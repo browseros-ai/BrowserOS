@@ -16,11 +16,12 @@ use serde_json::{Value, json};
 
 use crate::op_scope::{OpScope, Sent};
 use crate::page::document_watch::DocumentWatch;
+use crate::page::evaluate_guard::DOCUMENT_REPLACED;
 use crate::page::navigation::watch_error;
 use crate::page::site_sweep::SiteSweep;
 use crate::page::world_call::{main_frame_only, unexpected, with_world};
 use crate::page::{LoadState, OpPage};
-use crate::probe::{self, DocumentPart, ProbeFailure, ProbeReply, ProbeRequest};
+use crate::probe::{self, DocumentPart, ProbeFailure, ProbeReply, ProbeRequest, Ran};
 use crate::resolve::failed;
 use crate::target::PageRef;
 use crate::world::{Endpoint, Place, SealedWorld};
@@ -149,7 +150,10 @@ pub(crate) async fn set_content(
 
 /// Writes `html` in the main frame's world and returns that world, now unbooted. A world whose
 /// document changed since its install fails `Gone` without running the request, so the write is
-/// tried once more in the new document's world, after the host's policies run again.
+/// tried once more in the new document's world, after the host's policies run again. A write a
+/// navigation cut off while it was pending may have run, the HTML's inline scripts with it, so
+/// it is never sent again: the op fails with the message upstream's setContent gives when that
+/// navigation destroys its evaluation's context.
 async fn replace_document(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
@@ -166,7 +170,10 @@ async fn replace_document(
         match write_document(&world, html, &sent).await {
             Ok(ProbeReply::Replaced) => return Ok(world),
             Ok(other) => return Err(failed(scope, unexpected("setContent", other))),
-            Err(ProbeFailure::Gone) if !retried => {
+            Err(ProbeFailure::Gone(Ran::Maybe)) => {
+                return Err(scope.fail(ErrorCode::PageError, DOCUMENT_REPLACED));
+            }
+            Err(ProbeFailure::Gone(Ran::No)) if !retried => {
                 retried = true;
                 page.frames().invalidate(&world);
                 world = installed(page.world(main, Place::Main).await)?;
@@ -187,3 +194,6 @@ async fn write_document(
     };
     probe::call(world, &request).await
 }
+
+#[cfg(test)]
+mod tests;

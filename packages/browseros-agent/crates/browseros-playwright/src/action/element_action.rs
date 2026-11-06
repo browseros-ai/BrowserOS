@@ -230,7 +230,7 @@ impl<'a> ElementRunner<'a> {
         };
         match asked? {
             Ok(reply) => Ok(Some(reply)),
-            Err(ProbeFailure::Gone) => self.subject.lost(located).map(|()| None),
+            Err(ProbeFailure::Gone(_)) => self.subject.lost(located).map(|()| None),
             Err(failure) => Err(resolve::failed(self.scope, failure)),
         }
     }

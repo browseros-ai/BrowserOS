@@ -1,9 +1,10 @@
 //! A live browser for the crate's own live tests: one CDP connection with a `Playwright` over
 //! it, as claw-sdk builds them, tabs it opens and closes, and hooks that record what the
-//! journal reports. Needs BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005). Also the
-//! scripted one-tab browser unit tests run an op against ([`one_tab`]); it lives here because
-//! core's `page_js_guard` reads every other non-test file as production code, and the script
-//! answers `Runtime.evaluate`.
+//! journal reports and what the sweeps told the host. Needs BrowserOS with CDP on
+//! `BROWSEROS_CDP_PORT` (default 9005). Also the scripted browsers unit tests run an op against
+//! ([`one_tab`], and [`ScriptedTab`] for ops that install and call a sealed world); they live
+//! here because core's `page_js_guard` reads every other non-test file as production code, and
+//! the scripts answer `Runtime.evaluate`.
 
 #[path = "../tests/support/fixture_server.rs"]
 pub(crate) mod fixture_server;
@@ -11,20 +12,25 @@ pub(crate) mod fixture_server;
 use std::env;
 use std::error::Error;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use browseros_cdp::{CdpClient, ConnectOptions};
+use browseros_cdp::{CdpClient, CdpError, CdpEvent, ConnectOptions, TargetedEvents};
 use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
 use browseros_core::testing::TestConnection;
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, PageId, ProtocolSession,
-    TabId, TargetId,
+    SessionId, TabId, TargetId,
 };
+use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
+use tokio::sync::{broadcast, mpsc};
 use tokio::time;
 
 use crate::op::Op;
+use crate::probe::PROBE_PROTOCOL;
+use crate::target::PageRef;
 use crate::test_env::TestEnv;
 use crate::{Playwright, PlaywrightHooks, Refusal, TypedBy};
 
@@ -39,11 +45,13 @@ pub(crate) struct Journaled {
     pub(crate) by: TypedBy,
 }
 
-/// Hooks that remember what the journal reported. They name no secret files unless built
-/// with [`RecordingHooks::naming_secrets`], so path uploads are refused, as a host's default.
+/// Hooks that remember what the journal reported and every value a sweep told the host. They
+/// name no secret files unless built with [`RecordingHooks::naming_secrets`], so path uploads
+/// are refused, as a host's default.
 #[derive(Default)]
 pub(crate) struct RecordingHooks {
     journaled: Mutex<Vec<Journaled>>,
+    swept: Mutex<Vec<String>>,
     secrets: Option<Vec<PathBuf>>,
 }
 
@@ -51,13 +59,21 @@ impl RecordingHooks {
     /// Hooks that name `secrets` as Neo's secret files.
     pub(crate) fn naming_secrets(secrets: Vec<PathBuf>) -> Self {
         Self {
-            journaled: Mutex::default(),
             secrets: Some(secrets),
+            ..Self::default()
         }
     }
 
     pub(crate) fn journaled(&self) -> Vec<Journaled> {
         self.journaled
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Every value `values_swept` was told so far, long enough to register, in order.
+    pub(crate) fn swept(&self) -> Vec<String> {
+        self.swept
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
@@ -88,7 +104,12 @@ impl PlaywrightHooks for RecordingHooks {
             });
     }
 
-    fn values_swept(&self, _page: PageId, _values: &FieldValues) {}
+    fn values_swept(&self, _page: PageId, values: &FieldValues) {
+        self.swept
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(values.registrable().map(str::to_owned));
+    }
 
     fn capture_allowed(&self, _page: PageId) -> Result<(), Refusal> {
         Ok(())
@@ -272,4 +293,221 @@ pub(crate) async fn one_tab(connection: &Arc<TestConnection>) -> Result<OneTab, 
         .page_id
         .clone();
     Ok(OneTab { browser, page })
+}
+
+/// What a [`ScriptedTab`] answers one probe request with, after `after` on the tokio clock.
+pub(crate) struct ProbeAnswer {
+    pub(crate) after: Duration,
+    /// The probe's reply object, or the protocol error Chromium fails the call with.
+    pub(crate) reply: Result<Value, &'static str>,
+}
+
+impl ProbeAnswer {
+    /// `reply`, at once.
+    pub(crate) fn reply(reply: Value) -> Self {
+        Self {
+            after: Duration::ZERO,
+            reply: Ok(reply),
+        }
+    }
+
+    /// The call fails at once with Chromium's protocol error `message`.
+    pub(crate) fn error(message: &'static str) -> Self {
+        Self {
+            after: Duration::ZERO,
+            reply: Err(message),
+        }
+    }
+
+    /// A sweep of a document that holds no sensitive field.
+    pub(crate) fn empty_sweep() -> Self {
+        Self::reply(json!({ "kind": "sweep", "values": [] }))
+    }
+}
+
+/// How a test's [`ScriptedTab`] answers the probe.
+pub(crate) trait TabScript: Send + Sync + 'static {
+    /// The answer to `request`, one probe request as the crate encoded it (`{"op": ...}`).
+    fn probe(&self, request: &Value) -> ProbeAnswer;
+
+    /// Whether the tab's main frame has left for a document no world can be made in yet: an
+    /// install then fails as for a frame that is gone.
+    fn left(&self) -> bool {
+        false
+    }
+}
+
+/// The scripted tab's target id, which is also its main frame's id.
+const SCRIPTED_TARGET: &str = "scripted-target";
+
+/// Numbers the scripted tabs' sessions: core serializes captures by session id across the
+/// process, so no two tabs may share one.
+static SCRIPTED_SESSIONS: AtomicU64 = AtomicU64::new(0);
+
+/// A scripted browser with one tab, tab 7 on `https://a.test/` with no child frame. It answers
+/// what admitting the tab, installing its main frame's sealed world and listing its frames and
+/// targets send, as for a page with no closed shadow root, and hands every probe request, a
+/// sweep included, to its [`TabScript`].
+pub(crate) struct ScriptedTab<S> {
+    script: S,
+    session: String,
+    events: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
+}
+
+impl<S: TabScript> ScriptedTab<S> {
+    pub(crate) fn new(script: S) -> Arc<Self> {
+        Arc::new(Self {
+            script,
+            session: format!(
+                "scripted-session-{}",
+                SCRIPTED_SESSIONS.fetch_add(1, Ordering::Relaxed)
+            ),
+            events: broadcast::channel(16).0,
+            targeted: TargetedEvents::default(),
+        })
+    }
+
+    pub(crate) fn script(&self) -> &S {
+        &self.script
+    }
+
+    async fn answer(&self, method: &str, params: &Value) -> Result<Value, CdpError> {
+        Ok(match method {
+            "Browser.getTabs" => json!({ "tabs": [{ "tabId": 7, "targetId": SCRIPTED_TARGET,
+                "windowId": 1, "url": "https://a.test/", "title": "A", "isActive": true,
+                "isLoading": false, "loadProgress": 1.0, "isPinned": false,
+                "isHidden": false }] }),
+            "Target.attachToTarget" => json!({ "sessionId": self.session }),
+            "Target.getTargets" => json!({ "targetInfos": [
+                { "targetId": SCRIPTED_TARGET, "type": "page", "url": "https://a.test/" },
+            ] }),
+            "Page.getFrameTree" => json!({ "frameTree": { "frame": { "id": SCRIPTED_TARGET,
+                "loaderId": "L", "url": "https://a.test/", "domainAndRegistry": "a.test" } } }),
+            "Page.createIsolatedWorld" if self.script.left() => {
+                return Err(protocol_error("No frame for given id found"));
+            }
+            "Page.createIsolatedWorld" => json!({ "executionContextId": 7 }),
+            "Runtime.evaluate" => json!({ "result": { "type": "object", "objectId": "g" } }),
+            // The hidden-root scan finds no shadow root.
+            "DOM.describeNode" => json!({ "node": { "backendNodeId": 1,
+                "nodeName": "#document", "childNodeCount": 0, "children": [] } }),
+            "Runtime.callFunctionOn" => return self.call(params).await,
+            _ => json!({}),
+        })
+    }
+
+    /// One `Runtime.callFunctionOn`: a probe request goes to the script, and the install's
+    /// boot, the seal's watch and the world's document answer as for a page with no closed
+    /// shadow root.
+    async fn call(&self, params: &Value) -> Result<Value, CdpError> {
+        let first = &params["arguments"][0]["value"];
+        if first.get("op").is_some() {
+            let ProbeAnswer { after, reply } = self.script.probe(first);
+            time::sleep(after).await;
+            return reply
+                .map(|reply| json!({ "result": { "type": "object", "value": reply } }))
+                .map_err(protocol_error);
+        }
+        if first.get("frameSeq").is_some() {
+            return Ok(
+                json!({ "result": { "type": "object", "value": { "kind": "described",
+                "protocol": PROBE_PROTOCOL, "seq": first["frameSeq"],
+                "url": "https://a.test/" } } }),
+            );
+        }
+        let function = params["functionDeclaration"].as_str().unwrap_or_default();
+        Ok(if function.contains("takeHost") {
+            // The seal reported no shadow host.
+            json!({ "result": { "type": "object", "subtype": "null", "value": null } })
+        } else if function.contains("detachedTops") {
+            // It watches no tree out of the document.
+            json!({ "result": { "type": "object", "subtype": "array", "objectId": "tops",
+                "description": "Array(0)" } })
+        } else {
+            // The world's document, where the scan starts.
+            json!({ "result": { "type": "object", "objectId": "d" } })
+        })
+    }
+}
+
+/// Chromium's failure of a call, with `message`.
+fn protocol_error(message: &str) -> CdpError {
+    CdpError::Protocol {
+        code: -32000,
+        message: message.to_owned(),
+    }
+}
+
+impl<S: TabScript> CdpConnection for ScriptedTab<S> {
+    fn send<'a>(
+        &'a self,
+        method: &'a str,
+        params: Value,
+        _session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<Value, CdpError>> {
+        Box::pin(async move { self.answer(method, &params).await })
+    }
+
+    fn send_raw_json<'a>(
+        &'a self,
+        method: &'a str,
+        params_json: &'a str,
+        _session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<String, CdpError>> {
+        Box::pin(async move {
+            let params = serde_json::from_str(params_json)?;
+            let reply = self.answer(method, &params).await?;
+            Ok(serde_json::to_string(&reply)?)
+        })
+    }
+
+    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        self.events.subscribe()
+    }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    fn connection_epoch(&self) -> u64 {
+        1
+    }
+}
+
+/// A `Playwright` over a [`ScriptedTab`], the hooks it reports to, the host's side of its ops
+/// and the tab's brand.
+pub(crate) struct ScriptedRun {
+    pub(crate) playwright: Arc<Playwright>,
+    pub(crate) hooks: Arc<RecordingHooks>,
+    pub(crate) env: TestEnv,
+    pub(crate) page: PageRef,
+}
+
+impl ScriptedRun {
+    /// A run over `tab`, whose one tab it lists first.
+    pub(crate) async fn over<S: TabScript>(tab: &Arc<ScriptedTab<S>>) -> TestResult<Self> {
+        let connection: Arc<dyn CdpConnection> = Arc::clone(tab) as Arc<dyn CdpConnection>;
+        let browser = BrowserSession::new(connection, BrowserSessionHooks::default());
+        let hooks = Arc::new(RecordingHooks::default());
+        let playwright = Playwright::new(
+            Arc::clone(&browser),
+            Arc::clone(&hooks) as Arc<dyn PlaywrightHooks>,
+        );
+        let listed = browser.pages.list().await?;
+        let listed = listed.first().ok_or("the tab is listed")?;
+        let page = serde_json::from_value(
+            json!({ "$neo": "page", "id": listed.page_id, "tab": listed.tab_id }),
+        )?;
+        Ok(Self {
+            playwright,
+            hooks,
+            env: TestEnv::over(BrowserView::unbound(browser, None)),
+            page,
+        })
+    }
 }

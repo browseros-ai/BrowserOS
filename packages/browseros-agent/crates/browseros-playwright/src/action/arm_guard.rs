@@ -82,7 +82,7 @@ impl ArmGuard {
         let request = ProbeRequest::Verdict { token: self.token };
         let reply = resolve::ask(page, scope, &world, &request, None).await;
         // A sweep that failed after the first answer still found the interceptor stopped.
-        if matches!(reply, Ok(Ok(_) | Err(ProbeFailure::Gone)) | Err(_)) {
+        if matches!(reply, Ok(Ok(_) | Err(ProbeFailure::Gone(_))) | Err(_)) {
             self.world = None;
         }
         reply

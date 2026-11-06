@@ -1,7 +1,6 @@
 // Upstream: Playwright v1.64.1 tests/page/locator-convenience.spec.ts:121
 // Test: isEditable should work
 // Lifted by tier2/convert.mjs. Rerun it instead of editing this file.
-// @needs R10c: $eval (R10c) not built yet
 const tier2 = tier2Runtime(fixtures)
 return tier2.done(await harness.settle((async () => {
   await page.goto(tier2.html(`

@@ -117,7 +117,7 @@ async fn pinned_node(
 ) -> Result<Option<PinnedNode>, PlaywrightError> {
     let sealed = match probe::pinned_object(scope, world, pin).await {
         Ok(Some(object)) => object,
-        Ok(None) | Err(ProbeFailure::Gone) => return Ok(None),
+        Ok(None) | Err(ProbeFailure::Gone(_)) => return Ok(None),
         Err(failure) => return Err(resolve::failed(scope, failure)),
     };
     let described = world
@@ -130,7 +130,7 @@ async fn pinned_node(
             backend: described.node.backend_node_id,
         })),
         Err(error) => match ProbeFailure::from_core(error) {
-            ProbeFailure::Gone => Ok(None),
+            ProbeFailure::Gone(_) => Ok(None),
             failure => Err(resolve::failed(scope, failure)),
         },
     }

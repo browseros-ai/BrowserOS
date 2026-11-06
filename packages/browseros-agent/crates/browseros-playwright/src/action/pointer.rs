@@ -642,8 +642,8 @@ impl<'a> Runner<'a> {
                     // A world gone under the verdict means the input navigated or closed the
                     // frame: it landed, as upstream reads a failed `stop()`.
                     match verdict {
-                        Ok(ProbeReply::Verdict { hit: Hit::Done(_) }) | Err(ProbeFailure::Gone) => {
-                        }
+                        Ok(ProbeReply::Verdict { hit: Hit::Done(_) })
+                        | Err(ProbeFailure::Gone(_)) => {}
                         Ok(ProbeReply::Verdict {
                             hit: Hit::Missed { by },
                         }) => {
@@ -841,7 +841,7 @@ impl<'a> Runner<'a> {
         };
         match asked? {
             Ok(reply) => Ok(Called::Reply(reply)),
-            Err(ProbeFailure::Gone) => Ok(Called::Gone),
+            Err(ProbeFailure::Gone(_)) => Ok(Called::Gone),
             Err(failure) => Err(resolve::failed(self.scope, failure)),
         }
     }

@@ -317,7 +317,7 @@ impl InputFiles {
         let object = match probe::pinned_object(scope, located.world(), input.pin).await {
             Ok(Some(object)) => object,
             Ok(None) => return subject.detached().map(|()| None),
-            Err(ProbeFailure::Gone) => return subject.lost(located).map(|()| None),
+            Err(ProbeFailure::Gone(_)) => return subject.lost(located).map(|()| None),
             Err(failure) => return Err(resolve::failed(scope, failure)),
         };
         if directory {
@@ -326,7 +326,7 @@ impl InputFiles {
                 Ok(ProbeReply::Value { .. }) => {}
                 Ok(ProbeReply::Detached) => return subject.detached().map(|()| None),
                 Ok(other) => return Err(subject.refused(located, other).await),
-                Err(ProbeFailure::Gone) => return subject.lost(located).map(|()| None),
+                Err(ProbeFailure::Gone(_)) => return subject.lost(located).map(|()| None),
                 Err(failure) => return Err(resolve::failed(scope, failure)),
             }
         }
@@ -396,7 +396,7 @@ impl Ready<'_> {
                 };
                 if let Err(error) = set {
                     return match ProbeFailure::from_core(error) {
-                        ProbeFailure::Gone => subject.lost(located).map(|()| Set::Again),
+                        ProbeFailure::Gone(_) => subject.lost(located).map(|()| Set::Again),
                         ProbeFailure::Cdp(CoreError::Cdp(CdpError::Protocol {
                             message, ..
                         })) => {
@@ -452,7 +452,7 @@ async fn set_payloads(
         }
         Ok(ProbeReply::Detached) => subject.detached().map(|()| Set::Again),
         Ok(other) => Err(subject.refused(located, other).await),
-        Err(ProbeFailure::Gone) => subject.lost(located).map(|()| Set::Again),
+        Err(ProbeFailure::Gone(_)) => subject.lost(located).map(|()| Set::Again),
         Err(failure) => Err(resolve::failed(scope, failure)),
     }
 }
@@ -481,7 +481,7 @@ async fn wait_for_input(
             // listener on an element that never sees `input` does.
             Ok(ProbeReply::Detached) => {}
             Ok(other) => return Err(subject.refused(located, other).await),
-            Err(ProbeFailure::Gone) => return Ok(Set::Done),
+            Err(ProbeFailure::Gone(_)) => return Ok(Set::Done),
             Err(failure) => return Err(resolve::failed(scope, failure)),
         }
         if scope.sleep(INPUT_POLL).await.is_err() {
@@ -517,7 +517,7 @@ async fn file_input(
         Ok(ProbeReply::None { stale_ref: None }) => Ok(None),
         Ok(ProbeReply::Detached) => subject.detached().map(|()| None),
         Ok(other) => Err(subject.refused(located, other).await),
-        Err(ProbeFailure::Gone) => subject.lost(located).map(|()| None),
+        Err(ProbeFailure::Gone(_)) => subject.lost(located).map(|()| None),
         Err(failure) => Err(resolve::failed(scope, failure)),
     }
 }

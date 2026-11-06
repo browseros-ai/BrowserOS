@@ -47,12 +47,16 @@ pub(crate) struct Landed<T = ()> {
     pub(crate) alongside: T,
 }
 
-/// What [`Resolver::attempt`]'s `send` got in the world a pass resolved: the probe's answer,
-/// and what ran with the request there, which becomes the [`Landed`]'s `alongside`.
-struct Answered<T> {
-    reply: Result<ProbeReply, ProbeFailure>,
-    alongside: T,
+/// A request's reply, and what ran with the request in its world: a read's site sweep, or the
+/// values the request was masked with. It becomes a [`Landed`]'s `alongside`.
+pub(crate) struct Asked<T> {
+    pub(crate) reply: ProbeReply,
+    pub(crate) alongside: T,
 }
+
+/// What [`Resolver::attempt`]'s `send` got in the world a pass resolved, or why the world gave
+/// none (`Gone` is the liveness rule's).
+type Answered<T> = Result<Asked<T>, ProbeFailure>;
 
 /// The frames one pass went through so far: their parents, top down, and whether every
 /// `<iframe>` on the way is visible (upstream's `frameVisible`).
@@ -245,10 +249,7 @@ impl<'a> Resolver<'a> {
             async move {
                 let asked = self.ask(&world, &request, root.as_deref());
                 let (reply, alongside) = future::join(asked, beside).await;
-                Ok(Answered {
-                    reply: reply?,
-                    alongside,
-                })
+                Ok(reply?.map(|reply| Asked { reply, alongside }))
             }
         })
         .await
@@ -258,21 +259,25 @@ impl<'a> Resolver<'a> {
     /// `pins`): the landed world's site is swept first and the request carries its values, so
     /// the probe masks the previews before it cuts them and never answers `needsMask`; a field
     /// that changed meanwhile is caught by a sweep after the reply ([`masked_call`]). A frame of
-    /// the site that missed a sweep fails the op closed. The values come back as `alongside`,
-    /// for the op's own mask of the reply.
+    /// the site that missed a sweep fails the op closed; the landed world's own frame gone under
+    /// either sweep is the request coming back gone. The values come back as `alongside`, for
+    /// the op's own mask of the reply.
     pub(crate) async fn attempt_masked(
         &self,
         request: impl Fn(ParsedSelector, bool) -> ProbeRequest,
     ) -> Result<Option<Landed<SiteValues>>, PlaywrightError> {
         self.attempt(request, |world, request, root| async move {
-            let site = site_values(self.page, self.scope, &world).await?;
+            let site = match site_values(self.page, self.scope, &world).await? {
+                Ok(site) => site,
+                Err(gone) => return Ok(Err(gone)),
+            };
             let root = root.as_deref();
             let Masked { reply, site } =
                 masked_call(self.page, self.scope, &world, &request, root, site).await?;
-            Ok(Answered {
+            Ok(reply.map(|reply| Asked {
                 reply,
                 alongside: site,
-            })
+            }))
         })
         .await
     }
@@ -301,10 +306,9 @@ impl<'a> Resolver<'a> {
             };
             let last = ParsedSelector::of(self.target.chunks.last());
             let request = request(last, resolved.frame_visible);
-            let Answered { reply, alongside } =
-                send(resolved.world.clone(), request, resolved.root.clone()).await?;
-            match reply {
-                Ok(reply) => {
+            let answered = send(resolved.world.clone(), request, resolved.root.clone()).await?;
+            match answered {
+                Ok(Asked { reply, alongside }) => {
                     return Ok(Some(Landed {
                         reply,
                         world: resolved.world,
@@ -312,7 +316,7 @@ impl<'a> Resolver<'a> {
                         alongside,
                     }));
                 }
-                Err(ProbeFailure::Gone) => {
+                Err(ProbeFailure::Gone(_)) => {
                     self.page.frames().invalidate(&resolved.world);
                     if let Some(jump) = resolved.jumped {
                         return Err(self.detached(&jump.to_string()));
@@ -484,7 +488,7 @@ impl<'a> Resolver<'a> {
             .await
         {
             Ok(world) => world,
-            Err(ProbeFailure::Gone) => return Ok(Err(Step::Gone(None))),
+            Err(ProbeFailure::Gone(_)) => return Ok(Err(Step::Gone(None))),
             Err(failure) => return Err(self.failed(failure)),
         };
         let Some(start) = &self.start else {
@@ -589,7 +593,7 @@ async fn hop_from(
             ));
         }
         Ok(other) => return Err(refused(scope, other)),
-        Err(ProbeFailure::Gone) => return Ok(Hopped::ParentGone),
+        Err(ProbeFailure::Gone(_)) => return Ok(Hopped::ParentGone),
         Err(failure) => return Err(failed(scope, failure)),
     };
     // Boxed: every resolver pass awaits a hop, and every locator op's future holds a pass.
@@ -623,7 +627,7 @@ pub(crate) async fn hop_pinned(
             | ProbeReply::NeedsMask,
         ) => return Ok(Hopped::Missing),
         Ok(other) => return Err(refused(scope, other)),
-        Err(ProbeFailure::Gone) => return Ok(Hopped::ParentGone),
+        Err(ProbeFailure::Gone(_)) => return Ok(Hopped::ParentGone),
         Err(failure) => return Err(failed(scope, failure)),
     };
     enter_pinned(page, scope, parent, pin, key, visible).await
@@ -641,7 +645,7 @@ async fn enter_pinned(
     let object = match probe::pinned_object(scope, parent, pin).await {
         Ok(Some(object)) => object,
         Ok(None) => return Ok(Hopped::Missing),
-        Err(ProbeFailure::Gone) => return Ok(Hopped::ParentGone),
+        Err(ProbeFailure::Gone(_)) => return Ok(Hopped::ParentGone),
         Err(failure) => return Err(failed(scope, failure)),
     };
     let iframe = Iframe {
@@ -680,7 +684,7 @@ pub(super) async fn enter_iframe(
         Ok(described) => described,
         Err(error) => {
             return match ProbeFailure::from_core(error) {
-                ProbeFailure::Gone => Ok(Hopped::ParentGone),
+                ProbeFailure::Gone(_) => Ok(Hopped::ParentGone),
                 failure => Err(failed(scope, failure)),
             };
         }
@@ -705,7 +709,7 @@ pub(super) async fn enter_iframe(
         Ok(target) => target,
         Err(error) => {
             return match ProbeFailure::from_core(error) {
-                ProbeFailure::Gone => Ok(Hopped::ChildGone),
+                ProbeFailure::Gone(_) => Ok(Hopped::ChildGone),
                 failure => Err(failed(scope, failure)),
             };
         }
@@ -724,7 +728,7 @@ pub(super) async fn enter_iframe(
             },
             visible,
         }),
-        Err(ProbeFailure::Gone) => Ok(Hopped::ChildGone),
+        Err(ProbeFailure::Gone(_)) => Ok(Hopped::ChildGone),
         Err(failure) => Err(failed(scope, failure)),
     }
 }
@@ -751,16 +755,23 @@ pub(crate) async fn ask(
 
 /// `request` in `world` with its site's values, swept first, for a request whose reply always
 /// previews page text (an `expect` poll's `resolved`), so it never answers `needsMask`. The
-/// values come back with the reply, for the op's own mask of it.
+/// values come back as the reply's `alongside`, for the op's own mask of it; `world`'s frame
+/// gone under a sweep is the request coming back gone.
 pub(crate) async fn ask_masked(
     page: &OpPage<'_>,
     scope: &OpScope<'_>,
     world: &SealedWorld,
     request: &ProbeRequest,
-) -> Result<(Result<ProbeReply, ProbeFailure>, SiteValues), PlaywrightError> {
-    let site = site_values(page, scope, world).await?;
+) -> Result<Result<Asked<SiteValues>, ProbeFailure>, PlaywrightError> {
+    let site = match site_values(page, scope, world).await? {
+        Ok(site) => site,
+        Err(gone) => return Ok(Err(gone)),
+    };
     let Masked { reply, site } = masked_call(page, scope, world, request, None, site).await?;
-    Ok((reply, site))
+    Ok(reply.map(|reply| Asked {
+        reply,
+        alongside: site,
+    }))
 }
 
 /// Sends `request` in `world` again, with the values of every sensitive field of the world's
@@ -777,7 +788,10 @@ pub(super) async fn remask(
     request: &ProbeRequest,
     root: Option<&str>,
 ) -> Result<Result<ProbeReply, ProbeFailure>, PlaywrightError> {
-    let site = site_values(page, scope, world).await?;
+    let site = match site_values(page, scope, world).await? {
+        Ok(site) => site,
+        Err(gone) => return Ok(Err(gone)),
+    };
     let Masked { reply, site } = masked_call(page, scope, world, request, root, site).await?;
     Ok(reply.map(|reply| site.mask_reply(reply)))
 }
@@ -854,7 +868,24 @@ async fn checked_call(
         Ok(ProbeReply::Read { sweep, .. } | ProbeReply::Values { sweep, .. }) => Some(sweep),
         Ok(_) | Err(_) => None,
     };
-    let after = site_values(page, scope, world).await?;
+    // The host hears them now: the sweep below can drop this reply or send the request again,
+    // and either exit would lose a value only this call saw, which the next document may echo.
+    if let Some(own) = own.filter(|own| !own.is_empty()) {
+        page.playwright()
+            .hooks()
+            .values_swept(page.id().clone(), own);
+    }
+    let after = match site_values(page, scope, world).await? {
+        Ok(after) => after,
+        // The reply's frame went away before the sweep could check the site, so the reply is
+        // dropped for the request coming back gone, and none of its page text leaves.
+        Err(gone) => {
+            return Ok(Checked::Fits(Masked {
+                reply: Err(gone),
+                site,
+            }));
+        }
+    };
     let changed = site.lacks_any_of(own, &after);
     let site = site.union(after);
     Ok(if changed {
@@ -888,13 +919,15 @@ fn holds_cut_text(reply: &Result<ProbeReply, ProbeFailure>) -> bool {
     )
 }
 
-/// The values of every sensitive field of `world`'s site, swept now and told to the host.
+/// The values of every sensitive field of `world`'s site, swept now and told to the host, for a
+/// request sent in `world` after the sweep: `Gone` when `world`'s own frame went away under it
+/// (`SiteSweep::values_or_gone`).
 async fn site_values(
     page: &OpPage<'_>,
     scope: &OpScope<'_>,
     world: &SealedWorld,
-) -> Result<SiteValues, PlaywrightError> {
-    SiteSweep::of(page, world.clone()).await.values(
+) -> Result<Result<SiteValues, ProbeFailure>, PlaywrightError> {
+    SiteSweep::of(page, world.clone()).await.values_or_gone(
         page.playwright(),
         scope,
         page.id(),
@@ -947,7 +980,9 @@ async fn iframes_visible(scope: &OpScope<'_>, path: &FramePath) -> Result<bool, 
         };
         let visible = match probe::call(&hop.parent, &request).await {
             Ok(ProbeReply::Read { value, .. }) => value.textless() == Value::Bool(true),
-            Ok(ProbeReply::None { .. } | ProbeReply::Detached) | Err(ProbeFailure::Gone) => false,
+            Ok(ProbeReply::None { .. } | ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => {
+                false
+            }
             Ok(other) => return Err(refused(scope, other)),
             Err(failure) => return Err(failed(scope, failure)),
         };
@@ -996,7 +1031,9 @@ fn detached(scope: &OpScope<'_>, stale: &str) -> PlaywrightError {
 /// A probe failure that is not the liveness rule's to handle.
 pub(crate) fn failed(scope: &OpScope<'_>, failure: ProbeFailure) -> PlaywrightError {
     match failure {
-        ProbeFailure::Gone => scope.fail(ErrorCode::TargetClosed, "the frame's document went away"),
+        ProbeFailure::Gone(_) => {
+            scope.fail(ErrorCode::TargetClosed, "the frame's document went away")
+        }
         ProbeFailure::Cdp(error) => scope.core_error(&error),
         ProbeFailure::Broken(why) => scope.fail(ErrorCode::Internal, &why),
         ProbeFailure::Late => scope.fail(
@@ -1051,6 +1088,7 @@ fn selector_text(chunk: &Chunk) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use browseros_core::sensitive_fields::FieldValues;
@@ -1060,12 +1098,122 @@ mod tests {
     use super::{Masked, Resolved, Resolver, Step, masked_call, selector_text, site_values};
     use crate::op_scope::OpScope;
     use crate::page::OpPage;
-    use crate::probe::{ProbeReply, ProbeRequest, ProbeTarget, Read};
+    use crate::page::site_sweep::SiteValues;
+    use crate::probe::{ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Read};
     use crate::resolve::{HopIframe, Landed};
     use crate::target::{CallHeader, Chunk, LocatorTarget, Strictness, Target};
     use crate::test_support::fixture_server::{FixtureServer, Page, nest_pages};
-    use crate::test_support::{LiveBrowser, Tab, TestResult, count_op};
+    use crate::test_support::{
+        LiveBrowser, ProbeAnswer, ScriptedRun, ScriptedTab, Tab, TabScript, TestResult, count_op,
+    };
     use crate::world::{FrameSeq, Place, SeqLookup};
+
+    /// What the read's frame does once it answered the first read.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum AfterRead {
+        /// It leaves for another document: the sweep after the reply finds it gone, and the
+        /// reply is dropped.
+        Leaves,
+        /// Another frame of its site holds a new value from then on: the sweep after the reply
+        /// finds it, and the read is sent once more.
+        Changes,
+    }
+
+    /// One frame of `https://a.test/` whose first read sees [`TYPED_LATE`] and whose later
+    /// reads do not.
+    struct ReadOnce {
+        after: AfterRead,
+        reads: AtomicUsize,
+    }
+
+    /// A value in the read's own frame after the sweep before the call, which only the first
+    /// call's own sweep saw.
+    const TYPED_LATE: &str = "typed-after-the-sweep";
+
+    impl ReadOnce {
+        fn new(after: AfterRead) -> Self {
+            Self {
+                after,
+                reads: AtomicUsize::new(0),
+            }
+        }
+
+        fn read_once(&self) -> bool {
+            self.reads.load(Ordering::SeqCst) > 0
+        }
+    }
+
+    impl TabScript for ReadOnce {
+        fn probe(&self, request: &Value) -> ProbeAnswer {
+            if self.after == AfterRead::Leaves && self.read_once() {
+                return ProbeAnswer::error("Cannot find context with specified id");
+            }
+            if request["op"] == "read" {
+                let own: &[&str] = if self.reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    &[TYPED_LATE]
+                } else {
+                    &[]
+                };
+                return ProbeAnswer::reply(json!({ "kind": "read", "value": "Signed in",
+                    "sensitive": null, "sweep": own }));
+            }
+            if self.read_once() {
+                return ProbeAnswer::reply(
+                    json!({ "kind": "sweep", "values": ["typed-in-another-frame"] }),
+                );
+            }
+            ProbeAnswer::empty_sweep()
+        }
+
+        fn left(&self) -> bool {
+            self.after == AfterRead::Leaves && self.read_once()
+        }
+    }
+
+    /// A reply carries its own frame's values as the probe found them during the call. The
+    /// sweep after it can drop the reply (its frame went away) or send the read once more
+    /// (another frame changed), and either way the host still learns those values: the next
+    /// document or the next reply may echo one (a form that posts the field and prints it
+    /// back), and the host masks every exit with what it was told.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_dropped_or_repeated_reply_still_tells_the_host_its_own_sweep()
+    -> TestResult {
+        for after in [AfterRead::Leaves, AfterRead::Changes] {
+            let tab = ScriptedTab::new(ReadOnce::new(after));
+            let run = ScriptedRun::over(&tab).await?;
+            let scope = OpScope::new(&run.env, count_op()?, CallHeader::default());
+            let page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
+            let world = page
+                .world(&page.main_endpoint(), Place::Main)
+                .await
+                .map_err(|failure| failure.to_string())?;
+            let request = located("h1")?;
+            let site = SiteValues::found(FieldValues::default());
+            let Masked { reply, .. } =
+                masked_call(&page, &scope, &world, &request, None, site).await?;
+            match after {
+                AfterRead::Leaves => assert!(
+                    matches!(reply, Err(ProbeFailure::Gone(_))),
+                    "the reply whose frame left before the sweep after it is dropped"
+                ),
+                AfterRead::Changes => assert!(
+                    matches!(reply, Ok(ProbeReply::Read { .. })),
+                    "the read sent once more answers"
+                ),
+            }
+            assert!(
+                run.hooks.swept().iter().any(|value| value == TYPED_LATE),
+                "the first reply's own sweep reached the host when its frame {}: {:?}",
+                if after == AfterRead::Leaves {
+                    "left"
+                } else {
+                    "changed"
+                },
+                run.hooks.swept()
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn tests_that_a_chunk_prints_as_upstreams_stringify_selector() -> TestResult {
@@ -1305,8 +1453,13 @@ mod tests {
         // The site as each op's sweep finds it before its call. The page's own frame holds no
         // field, so its probe has nothing of its own to add when the user types on in the
         // same-origin child, and the page copies the new value into the top document.
-        let for_preview = site_values(&page, &scope, &world).await?;
-        let for_strict = site_values(&page, &scope, &world).await?;
+        let live_world = |_gone| "the page's own frame is still there";
+        let for_preview = site_values(&page, &scope, &world)
+            .await?
+            .map_err(live_world)?;
+        let for_strict = site_values(&page, &scope, &world)
+            .await?
+            .map_err(live_world)?;
         tab.main_world(&format!("field().value = {FRESH:?}; copyField()"))
             .await?;
 

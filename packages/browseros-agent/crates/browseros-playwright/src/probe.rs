@@ -25,7 +25,7 @@ mod probe_reply;
 mod probe_request;
 
 pub(crate) use probe_call::{
-    ProbeFailure, ProbeMask, call, call_masked, call_on, pinned_object, reply_of,
+    ProbeFailure, ProbeMask, Ran, call, call_masked, call_on, pinned_object, reply_of,
 };
 pub(crate) use probe_reply::{
     ErrorClass, Hit, PROBE_PROTOCOL, PageText, Point, ProbeReply, Rect, SnapshotIframe,

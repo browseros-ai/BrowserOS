@@ -114,7 +114,7 @@ pub(crate) fn refuse_copy(scope: &OpScope<'_>, focus: Focus) -> Result<(), Playw
 async fn focus(page: &OpPage<'_>, scope: &OpScope<'_>) -> Result<Option<Focus>, PlaywrightError> {
     let main = match page.world(&page.main_endpoint(), Place::Main).await {
         Ok(world) => world,
-        Err(ProbeFailure::Gone) => return Ok(None),
+        Err(ProbeFailure::Gone(_)) => return Ok(None),
         Err(failure) => return Err(resolve::failed(scope, failure)),
     };
     let mut world = main.clone();
@@ -131,7 +131,7 @@ async fn focus(page: &OpPage<'_>, scope: &OpScope<'_>) -> Result<Option<Focus>, 
             }) => return behind_closed_root(page, scope, &world, &main, host).await,
             Ok(ProbeReply::Focused { .. }) => return Ok(Some(Focus::Plain)),
             Ok(other) => return Err(resolve::refused(scope, other)),
-            Err(ProbeFailure::Gone) => return Ok(gone(page, &world, &main)),
+            Err(ProbeFailure::Gone(_)) => return Ok(gone(page, &world, &main)),
             Err(failure) => return Err(resolve::failed(scope, failure)),
         };
         world = match resolve::hop_pinned(page, scope, &world, iframe).await? {
@@ -158,7 +158,7 @@ async fn behind_closed_root(
         Ok(Some(object)) => object,
         // The element left the page since `focused`: the focus moved, and went unasked.
         Ok(None) => return Ok(Some(Focus::Unknown)),
-        Err(ProbeFailure::Gone) => return Ok(gone(page, world, main)),
+        Err(ProbeFailure::Gone(_)) => return Ok(gone(page, world, main)),
         Err(failure) => return Err(resolve::failed(scope, failure)),
     };
     let described = world
@@ -172,7 +172,7 @@ async fn behind_closed_root(
         Ok(described) => described,
         Err(error) => {
             return match ProbeFailure::from_core(error) {
-                ProbeFailure::Gone => Ok(gone(page, world, main)),
+                ProbeFailure::Gone(_) => Ok(gone(page, world, main)),
                 failure => Err(resolve::failed(scope, failure)),
             };
         }

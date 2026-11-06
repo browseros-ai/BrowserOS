@@ -65,10 +65,11 @@ impl fmt::Debug for ProbeMask<'_> {
 #[derive(Debug)]
 pub(crate) enum ProbeFailure {
     /// The world is gone: its document was replaced (a stale context), its session detached,
-    /// its frame is no longer there, or it holds no booted probe (`uninstalled`). The caller
-    /// decides what that means: re-install and retry once on resolution, `element_detached`
-    /// at once after a ref jump.
-    Gone,
+    /// its frame is no longer there, or it holds no booted probe (`uninstalled`); [`Ran`] says
+    /// whether the call may have run before it went. The caller decides what that means:
+    /// re-install and retry once on resolution, `element_detached` at once after a ref jump,
+    /// and never a second write after one that may have run.
+    Gone(Ran),
     /// CDP failed for any other reason: the transport, a closed target.
     Cdp(CoreError),
     /// The page asset and the crate disagree: a reply this build cannot read, a probe that
@@ -80,20 +81,45 @@ pub(crate) enum ProbeFailure {
     Late,
 }
 
+/// Whether a call whose world went away ran there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Ran {
+    /// It did not: the world was gone when the call reached it.
+    No,
+    /// It may have: the call was still pending when its document went away, and Chromium cut it
+    /// off ([`CUT_OFF`]). A read is safe to send again in the new document, and upstream retries
+    /// reads and element actions after the same errors; a document write is not, because the
+    /// first may have run the HTML's inline scripts.
+    Maybe,
+}
+
+/// How Chromium answers a call its document's navigation cut off while it was pending. The
+/// first answers a call to a frame that changed process (measured: a `waitForSelector` poll
+/// during a cross-site `goto`), the second one whose context was destroyed while it awaited.
+/// Upstream turns both into "Execution context was destroyed, most likely because of a
+/// navigation" (`crExecutionContext.rewriteError`). Core's `is_stale_context` also takes the
+/// second for a stale context, so these are read first.
+const CUT_OFF: [&str; 2] = [
+    "Inspected target navigated or closed",
+    "Execution context was destroyed",
+];
+
 impl ProbeFailure {
     /// Core's failure as a probe failure. A stale context, a lost session and a frame that is
-    /// no longer in the page all mean the world is gone.
+    /// no longer in the page mean the world was gone before the call ran; a call cut off by
+    /// its document's navigation means it went while the call was pending.
     pub(crate) fn from_core(error: CoreError) -> Self {
-        let frame_gone = matches!(
-            &error,
-            CoreError::Cdp(CdpError::Protocol { message, .. })
-                if message.contains("No frame for given id found")
-        );
-        if frame_gone
+        let message = match &error {
+            CoreError::Cdp(CdpError::Protocol { message, .. }) => message.as_str(),
+            _ => "",
+        };
+        if CUT_OFF.iter().any(|cut| message.contains(cut)) {
+            Self::Gone(Ran::Maybe)
+        } else if message.contains("No frame for given id found")
             || is_stale_context(&error)
             || matches!(error, CoreError::Cdp(CdpError::SessionGone))
         {
-            Self::Gone
+            Self::Gone(Ran::No)
         } else {
             Self::Cdp(error)
         }
@@ -103,7 +129,7 @@ impl ProbeFailure {
 impl fmt::Display for ProbeFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Gone => f.write_str("the sealed world's document or session is gone"),
+            Self::Gone(_) => f.write_str("the sealed world's document or session is gone"),
             Self::Cdp(error) => error.fmt(f),
             Self::Broken(why) => f.write_str(why),
             Self::Late => f.write_str("the frame did not answer Neo's privacy scan in time"),
@@ -232,7 +258,7 @@ async fn send(
             ProbeFailure::Cdp(CoreError::Cdp(CdpError::Protocol { message, .. }))
                 if root.is_some() && message.contains("same JavaScript world") =>
             {
-                ProbeFailure::Gone
+                ProbeFailure::Gone(Ran::No)
             }
             failure => failure,
         })?;
@@ -281,7 +307,7 @@ pub(crate) fn reply_of(called: Value) -> Result<ProbeReply, ProbeFailure> {
         )));
     }
     match serde_json::from_value(called.result.value) {
-        Ok(ProbeReply::Uninstalled) => Err(ProbeFailure::Gone),
+        Ok(ProbeReply::Uninstalled) => Err(ProbeFailure::Gone(Ran::No)),
         Ok(reply) => Ok(reply),
         Err(error) => Err(ProbeFailure::Broken(format!(
             "the probe answered a reply this build cannot read ({error}); rebuild \
@@ -327,7 +353,7 @@ pub(crate) async fn pinned_object(
     match result.subtype.as_deref() {
         Some("node") => Ok(result.object_id),
         Some("null") => Ok(None),
-        _ if is_uninstalled(result.preview.as_ref()) => Err(ProbeFailure::Gone),
+        _ if is_uninstalled(result.preview.as_ref()) => Err(ProbeFailure::Gone(Ran::No)),
         _ => Err(ProbeFailure::Broken(
             "the probe answered `pinned` with neither an element nor null".to_owned(),
         )),
@@ -354,7 +380,7 @@ mod tests {
     use serde::Serialize;
     use serde_json::{Value, json};
 
-    use super::{CALL_FUNCTION, ProbeFailure, ProbeMask, call_arguments, reply_of};
+    use super::{CALL_FUNCTION, ProbeFailure, ProbeMask, Ran, call_arguments, reply_of};
     use crate::probe::probe_reply::ProbeReply;
     use crate::probe::probe_request::ProbeRequest;
 
@@ -421,14 +447,26 @@ mod tests {
 
     #[test]
     fn tests_that_a_replaced_document_or_a_lost_session_is_gone() {
-        for gone in [
-            protocol_error("Cannot find context with specified id"),
-            protocol_error("No frame for given id found"),
-            CoreError::Cdp(CdpError::SessionGone),
+        for (gone, ran) in [
+            (
+                protocol_error("Cannot find context with specified id"),
+                Ran::No,
+            ),
+            (protocol_error("No frame for given id found"), Ran::No),
+            (CoreError::Cdp(CdpError::SessionGone), Ran::No),
+            (
+                protocol_error("Inspected target navigated or closed"),
+                Ran::Maybe,
+            ),
+            (
+                protocol_error("Execution context was destroyed."),
+                Ran::Maybe,
+            ),
         ] {
             assert!(
-                matches!(ProbeFailure::from_core(gone), ProbeFailure::Gone),
-                "the world must be re-installed or the ref fail, never retried as is"
+                matches!(ProbeFailure::from_core(gone), ProbeFailure::Gone(found) if found == ran),
+                "the world must be re-installed or the ref fail, never retried as is, and a \
+                 call cut off while pending may have run ({ran:?})"
             );
         }
         let ProbeFailure::Cdp(lost) =
@@ -449,7 +487,7 @@ mod tests {
         assert!(matches!(reply, Ok(ProbeReply::None { stale_ref: None })));
         let uninstalled =
             reply_of(json!({ "result": { "type": "object", "value": { "kind": "uninstalled" } } }));
-        assert!(matches!(uninstalled, Err(ProbeFailure::Gone)));
+        assert!(matches!(uninstalled, Err(ProbeFailure::Gone(_))));
         let thrown = reply_of(json!({
             "result": { "type": "object", "subtype": "error" },
             "exceptionDetails": { "text": "Uncaught", "exception": { "description": "TypeError: x is not a function\n    at y" } },

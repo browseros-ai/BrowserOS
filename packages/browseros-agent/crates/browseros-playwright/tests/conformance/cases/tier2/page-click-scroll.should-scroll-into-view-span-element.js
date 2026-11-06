@@ -8,7 +8,7 @@ return tier2.done(await harness.settle((async () => {
     <span id=small>foo</span>
   `));
   await page.locator('#small').scrollIntoViewIfNeeded();
-  (await tier2.record('L94', async () => (await page.evaluate(() => window.scrollY))));
+  (await tier2.record('L94', async () => ((await page.evaluate(() => window.scrollY)) > (9000))));
 })()))
 
 function tier2Runtime(fixtures) {

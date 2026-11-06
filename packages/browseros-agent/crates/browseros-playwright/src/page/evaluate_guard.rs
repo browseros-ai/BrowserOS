@@ -84,7 +84,7 @@ use crate::page::frame_tree::frame_tree;
 use crate::page::page_value::{self, MaskedValue, PageValue, TOO_DEEP, Unreadable};
 use crate::page::sweep_scope::{self, Site};
 use crate::page::world_call::{unexpected, with_world};
-use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest};
+use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, Ran};
 use crate::resolve::{self, HandleSite};
 use crate::target::{ElementTarget, PageRef};
 use crate::world::{BackendNodeId, Endpoint, FrameSeq, Place, Scan, SealedWorld, SeqLookup};
@@ -594,6 +594,11 @@ pub(crate) enum Unswept {
     /// It came back gone on a second read of its target too (a lost session, a session of
     /// another target, a missing frame), while the browser still lists that target.
     Lost,
+    /// The frame the sweep was taken for came back gone, on a fresh world too: its document,
+    /// its frame or its session went away, as mid-navigation. A script there fails; a read
+    /// there lands nowhere and polls again, as its own call coming back gone would
+    /// (`SiteSweep::values_or_gone`).
+    Gone,
     /// It failed for another reason.
     Failed(ProbeFailure),
 }
@@ -622,6 +627,7 @@ impl Unswept {
                      it again for its privacy sweep, {consequence}; try again"
                 ),
             ),
+            Self::Gone => resolve::failed(scope, ProbeFailure::Gone(Ran::No)),
             Self::Failed(failure) => resolve::failed(scope, failure),
         }
     }
@@ -669,14 +675,13 @@ pub(crate) async fn sweep_site(page: &OpPage<'_>, script: &Endpoint, place: &Pla
     let mut found = Found::default();
     match own {
         Ok(Some(values)) => found.add(values),
-        // The script's own document going away fails the op.
-        Ok(None) => found.fail(Unswept::Failed(ProbeFailure::Gone)),
+        Ok(None) => found.fail(Unswept::Gone),
         Err(unswept) => found.fail(unswept),
     }
     let tree = match tree {
         Ok(Some(tree)) => tree.frame_tree,
         Ok(None) => {
-            found.fail(Unswept::Failed(ProbeFailure::Gone));
+            found.fail(Unswept::Gone);
             return found;
         }
         Err(unswept) => {
@@ -898,7 +903,7 @@ async fn sweep_frame(
     match time::timeout_at(deadline, swept).await {
         Err(_) | Ok(Err(ProbeFailure::Late)) => Err(Unswept::Late),
         Ok(Ok(swept)) => Ok(Some(swept)),
-        Ok(Err(ProbeFailure::Gone)) => Ok(None),
+        Ok(Err(ProbeFailure::Gone(_))) => Ok(None),
         Ok(Err(failure)) => Err(Unswept::Failed(failure)),
     }
 }
@@ -913,7 +918,7 @@ async fn read_within_budget<T>(
         Err(_late) => Err(Unswept::Late),
         Ok(Ok(value)) => Ok(Some(value)),
         Ok(Err(error)) => match ProbeFailure::from_core(error) {
-            ProbeFailure::Gone => Ok(None),
+            ProbeFailure::Gone(_) => Ok(None),
             failure => Err(Unswept::Failed(failure)),
         },
     }
@@ -1321,7 +1326,7 @@ async fn bind(
         match world.watch_trees(&watched).await {
             // The document went with its world: nothing the script was given can run now, and
             // `run` finds its elements gone.
-            Ok(()) | Err(ProbeFailure::Gone) => {}
+            Ok(()) | Err(ProbeFailure::Gone(_)) => {}
             Err(failure) => return Err(resolve::failed(scope, failure)),
         }
     }
@@ -1441,7 +1446,12 @@ async fn main_world_nodes(
             // No object, or a node the backend id no longer names, or a document gone: nothing
             // ran.
             Ok(_) | Err(CoreError::Cdp(CdpError::Protocol { .. })) => return Ok(None),
-            Err(error) if matches!(ProbeFailure::from_core(error.clone()), ProbeFailure::Gone) => {
+            Err(error)
+                if matches!(
+                    ProbeFailure::from_core(error.clone()),
+                    ProbeFailure::Gone(_)
+                ) =>
+            {
                 return Ok(None);
             }
             Err(error) => return Err(error),

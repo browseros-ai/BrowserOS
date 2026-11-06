@@ -28,7 +28,7 @@ return tier2.done(await harness.settle((async () => {
   // Every scroll performed by Playwright should be a single instant jump,
   // and never a smooth animation that fires a scroll event per frame.
   const scrolls = await page.evaluate(() => window['scrolls']);
-  tier2.record('L187', () => (scrolls.length));
+  tier2.record('L187', () => ((scrolls.length) <= (2)));
 })()))
 
 function tier2Runtime(fixtures) {

@@ -43,7 +43,7 @@ use serde_json::Value;
 use crate::op_scope::OpScope;
 use crate::page::evaluate_guard::{self, FRAME_BUDGET, Found, TreeFrame, Unswept};
 use crate::page::{OpPage, page_value};
-use crate::probe::{PageText, ProbeMask, ProbeReply};
+use crate::probe::{PageText, ProbeFailure, ProbeMask, ProbeReply, Ran};
 use crate::world::SealedWorld;
 use crate::{ErrorCode, Playwright, PlaywrightError, resolve};
 
@@ -64,7 +64,8 @@ impl SiteSweep {
     /// other frame's. All of them go to the host, also when a frame was not swept, so its own
     /// mask at every exit knows them from now on. A frame of the site that missed its budget
     /// fails the op closed as `neo / unsupported`, as a main-world script is refused: the
-    /// page text may hold that frame's value, and Neo cannot tell.
+    /// page text may hold that frame's value, and Neo cannot tell. The read's own frame gone
+    /// under the sweep fails the op too.
     pub(crate) fn values(
         self,
         pw: &Playwright,
@@ -72,13 +73,31 @@ impl SiteSweep {
         page: &PageId,
         own: FieldValues,
     ) -> Result<SiteValues, PlaywrightError> {
+        self.values_or_gone(pw, scope, page, own)?
+            .map_err(|gone| resolve::failed(scope, gone))
+    }
+
+    /// [`SiteSweep::values`] for a request sent after its sweep, which has no reply yet: the
+    /// read's own frame gone under the sweep is [`ProbeFailure::Gone`], the answer the request
+    /// would get in that world too. The resolver's liveness rule takes it as it takes a call
+    /// that came back gone, so a poll that lands mid-navigation lands nowhere and the next one
+    /// installs in the new document. Ending the op there instead failed upstream's waits that
+    /// outlive a cross-process navigation.
+    pub(crate) fn values_or_gone(
+        self,
+        pw: &Playwright,
+        scope: &OpScope<'_>,
+        page: &PageId,
+        own: FieldValues,
+    ) -> Result<Result<SiteValues, ProbeFailure>, PlaywrightError> {
         let Found { values, unswept } = self.0;
         let values = own.union(values);
         if !values.is_empty() {
             pw.hooks().values_swept(page.clone(), &values);
         }
         match unswept {
-            None => Ok(SiteValues(values)),
+            None => Ok(Ok(SiteValues(values))),
+            Some(Unswept::Gone) => Ok(Err(ProbeFailure::Gone(Ran::No))),
             Some(Unswept::Late) => Err(scope.fail(
                 ErrorCode::Unsupported,
                 &format!(

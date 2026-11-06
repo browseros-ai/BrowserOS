@@ -297,7 +297,7 @@ impl Snapshotter<'_> {
             .await
         {
             Ok(world) => world,
-            Err(ProbeFailure::Gone) => return Ok(None),
+            Err(ProbeFailure::Gone(_)) => return Ok(None),
             Err(failure) => return Err(resolve::failed(self.scope, failure)),
         };
         let (reply, site) = future::join(
@@ -317,7 +317,7 @@ impl Snapshotter<'_> {
             Ok(ProbeReply::None { stale_ref: None }) => Ok(None),
             Ok(other) => Err(resolve::refused(self.scope, other)),
             // A navigation replaced the document: the next try installs in the new one.
-            Err(ProbeFailure::Gone) => {
+            Err(ProbeFailure::Gone(_)) => {
                 self.page.frames().invalidate(&world);
                 Ok(None)
             }
@@ -501,7 +501,7 @@ impl Snapshotter<'_> {
                         refused.error_code().unwrap_or(ErrorCode::Internal),
                     ));
                 }
-                Err(ProbeFailure::Gone) => self.page.frames().invalidate(&child),
+                Err(ProbeFailure::Gone(_)) => self.page.frames().invalidate(&child),
                 Err(ProbeFailure::Cdp(error)) => {
                     return Err(Unread::Failed(ErrorCode::from_core(&error)));
                 }

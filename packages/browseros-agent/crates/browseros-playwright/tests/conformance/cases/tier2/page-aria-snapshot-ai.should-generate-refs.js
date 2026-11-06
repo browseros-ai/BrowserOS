@@ -1,7 +1,6 @@
 // Upstream: Playwright v1.64.1 tests/page/page-aria-snapshot-ai.spec.ts:26
 // Test: should generate refs
 // Lifted by tier2/convert.mjs. Rerun it instead of editing this file.
-// @needs R10c: locator.evaluate (R10c) not built yet
 const tier2 = tier2Runtime(fixtures)
 async function snapshotForAI(page, options) {
   return await page.ariaSnapshot({ ...options, mode: 'ai' });

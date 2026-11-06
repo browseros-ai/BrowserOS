@@ -28,8 +28,9 @@ pub(crate) fn main_frame_only(
 /// `call` runs once more in the new document's world, under a new seq. A second `Gone`, or an
 /// install that fails `Gone` because the frame itself went away, is returned.
 ///
-/// `call` must be safe to repeat after a `Gone`, which holds for every probe request: a gone
-/// world never ran it.
+/// `call` must be safe to repeat after a `Gone`, also one that may have run before its document
+/// went (`Ran::Maybe`): every caller's is a read, a sweep, a document read or a URL match, which
+/// changes nothing in the page.
 pub(crate) async fn with_world<T, F, Fut>(
     page: &OpPage<'_>,
     endpoint: &Endpoint,
@@ -42,7 +43,7 @@ where
 {
     let world = page.world(endpoint, place.clone()).await?;
     match call(world.clone()).await {
-        Err(ProbeFailure::Gone) => {
+        Err(ProbeFailure::Gone(_)) => {
             page.frames().invalidate(&world);
             call(page.world(endpoint, place.clone()).await?).await
         }

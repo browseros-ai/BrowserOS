@@ -1,7 +1,6 @@
 // Upstream: Playwright v1.64.1 tests/page/page-fill.spec.ts:108
 // Test: input event.composed should be true and cross shadow dom boundary - month
 // Lifted by tier2/convert.mjs. Rerun it instead of editing this file.
-// @needs R10c: locator.evaluate (R10c) not built yet
 const tier2 = tier2Runtime(fixtures)
 const server = tier2.server
 const [type, value] = ["month","2020-03"]

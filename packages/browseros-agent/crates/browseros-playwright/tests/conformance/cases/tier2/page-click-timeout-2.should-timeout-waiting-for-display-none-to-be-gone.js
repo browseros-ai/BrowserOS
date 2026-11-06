@@ -1,7 +1,6 @@
 // Upstream: Playwright v1.64.1 tests/page/page-click-timeout-2.spec.ts:20
 // Test: should timeout waiting for display:none to be gone
 // Lifted by tier2/convert.mjs. Rerun it instead of editing this file.
-// @needs R10c: $eval (R10c) not built yet
 const tier2 = tier2Runtime(fixtures)
 const server = tier2.server
 return tier2.done(await harness.settle((async () => {

@@ -1,7 +1,6 @@
 // Upstream: Playwright v1.64.1 tests/page/selectors-text.spec.ts:365
 // Test: should match input[type=button|submit|reset]
 // Lifted by tier2/convert.mjs. Rerun it instead of editing this file.
-// @needs R10c: $eval (R10c) not built yet
 const tier2 = tier2Runtime(fixtures)
 return tier2.done(await harness.settle((async () => {
   await page.goto(tier2.html(`<input type="submit" value="hello"><input type="button" value="world"><input type="reset" value="clear">`));

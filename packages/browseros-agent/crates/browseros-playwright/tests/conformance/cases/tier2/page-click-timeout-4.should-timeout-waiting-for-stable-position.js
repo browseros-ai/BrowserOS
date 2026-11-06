@@ -1,7 +1,6 @@
 // Upstream: Playwright v1.64.1 tests/page/page-click-timeout-4.spec.ts:20
 // Test: should timeout waiting for stable position
 // Lifted by tier2/convert.mjs. Rerun it instead of editing this file.
-// @needs R10c: elementHandle.evaluate (R10c) not built yet
 const tier2 = tier2Runtime(fixtures)
 const server = tier2.server
 async function rafraf(target, count = 1) {

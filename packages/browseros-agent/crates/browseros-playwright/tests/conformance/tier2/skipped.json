@@ -876,6 +876,12 @@
     "reason": "it.skip(browserName === 'chromium' && isWindows) depends on what the converter cannot know: context menu support is best-effort for Linux and MacOS"
   },
   {
+    "test": "tests/page/page-keyboard.spec.ts:815",
+    "title": "should close dialog on Escape key press in contenteditable",
+    "kind": "unsupported",
+    "reason": "expect(...).toHaveJSProperty is not supported in Neo"
+  },
+  {
     "test": "tests/page/page-set-input-files.spec.ts:24",
     "title": "should upload the file",
     "kind": "node",

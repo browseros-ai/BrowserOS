@@ -459,7 +459,7 @@ impl<'a> FormRunner<'a> {
         };
         match asked? {
             Ok(reply) => Ok(Called::Reply(reply)),
-            Err(ProbeFailure::Gone) => Ok(Called::Gone),
+            Err(ProbeFailure::Gone(_)) => Ok(Called::Gone),
             Err(failure) => Err(resolve::failed(self.scope, failure)),
         }
     }

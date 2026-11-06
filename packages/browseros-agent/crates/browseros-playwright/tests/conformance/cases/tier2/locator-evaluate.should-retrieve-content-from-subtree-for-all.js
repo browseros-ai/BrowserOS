@@ -1,7 +1,6 @@
 // Upstream: Playwright v1.64.1 tests/page/locator-evaluate.spec.ts:42
 // Test: should retrieve content from subtree for all
 // Lifted by tier2/convert.mjs. Rerun it instead of editing this file.
-// @needs R10c: evaluateAll (R10c) not built yet
 const tier2 = tier2Runtime(fixtures)
 return tier2.done(await harness.settle((async () => {
   const htmlContent = '<div class="a">not-a-child-div</div><div id="myId"><div class="a">a1-child-div</div><div class="a">a2-child-div</div></div>';

@@ -1,7 +1,6 @@
 // Upstream: Playwright v1.64.1 tests/page/locator-evaluate.spec.ts:35
 // Test: should work for all
 // Lifted by tier2/convert.mjs. Rerun it instead of editing this file.
-// @needs R10c: evaluateAll (R10c) not built yet
 const tier2 = tier2Runtime(fixtures)
 return tier2.done(await harness.settle((async () => {
   await page.goto(tier2.html('<html><body><div class="tweet"><div class="like">100</div><div class="like">10</div></div></body></html>'));

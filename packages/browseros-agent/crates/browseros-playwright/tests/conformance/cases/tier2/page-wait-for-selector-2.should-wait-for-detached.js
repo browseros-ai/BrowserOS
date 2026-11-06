@@ -1,7 +1,6 @@
 // Upstream: Playwright v1.64.1 tests/page/page-wait-for-selector-2.spec.ts:213
 // Test: should wait for detached
 // Lifted by tier2/convert.mjs. Rerun it instead of editing this file.
-// @needs R10c: $eval (R10c) not built yet
 const tier2 = tier2Runtime(fixtures)
 return tier2.done(await harness.settle((async () => {
   await page.goto(tier2.html('<section id="testAttribute"><div>43543</div></section>'));

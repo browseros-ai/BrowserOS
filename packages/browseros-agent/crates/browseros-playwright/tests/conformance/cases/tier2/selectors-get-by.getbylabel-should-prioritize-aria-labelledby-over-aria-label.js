@@ -1,7 +1,6 @@
 // Upstream: Playwright v1.64.1 tests/page/selectors-get-by.spec.ts:140
 // Test: getByLabel should prioritize aria-labelledby over aria-label
 // Lifted by tier2/convert.mjs. Rerun it instead of editing this file.
-// @needs R10c: locator.evaluate (R10c) not built yet
 const tier2 = tier2Runtime(fixtures)
 return tier2.done(await harness.settle((async () => {
   await page.goto(tier2.html(`<label id=other-label>Other</label><input id=target aria-label="Name" aria-labelledby=other-label>`));

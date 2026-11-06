@@ -401,7 +401,7 @@ async fn tests_that_a_navigation_retires_the_seq_even_across_processes() -> Test
         .await?;
     let stale = probe::call(&first, &ProbeRequest::Describe).await;
     assert!(
-        matches!(stale, Err(ProbeFailure::Gone)),
+        matches!(stale, Err(ProbeFailure::Gone(_))),
         "the old handle must fail, never answer from another context: {stale:?}"
     );
     let page = OpPage::admit(&live.playwright, &scope, &tab.page).await?;
@@ -429,7 +429,7 @@ async fn tests_that_a_navigation_retires_the_seq_even_across_processes() -> Test
     tab.navigate(&server.url("localhost", "/password.html?again"))
         .await?;
     let stale = probe::call(&second, &ProbeRequest::Describe).await;
-    assert!(matches!(stale, Err(ProbeFailure::Gone)), "{stale:?}");
+    assert!(matches!(stale, Err(ProbeFailure::Gone(_))), "{stale:?}");
     live.close(&tab).await;
     Ok(())
 }
@@ -576,7 +576,7 @@ async fn tests_that_a_second_playwright_rekeys_the_world_so_old_refs_fail() -> T
     ));
     navigate_frame(&tab, "?next").await?;
     let stale = probe::call(&other_child, &ProbeRequest::Describe).await;
-    assert!(matches!(stale, Err(ProbeFailure::Gone)), "{stale:?}");
+    assert!(matches!(stale, Err(ProbeFailure::Gone(_))), "{stale:?}");
     other_page.frames().invalidate(&other_child);
     let next = other_page.world(&child_endpoint, child_place).await?;
     assert_eq!(
@@ -935,7 +935,7 @@ async fn tests_that_a_renderer_swap_in_the_install_window_fails_gone_never_a_pag
         Err(_) => Value::Null,
     };
     assert!(
-        matches!(installed, Err(ProbeFailure::Gone)),
+        matches!(installed, Err(ProbeFailure::Gone(_))),
         "a new world's unique id names nothing in the next renderer: {installed:?} in {landed}"
     );
 
@@ -952,7 +952,7 @@ async fn tests_that_a_renderer_swap_in_the_install_window_fails_gone_never_a_pag
         Err(_) => Value::Null,
     };
     assert!(
-        matches!(installed, Err(ProbeFailure::Gone)),
+        matches!(installed, Err(ProbeFailure::Gone(_))),
         "the session reported the swap inside the window, so the number is not trusted: \
          {installed:?} in {landed}"
     );

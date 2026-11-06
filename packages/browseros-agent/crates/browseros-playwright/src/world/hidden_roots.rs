@@ -71,7 +71,7 @@ use futures_util::{StreamExt, stream};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, MutexGuard};
 
-use crate::probe::ProbeFailure;
+use crate::probe::{ProbeFailure, Ran};
 use crate::world::BackendNodeId;
 
 /// How many levels of the DOM one describe takes; the module doc says why 30.
@@ -142,7 +142,7 @@ impl HiddenRoots {
         let mut walk = Walk::default();
         let top = describe(session, json!({ "objectId": start }))
             .await?
-            .ok_or(ProbeFailure::Gone)?;
+            .ok_or(ProbeFailure::Gone(Ran::No))?;
         walk.subtree(&top, false)?;
         while !walk.cut.is_empty() {
             let described: Vec<Redescribed> = stream::iter(mem::take(&mut walk.cut))

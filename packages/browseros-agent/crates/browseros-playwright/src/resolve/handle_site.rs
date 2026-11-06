@@ -78,7 +78,7 @@ impl<'a> HandleSite<'a> {
                 node: resolved.object.object_id,
             })),
             Err(error) => match ProbeFailure::from_core(error) {
-                ProbeFailure::Gone => {
+                ProbeFailure::Gone(_) => {
                     page.frames().invalidate(&world);
                     Ok(None)
                 }
@@ -95,7 +95,7 @@ impl<'a> HandleSite<'a> {
     pub(crate) async fn call(&self, request: &ProbeRequest) -> Result<ProbeReply, PlaywrightError> {
         match probe::call_on(&self.world, request, &self.node).await {
             Ok(reply) => Ok(reply),
-            Err(ProbeFailure::Gone) => {
+            Err(ProbeFailure::Gone(_)) => {
                 self.page.frames().invalidate(&self.world);
                 Ok(ProbeReply::Detached)
             }

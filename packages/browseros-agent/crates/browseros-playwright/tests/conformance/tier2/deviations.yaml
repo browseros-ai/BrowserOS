@@ -6,55 +6,6 @@
 #
 # The cases are generated (tier2/convert.mjs), so an entry is fixed by changing Neo or the
 # converter, never the case, and is deleted in the commit that closes it.
-- case: locator-element-handle.should-query-existing-element-smoke
-  path: /returned
-  kind: finding
-  route: J4 prelude, R10c
-  reason: Upstream passes an ElementHandle argument to page.evaluate as its element
-    (page.evaluate(e => e.textContent, handle)), a pattern upstream's own tests use often. Neo's
-    prelude refuses any handle in an evaluate argument (prelude/options.ts) with this hint, and
-    no decision records the refusal. R10c resolves handles to main-world nodes for
-    elementHandle.evaluate, the step an argument needs too.
-  p:
-    L27: A
-  n:
-    threw:
-      message: "page.evaluate: Neo passes evaluate arguments as JSON, without handles; run the
-        function on the element itself with locator.evaluate(fn) or elementHandle.evaluate(fn)"
-      name: Error
-- case: locator-element-handle.should-query-existing-elements
-  path: /returned/L36
-  kind: finding
-  route: J4 prelude, R10c
-  reason: Upstream passes an ElementHandle argument to page.evaluate as its element
-    (page.evaluate(e => e.textContent, handle)), a pattern upstream's own tests use often. Neo's
-    prelude refuses any handle in an evaluate argument (prelude/options.ts) with this hint, and
-    no decision records the refusal. R10c resolves handles to main-world nodes for
-    elementHandle.evaluate, the step an argument needs too.
-  p:
-    - A
-    - B
-  n:
-    threw:
-      message: "page.evaluate: Neo passes evaluate arguments as JSON, without handles; run the
-        function on the element itself with locator.evaluate(fn) or elementHandle.evaluate(fn)"
-      name: Error
-- case: locator-element-handle.xpath-should-query-existing-element
-  path: /returned
-  kind: finding
-  route: J4 prelude, R10c
-  reason: Upstream passes an ElementHandle argument to page.evaluate as its element
-    (page.evaluate(e => e.textContent, handle)), a pattern upstream's own tests use often. Neo's
-    prelude refuses any handle in an evaluate argument (prelude/options.ts) with this hint, and
-    no decision records the refusal. R10c resolves handles to main-world nodes for
-    elementHandle.evaluate, the step an argument needs too.
-  p:
-    L54: A
-  n:
-    threw:
-      message: "page.evaluate: Neo passes evaluate arguments as JSON, without handles; run the
-        function on the element itself with locator.evaluate(fn) or elementHandle.evaluate(fn)"
-      name: Error
 - case: locator-misc-2.should-scroll-zero-sized-element-into-view
   path: /returned/L73/y
   kind: finding
@@ -129,46 +80,6 @@
     threw:
       message: cannot read property 'message' of undefined
       name: TypeError
-- case: page-click-scroll.should-not-scroll-nested-container-when-scroll-is-none
-  path: /returned/L143
-  kind: finding
-  route: page.evaluate privacy milestone (page/evaluate_guard.rs)
-  reason: "Upstream's page.evaluate returns undefined for a window property nothing set.
-    Neo's evaluate result is JSON (page/evaluate_guard.rs mask_completion), which has no
-    undefined, so it answers null, and the prelude cannot tell the two apart after the reply. The
-    op's reply would have to mark an undefined completion for the prelude to revive it."
-  p: (undefined)
-  n: null
-- case: page-click-scroll.should-not-scroll-on-hover-when-scroll-is-none
-  path: /returned/L156
-  kind: finding
-  route: page.evaluate privacy milestone (page/evaluate_guard.rs)
-  reason: "Upstream's page.evaluate returns undefined for a window property nothing set.
-    Neo's evaluate result is JSON (page/evaluate_guard.rs mask_completion), which has no
-    undefined, so it answers null, and the prelude cannot tell the two apart after the reply. The
-    op's reply would have to mark an undefined completion for the prelude to revive it."
-  p: (undefined)
-  n: null
-- case: page-click-scroll.should-not-scroll-the-page-when-scroll-is-none
-  path: /returned/L116
-  kind: finding
-  route: page.evaluate privacy milestone (page/evaluate_guard.rs)
-  reason: "Upstream's page.evaluate returns undefined for a window property nothing set.
-    Neo's evaluate result is JSON (page/evaluate_guard.rs mask_completion), which has no
-    undefined, so it answers null, and the prelude cannot tell the two apart after the reply. The
-    op's reply would have to mark an undefined completion for the prelude to revive it."
-  p: (undefined)
-  n: null
-- case: page-click-timeout-1.should-timeout-waiting-for-button-to-be-enabled
-  path: /returned/L33
-  kind: finding
-  route: page.evaluate privacy milestone (page/evaluate_guard.rs)
-  reason: "Upstream's page.evaluate returns undefined for a window property nothing set.
-    Neo's evaluate result is JSON (page/evaluate_guard.rs mask_completion), which has no
-    undefined, so it answers null, and the prelude cannot tell the two apart after the reply. The
-    op's reply would have to mark an undefined completion for the prelude to revive it."
-  p: (undefined)
-  n: null
 - case: page-click.should-click-in-a-transformed-iframe
   path: /returned
   kind: finding
@@ -199,151 +110,6 @@
     threw:
       message: "locator.click: an iframe on the way to the element has a CSS transform, which Neo cannot place input through yet"
       name: Error
-- case: page-click.should-click-the-button-when-window-innerwidth-is-corrupted
-  path: /returned
-  kind: finding
-  route: page.evaluate privacy milestone (page/evaluate_guard.rs)
-  reason: "The test's page.evaluate returns what Object.defineProperty(window, ...) returns,
-    the window itself. Upstream's serializer turns a window into a reference; Neo's evaluate
-    returns by value through CDP (page/evaluate_guard.rs), which refuses an object graph that deep,
-    so the evaluate throws before the click runs."
-  p:
-    L881: Clicked
-  n:
-    threw:
-      message: "page.evaluate: Cannot serialize result: object reference chain is too long."
-      name: Error
-- case: page-click.should-issue-clicks-in-parallel-in-page-and-popup
-  path: /returned/threw/message
-  kind: finding
-  route: page.evaluate privacy milestone (page/evaluate_guard.rs)
-  reason: "Upstream evaluates with a user gesture, so window.open from page.evaluate opens a
-    popup. Neo's evaluate calls Runtime.callFunctionOn without userGesture (page/evaluate_guard.rs),
-    so the browser's popup blocker drops it: measured, window.open returned null and no popup
-    event came, while the same call through a user-gesture eval opened one. Upstream then times
-    out clicking in the background popup on BrowserOS, which Neo never reaches."
-  p: "locator.click: Timeout <n>ms exceeded."
-  n: 'page.waitForEvent: Timeout <n>ms exceeded while waiting for event "popup"'
-- case: page-click.should-retry-when-element-detaches-after-animation
-  path: /returned/L782
-  kind: finding
-  route: page.evaluate privacy milestone (page/evaluate_guard.rs)
-  reason: "Upstream's page.evaluate returns undefined for a window property nothing set.
-    Neo's evaluate result is JSON (page/evaluate_guard.rs mask_completion), which has no
-    undefined, so it answers null, and the prelude cannot tell the two apart after the reply. The
-    op's reply would have to mark an undefined completion for the prelude to revive it."
-  p: (undefined)
-  n: null
-- case: page-click.should-retry-when-element-detaches-after-animation
-  path: /returned/L786
-  kind: finding
-  route: page.evaluate privacy milestone (page/evaluate_guard.rs)
-  reason: "Upstream's page.evaluate returns undefined for a window property nothing set.
-    Neo's evaluate result is JSON (page/evaluate_guard.rs mask_completion), which has no
-    undefined, so it answers null, and the prelude cannot tell the two apart after the reply. The
-    op's reply would have to mark an undefined completion for the prelude to revive it."
-  p: (undefined)
-  n: null
-- case: page-click.should-retry-when-element-detaches-after-animation
-  path: /returned/L790
-  kind: finding
-  route: page.evaluate privacy milestone (page/evaluate_guard.rs)
-  reason: "Upstream's page.evaluate returns undefined for a window property nothing set.
-    Neo's evaluate result is JSON (page/evaluate_guard.rs mask_completion), which has no
-    undefined, so it answers null, and the prelude cannot tell the two apart after the reply. The
-    op's reply would have to mark an undefined completion for the prelude to revive it."
-  p: (undefined)
-  n: null
-- case: page-click.should-wait-for-button-to-be-clickable-when-it-has-pointer-events-none
-  path: /returned/L708
-  kind: finding
-  route: page.evaluate privacy milestone (page/evaluate_guard.rs)
-  reason: "Upstream's page.evaluate returns undefined for a window property nothing set.
-    Neo's evaluate result is JSON (page/evaluate_guard.rs mask_completion), which has no
-    undefined, so it answers null, and the prelude cannot tell the two apart after the reply. The
-    op's reply would have to mark an undefined completion for the prelude to revive it."
-  p: (undefined)
-  n: null
-- case: page-click.should-wait-for-button-to-be-enabled
-  path: /returned/L658
-  kind: finding
-  route: page.evaluate privacy milestone (page/evaluate_guard.rs)
-  reason: "Upstream's page.evaluate returns undefined for a window property nothing set.
-    Neo's evaluate result is JSON (page/evaluate_guard.rs mask_completion), which has no
-    undefined, so it answers null, and the prelude cannot tell the two apart after the reply. The
-    op's reply would have to mark an undefined completion for the prelude to revive it."
-  p: (undefined)
-  n: null
-- case: page-click.should-wait-for-input-to-be-enabled
-  path: /returned/L670
-  kind: finding
-  route: page.evaluate privacy milestone (page/evaluate_guard.rs)
-  reason: "Upstream's page.evaluate returns undefined for a window property nothing set.
-    Neo's evaluate result is JSON (page/evaluate_guard.rs mask_completion), which has no
-    undefined, so it answers null, and the prelude cannot tell the two apart after the reply. The
-    op's reply would have to mark an undefined completion for the prelude to revive it."
-  p: (undefined)
-  n: null
-- case: page-click.should-wait-for-label-to-be-clickable-when-it-has-pointer-events-none
-  path: /returned/L720
-  kind: finding
-  route: page.evaluate privacy milestone (page/evaluate_guard.rs)
-  reason: "Upstream's page.evaluate returns undefined for a window property nothing set.
-    Neo's evaluate result is JSON (page/evaluate_guard.rs mask_completion), which has no
-    undefined, so it answers null, and the prelude cannot tell the two apart after the reply. The
-    op's reply would have to mark an undefined completion for the prelude to revive it."
-  p: (undefined)
-  n: null
-- case: page-click.should-wait-for-label-to-be-clickable-when-it-has-pointer-events-none
-  path: /returned/L720#2
-  kind: finding
-  route: page.evaluate privacy milestone (page/evaluate_guard.rs)
-  reason: "Upstream's page.evaluate returns undefined for a window property nothing set.
-    Neo's evaluate result is JSON (page/evaluate_guard.rs mask_completion), which has no
-    undefined, so it answers null, and the prelude cannot tell the two apart after the reply. The
-    op's reply would have to mark an undefined completion for the prelude to revive it."
-  p: (undefined)
-  n: null
-- case: page-click.should-wait-for-label-to-be-clickable-when-it-has-pointer-events-none
-  path: /returned/L720#3
-  kind: finding
-  route: page.evaluate privacy milestone (page/evaluate_guard.rs)
-  reason: "Upstream's page.evaluate returns undefined for a window property nothing set.
-    Neo's evaluate result is JSON (page/evaluate_guard.rs mask_completion), which has no
-    undefined, so it answers null, and the prelude cannot tell the two apart after the reply. The
-    op's reply would have to mark an undefined completion for the prelude to revive it."
-  p: (undefined)
-  n: null
-- case: page-click.should-wait-for-label-to-be-clickable-when-it-has-pointer-events-none
-  path: /returned/L720#4
-  kind: finding
-  route: page.evaluate privacy milestone (page/evaluate_guard.rs)
-  reason: "Upstream's page.evaluate returns undefined for a window property nothing set.
-    Neo's evaluate result is JSON (page/evaluate_guard.rs mask_completion), which has no
-    undefined, so it answers null, and the prelude cannot tell the two apart after the reply. The
-    op's reply would have to mark an undefined completion for the prelude to revive it."
-  p: (undefined)
-  n: null
-- case: page-click.should-wait-for-label-to-be-clickable-when-it-has-pointer-events-none
-  path: /returned/L720#5
-  kind: finding
-  route: page.evaluate privacy milestone (page/evaluate_guard.rs)
-  reason: "Upstream's page.evaluate returns undefined for a window property nothing set.
-    Neo's evaluate result is JSON (page/evaluate_guard.rs mask_completion), which has no
-    undefined, so it answers null, and the prelude cannot tell the two apart after the reply. The
-    op's reply would have to mark an undefined completion for the prelude to revive it."
-  p: (undefined)
-  n: null
-- case: page-click.should-wait-for-select-to-be-enabled
-  path: /returned/L690
-  kind: finding
-  route: page.evaluate privacy milestone (page/evaluate_guard.rs)
-  reason: "Upstream's page.evaluate returns undefined for a window property nothing set.
-    Neo's evaluate result is JSON (page/evaluate_guard.rs mask_completion), which has no
-    undefined, so it answers null, and the prelude cannot tell the two apart after the reply. The
-    op's reply would have to mark an undefined completion for the prelude to revive it."
-  p: (undefined)
-  n: null
 - case: page-wait-for-selector-1.should-throw-on-waitfor
   path: /returned/L33
   kind: finding
@@ -357,36 +123,6 @@
     threw:
       message: cannot read property 'message' of undefined
       name: TypeError
-- case: page-wait-for-selector-1.should-work-with-removed-mutationobserver
-  path: /returned/L93
-  kind: finding
-  route: J4 prelude, R10c
-  reason: Upstream passes an ElementHandle argument to page.evaluate as its element
-    (page.evaluate(e => e.textContent, handle)), a pattern upstream's own tests use often. Neo's
-    prelude refuses any handle in an evaluate argument (prelude/options.ts) with this hint, and
-    no decision records the refusal. R10c resolves handles to main-world nodes for
-    elementHandle.evaluate, the step an argument needs too.
-  p: anything
-  n:
-    threw:
-      message: "page.evaluate: Neo passes evaluate arguments as JSON, without handles; run the
-        function on the element itself with locator.evaluate(fn) or elementHandle.evaluate(fn)"
-      name: Error
-- case: page-wait-for-selector-2.should-allow-you-to-select-an-element-with-single-slash-xpath
-  path: /returned/L272
-  kind: finding
-  route: J4 prelude, R10c
-  reason: Upstream passes an ElementHandle argument to page.evaluate as its element
-    (page.evaluate(e => e.textContent, handle)), a pattern upstream's own tests use often. Neo's
-    prelude refuses any handle in an evaluate argument (prelude/options.ts) with this hint, and
-    no decision records the refusal. R10c resolves handles to main-world nodes for
-    elementHandle.evaluate, the step an argument needs too.
-  p: some text
-  n:
-    threw:
-      message: "page.evaluate: Neo passes evaluate arguments as JSON, without handles; run the
-        function on the element itself with locator.evaluate(fn) or elementHandle.evaluate(fn)"
-      name: Error
 - case: page-wait-for-selector-2.should-have-correct-stack-trace-for-timeout
   path: /returned/L165
   kind: finding
@@ -397,51 +133,6 @@
     the message first.
   p: "page.waitForSelector: Timeout <n>ms exceeded."
   n: ""
-- case: page-wait-for-selector-2.should-return-the-element-handle
-  path: /returned/L159
-  kind: finding
-  route: J4 prelude, R10c
-  reason: Upstream passes an ElementHandle argument to page.evaluate as its element
-    (page.evaluate(e => e.textContent, handle)), a pattern upstream's own tests use often. Neo's
-    prelude refuses any handle in an evaluate argument (prelude/options.ts) with this hint, and
-    no decision records the refusal. R10c resolves handles to main-world nodes for
-    elementHandle.evaluate, the step an argument needs too.
-  p: anything
-  n:
-    threw:
-      message: "page.evaluate: Neo passes evaluate arguments as JSON, without handles; run the
-        function on the element itself with locator.evaluate(fn) or elementHandle.evaluate(fn)"
-      name: Error
-- case: page-wait-for-selector-2.should-return-the-element-handle-xpath
-  path: /returned/L266
-  kind: finding
-  route: J4 prelude, R10c
-  reason: Upstream passes an ElementHandle argument to page.evaluate as its element
-    (page.evaluate(e => e.textContent, handle)), a pattern upstream's own tests use often. Neo's
-    prelude refuses any handle in an evaluate argument (prelude/options.ts) with this hint, and
-    no decision records the refusal. R10c resolves handles to main-world nodes for
-    elementHandle.evaluate, the step an argument needs too.
-  p: anything
-  n:
-    threw:
-      message: "page.evaluate: Neo passes evaluate arguments as JSON, without handles; run the
-        function on the element itself with locator.evaluate(fn) or elementHandle.evaluate(fn)"
-      name: Error
-- case: page-wait-for-selector-2.should-support-some-fancy-xpath
-  path: /returned/L228
-  kind: finding
-  route: J4 prelude, R10c
-  reason: Upstream passes an ElementHandle argument to page.evaluate as its element
-    (page.evaluate(e => e.textContent, handle)), a pattern upstream's own tests use often. Neo's
-    prelude refuses any handle in an evaluate argument (prelude/options.ts) with this hint, and
-    no decision records the refusal. R10c resolves handles to main-world nodes for
-    elementHandle.evaluate, the step an argument needs too.
-  p: "hello  world  "
-  n:
-    threw:
-      message: "page.evaluate: Neo passes evaluate arguments as JSON, without handles; run the
-        function on the element itself with locator.evaluate(fn) or elementHandle.evaluate(fn)"
-      name: Error
 - case: page-wait-for-selector-2.should-throw-for-false-state-option
   path: /returned/L193
   kind: finding
@@ -494,21 +185,119 @@
     cannot use ~= in attribute with non-string matching value - true"
   n: "page.$: Error while parsing selector `checkbox[checked~=true]` - cannot use ~= in attribute
     with non-string matching value - true"
-- case: page-click.should-fail-when-element-detaches-after-animation
-  path: /returned/L772
+- case: page-fill.should-fill-different-input-types
+  path: /returned/L50
+  kind: decided
+  reason: "The privacy design (D14, page/evaluate_guard.rs): a main-world result is masked
+    with the raw value of every sensitive field the sweeps found, and the page's window.result
+    is the input's value. The case types the input as a password first, and core's seal
+    remembers an input it has seen typed as a password (held-methods milestone 1, m1-handoff's
+    core section; seal.js wasPassword), so its value stays sensitive after the case changes the
+    type to search, tel, text, url or an invalid type, and each read is masked whole."
+  p: text password
+  n: "[private]"
+- case: page-fill.should-fill-different-input-types
+  path: /returned/L50#2
+  kind: decided
+  reason: "The privacy design (D14, page/evaluate_guard.rs): a main-world result is masked
+    with the raw value of every sensitive field the sweeps found, and the page's window.result
+    is the input's value. The case types the input as a password first, and core's seal
+    remembers an input it has seen typed as a password (held-methods milestone 1, m1-handoff's
+    core section; seal.js wasPassword), so its value stays sensitive after the case changes the
+    type to search, tel, text, url or an invalid type, and each read is masked whole."
+  p: text search
+  n: "[private]"
+- case: page-fill.should-fill-different-input-types
+  path: /returned/L50#3
+  kind: decided
+  reason: "The privacy design (D14, page/evaluate_guard.rs): a main-world result is masked
+    with the raw value of every sensitive field the sweeps found, and the page's window.result
+    is the input's value. The case types the input as a password first, and core's seal
+    remembers an input it has seen typed as a password (held-methods milestone 1, m1-handoff's
+    core section; seal.js wasPassword), so its value stays sensitive after the case changes the
+    type to search, tel, text, url or an invalid type, and each read is masked whole."
+  p: text tel
+  n: "[private]"
+- case: page-fill.should-fill-different-input-types
+  path: /returned/L50#4
+  kind: decided
+  reason: "The privacy design (D14, page/evaluate_guard.rs): a main-world result is masked
+    with the raw value of every sensitive field the sweeps found, and the page's window.result
+    is the input's value. The case types the input as a password first, and core's seal
+    remembers an input it has seen typed as a password (held-methods milestone 1, m1-handoff's
+    core section; seal.js wasPassword), so its value stays sensitive after the case changes the
+    type to search, tel, text, url or an invalid type, and each read is masked whole."
+  p: text text
+  n: "[private]"
+- case: page-fill.should-fill-different-input-types
+  path: /returned/L50#5
+  kind: decided
+  reason: "The privacy design (D14, page/evaluate_guard.rs): a main-world result is masked
+    with the raw value of every sensitive field the sweeps found, and the page's window.result
+    is the input's value. The case types the input as a password first, and core's seal
+    remembers an input it has seen typed as a password (held-methods milestone 1, m1-handoff's
+    core section; seal.js wasPassword), so its value stays sensitive after the case changes the
+    type to search, tel, text, url or an invalid type, and each read is masked whole."
+  p: text url
+  n: "[private]"
+- case: page-fill.should-fill-different-input-types
+  path: /returned/L50#6
+  kind: decided
+  reason: "The privacy design (D14, page/evaluate_guard.rs): a main-world result is masked
+    with the raw value of every sensitive field the sweeps found, and the page's window.result
+    is the input's value. The case types the input as a password first, and core's seal
+    remembers an input it has seen typed as a password (held-methods milestone 1, m1-handoff's
+    core section; seal.js wasPassword), so its value stays sensitive after the case changes the
+    type to search, tel, text, url or an invalid type, and each read is masked whole."
+  p: text invalid-type
+  n: "[private]"
+- case: page-click.should-click-in-a-nested-transformed-iframe
+  path: /returned
   kind: finding
-  route: R10b evaluate, J4 prelude
-  reason: page.evaluate('window.clicked') reads a global the page never set. Upstream returns
-    undefined; Neo's evaluate result crosses the wire as JSON, which has no undefined, so it
-    arrives as null. The click itself (handle.click on a detached element) matches upstream.
-  p: (undefined)
-  n: null
-- case: page-click.should-report-nice-error-when-element-is-detached-and-force-clicked
-  path: /returned/L761
+  route: R8 pointer actions
+  reason: "As page-click.should-click-in-a-transformed-iframe, through two scaled iframes:
+    upstream maps the point through each frame's quads, and Neo refuses input through an iframe
+    with a transform on the way to the element (action/frame_projection.rs,
+    Projection::Transformed). Its locator.evaluate, which kept the case skipped until milestone
+    1, matches."
+  p:
+    L1154: true
+  n:
+    threw:
+      message: "locator.click: an iframe on the way to the element has a CSS transform, which Neo cannot place input through yet"
+      name: Error
+- case: selectors-css.should-work-with-is
+  path: /returned/L389
   kind: finding
-  route: R10b evaluate, J4 prelude
-  reason: page.evaluate('window.clicked') reads a global the page never set. Upstream returns
-    undefined; Neo's evaluate result crosses the wire as JSON, which has no undefined, so it
-    arrives as null. The forced click on the detached handle fails with upstream's message.
-  p: (undefined)
-  n: null
+  route: sdk-skeleton (apps/claw-sdk bootstrap.js plain)
+  reason: "claw-sdk's run bootstrap encodes an op's input with a recursive plain() on the
+    run's 512 KiB QuickJS stack (apps/claw-sdk/src/runtime/js/bootstrap.js), the depth limit
+    m1-handoff's sdk-skeleton line 4 names for revive. The locator brand carries the parsed
+    selector, and a :scope nested in :has() parses deep enough to overflow it in Runner N's
+    debug build (measured: the op received {$neo: invalid, reason: 'the input could not be
+    encoded: Maximum call stack size exceeded'}, which its decode refuses). The case's other
+    selectors match. A release build's frames are smaller (unmeasured), and an iterative
+    plain() would carry the input."
+  p: 1
+  n:
+    threw:
+      message: "page.$$eval: $neo: unknown field `$neo`, expected `target` or `script`"
+      name: Error
+- case: selectors-css.should-work-with-scope
+  path: /returned/L431
+  kind: finding
+  route: sdk-skeleton (apps/claw-sdk bootstrap.js plain)
+  reason: "claw-sdk's run bootstrap encodes an op's input with a recursive plain() on the
+    run's 512 KiB QuickJS stack (apps/claw-sdk/src/runtime/js/bootstrap.js), the depth limit
+    m1-handoff's sdk-skeleton line 4 names for revive. The locator brand carries the parsed
+    selector, and a :scope nested in :has() parses deep enough to overflow it in Runner N's
+    debug build (measured: the op received {$neo: invalid, reason: 'the input could not be
+    encoded: Maximum call stack size exceeded'}, which its decode refuses). The case's other
+    selectors match. A release build's frames are smaller (unmeasured), and an iterative
+    plain() would carry the input."
+  p:
+    - inner
+  n:
+    threw:
+      message: "page.$$eval: $neo: unknown field `$neo`, expected `target` or `script`"
+      name: Error

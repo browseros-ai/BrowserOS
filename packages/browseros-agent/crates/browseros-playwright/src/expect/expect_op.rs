@@ -167,13 +167,12 @@ async fn main_frame(
 ) -> Result<Poll, PlaywrightError> {
     let world = match page.world(&page.main_endpoint(), Place::Main).await {
         Ok(world) => world,
-        Err(ProbeFailure::Gone) => return Ok(Poll::Missing),
+        Err(ProbeFailure::Gone(_)) => return Ok(Poll::Missing),
         Err(failure) => return Err(resolve::failed(scope, failure)),
     };
-    let (called, site) = resolve::ask_masked(page, scope, &world, request).await?;
-    match called {
-        Ok(reply) => expect.poll_of(scope, reply, || Ok(site)),
-        Err(ProbeFailure::Gone) => {
+    match resolve::ask_masked(page, scope, &world, request).await? {
+        Ok(asked) => expect.poll_of(scope, asked.reply, || Ok(asked.alongside)),
+        Err(ProbeFailure::Gone(_)) => {
             page.frames().invalidate(&world);
             Ok(Poll::Missing)
         }

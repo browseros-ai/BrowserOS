@@ -1,7 +1,6 @@
 // Upstream: Playwright v1.64.1 tests/page/page-check.spec.ts:109
 // Test: should check the box inside a button
 // Lifted by tier2/convert.mjs. Rerun it instead of editing this file.
-// @needs R10c: $eval (R10c) not built yet
 const tier2 = tier2Runtime(fixtures)
 return tier2.done(await harness.settle((async () => {
   await page.goto(tier2.html(`<div role='button'><input type='checkbox'></div>`));

@@ -1,7 +1,6 @@
 // Upstream: Playwright v1.64.1 tests/page/selectors-get-by.spec.ts:74
 // Test: getByLabel should work
 // Lifted by tier2/convert.mjs. Rerun it instead of editing this file.
-// @needs R10c: locator.evaluate (R10c) not built yet
 const tier2 = tier2Runtime(fixtures)
 return tier2.done(await harness.settle((async () => {
   await page.goto(tier2.html(`<div><label for=target>Name</label><input id=target type=text></div>`));

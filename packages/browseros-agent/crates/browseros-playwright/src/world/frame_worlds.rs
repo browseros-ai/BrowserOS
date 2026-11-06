@@ -350,7 +350,7 @@ mod tests {
     use tokio::task;
 
     use super::{FrameWorlds, ParentLink, Place, SeqLookup, WorldKey};
-    use crate::probe::ProbeFailure;
+    use crate::probe::{ProbeFailure, Ran};
     use crate::test_env;
     use crate::world::{FrameSeq, Installed, SealedWorld};
 
@@ -506,10 +506,10 @@ mod tests {
         let worlds = FrameWorlds::new(FrameSeq(0));
         let failed = worlds
             .world_with(key("S", "main"), Place::Main, |_| async {
-                Err(ProbeFailure::Gone)
+                Err(ProbeFailure::Gone(Ran::No))
             })
             .await;
-        assert!(matches!(failed, Err(ProbeFailure::Gone)));
+        assert!(matches!(failed, Err(ProbeFailure::Gone(_))));
         let installs = AtomicU32::new(0);
         let world = install(&worlds, ("S", "main"), Place::Main, &installs).await?;
         assert_eq!(

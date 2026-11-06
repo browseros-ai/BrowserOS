@@ -19,7 +19,7 @@ use tokio::sync::broadcast::error::TryRecvError;
 use tokio::time::{self, Instant};
 
 use crate::page::FRAME_BUDGET;
-use crate::probe::{self, PROBE_PROTOCOL, ProbeFailure, ProbeReply};
+use crate::probe::{self, PROBE_PROTOCOL, ProbeFailure, ProbeReply, Ran};
 use crate::world::engine_source::install_function;
 use crate::world::hidden_roots::{self, HiddenRoots, WatchedRoots};
 use crate::world::{BackendNodeId, ContextId, Epoch, FrameSeq};
@@ -337,13 +337,13 @@ impl SealedWorld {
         let named = match watch.read(&session_id, &frame, context)? {
             Reported::Created(unique) => Named::Unique(unique),
             Reported::Nothing => Named::Number(context),
-            Reported::Churned => return Err(ProbeFailure::Gone),
+            Reported::Churned => return Err(ProbeFailure::Gone(Ran::No)),
         };
         let global = global_of(&session, &named).await?;
         if matches!(named, Named::Number(_))
             && watch.read(&session_id, &frame, context)? != Reported::Nothing
         {
-            return Err(ProbeFailure::Gone);
+            return Err(ProbeFailure::Gone(Ran::No));
         }
         let called = session
             .send::<_, Value>(
@@ -552,7 +552,7 @@ impl SealedWorld {
             .map_err(ProbeFailure::from_core)?;
         match called.pointer("/result/value") {
             Some(Value::Bool(true)) => Ok(()),
-            Some(Value::Bool(false)) => Err(ProbeFailure::Gone),
+            Some(Value::Bool(false)) => Err(ProbeFailure::Gone(Ran::No)),
             _ => Err(ProbeFailure::Broken(
                 "the seal did not take the elements to watch".to_owned(),
             )),
@@ -606,13 +606,13 @@ impl SealedWorld {
                 ProbeFailure::Cdp(CoreError::Cdp(CdpError::Protocol { message, .. }))
                     if message.contains("same JavaScript world") =>
                 {
-                    ProbeFailure::Gone
+                    ProbeFailure::Gone(Ran::No)
                 }
                 failure => failure,
             })?;
         match called.pointer("/result/value") {
             Some(Value::Bool(true)) => Ok(()),
-            Some(Value::Bool(false)) => Err(ProbeFailure::Gone),
+            Some(Value::Bool(false)) => Err(ProbeFailure::Gone(Ran::No)),
             _ => Err(ProbeFailure::Broken(
                 "the seal did not take the hidden shadow roots to watch".to_owned(),
             )),
@@ -721,7 +721,7 @@ async fn global_of(session: &ProtocolSession, named: &Named) -> Result<String, P
             CoreError::Cdp(CdpError::Protocol { message, .. })
                 if message.contains(UNIQUE_CONTEXT_GONE) =>
             {
-                ProbeFailure::Gone
+                ProbeFailure::Gone(Ran::No)
             }
             _ => ProbeFailure::from_core(error),
         })?;
@@ -1060,7 +1060,7 @@ mod tests {
             );
             let installed = install(&browser).await;
             assert!(
-                matches!(installed, Err(ProbeFailure::Gone)),
+                matches!(installed, Err(ProbeFailure::Gone(_))),
                 "{name}/{kind}/{frame}: {installed:?}"
             );
             assert!(
@@ -1103,7 +1103,7 @@ mod tests {
             swapped.on("Runtime.evaluate", event, params);
             let installed = install(&swapped).await;
             assert!(
-                matches!(installed, Err(ProbeFailure::Gone)),
+                matches!(installed, Err(ProbeFailure::Gone(_))),
                 "{event}: {installed:?}"
             );
             assert!(
@@ -1124,7 +1124,7 @@ mod tests {
         );
         let installed = install(&gone).await;
         assert!(
-            matches!(installed, Err(ProbeFailure::Gone)),
+            matches!(installed, Err(ProbeFailure::Gone(_))),
             "{installed:?}"
         );
 
@@ -1140,7 +1140,7 @@ mod tests {
         }
         let installed = install(&flooded).await;
         assert!(
-            matches!(installed, Err(ProbeFailure::Gone)),
+            matches!(installed, Err(ProbeFailure::Gone(_))),
             "{installed:?}"
         );
         assert!(flooded.calls("Runtime.evaluate")?.is_empty());

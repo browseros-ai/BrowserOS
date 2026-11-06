@@ -1026,6 +1026,52 @@ async fn tests_that_wait_for_times_out_with_upstreams_call_log() -> TestResult {
     live.close(&page).await
 }
 
+/// Upstream's `should survive cross-process navigation` (page-wait-for-selector-2.spec.ts:23):
+/// a wait goes on polling while its page navigates within its site and then from site to site,
+/// and finds the element in the last process's document. A poll that lands mid-navigation, its
+/// frame gone under the site sweep it starts with, lands nowhere, as its read would. The page
+/// changes process four times so that some poll lands mid-way (one change failed 2 of 3 runs
+/// before the fix).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
+async fn tests_that_a_wait_survives_a_cross_process_navigation() -> TestResult {
+    let live = LiveBrowser::connect().await?;
+    let server = FixtureServer::start(HashMap::from([
+        ("/empty.html".to_owned(), Page::html("<p>empty</p>")),
+        (
+            "/box.html".to_owned(),
+            Page::html("<div class=\"box\">box</div>"),
+        ),
+    ]))
+    .await?;
+    let page = live.open(&server.url("127.0.0.1", "/empty.html")).await?;
+    let goto = |url: String| live.invoke("page.goto", json!({ "page": page.brand(), "url": url }));
+    let wait = live.invoke(
+        "locator.waitFor",
+        json!({ "call": { "api": "page.waitForSelector", "timeoutMs": 10_000 },
+                "target": at(&page, ".box"), "strict": "firstMatch", "state": "visible",
+                "omitReturnValue": true }),
+    );
+    let navigate = async {
+        goto(server.url("127.0.0.1", "/empty.html?again")).await??;
+        live.invoke("page.reload", json!({ "page": page.brand() }))
+            .await??;
+        for host in ["localhost", "127.0.0.1", "localhost"] {
+            goto(server.url(host, "/empty.html")).await??;
+        }
+        goto(server.url("127.0.0.1", "/box.html")).await??;
+        TestResult::Ok(())
+    };
+    let (waited, navigated) = tokio::join!(wait, navigate);
+    navigated?;
+    assert_eq!(
+        waited??,
+        Value::Null,
+        "the wait found the box on the other site"
+    );
+    live.close(&page).await
+}
+
 /// `elementHandle.waitForElementState(state, { timeout })`.
 fn element_state(handle: &Value, state: &str, timeout_ms: u64) -> Value {
     json!({ "call": { "api": "elementHandle.waitForElementState", "timeoutMs": timeout_ms },

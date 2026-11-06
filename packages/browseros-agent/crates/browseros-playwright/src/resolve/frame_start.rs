@@ -211,7 +211,7 @@ async fn enter_child(
             ),
         )),
         Ok(other) => Err(resolve::refused(scope, other)),
-        Err(ProbeFailure::Gone) => Ok(Hopped::ParentGone),
+        Err(ProbeFailure::Gone(_)) => Ok(Hopped::ParentGone),
         Err(failure) => Err(resolve::failed(scope, failure)),
     }
 }
@@ -220,7 +220,7 @@ async fn enter_child(
 /// there (a protocol error), or the op fails.
 fn gone_or(scope: &OpScope<'_>, error: CoreError) -> Result<Hopped, PlaywrightError> {
     match ProbeFailure::from_core(error) {
-        ProbeFailure::Gone => Ok(Hopped::ParentGone),
+        ProbeFailure::Gone(_) => Ok(Hopped::ParentGone),
         ProbeFailure::Cdp(CoreError::Cdp(CdpError::Protocol { .. })) => Ok(Hopped::Missing),
         failure => Err(resolve::failed(scope, failure)),
     }

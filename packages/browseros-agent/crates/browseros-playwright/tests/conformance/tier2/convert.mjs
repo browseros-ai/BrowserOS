@@ -23,6 +23,9 @@
  *                           under the expect's upstream line, and Runner P is the oracle for it
  *   expect(v).toMatch(/re/) tier2.record('L<line>', () => tier2.matches(v, /re/)): upstream's
  *                           pattern is what it accepts, so its verdict is what is compared
+ *   expect(v).toBeLessThan(n)
+ *                           tier2.record('L<line>', () => (v) < (n)): so is its bound, and the
+ *                           same for <=, > and >= (a count of scroll events, say)
  *   await expect(l).toX()   tier2.record('L<line>', () => expect(l).toX()): a web-first
  *                           assertion is kept and its outcome recorded (tier2.pass where its
  *                           promise is used, so a rejection still reaches the test)
@@ -34,12 +37,13 @@
  *   window.builtins         window: Playwright installs builtins only under its own test mode
  *                           (utilityScript.ts isUnderTest), and nothing here emulates a clock
  *
- * A member Neo has but has not built yet gives the case a `// @needs <unit>` line naming the
- * unit that builds it (UNITS), so both runners skip it until that unit lands. When it lands,
- * drop its members from memberStatus (and web-first matchers from `assertion`) and rerun:
- * the cases lose their `@needs` line and both runners run them. A recorded value is shaped
- * as JSON by the runtime at the end of each case: handles and locators become `(Locator)` and
- * the like, and messages lose their call log and stack frames, which are each runner's own.
+ * A member Neo has but has not built yet, or a page Neo cannot run a test on yet (SWEEP_COST),
+ * gives the case a `// @needs <unit>` line naming the unit that builds it (UNITS), so both
+ * runners skip it until that unit lands. When it lands, drop its members from memberStatus
+ * (and web-first matchers from `assertion`, or its tests from SWEEP_COST) and rerun: the
+ * cases lose their `@needs` line and both runners run them. A recorded value is shaped as JSON
+ * by the runtime at the end of each case: handles and locators become `(Locator)` and the
+ * like, and messages lose their call log and stack frames, which are each runner's own.
  */
 import { createHash } from 'node:crypto'
 import {
@@ -70,11 +74,34 @@ const UTILS = 'tests/config/utils.ts'
 
 // ---- the domain: what each upstream name means to Neo ------------------------------------
 
-/** The units building members Neo has but has not built, as `@needs` names them. */
+/**
+ * The units building what a lifted test needs and Neo has not built, as `@needs` names them:
+ * a member (memberStatus), or the cost a test's page asks for (SWEEP_COST).
+ */
 const UNITS = {
-  R10c: 'R10c builds locator.evaluate, evaluateAll, $eval and $$eval',
+  'sweep-cost':
+    "the privacy sweep's cost on big pages (m1-handoff's owner question)",
   unowned: 'no unit builds this yet',
 }
+
+/**
+ * Tests Neo runs, but not on their page within a case's budget, by spec and title: they
+ * build 24,575 elements and run main-world scripts over them. Measured on BrowserOS neo under
+ * the delegates' load (load average 40 to 55): each op's sweep of such a page takes about
+ * FRAME_BUDGET (1 s) and fails the op closed past it, one `$$eval` of one match took 3.2 s, and
+ * the selectors-css case ran past Runner N's 90 s, while Runner P finished both in the same
+ * runs. Drop an entry once its case fits, and the unit once none is left.
+ */
+const SWEEP_COST = new Map([
+  [
+    'tests/page/selectors-css.spec.ts > should work with large DOM @smoke',
+    'cheap sweeps of a 24,575-element page',
+  ],
+  [
+    'tests/page/selectors-text.spec.ts > should work with large DOM',
+    'cheap sweeps of a 24,575-element page',
+  ],
+])
 
 /**
  * Upstream's worker fixtures whose value is fixed for these runs: Chromium, not Android,
@@ -168,17 +195,8 @@ const MAIN_FRAME_ONLY = new Set(['content', 'title', 'waitForFunction'])
 function memberStatus(name, kind) {
   if (UNSUPPORTED.has(name) || UNSUPPORTED_ON[kind]?.has(name))
     return { unsupported: `${kind === 'unknown' ? '' : `${kind}.`}${name}` }
-  if (name === '$eval' || name === '$$eval' || name === 'evaluateAll')
-    return { needs: 'R10c', what: name }
-  if (name === 'evaluate') {
-    if (kind === 'page') return null
-    if (kind === 'frame')
-      return { needs: 'unowned', what: 'evaluate in a child frame' }
-    return {
-      needs: 'R10c',
-      what: `${kind === 'handle' ? 'elementHandle' : 'locator'}.evaluate`,
-    }
-  }
+  if (name === 'evaluate' && kind === 'frame')
+    return { needs: 'unowned', what: 'evaluate in a child frame' }
   if (kind === 'frame' && MAIN_FRAME_ONLY.has(name))
     return { needs: 'unowned', what: `${name} in a child frame` }
   if (name === 'screenshot' && (kind === 'locator' || kind === 'handle'))
@@ -207,7 +225,6 @@ const WEB_FIRST = new Set([
   'toHaveCount',
   'toHaveCSS',
   'toHaveId',
-  'toHaveJSProperty',
   'toHaveRole',
   'toHaveText',
   'toHaveTitle',
@@ -243,9 +260,20 @@ const GENERIC = new Set([
   'toThrow',
   'toThrowError',
 ])
-/** Matchers Neo refuses (unsupported.ts's expect entries). */
+/** The ordering matchers, whose verdict a lifted case records (see the header). */
+const ORDERING = {
+  toBeGreaterThan: '>',
+  toBeGreaterThanOrEqual: '>=',
+  toBeLessThan: '<',
+  toBeLessThanOrEqual: '<=',
+}
+/**
+ * Matchers Neo refuses: unsupported.ts's expect entries, and toHaveJSProperty, which the crate
+ * refuses because the sealed world never sees the page's own objects (expect/expectation.rs).
+ */
 const UNSUPPORTED_MATCHERS = new Set([
   'toBeOK',
+  'toHaveJSProperty',
   'toHaveScreenshot',
   'toMatchAriaSnapshot',
   'toMatchSnapshot',
@@ -504,11 +532,17 @@ class Source {
       const matches =
         chain.matcher === 'toMatch' &&
         ['RegExpLiteral', 'StringLiteral'].includes(pattern?.type)
+      // A bound is what upstream accepts too: a count of scroll events varies from run to run
+      // in both runners, and only whether it stays under the bound is upstream's to judge.
+      const order =
+        node.arguments.length === 1 ? ORDERING[chain.matcher] : undefined
       this.edit(node.start, node.end, () => {
         let received = this.nodeText(chain.received)
         if (calls) received = `(${received})()`
         if (matches)
           received = `tier2.matches(${received}, ${this.nodeText(pattern)})`
+        if (order !== undefined)
+          received = `(${received}) ${order} (${this.nodeText(pattern)})`
         const thunk = `${awaits ? 'async ' : ''}() => (${received})`
         const call = `tier2.record(${key}, ${thunk})`
         return awaits ? `(await ${call})` : call
@@ -1568,6 +1602,8 @@ for (const test of tests) {
   if (lift.skip === null) scan(lift, test.fn, { test: true })
   const where = `${test.source.path}:${test.line}`
   const title = test.titles.join(' > ')
+  const costly = SWEEP_COST.get(`${test.source.path} > ${title}`)
+  if (costly !== undefined) lift.need('sweep-cost', costly)
   if (lift.skip !== null) {
     skipped.push({
       test: where,
@@ -1642,7 +1678,7 @@ const byKind = Object.entries(counts.skipped)
   .map(([kind, count]) => `${count} ${kind}`)
   .join(', ')
 console.log(
-  `${tests.length} upstream tests in ${specs.length} specs: ${counts.lifted} lifted (${counts.runs} run now; @needs ${byUnit}), ${skipped.length} skipped (${byKind})`,
+  `${tests.length} upstream tests in ${specs.length} specs: ${counts.lifted} lifted (${counts.runs} run now; @needs ${byUnit || 'none'}), ${skipped.length} skipped (${byKind})`,
 )
 if (check && stale > 0) {
   console.log(`${stale} files differ; rerun node tier2/convert.mjs`)

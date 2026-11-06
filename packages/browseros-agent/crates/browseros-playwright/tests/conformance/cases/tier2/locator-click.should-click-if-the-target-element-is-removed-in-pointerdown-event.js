@@ -1,7 +1,6 @@
 // Upstream: Playwright v1.64.1 tests/page/locator-click.spec.ts:57
 // Test: should click if the target element is removed in pointerdown event
 // Lifted by tier2/convert.mjs. Rerun it instead of editing this file.
-// @needs R10c: $eval (R10c) not built yet
 const tier2 = tier2Runtime(fixtures)
 return tier2.done(await harness.settle((async () => {
   await page.goto(tier2.html(`<button id=clickme>Clickable</button>`));

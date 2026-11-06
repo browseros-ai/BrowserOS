@@ -1,7 +1,6 @@
 // Upstream: Playwright v1.64.1 tests/page/locator-query.spec.ts:57
 // Test: should throw on due to strictness 2
 // Lifted by tier2/convert.mjs. Rerun it instead of editing this file.
-// @needs R10c: locator.evaluate (R10c) not built yet
 const tier2 = tier2Runtime(fixtures)
 return tier2.done(await harness.settle((async () => {
   await page.goto(tier2.html(`<select><option>One</option><option>Two</option></select>`));

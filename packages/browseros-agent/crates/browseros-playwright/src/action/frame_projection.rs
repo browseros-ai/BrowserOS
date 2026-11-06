@@ -137,7 +137,7 @@ async fn frame_box(
         }) => Placed::Origin(origin),
         Ok(ProbeReply::FrameBox { origin: None, .. }) => Placed::NoOrigin,
         Ok(ProbeReply::None { .. } | ProbeReply::Detached | ProbeReply::Strict { .. })
-        | Err(ProbeFailure::Gone) => Placed::Gone,
+        | Err(ProbeFailure::Gone(_)) => Placed::Gone,
         Ok(other) => {
             return Err(scope.fail(
                 ErrorCode::Internal,
