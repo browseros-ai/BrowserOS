@@ -13,7 +13,8 @@ use browseros_captcha::config::{CAPSOLVER_KEY_FILE_ENV, CAPSOLVER_URL_ENV, Captc
 use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
 use browseros_core::{NativeCapabilities, PageId, TabId};
 use browseros_playwright::{
-    ErrorCode as PlaywrightCode, Op, OpEnv, PlaywrightError, PlaywrightHooks, RunState, TypedBy,
+    Capability, ErrorCode as PlaywrightCode, Op, OpEnv, PlaywrightError, PlaywrightHooks, RunState,
+    TypedBy,
 };
 use browseros_takeover::{Lock, LockBinding, LockTtl, Locks, Reads};
 use browseros_trace::{
@@ -27,6 +28,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::time::{self, Instant};
 
+use super::op_marks::Hold;
 use super::playwright_ops::{self, OpCtxEnv, leaf_error};
 use super::{BuiltinDeps, CaptchaClaims, PlaywrightFacade, PrivacyHooks, TabJanitor};
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
@@ -39,9 +41,9 @@ use crate::dispatch::{
 use crate::host::{FlagRecovery, TakeoverLock};
 use crate::test_support::FakeCdp;
 
-/// The built-ins' door on the fake browser, with the app's own rules in the app's order: the
-/// takeover lock over browseros-takeover's real `Locks`, then tab privacy, then the CAPTCHA
-/// claims. A plain data bag.
+/// The built-ins' door on the fake browser, with the app's own rules in the app's order
+/// (`door_rules`): the takeover lock over browseros-takeover's real `Locks`, then tab privacy,
+/// then the CAPTCHA claims. A plain data bag.
 struct Harness {
     fake: Arc<FakeCdp>,
     link: Arc<BrowserLink>,
@@ -114,11 +116,7 @@ impl Harness {
         super::builtin_set(&mut registry, deps)?;
         let dispatcher = Arc::new(Dispatcher::new(
             registry.build(),
-            vec![
-                Arc::clone(&takeover) as Arc<dyn Policy>,
-                Arc::clone(&hooks) as Arc<dyn Policy>,
-                claims as Arc<dyn Policy>,
-            ],
+            super::door_rules(&takeover, &hooks, &claims),
             secrets,
             sink.clone(),
             hooks.typed(),
@@ -1316,8 +1314,9 @@ async fn every_playwright_op_is_one_listed_script_method_with_the_crates_spec()
     playwright_ops::playwright_ops(&mut builder, &harness.playwright)?;
     let listed = builder.build().listed();
     let mut names: Vec<&str> = Op::all()
-        .map(|op| op.spec().name)
-        .filter(|name| !HELD_OPS.contains(name) && *name != HELD_UPLOAD)
+        .map(Op::spec)
+        .filter(|spec| Hold::of(spec).is_none())
+        .map(|spec| spec.name)
         .collect();
     names.sort_unstable();
     let registered: Vec<&str> = listed.iter().map(|spec| spec.name).collect();
@@ -1359,18 +1358,6 @@ async fn every_playwright_op_is_one_listed_script_method_with_the_crates_spec()
     );
     Ok(())
 }
-
-/// The file upload, held back because it hands the page files from Neo's own disk.
-const HELD_UPLOAD: &str = "locator.setInputFiles";
-
-/// The ops held back because they run the agent's script in the page's main world.
-const HELD_OPS: [&str; 5] = [
-    "page.evaluate",
-    "page.waitForFunction",
-    "locator.evaluate",
-    "locator.evaluateAll",
-    "page.setContent",
-];
 
 /// Each Playwright API that runs the agent's script in the main world, as the prelude sends it:
 /// the crate op its alias shares, and the input, whose `call.api` names the API. Some name the
@@ -1480,7 +1467,15 @@ async fn the_ops_that_run_script_in_the_pages_main_world_are_held() -> Result<()
     let (run, _guard) = harness.run()?;
     let calls = main_world_calls(&handle(&owners));
     let tried: HashSet<&str> = calls.iter().map(|(name, _)| *name).collect();
-    assert_eq!(tried, HashSet::from(HELD_OPS), "every held op is tried");
+    let main_world: HashSet<&str> = Op::all()
+        .map(Op::spec)
+        .filter(|spec| spec.uses(Capability::MainWorld))
+        .map(|spec| spec.name)
+        .collect();
+    assert_eq!(
+        tried, main_world,
+        "every op that declares the main world is tried"
+    );
 
     let before = harness.fake.calls().len();
     for (name, input) in calls {
@@ -1501,12 +1496,11 @@ async fn the_ops_that_run_script_in_the_pages_main_world_are_held() -> Result<()
             "{api} ({name}): {}",
             refused.error
         );
+        let message = refused.error.message();
         assert!(
-            refused
-                .error
-                .message()
-                .contains("held while a privacy fix lands"),
-            "{api}: the message says why, so the agent reads the page another way: {}",
+            message.contains(&format!("`{name}` is held")) && message.contains("main world"),
+            "{api}: the message names the op and says why, so the agent reads the page another \
+             way: {}",
             refused.error
         );
         assert_eq!(
@@ -1556,7 +1550,9 @@ async fn a_file_upload_is_held_since_its_paths_are_on_neos_own_disk() -> Result<
         "strict": "strict",
         "files": ["/home/neo/.config/browseros/captcha/capsolver-api-key"],
     });
-    let (operation, reply) = harness.submit_op(&run, HELD_UPLOAD, input).await;
+    let (operation, reply) = harness
+        .submit_op(&run, "locator.setInputFiles", input)
+        .await;
     let refused = failure(reply)?;
     assert_eq!(
         (

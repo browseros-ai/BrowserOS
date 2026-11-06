@@ -27,7 +27,7 @@ use crate::builtins::{
     self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, PrivacyHooks, TabJanitor,
 };
 use crate::config::{AppConfig, Defaults, HostedMode};
-use crate::dispatch::{Dispatcher, Policy, RegistryBuilder};
+use crate::dispatch::{Dispatcher, RegistryBuilder};
 use crate::host::{FlagRecovery, HostApi, HostInputs, TakeoverLock};
 use crate::http::agent_router;
 use crate::mcp::McpServer;
@@ -44,7 +44,7 @@ use crate::test_support::FakeCdp;
 ///        ─ TabRegistry + BrowserLink (connects in the background) ─ PlaywrightFacade (built on
 ///          the link's first connect) ─ CaptchaSolver (with a provider key) ─ Registry
 ///          (built-ins, browseros-playwright's ops)
-///        ─ Dispatcher (rules: the takeover lock, the CAPTCHA claims) ─ RunService ─ McpServer
+///        ─ Dispatcher (rules: builtins::door_rules) ─ RunService ─ McpServer
 ///        ─ host API task (starts browseros-service once the link connects, then serves the
 ///          socket) ─ housekeeping task ─ agent router
 ///  serve ─ until SIGTERM ─ runs stop (shutting_down) ─ connections drain ─ trace flushed
@@ -197,7 +197,7 @@ impl App {
         let takeover = Arc::new(TakeoverLock::default());
         let dispatcher = Arc::new(Dispatcher::new(
             methods,
-            rules(&takeover, &hooks, &claims),
+            builtins::door_rules(&takeover, &hooks, &claims),
             Arc::clone(&secrets),
             trace.clone(),
             // What every run's records and reply are masked with beyond the secret set: the
@@ -287,23 +287,6 @@ impl fmt::Debug for App {
             .field("agent", &self.agent)
             .finish_non_exhaustive()
     }
-}
-
-/// The dispatcher's rules, in their one fixed order (design D7 rule 4): the takeover lock, then
-/// tab privacy, then the CAPTCHA busy rule. The door runs them in this order for every op, so an
-/// owner's lock outranks a solve's claim when both would refuse. Tab privacy refuses a capture
-/// of a private tab, and withholds one whose tab went private before its pixels arrived;
-/// browseros-playwright also asks right before each capture (`PrivacyHooks::capture_allowed`).
-fn rules(
-    takeover: &Arc<TakeoverLock>,
-    privacy: &Arc<PrivacyHooks>,
-    claims: &Arc<CaptchaClaims>,
-) -> Vec<Arc<dyn Policy>> {
-    vec![
-        Arc::clone(takeover) as Arc<dyn Policy>,
-        Arc::clone(privacy) as Arc<dyn Policy>,
-        Arc::clone(claims) as Arc<dyn Policy>,
-    ]
 }
 
 /// Neo's periodic upkeep, one task until `shutdown`: every [`Defaults::HOUSEKEEPING_EVERY`] the

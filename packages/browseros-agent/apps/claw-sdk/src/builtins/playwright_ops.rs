@@ -14,27 +14,27 @@
 //!
 //! The crate owns what each op does and how its failures read; the door keeps its own chores
 //! (the trace, the rules, delivery, masking, page facts). This file only translates between
-//! the two. The ops in [`HELD`] are the exception: their names answer a refusal, and the crate
-//! never sees the call.
+//! the two. An op that [`OpMarks`] holds is the exception: its name answers a refusal, and the
+//! crate never sees the call.
 
 use std::future::{self, Future};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use browseros_core::{BrowserView, PageId, TabId};
 use browseros_playwright::{
-    Answer, ErrorCode as PlaywrightCode, Op, OpEnv, OpLifetime, PlaywrightError, Refusal, RunState,
-    TimedOut,
+    Answer, ErrorCode as PlaywrightCode, Op, OpEnv, PlaywrightError, Refusal, RunState, TimedOut,
 };
-use browseros_trace::{Effect, ErrorOwner};
+use browseros_trace::ErrorOwner;
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 
 use super::PlaywrightFacade;
 use super::event_release::EventRelease;
+use super::op_marks::{self, Hold, OpMarks};
 use crate::browser::PageRef;
 use crate::dispatch::{
-    ErrorCode, LeafError, Lifetime, Listing, Method, MethodSpec, OpCtx, OperationError, Output,
-    PageChange, PageTarget, RegistryBuilder, RegistryError,
+    ErrorCode, LeafError, Method, MethodSpec, OpCtx, OperationError, PageChange, PageTarget,
+    RegistryBuilder, RegistryError,
 };
 
 /// browseros-playwright's prelude, which the agent realm evaluates after its bootstrap: the
@@ -42,10 +42,21 @@ use crate::dispatch::{
 /// Here so that `runtime/`, which never names a browser crate (STYLE.md P2), can install it.
 pub(crate) const PLAYWRIGHT_PRELUDE: &str = browseros_playwright::PRELUDE_JS;
 
-/// The `run` description's one line for every Playwright op. It names the families a model reaches
-/// for, what the prelude refuses, and what is held ([`HELD`]), so a model does not spend a call
-/// finding out.
-const PLAYWRIGHT_LINE: &str = "Playwright's API (as of 1.56) on `page`, `context` and \
+/// The `run` description's one line for every served Playwright op: the families a model reaches
+/// for, what the prelude refuses, and then each op [`OpMarks`] holds and why ([`op_marks::held_clause`]),
+/// so a model does not spend a call finding out. Built once, when the first op registers; a
+/// `static`, so `Listing::Grouped` gets the `&'static str` it takes without a leak.
+static PLAYWRIGHT_LINE: LazyLock<String> = LazyLock::new(|| {
+    let mut line = PLAYWRIGHT_API.to_owned();
+    if let Some(held) = op_marks::held_clause(Op::all().map(Op::spec)) {
+        line.push(' ');
+        line.push_str(&held);
+    }
+    line
+});
+
+/// What [`PLAYWRIGHT_LINE`] says whatever is held.
+const PLAYWRIGHT_API: &str = "Playwright's API (as of 1.64.1) on `page`, `context` and \
     `browser`: locators (`getByRole`, `getByText`, `getByLabel`, `getByTestId`, `locator`, \
     `frameLocator`, `filter`, `nth`) that wait and are strict, frames (`page.frames()`, \
     `frame.locator`), reads (`textContent`, `innerText`, `getAttribute`, `inputValue`, \
@@ -60,85 +71,8 @@ const PLAYWRIGHT_LINE: &str = "Playwright's API (as of 1.56) on `page`, `context
     `toHaveValue`, `toHaveCount`, `toHaveAttribute`, ...) and page matchers (`toHaveTitle`, \
     `toHaveURL`), with `.not`, value matchers (`toBe`, `toEqual`, ...), `expect.poll` and \
     `toPass`; soft assertions, `toBeOK` and screenshot, snapshot and `toMatchAriaSnapshot` \
-    comparisons are not available. Running script in the page (`page.evaluate`, \
-    `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, `$eval`, `$$eval`, \
-    `elementHandle.evaluate`, `page.setContent`, and their `frame` forms) and `setInputFiles` \
-    are not available for now and fail with `method_unavailable`, and `goto` and `reload` open only `http`, `https`, \
-    `data` and `about` URLs.";
-
-/// The ops claw-sdk holds back for now: every op that runs the agent's script in the page's main
-/// world, where the page's own state and its same-origin frames are in reach and no seal masks
-/// a field, and the file upload. A held op's name answers `script / method_unavailable` with the reason, and the
-/// crate's op never runs.
-/// - `page.evaluate` and `page.waitForFunction` (decision 25a) run it between the evaluate
-///   guard's sweeps (`page/evaluate_guard.rs`), which missed same-site frames on another CDP
-///   session, so a password in one came back raw. sdk-playwright is fixing that.
-/// - `locator.evaluate` and `locator.evaluateAll` run it on elements the same way. They are not
-///   built yet, and held before they are.
-/// - `page.setContent` writes the agent's HTML from the sealed world, but the scripts in that
-///   HTML run in the main world, with the page's origin and the state its own scripts keep, and
-///   no sweep at all.
-/// - `locator.setInputFiles` is held for another reason: it hands the page any file Neo's
-///   process can read (core's `FileTransfers` checks only that each path is a readable file), and
-///   the page's own script can read that file and write it where the agent reads. Neo's disk
-///   holds the CAPTCHA key files and the host token, so it is the `file:` hole (decision 27)
-///   through an upload. Serving it needs a root uploads may come from, such as the downloads
-///   directory.
-///
-/// `page.title` and `page.content` read in the sealed world and are served as usual. Serving an
-/// op again is a commit of its own, once a fix covers it.
-///
-/// The rule is the property, not this list: an op is held because it runs script in the main
-/// world. Once sdk-playwright marks such ops in `OpSpec`, `HELD` becomes "every op so marked",
-/// so a main-world op the crate adds later is held by default instead of served until someone
-/// lists it here. Until then each entry is a crate op name, which covers every API the prelude
-/// sends under it: the `frame` forms send the page ops; `$eval`, `frame.$eval` and
-/// `elementHandle.evaluate` send `locator.evaluate`; `$$eval` and `frame.$$eval` send
-/// `locator.evaluateAll`. `elementHandle.$eval` and `$$eval` send nothing: the prelude refuses
-/// them itself. A served op that does harm only for some inputs is refused by input instead:
-/// `page.goto` to a URL outside [`NAVIGABLE_SCHEMES`] ([`OpInput::refused_navigation`]), and
-/// `page.reload` of a page on one ([`refused_reload`]).
-const HELD: [Held; 6] = [
-    Held {
-        name: "page.evaluate",
-        why: MAIN_WORLD,
-        instead: "read the page through locators (`textContent`, `innerText`, \
-                  `getAttribute`), `page.content()` or `page.title()`",
-    },
-    Held {
-        name: "page.waitForFunction",
-        why: MAIN_WORLD,
-        instead: "wait through a locator, which waits by itself, or through \
-                  `page.waitForURL()` and `page.waitForLoadState()`",
-    },
-    Held {
-        name: "locator.evaluate",
-        why: MAIN_WORLD,
-        instead: "read the element with `textContent()`, `innerText()`, `getAttribute()` or \
-                  `inputValue()`",
-    },
-    Held {
-        name: "locator.evaluateAll",
-        why: MAIN_WORLD,
-        instead: "read the matches with `allTextContents()`, `allInnerTexts()` or `count()`, \
-                  or one at a time through `nth()`",
-    },
-    Held {
-        name: "page.setContent",
-        why: MAIN_WORLD,
-        instead: "open the HTML as a page of its own with \
-                  `page.goto('data:text/html,' + encodeURIComponent(html))`, whose scripts run \
-                  in an origin of their own",
-    },
-    Held {
-        name: "locator.setInputFiles",
-        why: "it hands the page files from Neo's own disk, where Neo keeps its secrets",
-        instead: "no op gives a page a file; tell the user the upload needs them",
-    },
-];
-
-/// Why most held ops are held.
-const MAIN_WORLD: &str = "it runs script in the page's main world";
+    comparisons are not available. `goto` and `reload` open only `http`, `https`, `data` and \
+    `about` URLs.";
 
 /// The schemes a navigation may load (decision 27): the web, and documents the script makes
 /// itself. Every other scheme shows the agent what it must not see, or runs script where no sweep
@@ -149,50 +83,37 @@ const MAIN_WORLD: &str = "it runs script in the page's main world";
 /// page of the same name (`about:version`), which `tests/playwright_browseros.rs` pins.
 const NAVIGABLE_SCHEMES: [&str; 4] = ["http", "https", "data", "about"];
 
-/// A held op, and what a script uses meanwhile. A plain data bag.
-#[derive(Clone, Copy, Debug)]
-struct Held {
-    /// The crate's op name, which the prelude sends for every alias of the API ([`HELD`] lists
-    /// them).
-    name: &'static str,
-    /// Why it is held, as the refusal says it.
-    why: &'static str,
-    /// What the refusal suggests instead.
-    instead: &'static str,
-}
-
-/// Registers every browseros-playwright op as a script method, a held one as its refusal.
-/// Called once at startup; a duplicate name fails the start.
+/// Registers every browseros-playwright op as a script method, as [`OpMarks`] decides from its
+/// declarations: a held op as its refusal alone, every other one as a [`PlaywrightOp`]. Called
+/// once at startup; a duplicate name fails the start.
 pub(super) fn playwright_ops(
     builder: &mut RegistryBuilder,
     facade: &Arc<PlaywrightFacade>,
 ) -> Result<(), RegistryError> {
     for op in Op::all() {
-        let spec = op.spec();
-        if let Some(&held) = HELD.iter().find(|held| held.name == spec.name) {
-            builder.define(HeldOp {
-                held,
-                effect: spec.effect,
-            })?;
-            continue;
+        let OpMarks { spec, hold } = OpMarks::of(&op.spec(), PLAYWRIGHT_LINE.as_str());
+        match hold {
+            Some(hold) => builder.define(HeldOp { spec, hold })?,
+            None => builder.define(PlaywrightOp {
+                op,
+                spec,
+                facade: Arc::clone(facade),
+                pages: PageEffect::of(spec.name),
+                events: EventRelease::of(spec.name),
+            })?,
         }
-        builder.define(PlaywrightOp {
-            op,
-            facade: Arc::clone(facade),
-            pages: PageEffect::of(spec.name),
-            events: EventRelease::of(spec.name),
-        })?;
     }
     Ok(())
 }
 
 /// A held op's name, served by its refusal alone: the crate's op never runs. It names no page,
 /// so the door refuses it before it would open the run's lazy page, and it reads no input, so the
-/// answer is the hold whatever the script sent. Unlisted: the `run` description names the hold.
+/// answer is the hold whatever the script sent. Its spec is the crate op's own, as [`OpMarks`]
+/// derived it, so the trace records the attempt as the op it stands for; unlisted, since the
+/// `run` description names the hold.
 struct HeldOp {
-    held: Held,
-    /// The crate op's own, so the trace records the attempt as the op it stands for.
-    effect: Effect,
+    spec: MethodSpec,
+    hold: Hold,
 }
 
 impl Method for HeldOp {
@@ -200,7 +121,7 @@ impl Method for HeldOp {
     type Output = Value;
 
     fn spec(&self) -> MethodSpec {
-        MethodSpec::new(self.held.name, self.effect)
+        self.spec
     }
 
     fn target(_input: &Value) -> Option<&PageTarget> {
@@ -212,25 +133,16 @@ impl Method for HeldOp {
         _op: &OpCtx<Self>,
         _input: Value,
     ) -> impl Future<Output = Result<Value, LeafError>> + Send {
-        let Held { name, why, instead } = self.held;
-        future::ready(Err(LeafError::definite(OperationError::script(
-            ErrorCode::METHOD_UNAVAILABLE,
-            format_args!(
-                "`{name}` is held while a privacy fix lands: {why}. Meanwhile, {instead}."
-            ),
-        ))))
+        future::ready(Err(LeafError::definite(self.hold.refusal(self.spec.name))))
     }
 }
-
-/// The ops whose result holds the page's pixels ([`Output::Pixels`]), which the door's
-/// tab-privacy rule refuses while the tab is private. Each is a crate op name, which a test checks.
-/// Once sdk-playwright marks capture ops in `OpSpec`, this reads the mark instead.
-const PIXEL_OPS: [&str; 2] = ["page.screenshot", "page.pdf"];
 
 /// One browseros-playwright op as a dispatcher method. Every op is this one type: the op is
 /// data (`Op`), and so is all the door reads about it, so the crate's op table is the only list.
 struct PlaywrightOp {
     op: Op,
+    /// The crate's spec with the door's marks, derived once by [`OpMarks`].
+    spec: MethodSpec,
     facade: Arc<PlaywrightFacade>,
     /// What the op does to pages that the door keeps books on.
     pages: PageEffect,
@@ -243,21 +155,7 @@ impl Method for PlaywrightOp {
     type Output = Value;
 
     fn spec(&self) -> MethodSpec {
-        let spec = self.op.spec();
-        MethodSpec {
-            listing: Listing::Grouped(PLAYWRIGHT_LINE),
-            lifetime: match spec.lifetime {
-                OpLifetime::Operation => Lifetime::Operation,
-                OpLifetime::Background => Lifetime::Background,
-            },
-            output: if PIXEL_OPS.contains(&spec.name) {
-                Output::Pixels
-            } else {
-                Output::Data
-            },
-            sensitive_args: spec.sensitive_args,
-            ..MethodSpec::new(spec.name, spec.effect)
-        }
+        self.spec
     }
 
     fn target(input: &OpInput) -> Option<&PageTarget> {
@@ -677,6 +575,7 @@ fn refusal_code(error: &PlaywrightError) -> ErrorCode {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::error::Error;
 
     use browseros_core::{PageId, TabId};
@@ -684,7 +583,7 @@ mod tests {
     use browseros_trace::ErrorOwner;
     use serde_json::{Value, json};
 
-    use super::{HELD, OpInput, PIXEL_OPS, PageEffect, error_code, leaf_error};
+    use super::{Hold, OpInput, PLAYWRIGHT_LINE, PageEffect, error_code, leaf_error, op_marks};
     use crate::browser::PageRef;
     use crate::dispatch::{ErrorCode, PageTarget};
 
@@ -857,25 +756,52 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn every_held_op_is_a_crate_op() {
-        for held in HELD {
-            assert!(
-                Op::from_name(held.name).is_some(),
-                "{}: a renamed op would be served instead of held",
-                held.name
-            );
-        }
+    /// Every crate op that `text` names in backticks, by its wire name.
+    fn ops_named(text: &str) -> BTreeSet<&str> {
+        text.split('`')
+            .skip(1)
+            .step_by(2)
+            .filter(|name| Op::from_name(name).is_some())
+            .collect()
     }
 
+    /// A model reads which ops are held before it writes a call, so the line names each one the
+    /// op table holds and no other, and nowhere else offers one.
     #[test]
-    fn every_pixel_op_is_a_crate_op() {
-        for name in PIXEL_OPS {
-            assert!(
-                Op::from_name(name).is_some(),
-                "{name}: a renamed op would capture a private tab's pixels"
-            );
-        }
+    fn the_description_names_each_held_op_and_only_those() -> Result<(), Box<dyn Error>> {
+        let held: BTreeSet<&str> = Op::all()
+            .map(Op::spec)
+            .filter(|spec| Hold::of(spec).is_some())
+            .map(|spec| spec.name)
+            .collect();
+        assert!(
+            !held.is_empty(),
+            "this door holds ops, so the line names some"
+        );
+        let clause =
+            op_marks::held_clause(Op::all().map(Op::spec)).ok_or("the held ops have a clause")?;
+        let line: &str = &PLAYWRIGHT_LINE;
+        assert!(line.contains(&clause), "the line says what is held: {line}");
+        assert_eq!(
+            ops_named(&clause),
+            held,
+            "the clause names each held op and only those: {clause}"
+        );
+        let rest = line.replacen(&clause, "", 1);
+        let offered = ops_named(&rest);
+        assert!(
+            offered.is_disjoint(&held),
+            "the rest of the line offers no held op: {offered:?}"
+        );
+        let served = Op::all()
+            .map(Op::spec)
+            .filter(|spec| Hold::of(spec).is_none());
+        assert_eq!(
+            op_marks::held_clause(served),
+            None,
+            "with nothing held, the line adds nothing"
+        );
+        Ok(())
     }
 
     #[test]

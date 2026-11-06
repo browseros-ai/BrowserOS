@@ -3,6 +3,7 @@
 //! ```text
 //!  builtin_set ─▶ playwright_ops: every browseros-playwright op ─ PlaywrightFacade, the
 //!              │  process's one Playwright, built on the browser link's session ─ PrivacyHooks
+//!              │  ─ op_marks: each op's marks, and whether it is held, from its capabilities
 //!              │  ─ event_release: an event pull's events through the rules, tab by tab
 //!              └▶ solve_captcha: neo.solveCaptcha ─ CaptchaClaims (also the door's busy rule)
 //!  TabJanitor::sweep ─▶ a Neo-origin run ─▶ Dispatcher::submit(page.close) per idle agent tab
@@ -21,6 +22,7 @@
 mod builtin_set;
 mod captcha_claims;
 mod event_release;
+mod op_marks;
 mod playwright_facade;
 mod playwright_ops;
 mod privacy_hooks;
@@ -30,7 +32,7 @@ mod tab_janitor;
 mod tests;
 mod typed_values;
 
-pub(crate) use builtin_set::{BuiltinDeps, builtin_set};
+pub(crate) use builtin_set::{BuiltinDeps, builtin_set, door_rules};
 pub(crate) use captcha_claims::CaptchaClaims;
 pub(crate) use playwright_facade::PlaywrightFacade;
 pub(crate) use playwright_ops::PLAYWRIGHT_PRELUDE;

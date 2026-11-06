@@ -7,7 +7,8 @@
 //! a parser can see: paths a file names, the file layout, and attributes. Code inside macro bodies
 //! (`json!`, `format!`, `tokio::select!`) is not parsed and not checked. The dispatcher's "one front
 //! door" needs types, so it is enforced by visibility in `dispatch/` instead (STYLE.md, rule P2);
-//! this test only keeps the entry points away from the browser crates.
+//! this test only keeps the entry points away from the browser crates, and the door from naming
+//! the modules whose methods and rules it runs.
 
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -41,6 +42,12 @@ const BROWSER_CRATES: &[&str] = &[
     "browseros_playwright",
     "browseros_captcha",
 ];
+
+/// STYLE.md P2: the door runs every method as a registered `Method` and every rule as a `Policy`,
+/// so `dispatch/` never names the modules that implement them. They depend on the door, never the
+/// other way round: a door that named a built-in could reach it around its own registry.
+const DOOR: &str = "dispatch";
+const BEHIND_THE_DOOR: &[&str] = &["builtins", "host"];
 
 /// STYLE.md P4: types that hold a secret or a raw field value. A type with such a field must not
 /// derive `Debug` or `Serialize`; it writes a `Debug` that prints a fixed mask.
@@ -95,6 +102,7 @@ pub(crate) fn check_crate(manifest_dir: &Path) -> Result<Vec<String>, Box<dyn Er
         names.visit_file(&file);
         check_crate_homes(&shown, &module, &names, &mut violations);
         check_entry_points(&shown, &module, &names, &mut violations);
+        check_door(&shown, &module, &names, &mut violations);
         check_module_doc(&shown, &module, &file, &mut violations);
         check_non_leaf_items(&shown, &module, &file, &mut violations);
         check_leaf_name(&shown, &module, &file, &mut violations);
@@ -203,6 +211,23 @@ fn check_entry_points(shown: &str, module: &ModuleFile, names: &NamedPaths, out:
             out.push(format!(
                 "{shown}: names `{path}`; {}/ reaches the browser only through Dispatcher::submit (STYLE.md P2)",
                 module.subtree
+            ));
+        }
+    }
+}
+
+/// STYLE.md P2: the door names neither the built-ins nor the host. It reads paths as written, as
+/// every rule here does, so it sees the `crate::` form this crate's cross-subtree paths take; a
+/// `super::super::host` path would slip past it.
+fn check_door(shown: &str, module: &ModuleFile, names: &NamedPaths, out: &mut Vec<String>) {
+    if module.subtree != DOOR {
+        return;
+    }
+    for path in names.with_root("crate") {
+        let named = path.split("::").nth(1);
+        if named.is_some_and(|named| BEHIND_THE_DOOR.contains(&named)) {
+            out.push(format!(
+                "{shown}: names `{path}`; {DOOR}/ runs methods and rules only as `Method` and `Policy`, and never names builtins/ or host/ (STYLE.md P2)"
             ));
         }
     }
