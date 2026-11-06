@@ -1073,6 +1073,7 @@ pub(crate) mod tests {
     //!   goldens' folded logs show. Any attempt time under 46 ms gives the same counts.
 
     use std::collections::VecDeque;
+    use std::future;
     use std::sync::Mutex;
 
     use tokio::sync::oneshot;
@@ -1968,20 +1969,20 @@ pub(crate) mod tests {
 
     impl ElementAction<FakeTab> for ReadAction {
         type Output = String;
-        async fn act(
+        fn act(
             &self,
             tab: &FakeTab,
             _element: &u32,
             _progress: &Progress,
-        ) -> Result<ActionResult<String>, Stop> {
+        ) -> impl Future<Output = Result<ActionResult<String>, Stop>> + Send {
             tab.record("read action");
             let mut attempts = self.0.lock().expect("attempts");
             *attempts += 1;
-            if *attempts == 1 {
+            future::ready(if *attempts == 1 {
                 Ok(ActionResult::NotConnected)
             } else {
                 Ok(ActionResult::Done("value".into()))
-            }
+            })
         }
     }
 
