@@ -116,6 +116,11 @@ impl ScriptedBrowser {
         *self.front.lock().unwrap_or_else(PoisonError::into_inner) = Some(tab);
     }
 
+    /// The tab a test or a `Browser.activateTab` last brought to the front.
+    pub(crate) fn front(&self) -> Option<i64> {
+        *self.front.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// The owner typed these into sensitive fields.
     pub(crate) fn type_into_fields(&self, values: &[&str]) {
         *self.fields.lock().unwrap_or_else(PoisonError::into_inner) =

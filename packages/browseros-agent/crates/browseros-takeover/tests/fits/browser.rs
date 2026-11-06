@@ -110,6 +110,10 @@ struct State {
     fields: Vec<String>,
     /// Methods whose calls never answer.
     hung: Vec<String>,
+    /// The tab `Browser.activateTab` last brought to the front, as [`FakeBrowser::active`] reads
+    /// it. `Browser.getTabs` still reports every tab inactive, so a view's admission never finds
+    /// a private tab in front here: decision 34 is the display tests' own.
+    active: Option<i64>,
     /// How long a sweep's read of a frame's fields takes.
     sweep_read_time: Duration,
     /// How many child frames each page's frame tree has below its own.
@@ -145,6 +149,7 @@ impl FakeBrowser {
                 unreachable: Vec::new(),
                 fields: Vec::new(),
                 hung: Vec::new(),
+                active: None,
                 sweep_read_time: Duration::ZERO,
                 child_frames: 0,
                 scripts: 0,
@@ -258,6 +263,11 @@ impl FakeBrowser {
     /// The window's state now.
     pub fn window(&self) -> &'static str {
         self.state().window
+    }
+
+    /// The tab in front: the one `Browser.activateTab` last brought there.
+    pub fn active(&self) -> Option<i64> {
+        self.state().active
     }
 
     /// What tab `tab`'s page reports, as core's viewport readback reads it.
@@ -528,7 +538,10 @@ impl FakeBrowser {
                 };
                 json!({ "result": { "type": "object", "value": value } })
             }
-            "Browser.activateTab" => json!({}),
+            "Browser.activateTab" => {
+                state.active = params["tabId"].as_i64();
+                json!({})
+            }
             "Browser.getWindowForTarget" => {
                 json!({ "windowId": 1, "bounds": { "windowState": state.window } })
             }

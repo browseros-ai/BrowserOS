@@ -29,6 +29,8 @@
 //!  Fits ─ RFB ─▶ Xvnc (the screen's size)    Fits ─ agent's BrowserSession ─▶ window, viewport
 //!
 //!  dispatcher lock policy (app) ─▶ Service::locks().check, synchronous
+//!  dispatcher door, page.bringToFront (app) ─▶ Service::front(): check (synchronous), and
+//!                                              bring_to_front through the front turn
 //!  browser link tab events (app) ─▶ Service::tab_opened, tab_closed, retain_tabs
 //!       a reconcile's fence (app) ─▶ Service::tab_fence, before its listing; the routes that
 //!                                    change a tab, and a control display's first input, stamp

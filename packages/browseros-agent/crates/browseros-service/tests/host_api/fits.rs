@@ -8,7 +8,7 @@
 use crate::support::{HOME_SCREEN, TestResult, harness, harness_after_a_crash_mid_fit};
 use axum::http::StatusCode;
 use browseros_core::TabId;
-use browseros_takeover::{FitId, ScreenSize};
+use browseros_takeover::{FitId, OwnerHasScreen, ScreenHolder, ScreenSize};
 use serde_json::json;
 
 const PHONE: ScreenSize = ScreenSize {
@@ -183,4 +183,27 @@ async fn the_service_puts_the_screen_and_the_window_home_at_start() -> TestResul
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     Err(format!("the window is still {}", harness.browser.window()).into())
+}
+
+#[tokio::test]
+async fn a_fit_holds_the_screen_against_the_agent_until_it_is_restored() -> TestResult {
+    let harness = harness().await?;
+    harness.browser.open_tab(12);
+    let front = harness.service.front();
+    let fitted = harness
+        .post("/v1/tabs/12/fit", r#"{"width":390,"height":844}"#)
+        .await?;
+    assert_eq!(fitted.status, StatusCode::OK, "{}", fitted.body);
+    assert_eq!(
+        front.check(),
+        Err(OwnerHasScreen {
+            by: ScreenHolder::Fit
+        }),
+        "a host fit holds the screen against the agent's moves"
+    );
+    let id = fitted.body["id"].as_str().ok_or("an id")?;
+    let restored = harness.post(&format!("/v1/fits/{id}/restore"), "").await?;
+    assert_eq!(restored.status, StatusCode::OK, "{}", restored.body);
+    assert_eq!(front.check(), Ok(()), "the restore gave it back");
+    Ok(())
 }

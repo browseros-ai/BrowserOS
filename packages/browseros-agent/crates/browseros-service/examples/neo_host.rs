@@ -36,6 +36,10 @@
 //!   job is still out. With `busyMs`, the page's main thread then stays busy that long, as a
 //!   heavy script keeps a renderer busy. It answers `{"runId", "writes": [..], "read"}` once the
 //!   end is committed.
+//!   `GET /surface/front` reads `Service::front().check()` (`{"held"}`: null, or who holds the
+//!   screen), and `POST /surface/front {"tab": N}` brings tab N to the front as claw-sdk's
+//!   `page.bringToFront()` env does, with a commit that passes and prints `front: commit tab N`
+//!   (`{"outcome": "moved" | "owner_has_screen" | "activation", "error", "millis"}`).
 //! - `--xvnc <addr>`: Xvnc's RFB address for the fits and `GET /v1/display` (`127.0.0.1:5900`,
 //!   the image's).
 //! - `--neo-screen <WxH>`: the size the screen rests at between fits (`NEO_SCREEN` from the
@@ -61,7 +65,9 @@ use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use browseros_core::viewport::{ViewportMode, ViewportRequest, Viewports};
 use browseros_core::{BrowserSession, BrowserSessionHooks, BrowserView, PageJs, TabId};
 use browseros_service::{HostAuth, HostToken, PeerRule, Service, ServiceInputs, host_service};
-use browseros_takeover::{ArmedJournal, BrowserTabs, Journal, LockTarget, Locks, ScreenSize, Xvnc};
+use browseros_takeover::{
+    ArmedJournal, BrowserTabs, Front, FrontError, Journal, LockTarget, Locks, ScreenSize, Xvnc,
+};
 use browseros_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
     Outcome, PageState, Privacy, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
@@ -69,6 +75,7 @@ use browseros_trace::{
     WriterConfig, screenshot_queue, spawn_writer,
 };
 use serde_json::{Value, json};
+use std::convert::Infallible;
 use std::error::Error;
 use std::fs::Permissions;
 use std::future::IntoFuture;
@@ -200,17 +207,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     let privacy = Privacy::new(secrets, Arc::new(sink.clone()), store.private_tabs().await?);
     let viewports = Arc::new(Viewports::default());
-    let surface = SurfaceCalls {
-        journal: Journal::new(
-            BrowserTabs::new(Arc::clone(&browser), Arc::clone(&viewports)),
-            Arc::clone(privacy.secrets()),
-        ),
-        armed: Arc::default(),
-        sink: sink.clone(),
-        secrets: Arc::clone(privacy.secrets()),
-        browser: Arc::clone(&browser),
-        store: store.clone(),
-    };
+    let surface_secrets = Arc::clone(privacy.secrets());
+    let surface_store = store.clone();
     let service = Service::start(ServiceInputs {
         store,
         sink: sink.clone(),
@@ -224,6 +222,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         },
         cdp_port: args.cdp_port,
     });
+    let surface = SurfaceCalls {
+        journal: Journal::new(
+            BrowserTabs::new(Arc::clone(&browser), Arc::clone(&viewports)),
+            Arc::clone(&surface_secrets),
+        ),
+        armed: Arc::default(),
+        sink: sink.clone(),
+        secrets: surface_secrets,
+        browser: Arc::clone(&browser),
+        store: surface_store,
+        front: service.front().clone(),
+    };
 
     // What the app does at startup: read the token file, bind the socket owner-and-group only,
     // and take the peer rule from the socket it just made.
@@ -293,6 +303,7 @@ struct SurfaceCalls {
     secrets: Arc<SecretSet>,
     browser: Arc<BrowserSession>,
     store: TraceStore,
+    front: Front,
 }
 
 type SurfaceReply = Result<Json<Value>, (StatusCode, String)>;
@@ -304,6 +315,10 @@ impl SurfaceCalls {
             .route("/surface/runs", post(Self::fake_run))
             .route("/surface/secrets", get(Self::count))
             .route("/surface/paint-run", post(Self::paint_run))
+            .route(
+                "/surface/front",
+                get(Self::front_held).post(Self::bring_to_front),
+            )
             .with_state(self)
     }
 
@@ -373,6 +388,33 @@ impl SurfaceCalls {
 
     async fn count(State(calls): State<Self>) -> SurfaceReply {
         Ok(Json(json!({ "count": calls.secrets.count() })))
+    }
+
+    /// Whether the owner holds the screen, as the app's door asks before a move.
+    async fn front_held(State(calls): State<Self>) -> SurfaceReply {
+        let held = calls.front.check().err().map(|held| held.by.to_string());
+        Ok(Json(json!({ "held": held })))
+    }
+
+    /// The agent's move of the front, as claw-sdk's `page.bringToFront()` env makes it, with a
+    /// commit that always passes. The commit's line in the log is when the op would count as
+    /// sent, so a check can tell a refused move from one that ran its commit.
+    async fn bring_to_front(State(calls): State<Self>, body: Bytes) -> SurfaceReply {
+        let tab = front_request_tab(&body)?;
+        let started = std::time::Instant::now();
+        let moved = calls
+            .front
+            .bring_to_front(tab, None, || {
+                println!("front: commit tab {}", tab.0);
+                Ok::<(), Infallible>(())
+            })
+            .await;
+        let millis = started.elapsed().as_secs_f64() * 1000.0;
+        let (outcome, error) = front_outcome(moved);
+        println!("front: tab {} {outcome} in {millis:.1} ms", tab.0);
+        Ok(Json(
+            json!({ "outcome": outcome, "error": error, "millis": millis }),
+        ))
     }
 
     /// Records one run of real writes on a tab, each repainting it, then a read and the end.
@@ -526,6 +568,28 @@ struct PaintRun {
     /// How long the page keeps its renderer busy after each write; 0 when absent.
     #[serde(default)]
     busy_ms: u64,
+}
+
+/// The tab a `POST /surface/front` body names (`{"tab": N}`); a 400 when it is not JSON or
+/// names none.
+fn front_request_tab(body: &[u8]) -> Result<TabId, (StatusCode, String)> {
+    let request: Value = serde_json::from_slice(body)
+        .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+    request["tab"]
+        .as_i64()
+        .map(TabId)
+        .ok_or((StatusCode::BAD_REQUEST, "no tab".to_string()))
+}
+
+/// The agent's move as `POST /surface/front` reports it: its outcome, and the error's text.
+/// The commit always passes, so a refusal never comes back.
+fn front_outcome(moved: Result<(), FrontError<Infallible>>) -> (&'static str, Option<String>) {
+    match moved {
+        Ok(()) => ("moved", None),
+        Err(FrontError::OwnerHasScreen(held)) => ("owner_has_screen", Some(held.to_string())),
+        Err(FrontError::Refused(never)) => match never {},
+        Err(FrontError::Activation(error)) => ("activation", Some(error.to_string())),
+    }
 }
 
 /// A script that repaints the whole page in `color`, with `write`'s number in large white type,

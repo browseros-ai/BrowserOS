@@ -3,7 +3,8 @@
 //!
 //! The service also builds the takeover parts once, and the v1 takeover flow over them, so the
 //! app reaches them through it rather than wiring each one: the lock policy and tab cleanup read
-//! [`Service::locks`], and the browser link's tab events go to [`Service::tab_opened`],
+//! [`Service::locks`], the app's door and its `page.bringToFront()` read [`Service::front`],
+//! and the browser link's tab events go to [`Service::tab_opened`],
 //! [`Service::tab_closed`] and [`Service::retain_tabs`], which hand each event to every part
 //! that keeps state about tabs: the takeovers, `Privacy`, the fits, the locks, and the displays
 //! (a control display arms its journal on each tab that opens). A reconcile takes a
@@ -20,7 +21,7 @@ use axum::Router;
 use browseros_capture::{CaptureHub, CaptureTransport, CdpPortTransport};
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, TabId};
-use browseros_takeover::{BrowserTabs, Displays, Fits, Journal, Locks, Takeovers, Xvnc};
+use browseros_takeover::{BrowserTabs, Displays, Fits, Front, Journal, Locks, Takeovers, Xvnc};
 use browseros_trace::{EpochMillis, Privacy, PrivacyError, ShotJobs, TraceSink, TraceStore};
 use std::sync::Arc;
 use tokio_util::sync::{CancellationToken, DropGuard};
@@ -71,6 +72,9 @@ pub(crate) struct ServiceState {
     pub(crate) displays: Arc<Displays>,
     /// The v1 takeover flow over the parts above (`/v1/takeovers`, and `release=` on a display).
     pub(crate) takeovers: Arc<Takeovers>,
+    /// The agent's side of Neo's one screen, over `displays`. The app's door and its
+    /// `page.bringToFront()` env read it; no route does.
+    pub(crate) front: Front,
     /// The capture hub behind the live views (`live_tabs`).
     pub(crate) live: Arc<CaptureHub>,
     /// The tabs each route changed, stamped before the change, against a reconcile's fence.
@@ -151,6 +155,7 @@ impl Service {
             browser.clone(),
         );
         events.follow_takeovers(takeovers.subscribe());
+        let front = displays.front();
         // A Neo restart in the middle of a fit drops the fit, but would leave Xvnc at the
         // owner's size and the window fullscreen, and nothing else would ever put them back.
         // Best-effort and logged. A fit that takes the surface first wins; its release puts
@@ -176,6 +181,7 @@ impl Service {
                 fits,
                 displays,
                 takeovers,
+                front,
                 live,
                 stamps,
                 _live_shutdown: shutdown.drop_guard(),
@@ -194,6 +200,15 @@ impl Service {
     #[must_use]
     pub fn locks(&self) -> &Arc<Locks> {
         &self.state.locks
+    }
+
+    /// The agent's side of Neo's one screen. The app's door asks [`Front::check`] about every op
+    /// that moves the front, at admission and at every recheck, and its `page.bringToFront()`
+    /// moves it through [`Front::bring_to_front`]. Arm it together with [`Service::locks`]: both
+    /// are the owner's claims, the tab and the screen.
+    #[must_use]
+    pub fn front(&self) -> &Front {
+        &self.state.front
     }
 
     /// The browser link saw a tab open. While a control display is open, the tab starts

@@ -18,10 +18,16 @@
 //!   displays to spectators, with no input and never while a private tab is in front; control
 //!   displays to the owner, whose first input waits until every open tab is private. A view can
 //!   keep a tab, or a task's tab, in front.
+//! - [`Front`] is the agent's side of that one screen. The app's door asks [`Front::check`]
+//!   whether the owner holds it (a takeover, a control display or a fit; a lock alone holds only
+//!   its tab), and the agent's `page.bringToFront()` moves it through [`Front::bring_to_front`],
+//!   which closes every view first when the tab is private. Every activation Neo makes takes
+//!   one front turn in [`BrowserTabs`], one at a time: the agent's, follow's and a fit's.
 //!
 //! [`Takeovers`] is the v1 flow over them, zuzu's two moments: the owner opens the link (the tab
-//! goes private, the agent is locked out, spectators are held off, the journal is armed and the
-//! tab fitted), and the owner is done (all of it given back, the lock last). It holds nothing
+//! goes private, the agent is locked out, the screen is held against spectators and the agent's
+//! moves, the journal is armed and the tab fitted), and the owner is done (all of it given back,
+//! the lock last). It holds nothing
 //! but what it took from the parts, so a new flow replaces it without touching them (D13).
 //!
 //! ```text
@@ -35,16 +41,20 @@
 //!  GET /v1/display ─▶ Displays::admit ─ upgrade ─▶ Admitted::serve ─ RFB, filtered ─▶ Xvnc
 //!    control: first input ─▶ views close ─▶ every open tab stamped, then private ─▶ the input
 //!      goes on
-//!    view: follow ─ the task's operations ─▶ Browser.activateTab
+//!    view: follow ─ the task's operations, Neo's front moves ─▶ the front turn ─▶ activateTab
 //!    views: tab.private, a 250 ms poll ─ a private tab in front ─▶ every view closes
-//!  POST /v1/takeovers ─▶ Takeovers::start ─▶ private, lock, views held, journal, fit
+//!  door (app) ─▶ Front::check (sync) ─ the screen rule over the owner's holds
+//!  the agent's page.bringToFront ─▶ Front::bring_to_front ─ the front turn ─ the screen rule
+//!    ─ a private tab: every view closes first ─▶ Browser.activateTab ─▶ followers read the move
+//!  POST /v1/takeovers ─▶ Takeovers::start ─▶ private, lock, screen held, journal, fit
 //!  release, 10 s before the TTL, tab closed ─▶ Takeovers::release ─▶ displays closed, sweep,
-//!    journal disarmed, fit restored, views back, unlock
+//!    journal disarmed, fit restored, screen let go, unlock
 //! ```
 //!
 //! The rules live apart from the I/O, as pure functions that test alone: the lock decision,
-//! the fit rule, the surface's plans, the RFB bytes both ways and the display's verdict table,
-//! the owner's address rule and follow's next activation, private targets included.
+//! the screen rule, the fit rule, the surface's plans, the RFB bytes both ways and the display's
+//! verdict table, the owner's address rule, and follow's next activation and memory, private
+//! targets included.
 
 #![deny(missing_docs)]
 #![deny(
@@ -60,6 +70,7 @@ mod displays;
 mod fit_rule;
 mod fits;
 mod follow;
+mod front;
 mod front_tab;
 mod journal;
 mod limits;
@@ -72,6 +83,7 @@ mod part_ids;
 mod rfb_client;
 mod rfb_server;
 mod screen;
+mod screen_rule;
 mod screen_size;
 mod sealed_frames;
 mod surface;
@@ -83,16 +95,18 @@ pub mod testing;
 
 pub use browser_tabs::BrowserTabs;
 pub use displays::{
-    Admitted, DisplayBinding, DisplayEnd, DisplayRequest, Displays, Follow, TaintStamps, ViewsHold,
+    Admitted, DisplayBinding, DisplayEnd, DisplayRequest, Displays, Follow, ScreenHold, TaintStamps,
 };
 pub use fit_rule::FitMode;
 pub use fits::{BarAction, BarOutcome, BrowserBar, Fit, FitState, Fits, Fitted, Keyboard};
+pub use front::{Front, FrontError};
 pub use journal::{ArmedJournal, Journal};
 pub use locks::{
     Lock, LockBinding, LockEnd, LockEnded, LockTarget, LockTtl, Locks, OwnerHasControl, Reads,
 };
 pub use part_error::PartError;
 pub use part_ids::{FitId, LockId, TakeoverId, UnknownId};
+pub use screen_rule::{OwnerHasScreen, ScreenHolder};
 pub use screen_size::{NotAScreenSize, ScreenSize, Xvnc};
 pub use sweep::{Swept, sweep};
 pub use takeovers::{

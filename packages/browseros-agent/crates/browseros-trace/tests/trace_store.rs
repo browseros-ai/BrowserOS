@@ -9,7 +9,7 @@ use browseros_trace::{
     OperationId, OperationKind, OperationStarted, Outcome, PageState, Privacy, PrivacyRecord,
     PrivacyStore, PrivateReason, RedactionLimits, RedactionPolicy, Redactor, RequestId,
     RetentionPolicy, RunEffects, RunEnded, RunId, RunQuery, RunStarted, RunStatus, SecretSet,
-    SecretSetConfig, SecretValue, TailQuery, TargetSensitivity, TaskId, TraceError,
+    SecretSetConfig, SecretValue, TailQuery, TargetSensitivity, TaskAct, TaskId, TraceError,
     TraceRecordEvent, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use futures_util::future::BoxFuture;
@@ -199,18 +199,55 @@ fn read_on(sink: &TraceSink, id: OperationId, tab: Option<TabId>, millis: i64) {
             ..simple(id, "page.title", Effect::Read)
         },
     );
-    sink.op_ended(OperationEnded {
+    sink.op_ended(answered(id, millis, None, None));
+}
+
+/// The end of `id`, admitted at `millis` and answered 5 ms later on `page_after`.
+fn answered(
+    id: OperationId,
+    millis: i64,
+    sent_at: Option<EpochMillis>,
+    page_after: Option<PageState>,
+) -> OperationEnded {
+    OperationEnded {
         id,
         outcome: Outcome::Ok,
         delivery: Delivery::Done,
-        sent_at: None,
+        sent_at,
         result: None,
         error: None,
-        page_after: None,
+        page_after,
         target: TargetSensitivity::Ordinary,
         also_mask: None,
         at: at(millis + 5),
-    });
+    }
+}
+
+/// A `newPage` admitted at `millis` with no target, which ended 5 ms later on the page of `tab`.
+fn new_page(sink: &TraceSink, id: OperationId, tab: TabId, millis: i64) {
+    op_started(
+        sink,
+        Op {
+            tab: None,
+            at: at(millis),
+            ..simple(id, "context.newPage", Effect::Write)
+        },
+    );
+    let page = PageState {
+        page_id: Some(4),
+        tab_id: Some(tab),
+        url: Some("about:blank".into()),
+        title: None,
+    };
+    sink.op_ended(answered(id, millis, Some(at(millis + 1)), Some(page)));
+}
+
+/// What `task_last_act` reads for a task that last acted on `tab` at `millis`.
+fn act(tab: i64, millis: i64) -> Option<TaskAct> {
+    Some(TaskAct {
+        tab: TabId(tab),
+        at: at(millis),
+    })
 }
 
 fn fill_policy() -> RedactionPolicy {
@@ -1515,32 +1552,7 @@ async fn a_tasks_last_tab_falls_back_to_the_tab_an_operation_ended_on() {
     let h = harness(WriterConfig::default()).await;
     let run = start_in(&h.sink, Some("checkout"), 0);
     read_on(&h.sink, OperationId::new(run, 1), Some(TabId(5)), 10);
-    let opened = OperationId::new(run, 2);
-    op_started(
-        &h.sink,
-        Op {
-            tab: None,
-            at: at(20),
-            ..simple(opened, "context.newPage", Effect::Write)
-        },
-    );
-    h.sink.op_ended(OperationEnded {
-        id: opened,
-        outcome: Outcome::Ok,
-        delivery: Delivery::Done,
-        sent_at: Some(at(21)),
-        result: None,
-        error: None,
-        page_after: Some(PageState {
-            page_id: Some(4),
-            tab_id: Some(TabId(8)),
-            url: Some("about:blank".into()),
-            title: None,
-        }),
-        target: TargetSensitivity::Ordinary,
-        also_mask: None,
-        at: at(25),
-    });
+    new_page(&h.sink, OperationId::new(run, 2), TabId(8), 20);
     read_on(&h.sink, OperationId::new(run, 3), None, 30);
     flushed(&h).await;
     let last_tab = || async {
@@ -1567,6 +1579,27 @@ async fn a_tasks_last_tab_falls_back_to_the_tab_an_operation_ended_on() {
     );
     flushed(&h).await;
     assert_eq!(last_tab().await, Some(TabId(3)));
+}
+
+/// When a task last acted on its last tab, for a follow view that lost the task's live events:
+/// a target counts from its operation's start, and the page an operation ended on from its end.
+#[tokio::test]
+async fn a_tasks_last_act_is_its_last_tab_and_when_the_task_acted_on_it() {
+    let h = harness(WriterConfig::default()).await;
+    let run = start_in(&h.sink, Some("checkout"), 0);
+    let last_act = || async {
+        h.store
+            .task_last_act(&task("checkout"))
+            .await
+            .unwrap_or_else(|error| panic!("task_last_act: {error}"))
+    };
+    read_on(&h.sink, OperationId::new(run, 1), Some(TabId(5)), 10);
+    flushed(&h).await;
+    assert_eq!(last_act().await, act(5, 10), "its start, not its end at 15");
+
+    new_page(&h.sink, OperationId::new(run, 2), TabId(8), 20);
+    flushed(&h).await;
+    assert_eq!(last_act().await, act(8, 25), "its end, not its start at 20");
 }
 
 #[tokio::test]

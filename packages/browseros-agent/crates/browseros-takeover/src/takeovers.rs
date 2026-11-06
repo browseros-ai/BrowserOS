@@ -5,11 +5,11 @@
 //!
 //! ```text
 //!  start:    private(tab) ─▶ lock(tab, reads, ttl), its TTL release scheduled
-//!            ─▶ hold views closed ─▶ arm the journal ─▶ fit(tab, viewer)? ─▶ active
+//!            ─▶ hold the screen ─▶ arm the journal ─▶ fit(tab, viewer)? ─▶ active
 //!            (still arming or fitting when the TTL release is due ─▶ given back as a release
 //!            is ─▶ released(expired), never active)
 //!  release:  close its displays (one that took input sweeps every open tab) ─▶ sweep(tab)
-//!            ─▶ disarm the journal ─▶ restore(fit) ─▶ let views back ─▶ unlock
+//!            ─▶ disarm the journal ─▶ restore(fit) ─▶ let the screen go ─▶ unlock
 //!            ─▶ released(reason): by the host, 10 s before the lock's deadline (expired),
 //!            or when the tab closes (tab_closed, without the sweep and the restore)
 //! ```
@@ -17,13 +17,14 @@
 //! **The order is the safety argument.** At start, the tab is private, durably, before anything
 //! else happens, so no capture taken from then on keeps a pixel of what the owner does; a flag
 //! that cannot be committed refuses the start with nothing else done. The agent is locked out
-//! before the owner can reach the tab, spectators are held off before the owner's display can
-//! open, and the journal is armed before the owner's first key. Release goes the other way. The
-//! owner's input stops first. What they typed reaches the known secrets list (the closing
-//! display's sweep, the tab's sweep, the journal's last values) before the tab is put back. The
-//! agent's lock lifts last, so the agent never acts on a half-restored tab or reads a value
-//! nobody registered. The 10 s early TTL release is the same argument: a release that waited for
-//! the lock's own deadline would sweep and restore with the agent already let back in.
+//! before the owner can reach the tab, spectators and the agent's moves of the front are held
+//! off before the owner's display can open, and the journal is armed before the owner's first
+//! key. Release goes the other way. The owner's input stops first. What they typed reaches the
+//! known secrets list (the closing display's sweep, the tab's sweep, the journal's last values)
+//! before the tab is put back. The agent's lock lifts last, so the agent never acts on a
+//! half-restored tab or reads a value nobody registered. The 10 s early TTL release is the same
+//! argument: a release that waited for the lock's own deadline would sweep and restore with the
+//! agent already let back in.
 //!
 //! **A start cannot outrun its TTL release.** The release is scheduled as the lock is taken, and
 //! the start waits for the journal's arming, a walk of every frame of the tab, and for the fit
@@ -34,7 +35,7 @@
 //! step, and one that takes longer is given back in the background once it is done.
 //!
 //! **No state of its own beyond what it took.** A takeover keeps the ids of its lock and fit,
-//! its display binding, the views hold, the armed journal and its state. The parts own the rest,
+//! its display binding, the screen hold, the armed journal and its state. The parts own the rest,
 //! which is what lets the owner change this flow without touching them.
 //!
 //! **Idempotent.** Starts run one at a time, and a start on a tab with an active takeover returns
@@ -54,7 +55,7 @@
 use crate::limits::{GIVE_BACK, KEEP_RELEASED_TAKEOVER, MIN_TAKEOVER_TTL, TAKEOVER_CHANGES};
 use crate::{
     ArmedJournal, BrowserTabs, DisplayBinding, Displays, FitId, Fits, Journal, LockBinding, LockId,
-    LockTtl, Locks, PartError, Reads, ScreenSize, TakeoverId, ViewsHold, sweep,
+    LockTtl, Locks, PartError, Reads, ScreenHold, ScreenSize, TakeoverId, sweep,
 };
 use browseros_core::TabId;
 use browseros_trace::{EpochMillis, Privacy, PrivateReason};
@@ -177,8 +178,8 @@ enum Phase {
 struct Held {
     /// Ties the owner's control displays to the takeover (`release=`).
     binding: DisplayBinding,
-    /// Keeps view displays off the screen.
-    views: ViewsHold,
+    /// Keeps view displays and the agent's moves off the screen.
+    screen: ScreenHold,
     /// Registers what the owner types into the tab's sensitive fields.
     journal: ArmedJournal,
     /// Stops the TTL release once the takeover's give-back has begun.
@@ -191,7 +192,7 @@ struct Held {
 struct Parts {
     /// Ties the owner's control displays to the takeover. None is bound to an unpublished one.
     binding: DisplayBinding,
-    views: ViewsHold,
+    screen: ScreenHold,
     journal: BoxFuture<'static, ArmedJournal>,
     fit: BoxFuture<'static, Option<FitId>>,
     /// Stops the TTL release once the give-back has begun.
@@ -203,13 +204,13 @@ impl Parts {
     fn held(held: Held, fit: Option<FitId>) -> Self {
         let Held {
             binding,
-            views,
+            screen,
             journal,
             timer,
         } = held;
         Self {
             binding,
-            views,
+            screen,
             journal: future::ready(journal).boxed(),
             fit: future::ready(fit).boxed(),
             timer,
@@ -236,7 +237,7 @@ pub struct Takeovers {
 
 impl Takeovers {
     /// No takeovers. The flow uses the same parts the host's own routes do: `privacy`'s flags
-    /// and secret set, `locks`, `fits`, `displays` (the views hold and the display binding),
+    /// and secret set, `locks`, `fits`, `displays` (the screen hold and the display binding),
     /// `journal`, and `browser` to check the tab and to sweep it.
     #[must_use]
     pub fn new(
@@ -261,7 +262,7 @@ impl Takeovers {
     }
 
     /// Starts a takeover of the tab, in the order the module doc argues for: private, locked
-    /// with its TTL release scheduled, views held off, journal armed, then fitted when a viewer
+    /// with its TTL release scheduled, the screen held, journal armed, then fitted when a viewer
     /// is given. A tab that has an active takeover gets it back as it is. A failed fit gives
     /// back what was taken, in release order, and is the error; the tab stays private, which
     /// only over-protects it. A start not done when its TTL release is due gives back what it
@@ -314,7 +315,7 @@ impl Takeovers {
             timer.clone(),
         ));
         let timer = timer.drop_guard();
-        let views = self.displays.hold_views_closed();
+        let screen = self.displays.hold_screen();
         let mut takeover = Takeover {
             id,
             tab,
@@ -330,7 +331,7 @@ impl Takeovers {
             Err(arming) => {
                 let parts = Parts {
                     binding: DisplayBinding::new(),
-                    views,
+                    screen,
                     journal: arming,
                     fit: future::ready(None).boxed(),
                     timer,
@@ -350,14 +351,14 @@ impl Takeovers {
                         "a takeover did not start: its fit failed"
                     );
                     journal.disarm().await;
-                    drop(views);
+                    drop(screen);
                     self.unlock(id, lock.id);
                     return Err(error);
                 }
                 Err(fitting) => {
                     let parts = Parts {
                         binding: DisplayBinding::new(),
-                        views,
+                        screen,
                         journal: future::ready(journal).boxed(),
                         // A fit that failed holds nothing to restore.
                         fit: fitting.map(|fit| fit.ok().map(|fit| fit.id)).boxed(),
@@ -369,7 +370,7 @@ impl Takeovers {
         }
         let held = Held {
             binding: DisplayBinding::new(),
-            views,
+            screen,
             journal,
             timer,
         };
@@ -461,7 +462,7 @@ impl Takeovers {
     async fn give_back(&self, takeover: Takeover, parts: Parts, reason: ReleaseReason) -> Takeover {
         let Parts {
             binding,
-            views,
+            screen,
             journal,
             fit,
             timer,
@@ -498,7 +499,7 @@ impl Takeovers {
             })
             .await;
         }
-        drop(views);
+        drop(screen);
         self.unlock(id, takeover.lock);
         let released = Takeover {
             state: TakeoverState::Released {

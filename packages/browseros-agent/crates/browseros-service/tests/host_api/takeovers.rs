@@ -6,7 +6,7 @@
 use crate::support::{BoxError, EventStream, Harness, Sse, TestResult, harness};
 use axum::http::StatusCode;
 use browseros_core::TabId;
-use browseros_takeover::{LockTarget, TakeoverId};
+use browseros_takeover::{LockTarget, OwnerHasScreen, ScreenHolder, TakeoverId};
 use browseros_trace::Effect;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
@@ -256,5 +256,26 @@ async fn a_closed_tab_releases_its_takeover_before_tab_closed() -> TestResult {
         released_at.is_some_and(|at| at + 1 < kinds.len()),
         "the release is published before tab.closed: {kinds:?}"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_takeover_holds_the_screen_until_its_release() -> TestResult {
+    let h = harness().await?;
+    h.browser.open_tab(12);
+    let front = h.service.front();
+    let takeover = start(&h, json!({"tabId": 12})).await?;
+    assert_eq!(
+        front.check(),
+        Err(OwnerHasScreen {
+            by: ScreenHolder::Takeover
+        }),
+        "a takeover with no viewer holds the screen too"
+    );
+    let released = h
+        .post(&format!("/v1/takeovers/{}/release", id(&takeover)?), "")
+        .await?;
+    assert_eq!(released.status, StatusCode::OK, "{}", released.body);
+    assert_eq!(front.check(), Ok(()), "the release gave it back");
     Ok(())
 }

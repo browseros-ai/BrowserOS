@@ -3,7 +3,10 @@
 //! connection with tabs 3 and 4 open and tab 3 in front, whose sweep reads take a moment;
 //! `Privacy` is real, over a private-flag store the test can hold or fail, which commits through
 //! the trace writer as the service's does, so `tab.private` reaches the front-tab watch; and
-//! follow reads a real trace store and writer.
+//! follow reads a real trace store and writer. A shared log orders what the test's commit and the
+//! fake browser saw: each activation is logged as it lands. A test can hold activations in
+//! flight, neither landed nor answered, and check a step meanwhile, so what the fake browser
+//! received orders the test, not a delay.
 //!
 //! The trace store reads through sqlx, whose pool does not run under paused time, so these tests
 //! use real time. Follow's pause is re-checked each second, so its test takes a few.
@@ -14,19 +17,23 @@ use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TabId};
 use browseros_takeover::testing::{FakeXvnc, NoStamps};
 use browseros_takeover::{
-    Admitted, BrowserTabs, DisplayBinding, DisplayEnd, DisplayRequest, Displays, Follow, Journal,
-    LockBinding, LockTtl, Locks, PartError, Reads, ScreenSize,
+    Admitted, BrowserTabs, DisplayBinding, DisplayEnd, DisplayRequest, Displays, Follow, Front,
+    FrontError, Journal, LockBinding, LockTtl, Locks, OwnerHasScreen, PartError, Reads,
+    ScreenHolder, ScreenSize,
 };
 use browseros_trace::{
-    Effect, EpochMillis, OperationId, OperationKind, OperationStarted, Privacy, PrivacyRecord,
-    PrivacyStore, PrivateReason, RedactionLimits, Redactor, RunId, RunStarted, SecretSet,
-    SecretSetConfig, TaskId, TraceError, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
+    Outcome, Privacy, PrivacyRecord, PrivacyStore, PrivateReason, RedactionLimits, Redactor, RunId,
+    RunStarted, SecretSet, SecretSetConfig, TargetSensitivity, TaskId, TraceError, TraceSink,
+    TraceStore, WriterConfig, spawn_writer,
 };
 use bytes::Bytes;
+use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::pin::{Pin, pin};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -66,6 +73,13 @@ const SWEEP_READ_TIME: Duration = Duration::from_millis(300);
 const HANDSHAKE: &[u8] = b"RFB 003.008\n\x01\x00";
 /// An update request answered at once (not incremental).
 const UPDATE: [u8; 10] = [3, 0, 0, 0, 0, 0, 0, 1, 0, 1];
+/// An update request Xvnc holds until the screen changes (incremental).
+const INCREMENTAL: [u8; 10] = [3, 1, 0, 0, 0, 0, 0, 1, 0, 1];
+/// What Xvnc sends before any message: its version, security type None, SecurityResult 0, and
+/// ServerInit (1600×1000, 32 bits per pixel, the name "neo").
+const SERVER_HANDSHAKE: usize = 12 + 2 + 4 + 24 + 3;
+/// The pixel the screen shows once the private tab 4 is in front.
+const PRIVATE_PX: [u8; 4] = [0xde, 0xad, 0xbe, 0xef];
 /// Key `a` down, as type 4 and as noVNC's QEMU key event.
 const KEY_A: [u8; 8] = [4, 1, 0, 0, 0, 0, 0, 0x61];
 const KEY_B: [u8; 8] = [4, 1, 0, 0, 0, 0, 0, 0x62];
@@ -148,6 +162,33 @@ fn open_tabs(connection: &TestConnection, tabs: &[i64], front: i64) -> TestResul
     Ok(())
 }
 
+/// What happened, in order: the test's commits and each activation as it lands.
+#[derive(Clone, Default)]
+struct Log(Arc<Mutex<Vec<String>>>);
+
+impl Log {
+    fn push(&self, entry: impl Into<String>) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(entry.into());
+    }
+
+    fn entries(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+/// The screen a tab shows once it is in front.
+struct Paint {
+    tab: i64,
+    pixel: [u8; 4],
+    xvnc: Arc<FakeXvnc>,
+}
+
 /// The scripted browser, with the one reply a canned script cannot give: a sweep's read of a
 /// frame's fields answers what `fields` holds, after a moment, as Chromium does. So a test can
 /// tell a sweep that was waited for from one that was not.
@@ -159,12 +200,28 @@ struct Browser {
     /// brings its tab to the front of them, as Chromium does; until then the front only moves
     /// when a test moves it.
     listed: Mutex<Option<Vec<i64>>>,
-    /// How long `Browser.activateTab` takes to bring its tab forward; none unless a test slows
-    /// it with [`Browser::slow_activation`].
-    activation: Mutex<Duration>,
+    /// `false` while a test holds activations: each `Browser.activateTab` then waits,
+    /// subscribed, before it lands and answers, until [`Browser::let_activations_go`]. So a
+    /// test checks a step while an activation is in flight, ordered by what the browser got.
+    activations: watch::Sender<bool>,
+    /// Logs each activation as it lands.
+    log: Log,
+    /// What the screen paints once a tab comes forward, when a test set it.
+    paint: Mutex<Option<Paint>>,
 }
 
 impl Browser {
+    fn new(script: Arc<TestConnection>) -> Self {
+        Self {
+            script,
+            fields: Mutex::default(),
+            listed: Mutex::default(),
+            activations: watch::channel(true).0,
+            log: Log::default(),
+            paint: Mutex::default(),
+        }
+    }
+
     /// From now on the browser lists `tabs`, with `front` in front, and an activated tab comes
     /// to the front of them.
     fn list_tabs(&self, tabs: &[i64], front: i64) -> TestResult {
@@ -172,12 +229,20 @@ impl Browser {
         open_tabs(&self.script, tabs, front)
     }
 
-    /// From now on `Browser.activateTab` takes `delay` to bring its tab forward.
-    fn slow_activation(&self, delay: Duration) {
-        *self
-            .activation
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = delay;
+    /// Every `Browser.activateTab` from now on waits, its tab not forward and its answer not
+    /// sent, until [`Browser::let_activations_go`].
+    fn hold_activations(&self) {
+        self.activations.send_replace(false);
+    }
+
+    /// Lands and answers every held activation, and every later one.
+    fn let_activations_go(&self) {
+        self.activations.send_replace(true);
+    }
+
+    /// How many activations are waiting to land.
+    fn held_activations(&self) -> usize {
+        self.activations.receiver_count()
     }
 
     async fn answer(
@@ -199,12 +264,14 @@ impl Browser {
             }
             None => self.script.send(method, params, session).await,
         }?;
-        if activated.is_some() {
-            let delay = *self
-                .activation
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            tokio::time::sleep(delay).await;
+        if let Some(tab) = activated {
+            let _ = self.activations.subscribe().wait_for(|open| *open).await;
+            self.log.push(format!("activate {tab}"));
+            if let Some(paint) = &*self.paint.lock().unwrap_or_else(PoisonError::into_inner)
+                && paint.tab == tab
+            {
+                paint.xvnc.paint(paint.pixel);
+            }
         }
         if let Some(tab) = activated
             && let Some(tabs) = self
@@ -354,7 +421,7 @@ impl PrivacyStore for Flags {
 
 struct Harness {
     _dir: tempfile::TempDir,
-    xvnc: FakeXvnc,
+    xvnc: Arc<FakeXvnc>,
     browser: Arc<Browser>,
     flags: Arc<Flags>,
     privacy: Arc<Privacy>,
@@ -386,12 +453,7 @@ async fn harness_at(xvnc: FakeXvnc, addr: SocketAddr) -> Result<Harness, BoxErro
         Arc::clone(&flags) as Arc<dyn PrivacyStore>,
         HashMap::new(),
     );
-    let browser = Arc::new(Browser {
-        script: browser(&[3, 4], 3)?,
-        fields: Mutex::default(),
-        listed: Mutex::default(),
-        activation: Mutex::default(),
-    });
+    let browser = Arc::new(Browser::new(browser(&[3, 4], 3)?));
     let tabs = BrowserTabs::new(
         BrowserSession::new(
             Arc::clone(&browser) as Arc<dyn CdpConnection>,
@@ -412,7 +474,7 @@ async fn harness_at(xvnc: FakeXvnc, addr: SocketAddr) -> Result<Harness, BoxErro
     );
     Ok(Harness {
         _dir: dir,
-        xvnc,
+        xvnc: Arc::new(xvnc),
         browser,
         flags,
         privacy,
@@ -424,9 +486,13 @@ async fn harness_at(xvnc: FakeXvnc, addr: SocketAddr) -> Result<Harness, BoxErro
 
 impl Harness {
     async fn view(&self, follow: Option<Follow>) -> Result<Viewer, BoxError> {
-        Ok(serve(
-            self.displays.admit(DisplayRequest::View { follow }).await?,
-        ))
+        Ok(serve(self.admit_view(follow).await?))
+    }
+
+    /// A view admitted and not yet served. Its follower has subscribed to its task's operations
+    /// and to Neo's moves, and reads neither until [`serve`] runs it.
+    async fn admit_view(&self, follow: Option<Follow>) -> Result<Admitted, BoxError> {
+        Ok(self.displays.admit(DisplayRequest::View { follow }).await?)
     }
 
     async fn control(&self, binding: Option<DisplayBinding>) -> Result<Viewer, BoxError> {
@@ -469,7 +535,109 @@ impl Harness {
             .count())
     }
 
-    /// Each tab follow brought to the front, in order.
+    /// What happened so far, in order.
+    fn log(&self) -> Vec<String> {
+        self.browser.log.entries()
+    }
+
+    /// From now on the screen paints `pixel` once `tab` comes forward.
+    fn paint_when_in_front(&self, tab: i64, pixel: [u8; 4]) {
+        *self
+            .browser
+            .paint
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Paint {
+            tab,
+            pixel,
+            xvnc: Arc::clone(&self.xvnc),
+        });
+    }
+
+    fn front(&self) -> Front {
+        self.displays.front()
+    }
+
+    /// The agent's `page.bringToFront()` on `tab` for `task`, whose commit is logged and passes.
+    async fn bring_to_front(&self, tab: i64, task: Option<&TaskId>) -> Result<(), FrontError<()>> {
+        let log = &self.browser.log;
+        self.front()
+            .bring_to_front(TabId(tab), task.cloned(), || {
+                log.push("commit");
+                Ok(())
+            })
+            .await
+    }
+
+    /// Whether a new view is refused now. Admission refuses a paused view before it awaits
+    /// anything, so this answers synchronously, as a commit must.
+    fn views_refused(&self) -> bool {
+        matches!(
+            self.displays
+                .admit(DisplayRequest::View { follow: None })
+                .now_or_never(),
+            Some(Err(PartError::DisplayPaused))
+        )
+    }
+
+    /// Whether a new view is refused once its admission has read what is in front, as with a
+    /// private tab there (decision 34).
+    async fn front_refuses_views(&self) -> bool {
+        matches!(
+            self.displays
+                .admit(DisplayRequest::View { follow: None })
+                .await,
+            Err(PartError::DisplayPaused)
+        )
+    }
+
+    /// From now on `Browser.activateTab` answers an error, as when it gave no answer in time.
+    fn fail_activations(&self) -> TestResult {
+        self.browser
+            .script
+            .always("Browser.activateTab", cdp_error("no answer in time"))?;
+        Ok(())
+    }
+
+    /// Waits until the browser holds the activation of `tab`: sent, neither landed nor answered.
+    async fn activation_held(&self, tab: i64) -> TestResult {
+        eventually(|| {
+            self.browser.held_activations() == 1
+                && self.activated().is_ok_and(|tabs| tabs.last() == Some(&tab))
+        })
+        .await
+    }
+
+    /// Polls the agent's move by hand until it is past its activation's answer: it returned, or
+    /// it asked the browser what is in front. Left unpolled, it keeps what it holds, its private
+    /// switch included, until the test polls it again.
+    async fn poll_past_the_activation(&self, mut moving: Pin<&mut impl Future>) -> TestResult {
+        timeout(WITHIN, async {
+            while moving.as_mut().now_or_never().is_none()
+                && !self
+                    .tab_reads_since_activation()
+                    .is_ok_and(|reads| reads > 0)
+            {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// How many times the browser listed its tabs since it was last asked to bring one forward.
+    fn tab_reads_since_activation(&self) -> Result<usize, BoxError> {
+        let calls = self.browser.script.calls()?;
+        let since = calls
+            .iter()
+            .rposition(|call| call.method == "Browser.activateTab")
+            .ok_or("no activation yet")?;
+        Ok(calls[since..]
+            .iter()
+            .filter(|call| call.method == "Browser.getTabs")
+            .count())
+    }
+
+    /// Each tab the browser was asked to bring to the front, in order.
     fn activated(&self) -> Result<Vec<i64>, BoxError> {
         Ok(self
             .calls("Browser.activateTab")?
@@ -484,30 +652,62 @@ impl Harness {
         Ok(self.xvnc.received(connection))
     }
 
-    /// Records an operation of task `task` on `tab`, as the dispatcher would.
+    /// Records an operation of task `task` on `tab` that starts now, as the dispatcher would.
     fn operation(&self, task: &TaskId, tab: i64) {
+        self.operation_at(task, tab, EpochMillis::now());
+    }
+
+    /// Records an operation of task `task` on `tab` that started at `at`. The dispatcher stamps
+    /// an operation as it admits it, and the writer publishes its start only after its commit,
+    /// so a follower can read an operation after a move that came later.
+    fn operation_at(&self, task: &TaskId, tab: i64, at: EpochMillis) {
         let run = RunId::new();
-        self.sink.run_started(RunStarted {
-            id: run,
-            code: "await page.click('#next')".into(),
-            request_id: None,
-            task_id: Some(task.clone()),
-            host_data: None,
-            also_mask: None,
-            at: EpochMillis::now(),
-        });
+        self.sink.run_started(run_of(run, task, at));
+        let click = first_operation(run, "locator.click", Effect::Write, Some(TabId(tab)), at);
         self.sink.op_started(OperationStarted {
-            id: OperationId::new(run, 1),
-            parent: None,
-            name: "locator.click".into(),
-            kind: OperationKind::Builtin,
-            effect: Effect::Write,
-            tab: Some(TabId(tab)),
             args: json!({ "selector": "#next" }),
-            policy: Arc::default(),
-            also_mask: None,
-            at: EpochMillis::now(),
+            ..click
         });
+    }
+
+    /// Records an operation of task `task` with no page, started and ended at `at`: a
+    /// context-level call, or one refused before it had a page. Its end names no tab.
+    fn operation_with_no_page(&self, task: &TaskId, at: EpochMillis) {
+        let run = RunId::new();
+        self.sink.run_started(run_of(run, task, at));
+        let cookies = first_operation(run, "context.cookies", Effect::Read, None, at);
+        let id = cookies.id;
+        self.sink.op_started(cookies);
+        self.sink.op_ended(OperationEnded {
+            id,
+            outcome: Outcome::Ok,
+            delivery: Delivery::Done,
+            sent_at: Some(at),
+            result: None,
+            error: None,
+            page_after: None,
+            target: TargetSensitivity::Ordinary,
+            also_mask: None,
+            at,
+        });
+    }
+
+    /// Commits more trace events than the writer's event stream holds (1024), so a subscriber
+    /// that reads none of them meanwhile has lost some.
+    async fn overflow_the_event_stream(&self) -> TestResult {
+        for _ in 0..1100 {
+            self.sink.run_started(RunStarted {
+                id: RunId::new(),
+                code: "await page.title()".into(),
+                request_id: None,
+                task_id: None,
+                host_data: None,
+                also_mask: None,
+                at: EpochMillis::now(),
+            });
+        }
+        self.sink.flush().await?;
+        Ok(())
     }
 }
 
@@ -556,12 +756,56 @@ impl Viewer {
         self.to_display = None;
     }
 
+    /// Every byte that reaches the viewer until its display ends.
+    async fn until_the_end(&mut self) -> Result<Vec<u8>, BoxError> {
+        let mut bytes = Vec::new();
+        while let Some(chunk) = timeout(WITHIN, self.from_display.recv()).await? {
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
+    }
+
     async fn ended(self) -> Result<DisplayEnd, BoxError> {
         Ok(timeout(WITHIN, self.serving).await??)
     }
 }
 
 /// Waits until `done` holds.
+/// A run of task `task`, started at `at`.
+fn run_of(run: RunId, task: &TaskId, at: EpochMillis) -> RunStarted {
+    RunStarted {
+        id: run,
+        code: "await page.click('#next')".into(),
+        request_id: None,
+        task_id: Some(task.clone()),
+        host_data: None,
+        also_mask: None,
+        at,
+    }
+}
+
+/// `run`'s first operation, `name` on `tab`, admitted at `at`.
+fn first_operation(
+    run: RunId,
+    name: &str,
+    effect: Effect,
+    tab: Option<TabId>,
+    at: EpochMillis,
+) -> OperationStarted {
+    OperationStarted {
+        id: OperationId::new(run, 1),
+        parent: None,
+        name: name.into(),
+        kind: OperationKind::Builtin,
+        effect,
+        tab,
+        args: json!({}),
+        policy: Arc::default(),
+        also_mask: None,
+        at,
+    }
+}
+
 async fn eventually(done: impl Fn() -> bool) -> TestResult {
     timeout(WITHIN, async {
         while !done() {
@@ -767,10 +1011,10 @@ async fn views_close_at_the_owners_first_input_and_stay_out_while_that_display_i
 }
 
 #[tokio::test]
-async fn a_views_hold_closes_open_views_and_refuses_new_ones_until_dropped() -> TestResult {
+async fn a_screen_hold_closes_open_views_and_refuses_new_ones_until_dropped() -> TestResult {
     let h = harness().await?;
     let view = h.view(None).await?;
-    let hold = h.displays.hold_views_closed();
+    let hold = h.displays.hold_screen();
     assert_eq!(view.ended().await?, DisplayEnd::Paused);
     assert!(matches!(
         h.displays
@@ -1067,10 +1311,24 @@ async fn a_view_whose_tab_comes_forward_slowly_is_not_closed_by_the_tab_it_repla
 {
     let h = harness().await?;
     h.browser.list_tabs(&[3, 4], 3)?;
-    h.browser.slow_activation(POLLS);
     h.make_private(3).await?;
+    h.browser.hold_activations();
+    let admitting = tokio::spawn({
+        let displays = Arc::clone(&h.displays);
+        async move {
+            displays
+                .admit(DisplayRequest::View {
+                    follow: Some(Follow::Tab(TabId(4))),
+                })
+                .await
+        }
+    });
+    h.activation_held(4).await?;
+    // In flight for two of the watch's polls, which would close a view already registered.
+    tokio::time::sleep(POLLS).await;
+    h.browser.let_activations_go();
 
-    let view = h.view(Some(Follow::Tab(TabId(4)))).await?;
+    let view = serve(timeout(WITHIN, admitting).await???);
     view.send(HANDSHAKE);
     assert_eq!(
         h.received(0, 3).await?,
@@ -1084,7 +1342,7 @@ async fn a_view_whose_tab_comes_forward_slowly_is_not_closed_by_the_tab_it_repla
 async fn a_view_admitted_while_views_are_held_brings_nothing_forward() -> TestResult {
     let h = harness().await?;
     h.browser.list_tabs(&[3, 4], 3)?;
-    let _hold = h.displays.hold_views_closed();
+    let _hold = h.displays.hold_screen();
     assert!(matches!(
         h.displays
             .admit(DisplayRequest::View {
@@ -1266,14 +1524,530 @@ async fn a_viewer_that_floods_while_its_first_input_waits_is_refused() -> TestRe
 #[test]
 fn the_browser_hands_its_targeted_subscriber_what_its_script_emits() -> TestResult {
     let script = TestConnection::new([]);
-    let browser = Browser {
-        script: Arc::clone(&script),
-        fields: Mutex::default(),
-        listed: Mutex::default(),
-        activation: Mutex::default(),
-    };
+    let browser = Browser::new(Arc::clone(&script));
     let mut bindings = browser.events_targeted("Runtime.bindingCalled");
     script.emit("Runtime.bindingCalled", json!({ "name": "probe" }), None);
     assert_eq!(bindings.try_recv()?.params["name"], "probe");
+    Ok(())
+}
+
+/// The agent brings the private tab 4 forward under a plain view and a follow view. Its commit
+/// (the door's recheck, then mark_sent) already finds new views refused: the switch that refuses
+/// them cancelled every open view's close in the same step. The activation comes after the
+/// commit, and both views end.
+#[tokio::test]
+async fn a_private_tab_comes_forward_only_after_every_views_close() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4], 3)?;
+    h.make_private(4).await?;
+    let task = TaskId::parse("checkout")?;
+    h.operation(&task, 3);
+    h.sink.flush().await?;
+    let plain = h.view(None).await?;
+    let follower = h.view(Some(Follow::Task(task))).await?;
+
+    let log = &h.browser.log;
+    h.front()
+        .bring_to_front(TabId(4), None, || {
+            if h.views_refused() {
+                log.push("views refused");
+            }
+            log.push("commit");
+            Ok::<_, ()>(())
+        })
+        .await?;
+    assert_eq!(
+        h.log(),
+        ["activate 3", "views refused", "commit", "activate 4"],
+        "the follow view brought 3 forward as it opened; then views were out before the commit, \
+         and the activation came after it"
+    );
+    assert_eq!(plain.ended().await?, DisplayEnd::Paused);
+    assert_eq!(follower.ended().await?, DisplayEnd::Paused);
+    Ok(())
+}
+
+/// The screen paints the private tab as soon as the browser brings it forward, and Xvnc answers
+/// the update request the view holds with it. None of it reaches the viewer.
+#[tokio::test]
+async fn no_byte_xvnc_sends_after_the_switch_reaches_a_viewer() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4], 3)?;
+    h.make_private(4).await?;
+    h.paint_when_in_front(4, PRIVATE_PX);
+    let mut view = h.view(None).await?;
+    view.send(HANDSHAKE);
+    view.send(&UPDATE);
+    view.read(SERVER_HANDSHAKE + 1).await?;
+    view.send(&INCREMENTAL);
+    h.received(0, 5).await?;
+
+    h.bring_to_front(4, None).await?;
+    let shown = view.until_the_end().await?;
+    assert!(
+        !shown
+            .windows(PRIVATE_PX.len())
+            .any(|pixel| pixel == PRIVATE_PX),
+        "the private tab's pixels reached the viewer"
+    );
+    assert_eq!(view.ended().await?, DisplayEnd::Paused);
+    Ok(())
+}
+
+#[tokio::test]
+async fn no_view_is_admitted_while_a_private_tab_comes_forward() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4], 3)?;
+    h.make_private(4).await?;
+    h.browser.hold_activations();
+    let moving = tokio::spawn({
+        let front = h.front();
+        async move {
+            front
+                .bring_to_front(TabId(4), None, || Ok::<_, ()>(()))
+                .await
+        }
+    });
+    h.activation_held(4).await?;
+    let dials = h.xvnc.connections();
+    assert!(
+        matches!(
+            h.displays
+                .admit(DisplayRequest::View { follow: None })
+                .await,
+            Err(PartError::DisplayPaused)
+        ),
+        "refused while the activation is in flight"
+    );
+    assert_eq!(h.xvnc.connections(), dials, "and it never reached Xvnc");
+
+    h.browser.let_activations_go();
+    timeout(WITHIN, moving).await???;
+    assert!(
+        matches!(
+            h.displays
+                .admit(DisplayRequest::View { follow: None })
+                .await,
+            Err(PartError::DisplayPaused)
+        ),
+        "refused once the switch is over: the private tab is in front"
+    );
+    let view = h.view(Some(Follow::Tab(TabId(3)))).await?;
+    view.send(HANDSHAKE);
+    assert_eq!(
+        h.received(dials, 3).await?,
+        handshake_received(),
+        "a followTab=3 view brings 3 back, the host's newer request, and is admitted"
+    );
+    assert_eq!(h.log(), ["activate 4", "activate 3"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_tab_that_is_not_private_comes_forward_under_open_views() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4], 3)?;
+    let mut view = h.view(None).await?;
+    view.send(HANDSHAKE);
+    view.read(SERVER_HANDSHAKE).await?;
+
+    h.bring_to_front(4, None).await?;
+    view.send(&UPDATE);
+    view.read(1).await?;
+    assert!(
+        !view.serving.is_finished(),
+        "the view still passes the screen"
+    );
+    assert_eq!(h.log(), ["commit", "activate 4"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_owner_holding_the_screen_refuses_the_move_and_sends_nothing() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4], 3)?;
+    h.make_private(4).await?;
+    let mut view = h.view(None).await?;
+    view.send(HANDSHAKE);
+    view.read(SERVER_HANDSHAKE).await?;
+    let commits = AtomicUsize::new(0);
+    let commit = || {
+        commits.fetch_add(1, Ordering::SeqCst);
+        Ok::<_, ()>(())
+    };
+
+    let mut control = h.control(None).await?;
+    let refused = h.front().bring_to_front(TabId(4), None, commit).await;
+    assert!(
+        matches!(
+            refused,
+            Err(FrontError::OwnerHasScreen(OwnerHasScreen {
+                by: ScreenHolder::ControlDisplay
+            }))
+        ),
+        "an open control display, with no input: {refused:?}"
+    );
+    view.send(&UPDATE);
+    view.read(1).await?;
+    assert!(
+        !view.serving.is_finished(),
+        "the refused move closed no view"
+    );
+    control.leave();
+    control.ended().await?;
+
+    let hold = h.displays.hold_screen();
+    let refused = h.front().bring_to_front(TabId(4), None, commit).await;
+    assert!(
+        matches!(
+            refused,
+            Err(FrontError::OwnerHasScreen(OwnerHasScreen {
+                by: ScreenHolder::Takeover
+            }))
+        ),
+        "a takeover's hold: {refused:?}"
+    );
+    assert_eq!(
+        view.ended().await?,
+        DisplayEnd::Paused,
+        "the hold itself closed the view, as a takeover's start does"
+    );
+    drop(hold);
+    assert_eq!(commits.load(Ordering::SeqCst), 0, "commit never ran");
+    assert_eq!(h.activated()?, [0; 0], "and nothing was sent");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_refused_commit_sends_nothing_and_lets_views_back() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4], 3)?;
+    h.make_private(4).await?;
+    let refused = h
+        .front()
+        .bring_to_front(TabId(4), None, || Err::<(), _>("the run was stopped"))
+        .await;
+    assert!(
+        matches!(refused, Err(FrontError::Refused("the run was stopped"))),
+        "the door's own refusal stands: {refused:?}"
+    );
+    assert_eq!(h.activated()?, [0; 0], "nothing was sent");
+    let view = h.view(None).await?;
+    view.send(HANDSHAKE);
+    assert_eq!(
+        h.received(0, 3).await?,
+        handshake_received(),
+        "views are let back, with 3 still in front"
+    );
+    Ok(())
+}
+
+/// Whether the agent's move ended with its activation's own error, the browser's.
+fn activation_failed(moved: &Result<(), FrontError<()>>) -> bool {
+    matches!(moved, Err(FrontError::Activation(PartError::Browser(_))))
+}
+
+/// `Browser.activateTab` answers an error, as when it gave no answer in time, yet the browser may
+/// still switch to the private tab afterwards. Views stay out past the error, until the browser
+/// reads what is in front, exactly as after an activation that answered. The test polls the move
+/// itself, so while it checks, the move waits in that read whatever the clock does.
+#[tokio::test]
+async fn a_private_move_whose_activation_failed_keeps_views_out_until_the_front_is_read()
+-> TestResult {
+    let h = harness().await?;
+    h.make_private(4).await?;
+    h.fail_activations()?;
+    let mut moving = pin!(h.bring_to_front(4, None));
+    h.poll_past_the_activation(moving.as_mut()).await?;
+    assert!(
+        h.views_refused(),
+        "a view asked for before the browser reads the front is refused"
+    );
+
+    // The switch the browser did not confirm lands after all.
+    open_tabs(&h.browser.script, &[3, 4], 4)?;
+    let moved = timeout(WITHIN, moving).await?;
+    assert!(activation_failed(&moved), "the move's error: {moved:?}");
+    assert!(
+        h.front_refuses_views().await,
+        "and with the private tab in front, views stay out (decision 34)"
+    );
+    Ok(())
+}
+
+/// A follow view's admission holds the turn while its activation is in flight. The agent's move
+/// passes its first check and waits its turn behind it; then a control display takes the screen
+/// and waits the turn out behind the move. Under the turn the move finds the owner holding the
+/// screen, and sends nothing.
+#[tokio::test]
+async fn a_move_waiting_its_turn_is_refused_once_a_control_display_opens() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4], 3)?;
+    h.browser.hold_activations();
+    let following = tokio::spawn({
+        let displays = Arc::clone(&h.displays);
+        async move {
+            displays
+                .admit(DisplayRequest::View {
+                    follow: Some(Follow::Tab(TabId(4))),
+                })
+                .await
+                .map(drop)
+        }
+    });
+    h.activation_held(4).await?;
+    let front = h.front();
+    let mut moving = pin!(front.bring_to_front(TabId(3), None, || Ok::<_, ()>(())));
+    assert!(
+        moving.as_mut().now_or_never().is_none(),
+        "the move passed its first check and waits its turn"
+    );
+    let control = tokio::spawn({
+        let displays = Arc::clone(&h.displays);
+        async move {
+            displays
+                .admit(DisplayRequest::Control { binding: None })
+                .await
+                .map(drop)
+        }
+    });
+    eventually(|| front.check().is_err()).await?;
+    h.browser.let_activations_go();
+
+    let moved = timeout(WITHIN, moving).await?;
+    assert!(
+        matches!(
+            moved,
+            Err(FrontError::OwnerHasScreen(OwnerHasScreen {
+                by: ScreenHolder::ControlDisplay
+            }))
+        ),
+        "{moved:?}"
+    );
+    assert_eq!(h.log(), ["activate 4"], "it never sent activate 3");
+    timeout(WITHIN, following).await???;
+    timeout(WITHIN, control).await???;
+    Ok(())
+}
+
+/// A control display asked for while the agent's move is in flight opens only once the move has
+/// landed, so the owner never takes the screen in the middle of it.
+#[tokio::test]
+async fn a_control_display_opens_only_once_a_move_in_flight_has_landed() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4], 3)?;
+    h.browser.hold_activations();
+    let moving = tokio::spawn({
+        let front = h.front();
+        async move {
+            front
+                .bring_to_front(TabId(4), None, || Ok::<_, ()>(()))
+                .await
+        }
+    });
+    h.activation_held(4).await?;
+    let mut control = pin!(h.control(None));
+    assert!(
+        timeout(QUIET, control.as_mut()).await.is_err(),
+        "the owner's display waits while the move is in flight"
+    );
+
+    h.browser.let_activations_go();
+    let _control = timeout(WITHIN, control).await??;
+    h.browser.log.push("control admitted");
+    timeout(WITHIN, moving).await???;
+    assert_eq!(h.log(), ["activate 4", "control admitted"]);
+    Ok(())
+}
+
+/// A followTab=3 view and a followTask=T view are open, after T's op on 3. Another task's
+/// bringToFront(4) moves the front, and neither follower undoes it. T's next op on 3 is its
+/// follower's own edge, and brings 3 back.
+#[tokio::test]
+async fn follow_sees_the_agents_move_and_does_not_undo_it() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4], 3)?;
+    let (task, other) = (TaskId::parse("checkout")?, TaskId::parse("search")?);
+    h.operation(&task, 3);
+    h.sink.flush().await?;
+    let _tab_view = h.view(Some(Follow::Tab(TabId(3)))).await?;
+    let _task_view = h.view(Some(Follow::Task(task.clone()))).await?;
+
+    h.bring_to_front(4, Some(&other)).await?;
+    tokio::time::sleep(QUIET).await;
+    assert_eq!(
+        h.log(),
+        ["activate 3", "activate 3", "commit", "activate 4"],
+        "each view brought 3 forward as it opened, and neither undid the move to 4"
+    );
+
+    h.operation(&task, 3);
+    eventually(|| {
+        h.log()
+            == [
+                "activate 3",
+                "activate 3",
+                "commit",
+                "activate 4",
+                "activate 3",
+            ]
+    })
+    .await?;
+    Ok(())
+}
+
+/// The agent's bringToFront(4) for task T: T's follower adopts it, so T's op on 4 brings nothing
+/// forward, and T's op on 3 brings 3 back.
+#[tokio::test]
+async fn a_task_follower_adopts_its_own_tasks_move() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4], 3)?;
+    let task = TaskId::parse("checkout")?;
+    h.operation(&task, 3);
+    h.sink.flush().await?;
+    let _view = h.view(Some(Follow::Task(task.clone()))).await?;
+
+    h.bring_to_front(4, Some(&task)).await?;
+    h.operation(&task, 4);
+    tokio::time::sleep(QUIET).await;
+    assert_eq!(
+        h.log(),
+        ["activate 3", "commit", "activate 4"],
+        "the task's own move is the follower's: its op on 4 brings nothing forward"
+    );
+
+    h.operation(&task, 3);
+    eventually(|| h.log() == ["activate 3", "commit", "activate 4", "activate 3"]).await?;
+    Ok(())
+}
+
+/// An operation's start reaches a follower through the trace writer, after the writer's commit,
+/// while Neo's moves reach it at once. T's op on 3 began before another task's bringToFront(4)
+/// but is read after it: it is old news, and the follower leaves 4 in front. T's op on 5, which
+/// starts after the move, is the follower's own edge, and is read after the old one.
+#[tokio::test]
+async fn an_op_that_began_before_a_move_does_not_undo_it() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4, 5], 3)?;
+    let (task, other) = (TaskId::parse("checkout")?, TaskId::parse("search")?);
+    let _view = h.view(Some(Follow::Task(task.clone()))).await?;
+    h.operation(&task, 3);
+    eventually(|| h.log() == ["activate 3"]).await?;
+
+    let began = EpochMillis::now();
+    h.bring_to_front(4, Some(&other)).await?;
+    h.operation_at(&task, 3, began);
+    // The records' clock reads milliseconds; an op in the move's own millisecond is older.
+    h.operation_at(&task, 5, EpochMillis::now().plus_millis(1));
+    eventually(|| h.log().last().is_some_and(|last| last == "activate 5")).await?;
+    assert_eq!(
+        h.log(),
+        ["activate 3", "commit", "activate 4", "activate 5"],
+        "the op that began before the move brought nothing back"
+    );
+    Ok(())
+}
+
+/// Another task's bringToFront(4) lands after a followTask=T view on 3 is admitted and before its
+/// follower's first pass, and T's next op on 3 is committed in the same gap. The follower reads
+/// both from its admission on, the move first, so T's op brings 3 back.
+#[tokio::test]
+async fn a_follower_reads_what_happened_between_its_admission_and_its_first_pass() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4], 3)?;
+    let (task, other) = (TaskId::parse("checkout")?, TaskId::parse("search")?);
+    h.operation(&task, 3);
+    h.sink.flush().await?;
+    let admitted = h
+        .displays
+        .admit(DisplayRequest::View {
+            follow: Some(Follow::Task(task.clone())),
+        })
+        .await?;
+    h.bring_to_front(4, Some(&other)).await?;
+    // The records' clock reads milliseconds; an op in the move's own millisecond is older.
+    h.operation_at(&task, 3, EpochMillis::now().plus_millis(1));
+    h.sink.flush().await?;
+
+    let _view = serve(admitted);
+    eventually(|| h.log() == ["activate 3", "commit", "activate 4", "activate 3"]).await?;
+    Ok(())
+}
+
+/// A followTask=T view on 3 is admitted, another task's bringToFront(4) lands, and more trace
+/// events arrive than the stream holds, all before the follower's first pass. It reads the move,
+/// then finds it lost events and re-reads T's last tab: 3, from an op that began before the move,
+/// so 4 stays in front. T's next op, on 5, comes forward. It is recorded only after a follower
+/// that would bring 3 back has had the time to, or the store would already name 5.
+#[tokio::test]
+async fn a_follower_that_lost_events_never_brings_back_a_tab_older_than_the_move() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4, 5], 3)?;
+    let (task, other) = (TaskId::parse("checkout")?, TaskId::parse("search")?);
+    h.operation(&task, 3);
+    h.sink.flush().await?;
+    let admitted = h.admit_view(Some(Follow::Task(task.clone()))).await?;
+    h.bring_to_front(4, Some(&other)).await?;
+    h.overflow_the_event_stream().await?;
+
+    let _view = serve(admitted);
+    tokio::time::sleep(QUIET).await;
+    h.operation(&task, 5);
+    eventually(|| h.log().last().is_some_and(|last| last == "activate 5")).await?;
+    assert_eq!(
+        h.log(),
+        ["activate 3", "commit", "activate 4", "activate 5"],
+        "the lost events brought nothing back over the move"
+    );
+    Ok(())
+}
+
+/// An operation of the task with no page ends with no tab, so the follower reads the task's last
+/// tab back from the store. That tab is judged by when the task acted on it, not by this
+/// operation's end, so T's tab 3, older than another task's move to 4, stays where the move left
+/// it.
+#[tokio::test]
+async fn an_operation_with_no_page_never_brings_back_a_tab_older_than_the_move() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4, 5], 3)?;
+    let (task, other) = (TaskId::parse("checkout")?, TaskId::parse("search")?);
+    h.operation(&task, 3);
+    h.sink.flush().await?;
+    let _view = h.view(Some(Follow::Task(task.clone()))).await?;
+    eventually(|| h.log() == ["activate 3"]).await?;
+    h.bring_to_front(4, Some(&other)).await?;
+
+    // A millisecond past the move's stamp, so this operation is newer than the move.
+    h.operation_with_no_page(&task, EpochMillis::now().plus_millis(1));
+    h.sink.flush().await?;
+    tokio::time::sleep(QUIET).await;
+    h.operation(&task, 5);
+    eventually(|| h.log().last().is_some_and(|last| last == "activate 5")).await?;
+    assert_eq!(
+        h.log(),
+        ["activate 3", "commit", "activate 4", "activate 5"],
+        "the operation with no page brought nothing back over the move"
+    );
+    Ok(())
+}
+
+/// A follower's own activation is no move its task's ops are judged against. T's op on 5 starts
+/// before the admission brings 3 forward, and T's op on 4 before the follower brings 5 forward;
+/// each is read after that activation, and each is T's newest work, so each comes forward.
+#[tokio::test]
+async fn a_followers_own_moves_never_make_its_tasks_ops_old_news() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4, 5], 3)?;
+    let task = TaskId::parse("checkout")?;
+    h.operation(&task, 3);
+    h.sink.flush().await?;
+    let on_five = EpochMillis::now();
+    let _view = h.view(Some(Follow::Task(task.clone()))).await?;
+    h.operation_at(&task, 5, on_five);
+    let on_four = EpochMillis::now();
+    eventually(|| h.log() == ["activate 3", "activate 5"]).await?;
+
+    h.operation_at(&task, 4, on_four);
+    eventually(|| h.log() == ["activate 3", "activate 5", "activate 4"]).await?;
     Ok(())
 }

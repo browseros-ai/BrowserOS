@@ -161,6 +161,19 @@ pub struct TraceTail {
     pub truncated: bool,
 }
 
+/// The tab a task's latest operation acted on, and when, as
+/// [`TraceStore::task_last_act`](crate::TraceStore::task_last_act) reads it. A follow view that
+/// lost the task's live events re-reads it, and weighs `at` against the last front move it saw,
+/// so an operation older than that move cannot undo it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TaskAct {
+    /// The operation's target, or the tab of the page it ended on when it had none.
+    pub tab: TabId,
+    /// When the task acted on `tab`: the operation's start, or its end for a tab it ended on,
+    /// which exists only from then (a `newPage`'s).
+    pub at: EpochMillis,
+}
+
 /// One page of a listing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Page<T> {

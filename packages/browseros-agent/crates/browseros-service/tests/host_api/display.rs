@@ -5,6 +5,7 @@
 use crate::support::{BoxError, Harness, TestResult, harness};
 use browseros_core::TabId;
 use browseros_service::{HostAuth, HostToken, PeerRule, host_service};
+use browseros_takeover::{OwnerHasScreen, ScreenHolder};
 use browseros_trace::PrivateReason;
 use futures_util::{SinkExt, StreamExt};
 use std::future::IntoFuture;
@@ -412,5 +413,69 @@ async fn a_display_whose_screen_closes_gets_1011() -> TestResult {
     let (mut display, _) = handshake(&socket.path, Open::new("mode=control")).await?;
     h.xvnc.drop_connections();
     assert_eq!(closed(&mut display).await?.0, 1011);
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_open_control_display_holds_the_screen_until_it_closes() -> TestResult {
+    let h = harness().await?;
+    h.browser.open_tab(12);
+    let socket = serve(&h)?;
+    let front = h.service.front();
+    assert_eq!(front.check(), Ok(()));
+
+    let (mut control, _) = handshake(&socket.path, Open::new("mode=control")).await?;
+    assert_eq!(
+        front.check(),
+        Err(OwnerHasScreen {
+            by: ScreenHolder::ControlDisplay
+        }),
+        "open, with no input yet"
+    );
+    // Neo answers the owner's close once the display has fully ended.
+    control.close(None).await?;
+    let answer = timeout(WITHIN, control.next()).await?;
+    assert!(
+        matches!(answer, Some(Ok(Message::Close(_)))),
+        "the owner's close was not answered: {answer:?}"
+    );
+    assert_eq!(front.check(), Ok(()), "the closed display gave it back");
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_agents_move_onto_a_private_tab_closes_a_routed_view_with_4001() -> TestResult {
+    let h = harness().await?;
+    for tab in [12, 13] {
+        h.browser.open_tab(tab);
+    }
+    h.browser.bring_to_front(12);
+    let private = h.post("/v1/tabs/13/private", "").await?;
+    assert_eq!(
+        private.status,
+        axum::http::StatusCode::OK,
+        "{}",
+        private.body
+    );
+    let socket = serve(&h)?;
+    let (mut view, _) = handshake(&socket.path, Open::new("mode=view")).await?;
+
+    h.service
+        .front()
+        .bring_to_front(TabId(13), None, || Ok::<_, ()>(()))
+        .await?;
+    let (code, reason) = closed(&mut view).await?;
+    assert_eq!(code, 4001, "{reason}");
+    assert!(reason.starts_with("paused"), "{reason}");
+    assert_eq!(
+        h.browser.front(),
+        Some(13),
+        "the browser brought the private tab forward"
+    );
+    assert_eq!(
+        refused(&socket.path, Open::new("mode=view")).await?,
+        (409, "display_paused".to_owned()),
+        "and views stay out while it is in front"
+    );
     Ok(())
 }

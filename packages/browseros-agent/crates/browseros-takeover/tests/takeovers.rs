@@ -19,16 +19,19 @@ use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, BrowserSessionHooks, TabId};
 use browseros_takeover::testing::{FakeXvnc, NoStamps};
 use browseros_takeover::{
-    Admitted, BrowserTabs, DisplayEnd, DisplayRequest, Displays, FitState, Fits, Journal, LockEnd,
-    LockTarget, Locks, OwnerHasControl, PartError, Reads, ReleaseReason, ScreenSize, Takeover,
-    TakeoverRequest, TakeoverState, TakeoverTtl, Takeovers,
+    Admitted, BrowserTabs, DisplayEnd, DisplayRequest, Displays, FitState, Fits, Follow, Front,
+    FrontError, Journal, LockEnd, LockTarget, Locks, OwnerHasControl, OwnerHasScreen, PartError,
+    Reads, ReleaseReason, ScreenHolder, ScreenSize, Takeover, TakeoverRequest, TakeoverState,
+    TakeoverTtl, Takeovers,
 };
 use browseros_trace::{
-    Effect, Privacy, PrivacyRecord, PrivacyStore, PrivateReason, RedactionLimits, Redactor,
-    SecretSet, SecretSetConfig, TraceError, TraceStore, WriterConfig, spawn_writer,
+    Effect, EpochMillis, OperationId, OperationKind, OperationStarted, Privacy, PrivacyRecord,
+    PrivacyStore, PrivateReason, RedactionLimits, Redactor, RunId, RunStarted, SecretSet,
+    SecretSetConfig, TaskId, TraceError, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -54,6 +57,10 @@ const TAB: TabId = TabId(3);
 
 /// How long a test waits for something that should happen.
 const WITHIN: Duration = Duration::from_secs(5);
+
+/// How long a test waits before it decides something did not happen. Longer than follow's 1 s
+/// tick, so a follower that was not paused would have acted by then.
+const QUIET: Duration = Duration::from_millis(1500);
 
 /// The version, security type 1, and a ClientInit that asks for exclusive access (0).
 const HANDSHAKE: &[u8] = b"RFB 003.008\n\x01\x00";
@@ -133,6 +140,7 @@ struct Harness {
     browser: Arc<FakeBrowser>,
     flags: Arc<Flags>,
     privacy: Arc<Privacy>,
+    sink: TraceSink,
     locks: Arc<Locks>,
     fits: Arc<Fits>,
     displays: Arc<Displays>,
@@ -172,7 +180,7 @@ async fn harness(tabs: &[i64]) -> Result<Harness, BoxError> {
         Arc::new(NoStamps),
         journal.clone(),
         Arc::clone(&locks),
-        sink,
+        sink.clone(),
         store,
     );
     let takeovers = Takeovers::new(
@@ -189,6 +197,7 @@ async fn harness(tabs: &[i64]) -> Result<Harness, BoxError> {
         browser,
         flags,
         privacy,
+        sink,
         locks,
         fits,
         displays,
@@ -215,6 +224,45 @@ fn shortest(viewer: Option<ScreenSize>) -> Result<TakeoverRequest, &'static str>
 }
 
 impl Harness {
+    fn front(&self) -> Front {
+        self.displays.front()
+    }
+
+    /// Each tab the browser brought to the front, in order.
+    fn activated(&self) -> Vec<i64> {
+        self.browser
+            .calls_of("Browser.activateTab")
+            .iter()
+            .filter_map(|call| call.params["tabId"].as_i64())
+            .collect()
+    }
+
+    /// Records an operation of task `task` on `tab`, as the dispatcher would.
+    fn operation(&self, task: &TaskId, tab: i64) {
+        let run = RunId::new();
+        self.sink.run_started(RunStarted {
+            id: run,
+            code: "await page.click('#next')".into(),
+            request_id: None,
+            task_id: Some(task.clone()),
+            host_data: None,
+            also_mask: None,
+            at: EpochMillis::now(),
+        });
+        self.sink.op_started(OperationStarted {
+            id: OperationId::new(run, 1),
+            parent: None,
+            name: "locator.click".into(),
+            kind: OperationKind::Builtin,
+            effect: Effect::Write,
+            tab: Some(TabId(tab)),
+            args: json!({ "selector": "#next" }),
+            policy: Arc::default(),
+            also_mask: None,
+            at: EpochMillis::now(),
+        });
+    }
+
     /// Whether a view display is admitted now; one that is goes away at once.
     async fn views_admitted(&self) -> Result<bool, BoxError> {
         match self
@@ -978,5 +1026,205 @@ async fn each_state_change_is_announced() -> TestResult {
         h.takeovers.binding(browseros_takeover::TakeoverId::new()),
         Err(PartError::NotFound)
     ));
+    Ok(())
+}
+
+/// During a takeover of 3 with a phone viewer, the agent's bringToFront(4) is refused for the
+/// takeover: its commit never runs, nothing is sent, and 3 stays in front. After the release the
+/// same move goes through.
+#[tokio::test]
+async fn a_takeovers_tab_stays_in_front_when_the_agent_brings_another_forward() -> TestResult {
+    let h = harness(&[3, 4]).await?;
+    let takeover = h.takeovers.start(request(Some(PHONE))?).await?;
+    assert_eq!(
+        h.browser.active(),
+        Some(3),
+        "the takeover's fit brought 3 forward"
+    );
+    let from = h.browser.calls().len();
+    let commits = AtomicUsize::new(0);
+    let refused = h
+        .front()
+        .bring_to_front(TabId(4), None, || {
+            commits.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, ()>(())
+        })
+        .await;
+    assert!(
+        matches!(
+            refused,
+            Err(FrontError::OwnerHasScreen(OwnerHasScreen {
+                by: ScreenHolder::Takeover
+            }))
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(commits.load(Ordering::SeqCst), 0, "commit never ran");
+    assert!(
+        h.calls_since(from, "Browser.activateTab").is_empty(),
+        "nothing was sent"
+    );
+    assert_eq!(h.browser.active(), Some(3), "3 stays in front");
+
+    h.takeovers
+        .release(takeover.id, ReleaseReason::Done)
+        .await?;
+    h.front()
+        .bring_to_front(TabId(4), None, || Ok::<_, ()>(()))
+        .await?;
+    assert_eq!(
+        h.browser.active(),
+        Some(4),
+        "the screen is the agent's again"
+    );
+    Ok(())
+}
+
+/// R4: the agent's move is past its last check and sent, its answer held, when a takeover of 3
+/// with a viewer starts. The takeover's fit asks for the front turn and waits for it, so its
+/// activation is not sent beside the agent's: the agent's lands first, and 3 ends in front.
+#[tokio::test]
+async fn a_move_in_flight_lands_before_the_takeovers_fit_brings_its_tab_forward() -> TestResult {
+    let h = harness(&[3, 4]).await?;
+    h.browser.hold("Browser.activateTab");
+    let moving = tokio::spawn({
+        let front = h.front();
+        async move {
+            front
+                .bring_to_front(TabId(4), None, || Ok::<_, ()>(()))
+                .await
+        }
+    });
+    eventually(|| h.browser.held("Browser.activateTab") == 1).await?;
+    let starting = tokio::spawn({
+        let takeovers = Arc::clone(&h.takeovers);
+        let request = request(Some(PHONE))?;
+        async move { takeovers.start(request).await }
+    });
+    eventually(|| !h.browser.calls_of("Browser.getWindowForTarget").is_empty()).await?;
+    tokio::time::sleep(QUIET).await;
+    assert_eq!(
+        h.browser.held("Browser.activateTab"),
+        1,
+        "the fit's activation waits for the turn instead of going out beside the agent's"
+    );
+
+    h.browser.let_go("Browser.activateTab");
+    timeout(WITHIN, moving).await???;
+    timeout(WITHIN, starting).await???;
+    assert_eq!(
+        h.activated(),
+        [4, 3],
+        "the agent's move, then the takeover's"
+    );
+    assert_eq!(
+        h.browser.active(),
+        Some(3),
+        "the takeover's tab is in front"
+    );
+    Ok(())
+}
+
+/// R3: a takeover with no viewer brings nothing forward, and still holds the screen against the
+/// agent from its start until its release has given everything back.
+#[tokio::test]
+async fn a_takeover_without_a_viewer_holds_the_screen_and_activates_nothing() -> TestResult {
+    let h = harness(&[3, 4]).await?;
+    let front = h.front();
+    assert_eq!(front.check(), Ok(()));
+    let takeover = h.takeovers.start(request(None)?).await?;
+    let held = Err(OwnerHasScreen {
+        by: ScreenHolder::Takeover,
+    });
+    assert_eq!(front.check(), held);
+
+    h.browser.hold_sweep_reads();
+    let releasing = tokio::spawn({
+        let takeovers = Arc::clone(&h.takeovers);
+        async move { takeovers.release(takeover.id, ReleaseReason::Done).await }
+    });
+    eventually(|| h.browser.held_sweep_reads() > 0).await?;
+    assert_eq!(
+        front.check(),
+        held,
+        "still the owner's while the release runs"
+    );
+    h.browser.let_sweep_reads_go();
+    timeout(WITHIN, releasing).await???;
+    assert_eq!(front.check(), Ok(()), "the release gave the screen back");
+    assert!(
+        h.browser.calls_of("Browser.activateTab").is_empty(),
+        "a takeover without a viewer brings nothing forward"
+    );
+    Ok(())
+}
+
+/// A host fit holds the screen against the agent from the start of its claim, before the claim
+/// awaits anything, until its restore's plan has run. A claim that fails holds nothing.
+#[tokio::test]
+async fn a_host_fit_holds_the_screen_from_its_claim_to_its_restore() -> TestResult {
+    let h = harness(&[3, 4]).await?;
+    let front = h.front();
+    let held = Err(OwnerHasScreen {
+        by: ScreenHolder::Fit,
+    });
+    h.browser.hold("Browser.getWindowForTarget");
+    let fitting = tokio::spawn({
+        let fits = Arc::clone(&h.fits);
+        async move { fits.fit(TAB, PHONE).await }
+    });
+    eventually(|| h.browser.held("Browser.getWindowForTarget") > 0).await?;
+    assert_eq!(front.check(), held, "held mid-claim");
+    h.browser.let_go("Browser.getWindowForTarget");
+    let fit = timeout(WITHIN, fitting).await???;
+    assert_eq!(front.check(), held, "held while the fit is active");
+
+    h.browser.hold("Browser.setWindowBounds");
+    let restoring = tokio::spawn({
+        let fits = Arc::clone(&h.fits);
+        async move { fits.restore(fit.id).await }
+    });
+    eventually(|| h.browser.held("Browser.setWindowBounds") > 0).await?;
+    assert_eq!(
+        front.check(),
+        held,
+        "held while its restore puts the window back"
+    );
+    h.browser.let_go("Browser.setWindowBounds");
+    timeout(WITHIN, restoring).await???;
+    assert_eq!(front.check(), Ok(()), "the restore gave the screen back");
+
+    h.xvnc.refuse_next(3);
+    let refused = h.fits.fit(TAB, PHONE).await;
+    assert!(matches!(refused, Err(PartError::Screen(_))), "{refused:?}");
+    assert_eq!(front.check(), Ok(()), "a claim that failed holds nothing");
+    Ok(())
+}
+
+/// A followTask view is open when a host fits tab 3 to a phone. The task acts on 4 meanwhile:
+/// its follower stays paused while the fit holds the screen, and brings 4 forward once the fit
+/// is restored.
+#[tokio::test]
+async fn follow_pauses_while_a_fit_holds_the_screen() -> TestResult {
+    let h = harness(&[3, 4]).await?;
+    let task = TaskId::parse("checkout")?;
+    let _view = serve(
+        h.displays
+            .admit(DisplayRequest::View {
+                follow: Some(Follow::Task(task.clone())),
+            })
+            .await?,
+    );
+    let fit = h.fits.fit(TAB, PHONE).await?;
+    h.operation(&task, 4);
+    tokio::time::sleep(QUIET).await;
+    assert_eq!(
+        h.activated(),
+        [3],
+        "the fit's own activation only: the follower waits while the fit holds the screen"
+    );
+
+    h.fits.restore(fit.id).await?;
+    eventually(|| h.activated() == [3, 4]).await?;
     Ok(())
 }

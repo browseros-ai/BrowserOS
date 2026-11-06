@@ -11,12 +11,14 @@
 //!  the front read: Browser.getTabs' active tabs ─▶ Privacy::is_private
 //! ```
 //!
-//! **Why a poll.** The browser sends no event when a tab comes to the front, so a private tab
-//! that the agent (or any CDP client) activates is seen only at the next read. A view can show it
-//! for up to one poll interval and a `Browser.getTabs` round trip before it closes. A tab that
-//! goes private while it is in front closes the views as soon as its flag commits, through the
-//! trace writer's `tab.private`. A poll can catch it sooner, because `Privacy` sets the flag in
-//! memory before the commit. Follow never brings a private tab forward itself (follow.rs).
+//! **Why a poll.** The agent's own move of a private tab closes every view before the activation
+//! is sent (`Front`, decision 46). But the browser sends no event when a tab comes to the front,
+//! so a private tab that something else brings forward (the owner, a page's popup, the tab in
+//! front closing) is seen only at the next read. A view can show it for up to one poll interval
+//! and a `Browser.getTabs` round trip before it closes. A tab that goes private while it is in
+//! front closes the views as soon as its flag commits, through the trace writer's
+//! `tab.private`. A poll can catch it sooner, because `Privacy` sets the flag in memory before
+//! the commit. Follow never brings a private tab forward itself (follow.rs).
 //!
 //! The watch runs only while a view display is open. The first view starts it, and the last
 //! one's end stops it ([`crate::Displays`]'s table). Two views share one watch.

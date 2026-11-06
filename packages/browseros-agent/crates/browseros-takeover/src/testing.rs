@@ -7,6 +7,8 @@
 //!   status), and every other client sees the change in its next one (reason 2);
 //! - an incremental update request is answered when the screen changes, so a client gets a
 //!   layout only while it keeps a request outstanding. Messages sent meanwhile are still read;
+//! - a test can paint the screen ([`FakeXvnc::paint`]): every update then carries that pixel,
+//!   and a held request is answered with it, as Xvnc answers once the browser repaints;
 //! - it takes every message a display may pass on, and records each one a connection sends, its
 //!   handshake included ([`FakeXvnc::received`]). Any other message closes the connection.
 //!
@@ -39,10 +41,14 @@ struct Shared {
     /// Bumped by every change of the screen's size. A connection holding an incremental
     /// request waits for it, as Xvnc holds the request until something changes.
     changes: watch::Sender<u64>,
+    /// Bumped by every paint, which a held request also waits for.
+    paints: watch::Sender<u64>,
 }
 
 struct State {
     size: ScreenSize,
+    /// The top-left pixel every update carries.
+    pixel: [u8; 4],
     screen_id: u32,
     screen_flags: u32,
     /// Each SetDesktopSize received, as `<w>x<h> id <id> flags <flags>`.
@@ -76,6 +82,7 @@ impl FakeXvnc {
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 size,
+                pixel: [0x20, 0x40, 0x60, 0],
                 screen_id: 7,
                 screen_flags: 0,
                 requests: Vec::new(),
@@ -84,6 +91,7 @@ impl FakeXvnc {
                 open: CancellationToken::new(),
             }),
             changes: watch::channel(0).0,
+            paints: watch::channel(0).0,
         });
         let accepting = tokio::spawn({
             let shared = Arc::clone(&shared);
@@ -170,6 +178,13 @@ impl FakeXvnc {
         self.shared.state().answer = Answer::Never;
     }
 
+    /// The browser repaints the screen: every update carries `pixel` from now on, and an
+    /// incremental request a connection holds is answered with it at once.
+    pub fn paint(&self, pixel: [u8; 4]) {
+        self.shared.state().pixel = pixel;
+        self.shared.paints.send_modify(|paints| *paints += 1);
+    }
+
     /// Another client resizes the screen, as the owner's noVNC does with `resize=remote`.
     pub fn resize_from_viewer(&self, size: ScreenSize) {
         self.shared.state().size = size;
@@ -239,7 +254,7 @@ impl Shared {
             bytes.extend_from_slice(&state.screen_flags.to_be_bytes());
         }
         bytes.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0]);
-        bytes.extend_from_slice(&[0x20, 0x40, 0x60, 0]);
+        bytes.extend_from_slice(&state.pixel);
         bytes
     }
 
@@ -295,6 +310,7 @@ async fn converse(shared: &Shared, socket: &mut TcpStream, connection: usize) ->
     socket.write_all(&init).await?;
 
     let mut changes = shared.changes.subscribe();
+    let mut paints = shared.paints.subscribe();
     let mut layout = Some((0, 0));
     // An incremental update request the fake holds until the screen changes.
     let mut held = false;
@@ -311,6 +327,15 @@ async fn converse(shared: &Shared, socket: &mut TcpStream, connection: usize) ->
                 socket.write_all(&shared.update(Some((2, 0)))).await?;
                 continue;
             }
+            painted = paints.changed(), if held => {
+                if painted.is_err() {
+                    return Ok(());
+                }
+                held = false;
+                paints.borrow_and_update();
+                socket.write_all(&shared.update(None)).await?;
+                continue;
+            }
             kind = socket.read_u8() => kind?,
         };
         let Some(message) = read_message(socket, kind).await? else {
@@ -323,6 +348,7 @@ async fn converse(shared: &Shared, socket: &mut TcpStream, connection: usize) ->
             3 if byte(1) == 1 && layout.is_none() && !shared.answers_at_once() => held = true,
             3 => {
                 changes.borrow_and_update();
+                paints.borrow_and_update();
                 socket.write_all(&shared.update(layout.take())).await?;
             }
             // SetDesktopSize: padding, w, h, a screen count, padding, 16 bytes per screen.

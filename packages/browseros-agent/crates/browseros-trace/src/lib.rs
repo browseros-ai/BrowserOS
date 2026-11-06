@@ -66,7 +66,8 @@ pub use privacy::{
     CaptureGuard, ControlDisplay, Privacy, PrivacyError, PrivacyRecord, PrivacyStore, PrivateReason,
 };
 pub use read_model::{
-    OperationRow, Page, RunDetail, RunQuery, RunSummary, ShotRead, ShotState, TailQuery, TraceTail,
+    OperationRow, Page, RunDetail, RunQuery, RunSummary, ShotRead, ShotState, TailQuery, TaskAct,
+    TraceTail,
 };
 pub use redactor::{Bounded, RedactionLimits, Redactor, Truncation};
 pub use run_record::{RunEffects, RunEnded, RunStarted, RunStatus};

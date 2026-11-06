@@ -13,7 +13,11 @@
 //!   read can close the fitted tab's popups and move it, and that must land before the tab
 //!   goes back to the agent. A release takes it while it holds the surface's; nothing takes
 //!   them the other way round;
-//! - the screen's size as the watcher last saw it, on a `watch` channel.
+//! - the screen's size as the watcher last saw it, on a `watch` channel;
+//! - each fit's hold on the screen for its owner (decision 44), a guard in the front's registry
+//!   (`browser_tabs`): taken before its claim awaits anything, kept in its table entry while it
+//!   is active, and let go once its restore's plan ran. The agent cannot move the front and
+//!   followers pause while any fit holds it, so neither strands the owner's phone fit.
 //!
 //! ```text
 //!  fit(tab, viewer) ── surface ──▶ Seen ─▶ Surface::claim ─▶ surface_steps::run ─▶ Fit
@@ -28,7 +32,7 @@
 //! A fit is idempotent per tab: fitting a tab whose fit is active refits it for the new
 //! viewer and returns the same fit. Restoring is idempotent per fit.
 
-use crate::browser_tabs::WindowState;
+use crate::browser_tabs::{ScreenHoldGuard, WindowState};
 use crate::fit_rule::{FitMode, Layout, layout_for};
 use crate::limits::{
     KEEP_RESTORED_FIT, NAVIGATE_TIMEOUT, OWNER_VIEW_BUDGET, OWNER_VIEW_TICK, STEP_TIMEOUT,
@@ -39,7 +43,7 @@ use crate::owner_view::{self, OwnerView};
 use crate::screen::Screen;
 use crate::surface::{Seen, Surface};
 use crate::surface_steps::{self, PlanFor};
-use crate::{BrowserTabs, FitId, PartError, ScreenSize, Xvnc};
+use crate::{BrowserTabs, FitId, PartError, ScreenHolder, ScreenSize, Xvnc};
 use browseros_core::{TabId, TargetId};
 use browseros_trace::{EpochMillis, SecretSet};
 use std::collections::HashMap;
@@ -160,8 +164,25 @@ struct Entry {
     /// The pages that stayed where they are at the last owner view read; `None` before the
     /// fit's first read.
     known_popups: Option<Vec<TargetId>>,
-    /// When it was restored, so it is forgotten an hour later.
-    restored: Option<Instant>,
+    standing: Standing,
+}
+
+/// A fit holds the screen for its owner exactly while it is active.
+enum Standing {
+    /// It holds its tab, and the screen.
+    Active { _held: ScreenHoldGuard },
+    /// It put its tab back at this instant, and is forgotten an hour later.
+    Restored(Instant),
+}
+
+impl Entry {
+    /// When it was restored; `None` while it is active.
+    fn restored(&self) -> Option<Instant> {
+        match self.standing {
+            Standing::Active { .. } => None,
+            Standing::Restored(at) => Some(at),
+        }
+    }
 }
 
 /// Every fit in the process, Neo's one screen and window, and the loop that keeps active fits
@@ -201,7 +222,8 @@ impl Fits {
     /// Fits `tab` to `viewer`: brings the tab to the front, resizes Neo's screen, then resets
     /// zoom and sets the window and the viewport for the screen's size. Returns once that ran,
     /// with `fitted` saying whether all of it landed. The first fit starts the fits loop and
-    /// the screen watcher.
+    /// the screen watcher. From the start of its claim to the end of its restore, the fit holds
+    /// the screen for its owner.
     ///
     /// # Errors
     /// `UnusableViewer` under 100 px a side; `TabNotFound`; `Browser` when the tab's window
@@ -209,6 +231,10 @@ impl Fits {
     /// surface as they were.
     pub async fn fit(self: &Arc<Self>, tab: TabId, viewer: ScreenSize) -> Result<Fit, PartError> {
         let layout = layout_for(viewer).ok_or(PartError::UnusableViewer(viewer))?;
+        // Before anything awaits. The claim's activation waits for the front turn, and without
+        // the hold an agent move could pass the screen rule meanwhile and land on top of it. A
+        // failed claim drops it; a refit of an active fit keeps its entry's own.
+        let held = self.browser.hold_screen(ScreenHolder::Fit);
         let page = self.browser.page(tab).await?;
         let mut surface = self.surface.lock().await;
         let seen = Seen {
@@ -244,7 +270,7 @@ impl Fits {
                     created_at: EpochMillis::now(),
                 },
                 known_popups: None,
-                restored: None,
+                standing: Standing::Active { _held: held },
             });
             apply(&mut table, layout, &refitted, fitted);
             table.get(&id).map(|entry| entry.fit.clone())
@@ -283,7 +309,7 @@ impl Fits {
         let tab = {
             let table = self.table();
             let entry = table.get(&id).ok_or(PartError::NotFound)?;
-            if entry.restored.is_some() {
+            if entry.restored().is_some() {
                 return Err(PartError::FitRestored);
             }
             entry.fit.tab
@@ -340,7 +366,7 @@ impl Fits {
         let restored = {
             let table = self.table();
             let entry = table.get(&id).ok_or(PartError::NotFound)?;
-            entry.restored.map(|_| entry.fit.clone())
+            entry.restored().map(|_| entry.fit.clone())
         };
         match restored {
             Some(fit) => Ok(fit),
@@ -365,7 +391,7 @@ impl Fits {
         let gone = self
             .table()
             .values()
-            .filter(|entry| entry.restored.is_none() && !open.contains(&entry.fit.tab))
+            .filter(|entry| entry.restored().is_none() && !open.contains(&entry.fit.tab))
             .map(|entry| entry.fit.id)
             .collect::<Vec<_>>();
         for id in gone {
@@ -415,8 +441,9 @@ impl Fits {
         }
     }
 
-    /// Releases `id`'s claim under the held surface lock, then marks it restored. The last
-    /// release stops the fits loop and its watcher.
+    /// Releases `id`'s claim under the held surface lock, then marks it restored and lets go of
+    /// its hold on the screen, so no agent move lands while its plan runs. The last release
+    /// stops the fits loop and its watcher.
     ///
     /// It first waits for a running round of owner view reads to end, rather than cancel it: a
     /// navigation a read has sent goes on in the browser whether or not the read is dropped. So
@@ -429,20 +456,25 @@ impl Fits {
         if !surface.is_claimed() {
             self.stop_loop();
         }
-        let mut table = self.table();
-        let entry = table.get_mut(&id).ok_or(PartError::NotFound)?;
-        entry.restored = Some(Instant::now());
-        entry.fit.state = FitState::Restored(EpochMillis::now());
-        entry.fit.keyboard = None;
-        entry.fit.bar = None;
-        tracing::info!(fit = %id, tab = entry.fit.tab.0, "restored");
-        Ok(entry.fit.clone())
+        let (fit, standing) = {
+            let mut table = self.table();
+            let entry = table.get_mut(&id).ok_or(PartError::NotFound)?;
+            let standing =
+                std::mem::replace(&mut entry.standing, Standing::Restored(Instant::now()));
+            entry.fit.state = FitState::Restored(EpochMillis::now());
+            entry.fit.keyboard = None;
+            entry.fit.bar = None;
+            (entry.fit.clone(), standing)
+        };
+        drop(standing);
+        tracing::info!(fit = %id, tab = fit.tab.0, "restored");
+        Ok(fit)
     }
 
     fn active_fit(&self, tab: TabId) -> Option<FitId> {
         self.table()
             .values()
-            .find(|entry| entry.restored.is_none() && entry.fit.tab == tab)
+            .find(|entry| entry.restored().is_none() && entry.fit.tab == tab)
             .map(|entry| entry.fit.id)
     }
 
@@ -538,7 +570,7 @@ impl Fits {
         let active = self
             .table()
             .values()
-            .filter(|entry| entry.restored.is_none())
+            .filter(|entry| entry.restored().is_none())
             .map(|entry| {
                 (
                     entry.fit.id,
@@ -573,7 +605,7 @@ impl Fits {
         let Some(entry) = table.get_mut(&id) else {
             return;
         };
-        if entry.restored.is_some() || entry.fit.screen != screen || entry.fit.mode != mode {
+        if entry.restored().is_some() || entry.fit.screen != screen || entry.fit.mode != mode {
             return;
         }
         entry.fit.keyboard = view.keyboard;
@@ -588,7 +620,7 @@ impl Fits {
         let mut table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
         table.retain(|_, entry| {
             entry
-                .restored
+                .restored()
                 .is_none_or(|restored| restored.elapsed() < KEEP_RESTORED_FIT)
         });
         table
@@ -600,7 +632,7 @@ impl Fits {
 /// size are dropped, since they would open the keyboard in the wrong place.
 fn apply(table: &mut HashMap<FitId, Entry>, layout: Layout, refitted: &[TabId], fitted: Fitted) {
     for entry in table.values_mut() {
-        if entry.restored.is_some() {
+        if entry.restored().is_some() {
             continue;
         }
         if entry.fit.screen != layout.screen {

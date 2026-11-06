@@ -25,7 +25,7 @@ use crate::screenshot_files::ShotFiles;
 use crate::{
     Delivery, Effect, EpochMillis, ErrorRecord, IdError, OperationId, OperationKind, OperationRow,
     Outcome, Page, PageState, PrivacyRecord, PrivateReason, RequestId, RunDetail, RunEffects,
-    RunId, RunQuery, RunStatus, RunSummary, Shot, ShotRead, ShotState, TailQuery, TaskId,
+    RunId, RunQuery, RunStatus, RunSummary, Shot, ShotRead, ShotState, TailQuery, TaskAct, TaskId,
     TraceError, TraceTail, salvage,
 };
 use browseros_core::TabId;
@@ -589,17 +589,19 @@ impl TraceStore {
         })
     }
 
-    /// The tab the task's most recent operation acted on. claw-sdk's task page default reads it
-    /// after a restart, when its memory of the task is gone. An operation counts with its target
-    /// tab; one that had no target when it started counts with the tab of the page it ended on.
-    /// That is how a `newPage` counts: its tab exists only once it ends, and it is the page the
-    /// task works in next. An operation with neither is skipped.
+    /// The tab the task's most recent operation acted on, and when. An operation counts with
+    /// its target tab, from its start. One that had no target when it started counts with the
+    /// tab of the page it ended on, from its end. That is how a `newPage` counts: its tab exists
+    /// only once it ends, and it is the page the task works in next. An operation with neither
+    /// is skipped. The latest by start wins.
     ///
     /// # Errors
-    /// When the file cannot be read.
-    pub async fn task_last_tab(&self, task: &TaskId) -> Result<Option<TabId>, TraceError> {
-        let tab: Option<i64> = sqlx::query_scalar(
-            "SELECT COALESCE(target_tab_id, tab_id) FROM operations \
+    /// When the file cannot be read or the row is corrupt.
+    pub async fn task_last_act(&self, task: &TaskId) -> Result<Option<TaskAct>, TraceError> {
+        let row = sqlx::query(
+            "SELECT COALESCE(target_tab_id, tab_id) AS tab, \
+               CASE WHEN target_tab_id IS NULL THEN ended_at ELSE started_at END AS acted_at \
+             FROM operations \
              WHERE run_id IN (SELECT id FROM runs WHERE task_id = ?) \
                AND COALESCE(target_tab_id, tab_id) IS NOT NULL \
              ORDER BY started_at DESC, run_id DESC, seq DESC LIMIT 1",
@@ -607,7 +609,22 @@ impl TraceStore {
         .bind(task.as_str())
         .fetch_optional(&self.pool)
         .await?;
-        Ok(tab.map(TabId))
+        row.map(|row| {
+            Ok(TaskAct {
+                tab: TabId(row.try_get("tab")?),
+                at: EpochMillis::from_millis(row.try_get("acted_at")?),
+            })
+        })
+        .transpose()
+    }
+
+    /// The tab of the task's [last act](Self::task_last_act). claw-sdk's task page default reads
+    /// it after a restart, when its memory of the task is gone.
+    ///
+    /// # Errors
+    /// When the file cannot be read or the row is corrupt.
+    pub async fn task_last_tab(&self, task: &TaskId) -> Result<Option<TabId>, TraceError> {
+        Ok(self.task_last_act(task).await?.map(|act| act.tab))
     }
 
     /// The summaries of `ids`, oldest first.

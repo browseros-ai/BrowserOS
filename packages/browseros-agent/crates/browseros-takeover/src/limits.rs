@@ -62,10 +62,23 @@ pub(crate) const WINDOW_SETTLE: Duration = Duration::from_secs(3);
 /// How often a window state change is read back.
 pub(crate) const WINDOW_POLL: Duration = Duration::from_millis(25);
 
-/// One browser step of a surface plan: bringing a tab to the front, Ctrl+0, a window state or
-/// a viewport. A viewport waits for every holder of its tab, then up to 2 s for the page to
-/// report the change.
+/// One browser step of a surface plan: Ctrl+0, a window state or a viewport. A viewport waits
+/// for every holder of its tab, then up to 2 s for the page to report the change. The plan's
+/// activation is bounded by [`ACTIVATE_TIMEOUT`] instead.
 pub(crate) const STEP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// One `Browser.activateTab`, from any mover: a follower, a fit's claim, or the agent. Each
+/// holds the front turn until it is answered, so this keeps one mover from holding back every
+/// other for the CDP client's 60 s request timeout.
+pub(crate) const ACTIVATE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long views stay refused after the agent activates a private tab, waiting for
+/// `Browser.getTabs` to read it as in front. Then they are let back, and each view's admission
+/// reads the front itself (decision 46).
+pub(crate) const FRONT_SHOWN: Duration = Duration::from_secs(1);
+
+/// How often that read repeats.
+pub(crate) const FRONT_SHOWN_POLL: Duration = Duration::from_millis(25);
 
 /// How long a fit waits for the screen watcher to report the size it just set, so the fits
 /// loop never takes an older report for the owner's resize.
@@ -155,5 +168,5 @@ pub(crate) const TAKEOVER_CHANGES: usize = 256;
 
 /// How often the front-tab watch reads which tab is in front while any view display is open
 /// (decision 34). The browser sends no event when a tab comes to the front, so this bounds how
-/// long a view can show a private tab that the agent brought forward.
+/// long a view can show a private tab that something other than Neo brought forward.
 pub(crate) const FRONT_POLL: Duration = Duration::from_millis(250);
