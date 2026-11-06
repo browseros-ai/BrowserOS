@@ -31,6 +31,9 @@
 //! Neo-only behaviour, each deliberate:
 //! - `trial` with `force` still arms a blocking interceptor (without the preliminary hit
 //!   check); Playwright arms none under `force` and so delivers a real click on a trial.
+//! - The verdict is read after every press. Playwright skips it under `noWaitAfter`, and so
+//!   reports a press its interceptor blocked as a click; here `noWaitAfter` skips only the
+//!   navigation barrier.
 //! - A CDP failure after a press was written ends the call with `Error` and delivery `Unknown`;
 //!   Playwright's loop A would retry it and might press again.
 //! - `modifiers`, `steps` other than 1 and a `clickCount` above [`MAX_CLICK_COUNT`] are refused
@@ -364,7 +367,8 @@ pub(crate) struct ClickOptions {
     pub(crate) force: bool,
     /// `scroll: 'none'` skips scrolling (the log lines stay, as in Playwright).
     pub(crate) scroll: bool,
-    /// `!noWaitAfter`: await the interceptor's verdict and the navigation barrier.
+    /// `!noWaitAfter`: wait for the navigations the input requested. The verdict is read either
+    /// way.
     pub(crate) wait_after: bool,
     pub(crate) position: Option<Point>,
     pub(crate) mouse: MouseClick,
@@ -530,7 +534,7 @@ impl<T: Tab> ElementAction<T> for ClickAction<'_> {
         let wait_after = if self.options.wait_after {
             WaitAfter::Enabled
         } else {
-            WaitAfter::NoWait
+            WaitAfter::Disabled
         };
         retry_pointer_action(
             tab,
@@ -600,15 +604,15 @@ pub(crate) async fn retry_with_progress_if_not_connected<T: Tab, A: ElementActio
     }
 }
 
-/// Playwright's three pointer-action epilogues: `true`, `'disabled'`, and `false`.
+/// What a pointer action awaits after its input: Playwright's `true` and `'disabled'`. Its
+/// `false` (`noWaitAfter`) skips the verdict too, and so reports a press its interceptor blocked
+/// as a click; Neo reads the verdict after every press, so `noWaitAfter` is `Disabled`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WaitAfter {
-    /// Await both the hit-target verdict and navigation barrier.
+    /// The hit-target verdict, then the navigation barrier.
     Enabled,
-    /// Await the verdict only, as check/uncheck require.
+    /// The verdict only: `noWaitAfter`, and check/uncheck.
     Disabled,
-    /// Stop the interceptor in the background; await neither.
-    NoWait,
 }
 
 /// What one attempt came to.
@@ -800,19 +804,14 @@ async fn act<T: Tab>(
         } => return Err(PlaywrightError::error(message).into()),
     };
 
+    // Read after every press, `noWaitAfter` too: it cannot stall, because it races a dialog
+    // opening and a navigation being requested.
     let blocked = match armed {
-        Some(armed) if wait_after != WaitAfter::NoWait => {
-            match progress.race(tab.verdict(armed)).await? {
-                Verdict::Done => None,
-                Verdict::Blocked(target) => Some(target),
-            }
-        }
-        // With `noWaitAfter` Playwright does not await the stop; dropping it disarms in the
-        // background.
-        unawaited => {
-            drop(unawaited);
-            None
-        }
+        Some(armed) => match progress.race(tab.verdict(armed)).await? {
+            Verdict::Done => None,
+            Verdict::Blocked(target) => Some(target),
+        },
+        None => None,
     };
     // Not held through the navigation barrier, which only waits: an interceptor not yet stopped
     // keeps its own copy until it is.
@@ -1602,6 +1601,30 @@ pub(crate) mod tests {
         );
     }
 
+    /// `noWaitAfter` skips only the navigation barrier. Playwright skips the verdict too, and so
+    /// reports a press its interceptor blocked as a click.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_blocked_press_under_no_wait_after_presses_again() {
+        let mut tab = FakeTab::ready();
+        tab.verdict = Step::new(
+            ROUND_TRIP,
+            [Verdict::Blocked(OVERLAY.to_string()), Verdict::Done],
+        );
+        let mut no_wait = options(SELECTOR);
+        no_wait.wait_after = false;
+        let (result, _, delivery) = run(&tab, &no_wait, 30_000.0).await;
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(delivery, Delivery::Done);
+        assert_eq!(
+            tab.count("press (36.75, 18.5)"),
+            2,
+            "the blocked press is pressed again: {:?}",
+            tab.calls()
+        );
+        assert_eq!(tab.count("settle"), 0, "no navigation barrier");
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_trial_presses_into_a_blocking_interceptor_and_delivers_nothing() {
         let tab = FakeTab::ready();
@@ -1864,26 +1887,6 @@ pub(crate) mod tests {
             progress.delivery().expect("input").delivery(),
             Delivery::Done
         );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn tests_that_no_wait_after_drops_the_interceptor_without_awaiting_its_verdict() {
-        let tab = FakeTab::ready();
-        let progress = Progress::for_test(30_000.0);
-        let result = retry_pointer_action(
-            &tab,
-            &1,
-            &options(SELECTOR),
-            WaitAfter::NoWait,
-            &progress,
-            progress.delivery().expect("input"),
-        )
-        .await;
-        assert!(matches!(result, Ok(ActionResult::Done(()))));
-        assert_eq!(tab.count("verdict"), 0);
-        assert_eq!(tab.count("watch_navigations"), 0);
-        assert_eq!(tab.count("settle"), 0);
-        assert_eq!(tab.count("disarmed"), 1);
     }
 
     struct ReadAction(Mutex<usize>);
