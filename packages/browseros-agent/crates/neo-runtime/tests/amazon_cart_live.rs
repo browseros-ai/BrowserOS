@@ -10,6 +10,9 @@
 //! NEO_E2E_BROWSER="/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo" \
 //!   cargo test -p neo-runtime --test amazon_cart_live -- --ignored --nocapture
 //! ```
+//!
+//! Add `NEO_E2E_HEADED=1` to watch the browser. It stays open for 30 seconds after the
+//! cart read, then closes. This inspection pause runs outside the script's timeout.
 
 #[path = "support/browser.rs"]
 #[expect(
@@ -19,11 +22,14 @@
 mod browser;
 
 use std::env;
+use std::io;
+use std::io::Write;
 use std::time::Duration;
 
 use browser::{Fixture, Tab};
 use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime};
 use serde_json::json;
+use tokio::time;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -96,6 +102,13 @@ async fn tests_that_one_runtime_adds_one_pack_and_reads_its_cart_in_a_later_run(
     )
     .await;
     let observed = tab.evaluate(CART_STATE).await;
+    if browser::is_headed() {
+        let _ = writeln!(
+            io::stderr(),
+            "Cart inspection: keeping BrowserOS open for 30 seconds before closing."
+        );
+        time::sleep(Duration::from_secs(30)).await;
+    }
     tab.close().await;
 
     assert_eq!(before.status, RunStatus::Ok, "preflight: {before:#?}");

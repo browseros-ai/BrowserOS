@@ -3,8 +3,8 @@
 //! that tab. Gated on `NEO_E2E_BROWSER`, the browser binary's path; without it a test passes as
 //! a skip.
 //!
-//! The browser always launches `--headless=new --disable-browseros-server`: without the second
-//! flag, a browseros-claw-server sidecar outlives it. [`Tab::close`] closes it as Playwright
+//! The browser is headless unless `NEO_E2E_HEADED=1`. It always disables the BrowserOS server,
+//! since otherwise a browseros-claw-server sidecar outlives it. [`Tab::close`] closes it as Playwright
 //! does and fails the test if any of its processes outlives it; a `Tab` dropped without it, as
 //! when a test panics first, SIGKILLs the browser's process group.
 //!
@@ -48,6 +48,11 @@ pub fn e2e_browser() -> Option<OsString> {
         );
     }
     binary
+}
+
+/// Opens a visible browser for manual inspection when explicitly requested.
+pub fn is_headed() -> bool {
+    env::var("NEO_E2E_HEADED").is_ok_and(|value| value == "1")
 }
 
 /// What the fixture server serves. A path in `pages` gets its HTML; any other path gets a small
@@ -281,7 +286,7 @@ const HELPER_GRACE: Duration = Duration::from_secs(5);
 /// How often [`Browser::close`] samples the processes left.
 const POLL: Duration = Duration::from_millis(20);
 
-/// A headless BrowserOS neo on a throwaway profile, leading a process group of its own. Every
+/// A BrowserOS neo on a throwaway profile, leading a process group of its own. Every
 /// helper it starts (GPU, utility, renderers) joins that group (`ps -o pid,pgid` on
 /// 155.0.8318.26), so one signal to the group reaches them all. [`Browser::close`] ends it; one
 /// dropped without it, as when a test panics first, sends its whole group SIGKILL.
@@ -297,8 +302,11 @@ impl Browser {
     fn launch(binary: OsString) -> Self {
         let profile = tempfile::tempdir()
             .unwrap_or_else(|error| panic!("create a profile directory: {error}"));
-        let mut child = Command::new(binary)
-            .arg("--headless=new")
+        let mut command = Command::new(binary);
+        if !is_headed() {
+            command.arg("--headless=new");
+        }
+        let mut child = command
             // Otherwise the browser starts a browseros-claw-server sidecar that outlives it.
             .arg("--disable-browseros-server")
             // Port 0 lets the browser pick a free port and write it to DevToolsActivePort.
