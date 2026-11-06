@@ -4,7 +4,8 @@
 // chain composition in packages/playwright-core/src/client/{page,frame,locator}.ts is mirrored here,
 // because those classes need a live protocol connection to construct. Each chain is a JS expression an
 // agent would write; it is evaluated against the mirror, so the recorded chain text is exactly what
-// produced its selector. capture-click.mjs re-evaluates every chain against real playwright-core 1.64.1.
+// produced its selector. When it was captured, every chain also matched real playwright-core 1.64.1
+// (94/94; README.md).
 //
 // Run: bun selector-corpus.ts   (writes selector-goldens.json next to this file)
 
