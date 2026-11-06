@@ -23,5 +23,6 @@
 )]
 mod events;
 mod ids;
+mod view;
 
 pub use ids::{EpochMs, SessionKey, TabId};
