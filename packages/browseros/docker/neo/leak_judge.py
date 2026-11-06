@@ -1102,6 +1102,10 @@ def decide(o: Observation) -> tuple[Verdict, str]:
 
 
 PIXEL_GRACE_MS = 5000  # a stream may deliver what it captured before `since` this late
+# bringToFront closes every view before the private tab comes forward, and a closed view
+# forwards nothing it reads after that (sdk-traces decision 46). So a view frame may trail
+# the switch only by transport: one already in flight on its own socket as the reply left.
+FRONT_GRACE_MS = 250
 
 
 def decide_pixels(o: Observation) -> tuple[Verdict, str]:
@@ -1781,6 +1785,7 @@ class _Observer:
             else self.private_since
         )
         since = era.get(instance.name)
+        grace = FRONT_GRACE_MS if s.channel is ChannelId.FRONT_VIEW else PIXEL_GRACE_MS
         refusal = Refusal("http", str(s.status)) if s.status not in (101, 200) else None
         frames = [] if refusal else self._frames(s)
         before = [a for a, _ in frames if since is None or a < since]
@@ -1788,10 +1793,7 @@ class _Observer:
             a
             for a, captured in frames
             if since is not None
-            and (
-                (captured is not None and captured >= since)
-                or a > since + PIXEL_GRACE_MS
-            )
+            and ((captured is not None and captured >= since) or a > since + grace)
         ]
         if s.role == "retry":  # asked for after privacy: nothing is "before"
             before = []

@@ -2345,13 +2345,19 @@ class FrontTests(EvidenceBase):
         return out
 
     def test_a_view_still_sending_after_a_private_tab_came_forward_leaks(self) -> None:
-        """No view while a private tab is in front (decision 34): a frame later than the
-        pixel grace after the switch leaks, whatever it shows; frames before it and none
-        after are masked; a view refused once the tab is in front is held."""
+        """No view while a private tab is in front (decision 34), and every view closes
+        before the switch (decision 46): a frame later than the transport allowance after
+        it leaks, whatever it shows, though a screencast's pixel grace would excuse it;
+        frames before it, or in flight at it, and none later are masked; a view refused
+        once the tab is in front is held."""
         self.bring("b1", {"sent": True})
         self.front_step(1000, since_ms=1000)
-        self.view("s1", [200, 1500, 1000 + J.PIXEL_GRACE_MS + 900])
-        self.view("s2", [200, 1500], closed=(1300, "close 4001"))
+        late = 1000 + J.FRONT_GRACE_MS + 100
+        self.assertLess(late, 1000 + J.PIXEL_GRACE_MS)
+        self.view("s1", [200, late])
+        self.view(
+            "s2", [200, 1000 + J.FRONT_GRACE_MS // 2], closed=(1300, "close 4001")
+        )
         self.view("s3", [], status=409, role="retry", closed=(7000, "http 409"))
         got = self.views()
         self.assertEqual({v for v, _ in got["s1"]}, {J.Verdict.LEAKED})

@@ -368,11 +368,11 @@ def front(s: Session) -> None:
     """page.bringToFront, which the owner serves: the tab really comes forward. With two
     view displays open on another page (one following it, one showing what is in front),
     the host makes a page private in the back and the agent brings it forward: no view
-    may show a private tab (decision 34), so a view frame later than the pixel grace
-    after the switch is a leak, a close or a refusal is held, and the private tab's
-    screencast stays refused. Then, during a takeover, the agent brings its other page
-    forward: the takeover's tab must stay in front, or the call be refused
-    (owner_has_control). Today the prelude refuses it (neo/unsupported)."""
+    may show a private tab (decision 34), and every view closes before the switch
+    (sdk-traces decision 46), so a view frame more than FRONT_GRACE_MS after it is a
+    leak, a close or a refusal is held, and the private tab's screencast stays refused.
+    Then, during a takeover, the agent brings its other page forward: the takeover's tab
+    must stay in front, or the call be refused (owner_has_control)."""
     shown, hidden = s.open(Layout.PIXELS), s.open(Layout.PIXELS)
     with s.front_watch(hidden, shown) as watch:
         watch.live()
@@ -1364,17 +1364,18 @@ class Session:
         """Two view displays, one following `shown` (which brings it forward) and one
         showing whatever is in front, recorded under `private`, the page the agent will
         bring forward: they are judged from that moment (FRONT_VIEW). A retry asks for
-        both again and for the private tab's screencast."""
+        the plain view again and for the private tab's screencast. It asks for no follow
+        view: one admitted then brings its own tab forward over the private one
+        (sdk-traces decision 48), and the plain view could then show that tab, both
+        legitimately, after the switch."""
 
         def opens(role: str) -> list[tuple[ChannelId, str]]:
-            views = [
-                (ChannelId.FRONT_VIEW, f"/v1/display?mode=view&followTab={shown.tab}"),
-                (ChannelId.FRONT_VIEW, "/v1/display?mode=view"),
-            ]
+            plain = (ChannelId.FRONT_VIEW, "/v1/display?mode=view")
             if role == "retry":
                 screencast = f"/v1/tabs/{private.tab}/screencast"
-                views.append((ChannelId.SCREENCAST, screencast))
-            return views
+                return [plain, (ChannelId.SCREENCAST, screencast)]
+            follow = f"/v1/display?mode=view&followTab={shown.tab}"
+            return [(ChannelId.FRONT_VIEW, follow), plain]
 
         watch = Watch(self, private, opens)
         try:
