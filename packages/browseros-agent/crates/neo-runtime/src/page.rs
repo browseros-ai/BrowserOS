@@ -219,6 +219,7 @@ impl PageSession {
         page: &PageId,
         tasks: TaskTracker,
         input: Arc<Mutex<()>>,
+        closed: CancellationToken,
     ) -> Self {
         let world = World::new(
             session.cdp.clone(),
@@ -230,7 +231,7 @@ impl PageSession {
             main_frame: page.as_str().to_string(),
             tasks,
             prepared: OnceCell::new(),
-            closed: CancellationToken::new(),
+            closed,
             world,
             next_group: AtomicU64::new(1),
             input,
@@ -258,7 +259,7 @@ impl PageSession {
     /// # Errors
     ///
     /// The CDP error of `Page.enable`.
-    async fn prepare(&self) -> Result<(), CdpError> {
+    pub(crate) async fn prepare(&self) -> Result<(), CdpError> {
         self.prepared
             .get_or_try_init(|| async {
                 let events = self.session.cdp.events();
@@ -295,7 +296,7 @@ impl PageSession {
             .map(|_| ())
     }
 
-    async fn send(&self, method: &str, params: Value) -> Result<Value, CdpError> {
+    pub(crate) async fn send(&self, method: &str, params: Value) -> Result<Value, CdpError> {
         self.session
             .cdp
             .send(method, params, Some(&self.session.id))
