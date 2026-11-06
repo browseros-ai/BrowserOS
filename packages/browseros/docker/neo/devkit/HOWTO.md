@@ -127,6 +127,23 @@ run 01a1ad11-0d93-7030-96ae-f432286a6a94 ok effects=done 130ms tabs=[1276815223]
 
 `clear-field.js` and `set-checked.js` show `locator.clear()` and `locator.setChecked()`. The SDK runs them as `fill('')` and as `check()` or `uncheck()`, so the trace shows `locator.fill` and `locator.check`.
 
+### Upload a file, and see Neo's own secrets refused
+
+`upload-file.js` uploads `/etc/os-release` from the container into a file input, and the page shows the file's name and first line. Then it tries the host token that `compose.sdk-dev.yaml` mounts at `/run/neo-dev/host-token`.
+
+```sh
+./dev.sh run --task howto-upload -f devkit/examples/upload-file.js
+```
+
+```text
+{"shownAfterRefusal":"os-release: PRETTY_NAME=\"Ubuntu 24.04.5 LTS\"","token":{"code":"neo_secret_upload_refused","delivery":"not_sent","message":"locator.setInputFiles: Neo does not upload its own secret files","owner":"script"},"uploaded":"os-release: PRETTY_NAME=\"Ubuntu 24.04.5 LTS\""}
+run 01a1b043-47ac-7d72-8d4a-827de686e762 ok effects=done 321ms tabs=[1276815462]
+```
+
+In the trace UI the run has two `locator.setInputFiles` operations: the upload, delivered `done`, and the token's, `not_sent`.
+
+`setInputFiles` uploads any file Neo's process can read, as Playwright does, and `{ name, mimeType, buffer }` payloads too. Neo's own secret files are refused as `script / neo_secret_upload_refused`, delivery `not_sent`, and the message names no path. Those are the host token, the CAPTCHA keys, the trace store (`trace.db` and its WAL), the whole browser profile, and any path into `/dev` or `/proc`. A symlink, hard link or `..` path to one is refused too, and so is a directory that holds one. The script catches the refusal, so the run still ends `ok`, and the input keeps the file it had.
+
 ### See a host lock refuse a write
 
 A lock keeps the agent out of one tab. Take the tab id from the status line of the task's last run.
@@ -177,7 +194,7 @@ Release closes that display (`4002 released`) and lifts the lock.
 
 ### Run them all
 
-`devkit/examples/check.sh` runs every example, the lock and takeover flows, and the probes in the next section through `dev.sh run`. It checks each reply and Neo's own trace, prints `ok` or `FAIL` per step, and exits non-zero on a failure. It takes about 10 seconds.
+`devkit/examples/check.sh` runs every example, the lock and takeover flows, and the probes in the next section through `dev.sh run`. It checks each reply and Neo's own trace, prints `ok` or `FAIL` per step, and exits non-zero on a failure. It takes about 25 seconds.
 
 ## Read the trace
 
@@ -195,12 +212,12 @@ To call the host API yourself, use `./dev.sh host <METHOD> <path> [json]`, for e
 
 ## What does not work yet
 
-These are the gaps a tester hits first, on `feat/claw-sdk` at `12427d0b9`, which includes the actions and `expect`. `devkit/examples/check.sh` re-checks every row, and most rows have a `probe-*.js` script you can run yourself. The requirements behind them are in the claw-sdk gap analysis (`claw-sdk/requirements/gap-analysis.md`, rows 5 to 9).
+These are the gaps a tester hits first, on `feat/claw-sdk` at `1297d8062`, which includes the actions, `expect` and `setInputFiles`. `devkit/examples/check.sh` re-checks every row, and most rows have a `probe-*.js` script you can run yourself. The requirements behind them are in the claw-sdk gap analysis (`claw-sdk/requirements/gap-analysis.md`, rows 5 to 9).
 
 | Call | What you get today | Why |
 |---|---|---|
 | `page.evaluate`, `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, `page.setContent` | `script / method_unavailable`, delivery `not_sent` | Held: they run script in the page's main world, and the privacy fix that lets them back is not merged. Read through locators, `page.content()` or `page.title()` instead. |
-| `locator.setInputFiles` | `script / method_unavailable`, delivery `not_sent` | Held: it uploaded any file Neo's process could read from Neo's own disk. |
+| `locator.setInputFiles` on one of Neo's own secret files | `script / neo_secret_upload_refused`, delivery `not_sent`, and the message names no path | By design: every other path uploads, as Playwright does. Refused are the host token, the CAPTCHA keys, the trace store (`trace.db` and its WAL), the browser profile, and any path into `/dev` or `/proc`, also through a link or a directory. See the upload example above. |
 | `page.bringToFront` | `script / script_error: page.bringToFront: Neo keeps agent tabs in the background; act on the page directly` | Refused on purpose, so the owner's screen never jumps. A person brings a tab forward with the viewer's **Follow** or a takeover. |
 | Network: `page.waitForResponse`, `page.waitForRequest`, `page.on('request')`, `page.route` | `script / script_error: page.waitForResponse: Neo does not report network events; wait for what the page shows instead` (`route`: "network interception is not available in Neo") | Not built. The `Response` that `page.goto` returns works: `status()`, `ok()` and `url()`. |
 | A tab parameter on `run` | `run` takes only `{ code, timeout }`, and refuses any other field | A run picks its tab through `_meta["com.browseros.neo/run"].taskId`: a task's runs share its last tab. Without a `taskId`, a run drives the last tab any script touched. |

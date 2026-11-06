@@ -144,8 +144,6 @@ takeover() {
   expect "(e) close the takeover's tab, private until it closes" "$rec" 'meta.status == "ok"' 'outcome'
 }
 
-# What today's branch does with calls it does not serve. click and expect are
-# not built yet, so they pin only "refused, nothing sent" and print the code.
 # Playwright actions and expect: each script fills or types, clicks or presses, and asserts with
 # expect(...).toHaveText, and the writes it sent all came back done.
 actions() {
@@ -167,6 +165,19 @@ actions() {
   rec=$(run keyboard-submit.js --task check-actions)
   expect "(g) keyboard.type then Enter, expect toHaveText" "$rec" \
     'meta.status == "ok" and value.shown == "Results for claw sdk"' 'outcome + " shown=\(value.shown)"'
+
+  # An ordinary file uploads; Neo's host token is refused before a byte is read, the refusal
+  # names no path, and the input keeps the file it had.
+  rec=$(run upload-file.js --task check-actions)
+  expect "(g) setInputFiles uploads /etc/os-release and refuses the host token" "$rec" \
+    'meta.status == "ok" and (value.uploaded | startswith("os-release: "))
+      and value.token.owner == "script" and value.token.code == "neo_secret_upload_refused"
+      and value.token.delivery == "not_sent" and (value.token.message | test("host-token|/run/") | not)
+      and value.shownAfterRefusal == value.uploaded' \
+    'outcome + " uploaded=\(value.uploaded) token=\(value.token)"'
+  expect "(g) Neo's trace has the upload done and the token's upload not_sent" "$(trace_of "$rec")" \
+    '[.operations[] | select(.name == "locator.setInputFiles") | .delivery] == ["done", "not_sent"]' \
+    '[.operations[] | select(.name == "locator.setInputFiles") | .delivery] | join(", ")'
 }
 
 probes() {
