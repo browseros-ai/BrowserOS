@@ -170,7 +170,9 @@ AriaNode:
       type: array?
       items: AriaChild
 
-# The element's client rect, which Playwright rounds to whole pixels.
+# The element's client rect, which Playwright rounds to whole pixels. Decoding these as integers
+# relies on CDP writing an integral double as a JSON integer, `-0` included: serde rejects a
+# literal `-0` for an integer.
 AriaBox:
   type: object
   properties:
