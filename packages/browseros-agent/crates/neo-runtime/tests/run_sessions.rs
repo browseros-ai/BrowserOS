@@ -4,6 +4,10 @@
 //! records each session it hands out and each detach. No browser needed.
 
 #[path = "support/fake_browser.rs"]
+#[expect(
+    dead_code,
+    reason = "the page's interceptor and click readers serve click_lifecycle.rs"
+)]
 mod fake_browser;
 
 use std::time::{Duration, Instant};

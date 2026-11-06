@@ -55,6 +55,21 @@ fn mouse_event(exchange: &Exchange) -> Option<&str> {
         .flatten()
 }
 
+/// Each exchange as its method, or the glue function or mouse event it sent: a failure message
+/// that fits on a screen, where a full dump carries the 340 KB install bundle.
+fn trail(exchanges: &[Exchange]) -> Vec<String> {
+    exchanges
+        .iter()
+        .map(
+            |exchange| match (glue_call(exchange), mouse_event(exchange)) {
+                (Some(glue), _) => format!("glue {glue}"),
+                (_, Some(event)) => format!("mouse {event}"),
+                _ => exchange.method().to_string(),
+            },
+        )
+        .collect()
+}
+
 fn position(exchanges: &[Exchange], matches: impl Fn(&Exchange) -> bool) -> Option<usize> {
     exchanges.iter().position(matches)
 }
@@ -227,6 +242,124 @@ async fn a_dropped_run_still_releases_the_button_before_the_session_detaches() {
     assert!(run.await.is_err_and(|error| error.is_cancelled()));
 
     assert_released_before_detach(&settle(&browser, detached).await);
+}
+
+/// A trial whose deadline fires while the writer sleeps out its `delay` between press and
+/// release. The writer cuts the delay short and releases, and the trial's interceptor, which
+/// blocks every event, is still armed when the release lands, so the page's handlers see no
+/// click. Every mouse event is answered 200 ms late, so a stop sent as soon as the call stopped
+/// would land well before the release.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_trial_cut_short_mid_press_still_delivers_no_click() {
+    let browser = FakeBrowser::start(Replies {
+        mouse: Reply {
+            delay: Duration::from_millis(200),
+            ..Reply::default()
+        },
+        ..Replies::default()
+    })
+    .await;
+    let outcome = browser
+        .runtime()
+        .await
+        .run(fake_browser::run_request(
+            "try { await page.click('#go', { trial: true, delay: 5000, timeout: 700 }) } catch (error) { return error.name }",
+            Duration::from_secs(10),
+            CancellationToken::new(),
+        ))
+        .await;
+
+    assert_eq!(outcome.value, Some(json!("TimeoutError")), "{outcome:?}");
+    let exchanges = settle(&browser, detached).await;
+    assert_eq!(
+        mouse(&exchanges, "mouseReleased").len(),
+        1,
+        "{:?}",
+        trail(&exchanges)
+    );
+    assert_eq!(
+        browser.page_clicks(),
+        0,
+        "the trial reached the page's handlers: {:?}",
+        trail(&exchanges)
+    );
+    assert_eq!(
+        browser.armed_interceptor(),
+        None,
+        "disarmed once the release landed"
+    );
+}
+
+/// A run cancelled while its trial click arms the hit-target interceptor. The page arms it
+/// before it answers, and the answer comes after the cancel. That late answer is still read and
+/// the interceptor stopped, so nothing stays in the document's injected script: a second run's
+/// forced click, which arms nothing of its own, as the user's own clicks arm nothing, reaches
+/// the page.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_cancelled_while_arming_leaves_no_interceptor_behind() {
+    let browser = FakeBrowser::start(Replies {
+        arm: Reply {
+            delay: Duration::from_millis(500),
+            ..Reply::default()
+        },
+        ..Replies::default()
+    })
+    .await;
+    let cancel = CancellationToken::new();
+    let runtime = browser.runtime().await;
+    let first = tokio::spawn({
+        let cancel = cancel.clone();
+        async move {
+            runtime
+                .run(fake_browser::run_request(
+                    "await page.click('#go', { trial: true })",
+                    Duration::from_secs(10),
+                    cancel,
+                ))
+                .await
+        }
+    });
+    let arming = settle(&browser, |exchanges| {
+        exchanges
+            .iter()
+            .any(|exchange| glue_call(exchange) == Some("setupHitTargetInterceptor"))
+    })
+    .await;
+    assert!(
+        browser.armed_interceptor().is_some(),
+        "{:?}",
+        trail(&arming)
+    );
+    cancel.cancel();
+    let first = first.await.expect("the first run");
+    assert_eq!(first.status, RunStatus::Cancelled, "{first:?}");
+    assert_eq!(
+        first.calls.first().map(|call| call.delivery),
+        Some(Some(Delivery::NotSent))
+    );
+    let exchanges = settle(&browser, detached).await;
+    assert_eq!(
+        browser.armed_interceptor(),
+        None,
+        "the late answer's interceptor is stopped: {:?}",
+        trail(&exchanges)
+    );
+
+    let second = browser
+        .runtime()
+        .await
+        .run(fake_browser::run_request(
+            "await page.click('#go', { force: true }); return 'clicked'",
+            Duration::from_secs(10),
+            CancellationToken::new(),
+        ))
+        .await;
+    assert_eq!(second.value, Some(json!("clicked")), "{second:?}");
+    assert_eq!(
+        browser.page_clicks(),
+        1,
+        "the forced click reached the page"
+    );
 }
 
 /// A script that only reads `page.url()` sends no `Page.enable`, no focus emulation and no page

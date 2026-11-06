@@ -3,9 +3,13 @@
 //! including a click's: the lazy domains, the utility world and the glue's page calls (answered
 //! by glue name, as a page holding one ready button, [`BUTTON`], would answer them), quads, and
 //! mouse input. A test can hold back the answers to the calls a run may be stopped while
-//! awaiting (the attach, the navigation-history read, mouse input), close the tab while the
-//! page's domains are being enabled, and read back every command with its answer to see what a
-//! run did and what it left behind.
+//! awaiting (the attach, the navigation-history read, the hit-target setup, mouse input), close
+//! the tab while the page's domains are being enabled, and read back every command with its
+//! answer to see what a run did and what it left behind.
+//!
+//! The page also keeps the one piece of state a run can leave in it: the injected script's
+//! hit-target interceptor slot ([`FakeBrowser::armed_interceptor`]), and the clicks that reached
+//! the page's handlers past it ([`FakeBrowser::page_clicks`]).
 //!
 //! Test crates include this file with `#[path]`. Cargo builds only top-level `tests/*.rs` files
 //! as test crates, so it is never one on its own.
@@ -70,6 +74,10 @@ pub struct Replies {
     /// `Input.dispatchMouseEvent`, counted per event: `answers: 2` acknowledges a click's move
     /// and press and holds its release.
     pub mouse: Reply,
+    /// The `setupHitTargetInterceptor` glue call. The page arms the interceptor when the call
+    /// arrives, as a real page does before it answers, so holding the answer back leaves it
+    /// armed with the run not knowing yet.
+    pub arm: Reply,
     /// The tab closes the moment a session's first `Page.enable` arrives, and the fake does
     /// what BrowserOS does then (measured): it never answers the command in flight, reports
     /// `Target.detachedFromTarget` for the session, and answers every later command on it with
@@ -94,19 +102,47 @@ impl Exchange {
 pub struct FakeBrowser {
     port: u16,
     exchanges: Arc<Mutex<Vec<Exchange>>>,
+    page: Arc<Mutex<Page>>,
     tasks: [JoinHandle<()>; 2],
+}
+
+/// The page's own state, shared by every connection, as one tab is.
+#[derive(Default)]
+struct Page {
+    /// The injected script's single hit-target interceptor slot, as Playwright keeps it: a setup
+    /// replaces it, and a stop clears it only while it still holds the stopped interceptor.
+    /// Releasing an object group leaves it alone.
+    interceptor: Option<Interceptor>,
+    next_interceptor: usize,
+    /// Releases the page handled with no blocking interceptor armed: each fired the button's
+    /// `click`. A release counts when the fake acknowledges it, as Chromium acknowledges a
+    /// mouse event only after the page has dispatched it.
+    clicks: usize,
+}
+
+struct Interceptor {
+    id: String,
+    /// `blockAllEvents`: a trial's interceptor, which stops every event.
+    blocks_all: bool,
 }
 
 impl FakeBrowser {
     pub async fn start(replies: Replies) -> Self {
         let exchanges = Arc::new(Mutex::new(Vec::new()));
+        let page = Arc::new(Mutex::new(Page::default()));
         let (websocket, websocket_port) = bind().await;
         let recorded = Arc::clone(&exchanges);
+        let shared_page = Arc::clone(&page);
         let websocket_task = tokio::spawn(async move {
             // Aborting this task drops the set, which ends the connections it accepted too.
             let mut connections = JoinSet::new();
             while let Ok((stream, _)) = websocket.accept().await {
-                connections.spawn(serve_cdp(stream, replies, Arc::clone(&recorded)));
+                connections.spawn(serve_cdp(
+                    stream,
+                    replies,
+                    Arc::clone(&recorded),
+                    Arc::clone(&shared_page),
+                ));
             }
         });
         let (discovery, port) = bind().await;
@@ -135,6 +171,7 @@ impl FakeBrowser {
         Self {
             port,
             exchanges,
+            page,
             tasks: [websocket_task, discovery_task],
         }
     }
@@ -155,6 +192,19 @@ impl FakeBrowser {
     /// Every command received so far, in order, each with its answer if the fake sent one.
     pub fn exchanges(&self) -> Vec<Exchange> {
         lock(&self.exchanges).clone()
+    }
+
+    /// The interceptor armed in the page's slot now, by object id.
+    pub fn armed_interceptor(&self) -> Option<String> {
+        lock(&self.page)
+            .interceptor
+            .as_ref()
+            .map(|interceptor| interceptor.id.clone())
+    }
+
+    /// How many clicks reached the page's handlers.
+    pub fn page_clicks(&self) -> usize {
+        lock(&self.page).clicks
     }
 }
 
@@ -187,8 +237,8 @@ async fn bind() -> (TcpListener, u16) {
     (listener, port)
 }
 
-fn lock(exchanges: &Mutex<Vec<Exchange>>) -> MutexGuard<'_, Vec<Exchange>> {
-    exchanges
+fn lock<T>(shared: &Mutex<T>) -> MutexGuard<'_, T> {
+    shared
         .lock()
         .unwrap_or_else(|error| panic!("a fake browser task panicked: {error}"))
 }
@@ -203,6 +253,7 @@ struct Calls {
     attach: usize,
     history: usize,
     mouse: usize,
+    arm: usize,
     /// Whether `install.js` ran, so a later `attach.js` finds the glue.
     installed: bool,
     /// Sessions whose tab closed under them (`Replies::closes_at_page_enable`).
@@ -222,7 +273,12 @@ impl Calls {
 
 /// Serves one CDP connection. Answers go out through one writer task, so an answer held back
 /// for a while never delays the ones after it.
-async fn serve_cdp(stream: TcpStream, replies: Replies, exchanges: Arc<Mutex<Vec<Exchange>>>) {
+async fn serve_cdp(
+    stream: TcpStream,
+    replies: Replies,
+    exchanges: Arc<Mutex<Vec<Exchange>>>,
+    page: Arc<Mutex<Page>>,
+) {
     let Ok(socket) = tokio_tungstenite::accept_async(stream).await else {
         return;
     };
@@ -272,7 +328,7 @@ async fn serve_cdp(stream: TcpStream, replies: Replies, exchanges: Arc<Mutex<Vec
             let _ = outgoing.send(detached.to_string());
             (Value::Null, None)
         } else {
-            answer(&command, replies, &mut calls)
+            answer(&command, replies, &mut calls, &page)
         };
         let Some(delay) = when else {
             continue;
@@ -281,21 +337,32 @@ async fn serve_cdp(stream: TcpStream, replies: Replies, exchanges: Arc<Mutex<Vec
         if !command["sessionId"].is_null() {
             reply["sessionId"] = command["sessionId"].clone();
         }
+        let release = command["method"] == "Input.dispatchMouseEvent"
+            && command["params"]["type"] == "mouseReleased";
+        let delivery = Delivery {
+            exchanges: Arc::clone(&exchanges),
+            index,
+            page: release.then(|| Arc::clone(&page)),
+            outgoing: outgoing.clone(),
+        };
         if delay.is_zero() {
-            deliver(&exchanges, index, reply, &outgoing);
+            delivery.send(reply);
         } else {
-            let exchanges = Arc::clone(&exchanges);
-            let outgoing = outgoing.clone();
             tasks.spawn(async move {
                 time::sleep(delay).await;
-                deliver(&exchanges, index, reply, &outgoing);
+                delivery.send(reply);
             });
         }
     }
 }
 
 /// The fake's answer to `command`, and when to send it.
-fn answer(command: &Value, replies: Replies, calls: &mut Calls) -> (Value, Option<Duration>) {
+fn answer(
+    command: &Value,
+    replies: Replies,
+    calls: &mut Calls,
+    page: &Mutex<Page>,
+) -> (Value, Option<Duration>) {
     let now = Some(Duration::ZERO);
     match command["method"].as_str().unwrap_or_default() {
         "Browser.getTabInfo" if command["params"]["targetId"] == PAGE => {
@@ -332,7 +399,17 @@ fn answer(command: &Value, replies: Replies, calls: &mut Calls) -> (Value, Optio
         | "Runtime.releaseObjectGroup"
         | "DOM.scrollIntoViewIfNeeded" => (json!({ "result": {} }), now),
         "Page.createIsolatedWorld" => (json!({ "result": { "executionContextId": 7 } }), now),
-        "Runtime.callFunctionOn" => (call_function_on(&command["params"], calls), now),
+        "Runtime.callFunctionOn" => {
+            let params = &command["params"];
+            let when = if params["arguments"][0]["value"] == "setupHitTargetInterceptor" {
+                let call = calls.arm;
+                calls.arm += 1;
+                replies.arm.when(call)
+            } else {
+                now
+            };
+            (call_function_on(params, calls, page), when)
+        }
         "Runtime.getProperties" => {
             let object = command["params"]["objectId"].as_str().unwrap_or_default();
             let properties = calls
@@ -370,8 +447,9 @@ fn answer(command: &Value, replies: Replies, calls: &mut Calls) -> (Value, Optio
 
 /// `Runtime.callFunctionOn`: neo-runtime-injected's bundle entries by execution context, and
 /// glue calls on the glue object. A by-value result is the glue's JSON; a result that holds a
-/// handle is a page object whose properties `Runtime.getProperties` then lists.
-fn call_function_on(params: &Value, calls: &mut Calls) -> Value {
+/// handle is a page object whose properties `Runtime.getProperties` then lists. The interceptor
+/// glue arms and stops the page's slot.
+fn call_function_on(params: &Value, calls: &mut Calls, page: &Mutex<Page>) -> Value {
     if params["executionContextId"].is_i64() {
         // `attach.js` takes the key; `install.js` takes the key, the spec hash and the
         // initializer.
@@ -392,7 +470,18 @@ fn call_function_on(params: &Value, calls: &mut Calls) -> Value {
         "checkElementStates" | "scrollIntoView" => json!({}),
         "viewportSize" => json!({ "width": 800, "height": 600 }),
         "getElementBorderWidth" => json!({ "left": 0, "top": 0 }),
-        "stopHitTargetInterceptor" => json!({ "outcome": "done" }),
+        "stopHitTargetInterceptor" => {
+            let mut page = lock(page);
+            let stopped = &params["arguments"][2]["objectId"];
+            if page
+                .interceptor
+                .as_ref()
+                .is_some_and(|armed| *stopped == armed.id)
+            {
+                page.interceptor = None;
+            }
+            json!({ "outcome": "done" })
+        }
         "resolve" => {
             let properties = if glue_params["selector"] == "#go" {
                 let node = calls.object("node");
@@ -414,7 +503,16 @@ fn call_function_on(params: &Value, calls: &mut Calls) -> Value {
             return page_object(calls, properties);
         }
         "setupHitTargetInterceptor" => {
-            let interceptor = calls.object("interceptor");
+            let interceptor = {
+                let mut page = lock(page);
+                page.next_interceptor += 1;
+                let id = format!("interceptor-{}", page.next_interceptor);
+                page.interceptor = Some(Interceptor {
+                    id: id.clone(),
+                    blocks_all: glue_params["blockAllEvents"] == true,
+                });
+                id
+            };
             let properties = json!([property(
                 "outcome",
                 &json!({ "type": "object", "className": "Object", "objectId": interceptor }),
@@ -440,18 +538,35 @@ fn property(name: &str, value: &Value) -> Value {
     json!({ "name": name, "value": value, "configurable": true, "enumerable": true, "isOwn": true })
 }
 
-/// Records `reply` as the answer to exchange `index`, then sends it. Recording first means a
-/// test that sees a session's detach also sees the attach answer that handed it out.
-fn deliver(
-    exchanges: &Mutex<Vec<Exchange>>,
+/// Where one answer goes: the exchange it answers, and for a mouse release, the page that
+/// handles the release before it is acknowledged.
+struct Delivery {
+    exchanges: Arc<Mutex<Vec<Exchange>>>,
     index: usize,
-    reply: Value,
-    outgoing: &UnboundedSender<String>,
-) {
-    let text = reply.to_string();
-    if let Some(exchange) = lock(exchanges).get_mut(index) {
-        exchange.reply = Some(reply);
+    page: Option<Arc<Mutex<Page>>>,
+    outgoing: UnboundedSender<String>,
+}
+
+impl Delivery {
+    /// Lets the page handle a release, records `reply` as the answer to the exchange, then
+    /// sends it. Recording first means a test that sees a session's detach also sees the
+    /// attach answer that handed it out.
+    fn send(self, reply: Value) {
+        if let Some(page) = &self.page {
+            let mut page = lock(page);
+            if !page
+                .interceptor
+                .as_ref()
+                .is_some_and(|armed| armed.blocks_all)
+            {
+                page.clicks += 1;
+            }
+        }
+        let text = reply.to_string();
+        if let Some(exchange) = lock(&self.exchanges).get_mut(self.index) {
+            exchange.reply = Some(reply);
+        }
+        // Fails only once the connection is gone, when nobody is left to read the answer.
+        let _ = self.outgoing.send(text);
     }
-    // Fails only once the connection is gone, when nobody is left to read the answer.
-    let _ = outgoing.send(text);
 }

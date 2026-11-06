@@ -9,13 +9,14 @@
 //!
 //! Lifetime: [`PageSession`] owns the run's [`Session`], whose `Drop` detaches, so the session
 //! detaches when the last `Arc<PageSession>` drops. Every task that writes on the session holds
-//! one: the dispatcher's call tasks, the mouse writers, the interceptor stops and the
-//! object-group releases, all spawned on the run's `TaskTracker`. So no release can find its
-//! session gone, and no end-of-run step has to order a drain before a detach; this also covers
-//! a caller that drops the run's future. The watcher holds no `Arc` (it would keep the page
-//! alive forever): it holds a CDP client, the session id and a token cancelled when the page
-//! drops. A task stuck past the run (a renderer frozen by a dialog the watcher missed) keeps the
-//! session attached until its own CDP request times out (browseros-cdp's 60 s), then lets go.
+//! one: the dispatcher's call tasks, the interceptor setups, the mouse writers, the interceptor
+//! stops and the object-group releases, all spawned on the run's `TaskTracker`. So no release
+//! can find its session gone, and no end-of-run step has to order a drain before a detach; this
+//! also covers a caller that drops the run's future. The watcher holds no `Arc` (it would keep
+//! the page alive forever): it holds a CDP client, the session id and a token cancelled when the
+//! page drops. A task stuck past the run (a renderer frozen by a dialog the watcher missed) keeps
+//! the session attached until its own CDP request times out (browseros-cdp's 60 s), then lets
+//! go.
 //!
 //! Domains, enabled by [`PageSession::prepare`] on the run's first browser call only, so a
 //! getter-only run keeps its single live CDP call per getter:
@@ -142,8 +143,9 @@ pub(crate) struct PageSession {
     session: Session,
     /// The main frame's id, which is the target id.
     main_frame: String,
-    /// The run's tracker, for the writer, interceptor-stop and group-release tasks, so
-    /// `Dispatcher::finish` can wait for them before reading final deliveries.
+    /// The run's tracker, for the interceptor-setup, writer, interceptor-stop and
+    /// group-release tasks, so `Dispatcher::finish` can wait for them before reading final
+    /// deliveries.
     tasks: TaskTracker,
     /// The domains and the watcher, set up by the run's first browser call.
     prepared: OnceCell<Watcher>,
@@ -580,6 +582,12 @@ pub(crate) struct ResolvedElement {
 /// `click::Tab::Armed` for the real tab. The interceptor handle lives in its own object group,
 /// separate from the element's, so its stop never races the element group's release: the
 /// interceptor's JS closure keeps its own reference to the element.
+///
+/// Releasing the group does not disarm: the listener stays in the document's injected script,
+/// shared with the user and with later runs, until a stop names it or another setup replaces
+/// it. So this value is the only way to stop it, and it exists from the setup's answer on,
+/// whether or not the click still waits (`arm_interceptor` on the run's tracker). Its owner
+/// follows the input (`click::Tab::Armed`), and its `Drop` sends the stop.
 pub(crate) struct ArmedInterceptor {
     handle: Handle<HitTargetInterceptor>,
     group: Option<GroupGuard>,
@@ -861,68 +869,64 @@ impl Tab for Arc<PageSession> {
         })
     }
 
-    /// `setupHitTargetInterceptor` into a fresh group: `error:notconnected` is `NotConnected`,
-    /// any other description `Intercepted`, the handle `Armed` with the current counters.
-    async fn arm(
+    /// [`arm_interceptor`] on the run's tracker, spawned on the first poll, and a wait for its
+    /// answer. The page installs the interceptor before it answers, so the answer must be read
+    /// even when the call stops first: then nobody takes the `ArmedInterceptor`, and dropping it
+    /// in the task sends the stop. Spawning on the first poll, not eagerly, means a race that
+    /// had already lost never sends the setup at all.
+    fn arm(
         &self,
         element: &ResolvedElement,
         hit_point: Option<Point>,
         block_all: bool,
-    ) -> Result<Arming<ArmedInterceptor>, PageError> {
-        let mark = self.mark();
-        let group = new_group(self, "interceptor");
-        let armed = self
-            .world
-            .call(
-                Some(group.group()),
-                &InjectedSetupHitTargetInterceptorParams {
-                    element: element.handle.clone(),
-                    hit_point,
-                    block_all_events: block_all,
-                },
-            )
-            .await?;
-        Ok(match armed.outcome {
-            HitTargetSetup::Description(description) if description == "error:notconnected" => {
-                Arming::NotConnected
-            }
-            HitTargetSetup::Description(description) => Arming::Intercepted(description),
-            HitTargetSetup::Armed(handle) => Arming::Armed(ArmedInterceptor {
-                handle,
-                group: Some(group),
-                page: Arc::clone(self),
-                mark,
-                stopped: false,
-            }),
-        })
+    ) -> impl Future<Output = Result<Arming<ArmedInterceptor>, PageError>> + Send {
+        let page = Arc::clone(self);
+        let element = element.handle.clone();
+        async move {
+            let (answer, armed) = oneshot::channel();
+            let setup = arm_interceptor(Arc::clone(&page), element, hit_point, block_all);
+            page.spawn(async move {
+                // Nobody may be waiting any more; the unsent answer drops here, disarming.
+                let _waiting = answer.send(setup.await);
+            });
+            armed.await.unwrap_or(Err(PageError::Closed))
+        }
     }
 
     /// Spawns [`write_mouse`] on the run's tracker now, with an `Arc` of this page (so of the
-    /// session) and the ticket, and returns a future that awaits its report while holding a
-    /// drop guard on the writer's `cut_short` token: dropping the future (the call stopped)
-    /// cuts any remaining `delay` short, and the writer still sends the release and marks the
-    /// ticket.
+    /// session), the ticket and the armed interceptor, and returns a future that awaits its
+    /// report while holding a drop guard on the writer's `cut_short` token: dropping the future
+    /// (the call stopped) cuts any remaining `delay` short, and the writer still sends the
+    /// release and marks the ticket. The interceptor stays in the writer's task until the last
+    /// event is acknowledged; if nobody waits for the report then, it drops there and disarms,
+    /// after the page has handled the release.
     fn press(
         &self,
         point: Point,
         click: MouseClick,
         ticket: InputTicket,
-    ) -> impl Future<Output = PressReport> + Send {
+        armed: Option<ArmedInterceptor>,
+    ) -> impl Future<Output = (PressReport, Option<ArmedInterceptor>)> + Send {
         let cut_short = CancellationToken::new();
         let (report, receiver) = oneshot::channel();
         let writer = write_mouse(Arc::clone(self), point, click, ticket, cut_short.clone());
         self.spawn(async move {
-            // Nobody may be waiting any more; the ticket already holds the outcome.
-            let _waiting = report.send(writer.await);
+            let written = writer.await;
+            // Nobody may be waiting any more; the ticket already holds the outcome, and the
+            // unsent interceptor drops here, disarming.
+            let _waiting = report.send((written, armed));
         });
         let cut_short = cut_short.drop_guard();
         async move {
-            let report = receiver.await.unwrap_or_else(|_| PressReport::Failed {
-                closed: true,
-                message: "the mouse writer stopped before reporting".to_string(),
+            let pressed = receiver.await.unwrap_or_else(|_| {
+                let failed = PressReport::Failed {
+                    closed: true,
+                    message: "the mouse writer stopped before reporting".to_string(),
+                };
+                (failed, None)
             });
             drop(cut_short);
-            report
+            pressed
         }
     }
 
@@ -1022,6 +1026,44 @@ impl Tab for Arc<PageSession> {
         }
         Ok(barrier.committed)
     }
+}
+
+/// `setupHitTargetInterceptor` into a fresh group: `error:notconnected` is `NotConnected`, any
+/// other description `Intercepted`, the handle `Armed` with the counters taken just before the
+/// setup was sent. Runs on the run's tracker ([`Tab::arm`] for `Arc<PageSession>`), so it reads
+/// the answer to the end whoever still waits for it.
+async fn arm_interceptor(
+    page: Arc<PageSession>,
+    element: Handle<Element>,
+    hit_point: Option<Point>,
+    block_all: bool,
+) -> Result<Arming<ArmedInterceptor>, PageError> {
+    let mark = page.mark();
+    let group = new_group(&page, "interceptor");
+    let armed = page
+        .world
+        .call(
+            Some(group.group()),
+            &InjectedSetupHitTargetInterceptorParams {
+                element,
+                hit_point,
+                block_all_events: block_all,
+            },
+        )
+        .await?;
+    Ok(match armed.outcome {
+        HitTargetSetup::Description(description) if description == "error:notconnected" => {
+            Arming::NotConnected
+        }
+        HitTargetSetup::Description(description) => Arming::Intercepted(description),
+        HitTargetSetup::Armed(handle) => Arming::Armed(ArmedInterceptor {
+            handle,
+            group: Some(group),
+            page,
+            mark,
+            stopped: false,
+        }),
+    })
 }
 
 /// For a barrier whose own receiver lagged: waits for the watcher to see no pending navigation.

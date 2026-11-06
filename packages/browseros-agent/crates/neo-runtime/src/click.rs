@@ -62,6 +62,12 @@ pub(crate) trait Tab: Send + Sync {
     /// disarms it in the background, so every path out of an attempt disarms it: a leaked
     /// armed interceptor would keep swallowing mismatched clicks in the user's tab, because the
     /// injected script's slot outlives the run.
+    ///
+    /// It has one owner at a time, from the setup's send to the stop's answer: [`Tab::arm`]'s
+    /// task until a waiting caller takes it, the attempt until it presses, the writer until
+    /// the last mouse event is acknowledged ([`Tab::press`]), then the attempt again for the
+    /// verdict. Whichever owner goes away drops it, so a stop never lands before input it was
+    /// armed to judge, and a trial's blocking interceptor sees every event of the trial.
     type Armed: Send;
     /// Navigation requests recorded from the moment [`Tab::watch_navigations`] returns.
     type Navigations: Send;
@@ -110,7 +116,10 @@ pub(crate) trait Tab: Send + Sync {
         position: Option<&Point>,
     ) -> impl Future<Output = Result<Geometry, PageError>> + Send;
 
-    /// `setupHitTargetInterceptor(element, 'mouse', hit_point, block_all)`.
+    /// `setupHitTargetInterceptor(element, 'mouse', hit_point, block_all)`. The page installs
+    /// the interceptor before it answers, so once the setup is sent its answer is always read,
+    /// on a task of its own: a caller that stopped waiting leaves an `Armed` nobody takes,
+    /// which disarms as it drops. A future dropped before its first poll sends nothing.
     fn arm(
         &self,
         element: &Self::Element,
@@ -125,12 +134,18 @@ pub(crate) trait Tab: Send + Sync {
     /// followed by its release, and a `delay` is cut short. Starting eagerly matters: a future
     /// that started the writer only when first polled could be dropped unpolled by a
     /// [`Progress::race`] that had already lost, leaving a begun ticket nobody marks.
+    ///
+    /// The armed interceptor moves into the writer too, and comes back with the report once
+    /// every event is acknowledged. A caller that stopped waiting never gets it back, and the
+    /// writer drops it only then: disarming any earlier would let the release, and the page's
+    /// `click`, through unblocked, which for a trial is a real click.
     fn press(
         &self,
         point: Point,
         click: MouseClick,
         ticket: InputTicket,
-    ) -> impl Future<Output = PressReport> + Send;
+        armed: Option<Self::Armed>,
+    ) -> impl Future<Output = (PressReport, Option<Self::Armed>)> + Send;
 
     /// Disarms `armed` and reports what it saw: `stopHitTargetInterceptor`, raced against a
     /// dialog opening or a navigation being requested since it was armed (Playwright's
@@ -640,6 +655,8 @@ async fn attempt<T: Tab>(
 /// verifiably blocked it (a trial, or a verdict naming another element), which puts it back to
 /// `NotSent` so loop B may press again, exactly when Playwright would. Every other way out of
 /// here after the press ends the call: no code path retries a press the page may have seen.
+/// The armed interceptor rides in the writer with the ticket, so it is still armed when the
+/// last release lands however this returns, the call stopping mid-press included.
 async fn act<T: Tab>(
     tab: &T,
     point: Point,
@@ -658,10 +675,10 @@ async fn act<T: Tab>(
         .into());
     };
     progress.log("  performing click action");
-    let acked = match progress
-        .race(tab.press(point, options.mouse, ticket))
-        .await?
-    {
+    let (report, armed) = progress
+        .race(tab.press(point, options.mouse, ticket, armed))
+        .await?;
+    let acked = match report {
         PressReport::Acked(acked) => acked,
         // Nothing was written because the session's socket was replaced, or the session went
         // mid-press: either way the tab is gone for this run.
@@ -1157,14 +1174,18 @@ mod tests {
             point: Point,
             _click: MouseClick,
             ticket: InputTicket,
-        ) -> impl Future<Output = PressReport> + Send {
+            armed: Option<FakeArmed>,
+        ) -> impl Future<Output = (PressReport, Option<FakeArmed>)> + Send {
             self.record(format!("press ({}, {})", point.x, point.y));
             let writes = self.press.next();
             let duration = self.press.duration;
+            let calls = Arc::clone(&self.calls);
             let (report, receiver) = oneshot::channel();
-            // Detached, like the real writer: it marks the ticket whether or not anyone waits.
+            // Detached, like the real writer: it marks the ticket whether or not anyone waits,
+            // and holds the interceptor until its last event is answered.
             tokio::spawn(async move {
                 time::sleep(duration).await;
+                calls.lock().expect("calls").push("released".to_string());
                 let outcome = match writes {
                     Writes::Ack => PressReport::Acked(ticket.acked()),
                     Writes::Nothing => {
@@ -1179,12 +1200,15 @@ mod tests {
                         }
                     }
                 };
-                let _waiting = report.send(outcome);
+                let _waiting = report.send((outcome, armed));
             });
             async move {
-                receiver.await.unwrap_or(PressReport::Failed {
-                    closed: false,
-                    message: "the fake writer ended".to_string(),
+                receiver.await.unwrap_or_else(|_| {
+                    let failed = PressReport::Failed {
+                        closed: false,
+                        message: "the fake writer ended".to_string(),
+                    };
+                    (failed, None)
                 })
             }
         }
@@ -1363,6 +1387,7 @@ mod tests {
                 "arm Some(Point { x: 36.75, y: 18.5 }) false",
                 "watch_navigations",
                 "press (36.75, 18.5)",
+                "released",
                 "verdict",
                 "disarmed",
                 "settle",
@@ -1470,13 +1495,23 @@ mod tests {
             Delivery::Unknown,
             "the writer is mid-press"
         );
+        assert!(
+            !tab.calls().contains(&"disarmed".to_string()),
+            "the writer still holds the interceptor: {:?}",
+            tab.calls()
+        );
         time::sleep(Duration::from_secs(2)).await;
         assert_eq!(
             cell.delivery(),
             Delivery::Done,
             "the ticket lived in the writer, which acknowledged after the call stopped"
         );
-        assert!(tab.calls().contains(&"disarmed".to_string()));
+        let calls = tab.calls();
+        assert_eq!(
+            calls[calls.len() - 2..],
+            ["released", "disarmed"],
+            "disarmed only once the last event was answered"
+        );
     }
 
     #[tokio::test(start_paused = true)]

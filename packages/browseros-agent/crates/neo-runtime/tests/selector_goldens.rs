@@ -5,6 +5,10 @@
 //! has to let the run start, and the test checks that nothing else reached it.
 
 #[path = "support/fake_browser.rs"]
+#[expect(
+    dead_code,
+    reason = "the page's interceptor and click readers serve click_lifecycle.rs"
+)]
 mod fake_browser;
 
 use std::env;
