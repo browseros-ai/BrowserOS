@@ -16,7 +16,9 @@
     "scripts/dev/inspect-ui.ts",
     "scripts/patch-windows-exe.ts",
     "packages/agent-cursor/src/index.ts",
-    "packages/agent-cursor/scripts/classic-entry.ts"
+    "packages/agent-cursor/scripts/classic-entry.ts",
+    "crates/neo-runtime-spec/tests/ts/glue.ts",
+    "crates/neo-runtime-spec/tests/ts/negative.ts"
   ],
   "ignoreDependencies": [
     "tailwind-scrollbar-hide",
