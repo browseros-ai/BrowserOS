@@ -273,8 +273,8 @@ mod tests {
     impl NavigationTab for FakeTab {
         type Observation = Events;
 
-        async fn prepare(&self) -> Result<(), PageError> {
-            Ok(())
+        fn prepare(&self) -> impl Future<Output = Result<(), PageError>> {
+            future::ready(Ok(()))
         }
 
         fn observe(&self) -> Result<Events, PageError> {
