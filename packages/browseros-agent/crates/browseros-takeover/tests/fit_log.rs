@@ -14,7 +14,7 @@ use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, BrowserSessionHooks, TabId};
 use browseros_takeover::testing::FakeXvnc;
 use browseros_takeover::{BarAction, BarOutcome, BrowserTabs, Fits, ScreenSize};
-use browseros_trace::{SecretSet, SecretSetConfig, SecretValue};
+use browseros_trace::{SecretSet, SecretSetConfig, SecretSource, SecretValue};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -88,7 +88,11 @@ async fn a_navigation_that_fails_logs_its_address_masked() -> Result<(), BoxErro
     let xvnc = Arc::new(FakeXvnc::start(HOME).await?);
     let browser = FakeBrowser::new(Arc::clone(&xvnc), &[3]);
     let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
-    secrets.register(SecretValue::new(SECRET.to_owned()), None);
+    let _registration = secrets.register_from(
+        SecretValue::new(SECRET.to_owned()),
+        None,
+        SecretSource::Page,
+    );
     let fits = Fits::new(
         BrowserTabs::new(
             BrowserSession::new(browser.clone(), BrowserSessionHooks::default()),

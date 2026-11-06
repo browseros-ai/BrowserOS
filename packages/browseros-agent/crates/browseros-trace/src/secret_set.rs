@@ -184,7 +184,7 @@ impl SecretSet {
 
     /// A set masking `values` from now on, built at once, for a record's or a run's own set such
     /// as the values claw-sdk still holds as it sends a record. It equals [`SecretSet::new`] then
-    /// registering each value in order as a page value with no TTL ([`SecretSet::register`]):
+    /// registering each value in order as a page value with no TTL ([`SecretSet::register_from`]):
     /// too short ones refused, a repeat kept once, the oldest dropped past `max_entries`. But it
     /// builds the matcher once, where each registration rebuilds it over every value it holds.
     #[must_use]
@@ -253,12 +253,6 @@ impl SecretSet {
         });
         rebuild(&mut inner, self.config.min_length);
         Registration::Registered
-    }
-
-    /// [`SecretSet::register_from`] for a page value. Callers should name the source instead:
-    /// this shorthand goes once claw-sdk labels its calls (sdk-traces decision 53).
-    pub fn register(&self, value: SecretValue, ttl: Option<Duration>) -> Registration {
-        self.register_from(value, ttl, SecretSource::Page)
     }
 
     /// Drops values whose time has passed. The writer calls this on its retention tick.
@@ -632,7 +626,11 @@ mod tests {
     fn set_with(values: &[&str]) -> SecretSet {
         let set = SecretSet::new(SecretSetConfig::default());
         for value in values {
-            set.register(SecretValue::new((*value).to_string()), None);
+            let _registration = set.register_from(
+                SecretValue::new((*value).to_string()),
+                None,
+                SecretSource::Page,
+            );
         }
         set
     }
@@ -743,15 +741,15 @@ mod tests {
     fn short_values_are_refused_and_repeats_refresh() {
         let set = SecretSet::new(SecretSetConfig::default());
         assert_eq!(
-            set.register(SecretValue::new("abc".into()), None),
+            set.register_from(SecretValue::new("abc".into()), None, SecretSource::Page),
             Registration::TooShort
         );
         assert_eq!(
-            set.register(SecretValue::new("abcd".into()), None),
+            set.register_from(SecretValue::new("abcd".into()), None, SecretSource::Page),
             Registration::Registered
         );
         assert_eq!(
-            set.register(SecretValue::new("abcd".into()), None),
+            set.register_from(SecretValue::new("abcd".into()), None, SecretSource::Page),
             Registration::Refreshed
         );
         assert_eq!(set.count(), 1);
@@ -779,9 +777,10 @@ mod tests {
     #[test]
     fn values_expire_after_their_ttl() {
         let set = SecretSet::new(SecretSetConfig::default());
-        set.register(
+        let _registration = set.register_from(
             SecretValue::new("one-time-123".into()),
             Some(Duration::from_secs(60)),
+            SecretSource::Page,
         );
         assert_eq!(set.expire(Instant::now()), 0);
         assert_eq!(masked(&set, "code one-time-123"), "code [private]");
@@ -794,10 +793,26 @@ mod tests {
         let set = SecretSet::new(SecretSetConfig::default());
         let minute = Some(Duration::from_secs(60));
         let hour = Duration::from_secs(60 * 60);
-        set.register(SecretValue::new("day-then-minute".into()), None);
-        set.register(SecretValue::new("day-then-minute".into()), minute);
-        set.register(SecretValue::new("minute-then-day".into()), minute);
-        set.register(SecretValue::new("minute-then-day".into()), None);
+        let _registration = set.register_from(
+            SecretValue::new("day-then-minute".into()),
+            None,
+            SecretSource::Page,
+        );
+        let _registration = set.register_from(
+            SecretValue::new("day-then-minute".into()),
+            minute,
+            SecretSource::Page,
+        );
+        let _registration = set.register_from(
+            SecretValue::new("minute-then-day".into()),
+            minute,
+            SecretSource::Page,
+        );
+        let _registration = set.register_from(
+            SecretValue::new("minute-then-day".into()),
+            None,
+            SecretSource::Page,
+        );
         assert_eq!(
             set.expire(Instant::now() + hour),
             0,
@@ -846,9 +861,10 @@ mod tests {
             ("second-value", 100),
             ("third-value", 100),
         ] {
-            set.register(
+            let _registration = set.register_from(
                 SecretValue::new(value.into()),
                 Some(Duration::from_secs(ttl)),
+                SecretSource::Page,
             );
         }
         assert_eq!(set.count(), 2);
@@ -890,7 +906,8 @@ mod tests {
     fn flood(set: &SecretSet, count: usize) -> Vec<String> {
         let values: Vec<String> = (0..count).map(|i| format!("page-flood-{i:02}")).collect();
         for value in &values {
-            let registration = set.register(SecretValue::new(value.clone()), None);
+            let registration =
+                set.register_from(SecretValue::new(value.clone()), None, SecretSource::Page);
             assert_eq!(registration, Registration::Registered, "{value}");
         }
         values
@@ -1091,7 +1108,11 @@ mod tests {
         }
         for i in 0..8 {
             assert_eq!(
-                set.register(SecretValue::new(format!("page-flood-{i}")), None),
+                set.register_from(
+                    SecretValue::new(format!("page-flood-{i}")),
+                    None,
+                    SecretSource::Page
+                ),
                 Registration::Registered
             );
         }
@@ -1176,7 +1197,11 @@ mod tests {
     fn registered_in_order(config: SecretSetConfig) -> SecretSet {
         let set = SecretSet::new(config);
         for value in IN_ORDER {
-            set.register(SecretValue::new(value.to_string()), None);
+            let _registration = set.register_from(
+                SecretValue::new(value.to_string()),
+                None,
+                SecretSource::Page,
+            );
         }
         set
     }
@@ -1259,7 +1284,8 @@ mod tests {
         let first = ["alpha-1", "bravo-2", "charlie-3"].map(|v| SecretValue::new(v.into()));
         let at_once = SecretSet::with_values(config, first);
         for later in ["delta-4", "echo-5"] {
-            at_once.register(SecretValue::new(later.into()), None);
+            let _registration =
+                at_once.register_from(SecretValue::new(later.into()), None, SecretSource::Page);
         }
         assert_eq!(
             masked(&at_once, "alpha-1 bravo-2 charlie-3 delta-4 echo-5"),
@@ -1308,7 +1334,7 @@ mod tests {
     }
 
     /// What a set of `count` values costs to build, registered one by one and built at once,
-    /// alternating so warmup and drift favour neither. Each `register` rebuilds the matcher over
+    /// alternating so warmup and drift favour neither. Each `register_from` rebuilds the matcher over
     /// every value the set holds, so one by one is `count` builds. Outside the timed part, each
     /// run's set must hold every value and mask each one whole. The times are wall time, so on a
     /// busy machine run it under `/usr/bin/time -l` and compare user time with real. In release:
@@ -1336,7 +1362,7 @@ mod tests {
                 let began = Instant::now();
                 let set = SecretSet::new(config);
                 for value in values {
-                    set.register(value, None);
+                    let _registration = set.register_from(value, None, SecretSource::Page);
                 }
                 one_by_one.push(began.elapsed());
                 assert_eq!(set.count(), count, "every value is distinct and kept");

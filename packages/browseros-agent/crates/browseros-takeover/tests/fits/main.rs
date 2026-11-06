@@ -18,7 +18,7 @@ use browseros_takeover::{
     BarAction, BarOutcome, BrowserBar, BrowserTabs, Fit, FitId, FitMode, FitState, Fits, Fitted,
     PartError, ScreenSize,
 };
-use browseros_trace::{SecretSet, SecretSetConfig, SecretValue};
+use browseros_trace::{SecretSet, SecretSetConfig, SecretSource, SecretValue};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -363,8 +363,11 @@ async fn unusable_viewers_and_closed_tabs_fit_nothing() -> TestResult {
 #[tokio::test]
 async fn the_owner_view_reads_keyboard_boxes_and_a_masked_browser_bar() -> TestResult {
     let h = harness(&[3]).await?;
-    h.secrets
-        .register(SecretValue::new("hunter2-secret".to_string()), None);
+    let _registration = h.secrets.register_from(
+        SecretValue::new("hunter2-secret".to_string()),
+        None,
+        SecretSource::Page,
+    );
     h.browser.navigate(
         3,
         "https://shop.example/search?q=hunter2-secret",

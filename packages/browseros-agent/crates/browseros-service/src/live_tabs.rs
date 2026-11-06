@@ -198,13 +198,17 @@ fn streaming(content_type: &str, body: Body) -> Response {
 mod tests {
     use super::mjpeg_part;
     use browseros_capture::Frame;
-    use browseros_trace::{Registration, SecretSet, SecretSetConfig, SecretValue};
+    use browseros_trace::{Registration, SecretSet, SecretSetConfig, SecretSource, SecretValue};
 
     #[test]
     fn a_part_masks_the_url_then_keeps_it_on_one_header_line() {
         let secrets = SecretSet::new(SecretSetConfig::default());
         assert!(matches!(
-            secrets.register(SecretValue::new("hunter2-swordfish".into()), None),
+            secrets.register_from(
+                SecretValue::new("hunter2-swordfish".into()),
+                None,
+                SecretSource::Page
+            ),
             Registration::Registered
         ));
         let part = mjpeg_part(

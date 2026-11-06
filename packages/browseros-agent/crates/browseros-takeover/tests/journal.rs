@@ -508,9 +508,11 @@ async fn what_the_owner_typed_outlasts_a_flood_of_page_values() -> TestResult {
     h.owner_types(&page, "OWNERTYPED_9k2x");
     h.registered("OWNERTYPED_9k2x").await?;
     for i in 0..8 {
-        let _registration = h
-            .secrets
-            .register(SecretValue::new(format!("page-flood-{i}")), None);
+        let _registration = h.secrets.register_from(
+            SecretValue::new(format!("page-flood-{i}")),
+            None,
+            SecretSource::Page,
+        );
     }
     assert!(
         h.masks("OWNERTYPED_9k2x"),
@@ -723,9 +725,11 @@ async fn each_press_makes_one_trusted_entry_the_owners_and_the_entry_past_them_a
     );
     tokio::time::sleep(QUIET * 2).await;
     assert_eq!(h.sources(), (3, 1), "(owner, page)");
-    let _registration = h
-        .secrets
-        .register(SecretValue::new("PAGEFLOOD_0001".into()), None);
+    let _registration = h.secrets.register_from(
+        SecretValue::new("PAGEFLOOD_0001".into()),
+        None,
+        SecretSource::Page,
+    );
     assert_eq!(
         h.masked("PRESSED_1x7q PRESSED_2m4w PRESSED_3k9z UNPRESSED_4d2r"),
         "[private] [private] [private] UNPRESSED_4d2r",

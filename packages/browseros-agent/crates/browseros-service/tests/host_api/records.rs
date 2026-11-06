@@ -9,8 +9,8 @@ use axum::http::StatusCode;
 use browseros_core::TabId;
 use browseros_trace::{
     Delivery, Effect, OperationEnded, OperationId, OperationKind, OperationStarted, Outcome,
-    PageState, RunEnded, RunId, RunStarted, RunStatus, SecretSet, SecretSetConfig, SecretValue,
-    TargetSensitivity, TaskId,
+    PageState, RunEnded, RunId, RunStarted, RunStatus, SecretSet, SecretSetConfig, SecretSource,
+    SecretValue, TargetSensitivity, TaskId,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -530,7 +530,11 @@ async fn a_value_only_an_ends_set_knows_never_reaches_the_start_events_or_the_fi
 /// it, and the process set never learns them.
 fn held_set(value: &str) -> Arc<SecretSet> {
     let held = SecretSet::new(SecretSetConfig::default());
-    let _registration = held.register(SecretValue::new(value.to_string()), None);
+    let _registration = held.register_from(
+        SecretValue::new(value.to_string()),
+        None,
+        SecretSource::Page,
+    );
     Arc::new(held)
 }
 

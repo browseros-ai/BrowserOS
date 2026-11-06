@@ -9,8 +9,8 @@ use browseros_trace::{
     OperationId, OperationKind, OperationStarted, Outcome, PageState, Privacy, PrivacyRecord,
     PrivacyStore, PrivateReason, RedactionLimits, RedactionPolicy, Redactor, RequestId,
     RetentionPolicy, RunEffects, RunEnded, RunId, RunQuery, RunStarted, RunStatus, SecretSet,
-    SecretSetConfig, SecretValue, TailQuery, TargetSensitivity, TaskAct, TaskId, TraceError,
-    TraceRecordEvent, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    SecretSetConfig, SecretSource, SecretValue, TailQuery, TargetSensitivity, TaskAct, TaskId,
+    TraceError, TraceRecordEvent, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -736,8 +736,11 @@ async fn sensitive_targets_redact_their_input_and_withhold_the_code() {
 #[tokio::test]
 async fn registered_secrets_never_reach_the_file() {
     let h = harness(WriterConfig::default()).await;
-    h.secrets
-        .register(SecretValue::new("123-456-otp".into()), None);
+    let _registration = h.secrets.register_from(
+        SecretValue::new("123-456-otp".into()),
+        None,
+        SecretSource::Page,
+    );
     let run = start_run(
         &h.sink,
         Start {
@@ -841,8 +844,11 @@ async fn notes_of(
 async fn an_operations_notes_reach_its_record_with_its_end_masked_bounded_and_in_order()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let h = harness(WriterConfig::default()).await;
-    h.secrets
-        .register(SecretValue::new("hunter2-swordfish".into()), None);
+    let _registration = h.secrets.register_from(
+        SecretValue::new("hunter2-swordfish".into()),
+        None,
+        SecretSource::Page,
+    );
     let limits = RedactionLimits::default();
     let run = start_in(&h.sink, None, 0);
     let click = OperationId::new(run, 1);
@@ -1893,7 +1899,11 @@ const HELD: &str = "held-7Qx-swordfish";
 fn also_mask(values: &[&str]) -> Arc<SecretSet> {
     let set = SecretSet::new(SecretSetConfig::default());
     for value in values {
-        let _registration = set.register(SecretValue::new((*value).to_string()), None);
+        let _registration = set.register_from(
+            SecretValue::new((*value).to_string()),
+            None,
+            SecretSource::Page,
+        );
     }
     Arc::new(set)
 }
@@ -2112,9 +2122,11 @@ async fn a_held_value_whose_prefix_the_process_set_knows_is_masked_whole()
     let h = harness(WriterConfig::default()).await;
     // The owner paused long enough for the prefix to be registered, then typed on. The record's
     // set holds the value only as typed, not as the process set's mask leaves it.
-    let _registration = h
-        .secrets
-        .register(SecretValue::new(PREFIX.to_string()), None);
+    let _registration = h.secrets.register_from(
+        SecretValue::new(PREFIX.to_string()),
+        None,
+        SecretSource::Page,
+    );
     let run = start_in(&h.sink, None, 0);
     let read = OperationId::new(run, 1);
     op_started(&h.sink, simple(read, "locator.textContent", Effect::Read));
@@ -2372,9 +2384,11 @@ async fn an_operations_name_is_masked_with_what_its_start_knows_before_it_is_sto
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let h = harness(WriterConfig::default()).await;
     let known = "known-4Rt-apikey";
-    let _registration = h
-        .secrets
-        .register(SecretValue::new(known.to_string()), None);
+    let _registration = h.secrets.register_from(
+        SecretValue::new(known.to_string()),
+        None,
+        SecretSource::Page,
+    );
     let run = start_in(&h.sink, Some("checkout"), 0);
     let call = OperationId::new(run, 1);
     let name = format!("vault.{HELD}.{known}");
