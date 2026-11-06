@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use browseros_core::{BrowserView, PageId, TabId};
 use browseros_trace::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, Outcome, RequestId, RunEffects,
-    RunEnded, RunId, RunStarted, RunStatus, TaskId, TraceSink,
+    RunEnded, RunId, RunStarted, RunStatus, SecretSet, TaskId, TraceSink,
 };
 use serde_json::Value;
 use tokio::sync::OnceCell;
@@ -19,7 +19,9 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::operation_guard::Settlement;
-use super::{CallSite, Dispatcher, ErrorCode, Lifetime, MethodSpec, OperationError};
+use super::{
+    CallSite, Dispatcher, ErrorCode, Held, HeldWatch, Lifetime, MethodSpec, OperationError,
+};
 use crate::browser::{PageRef, RunView};
 
 /// One `run` call as the door sees it: its identity, the browser view it captured, its budget,
@@ -35,6 +37,10 @@ pub(crate) struct RunCtx {
     /// The CDP epoch the view was taken at. The unbound view would silently follow a new
     /// socket, so the door refuses once the link's epoch differs.
     epoch: u64,
+    /// Every value held since the run began ([`super::HeldValues::watch`]), asked at every record
+    /// the run and its ops send. It lives as long as the context, since an op that settles after
+    /// the run's end, its task aborted at teardown, still sends a record.
+    watch: Box<dyn HeldWatch>,
     deadline: Instant,
     /// Cancelled exactly when [`RunCtx::stop`] is first called, and only by it.
     cancel: CancellationToken,
@@ -166,9 +172,9 @@ struct RunSlots {
 }
 
 impl RunCtx {
-    /// Opens the run: records `run_started` (a channel send, never a wait on disk) and returns
-    /// the guard that records its end.
-    pub(crate) fn start(trace: &TraceSink, start: RunStart) -> (Arc<Self>, RunGuard) {
+    /// Opens the run at `door`: records `run_started` through the door's trace (a channel send,
+    /// never a wait on disk) and returns the guard that records its end.
+    pub(crate) fn start(door: &Dispatcher, start: RunStart) -> (Arc<Self>, RunGuard) {
         let RunStart {
             id,
             code,
@@ -179,13 +185,15 @@ impl RunCtx {
             deadline,
             default_page,
         } = start;
+        let watch = Arc::clone(door.held()).watch();
+        let trace = door.trace();
         trace.run_started(RunStarted {
             id,
             code,
             request_id,
             task_id: task_id.clone(),
             host_data,
-            also_mask: None,
+            also_mask: watch.held().set(),
             at: EpochMillis::now(),
         });
         let run = Arc::new(Self {
@@ -193,6 +201,7 @@ impl RunCtx {
             task_id,
             view: view.view,
             epoch: view.epoch,
+            watch,
             deadline,
             cancel: CancellationToken::new(),
             stop: OnceLock::new(),
@@ -238,6 +247,14 @@ impl RunCtx {
     #[must_use]
     pub(crate) fn deadline(&self) -> Instant {
         self.deadline
+    }
+
+    /// Every value held since the run began, as of now: what each of its records is masked with
+    /// on top of the process's secret set, and its reply too, or, once the run lost one of them,
+    /// what says to withhold its output instead.
+    #[must_use]
+    pub(crate) fn held_values(&self) -> Held {
+        self.watch.held()
     }
 
     /// Fires when the run stops, for whatever reason.
@@ -438,9 +455,12 @@ impl StopReason {
 }
 
 impl RunGuard {
-    /// Records the run's end. Teardown drains the run's ops first, so their `op_ended`
-    /// records precede it; the trace turns any op still open at a run's end into `unknown`.
-    pub(crate) fn finish(mut self, end: RunEnd) {
+    /// Records the run's end, masked in the trace with `held` too: the set the run's reply was
+    /// masked with ([`RunCtx::held_values`]), so the record keeps nothing the reply hides. The
+    /// run service builds `end` from that reply, which it withheld for a run that lost a held
+    /// value. Teardown drains the run's ops first, so their `op_ended` records precede it; the
+    /// trace turns any op still open at a run's end into `unknown`.
+    pub(crate) fn finish(mut self, end: RunEnd, held: Option<Arc<SecretSet>>) {
         if let Some(run) = self.run.take() {
             run.end_slots();
             self.trace.run_ended(RunEnded {
@@ -449,7 +469,7 @@ impl RunGuard {
                 error: end.error,
                 result: end.result,
                 replay: end.replay,
-                also_mask: None,
+                also_mask: held,
                 at: EpochMillis::now(),
             });
         }
@@ -472,7 +492,7 @@ impl Drop for RunGuard {
             error: Some(error),
             result: None,
             replay: None,
-            also_mask: None,
+            also_mask: run.held_values().set(),
             at: EpochMillis::now(),
         });
     }

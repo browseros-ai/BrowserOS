@@ -19,13 +19,28 @@ use tokio::time::{self, Instant};
 use super::test_methods::{Shared, test_methods};
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 use crate::dispatch::{
-    Call, Caller, Dispatcher, ErrorCode, OpReply, OperationError, Policy, PolicyCheck,
-    RegistryBuilder, RunCtx, RunGuard, RunStart,
+    Call, Caller, Dispatcher, ErrorCode, Held, HeldValues, HeldWatch, OpReply, OperationError,
+    Policy, PolicyCheck, RegistryBuilder, RunCtx, RunGuard, RunStart,
 };
 use crate::test_support::FakeCdp;
 
 /// How many overlapping calls `test.gate` waits for before any of them returns.
 pub(super) const GATE_PARTIES: usize = 50;
+
+/// The door's own tests have no journal, so nothing is ever held.
+struct NothingHeld;
+
+impl HeldValues for NothingHeld {
+    fn watch(self: Arc<Self>) -> Box<dyn HeldWatch> {
+        Box::new(NothingHeld)
+    }
+}
+
+impl HeldWatch for NothingHeld {
+    fn held(&self) -> Held {
+        Held::Kept(None)
+    }
+}
 
 /// Everything a dispatcher test touches. A plain data bag.
 pub(super) struct Harness {
@@ -108,6 +123,7 @@ impl Harness {
             policies,
             Arc::clone(&secrets),
             sink.clone(),
+            Arc::new(NothingHeld),
             Arc::clone(&link),
             Arc::clone(&tabs),
         ));
@@ -139,7 +155,7 @@ impl Harness {
             deadline: Instant::now() + Duration::from_secs(300),
             default_page: None,
         };
-        Ok(RunCtx::start(&self.sink, start))
+        Ok(RunCtx::start(&self.dispatcher, start))
     }
 
     /// A tab the owner opened, as core names it.

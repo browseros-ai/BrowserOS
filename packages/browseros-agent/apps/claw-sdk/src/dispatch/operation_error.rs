@@ -170,6 +170,9 @@ impl ErrorCode {
     pub(crate) const CAPTCHA_UNAVAILABLE: Self = Self("captcha_unavailable");
     /// The tab is private, so Neo captures no more of its pixels (sdk-traces' privacy).
     pub(crate) const PAGE_PRIVATE: Self = Self("page_private");
+    /// A value the run's output had to be masked with was forgotten: more were typed into
+    /// sensitive fields while it ran than Neo keeps. Its reply and later records are withheld.
+    pub(crate) const OUTPUT_WITHHELD: Self = Self("output_withheld");
 
     // browseros-playwright's codes. The crate's own error table picks each one's owner, whether
     // it is a timeout and whether Neo can vouch for what happened; builtins/playwright_ops.rs

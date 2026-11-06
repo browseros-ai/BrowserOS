@@ -49,8 +49,8 @@ impl PrivacyHooks {
         }
     }
 
-    /// The values typed into sensitive fields that the set has not learned yet. The run service
-    /// masks each run's reply with them.
+    /// The values typed into sensitive fields that the set has not learned yet. The door is built
+    /// with them, and masks every run's records and reply with them.
     #[must_use]
     pub(crate) fn typed(&self) -> Arc<TypedValues> {
         Arc::clone(&self.typed)

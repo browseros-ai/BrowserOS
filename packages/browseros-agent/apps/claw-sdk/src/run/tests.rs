@@ -5,16 +5,21 @@
 
 use std::sync::Arc;
 use std::time::Duration;
+use std::{fs, io};
 
 use browseros_core::PageId;
 use browseros_core::sensitive_fields::{JournalEntry, SensitiveKind};
+use browseros_playwright::{PlaywrightHooks, TypedBy};
 use browseros_trace::{
     Delivery, EpochMillis, ErrorOwner, OperationId, Outcome, RequestId, RunEnded, RunId, RunQuery,
-    RunStarted, RunStatus, RunSummary, SecretValue, TaskId, WriterConfig,
+    RunStarted, RunStatus, RunSummary, SecretValue, TailQuery, TaskId, TraceRecordEvent,
+    WriterConfig,
 };
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use tokio::runtime::Handle;
+use tokio::sync::broadcast;
+use tokio::sync::broadcast::error::TryRecvError;
 use tokio::{task, time};
 
 use super::request_ledger::{Admission, LedgerLimits};
@@ -22,6 +27,7 @@ use super::run_reply::{ReplyDelivery, ReplyEffects, ReplyStatus};
 use super::{
     ReplyError, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest, RunService, RunTimeout,
 };
+use crate::browser::PageRef;
 use crate::config::Defaults;
 use crate::dispatch::{ErrorCode, OperationError};
 use crate::test_rig::{TestError, TestRig, on_neo_runtime, within};
@@ -51,6 +57,89 @@ fn keystroke(value: &str) -> JournalEntry {
         kind: SensitiveKind::Password,
         value: value.to_owned().into(),
     }
+}
+
+/// What the seal's journal reports as `by` types `value` into a field of `page`, a key at a
+/// time: the field's whole value after each key.
+fn type_into(rig: &TestRig, page: &PageRef, value: &str, by: TypedBy) {
+    for end in 1..=value.len() {
+        let typed = value.get(..end).unwrap_or(value);
+        rig.hooks
+            .field_entered(page.id.clone(), keystroke(typed), by);
+    }
+}
+
+/// The read finding 5's runs made: the first open tab's title, returned.
+const READ_TITLE: &str = "return await __neo.invoke('test.title', { page: context.pages()[0] });";
+
+/// Fails when a host-facing read of run `run` holds `value`: the run with its op rows
+/// (`GET /v1/runs/{id}`), each op (`GET /v1/operations/{op}`), the trace tail (`GET /v1/trace`),
+/// the row each live event names (`/v1/events` builds its payload from it), and the trace file
+/// with its WAL. `events` is subscribed before the run.
+async fn assert_no_record_keeps(
+    rig: &TestRig,
+    run: RunId,
+    value: &str,
+    mut events: broadcast::Receiver<TraceRecordEvent>,
+) -> Result<(), TestError> {
+    rig.sink.flush().await?;
+    let detail = rig.store.run(run).await?.ok_or("the run is recorded")?;
+    assert!(
+        !format!("{detail:?}").contains(value),
+        "GET /v1/runs/{run} keeps `{value}`: {detail:?}"
+    );
+    for op in &detail.operations {
+        let row = rig.store.operation(op.id).await?;
+        assert!(
+            !format!("{row:?}").contains(value),
+            "GET /v1/operations/{} keeps `{value}`: {row:?}",
+            op.id
+        );
+    }
+    let tail = rig.store.trace_tail(TailQuery::default()).await?;
+    assert!(
+        !format!("{tail:?}").contains(value),
+        "GET /v1/trace keeps `{value}`: {tail:?}"
+    );
+    let mut published = 0;
+    loop {
+        let row = match events.try_recv() {
+            Ok(
+                TraceRecordEvent::OperationStarted { id, .. }
+                | TraceRecordEvent::OperationEnded { id, .. },
+            ) => format!("{:?}", rig.store.operation(id).await?),
+            Ok(
+                TraceRecordEvent::RunStarted { run, .. } | TraceRecordEvent::RunEnded { run, .. },
+            ) => {
+                format!("{:?}", rig.store.run_summary(run).await?)
+            }
+            Ok(TraceRecordEvent::TabPrivate { .. } | TraceRecordEvent::RunComplete { .. }) => {
+                continue;
+            }
+            Err(TryRecvError::Empty) => break,
+            Err(error) => return Err(error.into()),
+        };
+        published += 1;
+        assert!(
+            !row.contains(value),
+            "a live event's payload keeps `{value}`: {row}"
+        );
+    }
+    assert!(published > 0, "the run's records were published live");
+    let db = rig.dir.path().join("trace.db");
+    let mut stored = fs::read(&db)?;
+    match fs::read(db.with_extension("db-wal")) {
+        Ok(wal) => stored.extend(wal),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    assert!(
+        !stored
+            .windows(value.len())
+            .any(|bytes| bytes == value.as_bytes()),
+        "trace.db or its WAL keeps `{value}`"
+    );
+    Ok(())
 }
 
 /// `text` as the process's secret set masks it now.
@@ -836,6 +925,335 @@ fn a_run_that_ends_while_another_field_is_typed_registers_none_of_it() -> Result
             masked(&rig, "hunte or hunter2"),
             "hunte or [private]",
             "the field went quiet: its final value is the secret, and its prefix never was"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn a_prefix_read_mid_typing_stays_masked_in_the_reply_after_a_later_key_supersedes_it()
+-> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        // The page echoes its password field into its title. The owner has typed `hunte` so far.
+        let page = rig
+            .owner_tab_titled("https://b.test/journal", "hunte")
+            .await?;
+        type_into(&rig, &page, "hunte", TypedBy::NotAgent);
+        // The script reads the echo, then meets the test at the gate twice: once so the test
+        // knows the read is done, and once after the test typed on.
+        let code = "const echo = await __neo.invoke('test.title', { page: context.pages()[0] });\n\
+                    await __neo.invoke('test.gate', {});\n\
+                    await __neo.invoke('test.gate', {});\n\
+                    return echo;";
+        let events = rig.sink.subscribe();
+        let run = caller(&rig.run_service(GRACE), request(code, meta(None, None)?)?);
+        within(Duration::from_secs(10), rig.gate.wait()).await?;
+        for value in ["hunter", "hunter2"] {
+            rig.hooks
+                .field_entered(page.id.clone(), keystroke(value), TypedBy::NotAgent);
+        }
+        within(Duration::from_secs(10), rig.gate.wait()).await?;
+        let reply = run.await?;
+        assert_eq!(
+            reply.value,
+            json!("[private]"),
+            "`hunte` was held while the run read it, though `hunter2` superseded it by the end"
+        );
+        assert_no_record_keeps(&rig, reply.id, "hunte", events).await?;
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(250)).await;
+        assert_eq!(
+            masked(&rig, "hunte or hunter2"),
+            "hunte or [private]",
+            "the field went quiet: its final value is the secret, and the prefix the run masked never was"
+        );
+        Ok(())
+    })
+}
+
+/// Finding 5, its first shape: a value still in its quiet period, which the page echoes and the
+/// next run reads back. The agent's own `keyboard.type` (`keys`), the owner on a raw control
+/// display (`control`) and the page's own input events (`page_echoes`, journaled) all reach the
+/// journal the same way.
+#[test]
+fn an_echo_of_a_value_still_in_its_quiet_period_is_masked_in_every_record_as_in_the_reply()
+-> Result<(), TestError> {
+    on_neo_runtime(async {
+        for (typist, value, by) in [
+            ("the agent", "agent-typed-7Qx", TypedBy::Agent),
+            ("the owner", "owner-typed-7Qx", TypedBy::NotAgent),
+            ("the page", "page-typed-7Qx", TypedBy::NotAgent),
+        ] {
+            let rig = TestRig::new().await?;
+            let page = rig
+                .owner_tab_titled("https://b.test/typed", &format!("typed: {value}"))
+                .await?;
+            type_into(&rig, &page, value, by);
+            let events = rig.sink.subscribe();
+            let reply = rig
+                .run_service(GRACE)
+                .run(request(READ_TITLE, meta(None, None)?)?)
+                .await;
+            assert_eq!(
+                reply.value,
+                json!("typed: [private]"),
+                "{typist}: the reply is masked with the value still held"
+            );
+            assert_eq!(
+                masked(&rig, value),
+                value,
+                "{typist}: the value is still in its quiet period, and no record registered it"
+            );
+            assert_no_record_keeps(&rig, reply.id, value, events).await?;
+        }
+        Ok(())
+    })
+}
+
+/// Finding 5, its second shape: `page.title()` on a page whose title echoes its password field.
+/// The read's own sweep holds the password and masks it out of the read's result, so the reply
+/// is masked; the op's page fact, which the door reads after the op, is a record of it too.
+#[test]
+fn a_page_fact_that_echoes_what_the_reads_own_sweep_found_is_masked_in_every_record()
+-> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let value = "swept-pw-7Qx";
+        let page = rig
+            .owner_tab_titled("https://a.test/login", &format!("Welcome {value}"))
+            .await?;
+        rig.fields.fill(&page, value);
+        let events = rig.sink.subscribe();
+        let reply = rig
+            .run_service(GRACE)
+            .run(request(READ_TITLE, meta(None, None)?)?)
+            .await;
+        assert_eq!(
+            reply.value,
+            json!("Welcome [private]"),
+            "the read masked what it swept out of its own result"
+        );
+        assert_eq!(
+            masked(&rig, value),
+            value,
+            "the sweep holds the value, and no record registered it"
+        );
+        assert_no_record_keeps(&rig, reply.id, value, events).await?;
+        Ok(())
+    })
+}
+
+/// Each start record is masked with what is held as it is sent: here a value the owner typed a
+/// moment before, in the run's host data and in the input of an op still running. Until that op
+/// ends, its start row is all a host reads of it.
+#[test]
+fn a_value_held_as_a_run_starts_is_in_none_of_its_start_records() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let value = "owner-typed-7Qx";
+        let page = rig
+            .owner_tab_titled("https://b.test/typed", &format!("typed: {value}"))
+            .await?;
+        type_into(&rig, &page, value, TypedBy::NotAgent);
+        let events = rig.sink.subscribe();
+        let code = "const title = await __neo.invoke('test.title', { page: context.pages()[0] });\n\
+                    await __neo.invoke('test.gate', { title });\n\
+                    return 1;";
+        let meta = RunMeta::parse(Some(&json!({ "hostData": { "echo": value } })))
+            .map_err(|error| error.to_string())?;
+        let run = caller(&rig.run_service(GRACE), request(code, meta)?);
+        let running = within(Duration::from_secs(10), async {
+            loop {
+                rig.sink.flush().await?;
+                let tail = rig.store.trace_tail(TailQuery::default()).await?;
+                if let Some(op) = tail
+                    .operations
+                    .into_iter()
+                    .find(|op| op.name == "test.gate")
+                {
+                    return Ok::<_, TestError>(op);
+                }
+                time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await??;
+        assert_eq!(running.outcome, None, "the op waits at the gate");
+        assert!(
+            !format!("{running:?}").contains(value),
+            "a running op's start row keeps `{value}`: {running:?}"
+        );
+        within(Duration::from_secs(10), rig.gate.wait()).await?;
+        let reply = run.await?;
+        assert_eq!(reply.status, ReplyStatus::Ok, "{reply:?}");
+        assert_no_record_keeps(&rig, reply.id, value, events).await?;
+        Ok(())
+    })
+}
+
+/// The end record is masked with every value held since the run began, as the reply is: here a
+/// password the run's own read swept, which its code names too. Nothing held it as the run
+/// started, and a run's code reaches the store only with its end, so only the end's set can mask
+/// it.
+#[test]
+fn a_value_a_runs_own_read_swept_is_masked_in_its_stored_code() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let value = "swept-pw-7Qx";
+        let page = rig
+            .owner_tab_titled("https://a.test/login", "Sign in")
+            .await?;
+        rig.fields.fill(&page, value);
+        let events = rig.sink.subscribe();
+        let code = format!(
+            "await __neo.invoke('test.title', {{ page: context.pages()[0] }});\nreturn '{value}'.length;"
+        );
+        let reply = rig
+            .run_service(GRACE)
+            .run(request(&code, meta(None, None)?)?)
+            .await;
+        assert_eq!(reply.value, json!(value.len()), "{reply:?}");
+        assert_no_record_keeps(&rig, reply.id, value, events).await?;
+        Ok(())
+    })
+}
+
+/// Past `MAX_SUPERSEDED`, a value a running run read is forgotten, so nothing can mask it out of
+/// what the run sends from then on. That output is withheld, the reply's value and the run's end
+/// record included, and the value is never registered: it may be a prefix.
+#[test]
+fn a_run_that_loses_a_value_it_read_past_the_cap_withholds_its_output() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        // The page echoes its password field into its title. The owner has typed `hunte` so far.
+        let page = rig
+            .owner_tab_titled("https://b.test/journal", "hunte")
+            .await?;
+        type_into(&rig, &page, "hunte", TypedBy::NotAgent);
+        let code = "const echo = await __neo.invoke('test.title', { page: context.pages()[0] });\n\
+                    await __neo.invoke('test.gate', {});\n\
+                    await __neo.invoke('test.gate', {});\n\
+                    return echo;";
+        let events = rig.sink.subscribe();
+        let run = caller(&rig.run_service(GRACE), request(code, meta(None, None)?)?);
+        within(Duration::from_secs(10), rig.gate.wait()).await?;
+        // The owner types on, which supersedes `hunte`. Then another page raises input events on
+        // its own field, each one superseding the last, until `hunte` is the one past the cap.
+        rig.hooks
+            .field_entered(page.id.clone(), keystroke("hunter"), TypedBy::NotAgent);
+        for pair in 0..=Defaults::MAX_SUPERSEDED {
+            for value in [format!("v{pair:03}a"), format!("v{pair:03}ab")] {
+                rig.typed.note(PageId(999), None, keystroke(&value));
+            }
+        }
+        within(Duration::from_secs(10), rig.gate.wait()).await?;
+        let reply = run.await?;
+        let shown = serde_json::to_string(&*reply)?;
+        assert!(!shown.contains("hunte"), "the reply keeps `hunte`: {shown}");
+        let error = error_of(&reply)?;
+        assert_eq!(
+            (error.owner, error.code.as_str(), &reply.value),
+            (ErrorOwner::Neo, "output_withheld", &Value::Null),
+            "the reply says why its value is withheld: {shown}"
+        );
+        assert_no_record_keeps(&rig, reply.id, "hunte", events).await?;
+        assert_eq!(
+            masked(&rig, "hunte"),
+            "hunte",
+            "a value forgotten past the cap is never registered: it may be a prefix"
+        );
+        Ok(())
+    })
+}
+
+/// Two password fields on one page, the second's value a prefix of the first's. The first is
+/// held, so the read's sweep leaves the second out of what it holds: it cannot tell it from a
+/// prefix the first field was typed past. The run's reply and records are masked with it all the
+/// same, and it is never registered.
+#[test]
+fn a_swept_value_a_held_one_extends_masks_the_run_and_is_never_registered() -> Result<(), TestError>
+{
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let (first, second) = ("separatePWX", "separatePW");
+        // The page echoes its second field into its URL and its title.
+        let page = rig
+            .owner_tab_titled(
+                &format!("https://a.test/login?echo={second}"),
+                &format!("Welcome {second}"),
+            )
+            .await?;
+        type_into(&rig, &page, first, TypedBy::NotAgent);
+        rig.fields.fill(&page, first);
+        rig.fields.fill(&page, second);
+        let events = rig.sink.subscribe();
+        let code = "await __neo.invoke('test.title', { page: context.pages()[0] });\n\
+                    return context.pages()[0].url();";
+        let reply = rig
+            .run_service(GRACE)
+            .run(request(code, meta(None, None)?)?)
+            .await;
+        assert_eq!(
+            reply.value,
+            json!("https://a.test/login?echo=[private]"),
+            "the page fact the script returned is masked with what the read swept: {reply:?}"
+        );
+        assert_no_record_keeps(&rig, reply.id, second, events).await?;
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(250)).await;
+        assert_eq!(
+            masked(&rig, &format!("{second} or {first}")),
+            format!("{second} or [private]"),
+            "only the value the first field was typed to is registered: the second may be its prefix"
+        );
+        Ok(())
+    })
+}
+
+/// The trace keeps an op's name as the door hands it over, and a script can call any name. One
+/// named after what it read, a value still held, is masked in the op's record as in the reply.
+/// So is one where that value overlaps a secret the process knows: masked with one set after the
+/// other, it would keep the held value's tail.
+#[test]
+fn an_unknown_methods_name_is_masked_in_its_record_with_what_its_run_holds() -> Result<(), TestError>
+{
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let value = "owner-typed-7Qx";
+        let page = rig.owner_tab_titled("https://b.test/typed", value).await?;
+        type_into(&rig, &page, value, TypedBy::NotAgent);
+        let _registration = rig
+            .secrets
+            .register(SecretValue::new("known-owner".to_owned()), None);
+        let events = rig.sink.subscribe();
+        let code = "const title = await __neo.invoke('test.title', { page: context.pages()[0] });\n\
+                    const said = [];\n\
+                    for (const name of [title, 'known-' + title]) {\n\
+                      try { await __neo.invoke(name, {}); } catch (error) { said.push(error.message); }\n\
+                    }\n\
+                    return said;";
+        let reply = rig
+            .run_service(GRACE)
+            .run(request(code, meta(None, None)?)?)
+            .await;
+        let said = serde_json::to_string(&reply.value)?;
+        assert!(
+            said.matches("is not a Neo method").count() == 2 && !said.contains("typed-7Qx"),
+            "the reply is masked with the value still held: {reply:?}"
+        );
+        assert_no_record_keeps(&rig, reply.id, value, events).await?;
+        let detail = rig
+            .store
+            .run(reply.id)
+            .await?
+            .ok_or("the run is recorded")?;
+        let names: Vec<&str> = detail
+            .operations
+            .iter()
+            .map(|op| op.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["test.title", "[private]", "[withheld]"],
+            "a name the held value overlaps a known secret in is masked whole, never in part"
         );
         Ok(())
     })

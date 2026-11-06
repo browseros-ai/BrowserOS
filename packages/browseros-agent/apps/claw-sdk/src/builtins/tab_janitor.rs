@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use browseros_trace::{RunId, RunStatus, TraceSink};
+use browseros_trace::{RunId, RunStatus};
 use futures_util::future;
 use serde_json::json;
 use tokio::time::{self, Instant};
@@ -38,25 +38,23 @@ pub(crate) struct TabJanitor {
     dispatcher: Arc<Dispatcher>,
     link: Arc<BrowserLink>,
     tabs: Arc<TabRegistry>,
-    trace: TraceSink,
     takeover: Arc<TakeoverLock>,
 }
 
 impl TabJanitor {
-    /// The janitor over the app's one dispatcher, link, tab registry, trace and takeover lock.
+    /// The janitor over the app's one dispatcher, whose trace records its runs, and the app's
+    /// link, tab registry and takeover lock.
     #[must_use]
     pub(crate) fn new(
         dispatcher: Arc<Dispatcher>,
         link: Arc<BrowserLink>,
         tabs: Arc<TabRegistry>,
-        trace: TraceSink,
         takeover: Arc<TakeoverLock>,
     ) -> Self {
         Self {
             dispatcher,
             link,
             tabs,
-            trace,
             takeover,
         }
     }
@@ -83,7 +81,7 @@ impl TabJanitor {
         };
         let deadline = Instant::now() + SWEEP_BUDGET;
         let (run, guard) = RunCtx::start(
-            &self.trace,
+            &self.dispatcher,
             RunStart {
                 id: RunId::new(),
                 code: SWEEP_CODE.to_owned(),
@@ -141,12 +139,15 @@ impl TabJanitor {
         } else {
             RunStatus::Ok
         };
-        guard.finish(RunEnd {
-            status,
-            error: None,
-            result: Some(json!({ "closed": closed, "kept": kept })),
-            replay: None,
-        });
+        guard.finish(
+            RunEnd {
+                status,
+                error: None,
+                result: Some(json!({ "closed": closed, "kept": kept })),
+                replay: None,
+            },
+            run.held_values().set(),
+        );
         Some(run.id())
     }
 }

@@ -85,6 +85,12 @@ impl Defaults {
     /// The most typed values held at once. A page can raise input events on its own fields, so
     /// past this the value typed longest ago is registered at once (decision 32).
     pub(crate) const MAX_TYPED: usize = 64;
+    /// The most superseded values kept for the runs going (decision 34). Past this the oldest is
+    /// forgotten, never registered, since it may be a prefix, and each run that may have read it
+    /// withholds its output from then on. A page can raise input events on its own fields. Each
+    /// record a run sends builds a matcher over these values, at O(N²) in them while
+    /// `SecretSet::register` rebuilds it per value, and this bounds that.
+    pub(crate) const MAX_SUPERSEDED: usize = 256;
     /// Tokio worker stacks. QuickJS plus nested futures overflowed the default 2 MiB in debug
     /// builds on Linux, which aborts the process. Reserved address space, committed as used.
     pub(crate) const WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;

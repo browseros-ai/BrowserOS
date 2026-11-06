@@ -121,6 +121,7 @@ impl Harness {
             ],
             secrets,
             sink.clone(),
+            hooks.typed(),
             Arc::clone(&link),
             Arc::clone(&tabs),
         ));
@@ -160,7 +161,7 @@ impl Harness {
             deadline: Instant::now() + Defaults::RUN_TIMEOUT,
             default_page: None,
         };
-        Ok(RunCtx::start(&self.sink, start))
+        Ok(RunCtx::start(&self.dispatcher, start))
     }
 
     /// One script call, answered.
@@ -237,6 +238,7 @@ impl Harness {
             rules,
             Arc::new(SecretSet::new(SecretSetConfig::default())),
             self.sink.clone(),
+            self.hooks.typed(),
             Arc::clone(&self.link),
             Arc::clone(&self.tabs),
         )))
@@ -247,7 +249,6 @@ impl Harness {
             Arc::clone(&self.dispatcher),
             Arc::clone(&self.link),
             Arc::clone(&self.tabs),
-            self.sink.clone(),
             Arc::clone(&self.takeover),
         )
     }

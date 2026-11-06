@@ -17,7 +17,6 @@ use tokio_util::sync::CancellationToken;
 use super::request_ledger::{Admission, LedgerLimits, RunTicket};
 use super::{HostData, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest};
 use crate::browser::{BrowserLink, PageRef, RunView, TabRegistry};
-use crate::builtins::TypedValues;
 use crate::config::Defaults;
 use crate::dispatch::{
     Dispatcher, ErrorCode, OperationError, PageFact, RunCtx, RunStart, StopReason,
@@ -34,7 +33,6 @@ pub(crate) struct RunService {
     store: TraceStore,
     trace: TraceSink,
     secrets: Arc<SecretSet>,
-    typed: Arc<TypedValues>,
     ledger: Arc<RequestLedger>,
     /// Cancelled on SIGTERM: every run stops as `neo / shutting_down` and records its end.
     shutdown: CancellationToken,
@@ -60,8 +58,6 @@ pub(crate) struct RunServiceParts {
     pub(crate) trace: TraceSink,
     /// The process's known secrets, masked out of every reply.
     pub(crate) secrets: Arc<SecretSet>,
-    /// Values typed into sensitive fields that the secret set has not learned yet.
-    pub(crate) typed: Arc<TypedValues>,
     /// Fires on SIGTERM.
     pub(crate) shutdown: CancellationToken,
     /// `Defaults::ORPHAN_GRACE` in the app.
@@ -79,7 +75,6 @@ impl RunService {
             store,
             trace,
             secrets,
-            typed,
             shutdown,
             orphan_grace,
         } = parts;
@@ -91,7 +86,6 @@ impl RunService {
             store,
             trace,
             secrets,
-            typed,
             shutdown,
             orphan_grace,
             #[cfg(test)]
@@ -153,16 +147,20 @@ impl RunService {
 
     /// Records a refused call as a run that ended at once, so the reply's `id` resolves in the
     /// trace. Without the request id, though: nothing ran, and a recorded request id would
-    /// make the store refuse that request's retry as a duplicate for good.
-    fn record_refused(&self, code: String, meta: RunMeta, reply: RunReply) -> Arc<RunReply> {
+    /// make the store refuse that request's retry as a duplicate for good. Its code and host
+    /// data are stored all the same, so its records, and its reply, are masked with what is
+    /// held as it is refused, as a run's are with what was held while it went on.
+    fn record_refused(&self, code: String, meta: RunMeta, mut reply: RunReply) -> Arc<RunReply> {
         let id = reply.id;
+        let held = Arc::clone(self.dispatcher.held()).watch().held();
+        reply.mask_held(&held);
         self.trace.run_started(RunStarted {
             id,
             code,
             request_id: None,
             task_id: meta.task_id,
             host_data: meta.host_data.map(HostData::into_value),
-            also_mask: None,
+            also_mask: held.set(),
             at: EpochMillis::now(),
         });
         let end = reply.trace_end(None);
@@ -172,7 +170,7 @@ impl RunService {
             error: end.error,
             result: end.result,
             replay: end.replay,
-            also_mask: None,
+            also_mask: held.set(),
             at: EpochMillis::now(),
         });
         Arc::new(reply)
@@ -211,7 +209,7 @@ impl RunService {
             host_data,
         } = meta;
         let (run, guard) = RunCtx::start(
-            &self.trace,
+            &self.dispatcher,
             RunStart {
                 id: handle.id(),
                 code: code.clone(),
@@ -245,16 +243,17 @@ impl RunService {
         {
             ops.shutdown().await;
         }
-        // The reply is masked once, here. A value still held as typed into a sensitive field is
-        // no secret yet, and may be a prefix of one being typed elsewhere (sdk-traces decision
-        // 32), but the reply may show it, so it is masked with what is held too, and that stays
-        // held.
+        // The reply is masked once, here. A value typed into a sensitive field while the run went
+        // on is no secret yet, and may be a prefix of one still being typed (sdk-traces decision
+        // 32), but the reply may show it. So the reply is masked with every value held since the
+        // run began, those a later keystroke superseded included, and they all stay unregistered,
+        // or withheld when the run lost one of them. The run's end record is built from this reply
+        // and masked with this same set (decision 34).
+        let held = run.held_values();
         let mut reply = RunReply::build(&run, end, &self.secrets);
-        if let Some(held) = self.typed.held() {
-            reply.mask(&held);
-        }
+        reply.mask_held(&held);
         let reply = Arc::new(reply);
-        guard.finish(reply.trace_end(request_id.as_ref()));
+        guard.finish(reply.trace_end(request_id.as_ref()), held.set());
         ticket.finish(reply);
     }
 

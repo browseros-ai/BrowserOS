@@ -200,6 +200,9 @@ impl App {
             rules(&takeover, &hooks, &claims),
             Arc::clone(&secrets),
             trace.clone(),
+            // What every run's records and reply are masked with beyond the secret set: the
+            // values typed or swept that the set learns only once their fields go quiet.
+            hooks.typed(),
             Arc::clone(&browser),
             Arc::clone(&tabs),
         ));
@@ -211,7 +214,6 @@ impl App {
             store: store.clone(),
             trace: trace.clone(),
             secrets: Arc::clone(&secrets),
-            typed: hooks.typed(),
             shutdown: shutdown.clone(),
             orphan_grace: Defaults::ORPHAN_GRACE,
         });
@@ -222,13 +224,7 @@ impl App {
             shutdown.clone(),
         ));
         tokio::spawn(housekeeping(
-            TabJanitor::new(
-                dispatcher,
-                Arc::clone(&browser),
-                tabs,
-                trace.clone(),
-                takeover,
-            ),
+            TabJanitor::new(dispatcher, Arc::clone(&browser), tabs, takeover),
             secrets,
             trace.clone(),
             shutdown.clone(),

@@ -539,12 +539,15 @@ async fn concurrent_ops_on_the_lazy_page_open_one_tab() -> Result<(), Box<dyn Er
         "Neo opened it for the agent, so the janitor may close it later"
     );
 
-    guard.finish(RunEnd {
-        status: RunStatus::Ok,
-        error: None,
-        result: None,
-        replay: None,
-    });
+    guard.finish(
+        RunEnd {
+            status: RunStatus::Ok,
+            error: None,
+            result: None,
+            replay: None,
+        },
+        None,
+    );
     for operation in operations {
         let row = harness.row(operation).await?;
         assert_eq!(
@@ -755,12 +758,15 @@ async fn a_runs_slot_is_shared_by_its_ops_and_goes_when_its_record_ends()
     );
     let kept = Arc::downgrade(&first);
     drop(first);
-    guard.finish(RunEnd {
-        status: RunStatus::Ok,
-        error: None,
-        result: None,
-        replay: None,
-    });
+    guard.finish(
+        RunEnd {
+            status: RunStatus::Ok,
+            error: None,
+            result: None,
+            replay: None,
+        },
+        None,
+    );
     assert!(
         kept.upgrade().is_none(),
         "the record's end drops it, while the run itself is still held"

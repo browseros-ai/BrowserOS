@@ -6,19 +6,25 @@ use std::thread;
 use browseros_core::TabId;
 use browseros_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationKind, OperationStarted, Outcome,
-    RedactionPolicy, SecretSet, TargetSensitivity, TraceSink,
+    PageState, RedactionPolicy, SecretSet, TargetSensitivity, TraceSink,
 };
 use serde_json::Value;
 use tokio::sync::oneshot;
 
 use super::op_ctx::OpState;
 use super::{
-    Answer, CallSite, Caller, ErrorCode, LeafError, Lifetime, MethodSpec, OpFailure, OpLine,
-    OpReply, OperationError, PageFact, RunCtx, StopReason,
+    Answer, CallSite, Caller, ErrorCode, Held, LeafError, Lifetime, MethodSpec, OpFailure, OpLine,
+    OpReply, OperationError, PageFact, RunCtx, StopReason, WITHHELD,
 };
 use crate::browser::PageRef;
 
 /// Ends one op exactly once: the trace's `op_ended`, the run's ledger, and the caller's reply.
+///
+/// Each of the op's records carries the run's held values as of sending it
+/// ([`RunCtx::held_values`]): its start the values held as it is sent, its end the values held as
+/// it settles, which include what its own read just swept. Once the run lost one of them
+/// ([`Held::Lost`]), a record sent from then on keeps Neo's own facts only: its input, its result,
+/// its error and its page's URL and title are withheld, and its error says why.
 ///
 /// [`OperationGuard::finish`] is the normal path and consumes the guard. `Drop` is the
 /// backstop for an op whose future went away without an answer: its task was aborted at
@@ -202,12 +208,16 @@ impl OperationGuard {
             tab: None,
             args,
             policy: redaction,
+            // The tab and the held values are the ones as of sending, which a lazy page delays.
             also_mask: None,
             at: EpochMillis::now(),
         };
         let unsent = match tab {
             StartTab::Named(tab) => {
-                trace.op_started(OperationStarted { tab, ..started });
+                trace.op_started(sent(
+                    OperationStarted { tab, ..started },
+                    &run.held_values(),
+                ));
                 None
             }
             StartTab::Lazy => Some(started),
@@ -233,7 +243,10 @@ impl OperationGuard {
         if let Some(open) = &mut self.open
             && let Some(started) = open.unsent.take()
         {
-            open.trace.op_started(OperationStarted { tab, ..started });
+            open.trace.op_started(sent(
+                OperationStarted { tab, ..started },
+                &open.run.held_values(),
+            ));
         }
     }
 
@@ -276,10 +289,11 @@ fn settle(open: Open, ending: Ending, pages: Vec<PageFact>, default_page: Option
         secrets,
         reply,
     } = open;
+    let held = run.held_values();
     // An op that ended before the door resolved its page (a gate, a stop, a page that would not
     // open) still has every op id on the record: its start goes first, with no tab.
     if let Some(started) = unsent {
-        trace.op_started(started);
+        trace.op_started(sent(started, &held));
     }
     let id = state.id();
     let sent_at = state.sent_at();
@@ -288,11 +302,25 @@ fn settle(open: Open, ending: Ending, pages: Vec<PageFact>, default_page: Option
         secrets.mask_str(&mut note);
         tracing::debug!(operation = %id, method = spec.name, %note, "op note");
     }
-    let (result, error) = match &settlement.result {
-        Settled::Value(value) => (Some(value.clone()), None),
-        Settled::Failed(error) => (None, Some(error.record(settlement.retryable, Some(id)))),
-        Settled::Retired(_) => (None, None),
+    let withheld = held.withheld();
+    let (result, error) = match (&settlement.result, &withheld) {
+        (Settled::Value(value), None) => (Some(value.clone()), None),
+        (Settled::Failed(error), None) => {
+            (None, Some(error.record(settlement.retryable, Some(id))))
+        }
+        (Settled::Value(_) | Settled::Failed(_), Some(withheld)) => {
+            (None, Some(withheld.record(settlement.retryable, Some(id))))
+        }
+        (Settled::Retired(_), _) => (None, None),
     };
+    let page_after = pages.first().map(|page| match withheld {
+        Some(_) => PageState {
+            url: None,
+            title: None,
+            ..page.page_state()
+        },
+        None => page.page_state(),
+    });
     trace.op_ended(OperationEnded {
         id,
         outcome: settlement.outcome,
@@ -300,13 +328,13 @@ fn settle(open: Open, ending: Ending, pages: Vec<PageFact>, default_page: Option
         sent_at,
         result,
         error,
-        page_after: pages.first().map(PageFact::page_state),
+        page_after,
         target: if state.is_sensitive() {
             TargetSensitivity::Sensitive
         } else {
             TargetSensitivity::Ordinary
         },
-        also_mask: None,
+        also_mask: held.set(),
         at: EpochMillis::now(),
     });
     let line = OpLine {
@@ -343,6 +371,20 @@ fn settle(open: Open, ending: Ending, pages: Vec<PageFact>, default_page: Option
     }
     // The caller may be gone (teardown dropped the bridge); nobody is owed the answer then.
     let _ = reply.send(answer);
+}
+
+/// `started` as it is sent now, with what its run holds now: that set as its `also_mask`, and its
+/// input withheld once the run lost a held value, since nothing could mask that value out of it.
+fn sent(started: OperationStarted, held: &Held) -> OperationStarted {
+    let args = match held.withheld() {
+        Some(_) => Value::String(WITHHELD.to_owned()),
+        None => started.args,
+    };
+    OperationStarted {
+        args,
+        also_mask: held.set(),
+        ..started
+    }
 }
 
 #[cfg(test)]

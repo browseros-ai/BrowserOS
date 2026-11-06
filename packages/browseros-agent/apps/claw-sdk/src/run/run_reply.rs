@@ -7,7 +7,9 @@ use browseros_trace::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::dispatch::{ErrorCode, OpFailure, OpLine, OperationError, RunCtx, RunEnd, StopReason};
+use crate::dispatch::{
+    ErrorCode, Held, OpFailure, OpLine, OperationError, RunCtx, RunEnd, StopReason,
+};
 use crate::runtime::{LogLine, ScriptEnd, ScriptOutcome};
 
 /// What one `run` call answers, already masked: the MCP layer renders it, and the trace keeps
@@ -182,6 +184,25 @@ impl RunReply {
             secrets.mask_str(&mut line.text);
         }
         self.mask_error(secrets);
+    }
+
+    /// Masks the reply with the values held since its run began, as well as the process's set
+    /// ([`RunReply::mask`]). Once the run lost one of them, nothing could mask it out of what the
+    /// script and its pages produced, so all of it is withheld instead: the value, the console
+    /// lines and the error give way to the error that says why, and only Neo's own facts stay
+    /// (the run's id, its effects and its op lines).
+    pub(crate) fn mask_held(&mut self, held: &Held) {
+        if let Some(withheld) = held.withheld() {
+            self.status = ReplyStatus::Error;
+            self.value = Value::Null;
+            self.logs.clear();
+            self.error = Some(ReplyError::from_error(
+                &withheld,
+                self.effects == ReplyEffects::None,
+            ));
+        } else if let Some(set) = held.set() {
+            self.mask(&set);
+        }
     }
 
     /// A call refused before it ran: nothing happened, so repeating it is safe.
