@@ -12,7 +12,9 @@
  * What differs from Playwright: `goto` resolves `null` for every navigation, because Neo creates
  * no `Response` objects yet (Playwright returns `null` only for navigations without one, such as
  * `about:blank` or a same-document change).
- * `allTextContents` reads through fixed glue in Neo's isolated world rather than the main world.
+ * `allTextContents` sends `client/locator.ts` source text; compiled Playwright clients may format
+ * it differently. It reads in Neo's isolated world, so page-defined `textContent` overrides
+ * (prototype patches, custom element classes or per-instance properties) can differ.
  */
 
 import type {
@@ -232,7 +234,7 @@ export class Frame {
     return result.value
   }
 
-  /** `client/locator.ts` at 26137face: its one `$$eval` function, on Playwright's wire. */
+  /** The source text Neo's SDK sends, from `client/locator.ts` at 26137face. */
   async _allTextContents(
     apiName: ApiName,
     selector: string,

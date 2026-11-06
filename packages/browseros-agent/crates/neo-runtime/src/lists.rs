@@ -3,14 +3,17 @@
 //! ```text
 //! Frame.queryCount / Frame.evalOnSelectorAll (only the allTextContents function)
 //!   dispatch → query_count / all_text_contents
-//!     prepare → one typed glue call → {value: count} / {value: SerializedValue}
+//!     prepare → describe (invalid selector → Error) → one collection read
+//!       → {value: count} / {value: SerializedValue}
 //!     NotConnected → count 0 / Error; Closed → TargetClosedError
 //!     invalid selector or contract error → Error; run end/cancel → stop
 //! ```
 //!
-//! No selector description, target marks, waiting or call-log lines. The glue queries all
-//! matches in document order. Text comes from Neo's isolated utility world; Playwright's
-//! `$$eval` reads the main world, so a page patching `Node.prototype.textContent` can differ.
+//! No target marks, waiting or call-log lines; `describe` validates without naming the locator.
+//! The glue queries all matches in document order. Text comes from Neo's isolated utility world,
+//! so page-defined `textContent` overrides (a `Node.prototype` patch, a custom element class or a
+//! per-instance property) can differ from Playwright's main-world `$$eval`.
+//! CDP request timeouts also become `NotConnected`, so `count` can return 0 on a frozen page.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -25,7 +28,8 @@ use crate::page::PageSession;
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::reads::SelectorTab;
 
-/// Playwright 26137face, `client/locator.ts` `allTextContents`. Only this `$$eval` is served;
+/// The source text Neo's SDK sends, from Playwright 26137face `client/locator.ts` `allTextContents`.
+/// Compiled Playwright clients can spell it differently. Only this SDK expression is served;
 /// arbitrary page JS must never bypass the typed glue boundary in `world.rs`.
 pub(crate) const ALL_TEXT_CONTENTS_EXPRESSION: &str = "ee => ee.map(e => e.textContent || '')";
 
@@ -45,13 +49,22 @@ pub(crate) async fn query_count<T: ListTab>(
     selector: &str,
     progress: &Progress,
 ) -> Result<FrameQueryCountResult, CallError> {
-    let value = match progress
-        .race(async {
-            tab.prepare().await?;
-            tab.query_count(selector).await
-        })
-        .await?
-    {
+    if let Err(error) = progress.race(tab.prepare()).await? {
+        return count_result(Err(error));
+    }
+    let facts = match progress.race(tab.describe(selector)).await? {
+        Ok(facts) => facts,
+        Err(error) => return count_result(Err(error)),
+    };
+    if let Some(invalid) = facts.invalid {
+        return Err(PlaywrightError::error(invalid).into());
+    }
+    count_result(progress.race(tab.query_count(selector)).await?)
+}
+
+/// Apply `queryCount`'s retriable-error fallback to any of its page steps.
+fn count_result(result: Result<i64, PageError>) -> Result<FrameQueryCountResult, CallError> {
+    let value = match result {
         Ok(value) => value,
         Err(PageError::NotConnected) => 0,
         Err(error) => return Err(page_error(error)),
@@ -65,11 +78,16 @@ pub(crate) async fn all_text_contents<T: ListTab>(
     selector: &str,
     progress: &Progress,
 ) -> Result<FrameEvalOnSelectorAllResult, CallError> {
+    progress.race(tab.prepare()).await?.map_err(page_error)?;
+    let facts = progress
+        .race(tab.describe(selector))
+        .await?
+        .map_err(page_error)?;
+    if let Some(invalid) = facts.invalid {
+        return Err(PlaywrightError::error(invalid).into());
+    }
     let values = progress
-        .race(async {
-            tab.prepare().await?;
-            tab.all_text_contents(selector).await
-        })
+        .race(tab.all_text_contents(selector))
         .await?
         .map_err(page_error)?;
     Ok(FrameEvalOnSelectorAllResult {
@@ -174,6 +192,7 @@ mod tests {
 
     enum Step {
         Prepare(Result<(), PageError>),
+        Describe(Result<SelectorFacts, PageError>),
         Count(Result<i64, PageError>),
         Texts(Result<Vec<String>, PageError>),
     }
@@ -218,8 +237,56 @@ mod tests {
             result
         }
 
-        async fn describe(&self, _selector: &str) -> Result<SelectorFacts, PageError> {
-            panic!("collection reads do not describe or wait for selectors");
+        async fn describe(&self, selector: &str) -> Result<SelectorFacts, PageError> {
+            assert_eq!(selector, SELECTOR);
+            let Step::Describe(result) = self.step("describe").await else {
+                panic!("expected describe");
+            };
+            result
+        }
+    }
+
+    fn valid_selector() -> Step {
+        Step::Describe(Ok(SelectorFacts {
+            locator: "locator('.item')".to_string(),
+            invalid: None,
+        }))
+    }
+
+    #[test]
+    fn tests_that_the_sdk_bundle_sends_the_served_collection_expression() {
+        let bundle = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../neo-sdk/dist/sdk.js"
+        ));
+        assert!(
+            bundle.contains(ALL_TEXT_CONTENTS_EXPRESSION),
+            "the embedded SDK expression must match the runtime's route gate"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_invalid_selectors_stop_after_describe_without_a_read() {
+        for count in [true, false] {
+            let tab = FakeLists::new([
+                Step::Prepare(Ok(())),
+                Step::Describe(Ok(SelectorFacts {
+                    locator: SELECTOR.to_string(),
+                    invalid: Some("invalid selector".to_string()),
+                })),
+            ]);
+            let progress = Progress::for_test(0.0);
+            let error = if count {
+                query_count(&tab, SELECTOR, &progress)
+                    .await
+                    .expect_err("invalid count selector")
+            } else {
+                all_text_contents(&tab, SELECTOR, &progress)
+                    .await
+                    .expect_err("invalid text selector")
+            };
+            assert_error(error, ErrorName::Error);
+            tab.assert_calls(&["prepare", "describe"]);
         }
     }
 
@@ -244,7 +311,11 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn tests_that_count_returns_zero_or_many_from_one_snapshot() {
         for value in [0, 3] {
-            let tab = FakeLists::new([Step::Prepare(Ok(())), Step::Count(Ok(value))]);
+            let tab = FakeLists::new([
+                Step::Prepare(Ok(())),
+                valid_selector(),
+                Step::Count(Ok(value)),
+            ]);
             let result = query_count(&tab, SELECTOR, &Progress::for_test(0.0))
                 .await
                 .expect("count");
@@ -252,7 +323,7 @@ mod tests {
                 serde_json::to_value(result).expect("wire result"),
                 json!({"value": value})
             );
-            tab.assert_calls(&["prepare", "queryCount"]);
+            tab.assert_calls(&["prepare", "describe", "queryCount"]);
         }
     }
 
@@ -267,7 +338,11 @@ mod tests {
                 "nested 🦊".to_string(),
             ],
         ] {
-            let tab = FakeLists::new([Step::Prepare(Ok(())), Step::Texts(Ok(values.clone()))]);
+            let tab = FakeLists::new([
+                Step::Prepare(Ok(())),
+                valid_selector(),
+                Step::Texts(Ok(values.clone())),
+            ]);
             let result = all_text_contents(&tab, SELECTOR, &Progress::for_test(0.0))
                 .await
                 .expect("texts");
@@ -276,24 +351,25 @@ mod tests {
                 serde_json::to_value(result).expect("wire result"),
                 json!({"value": {"a": expected, "id": 1}})
             );
-            tab.assert_calls(&["prepare", "allTextContents"]);
+            tab.assert_calls(&["prepare", "describe", "allTextContents"]);
         }
     }
 
     #[tokio::test(start_paused = true)]
-    async fn tests_that_count_returns_zero_when_prepare_or_query_loses_the_document() {
+    async fn tests_that_count_returns_zero_when_a_page_step_loses_the_document() {
         for steps in [
             vec![Step::Prepare(Err(PageError::NotConnected))],
             vec![
                 Step::Prepare(Ok(())),
+                Step::Describe(Err(PageError::NotConnected)),
+            ],
+            vec![
+                Step::Prepare(Ok(())),
+                valid_selector(),
                 Step::Count(Err(PageError::NotConnected)),
             ],
         ] {
-            let expected = if steps.len() == 1 {
-                vec!["prepare"]
-            } else {
-                vec!["prepare", "queryCount"]
-            };
+            let expected = &["prepare", "describe", "queryCount"][..steps.len()];
             let tab = FakeLists::new(steps);
             assert_eq!(
                 query_count(&tab, SELECTOR, &Progress::for_test(0.0))
@@ -302,24 +378,25 @@ mod tests {
                     .value,
                 0
             );
-            tab.assert_calls(&expected);
+            tab.assert_calls(expected);
         }
     }
 
     #[tokio::test(start_paused = true)]
-    async fn tests_that_all_text_contents_fails_when_prepare_or_query_loses_the_document() {
+    async fn tests_that_all_text_contents_fails_when_a_page_step_loses_the_document() {
         for steps in [
             vec![Step::Prepare(Err(PageError::NotConnected))],
             vec![
                 Step::Prepare(Ok(())),
+                Step::Describe(Err(PageError::NotConnected)),
+            ],
+            vec![
+                Step::Prepare(Ok(())),
+                valid_selector(),
                 Step::Texts(Err(PageError::NotConnected)),
             ],
         ] {
-            let expected = if steps.len() == 1 {
-                vec!["prepare"]
-            } else {
-                vec!["prepare", "allTextContents"]
-            };
+            let expected = &["prepare", "describe", "allTextContents"][..steps.len()];
             let tab = FakeLists::new(steps);
             assert_error(
                 all_text_contents(&tab, SELECTOR, &Progress::for_test(0.0))
@@ -327,7 +404,7 @@ mod tests {
                     .expect_err("document lost"),
                 ErrorName::Error,
             );
-            tab.assert_calls(&expected);
+            tab.assert_calls(expected);
         }
     }
 
@@ -344,11 +421,15 @@ mod tests {
                 ErrorName::Error,
             ),
         ] {
-            for prepare_fails in [true, false] {
-                let count_steps = if prepare_fails {
-                    vec![Step::Prepare(Err(error.clone()))]
-                } else {
-                    vec![Step::Prepare(Ok(())), Step::Count(Err(error.clone()))]
+            for failing_step in 0..3 {
+                let count_steps = match failing_step {
+                    0 => vec![Step::Prepare(Err(error.clone()))],
+                    1 => vec![Step::Prepare(Ok(())), Step::Describe(Err(error.clone()))],
+                    _ => vec![
+                        Step::Prepare(Ok(())),
+                        valid_selector(),
+                        Step::Count(Err(error.clone())),
+                    ],
                 };
                 let tab = FakeLists::new(count_steps);
                 assert_error(
@@ -357,16 +438,16 @@ mod tests {
                         .expect_err("count fails"),
                     name,
                 );
-                tab.assert_calls(if prepare_fails {
-                    &["prepare"]
-                } else {
-                    &["prepare", "queryCount"]
-                });
+                tab.assert_calls(&["prepare", "describe", "queryCount"][..=failing_step]);
 
-                let text_steps = if prepare_fails {
-                    vec![Step::Prepare(Err(error.clone()))]
-                } else {
-                    vec![Step::Prepare(Ok(())), Step::Texts(Err(error.clone()))]
+                let text_steps = match failing_step {
+                    0 => vec![Step::Prepare(Err(error.clone()))],
+                    1 => vec![Step::Prepare(Ok(())), Step::Describe(Err(error.clone()))],
+                    _ => vec![
+                        Step::Prepare(Ok(())),
+                        valid_selector(),
+                        Step::Texts(Err(error.clone())),
+                    ],
                 };
                 let tab = FakeLists::new(text_steps);
                 assert_error(
@@ -375,11 +456,7 @@ mod tests {
                         .expect_err("texts fail"),
                     name,
                 );
-                tab.assert_calls(if prepare_fails {
-                    &["prepare"]
-                } else {
-                    &["prepare", "allTextContents"]
-                });
+                tab.assert_calls(&["prepare", "describe", "allTextContents"][..=failing_step]);
             }
         }
     }

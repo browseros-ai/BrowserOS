@@ -15,7 +15,9 @@
  *   `toString` and `description` (they need Playwright's ~2,500-line locator generators), and
  *   actions and reads Neo does not serve. Explicit names preserve the outer `clear` and
  *   `setChecked` API names through their delegated calls (`_wrapApiCall` in Playwright).
- * - `allTextContents` reads in Neo's isolated world through its private Frame helper.
+ * - `allTextContents` sends `client/locator.ts` source text; compiled clients may format it
+ *   differently. It reads in Neo's isolated world, so page-defined `textContent` overrides
+ *   (prototype patches, custom element classes or per-instance properties) can differ.
  *
  * Frame identity is load-bearing: `has`, `hasNot`, `and`, `or` and `locator(Locator)` throw
  * unless both locators hold the same `Frame` object, which is why a page builds its main frame
