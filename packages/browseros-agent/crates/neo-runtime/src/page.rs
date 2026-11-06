@@ -237,6 +237,11 @@ impl PageSession {
         }
     }
 
+    /// The typed utility-world calls used by sibling action seams.
+    pub(crate) fn world(&self) -> &World {
+        &self.world
+    }
+
     pub(crate) fn session_id(&self) -> &SessionId {
         &self.session.id
     }
@@ -304,7 +309,7 @@ impl PageSession {
 
     /// Runs a cleanup or writer task on the run's tracker. Spawned on the session's runtime
     /// handle because it may be called from a `Drop`.
-    fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
+    pub(crate) fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
         self.tasks.spawn_on(task, &self.session.tokio);
     }
 
@@ -632,9 +637,17 @@ impl Drop for GroupGuard {
 
 /// `click::Tab::Element` for the real tab: one element and the group of the resolution that
 /// produced it. The handle dies with the group.
+#[derive(Clone)]
 pub(crate) struct ResolvedElement {
     handle: Handle<Element>,
-    _group: GroupGuard,
+    _group: Arc<GroupGuard>,
+}
+
+impl ResolvedElement {
+    /// A typed handle; this element's shared group keeps it alive through a detached page step.
+    pub(crate) fn handle(&self) -> &Handle<Element> {
+        &self.handle
+    }
 }
 
 /// `click::Tab::Armed` for the real tab. The interceptor handle lives in its own object group,
@@ -778,7 +791,7 @@ impl Tab for Arc<PageSession> {
         Ok(resolved.element.map(|handle| Resolved {
             element: ResolvedElement {
                 handle,
-                _group: group,
+                _group: Arc::new(group),
             },
             count: u32::try_from(resolved.count).unwrap_or(u32::MAX),
             preview: resolved.preview.unwrap_or_default(),

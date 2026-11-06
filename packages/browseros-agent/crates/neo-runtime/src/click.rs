@@ -976,7 +976,7 @@ fn trim_with_ellipsis(input: &str, cap: usize) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     //! Policy tests against [`FakeTab`], under paused tokio time, so every attempt count is
     //! exact. The goldens record no per-message timestamps, so the durations below are
     //! inferred from what the recordings do pin:
@@ -1011,24 +1011,24 @@ mod tests {
 
     /// One scripted step: each call takes `duration` and pops the next answer; the last answer
     /// repeats.
-    struct Step<T> {
-        duration: Duration,
+    pub(crate) struct Step<T> {
+        pub(crate) duration: Duration,
         answers: Mutex<VecDeque<T>>,
     }
 
     impl<T: Clone> Step<T> {
-        fn new(duration: Duration, answers: impl IntoIterator<Item = T>) -> Self {
+        pub(crate) fn new(duration: Duration, answers: impl IntoIterator<Item = T>) -> Self {
             Self {
                 duration,
                 answers: Mutex::new(answers.into_iter().collect()),
             }
         }
 
-        fn always(duration: Duration, answer: T) -> Self {
+        pub(crate) fn always(duration: Duration, answer: T) -> Self {
             Self::new(duration, [answer])
         }
 
-        fn next(&self) -> T {
+        pub(crate) fn next(&self) -> T {
             let mut answers = self.answers.lock().expect("a fake step's lock");
             if answers.len() > 1 {
                 answers.pop_front().expect("checked non-empty")
@@ -1037,7 +1037,7 @@ mod tests {
             }
         }
 
-        async fn answer(&self) -> T {
+        pub(crate) async fn answer(&self) -> T {
             let answer = self.next();
             time::sleep(self.duration).await;
             answer
@@ -1046,14 +1046,14 @@ mod tests {
 
     /// The writer's scripted outcome.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum Writes {
+    pub(crate) enum Writes {
         Ack,
         Nothing,
         Fail,
     }
 
     #[derive(Debug, Clone, PartialEq)]
-    enum ArmAnswer {
+    pub(crate) enum ArmAnswer {
         Armed,
         NotConnected,
         Intercepted(String),
@@ -1061,7 +1061,7 @@ mod tests {
 
     /// A dropped armed interceptor, so tests see every path disarm. It holds a copy of its
     /// click's input turn, as the real one does until its stop has answered.
-    struct FakeArmed {
+    pub(crate) struct FakeArmed {
         calls: Arc<Mutex<Vec<String>>>,
         _input: FakeInput,
     }
@@ -1079,7 +1079,7 @@ mod tests {
     /// `input` when it grants a turn and `input released` when the turn's last copy drops, so
     /// tests see where each input phase starts and ends.
     #[derive(Clone)]
-    struct FakeInput {
+    pub(crate) struct FakeInput {
         _turn: Arc<FakeTurn>,
     }
 
@@ -1095,25 +1095,25 @@ mod tests {
     }
 
     /// A scripted tab. Every page step records its name in `calls`.
-    struct FakeTab {
+    pub(crate) struct FakeTab {
         /// Instant, like every preparation after the run's first.
-        prepare: Step<Result<(), PageError>>,
-        describe: Step<Result<SelectorFacts, PageError>>,
-        resolve: Step<Result<Option<(u32, String)>, PageError>>,
-        check_states: Step<Result<StatesCheck, PageError>>,
-        scroll: Step<Result<Option<NotReady>, PageError>>,
-        geometry: Step<Result<Geometry, PageError>>,
-        arm: Step<Result<ArmAnswer, PageError>>,
-        press: Step<Writes>,
-        verdict: Step<Verdict>,
-        settle: Step<Result<Vec<String>, PageError>>,
-        pending: Mutex<Option<String>>,
-        calls: Arc<Mutex<Vec<String>>>,
+        pub(crate) prepare: Step<Result<(), PageError>>,
+        pub(crate) describe: Step<Result<SelectorFacts, PageError>>,
+        pub(crate) resolve: Step<Result<Option<(u32, String)>, PageError>>,
+        pub(crate) check_states: Step<Result<StatesCheck, PageError>>,
+        pub(crate) scroll: Step<Result<Option<NotReady>, PageError>>,
+        pub(crate) geometry: Step<Result<Geometry, PageError>>,
+        pub(crate) arm: Step<Result<ArmAnswer, PageError>>,
+        pub(crate) press: Step<Writes>,
+        pub(crate) verdict: Step<Verdict>,
+        pub(crate) settle: Step<Result<Vec<String>, PageError>>,
+        pub(crate) pending: Mutex<Option<String>>,
+        pub(crate) calls: Arc<Mutex<Vec<String>>>,
     }
 
     impl FakeTab {
         /// The `ok` page: one button that every step finds ready.
-        fn ready() -> Self {
+        pub(crate) fn ready() -> Self {
             Self {
                 prepare: Step::always(Duration::ZERO, Ok(())),
                 describe: Step::always(
@@ -1142,15 +1142,15 @@ mod tests {
             }
         }
 
-        fn record(&self, call: impl Into<String>) {
+        pub(crate) fn record(&self, call: impl Into<String>) {
             self.calls.lock().expect("calls").push(call.into());
         }
 
-        fn calls(&self) -> Vec<String> {
+        pub(crate) fn calls(&self) -> Vec<String> {
             self.calls.lock().expect("calls").clone()
         }
 
-        fn count(&self, name: &str) -> usize {
+        pub(crate) fn count(&self, name: &str) -> usize {
             self.calls().iter().filter(|call| *call == name).count()
         }
     }

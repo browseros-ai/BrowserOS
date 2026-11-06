@@ -28,13 +28,17 @@
 //! the test id attribute from `world.rs`, the one name the SDK and the page share.
 
 mod bridge;
+mod check;
 mod click;
 #[cfg(test)]
 mod click_goldens;
 mod deadline;
 mod dispatch;
+mod fill;
+mod forms;
 mod getters;
 mod page;
+mod press;
 mod progress;
 mod realm;
 mod run;

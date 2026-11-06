@@ -220,6 +220,114 @@ Injected:
       returns:
         outcome: HitTargetOutcome
 
+    # One page evaluation of `dom.ts` `_fill`, including its state checks unless forced.
+    fill:
+      internal: true
+      parameters:
+        element: Element
+        value: string
+        force: boolean
+      returns:
+        outcome: FormFillOutcome
+
+    # One page evaluation of `dom.ts` `_selectOption`; arrays cross by value, without handles.
+    selectOptions:
+      internal: true
+      parameters:
+        element: Element
+        options:
+          type: array
+          items: FormSelectOption
+        force: boolean
+      returns:
+        # Present on success, including an empty selection.
+        values:
+          type: array?
+          items: string
+        # Present when no selection was made.
+        outcome: FormSelectOutcome?
+
+    # Playwright's `ElementStateQueryResult` for a checkbox or radio button.
+    elementState:
+      internal: true
+      parameters:
+        element: Element
+        state:
+          type: enum
+          literals:
+          - checked
+          - unchecked
+      returns:
+        matches: boolean
+        received: string?
+        isRadio: boolean?
+
+    # `InjectedScript.focusNode`, before a key press.
+    focusElement:
+      internal: true
+      parameters:
+        element: Element
+        resetSelectionIfNotFocused: boolean
+      returns:
+        outcome: FormFocusOutcome
+
+    # `frames.ts` `inputValue`: resolve and mark the first match, then follow its label.
+    inputValue:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+      returns:
+        matched: FormInputValueMatch?
+
+# `_fill` returns a string or the first missing state, without mutating when not ready.
+FormFillOutcome:
+  type: union
+  members:
+    status:
+      type: enum
+      literals:
+      - needsinput
+      - done
+      - error:notconnected
+    missing: MissingState
+
+# The option selector fields of Playwright's `selectOptions` page helper.
+FormSelectOption:
+  type: object
+  properties:
+    valueOrLabel: string?
+    value: string?
+    label: string?
+    index: int?
+
+# Why `_selectOption` could not select yet. Success is the separate `values` array because
+# this dialect discriminates unions by JSON kind and does not support array members.
+FormSelectOutcome:
+  type: union
+  members:
+    error:
+      type: enum
+      literals:
+      - error:notconnected
+      - error:optionsnotfound
+      - error:optionnotenabled
+    missing: MissingState
+
+# The result of Playwright's `focusNode` helper.
+FormFocusOutcome:
+  type: enum
+  literals:
+  - done
+  - error:notconnected
+
+# The input's value and the original matched node's preview for the call log.
+FormInputValueMatch:
+  type: object
+  properties:
+    value: string
+    preview: string
+
 # The `{stop}` object `setupHitTargetInterceptor` arms: Playwright's
 # `HitTargetInterceptionResult`, bound in the glue's `satisfies` clause.
 HitTargetInterceptor:
