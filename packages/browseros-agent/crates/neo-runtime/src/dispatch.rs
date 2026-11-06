@@ -41,6 +41,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tokio::time;
+use tokio::time::Instant;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::click::{self, ClickOptions};
@@ -52,10 +53,9 @@ use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
 use crate::tab_calls;
 use crate::tabs::{PageEntry, Tabs};
 
-/// How long `finish` waits, after creation transactions settle, for the run's calls to end so their
-/// records read final results and deliveries. A task still running past it keeps running and
-/// its record reads `Unfinished`. The wait adds to the run's wall time only when a call is
-/// still in flight at the end.
+/// The shared budget for creation settlement, call draining and closing-state reads after
+/// the realm ends. Tasks still running keep their state and records read `Unfinished`.
+/// Unkept creations close their tabs when their late acknowledgements arrive.
 const RECORDS_WAIT: Duration = Duration::from_secs(1);
 
 /// The most browser calls one run may have unfinished at once. Each holds its params, its call
@@ -288,15 +288,16 @@ impl Dispatcher {
     }
 
     /// Ends the run's calls after the realm is gone: records why the run ended (the first
-    /// reason wins), settles creation writes, then waits up to [`RECORDS_WAIT`] for other tasks and
-    /// returns the records and the dropped-calls summary.
+    /// reason wins), and shares [`RECORDS_WAIT`] across creation settlement, task draining
+    /// and closing-state reads before returning the records and dropped-calls summary.
     pub(crate) async fn finish(&self, reason: RunEnd) -> (Vec<CallRecord>, Option<DroppedCalls>) {
+        let deadline = Instant::now() + RECORDS_WAIT;
         let run = &self.0.run;
         run.end(reason);
-        self.0.tabs.finish_creations().await;
+        let _created = time::timeout_at(deadline, self.0.tabs.finish_creations()).await;
         run.tasks.close();
-        let _waited = time::timeout(RECORDS_WAIT, run.tasks.wait()).await;
-        self.0.tabs.refresh_closing().await;
+        let _waited = time::timeout_at(deadline, run.tasks.wait()).await;
+        let _refreshed = time::timeout_at(deadline, self.0.tabs.refresh_closing()).await;
         self.0.trace.take(reason)
     }
 }
@@ -767,6 +768,44 @@ mod tests {
                 reason: RunEnd::Settled
             },
             "the ended run still cancels the click"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_closing_pages_share_one_finish_budget() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        browser.page.lock().unwrap().tabs.push(json!({
+            "targetId":"other", "url":"about:blank", "windowId":1,
+            "liveBrowserContextId":"profile", "isActive":false,
+        }));
+        let tasks = TaskTracker::new();
+        let run = RunScope::new(
+            Deadline::new(Duration::from_secs(10), CancellationToken::new()),
+            tasks.clone(),
+        );
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            tasks,
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap();
+        tabs.pages().await.unwrap();
+        for target in [PAGE, "other"] {
+            tabs.resolve(&format!("page@{target}"))
+                .unwrap()
+                .request_close();
+        }
+        browser.page.lock().unwrap().tab_info_delay = Some(Duration::from_secs(3));
+        let dispatcher = Dispatcher::new(tabs, run);
+        let started = Instant::now();
+        dispatcher.finish(RunEnd::Settled).await;
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "each closing page received another finish budget: {:?}",
+            started.elapsed()
         );
     }
 

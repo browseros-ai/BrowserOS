@@ -1,7 +1,6 @@
 //! Creation cancellation, registry races, and shared input turns against the fake browser.
 
 #[path = "support/fake_browser.rs"]
-#[expect(dead_code, reason = "shared fake")]
 mod fake_browser;
 
 use std::time::{Duration, Instant};
@@ -193,15 +192,15 @@ async fn tests_that_a_listed_page_forced_click_waits_for_another_runs_trial() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn tests_that_a_create_answer_after_the_normal_drain_is_recorded() {
+async fn tests_that_late_creation_does_not_extend_finish_and_is_closed() {
     let browser = FakeBrowser::start(Replies {
-        create_tab_delay: Some(Duration::from_millis(1500)),
+        create_tab_delay: Some(Duration::from_secs(3)),
         ..Replies::default()
     })
     .await;
-    let outcome = browser
-        .runtime()
-        .await
+    let runtime = browser.runtime().await;
+    let started = Instant::now();
+    let outcome = runtime
         .run(fake_browser::run_request(
             &format!("{WIRE} await call('context@default','newPage');"),
             Duration::from_millis(100),
@@ -210,15 +209,30 @@ async fn tests_that_a_create_answer_after_the_normal_drain_is_recorded() {
         .await;
     assert_eq!(outcome.status, RunStatus::Timeout, "{outcome:?}");
     assert!(
-        outcome
-            .pages
-            .iter()
-            .any(|page| page.id == "new-page-1" && page.created && page.closed),
-        "late creation must be recorded and cleaned up: {outcome:?}"
+        started.elapsed() < Duration::from_millis(1600),
+        "finish extended the 100ms run beyond its cleanup budget: {:?}",
+        started.elapsed()
     );
     assert!(
-        !tab_ids(&browser).contains(&"new-page-1".to_string()),
-        "failed creation left a tab open"
+        tab_ids(&browser).contains(&"new-page-1".to_string()),
+        "the tab exists before its delayed acknowledgement"
+    );
+    assert!(
+        !outcome.pages.iter().any(|page| page.id == "new-page-1"),
+        "an unanswered creation has no known ID yet: {outcome:?}"
+    );
+    let until = Instant::now() + Duration::from_secs(5);
+    while tab_ids(&browser).contains(&"new-page-1".to_string()) {
+        assert!(Instant::now() < until, "the late unkept tab never closed");
+        time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        browser
+            .exchanges()
+            .iter()
+            .any(|exchange| exchange.method() == "Target.closeTarget"
+                && exchange.command["params"]["targetId"] == "new-page-1"),
+        "the owned creation task must close the late tab"
     );
 }
 

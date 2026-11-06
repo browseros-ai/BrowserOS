@@ -3,7 +3,7 @@
 Runs one script in a fresh QuickJS realm from a starting BrowserOS tab. Its context can hand out more pages; `RunOutcome` records the calls and page identities. Every Playwright getter is a live CDP call; nothing is cached. Read `../NEO_STYLE.md` before changing anything here.
 
 - Depends on `browseros-cdp`, `neo-runtime-spec` and ordinary crates only; `browseros-core` is never a dependency.
-- `src/tabs.rs` owns the context scope, first-seen page order, and one lazy session per handed-out tab. `src/tab_calls.rs` handles page/context lifecycle. Pending creations and failed-creation cleanup settle before the outcome; normal tabs survive the run.
+- `src/tabs.rs` owns the context scope, first-seen page order, and one lazy session per handed-out tab. `src/tab_calls.rs` handles page/context lifecycle. Finish shares one bounded drain across creation settlement, tasks, and closing-state reads; late unkept creations close in the background and may be absent from the outcome. Normal tabs survive the run.
 - `src/lib.rs` draws the call path; `src/bridge.rs` is the only door from JS into Rust, and `src/dispatch.rs` the only path a browser call takes.
 - A browser call runs on its own tokio task and keeps its state in the run's trace (`src/progress.rs`), never in the realm, so a call the script never awaits, or one the run ends under, still has its record.
 - `tests/fixtures/replies.json` pins the reply envelope for neo-sdk's tests; rewrite it with `NEO_RUNTIME_WRITE_FIXTURES=1 cargo test -p neo-runtime --lib dispatch` after a deliberate change.

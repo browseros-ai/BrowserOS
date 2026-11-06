@@ -122,6 +122,7 @@ pub struct FakeBrowser {
 /// The page's own state, shared by every connection, as one tab is.
 pub struct Page {
     pub tabs: Vec<Value>,
+    pub tab_info_delay: Option<Duration>,
     next_tab: usize,
     active_window: i64,
     next_window: i64,
@@ -144,6 +145,7 @@ impl Default for Page {
                 "targetId": PAGE, "url": PAGE_URL, "windowId": 1,
                 "liveBrowserContextId": "profile", "isActive": true,
             })],
+            tab_info_delay: None,
             next_tab: 0,
             active_window: 1,
             next_window: 2,
@@ -620,7 +622,7 @@ fn tab_command(
                     || json!({ "error": { "code": -32000, "message": "No target with given id" } }),
                     |tab| json!({ "result": { "tab": tab } }),
                 ),
-                now,
+                page.tab_info_delay.or(now),
             )
         }
         "Browser.getTabs" => {
