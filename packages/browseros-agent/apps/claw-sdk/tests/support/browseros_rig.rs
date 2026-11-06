@@ -8,7 +8,7 @@
 use std::env;
 use std::error::Error;
 use std::fs::{self, File};
-use std::net::{Ipv4Addr, TcpListener};
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -28,6 +28,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UnixStream};
 use tokio::process::{Child, Command};
 use tokio::time;
+
+#[path = "fork_lock.rs"]
+mod fork_lock;
 
 /// What every test here returns.
 pub type TestResult = Result<(), Box<dyn Error>>;
@@ -131,29 +134,30 @@ impl Rig {
         env: &[(&str, &str)],
     ) -> Result<Self, Box<dyn Error>> {
         let dir = tempfile::tempdir()?;
-        let cdp_port = free_port()?;
-        let server_port = free_port()?;
+        let cdp_port = fork_lock::free_port()?;
+        let server_port = fork_lock::free_port()?;
 
         // The flags hosted Neo's image uses minus the display: no bundled server, updater or
         // extensions, which would race claw-sdk for the browser.
         let profile = dir.path().join(PROFILE_DIR);
-        let browser = Command::new(browser)
-            .arg("--headless=new")
-            .arg(format!("--user-data-dir={}", profile.display()))
-            .arg(format!("--remote-debugging-port={cdp_port}"))
-            .args([
-                "--disable-browseros-server",
-                "--disable-browseros-server-updater",
-                "--disable-browseros-extensions",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "about:blank",
-            ])
-            .stdin(Stdio::null())
-            .stdout(log_sink(&dir.path().join("browser.log"))?)
-            .stderr(log_sink(&dir.path().join("browser.log"))?)
-            .kill_on_drop(true)
-            .spawn()?;
+        let browser = fork_lock::spawn(
+            Command::new(browser)
+                .arg("--headless=new")
+                .arg(format!("--user-data-dir={}", profile.display()))
+                .arg(format!("--remote-debugging-port={cdp_port}"))
+                .args([
+                    "--disable-browseros-server",
+                    "--disable-browseros-server-updater",
+                    "--disable-browseros-extensions",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "about:blank",
+                ])
+                .stdin(Stdio::null())
+                .stdout(log_sink(&dir.path().join("browser.log"))?)
+                .stderr(log_sink(&dir.path().join("browser.log"))?)
+                .kill_on_drop(true),
+        )?;
 
         // `execution` is Chromium's `<user-data-dir>/.browseros`, as every real launch writes it:
         // Neo places the browser profile from it, and uploads no file from its disk without it.
@@ -183,12 +187,12 @@ impl Rig {
                 .env("BROWSEROS_CAPSOLVER_API_URL", "http://127.0.0.1:9");
         }
         neo.envs(env.iter().copied());
-        let neo = neo
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(log_sink(&dir.path().join("neo.log"))?)
-            .kill_on_drop(true)
-            .spawn()?;
+        let neo = fork_lock::spawn(
+            neo.stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(log_sink(&dir.path().join("neo.log"))?)
+                .kill_on_drop(true),
+        )?;
         Ok(Self {
             neo,
             _browser: browser,
@@ -316,9 +320,8 @@ impl Rig {
     /// SIGTERM, as Chromium stops it, and the exit code; the trace writer commits on this path.
     pub async fn stop_neo(&mut self) -> Result<Option<i32>, Box<dyn Error>> {
         let pid = self.neo.id().ok_or("claw-sdk exited before SIGTERM")?;
-        let kill = Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .status()
+        let kill = fork_lock::spawn(Command::new("kill").args(["-TERM", &pid.to_string()]))?
+            .wait()
             .await?;
         if !kill.success() {
             return Err(format!("kill -TERM {pid} failed").into());
@@ -400,14 +403,6 @@ fn complete(response: &[u8]) -> bool {
         .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
         .and_then(|(_, length)| length.trim().parse::<usize>().ok())
         .is_some_and(|length| body.len() >= length)
-}
-
-/// A port nothing listens on right now. Another process could take it before its user binds;
-/// that race is accepted for a test.
-fn free_port() -> Result<u16, Box<dyn Error>> {
-    Ok(TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?
-        .local_addr()?
-        .port())
 }
 
 /// A child's output, appended to `path`.

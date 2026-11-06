@@ -14,6 +14,9 @@ use tokio::net::TcpStream;
 use tokio::process::Command;
 use tokio::time::{self, Instant};
 
+#[path = "support/fork_lock.rs"]
+mod fork_lock;
+
 const BIN: &str = env!("CARGO_BIN_EXE_browseros-claw-sdk");
 /// Generous for a debug binary on a loaded CI machine; a passing run takes well under a second.
 const PATIENCE: Duration = Duration::from_secs(30);
@@ -62,14 +65,6 @@ impl Scratch {
     }
 }
 
-/// A port nothing listens on right now. Another process could take it before the binary binds;
-/// that race is accepted for a test.
-fn free_port() -> Result<u16, Box<dyn Error>> {
-    Ok(TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?
-        .local_addr()?
-        .port())
-}
-
 /// `GET path` on the agent port, retried until the binary is listening.
 async fn get_when_up(port: u16, path: &str) -> Result<String, Box<dyn Error>> {
     let deadline = Instant::now() + PATIENCE;
@@ -90,7 +85,9 @@ async fn get_when_up(port: u16, path: &str) -> Result<String, Box<dyn Error>> {
 #[tokio::test]
 async fn version_prints_alone_before_any_state() -> TestResult {
     let scratch = Scratch::new()?;
-    let output = scratch.neo().arg("--version").output().await?;
+    let output = fork_lock::spawn(scratch.neo().arg("--version"))?
+        .wait_with_output()
+        .await?;
 
     assert_eq!(
         output.status.code(),
@@ -128,7 +125,9 @@ async fn usage_and_config_errors_exit_1_and_help_exits_0() -> TestResult {
         &["--config", missing],
     ];
     for args in cases {
-        let output = scratch.neo().args(args).output().await?;
+        let output = fork_lock::spawn(scratch.neo().args(args))?
+            .wait_with_output()
+            .await?;
         assert_eq!(
             output.status.code(),
             Some(1),
@@ -136,7 +135,9 @@ async fn usage_and_config_errors_exit_1_and_help_exits_0() -> TestResult {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let help = scratch.neo().arg("--help").output().await?;
+    let help = fork_lock::spawn(scratch.neo().arg("--help"))?
+        .wait_with_output()
+        .await?;
     assert_eq!(help.status.code(), Some(0), "help is not a failure");
     Ok(())
 }
@@ -149,7 +150,7 @@ async fn a_taken_agent_port_exits_2() -> TestResult {
 
     let output = time::timeout(
         PATIENCE,
-        scratch.neo().arg("--config").arg(&launch).output(),
+        fork_lock::spawn(scratch.neo().arg("--config").arg(&launch))?.wait_with_output(),
     )
     .await??;
     assert_eq!(
@@ -164,14 +165,15 @@ async fn a_taken_agent_port_exits_2() -> TestResult {
 #[tokio::test]
 async fn serves_health_logs_the_start_and_exits_0_on_sigterm() -> TestResult {
     let scratch = Scratch::new()?;
-    let port = free_port()?;
+    let port = fork_lock::free_port()?;
     let launch = scratch.launch_file(port)?;
-    let child = scratch
-        .neo()
-        .arg("--config")
-        .arg(&launch)
-        .env("BROWSERCLAW_CONFIG_FILE", "/etc/neo.toml")
-        .spawn()?;
+    let child = fork_lock::spawn(
+        scratch
+            .neo()
+            .arg("--config")
+            .arg(&launch)
+            .env("BROWSERCLAW_CONFIG_FILE", "/etc/neo.toml"),
+    )?;
 
     let response = get_when_up(port, "/system/health").await?;
     assert!(
@@ -184,9 +186,8 @@ async fn serves_health_logs_the_start_and_exits_0_on_sigterm() -> TestResult {
     );
 
     let pid = child.id().ok_or("the binary exited before SIGTERM")?;
-    let kill = Command::new("kill")
-        .args(["-TERM", &pid.to_string()])
-        .status()
+    let kill = fork_lock::spawn(Command::new("kill").args(["-TERM", &pid.to_string()]))?
+        .wait()
         .await?;
     assert!(kill.success(), "kill -TERM {pid}");
     let output = time::timeout(PATIENCE, child.wait_with_output()).await??;
