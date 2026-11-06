@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use browser::{Fixture, Tab};
 use browseros_cdp::SessionId;
-use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime};
+use neo_runtime::{CallResult, PageId, RunOutcome, RunRequest, RunStatus, Runtime};
 use serde_json::{Value, json};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -149,6 +149,112 @@ async fn tests_that_new_pages_open_in_background_with_distinct_initializers() {
         assert_eq!(info(&tab, target).await["isActive"], false);
     }
     assert_eq!(info(&tab, &tab.target_id).await["isActive"], true);
+    tab.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_sdk_created_pages_keep_their_targets_across_runs() {
+    let Some(binary) = browser::e2e_browser() else {
+        return;
+    };
+    let tab = Tab::open(binary, Fixture::default(), "/sdk-start").await;
+    tab.cdp
+        .send(
+            "Browser.activateTab",
+            json!({"targetId":tab.target_id}),
+            None,
+        )
+        .await
+        .unwrap();
+    tab.evaluate("window.runClicks=0; document.documentElement.addEventListener('click',()=>window.runClicks++);").await;
+    let original = info(&tab, &tab.target_id).await;
+    let initial = tab
+        .cdp
+        .send("Browser.getTabs", json!({}), None)
+        .await
+        .unwrap();
+    let initial_ids: Vec<_> = initial["tabs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["targetId"].clone())
+        .collect();
+    let runtime = Runtime::connect(tab.cdp.clone()).await.unwrap();
+    let request = RunRequest {
+        code: r"
+          const before = context.pages();
+          const first = await context.newPage();
+          const second = await context.newPage();
+          const listed = context.pages();
+          const distinct = first !== second;
+          const bothListed = listed.includes(first) && listed.includes(second);
+          await second.locator('#continue').click();
+          await second.locator('html').click();
+          await second.bringToFront();
+          await first.close();
+          return {beforeCount:before.length, distinct, bothListed, firstClosed:first.isClosed(),
+                  secondListed:context.pages().includes(second), firstListed:context.pages().includes(first),
+                  secondUrl:second.url()};
+        ".to_string(),
+        page: PageId::new(tab.target_id.clone()),
+        timeout: Duration::from_secs(15),
+        cancel: CancellationToken::new(),
+    };
+    let running = tokio::spawn({
+        let runtime = runtime.clone();
+        async move { runtime.run(request).await }
+    });
+    // The missing selector holds the SDK flow while CDP observes both background tabs.
+    let created = two_new_tabs(&tab, &initial_ids).await;
+    assert!(
+        created.iter().all(|p| p["isActive"] == false),
+        "new tabs stole activation: {created:?}"
+    );
+    assert_eq!(info(&tab, &tab.target_id).await["isActive"], true);
+    driver(
+        &tab,
+        created[1]["targetId"].as_str().unwrap(),
+        "<button id='continue'>Continue</button>",
+    )
+    .await;
+    let outcome = running.await.unwrap();
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    assert_eq!(
+        outcome.value,
+        Some(json!({
+            "beforeCount":initial_ids.len(), "distinct":true, "bothListed":true,
+            "firstClosed":true,"secondListed":true,"firstListed":false,"secondUrl":"about:blank",
+        }))
+    );
+    let pages: Vec<_> = outcome.pages.iter().filter(|p| p.created).collect();
+    assert_eq!(pages.len(), 2);
+    let (first, second) = (pages[0], pages[1]);
+    assert_eq!(created[0]["targetId"], first.id);
+    assert_eq!(created[1]["targetId"], second.id);
+    assert!(first.closed && !second.closed, "{pages:?}");
+    assert_sdk_routes(&outcome, &first.id, &second.id);
+    assert!(
+        outcome.calls.iter().all(|c| c.result == CallResult::Ok),
+        "{outcome:?}"
+    );
+    wait_gone(&tab, &first.id).await;
+    assert_eq!(info(&tab, &second.id).await["isActive"], true);
+    assert_eq!(info(&tab, &tab.target_id).await["url"], original["url"]);
+    assert_eq!(tab.evaluate("window.runClicks").await, 0);
+
+    let next=runtime.run(RunRequest {
+        code:"await page.locator('html').click(); return {url:page.url(),closed:page.isClosed()};".to_string(),
+        page:PageId::new(second.id.clone()), timeout:Duration::from_secs(10), cancel:CancellationToken::new(),
+    }).await;
+    assert_eq!(next.status, RunStatus::Ok, "{next:?}");
+    assert_eq!(
+        next.value,
+        Some(json!({"url":"about:blank","closed":false}))
+    );
+    assert_eq!(next.calls.len(), 1);
+    assert_eq!(next.calls[0].guid, format!("frame@{}", second.id));
+    assert_eq!(next.calls[0].result, CallResult::Ok);
+    assert_eq!(tab.evaluate("window.runClicks").await, 0);
     tab.close().await;
 }
 
@@ -576,4 +682,53 @@ async fn tests_that_new_page_recreates_an_inactive_window_after_the_last_tab_clo
         "{outcome:?}"
     );
     tab.close().await;
+}
+
+/// Waits for both initial documents to load before the driver adds the barrier's button.
+async fn two_new_tabs(tab: &Tab, initial_ids: &[Value]) -> Vec<Value> {
+    let until = Instant::now() + Duration::from_secs(10);
+    loop {
+        let tabs = tab
+            .cdp
+            .send("Browser.getTabs", json!({}), None)
+            .await
+            .unwrap_or_else(|error| panic!("list acceptance tabs: {error}"));
+        let fresh: Vec<_> = tabs["tabs"]
+            .as_array()
+            .unwrap_or_else(|| panic!("missing tabs in {tabs}"))
+            .iter()
+            .filter(|page| !initial_ids.contains(&page["targetId"]))
+            .cloned()
+            .collect();
+        if fresh.len() == 2 && fresh.iter().all(|page| page["isLoading"] == false) {
+            return fresh;
+        }
+        assert!(
+            Instant::now() < until,
+            "two SDK tabs never appeared: {tabs}"
+        );
+        time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+fn assert_sdk_routes(outcome: &RunOutcome, first: &str, second: &str) {
+    let routed: Vec<_> = outcome
+        .calls
+        .iter()
+        .filter(|call| {
+            call.params["selector"] == "html"
+                || call.method == "bringToFront"
+                || call.method == "close"
+        })
+        .map(|call| (call.method.clone(), call.guid.clone()))
+        .collect();
+    assert_eq!(
+        routed,
+        vec![
+            ("click".to_string(), format!("frame@{second}")),
+            ("bringToFront".to_string(), format!("page@{second}")),
+            ("close".to_string(), format!("page@{first}")),
+        ],
+        "SDK objects must route their calls to the returned page's target"
+    );
 }
