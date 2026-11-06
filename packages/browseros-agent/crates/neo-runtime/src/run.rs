@@ -1,4 +1,4 @@
-//! The data a caller hands `Runtime::run` and gets back: one agent script, one tab, one outcome.
+//! A script, its starting tab, and the outcome with every created or handed-out page.
 
 use std::time::Duration;
 
@@ -25,14 +25,15 @@ impl PageId {
     }
 }
 
-/// One script to run against one tab.
+/// One script to start from a tab; its context may hand it additional pages.
 #[derive(Debug, Clone)]
 pub struct RunRequest {
     /// The body of an async function that receives `page` and `context`, as in a Playwright
     /// script: it may `await` and `return`.
     pub code: String,
     pub page: PageId,
-    /// Wall-clock budget for the whole run, from the tab check to the script's return.
+    /// Wall-clock budget from the tab check to the script's return. Cleanup and pending
+    /// creation acknowledgements may outlive it so the outcome accounts for browser writes.
     pub timeout: Duration,
     /// Cancelling ends the run with [`RunStatus::Cancelled`] at the script's next instruction,
     /// timer or getter.
@@ -106,8 +107,9 @@ pub struct RunOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<RunError>,
     pub calls: Vec<CallRecord>,
-    /// Pages handed to the script, in first-seen order, with the run page first. IDs can be
-    /// passed to a later `RunRequest`; tabs themselves outlive runs.
+    /// Pages handed to the script or created by the run, in first-seen order with the run
+    /// page first. Failed creations stay recorded after cleanup. IDs can be passed to a
+    /// later `RunRequest`; successful tabs outlive runs.
     pub pages: Vec<RunPage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calls_dropped: Option<DroppedCalls>,
@@ -173,7 +175,7 @@ impl RunOutcome {
     }
 }
 
-/// A page identity the run handed to its script, and the lifecycle changes this run made.
+/// A page identity handed out or created by the run, and the lifecycle changes it made.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunPage {
