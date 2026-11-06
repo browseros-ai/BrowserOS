@@ -1,6 +1,6 @@
 /**
  * The glue table: the page functions Playwright's server sends to the page as source text
- * (`server/frameSelectors.ts`, `frames.ts`, `page.ts`), written once as named TypeScript
+ * (`server/frameSelectors.ts`, `frames.ts`, `page.ts`, `dom.ts`), written once as named TypeScript
  * functions over Playwright's real, unchanged `InjectedScript`. neo-runtime calls each by name
  * through `dist/call.js`, with the JSON params and then the handles the spec declares
  * (`neo_runtime_spec::InjectedCall` documents the convention).
@@ -14,9 +14,10 @@
  * Import rule (Playwright's DEPS.list, enforced by build.ts): this file imports vendored TYPES
  * only; the one value import of vendored code is `install.ts`'s `InjectedScript` constructor.
  *
- * Every function reports the page at one instant. None retries, waits on a selector or owns a
- * deadline: neo-runtime does. Each mirrors Playwright's page-side code in behaviour, with no
- * extra checks, because Neo's results and errors are compared with Playwright's.
+ * Every function reports the page at one instant, except `checkElementStates`, which awaits about
+ * two animation frames for `stable`. None retries, waits on a selector or owns a deadline:
+ * neo-runtime does. Each mirrors Playwright's page-side code in behaviour, with no extra checks,
+ * because Neo's results, errors and call logs are compared with Playwright's.
  */
 
 import type {
@@ -24,24 +25,33 @@ import type {
   AriaRole,
   InjectedApi,
 } from '@browseros/neo-runtime-spec/injected'
-import type { InjectedScript } from '../vendor/playwright/injected/src/injectedScript'
+import type {
+  HitTargetInterceptionResult,
+  InjectedScript,
+} from '../vendor/playwright/injected/src/injectedScript'
 import type { AriaNodeJSON } from '../vendor/playwright/isomorphic/ariaSnapshot'
 
-/** The Playwright page types behind the spec's named handle kinds; it names none yet. */
-type Handles = Record<never, never>
+/** The Playwright page types behind the spec's named handle kinds. */
+type Handles = { HitTargetInterceptor: HitTargetInterceptionResult }
 
 /**
- * Parses one frame chunk, queries the document, and applies Playwright's strict mode. A strict
- * violation throws Playwright's stackless error, so CDP's `exception.description` reads
- * `Error: strict mode violation: …`, as Playwright reports it.
+ * Parses one frame chunk, queries the document, and applies Playwright's checks in Playwright's
+ * order (`frameSelectors.ts` `_callOnSelectorInternal`): mark the matches when an action asks,
+ * reject a deprecated selector, then strict mode. A strict violation throws Playwright's
+ * stackless error, so CDP's `exception.description` reads `Error: strict mode violation: …`, as
+ * Playwright reports it.
  */
 function query(
   injected: InjectedScript,
   selector: string,
   strict: boolean,
+  { markTargets = false } = {},
 ): Element[] {
   const parsed = injected.parseSelector(selector)
   const elements = injected.querySelectorAll(parsed, document)
+  // Before the checks, as in Playwright: the page's own listeners see every match marked even
+  // when strict mode then fails the call.
+  if (markTargets) injected.markTargetElements(new Set(elements))
   injected.checkDeprecatedSelectorUsage(parsed, elements)
   if (strict && elements.length > 1)
     throw injected.strictModeViolationError(parsed, elements)
@@ -85,6 +95,65 @@ export const glue = {
     }
     return { element: elements[0] }
   },
+
+  describeSelector: (injected, { selector }) => {
+    const locator = injected.utils.asLocator('javascript', selector)
+    try {
+      injected.parseSelector(selector)
+      return { locator }
+    } catch (error) {
+      return { locator, invalidSelector: error.message }
+    }
+  },
+
+  /** The page callback of `frames.ts` `_retryWithProgressIfNotConnected`, minus its log text. */
+  resolve: (injected, { selector, strict }) => {
+    const elements = query(injected, selector, strict, { markTargets: true })
+    const [element] = elements
+    return {
+      element,
+      count: elements.length,
+      preview: element ? injected.previewNode(element) : undefined,
+    }
+  },
+
+  checkElementStates: async (injected, { states, frameVisible }, element) => {
+    const outcome = await injected.checkElementStates(
+      element,
+      states,
+      frameVisible,
+    )
+    return outcome === undefined ? {} : { outcome }
+  },
+
+  /** `dom.ts` `doScrollIntoView`'s page function, for loop B's forced scroll options. */
+  scrollIntoView: (_injected, { block, inline }, element) => {
+    if (element.nodeType === Node.ELEMENT_NODE)
+      element.scrollIntoView({ block, inline, behavior: 'instant' })
+    return {}
+  },
+
+  viewportSize: () => ({ width: innerWidth, height: innerHeight }),
+
+  getElementBorderWidth: (injected, _params, element) =>
+    injected.getElementBorderWidth(element),
+
+  setupHitTargetInterceptor: (
+    injected,
+    { hitPoint, blockAllEvents },
+    element,
+  ) => ({
+    outcome: injected.setupHitTargetInterceptor(
+      element,
+      'mouse',
+      hitPoint,
+      blockAllEvents,
+    ),
+  }),
+
+  stopHitTargetInterceptor: (_injected, _params, interceptor) => ({
+    outcome: interceptor.stop(),
+  }),
 } satisfies InjectedApi<InjectedScript, Handles>
 
 // Playwright's AriaNodeJSON reaches Rust unchanged, but TypeScript lets a structurally wider

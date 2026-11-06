@@ -118,6 +118,187 @@ Injected:
         # nothing matched yet.
         element: Element?
 
+    # Names a selector the way Playwright's call log does, for a click's first log line
+    # `waiting for <locator>`, and reports a selector the page cannot parse. Playwright computes
+    # both in Node (`asLocator`, `Selectors.parseSelector`); Neo asks the injected script's own
+    # copies, `InjectedScript.utils.asLocator` and `InjectedScript.parseSelector`.
+    describeSelector:
+      internal: true
+      parameters:
+        # The whole selector string the client sent.
+        selector: string
+      returns:
+        # `asLocator('javascript', selector)`, which falls back to the raw selector when it does
+        # not parse.
+        locator: string
+        # The parse error's message, with no `Error: ` prefix and no stack. Absent when the
+        # selector parses.
+        invalidSelector: string?
+
+    # One resolution of Playwright's click (`frames.ts` `_retryWithProgressIfNotConnected`):
+    # parses and queries the selector in the document, marks every match with
+    # `markTargetElements`, rejects deprecated selectors, and throws Playwright's strict mode
+    # violation when `strict` and more than one element matched. neo-runtime owns retrying.
+    resolve:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+      returns:
+        # The first match, which stays in the page in the caller's object group. Absent when
+        # nothing matched; neo-runtime then polls again with Playwright's backoff.
+        element: Element?
+        # How many elements matched, for `locator resolved to N elements. Proceeding with the
+        # first one: …` on a non-strict click.
+        count: int
+        # `InjectedScript.previewNode` of the first match, for `locator resolved to …`.
+        preview: string?
+
+    # `InjectedScript.checkElementStates`. It awaits about two animation frames for `stable`,
+    # the one short in-page wait a click allows; neo-runtime keeps the deadline.
+    checkElementStates:
+      internal: true
+      parameters:
+        element: Element
+        states:
+          type: array
+          items: ElementState
+        # Neo resolves in the main frame only, so neo-runtime always sends `true`.
+        frameVisible: boolean
+      returns:
+        # Absent when every state holds.
+        outcome: ElementStatesOutcome?
+
+    # `element.scrollIntoView({block, inline, behavior: 'instant'})` on an element node, the
+    # page-side scroll of Playwright's loop-B retries 1 to 3 (`dom.ts` `doScrollIntoView`),
+    # exactly as Playwright runs it: no connectedness check, which the next geometry read
+    # catches. Retry 0 scrolls with CDP `DOM.scrollIntoViewIfNeeded` instead.
+    scrollIntoView:
+      internal: true
+      parameters:
+        element: Element
+        block: ScrollAlignment
+        inline: ScrollAlignment
+
+    # The main frame's `innerWidth` and `innerHeight`, which clip the content quads to the
+    # viewport (`dom.ts` `_clickablePoint`).
+    viewportSize:
+      internal: true
+      returns:
+        width: int
+        height: int
+
+    # `InjectedScript.getElementBorderWidth`, for a click at `position` (`dom.ts` `_offsetPoint`).
+    getElementBorderWidth:
+      internal: true
+      parameters:
+        element: Element
+      returns:
+        left: float
+        top: float
+
+    # `InjectedScript.setupHitTargetInterceptor(element, 'mouse', hitPoint, blockAllEvents)`.
+    # It retargets to the closest button or link, checks the hit point once, and arms the
+    # injected script's single hit-target slot for the coming mouse events.
+    setupHitTargetInterceptor:
+      internal: true
+      parameters:
+        element: Element
+        # The click point; absent skips the preliminary hit check.
+        hitPoint: Point?
+        # Playwright's `trial`: block every intercepted event, hit or not.
+        blockAllEvents: boolean
+      returns:
+        outcome: HitTargetSetup
+
+    # Calls the armed interceptor's `stop()`, which disarms the slot and reports what the first
+    # trusted mouse event hit (`done` when it hit the element or no event arrived).
+    stopHitTargetInterceptor:
+      internal: true
+      parameters:
+        interceptor: HitTargetInterceptor
+      returns:
+        outcome: HitTargetOutcome
+
+# The `{stop}` object `setupHitTargetInterceptor` arms: Playwright's
+# `HitTargetInterceptionResult`, bound in the glue's `satisfies` clause.
+HitTargetInterceptor:
+  type: handle
+
+# Playwright's `ElementState` (`injectedScript.ts`), every value, so the glue's `missingState`
+# result type-checks against Playwright's own union.
+ElementState:
+  type: enum
+  literals:
+  - visible
+  - hidden
+  - enabled
+  - disabled
+  - editable
+  - checked
+  - unchecked
+  - indeterminate
+  - stable
+  - non-inert
+
+# The element was detached from its document, or its document was replaced.
+NotConnected:
+  type: enum
+  literals:
+  - error:notconnected
+
+# What `checkElementStates` reports when the element is not ready.
+ElementStatesOutcome:
+  type: union
+  members:
+    notConnected: NotConnected
+    missing: MissingState
+
+# The first state that does not hold, in Playwright's order, with `stable` first.
+MissingState:
+  type: object
+  properties:
+    missingState: ElementState
+
+# The `block` and `inline` of `scrollIntoView`; Playwright cycles through `end`, `center` and
+# `start`.
+ScrollAlignment:
+  type: enum
+  literals:
+  - start
+  - center
+  - end
+  - nearest
+
+# Not armed, or armed. Not armed is a string: `error:notconnected`, or the `previewNode` of the
+# element covering the point (`<div id="overlay"></div>`), exactly as Playwright's
+# `setupHitTargetInterceptor` returns it; Playwright's `dom.ts` compares the same literal.
+HitTargetSetup:
+  type: union
+  members:
+    description: string
+    armed: HitTargetInterceptor
+
+# What `stop()` reports.
+HitTargetOutcome:
+  type: union
+  members:
+    done: HitTargetDone
+    blocked: HitTargetBlocked
+
+# The first trusted mouse event hit the element, or no event arrived.
+HitTargetDone:
+  type: enum
+  literals:
+  - done
+
+# The first trusted mouse event hit another element. The interceptor blocked it and every later
+# event of the action.
+HitTargetBlocked:
+  type: object
+  properties:
+    hitTargetDescription: string
+
 # The first matching element's text.
 TextMatch:
   type: object

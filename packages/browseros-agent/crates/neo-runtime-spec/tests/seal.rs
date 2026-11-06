@@ -4,8 +4,13 @@
 //! `neo-runtime` reaches them, and that each result decodes the way its spec says it crosses.
 
 use neo_runtime_spec::injected::{
-    InjectedAriaSnapshotParams, InjectedFrameOwnerParams, InjectedFrameOwnerResult,
-    InjectedTextContentParams, InjectedTitleParams, InjectedTitleResult,
+    ElementState, ElementStatesOutcome, HitTargetBlocked, HitTargetOutcome, HitTargetSetup,
+    InjectedAriaSnapshotParams, InjectedCheckElementStatesParams, InjectedCheckElementStatesResult,
+    InjectedFrameOwnerParams, InjectedFrameOwnerResult, InjectedResolveResult,
+    InjectedSetupHitTargetInterceptorParams, InjectedSetupHitTargetInterceptorResult,
+    InjectedStopHitTargetInterceptorParams, InjectedStopHitTargetInterceptorResult,
+    InjectedTextContentParams, InjectedTitleParams, InjectedTitleResult, MissingState,
+    NotConnected, Point,
 };
 use neo_runtime_spec::serve::FrameTitleParams;
 use neo_runtime_spec::{
@@ -175,4 +180,150 @@ fn a_handle_checks_its_kind_and_compares_by_object_id() {
     let copy = element.clone();
     assert_eq!(copy, element);
     assert_eq!(format!("{copy:?}"), "Handle<Element>(\"-9083572.1.4\")");
+}
+
+/// An element handle, as `resolve` hands one out.
+fn element(id: &str) -> Option<Handle<Element>> {
+    Handle::new(HandleId::new(id.to_owned()), Some("node"))
+}
+
+#[test]
+fn a_click_resolves_one_element_and_passes_it_by_handle() {
+    let resolved = InjectedResolveResult::from_properties(properties(
+        json!({"count": 2, "preview": "<button>Submit</button>"}),
+        &[("element", "-7.1.9", Some("node"))],
+    ))
+    .unwrap();
+    assert_eq!(
+        resolved,
+        InjectedResolveResult {
+            element: element("-7.1.9"),
+            count: 2,
+            preview: Some("<button>Submit</button>".into()),
+        }
+    );
+    let missing_count = InjectedResolveResult::from_properties(Properties::default());
+    assert_eq!(
+        missing_count.unwrap_err().to_string(),
+        "page call resolve returned no `count`"
+    );
+
+    // The handle crosses as an argument after the params, never inside them.
+    let states = InjectedCheckElementStatesParams {
+        element: resolved.element.expect("resolve found the element"),
+        states: vec![
+            ElementState::Visible,
+            ElementState::Stable,
+            ElementState::NonInert,
+        ],
+        frame_visible: true,
+    };
+    assert_eq!(
+        page_call(&states).unwrap(),
+        (
+            "checkElementStates",
+            json!({"states": ["visible", "stable", "non-inert"], "frameVisible": true}),
+            vec!["-7.1.9".to_owned()],
+            true
+        )
+    );
+    let not_ready = InjectedCheckElementStatesResult::from_value(
+        json!({"outcome": {"missingState": "stable"}}),
+    )
+    .unwrap();
+    let missing = MissingState {
+        missing_state: ElementState::Stable,
+    };
+    assert_eq!(
+        not_ready.outcome,
+        Some(ElementStatesOutcome::Missing(Box::new(missing)))
+    );
+    let detached =
+        InjectedCheckElementStatesResult::from_value(json!({"outcome": "error:notconnected"}))
+            .unwrap();
+    assert_eq!(
+        detached.outcome,
+        Some(ElementStatesOutcome::NotConnected(
+            NotConnected::ErrorNotconnected
+        ))
+    );
+}
+
+#[test]
+fn an_armed_interceptor_is_the_handle_its_stop_consumes() {
+    let setup = InjectedSetupHitTargetInterceptorParams {
+        element: element("-7.1.9").unwrap(),
+        hit_point: Some(Point { x: 40.5, y: 18.0 }),
+        block_all_events: false,
+    };
+    assert_eq!(
+        page_call(&setup).unwrap(),
+        (
+            "setupHitTargetInterceptor",
+            json!({"hitPoint": {"x": 40.5, "y": 18.0}, "blockAllEvents": false}),
+            vec!["-7.1.9".to_owned()],
+            false
+        )
+    );
+
+    // Armed: `{stop}` is a plain object, which CDP reports with no subtype.
+    let armed = InjectedSetupHitTargetInterceptorResult::from_properties(properties(
+        json!({}),
+        &[("outcome", "-7.1.12", None)],
+    ))
+    .unwrap();
+    let HitTargetSetup::Armed(interceptor) = armed.outcome else {
+        panic!("an object outcome is the armed interceptor: {armed:?}");
+    };
+    let stop = InjectedStopHitTargetInterceptorParams { interceptor };
+    assert_eq!(
+        page_call(&stop).unwrap(),
+        (
+            "stopHitTargetInterceptor",
+            json!({}),
+            vec!["-7.1.12".to_owned()],
+            true
+        )
+    );
+    let blocked = InjectedStopHitTargetInterceptorResult::from_value(
+        json!({"outcome": {"hitTargetDescription": "<div id=\"overlay\"></div>"}}),
+    )
+    .unwrap();
+    let overlay = HitTargetBlocked {
+        hit_target_description: "<div id=\"overlay\"></div>".into(),
+    };
+    assert_eq!(
+        blocked.outcome,
+        HitTargetOutcome::Blocked(Box::new(overlay))
+    );
+
+    // Not armed: the description of what covers the point arrives as a value.
+    let covered = InjectedSetupHitTargetInterceptorResult::from_properties(properties(
+        json!({"outcome": "<div id=\"overlay\"></div>"}),
+        &[],
+    ))
+    .unwrap();
+    assert_eq!(
+        covered.outcome,
+        HitTargetSetup::Description("<div id=\"overlay\"></div>".into())
+    );
+    // An element is not an interceptor, even though both are page objects.
+    let element_outcome = InjectedSetupHitTargetInterceptorResult::from_properties(properties(
+        json!({}),
+        &[("outcome", "-7.1.9", Some("node"))],
+    ));
+    assert_eq!(
+        element_outcome.unwrap_err().to_string(),
+        "page call setupHitTargetInterceptor returned `outcome` as a page object of subtype \
+         Some(\"node\"), not a `HitTargetInterceptor` (subtype None)"
+    );
+    let number = InjectedSetupHitTargetInterceptorResult::from_properties(properties(
+        json!({"outcome": 3}),
+        &[],
+    ));
+    assert_eq!(
+        number.unwrap_err().to_string(),
+        "page call setupHitTargetInterceptor returned `outcome` as the value 3, not a string or a \
+         `HitTargetInterceptor` page object"
+    );
 }

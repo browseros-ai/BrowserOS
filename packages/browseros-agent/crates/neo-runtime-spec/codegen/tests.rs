@@ -738,8 +738,9 @@ fn handles_cross_as_arguments_and_properties() {
     for expected in [
         // A handle argument is skipped by serde and listed by `handles()`, in spec order.
         "#[derive(Clone, Debug, PartialEq, Eq, Serialize)]\npub struct InjectedCheckParams {\n    \
-         #[serde(skip)]\n    pub element: Handle<Element>,\n    #[serde(rename = \"force\")]\n    \
-         pub force: bool,\n}",
+         /// Not in the JSON params: crosses as a `Runtime.callFunctionOn` argument after them, in \
+         spec\n    /// order.\n    #[serde(skip)]\n    pub element: Handle<Element>,\n    \
+         #[serde(rename = \"force\")]\n    pub force: bool,\n}",
         "    fn handles(&self) -> Vec<&HandleId> {\n        vec![self.element.id()]\n    }",
         "    fn handles(&self) -> Vec<&HandleId> {\n        vec![self.interceptor.id()]\n    }",
         // A result that holds a handle is decoded property by property.

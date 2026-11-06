@@ -1,6 +1,7 @@
 // Proves the BUILT bundle works where neo-runtime will use it, before any Rust calls it:
 // dist/install.js constructs Playwright's InjectedScript in an isolated world of a real
-// BrowserOS neo tab, the glue answers through dist/call.js, and a second CDP session reuses the
+// BrowserOS neo tab, the glue answers through dist/call.js (handles passed as arguments, and
+// results that hold one read with Runtime.getProperties), and a second CDP session reuses the
 // install through dist/attach.js. Rust's strict decode of every result is the shape oracle once
 // neo-runtime calls the page; these checks pin what that decode will see.
 //
@@ -151,6 +152,75 @@ test('the built bundle installs once per document and answers through call.js', 
       'Error: Selector "#lone" resolved to <p id="lone">Only one</p>, <iframe> was expected',
     )
 
+    const lone = await handleCall(cdp, sessionA, glue, 'resolve', {
+      selector: '#lone',
+      strict: true,
+    })
+    assert.equal(lone.element.subtype, 'node', 'resolve returns the element')
+    assert.deepEqual(
+      [lone.count.value, lone.preview.value],
+      [1, '<p id="lone">Only one</p>'],
+    )
+    const buttons = await handleCall(cdp, sessionA, glue, 'resolve', {
+      selector: 'internal:role=button[name="Submit"i]',
+      strict: false,
+    })
+    assert.deepEqual(
+      [buttons.count.value, buttons.preview.value],
+      [2, '<button>Submit</button>'],
+      'a non-strict resolve counts every match and previews the first',
+    )
+
+    const states = (wanted) =>
+      byValueCall(
+        cdp,
+        sessionA,
+        glue,
+        'checkElementStates',
+        { states: wanted, frameVisible: true },
+        [lone.element],
+      )
+    assert.deepEqual(
+      await states(['visible', 'stable']),
+      {},
+      'the element passed as a handle is visible and stable',
+    )
+    assert.deepEqual(await states(['hidden']), {
+      outcome: { missingState: 'hidden' },
+    })
+
+    const center = await cdp.send(
+      'Runtime.callFunctionOn',
+      {
+        objectId: lone.element.objectId,
+        functionDeclaration:
+          'function () { const r = this.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } }',
+        returnByValue: true,
+      },
+      sessionA,
+    )
+    const armed = await handleCall(
+      cdp,
+      sessionA,
+      glue,
+      'setupHitTargetInterceptor',
+      { hitPoint: center.result.value, blockAllEvents: false },
+      [lone.element],
+    )
+    assert.equal(armed.outcome.type, 'object', 'the interceptor is armed')
+    assert.equal(
+      armed.outcome.subtype,
+      undefined,
+      'a plain object has no CDP subtype, which neo-runtime checks',
+    )
+    assert.deepEqual(
+      await byValueCall(cdp, sessionA, glue, 'stopHitTargetInterceptor', {}, [
+        armed.outcome,
+      ]),
+      { outcome: 'done' },
+      'with no mouse event, stop reports done',
+    )
+
     const mainWorld = await cdp.send(
       'Runtime.evaluate',
       { expression: 'typeof globalThis.__neo_injected__', returnByValue: true },
@@ -236,6 +306,31 @@ async function pageCall(cdp, sessionId, glue, name, params) {
   if (reply.exceptionDetails)
     return { exception: reply.exceptionDetails.exception }
   return { value: reply.result.value }
+}
+
+/** A page call whose result crosses by value, with handle arguments after the params. */
+async function byValueCall(cdp, sessionId, glue, name, params, handles) {
+  const reply = await cdp.send(
+    'Runtime.callFunctionOn',
+    {
+      objectId: glue.objectId,
+      functionDeclaration: bundle.call,
+      arguments: [
+        { value: name },
+        { value: params },
+        ...handles.map((handle) => ({ objectId: handle.objectId })),
+      ],
+      returnByValue: true,
+      awaitPromise: true,
+    },
+    sessionId,
+  )
+  assert.equal(
+    reply.exceptionDetails,
+    undefined,
+    JSON.stringify(reply.exceptionDetails),
+  )
+  return reply.result.value
 }
 
 /**

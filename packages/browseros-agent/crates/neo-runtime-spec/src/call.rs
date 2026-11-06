@@ -222,6 +222,14 @@ impl Properties {
     }
 }
 
+/// Decodes a primitive property, for a generated decode.
+pub(crate) fn decode_property<T: DeserializeOwned>(property: Property) -> Result<T, String> {
+    match property {
+        Property::Value(value) => serde_json::from_value(value).map_err(|error| error.to_string()),
+        Property::Object(..) => Err("a page object, not a value".to_owned()),
+    }
+}
+
 /// Decodes a by-value result, for a generated [`PageResult::from_value`].
 pub(crate) fn decode_json<T: DeserializeOwned>(
     call: &'static str,
@@ -285,6 +293,18 @@ impl HandleKind for Element {
 ///
 /// Cloning copies the name, not the object: every copy dies when the object group holding the
 /// object is released, so the holder of the group decides how long every handle lives.
+///
+/// The kind is part of the type, so a handle of one kind cannot reach a call that takes another:
+///
+/// ```compile_fail,E0308
+/// use neo_runtime_spec::injected::{HitTargetInterceptor, InjectedGetElementBorderWidthParams};
+/// use neo_runtime_spec::{Handle, HandleId};
+///
+/// let interceptor = Handle::<HitTargetInterceptor>::new(HandleId::new("-1.1.1".into()), None);
+/// let params = InjectedGetElementBorderWidthParams {
+///     element: interceptor.unwrap(),
+/// };
+/// ```
 pub struct Handle<K: HandleKind> {
     id: HandleId,
     kind: PhantomData<K>,

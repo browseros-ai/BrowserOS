@@ -10,68 +10,96 @@ import type {
 import type { FrameGotoParams, FrameGotoResult } from '../../ts/serve'
 import type { InjectedScript } from './injected-script'
 
-/** The spec names no handle kinds besides the built-in `Element` yet. */
-type Handles = Record<never, never>
+/** The named handle kinds, bound as the real glue binds them to Playwright's page types. */
+type Handles = {
+  HitTargetInterceptor: {
+    stop: () => 'done' | { hitTargetDescription: string }
+  }
+}
 type Api = InjectedApi<InjectedScript, Handles>
 
-export const nullText = {
+/** A table that satisfies the contract; each case below breaks one entry of it. */
+const valid = {
   title: () => ({ value: document.title }),
+  textContent: () => ({}),
+  ariaSnapshot: () => ({}),
+  frameOwner: () => ({}),
+  describeSelector: (_injected, { selector }) => ({ locator: selector }),
+  resolve: () => ({ count: 0 }),
+  checkElementStates: () => ({}),
+  scrollIntoView: () => ({}),
+  viewportSize: () => ({ width: 1280, height: 720 }),
+  getElementBorderWidth: () => ({ left: 0, top: 0 }),
+  setupHitTargetInterceptor: () => ({ outcome: 'error:notconnected' }),
+  stopHitTargetInterceptor: (_injected, _params, interceptor) => ({
+    outcome: interceptor.stop(),
+  }),
+} satisfies Api
+
+export const nullText = {
+  ...valid,
   textContent: () => ({
     // @ts-expect-error Node.textContent may be null, and the contract's text is a string.
     matched: { value: (document as Node).textContent, preview: '' },
   }),
-  ariaSnapshot: () => ({}),
-  frameOwner: () => ({}),
 } satisfies Api
 
-export const missingCall = {
-  title: () => ({ value: document.title }),
-  textContent: () => ({}),
-  ariaSnapshot: () => ({}),
-  // @ts-expect-error frameOwner is missing.
-} satisfies Api
+const { frameOwner: _frameOwner, ...withoutFrameOwner } = valid
+// @ts-expect-error frameOwner is missing.
+export const missingCall = withoutFrameOwner satisfies Api
 
 export const extraCall = {
-  title: () => ({ value: document.title }),
-  textContent: () => ({}),
-  ariaSnapshot: () => ({}),
-  frameOwner: () => ({}),
+  ...valid,
   // @ts-expect-error click is not a page call the contract declares.
   click: () => ({}),
 } satisfies Api
 
 export const valueForElement = {
-  title: () => ({ value: document.title }),
-  textContent: () => ({}),
-  ariaSnapshot: () => ({}),
+  ...valid,
   // @ts-expect-error frameOwner returns the element itself, not a selector for it.
   frameOwner: () => ({ element: 'iframe#main' }),
 } satisfies Api
 
 export const unexpectedHandle = {
-  title: () => ({ value: document.title }),
-  textContent: () => ({}),
-  ariaSnapshot: () => ({}),
+  ...valid,
   // @ts-expect-error frameOwner takes no handle argument: it finds its element by selector.
   frameOwner: (_injected, _params, element: Element) => ({ element }),
 } satisfies Api
 
+export const elementAsInterceptor = {
+  ...valid,
+  // @ts-expect-error stopHitTargetInterceptor stops the interceptor that setup armed, not an element.
+  stopHitTargetInterceptor: (_injected, _params, interceptor: Element) => ({
+    outcome: interceptor.isConnected ? 'done' : 'done',
+  }),
+} satisfies Api
+
+export const elementAsArmed = {
+  ...valid,
+  setupHitTargetInterceptor: (_injected, _params, element) => ({
+    // @ts-expect-error an armed outcome is the interceptor, not the element it guards.
+    outcome: element,
+  }),
+} satisfies Api
+
+export const unknownState = {
+  ...valid,
+  // @ts-expect-error a missing state is one of Playwright's element states.
+  checkElementStates: () => ({ outcome: { missingState: 'focused' } }),
+} satisfies Api
+
 export const iframeRecord = {
-  title: () => ({ value: document.title }),
-  textContent: () => ({}),
+  ...valid,
   // @ts-expect-error iframes is a list, not Playwright's iframeDepths record.
   ariaSnapshot: () => ({ snapshot: { nodes: [], iframes: { e1: 0 } } }),
-  frameOwner: () => ({}),
 } satisfies Api
 
 export const unknownParam = {
-  title: () => ({ value: document.title }),
+  ...valid,
   textContent: (_injected, params) => ({
     // @ts-expect-error textContent's params have no selectors list.
     matched: { value: params.selectors[0], preview: '' },
   }),
-  ariaSnapshot: () => ({}),
-  frameOwner: () => ({}),
 } satisfies Api
 
 // @ts-expect-error Playwright has no "spaceship" role.

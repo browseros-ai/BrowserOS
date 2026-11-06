@@ -925,12 +925,19 @@ impl<'protocol> Builder<'protocol> {
                 }
                 _ => self.lower(&prop.ty, &site, &at)?,
             };
-            let note = self.unimplemented(&prop.ty).map(|interface| {
-                format!(
-                    "Always absent: `{interface}` is not a key of `spec/serve.yml`, so Neo creates \
-                     no `{interface}` objects."
-                )
-            });
+            let note = match (place, &ty) {
+                (Place::PageParams, FieldType::Handle(_)) => Some(
+                    "Not in the JSON params: crosses as a `Runtime.callFunctionOn` argument after \
+                     them, in spec order."
+                        .to_owned(),
+                ),
+                _ => self.unimplemented(&prop.ty).map(|interface| {
+                    format!(
+                        "Always absent: `{interface}` is not a key of `spec/serve.yml`, so Neo \
+                         creates no `{interface}` objects."
+                    )
+                }),
+            };
             let doc = paragraphs(&[&prop.doc, note.as_deref().unwrap_or_default()]);
             fields.push(Field {
                 wire: prop.name.clone(),
