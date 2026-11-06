@@ -16,6 +16,20 @@ serde_json.workspace = true
 [build-dependencies]
 sha2.workspace = true
 
+# Only the translator (the `codegen` example) and tests parse YAML, so consumers of the crate
+# never compile a YAML parser.
+[dev-dependencies]
+serde-saphyr.workspace = true
+sha2.workspace = true
+
+# The translator: `cargo run -p neo-runtime-spec --example codegen [-- --check]`. An example
+# may use dev-dependencies, and `test = true` makes plain `cargo test` run its tests, including
+# the drift check, so CI needs no extra job.
+[[example]]
+name = "codegen"
+path = "codegen/main.rs"
+test = true
+
 [lints.rust]
 unsafe_code = "forbid"
 

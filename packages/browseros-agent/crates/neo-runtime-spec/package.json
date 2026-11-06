@@ -5,6 +5,8 @@
   "type": "module",
   "description": "Neo's runtime contracts: a Rust crate, plus the generated TypeScript types under ts/.",
   "scripts": {
+    "codegen": "NEO_RUNTIME_SPEC_CODEGEN=1 cargo run --package neo-runtime-spec --example codegen",
+    "codegen:check": "NEO_RUNTIME_SPEC_CODEGEN=1 cargo run --package neo-runtime-spec --example codegen -- --check",
     "lint:rust": "cargo fmt --package neo-runtime-spec -- --check && cargo clippy --package neo-runtime-spec --all-targets --locked -- -D warnings",
     "test:rust": "cargo test --package neo-runtime-spec --locked"
   }

@@ -1847,6 +1847,7 @@ name = "neo-runtime-spec"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde-saphyr",
  "serde_json",
  "sha2",
 ]

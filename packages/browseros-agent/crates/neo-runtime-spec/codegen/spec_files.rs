@@ -41,7 +41,7 @@ pub fn read(spec_dir: &Path) -> io::Result<Vec<SpecFile>> {
 }
 
 /// The lowercase hex SHA-256 of `files`, which must be in spec order, as [`read`] returns them.
-pub fn sha256(files: &[SpecFile]) -> String {
+pub fn sha256<'a>(files: impl IntoIterator<Item = &'a SpecFile>) -> String {
     let mut hasher = Sha256::new();
     for file in files {
         hasher.update(file.path.as_bytes());
