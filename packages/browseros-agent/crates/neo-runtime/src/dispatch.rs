@@ -427,6 +427,9 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::SelectOption(params) => {
             Ok(Route::FrameSelectOption(SelectOptions::from_params(params)))
         }
+        FrameCall::WaitForSelector(_) => Err(PlaywrightError::error(
+            "Neo does not serve waitForSelector yet",
+        )),
     }
 }
 

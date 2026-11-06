@@ -59,6 +59,11 @@ mod run;
 mod runtime;
 mod tab_calls;
 mod tabs;
+#[expect(
+    dead_code,
+    reason = "the waitForURL matcher interface; waits.rs is its caller"
+)]
+mod url_match;
 mod world;
 
 pub use run::{
