@@ -16,7 +16,7 @@ mod browser;
 use std::iter;
 use std::time::Duration;
 
-use browser::{Fixture, Tab, e2e_browser};
+use browser::{Fixture, Tab};
 use neo_runtime::RunStatus;
 use serde_json::json;
 use tokio::time;
@@ -31,7 +31,7 @@ const COMMITS: usize = 10;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn page_url_and_is_closed_match_playwright_through_a_tab_lifetime() {
-    let Some(binary) = e2e_browser() else {
+    let Some(binary) = browser::e2e_browser() else {
         return;
     };
     let tab = Tab::open(binary, slow(SLOW_RESPONSE), "/a").await;
@@ -85,7 +85,7 @@ async fn page_url_and_is_closed_match_playwright_through_a_tab_lifetime() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn page_url_reads_through_every_cross_document_commit() {
-    let Some(binary) = e2e_browser() else {
+    let Some(binary) = browser::e2e_browser() else {
         return;
     };
     let tab = Tab::open(binary, slow(COMMIT_RESPONSE), "/a").await;

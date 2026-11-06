@@ -64,7 +64,7 @@ use crate::click::{
 };
 use crate::progress::InputTicket;
 use crate::run::PageId;
-use crate::world::{ObjectGroup, World, classify};
+use crate::world::{self, ObjectGroup, World};
 
 /// Detaching is best effort. It runs in the background after a run, so this bound only keeps
 /// a hung browser from piling up detach tasks.
@@ -665,7 +665,7 @@ impl Tab for Arc<PageSession> {
     async fn prepare(&self) -> Result<(), PageError> {
         PageSession::prepare(self)
             .await
-            .map_err(|error| classify(&error))
+            .map_err(|error| world::classify(&error))
     }
 
     async fn describe(&self, selector: &str) -> Result<SelectorFacts, PageError> {
@@ -779,7 +779,7 @@ impl Tab for Arc<PageSession> {
                     {
                         Ok(Some(NotReady::NotConnected))
                     }
-                    Err(error) => Err(classify(&error)),
+                    Err(error) => Err(world::classify(&error)),
                 };
             }
             Scroll::End => ScrollAlignment::End,
@@ -826,7 +826,7 @@ impl Tab for Arc<PageSession> {
             let (model, border) = tokio::join!(model, border);
             let model = match model {
                 Ok(model) => model.model,
-                Err(error) => return no_geometry(&classify(&error)),
+                Err(error) => return no_geometry(&world::classify(&error)),
             };
             let border = match border {
                 Ok(border) => border,
@@ -853,7 +853,7 @@ impl Tab for Arc<PageSession> {
         let viewport = viewport?;
         let quads = match quads {
             Ok(quads) => quads.quads,
-            Err(error) => return no_geometry(&classify(&error)),
+            Err(error) => return no_geometry(&world::classify(&error)),
         };
         Ok(Geometry::Quads {
             quads: quads.into_iter().map(quad).collect::<Result<_, _>>()?,
@@ -999,7 +999,7 @@ impl Tab for Arc<PageSession> {
         mut watched: NavigationWatch,
     ) -> Result<Vec<String>, PageError> {
         if let Err(error) = self.send("Page.enable", json!({})).await
-            && classify(&error) == PageError::Closed
+            && world::classify(&error) == PageError::Closed
         {
             return Err(PageError::Closed);
         }
@@ -1093,7 +1093,7 @@ async fn write_mouse(
         Some(error) => {
             drop(ticket);
             PressReport::Failed {
-                closed: classify(error) == PageError::Closed,
+                closed: world::classify(error) == PageError::Closed,
                 message: error.to_string(),
             }
         }

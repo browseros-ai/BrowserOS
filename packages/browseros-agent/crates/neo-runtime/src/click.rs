@@ -946,8 +946,8 @@ mod tests {
     use tokio::time::Instant;
 
     use super::*;
-    use crate::click_goldens::golden;
-    use crate::progress::{ErrorName, compress_call_log};
+    use crate::click_goldens;
+    use crate::progress::{self, ErrorName};
     use crate::run::Delivery;
 
     const ROUND_TRIP: Duration = Duration::from_millis(1);
@@ -1251,21 +1251,21 @@ mod tests {
         let (result, log, delivery) = run(&tab, &options(SELECTOR), 500.0).await;
 
         assert_eq!(result, timeout_error(500.0));
-        assert_eq!(log, golden("hidden").call_log());
+        assert_eq!(log, click_goldens::golden("hidden").call_log());
         assert_eq!(tab.count("resolve"), 7, "{:?}", tab.calls());
         assert_eq!(delivery, Delivery::NotSent);
     }
 
     #[tokio::test(start_paused = true)]
     async fn the_strict_golden_fails_at_once_with_the_pages_message() {
-        let message = golden("strict").server_message().to_string();
+        let message = click_goldens::golden("strict").server_message().to_string();
         let mut tab = FakeTab::ready();
         tab.resolve = Step::always(ROUND_TRIP, Err(PageError::Threw(message.clone())));
         let started = Instant::now();
         let (result, log, delivery) = run(&tab, &options(SELECTOR), 30_000.0).await;
 
         assert_eq!(result, Err(PlaywrightError::error(message).into()));
-        assert_eq!(log, golden("strict").call_log());
+        assert_eq!(log, click_goldens::golden("strict").call_log());
         assert_eq!(tab.count("resolve"), 1);
         assert_eq!(
             started.elapsed(),
@@ -1282,7 +1282,7 @@ mod tests {
         let (result, log, delivery) = run(&tab, &options(SELECTOR), 1000.0).await;
 
         assert_eq!(result, timeout_error(1000.0));
-        assert_eq!(log, golden("covered").call_log());
+        assert_eq!(log, click_goldens::golden("covered").call_log());
         assert_eq!(tab.count("press (36.75, 18.5)"), 0);
         let scrolls: Vec<String> = tab
             .calls()
@@ -1315,7 +1315,7 @@ mod tests {
         let (result, log, delivery) = run(&tab, &options(SELECTOR), 500.0).await;
 
         assert_eq!(result, timeout_error(500.0));
-        assert_eq!(log, golden("disabled").call_log());
+        assert_eq!(log, click_goldens::golden("disabled").call_log());
         assert_eq!(tab.count("check_states"), 5);
         assert_eq!(delivery, Delivery::NotSent);
     }
@@ -1350,7 +1350,7 @@ mod tests {
         let (result, log, delivery) = run(&tab, &options(SELECTOR), 30_000.0).await;
 
         assert_eq!(result, Ok(()));
-        assert_eq!(log, compress_call_log(&ok_log(false)));
+        assert_eq!(log, progress::compress_call_log(&ok_log(false)));
         assert_eq!(delivery, Delivery::Done);
         assert_eq!(
             tab.calls(),
@@ -1396,7 +1396,7 @@ mod tests {
             &ok_log(false)[3..],
         ]
         .concat();
-        assert_eq!(log, compress_call_log(&raw));
+        assert_eq!(log, progress::compress_call_log(&raw));
     }
 
     #[tokio::test(start_paused = true)]
@@ -1408,7 +1408,7 @@ mod tests {
 
         assert_eq!(result, Ok(()));
         assert_eq!(delivery, Delivery::NotSent);
-        assert_eq!(log, compress_call_log(&ok_log(true)));
+        assert_eq!(log, progress::compress_call_log(&ok_log(true)));
         assert!(
             tab.calls()
                 .contains(&"arm Some(Point { x: 36.75, y: 18.5 }) true".to_string()),
@@ -1616,7 +1616,7 @@ mod tests {
             "  scrolling into view if needed".to_string(),
             "  done scrolling".to_string(),
         ];
-        assert_eq!(log, compress_call_log(&raw));
+        assert_eq!(log, progress::compress_call_log(&raw));
         assert_eq!(tab.count("geometry"), 1, "no retry under force");
     }
 

@@ -13,7 +13,7 @@ mod fake_browser;
 
 use std::time::{Duration, Instant};
 
-use fake_browser::{Exchange, FakeBrowser, GLUE, PAGE_URL, Replies, Reply, run_request};
+use fake_browser::{Exchange, FakeBrowser, GLUE, PAGE_URL, Replies, Reply};
 use neo_runtime::{CallResult, Delivery, RunEnd, RunStatus};
 use serde_json::json;
 use tokio::time;
@@ -132,7 +132,7 @@ async fn a_timeout_after_the_press_is_unknown_and_never_presses_again() {
     let outcome = browser
         .runtime()
         .await
-        .run(run_request(
+        .run(fake_browser::run_request(
             "try { await page.click('#go', { timeout: 500 }) } catch (error) { return error.name }",
             Duration::from_secs(10),
             CancellationToken::new(),
@@ -172,7 +172,7 @@ async fn a_pressed_button_is_released_before_the_session_detaches() {
     let outcome = browser
         .runtime()
         .await
-        .run(run_request(
+        .run(fake_browser::run_request(
             PRESS_AND_RETURN,
             Duration::from_secs(10),
             CancellationToken::new(),
@@ -211,7 +211,7 @@ async fn a_dropped_run_still_releases_the_button_before_the_session_detaches() {
     let runtime = browser.runtime().await;
     let run = tokio::spawn(async move {
         runtime
-            .run(run_request(
+            .run(fake_browser::run_request(
                 PRESS_AND_RETURN,
                 Duration::from_secs(10),
                 CancellationToken::new(),
@@ -237,7 +237,7 @@ async fn a_getter_only_run_enables_nothing() {
     let outcome = browser
         .runtime()
         .await
-        .run(run_request(
+        .run(fake_browser::run_request(
             "return page.url()",
             Duration::from_secs(5),
             CancellationToken::new(),
@@ -281,7 +281,7 @@ async fn a_tab_closed_while_its_domains_are_enabled_ends_the_click() {
     let outcome = browser
         .runtime()
         .await
-        .run(run_request(
+        .run(fake_browser::run_request(
             "try { await page.click('#go', { timeout: 20000 }) } catch (error) { return [error.name, error.message] }",
             Duration::from_secs(30),
             CancellationToken::new(),

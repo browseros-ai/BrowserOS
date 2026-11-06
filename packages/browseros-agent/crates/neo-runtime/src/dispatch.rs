@@ -514,8 +514,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::click_goldens::{golden, raw_log};
-    use crate::progress::{ErrorName, compress_call_log};
+    use crate::click_goldens;
+    use crate::progress::ErrorName;
 
     const PAGE: &str = "page@T";
     const FRAME: &str = "frame@T";
@@ -680,7 +680,7 @@ mod tests {
         let mut replies = BTreeMap::new();
         replies.insert("ok", encode_reply(&id, Ok(None), None));
         for name in ["strict", "hidden", "covered", "disabled"] {
-            let golden = golden(name);
+            let golden = click_goldens::golden(name);
             let error = match golden.timeout_ms() {
                 Some(timeout_ms) => {
                     let error = PlaywrightError::timeout(timeout_ms);
@@ -690,7 +690,7 @@ mod tests {
                 // A strict mode violation's message is the page's own, passed through.
                 None => PlaywrightError::error(golden.server_message()),
             };
-            let log = compress_call_log(&raw_log(name));
+            let log = progress::compress_call_log(&click_goldens::raw_log(name));
             replies.insert(name, encode_reply(&id, Err(&error), Some(&log)));
         }
         replies.insert(

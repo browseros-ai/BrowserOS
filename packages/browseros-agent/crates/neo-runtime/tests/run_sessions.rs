@@ -8,7 +8,7 @@ mod fake_browser;
 
 use std::time::{Duration, Instant};
 
-use fake_browser::{Exchange, FakeBrowser, PAGE_URL, Replies, Reply, run_request};
+use fake_browser::{Exchange, FakeBrowser, PAGE_URL, Replies, Reply};
 use futures_util::future;
 use neo_runtime::RunStatus;
 use serde_json::json;
@@ -62,7 +62,7 @@ async fn a_finished_run_detaches_its_session() {
     let outcome = browser
         .runtime()
         .await
-        .run(run_request(
+        .run(fake_browser::run_request(
             "return page.url()",
             Duration::from_secs(5),
             CancellationToken::new(),
@@ -89,7 +89,7 @@ async fn a_run_cancelled_while_reading_its_first_url_detaches_its_session() {
     .await;
     let runtime = browser.runtime().await;
     let cancel = CancellationToken::new();
-    let request = run_request("return 1", Duration::from_secs(30), cancel.clone());
+    let request = fake_browser::run_request("return 1", Duration::from_secs(30), cancel.clone());
     let canceller = tokio::spawn(async move {
         time::sleep(Duration::from_millis(300)).await;
         cancel.cancel();
@@ -122,7 +122,7 @@ async fn attaches_answered_after_their_runs_timed_out_are_detached() {
     let runtime = browser.runtime().await;
 
     let outcomes = future::join_all((0..RUNS).map(|_| {
-        runtime.run(run_request(
+        runtime.run(fake_browser::run_request(
             "return 1",
             Duration::from_millis(200),
             CancellationToken::new(),

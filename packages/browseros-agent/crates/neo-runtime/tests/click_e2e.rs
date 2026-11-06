@@ -19,11 +19,12 @@
 mod browser;
 
 use std::collections::BTreeSet;
+use std::env;
+use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use std::{env, fs};
 
-use browser::{Fixture, Tab, e2e_browser};
+use browser::{Fixture, Tab};
 use browseros_cdp::{CdpEvent, SessionId};
 use neo_runtime::{CallRecord, CallResult, Delivery, RunEnd, RunOutcome, RunStatus};
 use serde::Deserialize;
@@ -89,7 +90,7 @@ impl Golden {
 
     /// Opens a fresh browser on the golden's fixture page.
     async fn open(&self) -> Option<Tab> {
-        let binary = e2e_browser()?;
+        let binary = browser::e2e_browser()?;
         let fixture = Fixture {
             pages: vec![(self.path(), self.fixture_html.clone())],
             ..Fixture::default()
@@ -113,7 +114,7 @@ const BLOCKED_ONCE_PAGE: &str = include_str!("../../neo-sdk/tests/pages/blocked-
 
 /// Opens a fresh browser on one page that is not a golden's.
 async fn open_page(path: &str, html: &str) -> Option<Tab> {
-    let binary = e2e_browser()?;
+    let binary = browser::e2e_browser()?;
     let fixture = Fixture {
         pages: vec![(path.to_string(), html.to_string())],
         ..Fixture::default()
@@ -403,7 +404,7 @@ const CALLS_PAGE: &str = r#"<!doctype html><html><head><meta charset="utf-8"><ti
 /// `stopHitTargetInterceptor`.
 #[tokio::test(flavor = "multi_thread")]
 async fn every_click_page_call_decodes_against_the_spec() {
-    let Some(binary) = e2e_browser() else {
+    let Some(binary) = browser::e2e_browser() else {
         return;
     };
     let fixture = Fixture {
@@ -743,7 +744,7 @@ impl InstallTap {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_injected_install_is_reused_per_document_and_redone_after_navigation() {
     let golden = Golden::load("ok");
-    let Some(binary) = e2e_browser() else {
+    let Some(binary) = browser::e2e_browser() else {
         return;
     };
     let fixture = Fixture {

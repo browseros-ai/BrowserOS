@@ -7,7 +7,7 @@ mod fake_browser;
 
 use std::time::{Duration, Instant};
 
-use fake_browser::{BUTTON, FakeBrowser, PAGE, PAGE_URL, Replies, Reply, run_request};
+use fake_browser::{BUTTON, FakeBrowser, PAGE, PAGE_URL, Replies, Reply};
 use neo_runtime::{
     CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd, RunOutcome, RunStatus,
 };
@@ -24,7 +24,11 @@ async fn run(code: &str, timeout: Duration) -> RunOutcome {
     browser
         .runtime()
         .await
-        .run(run_request(code, timeout, CancellationToken::new()))
+        .run(fake_browser::run_request(
+            code,
+            timeout,
+            CancellationToken::new(),
+        ))
         .await
 }
 
@@ -89,7 +93,7 @@ async fn cancelling_ends_the_run_as_cancelled() {
     let browser = FakeBrowser::start(Replies::default()).await;
     let runtime = browser.runtime().await;
     let cancel = CancellationToken::new();
-    let request = run_request(
+    let request = fake_browser::run_request(
         "await new Promise((resolve) => setTimeout(resolve, 60_000))",
         Duration::from_secs(30),
         cancel.clone(),
@@ -110,7 +114,7 @@ async fn a_script_that_catches_the_deadline_still_ends_as_a_timeout() {
     let outcome = browser
         .runtime()
         .await
-        .run(run_request(
+        .run(fake_browser::run_request(
             CATCHES_GETTER_ERROR,
             Duration::from_millis(300),
             CancellationToken::new(),
@@ -134,7 +138,7 @@ async fn a_script_that_catches_cancellation_still_ends_as_cancelled() {
     let browser = stalled_getter().await;
     let runtime = browser.runtime().await;
     let cancel = CancellationToken::new();
-    let request = run_request(
+    let request = fake_browser::run_request(
         CATCHES_GETTER_ERROR,
         Duration::from_secs(30),
         cancel.clone(),

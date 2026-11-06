@@ -757,7 +757,7 @@ pub(crate) fn js_number(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::click_goldens::{golden, raw_log};
+    use crate::click_goldens;
 
     fn entry(call_id: u64, input: bool) -> Arc<CallEntry> {
         Arc::new(CallEntry::new(CallStart {
@@ -786,8 +786,8 @@ mod tests {
     fn compress_call_log_reproduces_every_golden_byte_for_byte() {
         for name in ["strict", "hidden", "covered", "disabled"] {
             assert_eq!(
-                compress_call_log(&raw_log(name)),
-                golden(name).call_log(),
+                compress_call_log(&click_goldens::raw_log(name)),
+                click_goldens::golden(name).call_log(),
                 "the {name} golden"
             );
         }

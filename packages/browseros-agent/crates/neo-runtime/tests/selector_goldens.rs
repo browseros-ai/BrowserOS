@@ -13,7 +13,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use fake_browser::{Exchange, FakeBrowser, Replies, run_request};
+use fake_browser::{Exchange, FakeBrowser, Replies};
 use neo_runtime::{RunOutcome, RunStatus};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -47,7 +47,7 @@ async fn run(code: &str) -> (RunOutcome, Vec<Exchange>) {
     let outcome = browser
         .runtime()
         .await
-        .run(run_request(
+        .run(fake_browser::run_request(
             code,
             Duration::from_secs(10),
             CancellationToken::new(),

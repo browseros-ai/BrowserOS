@@ -18,13 +18,16 @@
 //! as test crates, so it is never one on its own.
 
 use std::collections::BTreeSet;
+use std::env;
 use std::ffi::{OsStr, OsString};
+use std::fs;
+use std::io;
 use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
-use std::{env, fs, io, thread};
 
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy, SessionId};
 use neo_runtime::{PageId, RunOutcome, RunRequest, Runtime};
