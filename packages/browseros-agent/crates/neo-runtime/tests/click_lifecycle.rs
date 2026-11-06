@@ -163,7 +163,7 @@ async fn tests_that_a_late_setup_spanning_a_commit_is_stopped_after_timeout() {
     let browser = FakeBrowser::start(Replies {
         commit_during: Some(CommitDuring::Arm),
         arm: Reply {
-            delay: Duration::from_millis(2000),
+            delay: Duration::from_secs(2),
             ..Reply::default()
         },
         ..Replies::default()
