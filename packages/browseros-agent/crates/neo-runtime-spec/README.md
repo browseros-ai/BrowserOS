@@ -30,8 +30,9 @@ crates/neo-runtime-spec/sync-playwright.sh <playwright-checkout>
 ```
 
 The bun package `@browseros/neo-runtime-spec` wraps the first two as `codegen` and
-`codegen:check`, and its `typecheck` script runs `tsc` over `ts/` and over the glue sample and
-negative cases in `tests/ts/`.
+`codegen:check`, and its `typecheck` script runs `tsc` over `ts/` and over the negative cases in
+`tests/ts/`. The real glue table lives in `neo-runtime-injected`, whose `typecheck` checks it
+against `ts/injected.ts`.
 
 ## Layout
 

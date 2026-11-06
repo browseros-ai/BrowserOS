@@ -17,13 +17,19 @@
 //!
 //! - `type: union` with `members`: a value that is exactly one of its members. The wire carries
 //!   the member's own JSON with no tag, so members must differ in JSON kind.
-//! - `returns: Element?` as a command's whole result: a DOM element that stays in the page.
+//! - Handles: page objects that stay in the page while Rust holds their CDP object ids. The
+//!   bare name `Element` is the built-in handle type, and a `type: handle` definition names
+//!   another. Playwright's files never see either. Where a handle may appear is Neo's rule, so
+//!   `contract.rs` checks it.
 
 use std::collections::HashMap;
 use std::fmt;
 
 use crate::error::{At, SpecError, did_you_mean};
 use crate::yaml::{Node, Value};
+
+/// The name an extended-grammar file uses for the built-in handle type, a DOM element.
+pub const BUILT_IN_ELEMENT: &str = "Element";
 
 /// One parsed spec file in the dialect, and the grammar it is read with.
 pub struct DialectFile {
@@ -75,6 +81,9 @@ pub enum DefKind {
     Interface(Interface),
     /// Extension: a value that is exactly one of its members.
     Union(Vec<Member>),
+    /// Extension: a page object other than an element, named so that the glue and Rust agree on
+    /// which call produces it and which consumes it.
+    Handle,
 }
 
 pub struct Interface {
@@ -103,8 +112,6 @@ pub enum Returns {
     /// No `returns` key: the result is empty (TypeScript `void` in Playwright).
     Nothing,
     Props(Vec<Prop>),
-    /// Extension: `returns: Element?`.
-    Element,
 }
 
 /// A command's metainfo, already checked with Playwright's generator rules.
@@ -184,6 +191,10 @@ pub enum Type {
     Object(Vec<Prop>),
     /// An inline union (extension).
     Union(Vec<Member>),
+    /// The built-in handle type `Element`: a DOM element that stays in the page (extension).
+    Element,
+    /// A `type: handle` definition (extension).
+    Handle(DefId),
 }
 
 /// Where [`Protocol::command`] found a command.
@@ -272,6 +283,7 @@ enum Kind {
     Mixin,
     Interface,
     Union,
+    Handle,
 }
 
 /// A top-level definition as found by the first pass.
@@ -330,6 +342,7 @@ fn definition_kind(body: &[(String, Node)], grammar: Grammar, at: &At) -> Result
         "mixin" => Ok(Kind::Mixin),
         "interface" => Ok(Kind::Interface),
         "union" => extension(grammar, "`type: union`", at).map(|()| Kind::Union),
+        "handle" => extension(grammar, "`type: handle`", at).map(|()| Kind::Handle),
         other => Err(at.key("type").error(format!(
             "unknown definition type \"{other}\"; expected object, enum, mixin or interface"
         ))),
@@ -388,6 +401,10 @@ impl Reader<'_> {
                 DefKind::Union(self.members(members, &at.key("members"), &scope)?)
             }
             Kind::Interface => DefKind::Interface(self.interface(entry.body, &at, &scope)?),
+            Kind::Handle => {
+                only_keys(entry.body, &["type"], &at)?;
+                DefKind::Handle
+            }
         };
         Ok(Def {
             name: entry.name.to_owned(),
@@ -496,10 +513,6 @@ impl Reader<'_> {
         match &node.value {
             Value::Null => Ok(Returns::Nothing),
             Value::Map(_) => Ok(Returns::Props(self.props(node, at, scope)?)),
-            Value::Str(text) if text == "Element?" => {
-                extension(scope.grammar, "`returns: Element?`", at)?;
-                Ok(Returns::Element)
-            }
             other => Err(at.error(format!(
                 "must be a map of properties, not {}",
                 other.describe()
@@ -625,6 +638,9 @@ impl Reader<'_> {
             "json" => Type::Json,
             "undefined" => Type::Undefined,
             "Channel" => Type::AnyChannel,
+            // A Playwright file cannot name it, so `Element` resolves like any undefined name
+            // there.
+            BUILT_IN_ELEMENT if scope.grammar == Grammar::Extended => Type::Element,
             "number" => {
                 return Err(
                     at.error("uses \"number\"; the dialect has \"int\" and \"float\"".to_owned())
@@ -642,6 +658,7 @@ impl Reader<'_> {
                 match self.entries[id.0].kind {
                     Kind::Interface => Type::Channel(id),
                     Kind::Object | Kind::Enum | Kind::Union => Type::Named(id),
+                    Kind::Handle => Type::Handle(id),
                     Kind::Mixin => {
                         return Err(at.error(format!(
                             "uses the mixin \"{name}\" as a type; splice it with a `$mixin` key"
@@ -734,12 +751,18 @@ impl Reader<'_> {
         match ty {
             Type::String | Type::Binary | Type::Enum(_) => Ok(JsonKind::String),
             Type::Boolean => Ok(JsonKind::Boolean),
-            Type::Object(_) | Type::Channel(_) | Type::AnyChannel => Ok(JsonKind::Object),
+            // A handle arrives as a remote object, as an object member would, so the two cannot
+            // share a union.
+            Type::Object(_)
+            | Type::Channel(_)
+            | Type::AnyChannel
+            | Type::Element
+            | Type::Handle(_) => Ok(JsonKind::Object),
             Type::Named(id) => match self.entries[id.0].kind {
                 Kind::Object => Ok(JsonKind::Object),
                 Kind::Enum => Ok(JsonKind::String),
                 // `named_type` resolves only objects, enums and unions to `Named`.
-                Kind::Union | Kind::Mixin | Kind::Interface => {
+                Kind::Union | Kind::Mixin | Kind::Interface | Kind::Handle => {
                     Err(at.error("cannot nest a union in a union".to_owned()))
                 }
             },

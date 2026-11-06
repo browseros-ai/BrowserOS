@@ -4,15 +4,16 @@
 #
 # Rules the translator enforces for this file (codegen/contract.rs):
 # - Exactly one interface, `Injected`. Its `initializer` is the options of the page bundle's
-#   bootstrap, and each command is one glue function `(injected, params) => result`.
+#   bootstrap, and each command is one glue function `(injected, params, ...handles) => result`.
 # - Every command is `internal: true`, because Playwright's generator requires a title on any
 #   other command and a page call carries no metainfo. A command declares only `parameters`
 #   and `returns`.
 # - Every definition is reachable from `Injected`. No `binary` and no Playwright object
-#   references: a page call crosses plain JSON, or one element.
+#   references: a page call crosses plain JSON plus handles (below).
 # - A glue function returns every outcome neo-runtime acts on (nothing matched yet) as a value,
 #   and throws for failures that end the Playwright call (a strict mode violation, an invalid
-#   selector, an element of the wrong kind), as Playwright's page code does.
+#   selector, an element of the wrong kind), as Playwright's page code does. A command without
+#   `returns` resolves to `{}`, and its glue function returns `{}`.
 #
 # The comment directly above a key becomes the Rust and TypeScript docs of what it generates.
 # Write it as one paragraph with no blank line before the key, and quote identifiers in
@@ -23,9 +24,22 @@
 #    JSON kind (string, boolean or object), so the members' kinds must differ. The wire carries
 #    the member's own JSON with no tag. Rust decodes it in one pass by kind; TypeScript writes
 #    `A | B`.
-# 2. `returns: Element?`: the glue function returns a DOM element that stays in the page
-#    (`returnByValue: false`), or `undefined`. Rust implements `ElementCall`; TypeScript
-#    writes `Element | undefined`.
+# 2. Handles. A handle is a page object that stays in the page while Rust holds its CDP
+#    `Runtime.RemoteObjectId`. `Element` is the built-in handle type (a DOM element, CDP subtype
+#    `node`); a definition with `type: handle` names another page object, a plain JavaScript
+#    object (no CDP subtype).
+#    - A handle-typed parameter, at the top level of `parameters` only and never optional, does
+#      not travel in the JSON params. It crosses as a `Runtime.callFunctionOn` argument
+#      `{objectId}` after the call name and the params, in declaration order. Rust types it
+#      `Handle<K>`; TypeScript passes it to the glue function positionally after `params`.
+#    - A result that holds a handle (a top-level property typed with a handle, or with a union
+#      that has one handle member) is called with `returnByValue: false` into the caller's object
+#      group and read back with one `Runtime.getProperties`. Each of its other top-level
+#      properties must be a primitive (string, int, float, boolean, string enum), each
+#      optionally `?`: getProperties would hand back an object or an array as a page object too.
+#      A result that holds no handle still crosses by value.
+#    The translator lists every `type: handle` name in `InjectedHandleKinds` (TypeScript), which
+#    the glue binds to Playwright's own page types at its one `satisfies` site.
 
 Injected:
   type: interface
@@ -99,7 +113,10 @@ Injected:
         selector: string
         # Throw a strict mode violation when more than one element matches.
         strict: boolean
-      returns: Element?
+      returns:
+        # The first match, which stays in the page in the caller's object group. Absent when
+        # nothing matched yet.
+        element: Element?
 
 # The first matching element's text.
 TextMatch:

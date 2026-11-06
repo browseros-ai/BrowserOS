@@ -7,7 +7,8 @@
 //! value, which the page bundle embeds.
 
 use crate::contract::{
-    Body, FieldType, InjectedModule, MemberKind, PageResult, ServeModule, Struct, TypeDef,
+    Body, Crossing, Field, FieldType, HandleKindRef, InjectedModule, MemberKind, ServeModule,
+    Struct, TypeDef, UnionMember,
 };
 use crate::output::{self, MAX_WIDTH};
 
@@ -49,28 +50,67 @@ pub fn serve(module: &ServeModule, sha256: &str) -> String {
 /// Renders `ts/injected.ts`.
 pub fn injected(module: &InjectedModule, sha256: &str) -> String {
     let mut out = output::header(sha256);
-    let commands = format!("{}Commands", module.interface);
+    let interface = &module.interface;
+    let commands = format!("{interface}Commands");
+    let kinds = format!("{interface}HandleKinds");
     for line in [
         "",
         "// The page calls neo-runtime makes into neo-runtime-injected's glue table (spec/injected.yml),",
         "// with exactly what the page returns. Rust decodes each result with unknown fields rejected,",
         "// so an extra field fails the call.",
         "",
-        "/** The page calls, by glue table key. */",
+        "/**",
+        " * The page objects that `type: handle` definitions name. The glue binds each to the page",
+        " * type it really is, at its one `satisfies` site; Rust holds each as an opaque `Handle<K>`.",
+        " * The built-in handle kind, `Element`, is the DOM's own type.",
+        " */",
     ] {
         out.push(line.to_owned());
     }
-    out.push(format!("export type {commands} = {{"));
+    let handle_defs: Vec<&TypeDef> = module
+        .types
+        .iter()
+        .filter(|ty| matches!(ty.body, Body::Handle))
+        .collect();
+    if handle_defs.is_empty() {
+        out.push(format!("export type {kinds} = Record<never, unknown>"));
+    } else {
+        out.push(format!("export type {kinds} = {{"));
+        for ty in handle_defs {
+            doc(&mut out, "  ", &ty.doc);
+            out.push(format!("  {}: unknown", key(&ty.name)));
+        }
+        out.push("}".to_owned());
+    }
+    for line in [
+        String::new(),
+        "/**".to_owned(),
+        " * The page calls, by glue table key. `handles` are the call's handle arguments in spec order,"
+            .to_owned(),
+        " * passed after `params`, never inside it.".to_owned(),
+        " */".to_owned(),
+        format!("export type {commands}<H extends {kinds}> = {{"),
+    ] {
+        out.push(line);
+    }
     for call in &module.calls {
-        let result = match &call.result {
-            PageResult::Value(result) => result.clone(),
-            PageResult::Element => "Element | undefined".to_owned(),
-        };
+        let handles: Vec<String> = handle_fields(&module.types, &call.params)
+            .map(|field| {
+                format!(
+                    "{}: {}",
+                    field.wire,
+                    field_type(&field.ty, "", &module.types)
+                )
+            })
+            .collect();
+        out.push(format!("  {}: {{", key(&call.name)));
+        out.push(format!("    params: {}", call.params));
+        out.push(format!("    handles: [{}]", handles.join(", ")));
         out.push(format!(
-            "  {}: {{ params: {}; result: {result} }}",
-            key(&call.name),
-            call.params
+            "    result: {}",
+            reference(&call.result, "    ", &module.types)
         ));
+        out.push("  }".to_owned());
     }
     out.push("}".to_owned());
     for line in [
@@ -78,17 +118,22 @@ pub fn injected(module: &InjectedModule, sha256: &str) -> String {
         "/**".to_owned(),
         " * The glue table `neo-runtime-injected` implements, checked with".to_owned(),
         format!(
-            " * `export const glue = {{ ... }} satisfies {}Api<InjectedScript>`: a missing, extra or",
-            module.interface
+            " * `export const glue = {{ ... }} satisfies {interface}Api<InjectedScript, Handles>`: a missing,"
         ),
-        " * mistyped glue function fails `tsc`. `neo-runtime` calls each function with".to_owned(),
-        " * `awaitPromise: true`, so it may return a promise.".to_owned(),
+        " * extra or mistyped glue function fails `tsc`, and so does a handle bound to a page type that"
+            .to_owned(),
+        " * the call producing it and the call consuming it disagree on. `neo-runtime` calls each"
+            .to_owned(),
+        " * function with `awaitPromise: true`, so it may return a promise.".to_owned(),
         " */".to_owned(),
-        format!("export type {}Api<Script> = {{", module.interface),
-        format!("  [Name in keyof {commands}]: ("),
+        format!("export type {interface}Api<Script, H extends {kinds}> = {{"),
+        format!("  [Name in keyof {commands}<H>]: ("),
         "    injected: Script,".to_owned(),
-        format!("    params: {commands}[Name]['params'],"),
-        format!("  ) => {commands}[Name]['result'] | Promise<{commands}[Name]['result']>"),
+        format!("    params: {commands}<H>[Name]['params'],"),
+        format!("    ...handles: {commands}<H>[Name]['handles']"),
+        "  ) =>".to_owned(),
+        format!("    | {commands}<H>[Name]['result']"),
+        format!("    | Promise<{commands}<H>[Name]['result']>"),
         "}".to_owned(),
     ] {
         out.push(line);
@@ -98,6 +143,17 @@ pub fn injected(module: &InjectedModule, sha256: &str) -> String {
         type_def(&mut out, ty, &module.types);
     }
     lines(&out)
+}
+
+/// The handle fields of a params struct, in spec order.
+fn handle_fields<'t>(types: &'t [TypeDef], params: &str) -> impl Iterator<Item = &'t Field> {
+    let fields = match types.iter().find(|ty| ty.name == params).map(|ty| &ty.body) {
+        Some(Body::Struct(fields)) => fields.fields.as_slice(),
+        _ => &[],
+    };
+    fields
+        .iter()
+        .filter(|field| matches!(field.ty, FieldType::Handle(_)))
 }
 
 /// Renders `ts/spec-hash.ts`.
@@ -133,11 +189,7 @@ fn type_def(out: &mut Vec<String>, ty: &TypeDef, types: &[TypeDef]) {
             let members: Vec<String> = union
                 .members
                 .iter()
-                .map(|member| match &member.kind {
-                    MemberKind::Bool => "boolean".to_owned(),
-                    MemberKind::String => "string".to_owned(),
-                    MemberKind::Enum(name) | MemberKind::Object(name) => reference(name, "", types),
-                })
+                .map(|member| member_type(member, "", types))
                 .collect();
             union_alias(out, &alias, &members);
         }
@@ -145,6 +197,8 @@ fn type_def(out: &mut Vec<String>, ty: &TypeDef, types: &[TypeDef]) {
             out.push(format!("{alias} {{ guid: string }}"));
         }
         Body::Channel(_) => out.push(format!("{alias} never")),
+        // The contract exports no handle; `InjectedHandleKinds` lists them.
+        Body::Handle => {}
     }
 }
 
@@ -161,14 +215,22 @@ fn union_alias(out: &mut Vec<String>, alias: &str, members: &[String]) {
     }
 }
 
-/// An object type's body, where `indent` is the indentation of the line it opens on.
+/// An object type's body, where `indent` is the indentation of the line it opens on. Params that
+/// hold handles leave them out: they cross as arguments after the params.
 fn object(fields: &Struct, indent: &str, types: &[TypeDef]) -> String {
-    if fields.fields.is_empty() {
+    let json: Vec<&Field> = fields
+        .fields
+        .iter()
+        .filter(|field| {
+            fields.crossing != Crossing::Arguments || !matches!(field.ty, FieldType::Handle(_))
+        })
+        .collect();
+    if json.is_empty() {
         return "Record<string, never>".to_owned();
     }
     let inner = format!("{indent}  ");
     let mut out = vec!["{".to_owned()];
-    for field in &fields.fields {
+    for field in json {
         doc(&mut out, &inner, &field.doc);
         let optional = if field.optional { "?" } else { "" };
         out.push(format!(
@@ -196,6 +258,24 @@ fn field_type(ty: &FieldType, indent: &str, types: &[TypeDef]) -> String {
                 format!("{items}[]")
             }
         }
+        FieldType::Handle(kind) => handle_type(kind),
+    }
+}
+
+/// A handle in the scope of `InjectedCommands<H>`, where `H` binds the named kinds.
+fn handle_type(kind: &HandleKindRef) -> String {
+    match kind {
+        HandleKindRef::Element => "Element".to_owned(),
+        HandleKindRef::Named(name) => format!("H[{}]", quote(name)),
+    }
+}
+
+fn member_type(member: &UnionMember, indent: &str, types: &[TypeDef]) -> String {
+    match &member.kind {
+        MemberKind::Bool => "boolean".to_owned(),
+        MemberKind::String => "string".to_owned(),
+        MemberKind::Enum(name) | MemberKind::Object(name) => reference(name, indent, types),
+        MemberKind::Handle(kind) => handle_type(kind),
     }
 }
 
@@ -221,18 +301,12 @@ fn reference(name: &str, indent: &str, types: &[TypeDef]) -> String {
             let members: Vec<String> = union
                 .members
                 .iter()
-                .map(|member| match &member.kind {
-                    MemberKind::Bool => "boolean".to_owned(),
-                    MemberKind::String => "string".to_owned(),
-                    MemberKind::Enum(name) | MemberKind::Object(name) => {
-                        reference(name, indent, types)
-                    }
-                })
+                .map(|member| member_type(member, indent, types))
                 .collect();
             members.join(" | ")
         }
-        // The contract exports every channel.
-        Body::Channel(_) => name.to_owned(),
+        // The contract exports every channel, and a handle is only ever a field's type.
+        Body::Channel(_) | Body::Handle => name.to_owned(),
     }
 }
 

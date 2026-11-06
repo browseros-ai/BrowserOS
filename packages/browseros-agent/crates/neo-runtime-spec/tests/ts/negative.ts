@@ -10,6 +10,10 @@ import type {
 import type { FrameGotoParams, FrameGotoResult } from '../../ts/serve'
 import type { InjectedScript } from './injected-script'
 
+/** The spec names no handle kinds besides the built-in `Element` yet. */
+type Handles = Record<never, never>
+type Api = InjectedApi<InjectedScript, Handles>
+
 export const nullText = {
   title: () => ({ value: document.title }),
   textContent: () => ({
@@ -17,40 +21,48 @@ export const nullText = {
     matched: { value: (document as Node).textContent, preview: '' },
   }),
   ariaSnapshot: () => ({}),
-  frameOwner: () => undefined,
-} satisfies InjectedApi<InjectedScript>
+  frameOwner: () => ({}),
+} satisfies Api
 
 export const missingCall = {
   title: () => ({ value: document.title }),
   textContent: () => ({}),
   ariaSnapshot: () => ({}),
   // @ts-expect-error frameOwner is missing.
-} satisfies InjectedApi<InjectedScript>
+} satisfies Api
 
 export const extraCall = {
   title: () => ({ value: document.title }),
   textContent: () => ({}),
   ariaSnapshot: () => ({}),
-  frameOwner: () => undefined,
+  frameOwner: () => ({}),
   // @ts-expect-error click is not a page call the contract declares.
   click: () => ({}),
-} satisfies InjectedApi<InjectedScript>
+} satisfies Api
 
 export const valueForElement = {
   title: () => ({ value: document.title }),
   textContent: () => ({}),
   ariaSnapshot: () => ({}),
   // @ts-expect-error frameOwner returns the element itself, not a selector for it.
-  frameOwner: () => 'iframe#main',
-} satisfies InjectedApi<InjectedScript>
+  frameOwner: () => ({ element: 'iframe#main' }),
+} satisfies Api
+
+export const unexpectedHandle = {
+  title: () => ({ value: document.title }),
+  textContent: () => ({}),
+  ariaSnapshot: () => ({}),
+  // @ts-expect-error frameOwner takes no handle argument: it finds its element by selector.
+  frameOwner: (_injected, _params, element: Element) => ({ element }),
+} satisfies Api
 
 export const iframeRecord = {
   title: () => ({ value: document.title }),
   textContent: () => ({}),
   // @ts-expect-error iframes is a list, not Playwright's iframeDepths record.
   ariaSnapshot: () => ({ snapshot: { nodes: [], iframes: { e1: 0 } } }),
-  frameOwner: () => undefined,
-} satisfies InjectedApi<InjectedScript>
+  frameOwner: () => ({}),
+} satisfies Api
 
 export const unknownParam = {
   title: () => ({ value: document.title }),
@@ -59,8 +71,8 @@ export const unknownParam = {
     matched: { value: params.selectors[0], preview: '' },
   }),
   ariaSnapshot: () => ({}),
-  frameOwner: () => undefined,
-} satisfies InjectedApi<InjectedScript>
+  frameOwner: () => ({}),
+} satisfies Api
 
 // @ts-expect-error Playwright has no "spaceship" role.
 export const unknownRole: AriaNode = { role: 'spaceship' }

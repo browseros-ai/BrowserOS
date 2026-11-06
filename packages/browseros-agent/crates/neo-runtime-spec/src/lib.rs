@@ -15,15 +15,18 @@
 //!   decodes a call with [`serve::FrameCall::decode`], matches on it, and answers with
 //!   [`Command::reply`], which accepts only that command's result type.
 //! - [`injected`] holds the page calls `neo-runtime` makes into `neo-runtime-injected`'s glue
-//!   table (`spec/injected.yml`). The page does no serialization work. A call returns plain
-//!   JSON ([`ValueCall`]) or one element that stays in the page ([`ElementCall`]), and the
-//!   decode here is the only validation.
+//!   table (`spec/injected.yml`). Each call's params type implements [`InjectedCall`], and its
+//!   result type implements [`PageResult`]. A call crosses plain JSON plus handles: a
+//!   [`Handle<K>`](Handle) names a page object that stays in the page, by its CDP object id,
+//!   typed by kind ([`Element`], or a marker generated from a `type: handle` definition). The
+//!   page does no serialization work, and the decode here is the only validation.
 //!
 //! The same types exist in TypeScript under `ts/`, in the bun package
 //! `@browseros/neo-runtime-spec` (exports `./serve`, `./injected` and `./spec-hash`).
 //! `neo-runtime-injected`'s glue table is written as
-//! `export const glue = { ... } satisfies InjectedApi<InjectedScript>`, so it fails `tsc` when
-//! it drifts from `spec/injected.yml`.
+//! `export const glue = { ... } satisfies InjectedApi<InjectedScript, Handles>`, where `Handles`
+//! binds each named handle kind to its Playwright page type, so it fails `tsc` when it drifts
+//! from `spec/injected.yml`.
 //!
 //! # Regenerate after a spec change
 //!
@@ -55,7 +58,14 @@
 //! 1. Add a command under `Injected.commands` in `spec/injected.yml`, with `internal: true`,
 //!    `parameters` and `returns`. The file's header lists the rules the translator enforces.
 //! 2. Regenerate. `ts/injected.ts` gains the call, so `neo-runtime-injected` fails `tsc` until
-//!    its glue table implements it.
+//!    its glue table implements it, and its `dist/` must be rebuilt because the spec hash
+//!    changed.
+//!
+//! A handle may be a top-level parameter, which crosses as a `Runtime.callFunctionOn` argument
+//! after the params ([`InjectedCall::handles`]), or a top-level property of the result, alone or
+//! as one member of a union. A result that holds one crosses through `Runtime.getProperties`
+//! ([`PageResult::from_properties`]), so its other properties must be primitives. The translator
+//! rejects a handle anywhere else, where it would have to cross as JSON.
 //!
 //! # Notes for consumers
 //!
@@ -82,10 +92,18 @@ pub mod serve;
 mod spec_hash;
 
 pub use call::{
-    CallDecodeError, Command, ElementCall, InjectedCall, MethodFlag, MethodGroup, MethodMeta,
-    RemoteElement, ValueCall,
+    CallDecodeError, Command, Element, Handle, HandleId, HandleKind, InjectedCall, MethodFlag,
+    MethodGroup, MethodMeta, PageResult, Properties, ResultDecodeError,
 };
 pub use spec_hash::SPEC_SHA256;
+
+/// Whether `hash` is the spec hash this crate was generated from. `const`, so `neo-runtime` can
+/// assert at compile time that the page bundle it embeds (`neo-runtime-injected`'s
+/// `dist/spec-sha256`) was built from the same spec as these types.
+#[must_use]
+pub const fn is_current(hash: &str) -> bool {
+    str_eq(hash, SPEC_SHA256)
+}
 
 // The generated modules must come from the spec as it is now: build.rs hashes `spec/` on every
 // build, and a different hash means a spec file changed after the last translator run.

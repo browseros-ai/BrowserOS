@@ -8,7 +8,13 @@
 //!   A reference to an interface Neo does not implement is uninhabited: no value can exist, so
 //!   Rust cannot produce one.
 //! - `injected.yml` declares one interface, `Injected`, whose commands are the page's glue
-//!   functions. A page call crosses plain JSON or one element, never a Playwright object.
+//!   functions. A page call crosses plain JSON and handles, never a Playwright object.
+//! - A handle (`Element` or a `type: handle` definition) is a page object Rust names by CDP object
+//!   id. It may be a top-level parameter, which crosses as a `Runtime.callFunctionOn` argument,
+//!   or a top-level result property (alone or as one member of a union), which `neo-runtime`
+//!   reads with `Runtime.getProperties`. That read hands back every object as another page
+//!   object, so the other properties of such a result must be primitives. Anywhere else a
+//!   handle would have to cross as JSON, which it cannot, so the builder rejects it.
 //! - Only the closure of those selections is emitted.
 //! - Inline types are hoisted as `{Owner}{Prop}`, with `Item` for array items. Every type name,
 //!   field and variant identifier is checked unique, and a recursive reference that no array
@@ -58,6 +64,9 @@ pub struct ServedCommand {
     /// The params struct in the module's types, such as `FrameTextContentParams`.
     pub params: String,
     pub result: String,
+    /// Playwright's command declares no `returns`, so its server replies with no `result` at all
+    /// and its client resolves `undefined`, not `{}`.
+    pub void_result: bool,
     pub meta: Meta,
 }
 
@@ -69,20 +78,14 @@ pub struct InjectedModule {
     pub types: Vec<TypeDef>,
 }
 
-/// One glue function in the page.
+/// One glue function in the page. Its params struct lists the handle arguments as fields of
+/// [`FieldType::Handle`], in spec order, and its result struct's [`Crossing`] says how the result
+/// comes back.
 pub struct PageCall {
     /// The glue table key, such as `textContent`.
     pub name: String,
     pub params: String,
-    pub result: PageResult,
-}
-
-/// How a page call's result crosses back.
-pub enum PageResult {
-    /// A struct in the module's types, decoded from the JSON the page returns.
-    Value(String),
-    /// One DOM element that stays in the page, or nothing.
-    Element,
+    pub result: String,
 }
 
 /// A generated type.
@@ -101,15 +104,33 @@ pub enum Body {
     Enum(Vec<Variant>),
     Union(Union),
     Channel(Channel),
+    /// A `type: handle` definition: a marker kind in Rust, a key of `InjectedHandleKinds` in
+    /// TypeScript.
+    Handle,
 }
 
 pub struct Struct {
     pub fields: Vec<Field>,
     /// No `float` is reachable, so the struct derives `Eq`.
     pub eq: bool,
-    /// A page call type: decoding rejects unknown fields, so a page bundle built from another
-    /// spec fails on its first call instead of dropping data.
+    /// A page call type decoded from JSON: decoding rejects unknown fields, so a page bundle built
+    /// from another spec fails on its first call instead of dropping data.
     pub deny_unknown_fields: bool,
+    pub crossing: Crossing,
+}
+
+/// How a struct or union crosses its seam. Served commands only ever cross as JSON; page calls
+/// use all three.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Crossing {
+    /// As JSON, both ways.
+    Json,
+    /// Page call params that hold handles: the other fields serialize as the JSON params, and
+    /// each handle crosses as a `Runtime.callFunctionOn` argument. Never decoded.
+    Arguments,
+    /// A page call result that holds a handle, or a union with a handle member: read property by
+    /// property from `Runtime.getProperties`, never as JSON.
+    Properties,
 }
 
 pub struct Field {
@@ -136,6 +157,17 @@ pub enum FieldType {
     /// A [`FieldType::Ref`] on a cycle that no array breaks, so Rust boxes it.
     Boxed(String),
     Array(Box<FieldType>),
+    /// A page object of this kind, only ever a top-level field of page call params or results.
+    Handle(HandleKindRef),
+}
+
+/// The kind of page object a handle names.
+#[derive(Clone, PartialEq, Eq)]
+pub enum HandleKindRef {
+    /// The built-in `Element`.
+    Element,
+    /// A `type: handle` definition, by name.
+    Named(String),
 }
 
 /// An enum literal.
@@ -152,6 +184,8 @@ pub struct Union {
     pub eq: bool,
     /// Every member is a boolean or an enum, so the union derives `Copy` and `Hash`.
     pub copy_hash: bool,
+    /// [`Crossing::Json`], or [`Crossing::Properties`] when a member is a handle.
+    pub crossing: Crossing,
 }
 
 pub struct UnionMember {
@@ -169,6 +203,8 @@ pub enum MemberKind {
     Enum(String),
     /// A JSON object decoded as this struct, boxed in Rust.
     Object(String),
+    /// A page object, which a result property holds instead of a primitive member.
+    Handle(HandleKindRef),
 }
 
 /// A reference to an object of a Playwright interface.
@@ -383,7 +419,7 @@ fn build_serve(protocol: &Protocol, selection: &Selection<'_>) -> Result<ServeMo
                 ]),
                 exported: true,
             };
-            builder.add_struct(head, initializer.props, &initializer.at)?;
+            builder.add_struct(head, initializer.props, &initializer.at, Place::Plain)?;
         }
         let mut commands = Vec::with_capacity(interface.commands.len());
         for (command, _) in &interface.commands {
@@ -482,7 +518,7 @@ fn build_injected(protocol: &Protocol, id: DefId) -> Result<InjectedModule, Spec
             ]),
             exported: true,
         };
-        builder.add_struct(head, props, &at.key("initializer"))?;
+        builder.add_struct(head, props, &at.key("initializer"), Place::Plain)?;
     }
     let mut calls = Vec::with_capacity(interface.commands.len());
     for command in &interface.commands {
@@ -560,13 +596,15 @@ impl Closure {
         match &protocol.def(id).kind {
             DefKind::Object(props) => self.props(protocol, props),
             DefKind::Union(members) => self.members(protocol, members),
-            DefKind::Enum(_) | DefKind::Mixin | DefKind::Interface(_) => {}
+            DefKind::Enum(_) | DefKind::Mixin | DefKind::Interface(_) | DefKind::Handle => {}
         }
     }
 
     fn ty(&mut self, protocol: &Protocol, ty: &Type) {
         match ty {
-            Type::Named(id) => self.named(protocol, *id),
+            // A handle definition counts as reached, so an unused one is reported like any other
+            // unused definition.
+            Type::Named(id) | Type::Handle(id) => self.named(protocol, *id),
             Type::Channel(id) => {
                 self.channels.insert(*id);
             }
@@ -581,7 +619,8 @@ impl Closure {
             | Type::Json
             | Type::Undefined
             | Type::AnyChannel
-            | Type::Enum(_) => {}
+            | Type::Enum(_)
+            | Type::Element => {}
         }
     }
 }
@@ -591,8 +630,20 @@ enum Side {
     /// Served commands: Playwright's wire, where a channel reference is inhabited only when its
     /// interface is keyed in `serve.yml`.
     Serve { implemented: Vec<DefId> },
-    /// Page calls: plain JSON both ways, and decoding rejects unknown fields.
+    /// Page calls: plain JSON and handles, and decoding rejects unknown fields.
     Page,
+}
+
+/// Where a struct's properties sit, which decides whether one may be a handle.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// Anywhere but the top level of a page call: a handle cannot cross as JSON.
+    Plain,
+    /// A page call's `parameters`: a property may be a handle, passed as a CDP argument.
+    PageParams,
+    /// A page call's `returns`: a property may be a handle or a union with a handle member, read
+    /// with `Runtime.getProperties`.
+    PageReturns,
 }
 
 /// A type's name, docs and TypeScript visibility.
@@ -680,11 +731,11 @@ impl<'protocol> Builder<'protocol> {
             head,
             command.params.as_deref().unwrap_or_default(),
             &at.key("parameters"),
+            Place::Plain,
         )?;
         let returns: &[Prop] = match &command.returns {
             Returns::Props(props) => props,
-            // The extended grammar alone allows `Element?`, and served commands are Playwright's.
-            Returns::Nothing | Returns::Element => &[],
+            Returns::Nothing => &[],
         };
         let result = format!("{stem}Result");
         let head = Head {
@@ -692,12 +743,13 @@ impl<'protocol> Builder<'protocol> {
             doc: vec![format!("Result of `{method}` (`spec/{}`).", def.file)],
             exported: true,
         };
-        self.add_struct(head, returns, &at.key("returns"))?;
+        self.add_struct(head, returns, &at.key("returns"), Place::Plain)?;
         Ok(ServedCommand {
             method: command.name.clone(),
             variant: title_case(&command.name),
             params,
             result,
+            void_result: matches!(command.returns, Returns::Nothing),
             meta: command.meta.clone(),
         })
     }
@@ -722,15 +774,9 @@ impl<'protocol> Builder<'protocol> {
             head,
             command.params.as_deref().unwrap_or_default(),
             &at.key("parameters"),
+            Place::PageParams,
         )?;
         let returns: &[Prop] = match &command.returns {
-            Returns::Element => {
-                return Ok(PageCall {
-                    name: command.name.clone(),
-                    params,
-                    result: PageResult::Element,
-                });
-            }
             Returns::Props(props) => props,
             Returns::Nothing => &[],
         };
@@ -743,11 +789,11 @@ impl<'protocol> Builder<'protocol> {
             )],
             exported: true,
         };
-        self.add_struct(head, returns, &at.key("returns"))?;
+        self.add_struct(head, returns, &at.key("returns"), Place::PageReturns)?;
         Ok(PageCall {
             name: command.name.clone(),
             params,
-            result: PageResult::Value(result),
+            result,
         })
     }
 
@@ -771,12 +817,26 @@ impl<'protocol> Builder<'protocol> {
             exported: true,
         };
         match &def.kind {
-            DefKind::Object(props) => self.add_struct(head, props, &at),
+            DefKind::Object(props) => self.add_struct(head, props, &at, Place::Plain),
             DefKind::Enum(literals) => self.add_enum(head, literals, &at),
             DefKind::Union(members) => self.add_union(head, members, &at),
+            DefKind::Handle => self.add_handle(head, &at),
             // `Type::Named`, which the closure follows, never names these.
             DefKind::Mixin | DefKind::Interface(_) => Ok(()),
         }
+    }
+
+    /// A `type: handle` definition. TypeScript writes it as a key of `InjectedHandleKinds`, not
+    /// as a type of its own, because the glue binds it to a Playwright page type.
+    fn add_handle(&mut self, head: Head, at: &At) -> Result<(), SpecError> {
+        self.claim(&head.name, at)?;
+        self.types.push(TypeDef {
+            name: head.name,
+            doc: head.doc,
+            exported: false,
+            body: Body::Handle,
+        });
+        Ok(())
     }
 
     fn add_channel(&mut self, id: DefId) -> Result<(), SpecError> {
@@ -811,10 +871,25 @@ impl<'protocol> Builder<'protocol> {
         Ok(())
     }
 
-    fn add_struct(&mut self, head: Head, props: &[Prop], at: &At) -> Result<(), SpecError> {
+    fn add_struct(
+        &mut self,
+        head: Head,
+        props: &[Prop],
+        at: &At,
+        place: Place,
+    ) -> Result<(), SpecError> {
         self.claim(&head.name, at)?;
         // Hoisted types land right after their owner.
         let slot = self.types.len();
+        let holds_handle = match place {
+            Place::Plain => false,
+            Place::PageParams => props
+                .iter()
+                .any(|prop| self.handle_kind(&prop.ty).is_some()),
+            Place::PageReturns => props.iter().any(|prop| {
+                self.handle_kind(&prop.ty).is_some() || self.has_handle_member(&prop.ty)
+            }),
+        };
         let mut fields: Vec<Field> = Vec::with_capacity(props.len());
         for prop in props {
             let at = at.key(&prop.name);
@@ -826,7 +901,30 @@ impl<'protocol> Builder<'protocol> {
                     other.wire
                 )));
             }
-            let ty = self.lower(&prop.ty, &Site::prop(&head.name, &prop.name), &at)?;
+            let site = Site::prop(&head.name, &prop.name);
+            let handle = self.handle_kind(&prop.ty);
+            let ty = match (place, handle) {
+                (Place::PageParams, Some(_)) if prop.presence == Presence::Optional => {
+                    return Err(at.error(
+                        "is an optional handle; a handle argument is passed by position, so it \
+                         cannot be absent"
+                            .to_owned(),
+                    ));
+                }
+                (Place::PageParams | Place::PageReturns, Some(kind)) => FieldType::Handle(kind),
+                (Place::PageReturns, None) if self.has_handle_member(&prop.ty) => {
+                    self.lower_handle_union(&prop.ty, &site, &at)?
+                }
+                (Place::PageReturns, None) if holds_handle && !self.is_primitive(&prop.ty) => {
+                    return Err(at.error(
+                        "is not a primitive; a result that holds a handle is read with \
+                         `Runtime.getProperties`, which hands back objects and arrays as page \
+                         objects too, so its other properties must be primitives or string enums"
+                            .to_owned(),
+                    ));
+                }
+                _ => self.lower(&prop.ty, &site, &at)?,
+            };
             let note = self.unimplemented(&prop.ty).map(|interface| {
                 format!(
                     "Always absent: `{interface}` is not a key of `spec/serve.yml`, so Neo creates \
@@ -842,18 +940,34 @@ impl<'protocol> Builder<'protocol> {
                 optional: prop.presence == Presence::Optional,
             });
         }
-        let deny_unknown_fields = matches!(self.side, Side::Page);
+        let crossing = match place {
+            Place::PageParams if holds_handle => Crossing::Arguments,
+            Place::PageReturns if holds_handle => Crossing::Properties,
+            Place::Plain | Place::PageParams | Place::PageReturns => Crossing::Json,
+        };
+        let mut doc = head.doc;
+        if crossing == Crossing::Properties {
+            doc.push(String::new());
+            doc.push(
+                "It holds a page object, so `neo-runtime` reads it with `Runtime.getProperties`, \
+                 not by value."
+                    .to_owned(),
+            );
+        }
         let body = Body::Struct(Struct {
             fields,
             eq: true,
-            deny_unknown_fields,
+            deny_unknown_fields: matches!(self.side, Side::Page) && crossing == Crossing::Json,
+            crossing,
         });
         self.types.insert(
             slot,
             TypeDef {
                 name: head.name,
-                doc: head.doc,
-                exported: head.exported,
+                doc,
+                // TypeScript writes a handle result inline where the glue's handle kinds are in
+                // scope.
+                exported: head.exported && crossing != Crossing::Properties,
                 body,
             },
         );
@@ -902,25 +1016,9 @@ impl<'protocol> Builder<'protocol> {
                     "collides with another member as the variant `{ident}`"
                 )));
             }
-            // Lowering hoists an inline member and applies the module's rules; the dialect has
-            // already limited members to these kinds.
-            let member_type =
-                self.lower(&member.ty, &Site::member(&head.name, &member.name), &at)?;
-            let is_enum = match &member.ty {
-                Type::Enum(_) => true,
-                Type::Named(id) => matches!(self.protocol.def(*id).kind, DefKind::Enum(_)),
-                _ => false,
-            };
-            let kind = match member_type {
-                FieldType::Bool => MemberKind::Bool,
-                FieldType::String | FieldType::Base64 => MemberKind::String,
-                FieldType::Ref(name) if is_enum => MemberKind::Enum(name),
-                FieldType::Ref(name) => MemberKind::Object(name),
-                _ => {
-                    return Err(
-                        at.error("is not a kind of union member Neo supports yet".to_owned())
-                    );
-                }
+            let kind = match self.handle_kind(&member.ty) {
+                Some(handle) => MemberKind::Handle(handle),
+                None => self.member_kind(member, &head.name, &at)?,
             };
             union_members.push(UnionMember {
                 ident,
@@ -928,21 +1026,56 @@ impl<'protocol> Builder<'protocol> {
                 kind,
             });
         }
+        // The dialect lets a handle member share a union only with string and boolean members,
+        // which `Runtime.getProperties` hands back as values, so the property's place tells the
+        // members apart.
+        let crossing = if union_members
+            .iter()
+            .any(|member| matches!(member.kind, MemberKind::Handle(_)))
+        {
+            Crossing::Properties
+        } else {
+            Crossing::Json
+        };
         let body = Body::Union(Union {
             members: union_members,
             eq: true,
             copy_hash: false,
+            crossing,
         });
         self.types.insert(
             slot,
             TypeDef {
                 name: head.name,
                 doc: head.doc,
-                exported: head.exported,
+                exported: head.exported && crossing == Crossing::Json,
                 body,
             },
         );
         Ok(())
+    }
+
+    /// A union member that is not a handle. Lowering hoists an inline member and applies the
+    /// module's rules; the dialect has already limited members to these kinds.
+    fn member_kind(
+        &mut self,
+        member: &Member,
+        owner: &str,
+        at: &At,
+    ) -> Result<MemberKind, SpecError> {
+        let member_type = self.lower(&member.ty, &Site::member(owner, &member.name), at)?;
+        let is_enum = match &member.ty {
+            Type::Enum(_) => true,
+            Type::Named(id) => matches!(self.protocol.def(*id).kind, DefKind::Enum(_)),
+            _ => false,
+        };
+        match member_type {
+            FieldType::Bool => Ok(MemberKind::Bool),
+            FieldType::String | FieldType::Base64 => Ok(MemberKind::String),
+            FieldType::Ref(name) if is_enum => Ok(MemberKind::Enum(name)),
+            FieldType::Ref(name) => Ok(MemberKind::Object(name)),
+            _ => Err(at.error("is not a kind of union member Neo supports yet".to_owned())),
+        }
     }
 
     /// The field type for `ty`, hoisting an inline type under `site`'s name.
@@ -970,10 +1103,24 @@ impl<'protocol> Builder<'protocol> {
             }
             Type::Channel(id) if page => {
                 return Err(at.error(format!(
-                    "is a `{}` object; a page call crosses plain JSON or one element, never a \
+                    "is a `{}` object; a page call crosses plain JSON and handles, never a \
                      Playwright object",
                     self.protocol.def(*id).name
                 )));
+            }
+            Type::Element | Type::Handle(_) => {
+                return Err(at.error(
+                    "is a handle, which crosses only as a top-level parameter or result property \
+                     of a page call"
+                        .to_owned(),
+                ));
+            }
+            Type::Named(_) | Type::Union(_) if self.has_handle_member(ty) => {
+                return Err(at.error(
+                    "is a union with a handle member, which crosses only as a top-level result \
+                     property of a page call"
+                        .to_owned(),
+                ));
             }
             Type::Channel(id) => FieldType::Ref(format!("{}Channel", self.protocol.def(*id).name)),
             Type::Named(id) => FieldType::Ref(self.protocol.def(*id).name.clone()),
@@ -985,7 +1132,7 @@ impl<'protocol> Builder<'protocol> {
                 FieldType::Ref(site.name.clone())
             }
             Type::Object(props) => {
-                self.add_struct(site.head(), props, at)?;
+                self.add_struct(site.head(), props, at, Place::Plain)?;
                 FieldType::Ref(site.name.clone())
             }
             Type::Union(members) => {
@@ -994,6 +1141,58 @@ impl<'protocol> Builder<'protocol> {
             }
         };
         Ok(lowered)
+    }
+
+    /// A top-level result property whose union has a handle member, which [`Builder::lower`]
+    /// rejects everywhere else.
+    fn lower_handle_union(
+        &mut self,
+        ty: &Type,
+        site: &Site,
+        at: &At,
+    ) -> Result<FieldType, SpecError> {
+        match ty {
+            Type::Named(id) => Ok(FieldType::Ref(self.protocol.def(*id).name.clone())),
+            Type::Union(members) => {
+                self.add_union(site.head(), members, at)?;
+                Ok(FieldType::Ref(site.name.clone()))
+            }
+            _ => self.lower(ty, site, at),
+        }
+    }
+
+    /// The kind of page object `ty` names, when it is a handle.
+    fn handle_kind(&self, ty: &Type) -> Option<HandleKindRef> {
+        match ty {
+            Type::Element => Some(HandleKindRef::Element),
+            Type::Handle(id) => Some(HandleKindRef::Named(self.protocol.def(*id).name.clone())),
+            _ => None,
+        }
+    }
+
+    /// Whether `ty` is a union, named or inline, with a handle member.
+    fn has_handle_member(&self, ty: &Type) -> bool {
+        let members = match ty {
+            Type::Union(members) => members,
+            Type::Named(id) => match &self.protocol.def(*id).kind {
+                DefKind::Union(members) => members,
+                _ => return false,
+            },
+            _ => return false,
+        };
+        members
+            .iter()
+            .any(|member| self.handle_kind(&member.ty).is_some())
+    }
+
+    /// Whether `Runtime.getProperties` hands `ty` back as a value: a string, number, boolean or
+    /// string enum.
+    fn is_primitive(&self, ty: &Type) -> bool {
+        match ty {
+            Type::String | Type::Boolean | Type::Int | Type::Float | Type::Enum(_) => true,
+            Type::Named(id) => matches!(self.protocol.def(*id).kind, DefKind::Enum(_)),
+            _ => false,
+        }
     }
 
     /// The interface of a channel reference Neo does not implement.
@@ -1052,7 +1251,7 @@ impl<'protocol> Builder<'protocol> {
                         matches!(member.kind, MemberKind::Bool | MemberKind::Enum(_))
                     });
                 }
-                Body::Enum(_) | Body::Channel(_) => {}
+                Body::Enum(_) | Body::Channel(_) | Body::Handle => {}
             }
         }
         types
@@ -1119,7 +1318,7 @@ fn reaches_float(types: &[TypeDef]) -> Vec<bool> {
         .iter()
         .map(|ty| match &ty.body {
             Body::Struct(fields) => fields.fields.iter().any(|field| holds_float(&field.ty)),
-            Body::Enum(_) | Body::Union(_) | Body::Channel(_) => false,
+            Body::Enum(_) | Body::Union(_) | Body::Channel(_) | Body::Handle => false,
         })
         .collect();
     loop {
@@ -1173,7 +1372,7 @@ fn references(ty: &TypeDef) -> Vec<&str> {
                 }
             }
         }
-        Body::Enum(_) | Body::Channel(_) => {}
+        Body::Enum(_) | Body::Channel(_) | Body::Handle => {}
     }
     names
 }
@@ -1245,7 +1444,7 @@ fn blocker(types: &[TypeDef], name: &str, seen: &mut Vec<String>) -> Option<Stri
                 FieldType::Ref(target) | FieldType::Boxed(target) => blocker(types, target, seen),
                 _ => None,
             }),
-        Body::Channel(_) | Body::Enum(_) | Body::Union(_) => None,
+        Body::Channel(_) | Body::Enum(_) | Body::Union(_) | Body::Handle => None,
     }
 }
 

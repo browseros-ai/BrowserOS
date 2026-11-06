@@ -12,7 +12,9 @@ use neo_runtime_spec::serve::{
     FrameCall, FrameGotoParams, FrameGotoResult, FrameTextContentParams, FrameTextContentResult,
     FrameTitleResult, LifecycleEvent, Metadata,
 };
-use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodGroup, SPEC_SHA256};
+use neo_runtime_spec::{
+    CallDecodeError, Command, MethodFlag, MethodGroup, PageResult, SPEC_SHA256, is_current,
+};
 use serde_json::json;
 
 #[test]
@@ -72,10 +74,12 @@ fn replies_are_typed_by_their_command() {
         referer: None,
     };
     // `params.reply(&FrameTitleResult { .. })` does not compile: the reply type is the command's.
+    // `goto` declares a result, so even an empty one is sent as `result: {}`.
     assert_eq!(
         params.reply(&FrameGotoResult { response: None }).unwrap(),
-        json!({})
+        Some(json!({}))
     );
+    const { assert!(!<FrameGotoParams as Command>::VOID_RESULT, "goto returns") };
     let meta = <FrameGotoParams as Command>::META;
     assert_eq!(
         (meta.interface, meta.method, meta.title),
@@ -117,18 +121,23 @@ fn served_types_ignore_unknown_fields_like_playwright() {
 
 #[test]
 fn page_results_reject_unknown_fields() {
-    let matched: InjectedTextContentResult =
-        serde_json::from_value(json!({"matched": {"value": "", "preview": "<p></p>"}})).unwrap();
+    let matched = InjectedTextContentResult::from_value(
+        json!({"matched": {"value": "", "preview": "<p></p>"}}),
+    )
+    .unwrap();
     let expected = TextMatch {
         value: String::new(),
         preview: "<p></p>".into(),
     };
     assert_eq!(matched.matched, Some(expected));
-    let drift = serde_json::from_value::<InjectedTextContentResult>(json!({"matched": {
+    let drift = InjectedTextContentResult::from_value(json!({"matched": {
         "value": "x", "preview": "<p></p>", "extra": 1
     }}));
     let message = drift.unwrap_err().to_string();
-    assert!(message.contains("unknown field `extra`"), "{message}");
+    assert!(
+        message.starts_with("page call textContent returned unknown field `extra`"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -216,4 +225,7 @@ fn spec_hash_is_stamped_in_both_languages() {
         ts.contains(&format!("export const SPEC_SHA256 = '{SPEC_SHA256}'")),
         "{ts}"
     );
+    // `neo-runtime` const-asserts the page bundle's hash with this.
+    const { assert!(is_current(SPEC_SHA256), "the crate's own hash is current") };
+    assert!(!is_current(&"0".repeat(64)), "another spec's hash is not");
 }

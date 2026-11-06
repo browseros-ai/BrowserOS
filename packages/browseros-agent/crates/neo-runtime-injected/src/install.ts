@@ -25,6 +25,13 @@ import {
 import { glue } from './glue'
 import { WORLD_KEY } from './world-key'
 
+/** A glue function as `install` binds it, whatever its declared params and handles. */
+type GlueFunction = (
+  injected: InjectedScript,
+  params: never,
+  ...handles: never[]
+) => unknown
+
 /** The object `call.js` is called on: one method per glue key. */
 export type GlueObject = {
   [Name in keyof typeof glue]: (
@@ -72,10 +79,13 @@ export default function install(
     customEngines: [],
   }
   const injected = new InjectedScript(window, options)
+  // Every glue function accepts this shape: `never` params take any declared params, and the
+  // handles CDP passes after them arrive in the declared order.
+  const table: Record<string, GlueFunction> = glue
   const object = Object.fromEntries(
-    Object.entries(glue).map(([name, fn]) => [
+    Object.entries(table).map(([name, fn]) => [
       name,
-      (params: never) => fn(injected, params),
+      (params: never, ...handles: never[]) => fn(injected, params, ...handles),
     ]),
   ) as GlueObject
   store[key] = object

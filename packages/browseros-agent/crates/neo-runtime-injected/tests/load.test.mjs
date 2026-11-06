@@ -123,21 +123,25 @@ test('the built bundle installs once per document and answers through call.js', 
       ['button', 'button', 'paragraph', 'iframe'],
     )
 
-    const owner = await cdp.send(
-      'Runtime.callFunctionOn',
-      {
-        objectId: glue.objectId,
-        functionDeclaration: bundle.call,
-        arguments: [
-          { value: 'frameOwner' },
-          { value: { selector: 'iframe', strict: true } },
-        ],
-        awaitPromise: true,
-      },
-      sessionA,
+    const owner = await handleCall(cdp, sessionA, glue, 'frameOwner', {
+      selector: 'iframe',
+      strict: true,
+    })
+    assert.equal(
+      owner.element.subtype,
+      'node',
+      'frameOwner returns the element as a page object',
     )
-    assert.equal(owner.result.subtype, 'node', 'frameOwner returns the element')
-    assert.equal(owner.result.className, 'HTMLIFrameElement')
+    assert.equal(owner.element.className, 'HTMLIFrameElement')
+    const noOwner = await handleCall(cdp, sessionA, glue, 'frameOwner', {
+      selector: 'iframe.missing',
+      strict: true,
+    })
+    assert.equal(
+      noOwner.element.type,
+      'undefined',
+      'nothing matched reads as an undefined property, which neo-runtime leaves out',
+    )
     const notFrame = await page('frameOwner', {
       selector: '#lone',
       strict: true,
@@ -232,6 +236,44 @@ async function pageCall(cdp, sessionId, glue, name, params) {
   if (reply.exceptionDetails)
     return { exception: reply.exceptionDetails.exception }
   return { value: reply.result.value }
+}
+
+/**
+ * A page call whose result holds a handle, as neo-runtime makes it: by reference into an object
+ * group, then one `Runtime.getProperties`. Returns each own property's remote object by name.
+ */
+async function handleCall(cdp, sessionId, glue, name, params, handles = []) {
+  const reply = await cdp.send(
+    'Runtime.callFunctionOn',
+    {
+      objectId: glue.objectId,
+      functionDeclaration: bundle.call,
+      arguments: [
+        { value: name },
+        { value: params },
+        ...handles.map((handle) => ({ objectId: handle.objectId })),
+      ],
+      returnByValue: false,
+      awaitPromise: true,
+      objectGroup: 'neo-load-test',
+    },
+    sessionId,
+  )
+  assert.equal(
+    reply.exceptionDetails,
+    undefined,
+    JSON.stringify(reply.exceptionDetails),
+  )
+  const { result } = await cdp.send(
+    'Runtime.getProperties',
+    { objectId: reply.result.objectId, ownProperties: true },
+    sessionId,
+  )
+  return Object.fromEntries(
+    result
+      .filter((property) => property.name !== '__proto__')
+      .map((property) => [property.name, property.value]),
+  )
 }
 
 async function sameObject(cdp, sessionId, a, b) {

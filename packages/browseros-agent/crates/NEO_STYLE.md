@@ -9,8 +9,13 @@ Applies to every `crates/neo-*` crate and to `crates/neo-sdk`. Run `scripts/neo-
 | `neo-runtime-spec` | Rust, generated TS | Neo's cross-language contracts, translated from Playwright's protocol |
 | `neo-runtime` | Rust | Runs an agent's Playwright-style script in a QuickJS realm against one BrowserOS tab |
 | `neo-sdk` | TypeScript | The Playwright-shaped objects a script sees; `neo-runtime` embeds its `dist/sdk.js` |
+| `neo-runtime-injected` | TypeScript (page) | Playwright's injected script, vendored unchanged, behind Neo's typed glue table; `neo-runtime` embeds its `dist/*.js` and calls them over CDP in an isolated world |
 
-Dependencies point one way: `neo-sdk` is embedded by `neo-runtime`, which talks to the browser through `browseros-cdp` and may use `neo-runtime-spec`. Rust neo crates depend on those plus ordinary crates (tokio, serde, rquickjs, thiserror, tracing).
+Dependencies point one way: `neo-sdk` and `neo-runtime-injected` are embedded by `neo-runtime`, which talks to the browser through `browseros-cdp` and may use `neo-runtime-spec`. `neo-sdk` and `neo-runtime-injected` never import each other; both take types from `neo-runtime-spec`'s TypeScript. Rust neo crates depend on those plus ordinary crates (tokio, serde, rquickjs, thiserror, tracing).
+
+## Page objects
+
+A page object that Rust refers to across page calls (an element, an armed hit-target interceptor) is a handle: `neo_runtime_spec::Handle<K>`, the CDP `objectId` of an object that stays in the page, typed by its kind. Each kind is declared in `spec/injected.yml` (the built-in `Element`, or a `type: handle` definition), and the translator lets a handle cross only as a top-level page call parameter or result property. Never pass a raw `objectId` string between page calls, and never keep element state in the page for Neo to look up later: a handle lives in the CDP object group of the session that read it, and releasing that group is what frees it.
 
 `browseros-core` is never a dependency of a neo crate. Read it for patterns and copy what you need; Neo is a rebuild, and depending on it would pull the old runtime's state model back in.
 

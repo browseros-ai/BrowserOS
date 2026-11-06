@@ -73,7 +73,9 @@ fn playwright_spec_loads_with_every_name_resolved() {
             DefKind::Enum(_) => 1,
             DefKind::Mixin => 2,
             DefKind::Interface(_) => 3,
-            DefKind::Union(_) => panic!("Playwright's files cannot define unions"),
+            DefKind::Union(_) | DefKind::Handle => {
+                panic!("Playwright's files cannot use Neo's extensions")
+            }
         };
         kinds[slot] += 1;
     }
@@ -348,13 +350,20 @@ fn an_extension_outside_injected_yml_is_rejected() {
         error.starts_with("spec/playwright/a.yml: Either: uses `type: union`, a Neo extension"),
         "{error}"
     );
-    let element = PLAYWRIGHT.replace(
-        "      returns:\n        response: Response\n",
-        "      returns: Element?\n",
+    let handle = format!("{PLAYWRIGHT}Interceptor:\n  type: handle\n");
+    let error = rejection("playwright/a.yml", &handle);
+    assert_eq!(
+        error,
+        "spec/playwright/a.yml: Interceptor: uses `type: handle`, a Neo extension that only Neo's \
+         own spec files may use"
     );
+    // Only Neo's files see the built-in handle type, so a Playwright command cannot cross one.
+    let element = PLAYWRIGHT.replace("        response: Response\n", "        owner: Element\n");
     let error = rejection("playwright/a.yml", &element);
     assert!(
-        error.contains("Page.commands.reload.returns: uses `returns: Element?`, a Neo extension"),
+        error.starts_with(
+            "spec/playwright/a.yml: Page.commands.reload.returns.owner: unknown type \"Element\""
+        ),
         "{error}"
     );
 }
@@ -412,7 +421,7 @@ fn page_calls_cross_plain_json_only() {
     };
     let object = rejection("injected.yml", &with_returns("        page: Page\n"));
     assert!(
-        object.contains("is a `Page` object; a page call crosses plain JSON or one element"),
+        object.contains("is a `Page` object; a page call crosses plain JSON and handles"),
         "{object}"
     );
     let binary = rejection("injected.yml", &with_returns("        data: binary\n"));
@@ -555,4 +564,251 @@ fn identifiers_follow_the_wire_names() {
     );
     assert_eq!(variant_ident("2d").as_deref(), None);
     assert_eq!(title_case("textContent"), "TextContent");
+}
+
+/// `injected.yml` with one more page call, `pick`, declared by `body` (its keys under the
+/// command), and `defs` appended as definitions.
+fn with_pick(body: &str, defs: &str) -> String {
+    format!("{INJECTED}    pick:\n      internal: true\n{body}{defs}")
+}
+
+const INTERCEPTOR: &str = "Interceptor:\n  type: handle\n";
+
+#[test]
+fn a_handle_crosses_only_at_the_top_level_of_a_page_call() {
+    let nested = with_pick(
+        "      returns:\n        box:\n          type: object\n          properties:\n            \
+         element: Element\n",
+        "",
+    );
+    assert_eq!(
+        rejection("injected.yml", &nested),
+        "spec/injected.yml: Injected.commands.pick.returns.box.element: is a handle, which \
+         crosses only as a top-level parameter or result property of a page call"
+    );
+    let listed = with_pick(
+        "      returns:\n        elements:\n          type: array\n          items: Element\n",
+        "",
+    );
+    let error = rejection("injected.yml", &listed);
+    assert!(
+        error
+            .starts_with("spec/injected.yml: Injected.commands.pick.returns.elements: is a handle"),
+        "{error}"
+    );
+    let initializer = INJECTED.replace(
+        "  type: interface\n",
+        "  type: interface\n  initializer:\n    owner: Element\n",
+    );
+    let error = rejection("injected.yml", &initializer);
+    assert!(
+        error.starts_with("spec/injected.yml: Injected.initializer.owner: is a handle"),
+        "{error}"
+    );
+    let union_param = with_pick(
+        "      parameters:\n        target: Target\n",
+        "Target:\n  type: union\n  members:\n    text: string\n    element: Element\n",
+    );
+    assert_eq!(
+        rejection("injected.yml", &union_param),
+        "spec/injected.yml: Injected.commands.pick.parameters.target: is a union with a handle \
+         member, which crosses only as a top-level result property of a page call"
+    );
+}
+
+#[test]
+fn a_handle_argument_is_never_optional() {
+    let optional = with_pick("      parameters:\n        element: Element?\n", "");
+    let error = rejection("injected.yml", &optional);
+    assert!(
+        error.starts_with(
+            "spec/injected.yml: Injected.commands.pick.parameters.element: is an optional handle"
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_result_that_holds_a_handle_has_only_primitive_properties() {
+    for (property, kind) in [
+        (
+            "rect",
+            "          type: object\n          properties:\n            x: int\n",
+        ),
+        ("tags", "          type: array\n          items: string\n"),
+    ] {
+        let returns =
+            format!("      returns:\n        element: Element?\n        {property}:\n{kind}");
+        let error = rejection("injected.yml", &with_pick(&returns, ""));
+        assert!(
+            error.starts_with(&format!(
+                "spec/injected.yml: Injected.commands.pick.returns.{property}: is not a primitive; a \
+                 result that holds a handle is read with `Runtime.getProperties`"
+            )),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn a_union_holds_at_most_one_handle() {
+    let two = with_pick(
+        "      returns:\n        target: Target\n",
+        &format!(
+            "Target:\n  type: union\n  members:\n    element: Element\n    armed: Interceptor\n{INTERCEPTOR}"
+        ),
+    );
+    let error = rejection("injected.yml", &two);
+    assert!(
+        error.starts_with(
+            "spec/injected.yml: Target.members.armed: is a JSON object, like member \"element\""
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn every_handle_definition_is_reachable_from_injected() {
+    let error = rejection("injected.yml", &format!("{INJECTED}{INTERCEPTOR}"));
+    assert_eq!(
+        error,
+        "spec/injected.yml: Interceptor: is not reachable from `Injected`; use it in a page call or \
+         remove it"
+    );
+    let body = format!("{INJECTED}Interceptor:\n  type: handle\n  properties:\n    stop: string\n");
+    let error = rejection("injected.yml", &body);
+    assert!(
+        error.starts_with(
+            "spec/injected.yml: Interceptor.properties: is not part of the dialect here"
+        ),
+        "{error}"
+    );
+}
+
+/// Every place a handle may cross, in one scratch spec: a handle argument, a result that holds an
+/// element next to primitives, a result union of a string and a named handle, and a call that
+/// consumes that handle.
+const HANDLES: &str = "\
+Injected:
+  type: interface
+  commands:
+    resolve:
+      internal: true
+      parameters:
+        selector: string
+      returns:
+        element: Element?
+        count: int
+        mode: Mode?
+    check:
+      internal: true
+      parameters:
+        element: Element
+        force: boolean
+    arm:
+      internal: true
+      parameters:
+        element: Element
+      returns:
+        outcome: Setup
+    stop:
+      internal: true
+      parameters:
+        interceptor: Interceptor
+      returns:
+        done: boolean
+Interceptor:
+  type: handle
+Setup:
+  type: union
+  members:
+    description: string
+    armed: Interceptor
+";
+
+#[test]
+fn handles_cross_as_arguments_and_properties() {
+    let outputs = generate_from(&[
+        ("playwright/a.yml", PLAYWRIGHT),
+        ("serve.yml", SERVE),
+        ("injected.yml", HANDLES),
+    ])
+    .unwrap_or_else(|error| panic!("{error}"));
+    let rust = rendered(&outputs, "src/injected.rs");
+    for expected in [
+        // A handle argument is skipped by serde and listed by `handles()`, in spec order.
+        "#[derive(Clone, Debug, PartialEq, Eq, Serialize)]\npub struct InjectedCheckParams {\n    \
+         #[serde(skip)]\n    pub element: Handle<Element>,\n    #[serde(rename = \"force\")]\n    \
+         pub force: bool,\n}",
+        "    fn handles(&self) -> Vec<&HandleId> {\n        vec![self.element.id()]\n    }",
+        "    fn handles(&self) -> Vec<&HandleId> {\n        vec![self.interceptor.id()]\n    }",
+        // A result that holds a handle is decoded property by property.
+        "#[derive(Clone, Debug, PartialEq, Eq)]\npub struct InjectedResolveResult {\n    pub element: \
+         Option<Handle<Element>>,\n    pub count: i64,\n    pub mode: Option<Mode>,\n}",
+        "    const BY_VALUE: bool = false;",
+        "            count: properties.required(\"resolve\", \"count\", decode_property)?,",
+        "        properties.finish(\"resolve\")?;",
+        // The union of a string and a handle is told apart by where the property arrives.
+        "pub enum Setup {\n    Description(String),\n    Armed(Handle<Interceptor>),\n}",
+        "            Property::Object(..) => Handle::from_property(property).map(Self::Armed),",
+        // A named handle kind is an uninhabited marker.
+        "pub enum Interceptor {}",
+        "impl HandleKind for Interceptor {",
+        // A result that holds no handle still crosses by value.
+        "impl PageResult for InjectedStopResult {\n    const BY_VALUE: bool = true;",
+    ] {
+        assert!(
+            rust.contains(expected),
+            "src/injected.rs lacks:\n{expected}\n\n{rust}"
+        );
+    }
+    let ts = rendered(&outputs, "ts/injected.ts");
+    for expected in [
+        "export type InjectedHandleKinds = {\n  /** `Interceptor` (`spec/injected.yml`). */\n  \
+         Interceptor: unknown\n}",
+        "  check: {\n    params: InjectedCheckParams\n    handles: [element: Element]\n",
+        "    handles: [interceptor: H['Interceptor']]\n",
+        "      outcome: string | H['Interceptor']\n",
+        "      element?: Element\n",
+        // A handle argument is not part of the JSON params.
+        "export type InjectedCheckParams = {\n  force: boolean\n}",
+        "export type InjectedStopParams = Record<string, never>",
+    ] {
+        assert!(
+            ts.contains(expected),
+            "ts/injected.ts lacks:\n{expected}\n\n{ts}"
+        );
+    }
+    assert!(
+        !ts.contains("export type InjectedResolveResult"),
+        "a result that holds a handle is written inline, where `H` is in scope"
+    );
+}
+
+#[test]
+fn a_void_command_replies_without_a_result() {
+    let served = "interfaces:\n  Page: [title, ping]\ntypes: []\n";
+    let ping = PLAYWRIGHT.replace(
+        "    reload:\n",
+        "    ping:\n      title: Ping\n    reload:\n",
+    );
+    let outputs = generate_from(&[
+        ("playwright/a.yml", &ping),
+        ("serve.yml", served),
+        ("injected.yml", INJECTED),
+    ])
+    .unwrap_or_else(|error| panic!("{error}"));
+    let rust = rendered(&outputs, "src/serve.rs");
+    assert!(
+        rust.contains("impl Command for PagePingParams {\n    type Result = PagePingResult;"),
+        "{rust}"
+    );
+    let void = |params: &str| {
+        let start = rust
+            .find(&format!("impl Command for {params} {{"))
+            .expect("the impl exists");
+        rust[start..].find("const VOID_RESULT: bool = true;") < rust[start..].find("\n}\n")
+    };
+    assert!(void("PagePingParams"), "ping declares no returns");
+    assert!(!void("PageTitleParams"), "title returns its value");
 }
