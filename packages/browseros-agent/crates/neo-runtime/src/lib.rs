@@ -13,7 +13,8 @@
 //!                  └─ Tabs::session      one lazy session for the call's page
 //!                       ├─ click::click  click.rs: policy over the Tab seam
 //!                       ├─ navigate      navigate.rs: goto (commits, lifecycle) and live title
-//!                       ├─ reads         reads.rs: textContent and ariaSnapshot read loops;
+//!                       ├─ reads         reads.rs: textContent, innerText, getAttribute,
+//!                       │                ariaSnapshot;
 //!                       │                aria_yaml.rs renders the snapshot as Playwright's YAML
 //!                       └─ PageSession   page.rs: domains, watcher, document state, input
 //!                            └─ World    world.rs: per-document injected glue

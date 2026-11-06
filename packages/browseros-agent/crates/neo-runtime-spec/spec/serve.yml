@@ -35,6 +35,8 @@ interfaces:
     - check
     - uncheck
     - selectOption
+    - innerText
+    - getAttribute
     - queryCount
     - evalOnSelectorAll
 
