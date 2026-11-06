@@ -1,0 +1,35 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>wait-for</title></head><body>
+<button id="arm" type="button">Arm</button>
+<button id="add" type="button">Add</button>
+<p id="shown">Shown</p>
+<p id="hidden" style="display: none">Hidden</p>
+<p class="many">One</p>
+<p class="many">Two</p>
+<p id="doomed">Doomed</p>
+<p id="fade">Fade</p>
+<p id="reveal" style="display: none">Reveal</p>
+<script>
+window.__log = []
+const add = (id) => {
+  const element = document.createElement('p')
+  element.id = id
+  element.textContent = id
+  document.body.append(element)
+}
+// 300 ms after #arm: one element added, one removed, one hidden, one shown.
+document.querySelector('#arm').addEventListener('click', () => {
+  window.__log.push('armed')
+  setTimeout(() => {
+    add('late')
+    document.querySelector('#doomed').remove()
+    document.querySelector('#fade').style.display = 'none'
+    document.querySelector('#reveal').style.display = ''
+    window.__log.push('changed')
+  }, 300)
+})
+document.querySelector('#add').addEventListener('click', () => {
+  add('added')
+  window.__log.push('added')
+})
+</script>
+</body></html>

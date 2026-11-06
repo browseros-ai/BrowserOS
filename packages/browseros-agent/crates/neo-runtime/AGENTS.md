@@ -20,7 +20,7 @@ Checks, from `packages/browseros-agent`: `scripts/neo-check.sh`. The end-to-end 
 ```sh
 export NEO_E2E_BROWSER="/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo"
 cargo test -p neo-runtime --test tabs_e2e --test sync_getters --test click_e2e --test navigation_e2e \
-  --test reads_e2e --test acceptance_e2e -- --nocapture
+  --test reads_e2e --test acceptance_e2e --test waits_e2e -- --nocapture
 ```
 
 Try a script by hand with `cargo run -p neo-runtime --example neo_run -- --help`.
