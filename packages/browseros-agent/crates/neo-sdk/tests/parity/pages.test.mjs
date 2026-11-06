@@ -90,10 +90,10 @@ test(`context.pages() reads the same through Neo and Playwright ${playwrightVers
     assert.deepEqual(
       [viaPlaywright.clicks, viaNeo.clicks],
       [
-        [1, 1],
-        [1, 1],
+        [2, 1, 1],
+        [2, 1, 1],
       ],
-      "each page's click reached its own tab, once",
+      "each page's clicks reached its own tab",
     )
   } finally {
     await runCleanups(cleanups)
@@ -103,8 +103,12 @@ test(`context.pages() reads the same through Neo and Playwright ${playwrightVers
 /**
  * One engine's turn on fresh tabs: opens /other.html then /run.html, starts `run` on the run
  * tab, and, in step with the script, opens /opened.html and later closes it. Returns what the
- * script settled with, the tab paths in tab order before it ran, and the clicks each of the
- * two first tabs counted. A script that ends early ends the stepping too.
+ * script settled with, the tab paths in tab order before it ran, and the clicks /run.html,
+ * /other.html and /opened.html counted. A script that ends early ends the stepping too.
+ *
+ * /opened.html closes only once the run tab counts its second click, which the script sends
+ * after its click on /opened.html resolved. A button counts before its click call returns, so
+ * closing at /opened.html's own count could fail that call with TargetClosedError.
  */
 async function half(cdp, origin, run) {
   const other = await openTab(cdp, `${origin}/other.html`)
@@ -116,19 +120,31 @@ async function half(cdp, origin, run) {
     settled = true
   })
 
-  const counted = async (...targets) => {
-    const counts = await Promise.all(targets.map((t) => clicks(cdp, t)))
-    return settled || counts.every((count) => count === 1)
+  const counted = async (...expected) => {
+    const counts = await Promise.all(expected.map(([t]) => clicks(cdp, t)))
+    return settled || counts.every((count, i) => count === expected[i][1])
   }
-  await eventually(() => counted(runTab, other), 'both tabs counted a click')
+  await eventually(
+    () => counted([runTab, 1], [other, 1]),
+    'both tabs counted a click',
+  )
   let opened
+  let openedClicks = null
   if (!settled) {
     opened = await openTab(cdp, `${origin}/opened.html`)
-    await eventually(() => counted(opened), '/opened.html counted a click')
+    await eventually(
+      () => counted([runTab, 2]),
+      'the click on /opened.html resolved',
+    )
+    openedClicks = await clicks(cdp, opened)
     await cdp.send('Target.closeTarget', { targetId: opened.targetId })
   }
   const result = await running
-  const finalClicks = [await clicks(cdp, runTab), await clicks(cdp, other)]
+  const finalClicks = [
+    await clicks(cdp, runTab),
+    await clicks(cdp, other),
+    openedClicks,
+  ]
   // Every tab of this turn goes, so the next engine's turn starts from the same tabs. Closing
   // the one already closed fails, which is fine.
   for (const { targetId } of [other, runTab, opened].filter(Boolean))
