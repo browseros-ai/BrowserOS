@@ -158,10 +158,12 @@ async fn tests_that_a_setup_spanning_a_commit_is_stopped_before_retrying() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_a_late_setup_spanning_a_commit_is_stopped_after_timeout() {
+    // The click's timeout leaves ample time to reach its setup on a slow machine; the setup's
+    // answer lands well after that timeout.
     let browser = FakeBrowser::start(Replies {
         commit_during: Some(CommitDuring::Arm),
         arm: Reply {
-            delay: Duration::from_millis(200),
+            delay: Duration::from_millis(2000),
             ..Reply::default()
         },
         ..Replies::default()
@@ -171,7 +173,7 @@ async fn tests_that_a_late_setup_spanning_a_commit_is_stopped_after_timeout() {
         .runtime()
         .await
         .run(fake_browser::run_request(
-            "try { await page.locator('#go').click({timeout:50}); } catch(e) { return e.name; }",
+            "try { await page.locator('#go').click({timeout:1000}); } catch(e) { return e.name; }",
             Duration::from_secs(10),
             CancellationToken::new(),
         ))
@@ -179,6 +181,10 @@ async fn tests_that_a_late_setup_spanning_a_commit_is_stopped_after_timeout() {
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
     assert_eq!(outcome.value, Some(json!("TimeoutError")));
     let exchanges = settle(&browser, detached).await;
+    assert!(
+        armed(&exchanges),
+        "the click must reach its setup before its timeout: {exchanges:#?}"
+    );
     assert!(
         exchanges.iter().any(|exchange| {
             glue_call(exchange) == Some("stopHitTargetInterceptor")
