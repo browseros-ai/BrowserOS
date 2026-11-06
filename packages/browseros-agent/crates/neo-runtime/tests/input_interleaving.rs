@@ -1,8 +1,9 @@
 //! Input from many calls and runs on one tab of a fresh headless BrowserOS neo: every input
 //! call takes the tab's input turn (`page.rs` `TabInputs`, shared by the runs of one `Runtime`),
-//! so fills, key presses, checks and clicks never split one another's input, turns go in
-//! arrival order, a call that stops waiting for its turn sends nothing, and a press cut short
-//! still releases its keys. Behaviour only: page-seen events, values and delivery records.
+//! so fills, key presses, checks, selections and clicks never split one another's input, turns
+//! go in arrival order, a call that stops waiting for its turn sends nothing, a press cut short
+//! still releases its keys, and a fill cut short mid-insertText still inserts its whole value
+//! before the next input. Behaviour only: page-seen events, values and delivery records.
 
 #[expect(
     dead_code,
@@ -21,16 +22,19 @@ use tokio_util::sync::CancellationToken;
 
 /// Every control the tests type into, and a recorder of the events input produces, by target.
 /// No `change`: a text field fires it when it loses focus, during the next call's input.
-const PAGE: &str = r"<!doctype html><html><body>
-<button id='hold'>Hold</button><button id='c'>Click</button>
-<input id='a'><input id='b'><input id='f'><input id='p'><input id='late'>
+/// `#hold` marks `#flag` when its press lands, so a script can see that click holding the turn.
+const PAGE: &str = r#"<!doctype html><html><body>
+<button id='hold' onmousedown="document.getElementById('flag').value = 'held'">Hold</button>
+<button id='c'>Click</button>
+<input id='a'><input id='b'><input id='f'><input id='p'><input id='late'><input id='flag'>
 <input id='cb' type='checkbox'>
+<select id='s'><option value='one'>One</option><option value='two'>Two</option></select>
 <script>
 window.__events = [];
 for (const type of ['mousedown', 'mouseup', 'click', 'keydown', 'keypress', 'keyup', 'beforeinput', 'input'])
   addEventListener(type, e => __events.push({ type: e.type, target: e.target.id, key: e.key ?? null, data: e.data ?? null, shift: e.shiftKey ?? null }), true);
 </script>
-</body></html>";
+</body></html>"#;
 
 async fn open() -> Option<Tab> {
     let binary = browser::e2e_browser()?;
@@ -225,27 +229,34 @@ async fn a_press_cancelled_mid_delay_still_releases_its_keys() {
     );
 }
 
-/// While a click holds the tab's input through its 800 ms press, a click, a fill, a check and a
-/// press queue in that order. Each one's input reaches the page whole and after the one before
-/// it, and a press that gives up waiting for its turn sends nothing.
+/// While a click holds the tab's input through its 2.5 s press, a click, a fill, a check, a
+/// selection and a press queue in that order. Each one's input reaches the page whole and after
+/// the one before it, and a press that gives up waiting for its turn sends nothing.
+///
+/// Arrival order is the order the calls ask for the turn, after their own element waits. The
+/// queue starts only once the holding click is pressing (its `mousedown` marks `#flag`, read
+/// with `inputValue`, which takes no turn), and each call starts 300 ms after the one before,
+/// far longer than any of them takes to find its element.
 #[tokio::test(flavor = "multi_thread")]
 async fn queued_inputs_take_turns_in_arrival_order() {
     let Some(tab) = open().await else { return };
     let outcome = tab
         .start_run(
             r"const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-const hold = page.locator('#hold').click({ delay: 800 });
-await pause(150);
+const hold = page.locator('#hold').click({ delay: 2500 });
+while (await page.locator('#flag').inputValue() !== 'held') await pause(10);
 const click = page.locator('#c').click();
-await pause(100);
+await pause(300);
 const fill = page.locator('#f').fill('typed');
-await pause(100);
+await pause(300);
 const check = page.locator('#cb').check();
-await pause(100);
+await pause(300);
+const select = page.locator('#s').selectOption('two');
+await pause(300);
 const press = page.locator('#p').press('x');
-await pause(100);
+await pause(300);
 const late = page.locator('#late').press('y', { timeout: 100 }).then(() => 'resolved', error => error.name);
-const results = await Promise.all([hold, click, fill, check, press, late]);
+const results = await Promise.all([hold, click, fill, check, select, press, late]);
 return results.map(result => result === undefined ? 'undefined' : result);"
                 .to_string(),
         )
@@ -254,7 +265,7 @@ return results.map(result => result === undefined ? 'undefined' : result);"
         .unwrap_or_else(|error| panic!("the run's task: {error}"));
     let recorded = events(&tab.evaluate("window.__events").await);
     let values = tab
-        .evaluate("[document.querySelector('#f').value, document.querySelector('#p').value, document.querySelector('#cb').checked, document.querySelector('#late').value]")
+        .evaluate("['#f', '#p', '#cb', '#s', '#late'].map(id => document.querySelector(id)).map(e => e.type === 'checkbox' ? e.checked : e.value)")
         .await;
     tab.close().await;
 
@@ -266,11 +277,12 @@ return results.map(result => result === undefined ? 'undefined' : result);"
             "undefined",
             "undefined",
             "undefined",
+            ["two"],
             "undefined",
             "TimeoutError"
         ]))
     );
-    assert_eq!(values, json!(["typed", "x", true, ""]));
+    assert_eq!(values, json!(["typed", "x", true, "two", ""]));
     let mut groups: Vec<&str> = Vec::new();
     for (target, _, _) in &recorded {
         if groups.last() != Some(&target.as_str()) {
@@ -279,7 +291,7 @@ return results.map(result => result === undefined ? 'undefined' : result);"
     }
     assert_eq!(
         groups,
-        ["hold", "c", "f", "cb", "p"],
+        ["hold", "c", "f", "cb", "s", "p"],
         "each call's input whole, in arrival order: {recorded:?}"
     );
     let late = outcome
@@ -292,13 +304,95 @@ return results.map(result => result === undefined ? 'undefined' : result);"
         matches!(&late.result, CallResult::Error { name, .. } if name == "TimeoutError"),
         "{late:?}"
     );
+    let inputs: Vec<_> = outcome
+        .calls
+        .iter()
+        .filter(|call| call.method != "inputValue" && call.params["selector"] != "#late")
+        .collect();
+    assert_eq!(inputs.len(), 6, "{:#?}", outcome.calls);
     assert!(
-        outcome
-            .calls
+        inputs
             .iter()
-            .filter(|call| call.params["selector"] != "#late")
             .all(|call| call.delivery == Some(Delivery::Done)),
-        "{:#?}",
-        outcome.calls
+        "{inputs:#?}"
+    );
+}
+
+/// A slow page: `#a`'s handler keeps the renderer busy for 3 s inside `Input.insertText`, so a
+/// fill of `#a` with a 1.5 s timeout is still waiting for its insertText's answer when the
+/// timeout passes, however long (under 1.5 s) the fill took to reach its insertText.
+const SLOW_FILL_PAGE: &str = r"<!doctype html><html><body>
+<input id='a'><input id='b'>
+<script>
+window.__events = [];
+for (const type of ['beforeinput', 'input'])
+  addEventListener(type, e => __events.push([e.type, e.target.id, (e.data ?? '').length]), true);
+document.getElementById('a').addEventListener('beforeinput', () => {
+  const end = performance.now() + 3000;
+  while (performance.now() < end);
+});
+</script>
+</body></html>";
+
+/// A fill of a large value whose call times out in the middle of its `Input.insertText` still
+/// inserts the whole value, and the next fill, issued once that call has stopped and while its
+/// writer still waits, lands whole on another field after it. Each record's delivery is what
+/// its writer saw: the stopped fill's text was answered, so `Done`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fill_stopped_mid_insert_text_lands_whole_before_the_next() {
+    let Some(binary) = browser::e2e_browser() else {
+        return;
+    };
+    let tab = Tab::open(
+        binary,
+        Fixture {
+            pages: vec![("/slow-fill.html".into(), SLOW_FILL_PAGE.into())],
+            ..Fixture::default()
+        },
+        "/slow-fill.html",
+    )
+    .await;
+    let outcome = tab
+        .start_run(
+            r"const large = 'x'.repeat(50000);
+const first = await page.locator('#a').fill(large, { timeout: 1500 }).then(() => 'resolved', error => error.name);
+const next = await page.locator('#b').fill('second');
+return [first, next === undefined];"
+                .to_string(),
+        )
+        .await
+        .await
+        .unwrap_or_else(|error| panic!("the run's task: {error}"));
+    let values = tab
+        .evaluate("[document.querySelector('#a').value.length, document.querySelector('#b').value]")
+        .await;
+    let recorded = tab.evaluate("window.__events").await;
+    tab.close().await;
+
+    assert_ok(&outcome);
+    assert_eq!(outcome.value, Some(json!(["TimeoutError", true])));
+    assert_eq!(values, json!([50000, "second"]));
+    assert_eq!(
+        recorded,
+        json!([
+            ["beforeinput", "a", 50000],
+            ["input", "a", 50000],
+            ["beforeinput", "b", 6],
+            ["input", "b", 6],
+        ]),
+        "the next fill lands after the whole first value"
+    );
+    let [stopped, next] = outcome.calls.as_slice() else {
+        panic!("two fills: {:#?}", outcome.calls);
+    };
+    assert!(
+        matches!(&stopped.result, CallResult::Error { name, .. } if name == "TimeoutError"),
+        "{stopped:?}"
+    );
+    assert_eq!(stopped.delivery, Some(Delivery::Done), "{stopped:?}");
+    assert_eq!(
+        (&next.result, next.delivery),
+        (&CallResult::Ok, Some(Delivery::Done)),
+        "{next:?}"
     );
 }
