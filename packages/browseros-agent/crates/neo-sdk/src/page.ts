@@ -5,21 +5,28 @@ import type { Connection } from './connection'
 import { isTargetClosedError } from './errors'
 import {
   type AriaSnapshotOptions,
+  type CheckOptions,
   type ClickOptions,
+  type FillOptions,
   Frame,
   type GotoOptions,
+  type InputValueOptions,
+  type PressOptions,
+  type SelectOptionOptions,
   type TextContentOptions,
+  type UncheckOptions,
 } from './frame'
 import type { Locator, LocatorOptions } from './locator'
 import { PAGE_CLOSE_KEYS, pickParams } from './protocol'
 import { get } from './runtime-bridge'
+import type { SelectOptionValues } from './select-option'
 import { TimeoutSettings } from './timeout-settings'
 
 /**
  * Playwright's `Page`, backed by live reads from its own tab, which its guid names. Its
- * selector builders, `goto`, `title`, `textContent` and `click` forward to the main frame, as
- * Playwright's do (`client/page.ts`); `ariaSnapshot` snapshots the main frame's document. Only
- * the run's `BrowserContext` builds one, once per guid.
+ * selector builders, `goto`, `title`, `textContent` and browser actions forward to the main
+ * frame, as Playwright's do (`client/page.ts`); `ariaSnapshot` snapshots the main frame's
+ * document. Only the run's `BrowserContext` builds one, once per guid.
  *
  * Known limitation: once the tab is closed, `url()` returns the last URL this object returned,
  * not the last URL the tab committed. Navigate `/a` to `/final`, close the tab before the
@@ -167,6 +174,64 @@ export class Page {
   /** Not strict, as Playwright's `page.click`, which forwards to the main frame. */
   async click(selector: string, options: ClickOptions = {}): Promise<void> {
     return await this.#mainFrame._click('page.click', selector, options)
+  }
+
+  async fill(
+    selector: string,
+    value: string,
+    options: FillOptions = {},
+  ): Promise<void> {
+    return await this.#mainFrame._fill('page.fill', selector, value, options)
+  }
+
+  async press(
+    selector: string,
+    key: string,
+    options: PressOptions = {},
+  ): Promise<void> {
+    return await this.#mainFrame._press('page.press', selector, key, options)
+  }
+
+  async inputValue(
+    selector: string,
+    options: InputValueOptions = {},
+  ): Promise<string> {
+    return await this.#mainFrame._inputValue(
+      'page.inputValue',
+      selector,
+      options,
+    )
+  }
+
+  async check(selector: string, options: CheckOptions = {}): Promise<void> {
+    return await this.#mainFrame._check('page.check', selector, options)
+  }
+
+  async uncheck(selector: string, options: UncheckOptions = {}): Promise<void> {
+    return await this.#mainFrame._uncheck('page.uncheck', selector, options)
+  }
+
+  async selectOption(
+    selector: string,
+    values: SelectOptionValues,
+    options: SelectOptionOptions = {},
+  ): Promise<string[]> {
+    return await this.#mainFrame._selectOption(
+      'page.selectOption',
+      selector,
+      values,
+      options,
+    )
+  }
+
+  async setChecked(
+    selector: string,
+    checked: boolean,
+    options: CheckOptions = {},
+  ): Promise<void> {
+    if (checked)
+      await this.#mainFrame._check('page.setChecked', selector, options)
+    else await this.#mainFrame._uncheck('page.setChecked', selector, options)
   }
 
   locator(selector: string, options?: LocatorOptions): Locator {

@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -119,6 +119,61 @@ export function startNeo(neoRun, port, targetId, scriptPath) {
     return JSON.parse(stdout)
   })
   return { connected, outcome }
+}
+
+/** Shared inside each script, so both engines compare failure categories in the same way. */
+function errorCategory(error) {
+  if (error.name === 'TimeoutError') return 'timeout'
+  if (/strict mode violation/.test(error.message)) return 'strict'
+  return 'error'
+}
+
+/** Runs one method's public script on fresh pages and compares its result and browser effect. */
+export async function compareMethod(t, { html, source, probe }) {
+  t.diagnostic(
+    `Playwright ${playwrightVersion}; ${playwrightDir ?? 'npm playwright-core'}`,
+  )
+  const neoRun = buildNeoRun()
+  const scriptSource = `const errorCategory = ${errorCategory.toString()};\n${source}`
+  const cleanups = []
+  try {
+    const origin = await serveFixture(cleanups, {
+      pages: { '/method.html': html },
+    })
+    const browser = await launchBrowser(cleanups, browserBinary)
+    const playwright = await chromium.connectOverCDP(
+      `http://127.0.0.1:${browser.port}`,
+    )
+    cleanups.push(() => playwright.close())
+    const [context] = playwright.contexts()
+    const scripts = mkdtempSync(join(tmpdir(), 'neo-method-parity-'))
+    cleanups.push(() => rmSync(scripts, { recursive: true, force: true }))
+    const reference = await context.newPage()
+    await reference.goto(`${origin}/method.html`)
+    const AsyncFunction = (async () => {}).constructor
+    const value = await new AsyncFunction('page', scriptSource)(reference)
+    const effect = await reference.evaluate(probe)
+    await reference.close()
+
+    const page = await context.newPage()
+    await page.goto(`${origin}/method.html`)
+    const session = await context.newCDPSession(page)
+    const { targetInfo } = await session.send('Target.getTargetInfo')
+    await session.detach()
+    const script = join(scripts, 'method.js')
+    writeFileSync(script, scriptSource)
+    const neo = startNeo(neoRun, browser.port, targetInfo.targetId, script)
+    await neo.connected
+    const outcome = await neo.outcome
+    const actualEffect = await page.evaluate(probe)
+    await page.close()
+    assert.equal(outcome.status, 'ok', JSON.stringify(outcome))
+    assert.deepEqual(outcome.value, value, 'public return values and types')
+    assert.deepEqual(actualEffect, effect, 'browser effect')
+    return outcome
+  } finally {
+    await runCleanups(cleanups)
+  }
 }
 
 /**

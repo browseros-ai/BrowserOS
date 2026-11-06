@@ -41,14 +41,19 @@ mod fake_browser;
 
 mod aria_yaml;
 mod bridge;
+mod check;
 mod click;
 #[cfg(test)]
 mod click_goldens;
 mod deadline;
 mod dispatch;
+mod fill;
+mod forms;
 mod getters;
+mod keyboard;
 mod navigate;
 mod page;
+mod press;
 mod progress;
 mod reads;
 mod realm;

@@ -439,7 +439,7 @@ impl ClickOptions {
 
 /// Why one loop-A iteration ended without a click.
 #[derive(Debug)]
-enum Stop {
+pub(crate) enum Stop {
     /// A page step answered [`PageError::NotConnected`]: resolve again, as Playwright retries
     /// every error its `isNonRetriableError` does not name.
     Retry,
@@ -482,9 +482,82 @@ pub(crate) async fn click<T: Tab>(
     let Some(delivery) = progress.delivery() else {
         return Err(PlaywrightError::error("neo-runtime: Frame.click has no delivery cell").into());
     };
+    retry_with_progress_if_not_connected(
+        tab,
+        &options.selector,
+        options.strict,
+        options.force,
+        progress,
+        &ClickAction { options, delivery },
+    )
+    .await
+}
+
+/// A per-element action inside Playwright's loop A. It returns `NotConnected` only when the
+/// page proved the element detached; transient page errors use `Stop::Retry` without that log.
+/// The resolved handle lives until `act` returns, including across its loop-B retries.
+pub(crate) trait ElementAction<T: Tab>: Sync {
+    type Output;
+
+    fn act(
+        &self,
+        tab: &T,
+        element: &T::Element,
+        progress: &Progress,
+    ) -> impl Future<Output = Result<ActionResult<Self::Output>, Stop>> + Send;
+}
+
+/// How one per-element action ended for loop A.
+pub(crate) enum ActionResult<R> {
+    Done(R),
+    NotConnected,
+}
+
+struct ClickAction<'a> {
+    options: &'a ClickOptions,
+    delivery: &'a Arc<DeliveryCell>,
+}
+
+impl<T: Tab> ElementAction<T> for ClickAction<'_> {
+    type Output = ();
+
+    async fn act(
+        &self,
+        tab: &T,
+        element: &T::Element,
+        progress: &Progress,
+    ) -> Result<ActionResult<()>, Stop> {
+        let wait_after = if self.options.wait_after {
+            WaitAfter::Enabled
+        } else {
+            WaitAfter::NoWait
+        };
+        retry_pointer_action(
+            tab,
+            element,
+            self.options,
+            wait_after,
+            progress,
+            self.delivery,
+        )
+        .await
+    }
+}
+
+/// Playwright's `_retryWithProgressIfNotConnected`, shared by click and form actions. Naming,
+/// backoff, preparation, pre-checks, description and resolution stay in exactly that order.
+/// The element and its object group drop after each iteration, as Playwright disposes its handle.
+pub(crate) async fn retry_with_progress_if_not_connected<T: Tab, A: ElementAction<T>>(
+    tab: &T,
+    selector: &str,
+    strict: bool,
+    force: bool,
+    progress: &Progress,
+    action: &A,
+) -> Result<A::Output, CallError> {
     // Playwright names the locator before any page call. Neo learns its text from the page, so
     // the line reads the raw selector until `describe` answers (Playwright's own fallback).
-    progress.name_locator(&options.selector);
+    progress.name_locator(selector);
     let mut named = false;
     let mut waits = LoopAWaits::new(progress.timeout_ms());
     loop {
@@ -492,56 +565,50 @@ pub(crate) async fn click<T: Tab>(
         if !wait.is_zero() {
             progress.wait(wait).await?;
         }
-        match resolve_and_click(tab, options, progress, delivery, &mut named).await {
-            Ok(true) => return Ok(()),
-            Ok(false) | Err(Stop::Retry) => {}
+        let iteration = async {
+            progress.race(tab.prepare()).await??;
+            if !force {
+                wait_out_pending_navigation(tab, progress).await?;
+            }
+            if !named {
+                let facts = progress.race(tab.describe(selector)).await??;
+                progress.name_locator(&facts.locator);
+                named = true;
+                // Playwright parses the selector before its first page call and fails at once.
+                if let Some(message) = facts.invalid {
+                    return Err(PlaywrightError::error(message).into());
+                }
+            }
+            let resolved = progress.race(tab.resolve(selector, strict)).await??;
+            let Some(resolved) = resolved else {
+                return Ok(None);
+            };
+            progress.log(resolved_line(resolved.count, &resolved.preview));
+            match action.act(tab, &resolved.element, progress).await? {
+                ActionResult::Done(value) => Ok(Some(value)),
+                ActionResult::NotConnected => {
+                    progress.log("element was detached from the DOM, retrying");
+                    Ok(None)
+                }
+            }
+        };
+        match iteration.await {
+            Ok(Some(value)) => return Ok(value),
+            Ok(None) | Err(Stop::Retry) => {}
             Err(Stop::End(error)) => return Err(error),
         }
     }
 }
 
-/// One loop-A iteration: `Ok(true)` when clicked, `Ok(false)` to poll again. The element and
-/// its object group drop at the end of the iteration, as Playwright disposes its handle.
-async fn resolve_and_click<T: Tab>(
-    tab: &T,
-    options: &ClickOptions,
-    progress: &Progress,
-    delivery: &Arc<DeliveryCell>,
-    named: &mut bool,
-) -> Result<bool, Stop> {
-    progress.race(tab.prepare()).await??;
-    if !options.force {
-        wait_out_pending_navigation(tab, progress).await?;
-    }
-    if !*named {
-        let facts = progress.race(tab.describe(&options.selector)).await??;
-        progress.name_locator(&facts.locator);
-        *named = true;
-        // Playwright parses the selector before its first page call and fails at once.
-        if let Some(message) = facts.invalid {
-            return Err(PlaywrightError::error(message).into());
-        }
-    }
-    let resolved = progress
-        .race(tab.resolve(&options.selector, options.strict))
-        .await??;
-    let Some(resolved) = resolved else {
-        return Ok(false);
-    };
-    progress.log(resolved_line(resolved.count, &resolved.preview));
-    match retry_pointer_action(tab, &resolved.element, options, progress, delivery).await? {
-        LoopB::Done => Ok(true),
-        LoopB::NotConnected => {
-            progress.log("element was detached from the DOM, retrying");
-            Ok(false)
-        }
-    }
-}
-
-/// How loop B ended for loop A.
-enum LoopB {
-    Done,
-    NotConnected,
+/// Playwright's three pointer-action epilogues: `true`, `'disabled'`, and `false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WaitAfter {
+    /// Await both the hit-target verdict and navigation barrier.
+    Enabled,
+    /// Await the verdict only, as check/uncheck require.
+    Disabled,
+    /// Stop the interceptor in the background; await neither.
+    NoWait,
 }
 
 /// What one attempt came to.
@@ -553,13 +620,14 @@ enum Attempt {
 /// Loop B (`_retryAction` with `_retryPointerAction`): the same element until it is clicked,
 /// detached, or the call stops. Under `force`, `NotVisible` and `NotInViewport` end the call
 /// (Playwright's `NonRecoverableDOMError`).
-async fn retry_pointer_action<T: Tab>(
+pub(crate) async fn retry_pointer_action<T: Tab>(
     tab: &T,
     element: &T::Element,
     options: &ClickOptions,
+    wait_after: WaitAfter,
     progress: &Progress,
     delivery: &Arc<DeliveryCell>,
-) -> Result<LoopB, Stop> {
+) -> Result<ActionResult<()>, Stop> {
     let trial = if options.trial { " (trial run)" } else { "" };
     let mut retry = 0;
     loop {
@@ -576,11 +644,12 @@ async fn retry_pointer_action<T: Tab>(
         if !options.force {
             wait_out_pending_navigation(tab, progress).await?;
         }
-        let reason = match attempt(tab, element, retry, options, progress, delivery).await? {
-            Attempt::Done => return Ok(LoopB::Done),
-            Attempt::NotReady(NotReady::NotConnected) => return Ok(LoopB::NotConnected),
-            Attempt::NotReady(reason) => reason,
-        };
+        let reason =
+            match attempt(tab, element, retry, options, wait_after, progress, delivery).await? {
+                Attempt::Done => return Ok(ActionResult::Done(())),
+                Attempt::NotReady(NotReady::NotConnected) => return Ok(ActionResult::NotConnected),
+                Attempt::NotReady(reason) => reason,
+            };
         retry += 1;
         if options.force {
             match reason {
@@ -607,6 +676,7 @@ async fn attempt<T: Tab>(
     element: &T::Element,
     retry: usize,
     options: &ClickOptions,
+    wait_after: WaitAfter,
     progress: &Progress,
     delivery: &Arc<DeliveryCell>,
 ) -> Result<Attempt, Stop> {
@@ -673,7 +743,10 @@ async fn attempt<T: Tab>(
             return Ok(Attempt::NotReady(NotReady::Intercepted(target)));
         }
     };
-    act(tab, point, armed, input, options, progress, delivery).await
+    act(
+        tab, point, armed, input, options, wait_after, progress, delivery,
+    )
+    .await
 }
 
 /// Input and everything after it, inside Playwright's `waitForSignalsCreatedBy`.
@@ -687,16 +760,21 @@ async fn attempt<T: Tab>(
 /// last release lands however this returns, the call stopping mid-press included. `input`, the
 /// click's turn at the tab, goes with the verdict; the writer and the interceptor hold their own
 /// copies until they are done.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the pointer step carries its input ownership and epilogue separately"
+)]
 async fn act<T: Tab>(
     tab: &T,
     point: Point,
     armed: Option<T::Armed>,
     input: T::Input,
     options: &ClickOptions,
+    wait_after: WaitAfter,
     progress: &Progress,
     delivery: &Arc<DeliveryCell>,
 ) -> Result<Attempt, Stop> {
-    let watched = options.wait_after.then(|| tab.watch_navigations());
+    let watched = (wait_after == WaitAfter::Enabled).then(|| tab.watch_navigations());
     // The last chance to stop before an irreversible step.
     progress.check()?;
     let Ok(ticket) = delivery.begin() else {
@@ -723,10 +801,12 @@ async fn act<T: Tab>(
     };
 
     let blocked = match armed {
-        Some(armed) if options.wait_after => match progress.race(tab.verdict(armed)).await? {
-            Verdict::Done => None,
-            Verdict::Blocked(target) => Some(target),
-        },
+        Some(armed) if wait_after != WaitAfter::NoWait => {
+            match progress.race(tab.verdict(armed)).await? {
+                Verdict::Done => None,
+                Verdict::Blocked(target) => Some(target),
+            }
+        }
         // With `noWaitAfter` Playwright does not await the stop; dropping it disarms in the
         // background.
         unawaited => {
@@ -771,7 +851,10 @@ async fn act<T: Tab>(
 /// `performActionPreChecks`' navigation half (`page.ts` `_performWaitForNavigationCheck`):
 /// when a requested main-frame navigation has not settled, log, wait for it, and log where it
 /// went.
-async fn wait_out_pending_navigation<T: Tab>(tab: &T, progress: &Progress) -> Result<(), Stop> {
+pub(crate) async fn wait_out_pending_navigation<T: Tab>(
+    tab: &T,
+    progress: &Progress,
+) -> Result<(), Stop> {
     let Some(url) = tab.pending_navigation() else {
         return Ok(());
     };
@@ -829,7 +912,7 @@ impl LoopAWaits {
 
 /// Loop B's wait before retry `retry` (≥ 1): `LOOP_B_WAITS_MS[min(retry - 1, 4)]`. Retry 1
 /// waits 0 ms and logs no wait line.
-fn loop_b_wait(retry: usize) -> Duration {
+pub(crate) fn loop_b_wait(retry: usize) -> Duration {
     let index = retry.saturating_sub(1).min(LOOP_B_WAITS_MS.len() - 1);
     Duration::from_millis(LOOP_B_WAITS_MS[index])
 }
@@ -934,7 +1017,7 @@ fn resolved_line(count: u32, preview: &str) -> String {
 }
 
 /// The line loop B logs for `reason`; `None` for `NotConnected`, which leaves loop B.
-fn not_ready_line(reason: &NotReady) -> Option<String> {
+pub(crate) fn not_ready_line(reason: &NotReady) -> Option<String> {
     match reason {
         NotReady::NotConnected => None,
         NotReady::NotVisible => Some("  element is not visible".to_string()),
@@ -976,7 +1059,7 @@ fn trim_with_ellipsis(input: &str, cap: usize) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     //! Policy tests against [`FakeTab`], under paused tokio time, so every attempt count is
     //! exact. The goldens record no per-message timestamps, so the durations below are
     //! inferred from what the recordings do pin:
@@ -990,15 +1073,17 @@ mod tests {
     //!   goldens' folded logs show. Any attempt time under 46 ms gives the same counts.
 
     use std::collections::VecDeque;
+    use std::future;
     use std::sync::Mutex;
 
-    use futures_util::future;
     use tokio::sync::oneshot;
     use tokio::time;
     use tokio::time::Instant;
 
     use super::*;
     use crate::click_goldens;
+    use crate::forms::tests::FormSteps;
+    use crate::keyboard::Platform;
     use crate::progress::{self, ErrorName};
     use crate::run::Delivery;
 
@@ -1012,24 +1097,24 @@ mod tests {
 
     /// One scripted step: each call takes `duration` and pops the next answer; the last answer
     /// repeats.
-    struct Step<T> {
-        duration: Duration,
+    pub(crate) struct Step<T> {
+        pub(crate) duration: Duration,
         answers: Mutex<VecDeque<T>>,
     }
 
     impl<T: Clone> Step<T> {
-        fn new(duration: Duration, answers: impl IntoIterator<Item = T>) -> Self {
+        pub(crate) fn new(duration: Duration, answers: impl IntoIterator<Item = T>) -> Self {
             Self {
                 duration,
                 answers: Mutex::new(answers.into_iter().collect()),
             }
         }
 
-        fn always(duration: Duration, answer: T) -> Self {
+        pub(crate) fn always(duration: Duration, answer: T) -> Self {
             Self::new(duration, [answer])
         }
 
-        fn next(&self) -> T {
+        pub(crate) fn next(&self) -> T {
             let mut answers = self.answers.lock().expect("a fake step's lock");
             if answers.len() > 1 {
                 answers.pop_front().expect("checked non-empty")
@@ -1038,7 +1123,7 @@ mod tests {
             }
         }
 
-        async fn answer(&self) -> T {
+        pub(crate) async fn answer(&self) -> T {
             let answer = self.next();
             time::sleep(self.duration).await;
             answer
@@ -1047,14 +1132,14 @@ mod tests {
 
     /// The writer's scripted outcome.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum Writes {
+    pub(crate) enum Writes {
         Ack,
         Nothing,
         Fail,
     }
 
     #[derive(Debug, Clone, PartialEq)]
-    enum ArmAnswer {
+    pub(crate) enum ArmAnswer {
         Armed,
         NotConnected,
         Intercepted(String),
@@ -1062,7 +1147,7 @@ mod tests {
 
     /// A dropped armed interceptor, so tests see every path disarm. It holds a copy of its
     /// click's input turn, as the real one does until its stop has answered.
-    struct FakeArmed {
+    pub(crate) struct FakeArmed {
         calls: Arc<Mutex<Vec<String>>>,
         _input: FakeInput,
     }
@@ -1080,7 +1165,7 @@ mod tests {
     /// `input` when it grants a turn and `input released` when the turn's last copy drops, so
     /// tests see where each input phase starts and ends.
     #[derive(Clone)]
-    struct FakeInput {
+    pub(crate) struct FakeInput {
         _turn: Arc<FakeTurn>,
     }
 
@@ -1096,26 +1181,30 @@ mod tests {
     }
 
     /// A scripted tab. Every page step records its name in `calls`.
-    struct FakeTab {
+    pub(crate) struct FakeTab {
+        pub(crate) forms: FormSteps,
+        pub(crate) platform: Step<Result<Platform, PageError>>,
         /// Instant, like every preparation after the run's first.
-        prepare: Step<Result<(), PageError>>,
-        describe: Step<Result<SelectorFacts, PageError>>,
-        resolve: Step<Result<Option<(u32, String)>, PageError>>,
-        check_states: Step<Result<StatesCheck, PageError>>,
-        scroll: Step<Result<Option<NotReady>, PageError>>,
-        geometry: Step<Result<Geometry, PageError>>,
-        arm: Step<Result<ArmAnswer, PageError>>,
-        press: Step<Writes>,
-        verdict: Step<Verdict>,
-        settle: Step<Result<Vec<String>, PageError>>,
-        pending: Mutex<Option<String>>,
-        calls: Arc<Mutex<Vec<String>>>,
+        pub(crate) prepare: Step<Result<(), PageError>>,
+        pub(crate) describe: Step<Result<SelectorFacts, PageError>>,
+        pub(crate) resolve: Step<Result<Option<(u32, String)>, PageError>>,
+        pub(crate) check_states: Step<Result<StatesCheck, PageError>>,
+        pub(crate) scroll: Step<Result<Option<NotReady>, PageError>>,
+        pub(crate) geometry: Step<Result<Geometry, PageError>>,
+        pub(crate) arm: Step<Result<ArmAnswer, PageError>>,
+        pub(crate) press: Step<Writes>,
+        pub(crate) verdict: Step<Verdict>,
+        pub(crate) settle: Step<Result<Vec<String>, PageError>>,
+        pub(crate) pending: Mutex<Option<String>>,
+        pub(crate) calls: Arc<Mutex<Vec<String>>>,
     }
 
     impl FakeTab {
         /// The `ok` page: one button that every step finds ready.
-        fn ready() -> Self {
+        pub(crate) fn ready() -> Self {
             Self {
+                forms: FormSteps::ready(),
+                platform: Step::always(ROUND_TRIP, Ok(Platform::Mac)),
                 prepare: Step::always(Duration::ZERO, Ok(())),
                 describe: Step::always(
                     ROUND_TRIP,
@@ -1143,15 +1232,15 @@ mod tests {
             }
         }
 
-        fn record(&self, call: impl Into<String>) {
+        pub(crate) fn record(&self, call: impl Into<String>) {
             self.calls.lock().expect("calls").push(call.into());
         }
 
-        fn calls(&self) -> Vec<String> {
+        pub(crate) fn calls(&self) -> Vec<String> {
             self.calls.lock().expect("calls").clone()
         }
 
-        fn count(&self, name: &str) -> usize {
+        pub(crate) fn count(&self, name: &str) -> usize {
             self.calls().iter().filter(|call| *call == name).count()
         }
     }
@@ -1217,16 +1306,15 @@ mod tests {
             self.geometry.answer().await
         }
 
-        /// Granted at once: one call per test never waits for a turn. `future::lazy`, not an
-        /// `async fn` without an await (Rust 1.98's `unused_async_trait_impl`), so the turn is
-        /// still recorded only when the click first polls it.
-        fn input(&self) -> impl Future<Output = FakeInput> + Send {
-            future::lazy(|_| {
-                self.record("input");
-                FakeInput {
-                    _turn: Arc::new(FakeTurn(Arc::clone(&self.calls))),
-                }
-            })
+        /// Forms can script a blocked input wait; click tests grant their turns at once.
+        async fn input(&self) -> FakeInput {
+            if !self.forms.input_wait.is_zero() {
+                time::sleep(self.forms.input_wait).await;
+            }
+            self.record("input");
+            FakeInput {
+                _turn: Arc::new(FakeTurn(Arc::clone(&self.calls))),
+            }
         }
 
         async fn arm(
@@ -1826,6 +1914,103 @@ mod tests {
                 "    - navigated to \"https://example.test/after\"".to_string(),
                 "    - navigations have finished".to_string(),
             ]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_disabled_wait_after_reads_the_verdict_without_a_navigation_barrier() {
+        let mut tab = FakeTab::ready();
+        tab.verdict = Step::new(
+            ROUND_TRIP,
+            [Verdict::Blocked(OVERLAY.into()), Verdict::Done],
+        );
+        let progress = Progress::for_test(30_000.0);
+        let result = retry_pointer_action(
+            &tab,
+            &1,
+            &options(SELECTOR),
+            WaitAfter::Disabled,
+            &progress,
+            progress.delivery().expect("input"),
+        )
+        .await;
+        assert!(matches!(result, Ok(ActionResult::Done(()))));
+        assert_eq!(tab.count("verdict"), 2);
+        assert_eq!(tab.count("watch_navigations"), 0);
+        assert_eq!(tab.count("settle"), 0);
+        assert_eq!(tab.count("input released"), 2);
+        assert_eq!(
+            progress.delivery().expect("input").delivery(),
+            Delivery::Done
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_no_wait_after_drops_the_interceptor_without_awaiting_its_verdict() {
+        let tab = FakeTab::ready();
+        let progress = Progress::for_test(30_000.0);
+        let result = retry_pointer_action(
+            &tab,
+            &1,
+            &options(SELECTOR),
+            WaitAfter::NoWait,
+            &progress,
+            progress.delivery().expect("input"),
+        )
+        .await;
+        assert!(matches!(result, Ok(ActionResult::Done(()))));
+        assert_eq!(tab.count("verdict"), 0);
+        assert_eq!(tab.count("watch_navigations"), 0);
+        assert_eq!(tab.count("settle"), 0);
+        assert_eq!(tab.count("disarmed"), 1);
+    }
+
+    struct ReadAction(Mutex<usize>);
+
+    impl ElementAction<FakeTab> for ReadAction {
+        type Output = String;
+        fn act(
+            &self,
+            tab: &FakeTab,
+            _element: &u32,
+            _progress: &Progress,
+        ) -> impl Future<Output = Result<ActionResult<String>, Stop>> + Send {
+            tab.record("read action");
+            let mut attempts = self.0.lock().expect("attempts");
+            *attempts += 1;
+            future::ready(if *attempts == 1 {
+                Ok(ActionResult::NotConnected)
+            } else {
+                Ok(ActionResult::Done("value".into()))
+            })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_loop_a_returns_an_action_value_and_re_resolves_detached_elements() {
+        let tab = FakeTab::ready();
+        let progress = Progress::for_test(30_000.0);
+        let result = retry_with_progress_if_not_connected(
+            &tab,
+            SELECTOR,
+            true,
+            false,
+            &progress,
+            &ReadAction(Mutex::new(0)),
+        )
+        .await;
+        assert_eq!(result, Ok("value".into()));
+        assert_eq!(tab.count("describe"), 1);
+        assert_eq!(tab.count("resolve"), 2);
+        assert_eq!(tab.count("read action"), 2);
+        assert!(
+            progress
+                .folded_log()
+                .contains(&"  - element was detached from the DOM, retrying".to_string())
+        );
+        assert_eq!(
+            progress.delivery().expect("input").delivery(),
+            Delivery::NotSent
         );
     }
 

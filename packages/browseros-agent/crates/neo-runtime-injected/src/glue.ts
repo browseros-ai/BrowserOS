@@ -162,6 +162,63 @@ export const glue = {
   stopHitTargetInterceptor: (_injected, _params, interceptor) => ({
     outcome: interceptor.stop(),
   }),
+
+  /** `dom.ts` `_fill`'s single page evaluation, without its server-side retry loop. */
+  fill: async (injected, { value, force }, element) => {
+    if (!force) {
+      const outcome = await injected.checkElementStates(
+        element,
+        ['visible', 'enabled', 'editable', 'non-inert'],
+        true,
+      )
+      if (outcome) return { outcome }
+    }
+    return { outcome: injected.fill(element, value) }
+  },
+
+  /** `dom.ts` `_selectOption`'s single page evaluation. */
+  selectOptions: async (injected, { options, force }, element) => {
+    if (!force) {
+      const outcome = await injected.checkElementStates(
+        element,
+        ['visible', 'enabled', 'non-inert'],
+        true,
+      )
+      if (outcome) return { outcome }
+    }
+    const outcome = injected.selectOptions(element, options)
+    return Array.isArray(outcome) ? { values: outcome } : { outcome }
+  },
+
+  elementState: (injected, { state }, element) =>
+    injected.elementState(element, state),
+
+  focusElement: (injected, { resetSelectionIfNotFocused }, element) => ({
+    outcome: injected.focusNode(element, resetSelectionIfNotFocused),
+  }),
+
+  inputValue: (injected, { selector, strict }) => {
+    const [node] = query(injected, selector, strict, { markTargets: 'first' })
+    if (!node) return {}
+    const element = injected.retarget(node, 'follow-label')
+    if (
+      !element ||
+      (element.nodeName !== 'INPUT' &&
+        element.nodeName !== 'TEXTAREA' &&
+        element.nodeName !== 'SELECT')
+    )
+      throw injected.createStacklessError(
+        'Node is not an <input>, <textarea> or <select> element',
+      )
+    return {
+      matched: {
+        value: (
+          element as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+        ).value,
+        preview: injected.previewNode(node),
+      },
+    }
+  },
 } satisfies InjectedApi<InjectedScript, Handles>
 
 // Playwright's AriaNodeJSON reaches Rust unchanged, but TypeScript lets a structurally wider

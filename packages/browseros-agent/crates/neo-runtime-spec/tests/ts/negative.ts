@@ -34,6 +34,23 @@ const valid = {
   stopHitTargetInterceptor: (_injected, _params, interceptor) => ({
     outcome: interceptor.stop(),
   }),
+  fill: () => ({ outcome: 'done' }),
+  selectOptions: () => ({ values: [] }),
+  elementState: () => ({ matches: false }),
+  focusElement: () => ({ outcome: 'done' }),
+  inputValue: () => ({}),
+} satisfies Api
+
+export const unknownFillOutcome = {
+  ...valid,
+  // @ts-expect-error fill returns needsinput, done, notconnected or a missing state.
+  fill: () => ({ outcome: 'filled' }),
+} satisfies Api
+
+export const wrongSelectValues = {
+  ...valid,
+  // @ts-expect-error selected values cross by value as strings, never element handles.
+  selectOptions: () => ({ values: [document.body] }),
 } satisfies Api
 
 export const nullText = {
