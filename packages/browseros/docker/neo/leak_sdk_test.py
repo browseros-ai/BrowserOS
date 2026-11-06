@@ -580,21 +580,30 @@ class DenyPlanTests(unittest.TestCase):
 
     def test_every_secret_by_its_path_and_every_bypass_by_its_shape(self) -> None:
         """Every target by its own path; the token through a symlink in /tmp, a ".."
-        path and a directory holding a symlink to it; trace.db through a hard link and
-        its directory. Each probe has a file input of its own that the page never echoes,
-        so one probe's upload can never be read as another's; none is in the downloads
-        dir, which the deny list must leave alone."""
+        path and a directory holding a symlink to it, that one from the background and,
+        last, from the front tab; trace.db through a hard link and its directory. Only
+        the symlink directory is sent rather than refused. Each probe has a file input of
+        its own that the page never echoes, so one probe's upload can never be read as
+        another's; none is in the downloads dir, which the deny list must leave alone."""
         by_path = {p.target for p in P.DENY_PROBES if p.via is P.Via.PATH}
         self.assertEqual(by_path, set(P.NeoFile))
         self.assertEqual(
-            {(p.target, p.via) for p in P.DENY_PROBES if p.via is not P.Via.PATH},
-            {
-                (P.NeoFile.HOST_TOKEN, P.Via.SYMLINK),
-                (P.NeoFile.HOST_TOKEN, P.Via.DOTDOT),
-                (P.NeoFile.HOST_TOKEN, P.Via.LINK_DIRECTORY),
-                (P.NeoFile.TRACE_DB, P.Via.HARD_LINK),
-                (P.NeoFile.TRACE_DB, P.Via.DIRECTORY),
-            },
+            [
+                (p.target, p.via, p.front)
+                for p in P.DENY_PROBES
+                if p.via is not P.Via.PATH
+            ],
+            [
+                (P.NeoFile.HOST_TOKEN, P.Via.SYMLINK, False),
+                (P.NeoFile.HOST_TOKEN, P.Via.DOTDOT, False),
+                (P.NeoFile.HOST_TOKEN, P.Via.LINK_DIRECTORY, False),
+                (P.NeoFile.TRACE_DB, P.Via.HARD_LINK, False),
+                (P.NeoFile.TRACE_DB, P.Via.DIRECTORY, False),
+                (P.NeoFile.HOST_TOKEN, P.Via.LINK_DIRECTORY, True),
+            ],
+        )
+        self.assertEqual(
+            {p.via for p in P.DENY_PROBES if not p.refused}, {P.Via.LINK_DIRECTORY}
         )
         self.assertEqual([u.probe for u in self.uploads], list(P.DENY_PROBES))
         regions = [u.region for u in self.uploads]
@@ -624,8 +633,14 @@ class DenyPlanTests(unittest.TestCase):
                     (("symlink", target, f"{here}/{posixpath.basename(target)}"),),
                 ),
             }[upload.probe.via]
+            decoy = (
+                f"{here}/decoy.bin"
+                if upload.probe.via is P.Via.LINK_DIRECTORY
+                else None
+            )
             with self.subTest(probe=str(upload.probe)):
                 self.assertEqual((upload.named, upload.links), want)
+                self.assertEqual(upload.decoy, decoy)
                 self.assertEqual(upload.paths, (upload.named, target))
                 if upload.probe.via is P.Via.DOTDOT:
                     self.assertEqual(posixpath.normpath(upload.named), target)
@@ -650,12 +665,22 @@ class DenyPlanTests(unittest.TestCase):
 
     def test_a_probe_names_its_input_and_a_path_and_keys_its_refusal(self) -> None:
         """A path is not a value: the run names the input's id and the path, and keys a
-        refusal by the input, so its code and message survive (void_run)."""
+        refusal by the input, so its code and message survive (void_run). A directory
+        carries its own short timeout, as a background one times out; the front probe
+        brings its tab forward first, inside the same catch."""
         for upload in self.uploads:
             code = upload.code()
             with self.subTest(probe=str(upload.probe)):
                 call = f"page.locator('#{upload.region.id}').setInputFiles("
-                self.assertIn(call + json.dumps(upload.named) + ")", code)
+                options = (
+                    f", {{timeout: {P.DIRECTORY_TIMEOUT_MS}}}"
+                    if upload.probe.directory
+                    else ""
+                )
+                self.assertIn(call + json.dumps(upload.named) + options + ")", code)
+                front = f"await page.bringToFront().then(() => {call}"
+                self.assertEqual(front in code, upload.probe.front)
+                self.assertEqual("bringToFront" in code, upload.probe.front)
                 self.assertIn("return {sent: true};", code)
                 self.assertIn(f'return {{"{upload.region.id}": refused}};', code)
                 P.assert_clean(code, [self.inst])
@@ -2723,13 +2748,23 @@ class DenyTests(EvidenceBase):
     new leak; any other answer is unproven with its reason."""
 
     layout = P.Layout.UPLOAD
-    NOTHING = {"files": 0, "read": 0, "errors": [], "matched": False, "empty": False}
+    NOTHING = {
+        "files": 0,
+        "read": 0,
+        "errors": [],
+        "matched": False,
+        "empty": False,
+        "cancelled": False,
+        "decoy": False,
+    }
 
-    def upload_of(self, target: P.NeoFile, via: P.Via) -> P.DenyUpload:
+    def upload_of(
+        self, target: P.NeoFile, via: P.Via, *, front: bool = False
+    ) -> P.DenyUpload:
         return next(
             u
             for u in P.deny_uploads(self.inst)
-            if (u.probe.target, u.probe.via) == (target, via)
+            if (u.probe.target, u.probe.via, u.probe.front) == (target, via, front)
         )
 
     @staticmethod
@@ -2744,6 +2779,8 @@ class DenyTests(EvidenceBase):
             "probe": str(upload.probe),
             "named": upload.named,
             "paths": list(upload.paths),
+            "refused": upload.probe.refused,
+            "front": upload.probe.front,
             "present": True,
             "made": True,
             **detail,
@@ -2792,6 +2829,106 @@ class DenyTests(EvidenceBase):
             {(J.Verdict.WITHHELD, None, P.DENY_CODE)},
         )
         self.assertEqual(judgement.exit_code, 0)
+
+    # What m5-secrets' live test measured for a directory in a background agent tab: the
+    # run times out waiting for `input`, and the input fired `cancel` with no file.
+    TIMED_OUT = {
+        "err": f"page.setInputFiles: Timeout {P.DIRECTORY_TIMEOUT_MS}ms exceeded.",
+        "owner": None,
+        "code": None,
+    }
+
+    def test_a_symlink_directory_cancelled_in_the_background_is_held(self) -> None:
+        """A directory holding a symlink to the token is sent, not refused (the crate's
+        walk skips symlinks as Chromium does), and a background tab cancels it: the run
+        times out and the page holds no file. That is the contract on an agent tab, so
+        it is held, with no residual and no exit bit."""
+        upload = self.upload_of(P.NeoFile.HOST_TOKEN, P.Via.LINK_DIRECTORY)
+        self.assertFalse(upload.probe.refused)
+        self.probe(upload, "d1", refused=self.TIMED_OUT, read={"cancelled": True})
+        judgement = J.judge(self.evidence())
+        self.assertEqual(
+            self.verdicts()[upload.region.id],
+            (
+                J.Verdict.WITHHELD,
+                None,
+                "cancelled: Chromium reads no directory in a background tab",
+            ),
+        )
+        self.assertEqual(judgement.exit_code, 0)
+
+    def test_a_cancel_proves_nothing_where_the_deny_list_must_act_or_from_the_front(
+        self,
+    ) -> None:
+        """trace.db's directory must be refused before any read: a cancel there means
+        the deny list let it through and only the background tab kept it from the page.
+        From the front tab a cancel lands nothing, so nothing shows the symlink was
+        skipped. Both are unproven (+8)."""
+        trace = self.upload_of(P.NeoFile.TRACE_DB, P.Via.DIRECTORY)
+        front = self.upload_of(P.NeoFile.HOST_TOKEN, P.Via.LINK_DIRECTORY, front=True)
+        self.probe(trace, "d1", refused=self.TIMED_OUT, read={"cancelled": True})
+        self.probe(front, "d2", refused=self.TIMED_OUT, read={"cancelled": True})
+        judgement = J.judge(self.evidence())
+        verdicts = self.verdicts()
+        self.assertEqual(
+            verdicts[trace.region.id],
+            (
+                J.Verdict.INCONCLUSIVE,
+                None,
+                f"{trace.probe}: cancelled, not refused: only the background tab "
+                "kept the page from reading it",
+            ),
+        )
+        self.assertEqual(
+            verdicts[front.region.id],
+            (
+                J.Verdict.INCONCLUSIVE,
+                None,
+                f"{front.probe}: cancelled in the front tab: nothing landed to show "
+                "the symlink skipped",
+            ),
+        )
+        self.assertEqual(judgement.exit_code, J.EXIT_INCONCLUSIVE)
+
+    def test_a_symlink_directory_from_the_front_lands_without_its_target(self) -> None:
+        """From the front tab the directory lands: the page reading the decoy beside the
+        symlink, and not the token, shows Chromium skipped the symlink. Masked, with no
+        exit bit."""
+        front = self.upload_of(P.NeoFile.HOST_TOKEN, P.Via.LINK_DIRECTORY, front=True)
+        self.probe(front, "d1", read={"files": 1, "read": 1, "decoy": True})
+        judgement = J.judge(self.evidence())
+        self.assertEqual(
+            self.verdicts()[front.region.id],
+            (
+                J.Verdict.MASKED,
+                None,
+                f"{front.probe}: sent; the page read the directory's own file, not "
+                "the symlinked one",
+            ),
+        )
+        self.assertEqual(judgement.exit_code, 0)
+
+    def test_the_token_read_through_a_symlink_directory_leaks(self) -> None:
+        """The page reading the token's bytes leaks, decoy or not; a refusal of a probe
+        that should be sent (bringToFront refused, say) is unproven, with its code."""
+        front = self.upload_of(P.NeoFile.HOST_TOKEN, P.Via.LINK_DIRECTORY, front=True)
+        back = self.upload_of(P.NeoFile.HOST_TOKEN, P.Via.LINK_DIRECTORY)
+        both = {"files": 2, "read": 2, "decoy": True, "matched": True}
+        self.probe(front, "d1", read=both)
+        self.probe(back, "d2", refused=self.refusal("neo/unsupported", "no front"))
+        verdicts = self.verdicts()
+        self.assertEqual(
+            verdicts[front.region.id],
+            (J.Verdict.LEAKED, None, f"{front.probe}: the page read its bytes"),
+        )
+        self.assertEqual(
+            verdicts[back.region.id],
+            (
+                J.Verdict.INCONCLUSIVE,
+                None,
+                f"{back.probe}: refused with neo/unsupported, not sent: no front",
+            ),
+        )
 
     def test_held_while_set_input_files_is_held(self) -> None:
         """Today's image holds setInputFiles whole (script/method_unavailable): held,
@@ -2975,7 +3112,15 @@ class DenySessionTests(unittest.TestCase):
     """leak_sdk.Session.deny_list over a fake oracle and agent: what it records for each
     probe is what decide_neo_upload reads, so the run and the judge cannot drift."""
 
-    NOTHING = {"files": 0, "read": 0, "errors": [], "matched": False, "empty": False}
+    NOTHING = {
+        "files": 0,
+        "read": 0,
+        "errors": [],
+        "matched": False,
+        "empty": False,
+        "cancelled": False,
+        "decoy": False,
+    }
 
     def deny_list(self, *, control: bool = True) -> tuple[J.Judgement, dict]:
         """Every probe answered sent; the CAPTCHA key missing from the container, the
@@ -2986,8 +3131,11 @@ class DenySessionTests(unittest.TestCase):
         instance = P.make_instance(P.Layout.UPLOAD, seed="s", index=1)
         session.instances[instance.name] = instance
         session._write_manifest()
-        uploads = {(u.probe.target, u.probe.via): u for u in P.deny_uploads(instance)}
-        token = uploads[(P.NeoFile.HOST_TOKEN, P.Via.PATH)]
+        uploads = {
+            (u.probe.target, u.probe.via, u.probe.front): u
+            for u in P.deny_uploads(instance)
+        }
+        token = uploads[(P.NeoFile.HOST_TOKEN, P.Via.PATH, False)]
         missing = P.NEO_FILES[P.NeoFile.CAPTCHA_KEY]
         nothing = self.NOTHING
 
@@ -3005,7 +3153,10 @@ class DenySessionTests(unittest.TestCase):
                     return {**ok, "present": True, "made": True}
                 assert op == "read_back", op
                 read = params["region"] == token.region.id
-                return {**ok, **nothing, "files": 1, "read": 1, "matched": read}
+                # The page reads the decoy whenever the session named one.
+                decoy = params["decoy"] is not None
+                facts = {"files": 1, "read": 1, "matched": read, "decoy": decoy}
+                return {**ok, **nothing, **facts}
 
         class Agent:
             def run(self, code: str, meta: dict, timeout_ms: int) -> tuple[str, bytes]:
@@ -3018,7 +3169,9 @@ class DenySessionTests(unittest.TestCase):
     def test_each_probe_records_what_the_judge_reads(self) -> None:
         """A target missing here and a link the filesystem refused are judged from
         their steps, with no run; a run that went through is judged by what the oracle
-        found the page read: the token's bytes leak, anything else stays unproven."""
+        found the page read: the token's bytes leak, a symlink directory's decoy alone
+        is masked (the session passes the decoy and the probe's expectations through),
+        anything else stays unproven."""
         judgement, uploads = self.deny_list()
         verdicts = {
             c.region.id: (c.verdict, c.why)
@@ -3026,9 +3179,11 @@ class DenySessionTests(unittest.TestCase):
             if c.channel is P.ChannelId.UPLOAD_NEO
         }
         self.assertEqual(len(verdicts), len(P.DENY_PROBES))
-        token = uploads[(P.NeoFile.HOST_TOKEN, P.Via.PATH)]
-        key = uploads[(P.NeoFile.CAPTCHA_KEY, P.Via.PATH)]
-        hard = uploads[(P.NeoFile.TRACE_DB, P.Via.HARD_LINK)]
+        token = uploads[(P.NeoFile.HOST_TOKEN, P.Via.PATH, False)]
+        key = uploads[(P.NeoFile.CAPTCHA_KEY, P.Via.PATH, False)]
+        hard = uploads[(P.NeoFile.TRACE_DB, P.Via.HARD_LINK, False)]
+        links = [u for u in uploads.values() if u.probe.via is P.Via.LINK_DIRECTORY]
+        self.assertEqual(len(links), 2)
         special = {
             token.region.id: (
                 J.Verdict.LEAKED,
@@ -3043,6 +3198,14 @@ class DenySessionTests(unittest.TestCase):
                 f"{hard.probe}: the harness could not make it "
                 "(Invalid cross-device link)",
             ),
+            **{
+                u.region.id: (
+                    J.Verdict.MASKED,
+                    f"{u.probe}: sent; the page read the directory's own file, not "
+                    "the symlinked one",
+                )
+                for u in links
+            },
         }
         for upload in uploads.values():
             want = special.get(upload.region.id) or (

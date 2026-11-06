@@ -35,6 +35,7 @@ const FX = {
   rebased: 0, // copy layout: how many baseline tokens this page has made
   uploads: new Map(), // file input region id -> the text the page read from its file
   digests: new Map(), // deny-list or control input id -> promise of [{size, sha256} | {error}]
+  cancelled: new Set(), // deny-list input ids that fired `cancel`: Chromium read nothing
 };
 
 // The copy layout's two plain fields in MAIN (leak_plan.COPY_BASE, COPY_DROP): the baseline
@@ -234,11 +235,13 @@ function render() {
 // (leak_plan.DIGEST_CONTROL): the page reads every file it is given, whole, and keeps a
 // sha256 of each for the oracle's read_back, which compares it with the file inside the
 // container. Nothing read here reaches FX.values, an echo or a proof, so neither the bytes
-// of Neo's own files nor a digest of them can leave the container.
+// of Neo's own files nor a digest of them can leave the container. A `cancel` is kept too:
+// Chromium fires it, and sets no file, for a directory chosen in a background tab.
 function watchDigests(input, id) {
   input.addEventListener("change", () => {
     FX.digests.set(id, Promise.all([...input.files].map(digestOf)));
   });
+  input.addEventListener("cancel", () => FX.cancelled.add(id));
 }
 
 function digestOf(file) {
@@ -572,4 +575,6 @@ window.__fx = {
   values: () => FX.values,
   // What a deny-list or control input read, once every file is read; null before a change.
   digests: (id) => FX.digests.get(id) ?? null,
+  // Whether a deny-list input fired `cancel`.
+  cancelled: (id) => FX.cancelled.has(id),
 };

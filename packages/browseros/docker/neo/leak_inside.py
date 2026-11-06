@@ -330,14 +330,22 @@ class Oracle:
         target.chmod(0o644)
         return {}
 
-    def prepare_upload(self, target: str, links: list) -> dict:
+    def prepare_upload(
+        self, target: str, links: list, decoy: str | None = None
+    ) -> dict:
         """Ready one deny-list probe (leak_plan.deny_uploads): whether its target is a
         file in this container, and the links that name it, made as root, each (kind,
         the target, where) with kind "symlink" or "hard link". A hard link needs the
-        target's own filesystem, so it can fail; the probe then names nothing. Paths only
-        cross this pipe."""
+        target's own filesystem, so it can fail; the probe then names nothing. A decoy
+        is an ordinary file of fresh random bytes, written where the probe names it.
+        Paths only cross this pipe."""
         if not Path(target).is_file():
             return {"present": False}
+        if decoy:
+            made = Path(decoy)
+            made.parent.mkdir(parents=True, exist_ok=True)
+            made.write_bytes(os.urandom(1500))
+            made.chmod(0o644)
         for kind, source, at in links:
             Path(at).parent.mkdir(parents=True, exist_ok=True)
             make = os.link if kind == "hard link" else os.symlink
@@ -348,25 +356,40 @@ class Oracle:
                 return {"present": True, "made": False, "why": why}
         return {"present": True, "made": True}
 
-    def read_back(self, instance: str, region: str, path: str) -> dict:
+    def read_back(
+        self, instance: str, region: str, path: str, decoy: str | None = None
+    ) -> dict:
         """Whether the page's file input `region` read what `path` holds (a file, or every
         file under a directory, through any symlink): the sha256 fx.js took of each file
-        it read against each file's own, compared here. Counts and booleans cross this
-        pipe; no byte of the files and no digest of them."""
+        it read against each file's own, compared here. The decoy, when there is one, is
+        held apart: reading it shows the directory landed, and is no match. Also whether
+        the input fired `cancel`. Counts and booleans cross this pipe; no byte of the
+        files and no digest of them."""
         (main, *_) = self._tabs(instance)
+        key = json.dumps(region)
         expression = (
-            f"window.__fx.booted.then(() => window.__fx.digests({json.dumps(region)}))"
+            "window.__fx.booted.then(() => Promise.all("
+            f"[window.__fx.digests({key}), window.__fx.cancelled({key})]))"
         )
-        got = self._evaluate(main["targetId"], expression) or []
+        got, cancelled = self._evaluate(main["targetId"], expression) or [None, False]
+        got = got or []
         root = Path(path)
         files = (
             [root]
             if root.is_file()
             else sorted(p for p in root.rglob("*") if p.is_file())
         )
+        decoy_path = Path(decoy) if decoy else None
         wanted = {
-            hashlib.sha256(data).hexdigest() for f in files if (data := f.read_bytes())
+            hashlib.sha256(data).hexdigest()
+            for f in files
+            if f != decoy_path and (data := f.read_bytes())
         }
+        decoy_sha = (
+            hashlib.sha256(decoy_path.read_bytes()).hexdigest()
+            if decoy_path and decoy_path.is_file()
+            else None
+        )
         read = [entry["sha256"] for entry in got if "sha256" in entry]
         return {
             "files": len(got),
@@ -376,6 +399,8 @@ class Oracle:
             ),
             "matched": bool(wanted.intersection(read)),
             "empty": not wanted,
+            "cancelled": bool(cancelled),
+            "decoy": decoy_sha in read,
         }
 
     def digest_control(self, instance: str, input: str, path: str) -> dict:

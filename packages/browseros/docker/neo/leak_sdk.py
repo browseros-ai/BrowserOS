@@ -123,7 +123,7 @@ TYPED_QUIET_S = 1.0
 # Values that reach the page as typing: held by claw-sdk until quiet, then registered.
 TYPED_ORIGINS = frozenset({Origin.OWNER, Origin.AGENT})
 # What read_back answers about a page's input; the oracle's reply also carries its id.
-READ_FACTS = ("files", "read", "errors", "matched", "empty")
+READ_FACTS = ("files", "read", "errors", "matched", "empty", "cancelled", "decoy")
 
 # ------------------------------------------------------------------------------------------
 # The scenarios, in the order they run. Each opens its own page instances and closes them.
@@ -280,8 +280,10 @@ def upload(s: Session) -> None:
     (unproven). A {name, mimeType, buffer} payload is the
     agent's own value, a declared way in like keyboard.type: the control. Then the deny
     list (decision 33b): each of Neo's own secret files, by its path and by the shapes
-    that hide a path, must be refused with DENY_CODE before the page reads a byte. Held
-    today (UPLOAD-HELD)."""
+    that hide a path, must be refused with DENY_CODE before the page reads a byte. A
+    directory holding a symlink to the token is sent instead, and must land without it:
+    a background tab cancels it, so it runs again, last, from the front tab. Held today
+    (UPLOAD-HELD)."""
     page = s.open(Layout.UPLOAD)
     ordinary = [p for p in page.instance.plants if p.origin is not Origin.NEO]
     if any([s.upload(page, plant) for plant in ordinary]):
@@ -1026,12 +1028,15 @@ class Session:
                 "prepare_upload",
                 target=NEO_FILES[upload.probe.target],
                 links=[list(link) for link in upload.links],
+                decoy=upload.decoy,
             )
             facts = {
                 "region": upload.region.id,
                 "probe": str(upload.probe),
                 "named": upload.named,
                 "paths": list(upload.paths),
+                "refused": upload.probe.refused,
+                "front": upload.probe.front,
                 "present": ready["present"],
                 "made": ready.get("made", False),
                 "why": ready.get("why"),
@@ -1049,6 +1054,7 @@ class Session:
                 instance=page.instance.name,
                 region=upload.region.id,
                 path=upload.named,
+                decoy=upload.decoy,
             )
             checked = {k: read[k] for k in READ_FACTS}
             self.step("neo_upload", page, capture=capture.id, read=checked, **facts)

@@ -1376,7 +1376,9 @@ NEO_FILES: Mapping[NeoFile, str] = {
 
 class Via(StrEnum):
     """How a probe names its target. The deny list matches by realpath and by (dev,
-    inode), and refuses a directory that holds a denied file, so every shape must fail."""
+    inode), and refuses a directory that holds a denied file, so every shape but one must
+    be refused. A directory holding a symlink is sent: the crate's walk skips symlinks,
+    as Chromium's directory upload drops them (sdk-playwright, m5-secrets)."""
 
     PATH = "its path"
     SYMLINK = "a symlink in /tmp"
@@ -1388,20 +1390,36 @@ class Via(StrEnum):
 
 @dataclasses.dataclass(frozen=True)
 class DenyProbe:
-    """One target named one way: the unit of a deny-list verdict."""
+    """One target named one way, from the agent's background tab or, with `front`, after
+    the agent brings that tab forward: the unit of a deny-list verdict."""
 
     target: NeoFile
     via: Via
+    front: bool = False
 
     @property
     def directory(self) -> bool:
         """Uploaded as a directory, into an input that takes one (webkitdirectory)."""
         return self.via in (Via.DIRECTORY, Via.LINK_DIRECTORY)
 
+    @property
+    def refused(self) -> bool:
+        """Whether the deny list must refuse it. A directory holding a symlink is sent,
+        so only what the page read judges it: never its target."""
+        return self.via is not Via.LINK_DIRECTORY
+
     def __str__(self) -> str:
-        return f"{self.target} by {self.via}"
+        where = " from the front tab" if self.front else ""
+        return f"{self.target} by {self.via}{where}"
 
 
+# Chromium reads a chosen directory only for the front tab, and every agent tab is in the
+# background: there it fires `cancel` on the input, which stays empty, and setInputFiles
+# times out waiting for the `input` event upstream waits for (sdk-playwright, m5-secrets'
+# live test). So the symlink probe runs twice. From the background, a cancel is the
+# expected answer and proves only that nothing landed; from the front tab, the directory
+# lands, and the page reading its decoy but not its target proves Chromium skipped the
+# symlink. The front probe runs last, so every other probe stays in the background.
 DENY_PROBES: tuple[DenyProbe, ...] = (
     *(DenyProbe(target, Via.PATH) for target in NeoFile),
     DenyProbe(NeoFile.HOST_TOKEN, Via.SYMLINK),
@@ -1409,7 +1427,11 @@ DENY_PROBES: tuple[DenyProbe, ...] = (
     DenyProbe(NeoFile.HOST_TOKEN, Via.LINK_DIRECTORY),
     DenyProbe(NeoFile.TRACE_DB, Via.HARD_LINK),
     DenyProbe(NeoFile.TRACE_DB, Via.DIRECTORY),
+    DenyProbe(NeoFile.HOST_TOKEN, Via.LINK_DIRECTORY, front=True),
 )
+# A directory probe's own timeout: a background one is expected to time out, and must
+# not hold the run for Playwright's default.
+DIRECTORY_TIMEOUT_MS = 3000
 # Where the oracle makes the links a probe names: on the container's root filesystem,
 # which also holds trace.db (the harness mounts no volume on /data), so a hard link to it
 # can be made there.
@@ -1423,12 +1445,15 @@ DIGEST_CONTROL = "fx-digest-control"
 @dataclasses.dataclass(frozen=True)
 class DenyUpload:
     """One deny-list probe on one UPLOAD page: the file input it uses, the path the agent
-    names, and the links the oracle makes first, each (kind, the target, where)."""
+    names, the links the oracle makes first, each (kind, the target, where), and for a
+    directory holding a symlink, the ordinary file of random bytes the oracle writes
+    beside it: the page reading that decoy shows the directory landed."""
 
     probe: DenyProbe
     region: Region
     named: str
     links: tuple[tuple[str, str, str], ...] = ()
+    decoy: str | None = None
 
     @property
     def paths(self) -> tuple[str, str]:
@@ -1437,9 +1462,16 @@ class DenyUpload:
 
     def code(self) -> str:
         """setInputFiles with the named path on the probe's own input: a path, which is
-        not a value. A refusal is keyed by the input, so its code survives (void_run)."""
+        not a value. A directory gets its own timeout, and a front probe brings its tab
+        forward first. A refusal, bringToFront's included, is keyed by the input, so its
+        code survives (void_run)."""
         path = json.dumps(self.named)
-        call = f"page.locator('#{self.region.id}').setInputFiles({path})"
+        options = (
+            f", {{timeout: {DIRECTORY_TIMEOUT_MS}}}" if self.probe.directory else ""
+        )
+        call = f"page.locator('#{self.region.id}').setInputFiles({path}{options})"
+        if self.probe.front:
+            call = f"page.bringToFront().then(() => {call})"
         return void_run([self.region.id], call)
 
 
@@ -1463,7 +1495,8 @@ def deny_uploads(instance: Instance) -> tuple[DenyUpload, ...]:
             Via.DIRECTORY: (posixpath.dirname(target), ()),
             Via.LINK_DIRECTORY: (here, (("symlink", target, inside),)),
         }[probe.via]
-        out.append(DenyUpload(probe, region, named, links))
+        decoy = f"{here}/decoy.bin" if probe.via is Via.LINK_DIRECTORY else None
+        out.append(DenyUpload(probe, region, named, links, decoy))
     return tuple(out)
 
 

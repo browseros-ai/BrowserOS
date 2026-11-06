@@ -1012,6 +1012,8 @@ class NeoRead:
     and what the oracle found the page read, compared by sha256 inside the container."""
 
     probe: str  # "host token by a symlink in /tmp"
+    refused: bool = True  # the deny list must refuse it (a symlink directory is sent)
+    front: bool = False  # the agent brought its tab forward before the upload
     present: bool = True  # its target is a file in this container
     made: bool = True  # the links that name it were made
     why: str = ""  # why not, when they were not
@@ -1022,6 +1024,8 @@ class NeoRead:
     errors: tuple[str, ...] = ()  # why the page could not read the others
     matched: bool = False  # one it read hashes the same as a file the probe names
     empty: bool = False  # every file the probe names is empty: nothing to read back
+    cancelled: bool = False  # the input fired `cancel`: Chromium set no file
+    decoy: bool = False  # it read the decoy beside the symlink: the directory landed
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1187,15 +1191,21 @@ def decide_copy(o: Observation) -> tuple[Verdict, str]:
 
 def decide_neo_upload(o: Observation) -> tuple[Verdict, str]:
     """A setInputFiles of one of Neo's own secret files (decision 33b). Neo must refuse
-    it with DENY_CODE before reading a byte, and name no path. What the page read is
-    the proof, whatever Neo answered:
+    it with DENY_CODE before reading a byte, and name no path; a directory holding a
+    symlink to it is sent instead, as Chromium skips the symlink (m5-secrets). What the
+    page read is the proof, whatever Neo answered:
 
         the page read a file that hashes as its target   -> LEAKED
         its target is not in this container              -> INCONCLUSIVE (no run)
         the harness could not make the links             -> N/A (no run)
         refused, the message names a path of it          -> LEAKED (the path)
         refused with DENY_CODE, or while it is held      -> WITHHELD
+        cancelled with no file: a symlink directory
+          from the background tab                        -> WITHHELD (Chromium's cancel)
+        cancelled, where the deny list must refuse,
+          or from the front tab                          -> INCONCLUSIVE
         refused any other way                            -> INCONCLUSIVE
+        a symlink directory: the page read its decoy     -> MASKED (the symlink skipped)
         sent: no file, an unread or empty one, others    -> INCONCLUSIVE
     """
     n = o.neo
@@ -1215,6 +1225,33 @@ def decide_neo_upload(o: Observation) -> tuple[Verdict, str]:
             return Verdict.LEAKED, f"{n.probe}: the refusal names its path ({key})"
         if key in SPECS[o.channel].refusals:
             return Verdict.WITHHELD, key
+    if n.cancelled and not n.files:
+        # Sent, and Chromium read nothing: its answer for a directory in a background
+        # tab (setInputFiles then times out). Enough for a symlink directory there; not
+        # for a probe the deny list must refuse, which only the background tab stopped.
+        if n.refused:
+            return (
+                Verdict.INCONCLUSIVE,
+                f"{n.probe}: cancelled, not refused: only the background tab kept "
+                "the page from reading it",
+            )
+        if n.front:
+            return (
+                Verdict.INCONCLUSIVE,
+                f"{n.probe}: cancelled in the front tab: nothing landed to show the "
+                "symlink skipped",
+            )
+        return (
+            Verdict.WITHHELD,
+            "cancelled: Chromium reads no directory in a background tab",
+        )
+    if o.refusal is not None:
+        key = o.refusal.key
+        if not n.refused:
+            return (
+                Verdict.INCONCLUSIVE,
+                f"{n.probe}: refused with {key}, not sent: {o.refusal.message[:80]}",
+            )
         return (
             Verdict.INCONCLUSIVE,
             f"{n.probe}: refused with {key}, not {DENY_CODE}: {o.refusal.message[:80]}",
@@ -1223,6 +1260,12 @@ def decide_neo_upload(o: Observation) -> tuple[Verdict, str]:
         return (
             Verdict.INCONCLUSIVE,
             f"{n.probe}: sent, but nothing checked what the page read",
+        )
+    if not n.refused and n.decoy:
+        return (
+            Verdict.MASKED,
+            f"{n.probe}: sent; the page read the directory's own file, not the "
+            "symlinked one",
         )
     if not n.files:
         return (
@@ -1571,6 +1614,8 @@ class _Observer:
         read = read if checked else {}
         facts = NeoRead(
             probe=str(d.get("probe", region_id)),
+            refused=bool(d.get("refused", True)),
+            front=bool(d.get("front", False)),
             present=bool(d.get("present", True)),
             made=bool(d.get("made", True)),
             why=str(d.get("why") or ""),
@@ -1581,6 +1626,8 @@ class _Observer:
             errors=tuple(str(e) for e in read.get("errors", ())),
             matched=bool(read.get("matched")),
             empty=bool(read.get("empty")),
+            cancelled=bool(read.get("cancelled")),
+            decoy=bool(read.get("decoy")),
         )
         self.emit(
             Observation(
@@ -2589,6 +2636,7 @@ def _neo_uploads(cells: Sequence[Cell], steps: Sequence[Step]) -> str:
     contract_first = sorted(held.items(), key=lambda kv: (kv[0] != DENY_CODE, kv[0]))
     parts = [f"{n} held ({key})" for key, n in contract_first]
     for verdict, word in (
+        (Verdict.MASKED, "masked"),
         (Verdict.LEAKED, "LEAK"),
         (Verdict.INCONCLUSIVE, "unproven"),
         (Verdict.NOT_APPLICABLE, "not run"),
