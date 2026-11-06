@@ -17,6 +17,7 @@ interfaces:
     - title
     - textContent
     - ariaSnapshot
+    - click
 
 # Named Playwright types the call bridge needs outside any command. `Metadata` is the `metadata`
 # of every protocol call; it carries the call's timeout, which is never a command parameter.

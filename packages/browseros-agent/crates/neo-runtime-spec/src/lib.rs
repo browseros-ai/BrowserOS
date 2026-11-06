@@ -47,9 +47,9 @@
 //!
 //! # Serve another Playwright command
 //!
-//! 1. Add the command's name under its interface in `spec/serve.yml`, for example
-//!    `Frame: [goto, title, textContent, ariaSnapshot, click]`. The translator rejects a name
-//!    that Playwright's spec lacks and suggests the closest one.
+//! 1. Add the command's name under its interface in `spec/serve.yml`, for example `dblclick`
+//!    under `Frame`. The translator rejects a name that Playwright's spec lacks and suggests the
+//!    closest one.
 //! 2. Regenerate. `FrameCall` gains a variant, so `neo-runtime`'s exhaustive `match` fails to
 //!    compile until the command has a handler.
 //!

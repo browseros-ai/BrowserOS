@@ -9,8 +9,10 @@ use neo_runtime_spec::injected::{
     InjectedAriaSnapshotResult, InjectedTextContentResult, TextMatch,
 };
 use neo_runtime_spec::serve::{
-    FrameCall, FrameGotoParams, FrameGotoResult, FrameTextContentParams, FrameTextContentResult,
-    FrameTitleResult, LifecycleEvent, Metadata,
+    FrameCall, FrameClickParams, FrameClickParamsButton, FrameClickParamsModifiersItem,
+    FrameClickParamsScroll, FrameClickResult, FrameGotoParams, FrameGotoResult,
+    FrameTextContentParams, FrameTextContentResult, FrameTitleResult, LifecycleEvent, Metadata,
+    Point,
 };
 use neo_runtime_spec::{
     CallDecodeError, Command, MethodFlag, MethodGroup, PageResult, SPEC_SHA256, is_current,
@@ -51,9 +53,9 @@ fn served_calls_decode_by_method_name() {
     assert!(matches!(title, FrameCall::Title(_)), "{title:?}");
     assert_eq!(title.meta().group, Some(MethodGroup::Getter));
 
-    let unknown = FrameCall::decode("click", Some(json!({"selector": "#a"}))).unwrap_err();
+    let unknown = FrameCall::decode("dblclick", Some(json!({"selector": "#a"}))).unwrap_err();
     assert!(
-        matches!(&unknown, CallDecodeError::UnknownMethod { interface: "Frame", method } if method == "click"),
+        matches!(&unknown, CallDecodeError::UnknownMethod { interface: "Frame", method } if method == "dblclick"),
         "{unknown:?}"
     );
     let invalid = FrameCall::decode("goto", Some(json!({"url": "x", "waitUntil": "later"})));
@@ -96,6 +98,80 @@ fn replies_are_typed_by_their_command() {
         serde_json::to_value(&title).unwrap(),
         json!({"value": "Example"})
     );
+}
+
+#[test]
+fn click_decodes_every_key_playwright_sends() {
+    let call = FrameCall::decode(
+        "click",
+        Some(json!({
+            "selector": "internal:role=button[name=\"Submit\"i]",
+            "strict": true,
+            "force": false,
+            "scroll": "none",
+            "noWaitAfter": true,
+            "modifiers": ["Alt", "ControlOrMeta"],
+            "position": {"x": 1.5, "y": 2},
+            "delay": 10.5,
+            "button": "right",
+            "clickCount": 2,
+            "trial": true,
+            "steps": 3,
+        })),
+    )
+    .unwrap();
+    assert!(
+        call.meta().has(MethodFlag::Input),
+        "a click writes to the page"
+    );
+    let expected = FrameClickParams {
+        selector: "internal:role=button[name=\"Submit\"i]".into(),
+        strict: Some(true),
+        force: Some(false),
+        scroll: Some(FrameClickParamsScroll::None),
+        no_wait_after: Some(true),
+        modifiers: Some(vec![
+            FrameClickParamsModifiersItem::Alt,
+            FrameClickParamsModifiersItem::ControlOrMeta,
+        ]),
+        position: Some(Point { x: 1.5, y: 2.0 }),
+        delay: Some(10.5),
+        button: Some(FrameClickParamsButton::Right),
+        click_count: Some(2),
+        trial: Some(true),
+        steps: Some(3),
+    };
+    assert_eq!(call, FrameCall::Click(expected));
+
+    // `locator.click()` with no options sends the selector and `strict` only.
+    let FrameCall::Click(bare) =
+        FrameCall::decode("click", Some(json!({"selector": "#a", "strict": true}))).unwrap()
+    else {
+        panic!("click decodes as a click");
+    };
+    assert_eq!((bare.position, bare.delay, bare.button), (None, None, None));
+}
+
+#[test]
+fn a_void_command_replies_without_a_result() {
+    // Playwright's `click` declares no `returns`: its server replies `{id}`, and its client
+    // resolves `undefined`. `Some(json!({}))` would resolve `{}` in the agent's script.
+    let click = FrameClickParams {
+        selector: "#a".into(),
+        strict: Some(true),
+        force: None,
+        scroll: None,
+        no_wait_after: None,
+        modifiers: None,
+        position: None,
+        delay: None,
+        button: None,
+        click_count: None,
+        trial: None,
+        steps: None,
+    };
+    const { assert!(<FrameClickParams as Command>::VOID_RESULT, "click is void") };
+    assert_eq!(click.reply(&FrameClickResult {}).unwrap(), None);
 }
 
 #[test]
