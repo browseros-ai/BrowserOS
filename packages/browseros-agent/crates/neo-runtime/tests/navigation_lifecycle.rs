@@ -5,10 +5,48 @@ mod fake_browser;
 
 use std::time::Duration;
 
-use fake_browser::{FakeBrowser, NavigationScript, Replies};
+use fake_browser::{CommitDuring, FakeBrowser, NavigationScript, Replies, Reply};
 use neo_runtime::RunStatus;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_reads_retry_when_a_commit_spans_the_reply_or_attachment() {
+    for during in [CommitDuring::Title, CommitDuring::Attach] {
+        let browser = FakeBrowser::start(Replies {
+            commit_during: Some(during),
+            title: Reply {
+                delay: Duration::from_millis(50),
+                ..Reply::default()
+            },
+            world: Reply {
+                delay: Duration::from_millis(50),
+                ..Reply::default()
+            },
+            ..Replies::default()
+        })
+        .await;
+        let outcome = browser
+            .runtime()
+            .await
+            .run(fake_browser::run_request(
+                "return await page.title()",
+                Duration::from_secs(10),
+                CancellationToken::new(),
+            ))
+            .await;
+        assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+        assert_eq!(outcome.value, Some(json!("After commit")));
+        assert_eq!(
+            browser
+                .exchanges()
+                .iter()
+                .filter(|exchange| exchange.method() == "Page.createIsolatedWorld")
+                .count(),
+            2
+        );
+    }
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_cdp_commits_before_and_after_the_reply_complete_navigation() {
@@ -24,6 +62,7 @@ async fn tests_that_cdp_commits_before_and_after_the_reply_complete_navigation()
                 commit_after: Duration::from_millis(commit),
                 same_document,
                 stop_loading,
+                restored_from_bfcache: stop_loading,
             }),
             ..Replies::default()
         })
@@ -73,6 +112,7 @@ async fn tests_that_dispatch_sends_generated_goto_and_title_results() {
             commit_after: Duration::from_millis(1),
             same_document: false,
             stop_loading: false,
+            restored_from_bfcache: false,
         }),
         ..Replies::default()
     })
