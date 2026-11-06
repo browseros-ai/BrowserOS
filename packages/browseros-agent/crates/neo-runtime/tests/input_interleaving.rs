@@ -13,6 +13,7 @@
 mod browser;
 
 use std::time::Duration;
+use std::time::Instant;
 
 use browser::{Fixture, Tab};
 use neo_runtime::{CallResult, Delivery, PageId, RunOutcome, RunRequest, RunStatus, Runtime};
@@ -151,24 +152,32 @@ async fn a_press_cancelled_mid_delay_still_releases_its_keys() {
     let Some(tab) = open().await else { return };
     let runtime = runtime(&tab).await;
     let cancel = CancellationToken::new();
-    let stopper = {
-        let cancel = cancel.clone();
-        tokio::spawn(async move {
-            time::sleep(Duration::from_millis(300)).await;
-            cancel.cancel();
-        })
+    // Cancel once the page has seen both keyDowns: the press is then inside its `delay`, however
+    // long the run took to reach its first page call. A fixed sleep raced the run's setup.
+    let stopper = async {
+        let started = Instant::now();
+        while tab
+            .evaluate("window.__events.filter(event => event.type === 'keydown').length >= 2")
+            .await
+            != json!(true)
+        {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the press never reached its delay"
+            );
+            time::sleep(Duration::from_millis(10)).await;
+        }
+        cancel.cancel();
     };
-    let cut = runtime
-        .run(request(
+    let (cut, ()) = tokio::join!(
+        runtime.run(request(
             &tab,
             "await page.locator('#p').press('Shift+a', { delay: 500 })",
             Duration::from_secs(30),
-            cancel,
-        ))
-        .await;
-    stopper
-        .await
-        .unwrap_or_else(|error| panic!("the stopper: {error}"));
+            cancel.clone(),
+        )),
+        stopper,
+    );
     let next = runtime
         .run(request(
             &tab,
