@@ -15,6 +15,7 @@
 //!                       ├─ navigate      navigate.rs: goto (commits, lifecycle) and live title
 //!                       ├─ reads         reads.rs: textContent and ariaSnapshot read loops;
 //!                       │                aria_yaml.rs renders the snapshot as Playwright's YAML
+//!                       ├─ waits         waits.rs: selector, URL and lifecycle waits; no input lock
 //!                       └─ PageSession   page.rs: domains, watcher, document state, input
 //!                            └─ World    world.rs: per-document injected glue
 //! ```
@@ -59,11 +60,8 @@ mod run;
 mod runtime;
 mod tab_calls;
 mod tabs;
-#[expect(
-    dead_code,
-    reason = "the waitForURL matcher interface; waits.rs is its caller"
-)]
 mod url_match;
+mod waits;
 mod world;
 
 pub use run::{
