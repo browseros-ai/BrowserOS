@@ -222,8 +222,12 @@ export const glue = {
    * document's last snapshot, so a later snapshot of another part of the document leaves it. */
   frameOwnerByRef: (injected, { ref }) => {
     const named = namedOwners.get(ref)?.deref()
+    // Only an owner still connected in this document: one moved into another document (a
+    // sibling frame's) carries its ref along, but this document's path no longer leads to it.
     const element =
-      named?.isConnected && (named as NamedElement)._ariaRef?.ref === ref
+      named?.isConnected &&
+      named.ownerDocument === document &&
+      (named as NamedElement)._ariaRef?.ref === ref
         ? named
         : injected
             .querySelectorAll(injected.parseSelector('iframe, frame'), document)

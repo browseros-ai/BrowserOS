@@ -9055,7 +9055,7 @@ var glue = {
   },
   frameOwnerByRef: (injected, { ref }) => {
     const named = namedOwners.get(ref)?.deref();
-    const element = named?.isConnected && named._ariaRef?.ref === ref ? named : injected.querySelectorAll(injected.parseSelector("iframe, frame"), document).find((owner) => owner._ariaRef?.ref === ref);
+    const element = named?.isConnected && named.ownerDocument === document && named._ariaRef?.ref === ref ? named : injected.querySelectorAll(injected.parseSelector("iframe, frame"), document).find((owner) => owner._ariaRef?.ref === ref);
     return {
       element,
       visible: !!element && injected.utils.isElementVisible(element)
