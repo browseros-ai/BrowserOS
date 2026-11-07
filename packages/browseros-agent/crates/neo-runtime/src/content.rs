@@ -21,9 +21,13 @@ use neo_runtime_spec::serve::{
     FrameContentResult, FrameResolveSelectorResult, FrameSetContentParams, LifecycleEvent,
 };
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use browseros_cdp::{CdpEvent, SessionId};
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::oneshot;
 
 use crate::click::{PageError, Tab};
 use crate::frame_selector;
@@ -45,6 +49,50 @@ const ENTER_FRAME: &str = " >> internal:control=enter-frame >> ";
 pub(crate) struct SetContentOptions {
     pub(crate) html: String,
     pub(crate) wait_until: LifecycleEvent,
+}
+
+/// Neo: the run's `setContent` writes into each frame, in the order the calls arrived. Playwright
+/// sends each write's `document.open()` in call order, so of overlapping writes the later one's
+/// document stays; Neo's calls run as tasks, so each waits for the frame's previous write to
+/// answer first. The order is taken when the call arrives (`Dispatcher::call`, synchronous).
+#[derive(Debug, Default)]
+pub(crate) struct WriteOrder {
+    /// Per frame guid, the answer of the last write that arrived.
+    last: Mutex<HashMap<String, oneshot::Receiver<()>>>,
+}
+
+/// Neo: one write's place in its frame's order: the previous write's answer, and its own,
+/// given when it is dropped (written, failed or stopped alike).
+#[derive(Debug)]
+pub(crate) struct WriteTurn {
+    previous: Option<oneshot::Receiver<()>>,
+    _answered: oneshot::Sender<()>,
+}
+
+impl WriteOrder {
+    /// The next place in `frame`'s order, taken in arrival order.
+    pub(crate) fn turn(&self, frame: &str) -> WriteTurn {
+        let (answered, next) = oneshot::channel();
+        let previous = self
+            .last
+            .lock()
+            .ok()
+            .and_then(|mut last| last.insert(frame.to_string(), next));
+        WriteTurn {
+            previous,
+            _answered: answered,
+        }
+    }
+}
+
+impl WriteTurn {
+    /// Waits until the frame's previous write answered (or went), and holds this one's place.
+    async fn ready(mut self) -> Self {
+        if let Some(previous) = self.previous.take() {
+            let _answered = previous.await;
+        }
+        self
+    }
 }
 
 /// Neo: decodes `Frame.setContent`, refusing `networkidle` before any page call, as `goto` does.
@@ -97,8 +145,14 @@ pub(crate) async fn content(
 pub(crate) async fn set_content(
     tab: &FrameTab,
     options: &SetContentOptions,
+    turn: Option<WriteTurn>,
     progress: &Progress,
 ) -> Result<(), CallError> {
+    // Overlapping writes into one frame go in call order: this one waits for the previous.
+    let turn = match turn {
+        Some(turn) => Some(progress.race(turn.ready()).await?),
+        None => None,
+    };
     progress.log(format!(
         "setting frame content, waiting until \"{}\"",
         lifecycle_name(options.wait_until)
@@ -129,6 +183,8 @@ pub(crate) async fn set_content(
     {
         tab.page.expect_reopen(&frame.id, false);
     }
+    // The write answered: the frame's next write may go.
+    drop(turn);
     written?.map_err(call_error)?;
     if options.wait_until == LifecycleEvent::Commit {
         return Ok(());
@@ -287,9 +343,37 @@ fn call_error(error: PageError) -> CallError {
 
 #[cfg(test)]
 mod tests {
-    //! The decoding steps; the page side is covered by the real-browser tests.
+    //! The decoding steps and the write order; the page side is covered by the real-browser
+    //! tests.
+
+    use std::time::Duration;
+
+    use tokio::time::timeout;
 
     use super::*;
+
+    #[tokio::test]
+    async fn tests_that_writes_into_one_frame_go_in_arrival_order() {
+        let order = WriteOrder::default();
+        let first = order.turn("frame@A");
+        let second = order.turn("frame@A");
+        let other = order.turn("frame@B");
+        let other = timeout(Duration::from_millis(100), other.ready())
+            .await
+            .expect("another frame's write goes at once");
+        let mut waiting = Box::pin(second.ready());
+        assert!(
+            timeout(Duration::from_millis(100), &mut waiting)
+                .await
+                .is_err(),
+            "the second write waits for the first"
+        );
+        drop(first.ready().await);
+        let _second = timeout(Duration::from_millis(1000), waiting)
+            .await
+            .expect("the second write goes once the first answered");
+        drop(other);
+    }
 
     #[test]
     fn tests_that_set_content_waits_for_load_unless_told_and_refuses_networkidle() {

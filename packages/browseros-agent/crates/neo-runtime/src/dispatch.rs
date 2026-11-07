@@ -68,7 +68,7 @@ use tracing::debug;
 use crate::abort::{Aborts, Registration};
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
-use crate::content::{self, SetContentOptions};
+use crate::content::{self, SetContentOptions, WriteOrder, WriteTurn};
 use crate::devices::{self, DeviceCall};
 use crate::dialogs;
 use crate::element_ops::{
@@ -224,9 +224,21 @@ struct Inner {
     /// The admitted calls a script's `signal` can still abort, by message id (`abort.rs`).
     aborts: Arc<Aborts>,
     next_call_id: AtomicU64,
+    /// The `setContent` writes into each frame, in arrival order (`content.rs`).
+    write_order: WriteOrder,
     /// Cancels `run.ended` when the last `Dispatcher` drops. A reason `finish` recorded first
     /// wins; otherwise calls read [`RunEnd::Cancelled`].
     _ending: DropGuard,
+}
+
+impl Inner {
+    /// A `setContent` call takes its place in its frame's write order as it arrives.
+    fn ordered(&self, guid: &str, mut call: ObjectCall) -> ObjectCall {
+        if let ObjectCall::Frame(Route::FrameSetContent(_, turn)) = &mut call {
+            *turn = Some(self.write_order.turn(guid));
+        }
+        call
+    }
 }
 
 /// Playwright's client message, `{id, guid, method, params, metadata}` (`connection.ts`).
@@ -353,7 +365,8 @@ enum Route {
     FrameWaitForLoadState(WaitForLoadStateOptions),
     // Document content and timing (content.rs, waits.rs, reads.rs).
     FrameContent(bool),
-    FrameSetContent(SetContentOptions),
+    /// The options, and the write's place in its frame's order (`Dispatcher::call` gives it).
+    FrameSetContent(SetContentOptions, Option<WriteTurn>),
     FrameWaitForTimeout(f64),
     FrameResolveSelector(String),
     FrameAriaSnapshotJson(SnapshotOptions),
@@ -385,6 +398,7 @@ impl Dispatcher {
             cursors: Arc::default(),
             aborts: Arc::default(),
             next_call_id: AtomicU64::new(1),
+            write_order: WriteOrder::default(),
         }))
     }
 
@@ -415,6 +429,7 @@ impl Dispatcher {
         });
         let object = object_kind(&guid, target.is_some());
         let Routed { meta, route } = route(object, &method, params.clone());
+        let route = route.map(|call| inner.ordered(&guid, call));
         let metadata = metadata.unwrap_or(Metadata {
             location: None,
             title: None,
@@ -804,9 +819,8 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::Content(params) => {
             Ok(Route::FrameContent(params.include_shadow.unwrap_or(false)))
         }
-        FrameCall::SetContent(params) => {
-            SetContentOptions::from_params(params).map(Route::FrameSetContent)
-        }
+        FrameCall::SetContent(params) => SetContentOptions::from_params(params)
+            .map(|options| Route::FrameSetContent(options, None)),
         FrameCall::WaitForTimeout(params) => Ok(Route::FrameWaitForTimeout(params.wait_timeout)),
         FrameCall::ResolveSelector(params) => Ok(Route::FrameResolveSelector(params.selector)),
         FrameCall::AriaSnapshotJSON(params) => Ok(Route::FrameAriaSnapshotJson(
@@ -1043,7 +1057,7 @@ async fn serve(
         | Route::FrameIsDisabled(_)
         | Route::FrameIsEditable(_)) => serve_state(&page, route, &progress).await,
         route @ (Route::FrameContent(_)
-        | Route::FrameSetContent(_)
+        | Route::FrameSetContent(..)
         | Route::FrameWaitForTimeout(_)
         | Route::FrameResolveSelector(_)
         | Route::FrameAriaSnapshotJson(_)) => serve_document(&page, route, &progress).await,
@@ -1169,9 +1183,11 @@ async fn serve_document(
         Route::FrameContent(include_shadow) => content::content(page, include_shadow, progress)
             .await
             .and_then(|result| encode_result::<FrameContentParams>(&result)),
-        Route::FrameSetContent(options) => content::set_content(page, &options, progress)
-            .await
-            .and_then(|()| encode_result::<FrameSetContentParams>(&FrameSetContentResult {})),
+        Route::FrameSetContent(options, turn) => {
+            content::set_content(page, &options, turn, progress)
+                .await
+                .and_then(|()| encode_result::<FrameSetContentParams>(&FrameSetContentResult {}))
+        }
         Route::FrameWaitForTimeout(wait) => {
             waits::wait_for_timeout(page, waits::timer_delay(wait), progress)
                 .await
@@ -1308,7 +1324,7 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameWaitForUrl(_)
         | Route::FrameWaitForLoadState(_)
         | Route::FrameContent(_)
-        | Route::FrameSetContent(_)
+        | Route::FrameSetContent(..)
         | Route::FrameWaitForTimeout(_)
         | Route::FrameResolveSelector(_)
         | Route::FrameAriaSnapshotJson(_)
