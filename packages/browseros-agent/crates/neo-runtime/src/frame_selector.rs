@@ -753,7 +753,7 @@ mod tests {
             let found = split(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
             assert_eq!(
                 found.hops,
-                [outer],
+                [Hop::Chunk(outer.to_string())],
                 "the outer owner is unchanged: {source}"
             );
             assert_eq!(
