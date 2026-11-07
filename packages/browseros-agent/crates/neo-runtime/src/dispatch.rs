@@ -113,6 +113,7 @@ use crate::reads::{self, AttributeOptions, ReadOptions, SnapshotOptions};
 use crate::responses::{self, NetworkCall};
 use crate::routes;
 use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
+use crate::session_state::StateFile;
 use crate::set_input_files;
 use crate::states::{self, StateOptions};
 use crate::tab_calls;
@@ -131,7 +132,7 @@ const RECORDS_WAIT: Duration = Duration::from_secs(1);
 /// its pages (`init_scripts.rs`, `bindings.rs`), apart from [`RECORDS_WAIT`]: a session it does
 /// not reach keeps a script the next run's documents would run, or a binding whose calls never
 /// settle. Free for a run that used neither.
-const PAGE_END_WAIT: Duration = Duration::from_secs(3);
+pub(crate) const PAGE_END_WAIT: Duration = Duration::from_secs(3);
 /// Neo: the budget for removing the run's highlights at its end, after [`RECORDS_WAIT`] and
 /// apart from it, so a document that does not answer delays the outcome by at most this and
 /// never holds back an input release. An overlay it cannot remove in time stays, as one in a
@@ -392,6 +393,9 @@ enum ObjectKind {
 
 enum ObjectCall {
     Context(BrowserContextCall),
+    /// `context.storageState` and `context.setStorageState`, with the `path` the spec's params
+    /// lack (`neo_path`).
+    StorageState(StateFile, Option<String>),
     Page(PageCall),
     /// `page.keyboard`, `page.mouse` and `page.touchscreen` (`devices.rs`).
     Device(DeviceCall),
@@ -613,14 +617,11 @@ impl Dispatcher {
         // Before anything below waits: what the run holds is held by no live run from now on,
         // however its release goes (`TabInput::mark_ended`).
         self.0.tabs.mark_input_ended();
-        // The run's init scripts go first, then its bindings, on a budget of their own: neither
-        // waits on a call still running, so no document loaded after the run returns runs one
-        // of its scripts, and no page keeps one of its bindings.
-        let _removed = time::timeout(PAGE_END_WAIT, async {
-            run.init_scripts.close().await;
-            run.bindings.close(&self.0.tabs).await;
-        })
-        .await;
+        // What the run installed on the tabs it leaves open goes first, as `context.close()`
+        // lets go of it, each part on a budget of its own: removal never waits on a call still
+        // running, so no document loaded after the run returns runs one of its init scripts, no page keeps one of its
+        // bindings, and none gets its session overrides (`Tabs::release_run_scoped`).
+        self.0.tabs.release_run_scoped(run).await;
         // The realm is gone with its listeners: from now on the watchers answer dialogs
         // themselves, and a dialog a listener left open gets the default answer before the
         // sessions detach (`Dialogs::left_open`).
@@ -801,8 +802,11 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         Err(unrouted) => unrouted,
     };
     let decoded = match object {
-        ObjectKind::Context => BrowserContextCall::decode(method, params)
-            .map(|call| (call.meta(), Ok(ObjectCall::Context(call)))),
+        ObjectKind::Context => {
+            let path = neo_path(params.as_ref());
+            BrowserContextCall::decode(method, params)
+                .map(|call| (call.meta(), context_call(call, path)))
+        }
         ObjectKind::Page => {
             let path = neo_path(params.as_ref());
             PageCall::decode(method, params).map(|call| {
@@ -924,6 +928,22 @@ fn json_kind(value: &Value) -> &'static str {
         Value::Array(_) => "array",
         Value::Object(_) => "object",
     }
+}
+
+/// A decoded context call: the storage-state ones go with their `path`.
+fn context_call(
+    call: BrowserContextCall,
+    path: Result<Option<String>, PlaywrightError>,
+) -> Result<ObjectCall, PlaywrightError> {
+    Ok(match call {
+        BrowserContextCall::StorageState(params) => {
+            ObjectCall::StorageState(StateFile::Export(params), path?)
+        }
+        BrowserContextCall::SetStorageState(params) => {
+            ObjectCall::StorageState(StateFile::Import(params), path?)
+        }
+        call => ObjectCall::Context(call),
+    })
 }
 
 /// A decoded page call: the ones that answer bytes go to `capture.rs` with their `path`.
@@ -1258,7 +1278,7 @@ async fn serve_call(
         (ObjectCall::Dialog(..) | ObjectCall::Download(..) | ObjectCall::Intercepted(..), _) => {
             None
         }
-        (ObjectCall::Context(_), _) => Some(ALL_PAGES),
+        (ObjectCall::Context(_) | ObjectCall::StorageState(..), _) => Some(ALL_PAGES),
         (_, Some((page, _))) => Some(page.id.as_str()),
         (_, None) => None,
     };
@@ -1271,6 +1291,9 @@ async fn serve_call(
     }
     let result = match (route, target) {
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
+        (ObjectCall::StorageState(file, path), _) => {
+            tab_calls::state_file(&tabs, file, path, &progress).await
+        }
         (ObjectCall::Init(route), target) => init_call(&tabs, target, route, &progress).await,
         (ObjectCall::Binding(route), target) => binding_call(&tabs, target, route, &progress).await,
         (ObjectCall::Page(call), Some((page, _))) => {
@@ -2138,6 +2161,7 @@ mod tests {
         route.map(|call| match call {
             ObjectCall::Frame(route) => route,
             ObjectCall::Context(_)
+            | ObjectCall::StorageState(..)
             | ObjectCall::Page(_)
             | ObjectCall::Device(_)
             | ObjectCall::Network(_)
