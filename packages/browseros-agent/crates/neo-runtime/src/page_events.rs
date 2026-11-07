@@ -210,7 +210,13 @@ impl PageEvents {
 
     /// A frame change of the tab, for the page's and the context's frame listeners.
     fn frame_event(&self, event: &CdpEvent) {
-        if !event.method.starts_with("Page.") {
+        if !matches!(
+            event.method.as_str(),
+            "Page.frameAttached"
+                | "Page.frameDetached"
+                | "Page.frameNavigated"
+                | "Page.navigatedWithinDocument"
+        ) {
             return;
         }
         let Ok(changes) = self.frames.lock().map(|mut model| model.apply(event)) else {
