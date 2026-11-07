@@ -9,12 +9,12 @@ const TOP = 5
 context.setDefaultTimeout(15_000)
 context.setDefaultNavigationTimeout(30_000)
 
-// Neo currently returns null from goto, so HTTP status checks work only in real Playwright.
-// The integration test independently verifies the loaded listing and comment pages.
+// Fails on an HTTP error (Hacker News rate-limits fast clients) rather than on a later selector.
 const load = async (tab, url) => {
   const response = await tab.goto(url)
-  if (response && !response.ok()) {
-    throw new Error(`Loading ${url} failed: HTTP ${response.status()}.`)
+  if (!response?.ok()) {
+    const answer = response ? `HTTP ${response.status()}` : 'no response'
+    throw new Error(`Loading ${url} failed: ${answer}.`)
   }
 }
 // Story links are absolute; the site's own links are relative to its root (`item?id=…`).
@@ -26,8 +26,7 @@ await load(page, BEST_URL)
 // One `tr.athing` row per story, its id the story's id. The row below it holds the score,
 // author, age and the comments link: "N comments", or "discuss" before the first comment.
 const rows = page.locator('tr.athing')
-// Read the first row before counting, including on SDK builds without Locator.waitFor.
-await rows.first().textContent()
+await rows.first().waitFor()
 const listed = await rows.count()
 if (listed < TOP) {
   throw new Error(`Expected at least ${TOP} stories on ${BEST_URL}, found ${listed}.`)
