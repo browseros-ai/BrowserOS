@@ -90,7 +90,7 @@ use crate::tab_calls;
 use crate::tabs::{PageEntry, Tabs};
 use crate::waits::{
     self, NeoWaitForLoadStateParams, NeoWaitForUrlParams, WaitForLoadStateOptions,
-    WaitForSelectorOptions, WaitForUrlOptions,
+    WaitForSelectorOptions, WaitForUrlOptions, WaitTab,
 };
 
 /// The shared budget for creation settlement, call draining and closing-state reads after
@@ -863,9 +863,17 @@ async fn serve(
                 .map(|()| Some(json!({})))
         }
         Route::FrameWaitForNavigation(options) => {
-            history::wait_for_navigation(&page, &options, &progress)
-                .await
-                .and_then(|response| encode_neo(&NeoNavigationResult { response }))
+            let waited = if matches!(page.scope, FrameScope::Main) {
+                history::wait_for_navigation(&page, &options, &progress).await
+            } else {
+                match WaitTab::observe(&page) {
+                    Ok(events) => {
+                        history::wait_for_navigation_on(&page, events, &options, &progress).await
+                    }
+                    Err(error) => Err(navigate::page_error(error).into()),
+                }
+            };
+            waited.and_then(|response| encode_neo(&NeoNavigationResult { response }))
         }
         Route::FrameNextNavigation(params) => {
             history::next_frame_navigation(cursors, page, &params, &progress)
@@ -947,11 +955,6 @@ fn unsupported_child_call(scope: &FrameScope, route: &Route) -> Option<Playwrigh
     }
     let method = match route {
         Route::FrameGoto(_) => "goto",
-        // Deviation: `client/frame.ts` `Frame.waitForNavigation` Playwright answers a child
-        // frame's navigation Response; the network log records only the main frame's requests,
-        // so Neo refuses the wait. A predicate wait that answers none (`waitForURL`) is served.
-        Route::FrameWaitForNavigation(_) => "waitForNavigation",
-        Route::FrameNextNavigation(params) if params.response => "waitForNavigation",
         _ => return None,
     };
     Some(PlaywrightError::error(format!(
@@ -1790,14 +1793,15 @@ mod tests {
                 "{method}"
             );
         }
-        // A child frame's Response is unknown, so a wait that answers one is refused before it
-        // starts; a URL-only cursor (`waitForURL`) is served there.
+        // Every frame's requests are recorded, so a child frame's navigation waits are served
+        // with their Response, as the main frame's; only `goto` stays refused on a child.
         let child = FrameScope::Frame("child".to_string());
         for (method, params, refused) in [
-            ("neo:waitForNavigation", json!({"url":{"glob":""}}), true),
-            ("neo:nextNavigation", json!({"response":true}), true),
+            ("neo:waitForNavigation", json!({"url":{"glob":""}}), false),
+            ("neo:nextNavigation", json!({"response":true}), false),
             ("neo:nextNavigation", json!({"response":false}), false),
             ("neo:releaseNavigation", json!({"cursor":1}), false),
+            ("goto", json!({"url":"https://example.test"}), true),
         ] {
             let Ok(ObjectCall::Frame(route)) = route_frame(method, params).route else {
                 panic!("{method} routes");

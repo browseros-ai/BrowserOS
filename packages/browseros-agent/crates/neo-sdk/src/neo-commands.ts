@@ -65,10 +65,9 @@ export type NeoWaitForURLParams = {
  * or for the next one. */
 export type NeoWaitForLoadStateParams = { state: LifecycleEvent }
 
-/** `neo:waitForNavigation`: Playwright's `waitForNavigation` for the main frame with a glob or
+/** `neo:waitForNavigation`: Playwright's `waitForNavigation` for a frame with a glob or
  * `RegExp` `url` (`''` for none): the first navigation after the call whose URL matches (a
- * same-document one counts; a failed one rejects), then `waitUntil`. Rust refuses child frames,
- * whose navigation requests it does not record. */
+ * same-document one counts; a failed one rejects), then `waitUntil`, on any frame. */
 export type NeoWaitForNavigationParams = {
   url: NeoSerializedUrlMatch
   waitUntil: LifecycleEvent

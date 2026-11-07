@@ -20,9 +20,10 @@
  * - `waitForURL`, `waitForLoadState` and `waitForNavigation` are `neo:` calls that Rust waits out
  *   (`neo-commands.ts`), where Playwright's client waits on `navigated` and `loadstate` events.
  *   A predicate `url` steps a cursor, one call per navigation, and receives Neo's read-only `URL`
- *   (`url.ts`). A failed navigation rejects a main-frame wait, as in
- *   Playwright, once Neo has seen its request start; a child frame's never does.
- *   `waitForNavigation` on a child frame rejects: Neo does not record a child frame's requests.
+ *   (`url.ts`). A failed navigation rejects the wait, as in Playwright, once Neo has
+ *   seen its request start. A child frame's `waitForNavigation` answers the frame's `Response`,
+ *   except that a frame whose document moves to another process mid-wait reports that commit on
+ *   a session Neo only reads once a call attached it.
  *   An unknown `waitUntil` is reported as `waitUntil`, where Playwright names it `state` when a
  *   glob or `RegExp` URL already matches.
  * - `allTextContents` and `allInnerTexts` send `client/locator.ts` source text (the latter
@@ -461,8 +462,7 @@ export class Frame {
    * navigation or a document without a request. A navigation that fails first rejects with its
    * error. Start it before the action that navigates:
    * `await Promise.all([page.waitForNavigation(), page.click('a')])`. Runs under the navigation
-   * timeout. Neo limit: a child frame's wait rejects, because Neo does not record a child
-   * frame's navigation requests.
+   * timeout.
    */
   async waitForNavigation(
     options: WaitForNavigationOptions = {},

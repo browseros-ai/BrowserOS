@@ -464,6 +464,26 @@ impl FrameFeeds {
 }
 
 impl FrameFeeds {
+    /// A navigation request of child frame `frame` started or failed (`Network.requestWillBeSent`,
+    /// `Network.loadingFailed`), which the frame's feed follows as the main frame's state does
+    /// ([`apply_navigation_request`]): its pending document, and a failure that aborts it.
+    /// Network events name no frame's session, so the tab's watcher routes them here by frame.
+    fn apply_network(&self, event: &CdpEvent, frame: &str) {
+        let Ok(mut frames) = self.frames.lock() else {
+            return;
+        };
+        let feed = frames.entry(frame.to_string()).or_insert_with(new_feed);
+        let mut navigation = None;
+        feed.state.send_if_modified(|state| {
+            let applied = apply_navigation_request(&mut state.page, event, frame);
+            navigation = applied.navigation;
+            applied.changed
+        });
+        if let Some(navigation) = navigation {
+            let _listeners = feed.navigations.send(navigation);
+        }
+    }
+
     /// `frame`'s `networkidle` fired or was removed (`network_idle.rs`).
     fn set_network_idle(&self, frame: &str, fired: bool) {
         if let Ok(frames) = self.frames.lock()
@@ -1325,6 +1345,25 @@ impl Watcher {
         self.apply_idle(changes);
     }
 
+    /// A child frame's navigation request starting or failing, routed to that frame's feed: the
+    /// start names its frame, the failure only its request, whose frame the network log knows.
+    /// `recorded`: the event came from a session the network log records.
+    fn child_navigation_request(&self, feeds: &FrameFeeds, event: &CdpEvent, recorded: bool) {
+        if !recorded {
+            return;
+        }
+        let frame = match event.method.as_str() {
+            "Network.requestWillBeSent" => event.params["frameId"].as_str().map(str::to_string),
+            "Network.loadingFailed" => event.params["requestId"]
+                .as_str()
+                .and_then(|request| self.network.frame_of(request)),
+            _ => None,
+        };
+        if let Some(frame) = frame.filter(|frame| *frame != self.main_frame) {
+            feeds.apply_network(event, &frame);
+        }
+    }
+
     /// A network idle timer fired.
     fn idle_tick(&self) {
         let changes = self
@@ -1353,6 +1392,7 @@ impl Watcher {
                 // An out-of-process frame session's requests are the tab's once the page enabled
                 // its Network domain (`enable_child_network`).
                 let mut happenings = Vec::new();
+                let mut recorded = false;
                 if event.method.starts_with("Network.") {
                     let from = match event.session_id.as_ref() {
                         Some(from) if from == session => Some(None),
@@ -1360,6 +1400,7 @@ impl Watcher {
                         _ => None,
                     };
                     if let Some(from) = from {
+                        recorded = true;
                         happenings = self.network.apply(from, &event.method, &event.params);
                         if let Some(producer) = &self.producer {
                             producer.network(&self.network, &happenings);
@@ -1393,6 +1434,7 @@ impl Watcher {
                         feeds.detach_all();
                     }
                     feeds.apply(&event, session, Some(&self.main_frame));
+                    self.child_navigation_request(feeds, &event, recorded);
                 }
                 // After the frames' state, so a commit's cleared lifecycle comes first. Only the
                 // tab's own session reports the frames `networkidle` follows (`network_idle.rs`).

@@ -204,7 +204,20 @@ pub(crate) async fn wait_for_navigation(
     options: &WaitForNavigationOptions,
     progress: &Progress,
 ) -> Result<Option<ResponseChannel>, CallError> {
-    let mut events = tab.observe().map_err(navigate::page_error)?;
+    let events = tab.observe().map_err(navigate::page_error)?;
+    wait_for_navigation_on(tab, events, options, progress).await
+}
+
+/// [`wait_for_navigation`] over `events`, a child frame's navigations (`waits::FrameObservation`)
+/// or the main frame's: subscribed by the caller before anything here runs. A child frame's
+/// `Response` is the network log's answer for its document, as the main frame's: Neo records
+/// every frame's requests (`network.rs`).
+pub(crate) async fn wait_for_navigation_on(
+    tab: &impl NavigationTab,
+    mut events: impl Observation,
+    options: &WaitForNavigationOptions,
+    progress: &Progress,
+) -> Result<Option<ResponseChannel>, CallError> {
     progress
         .race(tab.prepare())
         .await?

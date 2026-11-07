@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (35)
+## Deviations (34)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -20,7 +20,6 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/console.rs | `from_console_api` | `server/chromium/crPage.ts` `FrameSession._onConsoleAPI` | Playwright also drops a message from a context it holds no record of (none created in a frame it knows, or one already destroyed); Neo keeps no table of contexts and keeps it. |
 | neo-runtime/src/console.rs | `split_error_message` | `utils/stackTrace.ts` `splitErrorMessage` | Playwright cuts a character outside the BMP in half and keeps its low surrogate, which a Rust string cannot hold; Neo writes U+FFFD there, one UTF-16 unit as in JS. |
 | neo-runtime/src/dialogs.rs | `Dialogs::left_open` | `server/dialog.ts` `DialogManager.dialogDidOpen` | Playwright answers a dialog only when nobody listens, and leaves a listener's unanswered dialog open for the page's life. Neo's tab outlives the run and must not stay frozen for its user, so the run's end gives a dialog it handed out and nobody answered the default answer, which this takes. |
-| neo-runtime/src/dispatch.rs | `unsupported_child_call` | `client/frame.ts` `Frame.waitForNavigation` | Playwright answers a child frame's navigation Response; the network log records only the main frame's requests, so Neo refuses the wait. A predicate wait that answers none (`waitForURL`) is served. |
 | neo-runtime/src/events.rs | `MAX_QUEUED_BYTES` | `client/connection.ts` `Connection.dispatch` | The same bound in bytes of queued JSON, so a few huge payloads cannot pin the server's memory. |
 | neo-runtime/src/events.rs | `MAX_QUEUED_EVENTS` | `client/connection.ts` `Connection.dispatch` | Playwright's client dispatches every event its server sends; Neo's queue lives outside the realm's memory limit, so a run holds at most this many undelivered events and counts the rest. |
 | neo-runtime/src/history.rs | `MAX_ANSWERED` | `client/frame.ts` `Frame.waitForNavigation` | the navigations one predicate wait keeps for its finish to name, the most recent first; Playwright's waiter keeps every event its pending predicates hold. A predicate still pending this many navigations later cannot win. |
