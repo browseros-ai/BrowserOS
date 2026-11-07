@@ -8,6 +8,11 @@
  *   dist/utility.js     `() => UtilityScript`                      Playwright's main-world helper
  *   dist/evaluate.js    `(utilityScript, ...args) => evaluate`     Playwright's evaluate convention
  *   dist/json-value.js  `(utilityScript, ...args) => jsonValue`    Playwright's jsonValue convention
+ *   dist/get-property.js, wait-for-function.js, wait-result.js, wait-abort.js
+ *                       Playwright's server page functions, run as `UtilityScript.evaluate`
+ *                       expressions (`JSHandle.getProperty`, `page.waitForFunction`)
+ *   dist/retain.js      `(object) => object`                       an event's object, kept
+ *                       in a run's handle group
  *   dist/spec-sha256    neo-runtime-spec's SPEC_SHA256, no trailing newline, which neo-runtime
  *                       const-asserts against the Rust crate's own hash
  *
@@ -51,6 +56,11 @@ const ENTRIES = [
   'utility',
   'evaluate',
   'json-value',
+  'get-property',
+  'wait-for-function',
+  'wait-result',
+  'wait-abort',
+  'retain',
 ] as const
 const VALUE_IMPORTERS = ['install.ts', 'utility.ts']
 const VENDOR_ALIASES = ['@injected/', '@isomorphic/', '@protocol/']
