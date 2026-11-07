@@ -76,6 +76,23 @@ struct DialogOpening {
 }
 
 impl PageEvents {
+    /// `locatorHandlerTriggered` on the page while the realm listens (`locator_handlers.rs`):
+    /// whether it went out.
+    pub(crate) fn locator_handler_triggered(&self, uid: i64) -> bool {
+        if !self
+            .hub
+            .subscribed(&self.page_guid, "locatorHandlerTriggered")
+        {
+            return false;
+        }
+        let _emitted = self.hub.emit(
+            &self.page_guid,
+            "locatorHandlerTriggered",
+            &json!({ "uid": uid }),
+        );
+        true
+    }
+
     pub(crate) fn new(hub: EventHub, target: &str, cdp: CdpClient, session: SessionId) -> Self {
         Self {
             hub,

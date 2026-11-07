@@ -443,6 +443,9 @@ class ChannelOwner extends EventEmitter {
     if (typeof event === "string" && this.#table.unserved.includes(event))
       throw new Error(`Neo does not serve the "${event}" event on ${this.#table.receiver} yet`);
   }
+  _subscribeChannelEvent(event, enabled) {
+    this.#pipe._subscribe(this._guid, event, enabled);
+  }
   #updateSubscription(event, enabled) {
     if (this.#served(event))
       this.#pipe._subscribe(this._guid, event, enabled);
@@ -4490,6 +4493,12 @@ var FRAME_WAIT_FOR_SELECTOR_KEYS = [
   "omitReturnValue"
 ];
 var PAGE_CLOSE_KEYS = ["reason"];
+var PAGE_REGISTER_LOCATOR_HANDLER_KEYS = [
+  "selector",
+  "noWaitAfter"
+];
+var PAGE_RESOLVE_LOCATOR_HANDLER_KEYS = ["uid", "remove"];
+var PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS = ["uid"];
 var PAGE_RELOAD_KEYS = ["waitUntil"];
 var PAGE_GO_BACK_KEYS = ["waitUntil"];
 var PAGE_GO_FORWARD_KEYS = ["waitUntil"];
@@ -5482,11 +5491,66 @@ class Page extends ChannelOwner {
   isClosed() {
     return get(this.#guid, "isClosed");
   }
-  _onEvent(method) {
+  _onEvent(method, params) {
     if (method === "close")
       this._onClose();
     else if (method === "crash")
       this.emit("crash", this);
+    else if (method === "locatorHandlerTriggered")
+      this.#onLocatorHandlerTriggered(params.uid).catch((error) => this.#context._pipe.report(error));
+  }
+  #locatorHandlers = new Map;
+  async addLocatorHandler(locator, handler, options = {}) {
+    if (locator._frame !== this.#mainFrame)
+      throw new Error("Locator must belong to the main frame of this page");
+    if (options.times === 0)
+      return;
+    if (!this.#locatorHandlers.size)
+      this._subscribeChannelEvent("locatorHandlerTriggered", true);
+    try {
+      const { uid } = await this.#connection.sendPage("page.addLocatorHandler", this.#guid, "registerLocatorHandler", pickParams(PAGE_REGISTER_LOCATOR_HANDLER_KEYS, {
+        selector: locator._selector,
+        noWaitAfter: options.noWaitAfter
+      }), 0);
+      this.#locatorHandlers.set(uid, { locator, handler, times: options.times });
+    } finally {
+      if (!this.#locatorHandlers.size)
+        this._subscribeChannelEvent("locatorHandlerTriggered", false);
+    }
+  }
+  async#onLocatorHandlerTriggered(uid) {
+    let remove = false;
+    try {
+      const handler = this.#locatorHandlers.get(uid);
+      if (handler && handler.times !== 0) {
+        if (handler.times !== undefined)
+          handler.times--;
+        await handler.handler(handler.locator);
+      }
+      remove = handler?.times === 0;
+    } finally {
+      if (remove)
+        this.#dropLocatorHandler(uid);
+      this.#connection.sendPage("page.addLocatorHandler", this.#guid, "resolveLocatorHandlerNoReply", pickParams(PAGE_RESOLVE_LOCATOR_HANDLER_KEYS, {
+        uid,
+        remove
+      }), 0).catch(() => {});
+    }
+  }
+  async removeLocatorHandler(locator) {
+    for (const [uid, data] of this.#locatorHandlers) {
+      if (data.locator._equals(locator)) {
+        this.#dropLocatorHandler(uid);
+        await this.#connection.sendPage("page.removeLocatorHandler", this.#guid, "unregisterLocatorHandler", pickParams(PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS, {
+          uid
+        }), 0).catch(() => {});
+      }
+    }
+  }
+  #dropLocatorHandler(uid) {
+    this.#locatorHandlers.delete(uid);
+    if (!this.#locatorHandlers.size)
+      this._subscribeChannelEvent("locatorHandlerTriggered", false);
   }
   _onClose() {
     this.emit("close", this);

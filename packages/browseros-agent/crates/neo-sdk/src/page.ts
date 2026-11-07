@@ -5,7 +5,11 @@ import type {
   PageGoBackParams,
   PageGoForwardParams,
   PagePageErrorsParams,
+  PageRegisterLocatorHandlerParams,
+  PageRegisterLocatorHandlerResult,
   PageReloadParams,
+  PageResolveLocatorHandlerNoReplyParams,
+  PageUnregisterLocatorHandlerParams,
   ResponseChannel,
 } from '@browseros/neo-runtime-spec/serve'
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
@@ -66,7 +70,10 @@ import {
   PAGE_GO_BACK_KEYS,
   PAGE_GO_FORWARD_KEYS,
   PAGE_PAGE_ERRORS_KEYS,
+  PAGE_REGISTER_LOCATOR_HANDLER_KEYS,
   PAGE_RELOAD_KEYS,
+  PAGE_RESOLVE_LOCATOR_HANDLER_KEYS,
+  PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS,
   pickParams,
 } from './protocol'
 import { type CreatedFrame, get, matchesURL } from './runtime-bridge'
@@ -231,9 +238,110 @@ export class Page extends ChannelOwner {
   }
 
   /** Playwright's page channel handlers (`client/page.ts` constructor). */
-  _onEvent(method: string): void {
+  _onEvent(method: string, params?: unknown): void {
     if (method === 'close') this._onClose()
     else if (method === 'crash') this.emit('crash', this)
+    else if (method === 'locatorHandlerTriggered')
+      this.#onLocatorHandlerTriggered((params as { uid: number }).uid).catch(
+        (error) => this.#context._pipe.report(error),
+      )
+  }
+
+  /** Playwright: `client/page.ts` `Page._locatorHandlers` */
+  readonly #locatorHandlers = new Map<
+    number,
+    {
+      locator: Locator
+      handler: (locator: Locator) => unknown
+      times: number | undefined
+    }
+  >()
+
+  /**
+   * Runs `handler(locator)` whenever an action is about to act while `locator` is visible (a
+   * cookie banner, a popup), then lets the action go on once it hid, unless `noWaitAfter`, at
+   * most `times` times. Sent with no timeout, as Playwright's (`kNoTimeout`).
+   */
+  async addLocatorHandler(
+    locator: Locator,
+    handler: (locator: Locator) => unknown,
+    options: { times?: number; noWaitAfter?: boolean } = {},
+  ): Promise<void> {
+    if (locator._frame !== this.#mainFrame)
+      throw new Error('Locator must belong to the main frame of this page')
+    if (options.times === 0) return
+    // Subscribed before the handler exists, so its first trigger always reaches the realm.
+    if (!this.#locatorHandlers.size)
+      this._subscribeChannelEvent('locatorHandlerTriggered', true)
+    try {
+      const { uid } = (await this.#connection.sendPage(
+        'page.addLocatorHandler',
+        this.#guid,
+        'registerLocatorHandler',
+        pickParams(PAGE_REGISTER_LOCATOR_HANDLER_KEYS, {
+          selector: locator._selector,
+          noWaitAfter: options.noWaitAfter,
+        }) as PageRegisterLocatorHandlerParams,
+        0,
+      )) as PageRegisterLocatorHandlerResult
+      this.#locatorHandlers.set(uid, { locator, handler, times: options.times })
+    } finally {
+      if (!this.#locatorHandlers.size)
+        this._subscribeChannelEvent('locatorHandlerTriggered', false)
+    }
+  }
+
+  /** Playwright: `client/page.ts` `Page._onLocatorHandlerTriggered` */
+  async #onLocatorHandlerTriggered(uid: number): Promise<void> {
+    let remove = false
+    try {
+      const handler = this.#locatorHandlers.get(uid)
+      if (handler && handler.times !== 0) {
+        if (handler.times !== undefined) handler.times--
+        await handler.handler(handler.locator)
+      }
+      remove = handler?.times === 0
+    } finally {
+      if (remove) this.#dropLocatorHandler(uid)
+      this.#connection
+        .sendPage(
+          'page.addLocatorHandler',
+          this.#guid,
+          'resolveLocatorHandlerNoReply',
+          pickParams(PAGE_RESOLVE_LOCATOR_HANDLER_KEYS, {
+            uid,
+            remove,
+          }) as PageResolveLocatorHandlerNoReplyParams,
+          0,
+        )
+        .catch(() => {})
+    }
+  }
+
+  /** Removes every handler of `locator` (same frame and selector), as Playwright's. */
+  async removeLocatorHandler(locator: Locator): Promise<void> {
+    for (const [uid, data] of this.#locatorHandlers) {
+      if (data.locator._equals(locator)) {
+        this.#dropLocatorHandler(uid)
+        await this.#connection
+          .sendPage(
+            'page.removeLocatorHandler',
+            this.#guid,
+            'unregisterLocatorHandler',
+            pickParams(PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS, {
+              uid,
+            }) as PageUnregisterLocatorHandlerParams,
+            0,
+          )
+          .catch(() => {})
+      }
+    }
+  }
+
+  #dropLocatorHandler(uid: number): void {
+    this.#locatorHandlers.delete(uid)
+    if (!this.#locatorHandlers.size)
+      this._subscribeChannelEvent('locatorHandlerTriggered', false)
   }
 
   /** Playwright's `Page._onClose`: the page's `close`, then the context's `pageclose`. */

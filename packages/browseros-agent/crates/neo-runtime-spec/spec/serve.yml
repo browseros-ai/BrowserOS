@@ -33,6 +33,11 @@ interfaces:
     - pageErrors
     - clearConsoleMessages
     - clearPageErrors
+    # Locator handlers (locator_handlers.rs): the registry every action attempt checks before
+    # its input; `locatorHandlerTriggered` goes out through the run's event hub.
+    - registerLocatorHandler
+    - resolveLocatorHandlerNoReply
+    - unregisterLocatorHandler
   # A JavaScript dialog the run's `dialog` event handed out.
   Dialog:
     - accept

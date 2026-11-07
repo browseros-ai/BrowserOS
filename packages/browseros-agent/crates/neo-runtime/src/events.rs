@@ -67,14 +67,16 @@ const READY_WAIT: Duration = Duration::from_secs(10);
 const REPLAY_WAIT: Duration = Duration::from_secs(5);
 
 /// Neo: the listener events Neo produces on a `Page`, under the names Playwright's client gives
-/// them (`Events.Page`), and what each needs switched on in the page's session.
-const PAGE_EVENTS: [(&str, Needs); 6] = [
+/// them (`Events.Page`), and what each needs switched on in the page's session; and the one
+/// channel event the SDK handles itself, `locatorHandlerTriggered` (`locator_handlers.rs`).
+const PAGE_EVENTS: [(&str, Needs); 7] = [
     ("console", Needs::RUNTIME),
     ("pageerror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
     ("dialogclosed", Needs::WATCHER),
     ("close", Needs::WATCHER),
     ("crash", Needs::WATCHER),
+    ("locatorHandlerTriggered", Needs::NOTHING),
 ];
 
 /// Neo: the listener events Neo produces on the run's `BrowserContext` (`Events.BrowserContext`),
@@ -96,6 +98,12 @@ pub(crate) struct Needs {
 }
 
 impl Needs {
+    /// Neo: an event an action's own call produces (`locatorHandlerTriggered`), with nothing to
+    /// switch on.
+    const NOTHING: Self = Self {
+        watcher: false,
+        runtime: false,
+    };
     /// Neo: an event the page watcher produces from the domains it always enables.
     const WATCHER: Self = Self {
         watcher: true,

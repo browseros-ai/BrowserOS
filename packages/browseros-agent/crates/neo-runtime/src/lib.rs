@@ -64,6 +64,7 @@ mod getters;
 mod history;
 mod keyboard;
 mod lists;
+mod locator_handlers;
 mod main_world;
 mod navigate;
 mod network;

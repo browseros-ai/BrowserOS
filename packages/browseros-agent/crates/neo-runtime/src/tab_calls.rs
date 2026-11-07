@@ -10,8 +10,10 @@ use neo_runtime_spec::serve::{
     PageClearConsoleMessagesParams, PageClearConsoleMessagesResult, PageClearPageErrorsParams,
     PageClearPageErrorsResult, PageConsoleMessagesParams, PageConsoleMessagesResult,
     PageGoBackParams, PageGoBackResult, PageGoForwardParams, PageGoForwardResult,
-    PagePageErrorsParams, PagePageErrorsResult, PageReloadParams, PageReloadResult,
-    ResponseChannel,
+    PagePageErrorsParams, PagePageErrorsResult, PageRegisterLocatorHandlerParams,
+    PageRegisterLocatorHandlerResult, PageReloadParams, PageReloadResult,
+    PageResolveLocatorHandlerNoReplyParams, PageResolveLocatorHandlerNoReplyResult,
+    PageUnregisterLocatorHandlerParams, PageUnregisterLocatorHandlerResult, ResponseChannel,
 };
 use serde_json::{Value, json};
 use tracing::debug;
@@ -115,6 +117,11 @@ pub(crate) async fn page(
                 &PageClearConsoleMessagesResult {},
             );
         }
+        call @ (PageCall::RegisterLocatorHandler(_)
+        | PageCall::ResolveLocatorHandlerNoReply(_)
+        | PageCall::UnregisterLocatorHandler(_)) => {
+            return locator_handler_call(tabs, entry, call, progress).await;
+        }
         PageCall::ClearPageErrors(_) => {
             console_page(tabs, entry, progress)
                 .await?
@@ -167,6 +174,43 @@ pub(crate) async fn page(
         }
     }
     Ok(None)
+}
+
+/// The locator handler commands of `entry`'s session (`locator_handlers.rs`).
+async fn locator_handler_call(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    call: PageCall,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    match call {
+        PageCall::RegisterLocatorHandler(params) => {
+            let uid = page
+                .locator_handlers
+                .register(params.selector, params.no_wait_after.unwrap_or(false))?;
+            encode_result::<PageRegisterLocatorHandlerParams>(&PageRegisterLocatorHandlerResult {
+                uid,
+            })
+        }
+        PageCall::ResolveLocatorHandlerNoReply(params) => {
+            page.locator_handlers
+                .resolve(params.uid, params.remove.unwrap_or(false))?;
+            encode_result::<PageResolveLocatorHandlerNoReplyParams>(
+                &PageResolveLocatorHandlerNoReplyResult {},
+            )
+        }
+        PageCall::UnregisterLocatorHandler(params) => {
+            page.locator_handlers.unregister(params.uid)?;
+            encode_result::<PageUnregisterLocatorHandlerParams>(
+                &PageUnregisterLocatorHandlerResult {},
+            )
+        }
+        _ => Err(PlaywrightError::error(
+            "neo-runtime: `locator_handler_call` serves the locator handler commands only",
+        )
+        .into()),
+    }
 }
 
 /// `Page.reload`, `goBack` or `goForward` on the main frame of `entry`'s session: the new

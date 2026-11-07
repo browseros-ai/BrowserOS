@@ -97,6 +97,8 @@ export type ApiName =
   | 'browserContext.newPage'
   | 'page.close'
   | 'page.bringToFront'
+  | 'page.addLocatorHandler'
+  | 'page.removeLocatorHandler'
   | 'locator.waitFor'
   | 'page.waitForURL'
   | 'frame.waitForURL'
