@@ -64,6 +64,7 @@ use tracing::debug;
 use crate::bindings::{self, BindingRoute, Outcome};
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
+use crate::clock::{self, ClockRoute};
 use crate::dialogs;
 use crate::evaluate::{self, EvalCall};
 use crate::events::{ALL_PAGES, EventHub};
@@ -104,10 +105,11 @@ use crate::waits::{
 /// Unkept creations close their tabs when their late acknowledgements arrive.
 const RECORDS_WAIT: Duration = Duration::from_secs(1);
 
-/// Neo: how long run end may take removing the run's init scripts and ending its bindings in
-/// its pages (`init_scripts.rs`, `bindings.rs`), apart from [`RECORDS_WAIT`]: a session it does
-/// not reach keeps a script the next run's documents would run, or a binding whose calls never
-/// settle. Free for a run that used neither.
+/// Neo: how long run end may take removing the run's init scripts, ending its bindings and
+/// putting back its pages' timers (`init_scripts.rs`, `bindings.rs`, `clock.rs`), apart from
+/// [`RECORDS_WAIT`]: a session it does not reach keeps a script the next run's documents would
+/// run, a binding whose calls never settle, or the run's fake timers. Free for a run that used
+/// none of them.
 const PAGE_END_WAIT: Duration = Duration::from_secs(3);
 
 /// The most browser calls one run may have unfinished at once. Each holds its params, its call
@@ -316,6 +318,8 @@ enum ObjectCall {
     Init(InitRoute),
     /// A binding command (`bindings.rs`).
     Binding(BindingRoute),
+    /// A clock command (`clock.rs`).
+    Clock(ClockRoute),
     Dialog(u64, DialogCall),
 }
 
@@ -484,12 +488,13 @@ impl Dispatcher {
         let deadline = Instant::now() + RECORDS_WAIT;
         let run = &self.0.run;
         run.end(reason);
-        // The run's init scripts go first, then its bindings, on a budget of their own: neither
-        // waits on a call still running, so no document loaded after the run returns runs one
-        // of its scripts, and no page keeps one of its bindings.
+        // The run's init scripts go first, then its bindings and its clock, on a budget of their
+        // own: none waits on a call still running, so no document loaded after the run returns
+        // runs one of its scripts, and no page keeps one of its bindings or fake timers.
         let _removed = time::timeout(PAGE_END_WAIT, async {
             run.init_scripts.close().await;
             run.bindings.close(&self.0.tabs).await;
+            run.clock.close(&self.0.tabs).await;
         })
         .await;
         // The realm is gone with its listeners: from now on the watchers answer dialogs
@@ -576,6 +581,14 @@ fn route_init(
             Ok(Routed {
                 meta: Some(meta),
                 route: route.map(ObjectCall::Binding),
+            })
+        }
+        ObjectKind::Context if clock::serves(method) => {
+            let (meta, route) = clock::decode(method, params)
+                .unwrap_or_else(|| unreachable!("clock::serves names every clock command"));
+            Ok(Routed {
+                meta: Some(meta),
+                route: route.map(ObjectCall::Clock),
             })
         }
         ObjectKind::BindingCall(guid) => Ok(match bindings::decode_call(&guid, method, params) {
@@ -906,6 +919,11 @@ async fn serve_call(
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
         (ObjectCall::Init(route), target) => init_call(&tabs, target, route, &progress).await,
         (ObjectCall::Binding(route), target) => binding_call(&tabs, target, route, &progress).await,
+        (ObjectCall::Clock(route), _) => progress
+            .race(progress.clock().call(&tabs, progress.init_scripts(), route))
+            .await
+            .and_then(|called| called.map_err(CallError::from))
+            .map(|()| Some(json!({}))),
         (ObjectCall::Page(call), Some((page, _))) => {
             // A page call that navigates (`reload`, `goBack`, …) shows the run's scripts first,
             // as a Frame call does.
@@ -1551,6 +1569,7 @@ mod tests {
             | ObjectCall::Network(_)
             | ObjectCall::Init(_)
             | ObjectCall::Binding(_)
+            | ObjectCall::Clock(_)
             | ObjectCall::Dialog(..) => {
                 panic!("a Frame message routed to another object")
             }

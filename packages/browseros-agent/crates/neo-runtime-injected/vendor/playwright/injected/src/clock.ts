@@ -1,0 +1,910 @@
+/**
+ * Copyright (c) 2010-2014, Christian Johansen, christian@cjohansen.no. All rights reserved.
+ * Modifications copyright (c) Microsoft Corporation.
+ *
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+import type { Builtins } from './utilityScript';
+
+export type ClockConfig = {
+  now?: number;
+};
+
+export type InstallConfig = ClockConfig & {
+  toFake?: (keyof Builtins)[];
+  browserName?: string;
+};
+
+enum TimerType {
+  Timeout = 'Timeout',
+  Interval = 'Interval',
+  Immediate = 'Immediate',
+  AnimationFrame = 'AnimationFrame',
+  IdleCallback = 'IdleCallback',
+}
+
+type Timer = {
+  type: TimerType;
+  func: TimerHandler;
+  args: any[];
+  delay: number;
+  callAt: Ticks;
+  createdAt: Ticks;
+  id: number;
+  error?: Error;
+};
+
+interface Embedder {
+  dateNow(): number;
+  performanceNow(): EmbedderTicks;
+  setTimeout(task: () => void, timeout?: number): () => void;
+  setInterval(task: () => void, delay: number): () => void;
+  postTask(task: () => void): void;
+}
+
+type Ticks = number & { readonly __brand: 'Ticks' };
+type EmbedderTicks = number & { readonly __brand: 'EmbedderTicks' };
+type WallTime = number & { readonly __brand: 'WallTime' };
+
+type Time = {
+  time: WallTime;
+  ticks: Ticks;
+  isFixedTime: boolean;
+  origin: WallTime;
+};
+
+type LogEntryType = 'fastForward' |'install' | 'pauseAt' | 'resume' | 'runFor' | 'setFixedTime' | 'setSystemTime';
+
+type RealTimeTimer = {
+  callAt: Ticks;
+  cancel: () => void;
+  promise: Promise<void> | undefined;
+  dispose: () => Promise<void>;
+};
+
+export class ClockController {
+  readonly _now: Time;
+  private _duringTick = false;
+  private _timers: Map<number, Timer>;
+  private _uniqueTimerId = idCounterStart;
+  private _embedder: Embedder;
+  readonly disposables: (() => void)[] = [];
+  private _log: { type: LogEntryType, time: number, param?: number }[] = [];
+  private _realTime: { startTicks: EmbedderTicks, lastSyncTicks: EmbedderTicks } | undefined;
+  private _currentRealTimeTimer: RealTimeTimer | undefined;
+
+  constructor(embedder: Embedder) {
+    this._timers = new Map();
+    this._now = { time: asWallTime(0), isFixedTime: false, ticks: 0 as Ticks, origin: asWallTime(-1) };
+    this._embedder = embedder;
+  }
+
+  uninstall() {
+    this.disposables.forEach(dispose => dispose());
+    this.disposables.length = 0;
+  }
+
+  now(): number {
+    this._replayLogOnce();
+    // Sync real time to support calling Date.now() in a loop.
+    this._syncRealTime();
+    return this._now.time;
+  }
+
+  install(time: number) {
+    this._replayLogOnce();
+    this._innerInstall(asWallTime(time));
+  }
+
+  setSystemTime(time: number) {
+    this._replayLogOnce();
+    this._innerSetTime(asWallTime(time));
+  }
+
+  setFixedTime(time: number) {
+    this._replayLogOnce();
+    this._innerSetFixedTime(asWallTime(time));
+  }
+
+  performanceNow(): DOMHighResTimeStamp {
+    this._replayLogOnce();
+    // Sync real time to support calling performance.now() in a loop.
+    this._syncRealTime();
+    return this._now.ticks;
+  }
+
+  private _syncRealTime() {
+    if (!this._realTime)
+      return;
+    const now = this._embedder.performanceNow();
+    const sinceLastSync = now - this._realTime.lastSyncTicks;
+    if (sinceLastSync > 0) {
+      this._advanceNow(shiftTicks(this._now.ticks, sinceLastSync));
+      this._realTime.lastSyncTicks = now;
+    }
+  }
+
+  private _innerSetTime(time: WallTime) {
+    this._now.time  = time;
+    this._now.isFixedTime = false;
+    if (this._now.origin < 0)
+      this._now.origin = this._now.time;
+  }
+
+  private _innerInstall(time: WallTime) {
+    // On a fresh install, reset the monotonic counter so that drift
+    // accumulated by the realTime ticker before the user called install()
+    // does not leak into performance.now().
+    if (this._now.origin < 0)
+      this._now.ticks = 0 as Ticks;
+    this._innerSetTime(time);
+  }
+
+  private _innerSetFixedTime(time: WallTime) {
+    this._innerSetTime(time);
+    this._now.isFixedTime = true;
+  }
+
+  private _advanceNow(to: Ticks) {
+    if (this._now.ticks > to) {
+      // While running timers, `now` can advance by syncing with real time
+      // from within now() or performance.now().
+      // This makes it possible for `now` to be ahead of where we want to advance it.
+      return;
+    }
+    if (!this._now.isFixedTime)
+      this._now.time = asWallTime(this._now.time + to - this._now.ticks);
+    this._now.ticks = to;
+  }
+
+  async log(type: LogEntryType, time: number, param?: number) {
+    this._log.push({ type, time, param });
+  }
+
+  async runFor(ticks: number) {
+    this._replayLogOnce();
+    if (ticks < 0)
+      throw new TypeError('Negative ticks are not supported');
+    await this._runWithDisabledRealTimeSync(async () => {
+      await this._runTo(shiftTicks(this._now.ticks, ticks));
+    });
+  }
+
+  private async _runTo(to: Ticks) {
+    to = Math.ceil(to) as Ticks;
+
+    if (this._now.ticks > to)
+      return;
+
+    let firstException: Error | undefined;
+    while (true) {
+      const result = await this._callFirstTimer(to);
+      if (!result.timerFound)
+        break;
+      firstException = firstException || result.error;
+    }
+
+    this._advanceNow(to);
+
+    if (firstException)
+      throw firstException;
+  }
+
+  async pauseAt(time: number): Promise<number> {
+    this._replayLogOnce();
+    await this._innerPause();
+    const toConsume = time - this._now.time;
+    await this._innerFastForwardTo(shiftTicks(this._now.ticks, toConsume));
+    return toConsume;
+  }
+
+  private async _innerPause() {
+    this._realTime = undefined;
+    await this._currentRealTimeTimer?.dispose();
+    this._currentRealTimeTimer = undefined;
+  }
+
+  resume() {
+    this._replayLogOnce();
+    this._innerResume();
+  }
+
+  private _innerResume() {
+    const now = this._embedder.performanceNow();
+    this._realTime = { startTicks: now, lastSyncTicks: now };
+    this._updateRealTimeTimer();
+  }
+
+  private _updateRealTimeTimer() {
+    if (this._currentRealTimeTimer?.promise) {
+      // In progress, safe to return as it will call itself once promise is resolved.
+      return;
+    }
+
+    const firstTimer = this._firstTimer();
+
+    // Either run the next timer or move time in 100ms chunks.
+    const nextTick = Math.min(firstTimer ? firstTimer.callAt : this._now.ticks + maxTimeout, this._now.ticks + 100) as Ticks;
+    const callAt = this._currentRealTimeTimer ? Math.min(this._currentRealTimeTimer.callAt, nextTick) as Ticks : nextTick;
+
+    if (this._currentRealTimeTimer) {
+      // Cancel and reschedule.
+      this._currentRealTimeTimer.cancel();
+      this._currentRealTimeTimer = undefined;
+    }
+
+    const realTimeTimer: RealTimeTimer = {
+      callAt,
+      promise: undefined,
+      cancel: this._embedder.setTimeout(() => {
+        // Apply the log before the real time moves the clock.
+        this._replayLogOnce();
+        if (this._currentRealTimeTimer !== realTimeTimer)
+          return;
+        this._syncRealTime();
+        // eslint-disable-next-line no-console
+        realTimeTimer.promise = this._runTo(this._now.ticks).catch(e => console.error(e));
+        void realTimeTimer.promise.then(() => {
+          if (this._currentRealTimeTimer !== realTimeTimer)
+            return;
+          this._currentRealTimeTimer = undefined;
+          if (this._realTime)
+            this._updateRealTimeTimer();
+        });
+      }, callAt - this._now.ticks),
+      dispose: async () => {
+        realTimeTimer.cancel();
+        await realTimeTimer.promise;
+      }
+    };
+
+    this._currentRealTimeTimer = realTimeTimer;
+  }
+
+  private async _runWithDisabledRealTimeSync(fn: () => Promise<void>) {
+    if (!this._realTime) {
+      await fn();
+      return;
+    }
+
+    await this._innerPause();
+    try {
+      await fn();
+    } finally {
+      this._innerResume();
+    }
+  }
+
+  async fastForward(ticks: number) {
+    this._replayLogOnce();
+    await this._runWithDisabledRealTimeSync(async () => {
+      await this._innerFastForwardTo(shiftTicks(this._now.ticks, Math.trunc(ticks)));
+    });
+  }
+
+  private async _innerFastForwardTo(to: Ticks) {
+    if (to < this._now.ticks)
+      throw new Error('Cannot fast-forward to the past');
+    for (const timer of this._timers.values()) {
+      if (to > timer.callAt)
+        timer.callAt = to;
+    }
+    await this._runTo(to);
+  }
+
+  addTimer(options: { func: TimerHandler, type: TimerType, delay?: number | string, args?: any[] }): number {
+    this._replayLogOnce();
+
+    if (options.type === TimerType.AnimationFrame && !options.func)
+      throw new Error('Callback must be provided to requestAnimationFrame calls');
+    if (options.type === TimerType.IdleCallback && !options.func)
+      throw new Error('Callback must be provided to requestIdleCallback calls');
+    if ([TimerType.Timeout, TimerType.Interval].includes(options.type) && !options.func && options.delay === undefined)
+      throw new Error('Callback must be provided to timer calls');
+
+    let delay = options.delay ? +options.delay : 0;
+    if (!Number.isFinite(delay))
+      delay = 0;
+    delay = delay > maxTimeout ? 1 : delay;
+    delay = Math.max(0, delay);
+
+    const timer: Timer = {
+      type: options.type,
+      func: options.func,
+      args: options.args || [],
+      delay,
+      callAt: shiftTicks(this._now.ticks, (delay || (this._duringTick ? 1 : 0))),
+      createdAt: this._now.ticks,
+      id: this._uniqueTimerId++,
+      error: new Error(),
+    };
+    this._timers.set(timer.id, timer);
+    if (this._realTime)
+      this._updateRealTimeTimer();
+    return timer.id;
+  }
+
+  countTimers() {
+    return this._timers.size;
+  }
+
+  private _firstTimer(beforeTick?: number): Timer | null {
+    let firstTimer: Timer | null = null;
+
+    for (const timer of this._timers.values()) {
+      const isInRange = beforeTick === undefined || timer.callAt <= beforeTick;
+      if (isInRange && (!firstTimer || compareTimers(firstTimer, timer) === 1))
+        firstTimer = timer;
+    }
+    return firstTimer;
+  }
+
+  private _takeFirstTimer(beforeTick?: number): Timer | null {
+    const timer = this._firstTimer(beforeTick);
+    if (!timer)
+      return null;
+
+    this._advanceNow(timer.callAt);
+
+    if (timer.type === TimerType.Interval)
+      timer.callAt = shiftTicks(timer.callAt, timer.delay);
+    else
+      this._timers.delete(timer.id);
+    return timer;
+  }
+
+  private async _callFirstTimer(beforeTick: number): Promise<{ timerFound: boolean, error?: Error }> {
+    const timer = this._takeFirstTimer(beforeTick);
+    if (!timer)
+      return { timerFound: false };
+
+    this._duringTick = true;
+    try {
+      if (typeof timer.func !== 'function') {
+        let error: Error | undefined;
+        try {
+          // Using global this is not correct here,
+          // but it is already broken since the eval scope is different from the one
+          // on the original call site.
+          // eslint-disable-next-line no-restricted-globals
+          (() => { globalThis.eval(timer.func); })();
+        } catch (e) {
+          error = e;
+        }
+        await new Promise<void>(f => this._embedder.postTask(f));
+        return { timerFound: true, error };
+      }
+
+      let args = timer.args;
+      if (timer.type === TimerType.AnimationFrame)
+        args = [this._now.ticks];
+      else if (timer.type === TimerType.IdleCallback)
+        args = [{ didTimeout: false, timeRemaining: () => 0 }];
+
+      let error: Error | undefined;
+      try {
+        timer.func.apply(null, args);
+      } catch (e) {
+        error = e;
+      }
+      await new Promise<void>(f => this._embedder.postTask(f));
+      return { timerFound: true, error };
+    } finally {
+      this._duringTick = false;
+    }
+  }
+
+  getTimeToNextFrame() {
+    // When `window.requestAnimationFrame` is the first call in the page,
+    // this place is the first API call, so replay the log.
+    this._replayLogOnce();
+    return 16 - this._now.ticks % 16;
+  }
+
+  clearTimer(timerId: number, type: TimerType) {
+    this._replayLogOnce();
+
+    if (!timerId) {
+      // null appears to be allowed in most browsers, and appears to be
+      // relied upon by some libraries, like Bootstrap carousel
+      return;
+    }
+
+    // in Node, the ID is stored as the primitive value for `Timeout` objects
+    // for `Immediate` objects, no ID exists, so it gets coerced to NaN
+    const id = Number(timerId);
+
+    if (Number.isNaN(id) || id < idCounterStart) {
+      const handlerName = getClearHandler(type);
+      new Error(`Clock: ${handlerName} was invoked to clear a native timer instead of one created by the clock library.`);
+    }
+
+    const timer = this._timers.get(id);
+    if (timer) {
+      if (
+        timer.type === type ||
+        (timer.type === 'Timeout' && type === 'Interval') ||
+        (timer.type === 'Interval' && type === 'Timeout')
+      ) {
+        this._timers.delete(id);
+      } else {
+        const clear = getClearHandler(type);
+        const schedule = getScheduleHandler(timer.type);
+        throw new Error(
+            `Cannot clear timer: timer created with ${schedule}() but cleared with ${clear}()`,
+        );
+      }
+    }
+  }
+
+  private _replayLogOnce() {
+    if (!this._log.length)
+      return;
+
+    let lastLogTime = -1;
+    // The log can be replayed in parts, when an init script reads the time
+    // in between the clock's init scripts. Continue from the current state.
+    let isPaused = !this._realTime;
+
+    for (const { type, time, param } of this._log) {
+      if (!isPaused && lastLogTime !== -1)
+        this._advanceNow(shiftTicks(this._now.ticks, time - lastLogTime));
+      lastLogTime = time;
+
+      if (type === 'install') {
+        this._innerInstall(asWallTime(param!));
+      } else if (type === 'fastForward' || type === 'runFor') {
+        this._advanceNow(shiftTicks(this._now.ticks, param!));
+      } else if (type === 'pauseAt') {
+        isPaused = true;
+        this._innerSetTime(asWallTime(param!));
+      } else if (type === 'resume') {
+        isPaused = false;
+      } else if (type === 'setFixedTime') {
+        this._innerSetFixedTime(asWallTime(param!));
+      } else if (type === 'setSystemTime') {
+        this._innerSetTime(asWallTime(param!));
+      }
+    }
+
+    if (!isPaused) {
+      if (lastLogTime > 0)
+        this._advanceNow(shiftTicks(this._now.ticks, this._embedder.dateNow() - lastLogTime));
+      this._innerResume();
+    } else {
+      this._realTime = undefined;
+      if (!this._currentRealTimeTimer?.promise) {
+        this._currentRealTimeTimer?.cancel();
+        this._currentRealTimeTimer = undefined;
+      }
+    }
+
+    this._log.length = 0;
+  }
+}
+
+function mirrorDateProperties(target: any, source: Builtins['Date']): Builtins['Date'] {
+  for (const prop in source) {
+    if (source.hasOwnProperty(prop))
+      target[prop] = (source as any)[prop];
+  }
+  target.toString = () => source.toString();
+  target.prototype = source.prototype;
+  target.parse = source.parse;
+  target.UTC = source.UTC;
+  target.prototype.toUTCString = source.prototype.toUTCString;
+  target.isFake = true;
+  return target;
+}
+
+function createDate(clock: ClockController, NativeDate: Builtins['Date']): Builtins['Date'] {
+  function ClockDate(this: typeof ClockDate, year: number, month: number, date: number, hour: number, minute: number, second: number, ms: number): Date | string {
+    // the Date constructor called as a function, ref Ecma-262 Edition 5.1, section 15.9.2.
+    // This remains so in the 10th edition of 2019 as well.
+    if (!(this instanceof ClockDate))
+      return new NativeDate(clock.now()).toString();
+
+    // if Date is called as a constructor with 'new' keyword
+    // Defensive and verbose to avoid potential harm in passing
+    // explicit undefined when user does not pass argument
+    switch (arguments.length) {
+      case 0:
+        return new NativeDate(clock.now());
+      case 1:
+        return new NativeDate(year);
+      case 2:
+        return new NativeDate(year, month);
+      case 3:
+        return new NativeDate(year, month, date);
+      case 4:
+        return new NativeDate(year, month, date, hour);
+      case 5:
+        return new NativeDate(year, month, date, hour, minute);
+      case 6:
+        return new NativeDate(
+            year,
+            month,
+            date,
+            hour,
+            minute,
+            second,
+        );
+      default:
+        return new NativeDate(
+            year,
+            month,
+            date,
+            hour,
+            minute,
+            second,
+            ms,
+        );
+    }
+  }
+
+  ClockDate.now = () => clock.now();
+  return mirrorDateProperties(ClockDate, NativeDate);
+}
+
+/**
+ * Mirror Intl by default on our fake implementation
+ *
+ * Most of the properties are the original native ones,
+ * but we need to take control of those that have a
+ * dependency on the current clock.
+ */
+function createIntl(clock: ClockController, NativeIntl: Builtins['Intl']): Builtins['Intl'] {
+  const ClockIntl: any = {};
+  /*
+    * All properties of Intl are non-enumerable, so we need
+    * to do a bit of work to get them out.
+    */
+  for (const key of Object.getOwnPropertyNames(NativeIntl) as (keyof Builtins['Intl'])[])
+    ClockIntl[key] = NativeIntl[key];
+
+  // Formatters are native instances with a prototype that has the same own members as
+  // the native one, except that format() and formatToParts() default to the clock time.
+  const nativePrototype = NativeIntl.DateTimeFormat.prototype;
+  const nativeFormat = Object.getOwnPropertyDescriptor(nativePrototype, 'format')!.get!;
+  const nativeFormatToParts = nativePrototype.formatToParts;
+  ClockIntl.DateTimeFormat = function(...args: any[]) {
+    return Reflect.construct(NativeIntl.DateTimeFormat, args, new.target ?? ClockIntl.DateTimeFormat);
+  };
+  ClockIntl.DateTimeFormat.prototype = Object.create(nativePrototype, {
+    ...Object.getOwnPropertyDescriptors(nativePrototype),
+    constructor: { value: ClockIntl.DateTimeFormat, writable: true, configurable: true },
+    format: {
+      get(this: Intl.DateTimeFormat) {
+        const format = nativeFormat.call(this);
+        return (date?: Date | number) => format(date === undefined ? clock.now() : date);
+      },
+      configurable: true,
+    },
+    formatToParts: {
+      value(this: Intl.DateTimeFormat, date?: Date | number) {
+        return nativeFormatToParts.call(this, date === undefined ? clock.now() : date);
+      },
+      writable: true,
+      configurable: true,
+    },
+  });
+
+  ClockIntl.DateTimeFormat.supportedLocalesOf =
+    NativeIntl.DateTimeFormat.supportedLocalesOf;
+
+  return ClockIntl;
+}
+
+function createTemporal(clock: ClockController, NativeTemporal: Builtins['Temporal']): Builtins['Temporal'] {
+  const NativeNow = NativeTemporal.Now;
+  const instant = () => NativeTemporal.Instant.fromEpochMilliseconds(Math.trunc(clock.now()));
+  const zonedDateTimeISO = (timeZone?: Temporal.TimeZoneLike) => instant().toZonedDateTimeISO(timeZone ?? NativeNow.timeZoneId());
+  const overrides: Partial<typeof Temporal.Now> = {
+    instant,
+    zonedDateTimeISO,
+    plainDateTimeISO: timeZone => zonedDateTimeISO(timeZone).toPlainDateTime(),
+    plainDateISO: timeZone => zonedDateTimeISO(timeZone).toPlainDate(),
+    plainTimeISO: timeZone => zonedDateTimeISO(timeZone).toPlainTime(),
+  };
+
+  // All properties of Temporal are non-enumerable, mirror them with their descriptors.
+  const ClockNow = Object.create(Object.getPrototypeOf(NativeNow), Object.getOwnPropertyDescriptors(NativeNow));
+  for (const [key, value] of Object.entries(overrides))
+    Object.defineProperty(ClockNow, key, { value, writable: true, enumerable: false, configurable: true });
+  const ClockTemporal = Object.create(Object.getPrototypeOf(NativeTemporal), Object.getOwnPropertyDescriptors(NativeTemporal));
+  Object.defineProperty(ClockTemporal, 'Now', { value: ClockNow, writable: true, enumerable: false, configurable: true });
+  return ClockTemporal;
+}
+
+function compareTimers(a: Timer, b: Timer) {
+  // Sort first by absolute timing
+  if (a.callAt < b.callAt)
+    return -1;
+  if (a.callAt > b.callAt)
+    return 1;
+
+  // Sort next by immediate, immediate timers take precedence
+  if (a.type === TimerType.Immediate && b.type !== TimerType.Immediate)
+    return -1;
+  if (a.type !== TimerType.Immediate && b.type === TimerType.Immediate)
+    return 1;
+
+  // Sort next by creation time, earlier-created timers take precedence
+  if (a.createdAt < b.createdAt)
+    return -1;
+  if (a.createdAt > b.createdAt)
+    return 1;
+
+  // Sort next by id, lower-id timers take precedence
+  if (a.id < b.id)
+    return -1;
+  if (a.id > b.id)
+    return 1;
+
+  // As timer ids are unique, no fallback `0` is necessary
+}
+
+const maxTimeout = Math.pow(2, 31) - 1;  // see https://heycam.github.io/webidl/#abstract-opdef-converttoint
+const idCounterStart = 1e12; // arbitrarily large number to avoid collisions with native timer IDs
+
+function platformOriginals(globalObject: WindowOrWorkerGlobalScope): { raw: Builtins, bound: Builtins } {
+  const raw: Builtins = {
+    setTimeout: globalObject.setTimeout,
+    clearTimeout: globalObject.clearTimeout,
+    setInterval: globalObject.setInterval,
+    clearInterval: globalObject.clearInterval,
+    requestAnimationFrame: (globalObject as any).requestAnimationFrame ? (globalObject as any).requestAnimationFrame : undefined,
+    cancelAnimationFrame: (globalObject as any).cancelAnimationFrame ? (globalObject as any).cancelAnimationFrame : undefined,
+    requestIdleCallback: (globalObject as any).requestIdleCallback ? (globalObject as any).requestIdleCallback : undefined,
+    cancelIdleCallback: (globalObject as any).cancelIdleCallback ? (globalObject as any).cancelIdleCallback : undefined,
+    Date: (globalObject as any).Date,
+    performance: globalObject.performance,
+    Intl: (globalObject as any).Intl,
+    AbortSignal: (globalObject as any).AbortSignal,
+    Temporal: (globalObject as any).Temporal,
+  };
+  const bound = { ...raw };
+  for (const key of Object.keys(bound) as (keyof Builtins)[]) {
+    if (key !== 'Date' && key !== 'AbortSignal' && typeof bound[key] === 'function')
+      bound[key] = (bound[key] as any).bind(globalObject);
+  }
+  return { raw, bound };
+}
+
+/**
+ * Gets schedule handler name for a given timer type
+ */
+function getScheduleHandler(type: TimerType) {
+  if (type === 'IdleCallback' || type === 'AnimationFrame')
+    return `request${type}`;
+
+  return `set${type}`;
+}
+
+function createApi(clock: ClockController, originals: Builtins, browserName?: string): Builtins {
+  return {
+    setTimeout: (func: TimerHandler, timeout?: number | undefined, ...args: any[]) => {
+      const delay = timeout ? +timeout : timeout;
+      return clock.addTimer({
+        type: TimerType.Timeout,
+        func,
+        args,
+        delay
+      });
+    },
+    clearTimeout: (timerId: number | undefined): void => {
+      if (timerId)
+        clock.clearTimer(timerId, TimerType.Timeout);
+    },
+    setInterval: (func: TimerHandler, timeout?: number | undefined, ...args: any[]): number => {
+      const delay = timeout ? +timeout : timeout;
+      return clock.addTimer({
+        type: TimerType.Interval,
+        func,
+        args,
+        delay,
+      });
+    },
+    clearInterval: (timerId: number | undefined): void => {
+      if (timerId)
+        return clock.clearTimer(timerId, TimerType.Interval);
+    },
+    requestAnimationFrame: (callback: FrameRequestCallback): number => {
+      return clock.addTimer({
+        type: TimerType.AnimationFrame,
+        func: callback,
+        delay: clock.getTimeToNextFrame(),
+      });
+    },
+    cancelAnimationFrame: (timerId: number): void => {
+      if (timerId)
+        return clock.clearTimer(timerId, TimerType.AnimationFrame);
+    },
+    requestIdleCallback: (callback: IdleRequestCallback, options?: IdleRequestOptions | undefined): number => {
+      let timeToNextIdlePeriod = 0;
+
+      if (clock.countTimers() > 0)
+        timeToNextIdlePeriod = 50; // const for now
+      return clock.addTimer({
+        type: TimerType.IdleCallback,
+        func: callback,
+        delay: options?.timeout ? Math.min(options?.timeout, timeToNextIdlePeriod) : timeToNextIdlePeriod,
+      });
+    },
+    cancelIdleCallback: (timerId: number): void => {
+      if (timerId)
+        return clock.clearTimer(timerId, TimerType.IdleCallback);
+    },
+    Intl: originals.Intl ? createIntl(clock, originals.Intl) : (undefined as unknown as Builtins['Intl']),
+    Date: createDate(clock, originals.Date),
+    performance: originals.performance ? fakePerformance(clock, originals.performance) : (undefined as unknown as Builtins['performance']),
+    AbortSignal: originals.AbortSignal ? fakeAbortSignal(clock, originals.AbortSignal, browserName) : (undefined as unknown as Builtins['AbortSignal']),
+    Temporal: originals.Temporal ? createTemporal(clock, originals.Temporal) : (undefined as unknown as Builtins['Temporal']),
+  };
+}
+
+function getClearHandler(type: TimerType) {
+  if (type === 'IdleCallback' || type === 'AnimationFrame')
+    return `cancel${type}`;
+
+  return `clear${type}`;
+}
+
+class FakePerformanceEntry {
+  name: string;
+  entryType: string;
+  startTime: number;
+  duration: number;
+
+  constructor(name: string, entryType: string, startTime: number, duration: number) {
+    this.name = name;
+    this.entryType = entryType;
+    this.startTime = startTime;
+    this.duration = duration;
+  }
+
+  toJSON() {
+    return JSON.stringify({ ...this });
+  }
+}
+
+function fakePerformance(clock: ClockController, performance: Builtins['performance']): Builtins['performance'] {
+  const result: any = {
+    now: () => clock.performanceNow(),
+  };
+  result.__defineGetter__('timeOrigin', () => clock._now.origin || 0);
+  // eslint-disable-next-line no-proto
+  for (const key of Object.keys((performance as any).__proto__)) {
+    if (key === 'now' || key === 'timeOrigin')
+      continue;
+    if (key === 'getEntries' || key === 'getEntriesByName' || key === 'getEntriesByType')
+      result[key] = () => [];
+    else if (key === 'mark')
+      result[key] = (name: string) => new FakePerformanceEntry(name, 'mark', 0, 0);
+    else if (key === 'measure')
+      result[key] = (name: string) => new FakePerformanceEntry(name, 'measure', 0, 50);
+    else
+      result[key] = () => {};
+  }
+  return result;
+}
+
+function fakeAbortSignal(clock: ClockController, abortSignal: Builtins['AbortSignal'], browserName?: string): Builtins['AbortSignal'] {
+  Object.defineProperty(abortSignal, 'timeout', {
+    value(ms: number) {
+      const controller = new AbortController();
+      clock.addTimer({
+        delay: ms,
+        type: TimerType.Timeout,
+        func: () => controller.abort(
+            new DOMException(
+                browserName === 'chromium' ? 'signal timed out' : 'The operation timed out.',
+                'TimeoutError'
+            )
+        ),
+      });
+      return controller.signal;
+    }
+  });
+  return abortSignal;
+}
+
+export function createClock(globalObject: WindowOrWorkerGlobalScope, config: InstallConfig = {}): { clock: ClockController, api: Builtins, originals: Builtins } {
+  const originals = platformOriginals(globalObject);
+  // Nested setTimeout(fn, 0) is clamped to 4ms, which adds up when many timers
+  // are due. A MessageChannel task is not clamped, so yield through one instead.
+  const tasks: (() => void)[] = [];
+  let channel: MessageChannel | undefined;
+  const embedder: Embedder = {
+    dateNow: () => originals.raw.Date.now(),
+    performanceNow: () => Math.ceil(originals.raw.performance!.now()) as EmbedderTicks,
+    setTimeout: (task: () => void, timeout?: number) => {
+      const timerId = originals.bound.setTimeout(task, timeout);
+      return () => originals.bound.clearTimeout(timerId);
+    },
+    setInterval: (task: () => void, delay: number) => {
+      const intervalId = originals.bound.setInterval(task, delay);
+      return () => originals.bound.clearInterval(intervalId);
+    },
+    postTask: (task: () => void) => {
+      if (!channel) {
+        channel = new (globalObject as any).MessageChannel() as MessageChannel;
+        channel.port1.onmessage = () => tasks.shift()!();
+      }
+      tasks.push(task);
+      channel.port2.postMessage(undefined);
+    },
+  };
+
+  const clock = new ClockController(embedder);
+  const api = createApi(clock, originals.bound, config.browserName);
+  return { clock, api, originals: originals.raw };
+}
+
+export function install(globalObject: WindowOrWorkerGlobalScope, config: InstallConfig = {}): { clock: ClockController, api: Builtins, originals: Builtins } {
+  if ((globalObject as any).Date?.isFake) {
+    // Timers are already faked; this is a problem.
+    // Make the user reset timers before continuing.
+    throw new TypeError(`Can't install fake timers twice on the same global object.`);
+  }
+
+  const { clock, api, originals } = createClock(globalObject, config);
+  const toFake = config.toFake?.length ? config.toFake : Object.keys(originals) as (keyof Builtins)[];
+
+  for (const method of toFake) {
+    if (method === 'Temporal' && !api.Temporal)
+      continue;
+    if (method === 'Date') {
+      (globalObject as any).Date = mirrorDateProperties(api.Date, (globalObject as any).Date);
+    } else if (method === 'Intl') {
+      (globalObject as any).Intl = api[method]!;
+    } else if (method === 'AbortSignal') {
+      (globalObject as any).AbortSignal = api[method]!;
+    } else if (method === 'Temporal') {
+      (globalObject as any).Temporal = api[method]!;
+    } else if (method === 'performance') {
+      (globalObject as any).performance = api[method]!;
+      const kEventTimeStamp = Symbol('playwrightEventTimeStamp');
+      Object.defineProperty(Event.prototype, 'timeStamp', {
+        get() {
+          if (!this[kEventTimeStamp])
+            this[kEventTimeStamp] = api.performance?.now();
+          return this[kEventTimeStamp];
+        }
+      });
+    } else {
+      (globalObject as any)[method] = (...args: any[]) => {
+        return (api[method] as any).apply(api, args);
+      };
+    }
+    clock.disposables.push(() => {
+      (globalObject as any)[method] = originals[method];
+    });
+  }
+
+  return { clock, api, originals };
+}
+
+export function inject(globalObject: WindowOrWorkerGlobalScope, browserName?: string) {
+  const builtins = platformOriginals(globalObject).bound;
+  const { clock: controller } = install(globalObject, { browserName });
+  controller.resume();
+  return {
+    controller,
+    builtins,
+  };
+}
+
+function asWallTime(n: number): WallTime {
+  return n as WallTime;
+}
+
+function shiftTicks(ticks: Ticks, ms: number): Ticks {
+  return ticks + ms as Ticks;
+}
