@@ -50,6 +50,7 @@ pub(crate) struct FrameMetadata {
     detached: HashSet<String>,
     closing: bool,
     lost_events: bool,
+    revision: u64,
 }
 
 /// Neo: Keeps observed metadata and real detach events separate from session closure.
@@ -63,6 +64,7 @@ impl FrameMetadata {
             detached: HashSet::new(),
             closing: false,
             lost_events: false,
+            revision: 0,
         }
     }
 
@@ -74,12 +76,16 @@ impl FrameMetadata {
     }
 
     fn drain(&mut self) -> Result<(), PlaywrightError> {
+        if !self.closing {
+            self.collect_events()?;
+        }
         if self.lost_events {
             return Err(PlaywrightError::error("Frame metadata events were lost"));
         }
-        if self.closing {
-            return Ok(());
-        }
+        Ok(())
+    }
+
+    fn collect_events(&mut self) -> Result<(), PlaywrightError> {
         loop {
             match self.events.try_recv() {
                 Ok(event)
@@ -93,12 +99,14 @@ impl FrameMetadata {
                         && let Some(id) = event.params["frameId"].as_str()
                     {
                         self.detached.insert(id.to_string());
+                        self.revision = self.revision.wrapping_add(1);
                     }
                 }
                 Ok(_) => {}
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Closed | TryRecvError::Lagged(_)) => {
                     self.lost_events = true;
+                    self.revision = self.revision.wrapping_add(1);
                     return Err(PlaywrightError::error("Frame metadata events were lost"));
                 }
             }
@@ -122,9 +130,21 @@ impl FrameMetadata {
         Ok(())
     }
 
-    fn observe(&mut self, tree: &[FrameInfo]) -> Result<(), PlaywrightError> {
-        // A close attempt that left the page alive does not freeze later live reads.
+    /// Neo: A fresh receiver precedes recovery's live read. Lost history remains explicit
+    /// until that read succeeds and no queued structural change invalidates its snapshot.
+    fn begin_snapshot(&mut self, cdp: &CdpClient) -> u64 {
         self.closing = false;
+        let _collected = self.collect_events();
+        if self.lost_events {
+            self.events = cdp.events();
+        }
+        self.revision
+    }
+
+    fn finish_snapshot(&mut self, tree: &[FrameInfo], revision: u64) -> bool {
+        if self.collect_events().is_err() || revision != self.revision {
+            return false;
+        }
         for frame in tree {
             match self.known.iter_mut().find(|known| known.id == frame.id) {
                 Some(known) => *known = frame.clone(),
@@ -132,7 +152,10 @@ impl FrameMetadata {
             }
         }
         self.live = tree.iter().map(|frame| frame.id.clone()).collect();
-        self.drain()
+        // A complete, reconciled live tree is authoritative after lost event history.
+        self.detached.retain(|id| !self.live.contains(id));
+        self.lost_events = false;
+        true
     }
 
     fn tree(&mut self) -> Result<Vec<FrameInfo>, PlaywrightError> {
@@ -237,31 +260,35 @@ async fn frame_tree(tabs: &Tabs, page: &PageEntry) -> Result<Vec<FrameInfo>, Pla
         return metadata(page)?.tree();
     }
     let session = tabs.session(page).await?;
-    watch_frame_host(page, &session.frames.main().host).await?;
-    let mut tree = session.frames.tree().await.map_err(frame_tree_error)?;
     loop {
-        let mut watched = false;
-        for frame in &tree {
-            if let Some(context) = session.frames.cached(&frame.id) {
-                watched |= watch_frame_host(page, &context.host).await?;
+        let revision = metadata(page)?.begin_snapshot(tabs.cdp());
+        watch_frame_host(page, &session.frames.main().host).await?;
+        let mut tree = session.frames.tree().await.map_err(frame_tree_error)?;
+        loop {
+            let mut watched = false;
+            for frame in &tree {
+                if let Some(context) = session.frames.cached(&frame.id) {
+                    watched |= watch_frame_host(page, &context.host).await?;
+                }
             }
+            if !watched {
+                break;
+            }
+            // A host can lose a frame before Page.enable. Re-read after subscribing so that
+            // missing frames cannot enter the retained graph without a corresponding event.
+            tree = session.frames.tree().await.map_err(frame_tree_error)?;
         }
-        if !watched {
-            break;
+        if let Some(main) = tree.first_mut() {
+            main.url = tabs
+                .url(page)
+                .await?
+                .ok_or_else(PlaywrightError::target_closed)?;
         }
-        // A host can lose a frame before Page.enable. Re-read after subscribing so that
-        // missing frames cannot enter the retained graph without a corresponding event.
-        tree = session.frames.tree().await.map_err(frame_tree_error)?;
+        let mut metadata = metadata(page)?;
+        if metadata.finish_snapshot(&tree, revision) {
+            return metadata.tree();
+        }
     }
-    if let Some(main) = tree.first_mut() {
-        main.url = tabs
-            .url(page)
-            .await?
-            .ok_or_else(PlaywrightError::target_closed)?;
-    }
-    let mut metadata = metadata(page)?;
-    metadata.observe(&tree)?;
-    metadata.tree()
 }
 
 fn frame_value(
@@ -450,9 +477,13 @@ pub(crate) async fn is_closed(cdp: &CdpClient, page: &PageId) -> Result<bool, Cd
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use browseros_cdp::CdpEvent;
     use serde_json::{Value, json};
 
     use tokio::runtime::Handle;
+    use tokio::sync::broadcast;
     use tokio_util::task::TaskTracker;
 
     use super::{FrameField, frame, frame_records, frame_value, matches_url};
@@ -461,7 +492,7 @@ mod tests {
     use crate::page::TabInputs;
     use crate::progress::ErrorName;
     use crate::run::PageId;
-    use crate::tabs::Tabs;
+    use crate::tabs::{PageEntry, Tabs};
     use crate::url_match::SerializedUrlMatch;
 
     fn tree() -> Vec<FrameInfo> {
@@ -484,6 +515,61 @@ mod tests {
             url: url.to_string(),
         })
         .collect()
+    }
+
+    fn fixture_tree(name: &str, old_child: bool) -> FrameReplies {
+        let mut children = vec![
+            json!({"frame":{"id":"local","parentId":PAGE,"name":name,"url":"https://example.test/local"}}),
+        ];
+        if old_child {
+            children.push(json!({"frame":{"id":"old","parentId":PAGE,"name":"old","url":"https://example.test/old"}}));
+        }
+        FrameReplies {
+            trees: [(
+                PAGE.to_string(),
+                json!({"frameTree":{"frame":{"id":PAGE,"url":PAGE_URL},"childFrames":children}}),
+            )]
+            .into(),
+            ..FrameReplies::default()
+        }
+    }
+
+    async fn frame_fixture() -> (FakeBrowser, Tabs, Arc<PageEntry>) {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        browser
+            .page
+            .lock()
+            .unwrap_or_else(|error| panic!("fixture state: {error}"))
+            .frames = Some(fixture_tree("before", true));
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            TaskTracker::new(),
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("open fixture: {error:?}"));
+        let (page, _) = tabs
+            .resolve(&format!("frame@{PAGE}"))
+            .unwrap_or_else(|| panic!("fixture page was not registered"));
+        (browser, tabs, page)
+    }
+
+    fn lose_events(page: &PageEntry) -> broadcast::Sender<CdpEvent> {
+        let (sender, receiver) = broadcast::channel(1);
+        page.frame_metadata
+            .lock()
+            .unwrap_or_else(|error| panic!("metadata state: {error}"))
+            .events = receiver;
+        for _ in 0..2 {
+            let _sent = sender.send(CdpEvent {
+                method: "Runtime.consoleAPICalled".to_string(),
+                params: json!({}),
+                session_id: None,
+            });
+        }
+        sender
     }
 
     #[test]
@@ -600,6 +686,83 @@ mod tests {
         );
         cdp.disconnect().await;
         let error = frame(&tabs, &page, &scope, FrameField::Name)
+            .await
+            .unwrap_err();
+        assert_eq!(error.name, ErrorName::TargetClosedError);
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_fresh_live_tree_recovers_lost_metadata_events_before_close() {
+        let (browser, tabs, page) = frame_fixture().await;
+        let local = FrameScope::Frame("local".to_string());
+        let old = FrameScope::Frame("old".to_string());
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::Name).await.unwrap(),
+            "before"
+        );
+        let _events = lose_events(&page);
+        browser.page.lock().unwrap().frames = Some(fixture_tree("after", false));
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::Name).await.unwrap(),
+            "after"
+        );
+        assert_eq!(
+            frame(&tabs, &page, &old, FrameField::IsDetached)
+                .await
+                .unwrap(),
+            true
+        );
+        page.request_close();
+        tabs.cdp()
+            .send("Target.closeTarget", json!({"targetId":PAGE}), None)
+            .await
+            .unwrap();
+        assert!(tabs.is_closed(&page).await.unwrap());
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::Name).await.unwrap(),
+            "after"
+        );
+        assert_eq!(
+            frame(&tabs, &page, &old, FrameField::IsDetached)
+                .await
+                .unwrap(),
+            true
+        );
+        assert_eq!(
+            frame(&tabs, &page, &old, FrameField::Name).await.unwrap(),
+            "old"
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_event_loss_without_a_fresh_tree_stays_explicit_after_close() {
+        let (_browser, tabs, page) = frame_fixture().await;
+        let local = FrameScope::Frame("local".to_string());
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::Name).await.unwrap(),
+            "before"
+        );
+        let _events = lose_events(&page);
+        page.request_close();
+        tabs.cdp()
+            .send("Target.closeTarget", json!({"targetId":PAGE}), None)
+            .await
+            .unwrap();
+        assert!(tabs.is_closed(&page).await.unwrap());
+        assert!(frame(&tabs, &page, &local, FrameField::Name).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn tests_that_lost_metadata_never_hides_a_failed_live_recovery() {
+        let (_browser, tabs, page) = frame_fixture().await;
+        let local = FrameScope::Frame("local".to_string());
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::Name).await.unwrap(),
+            "before"
+        );
+        let _events = lose_events(&page);
+        tabs.cdp().disconnect().await;
+        let error = frame(&tabs, &page, &local, FrameField::Name)
             .await
             .unwrap_err();
         assert_eq!(error.name, ErrorName::TargetClosedError);
