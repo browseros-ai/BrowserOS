@@ -123,7 +123,7 @@ const RECORDS_WAIT: Duration = Duration::from_secs(1);
 /// Neo: how long removing the run's init scripts may take at run end, apart from
 /// [`RECORDS_WAIT`]: a session it does not reach keeps a script the next run's documents would
 /// run. Free for a run that added none.
-const PAGE_END_WAIT: Duration = Duration::from_secs(3);
+pub(crate) const PAGE_END_WAIT: Duration = Duration::from_secs(3);
 /// Neo: the budget for removing the run's highlights at its end, after [`RECORDS_WAIT`] and
 /// apart from it, so a document that does not answer delays the outcome by at most this and
 /// never holds back an input release. An overlay it cannot remove in time stays, as one in a
@@ -560,9 +560,11 @@ impl Dispatcher {
         // Before anything below waits: what the run holds is held by no live run from now on,
         // however its release goes (`TabInput::mark_ended`).
         self.0.tabs.mark_input_ended();
-        // The run's init scripts go first, on a budget of their own: removal never waits on a
-        // call still running, so no document loaded after the run returns runs one.
-        let _removed = time::timeout(PAGE_END_WAIT, run.init_scripts.close()).await;
+        // What the run installed on the tabs it leaves open goes first, as `context.close()`
+        // lets go of it, each part on a budget of its own: removal never waits on a call still
+        // running, so no document loaded after the run returns runs one of its init scripts or
+        // gets its session overrides (`Tabs::release_run_scoped`).
+        self.0.tabs.release_run_scoped(run).await;
         // The realm is gone with its listeners: from now on the watchers answer dialogs
         // themselves, and a dialog a listener left open gets the default answer before the
         // sessions detach (`Dialogs::left_open`).

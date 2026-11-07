@@ -17,6 +17,7 @@
 //! server does: the user's other cookies are never touched.
 
 use std::collections::{BTreeMap, HashMap};
+use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -307,7 +308,8 @@ fn network_conditions(offline: bool) -> Value {
 
 /// The run's session-scoped state: what each of its sessions gets, the tabs' and their
 /// out-of-process frames', those attached later included. CDP keeps each on the session that
-/// set it until that session detaches, so all of it ends with the run.
+/// set it until that session detaches; [`Overrides::release`] takes it back off before then,
+/// when the script closes the context or the run ends (`Tabs::release_run_scoped`).
 #[derive(Default)]
 pub(crate) struct Overrides(Mutex<State>);
 
@@ -319,6 +321,19 @@ struct State {
     page_headers: HashMap<PageId, Vec<NameValue>>,
     offline: bool,
     geolocation: Option<BrowserContextSetGeolocationParamsGeolocation>,
+    /// Every session any of it went to, with what, noted before the send: what
+    /// [`Overrides::release`] takes back, a session still attaching included.
+    applied: HashMap<SessionId, Applied>,
+    /// Set by [`Overrides::release`]: from then on no session gets any of it.
+    released: bool,
+}
+
+/// What one session was sent of the run's session state.
+#[derive(Default, Clone, Copy)]
+struct Applied {
+    headers: bool,
+    offline: bool,
+    geolocation: bool,
 }
 
 impl State {
@@ -462,10 +477,18 @@ impl Overrides {
         progress: &Progress,
     ) -> Result<(), CallError> {
         let mut state = self.0.lock().await;
+        if state.released {
+            return Err(PlaywrightError::target_closed().into());
+        }
         state.headers = headers;
         for (entry, page) in open_tabs(tabs) {
             let merged = state.headers_of(&entry.id);
             for target in targets_of(&page) {
+                state
+                    .applied
+                    .entry(target.session.clone())
+                    .or_default()
+                    .headers = true;
                 progress.race(target.headers(&merged)).await??;
             }
         }
@@ -481,9 +504,17 @@ impl Overrides {
         progress: &Progress,
     ) -> Result<(), CallError> {
         let mut state = self.0.lock().await;
+        if state.released {
+            return Err(PlaywrightError::target_closed().into());
+        }
         state.page_headers.insert(id.clone(), headers);
         let merged = state.headers_of(id);
         for target in targets_of(page) {
+            state
+                .applied
+                .entry(target.session.clone())
+                .or_default()
+                .headers = true;
             progress.race(target.headers(&merged)).await??;
         }
         Ok(())
@@ -497,12 +528,20 @@ impl Overrides {
         progress: &Progress,
     ) -> Result<(), CallError> {
         let mut state = self.0.lock().await;
+        if state.released {
+            return Err(PlaywrightError::target_closed().into());
+        }
         if state.offline == offline {
             return Ok(());
         }
         state.offline = offline;
         for (_, page) in open_tabs(tabs) {
             for target in targets_of(&page) {
+                state
+                    .applied
+                    .entry(target.session.clone())
+                    .or_default()
+                    .offline = true;
                 progress.race(target.offline(offline)).await??;
             }
         }
@@ -518,11 +557,19 @@ impl Overrides {
     ) -> Result<(), CallError> {
         let checked = geolocation.as_ref().map(verify_geolocation).transpose()?;
         let mut state = self.0.lock().await;
+        if state.released {
+            return Err(PlaywrightError::target_closed().into());
+        }
         state.geolocation = geolocation;
         // The tab's own session only: its frames, out-of-process ones too, see the tab's
         // override, and a frame session that detaches would take the tab's with it (measured).
         for (_, page) in open_tabs(tabs) {
             if let Some(own) = targets_of(&page).into_iter().next() {
+                state
+                    .applied
+                    .entry(own.session.clone())
+                    .or_default()
+                    .geolocation = true;
                 progress.race(own.geolocation(checked.as_ref())).await??;
             }
         }
@@ -549,19 +596,29 @@ impl Overrides {
         page: &PageId,
         frame: bool,
     ) {
-        let state = self.0.lock().await;
-        let target = Target { cdp, session };
+        let mut state = self.0.lock().await;
+        if state.released {
+            return;
+        }
         let headers = state.headers_of(page);
         let geolocation = state
             .geolocation
             .as_ref()
             .filter(|_| !frame)
             .and_then(|geolocation| verify_geolocation(geolocation).ok());
+        let offline = state.offline;
+        if !headers.is_empty() || offline || geolocation.is_some() {
+            let noted = state.applied.entry(session.clone()).or_default();
+            noted.headers |= !headers.is_empty();
+            noted.offline |= offline;
+            noted.geolocation |= geolocation.is_some();
+        }
+        let target = Target { cdp, session };
         let applied = async {
             if !headers.is_empty() {
                 target.headers(&headers).await?;
             }
-            if state.offline {
+            if offline {
                 target.offline(true).await?;
             }
             if let Some(geolocation) = &geolocation {
@@ -571,6 +628,42 @@ impl Overrides {
         };
         if let Err(error) = applied.await {
             debug!(?error, "a new session did not take the run's session state");
+        }
+    }
+
+    /// Takes the run's session state back off every session it went to, the tabs the run
+    /// leaves open included: their extra headers, offline mode and geolocation are the
+    /// browser's own again, as when Playwright's sessions detach with its connection. From then
+    /// on no session gets any of it: an attach still running sets nothing
+    /// ([`Self::apply_to_new`]), nor does a call still running. Idempotent. A session that went
+    /// away is passed by (`Target::send`); another failure is logged, and that session keeps
+    /// the state until it detaches at the run's end.
+    pub(crate) async fn release(&self, cdp: &CdpClient) {
+        let mut state = self.0.lock().await;
+        let applied = mem::take(&mut state.applied);
+        *state = State {
+            released: true,
+            ..State::default()
+        };
+        for (session, applied) in applied {
+            let target = Target { cdp, session };
+            let reset = async {
+                if applied.headers {
+                    target.headers(&[]).await?;
+                }
+                if applied.offline {
+                    target.offline(false).await?;
+                }
+                if applied.geolocation {
+                    target
+                        .send("Emulation.clearGeolocationOverride", json!({}))
+                        .await?;
+                }
+                Ok::<_, PlaywrightError>(())
+            };
+            if let Err(error) = reset.await {
+                debug!(?error, "a session kept the run's session state");
+            }
         }
     }
 }
@@ -993,6 +1086,9 @@ impl Permissions {
         let origin = grant_origin(origin)?;
         let context = tabs.context_id().map(str::to_string);
         let mut grants = self.grants.lock().await;
+        // A grant that waited here while the context closed or the run ended goes no further:
+        // the run let go of its grants meanwhile (`Tabs::release_run_scoped`).
+        progress.check()?;
         let held = grants.entry(run).or_default();
         held.context.clone_from(&context);
         let list = held.origins.entry(origin.clone()).or_default();
@@ -1232,6 +1328,128 @@ mod tests {
                 json!(["Browser.grantPermissions", "http://a.test", ["geolocation"]]),
             ],
             "the reset and run 1's grant again, run 2's gone"
+        );
+    }
+
+    /// Review delta D1: a released run's session state comes off every session it went to,
+    /// one that attached as a frame's included (headers and offline there, geolocation on the
+    /// tab's own only), and goes on no session after, however late it attaches; a second
+    /// release sends nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_released_overrides_come_off_every_session_and_go_on_no_new_one() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let cdp = browser.cdp().await;
+        let overrides = Overrides::default();
+        {
+            let mut state = overrides.0.lock().await;
+            state.headers = vec![NameValue {
+                name: "x-scope".to_string(),
+                value: "owned".to_string(),
+            }];
+            state.offline = true;
+            state.geolocation = Some(BrowserContextSetGeolocationParamsGeolocation {
+                latitude: 10.0,
+                longitude: 20.0,
+                accuracy: None,
+            });
+        }
+        let page = PageId::new(PAGE.to_string());
+        let session = |name: &str| SessionId::from(name.to_string());
+        overrides
+            .apply_to_new(&cdp, session("tab"), &page, false)
+            .await;
+        overrides
+            .apply_to_new(&cdp, session("frame"), &page, true)
+            .await;
+        let before = browser.exchanges().len();
+        overrides.release(&cdp).await;
+        let released = browser.exchanges().len();
+        overrides.release(&cdp).await;
+        overrides
+            .apply_to_new(&cdp, session("late"), &page, false)
+            .await;
+        let exchanges = browser.exchanges();
+        let mut sent: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+        for exchange in &exchanges[before..released] {
+            sent.entry(
+                exchange.command["sessionId"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
+            )
+            .or_default()
+            .push(json!([exchange.method(), exchange.command["params"]]));
+        }
+        let offline = json!([
+            "Network.emulateNetworkConditions",
+            network_conditions(false)
+        ]);
+        let no_headers = json!(["Network.setExtraHTTPHeaders", { "headers": {} }]);
+        let enable = json!(["Network.enable", {}]);
+        assert_eq!(
+            sent,
+            BTreeMap::from([
+                (
+                    "frame".to_string(),
+                    vec![
+                        enable.clone(),
+                        no_headers.clone(),
+                        enable.clone(),
+                        offline.clone()
+                    ]
+                ),
+                (
+                    "tab".to_string(),
+                    vec![
+                        enable.clone(),
+                        no_headers,
+                        enable,
+                        offline,
+                        json!(["Emulation.clearGeolocationOverride", {}]),
+                    ]
+                ),
+            ]),
+            "each session gets back what it was given"
+        );
+        assert_eq!(
+            exchanges.len(),
+            released,
+            "a second release and a late attach send nothing"
+        );
+    }
+
+    /// A grant that reaches the registry after the context closed sends nothing: the run let go
+    /// of its grants meanwhile (`Tabs::release_run_scoped`).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_a_grant_after_the_context_closed_sends_nothing() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            Switches::default(),
+            Permissions::default(),
+            TaskTracker::new(),
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("open: {error:?}"));
+        let progress = call_progress();
+        progress.stop_the_runs_calls();
+        let granted = tabs
+            .permissions()
+            .grant(
+                &tabs,
+                1,
+                Some("http://a.test"),
+                &["geolocation".to_string()],
+                &progress,
+            )
+            .await;
+        assert!(granted.is_err(), "{granted:?}");
+        assert!(
+            permission_commands(&browser).is_empty(),
+            "nothing reached the browser"
         );
     }
 

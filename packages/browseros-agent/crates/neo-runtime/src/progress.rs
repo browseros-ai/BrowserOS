@@ -244,6 +244,11 @@ impl Progress {
     pub(crate) fn stop_the_runs_calls(&self) {
         self.run.context_closed.cancel();
     }
+
+    /// What every call of the run shares about the run itself.
+    pub(crate) fn run_scope(&self) -> &RunScope {
+        &self.run
+    }
 }
 
 impl Progress {

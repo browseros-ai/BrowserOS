@@ -662,6 +662,7 @@ const EMPTY_RESULTS: &[&str] = &[
     "Network.setExtraHTTPHeaders",
     "Network.emulateNetworkConditions",
     "Emulation.setGeolocationOverride",
+    "Emulation.clearGeolocationOverride",
     "Page.close",
     "Page.enable",
     "Network.enable",

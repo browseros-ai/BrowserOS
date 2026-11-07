@@ -24,15 +24,17 @@ use crate::bridge;
 use crate::click::PageError;
 use crate::dialogs;
 use crate::discovery::{self, TargetInfo};
+use crate::dispatch::PAGE_END_WAIT;
 use crate::downloads::{self, Downloads, Opened};
 use crate::evaluate::{self, Handles};
 use crate::events::{ALL_PAGES, CONTEXT_GUID, Enabling, EventHub, Needs};
 use crate::frames::{FrameContext, FrameScope};
 use crate::getters;
+use crate::init_scripts;
 use crate::network::HopId;
 use crate::page::{FrameTab, PageSession, Session, TabInputs};
 use crate::page_events::{self, Kept, MAX_KEPT_ARGS, MAX_KEPT_CHOOSERS};
-use crate::progress::PlaywrightError;
+use crate::progress::{PlaywrightError, RunScope};
 use crate::run::{PageId, RunPage};
 use crate::session_state::{self, Overrides, Permissions};
 use crate::switch::Switches;
@@ -612,6 +614,26 @@ impl Tabs {
     pub(crate) async fn finish_creations(&self) {
         self.0.creations.close();
         self.0.creations.wait().await;
+    }
+
+    /// Everything the run installed that the tabs it leaves open would otherwise keep, taken
+    /// back, in one place that each area adding such state releases it from: the run's init
+    /// scripts (`init_scripts.rs`), its session overrides (extra headers, offline mode,
+    /// geolocation; HTTP credentials hold none while `setHTTPCredentials` is pending) and its
+    /// permission grants (`session_state.rs`). `context.close()` awaits it before it resolves and
+    /// `Dispatcher::finish` runs it, so a closed context and an ended run let go the same way.
+    /// Each part marks itself released before it waits, so an attach or a call still running
+    /// installs nothing after it, and waits [`PAGE_END_WAIT`] at most; the grants' reset
+    /// finishes on the cleanup tracker regardless. Idempotent: a run that closed its context
+    /// finds nothing left at its end.
+    pub(crate) async fn release_run_scoped(&self, run: &RunScope) {
+        let _scripts = time::timeout(PAGE_END_WAIT, init_scripts::release_all(run)).await;
+        let _overrides = time::timeout(PAGE_END_WAIT, self.0.overrides.release(&self.0.cdp)).await;
+        let _grants = time::timeout(
+            PAGE_END_WAIT,
+            self.0.permissions.release(&self.0.cdp, self.0.run_id),
+        )
+        .await;
     }
 
     /// Records the run's end on every tab it attached to (`PageSession::mark_input_ended`): no

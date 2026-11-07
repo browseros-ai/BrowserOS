@@ -171,6 +171,9 @@ async fn close_context(tabs: &Tabs, progress: &Progress) -> Result<(), CallError
     // The script's promises for them have rejected (the SDK); this stops the calls themselves
     // before the close resolves, so none writes input to a tab the run let go of.
     progress.stop_the_runs_calls();
+    // Then what the run set on the tabs it leaves open goes, before the close resolves, as
+    // Playwright's overrides go with its connection (`Tabs::release_run_scoped`).
+    tabs.release_run_scoped(progress.run_scope()).await;
     Ok(())
 }
 
