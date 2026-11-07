@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (59)
+## Deviations (60)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -24,6 +24,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/downloads.rs | `save_as` | `server/dispatchers/artifactDispatcher.ts` `ArtifactDispatcher.saveAs` | Playwright copies the file to any path on its host. Neo writes a script's files only inside the artifact directory the host gives the run (`artifacts`), at a relative path without `..`, refusing a symbolic link on the way, and a run without one names the option. |
 | neo-runtime/src/element_ops.rs | `EVENT_INIT_UNSERVED` | `server/frames.ts` `Frame.dispatchEvent` | Playwright builds and dispatches the event in the page's main world from any serialized value, handles included; Neo dispatches from its isolated world, so `eventInit` takes plain values only (strings, finite numbers, booleans, null, arrays and plain objects) and anything else is refused before any page call. |
 | neo-runtime/src/element_ops.rs | `EXPANDED_VALUES_MAX` | `protocol/src/serializers.ts` `innerSerializeValue` | Playwright's serializer writes a value met again as a `ref` to its first occurrence and its server hands the refs on, so any number of references to one value dispatches; Neo hands `eventInit` to its isolated world as JSON, which writes a repeated value out in full each time (a chain of values each holding the next twice doubles at every level), so one `eventInit` expands to at most this many values and a larger one is refused, naming the limit, before any page call. |
+| neo-runtime/src/evaluate.rs | `adopt_element` | `server/dom.ts` `FrameExecutionContext.adoptIfNeeded` | A handle of another session (an out-of-process frame's, another tab's) fails Playwright's adoption, which `_retryWithProgressIfNotConnected` retries until the call times out (TimeoutError); Neo refuses it at once with Playwright's adoption Error, since a script gains nothing from waiting its whole timeout to learn the handle is unusable. Neither selects anything. |
 | neo-runtime/src/evaluate.rs | `created_handle` | `server/dom.ts` `ElementHandle._initializePreview` | Playwright starts at `JSHandle@node` and updates the preview by event; Neo has no events, so the handle starts with the final preview. |
 | neo-runtime/src/evaluate.rs | `route_frame` | `server/frames.ts` `Frame.waitForFunctionExpressionOnElement` | Neo has no main-world injected script yet to run the predicate on an element, so it refuses the selector form. |
 | neo-runtime/src/evaluate.rs | `utility_root` | `server/frameSelectors.ts` `FrameSelectors._resolveChainedSelector` | Playwright resolves frame hops from a scope too; Neo serves a scoped query within the element's own document only. |

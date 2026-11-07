@@ -1258,6 +1258,7 @@ pub(crate) async fn adopt_element(
         return Ok(None);
     };
     // A backend node id names a node in its own process only.
+    // Deviation: `server/dom.ts` `FrameExecutionContext.adoptIfNeeded`: `return this.frame._page.delegate.adoptElementHandle(handle, this);` A handle of another session (an out-of-process frame's, another tab's) fails Playwright's adoption, which `_retryWithProgressIfNotConnected` retries until the call times out (TimeoutError); Neo refuses it at once with Playwright's adoption Error, since a script gains nothing from waiting its whole timeout to learn the handle is unusable. Neither selects anything.
     if entry.frame.host.session_id() != frame.host.session_id() {
         return Ok(None);
     }
