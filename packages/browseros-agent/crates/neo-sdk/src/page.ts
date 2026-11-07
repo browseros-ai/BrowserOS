@@ -51,6 +51,12 @@ import {
   type WaitForURLOptions,
 } from './frame'
 import type { FrameLocator } from './frame-locator'
+import {
+  assertMaxArguments,
+  type EvaluateOptions,
+  type JSHandle,
+  type PageFunction,
+} from './js-handle'
 import type { Locator, LocatorOptions } from './locator'
 import { serializeUrlMatch } from './neo-commands'
 import { type Response, responseFor } from './network'
@@ -66,12 +72,7 @@ import {
 import { type CreatedFrame, get, matchesURL } from './runtime-bridge'
 import type { SelectOptionValues } from './select-option'
 import { TimeoutSettings } from './timeout-settings'
-import {
-  refuseSignal,
-  Waiter,
-  type WaitForEventOptions,
-  wrapApiCall,
-} from './waiter'
+import { Waiter, type WaitForEventOptions, wrapApiCall } from './waiter'
 
 /**
  * Neo: the page's listener events, by Playwright's names (`Events.Page`): what Neo produces,
@@ -377,9 +378,10 @@ export class Page extends ChannelOwner {
   ): Promise<unknown> {
     const options =
       typeof optionsOrPredicate === 'function' ? {} : optionsOrPredicate
-    refuseSignal(options)
+    // Refuses a signal first (TimeoutSettings), inside its callers' `wrapApiCall`, which
+    // prefixes the api name.
+    const timeout = this._timeoutSettings.timeout(options, null)
     this._refuseUnserved(event)
-    const timeout = this._timeoutSettings.timeout(options)
     const predicate =
       typeof optionsOrPredicate === 'function'
         ? optionsOrPredicate
@@ -518,6 +520,38 @@ export class Page extends ChannelOwner {
     return await this.#mainFrame._goto('page.goto', url, options)
   }
 
+  /** Playwright's `page.evaluate`: `frame.evaluate` in the main frame. */
+  async evaluate<R, Arg>(
+    pageFunction: PageFunction<Arg, R>,
+    arg?: Arg,
+    options?: EvaluateOptions,
+  ): Promise<R> {
+    // biome-ignore lint/complexity/noArguments: Playwright counts the arguments the call passed
+    assertMaxArguments(arguments.length, 3)
+    return await this.mainFrame()._evaluate(
+      'page.evaluate',
+      pageFunction,
+      arg,
+      options,
+    )
+  }
+
+  /** Playwright's `page.evaluateHandle`: `frame.evaluateHandle` in the main frame. */
+  async evaluateHandle<R, Arg>(
+    pageFunction: PageFunction<Arg, R>,
+    arg?: Arg,
+    options?: EvaluateOptions,
+  ): Promise<JSHandle<R>> {
+    // biome-ignore lint/complexity/noArguments: Playwright counts the arguments the call passed
+    assertMaxArguments(arguments.length, 3)
+    return await this.mainFrame()._evaluateHandle(
+      'page.evaluateHandle',
+      pageFunction,
+      arg,
+      options,
+    )
+  }
+
   async title(): Promise<string> {
     return await this.#mainFrame._title('page.title')
   }
@@ -541,7 +575,7 @@ export class Page extends ChannelOwner {
         ...options,
         waitUntil,
       }) as PageReloadParams,
-      this._timeoutSettings.navigationTimeout(options),
+      this._timeoutSettings.navigationTimeout(options, 'page.reload'),
     )
     return this.#response(result?.response)
   }
@@ -565,7 +599,7 @@ export class Page extends ChannelOwner {
         ...options,
         waitUntil,
       }) as PageGoBackParams,
-      this._timeoutSettings.navigationTimeout(options),
+      this._timeoutSettings.navigationTimeout(options, 'page.goBack'),
     )
     return this.#response(result?.response)
   }
@@ -584,7 +618,7 @@ export class Page extends ChannelOwner {
         ...options,
         waitUntil,
       }) as PageGoForwardParams,
-      this._timeoutSettings.navigationTimeout(options),
+      this._timeoutSettings.navigationTimeout(options, 'page.goForward'),
     )
     return this.#response(result?.response)
   }

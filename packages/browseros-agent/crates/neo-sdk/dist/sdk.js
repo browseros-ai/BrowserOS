@@ -685,6 +685,801 @@ function getByRoleSelector(role, options = {}) {
   return `internal:role=${role}${props.map(([n, v]) => `[${n}=${v}]`).join("")}`;
 }
 
+// src/vendor-shims.ts
+var DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+class URL {
+  href;
+  constructor(href) {
+    this.href = String(href);
+  }
+  toString() {
+    return this.href;
+  }
+  toJSON() {
+    return this.href;
+  }
+  get [Symbol.toStringTag]() {
+    return "URL";
+  }
+}
+var Buffer = {
+  from(buffer, byteOffset, length) {
+    return new Uint8Array(buffer, byteOffset, length);
+  }
+};
+function btoa(binary) {
+  let out = "";
+  for (let i = 0;i < binary.length; i += 3) {
+    const a = binary.charCodeAt(i);
+    const b = i + 1 < binary.length ? binary.charCodeAt(i + 1) : -1;
+    const c = i + 2 < binary.length ? binary.charCodeAt(i + 2) : -1;
+    if (a > 255 || b > 255 || c > 255)
+      throw new Error("btoa: the string has characters outside Latin1");
+    out += DIGITS[a >> 2];
+    out += DIGITS[(a & 3) << 4 | (b < 0 ? 0 : b >> 4)];
+    out += b < 0 ? "=" : DIGITS[(b & 15) << 2 | (c < 0 ? 0 : c >> 6)];
+    out += c < 0 ? "=" : DIGITS[c & 63];
+  }
+  return out;
+}
+function atob(base64) {
+  const clean = base64.replace(/[\t\n\f\r ]/g, "").replace(/={1,2}$/, "");
+  let out = "";
+  let bits = 0;
+  let value = 0;
+  for (const char of clean) {
+    const digit = DIGITS.indexOf(char);
+    if (digit < 0)
+      throw new Error("atob: the string is not valid base64");
+    value = value << 6 | digit;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out += String.fromCharCode(value >> bits & 255);
+    }
+  }
+  return out;
+}
+
+// vendor/playwright/isomorphic/utilityScriptSerializers.ts
+var kFunctionBindingPrefix = "__pw_fn_";
+var kBindingsControllerProperty = "__playwright__binding__controller__";
+function isRegExp(obj) {
+  try {
+    return obj instanceof RegExp || Object.prototype.toString.call(obj) === "[object RegExp]";
+  } catch (error) {
+    return false;
+  }
+}
+function isDate(obj) {
+  try {
+    return obj instanceof Date || Object.prototype.toString.call(obj) === "[object Date]";
+  } catch (error) {
+    return false;
+  }
+}
+function isURL(obj) {
+  try {
+    return obj instanceof URL || Object.prototype.toString.call(obj) === "[object URL]";
+  } catch (error) {
+    return false;
+  }
+}
+function isError(obj) {
+  try {
+    return obj instanceof Error || obj && Object.getPrototypeOf(obj)?.name === "Error";
+  } catch (error) {
+    return false;
+  }
+}
+function isTypedArray(obj, constructor) {
+  try {
+    return obj instanceof constructor || Object.prototype.toString.call(obj) === `[object ${constructor.name}]`;
+  } catch (error) {
+    return false;
+  }
+}
+function isArrayBuffer(obj) {
+  try {
+    return obj instanceof ArrayBuffer || Object.prototype.toString.call(obj) === "[object ArrayBuffer]";
+  } catch (error) {
+    return false;
+  }
+}
+function isMap(obj) {
+  try {
+    return obj instanceof Map || Object.prototype.toString.call(obj) === "[object Map]";
+  } catch (error) {
+    return false;
+  }
+}
+function isSet(obj) {
+  try {
+    return obj instanceof Set || Object.prototype.toString.call(obj) === "[object Set]";
+  } catch (error) {
+    return false;
+  }
+}
+var typedArrayConstructors = {
+  i8: Int8Array,
+  ui8: Uint8Array,
+  ui8c: Uint8ClampedArray,
+  i16: Int16Array,
+  ui16: Uint16Array,
+  i32: Int32Array,
+  ui32: Uint32Array,
+  f32: Float32Array,
+  f64: Float64Array,
+  bi64: BigInt64Array,
+  bui64: BigUint64Array
+};
+function typedArrayToBase64(array) {
+  if ("toBase64" in array)
+    return array.toBase64();
+  const binary = Array.from(new Uint8Array(array.buffer, array.byteOffset, array.byteLength)).map((b) => String.fromCharCode(b)).join("");
+  return btoa(binary);
+}
+function base64ToTypedArray(base64, TypedArrayConstructor) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0;i < binary.length; i++)
+    bytes[i] = binary.charCodeAt(i);
+  return new TypedArrayConstructor(bytes.buffer);
+}
+function parseEvaluationResultValue(value, handles = [], refs = new Map) {
+  if (Object.is(value, undefined))
+    return;
+  if (typeof value === "object" && value) {
+    if ("ref" in value)
+      return refs.get(value.ref);
+    if ("v" in value) {
+      if (value.v === "undefined")
+        return;
+      if (value.v === "null")
+        return null;
+      if (value.v === "NaN")
+        return NaN;
+      if (value.v === "Infinity")
+        return Infinity;
+      if (value.v === "-Infinity")
+        return -Infinity;
+      if (value.v === "-0")
+        return -0;
+      return;
+    }
+    if ("d" in value) {
+      return new Date(value.d);
+    }
+    if ("u" in value)
+      return new URL(value.u);
+    if ("bi" in value)
+      return BigInt(value.bi);
+    if ("e" in value) {
+      const error = new Error(value.e.m);
+      error.name = value.e.n;
+      error.stack = value.e.s;
+      return error;
+    }
+    if ("r" in value)
+      return new RegExp(value.r.p, value.r.f);
+    if ("a" in value) {
+      const result = [];
+      refs.set(value.id, result);
+      for (const a of value.a)
+        result.push(parseEvaluationResultValue(a, handles, refs));
+      return result;
+    }
+    if ("o" in value) {
+      const result = {};
+      refs.set(value.id, result);
+      for (const { k, v } of value.o) {
+        if (k === "__proto__")
+          continue;
+        result[k] = parseEvaluationResultValue(v, handles, refs);
+      }
+      return result;
+    }
+    if ("m" in value) {
+      const result = new Map;
+      refs.set(value.id, result);
+      for (const { k, v } of value.m)
+        result.set(parseEvaluationResultValue(k, handles, refs), parseEvaluationResultValue(v, handles, refs));
+      return result;
+    }
+    if ("s" in value) {
+      const result = new Set;
+      refs.set(value.id, result);
+      for (const item of value.s)
+        result.add(parseEvaluationResultValue(item, handles, refs));
+      return result;
+    }
+    if ("h" in value)
+      return handles[value.h];
+    if ("fn" in value) {
+      const name = value.fn;
+      return (...args) => globalThis[kBindingsControllerProperty].callBinding(name, ...args);
+    }
+    if ("ta" in value)
+      return base64ToTypedArray(value.ta.b, typedArrayConstructors[value.ta.k]);
+    if ("ab" in value)
+      return base64ToTypedArray(value.ab.b, Uint8Array).buffer;
+  }
+  return value;
+}
+function serializeAsCallArgument(value, handleSerializer, options = {}) {
+  return serialize(value, handleSerializer, { visited: new Map, lastId: 0, extendedSerialization: options.extendedSerialization });
+}
+function serialize(value, handleSerializer, visitorInfo) {
+  if (value && typeof value === "object") {
+    if (typeof globalThis.Window === "function" && value instanceof globalThis.Window)
+      return "ref: <Window>";
+    if (typeof globalThis.Document === "function" && value instanceof globalThis.Document)
+      return "ref: <Document>";
+    if (typeof globalThis.Node === "function" && value instanceof globalThis.Node)
+      return "ref: <Node>";
+  }
+  return innerSerialize(value, handleSerializer, visitorInfo);
+}
+function innerSerialize(value, handleSerializer, visitorInfo) {
+  const result = handleSerializer(value);
+  if ("fallThrough" in result)
+    value = result.fallThrough;
+  else
+    return result;
+  if (typeof value === "symbol")
+    return { v: "undefined" };
+  if (Object.is(value, undefined))
+    return { v: "undefined" };
+  if (Object.is(value, null))
+    return { v: "null" };
+  if (Object.is(value, NaN))
+    return { v: "NaN" };
+  if (Object.is(value, Infinity))
+    return { v: "Infinity" };
+  if (Object.is(value, -Infinity))
+    return { v: "-Infinity" };
+  if (Object.is(value, -0))
+    return { v: "-0" };
+  if (typeof value === "boolean")
+    return value;
+  if (typeof value === "number")
+    return value;
+  if (typeof value === "string")
+    return value;
+  if (typeof value === "bigint")
+    return { bi: value.toString() };
+  if (isError(value)) {
+    let stack;
+    if (value.stack?.startsWith(value.name + ": " + value.message)) {
+      stack = value.stack;
+    } else {
+      stack = `${value.name}: ${value.message}
+${value.stack}`;
+    }
+    return { e: { n: value.name, m: value.message, s: stack } };
+  }
+  if (isDate(value))
+    return { d: value.toJSON() };
+  if (isURL(value))
+    return { u: value.toJSON() };
+  if (isRegExp(value))
+    return { r: { p: value.source, f: value.flags } };
+  for (const [k, ctor] of Object.entries(typedArrayConstructors)) {
+    if (isTypedArray(value, ctor))
+      return { ta: { b: typedArrayToBase64(value), k } };
+  }
+  if (isArrayBuffer(value))
+    return { ab: { b: typedArrayToBase64(new Uint8Array(value)) } };
+  const id = visitorInfo.visited.get(value);
+  if (id)
+    return { ref: id };
+  if (visitorInfo.extendedSerialization) {
+    if (isMap(value)) {
+      const m = [];
+      const id2 = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id2);
+      const iterator = value.entries();
+      const next = new Map().entries().next;
+      while (true) {
+        const entry = next.call(iterator);
+        if (entry.done)
+          break;
+        m.push({ k: serialize(entry.value[0], handleSerializer, visitorInfo), v: serialize(entry.value[1], handleSerializer, visitorInfo) });
+      }
+      return { m, id: id2 };
+    }
+    if (isSet(value)) {
+      const s = [];
+      const id2 = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id2);
+      const iterator = value.values();
+      const next = new Set().values().next;
+      while (true) {
+        const entry = next.call(iterator);
+        if (entry.done)
+          break;
+        s.push(serialize(entry.value, handleSerializer, visitorInfo));
+      }
+      return { s, id: id2 };
+    }
+  }
+  if (Array.isArray(value)) {
+    const a = [];
+    const id2 = ++visitorInfo.lastId;
+    visitorInfo.visited.set(value, id2);
+    for (let i = 0;i < value.length; ++i)
+      a.push(serialize(value[i], handleSerializer, visitorInfo));
+    return { a, id: id2 };
+  }
+  if (typeof value === "object") {
+    const o = [];
+    const id2 = ++visitorInfo.lastId;
+    visitorInfo.visited.set(value, id2);
+    for (const name of Object.keys(value)) {
+      let item;
+      try {
+        item = value[name];
+      } catch (e) {
+        continue;
+      }
+      if (name === "toJSON" && typeof item === "function")
+        o.push({ k: name, v: { o: [], id: 0 } });
+      else
+        o.push({ k: name, v: serialize(item, handleSerializer, visitorInfo) });
+    }
+    let jsonWrapper;
+    try {
+      if (o.length === 0 && value.toJSON && typeof value.toJSON === "function")
+        jsonWrapper = { value: value.toJSON() };
+    } catch (e) {}
+    if (jsonWrapper)
+      return innerSerialize(jsonWrapper.value, handleSerializer, visitorInfo);
+    return { o, id: id2 };
+  }
+  if (typeof value === "function" && value.name.startsWith(kFunctionBindingPrefix))
+    return { fn: value.name };
+}
+
+// vendor/playwright/protocol/src/serializers.ts
+function parseSerializedValue(value, handles) {
+  return innerParseSerializedValue(value, handles, new Map, []);
+}
+function innerParseSerializedValue(value, handles, refs, accessChain) {
+  if (value.ref !== undefined)
+    return refs.get(value.ref);
+  if (value.n !== undefined)
+    return value.n;
+  if (value.s !== undefined)
+    return value.s;
+  if (value.b !== undefined)
+    return value.b;
+  if (value.v !== undefined) {
+    if (value.v === "undefined")
+      return;
+    if (value.v === "null")
+      return null;
+    if (value.v === "NaN")
+      return NaN;
+    if (value.v === "Infinity")
+      return Infinity;
+    if (value.v === "-Infinity")
+      return -Infinity;
+    if (value.v === "-0")
+      return -0;
+  }
+  if (value.d !== undefined)
+    return new Date(value.d);
+  if (value.u !== undefined)
+    return new URL(value.u);
+  if (value.bi !== undefined)
+    return BigInt(value.bi);
+  if (value.e !== undefined) {
+    const error = new Error(value.e.m);
+    error.name = value.e.n;
+    error.stack = value.e.s;
+    return error;
+  }
+  if (value.r !== undefined)
+    return new RegExp(value.r.p, value.r.f);
+  if (value.ta !== undefined) {
+    const ctor = typedArrayKindToConstructor[value.ta.k];
+    return new ctor(value.ta.b.buffer, value.ta.b.byteOffset, value.ta.b.length / ctor.BYTES_PER_ELEMENT);
+  }
+  if (value.a !== undefined) {
+    const result = [];
+    refs.set(value.id, result);
+    for (let i = 0;i < value.a.length; i++)
+      result.push(innerParseSerializedValue(value.a[i], handles, refs, [...accessChain, i]));
+    return result;
+  }
+  if (value.o !== undefined) {
+    const result = {};
+    refs.set(value.id, result);
+    for (const { k, v } of value.o)
+      result[k] = innerParseSerializedValue(v, handles, refs, [...accessChain, k]);
+    return result;
+  }
+  if (value.h !== undefined) {
+    if (handles === undefined)
+      throw new Error("Unexpected handle");
+    return handles[value.h];
+  }
+  if (value.fn !== undefined) {
+    const dummy = () => {};
+    Object.defineProperty(dummy, "name", { value: value.fn });
+    return dummy;
+  }
+  throw new Error(`Attempting to deserialize unexpected value${accessChainToDisplayString(accessChain)}: ${value}`);
+}
+function serializeValue(value, handleSerializer) {
+  return innerSerializeValue(value, handleSerializer, { lastId: 0, visited: new Map }, []);
+}
+function innerSerializeValue(value, handleSerializer, visitorInfo, accessChain) {
+  const handle = handleSerializer(value);
+  if ("fallThrough" in handle)
+    value = handle.fallThrough;
+  else
+    return handle;
+  if (typeof value === "symbol")
+    return { v: "undefined" };
+  if (Object.is(value, undefined))
+    return { v: "undefined" };
+  if (Object.is(value, null))
+    return { v: "null" };
+  if (Object.is(value, NaN))
+    return { v: "NaN" };
+  if (Object.is(value, Infinity))
+    return { v: "Infinity" };
+  if (Object.is(value, -Infinity))
+    return { v: "-Infinity" };
+  if (Object.is(value, -0))
+    return { v: "-0" };
+  if (typeof value === "boolean")
+    return { b: value };
+  if (typeof value === "number")
+    return { n: value };
+  if (typeof value === "string")
+    return { s: value };
+  if (typeof value === "bigint")
+    return { bi: value.toString() };
+  if (isError2(value))
+    return { e: { n: value.name, m: value.message, s: value.stack || "" } };
+  if (isDate2(value))
+    return { d: value.toJSON() };
+  if (isURL2(value))
+    return { u: value.toJSON() };
+  if (isRegExp2(value))
+    return { r: { p: value.source, f: value.flags } };
+  const typedArrayKind = constructorToTypedArrayKind.get(value.constructor);
+  if (typedArrayKind)
+    return { ta: { b: Buffer.from(value.buffer, value.byteOffset, value.byteLength), k: typedArrayKind } };
+  const id = visitorInfo.visited.get(value);
+  if (id)
+    return { ref: id };
+  if (Array.isArray(value)) {
+    const a = [];
+    const id2 = ++visitorInfo.lastId;
+    visitorInfo.visited.set(value, id2);
+    for (let i = 0;i < value.length; ++i)
+      a.push(innerSerializeValue(value[i], handleSerializer, visitorInfo, [...accessChain, i]));
+    return { a, id: id2 };
+  }
+  if (typeof value === "object") {
+    const o = [];
+    const id2 = ++visitorInfo.lastId;
+    visitorInfo.visited.set(value, id2);
+    for (const name of Object.keys(value))
+      o.push({ k: name, v: innerSerializeValue(value[name], handleSerializer, visitorInfo, [...accessChain, name]) });
+    return { o, id: id2 };
+  }
+  throw new Error(`Attempting to serialize unexpected value${accessChainToDisplayString(accessChain)}: ${value}`);
+}
+function accessChainToDisplayString(accessChain) {
+  const chainString = accessChain.map((accessor, i) => {
+    if (typeof accessor === "string")
+      return i ? `.${accessor}` : accessor;
+    return `[${accessor}]`;
+  }).join("");
+  return chainString.length > 0 ? ` at position "${chainString}"` : "";
+}
+function isRegExp2(obj) {
+  return obj instanceof RegExp || Object.prototype.toString.call(obj) === "[object RegExp]";
+}
+function isDate2(obj) {
+  return obj instanceof Date || Object.prototype.toString.call(obj) === "[object Date]";
+}
+function isURL2(obj) {
+  return obj instanceof URL || Object.prototype.toString.call(obj) === "[object URL]";
+}
+function isError2(obj) {
+  const proto = obj ? Object.getPrototypeOf(obj) : null;
+  return obj instanceof Error || proto?.name === "Error" || proto && isError2(proto);
+}
+var typedArrayKindToConstructor = {
+  i8: Int8Array,
+  ui8: Uint8Array,
+  ui8c: Uint8ClampedArray,
+  i16: Int16Array,
+  ui16: Uint16Array,
+  i32: Int32Array,
+  ui32: Uint32Array,
+  f32: Float32Array,
+  f64: Float64Array,
+  bi64: BigInt64Array,
+  bui64: BigUint64Array
+};
+var constructorToTypedArrayKind = new Map(Object.entries(typedArrayKindToConstructor).map(([k, v]) => [v, k]));
+
+// src/connection.ts
+var SCRIPT_FILE = "run.js";
+var AGENT_FRAME = /^ {4}at .* \(<input>:(\d+):(\d+)\)$/;
+
+class Connection {
+  #nextId = 1;
+  #lineOffset;
+  #closed = false;
+  #inFlight = new Set;
+  _closeReasonFor = () => {
+    return;
+  };
+  _closedFor = () => false;
+  _objects = new Map;
+  constructor(lineOffset) {
+    this.#lineOffset = lineOffset;
+  }
+  async send(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendPage(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendContext(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendRequest(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendResponse(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendDialog(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendNeo(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendEval(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendHandle(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout) ?? {};
+  }
+  async#send(apiName, guid, method, params, timeout) {
+    if (typeof timeout !== "number")
+      throw new Error(`timeout: expected float, got ${timeout === null ? "object" : typeof timeout}`);
+    const metadata = {
+      location: captureLocation(this.#lineOffset),
+      timeout
+    };
+    if (this.#closed)
+      throw closedError(apiName);
+    const closedBefore = this._closedFor(guid);
+    const message = { id: this.#nextId++, guid, method, params, metadata };
+    const text = await new Promise((resolve, reject) => {
+      const abandon = (reason) => reject(closedError(apiName, reason));
+      this.#inFlight.add(abandon);
+      call(JSON.stringify(message)).then(resolve, reject).finally(() => this.#inFlight.delete(abandon));
+    });
+    const reply = JSON.parse(text);
+    if (reply.error) {
+      const error = rebuildError(apiName, reply.error.error, reply.log);
+      const reason = isTargetClosedError(error) && !closedBefore ? this._closeReasonFor(guid) : undefined;
+      if (reason)
+        error.message = `${apiName}: ${reason}${formatCallLog(reply.log)}`;
+      throw error;
+    }
+    return reply.result;
+  }
+  _close(reason) {
+    this.#closed = true;
+    for (const abandon of this.#inFlight)
+      abandon(reason);
+    this.#inFlight.clear();
+  }
+}
+function closedError(apiName, reason) {
+  const error = targetClosedError(reason);
+  error.message = `${apiName}: ${error.message}`;
+  return error;
+}
+function captureLocation(lineOffset) {
+  const stackTraceLimit = Error.stackTraceLimit;
+  Error.stackTraceLimit = 50;
+  const stack = new Error().stack ?? "";
+  Error.stackTraceLimit = stackTraceLimit;
+  return agentLocation(stack, lineOffset);
+}
+function agentLocation(stack, lineOffset) {
+  for (const frame of stack.split(`
+`)) {
+    const match = AGENT_FRAME.exec(frame);
+    if (match)
+      return {
+        file: SCRIPT_FILE,
+        line: Number(match[1]) - lineOffset,
+        column: Number(match[2])
+      };
+  }
+  return { file: SCRIPT_FILE };
+}
+function rebuildError(apiName, error, log) {
+  const rebuilt = parseError(error);
+  rebuilt.log = log || [];
+  rebuilt.message = `${apiName}: ${rebuilt.message}${formatCallLog(log)}`;
+  return rebuilt;
+}
+function formatCallLog(log) {
+  if (!log?.some((line) => !!line))
+    return "";
+  return `
+Call log:
+${log.join(`
+`)}
+`;
+}
+
+// src/js-handle.ts
+class HandleRef {
+  guid;
+  constructor(guid) {
+    this.guid = guid;
+  }
+}
+
+class JSHandle {
+  _guid;
+  _connection;
+  _apiPrefix;
+  _preview;
+  constructor(connection, guid, initializer, apiPrefix = "jsHandle") {
+    this._connection = connection;
+    this._guid = guid;
+    this._apiPrefix = apiPrefix;
+    this._preview = initializer.preview;
+  }
+  async evaluate(pageFunction, arg, options) {
+    return await this._evaluate(`${this._apiPrefix}.evaluate`, pageFunction, arg, options);
+  }
+  async _evaluate(apiName, pageFunction, arg, options) {
+    assertEvaluateOptions(options);
+    const params = evaluateParams(apiName, pageFunction, arg, options);
+    const result = await this._connection.sendHandle(apiName, this._guid, "evaluateExpression", params, 0);
+    return parseResult(result.value);
+  }
+  async evaluateHandle(pageFunction, arg, options) {
+    return await this._evaluateHandle(`${this._apiPrefix}.evaluateHandle`, pageFunction, arg, options);
+  }
+  async _evaluateHandle(apiName, pageFunction, arg, options) {
+    assertEvaluateOptions(options);
+    const params = evaluateParams(apiName, pageFunction, arg, options);
+    const result = await this._connection.sendHandle(apiName, this._guid, "evaluateExpressionHandle", params, 0);
+    return handleFrom(this._connection, result.handle);
+  }
+  async jsonValue() {
+    const result = await this._connection.sendHandle(`${this._apiPrefix}.jsonValue`, this._guid, "jsonValue", {}, 0);
+    return parseResult(result.value);
+  }
+  asElement() {
+    return null;
+  }
+  async dispose() {
+    await this._dispose(`${this._apiPrefix}.dispose`);
+  }
+  async _dispose(apiName) {
+    try {
+      await this._connection.sendHandle(apiName, this._guid, "dispose", {}, 0);
+    } catch (e) {
+      if (isTargetClosedError(e))
+        return;
+      throw e;
+    }
+  }
+  toString() {
+    return this._preview;
+  }
+}
+var handleFactory = {};
+function handleFrom(connection, created) {
+  if (created.type === "ElementHandle" && handleFactory.element)
+    return handleFactory.element(connection, created.guid, created.initializer);
+  return new JSHandle(connection, created.guid, created.initializer);
+}
+function evaluateParams(apiName, pageFunction, arg, options) {
+  const signal = options?.signal;
+  if (signal !== undefined && signal !== null) {
+    throw new Error(`${apiName}: Neo does not support signal yet`);
+  }
+  if (options?.exposeFunctions) {
+    throw new Error(`${apiName}: Neo does not support exposeFunctions yet`);
+  }
+  const isFunction = typeof pageFunction === "function";
+  let expression;
+  try {
+    expression = normalizeEvaluationExpression(String(pageFunction), isFunction);
+  } catch (error) {
+    throw rebuildError(apiName, { name: "Error", message: error.message }, undefined);
+  }
+  return { expression, isFunction, arg: serializeArgument(arg) };
+}
+function serializeArgument(arg) {
+  const channels = [];
+  const protocolValue = serializeValue(arg, (value2) => {
+    if (value2 instanceof JSHandle)
+      return { h: channels.push(value2) - 1 };
+    return { fallThrough: value2 };
+  });
+  const live = parseSerializedValue(protocolValue, channels.map((handle) => new HandleRef(handle._guid)));
+  const handles = [];
+  const value = serializeAsCallArgument(live, (value2) => {
+    if (value2 instanceof HandleRef)
+      return { h: handles.push(value2.guid) - 1 };
+    return { fallThrough: value2 };
+  });
+  return { value, handles };
+}
+function parseResult(value) {
+  const live = parseEvaluationResultValue(value);
+  const wire = serializeValue(live, (value2) => ({ fallThrough: value2 }));
+  return parseSerializedValue(wire, undefined);
+}
+function assertMaxArguments(count, max) {
+  if (count > max)
+    throw new Error("Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.");
+}
+function assertEvaluateOptions(options) {
+  if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
+    throw new Error("Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.");
+}
+function normalizeEvaluationExpression(expression, isFunction) {
+  expression = expression.trim();
+  if (isFunction) {
+    try {
+      new Function(`(${expression})`);
+    } catch {
+      if (expression.startsWith("async "))
+        expression = `async function ${expression.substring("async ".length)}`;
+      else
+        expression = `function ${expression}`;
+      try {
+        new Function(`(${expression})`);
+      } catch {
+        throw new Error("Passed function is not well-serializable!");
+      }
+    }
+  }
+  if (/^(async)?\s*function(\s|\()/.test(expression))
+    expression = `(${expression})`;
+  return expression;
+}
+
+// src/element-handle.ts
+class ElementHandle extends JSHandle {
+  constructor(connection, guid, initializer) {
+    super(connection, guid, initializer, "elementHandle");
+  }
+  static fromNullable(connection, created) {
+    if (!created)
+      return null;
+    const handle = handleFrom(connection, created);
+    return handle instanceof ElementHandle ? handle : null;
+  }
+  asElement() {
+    return this;
+  }
+}
+handleFactory.element = (connection, guid, initializer) => new ElementHandle(connection, guid, initializer);
+
 // vendor/playwright/isomorphic/cssTokenizer.ts
 var between = function(num, first, last) {
   return num >= first && num <= last;
@@ -2386,11 +3181,11 @@ class JavaScriptLocatorFactory {
         return `filter({ visible: ${body === "true" ? "true" : "false"} })`;
       case "role":
         const attrs = [];
-        if (isRegExp(options.name))
+        if (isRegExp3(options.name))
           attrs.push(`name: ${this.regexToSourceString(options.name)}`);
         else if (typeof options.name === "string")
           attrs.push(`name: ${this.quote(options.name)}`);
-        if (isRegExp(options.description))
+        if (isRegExp3(options.description))
           attrs.push(`description: ${this.regexToSourceString(options.description)}`);
         else if (typeof options.description === "string")
           attrs.push(`description: ${this.quote(options.description)}`);
@@ -2437,17 +3232,17 @@ class JavaScriptLocatorFactory {
     return normalizeEscapedRegexQuotes(String(re));
   }
   toCallWithExact(method, body, exact) {
-    if (isRegExp(body))
+    if (isRegExp3(body))
       return `${method}(${this.regexToSourceString(body)})`;
     return exact ? `${method}(${this.quote(body)}, { exact: true })` : `${method}(${this.quote(body)})`;
   }
   toHasText(body) {
-    if (isRegExp(body))
+    if (isRegExp3(body))
       return this.regexToSourceString(body);
     return this.quote(body);
   }
   toTestIdValue(value) {
-    if (isRegExp(value))
+    if (isRegExp3(value))
       return this.regexToSourceString(value);
     return this.quote(value);
   }
@@ -2483,11 +3278,11 @@ class PythonLocatorFactory {
         return `filter(visible=${body === "true" ? "True" : "False"})`;
       case "role":
         const attrs = [];
-        if (isRegExp(options.name))
+        if (isRegExp3(options.name))
           attrs.push(`name=${this.regexToString(options.name)}`);
         else if (typeof options.name === "string")
           attrs.push(`name=${this.quote(options.name)}`);
-        if (isRegExp(options.description))
+        if (isRegExp3(options.description))
           attrs.push(`description=${this.regexToString(options.description)}`);
         else if (typeof options.description === "string")
           attrs.push(`description=${this.quote(options.description)}`);
@@ -2539,19 +3334,19 @@ class PythonLocatorFactory {
     return `re.compile(r"${normalizeEscapedRegexQuotes(body.source).replace(/\\\//, "/").replace(/"/g, "\\\"")}"${suffix})`;
   }
   toCallWithExact(method, body, exact) {
-    if (isRegExp(body))
+    if (isRegExp3(body))
       return `${method}(${this.regexToString(body)})`;
     if (exact)
       return `${method}(${this.quote(body)}, exact=True)`;
     return `${method}(${this.quote(body)})`;
   }
   toHasText(body) {
-    if (isRegExp(body))
+    if (isRegExp3(body))
       return this.regexToString(body);
     return `${this.quote(body)}`;
   }
   toTestIdValue(value) {
-    if (isRegExp(value))
+    if (isRegExp3(value))
       return this.regexToString(value);
     return this.quote(value);
   }
@@ -2599,11 +3394,11 @@ class JavaLocatorFactory {
         return `filter(new ${clazz}.FilterOptions().setVisible(${body === "true" ? "true" : "false"}))`;
       case "role":
         const attrs = [];
-        if (isRegExp(options.name))
+        if (isRegExp3(options.name))
           attrs.push(`.setName(${this.regexToString(options.name)})`);
         else if (typeof options.name === "string")
           attrs.push(`.setName(${this.quote(options.name)})`);
-        if (isRegExp(options.description))
+        if (isRegExp3(options.description))
           attrs.push(`.setDescription(${this.regexToString(options.description)})`);
         else if (typeof options.description === "string")
           attrs.push(`.setDescription(${this.quote(options.description)})`);
@@ -2651,19 +3446,19 @@ class JavaLocatorFactory {
     return `Pattern.compile(${this.quote(normalizeEscapedRegexQuotes(body.source))}${suffix})`;
   }
   toCallWithExact(clazz, method, body, exact) {
-    if (isRegExp(body))
+    if (isRegExp3(body))
       return `${method}(${this.regexToString(body)})`;
     if (exact)
       return `${method}(${this.quote(body)}, new ${clazz}.${toTitleCase(method)}Options().setExact(true))`;
     return `${method}(${this.quote(body)})`;
   }
   toHasText(body) {
-    if (isRegExp(body))
+    if (isRegExp3(body))
       return this.regexToString(body);
     return this.quote(body);
   }
   toTestIdValue(value) {
-    if (isRegExp(value))
+    if (isRegExp3(value))
       return this.regexToString(value);
     return this.quote(value);
   }
@@ -2699,11 +3494,11 @@ class CSharpLocatorFactory {
         return `Filter(new() { Visible = ${body === "true" ? "true" : "false"} })`;
       case "role":
         const attrs = [];
-        if (isRegExp(options.name))
+        if (isRegExp3(options.name))
           attrs.push(`NameRegex = ${this.regexToString(options.name)}`);
         else if (typeof options.name === "string")
           attrs.push(`Name = ${this.quote(options.name)}`);
-        if (isRegExp(options.description))
+        if (isRegExp3(options.description))
           attrs.push(`DescriptionRegex = ${this.regexToString(options.description)}`);
         else if (typeof options.description === "string")
           attrs.push(`Description = ${this.quote(options.description)}`);
@@ -2751,24 +3546,24 @@ class CSharpLocatorFactory {
     return `new Regex(${this.quote(normalizeEscapedRegexQuotes(body.source))}${suffix})`;
   }
   toCallWithExact(method, body, exact) {
-    if (isRegExp(body))
+    if (isRegExp3(body))
       return `${method}(${this.regexToString(body)})`;
     if (exact)
       return `${method}(${this.quote(body)}, new() { Exact = true })`;
     return `${method}(${this.quote(body)})`;
   }
   toHasText(body) {
-    if (isRegExp(body))
+    if (isRegExp3(body))
       return `HasTextRegex = ${this.regexToString(body)}`;
     return `HasText = ${this.quote(body)}`;
   }
   toTestIdValue(value) {
-    if (isRegExp(value))
+    if (isRegExp3(value))
       return this.regexToString(value);
     return this.quote(value);
   }
   toHasNotText(body) {
-    if (isRegExp(body))
+    if (isRegExp3(body))
       return `HasNotTextRegex = ${this.regexToString(body)}`;
     return `HasNotText = ${this.quote(body)}`;
   }
@@ -2812,7 +3607,7 @@ function regexFlagsSuffix(body, flagsEnum, names) {
   const flags = [...body.flags].filter((flag) => (flag in names)).map((flag) => `${flagsEnum}.${names[flag]}`);
   return flags.length ? `, ${flags.join(" | ")}` : "";
 }
-function isRegExp(obj) {
+function isRegExp3(obj) {
   return obj instanceof RegExp;
 }
 
@@ -2974,6 +3769,9 @@ class Locator {
   }
   async selectOption(values, options = {}) {
     return await this._frame._selectOption("locator.selectOption", this._selector, values, { strict: true, ...options });
+  }
+  async evaluate(pageFunction, arg, options) {
+    return await this._frame._withElement("locator.evaluate", this._selector, (handle) => handle._evaluate("locator.evaluate", pageFunction, arg, options), { timeout: options?.timeout, signal: options?.signal });
   }
   async waitFor(options) {
     await this._frame._waitForSelector("locator.waitFor", this._selector, {
@@ -3151,13 +3949,13 @@ function serializeUrlMatch(apiName, url) {
     return { glob: "" };
   if (isString(url))
     return url.length === 0 ? { regexSource: "^$", regexFlags: "" } : { glob: url };
-  if (isRegExp2(url))
+  if (isRegExp4(url))
     return { regexSource: url.source, regexFlags: url.flags };
   if (typeof url === "function")
     throw new Error(`${apiName}: Neo does not support a predicate function as url yet; pass a glob string or a RegExp`);
   throw new Error("url parameter should be string, RegExp, URLPattern or function");
 }
-function isRegExp2(value) {
+function isRegExp4(value) {
   return value instanceof RegExp || Object.prototype.toString.call(value) === "[object RegExp]";
 }
 
@@ -3242,7 +4040,7 @@ class Request {
   }
   postDataBuffer() {
     const data = this.#initializer.postData;
-    return data ? Buffer.fromBinary(data) : null;
+    return data ? Buffer3.fromBinary(data) : null;
   }
   postDataJSON() {
     const postData = this.postData();
@@ -3408,7 +4206,7 @@ class Response {
   }
   async#body(apiName) {
     const { binary } = await this.#connection.sendResponse(apiName, this._guid, "body", {}, 0);
-    return Buffer.fromBinary(binary);
+    return Buffer3.fromBinary(binary);
   }
   #actualHeaders(apiName) {
     this.#actualHeadersPromise ??= this.#connection.sendResponse(apiName, this._guid, "rawResponseHeaders", {}, 0).then(({ headers }) => new RawHeaders(headers));
@@ -3452,10 +4250,10 @@ function parseFormBody(body) {
 var BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 var BASE64_INDEX = new Map([...BASE64].map((char, index) => [char, index]));
 
-class Buffer extends Uint8Array {
+class Buffer3 extends Uint8Array {
   static fromBinary(text) {
     const clean = text.replace(/=+$/, "");
-    const bytes = new Buffer(Math.floor(clean.length * 3 / 4));
+    const bytes = new Buffer3(Math.floor(clean.length * 3 / 4));
     let bits = 0;
     let value = 0;
     let at = 0;
@@ -3766,10 +4564,195 @@ function convertSelectOptionValues(values) {
   return { options };
 }
 
+// src/waiter.ts
+function refuseSignal(options) {
+  if (options.signal !== undefined && options.signal !== null)
+    throw new Error('Neo does not support the "signal" option yet');
+}
+async function wrapApiCall(apiName, body) {
+  try {
+    return await body();
+  } catch (e) {
+    if (e instanceof Error)
+      e.message = `${apiName}: ${e.message}`;
+    throw e;
+  }
+}
+
+class Waiter {
+  _dispose = [];
+  _failures = [];
+  _immediateError;
+  _logs = [];
+  static createForEvent() {
+    return new Waiter;
+  }
+  async waitForEvent(emitter, event, predicate) {
+    const { promise, dispose } = waitForEvent(emitter, event, predicate);
+    return await this.waitForPromise(promise, dispose);
+  }
+  rejectOnEvent(emitter, event, error, predicate) {
+    const { promise, dispose } = waitForEvent(emitter, event, predicate);
+    this._rejectOn(promise.then(() => {
+      throw typeof error === "function" ? error() : error;
+    }), dispose);
+  }
+  rejectOnTimeout(timeout, timeoutMessage) {
+    if (timeout) {
+      const { promise, dispose } = waitForTimeout(timeout);
+      this._rejectOn(promise.then(() => {
+        throw new TimeoutError(timeoutMessage);
+      }), dispose);
+    }
+  }
+  rejectImmediately(error) {
+    this._immediateError = error;
+  }
+  throwIfImmediatelyRejected() {
+    if (this._immediateError)
+      throw this._immediateError;
+  }
+  dispose() {
+    for (const dispose of this._dispose)
+      dispose();
+  }
+  async waitForPromise(promise, dispose) {
+    try {
+      if (this._immediateError)
+        throw this._immediateError;
+      const result = await Promise.race([promise, ...this._failures]);
+      if (dispose)
+        dispose();
+      return result;
+    } catch (e) {
+      if (dispose)
+        dispose();
+      this.dispose();
+      if (e instanceof Error)
+        rewriteErrorMessage(e, e.message + formatLogRecording(this._logs));
+      throw e;
+    }
+  }
+  log(s) {
+    this._logs.push(s);
+  }
+  _rejectOn(promise, dispose) {
+    this._failures.push(promise);
+    if (dispose)
+      this._dispose.push(dispose);
+  }
+}
+function waitForEvent(emitter, event, predicate) {
+  let listener = () => {};
+  const promise = new Promise((resolve, reject) => {
+    listener = async (eventArg) => {
+      try {
+        if (predicate && !await predicate(eventArg))
+          return;
+        emitter.removeListener(event, listener);
+        resolve(eventArg);
+      } catch (e) {
+        emitter.removeListener(event, listener);
+        reject(e);
+      }
+    };
+    emitter.addListener(event, listener);
+  });
+  const dispose = () => emitter.removeListener(event, listener);
+  return { promise, dispose };
+}
+function waitForTimeout(timeout) {
+  let timeoutId;
+  const promise = new Promise((resolve) => {
+    timeoutId = setTimeout(resolve, timeout);
+  });
+  const dispose = () => clearTimeout(timeoutId);
+  return { promise, dispose };
+}
+function formatLogRecording(log) {
+  if (!log.length)
+    return "";
+  const header = " logs ";
+  const headerLength = 60;
+  const leftLength = (headerLength - header.length) / 2;
+  const rightLength = headerLength - header.length - leftLength;
+  return `
+${"=".repeat(leftLength)}${header}${"=".repeat(rightLength)}
+${log.join(`
+`)}
+${"=".repeat(headerLength)}`;
+}
+function rewriteErrorMessage(e, newMessage) {
+  const lines = (e.stack?.split(`
+`) || []).filter((l) => l.startsWith("    at "));
+  e.message = newMessage;
+  const errorTitle = `${e.name}: ${e.message}`;
+  if (lines.length)
+    e.stack = `${errorTitle}
+${lines.join(`
+`)}`;
+  return e;
+}
+
+// src/timeout-settings.ts
+var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
+function refuseSignalFor(options, apiName) {
+  try {
+    refuseSignal(options);
+  } catch (error) {
+    if (apiName !== null && error instanceof Error)
+      error.message = `${apiName}: ${error.message}`;
+    throw error;
+  }
+}
+
+class TimeoutSettings {
+  #parent;
+  #defaultTimeout;
+  #defaultNavigationTimeout;
+  constructor(parent) {
+    this.#parent = parent;
+  }
+  setDefaultTimeout(timeout) {
+    this.#defaultTimeout = timeout;
+  }
+  setDefaultNavigationTimeout(timeout) {
+    this.#defaultNavigationTimeout = timeout;
+  }
+  timeout(options, apiName) {
+    refuseSignalFor(options, apiName);
+    return this.#timeout(options);
+  }
+  navigationTimeout(options, apiName) {
+    refuseSignalFor(options, apiName);
+    return this.#navigationTimeout(options);
+  }
+  #timeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#timeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+  #navigationTimeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultNavigationTimeout !== undefined)
+      return this.#defaultNavigationTimeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#navigationTimeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+}
+
 // src/url.ts
 var READ_ONLY = "Neo's URL is read-only: build a new URL string instead";
 
-class URL {
+class URL2 {
   #parts;
   #searchParams;
   constructor(parts) {
@@ -3904,7 +4887,7 @@ class URLSearchParams {
 }
 function urlFor(url) {
   const parts = parseURL(url);
-  return parts ? new URL(parts) : null;
+  return parts ? new URL2(parts) : null;
 }
 function formEncode(text) {
   return encodeURIComponent(text).replace(/%20/g, "+").replace(/[!'()~]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
@@ -4001,7 +4984,7 @@ class Frame {
       url,
       ...options,
       waitUntil
-    }), this._page._timeoutSettings.navigationTimeout(options));
+    }), this._page._timeoutSettings.navigationTimeout(options, apiName));
     const guid = result?.response?.guid;
     return guid ? responseFor(this._connection, guid, this) : null;
   }
@@ -4015,19 +4998,19 @@ class Frame {
       if (current && url(current))
         return await this._waitForLoadState(apiName, waitOptions.waitUntil, waitOptions);
       const waitUntil2 = verifyWaitState(apiName, "waitUntil", waitOptions.waitUntil === undefined ? "load" : waitOptions.waitUntil);
-      await this._navigationMatching(apiName, url, waitUntil2, this._page._timeoutSettings.navigationTimeout(waitOptions), false);
+      await this._navigationMatching(apiName, url, waitUntil2, this._page._timeoutSettings.navigationTimeout(waitOptions, apiName), false);
       return;
     }
     const serialized = serializeUrlMatch(apiName, url);
     const waitUntil = verifyWaitState(apiName, "waitUntil", waitOptions.waitUntil === undefined ? "load" : waitOptions.waitUntil);
-    await this._connection.sendNeo(apiName, this._guid, "neo:waitForURL", { url: serialized, waitUntil }, this._page._timeoutSettings.navigationTimeout(waitOptions));
+    await this._connection.sendNeo(apiName, this._guid, "neo:waitForURL", { url: serialized, waitUntil }, this._page._timeoutSettings.navigationTimeout(waitOptions, apiName));
   }
   async waitForNavigation(options = {}) {
     return await this._waitForNavigation("frame.waitForNavigation", options);
   }
   async _waitForNavigation(apiName, options) {
     const waitUntil = verifyWaitState(apiName, "waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
-    const timeout = this._page._timeoutSettings.navigationTimeout(options);
+    const timeout = this._page._timeoutSettings.navigationTimeout(options, apiName);
     const result = typeof options.url === "function" ? await this._navigationMatching(apiName, options.url, waitUntil, timeout, true) : await this._connection.sendNeo(apiName, this._guid, "neo:waitForNavigation", { url: serializeUrlMatch(apiName, options.url), waitUntil }, timeout);
     const guid = result?.response?.guid;
     return guid ? responseFor(this._connection, guid, this) : null;
@@ -4125,13 +5108,46 @@ class Frame {
   }
   async _waitForLoadState(apiName, state, options) {
     const verified = verifyWaitState(apiName, "state", state === undefined ? "load" : state);
-    await this._connection.sendNeo(apiName, this._guid, "neo:waitForLoadState", { state: verified }, this._page._timeoutSettings.navigationTimeout(options ?? {}));
+    await this._connection.sendNeo(apiName, this._guid, "neo:waitForLoadState", { state: verified }, this._page._timeoutSettings.navigationTimeout(options ?? {}, apiName));
   }
   async _waitForSelector(apiName, selector, options) {
     await this._connection.send(apiName, this._guid, "waitForSelector", pickParams(FRAME_WAIT_FOR_SELECTOR_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options));
+    }), this._page._timeoutSettings.timeout(options, apiName));
+  }
+  async evaluate(pageFunction, arg, options) {
+    assertMaxArguments(arguments.length, 3);
+    return await this._evaluate("frame.evaluate", pageFunction, arg, options);
+  }
+  async _evaluate(apiName, pageFunction, arg, options) {
+    assertEvaluateOptions(options);
+    const params = evaluateParams(apiName, pageFunction, arg, options);
+    const result = await this._connection.sendEval(apiName, this._guid, "evaluateExpression", params, 0);
+    return parseResult(result?.value);
+  }
+  async evaluateHandle(pageFunction, arg, options) {
+    assertMaxArguments(arguments.length, 3);
+    return await this._evaluateHandle("frame.evaluateHandle", pageFunction, arg, options);
+  }
+  async _evaluateHandle(apiName, pageFunction, arg, options) {
+    assertEvaluateOptions(options);
+    const params = evaluateParams(apiName, pageFunction, arg, options);
+    const result = await this._connection.sendEval(apiName, this._guid, "evaluateExpressionHandle", params, 0);
+    return handleFrom(this._connection, result.handle);
+  }
+  async _withElement(apiName, selector, task, options) {
+    if (options.signal !== undefined && options.signal !== null)
+      throw new Error(`${apiName}: Neo does not support signal yet`);
+    const result = await this._connection.send(apiName, this._guid, "waitForSelector", { selector, strict: true, state: "attached" }, this._page._timeoutSettings.timeout(options, apiName));
+    const handle = ElementHandle.fromNullable(this._connection, result?.element);
+    if (!handle)
+      throw new Error(`Could not resolve ${selector} to DOM Element`);
+    try {
+      return await task(handle);
+    } finally {
+      await handle._dispose(apiName);
+    }
   }
   async title() {
     return await this._title("frame.title");
@@ -4147,7 +5163,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "textContent", pickParams(FRAME_TEXT_CONTENT_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     return result.value === undefined ? null : result.value;
   }
   async innerText(selector, options = {}) {
@@ -4157,7 +5173,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "innerText", pickParams(FRAME_INNER_TEXT_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     return result.value;
   }
   async innerHTML(selector, options = {}) {
@@ -4167,7 +5183,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "innerHTML", pickParams(FRAME_INNER_HTML_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     return result.value;
   }
   async getAttribute(selector, name, options = {}) {
@@ -4178,7 +5194,7 @@ class Frame {
       selector,
       name,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     return result.value === undefined ? null : result.value;
   }
   async _queryCount(apiName, selector) {
@@ -4218,7 +5234,7 @@ class Frame {
       selector,
       depth: options.depth,
       boxes: options.boxes
-    }), this._page._timeoutSettings.timeout(options));
+    }), this._page._timeoutSettings.timeout(options, apiName));
     return result.snapshot;
   }
   async click(selector, options = {}) {
@@ -4228,7 +5244,7 @@ class Frame {
     await this._connection.send(apiName, this._guid, "click", pickParams(FRAME_CLICK_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async dblclick(selector, options = {}) {
     return await this._dblclick("frame.dblclick", selector, options);
@@ -4237,7 +5253,7 @@ class Frame {
     await this._connection.send(apiName, this._guid, "dblclick", pickParams(FRAME_DBLCLICK_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async hover(selector, options = {}) {
     return await this._hover("frame.hover", selector, options);
@@ -4246,7 +5262,7 @@ class Frame {
     await this._connection.send(apiName, this._guid, "hover", pickParams(FRAME_HOVER_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async tap(selector, options = {}) {
     return await this._tap("frame.tap", selector, options);
@@ -4255,7 +5271,7 @@ class Frame {
     await this._connection.send(apiName, this._guid, "tap", pickParams(FRAME_TAP_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async fill(selector, value, options = {}) {
     return await this._fill("frame.fill", selector, value, options);
@@ -4265,7 +5281,7 @@ class Frame {
       selector,
       value,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async press(selector, key, options = {}) {
     return await this._press("frame.press", selector, key, options);
@@ -4275,7 +5291,7 @@ class Frame {
       selector,
       key,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async inputValue(selector, options = {}) {
     return await this._inputValue("frame.inputValue", selector, options);
@@ -4284,7 +5300,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "inputValue", pickParams(FRAME_INPUT_VALUE_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     if (result === undefined)
       throw new Error("neo-sdk: Frame.inputValue contract error: missing result");
     return result.value;
@@ -4293,6 +5309,7 @@ class Frame {
     return await this._isVisible("frame.isVisible", selector, options);
   }
   async _isVisible(apiName, selector, options) {
+    refuseSignalFor(options ?? {}, apiName);
     const result = await this._connection.send(apiName, this._guid, "isVisible", pickParams(FRAME_IS_VISIBLE_KEYS, {
       selector,
       ...options
@@ -4305,6 +5322,7 @@ class Frame {
     return await this._isHidden("frame.isHidden", selector, options);
   }
   async _isHidden(apiName, selector, options) {
+    refuseSignalFor(options ?? {}, apiName);
     const result = await this._connection.send(apiName, this._guid, "isHidden", pickParams(FRAME_IS_HIDDEN_KEYS, {
       selector,
       ...options
@@ -4320,7 +5338,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "isChecked", pickParams(FRAME_IS_CHECKED_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     if (result === undefined)
       throw new Error("neo-sdk: Frame.isChecked contract error: missing result");
     return result.value;
@@ -4332,7 +5350,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "isEnabled", pickParams(FRAME_IS_ENABLED_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     if (result === undefined)
       throw new Error("neo-sdk: Frame.isEnabled contract error: missing result");
     return result.value;
@@ -4344,7 +5362,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "isDisabled", pickParams(FRAME_IS_DISABLED_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     if (result === undefined)
       throw new Error("neo-sdk: Frame.isDisabled contract error: missing result");
     return result.value;
@@ -4356,7 +5374,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "isEditable", pickParams(FRAME_IS_EDITABLE_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     if (result === undefined)
       throw new Error("neo-sdk: Frame.isEditable contract error: missing result");
     return result.value;
@@ -4368,7 +5386,7 @@ class Frame {
     await this._connection.send(apiName, this._guid, "check", pickParams(FRAME_CHECK_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async uncheck(selector, options = {}) {
     return await this._uncheck("frame.uncheck", selector, options);
@@ -4377,7 +5395,7 @@ class Frame {
     await this._connection.send(apiName, this._guid, "uncheck", pickParams(FRAME_UNCHECK_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async selectOption(selector, values, options = {}) {
     return await this._selectOption("frame.selectOption", selector, values, options);
@@ -4387,7 +5405,7 @@ class Frame {
       selector,
       ...convertSelectOptionValues(values),
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     if (result === undefined)
       throw new Error("neo-sdk: Frame.selectOption contract error: missing result");
     return result.values;
@@ -4439,174 +5457,6 @@ function prefixed(apiName, error) {
 }
 function isPromiseLike(value) {
   return (typeof value === "object" || typeof value === "function") && value !== null && typeof value.then === "function";
-}
-
-// src/timeout-settings.ts
-var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
-
-class TimeoutSettings {
-  #parent;
-  #defaultTimeout;
-  #defaultNavigationTimeout;
-  constructor(parent) {
-    this.#parent = parent;
-  }
-  setDefaultTimeout(timeout) {
-    this.#defaultTimeout = timeout;
-  }
-  setDefaultNavigationTimeout(timeout) {
-    this.#defaultNavigationTimeout = timeout;
-  }
-  timeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.timeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
-  }
-  navigationTimeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultNavigationTimeout !== undefined)
-      return this.#defaultNavigationTimeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.navigationTimeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
-  }
-}
-
-// src/waiter.ts
-function refuseSignal(options) {
-  if (options.signal != null)
-    throw new Error('Neo does not support the "signal" option yet');
-}
-async function wrapApiCall(apiName, body) {
-  try {
-    return await body();
-  } catch (e) {
-    if (e instanceof Error)
-      e.message = `${apiName}: ${e.message}`;
-    throw e;
-  }
-}
-
-class Waiter {
-  _dispose = [];
-  _failures = [];
-  _immediateError;
-  _logs = [];
-  static createForEvent() {
-    return new Waiter;
-  }
-  async waitForEvent(emitter, event, predicate) {
-    const { promise, dispose } = waitForEvent(emitter, event, predicate);
-    return await this.waitForPromise(promise, dispose);
-  }
-  rejectOnEvent(emitter, event, error, predicate) {
-    const { promise, dispose } = waitForEvent(emitter, event, predicate);
-    this._rejectOn(promise.then(() => {
-      throw typeof error === "function" ? error() : error;
-    }), dispose);
-  }
-  rejectOnTimeout(timeout, timeoutMessage) {
-    if (timeout) {
-      const { promise, dispose } = waitForTimeout(timeout);
-      this._rejectOn(promise.then(() => {
-        throw new TimeoutError(timeoutMessage);
-      }), dispose);
-    }
-  }
-  rejectImmediately(error) {
-    this._immediateError = error;
-  }
-  throwIfImmediatelyRejected() {
-    if (this._immediateError)
-      throw this._immediateError;
-  }
-  dispose() {
-    for (const dispose of this._dispose)
-      dispose();
-  }
-  async waitForPromise(promise, dispose) {
-    try {
-      if (this._immediateError)
-        throw this._immediateError;
-      const result = await Promise.race([promise, ...this._failures]);
-      if (dispose)
-        dispose();
-      return result;
-    } catch (e) {
-      if (dispose)
-        dispose();
-      this.dispose();
-      if (e instanceof Error)
-        rewriteErrorMessage(e, e.message + formatLogRecording(this._logs));
-      throw e;
-    }
-  }
-  log(s) {
-    this._logs.push(s);
-  }
-  _rejectOn(promise, dispose) {
-    this._failures.push(promise);
-    if (dispose)
-      this._dispose.push(dispose);
-  }
-}
-function waitForEvent(emitter, event, predicate) {
-  let listener = () => {};
-  const promise = new Promise((resolve, reject) => {
-    listener = async (eventArg) => {
-      try {
-        if (predicate && !await predicate(eventArg))
-          return;
-        emitter.removeListener(event, listener);
-        resolve(eventArg);
-      } catch (e) {
-        emitter.removeListener(event, listener);
-        reject(e);
-      }
-    };
-    emitter.addListener(event, listener);
-  });
-  const dispose = () => emitter.removeListener(event, listener);
-  return { promise, dispose };
-}
-function waitForTimeout(timeout) {
-  let timeoutId;
-  const promise = new Promise((resolve) => {
-    timeoutId = setTimeout(resolve, timeout);
-  });
-  const dispose = () => clearTimeout(timeoutId);
-  return { promise, dispose };
-}
-function formatLogRecording(log) {
-  if (!log.length)
-    return "";
-  const header = " logs ";
-  const headerLength = 60;
-  const leftLength = (headerLength - header.length) / 2;
-  const rightLength = headerLength - header.length - leftLength;
-  return `
-${"=".repeat(leftLength)}${header}${"=".repeat(rightLength)}
-${log.join(`
-`)}
-${"=".repeat(headerLength)}`;
-}
-function rewriteErrorMessage(e, newMessage) {
-  const lines = (e.stack?.split(`
-`) || []).filter((l) => l.startsWith("    at "));
-  e.message = newMessage;
-  const errorTitle = `${e.name}: ${e.message}`;
-  if (lines.length)
-    e.stack = `${errorTitle}
-${lines.join(`
-`)}`;
-  return e;
 }
 
 // src/page.ts
@@ -4756,9 +5606,8 @@ class Page extends ChannelOwner {
   }
   async _waitForEvent(event, optionsOrPredicate, logLine) {
     const options = typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate;
-    refuseSignal(options);
+    const timeout = this._timeoutSettings.timeout(options, null);
     this._refuseUnserved(event);
-    const timeout = this._timeoutSettings.timeout(options);
     const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : optionsOrPredicate.predicate;
     const waiter = Waiter.createForEvent();
     if (logLine)
@@ -4828,6 +5677,14 @@ class Page extends ChannelOwner {
   async goto(url, options = {}) {
     return await this.#mainFrame._goto("page.goto", url, options);
   }
+  async evaluate(pageFunction, arg, options) {
+    assertMaxArguments(arguments.length, 3);
+    return await this.mainFrame()._evaluate("page.evaluate", pageFunction, arg, options);
+  }
+  async evaluateHandle(pageFunction, arg, options) {
+    assertMaxArguments(arguments.length, 3);
+    return await this.mainFrame()._evaluateHandle("page.evaluateHandle", pageFunction, arg, options);
+  }
   async title() {
     return await this.#mainFrame._title("page.title");
   }
@@ -4836,7 +5693,7 @@ class Page extends ChannelOwner {
     const result = await this.#connection.sendPage("page.reload", this.#guid, "reload", pickParams(PAGE_RELOAD_KEYS, {
       ...options,
       waitUntil
-    }), this._timeoutSettings.navigationTimeout(options));
+    }), this._timeoutSettings.navigationTimeout(options, "page.reload"));
     return this.#response(result?.response);
   }
   async goBack(options = {}) {
@@ -4844,7 +5701,7 @@ class Page extends ChannelOwner {
     const result = await this.#connection.sendPage("page.goBack", this.#guid, "goBack", pickParams(PAGE_GO_BACK_KEYS, {
       ...options,
       waitUntil
-    }), this._timeoutSettings.navigationTimeout(options));
+    }), this._timeoutSettings.navigationTimeout(options, "page.goBack"));
     return this.#response(result?.response);
   }
   async goForward(options = {}) {
@@ -4852,7 +5709,7 @@ class Page extends ChannelOwner {
     const result = await this.#connection.sendPage("page.goForward", this.#guid, "goForward", pickParams(PAGE_GO_FORWARD_KEYS, {
       ...options,
       waitUntil
-    }), this._timeoutSettings.navigationTimeout(options));
+    }), this._timeoutSettings.navigationTimeout(options, "page.goForward"));
     return this.#response(result?.response);
   }
   #response(response) {
@@ -5120,9 +5977,8 @@ class BrowserContext extends ChannelOwner {
   async waitForEvent(event, optionsOrPredicate = {}) {
     return await wrapApiCall("browserContext.waitForEvent", async () => {
       const options = typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate;
-      refuseSignal(options);
+      const timeout = this._timeoutSettings.timeout(options, null);
       this._refuseUnserved(event);
-      const timeout = this._timeoutSettings.timeout(options);
       const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : optionsOrPredicate.predicate;
       const waiter = Waiter.createForEvent();
       waiter.rejectOnTimeout(timeout, `Timeout ${timeout}ms exceeded while waiting for event "${event}"`);
@@ -5171,118 +6027,6 @@ class BrowserContext extends ChannelOwner {
 function pageGuidOf(guid) {
   const target = guid.slice(guid.indexOf("@") + 1).split(/[/:]/)[0];
   return `page@${target}`;
-}
-
-// src/connection.ts
-var SCRIPT_FILE = "run.js";
-var AGENT_FRAME = /^ {4}at .* \(<input>:(\d+):(\d+)\)$/;
-
-class Connection {
-  #nextId = 1;
-  #lineOffset;
-  #closed = false;
-  #inFlight = new Set;
-  _closeReasonFor = () => {
-    return;
-  };
-  _closedFor = () => false;
-  _objects = new Map;
-  constructor(lineOffset) {
-    this.#lineOffset = lineOffset;
-  }
-  async send(apiName, guid, method, params, timeout) {
-    return await this.#send(apiName, guid, method, params, timeout);
-  }
-  async sendPage(apiName, guid, method, params, timeout) {
-    return await this.#send(apiName, guid, method, params, timeout);
-  }
-  async sendContext(apiName, guid, method, params, timeout) {
-    return await this.#send(apiName, guid, method, params, timeout);
-  }
-  async sendRequest(apiName, guid, method, params, timeout) {
-    return await this.#send(apiName, guid, method, params, timeout);
-  }
-  async sendResponse(apiName, guid, method, params, timeout) {
-    return await this.#send(apiName, guid, method, params, timeout);
-  }
-  async sendDialog(apiName, guid, method, params, timeout) {
-    return await this.#send(apiName, guid, method, params, timeout);
-  }
-  async sendNeo(apiName, guid, method, params, timeout) {
-    return await this.#send(apiName, guid, method, params, timeout);
-  }
-  async#send(apiName, guid, method, params, timeout) {
-    if (typeof timeout !== "number")
-      throw new Error(`timeout: expected float, got ${timeout === null ? "object" : typeof timeout}`);
-    const metadata = {
-      location: captureLocation(this.#lineOffset),
-      timeout
-    };
-    if (this.#closed)
-      throw closedError(apiName);
-    const closedBefore = this._closedFor(guid);
-    const message = { id: this.#nextId++, guid, method, params, metadata };
-    const text = await new Promise((resolve, reject) => {
-      const abandon = (reason) => reject(closedError(apiName, reason));
-      this.#inFlight.add(abandon);
-      call(JSON.stringify(message)).then(resolve, reject).finally(() => this.#inFlight.delete(abandon));
-    });
-    const reply = JSON.parse(text);
-    if (reply.error) {
-      const error = rebuildError(apiName, reply.error.error, reply.log);
-      const reason = isTargetClosedError(error) && !closedBefore ? this._closeReasonFor(guid) : undefined;
-      if (reason)
-        error.message = `${apiName}: ${reason}${formatCallLog(reply.log)}`;
-      throw error;
-    }
-    return reply.result;
-  }
-  _close(reason) {
-    this.#closed = true;
-    for (const abandon of this.#inFlight)
-      abandon(reason);
-    this.#inFlight.clear();
-  }
-}
-function closedError(apiName, reason) {
-  const error = targetClosedError(reason);
-  error.message = `${apiName}: ${error.message}`;
-  return error;
-}
-function captureLocation(lineOffset) {
-  const stackTraceLimit = Error.stackTraceLimit;
-  Error.stackTraceLimit = 50;
-  const stack = new Error().stack ?? "";
-  Error.stackTraceLimit = stackTraceLimit;
-  return agentLocation(stack, lineOffset);
-}
-function agentLocation(stack, lineOffset) {
-  for (const frame of stack.split(`
-`)) {
-    const match = AGENT_FRAME.exec(frame);
-    if (match)
-      return {
-        file: SCRIPT_FILE,
-        line: Number(match[1]) - lineOffset,
-        column: Number(match[2])
-      };
-  }
-  return { file: SCRIPT_FILE };
-}
-function rebuildError(apiName, error, log) {
-  const rebuilt = parseError(error);
-  rebuilt.log = log || [];
-  rebuilt.message = `${apiName}: ${rebuilt.message}${formatCallLog(log)}`;
-  return rebuilt;
-}
-function formatCallLog(log) {
-  if (!log?.some((line) => !!line))
-    return "";
-  return `
-Call log:
-${log.join(`
-`)}
-`;
 }
 
 // src/index.ts

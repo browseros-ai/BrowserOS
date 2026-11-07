@@ -32,12 +32,7 @@ import { Page } from './page'
 import { BROWSER_CONTEXT_CLOSE_KEYS, pickParams } from './protocol'
 import { type CreatedPage, get } from './runtime-bridge'
 import { TimeoutSettings } from './timeout-settings'
-import {
-  refuseSignal,
-  Waiter,
-  type WaitForEventOptions,
-  wrapApiCall,
-} from './waiter'
+import { Waiter, type WaitForEventOptions, wrapApiCall } from './waiter'
 import { WebError, type WebErrorLocation } from './web-error'
 
 /**
@@ -235,9 +230,10 @@ export class BrowserContext extends ChannelOwner {
     return await wrapApiCall('browserContext.waitForEvent', async () => {
       const options =
         typeof optionsOrPredicate === 'function' ? {} : optionsOrPredicate
-      refuseSignal(options)
+      // Refuses a signal first (TimeoutSettings), inside `wrapApiCall`, which prefixes the
+      // api name.
+      const timeout = this._timeoutSettings.timeout(options, null)
       this._refuseUnserved(event)
-      const timeout = this._timeoutSettings.timeout(options)
       const predicate =
         typeof optionsOrPredicate === 'function'
           ? optionsOrPredicate

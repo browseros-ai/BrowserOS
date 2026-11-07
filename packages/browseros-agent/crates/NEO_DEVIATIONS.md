@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (38)
+## Deviations (44)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -21,6 +21,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/console.rs | `split_error_message` | `utils/stackTrace.ts` `splitErrorMessage` | Playwright cuts a character outside the BMP in half and keeps its low surrogate, which a Rust string cannot hold; Neo writes U+FFFD there, one UTF-16 unit as in JS. |
 | neo-runtime/src/dialogs.rs | `Dialogs::left_open` | `server/dialog.ts` `DialogManager.dialogDidOpen` | Playwright answers a dialog only when nobody listens, and leaves a listener's unanswered dialog open for the page's life. Neo's tab outlives the run and must not stay frozen for its user, so the run's end gives a dialog it handed out and nobody answered the default answer, which this takes. |
 | neo-runtime/src/dispatch.rs | `unsupported_child_call` | `client/frame.ts` `Frame.waitForNavigation` | Playwright answers a child frame's navigation Response; the network log records only the main frame's requests, so Neo refuses the wait. A predicate wait that answers none (`waitForURL`) is served. |
+| neo-runtime/src/evaluate.rs | `create_handle` | `server/dom.ts` `ElementHandle._initializePreview` | Playwright starts at `JSHandle@node` and updates the preview by event; Neo has no events, so the handle starts with the final preview. |
 | neo-runtime/src/events.rs | `MAX_QUEUED_BYTES` | `client/connection.ts` `Connection.dispatch` | The same bound in bytes of queued JSON, so a few huge payloads cannot pin the server's memory. |
 | neo-runtime/src/events.rs | `MAX_QUEUED_EVENTS` | `client/connection.ts` `Connection.dispatch` | Playwright's client dispatches every event its server sends; Neo's queue lives outside the realm's memory limit, so a run holds at most this many undelivered events and counts the rest. |
 | neo-runtime/src/frame_events.rs | (file) | `server/chromium/crPage.ts` `FrameSession._initialize` | Playwright attaches every out-of-process frame as it starts, paused until attached. Neo attaches one when the run first reaches into it (a frame read, a locator in it), so that frame's own commits before then are not reported; its attach and removal, which the tab's session reports, always are. |
@@ -38,13 +39,18 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-sdk/src/events.ts | `ChannelOwner.removeAllListeners` | `client/channelOwner.ts` `ChannelOwner.removeListener` | Playwright's removeAllListeners leaves its server subscriptions on; Neo turns off each one left without listeners, so Rust stops producing what nobody hears. |
 | neo-sdk/src/events.ts | `EventEmitter._addListener` | `client/eventEmitter.ts` `EventEmitter._addListener` | Neo runs are never Playwright's own tests, so the warning always goes to the run log. |
 | neo-sdk/src/events.ts | `EventEmitter._callHandler` | `client/eventEmitter.ts` `EventEmitter._callHandler` | There the rethrow is an unhandled rejection, and Node exits; QuickJS ignores one, so Neo hands it to the run, which ends with it. |
+| neo-sdk/src/frame.ts | `Frame._withElement` | `client/timeoutSettings.ts` `TimeoutSettings.timeout` | Neo refuses a signal rather than ignore it. |
+| neo-sdk/src/js-handle.ts | `evaluateParams` | `client/jsHandle.ts` `JSHandle.evaluate` | Neo has no realm callback from the page, so it refuses the option rather than ignore it. |
+| neo-sdk/src/js-handle.ts | `evaluateParams` | `client/jsHandle.ts` `JSHandle.evaluate` | Playwright's evaluations send no signal and ignore one; Neo refuses any signal rather than ignore one. |
 | neo-sdk/src/page.ts | `Page.bringToFront` | `server/chromium/crPage.ts` `CRPage.bringToFront` | Playwright sends `Page.bringToFront` alone. Neo also activates the tab in BrowserOS's tab strip when it is not the active one, which `Page.bringToFront` leaves as it was. |
 | neo-sdk/src/page.ts | `Page.consoleMessages` | `server/page.ts` `Page.addConsoleMessage` | Playwright's server keeps a page's messages and errors from the page's first moment. Neo keeps them from the run's first look (a listener, or a read like this one), starting with what the browser kept of the current document; the browser keeps nothing of a document the page left before then, so `'all'` does not reach back past it. |
 | neo-sdk/src/page.ts | `Page.opener` | `client/page.ts` `Page.opener` | Playwright's page keeps the opener its server named when it reported the page. Neo reads the tab's opener when asked, so the run page and a `pages()` page name theirs too. |
 | neo-sdk/src/page.ts | `Page` | `client/page.ts` `Page.constructor` | Playwright's page holds a `close` and a `crash` listener of its own from its first moment, which `eventNames()` and `listenerCount` report; Neo's holds none, so a page nobody listens to costs the run nothing. |
+| neo-sdk/src/timeout-settings.ts | `refuseSignalFor` | `client/timeoutSettings.ts` `TimeoutSettings.timeout` | Playwright hands the signal to the call, which aborts when it aborts; Neo has no way to abort a sent call yet, so it refuses any signal, an aborted one included, before sending anything; null and undefined are none. |
 | neo-sdk/src/url.ts | (file) | `isomorphic/urlMatch.ts` `urlMatches` | Playwright passes a URL predicate a WHATWG `URL`. The realm has no `URL`, so Neo passes this read-only one, built from Rust's WHATWG parser: every getter and `toString`/`toJSON` read as `URL`'s do, and `searchParams` reads as `URLSearchParams`; setters and `searchParams`' mutators throw, and `instanceof URL` cannot hold. |
 | neo-sdk/src/url.ts | `READ_ONLY` | `isomorphic/urlMatch.ts` `urlMatches` | the error a write to Neo's read-only `URL` throws, where Playwright's predicate gets a writable WHATWG `URL`. |
-| neo-sdk/src/waiter.ts | `refuseSignal` | `client/waiter.ts` `Waiter.rejectOnTimeout` | QuickJS has no `AbortSignal`, so Neo takes no `signal`; one passed anyway is refused before the method does anything, instead of being ignored. `null` is no signal, as `undefined` is. |
+| neo-sdk/src/vendor-shims.ts | `URL` | `isomorphic/utilityScriptSerializers.ts` `parseEvaluationResultValue` | QuickJS has no WHATWG URL, so a `URL` the page returns (and a `URL` an agent passes back) is this object: its `href`, `toString()` and `toJSON()` as Playwright's client gives them, and no parsed parts (`host`, `pathname`, `searchParams`). |
+| neo-sdk/src/waiter.ts | `refuseSignal` | `client/waiter.ts` `Waiter.rejectOnTimeout` | QuickJS has no `AbortSignal`, so Neo takes no `signal`; one passed anyway is refused instead of being ignored. `null` and `undefined` are no signal, as Playwright's client reads them. |
 
 ## Unexplained: owner questions (0)
 
