@@ -207,6 +207,28 @@ return await page.textContent('#alert-result')",
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_dialog_answer_never_waits_for_an_enable_the_dialog_holds() {
+    let Some(tab) = open().await else {
+        return;
+    };
+    // The console subscription's Runtime.enable starts while the alert blocks the renderer; the
+    // listener's answer must not wait for it.
+    let outcome = run(
+        &tab,
+        r"page.on('dialog', async dialog => {
+  page.on('console', () => {})
+  await dialog.accept()
+})
+await page.click('#alert')
+return await page.textContent('#alert-result')",
+        Duration::from_secs(30),
+    )
+    .await;
+    tab.close().await;
+    assert_eq!(value(&outcome), &json!("answered"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn tests_that_an_uncaught_listener_error_ends_the_run_with_it() {
     let Some(tab) = open().await else {
         return;

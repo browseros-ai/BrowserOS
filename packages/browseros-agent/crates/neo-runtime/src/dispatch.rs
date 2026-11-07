@@ -571,9 +571,11 @@ async fn serve_call(
     reply: CallReply,
 ) {
     // A page's call waits for what the run's subscriptions switched on there (console messages,
-    // the dialog watcher), so the call cannot cause an event before its producer listens.
+    // the dialog watcher), so the call cannot cause an event before its producer listens. A
+    // dialog's answer never waits: an open dialog can hold that very enable, and only the answer
+    // frees the page.
     if let Some((page, _)) = &target
-        && !matches!(route, ObjectCall::Context(_))
+        && !matches!(route, ObjectCall::Context(_) | ObjectCall::Dialog(..))
         && reply.events.enabling(page.id.as_str())
         && let Err(error) = progress.race(reply.events.ready(page.id.as_str())).await
     {

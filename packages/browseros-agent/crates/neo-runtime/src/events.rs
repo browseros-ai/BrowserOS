@@ -57,6 +57,11 @@ const MAX_QUEUED_BYTES: usize = 16 * 1024 * 1024;
 /// mutex; past it the reply goes, and events it missed arrive with a later reply or wake.
 const BARRIER_WAIT: Duration = Duration::from_millis(250);
 
+/// Neo: the longest a call waits for its page's enables. A renderer frozen by a dialog may hold
+/// an enable until the dialog is answered; a call with no timeout of its own (a close, a history
+/// read) then goes ahead rather than wait for the run's deadline.
+const READY_WAIT: Duration = Duration::from_secs(10);
+
 /// Neo: how long the end of `Runtime.enable`'s replay waits for the watchers. Once, per session;
 /// a watcher that applied the replay late would hand its tail to listeners as live messages.
 const REPLAY_WAIT: Duration = Duration::from_secs(5);
@@ -391,9 +396,15 @@ impl EventHub {
         .unwrap_or(false)
     }
 
-    /// Resolves once every enable started on `page` so far is done. The caller races it with
-    /// its call's progress, so a page frozen mid-enable times the call out as Playwright's would.
+    /// Resolves once every enable started on `page` so far is done, or after [`READY_WAIT`]. The
+    /// caller races it with its call's progress, so a call's own timeout still ends it first.
     pub(crate) async fn ready(&self, page: &str) {
+        if time::timeout(READY_WAIT, self.enabled(page)).await.is_err() {
+            warn!(page, "a call went ahead of its page's unfinished enable");
+        }
+    }
+
+    async fn enabled(&self, page: &str) {
         let pending = self
             .with(|state| {
                 state.enables.get_mut(page).map(|pending| {

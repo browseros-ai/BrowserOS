@@ -9,6 +9,7 @@
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs, events.mjs).
 
+import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { compareEvents, fixture } from './events.mjs'
 import { skip } from './harness.mjs'
@@ -88,14 +89,19 @@ const cases = [
   },
   {
     // page-event-console.spec.ts "CM-019 consoleMessages since-navigation filter should
-    // work", "CM-020 pageErrors since-navigation filter should work".
+    // work", "CM-020 pageErrors since-navigation filter should work". The first read comes
+    // before the navigation: Neo's stores start at a run's first look (a listener or a read),
+    // and the browser keeps nothing of a document the page left before that (the Neo-only case
+    // below pins it; a Deviation on page.ts `consoleMessages`).
     name: "since-navigation keeps the current document's entries, 'all' keeps every one",
     path: '/console.html',
     source: `const texts = async (options) => (await page.consoleMessages(options)).map((message) => message.text())
     const errors = async (options) => (await page.pageErrors(options)).map((error) => error.message)
+    const before = { console: await texts({ filter: 'all' }), errors: await errors({ filter: 'all' }) }
     await page.click('#log')
     await page.goto(page.url() + '?second')
     return {
+      before,
       all: await texts({ filter: 'all' }),
       sinceNavigation: await texts(),
       sinceNavigationNamed: await texts({ filter: 'since-navigation' }),
@@ -105,6 +111,10 @@ const cases = [
       badErrorsFilter: await settle(page.pageErrors({ filter: 'today' })),
     }`,
     expected: {
+      before: {
+        console: ['loaded first', 'load warning'],
+        errors: ['load error first'],
+      },
       all: [
         'loaded first',
         'load warning',
@@ -121,6 +131,25 @@ const cases = [
     },
     probe: 'window.__logged',
     effect: 2,
+  },
+  {
+    // Neo only: with no read or listener before the navigation, the stores start with what the
+    // browser kept of the current document, so 'all' holds only that document's entries.
+    name: "without an earlier look, Neo's 'all' starts at the current document",
+    path: '/console.html',
+    source: `await page.click('#log')
+    await page.goto(page.url() + '?second')
+    return {
+      all: (await page.consoleMessages({ filter: 'all' })).map((message) => message.text()),
+      errorsAll: (await page.pageErrors({ filter: 'all' })).map((error) => error.message),
+    }`,
+    neo: (outcome) => {
+      assert.equal(outcome.status, 'ok', JSON.stringify(outcome))
+      assert.deepEqual(outcome.value, {
+        all: ['loaded second', 'load warning'],
+        errorsAll: ['load error second'],
+      })
+    },
   },
 ]
 

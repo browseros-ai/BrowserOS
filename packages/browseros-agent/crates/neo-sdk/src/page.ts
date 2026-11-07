@@ -263,9 +263,14 @@ export class Page extends ChannelOwner {
 
   /**
    * The page's console messages, the last 200 as Playwright keeps them: since the last
-   * main-frame navigation by default, every kept one with `filter: 'all'`. Neo keeps them from
-   * its first look at the page (a listener, or this read), starting with what the browser kept
-   * of the page's current document; messages the run's listeners already saw are included.
+   * main-frame navigation by default, every kept one with `filter: 'all'`. Messages the run's
+   * listeners already saw are included.
+   *
+   * Deviation: `server/page.ts` `Page.addConsoleMessage`: `this._consoleMessages.push(message);`
+   * Playwright's server keeps a page's messages and errors from the page's first moment. Neo
+   * keeps them from the run's first look (a listener, or a read like this one), starting with
+   * what the browser kept of the current document; the browser keeps nothing of a document the
+   * page left before then, so `'all'` does not reach back past it.
    */
   async consoleMessages(
     options?: ConsoleMessagesOptions,

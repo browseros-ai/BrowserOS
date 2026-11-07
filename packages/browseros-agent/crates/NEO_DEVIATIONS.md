@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (16)
+## Deviations (17)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -21,6 +21,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-sdk/src/events.ts | `ChannelOwner.removeAllListeners` | `client/channelOwner.ts` `ChannelOwner.removeListener` | Playwright's removeAllListeners leaves its server subscriptions on; Neo turns off each one left without listeners, so Rust stops producing what nobody hears. |
 | neo-sdk/src/events.ts | `EventEmitter._addListener` | `client/eventEmitter.ts` `EventEmitter._addListener` | Neo runs are never Playwright's own tests, so the warning always goes to the run log. |
 | neo-sdk/src/events.ts | `EventEmitter._callHandler` | `client/eventEmitter.ts` `EventEmitter._callHandler` | There the rethrow is an unhandled rejection, and Node exits; QuickJS ignores one, so Neo hands it to the run, which ends with it. |
+| neo-sdk/src/page.ts | `Page.consoleMessages` | `server/page.ts` `Page.addConsoleMessage` | Playwright's server keeps a page's messages and errors from the page's first moment. Neo keeps them from the run's first look (a listener, or a read like this one), starting with what the browser kept of the current document; the browser keeps nothing of a document the page left before then, so `'all'` does not reach back past it. |
 | neo-sdk/src/page.ts | `Page` | `client/page.ts` `Page.constructor` | Playwright's page holds a `close` and a `crash` listener of its own from its first moment, which `eventNames()` and `listenerCount` report; Neo's holds none, so a page nobody listens to costs the run nothing. |
 | neo-sdk/src/waiter.ts | `refuseSignal` | `client/waiter.ts` `Waiter.rejectOnTimeout` | QuickJS has no `AbortSignal`, so Neo takes no `signal`; one passed anyway is refused instead of being ignored. |
 
