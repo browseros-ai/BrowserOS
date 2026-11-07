@@ -334,7 +334,7 @@ impl Getters {
         field: GetterField,
     ) -> Result<Value, GetError> {
         let unknown = || GetError::BadRequest(format!("unknown guid {guid:?}"));
-        let page = self.tabs.resolve(guid).ok_or_else(unknown)?;
+        let (page, _) = self.tabs.resolve(guid).ok_or_else(unknown)?;
         // A hop exists only after a goto on this session, which stays attached for the run.
         let session = page.attached_session().ok_or_else(unknown)?;
         let log = &session.network;

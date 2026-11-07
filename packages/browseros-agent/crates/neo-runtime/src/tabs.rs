@@ -613,6 +613,9 @@ mod tests {
                 format!("frame@{PAGE}/child"),
                 FrameScope::Frame("child".to_string()),
             ),
+            // goto's Request and Response belong to the main frame's navigation.
+            (format!("request@{PAGE}:loader:0"), FrameScope::Main),
+            (format!("response@{PAGE}:loader:1"), FrameScope::Main),
         ] {
             let (page, actual) = tabs.resolve(&guid).unwrap();
             assert_eq!(page.id.as_str(), PAGE);
@@ -623,6 +626,7 @@ mod tests {
             format!("frame@{PAGE}/"),
             format!("frame@{PAGE}/one/two"),
             "frame@unknown/child".to_string(),
+            "response@unknown:loader:0".to_string(),
             "element@fake-page".to_string(),
         ] {
             assert!(tabs.resolve(&guid).is_none(), "{guid}");

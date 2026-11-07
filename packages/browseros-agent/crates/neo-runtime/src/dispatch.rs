@@ -574,7 +574,7 @@ async fn serve_call(
         }
         // A hop's objects exist only after a goto on this page's session, which stays attached
         // for the run.
-        (ObjectCall::Network(call), Some(page)) => match page.attached_session() {
+        (ObjectCall::Network(call), Some((page, _))) => match page.attached_session() {
             Some(session) => responses::serve(&session, call, &progress).await,
             None => Err(PlaywrightError::target_closed().into()),
         },

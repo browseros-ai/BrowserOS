@@ -637,7 +637,7 @@ async fn snapshot_child<T: ReadTab>(
             break out_of_time(error);
         }
         match progress.race(tab.aria_snapshot(&params)).await {
-            Ok(Ok(snapshot)) => break Ok(snapshot),
+            Ok(Ok(result)) => break Ok(result.snapshot),
             Ok(Err(PageError::NotConnected)) => {}
             Ok(Err(PageError::Threw(_) | PageError::Contract(_))) => break Ok(None),
             Ok(Err(PageError::Closed)) => break Err(PlaywrightError::target_closed().into()),
@@ -874,7 +874,7 @@ mod tests {
         inner: Step<Result<Option<TextMatch>, PageError>>,
         attribute: Step<Result<Option<AttributeMatch>, PageError>>,
         read_params: Mutex<Vec<(String, bool, Option<String>)>>,
-        /// The call frame's document, `body,frameset`.
+        /// The call frame's document, `body,frameset`, and a locator's subtree, `SELECTOR`.
         snapshot: Step<Result<Option<AriaFrameSnapshot>, PageError>>,
         /// Each iframe's document, by the full selector that reaches it.
         frames: HashMap<String, Step<Result<Option<AriaFrameSnapshot>, PageError>>>,
@@ -1722,6 +1722,7 @@ mod tests {
     async fn tests_that_every_frame_gets_the_callers_mode_and_boxes_and_its_own_depth() {
         let tab = framed_page();
         let options = SnapshotOptions {
+            selector: None,
             mode: AriaSnapshotMode::Ai,
             depth: Some(4),
             boxes: Some(true),
@@ -1917,6 +1918,7 @@ mod tests {
             ))),
         );
         let options = SnapshotOptions {
+            selector: None,
             mode: AriaSnapshotMode::Default,
             depth: None,
             boxes: None,
