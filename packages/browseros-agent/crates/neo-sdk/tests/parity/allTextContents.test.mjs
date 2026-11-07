@@ -66,3 +66,21 @@ test('allTextContents inside frames reads the same texts through Neo and Playwri
 }, async (t) => {
   await compareFrameCases(t, frameCases)
 })
+
+test('review: allTextContents keeps SVG text and empty strings', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  const outcome = await compareMethod(t, {
+    html: '<span class="item">HTML</span><svg class="item"><text>SVG</text></svg><span class="item"></span>',
+    source: `
+      const values = await page.locator('.item').allTextContents()
+      return { values, types: values.map(value => typeof value) }
+    `,
+    probe: '[...document.querySelectorAll(".item")].map(e => e.textContent)',
+  })
+  assert.deepEqual(outcome.value, {
+    values: ['HTML', 'SVG', ''],
+    types: ['string', 'string', 'string'],
+  })
+})
