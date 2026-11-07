@@ -56,6 +56,7 @@ mod check;
 mod click;
 mod console;
 mod content;
+mod cookie_store;
 mod deadline;
 mod devices;
 mod dialogs;
