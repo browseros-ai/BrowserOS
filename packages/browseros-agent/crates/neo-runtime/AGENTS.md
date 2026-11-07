@@ -17,6 +17,8 @@ Runs one script in a fresh QuickJS realm from a starting BrowserOS tab. Its cont
 - `src/click.rs` is `Frame.click`'s policy (Playwright's two retry loops, every call-log line) over the `Tab` seam; `src/page.rs` implements the seam over CDP, and `src/world.rs` calls the injected glue. Click policy is tested against a scripted `FakeTab` under paused time (what a click calls, in which order, and what it delivers; never log wording or retry counts); the mechanism against `tests/support/fake_browser.rs` (`tests/click_lifecycle.rs`).
 - A tab has one mouse and one hit-target slot, shared by every call and run on it. Input to a tab takes a turn (`Tab::input`, `src/page.rs` `TabInputs`, per `Runtime` and tab) from the interceptor's setup until its stop has answered, mouse writes included; never wait for an element while holding one.
 
+- Every constant, and every value, step or message ported from Playwright, carries a provenance line (`Playwright:`, `Deviation:`, `Neo:`, `Platform:` or `Unexplained:`); `cargo test -p neo-runtime --test provenance` checks each line against Playwright vendored under `vendor/playwright/`, and regenerates `../NEO_DEVIATIONS.md` with `NEO_RUNTIME_WRITE_FIXTURES=1` (`../NEO_STYLE.md`, Provenance).
+
 Checks, from `packages/browseros-agent`: `scripts/neo-check.sh`. The end-to-end tests need a browser and skip without one:
 
 ```sh

@@ -41,6 +41,25 @@ Two naming rules the lints do not catch: call free functions through their modul
 
 The bundle runs in QuickJS, not Node or a browser: ES2023 only, no DOM or Node APIs, and evaluating it defines no globals. Getters return plain values, never promises, as in Playwright. `src/runtime-bridge.ts` is the only file that touches `__neo_runtime`. Commit `dist/sdk.js` with every `src/` change (`bun run build`).
 
+## Provenance
+
+Neo matches Playwright: where Neo serves a method, it uses Playwright's names, values and error wording. Every value, step and message that comes from outside Neo says where it comes from, on one line that `cargo test -p neo-runtime --test provenance` checks against Playwright's own source (vendored under `neo-runtime/vendor/playwright/` at the pinned commit), in CI too.
+
+- Give every `const` and `static`, and every top-level TypeScript constant with a literal value, one provenance line in its doc comment. Pick the first that fits:
+  - `Playwright: \`<path>\` \`<symbol>\`: \`<quote>\`` when it does what Playwright does. `<path>` starts at `server/` or `client/` (playwright-core's `src/`), at a `packages/` directory (`isomorphic/yaml.ts`, `injected/src/injectedScript.ts`), or at `/` for the repository root. `<symbol>` is `Class.member`, `function`, `CONSTANT`, or `outer/inner` for a closure. `<quote>` is Playwright's code copied exactly from that symbol, on one line.
+  - `Deviation: \`<path>\` \`<symbol>\`[: \`<quote>\`] <why>` when a script, or a host reading the outcome, could tell it apart from Playwright: a cap, a refusal, a skipped step, other wording. Cite what Playwright does and say why Neo differs.
+  - `Neo: <why>` when no script can see it and Playwright has nothing like it.
+  - `Platform: <fact>` for a fact of Chromium, CDP, BrowserOS, JavaScript, QuickJS, tokio or serde, with its source.
+  - `Unexplained: <what is unknown>` for existing code whose reason nobody recorded. It is a question for the owner.
+- A `Playwright:` constant holds Playwright's value exactly. Compute a value that differs from it in a separate `Neo:` or `Deviation:` constant.
+- Start each file's header with its provenance: `Neo:` for Neo's own module, one `Playwright:` line for a port of one Playwright file or class, several for a port of several. In a port of several, tag every free function, `impl` and `trait` block (in TypeScript, every top-level function and table member). A tag on a block covers its members.
+- Inside a port, everything is Playwright's unless a `Deviation:` line says otherwise at that spot. Tag each step Playwright runs and Neo skips or does differently with `// Deviation: …` at the branch.
+- Cite a symbol and a quote, never a line number. Name a Playwright source file in a comment only inside one of these lines.
+- `crates/NEO_DEVIATIONS.md` lists every `Deviation:` and `Unexplained:` line and is generated: rerun `NEO_RUNTIME_WRITE_FIXTURES=1 cargo test -p neo-runtime --test provenance`, commit it with the change, and on a rebase conflict regenerate it rather than merge it.
+- When the gate asks for a Playwright file that is not vendored yet, vendor it from a checkout at the pin: `NEO_PLAYWRIGHT=<checkout> cargo test -p neo-runtime --test provenance -- --ignored sync`. Never edit `vendor/`.
+
+Every line written anywhere is checked: its citation must resolve, its quote must be in the cited symbol, a `Playwright:` constant's value must equal its quote's, and its reason must not be empty. Coverage (every item carries a line, no Playwright path outside a line, Playwright wording in call logs and errors) is enforced for the files listed in `neo-runtime/tests/provenance-enforced.txt`, which grows one file at a time until it holds every neo source. Until a file is listed, tag what you add to it anyway.
+
 ## Comments
 
 Explain what a reader cannot reconstruct from one file:

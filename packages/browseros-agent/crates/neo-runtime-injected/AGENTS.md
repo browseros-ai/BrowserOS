@@ -7,6 +7,8 @@ The page half of neo-runtime: Playwright's injected script, vendored unchanged, 
 - `scripts/aria-yaml-goldens.ts` runs the vendored YAML renderer over a corpus of snapshots and tricky strings and writes `tests/aria-yaml-goldens.json`, which neo-runtime's `aria_yaml.rs` tests read. Rerun it after a vendor upgrade or a corpus edit; `bun run test` fails on a stale file.
 - `bun run build` writes `dist/`, which neo-runtime embeds. Commit it with every `src/` change and every neo-runtime-spec regeneration (the bundle carries the spec hash). `scripts/neo-check.sh` fails on a stale `dist/`.
 
+- `src/glue.ts` ports several Playwright files: give every glue function and top-level constant a provenance line, and mark each place the page code differs from Playwright's with `Deviation:` (`../NEO_STYLE.md`, Provenance). neo-runtime's `cargo test --test provenance` checks the lines.
+
 Checks: `bun run typecheck`, `bun run test` (vendored bytes against `VENDOR.md`, and the YAML goldens), then `scripts/neo-check.sh` from `packages/browseros-agent`. The browser test loads the built bundle into a real tab. It runs under Node and skips without a browser:
 
 ```sh
