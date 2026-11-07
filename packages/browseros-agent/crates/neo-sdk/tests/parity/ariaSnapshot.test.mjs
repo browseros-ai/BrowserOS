@@ -136,26 +136,31 @@ const frameCases = [
   {
     name: 'the ai snapshot stitches frames and its refs act inside them',
     source: `const refOf = (line) => /\\[ref=([^\\]]+)\\]/.exec(line)?.[1]
+    // BrowserOS neo's takeover bar (<browseros-neo-takeover>, which claw-app's content script adds
+    // to every page at document_idle) shows as one '- document' line, or not, depending on when
+    // the snapshot runs; it is not the page's, so both engines drop it.
+    const own = (yaml) => yaml.split('\\n').filter((line) => line.trim() !== '- document').join('\\n')
     const blank = (yaml) => yaml.replace(/\\[ref=[^\\]]+\\]/g, '[ref]')
-    const plain = await page.ariaSnapshot()
-    const shallow = await page.ariaSnapshot({ mode: 'ai', depth: 3 })
-    const ai = await page.ariaSnapshot({ mode: 'ai' })
+    const plain = own(await page.ariaSnapshot())
+    const shallow = own(await page.ariaSnapshot({ mode: 'ai', depth: 3 }))
+    const ai = own(await page.ariaSnapshot({ mode: 'ai' }))
     const lines = ai.split('\\n')
     const after = (marker, role) =>
       refOf(lines.slice(lines.findIndex((line) => line.includes(marker))).find((line) => line.includes(role)))
     const crossEmail = after(': cross gen 1', 'textbox "Email"')
     const grandchildSend = after(': grandchild gen 1', 'button "Send"')
     const iframes = lines.filter((line) => line.trimStart().startsWith('- iframe ')).map(refOf)
-    const crossIframe = page.locator('aria-ref=' + iframes[1])
+    // A snapshot without a frame's content has no ref to act on: report that, not a timeout.
+    const act = (ref, call) => (ref === undefined ? 'no ref' : settle(() => call(page.locator('aria-ref=' + ref))))
     return {
       plain,
       shallow: blank(shallow),
       ai: blank(ai),
-      filled: await settle(() => page.locator('aria-ref=' + crossEmail).fill('via-ref')),
-      read: await settle(() => page.locator('aria-ref=' + crossEmail).inputValue()),
-      clicked: await settle(() => page.locator('aria-ref=' + grandchildSend).click()),
-      iframeName: await settle(() => crossIframe.getAttribute('name')),
-      throughIframe: await settle(() => crossIframe.contentFrame().locator('#who').textContent()),
+      filled: await act(crossEmail, (target) => target.fill('via-ref')),
+      read: await act(crossEmail, (target) => target.inputValue()),
+      clicked: await act(grandchildSend, (target) => target.click()),
+      iframeName: await act(iframes[1], (target) => target.getAttribute('name')),
+      throughIframe: await act(iframes[1], (target) => target.contentFrame().locator('#who').textContent()),
       refs: { crossEmail, grandchildSend, iframes },
     }`,
     perEngine: ['refs'],

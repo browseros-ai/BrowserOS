@@ -290,10 +290,27 @@ async function iframeTargets(cdp, targetId) {
     .sort()
 }
 
+/**
+ * The viewport both tabs load frame-top.html in. At the browser's own size (516×475) the
+ * cross-site frames start below the fold, and a click into an out-of-process frame that has just
+ * scrolled into view can reach its parent's <iframe> element instead (seen once in about ten
+ * Playwright runs, which still reported the click done). At this size they are on screen from
+ * load; #chain-inner, a same-process frame, still starts below the fold.
+ */
+const VIEWPORT = {
+  width: 800,
+  height: 900,
+  deviceScaleFactor: 1,
+  mobile: false,
+}
+
 /** Runs the case as Playwright does, with `page` and `context` in scope. */
 async function viaPlaywright(cdp, context, url, c) {
   const page = await context.newPage()
   try {
+    // Kept attached to the end: the override lasts as long as the session that set it.
+    const emulation = await context.newCDPSession(page)
+    await emulation.send('Emulation.setDeviceMetricsOverride', VIEWPORT)
     await page.goto(url)
     const AsyncFunction = (async () => {}).constructor
     const result = await new AsyncFunction(
@@ -318,17 +335,23 @@ async function viaPlaywright(cdp, context, url, c) {
 }
 
 /**
- * Runs the case through neo_run on a tab of its own, opened as a user's tab would be, once the
- * page and every frame in it have loaded. Playwright, attached to every tab, reads its frames
- * afterwards.
+ * Runs the case through neo_run on a tab of its own, opened as a user's tab would be (at
+ * `VIEWPORT`), once the page and every frame in it have loaded. Playwright, attached to every
+ * tab, reads its frames afterwards; the CDP target listing runs only after the run, so it does
+ * not create out-of-process frame hosts Neo would have to create itself.
  */
 async function viaNeo({ cdp, context, port, neoRun, scripts }, index, url, c) {
-  const { targetId } = await cdp.send('Target.createTarget', { url })
+  const { targetId } = await cdp.send('Target.createTarget', {
+    url: 'about:blank',
+  })
   const { sessionId } = await cdp.send('Target.attachToTarget', {
     targetId,
     flatten: true,
   })
   try {
+    // This session stays attached until the tab closes, so the override lasts the whole run.
+    await cdp.send('Emulation.setDeviceMetricsOverride', VIEWPORT, sessionId)
+    await cdp.send('Page.navigate', { url }, sessionId)
     await waitForUrl(cdp, sessionId, url)
     await eventually(
       async () =>
