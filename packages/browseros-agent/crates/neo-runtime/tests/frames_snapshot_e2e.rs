@@ -116,9 +116,11 @@ async fn open(path: &str) -> Option<Tab> {
     Some(tab)
 }
 
-/// Polls `condition` in the top page's main world for up to 10 s.
+/// Polls `condition` in the top page's main world for up to the suite's run bound
+/// ([`browser::RUN_TIMEOUT`]): on a loaded machine an out-of-process frame alone can take longer
+/// to load than a shorter setup deadline allowed.
 async fn wait_for(tab: &Tab, condition: &str) {
-    time::timeout(Duration::from_secs(10), async {
+    time::timeout(browser::RUN_TIMEOUT, async {
         while tab.evaluate(condition).await != json!(true) {
             time::sleep(Duration::from_millis(20)).await;
         }
@@ -573,7 +575,8 @@ document.getElementById('embedded').src='http://localhost:'+location.port+'/snap
 const SCOPED_CHILD: &str = r#"<!doctype html><title>Scoped child</title>
 <form aria-label="Remote account"><label>Email<input value=seed></label>
 <button type=button onclick="document.getElementById('result').textContent='Remote clicked';parent.postMessage('scoped:click','*')">Remote action</button></form>
-<p id=result>idle</p><aside>Excluded child text</aside>"#;
+<p id=result>idle</p><aside>Excluded child text</aside>
+<script>addEventListener('load',()=>parent.postMessage('scoped:loaded','*'))</script>"#;
 
 async fn open_scoped() -> Option<Tab> {
     let binary = browser::e2e_browser()?;
@@ -589,7 +592,12 @@ async fn open_scoped() -> Option<Tab> {
         "/scoped.html",
     )
     .await;
-    wait_for(&tab, "document.readyState === 'complete'").await;
+    // Each document's own signal: the page's load, and the out-of-process form's.
+    wait_for(
+        &tab,
+        "document.readyState === 'complete' && window.__log.includes('scoped:loaded')",
+    )
+    .await;
     Some(tab)
 }
 
