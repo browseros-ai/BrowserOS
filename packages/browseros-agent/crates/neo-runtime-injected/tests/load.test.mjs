@@ -114,7 +114,7 @@ test('the built bundle installs once per document and answers through call.js', 
     )
 
     // `frames.ts` `_elementState` and `innerHTML` read the first match; a state the element
-    // cannot have throws, as Playwright's page code does; `allInnerTexts` reads every match.
+    // cannot have throws, as Playwright's page code does; `queryAll` reads every match.
     const lonePreview = '<p id="lone">Only one</p>'
     assert.deepEqual(
       await page('elementStateOnSelector', {
@@ -151,11 +151,41 @@ test('the built bundle installs once per document and answers through call.js', 
       await page('innerHTML', { selector: '#lone', strict: true }),
       { value: { matched: { value: 'Only one', preview: lonePreview } } },
     )
-    assert.deepEqual(await page('allInnerTexts', { selector: '#lone' }), {
-      value: { values: [{ value: 'Only one' }] },
+    // `Locator.allInnerTexts` is Playwright's `$$eval(selector, ee => ee.map(e => e.innerText))`
+    // (eval #3185): neo-runtime reads every match with `queryAll` (a null-prototype object of the
+    // matches by index, which it lists with `Runtime.getProperties`), previews the list with
+    // `listPreviews`, and evaluates that expression over the matches; here it runs on the list.
+    const innerTexts = async (selector) => {
+      const { elements } = await handleCall(cdp, sessionA, glue, 'queryAll', {
+        selector,
+      })
+      const { previews } = await byValueCall(
+        cdp,
+        sessionA,
+        glue,
+        'listPreviews',
+        {},
+        [elements],
+      )
+      const read = await cdp.send(
+        'Runtime.callFunctionOn',
+        {
+          objectId: elements.objectId,
+          functionDeclaration:
+            'function () { return ((ee) => ee.map((e) => e.innerText))(Object.values(this)) }',
+          returnByValue: true,
+        },
+        sessionA,
+      )
+      return { previews, values: read.result.value }
+    }
+    assert.deepEqual(await innerTexts('#lone'), {
+      previews: [lonePreview],
+      values: ['Only one'],
     })
-    assert.deepEqual(await page('allInnerTexts', { selector: '#missing' }), {
-      value: { values: [] },
+    assert.deepEqual(await innerTexts('#missing'), {
+      previews: [],
+      values: [],
     })
 
     const aria = await page('ariaSnapshot', {
