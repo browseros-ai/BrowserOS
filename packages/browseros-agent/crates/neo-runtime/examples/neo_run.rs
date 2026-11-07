@@ -19,7 +19,12 @@ use std::{fs, io};
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use clap::Parser;
 use neo_runtime::{PageId, RunRequest, RunStatus, Runtime};
+use tokio::time;
 use tokio_util::sync::CancellationToken;
+
+/// The longest `neo_run` waits for a run's cleanup before disconnecting: two CDP requests at
+/// browseros-cdp's 60 s request timeout, the most one cleanup task makes in a row.
+const DRAIN_TIMEOUT: Duration = Duration::from_mins(2);
 
 #[derive(Parser)]
 struct Args {
@@ -78,6 +83,14 @@ async fn run(args: Args) -> Result<RunStatus, String> {
             artifacts: args.artifacts,
         })
         .await;
+    // A run's outcome does not settle its cleanup (a screenshot's late restore, a PDF stream's
+    // close): drain it before going away, as `Runtime::drain` asks every host to.
+    if time::timeout(DRAIN_TIMEOUT, runtime.drain()).await.is_err() {
+        let _ = writeln!(
+            io::stderr(),
+            "neo_run: cleanup still pending after {DRAIN_TIMEOUT:?}"
+        );
+    }
     cdp.disconnect().await;
 
     let json = serde_json::to_string(&outcome).map_err(|error| error.to_string())?;

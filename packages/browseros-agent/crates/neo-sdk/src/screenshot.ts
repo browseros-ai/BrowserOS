@@ -13,8 +13,9 @@
  *   bytes into the run's artifact directory (`artifacts.rs`), relative paths only. A run
  *   without one refuses `path` with an Error naming the option.
  * - Deviation: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };`
- *   Neo takes no `signal` (the realm has no `AbortController`), so a `signal` option is refused
- *   rather than ignored.
+ *   Neo takes no `signal` yet (the realm has no `AbortController`), so any `signal` other than
+ *   `undefined` or `null` is refused before anything reaches the page, never ignored; `page.pdf`,
+ *   which Playwright calls with no timeout, refuses it the same way.
  */
 
 import type {
@@ -146,9 +147,7 @@ function screenshotFields(
   apiName: ApiName,
   options: ScreenshotOptions & { signal?: unknown },
 ): Record<string, unknown> {
-  if (options.signal !== undefined)
-    // Deviation: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };` Neo refuses a signal rather than ignore it.
-    throw new Error(`${apiName}: Neo does not support signal yet`)
+  refuseSignal(apiName, options)
   const fields: Record<string, unknown> = { ...options, mask: undefined }
   if (!fields.type) {
     try {
@@ -168,11 +167,25 @@ function screenshotFields(
 }
 
 /**
+ * Refuses a supplied `signal` before any option is mapped or sent. `undefined` and `null` are no
+ * signal, as Playwright's client acts only on a truthy one.
+ * Deviation: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };` until Neo can abort a call, a signal is refused rather than ignored.
+ */
+function refuseSignal(apiName: ApiName, options: { signal?: unknown }): void {
+  if (options.signal !== undefined && options.signal !== null)
+    throw new Error(`${apiName}: Neo does not support signal yet`)
+}
+
+/**
  * Playwright's `Page.pdf` option mapping: number sizes and margins become `px` strings, and
  * `margin` is copied so the caller's object stays as it was.
  * Playwright: `client/page.ts` `Page.pdf`
  */
-export function pdfParams(options: PDFOptions): WithPath<PagePdfParams> {
+export function pdfParams(
+  apiName: ApiName,
+  options: PDFOptions & { signal?: unknown },
+): WithPath<PagePdfParams> {
+  refuseSignal(apiName, options)
   const transportOptions: Record<string, unknown> = { ...options }
   const margin = options.margin ? { ...options.margin } : undefined
   if (margin) transportOptions.margin = margin

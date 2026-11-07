@@ -13,6 +13,7 @@ use base64::engine::general_purpose::STANDARD;
 use neo_runtime_spec::serve::PagePdfParams;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::sync::oneshot;
 use tracing::debug;
 
 use crate::capture;
@@ -60,10 +61,11 @@ impl PdfOptions {
     /// Playwright's `CRPDF.generate` up to its `Page.printToPDF`: the destructuring defaults,
     /// the paper size from `format` or `width`/`height`, the margins in inches.
     pub(crate) fn from_params(params: &PagePdfParams) -> Result<Self, PlaywrightError> {
+        // Playwright: `server/chromium/crPdf.ts` `CRPDF.generate`: `if (options.format) {`
         let (paper_width, paper_height) = match &params.format {
-            Some(format) => paper_format(&format.to_lowercase())
+            Some(format) if !format.is_empty() => paper_format(&format.to_lowercase())
                 .ok_or_else(|| PlaywrightError::error(format!("{UNKNOWN_PAPER_FORMAT}{format}")))?,
-            None => (
+            _ => (
                 inches_or(params.width.as_deref(), DEFAULT_PAPER_WIDTH)?,
                 inches_or(params.height.as_deref(), DEFAULT_PAPER_HEIGHT)?,
             ),
@@ -269,23 +271,36 @@ pub(crate) async fn pdf(
     progress: &Progress,
 ) -> Result<Vec<u8>, CallError> {
     let options = PdfOptions::from_params(params)?;
-    let printed = progress
-        .race(page.send("Page.printToPDF", options.to_cdp()))
+    // The print runs on the run's tracker, not in this call: a call that stops before the answer
+    // still gets its stream closed when the answer arrives (`Stream`'s `Drop`), however late.
+    let (sent, printed) = oneshot::channel();
+    let session = Arc::clone(page);
+    page.spawn(async move {
+        let answer = session.send("Page.printToPDF", options.to_cdp()).await;
+        let stream = match answer {
+            Ok(answer) => match answer.get("stream").and_then(Value::as_str) {
+                Some(handle) => Ok(Stream {
+                    page: Arc::clone(&session),
+                    handle: handle.to_string(),
+                    closed: false,
+                }),
+                None => Err(capture::malformed("Page.printToPDF", "no stream")),
+            },
+            Err(error) => Err(capture::protocol_error("Page.printToPDF", &error)),
+        };
+        // A call that stopped waiting drops the stream here, which closes it.
+        let _unread = sent.send(stream);
+    });
+    let stream = progress
+        .race(printed)
         .await?
-        .map_err(|error| capture::protocol_error("Page.printToPDF", &error))?;
-    let Some(handle) = printed.get("stream").and_then(Value::as_str) else {
-        return Err(capture::malformed("Page.printToPDF", "no stream"));
-    };
-    let stream = Stream {
-        page: Arc::clone(page),
-        handle: handle.to_string(),
-        closed: false,
-    };
+        .map_err(|_| PlaywrightError::target_closed())??;
     stream.read(progress).await
 }
 
-/// An open `IO` stream. Read to its end, then closed; dropped early (the call stopped), it is
-/// closed on the run's tracker so Chromium does not keep the PDF for the session's life.
+/// An open `IO` stream. Read to its end, then closed; dropped anywhere else (the call stopped
+/// before or while reading it), it is closed on the run's tracker, because Chromium keeps a
+/// stream after the session that made it goes away.
 struct Stream {
     page: Arc<PageSession>,
     handle: String,

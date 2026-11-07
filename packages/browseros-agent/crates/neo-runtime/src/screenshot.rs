@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use browseros_cdp::CdpError;
 use futures_util::future;
 use neo_runtime_spec::Handle;
 use neo_runtime_spec::injected::{
@@ -41,7 +42,7 @@ use neo_runtime_spec::serve::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::sync::oneshot;
+use tokio::sync::{OwnedMutexGuard, oneshot};
 use tracing::debug;
 
 use crate::capture;
@@ -199,6 +200,21 @@ impl ScreenshotOptions {
     }
 }
 
+/// A screenshot's turn at its tab ([`PageSession::screenshots`]), shared by the call and every
+/// cleanup task it started: the next screenshot on the tab starts only once the last of them
+/// has undone its part of the page, so a call that stopped early never leaks its style, caret,
+/// masks or transparent background into the next capture.
+type Turn = Arc<OwnedMutexGuard<()>>;
+
+/// Waits for a screenshot's turn at its tab.
+/// Neo: Playwright's `TaskQueue` per page, held past the call by its cleanup.
+async fn turn(tab: &FrameTab, progress: &Progress) -> Result<Turn, CallError> {
+    let guard = progress
+        .race(Arc::clone(&tab.screenshots).lock_owned())
+        .await?;
+    Ok(Arc::new(guard))
+}
+
 /// A width and height in CSS pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Size {
@@ -213,11 +229,11 @@ pub(crate) async fn screenshot_page(
     options: &ScreenshotOptions,
     progress: &Progress,
 ) -> Result<Vec<u8>, CallError> {
-    let _turn = progress.race(tab.screenshots.lock()).await?;
+    let turn = turn(tab, progress).await?;
     progress.log("taking page screenshot");
     let viewport = original_viewport_size(tab, progress).await?;
     let main = tab.frames.main();
-    let prepared = prepare(tab, &main, options, progress).await?;
+    let prepared = prepare(tab, &main, options, &turn, progress).await?;
     let result = async {
         if options.full_page {
             let full = full_page_size(tab, progress).await?;
@@ -237,6 +253,7 @@ pub(crate) async fn screenshot_page(
                 None,
                 fits_viewport,
                 options,
+                &turn,
                 progress,
             )
             .await;
@@ -250,7 +267,16 @@ pub(crate) async fn screenshot_page(
                 height: viewport.height,
             },
         };
-        capture(tab, None, Some(viewport_rect), true, options, progress).await
+        capture(
+            tab,
+            None,
+            Some(viewport_rect),
+            true,
+            options,
+            &turn,
+            progress,
+        )
+        .await
     }
     .await;
     prepared.restore(progress).await;
@@ -297,10 +323,10 @@ async fn screenshot_element(
 ) -> Result<Vec<u8>, CallError> {
     // Playwright: `server/dom.ts` `ElementHandle.screenshot`: `screenshotElement(progress, this, options, true /* frameVisible */)`
     element.frame_visible = true;
-    let _turn = progress.race(tab.screenshots.lock()).await?;
+    let turn = turn(tab, progress).await?;
     progress.log("taking element screenshot");
     let viewport = original_viewport_size(tab, progress).await?;
-    let prepared = prepare(tab, &element.frame, options, progress).await?;
+    let prepared = prepare(tab, &element.frame, options, &turn, progress).await?;
     let result = async {
         wait_and_scroll_into_view(tab, &element, progress).await?;
         let bounding_box = progress
@@ -339,6 +365,7 @@ async fn screenshot_element(
             None,
             fits_viewport,
             options,
+            &turn,
             progress,
         )
         .await
@@ -505,27 +532,25 @@ async fn capture(
     viewport_rect: Option<Rect>,
     fits_viewport: bool,
     options: &ScreenshotOptions,
+    turn: &Turn,
     progress: &Progress,
 ) -> Result<Vec<u8>, CallError> {
     // Playwright: `server/screenshotter.ts` `Screenshotter._screenshot`: `const shouldSetDefaultBackground = options.omitBackground && format !== 'jpeg';`
     let background = if options.omit_background && options.format != Format::Jpeg {
+        // Armed before the override is sent: from here on, whatever ends the call resets it.
+        let (background, answered) = Background::set(&tab.page, Arc::clone(turn));
         progress
-            .race(tab.send(
-                "Emulation.setDefaultBackgroundColorOverride",
-                json!({ "color": { "r": 0, "g": 0, "b": 0, "a": 0 } }),
-            ))
+            .race(answered)
             .await?
+            .map_err(|_| PlaywrightError::target_closed())?
             .map_err(|error| {
                 capture::protocol_error("Emulation.setDefaultBackgroundColorOverride", &error)
             })?;
-        Some(Background {
-            page: Arc::clone(&tab.page),
-            reset: false,
-        })
+        Some(background)
     } else {
         None
     };
-    let masks = mask_elements(tab, options, progress).await?;
+    let masks = mask_elements(tab, options, turn, progress).await?;
     let quality = match options.format {
         Format::Jpeg => Some(options.quality.unwrap_or(DEFAULT_JPEG_QUALITY)),
         Format::Webp => Some(options.quality.unwrap_or(DEFAULT_WEBP_QUALITY)),
@@ -676,18 +701,52 @@ async fn all_frames(tab: &FrameTab) -> Vec<Arc<FrameContext>> {
     frames
 }
 
-/// What `prepareForScreenshot` changed, frame by frame. Restored once: by [`Self::restore`],
-/// or, if the call ends first, on the run's tracker from `Drop`.
+/// What `prepareForScreenshot` changed, frame by frame. Each [`Cleanup`] restores its own
+/// frame exactly once: through [`Self::restore`] after the capture, or from its `Drop`.
 struct Prepared {
     page: Arc<PageSession>,
     cleanups: Vec<Cleanup>,
 }
 
-/// One frame's cleanup handle and the object group that keeps it alive until it ran.
+/// One frame's cleanup handle and the object group that keeps it alive until it ran. Dropped
+/// unrestored (the call stopped, the run ended, the run's future was dropped), it restores its
+/// frame on the run's tracker, so no path out of a screenshot leaves Playwright's styles,
+/// caret colours or cancelled animations in the user's page.
 struct Cleanup {
+    page: Arc<PageSession>,
     frame: Arc<FrameContext>,
     handle: Handle<ScreenshotCleanup>,
-    _group: GroupGuard,
+    /// `None` once the restore has been sent.
+    group: Option<GroupGuard>,
+    /// Held until the restore has run.
+    turn: Turn,
+}
+
+/// Playwright: `server/screenshotter.ts` `Screenshotter._restorePageAfterScreenshot`
+impl Cleanup {
+    async fn restore(mut self) {
+        let group = self.group.take();
+        restore_frame(&self.frame, &self.handle).await;
+        // The group releases only now, after the restore has used its handle.
+        drop(group);
+    }
+}
+
+/// Neo: an unrestored cleanup restores its frame in the background.
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        let Some(group) = self.group.take() else {
+            return;
+        };
+        let frame = Arc::clone(&self.frame);
+        let handle = self.handle.clone();
+        let turn = Arc::clone(&self.turn);
+        self.page.spawn(async move {
+            restore_frame(&frame, &handle).await;
+            drop(group);
+            drop(turn);
+        });
+    }
 }
 
 /// `Screenshotter._preparePageForScreenshot`: the page function in every frame, errors ignored
@@ -697,6 +756,7 @@ async fn prepare(
     tab: &FrameTab,
     frame: &Arc<FrameContext>,
     options: &ScreenshotOptions,
+    turn: &Turn,
     progress: &Progress,
 ) -> Result<Prepared, CallError> {
     if options.disable_animations {
@@ -712,30 +772,41 @@ async fn prepare(
         cleanups: Vec::new(),
     };
     let frames = progress.race(all_frames(tab)).await?;
-    let calls = frames.into_iter().map(|frame| {
+    // Each frame's request runs on the run's tracker and owns its answer: once sent, it changes
+    // the page whether or not this call is still waiting, so the cleanup it answers with must
+    // reach a `Cleanup` whatever happens here. A call that stops drops its receivers, and each
+    // task's undelivered (or delivered and then dropped) `Cleanup` restores its frame.
+    let mut answers = Vec::new();
+    for frame in frames {
         let group = tab.group(&frame, "screenshot");
-        let params = &params;
-        async move {
-            let result = frame.call(Some(group.group()), params).await;
-            (frame, group, result)
-        }
-    });
-    // A handle the race drops before it is recorded dies with its group: that frame keeps
-    // Playwright's styles until the page reloads, as a lost evaluation would leave them.
-    for (frame, group, result) in progress.race(future::join_all(calls)).await? {
-        match result {
-            Ok(result) => {
-                if let Some(handle) = result.cleanup {
-                    prepared.cleanups.push(Cleanup {
-                        frame,
-                        handle,
-                        _group: group,
-                    });
+        let params = params.clone();
+        let page = Arc::clone(&tab.page);
+        let turn = Arc::clone(turn);
+        let (sent, answer) = oneshot::channel();
+        tab.page.spawn(async move {
+            match frame.call(Some(group.group()), &params).await {
+                Ok(result) => {
+                    if let Some(handle) = result.cleanup {
+                        let _undelivered = sent.send(Cleanup {
+                            page,
+                            frame,
+                            handle,
+                            group: Some(group),
+                            turn,
+                        });
+                    }
+                }
+                Err(error) => {
+                    debug!(?error, frame = %frame.id, "preparing a frame for a screenshot failed");
                 }
             }
-            Err(error) => {
-                debug!(?error, frame = %frame.id, "preparing a frame for a screenshot failed");
-            }
+        });
+        answers.push(answer);
+    }
+    for answer in answers {
+        // A closed channel is a frame with nothing to restore, or one whose request failed.
+        if let Ok(cleanup) = progress.race(answer).await? {
+            prepared.cleanups.push(cleanup);
         }
     }
     progress.log("waiting for fonts to load...");
@@ -755,45 +826,28 @@ async fn prepare(
 impl Prepared {
     /// `Screenshotter._restorePageAfterScreenshot`, awaited unless the call has to stop; the
     /// restore itself always runs to its end on the run's tracker.
-    async fn restore(mut self, progress: &Progress) {
-        let cleanups = mem::take(&mut self.cleanups);
-        if cleanups.is_empty() {
+    async fn restore(self, progress: &Progress) {
+        if self.cleanups.is_empty() {
             return;
         }
+        let Prepared { page, cleanups } = self;
         let (done, restored) = oneshot::channel();
-        self.page.spawn(async move {
-            restore_all(cleanups).await;
+        page.spawn(async move {
+            future::join_all(cleanups.into_iter().map(Cleanup::restore)).await;
             let _sent = done.send(());
         });
         let _restored = progress.race(restored).await;
     }
 }
 
-/// Neo: a call that stopped early still restores the page, in the background.
-impl Drop for Prepared {
-    fn drop(&mut self) {
-        let cleanups = mem::take(&mut self.cleanups);
-        if !cleanups.is_empty() {
-            self.page.spawn(restore_all(cleanups));
-        }
+/// Playwright: `server/screenshotter.ts` `Screenshotter._restorePageAfterScreenshot`: `window.__pwCleanupScreenshot && window.__pwCleanupScreenshot()`
+async fn restore_frame(frame: &FrameContext, handle: &Handle<ScreenshotCleanup>) {
+    let params = InjectedRestoreAfterScreenshotParams {
+        cleanup: handle.clone(),
+    };
+    if let Err(error) = frame.call(None, &params).await {
+        debug!(?error, frame = %frame.id, "restoring a frame after a screenshot failed");
     }
-}
-
-/// Playwright: `server/page.ts` `Page.safeNonStallingEvaluateInAllFrames`
-async fn restore_all(cleanups: Vec<Cleanup>) {
-    let restores = cleanups.iter().map(|cleanup| async {
-        let params = InjectedRestoreAfterScreenshotParams {
-            cleanup: cleanup.handle.clone(),
-        };
-        cleanup.frame.call(None, &params).await
-    });
-    for result in future::join_all(restores).await {
-        if let Err(error) = result {
-            debug!(?error, "restoring a frame after a screenshot failed");
-        }
-    }
-    // The groups release only now, after every restore has used its handle.
-    drop(cleanups);
 }
 
 /// Masks drawn for one capture. Hidden once: by [`Self::hide`] after the capture, or from
@@ -801,7 +855,8 @@ async fn restore_all(cleanups: Vec<Cleanup>) {
 struct Masks {
     page: Arc<PageSession>,
     frames: Vec<Arc<FrameContext>>,
-    hidden: bool,
+    /// Held until the masks are hidden.
+    turn: Option<Turn>,
 }
 
 /// `Screenshotter._maskElements`: hide any overlay in every frame, then mask each locator's
@@ -810,6 +865,7 @@ struct Masks {
 async fn mask_elements(
     tab: &FrameTab,
     options: &ScreenshotOptions,
+    turn: &Turn,
     progress: &Progress,
 ) -> Result<Option<Masks>, CallError> {
     if options.masks.is_empty() {
@@ -819,7 +875,7 @@ async fn mask_elements(
     let masks = Masks {
         page: Arc::clone(&tab.page),
         frames,
-        hidden: false,
+        turn: Some(Arc::clone(turn)),
     };
     progress.race(hide_highlights(&masks.frames)).await?;
     for mask in &options.masks {
@@ -853,12 +909,13 @@ async fn mask_elements(
 impl Masks {
     /// Playwright's `await progress.race(cleanupHighlight())`.
     async fn hide(mut self, progress: &Progress) {
-        self.hidden = true;
+        let turn = self.turn.take();
         let frames = mem::take(&mut self.frames);
         let (done, hidden) = oneshot::channel();
         self.page.spawn(async move {
             hide_highlights(&frames).await;
             let _sent = done.send(());
+            drop(turn);
         });
         let _hidden = progress.race(hidden).await;
     }
@@ -867,12 +924,14 @@ impl Masks {
 /// Playwright: `server/screenshotter.ts` `Screenshotter._screenshot`: `cleanupHighlight().catch(() => {});`
 impl Drop for Masks {
     fn drop(&mut self) {
-        if self.hidden {
+        let Some(turn) = self.turn.take() else {
             return;
-        }
+        };
         let frames = mem::take(&mut self.frames);
-        self.page
-            .spawn(async move { hide_highlights(&frames).await });
+        self.page.spawn(async move {
+            hide_highlights(&frames).await;
+            drop(turn);
+        });
     }
 }
 
@@ -889,38 +948,59 @@ async fn hide_highlights(frames: &[Arc<FrameContext>]) {
     }
 }
 
-/// The transparent default background of one capture. Reset once: by [`Self::reset`], or from
-/// `Drop` on the run's tracker when the capture failed or the call stopped.
+/// The transparent default background of one capture, owned by one task on the run's tracker
+/// that sets the override, holds it until the capture is done, and then resets it. The reset
+/// goes out only after the override's own request has settled, so a call that stops while the
+/// override is still on its way can never leave it applied to later screenshots.
 struct Background {
-    page: Arc<PageSession>,
-    reset: bool,
+    /// Sent (or dropped) when the capture no longer needs the override.
+    release: Option<oneshot::Sender<()>>,
+    /// Answers once the reset has been sent and answered.
+    reset: Option<oneshot::Receiver<()>>,
 }
 
-/// Playwright: `server/screenshotter.ts` `Screenshotter._screenshot`: `await progress.race(this._page.delegate.setBackgroundColor());`
+/// Playwright: `server/screenshotter.ts` `Screenshotter._screenshot`: `await progress.race(this._page.delegate.setBackgroundColor({ r: 0, g: 0, b: 0, a: 0 }));`
 impl Background {
-    /// Playwright's `setBackgroundColor()`: `Emulation.setDefaultBackgroundColorOverride` with
-    /// no color, awaited unless the call has to stop.
-    async fn reset(mut self, progress: &Progress) {
-        self.reset = true;
-        let page = Arc::clone(&self.page);
-        let (done, reset) = oneshot::channel();
-        self.page.spawn(async move {
-            reset_background(&page).await;
-            let _sent = done.send(());
+    /// Starts the override's task, and returns its guard with the override's answer.
+    fn set(
+        page: &Arc<PageSession>,
+        turn: Turn,
+    ) -> (Self, oneshot::Receiver<Result<Value, CdpError>>) {
+        let (answer, answered) = oneshot::channel();
+        let (release, released) = oneshot::channel::<()>();
+        let (reset, was_reset) = oneshot::channel();
+        let owner = Arc::clone(page);
+        page.spawn(async move {
+            let set = owner
+                .send(
+                    "Emulation.setDefaultBackgroundColorOverride",
+                    json!({ "color": { "r": 0, "g": 0, "b": 0, "a": 0 } }),
+                )
+                .await;
+            let _unread = answer.send(set);
+            // A dropped guard is a release too: the call stopped.
+            let _released = released.await;
+            reset_background(&owner).await;
+            let _sent = reset.send(());
+            // The next screenshot may start only now.
+            drop(turn);
         });
-        let _reset = progress.race(reset).await;
+        let guard = Self {
+            release: Some(release),
+            reset: Some(was_reset),
+        };
+        (guard, answered)
     }
-}
 
-/// Playwright: `server/screenshotter.ts` `Screenshotter._screenshot`: `this._page.delegate.setBackgroundColor().catch(() => {});`
-impl Drop for Background {
-    fn drop(&mut self) {
-        if self.reset {
-            return;
+    /// Playwright's `setBackgroundColor()` after a capture: the reset, awaited unless the call
+    /// has to stop.
+    async fn reset(mut self, progress: &Progress) {
+        if let Some(release) = self.release.take() {
+            let _sent = release.send(());
         }
-        let page = Arc::clone(&self.page);
-        self.page
-            .spawn(async move { reset_background(&page).await });
+        if let Some(reset) = self.reset.take() {
+            let _reset = progress.race(reset).await;
+        }
     }
 }
 

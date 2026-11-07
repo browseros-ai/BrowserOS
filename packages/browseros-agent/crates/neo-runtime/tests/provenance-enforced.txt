@@ -6,6 +6,7 @@
 #
 # One path per line, relative to crates/, sorted. Add a file in the commit that makes it pass;
 # the list grows until it holds every neo source.
+neo-runtime-spec/src/binary.rs
 neo-runtime/src/artifacts.rs
 neo-runtime/src/capture.rs
 neo-runtime/src/pdf.rs

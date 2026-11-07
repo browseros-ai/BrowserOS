@@ -1,4 +1,6 @@
-// B1 regressions. Signal cases assert the fleet’s explicit Neo refusal contract.
+// B1 regressions. Signal cases assert the fleet’s explicit Neo refusal contract: a supplied
+// signal is refused before any browser effect, and `signal: null` is no signal (supermediator
+// DECIDED 01:27), so those cases compare with Playwright like the rest.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { withEngines } from './capture.mjs'
@@ -16,8 +18,20 @@ test('B1 independent option probes', { skip, timeout: 600000 }, async (t) => {
       ],
       [
         'locator signal',
-        `try {await page.locator('#far').screenshot({signal:null,style:'body{color:red}',path:at('signal.png')});return 'captured'}catch(e){return {name:e.name,signal:/signal/.test(e.message)}}`,
+        `try {await page.locator('#far').screenshot({signal:{aborted:true},style:'body{color:red}',path:at('signal.png')});return 'captured'}catch(e){return {name:e.name,signal:/signal/.test(e.message)}}`,
         'signal',
+      ],
+      [
+        'page null signal',
+        `const b=await page.screenshot({signal:null,clip:{x:0,y:0,width:20,height:10}});const d=describeImage(b);return {type:d.type,width:d.width,height:d.height}`,
+      ],
+      [
+        'locator null signal',
+        `const b=await page.locator('#box').screenshot({signal:null});const d=describeImage(b);return {type:d.type,width:d.width,height:d.height}`,
+      ],
+      [
+        'pdf null signal',
+        `const p=describePdf(await page.pdf({signal:null,pageRanges:'1'}));return {header:p.header,pages:p.pages,mediaBox:p.mediaBox}`,
       ],
       [
         'pdf signal',

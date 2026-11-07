@@ -306,7 +306,7 @@ export class Page {
       'page.pdf',
       this.#guid,
       'pdf',
-      pdfParams(options),
+      pdfParams('page.pdf', options),
       0,
     )
     return resultBuffer(result.pdf)

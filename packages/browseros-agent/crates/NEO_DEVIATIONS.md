@@ -11,8 +11,8 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/capture.rs | `masks` | `server/screenshotter.ts` `Screenshotter._maskElements` | masks a locator of another page in that page, where nothing hides the mask again; Neo skips it, which leaves this page's screenshot the same. |
 | neo-runtime/src/screenshot.rs | `screenshot_locator` | `server/frames.ts` `Frame.waitForSelector` | is the element Playwright's wait returns; Neo resolves it again with click's `resolve`, which also marks it as a target (`markTargets: 'all'`), and waits again if it detached in between. |
 | neo-sdk/src/screenshot.ts | (file) | `client/page.ts` `Page.screenshot` | A Neo script has no file system: `path` travels with the call and neo-runtime writes the bytes into the run's artifact directory (`artifacts.rs`), relative paths only. A run without one refuses `path` with an Error naming the option. |
-| neo-sdk/src/screenshot.ts | (file) | `client/timeoutSettings.ts` `TimeoutSettings.timeout` | Neo takes no `signal` (the realm has no `AbortController`), so a `signal` option is refused rather than ignored. |
-| neo-sdk/src/screenshot.ts | `screenshotFields` | `client/timeoutSettings.ts` `TimeoutSettings.timeout` | Neo refuses a signal rather than ignore it. |
+| neo-sdk/src/screenshot.ts | (file) | `client/timeoutSettings.ts` `TimeoutSettings.timeout` | Neo takes no `signal` yet (the realm has no `AbortController`), so any `signal` other than `undefined` or `null` is refused before anything reaches the page, never ignored; `page.pdf`, which Playwright calls with no timeout, refuses it the same way. |
+| neo-sdk/src/screenshot.ts | `refuseSignal` | `client/timeoutSettings.ts` `TimeoutSettings.timeout` | until Neo can abort a call, a signal is refused rather than ignored. |
 
 ## Unexplained: owner questions (0)
 

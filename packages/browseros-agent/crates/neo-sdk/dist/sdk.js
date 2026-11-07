@@ -827,8 +827,7 @@ function locatorScreenshotParams(apiName, selector, options) {
   return withPath(params, options.path);
 }
 function screenshotFields(apiName, options) {
-  if (options.signal !== undefined)
-    throw new Error(`${apiName}: Neo does not support signal yet`);
+  refuseSignal(apiName, options);
   const fields = { ...options, mask: undefined };
   if (!fields.type) {
     try {
@@ -846,7 +845,12 @@ function screenshotFields(apiName, options) {
   }
   return fields;
 }
-function pdfParams(options) {
+function refuseSignal(apiName, options) {
+  if (options.signal !== undefined && options.signal !== null)
+    throw new Error(`${apiName}: Neo does not support signal yet`);
+}
+function pdfParams(apiName, options) {
+  refuseSignal(apiName, options);
   const transportOptions = { ...options };
   const margin = options.margin ? { ...options.margin } : undefined;
   if (margin)
@@ -1939,7 +1943,7 @@ class Page {
     return resultBuffer(result.binary);
   }
   async pdf(options = {}) {
-    const result = await this.#connection.sendPage("page.pdf", this.#guid, "pdf", pdfParams(options), 0);
+    const result = await this.#connection.sendPage("page.pdf", this.#guid, "pdf", pdfParams("page.pdf", options), 0);
     return resultBuffer(result.pdf);
   }
   async ariaSnapshot(options = {}) {
