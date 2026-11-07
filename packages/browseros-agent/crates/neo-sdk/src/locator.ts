@@ -43,13 +43,17 @@ import {
   escapeForTextSelector,
   isString,
 } from '../vendor/playwright/isomorphic/stringUtils'
+import { DisposableStub } from './disposable'
 import type { ElementHandle } from './element-handle'
 import type {
   AriaSnapshotOptions,
   CheckOptions,
   ClickOptions,
   DblclickOptions,
+  DispatchEventOptions,
+  ElementTimeoutOptions,
   FillOptions,
+  FocusOptions,
   Frame,
   GetAttributeOptions,
   HoverOptions,
@@ -64,6 +68,7 @@ import type {
   IsVisibleOptions,
   PressOptions,
   SelectOptionOptions,
+  SelectTextOptions,
   TapOptions,
   TextContentOptions,
   UncheckOptions,
@@ -130,6 +135,84 @@ export class Locator {
 
   page(): Page {
     return this._frame.page()
+  }
+
+  /** The element's border box in the main frame's CSS pixels, or `null` when it has none. */
+  async boundingBox(
+    options?: ElementTimeoutOptions,
+  ): Promise<{ x: number; y: number; width: number; height: number } | null> {
+    return await this._frame._boundingBox(
+      'locator.boundingBox',
+      this._selector,
+      options ?? {},
+    )
+  }
+
+  async dispatchEvent(
+    type: string,
+    eventInit: object = {},
+    options?: DispatchEventOptions,
+  ): Promise<void> {
+    return await this._frame._dispatchEvent(
+      'locator.dispatchEvent',
+      this._selector,
+      type,
+      eventInit,
+      { strict: true, ...options },
+    )
+  }
+
+  async focus(options?: FocusOptions): Promise<void> {
+    return await this._frame._focus('locator.focus', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async blur(options?: FocusOptions): Promise<void> {
+    await this._frame._blur('locator.blur', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  /** As Playwright's, reads `options.timeout` first: a `null` options object throws its
+   * TypeError. The rest of the options reach the timeout settings, as every method's do. */
+  async scrollIntoViewIfNeeded(
+    options: ElementTimeoutOptions = {},
+  ): Promise<void> {
+    return await this._frame._scrollIntoViewIfNeeded(
+      'locator.scrollIntoViewIfNeeded',
+      this._selector,
+      { ...options, timeout: options.timeout },
+    )
+  }
+
+  /** As Playwright's, reads `options.timeout` first: a `null` options object throws its
+   * TypeError. */
+  async selectText(options: SelectTextOptions = {}): Promise<void> {
+    const timeout = options.timeout
+    return await this._frame._selectText('locator.selectText', this._selector, {
+      ...options,
+      timeout,
+    })
+  }
+
+  /** Highlights the matching elements until `hideHighlight()`, the returned stub's
+   * `dispose()`, or the end of the run, whichever comes first. */
+  async highlight(
+    options: { style?: string | Record<string, string | number> } = {},
+  ): Promise<DisposableStub> {
+    const style =
+      typeof options.style === 'object'
+        ? cssObjectToString(options.style)
+        : options.style
+    await this._frame._highlight('locator.highlight', this._selector, style)
+    return new DisposableStub(() => this.hideHighlight())
+  }
+
+  async hideHighlight(): Promise<void> {
+    await this._frame._hideHighlight('locator.hideHighlight', this._selector)
   }
 
   async click(options: ClickOptions = {}): Promise<void> {
@@ -579,4 +662,16 @@ export function testIdAttributeName(): string {
 
 export function setTestIdAttribute(attributeName: string) {
   _testIdAttributeName = attributeName
+}
+
+/** Playwright: `client/locator.ts` `cssObjectToString` */
+function cssObjectToString(style: Record<string, string | number>): string {
+  return Object.entries(style)
+    .map(([key, value]) => {
+      const property = key.startsWith('--')
+        ? key
+        : key.replace(/[A-Z]/g, (m) => '-' + m.toLowerCase())
+      return `${property}: ${value}`
+    })
+    .join('; ')
 }

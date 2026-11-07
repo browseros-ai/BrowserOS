@@ -77,6 +77,7 @@ use crate::click::{
 use crate::events::{EventHub, Flushes};
 use crate::frame_selector::{self, FrameOwner};
 use crate::frames::{FrameContext, FrameScope, Frames, Host, local_tree};
+use crate::highlight::Highlights;
 use crate::keyboard::{self, InputSender};
 use crate::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
@@ -197,6 +198,8 @@ pub(crate) struct PageSession {
     network_enabled: OnceCell<()>,
     /// The tab's frames' `networkidle`, fed and timed by the watcher.
     idle: Arc<SharedIdle>,
+    /// The run's highlights on this tab, hidden when the run ends (`highlight.rs`).
+    pub(crate) highlights: Highlights,
     /// What the watcher turns into the run's events, and the tab's console history and dialogs.
     pub(crate) events: PageEvents,
     /// `Runtime.enable` and `Log.enable`, sent once a run listens to console messages or page
@@ -652,6 +655,7 @@ impl PageSession {
             network,
             network_enabled: OnceCell::new(),
             idle: Arc::new(SharedIdle::new(page.as_str(), Instant::now())),
+            highlights: Highlights::default(),
             events,
             runtime_enabled: OnceCell::new(),
         }

@@ -64,11 +64,16 @@ use tracing::debug;
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::dialogs;
+use crate::element_ops::{
+    self, BOUNDING_BOX_META, DispatchOptions, ElementTarget, NeoElementParams, NeoSelectTextParams,
+    SCROLL_INTO_VIEW_META, SELECT_TEXT_META,
+};
 use crate::evaluate::{self, EvalCall};
 use crate::events::{ALL_PAGES, EventHub};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
 use crate::frames::FrameScope;
+use crate::highlight::{self, HighlightOptions};
 use crate::history::{
     self, Cursors, Ending, FinishNavigationOptions, FrameCursor, NeoFinishNavigationParams,
     NeoNavigationResult, NeoNextNavigationParams, NeoReleaseNavigationParams,
@@ -331,6 +336,15 @@ enum Route {
     FrameWaitForSelector(WaitForSelectorOptions),
     FrameWaitForUrl(WaitForUrlOptions),
     FrameWaitForLoadState(WaitForLoadStateOptions),
+    // Element operations (element_ops.rs, highlight.rs).
+    FrameFocus(ElementTarget),
+    FrameBlur(ElementTarget),
+    FrameDispatchEvent(DispatchOptions),
+    FrameScrollIntoViewIfNeeded(ElementTarget),
+    FrameSelectText(ElementTarget, bool),
+    FrameBoundingBox(ElementTarget),
+    FrameHighlight(HighlightOptions),
+    FrameHideHighlight(HighlightOptions),
     FrameWaitForNavigation(WaitForNavigationOptions),
     FrameNextNavigation(NeoNextNavigationParams),
     FrameFinishNavigation(FinishNavigationOptions),
@@ -473,6 +487,14 @@ impl Dispatcher {
         let _created = time::timeout_at(deadline, self.0.tabs.finish_creations()).await;
         run.tasks.close();
         let _waited = time::timeout_at(deadline, run.tasks.wait()).await;
+        // The run's highlights show over the user's tab; none may outlive the run that made it.
+        let sessions = self.0.tabs.attached_sessions();
+        let _hidden = time::timeout_at(deadline, async {
+            for session in &sessions {
+                highlight::hide_at_run_end(session).await;
+            }
+        })
+        .await;
         // Releases each session's handle group on its page's tracked task, before the sessions
         // detach; a run whose future is dropped releases them as `RunScope` drops.
         run.handles.close();
@@ -497,6 +519,9 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
                         .and_then(|params| WaitForUrlOptions::from_params(&params))
                         .map(|options| ObjectCall::Frame(Route::FrameWaitForUrl(options))),
                 };
+            }
+            if let Some(routed) = route_element_command(method, params.clone()) {
+                return routed;
             }
             if let Some(routed) = route_navigation_wait(method, params.as_ref()) {
                 return routed;
@@ -580,6 +605,36 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             route: Err(PlaywrightError::error(error.to_string())),
         },
     }
+}
+
+/// The Neo element commands (`element_ops.rs`), or `None` for any other method.
+fn route_element_command(method: &str, params: Option<Value>) -> Option<Routed> {
+    let (meta, route) = if method == SCROLL_INTO_VIEW_META.method {
+        let route = decode_neo_params::<NeoElementParams>(params, &SCROLL_INTO_VIEW_META)
+            .map(|params| Route::FrameScrollIntoViewIfNeeded(ElementTarget::from_neo(params)));
+        (&SCROLL_INTO_VIEW_META, route)
+    } else if method == SELECT_TEXT_META.method {
+        let route =
+            decode_neo_params::<NeoSelectTextParams>(params, &SELECT_TEXT_META).map(|params| {
+                let force = params.force.unwrap_or(false);
+                let target = ElementTarget::from_neo(NeoElementParams {
+                    selector: params.selector,
+                    strict: params.strict,
+                });
+                Route::FrameSelectText(target, force)
+            });
+        (&SELECT_TEXT_META, route)
+    } else if method == BOUNDING_BOX_META.method {
+        let route = decode_neo_params::<NeoElementParams>(params, &BOUNDING_BOX_META)
+            .map(|params| Route::FrameBoundingBox(ElementTarget::from_neo(params)));
+        (&BOUNDING_BOX_META, route)
+    } else {
+        return None;
+    };
+    Some(Routed {
+        meta: Some(meta),
+        route: route.map(ObjectCall::Frame),
+    })
 }
 
 /// Neo's navigation-wait commands on a Frame guid (`history.rs`), or `None` for another method.
@@ -692,6 +747,17 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         }
         FrameCall::WaitForSelector(params) => Ok(Route::FrameWaitForSelector(
             WaitForSelectorOptions::from_params(params),
+        )),
+        FrameCall::Focus(params) => Ok(Route::FrameFocus(ElementTarget::from_focus(params))),
+        FrameCall::Blur(params) => Ok(Route::FrameBlur(ElementTarget::from_blur(params))),
+        FrameCall::DispatchEvent(params) => {
+            DispatchOptions::from_params(params).map(Route::FrameDispatchEvent)
+        }
+        FrameCall::Highlight(params) => Ok(Route::FrameHighlight(
+            HighlightOptions::from_highlight(params),
+        )),
+        FrameCall::HideHighlight(params) => Ok(Route::FrameHideHighlight(
+            HighlightOptions::from_hide(params),
         )),
     }
 }
@@ -892,9 +958,65 @@ async fn serve(
         | Route::FrameIsEnabled(_)
         | Route::FrameIsDisabled(_)
         | Route::FrameIsEditable(_)) => serve_state(&page, route, &progress).await,
+        route @ (Route::FrameFocus(_)
+        | Route::FrameBlur(_)
+        | Route::FrameDispatchEvent(_)
+        | Route::FrameScrollIntoViewIfNeeded(_)
+        | Route::FrameSelectText(..)
+        | Route::FrameBoundingBox(_)
+        | Route::FrameHighlight(_)
+        | Route::FrameHideHighlight(_)) => serve_element_op(&page, route, &progress).await,
         route => serve_route(&page, route, &progress).await,
     };
     finish_reply(result, reply).await;
+}
+
+/// The element operations `serve` answers on the call's page (`element_ops.rs`,
+/// `highlight.rs`); each replies `{}` but `neo:boundingBox`, which answers `{value?}`.
+async fn serve_element_op(
+    page: &FrameTab,
+    route: Route,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    match route {
+        Route::FrameFocus(target) => element_ops::focus(page, &target, progress)
+            .await
+            .map(|()| None),
+        Route::FrameBlur(target) => element_ops::blur(page, &target, progress)
+            .await
+            .map(|()| None),
+        Route::FrameDispatchEvent(options) => element_ops::dispatch_event(page, &options, progress)
+            .await
+            .map(|()| None),
+        Route::FrameScrollIntoViewIfNeeded(target) => {
+            element_ops::scroll_into_view_if_needed(page, &target, progress)
+                .await
+                .map(|()| Some(json!({})))
+        }
+        Route::FrameSelectText(target, force) => {
+            element_ops::select_text(page, &target, force, progress)
+                .await
+                .map(|()| Some(json!({})))
+        }
+        Route::FrameBoundingBox(target) => element_ops::bounding_box(page, &target, progress)
+            .await
+            .and_then(|result| {
+                serde_json::to_value(result).map(Some).map_err(|error| {
+                    PlaywrightError::error(format!("encoding neo:boundingBox result: {error}"))
+                        .into()
+                })
+            }),
+        Route::FrameHighlight(options) => highlight::highlight(page, &options, progress)
+            .await
+            .map(|()| None),
+        Route::FrameHideHighlight(options) => highlight::hide_highlight(page, &options, progress)
+            .await
+            .map(|()| None),
+        _ => Err(PlaywrightError::error(
+            "neo-runtime: `serve_element_op` serves element operations only",
+        )
+        .into()),
+    }
 }
 
 /// The state reads `serve` answers on the call's page (`states.rs`): `isVisible` and `isHidden`
@@ -1046,6 +1168,14 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameWaitForSelector(_)
         | Route::FrameWaitForUrl(_)
         | Route::FrameWaitForLoadState(_)
+        | Route::FrameFocus(_)
+        | Route::FrameBlur(_)
+        | Route::FrameDispatchEvent(_)
+        | Route::FrameScrollIntoViewIfNeeded(_)
+        | Route::FrameSelectText(..)
+        | Route::FrameBoundingBox(_)
+        | Route::FrameHighlight(_)
+        | Route::FrameHideHighlight(_)
         | Route::FrameWaitForNavigation(_)
         | Route::FrameNextNavigation(_)
         | Route::FrameFinishNavigation(_)
@@ -1525,6 +1655,14 @@ mod tests {
                 | Route::FrameWaitForSelector(_)
                 | Route::FrameWaitForUrl(_)
                 | Route::FrameWaitForLoadState(_)
+                | Route::FrameFocus(_)
+                | Route::FrameBlur(_)
+                | Route::FrameDispatchEvent(_)
+                | Route::FrameScrollIntoViewIfNeeded(_)
+                | Route::FrameSelectText(..)
+                | Route::FrameBoundingBox(_)
+                | Route::FrameHighlight(_)
+                | Route::FrameHideHighlight(_)
                 | Route::FrameWaitForNavigation(_)
                 | Route::FrameNextNavigation(_)
                 | Route::FrameFinishNavigation(_)

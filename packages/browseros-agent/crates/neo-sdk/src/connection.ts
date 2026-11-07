@@ -192,6 +192,20 @@ export type ApiName =
   | 'frame.innerHTML'
   | 'locator.allInnerTexts'
   | 'locator.all'
+  // Element operations (B2).
+  | 'locator.focus'
+  | 'page.focus'
+  | 'frame.focus'
+  | 'locator.blur'
+  | 'locator.dispatchEvent'
+  | 'page.dispatchEvent'
+  | 'frame.dispatchEvent'
+  | 'locator.scrollIntoViewIfNeeded'
+  | 'locator.selectText'
+  | 'locator.boundingBox'
+  | 'locator.highlight'
+  | 'locator.hideHighlight'
+  | 'page.hideHighlight'
 
 /** Playwright's wire error, `{error: {name, message}}`'s inner object. */
 export type WireError = { name: string; message: string }
