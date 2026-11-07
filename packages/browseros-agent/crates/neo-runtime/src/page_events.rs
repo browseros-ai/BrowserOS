@@ -39,6 +39,7 @@ use browseros_cdp::{CdpClient, CdpEvent, SessionId};
 use neo_runtime_spec::serve::SerializedError;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::time;
 use tracing::debug;
 
@@ -76,6 +77,14 @@ pub(crate) struct PageEvents {
     /// The file choosers the page opened while the run listened, until `FileChooser.element()`
     /// makes their input the run's handle.
     pub(crate) choosers: Arc<Choosers>,
+    /// Whether the tab's session intercepts its file choosers now. Every switch takes this lock
+    /// and switches to the run's latest `filechooser` subscription, so the last one to run
+    /// leaves the latest, whatever order their tasks ran in ([`PageEvents::reconcile_interception`]).
+    intercepting: Arc<AsyncMutex<bool>>,
+    /// Each page-world execution context of the tab's sessions, by session and id, with the
+    /// frame it runs in, from `Runtime.executionContextCreated` (on once the run listens to the
+    /// console): the frame a console message's arguments live in.
+    contexts: Arc<Mutex<HashMap<(SessionId, i64), String>>>,
     pub(crate) console: Arc<ConsoleLog>,
     pub(crate) dialogs: Arc<Dialogs>,
     /// The tab's frames, as the run's frame events see them.
@@ -126,6 +135,8 @@ impl PageEvents {
             children: Arc::default(),
             args: Arc::default(),
             choosers: Arc::default(),
+            intercepting: Arc::default(),
+            contexts: Arc::default(),
             console: Arc::default(),
             dialogs: Arc::default(),
             frames: Arc::new(Mutex::new(FrameModel::new(target))),
@@ -163,14 +174,45 @@ impl PageEvents {
         if self.console.requested(&self.session) {
             self.enable_child(host).await;
         }
+        // Under the switches' lock, so a switch-off running meanwhile cannot miss this frame.
+        let _switching = self.intercepting.lock().await;
         if self.hub.subscribed(&self.page_guid, "filechooser") {
             self.intercept_child(host.session_id(), true).await;
         }
     }
 
+    /// Switches the tab's file chooser interception, and that of each out-of-process frame of it
+    /// the run attached, to the run's latest `filechooser` subscription, if it changed. Takes the
+    /// switches' lock for the whole switch. The tab's session must have `Page.enable` on
+    /// (`PageSession::prepare`); a failure is logged and the next switch tries again.
+    pub(crate) async fn reconcile_interception(&self) {
+        let mut intercepting = self.intercepting.lock().await;
+        let wanted = self.hub.subscribed(&self.page_guid, "filechooser");
+        if *intercepting == wanted {
+            return;
+        }
+        let switched = time::timeout(
+            CHILD_ENABLE_WAIT,
+            self.cdp.send(
+                "Page.setInterceptFileChooserDialog",
+                json!({ "enabled": wanted }),
+                Some(&self.session),
+            ),
+        )
+        .await;
+        match switched {
+            Ok(Ok(_)) => *intercepting = wanted,
+            Ok(Err(error)) => {
+                debug!(%error, "the page's file chooser interception did not switch");
+            }
+            Err(_) => debug!("the page's file chooser interception did not switch in time"),
+        }
+        self.intercept_children(wanted).await;
+    }
+
     /// Switches the file chooser interception of every out-of-process frame session of this tab
-    /// the run attached (`intercept_file_chooser`).
-    pub(crate) async fn intercept_children(&self, enabled: bool) {
+    /// the run attached, under the switches' lock ([`PageEvents::reconcile_interception`]).
+    async fn intercept_children(&self, enabled: bool) {
         let sessions: Vec<SessionId> = self
             .children
             .lock()
@@ -262,6 +304,7 @@ impl PageEvents {
         let Some(session) = event.session_id.as_ref() else {
             return applied.dialog;
         };
+        self.track_context(event, session);
         if session != &self.session {
             // An out-of-process frame of this tab: its console, frames and file choosers.
             // Chromium reports its dialogs on the tab's own session.
@@ -292,6 +335,38 @@ impl PageEvents {
         self.frame_event(event);
         self.lifecycle(applied);
         answer
+    }
+
+    /// Playwright: `server/chromium/crPage.ts` `FrameSession._onExecutionContextCreated`: `const frame = contextPayload.auxData ? this._page.frameManager.frame(contextPayload.auxData.frameId) : null;`
+    ///
+    /// The page-world execution contexts of the tab's own session and of the out-of-process
+    /// frame sessions the watcher takes, each with its frame.
+    fn track_context(&self, event: &CdpEvent, session: &SessionId) {
+        let Ok(mut contexts) = self.contexts.lock() else {
+            return;
+        };
+        match event.method.as_str() {
+            "Runtime.executionContextCreated" => {
+                let context = &event.params["context"];
+                let page_world = context["auxData"]["isDefault"].as_bool() == Some(true);
+                if let (Some(id), Some(frame), true) = (
+                    context["id"].as_i64(),
+                    context["auxData"]["frameId"].as_str(),
+                    page_world,
+                ) {
+                    contexts.insert((session.clone(), id), frame.to_string());
+                }
+            }
+            "Runtime.executionContextDestroyed" => {
+                if let Some(id) = event.params["executionContextId"].as_i64() {
+                    contexts.remove(&(session.clone(), id));
+                }
+            }
+            "Runtime.executionContextsCleared" => {
+                contexts.retain(|(of, _), _| of != session);
+            }
+            _ => {}
+        }
     }
 
     /// A frame change of the tab, for the page's and the context's frame listeners.
@@ -374,7 +449,14 @@ impl PageEvents {
             return;
         };
         let args = params["args"].as_array().cloned().unwrap_or_default();
-        self.message(record, event.timestamp, session, args);
+        // Playwright: `server/chromium/crPage.ts` `FrameSession._onConsoleAPI`: `const context = this._contextIdToContext.get(event.executionContextId);`
+        let frame = params["executionContextId"].as_i64().and_then(|id| {
+            self.contexts
+                .lock()
+                .ok()
+                .and_then(|contexts| contexts.get(&(session.clone(), id)).cloned())
+        });
+        self.message(record, event.timestamp, session, args, frame);
     }
 
     fn log_entry(&self, params: &Value, session: &SessionId) {
@@ -401,18 +483,20 @@ impl PageEvents {
         }
         // Playwright: `server/chromium/crPage.ts` `FrameSession._onLogEntryAdded`: `this._page.addConsoleMessage(null, level, [], location, text, event.entry.timestamp);`
         if let Some(record) = console::from_log_entry(&entry) {
-            self.message(record, entry.timestamp, session, Vec::new());
+            self.message(record, entry.timestamp, session, Vec::new(), None);
         }
     }
 
     /// A console message, or a log entry with no `args`. A listened message with arguments
     /// names them by an id (`argsId`), which `ConsoleMessage.args()` reads (`Tabs::console_args`).
+    /// `frame`: the frame the message's arguments live in, when the watcher knows its context.
     fn message(
         &self,
         record: ConsoleRecord,
         timestamp: f64,
         session: &SessionId,
         args: Vec<Value>,
+        frame: Option<String>,
     ) {
         let params = self
             .hub
@@ -423,7 +507,7 @@ impl PageEvents {
         if let Some(mut params) = params.filter(|_| live) {
             params["page"] = json!({ "guid": self.page_guid });
             if !args.is_empty() {
-                let frame = if session == &self.session {
+                let host = if session == &self.session {
                     None
                 } else {
                     self.children
@@ -431,7 +515,7 @@ impl PageEvents {
                         .ok()
                         .and_then(|children| children.get(session).cloned().flatten())
                 };
-                let id = self.args.keep(frame, args);
+                let id = self.args.keep(frame, host, args);
                 params["argsId"] = json!(format!("console@{}:{id}", self.target));
             }
             self.hub.emit(CONTEXT_GUID, "console", &params);
@@ -700,14 +784,17 @@ struct KeptArgs {
 #[derive(Clone, Debug)]
 pub(crate) struct Kept {
     pub(crate) id: u64,
+    /// The frame the arguments live in, when the watcher knew the message's context.
     pub(crate) frame: Option<String>,
+    /// The out-of-process frame whose session reported the message; `None` for the tab's own.
+    pub(crate) host: Option<String>,
     pub(crate) objects: Vec<Value>,
     pub(crate) handles: Option<Value>,
 }
 
 impl ConsoleArgs {
     /// Keeps one message's arguments and returns its id, dropping the oldest past the cap.
-    fn keep(&self, frame: Option<String>, objects: Vec<Value>) -> u64 {
+    fn keep(&self, frame: Option<String>, host: Option<String>, objects: Vec<Value>) -> u64 {
         let Ok(mut state) = self.0.lock() else {
             return 0;
         };
@@ -716,6 +803,7 @@ impl ConsoleArgs {
         state.kept.push_back(Kept {
             id,
             frame,
+            host,
             objects,
             handles: None,
         });
@@ -819,12 +907,15 @@ fn now_ms() -> f64 {
 
 /// Playwright: `server/page.ts` `Page._setFileChooserInterceptedBy`: `if (wasIntercepted !== this.fileChooserIntercepted())`
 ///
-/// Turns the page's file chooser interception on or off (`Page.setInterceptFileChooserDialog`,
-/// which its session keeps until it detaches), on a run task the page's next call waits for: a
-/// click right after `page.on('filechooser')` must find the chooser intercepted. The SDK
+/// Brings the page's file chooser interception (`Page.setInterceptFileChooserDialog`, which its
+/// session keeps until it detaches) to the run's latest `filechooser` subscription, on a run task
+/// the page's next call waits for: a click right after `page.on('filechooser')` must find the
+/// chooser intercepted, and one right after the last listener left must find it not. The SDK
 /// subscribes on the first listener and unsubscribes after the last, so this switches as
-/// Playwright's does, while the client listens.
-pub(crate) fn intercept_file_chooser(tabs: &Tabs, entry: Arc<PageEntry>, enabled: bool) {
+/// Playwright's does, while the client listens. Each subscription change starts one; they take
+/// turns ([`PageEvents::reconcile_interception`]), so a slow switch-on cannot land after the
+/// switch-off that followed it.
+pub(crate) fn intercept_file_chooser(tabs: &Tabs, entry: Arc<PageEntry>) {
     let enabling = tabs.events().begin_enable(entry.id.as_str());
     let run_tabs = tabs.clone();
     tabs.spawn(async move {
@@ -840,16 +931,7 @@ pub(crate) fn intercept_file_chooser(tabs: &Tabs, entry: Arc<PageEntry>, enabled
             debug!(%error, "a file chooser subscription could not prepare its page");
             return;
         }
-        let intercepted = session
-            .send(
-                "Page.setInterceptFileChooserDialog",
-                json!({ "enabled": enabled }),
-            )
-            .await;
-        if let Err(error) = intercepted {
-            debug!(%error, "the page's file chooser interception did not switch");
-        }
-        session.events.intercept_children(enabled).await;
+        session.events.reconcile_interception().await;
     });
 }
 
@@ -944,6 +1026,102 @@ mod tests {
             "the history keeps every message, live or not"
         );
     }
+    #[tokio::test]
+    async fn tests_that_interception_ends_at_the_latest_subscription_whatever_order_switches_run() {
+        use futures_util::future;
+
+        use crate::fake_browser::{FakeBrowser, Replies};
+
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let hub = EventHub::default();
+        let events = PageEvents::new(
+            hub.clone(),
+            "T",
+            browser.cdp().await,
+            SessionId::from("s"),
+            false,
+        );
+        let switches = || -> Vec<Value> {
+            browser
+                .exchanges()
+                .into_iter()
+                .filter(|exchange| exchange.method() == "Page.setInterceptFileChooserDialog")
+                .map(|exchange| exchange.command["params"]["enabled"].clone())
+                .collect()
+        };
+        // A listener came and went (an aborted wait) before either switch ran: neither turns it on.
+        hub.subscribe("page@T", "filechooser", true);
+        hub.subscribe("page@T", "filechooser", false);
+        future::join(
+            events.reconcile_interception(),
+            events.reconcile_interception(),
+        )
+        .await;
+        assert_eq!(switches(), Vec::<Value>::new(), "nothing to switch");
+        hub.subscribe("page@T", "filechooser", true);
+        events.reconcile_interception().await;
+        // The off follows a late on: both switches read the latest subscription, off.
+        hub.subscribe("page@T", "filechooser", false);
+        future::join(
+            events.reconcile_interception(),
+            events.reconcile_interception(),
+        )
+        .await;
+        assert_eq!(
+            switches(),
+            [json!(true), json!(false)],
+            "on, then off, once each"
+        );
+        assert!(!*events.intercepting.lock().await);
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_console_messages_context_names_the_frame_it_logged_in() {
+        use crate::fake_browser::{FakeBrowser, Replies};
+
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let events = PageEvents::new(
+            EventHub::default(),
+            "T",
+            browser.cdp().await,
+            SessionId::from("s"),
+            false,
+        );
+        let context = |method: &str, params: Value| CdpEvent {
+            method: method.to_string(),
+            params,
+            session_id: Some(SessionId::from("s")),
+        };
+        events.track_context(
+            &context(
+                "Runtime.executionContextCreated",
+                json!({ "context": { "id": 7, "auxData": { "frameId": "CHILD", "isDefault": true } } }),
+            ),
+            &SessionId::from("s"),
+        );
+        events.track_context(
+            &context(
+                "Runtime.executionContextCreated",
+                json!({ "context": { "id": 8, "auxData": { "frameId": "CHILD", "isDefault": false } } }),
+            ),
+            &SessionId::from("s"),
+        );
+        let frame_of = |id: i64| {
+            events
+                .contexts
+                .lock()
+                .ok()
+                .and_then(|contexts| contexts.get(&(SessionId::from("s"), id)).cloned())
+        };
+        assert_eq!(frame_of(7).as_deref(), Some("CHILD"), "a page world");
+        assert_eq!(frame_of(8), None, "an isolated world is no console's");
+        events.track_context(
+            &context("Runtime.executionContextsCleared", json!({})),
+            &SessionId::from("s"),
+        );
+        assert_eq!(frame_of(7), None, "cleared with its session's contexts");
+    }
+
     #[tokio::test]
     async fn tests_that_the_lifecycle_replay_is_history_except_on_a_discovered_page() {
         use crate::fake_browser::{FakeBrowser, Replies};

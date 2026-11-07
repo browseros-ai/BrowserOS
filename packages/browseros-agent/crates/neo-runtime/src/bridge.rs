@@ -209,7 +209,7 @@ fn subscribe(tabs: &Tabs, request: &str) -> Result<(), String> {
     if event == "filechooser" {
         // A page's own event: `pages` is that page alone.
         for entry in pages {
-            page_events::intercept_file_chooser(tabs, entry, enabled);
+            page_events::intercept_file_chooser(tabs, entry);
         }
         return Ok(());
     }

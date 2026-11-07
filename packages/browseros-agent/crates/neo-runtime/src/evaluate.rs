@@ -1762,6 +1762,42 @@ pub(crate) async fn handle_for_remote_object(
     created_handle(tab, frame, installed.document, object, handles).await
 }
 
+/// [`handle_for_remote_object`] for an argument whose page closed before the script read it: the
+/// same handle, made without the browser. A value keeps it, so `jsonValue()` still answers; a
+/// call through an object's handle fails as on a closed page, as Playwright's handle does then.
+pub(crate) fn handle_for_gone_object(
+    tab: &FrameTab,
+    frame: &Arc<FrameContext>,
+    object: &RemoteObject,
+    handles: &Handles,
+) -> Result<CreatedHandle, PageError> {
+    let Some(object_id) = object.object_id.clone() else {
+        let (argument, preview) = primitive(object);
+        return handles.register(
+            tab,
+            frame,
+            DocumentId::GONE,
+            Remote::Value(argument),
+            false,
+            preview,
+        );
+    };
+    let element = object.subtype.as_deref() == Some(NODE_TYPE);
+    let preview = if element {
+        format!("{NODE_PREVIEW_PREFIX}{NODE_TYPE}")
+    } else {
+        render_preview(object)
+    };
+    handles.register(
+        tab,
+        frame,
+        DocumentId::GONE,
+        Remote::Object(HandleId::new(object_id)),
+        element,
+        preview,
+    )
+}
+
 /// Playwright's `JSHandle.jsonValue`: the page's `UtilityScript.jsonValue(true, handle)`, or for a
 /// primitive the value the handle keeps, without its frame: it answers after the frame is gone.
 async fn json_value(

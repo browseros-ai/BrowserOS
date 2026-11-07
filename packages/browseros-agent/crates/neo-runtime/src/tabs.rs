@@ -27,11 +27,11 @@ use crate::discovery::{self, TargetInfo};
 use crate::downloads::{self, Downloads, Opened};
 use crate::evaluate::{self, Handles};
 use crate::events::{ALL_PAGES, CONTEXT_GUID, Enabling, EventHub, Needs};
-use crate::frames::FrameScope;
+use crate::frames::{FrameContext, FrameScope};
 use crate::getters;
 use crate::network::HopId;
 use crate::page::{FrameTab, PageSession, Session, TabInputs};
-use crate::page_events::{self, MAX_KEPT_ARGS, MAX_KEPT_CHOOSERS};
+use crate::page_events::{self, Kept, MAX_KEPT_ARGS, MAX_KEPT_CHOOSERS};
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunPage};
 use crate::switch::Switches;
@@ -874,8 +874,10 @@ impl Tabs {
     }
 
     /// `ConsoleMessage.args()`: the run's handles of console message `id`'s arguments on page
-    /// `target`, made at the first read (eval's `handle_for_remote_object`) and the same records
-    /// after. The message's arguments are kept from when its event was produced.
+    /// `target`, made at the first read (eval's `handle_for_remote_object`) in the frame that
+    /// logged the message, and the same records after. The message's arguments are kept from when
+    /// its event was produced, so a page closed by then still answers: its handles are made
+    /// without the browser, and fail on use as on a closed page.
     pub(crate) async fn console_args(
         &self,
         target: &PageId,
@@ -894,27 +896,84 @@ impl Tabs {
                  a listener received; this message's are gone"
             ))
         })?;
-        if let Some(records) = kept.handles {
+        if let Some(records) = kept.handles.clone() {
             return Ok(records);
         }
-        let frame = match &kept.frame {
-            None => session.frames.main(),
-            Some(frame) => session
-                .frames
-                .cached(frame)
-                .ok_or_else(PlaywrightError::target_closed)?,
-        };
         let tab = FrameTab {
             page: Arc::clone(&session),
             scope: FrameScope::Main,
         };
-        let mut records = Vec::with_capacity(kept.objects.len());
-        for object in kept.objects {
-            let object: RemoteObject = serde_json::from_value(object)
-                .map_err(|error| PlaywrightError::error(error.to_string()))?;
-            let made = time::timeout(
+        let objects = kept
+            .objects
+            .iter()
+            .map(|object| serde_json::from_value::<RemoteObject>(object.clone()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| PlaywrightError::error(error.to_string()))?;
+        // A page closed before or while the script read them still has them: Playwright made its
+        // handles as the message arrived. Using an object's handle then fails.
+        let made = if entry.closed.is_cancelled() {
+            Self::gone_args(&tab, &session, &kept, &objects, handles)?
+        } else {
+            match Self::live_args(&tab, &session, &kept, &objects, handles).await {
+                Ok(made) => made,
+                Err(_) if entry.closed.is_cancelled() => {
+                    Self::gone_args(&tab, &session, &kept, &objects, handles)?
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        let records = Value::Array(
+            made.into_iter()
+                .map(serde_json::to_value)
+                .collect::<Result<_, _>>()
+                .map_err(|error| PlaywrightError::error(error.to_string()))?,
+        );
+        session.events.args.made(id, records.clone());
+        Ok(records)
+    }
+
+    /// The frame a message's arguments live in: the frame that logged it, inside the
+    /// out-of-process frame whose session reported it, else that frame, else the main frame.
+    async fn args_frame(
+        session: &Arc<PageSession>,
+        kept: &Kept,
+    ) -> Result<Arc<FrameContext>, PlaywrightError> {
+        let main = session.frames.main();
+        let parent = match &kept.host {
+            Some(host) => {
+                let root = session
+                    .frames
+                    .context(host, Some(&main.host))
+                    .await
+                    .map_err(|error| args_error(&error))?;
+                Arc::clone(&root.host)
+            }
+            None => Arc::clone(&main.host),
+        };
+        match kept.frame.as_ref().or(kept.host.as_ref()) {
+            None => Ok(main),
+            Some(frame) => session
+                .frames
+                .context(frame, Some(&parent))
+                .await
+                .map_err(|error| args_error(&error)),
+        }
+    }
+
+    /// The arguments' handles, each retained in the run's handle group of its frame's session.
+    async fn live_args(
+        tab: &FrameTab,
+        session: &Arc<PageSession>,
+        kept: &Kept,
+        objects: &[RemoteObject],
+        handles: &Handles,
+    ) -> Result<Vec<evaluate::CreatedHandle>, PlaywrightError> {
+        let frame = Self::args_frame(session, kept).await?;
+        let mut made = Vec::with_capacity(objects.len());
+        for object in objects {
+            let handle = time::timeout(
                 ARGS_WAIT,
-                evaluate::handle_for_remote_object(&tab, &frame, object, handles),
+                evaluate::handle_for_remote_object(tab, &frame, object.clone(), handles),
             )
             .await
             .map_err(|_| {
@@ -924,14 +983,33 @@ impl Tabs {
                 )
             })?
             .map_err(|error| args_error(&error))?;
-            records.push(
-                serde_json::to_value(made)
-                    .map_err(|error| PlaywrightError::error(error.to_string()))?,
-            );
+            made.push(handle);
         }
-        let records = Value::Array(records);
-        session.events.args.made(id, records.clone());
-        Ok(records)
+        Ok(made)
+    }
+
+    /// The arguments' handles after their page closed ([`evaluate::handle_for_gone_object`]),
+    /// in the frame the run knew them in, else the main frame.
+    fn gone_args(
+        tab: &FrameTab,
+        session: &Arc<PageSession>,
+        kept: &Kept,
+        objects: &[RemoteObject],
+        handles: &Handles,
+    ) -> Result<Vec<evaluate::CreatedHandle>, PlaywrightError> {
+        let frame = kept
+            .frame
+            .as_ref()
+            .or(kept.host.as_ref())
+            .and_then(|frame| session.frames.cached(frame))
+            .unwrap_or_else(|| session.frames.main());
+        objects
+            .iter()
+            .map(|object| {
+                evaluate::handle_for_gone_object(tab, &frame, object, handles)
+                    .map_err(|error| args_error(&error))
+            })
+            .collect()
     }
 
     /// Deviation: `server/chromium/crPage.ts` `FrameSession._onFileChooserOpened`: `const utilityContext = await frame.utilityContext();`

@@ -689,6 +689,7 @@ fn answer(
         | "Target.setDiscoverTargets"
         | "Browser.setDownloadBehavior"
         | "Browser.cancelDownload"
+        | "Page.setInterceptFileChooserDialog"
         | "Page.close"
         | "Page.enable"
         | "Network.enable"

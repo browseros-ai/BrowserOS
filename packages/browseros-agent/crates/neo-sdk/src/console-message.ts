@@ -10,8 +10,10 @@
  * Playwright's server sends every argument as a handle with the message. Neo sends a message's
  * arguments by an id (`argsId`) and makes the run's handles of them when `args()` first reads
  * them (a getter; neo-runtime `tabs.rs` `console_args`), so a message nobody reads costs no
- * browser call and keeps its place among the events. A message read from `consoleMessages()`
- * kept no arguments: its `args()` throws an Error naming why.
+ * browser call and keeps its place among the events. Each handle lives in the frame that logged
+ * the message, as Playwright's does. After the page closed, `args()` still answers with them, and
+ * an object's handle then fails on use, as Playwright's does. A message read from
+ * `consoleMessages()` kept no arguments: its `args()` throws an Error naming why.
  *
  * Left out: Node's `util.inspect.custom` hook, which QuickJS does not have.
  */
