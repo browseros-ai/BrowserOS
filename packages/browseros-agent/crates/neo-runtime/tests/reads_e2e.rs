@@ -606,7 +606,8 @@ const FRAMED_BUTTONS: &str = r#"<!doctype html><html><body>
 
 /// An `ai` locator snapshot inside a frame answers page-wide refs: the ref of "Inner" reads
 /// "Inner" through `page.locator`, where a frame-relative `e2` read the main frame's "Top". A
-/// frame behind an iframe with no ref throws rather than answer refs it cannot route.
+/// frame behind an iframe that gets no ref (`visibility: hidden`) is named by its id (`fi…`), and
+/// that ref reads its button too.
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_an_ai_locator_snapshot_in_a_frame_answers_refs_that_reach_its_frame() {
     let Some(binary) = browser::e2e_browser() else {
@@ -631,6 +632,9 @@ async fn tests_that_an_ai_locator_snapshot_in_a_frame_answers_refs_that_reach_it
                viaPage: await page.locator('aria-ref=' + ref).textContent({{ timeout: 3000 }}).catch(caught),
                bodyRef: /\\[ref=([a-z0-9]+)\\]/.exec(body)?.[1],
                hidden: await page.frameLocator('#hidden').locator('button').ariaSnapshot({{ mode: 'ai' }}).catch(caught),
+               hiddenViaPage: await page.frameLocator('#hidden').locator('button').ariaSnapshot({{ mode: 'ai' }})
+                 .then((yaml) => page.locator('aria-ref=' + /\\[ref=([a-z0-9]+)\\]/.exec(yaml)?.[1]).textContent({{ timeout: 3000 }}))
+                 .catch(caught),
                hiddenDefault: await page.frameLocator('#hidden').locator('button').ariaSnapshot(),
              }};"
         ),
@@ -657,7 +661,19 @@ async fn tests_that_an_ai_locator_snapshot_in_a_frame_answers_refs_that_reach_it
             .is_some_and(|body_ref| body_ref.starts_with('f')),
         "every ref of a frame's subtree is page-wide: {result:#}"
     );
-    assert_eq!(result["hidden"], kind("Error", false));
+    let hidden = result["hidden"].as_str().unwrap_or_default();
+    let hidden_ref = hidden
+        .strip_prefix("- button \"Hidden\" [ref=fi")
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or_else(|| panic!("an identity ref for the hidden frame: {result:#}"));
+    assert!(
+        hidden_ref.len() > 32 && hidden_ref[32..].starts_with('e'),
+        "fi, the frame id's 32 hex digits, then eN: {result:#}"
+    );
+    assert_eq!(
+        result["hiddenViaPage"], "Hidden",
+        "the identity ref names the hidden frame's button"
+    );
     assert_eq!(
         result["hiddenDefault"], "- button \"Hidden\"",
         "the default mode has no refs to route"
