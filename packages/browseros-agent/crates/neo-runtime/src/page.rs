@@ -69,6 +69,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 use tracing::{debug, warn};
 
+use crate::auto_attach;
 use crate::click::{
     Arming, Geometry, NotReady, PageError, PressReport, Resolved, Scroll, SelectorFacts,
     StatesCheck, Stop, Tab, Verdict,
@@ -2214,6 +2215,8 @@ impl Drop for PageSession {
         // A run whose future is dropped never reaches its run end: its end is recorded here,
         // once nothing of the run writes any more, so what it holds is held by no live run.
         self.mark_input_ended();
+        // The session detaches with it, and its auto-attach setting with it (`auto_attach.rs`).
+        auto_attach::forget(self.session_id());
     }
 }
 

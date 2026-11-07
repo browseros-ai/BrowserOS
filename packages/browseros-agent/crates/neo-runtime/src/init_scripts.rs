@@ -35,7 +35,7 @@ use tokio::sync::Mutex;
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio_util::sync::CancellationToken;
 
-use crate::auto_attach::{AttachKind, AutoAttach};
+use crate::auto_attach::{self, AttachKind};
 use crate::page::PageSession;
 use crate::progress::PlaywrightError;
 
@@ -134,8 +134,6 @@ pub(crate) struct InitScripts {
     /// Cancelled as run end starts: a setup still waiting on a reply stops waiting, while the
     /// request's own task keeps the reply and undoes it.
     ending: CancellationToken,
-    /// The run's one auto-attach setting per session, shared with `workers.rs` (`auto_attach.rs`).
-    auto_attach: Arc<AutoAttach>,
 }
 
 #[derive(Clone)]
@@ -197,13 +195,6 @@ struct Link {
 
 impl Default for InitScripts {
     fn default() -> Self {
-        Self::with_auto_attach(Arc::default())
-    }
-}
-
-impl InitScripts {
-    /// The run's init scripts, setting auto-attach through the run's `auto_attach`.
-    pub(crate) fn with_auto_attach(auto_attach: Arc<AutoAttach>) -> Self {
         let mut hasher = RandomState::new().build_hasher();
         hasher.write_u64(NEXT_RUN.fetch_add(1, Ordering::Relaxed));
         Self {
@@ -216,7 +207,6 @@ impl InitScripts {
             sessions: SyncMutex::default(),
             stop: CancellationToken::new(),
             ending: CancellationToken::new(),
-            auto_attach,
         }
     }
 }
@@ -403,11 +393,10 @@ impl InitScripts {
             _ => return,
         }
         let (registry, cdp, link) = (Arc::clone(&self.registry), cdp.clone(), link.clone());
-        let auto_attach = Arc::clone(&self.auto_attach);
         let task = tokio::spawn(async move {
-            set_auto_attach(&auto_attach, &cdp, &link, true).await;
+            set_auto_attach(&cdp, &link, true).await;
             if lock(&registry).is_none_or(|registry| registry.closed) {
-                set_auto_attach(&auto_attach, &cdp, &link, false).await;
+                set_auto_attach(&cdp, &link, false).await;
             }
         });
         tokio::select! {
@@ -483,7 +472,6 @@ impl InitScripts {
             None => (Vec::new(), Vec::new()),
         };
         if let Some(cdp) = self.cdp.get().cloned() {
-            let auto_attach = Arc::clone(&self.auto_attach);
             // On a task of its own, so a run end cut short still removes every script.
             let removal = tokio::spawn(async move {
                 for installed in installed.iter().rev() {
@@ -491,7 +479,7 @@ impl InitScripts {
                 }
                 // The iframes' sessions first: turning auto-attach off on the tab's detaches them.
                 for link in attaching.iter().rev() {
-                    set_auto_attach(&auto_attach, &cdp, link, false).await;
+                    set_auto_attach(&cdp, link, false).await;
                 }
             });
             let _removed = removal.await;
@@ -723,18 +711,14 @@ async fn remove_script(cdp: &CdpClient, link: &Link, identifier: &str) {
 /// Neo: Chromium attaches each out-of-process iframe of the session's frame as it starts, held
 /// until its scripts are in (probe C1); off again when the run removes its scripts, which
 /// detaches those iframes' sessions.
-/// Turns the link's iframe auto-attach on or off, through the run's one setting per session
+/// Turns the link's iframe auto-attach on or off, through the session's one setting
 /// (`auto_attach.rs`), which also holds what `workers.rs` wants of it.
-async fn set_auto_attach(auto_attach: &AutoAttach, cdp: &CdpClient, link: &Link, on: bool) {
+async fn set_auto_attach(cdp: &CdpClient, link: &Link, on: bool) {
     let _set = until_gone(&link.gone, async {
         if on {
-            auto_attach
-                .want(cdp, &link.session, AttachKind::Iframe)
-                .await
+            auto_attach::want(cdp, &link.session, AttachKind::Iframe).await
         } else {
-            auto_attach
-                .release(cdp, &link.session, AttachKind::Iframe)
-                .await
+            auto_attach::release(cdp, &link.session, AttachKind::Iframe).await
         }
     })
     .await;
