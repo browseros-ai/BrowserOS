@@ -4590,28 +4590,61 @@ var ELEMENT_VALUES_UNSUPPORTED = "Neo does not support ElementHandle values in s
 function convertSelectOptionValues(values) {
   if (values === null)
     return {};
-  if (!Array.isArray(values))
-    values = [values];
-  if (!values.length)
+  const list = snapshot(values);
+  if (!list.length)
     return {};
-  for (let i = 0;i < values.length; i++) {
-    if (values[i] === null)
+  for (let i = 0;i < list.length; i++) {
+    if (list[i] === null)
       throw new Error(`options[${i}]: expected object, got null`);
   }
-  if (values.some((value) => value instanceof JSHandle))
-    throw new Error(ELEMENT_VALUES_UNSUPPORTED);
-  const options = isString(values[0]) ? values.map((valueOrLabel) => ({ valueOrLabel })) : values;
-  for (const [index, option] of options.entries()) {
-    if (typeof option !== "object" || option === null)
-      throw new Error(`options[${index}]: expected object`);
-    for (const field of ["valueOrLabel", "value", "label"]) {
-      if (option[field] !== undefined && typeof option[field] !== "string")
-        throw new Error(`options[${index}].${field}: expected string`);
-    }
-    if (option.index !== undefined && !Number.isInteger(option.index))
-      throw new Error(`options[${index}].index: expected integer`);
+  for (let i = 0;i < list.length; i++) {
+    if (list[i] instanceof JSHandle)
+      throw new Error(ELEMENT_VALUES_UNSUPPORTED);
+  }
+  const strings = isString(list[0]);
+  const options = [];
+  for (let i = 0;i < list.length; i++) {
+    options[i] = copyOption(strings ? { valueOrLabel: list[i] } : list[i], i);
   }
   return { options };
+}
+function snapshot(values) {
+  if (!Array.isArray(values))
+    return [values];
+  const length = values.length;
+  if (typeof length !== "number" || !Number.isSafeInteger(length) || length < 0)
+    throw new Error("options: expected array");
+  const list = [];
+  for (let i = 0;i < length; i++)
+    list[i] = values[i];
+  return list;
+}
+function copyOption(option, index) {
+  if (typeof option !== "object" || option === null)
+    throw new Error(`options[${index}]: expected object`);
+  const source = option;
+  const valueOrLabel = source.valueOrLabel;
+  const value = source.value;
+  const label = source.label;
+  const position = source.index;
+  const copy = {};
+  if (valueOrLabel !== undefined)
+    copy.valueOrLabel = text(valueOrLabel, index, "valueOrLabel");
+  if (value !== undefined)
+    copy.value = text(value, index, "value");
+  if (label !== undefined)
+    copy.label = text(label, index, "label");
+  if (position !== undefined) {
+    if (typeof position !== "number" || !Number.isInteger(position))
+      throw new Error(`options[${index}].index: expected integer`);
+    copy.index = position;
+  }
+  return copy;
+}
+function text(value, index, field) {
+  if (typeof value !== "string")
+    throw new Error(`options[${index}].${field}: expected string`);
+  return value;
 }
 
 // src/waiter.ts
@@ -4939,8 +4972,8 @@ function urlFor(url) {
   const parts = parseURL(url);
   return parts ? new URL2(parts) : null;
 }
-function formEncode(text) {
-  return encodeURIComponent(text).replace(/%20/g, "+").replace(/[!'()~]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+function formEncode(text2) {
+  return encodeURIComponent(text2).replace(/%20/g, "+").replace(/[!'()~]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 // src/frame.ts
@@ -5524,20 +5557,20 @@ class Frame {
   getByTestId(testId) {
     return this.locator(getByTestIdSelector(testIdAttributeName(), testId));
   }
-  getByAltText(text, options) {
-    return this.locator(getByAltTextSelector(text, options));
+  getByAltText(text2, options) {
+    return this.locator(getByAltTextSelector(text2, options));
   }
-  getByLabel(text, options) {
-    return this.locator(getByLabelSelector(text, options));
+  getByLabel(text2, options) {
+    return this.locator(getByLabelSelector(text2, options));
   }
-  getByPlaceholder(text, options) {
-    return this.locator(getByPlaceholderSelector(text, options));
+  getByPlaceholder(text2, options) {
+    return this.locator(getByPlaceholderSelector(text2, options));
   }
-  getByText(text, options) {
-    return this.locator(getByTextSelector(text, options));
+  getByText(text2, options) {
+    return this.locator(getByTextSelector(text2, options));
   }
-  getByTitle(text, options) {
-    return this.locator(getByTitleSelector(text, options));
+  getByTitle(text2, options) {
+    return this.locator(getByTitleSelector(text2, options));
   }
   getByRole(role, options = {}) {
     return this.locator(getByRoleSelector(role, options));
@@ -5921,20 +5954,20 @@ class Page extends ChannelOwner {
   getByTestId(testId) {
     return this.mainFrame().getByTestId(testId);
   }
-  getByAltText(text, options) {
-    return this.mainFrame().getByAltText(text, options);
+  getByAltText(text2, options) {
+    return this.mainFrame().getByAltText(text2, options);
   }
-  getByLabel(text, options) {
-    return this.mainFrame().getByLabel(text, options);
+  getByLabel(text2, options) {
+    return this.mainFrame().getByLabel(text2, options);
   }
-  getByPlaceholder(text, options) {
-    return this.mainFrame().getByPlaceholder(text, options);
+  getByPlaceholder(text2, options) {
+    return this.mainFrame().getByPlaceholder(text2, options);
   }
-  getByText(text, options) {
-    return this.mainFrame().getByText(text, options);
+  getByText(text2, options) {
+    return this.mainFrame().getByText(text2, options);
   }
-  getByTitle(text, options) {
-    return this.mainFrame().getByTitle(text, options);
+  getByTitle(text2, options) {
+    return this.mainFrame().getByTitle(text2, options);
   }
   getByRole(role, options = {}) {
     return this.mainFrame().getByRole(role, options);
