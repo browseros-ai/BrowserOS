@@ -2,7 +2,9 @@
  * The realm half of the event pipe against a stub `__neo_runtime`: listener counts turn Rust
  * subscriptions on and off as Playwright's `ChannelOwner` does, a reply's events run before its
  * caller continues, the idle wake delivers while the script waits, unserved Playwright events
- * refuse a listener, and a listener error nobody handles ends the run.
+ * refuse a listener, and a listener error nobody handles ends the run. New pages, lifecycle and
+ * frame events reach the page's and the context's listeners in Playwright's order, one object
+ * per guid.
  */
 import { beforeEach, expect, test } from 'bun:test'
 import type { BrowserContext } from '../../src/browser-context'
@@ -117,7 +119,9 @@ test('tests that an unserved Playwright event refuses a listener instead of neve
   expect(() => page.on('request', () => {})).toThrow(
     'Neo does not serve the "request" event on Page yet',
   )
-  expect(() => context.once('page', () => {})).toThrow(/BrowserContext/)
+  expect(() => context.once('serviceworker', () => {})).toThrow(
+    /BrowserContext/,
+  )
   expect(page.listenerCount('request')).toBe(0)
   await expect(page.waitForEvent('download')).rejects.toThrow(
     'page.waitForEvent: Neo does not serve the "download" event on Page yet',
@@ -255,4 +259,142 @@ test('tests that removeAllListeners with wait waits for running async listeners'
   expect(finished).toBe(true)
   expect(page.getMaxListeners()).toBe(0)
   expect(new EventEmitter().getMaxListeners()).toBe(10)
+})
+
+/** A frame record Rust would send (`frame_events.rs`). */
+function frameRecord(guid: string, url: string, name: string) {
+  return {
+    guid,
+    initializer: {
+      url,
+      name,
+      parentFrame: { guid: 'frame@T' },
+      loadStates: [],
+    },
+  }
+}
+
+/** A new page's record Rust would send (`tabs.rs` `Tabs::report_new`). */
+function pageRecord(target: string, url: string, opener?: string) {
+  return {
+    guid: `page@${target}`,
+    initializer: {
+      mainFrame: { guid: `frame@${target}` },
+      isClosed: false,
+      ...(opener ? { opener: { guid: opener } } : {}),
+    },
+    mainFrame: {
+      guid: `frame@${target}`,
+      initializer: { url, name: '', loadStates: [] },
+    },
+  }
+}
+
+test('tests that a new page reaches the context, then its opener as a popup, as one object', async () => {
+  const { page, context } = run()
+  const order: string[] = []
+  let fromContext: Page | undefined
+  context.on('page', (created) => {
+    fromContext = created
+    order.push(`page ${created.url()}`)
+  })
+  page.on('popup', (popup) => order.push(`popup ${popup === fromContext}`))
+  queueEvent('context@default', 'page', {
+    page: pageRecord('P', 'https://popup.test/', 'page@T'),
+  })
+  // A page whose opener the run does not know is nobody's popup.
+  queueEvent('context@default', 'page', {
+    page: pageRecord('Q', 'about:blank'),
+  })
+  await page.bringToFront()
+  expect(order).toEqual([
+    'page https://popup.test/',
+    'popup true',
+    'page about:blank',
+  ])
+  expect(subscriptions).toEqual([
+    { guid: 'context@default', event: 'page', enabled: true },
+    { guid: 'page@T', event: 'popup', enabled: true },
+  ])
+})
+
+test("tests that the main frame's load runs the page's listeners, then the context's", async () => {
+  const { page, context } = run()
+  const order: string[] = []
+  page.on('domcontentloaded', (loaded) =>
+    order.push(`domcontentloaded ${loaded === page}`),
+  )
+  page.on('load', (loaded) => order.push(`load ${loaded === page}`))
+  context.on('pageload', (loaded) => order.push(`pageload ${loaded === page}`))
+  queueEvent('page@T', 'domcontentloaded', {})
+  queueEvent('page@T', 'load', {})
+  await page.bringToFront()
+  expect(order).toEqual(['domcontentloaded true', 'load true', 'pageload true'])
+})
+
+test('tests that frame events hand out one Frame per guid and a navigation updates it', async () => {
+  const { page, context } = run()
+  const seen: unknown[] = []
+  let attached: unknown
+  page.on('frameattached', (frame) => {
+    attached = frame
+    seen.push(['attached', frame.name()])
+  })
+  context.on('frameattached', (frame) =>
+    seen.push(['context attached', frame === attached]),
+  )
+  page.on('framenavigated', (frame) =>
+    seen.push(['navigated', frame === attached, frame.url(), frame.name()]),
+  )
+  context.on('framenavigated', (frame) =>
+    seen.push(['context navigated', frame === page.mainFrame()]),
+  )
+  page.on('framedetached', (frame) =>
+    seen.push(['detached', frame === attached]),
+  )
+  context.on('framedetached', (frame) =>
+    seen.push(['context detached', frame === attached]),
+  )
+  queueEvent('page@T', 'frameAttached', {
+    frame: frameRecord('frame@T/A', '', ''),
+  })
+  queueEvent('page@T', 'frameNavigated', {
+    frame: frameRecord('frame@T/A', 'https://a.test/', 'x'),
+    url: 'https://a.test/#f',
+    name: 'x',
+  })
+  queueEvent('page@T', 'frameDetached', {
+    frame: frameRecord('frame@T/A', 'https://a.test/#f', 'x'),
+  })
+  queueEvent('page@T', 'frameNavigated', {
+    frame: {
+      guid: 'frame@T',
+      initializer: { url: 'https://run.test/next', name: '', loadStates: [] },
+    },
+    url: 'https://run.test/next',
+    name: '',
+  })
+  await page.bringToFront()
+  expect(seen).toEqual([
+    ['attached', ''],
+    ['context attached', true],
+    ['navigated', true, 'https://a.test/#f', 'x'],
+    ['context navigated', false],
+    ['detached', true],
+    ['context detached', true],
+    ['navigated', false, 'https://run.test/next', ''],
+    ['context navigated', true],
+  ])
+})
+
+test("tests that a closing page runs its close listeners, then the context's pageclose", async () => {
+  const { page, context } = run()
+  const order: string[] = []
+  page.on('close', (closed) => order.push(`close ${closed === page}`))
+  context.on('pageclose', (closed) =>
+    order.push(`pageclose ${closed === page}`),
+  )
+  queueEvent('page@T', 'close', {})
+  await page.bringToFront()
+  expect(order).toEqual(['close true', 'pageclose true'])
 })

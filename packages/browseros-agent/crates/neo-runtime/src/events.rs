@@ -598,6 +598,34 @@ mod tests {
         assert_eq!(needs(CONTEXT_GUID, "pageerror"), None);
         assert_eq!(needs("page@T", "request"), None);
         assert_eq!(needs("frame@T", "console"), None);
+        assert_eq!(needs("page@T", "popup"), Some(Needs::DISCOVERY));
+        assert_eq!(needs(CONTEXT_GUID, "page"), Some(Needs::DISCOVERY));
+        assert_eq!(needs(CONTEXT_GUID, "pageclose"), Some(Needs::WATCHER));
+        assert_eq!(needs("page@T", "framenavigated"), Some(Needs::WATCHER));
+        assert_eq!(needs(CONTEXT_GUID, "domcontentloaded"), None);
+        assert!(
+            !Needs::DISCOVERY.of_page(),
+            "discovery switches nothing on in a page"
+        );
+    }
+
+    #[test]
+    fn tests_that_an_enable_for_all_pages_holds_every_page_and_the_context() {
+        let hub = EventHub::default();
+        let enabling = hub.begin_enable(ALL_PAGES);
+        assert!(hub.enabling("T"), "a page's call waits for it");
+        assert!(hub.enabling(ALL_PAGES), "a context call waits for it");
+        drop(enabling);
+        assert!(!hub.enabling("T") && !hub.enabling(ALL_PAGES));
+    }
+
+    #[test]
+    fn tests_that_closing_the_hub_ends_its_producers() {
+        let hub = EventHub::default();
+        let ended = hub.ended();
+        assert!(!ended.is_cancelled());
+        hub.close();
+        assert!(ended.is_cancelled());
     }
 
     #[test]

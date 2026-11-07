@@ -633,4 +633,53 @@ mod tests {
             "the history keeps every message, live or not"
         );
     }
+    #[tokio::test]
+    async fn tests_that_the_lifecycle_replay_is_history_except_on_a_discovered_page() {
+        use crate::fake_browser::{FakeBrowser, Replies};
+        use crate::page::Fired;
+
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let cdp = browser.cdp().await;
+        let loaded = Applied {
+            fired: Fired {
+                dom_content_loaded: true,
+                load: true,
+            },
+            ..Applied::default()
+        };
+        let mut seen = Vec::new();
+        for discovered in [false, true] {
+            let hub = EventHub::default();
+            hub.subscribe("page@T", "load", true);
+            hub.subscribe("page@T", "domcontentloaded", true);
+            let events = PageEvents::new(
+                hub.clone(),
+                "T",
+                cdp.clone(),
+                SessionId::from("s"),
+                discovered,
+            );
+            events.lifecycle(&loaded);
+            let replayed = serde_json::from_str::<Vec<Value>>(&hub.drain(None)).unwrap();
+            events.lifecycle_replayed();
+            events.lifecycle(&loaded);
+            let live = serde_json::from_str::<Vec<Value>>(&hub.drain(None)).unwrap();
+            let methods = |events: &[Value]| -> Vec<String> {
+                events
+                    .iter()
+                    .map(|event| event["method"].as_str().unwrap().to_string())
+                    .collect()
+            };
+            seen.push((discovered, methods(&replayed), methods(&live)));
+        }
+        let both = vec!["domcontentloaded".to_string(), "load".to_string()];
+        assert_eq!(
+            seen,
+            [
+                (false, Vec::new(), both.clone()),
+                (true, both.clone(), both)
+            ],
+            "a known page's replay is history; a new page's is its own"
+        );
+    }
 }
