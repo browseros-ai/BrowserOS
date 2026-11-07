@@ -12,10 +12,11 @@ use neo_runtime_spec::serve::{
     FrameCall, FrameClickParams, FrameClickParamsButton, FrameClickParamsModifiersItem,
     FrameClickParamsScroll, FrameClickResult, FrameGotoParams, FrameGotoResult,
     FrameTextContentParams, FrameTextContentResult, FrameTitleResult, LifecycleEvent, Metadata,
-    Point, RequestInitializer,
+    PageCall, PageScreenshotResult, Point, RequestInitializer,
 };
 use neo_runtime_spec::{
-    CallDecodeError, Command, MethodFlag, MethodGroup, PageResult, SPEC_SHA256, is_current,
+    Binary, CallDecodeError, Command, MethodFlag, MethodGroup, PageResult, SPEC_SHA256,
+    is_current,
 };
 use serde_json::json;
 
@@ -309,4 +310,54 @@ fn spec_hash_is_stamped_in_both_languages() {
     // `neo-runtime` const-asserts the page bundle's hash with this.
     const { assert!(is_current(SPEC_SHA256), "the crate's own hash is current") };
     assert!(!is_current(&"0".repeat(64)), "another spec's hash is not");
+}
+
+#[test]
+fn binary_crosses_as_standard_base64_with_padding() {
+    // Empty, then 1-, 2- and 3-byte tails, then every byte value.
+    let cases: [(&[u8], &str); 5] = [
+        (b"", ""),
+        (b"a", "YQ=="),
+        (b"ab", "YWI="),
+        (b"abc", "YWJj"),
+        (&[0xfb, 0xff, 0xbf], "+/+/"),
+    ];
+    for (bytes, text) in cases {
+        let binary = Binary(bytes.to_vec());
+        assert_eq!(serde_json::to_value(&binary).unwrap(), json!(text));
+        let back: Binary = serde_json::from_value(json!(text)).unwrap();
+        assert_eq!(back.as_bytes(), bytes, "{text:?}");
+    }
+    let all: Vec<u8> = (0..=255).collect();
+    let text = serde_json::to_string(&Binary(all.clone())).unwrap();
+    let back: Binary = serde_json::from_str(&text).unwrap();
+    assert_eq!(back.into_bytes(), all);
+}
+
+#[test]
+fn binary_refuses_text_that_is_not_standard_base64() {
+    for text in ["%%%", "YQ", "YQ=", "Y Q==", "-_-_"] {
+        let error = serde_json::from_value::<Binary>(json!(text)).unwrap_err();
+        assert!(error.to_string().contains("invalid base64"), "{text:?}: {error}");
+    }
+    assert!(serde_json::from_value::<Binary>(json!(3)).is_err(), "a number is not binary");
+}
+
+#[test]
+fn binary_results_are_typed_and_debug_prints_only_their_size() {
+    let result = PageScreenshotResult {
+        binary: Binary(vec![0x89, b'P', b'N', b'G']),
+    };
+    assert_eq!(
+        serde_json::to_value(&result).unwrap(),
+        json!({"binary": "iVBORw=="})
+    );
+    assert_eq!(format!("{:?}", result.binary), "Binary(4 bytes)");
+    // Neo's `path` beside Playwright's params is ignored by Playwright's own decode.
+    let call = PageCall::decode(
+        "screenshot",
+        Some(json!({"type": "jpeg", "quality": 50, "path": "a.jpg"})),
+    )
+    .unwrap();
+    assert!(matches!(call, PageCall::Screenshot(_)), "{call:?}");
 }

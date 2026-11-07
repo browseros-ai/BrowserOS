@@ -27,7 +27,10 @@
  *    one before sending, never matching something else in its place.
  */
 
-import type { LifecycleEvent } from '@browseros/neo-runtime-spec/serve'
+import type {
+  LifecycleEvent,
+  PageScreenshotParams,
+} from '@browseros/neo-runtime-spec/serve'
 import { isString } from '../vendor/playwright/isomorphic/stringUtils'
 import type { ApiName } from './connection'
 
@@ -49,7 +52,21 @@ export type NeoWaitForURLParams = {
  * or for the next one. Rust refuses `networkidle`. */
 export type NeoWaitForLoadStateParams = { state: LifecycleEvent }
 
-/** Neo's commands on a frame guid, shaped as the generated `FrameCommands`. Each replies `{}`. */
+/** `neo:screenshot`: `locator.screenshot`. Playwright's client resolves the locator to an
+ * element (`waitForSelector`, strict, `attached`) and calls `ElementHandle.screenshot` on it; Neo
+ * has no element handles yet, so one call carries the selector, `ElementHandle.screenshot`'s
+ * params, and Neo's `path` (relative to the run's artifact directory). Rust: `capture.rs`
+ * `NeoScreenshotParams`; the reply is `ElementHandle.screenshot`'s `{binary}`. */
+export type NeoScreenshotParams = Omit<
+  PageScreenshotParams,
+  'fullPage' | 'clip'
+> & {
+  selector: string
+  path?: string
+}
+
+/** Neo's commands on a frame guid, shaped as the generated `FrameCommands`. The waits reply
+ * `{}`. */
 export type NeoFrameCommands = {
   'neo:waitForURL': {
     params: NeoWaitForURLParams
@@ -58,6 +75,10 @@ export type NeoFrameCommands = {
   'neo:waitForLoadState': {
     params: NeoWaitForLoadStateParams
     result: Record<string, never>
+  }
+  'neo:screenshot': {
+    params: NeoScreenshotParams
+    result: { binary: string }
   }
 }
 

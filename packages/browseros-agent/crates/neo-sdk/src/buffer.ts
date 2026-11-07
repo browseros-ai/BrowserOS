@@ -50,7 +50,11 @@ export class Buffer extends Uint8Array {
     } catch {
       throw new Error('neo-sdk: invalid base64 from Rust')
     }
-    return new Buffer(bytes.buffer, bytes.byteOffset, bytes.length)
+    return new Buffer(
+      bytes.buffer as ArrayBuffer,
+      bytes.byteOffset,
+      bytes.length,
+    )
   }
 
   /**

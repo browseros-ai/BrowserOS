@@ -106,6 +106,9 @@ export type ApiName =
   | 'response.serverAddr'
   | 'response.securityDetails'
   | 'response.httpVersion'
+  | 'page.screenshot'
+  | 'page.pdf'
+  | 'locator.screenshot'
 
 /** Playwright's wire error, `{error: {name, message}}`'s inner object. */
 export type WireError = { name: string; message: string }
