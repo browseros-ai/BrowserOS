@@ -1,0 +1,9 @@
+# Vendored Playwright
+
+Fixture for neo-runtime's provenance tests: copied at commit `26137face0500cacddf90c767dc1364da7262559`.
+
+| File | sha256 |
+| --- | --- |
+| `LICENSE` | `e20a2fccd0e40f35550ad4d85469767e8def890440b2043e7d12eb6060990a71` |
+| `NOTICE` | `e649e9a06793e897633f4f9bf02198b105228e8fcd13324fb3e5ff789ddc43b9` |
+| `isomorphic/yaml.ts` | `8ae2397daeeebbe7a89bef5ee01a2dde4132cea20b88026cdfe13273bbbda5a2` |
