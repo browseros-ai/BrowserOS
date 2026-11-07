@@ -97,34 +97,7 @@ impl Artifacts {
                  the host sets one per run (RunRequest.artifacts)"
             )));
         }
-        let mut relative = PathBuf::new();
-        let mut parts = Vec::new();
-        for component in Path::new(path).components() {
-            match component {
-                Component::Normal(part) => {
-                    let Some(text) = part.to_str() else {
-                        return Err(refused(option, path, "is not valid UTF-8"));
-                    };
-                    relative.push(part);
-                    parts.push(text.to_string());
-                }
-                Component::CurDir => {}
-                Component::ParentDir => {
-                    return Err(refused(
-                        option,
-                        path,
-                        "leaves the run's artifact directory (`..`)",
-                    ));
-                }
-                Component::RootDir | Component::Prefix(_) => {
-                    return Err(refused(
-                        option,
-                        path,
-                        "must be relative to the run's artifact directory",
-                    ));
-                }
-            }
-        }
+        let (relative, parts) = relative_path(option, path)?;
         if parts.is_empty() {
             return Err(refused(option, path, "names no file"));
         }
@@ -193,16 +166,24 @@ impl Artifacts {
                  the host sets one per run (RunRequest.artifacts)"
             )));
         };
-        let checked = self.check(option, path)?;
-        let relative = checked.relative.clone();
+        // A read may name the directory itself (`.`, a directory upload of the root), which no
+        // write may; an empty path names nothing, as Playwright's client stat of it fails.
+        if path.is_empty() {
+            return Err(refused(option, path, "names no file"));
+        }
+        let (relative, parts) = relative_path(option, path)?;
+        let display = if parts.is_empty() {
+            ".".to_string()
+        } else {
+            parts.join("/")
+        };
         let found = task::spawn_blocking(move || stat_inside(&dir, &relative))
             .await
             .map_err(|error| io::Error::other(error.to_string()))
             .and_then(|result| result);
         let (at, metadata) = found.map_err(|error| {
             PlaywrightError::error(format!(
-                "{option}: \"{}\" cannot be read in the run's artifact directory: {error}",
-                checked.display
+                "{option}: \"{display}\" cannot be read in the run's artifact directory: {error}"
             ))
         })?;
         let Some(text) = at.to_str() else {
@@ -219,7 +200,7 @@ impl Artifacts {
             .map(|since| since.as_secs_f64() * 1000.0);
         Ok(ExistingPath {
             path: text.to_string(),
-            display: checked.display,
+            display,
             is_dir: metadata.is_dir(),
             size: metadata.len(),
             modified_ms,
@@ -233,6 +214,41 @@ impl Artifacts {
             .map(|written| written.clone())
             .unwrap_or_default()
     }
+}
+
+/// The normal components of `path` and their text, refusing what leaves the artifact directory:
+/// `..`, an absolute path, text that is not UTF-8. `.` components vanish, so `.` names the
+/// directory itself (no components).
+fn relative_path(option: &str, path: &str) -> Result<(PathBuf, Vec<String>), PlaywrightError> {
+    let mut relative = PathBuf::new();
+    let mut parts = Vec::new();
+    for component in Path::new(path).components() {
+        match component {
+            Component::Normal(part) => {
+                let Some(text) = part.to_str() else {
+                    return Err(refused(option, path, "is not valid UTF-8"));
+                };
+                relative.push(part);
+                parts.push(text.to_string());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(refused(
+                    option,
+                    path,
+                    "leaves the run's artifact directory (`..`)",
+                ));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(refused(
+                    option,
+                    path,
+                    "must be relative to the run's artifact directory",
+                ));
+            }
+        }
+    }
+    Ok((relative, parts))
 }
 
 fn refused(option: &str, path: &str, why: &str) -> PlaywrightError {
@@ -282,7 +298,11 @@ fn stat_inside(dir: &Path, relative: &Path) -> io::Result<(PathBuf, fs::Metadata
         }
         metadata = Some(found);
     }
-    let metadata = metadata.ok_or_else(|| io::Error::other("names no file"))?;
+    // No components: the artifact directory itself.
+    let metadata = match metadata {
+        Some(metadata) => metadata,
+        None => fs::metadata(&at)?,
+    };
     Ok((at, metadata))
 }
 
@@ -424,6 +444,29 @@ mod tests {
             assert!(error.message.starts_with("files: "), "{error:?}");
             assert!(error.message.contains(why), "{path}: {error:?}");
         }
+        // The directory itself is a read (a directory upload of the root), never a write.
+        for root in [".", "./", "uploads/.."] {
+            let found = artifacts.existing("files", root).await;
+            if root == "uploads/.." {
+                assert!(
+                    found.is_err_and(|error| error.message.contains("`..`")),
+                    "{root}"
+                );
+                continue;
+            }
+            let found = found.expect(root);
+            assert!(
+                found.is_dir && found.path.ends_with("run"),
+                "{root}: {found:?}"
+            );
+            assert_eq!(found.display, ".");
+        }
+        let error = artifacts.existing("files", "").await.expect_err("empty");
+        assert!(error.message.contains("names no file"), "{error:?}");
+        assert!(
+            artifacts.check("path", ".").is_err(),
+            "a write needs a file name"
+        );
         let error = Artifacts::new(None)
             .existing("files", "a.txt")
             .await

@@ -1,8 +1,10 @@
 /**
- * Playwright's client file conversion for `setInputFiles` (`client/elementHandle.ts`
- * `convertInputFiles`) and `Locator.drop` (`client/frame.ts` `Frame._drop`), in a realm without
- * a file system: paths travel as the script wrote them, and Rust finds each in the run's
- * artifact directory and tells a directory from files (neo-runtime `set_input_files.rs`), where
+ * Playwright: `client/elementHandle.ts` `convertInputFiles`
+ * Playwright: `client/frame.ts` `Frame._drop`
+ *
+ * Playwright's client file conversion for `setInputFiles` and `Locator.drop`, in a realm without
+ * a file system: paths travel as the script wrote them, and Rust finds each in the run's artifact
+ * directory and tells a directory from files (neo-runtime `set_input_files.rs`), where
  * Playwright's client stats them. Buffers travel as the wire's `binary` (`toBinary`).
  */
 import type {
@@ -59,9 +61,11 @@ function filePayloadExceedsSizeLimit(payloads: FilePayload[]): boolean {
 }
 
 /**
- * One payload as the protocol validator leaves it (`tObject` over `name`, `mimeType`,
- * `buffer`, in schema order), its bytes as base64. A `buffer` that is no `Uint8Array` is
- * refused as Playwright's validator refuses one that is no `Buffer`.
+ * Playwright: `protocol/src/validatorPrimitives.ts` `tObject`: `if (Object.is(arg, null))`
+ *
+ * One payload as the protocol validator leaves it (`tObject` over `name`, `mimeType`, `buffer`,
+ * in schema order), its bytes as base64. A `buffer` that is no `Uint8Array` is refused as
+ * Playwright's validator refuses one that is no `Buffer`.
  */
 function wirePayload(payload: unknown, index: number): WirePayloads[number] {
   const path = `payloads[${index}]`
@@ -69,10 +73,12 @@ function wirePayload(payload: unknown, index: number): WirePayloads[number] {
   if (typeof payload !== 'object')
     throw new Error(`${path}: expected object, got ${typeof payload}`)
   const { name, mimeType, buffer } = payload as Record<string, unknown>
+  // Playwright: `protocol/src/validatorPrimitives.ts` `tString`: `if (typeof arg === 'string')`
   if (typeof name !== 'string')
     throw new Error(`${path}.name: expected string, got ${typeof name}`)
   if (mimeType !== undefined && typeof mimeType !== 'string')
     throw new Error(`${path}.mimeType: expected string, got ${typeof mimeType}`)
+  // Playwright: `protocol/src/validatorPrimitives.ts` `tBinary`: `if (!(arg instanceof Buffer))`
   if (!(buffer instanceof Uint8Array))
     throw new Error(`${path}.buffer: expected Buffer, got ${typeof buffer}`)
   return mimeType === undefined
@@ -95,6 +101,7 @@ export function convertDropPayload(
   }
   const data = payload.data
     ? Object.entries(payload.data).map(([mimeType, value], index) => {
+        // Playwright: `protocol/src/validatorPrimitives.ts` `tString`: `if (typeof arg === 'string')`
         if (typeof value !== 'string')
           throw new Error(
             `data[${index}].value: expected string, got ${typeof value}`,
