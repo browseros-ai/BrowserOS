@@ -69,7 +69,7 @@ test('tests that innerHTML returns the markup string from every receiver', async
 test('tests that allInnerTexts sends the served function and unwraps ordered strings', async () => {
   const { fake, page } = start()
   fake.answer = () => ({
-    result: { value: { a: [{ s: 'One' }, { s: '' }], id: 1 } },
+    result: { value: { a: ['One', ''], id: 1 } },
   })
   expect(await page.locator('.item').allInnerTexts()).toEqual(['One', ''])
   expect(fake.messages).toEqual([
@@ -88,7 +88,7 @@ test('tests that allInnerTexts sends the served function and unwraps ordered str
   ])
   // An SVG match has no innerText: Playwright's page function reads undefined there.
   fake.answer = () => ({
-    result: { value: { a: [{ s: 'HTML' }, { v: 'undefined' }], id: 1 } },
+    result: { value: { a: ['HTML', { v: 'undefined' }], id: 1 } },
   })
   // Playwright declares string[] and answers undefined at runtime, as Neo does.
   const withSvg: (string | undefined)[] = await page
@@ -97,17 +97,13 @@ test('tests that allInnerTexts sends the served function and unwraps ordered str
   expect(withSvg).toEqual(['HTML', undefined])
   expect(withSvg.length).toBe(2)
   expect(1 in withSvg).toBe(true)
-  fake.answer = () => ({ result: { value: { a: [{ n: 1 }], id: 1 } } })
-  await expect(page.locator('.item').allInnerTexts()).rejects.toThrow(
-    /contract error/,
-  )
-  // allTextContents never reads undefined (`textContent || ''`), so one is a contract error.
-  fake.answer = () => ({
-    result: { value: { a: [{ v: 'undefined' }], id: 1 } },
-  })
-  await expect(page.locator('.item').allTextContents()).rejects.toThrow(
-    /contract error/,
-  )
+  fake.answer = () => ({ result: { value: { a: [1], id: 1 } } })
+  const numeric: unknown[] = await page.locator('.item').allInnerTexts()
+  expect(numeric).toEqual([1])
+  // A page-defined getter may answer a number: $$eval preserves its result.
+  fake.answer = () => ({ result: { value: { a: [42], id: 1 } } })
+  const texts: unknown[] = await page.locator('.item').allTextContents()
+  expect(texts).toEqual([42])
 })
 
 test('tests that all() counts once and returns one nth locator per match', async () => {
