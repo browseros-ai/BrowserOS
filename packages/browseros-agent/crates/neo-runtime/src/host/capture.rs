@@ -61,12 +61,15 @@ use crate::host::presence::Presences;
 use crate::host::view::{FollowView, ShownTab};
 use crate::run::PageId;
 use lease::{CaptureKey, FrameDrops, Kind, Lease, RawFrame, Registry};
-pub(crate) use presets::{Preset, Quality};
+pub(crate) use presets::Preset;
+pub use presets::Quality;
 
 /// Why a live view could not be opened. The `/v1` adapter maps each to the hosted contract's
 /// error code; an unknown session is its own check, before it asks for a view.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum CaptureError {
+pub enum CaptureError {
+    #[error("session not found")]
+    SessionNotFound,
     /// → 409 `session_not_live`.
     #[error("session has ended")]
     SessionNotLive,
@@ -88,22 +91,22 @@ pub(crate) enum CaptureError {
 /// (`X-Tab-Id`, positive by type), that tab's URL (`X-Url`), and the browser's frame-swap time
 /// (`X-Frame-At`), never the time it arrived.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Frame {
-    pub(crate) jpeg: Bytes,
-    pub(crate) tab: TabId,
-    pub(crate) url: String,
-    pub(crate) captured_at: EpochMs,
+pub struct Frame {
+    pub jpeg: Bytes,
+    pub tab: TabId,
+    pub url: String,
+    pub captured_at: EpochMs,
 }
 
 /// A live screencast. It ends when the session ends or is withheld, its pinned tab leaves the
 /// view, the viewer stalls, or the host side shuts down. It holds only the newest frame: a slow
 /// reader gets the latest one when it reads, skipping those it missed.
-pub(crate) struct Frames(Pin<Box<dyn Stream<Item = Frame> + Send>>);
+pub struct Frames(Pin<Box<dyn Stream<Item = Frame> + Send>>);
 
 /// A live fragmented MP4: the initialization segment first, then keyframe-led fragments. It
 /// ends when its tab leaves the view, its capture ends, the session ends or is withheld, the
 /// viewer stalls, or the host side shuts down.
-pub(crate) struct VideoChunks(Pin<Box<dyn Stream<Item = Bytes> + Send>>);
+pub struct VideoChunks(Pin<Box<dyn Stream<Item = Bytes> + Send>>);
 
 /// Every live view of one browser, over the host side's own socket.
 pub(crate) struct CaptureHub {

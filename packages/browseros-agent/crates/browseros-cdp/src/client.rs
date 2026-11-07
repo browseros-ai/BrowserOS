@@ -35,7 +35,10 @@ use url::Url;
 type WsStream = WebSocketStream<TcpStream>;
 type WsSink = SplitSink<WsStream, Message>;
 type WsReader = SplitStream<WsStream>;
-type PendingSender = oneshot::Sender<Result<Value, CdpError>>;
+struct PendingSender {
+    reply: oneshot::Sender<Result<Value, CdpError>>,
+    boundary: Option<oneshot::Sender<broadcast::Receiver<CdpEvent>>>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReconnectPolicy {
@@ -227,6 +230,25 @@ impl CdpClient {
         params: Value,
         session: Option<&SessionId>,
     ) -> Result<Value, CdpError> {
+        self.send_with_boundary(expected_epoch, method, params, session, None).await
+    }
+
+    /// Sends an epoch-bound request and subscribes to events at its reply's exact socket
+    /// position. Discovery consumers can discard pre-reply changes without dropping events
+    /// that arrive after the fresh seed, even if their task is scheduled much later.
+    pub async fn send_at_epoch_with_events(
+        &self, epoch: u64, method: &str, params: Value,
+    ) -> Result<(Value, broadcast::Receiver<CdpEvent>), CdpError> {
+        let (boundary, receiver) = oneshot::channel();
+        let value = self.send_with_boundary(Some(epoch), method, params, None, Some(boundary)).await?;
+        let events = receiver.await.map_err(|_| CdpError::ConnectionLost)?;
+        Ok((value, events))
+    }
+
+    async fn send_with_boundary(
+        &self, expected_epoch: Option<u64>, method: &str, params: Value,
+        session: Option<&SessionId>, boundary: Option<oneshot::Sender<broadcast::Receiver<CdpEvent>>>,
+    ) -> Result<Value, CdpError> {
         let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
         let mut frame = serde_json::Map::new();
         frame.insert("id".to_string(), Value::from(id));
@@ -243,6 +265,7 @@ impl CdpClient {
             id,
             method,
             Message::Text(Value::Object(frame).to_string().into()),
+            boundary,
         )
         .await
     }
@@ -304,7 +327,7 @@ impl CdpClient {
         }
         frame.push('}');
         let response = self
-            .send_frame(expected_epoch, id, method, Message::Text(frame.into()))
+            .send_frame(expected_epoch, id, method, Message::Text(frame.into()), None)
             .await?;
         serde_json::to_string(&response).map_err(CdpError::from)
     }
@@ -339,9 +362,10 @@ impl CdpClient {
         id: u64,
         method: &str,
         message: Message,
+        boundary: Option<oneshot::Sender<broadcast::Receiver<CdpEvent>>>,
     ) -> Result<Value, CdpError> {
         let (tx, rx) = oneshot::channel();
-        self.inner.pending.lock().await.insert(id, tx);
+        self.inner.pending.lock().await.insert(id, PendingSender { reply: tx, boundary });
         let _slot = PendingSlot {
             inner: Arc::clone(&self.inner),
             id,
@@ -544,7 +568,10 @@ async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
             Ok(value.get("result").cloned().unwrap_or_else(|| json!({})))
         };
         if let Some(sender) = inner.pending.lock().await.remove(&id) {
-            let _ = sender.send(result);
+            if let Some(boundary) = sender.boundary {
+                let _ = boundary.send(inner.events_tx.subscribe());
+            }
+            let _ = sender.reply.send(result);
         }
         return;
     }
@@ -721,7 +748,7 @@ async fn link_supervisor(inner: Arc<Inner>) {
 async fn reject_all_pending(inner: &Arc<Inner>, error: CdpError) {
     let pending = std::mem::take(&mut *inner.pending.lock().await);
     for sender in pending.into_values() {
-        let _ = sender.send(Err(error.clone()));
+        let _ = sender.reply.send(Err(error.clone()));
     }
 }
 

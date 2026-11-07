@@ -119,6 +119,14 @@ impl HostLink {
         link
     }
 
+    pub(crate) fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        self.client.events()
+    }
+
+    pub(crate) fn client(&self) -> &CdpClient {
+        &self.client
+    }
+
     /// The incarnation new sessions attach on, or [`LinkError::Down`] while there is none.
     pub(crate) fn current(&self) -> Result<Arc<Generation>, LinkError> {
         let generation = Arc::clone(&self.generation.borrow());
@@ -206,6 +214,10 @@ impl Generation {
             epoch,
             ended: shutdown.child_token(),
         }
+    }
+
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch
     }
 
     pub(crate) fn is_ended(&self) -> bool {

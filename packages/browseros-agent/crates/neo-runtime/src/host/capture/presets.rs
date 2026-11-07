@@ -10,14 +10,15 @@
 
 /// How detailed a live view is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum Quality {
+pub enum Quality {
     Low,
     High,
 }
 
 impl Quality {
     /// Parses the `quality` query value.
-    pub(crate) fn parse(raw: &str) -> Option<Self> {
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
         match raw {
             "low" => Some(Self::Low),
             "high" => Some(Self::High),

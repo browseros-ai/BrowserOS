@@ -198,15 +198,28 @@ impl Ledger {
     ///
     /// A session past its idle window is ended by [`Self::expire`], never here, so every idle
     /// end is reported once.
+    #[cfg(test)]
     pub(crate) fn admit(
+        &mut self,
+        label: Option<&SessionKey>,
+        known: bool,
+        now: Instant,
+    ) -> Admitted {
+        self.admit_with_key(label, known, now, SessionKey::mint())
+    }
+
+    /// Admission supplies a candidate already checked against both the ledger and the store.
+    /// Keeping the I/O check outside this reducer leaves minting collision-safe after restart.
+    pub(crate) fn admit_with_key(
         &mut self,
         label: Option<&SessionKey>,
         label_known_to_store: bool,
         now: Instant,
+        candidate: SessionKey,
     ) -> Admitted {
         let Some(label) = label else {
             return Admitted {
-                session: self.fresh(now),
+                session: self.fresh(now, candidate),
                 successor_of: None,
             };
         };
@@ -237,7 +250,7 @@ impl Ledger {
             }
         }
         Admitted {
-            session: self.successor(label, now),
+            session: self.successor(label, now, candidate),
             successor_of: Some(label.clone()),
         }
     }
@@ -503,9 +516,26 @@ impl Ledger {
         })
     }
 
+    pub(crate) fn keys(&self) -> impl Iterator<Item = &SessionKey> {
+        self.sessions.keys()
+    }
+
+    pub(crate) fn touched(&self, key: &SessionKey) -> Vec<PageId> {
+        self.sessions
+            .get(key)
+            .map(|session| session.touches.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Called only for ended, complete, unwatched sessions. Durable knowledge belongs to the
+    /// store, so later admission still gives an evicted label a successor.
+    pub(crate) fn forget(&mut self, key: &SessionKey) {
+        self.sessions.remove(key);
+    }
+
     /// The session admissions under the ended `label` join: the successor an earlier one opened,
     /// while it is live, else a fresh one, remembered for the next.
-    fn successor(&mut self, label: &SessionKey, now: Instant) -> SessionKey {
+    fn successor(&mut self, label: &SessionKey, now: Instant, candidate: SessionKey) -> SessionKey {
         let idle = self.idle;
         let remembered = self
             .sessions
@@ -518,7 +548,7 @@ impl Ledger {
             session.passes += 1;
             return successor;
         }
-        let successor = self.fresh(now);
+        let successor = self.fresh(now, candidate);
         if let Some(ended) = self.sessions.get_mut(label) {
             ended.successor = Some(successor.clone());
         }
@@ -526,13 +556,14 @@ impl Ledger {
     }
 
     /// Opens a live session under a key no session has, holding this admission's pass.
-    fn fresh(&mut self, now: Instant) -> SessionKey {
-        let key = loop {
-            let key = SessionKey::mint();
+    fn fresh(&mut self, now: Instant, candidate: SessionKey) -> SessionKey {
+        let mut key = candidate;
+        loop {
             if !self.sessions.contains_key(&key) {
-                break key;
+                break;
             }
-        };
+            key = SessionKey::mint();
+        }
         let live = Phase::Live { idle_from: now };
         self.sessions.insert(key.clone(), Session::new(live, 1));
         key

@@ -25,21 +25,7 @@
     )
 )]
 mod capture;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "pure core: tests drive it until the host task does"
-    )
-)]
 mod cdp;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "pure core: tests drive it until the host task does"
-    )
-)]
 mod directory;
 mod emit;
 mod events;
@@ -60,24 +46,31 @@ mod link;
     )
 )]
 mod presence;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "pure core: tests drive it until the host task does"
-    )
-)]
 mod sessions;
 mod store;
 mod tap;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "runtime wiring starts the host task next")
+)]
+mod task;
 mod view;
 
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
 use std::time::Duration;
+use tokio::sync::{mpsc, oneshot, watch};
+use tokio::time::{self, Instant};
+use tokio_util::sync::CancellationToken;
 
+use crate::host::capture::CaptureHub;
 use crate::host::tap::Tap;
+use crate::host::task::{Command, Published};
+use crate::host::view::FollowView;
+use crate::run::PageId;
 
+pub use capture::{CaptureError as LiveError, Frame, Frames, Quality, VideoChunks};
 pub(crate) use emit::RunEmitter;
 pub(crate) use events::HostEvent;
 pub use ids::{EpochMs, SessionKey, TabId};
@@ -131,33 +124,206 @@ impl HostOptions {
 pub struct Host(Arc<Inner>);
 
 struct Inner {
-    #[expect(
-        dead_code,
-        reason = "scaffold: host capture reads `cdp_port`, the session ledger `idle`"
-    )]
     options: HostOptions,
-    /// Every host event, in the order the run path and the passes produced it.
     tap: Arc<Tap>,
+    commands: mpsc::UnboundedSender<Command>,
+    published: Arc<Mutex<Published>>,
+    captures: Option<Arc<CaptureHub>>,
+    shutdown: CancellationToken,
+}
+
+/// The current tab's two identities and live directory facts, for the server's `/v1` adapter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TabRef {
+    pub page: PageId,
+    pub tab: TabId,
+    pub url: String,
+    pub title: String,
+}
+
+/// A session snapshot. Completion is monotonic and includes the store's flush acknowledgement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent fields in the public server snapshot contract"
+)]
+pub struct SessionView {
+    pub live: bool,
+    pub withheld: bool,
+    pub current_tab: Option<TabRef>,
+    pub complete: bool,
+    pub damaged: bool,
+    pub ended_at: Option<EpochMs>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum HostError {
+    #[error("host task has stopped")]
+    Stopped,
+    #[error(transparent)]
+    Store(#[from] StoreError),
 }
 
 impl Host {
     pub(crate) fn new(options: HostOptions) -> Self {
-        Self(Arc::new(Inner {
-            tap: Arc::new(Tap::new(options.max_runs)),
-            options,
-        }))
+        Self::build(options, None, CancellationToken::new()).0
+    }
+
+    fn build(
+        options: HostOptions,
+        captures: Option<Arc<CaptureHub>>,
+        shutdown: CancellationToken,
+    ) -> (Self, mpsc::UnboundedReceiver<Command>) {
+        let (commands, receiver) = mpsc::unbounded_channel();
+        (
+            Self(Arc::new(Inner {
+                tap: Arc::new(Tap::new(options.max_runs)),
+                options,
+                commands,
+                published: Arc::new(Mutex::new(Published::default())),
+                captures,
+                shutdown,
+            })),
+            receiver,
+        )
     }
 
     pub(crate) fn tap(&self) -> &Arc<Tap> {
         &self.0.tap
     }
 
-    /// The pass for one admitted run of `session`. Only admission (with the session ledger)
-    /// calls this: a pass is the ledger's record that it counted the run.
+    /// Admits a run before it starts. The task serializes admissions, including the store's
+    /// restart and collision checks, so two callers using one label join the same session.
+    pub async fn admit_run(&self, label: Option<&SessionKey>) -> RunPass {
+        let (reply, receiver) = oneshot::channel();
+        let _ = self.0.commands.send(Command::Admit {
+            label: label.cloned(),
+            reply,
+        });
+        if let Ok(admitted) = receiver.await {
+            self.issue_pass(admitted.session, admitted.successor_of)
+        } else {
+            tracing::warn!("admission after host shutdown");
+            self.issue_pass(SessionKey::mint(), None)
+        }
+    }
+
+    /// Ends live views synchronously. The task consumes the end command before issuing another
+    /// pass under this label; already admitted runs keep reporting until their passes release.
+    pub fn end_session(&self, session: &SessionKey) {
+        if let Ok(mut published) = self.0.published.lock() {
+            published.end(session);
+        }
+        let _ = self.0.commands.send(Command::End(session.clone()));
+    }
+
+    /// Revokes visuals before returning the future. The task owns the durable write even if
+    /// the caller never polls or drops that future; callers entering secrets await it first.
+    ///
+    /// # Errors
+    /// Returns a store failure, or `Stopped` when shutdown prevents persistence.
+    pub fn withhold(
+        &self,
+        session: &SessionKey,
+    ) -> impl Future<Output = Result<(), HostError>> + Send + 'static {
+        let receiver = self.0.published.lock().ok().map(|mut published| {
+            let (receiver, first, targets) = published.withhold(session);
+            if let Some(hub) = &self.0.captures {
+                for target in targets {
+                    hub.end_captures(&target);
+                }
+            }
+            if first {
+                let _ = self.0.commands.send(Command::Withhold(session.clone()));
+            }
+            receiver
+        });
+        async move {
+            let mut receiver = receiver.ok_or(HostError::Stopped)?;
+            let value = receiver
+                .wait_for(Option::is_some)
+                .await
+                .map_err(|_| HostError::Stopped)?;
+            value.clone().unwrap_or(Err(HostError::Stopped))
+        }
+    }
+
+    #[must_use]
+    pub fn view(&self, session: &SessionKey) -> Option<SessionView> {
+        self.0.published.lock().ok()?.view(session)
+    }
+
+    /// Registers a watch before reading completion, so a flush resolving concurrently cannot
+    /// be missed. The deadline returns the latest snapshot, including one still settling.
+    pub async fn wait_complete(
+        &self,
+        session: &SessionKey,
+        deadline: Instant,
+    ) -> Option<SessionView> {
+        let mut changed = self.0.published.lock().ok()?.subscribe(session)?;
+        let _ = time::timeout_at(deadline, changed.wait_for(|view| view.complete)).await;
+        let snapshot = changed.borrow().clone();
+        Some(snapshot)
+    }
+
+    fn follow(&self, session: &SessionKey) -> Result<watch::Receiver<FollowView>, LiveError> {
+        self.0
+            .published
+            .lock()
+            .ok()
+            .and_then(|mut published| published.follow(session))
+            .ok_or(LiveError::SessionNotFound)
+    }
+
+    /// Opens a screencast following the session's current tab, or pins it to `tab`.
+    ///
+    /// # Errors
+    /// Returns the session/tab refusal or browser startup failure described by `LiveError`.
+    pub async fn screencast(
+        &self,
+        session: &SessionKey,
+        quality: Quality,
+        tab: Option<TabId>,
+    ) -> Result<Frames, LiveError> {
+        let view = self.follow(session)?;
+        let hub = self
+            .0
+            .captures
+            .as_ref()
+            .ok_or_else(|| LiveError::Browser("host task stopped".to_string()))?;
+        hub.screencast(view, quality, tab).await
+    }
+
+    /// Opens fragmented AV1 video of the selected tab; video stays on that tab.
+    ///
+    /// # Errors
+    /// Returns the session/tab refusal or browser startup failure described by `LiveError`.
+    pub async fn video(
+        &self,
+        session: &SessionKey,
+        quality: Quality,
+        tab: Option<TabId>,
+    ) -> Result<VideoChunks, LiveError> {
+        let view = self.follow(session)?;
+        let hub = self
+            .0
+            .captures
+            .as_ref()
+            .ok_or_else(|| LiveError::Browser("host task stopped".to_string()))?;
+        hub.video(view, quality, tab).await
+    }
+
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "scaffold: the host's run admission issues passes")
+        expect(dead_code, reason = "runtime shutdown wiring follows")
     )]
+    pub(crate) fn shutdown(&self) {
+        self.0.shutdown.cancel();
+        self.0.tap.close();
+    }
+
+    /// The pass for one admitted run of `session`. Only admission (with the session ledger)
+    /// calls this: a pass is the ledger's record that it counted the run.
     pub(crate) fn issue_pass(
         &self,
         session: SessionKey,

@@ -78,8 +78,8 @@ mod url_match;
 
 pub use artifacts::{AbsolutePaths, RunArtifact};
 pub use host::{
-    CallArtifacts, EpochMs, Host, HostOptions, HostStore, MemoryStore, RunPass, SessionKey,
-    StoreError, TabId,
+    CallArtifacts, EpochMs, Frame, Frames, Host, HostError, HostOptions, HostStore, LiveError,
+    MemoryStore, Quality, RunPass, SessionKey, SessionView, StoreError, TabId, TabRef, VideoChunks,
 };
 pub use run::{
     CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, PageId, RunBinary, RunEnd,

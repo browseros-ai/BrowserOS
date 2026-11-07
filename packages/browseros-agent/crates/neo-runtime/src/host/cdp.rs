@@ -25,8 +25,9 @@ use tracing::debug;
 use crate::host::capture::Preset;
 use crate::host::directory::{DirectoryInput, PageTarget, TabEntry};
 use crate::host::ids::TabId;
-use crate::host::link::Attached;
+use crate::host::link::{Attached, HostLink, LinkError};
 use crate::run::PageId;
+use tokio::sync::broadcast;
 
 // ----- the tab directory (`directory.rs`) ----------------------------------------------------
 
@@ -74,6 +75,30 @@ pub(crate) fn seed(reply: browser::GetTabsResult) -> DirectoryInput {
         })
         .collect();
     DirectoryInput::Seeded(tabs)
+}
+
+/// Subscribe before discovery; the seed returns an event receiver whose first event is
+/// strictly after its reply. This is the freshness boundary described in design §7.
+pub(crate) async fn discover_and_seed(
+    link: &HostLink,
+) -> Result<(DirectoryInput, broadcast::Receiver<CdpEvent>), LinkError> {
+    let epoch = link.current()?.epoch();
+    let _: target::SetDiscoverTargetsResult = send_at(
+        link.client(),
+        epoch,
+        "Target.setDiscoverTargets",
+        json!({"discover":true}),
+        None,
+    )
+    .await?;
+    let (reply, events) = link
+        .client()
+        .send_at_epoch_with_events(epoch, "Browser.getTabs", json!({"includeHidden":true}))
+        .await?;
+    Ok((
+        seed(serde_json::from_value(reply).map_err(CdpError::from)?),
+        events,
+    ))
 }
 
 /// A discovered target, if it is a tab: a `page` target carrying BrowserOS's patched `tabId`

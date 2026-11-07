@@ -17,6 +17,7 @@
 //! as test crates, so it is never one on its own.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::mem;
 use std::pin::pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -84,6 +85,13 @@ struct State {
     failing_reads: HashMap<String, usize>,
     attach_delay: Duration,
     frames: i64,
+    tabs: Vec<Value>,
+    seed_delay: Duration,
+    facts_delay: Duration,
+    screenshot_delay: Duration,
+    screenshots: VecDeque<usize>,
+    seed_before: Vec<Value>,
+    seed_after: Vec<Value>,
 }
 
 /// The socket the client is connected on now.
@@ -265,7 +273,62 @@ impl FakeHostCdp {
         }
     }
 
-    fn emit(&self, event: &Value) {
+    /// A tab-strip snapshot, returned by seeds and per-target facts reads.
+    pub fn set_tabs(&self, tabs: Vec<Value>) {
+        lock(&self.shared.state).tabs = tabs;
+    }
+
+    pub fn tab(target: &str, tab: i64, url: &str) -> Value {
+        json!({"targetId":target,"tabId":tab,"url":url,"title":target,
+            "isActive":false,"isLoading":false,"loadProgress":100,"isPinned":false,
+            "isHidden":false,"windowId":1,"index":0,"browserContextId":"Default"})
+    }
+
+    pub fn discovery(&self, method: &str, target: &str, tab: i64, url: &str) {
+        self.emit(&json!({"method":method,"params":{"targetInfo":{
+            "targetId":target,"tabId":tab,"type":"page","url":url,"title":target,
+            "attached":false,"canAccessOpener":false}}}));
+    }
+
+    pub fn destroyed(&self, target: &str) {
+        self.emit(&json!({"method":"Target.targetDestroyed","params":{"targetId":target}}));
+    }
+
+    #[expect(
+        dead_code,
+        reason = "after-call and lag tests use this scripted reply control next"
+    )]
+    pub fn delay_seeds(&self, delay: Duration) {
+        lock(&self.shared.state).seed_delay = delay;
+    }
+    #[expect(
+        dead_code,
+        reason = "after-call and lag tests use this scripted reply control next"
+    )]
+    pub fn delay_facts(&self, delay: Duration) {
+        lock(&self.shared.state).facts_delay = delay;
+    }
+    #[expect(
+        dead_code,
+        reason = "after-call and lag tests use this scripted reply control next"
+    )]
+    pub fn delay_screenshots(&self, delay: Duration) {
+        lock(&self.shared.state).screenshot_delay = delay;
+    }
+    #[expect(
+        dead_code,
+        reason = "after-call and lag tests use this scripted reply control next"
+    )]
+    pub fn screenshot_sizes(&self, sizes: &[usize]) {
+        lock(&self.shared.state).screenshots = sizes.iter().copied().collect();
+    }
+    pub fn around_seed(&self, before: Vec<Value>, after: Vec<Value>) {
+        let mut state = lock(&self.shared.state);
+        state.seed_before = before;
+        state.seed_after = after;
+    }
+
+    pub fn emit(&self, event: &Value) {
         if let Some(live) = &lock(&self.shared.state).live {
             // Fails only once the connection is gone, when nobody is left to read it.
             let _ = live.outgoing.send(event.to_string());
@@ -360,6 +423,9 @@ async fn serve(stream: TcpStream, shared: Arc<Shared>) {
         let outgoing = outgoing.clone();
         let send = move || {
             // Fails only once the connection is gone, when nobody is left to read it.
+            for event in answer.before {
+                let _ = outgoing.send(event.to_string());
+            }
             let _ = outgoing.send(answer.reply.to_string());
             for event in answer.events {
                 let _ = outgoing.send(event.to_string());
@@ -388,6 +454,7 @@ async fn serve(stream: TcpStream, shared: Arc<Shared>) {
 struct Answer {
     reply: Value,
     events: Vec<Value>,
+    before: Vec<Value>,
     delay: Duration,
 }
 
@@ -407,6 +474,7 @@ fn answer(shared: &Shared, connection: usize, command: &Value) -> Answer {
     shared.recorded.notify_waiters();
 
     let mut events = Vec::new();
+    let mut before = Vec::new();
     let mut delay = Duration::ZERO;
     let on_live_session = session.as_deref().is_none_or(|session| {
         !state.detached.contains(session)
@@ -416,6 +484,33 @@ fn answer(shared: &Shared, connection: usize, command: &Value) -> Answer {
     });
     let result = if on_live_session {
         match method.as_str() {
+            "Browser.getTabs" => {
+                delay = state.seed_delay;
+                before = mem::take(&mut state.seed_before);
+                events = mem::take(&mut state.seed_after);
+                Ok(json!({"tabs":state.tabs}))
+            }
+            "Browser.getTabInfo" => {
+                delay = state.facts_delay;
+                match state
+                    .tabs
+                    .iter()
+                    .find(|tab| tab["targetId"] == params["targetId"])
+                {
+                    Some(tab) => Ok(json!({"tab":tab})),
+                    None => Err((-32000, "No target with given id".to_string())),
+                }
+            }
+            "Page.getLayoutMetrics" => Ok(json!({"visualViewport":{
+                "pageX":20,"pageY":30,"clientWidth":1280,"clientHeight":800,"scale":1},
+                "contentSize":{"width":1280,"height":800}})),
+            "Page.captureScreenshot" => {
+                delay = state.screenshot_delay;
+                let size = state.screenshots.pop_front().unwrap_or(1024);
+                let mut bytes = vec![0; size.max(2)];
+                bytes[..2].copy_from_slice(&[0xff, 0xd8]);
+                Ok(json!({"data":BASE64.encode(bytes)}))
+            }
             "Target.attachToTarget" => {
                 let id = format!("session-{}", state.attachments.len() + 1);
                 state.attachments.push(Attachment {
@@ -460,6 +555,7 @@ fn answer(shared: &Shared, connection: usize, command: &Value) -> Answer {
     Answer {
         reply,
         events,
+        before,
         delay,
     }
 }
