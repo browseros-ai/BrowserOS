@@ -1,0 +1,38 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Mouse</title>
+<style>
+  body { margin: 0; }
+  #target { position: absolute; left: 0; top: 0; width: 300px; height: 200px; background: #eee; }
+</style>
+<div id="target"></div>
+<script>
+// Every mouse event the page sees, with its button state and modifiers but no coordinates,
+// and every wheel's deltas, so two engines' runs compare by what reached the page.
+window.__events = []
+const modifiers = (event) =>
+  ['alt', 'ctrl', 'meta', 'shift'].filter((name) => event[`${name}Key`]).join('+')
+for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'contextmenu', 'auxclick']) {
+  document.addEventListener(type, (event) => {
+    window.__events.push({
+      type,
+      target: event.target.id || event.target.nodeName.toLowerCase(),
+      button: event.button,
+      buttons: event.buttons,
+      detail: event.detail,
+      modifiers: modifiers(event),
+      isTrusted: event.isTrusted,
+    })
+  })
+}
+window.__moves = []
+document.addEventListener('mousemove', (event) => {
+  window.__moves.push({ buttons: event.buttons, modifiers: modifiers(event) })
+})
+window.__wheels = []
+document.addEventListener('wheel', (event) => {
+  window.__wheels.push({ deltaX: event.deltaX, deltaY: event.deltaY, modifiers: modifiers(event) })
+})
+document.addEventListener('contextmenu', (event) => event.preventDefault())
+window.__facts = () => ({ events: window.__events, moves: window.__moves, wheels: window.__wheels })
+</script>

@@ -12,8 +12,9 @@
  */
 
 import type { ApiName } from './connection'
-import { TimeoutError } from './errors'
+import { AbortError, TimeoutError } from './errors'
 import type { EventEmitter } from './events'
+import type { SignalLike, TimeoutOptions } from './timeout-settings'
 
 /** A `waitForEvent` predicate: may be async, as in Playwright. */
 // biome-ignore lint/suspicious/noExplicitAny: the event's value is the listener's to type.
@@ -22,17 +23,7 @@ export type EventPredicate = (arg: any) => boolean | Promise<boolean>
 /** Playwright's `WaitForEventOptions`: a predicate, or options with one. */
 export type WaitForEventOptions =
   | EventPredicate
-  | { timeout?: number; predicate?: EventPredicate; signal?: unknown }
-
-/**
- * Deviation: `client/waiter.ts` `Waiter.rejectOnTimeout`: `if (signal) {`
- * QuickJS has no `AbortSignal`, so Neo takes no `signal`; one passed anyway is refused instead
- * of being ignored. `null` and `undefined` are no signal, as Playwright's client reads them.
- */
-export function refuseSignal(options: { signal?: unknown }): void {
-  if (options.signal !== undefined && options.signal !== null)
-    throw new Error('Neo does not support the "signal" option yet')
-}
+  | { timeout?: number; predicate?: EventPredicate; signal?: SignalLike | null }
 
 /**
  * Playwright: `client/channelOwner.ts` `ChannelOwner._wrapApiCall`: `e.message = apiZone.apiName + ': ' + e.message;`
@@ -88,8 +79,25 @@ export class Waiter {
     )
   }
 
-  /** Playwright's `rejectOnTimeout` without its `signal` branch: callers refuse a `signal`. */
-  rejectOnTimeout(timeout: number, timeoutMessage: string) {
+  /** Rejects the wait with `AbortError` (its `cause` the signal's reason) at once for a signal
+   * already aborted, or when it aborts, and with `TimeoutError` at the timeout. */
+  rejectOnTimeout({ timeout, signal }: TimeoutOptions, timeoutMessage: string) {
+    if (signal) {
+      if (signal.aborted)
+        return this.rejectImmediately(
+          new AbortError(undefined, { cause: signal.reason }),
+        )
+      let rejectPromise: (error: unknown) => void = () => {}
+      const promise = new Promise<void>((_, reject) => {
+        rejectPromise = reject
+      })
+      const listener = () =>
+        rejectPromise(new AbortError(undefined, { cause: signal.reason }))
+      signal.addEventListener('abort', listener, { once: true })
+      this._rejectOn(promise, () =>
+        signal.removeEventListener('abort', listener),
+      )
+    }
     if (timeout) {
       const { promise, dispose } = waitForTimeout(timeout)
       this._rejectOn(
