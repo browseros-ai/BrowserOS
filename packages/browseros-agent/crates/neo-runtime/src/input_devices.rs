@@ -1452,6 +1452,67 @@ mod tests {
         assert!(after.mouse.buttons.is_empty());
     }
 
+    /// A run end whose drag cancel is refused, fails or is dropped mid-write (the run's
+    /// deadline) still ends the run, and leaves the drag running with its button, as the page may
+    /// still have them; the next run's end cancels the drag and lets go of the button.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_drag_cancel_cut_short_is_left_to_the_next_run_end() {
+        let running = InputDevices {
+            drag: Some(DragState {
+                data: serde_json::json!({ "items": [], "dragOperationsMask": 1 }),
+                x: 5.0,
+                y: 5.0,
+            }),
+            mouse: MouseState {
+                x: 5.0,
+                y: 5.0,
+                last_button: Some(MouseButton::Left),
+                buttons: vec![(MouseButton::Left, run("A"))],
+            },
+            ..InputDevices::default()
+        };
+        for (exit, answer) in [
+            ("refused", Answer::Refuse),
+            ("failed", Answer::Fail),
+            ("dropped", Answer::Hang),
+        ] {
+            let mut simulated = running.clone();
+            let mut end_a = Plan::default();
+            keyboard::plan_key_releases(&mut end_a, &mut simulated, &run("A"));
+            plan_button_releases(&mut end_a, &mut simulated, &run("A"));
+            let turn = Turn::of(running.clone(), "observer");
+            let sender = Sender::answering([answer]);
+            let never = CancellationToken::new();
+            let write = write_plan(&sender, &turn, &end_a, &never);
+            if exit == "dropped" {
+                let dropped = time::timeout(Duration::from_secs(1), write).await;
+                assert!(dropped.is_err(), "the run's deadline dropped it");
+            } else {
+                let _written = write.await;
+            }
+            assert_eq!(sender.sent(), ["dragCancel"], "{exit}");
+            let after = turn.devices();
+            assert_eq!(after.ended, [run("A")], "{exit}: A's run is over");
+            assert!(after.drag.is_some(), "{exit}: the page may still drag");
+
+            let mut simulated = after;
+            let mut end_b = Plan::default();
+            keyboard::plan_key_releases(&mut end_b, &mut simulated, &run("B"));
+            plan_button_releases(&mut end_b, &mut simulated, &run("B"));
+            let sender = Sender::answering([]);
+            let _written = write_plan(&sender, &turn, &end_b, &CancellationToken::new()).await;
+            assert_eq!(
+                sender.sent(),
+                ["dragCancel"],
+                "{exit}: B's end cancels A's drag"
+            );
+            let after = turn.devices();
+            assert_eq!(after.drag, None, "{exit}");
+            assert!(after.mouse.buttons.is_empty(), "{exit}");
+            assert!(after.ended.is_empty(), "{exit}");
+        }
+    }
+
     /// Known review issue: one failed run-end release must not prevent independent releases.
     #[tokio::test(start_paused = true)]
     async fn review_run_end_keeps_releasing_after_a_cdp_error() {
