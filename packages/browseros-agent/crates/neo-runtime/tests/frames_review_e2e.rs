@@ -58,13 +58,19 @@ async fn a_direct_frame_of_a_hidden_iframe_starts_visible() {
             frame = page.frame('hid');
             await new Promise(resolve => setTimeout(resolve, 20));
         }
-        return await frame.isVisible('#e');
+        await frame.locator('#e').waitFor({state: 'visible', timeout: 500});
+        return {direct: await frame.isVisible('#e'),
+            hop: await page.frameLocator('iframe').locator('#e').isVisible()};
     ",
     )
     .await;
     tab.close().await;
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:#?}");
-    assert_eq!(outcome.value, Some(json!(true)), "{outcome:#?}");
+    assert_eq!(
+        outcome.value,
+        Some(json!({"direct": true, "hop": false})),
+        "{outcome:#?}"
+    );
 }
 
 /// Through a `frameLocator` hop into a hidden iframe, Playwright's `fill` and `selectOption` wait
@@ -156,6 +162,8 @@ async fn frame_getters_survive_unrelated_oopif_churn() {
     let outcome = run(
         &tab,
         r"
+        await page.frameLocator('#stable').locator('p').waitFor({state: 'attached'});
+        const frame = page.frame('stable');
         const thrown = [];
         let calls = 0;
         const deadline = Date.now() + 3000;
@@ -168,7 +176,8 @@ async fn frame_getters_survive_unrelated_oopif_churn() {
                 thrown.push(error.message);
             }
         }
-        return {calls: calls > 0, thrown: [...new Set(thrown)]};
+        return {calls: calls > 0, thrown: [...new Set(thrown)],
+            text: await frame.textContent('p')};
     ",
     )
     .await;
@@ -176,7 +185,7 @@ async fn frame_getters_survive_unrelated_oopif_churn() {
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:#?}");
     assert_eq!(
         outcome.value,
-        Some(json!({"calls": true, "thrown": []})),
+        Some(json!({"calls": true, "thrown": [], "text": "child"})),
         "{outcome:#?}"
     );
 }

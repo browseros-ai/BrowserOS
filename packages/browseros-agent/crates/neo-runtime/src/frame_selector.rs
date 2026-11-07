@@ -3,9 +3,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use neo_runtime_spec::injected::{
-    ElementState, ElementStatesOutcome, InjectedCheckElementStatesParams, InjectedFrameOwnerParams,
-};
+use neo_runtime_spec::injected::InjectedFrameOwnerParams;
 use neo_runtime_spec::{Element, Handle};
 use serde_json::{Value, json};
 
@@ -261,30 +259,12 @@ pub(crate) async fn locate(
     } else {
         Vec::new()
     };
-    let mut visible = true;
-    for owner in &owners {
-        let states = owner
-            .frame
-            .call(
-                None,
-                &InjectedCheckElementStatesParams {
-                    element: owner.element.clone(),
-                    states: vec![ElementState::Visible],
-                    frame_visible: true,
-                },
-            )
-            .await?;
-        match states.outcome {
-            None => {}
-            Some(ElementStatesOutcome::NotConnected(_)) => return Err(PageError::NotConnected),
-            Some(ElementStatesOutcome::Missing(_)) => visible = false,
-        }
-    }
+    // Direct receivers start visible; only explicit selector hops contribute visibility.
+    // Retain direct owners for geometry and hit checks, independently of that visibility.
     let mut resolver = Resolver { tab, owners };
     let mut located = follow(&mut resolver, initial, chunks, strict).await?;
     if let Some(located) = &mut located {
         located.owners = resolver.owners;
-        located.frame_visible &= visible;
     }
     Ok(located)
 }

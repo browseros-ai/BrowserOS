@@ -269,6 +269,7 @@ impl Frames {
 
     /// Chromium omits remote subtrees from Page.getFrameTree. Join each reachable iframe
     /// target to its parent's frame, then read that target's local subtree on its own host.
+    /// A child disappearing during enumeration does not invalidate unrelated frame records.
     pub(crate) async fn tree(&self) -> Result<Vec<FrameInfo>, PageError> {
         let local = self.main.host.send("Page.getFrameTree", json!({}));
         let targets = self.main.host.session.cdp.send(
@@ -320,12 +321,21 @@ impl Frames {
             {
                 self.forget(&cached);
             }
-            let context = self.context(id, Some(&parent)).await?;
-            let local = context
+            let context = match self.context(id, Some(&parent)).await {
+                Ok(context) => context,
+                Err(PageError::NotConnected) => continue,
+                Err(error) => return Err(error),
+            };
+            let local = match context
                 .host
                 .send("Page.getFrameTree", json!({}))
                 .await
-                .map_err(|error| context.host.classify(&error))?;
+                .map_err(|error| context.host.classify(&error))
+            {
+                Ok(local) => local,
+                Err(PageError::NotConnected) => continue,
+                Err(error) => return Err(error),
+            };
             for mut frame in local_tree(&local)? {
                 if frame.id == id && frame.parent.is_none() {
                     frame.parent = Some(parent_id.to_string());
