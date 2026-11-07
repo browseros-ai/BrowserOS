@@ -212,6 +212,8 @@ pub(crate) async fn wait_for_navigation(
 /// or the main frame's: subscribed by the caller before anything here runs. A child frame's
 /// `Response` is the network log's answer for its document, as the main frame's: Neo records
 /// every frame's requests (`network.rs`).
+///
+/// Playwright: `server/frames.ts` `Frame.waitForNavigation`: `if (!this._firedLifecycleEvents.has(waitUntil))`
 pub(crate) async fn wait_for_navigation_on(
     tab: &impl NavigationTab,
     mut events: impl Observation,
