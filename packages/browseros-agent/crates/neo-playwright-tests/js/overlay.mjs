@@ -3,8 +3,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { corpus, crate, sha256, source, verifySource } from './prepare.mjs'
 
-export function materialize(root, harness = crate) {
-  const stamp = verifySource()
+export function materialize(
+  root,
+  harness = crate,
+  { upstream = source, pin = corpus } = {},
+) {
+  const stamp = verifySource({ root: upstream, pin })
   if (fs.existsSync(root)) throw new Error(`Overlay already exists: ${root}`)
   fs.mkdirSync(root, { recursive: true })
   // The upstream root is CommonJS. Without this boundary the overlay inherits this
@@ -13,11 +17,17 @@ export function materialize(root, harness = crate) {
     path.join(root, 'package.json'),
     JSON.stringify({ private: true, type: 'commonjs' }),
   )
-  fs.cpSync(path.join(source, 'tests'), path.join(root, 'tests'), {
+  fs.cpSync(path.join(upstream, 'tests'), path.join(root, 'tests'), {
     recursive: true,
   })
+  for (const [file, digest] of Object.entries(stamp.inputs))
+    if (
+      file.startsWith('tests/') &&
+      sha256(fs.readFileSync(path.join(root, file))) !== digest
+    )
+      throw new Error(`Pinned source changed while copying overlay: ${file}`)
   for (const name of ['packages', 'node_modules'])
-    fs.symlinkSync(path.join(source, name), path.join(root, name), 'dir')
+    fs.symlinkSync(path.join(upstream, name), path.join(root, name), 'dir')
   const edits = []
   const replace = (file, before, after) => {
     const name = path.join(root, file)
@@ -36,6 +46,10 @@ export function materialize(root, harness = crate) {
   }
   const browserFixture = 'tests/config/browserTest.ts'
   const original = fs.readFileSync(path.join(root, browserFixture))
+  // Keep upstream's complete fixture graph. Only the public import is replaced; the shim
+  // extends this alias and overrides the browser ownership and auto configuration seams.
+  const fixtureAlias = 'tests/config/__neoOriginalBrowserTest.ts'
+  fs.writeFileSync(path.join(root, fixtureAlias), original, { flag: 'wx' })
   fs.writeFileSync(
     path.join(root, browserFixture),
     `export { test as playwrightTest, test as browserTest, test as contextTest, expect } from ${JSON.stringify(path.join(harness, 'js/fixtures.mjs'))};\n`,
@@ -61,14 +75,16 @@ export function materialize(root, harness = crate) {
     `export default ${JSON.stringify(
       {
         testDir: path.join(root, 'tests'),
-        testMatch: corpus.suites
+        testMatch: pin.suites
           .filter((suite) => suite.include)
           .map((suite) => suite.file.replace(/^tests\//, '')),
         workers: 1,
         retries: 0,
         repeatEach: 1,
         timeout: 30_000,
-        globalTimeout: 180_000,
+        // Keep this outer runner fence aligned with the native guard. Original slow and
+        // setTimeout modifiers must retain their budgets inside the case supervisor.
+        globalTimeout: 600_000,
         forbidOnly: true,
         fullyParallel: false,
         build: { external: [path.join(harness, 'js/**')] },
@@ -82,11 +98,24 @@ export function materialize(root, harness = crate) {
     )};\n`,
   )
   const manifest = {
-    revision: corpus.revision,
-    version: corpus.version,
+    revision: pin.revision,
+    version: pin.version,
     sourceBuild: sha256(JSON.stringify(stamp)),
+    fixtureAlias: { file: fixtureAlias, sha256: sha256(original) },
     edits,
-    corpusSha256: sha256(fs.readFileSync(path.join(crate, 'corpus.json'))),
+    corpusSha256: sha256(fs.readFileSync(path.join(harness, 'corpus.json'))),
+    // Freeze the actual transformation/fixture/reporter inputs, including frozen snapshots
+    // passed by collect.mjs. Source provenance alone cannot identify the executed overlay.
+    harnessFiles: Object.fromEntries(
+      fs
+        .readdirSync(path.join(harness, 'js'))
+        .sort()
+        .map((file) => [
+          `js/${file}`,
+          sha256(fs.readFileSync(path.join(harness, 'js', file))),
+        ]),
+    ),
+    configSha256: sha256(fs.readFileSync(path.join(root, 'neo.config.mjs'))),
   }
   fs.writeFileSync(
     path.join(root, 'overlay.json'),
