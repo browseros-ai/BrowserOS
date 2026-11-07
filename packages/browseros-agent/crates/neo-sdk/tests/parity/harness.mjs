@@ -277,16 +277,29 @@ export async function eventually(check, what, timeoutMs = 15_000) {
  * `slowMs`, so a navigation to it stays in flight before it commits. It listens on 127.0.0.1;
  * the frame tests also load it as `localhost`, a different site, which BrowserOS neo reaches on
  * the same address.
+ *
+ * A page is its HTML, or `{ body, headers, status }` for a response with headers of its own (an
+ * attachment), or a function `(request, response)` that answers by itself (a body sent slowly).
  */
 export async function serveFixture(cleanups, { pages = {}, slowMs = 0 } = {}) {
   const server = http.createServer(async (request, response) => {
     if (request.url === '/slow') await sleep(slowMs)
+    const page = pages[request.url] ??
+      pages[request.url.split('?')[0]] ?? {
+        body: `<title>${request.url}</title><h1>${request.url}</h1>`,
+      }
+    if (typeof page === 'function') return page(request, response)
+    const {
+      body,
+      headers = {},
+      status = 200,
+    } = typeof page === 'string' ? { body: page } : page
+    response.statusCode = status
     response.setHeader('content-type', 'text/html; charset=utf-8')
-    response.end(
-      pages[request.url] ??
-        pages[request.url.split('?')[0]] ??
-        `<title>${request.url}</title><h1>${request.url}</h1>`,
-    )
+    for (const [name, value] of Object.entries(headers)) {
+      response.setHeader(name, value)
+    }
+    response.end(body)
   })
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
