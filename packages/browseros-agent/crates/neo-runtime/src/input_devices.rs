@@ -26,6 +26,7 @@
 //! acknowledged; a call that stopped part-way is `Unknown` (design section 4.7).
 
 use std::future::Future;
+use std::mem;
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -52,6 +53,10 @@ pub(crate) type Owner = SessionId;
 pub(crate) struct InputDevices {
     pub(crate) keyboard: KeyboardState,
     pub(crate) mouse: MouseState,
+    /// Runs that ended still listed as holders, because a release failed at their end: what
+    /// they hold may still be down, but no live run holds it, so the next run's end releases
+    /// it and no live run's release waits for it. Each goes once nothing lists it.
+    pub(crate) ended: Vec<Owner>,
     /// Chromium's drag manager (Playwright's `DragManager`): the drag the browser handed
     /// over, while one runs.
     pub(crate) drag: Option<DragState>,
@@ -142,6 +147,11 @@ pub(crate) enum Effect {
     },
     /// A `drop` or a `dragCancel` ended the drag.
     DragEnded,
+    /// A run ended: what it still holds (a release that failed) is held by no live run any
+    /// more, only possibly down (`InputDevices::ended`). Writes nothing.
+    Retire {
+        owner: Owner,
+    },
 }
 
 /// Neo: the effect of each written command on the tab's state, which no script reads directly.
@@ -152,6 +162,16 @@ impl InputDevices {
     /// adds its run as one more holder: the key is down once (Playwright's `_pressedKeys` is a
     /// set), and a release lets every holder go.
     pub(crate) fn apply(&mut self, effect: &Effect, answered: bool) {
+        self.apply_effect(effect, answered);
+        // An ended run goes once nothing lists it.
+        let ended = mem::take(&mut self.ended);
+        self.ended = ended
+            .into_iter()
+            .filter(|owner| self.holds_anything(owner))
+            .collect();
+    }
+
+    fn apply_effect(&mut self, effect: &Effect, answered: bool) {
         match effect {
             Effect::None => {}
             Effect::KeyDown {
@@ -222,7 +242,32 @@ impl InputDevices {
                     self.drag = None;
                 }
             }
+            Effect::Retire { owner } => {
+                if self.holds_anything(owner) && !self.ended.contains(owner) {
+                    self.ended.push(owner.clone());
+                }
+            }
         }
+    }
+
+    /// Whether `owner` is listed as holding any key or button.
+    fn holds_anything(&self, owner: &Owner) -> bool {
+        self.keyboard
+            .pressed
+            .iter()
+            .any(|(_, holder)| holder == owner)
+            || self.mouse.buttons.iter().any(|(_, holder)| holder == owner)
+    }
+
+    /// Whether `holder` is a live run other than `owner`: one whose end has not come.
+    pub(crate) fn live_other(&self, holder: &Owner, owner: &Owner) -> bool {
+        holder != owner && !self.ended.contains(holder)
+    }
+
+    /// Whether `holder`'s holds are `owner`'s to release at its end: its own, or an ended
+    /// run's.
+    pub(crate) fn releases(&self, holder: &Owner, owner: &Owner) -> bool {
+        holder == owner || self.ended.contains(holder)
     }
 
     /// `code` held by `owner` too, once.
@@ -604,21 +649,23 @@ pub(crate) fn plan_tap(plan: &mut Plan, simulated: &mut InputDevices, at: (f64, 
 
 /// Deviation: `server/input.ts` `Mouse.up`: `this._buttons.delete(button);` Playwright keeps a page's buttons held until its script releases them; Neo releases at a run's end every button the run left held, oldest first at the pointer's last position, because the tab is the user's and outlives the run.
 pub(crate) fn plan_button_releases(plan: &mut Plan, simulated: &mut InputDevices, owner: &Owner) {
-    let held: Vec<MouseButton> = simulated
-        .mouse
-        .buttons
-        .iter()
-        .filter(|(_, holder)| holder == owner)
-        .map(|(button, _)| *button)
-        .collect();
+    let mut held: Vec<MouseButton> = Vec::new();
+    for (button, holder) in &simulated.mouse.buttons {
+        if simulated.releases(holder, owner) && !held.contains(button) {
+            held.push(*button);
+        }
+    }
     for button in held {
         // A button another live run still holds stays down; this run only lets go of it.
         let shared = simulated
             .mouse
             .buttons
             .iter()
-            .any(|(held, holder)| *held == button && holder != owner);
+            .any(|(held, holder)| *held == button && simulated.live_other(holder, owner));
         let at = if shared {
+            if !simulated.mouse.buttons.contains(&(button, owner.clone())) {
+                continue;
+            }
             plan.push(
                 simulated,
                 Planned::state_only(Effect::ButtonLetGo {
@@ -634,6 +681,25 @@ pub(crate) fn plan_button_releases(plan: &mut Plan, simulated: &mut InputDevices
         };
         plan.commands[at].always = true;
     }
+    retire(plan, simulated, owner);
+}
+
+/// Neo: a run end's last command: what the run still holds after its releases (one failed)
+/// is held by no live run any more. Written even after the writer stopped, as every release
+/// before it.
+fn retire(plan: &mut Plan, simulated: &mut InputDevices, owner: &Owner) {
+    let at = plan.push(
+        simulated,
+        Planned::state_only(Effect::Retire {
+            owner: owner.clone(),
+        }),
+    );
+    plan.commands[at].always = true;
+}
+
+/// Neo: [`retire`] for `keyboard.rs`'s key releases.
+pub(crate) fn plan_retire(plan: &mut Plan, simulated: &mut InputDevices, owner: &Owner) {
+    retire(plan, simulated, owner);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1391,6 +1457,56 @@ mod tests {
             actual.mouse.buttons.is_empty(),
             "the mouse release is independent"
         );
+    }
+
+    /// A concurrent observer keeps the tab state alive while A's cleanup fails. A has ended,
+    /// so after B presses and ends, A must not count as another live holder of Shift.
+    #[tokio::test(start_paused = true)]
+    async fn review_failed_cleanup_does_not_leave_a_live_holder() {
+        let mut devices = InputDevices::default();
+        let mut setup = Plan::default();
+        keyboard::plan_key_down(
+            &mut setup,
+            &mut devices,
+            "Shift",
+            Platform::Linux,
+            &run("A"),
+        )
+        .expect("key");
+        let observer = Turn::of(devices.clone(), "observer");
+
+        let mut end_a = Plan::default();
+        keyboard::plan_key_releases(&mut end_a, &mut devices, &run("A"));
+        let failed = Sender::answering([Answer::Fail]);
+        let written = write_plan(&failed, &observer, &end_a, &CancellationToken::new()).await;
+        assert!(written.outcomes[0].is_err());
+        assert_eq!(observer.devices().keyboard.modifiers, keyboard::SHIFT);
+
+        let mut devices = observer.devices();
+        let mut down_b = Plan::default();
+        keyboard::plan_key_down(
+            &mut down_b,
+            &mut devices,
+            "Shift",
+            Platform::Linux,
+            &run("B"),
+        )
+        .expect("key");
+        let sender = Sender::answering([]);
+        let _written = write_plan(&sender, &observer, &down_b, &CancellationToken::new()).await;
+
+        let mut devices = observer.devices();
+        let mut end_b = Plan::default();
+        keyboard::plan_key_releases(&mut end_b, &mut devices, &run("B"));
+        let release = Sender::answering([]);
+        let _written = write_plan(&release, &observer, &end_b, &CancellationToken::new()).await;
+        assert_eq!(
+            release.sent(),
+            ["keyUp"],
+            "A has ended; its failed release must not keep Shift held after B ends: {:?}",
+            observer.devices()
+        );
+        assert_eq!(observer.devices().keyboard, KeyboardState::default());
     }
 
     const ROUND_TRIP: Duration = Duration::from_millis(1);

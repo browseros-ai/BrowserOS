@@ -37,6 +37,8 @@ import type {
   FrameWaitForSelectorParams,
   PageCloseParams,
   PageConsoleMessagesParams,
+  PageGoBackParams,
+  PageGoForwardParams,
   PageKeyboardDownParams,
   PageKeyboardInsertTextParams,
   PageKeyboardPressParams,
@@ -48,6 +50,7 @@ import type {
   PageMouseUpParams,
   PageMouseWheelParams,
   PagePageErrorsParams,
+  PageReloadParams,
   PageTouchscreenTapParams,
 } from '@browseros/neo-runtime-spec/serve'
 
@@ -495,6 +498,34 @@ type _PageCloseKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof PAGE_CLOSE_KEYS)[number], true>,
     Required<PageCloseParams>
+  >
+>
+
+/** `Page.reload`'s params (`spec/playwright/page.yml`). */
+export const PAGE_RELOAD_KEYS = ['waitUntil'] as const
+
+/** `Page.goBack`'s params (`spec/playwright/page.yml`). */
+export const PAGE_GO_BACK_KEYS = ['waitUntil'] as const
+
+/** `Page.goForward`'s params (`spec/playwright/page.yml`). */
+export const PAGE_GO_FORWARD_KEYS = ['waitUntil'] as const
+
+type _PageReloadKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_RELOAD_KEYS)[number], true>,
+    Required<PageReloadParams>
+  >
+>
+type _PageGoBackKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_GO_BACK_KEYS)[number], true>,
+    Required<PageGoBackParams>
+  >
+>
+type _PageGoForwardKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_GO_FORWARD_KEYS)[number], true>,
+    Required<PageGoForwardParams>
   >
 >
 

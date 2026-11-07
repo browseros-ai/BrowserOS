@@ -77,6 +77,40 @@ Injected:
         # Absent when nothing matches; hidden and detached waits succeed in that case.
         matched: SelectorMatch?
 
+    # `selectorState` for a `Frame.waitForSelector` whose caller wants the element back, such as
+    # `locator.evaluate`: the same probe, plus the first match in the caller's object group, which
+    # neo-runtime adopts into the frame's main world once the wait is met.
+    selectorElement:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+      returns:
+        # The first match. Absent when nothing matches.
+        element: Element?
+        count: int
+        visible: boolean
+        # `InjectedScript.previewNode` of the first match, absent when nothing matches.
+        preview: string?
+
+    # The document node of this world's frame, for neo-runtime's main-world door
+    # (`main_world.rs`), which reads its `backendNodeId` with `DOM.describeNode` and resolves the
+    # same node in the frame's main world. A `Document`, carried as the built-in `Element` handle
+    # because CDP gives every DOM node the subtype `node`.
+    document:
+      internal: true
+      returns:
+        node: Element
+
+    # `InjectedScript.previewNode` of a node adopted into this world, for an `ElementHandle`'s
+    # preview (`dom.ts` `ElementHandle._initializePreview`).
+    previewNode:
+      internal: true
+      parameters:
+        node: Element
+      returns:
+        preview: string
+
     # Resolves one frame chunk and reads the first match's `textContent`, for
     # `Frame.textContent`. neo-runtime owns waiting: it polls this call with Playwright's backoff
     # until something matches or the call's deadline passes.

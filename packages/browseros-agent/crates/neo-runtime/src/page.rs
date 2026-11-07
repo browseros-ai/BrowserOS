@@ -276,10 +276,22 @@ pub(crate) struct PageState {
     pub(crate) load: bool,
     pub(crate) dom_content_loaded_count: u64,
     pub(crate) load_count: u64,
-    /// Chromium emits no load lifecycle when restoring this document from bfcache.
-    restored_from_bfcache: bool,
+    /// Playwright's `Frame.pendingDocument()`: the navigation the frame requested or whose
+    /// request started, until a commit takes it or its request fails. Requests are seen only once
+    /// `Network.enable` ran.
+    pending_document: Option<PendingDocument>,
     /// `Page.javascriptDialogOpening` events seen; each was answered.
     pub(crate) dialogs_opened: u64,
+}
+
+/// The navigation a frame is waiting to commit ([`PageState::pending_document`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PendingDocument {
+    /// Requested (`Page.frameRequestedNavigation`), with no request known yet.
+    Requested,
+    /// Its request started (`Network.requestWillBeSent`): the request id, which is also the
+    /// document's loader id.
+    Started(String),
 }
 
 /// A snapshot of the counters in [`PageState`], taken when an interceptor is armed.
@@ -405,7 +417,7 @@ impl FrameFeeds {
                     page.document = None;
                     page.dom_content_loaded = false;
                     page.load = false;
-                    page.restored_from_bfcache = false;
+                    page.pending_document = None;
                     state.swaps += 1;
                     state.swapped_from = Some(session.clone());
                 } else {
@@ -1340,6 +1352,56 @@ struct FrameEvent {
     url: Option<String>,
 }
 
+/// The fields of `Network.requestWillBeSent` that tell a navigation request.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NavigationRequestStarted {
+    request_id: String,
+    loader_id: String,
+    #[serde(default)]
+    frame_id: Option<String>,
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
+    request: StartedRequest,
+}
+
+#[derive(Deserialize)]
+struct StartedRequest {
+    url: String,
+}
+
+/// The fields of `Network.loadingFailed` a navigation's failure needs.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NavigationRequestFailed {
+    request_id: String,
+    #[serde(default)]
+    error_text: Option<String>,
+    #[serde(default)]
+    blocked_reason: Option<String>,
+    #[serde(default)]
+    canceled: bool,
+}
+
+impl NavigationRequestFailed {
+    /// The text a navigation wait rejects with.
+    ///
+    /// Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager._onLoadingFailed`: `request.request._setFailureText(event.errorText || event.blockedReason || '');`
+    /// Playwright: `server/frames.ts` `FrameManager.requestFailed`: `errorText += '; maybe frame was detached?';`
+    fn error_text(&self) -> String {
+        let mut text = [&self.error_text, &self.blocked_reason]
+            .into_iter()
+            .flatten()
+            .find(|text| !text.is_empty())
+            .cloned()
+            .unwrap_or_default();
+        if self.canceled {
+            text.push_str("; maybe frame was detached?");
+        }
+        text
+    }
+}
+
 #[derive(Deserialize)]
 struct DialogOpening {
     #[serde(rename = "type")]
@@ -1391,10 +1453,18 @@ pub(crate) fn apply(
 }
 
 /// The part of [`apply`] that follows one frame, `frame`: its requested navigations, commits,
-/// same-document navigations, stops and lifecycle. The main frame's state and every child
-/// frame's feed ([`FrameFeeds`]) both take it, so a child frame's document is followed exactly
-/// as the main frame's is. The caller has already matched the event's session.
+/// same-document navigations, stops and lifecycle, and, for the main frame, its navigation
+/// requests' start and failure (Network events name no frame, so a child frame's feed never
+/// receives them). The main frame's state and every child frame's feed ([`FrameFeeds`]) both
+/// take it, so a child frame's document is followed exactly as the main frame's is. The caller
+/// has already matched the event's session.
 fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> Applied {
+    if matches!(
+        event.method.as_str(),
+        "Network.requestWillBeSent" | "Network.loadingFailed"
+    ) {
+        return apply_navigation_request(state, event, main_frame);
+    }
     let mut applied = Applied::default();
     let params = event.params.clone();
     match event.method.as_str() {
@@ -1405,6 +1475,9 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
             {
                 state.navigations_requested += 1;
                 state.pending_url = Some(requested.url);
+                // server/frames.ts frameRequestedNavigation: a navigation whose request is not
+                // known yet replaces any pending one.
+                state.pending_document = Some(PendingDocument::Requested);
                 applied.changed = true;
             }
         }
@@ -1416,15 +1489,42 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                 let fragment = frame.url_fragment.as_deref().unwrap_or("");
                 state.committed_url = Some(format!("{}{fragment}", frame.url));
                 state.document = frame.loader_id;
+                // server/frames.ts frameCommittedNewDocumentNavigation: the pending document is
+                // this one, with its request, or, with no request known, assumed to be; a later
+                // navigation whose request already started stays pending.
+                let request = match state.pending_document.take() {
+                    Some(PendingDocument::Started(pending))
+                        if state.document.as_ref() == Some(&pending) =>
+                    {
+                        true
+                    }
+                    Some(PendingDocument::Started(later)) => {
+                        state.pending_document = Some(PendingDocument::Started(later));
+                        false
+                    }
+                    Some(PendingDocument::Requested) | None => false,
+                };
                 state.dom_content_loaded = false;
                 state.load = false;
-                state.restored_from_bfcache = kind.as_deref() == Some("BackForwardCacheRestore");
+                if kind.as_deref() == Some("BackForwardCacheRestore") {
+                    // Deviation: `server/chromium/chromiumSwitches.ts` `chromiumSwitches`: `'--disable-back-forward-cache',`
+                    // Playwright's Chromium never restores a cached document, and one it met
+                    // would never fire `load`, so its history navigation would time out. Neo
+                    // runs in the user's browser, where Chromium caches only a document that
+                    // finished loading and restores it without lifecycle events, reporting
+                    // `frameStoppedLoading` before this commit (measured on BrowserOS neo): it
+                    // counts as loaded at once.
+                    state.did_dom_content_load();
+                    state.did_load();
+                }
                 state.pending_url = None;
                 applied.new_document = true;
                 applied.navigation = Some(Navigation {
                     document: state.document.clone(),
                     url: state.committed_url.clone().unwrap_or_default(),
                     lifecycle: state.lifecycle(),
+                    request,
+                    error: None,
                 });
                 applied.changed = true;
             }
@@ -1439,10 +1539,16 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                 state.commits += 1;
                 state.committed_url = Some(url.clone());
                 state.pending_url = None;
+                // server/frames.ts frameCommittedSameDocumentNavigation.
+                if state.pending_document == Some(PendingDocument::Requested) {
+                    state.pending_document = None;
+                }
                 applied.navigation = Some(Navigation {
                     document: None,
                     url,
                     lifecycle: state.lifecycle(),
+                    request: false,
+                    error: None,
                 });
                 applied.changed = true;
             }
@@ -1452,12 +1558,6 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                 && frame_id == main_frame
             {
                 state.pending_url = None;
-                // Playwright 26137face ignores stop-loading. Only bfcache needs this fallback:
-                // Chromium restores a loaded document without replaying its lifecycle events.
-                if state.restored_from_bfcache {
-                    state.did_dom_content_load();
-                    state.did_load();
-                }
                 applied.changed = true;
             }
         }
@@ -1469,6 +1569,45 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
             }
         }
         _ => {}
+    }
+    applied
+}
+
+/// The main frame's navigation requests, for [`apply_frame`]: one starting is the pending
+/// document; the pending document's request failing aborts its navigation, as a navigation event
+/// with its error.
+fn apply_navigation_request(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> Applied {
+    let mut applied = Applied::default();
+    // Read in place: every subresource request passes through here.
+    let params = &event.params;
+    if event.method == "Network.requestWillBeSent" {
+        // server/frames.ts requestStarted, for crNetworkManager.ts's navigation requests:
+        // `requestId === loaderId`, type `Document`, and never a `data:` URL.
+        if let Ok(started) = NavigationRequestStarted::deserialize(params)
+            && started.frame_id.as_deref() == Some(main_frame)
+            && started.request_id == started.loader_id
+            && started.kind.as_deref() == Some("Document")
+            && !started.request.url.starts_with("data:")
+        {
+            state.pending_document = Some(PendingDocument::Started(started.request_id));
+            applied.changed = true;
+        }
+        return applied;
+    }
+    // server/frames.ts requestFailed: only the pending document's request aborts the navigation;
+    // an older one that a newer navigation replaced fails silently.
+    if let Ok(failed) = NavigationRequestFailed::deserialize(params)
+        && state.pending_document == Some(PendingDocument::Started(failed.request_id.clone()))
+    {
+        state.pending_document = None;
+        applied.navigation = Some(Navigation {
+            url: state.committed_url.clone().unwrap_or_default(),
+            lifecycle: state.lifecycle(),
+            request: false,
+            error: Some(failed.error_text()),
+            document: Some(failed.request_id),
+        });
+        applied.changed = true;
     }
     applied
 }
@@ -2780,15 +2919,17 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_stopped_loading_completes_only_a_bfcache_document() {
-        let mut state = PageState::default();
+    fn tests_that_a_bfcache_restore_commits_a_loaded_document_without_a_request() {
+        // BrowserOS neo reports a restore's stop before its commit, then no lifecycle at all.
         let stopped = event(
             "Page.frameStoppedLoading",
             Some(SESSION),
             json!({"frameId":MAIN}),
         );
-        for (kind, expected) in [("BackForwardCacheRestore", true), ("Navigation", false)] {
-            applied(
+        for (kind, loaded) in [("BackForwardCacheRestore", true), ("Navigation", false)] {
+            let mut state = PageState::default();
+            applied(&mut state, &stopped);
+            let commit = applied(
                 &mut state,
                 &event(
                     "Page.frameNavigated",
@@ -2798,10 +2939,154 @@ mod tests {
                     }),
                 ),
             );
-            applied(&mut state, &stopped);
-            assert_eq!(state.dom_content_loaded, expected);
-            assert_eq!(state.load, expected);
+            assert_eq!((state.dom_content_loaded, state.load), (loaded, loaded));
+            let navigation = commit.navigation.expect("a commit");
+            assert_eq!(navigation.lifecycle.load, loaded, "{kind}");
+            assert!(!navigation.request, "no request started for {kind}");
         }
+    }
+
+    fn request_started(id: &str, frame: &str, url: &str, kind: &str) -> CdpEvent {
+        event(
+            "Network.requestWillBeSent",
+            Some(SESSION),
+            json!({
+                "requestId": id, "loaderId": id, "frameId": frame, "type": kind,
+                "request": {"url": url, "method": "GET", "headers": {}}
+            }),
+        )
+    }
+
+    fn request_failed(id: &str, error: &str, canceled: bool) -> CdpEvent {
+        event(
+            "Network.loadingFailed",
+            Some(SESSION),
+            json!({"requestId": id, "errorText": error, "canceled": canceled, "type": "Document"}),
+        )
+    }
+
+    fn committed(loader: &str) -> CdpEvent {
+        event(
+            "Page.frameNavigated",
+            Some(SESSION),
+            json!({"frame": {"id": MAIN, "url": format!("https://a.test/{loader}"), "loaderId": loader}}),
+        )
+    }
+
+    #[test]
+    fn tests_that_a_commit_carries_its_request_only_when_its_navigation_request_started() {
+        let mut state = PageState::default();
+        applied(
+            &mut state,
+            &request_started("D", MAIN, "https://a.test/D", "Document"),
+        );
+        let navigation = applied(&mut state, &committed("D"))
+            .navigation
+            .expect("commit");
+        assert!(navigation.request && navigation.error.is_none());
+        // A navigation requested from the page, whose request Neo never saw start.
+        applied(
+            &mut state,
+            &event(
+                "Page.frameRequestedNavigation",
+                Some(SESSION),
+                json!({"frameId": MAIN, "url": "https://a.test/E", "disposition": "currentTab"}),
+            ),
+        );
+        let navigation = applied(&mut state, &committed("E"))
+            .navigation
+            .expect("commit");
+        assert!(!navigation.request);
+        // Subresources, child frames and `data:` documents are never a navigation's request.
+        for (id, frame, url, kind) in [
+            ("S", MAIN, "https://a.test/s.js", "Script"),
+            ("C", "child", "https://a.test/c", "Document"),
+            ("U", MAIN, "data:text/html,x", "Document"),
+        ] {
+            applied(&mut state, &request_started(id, frame, url, kind));
+            assert_eq!(state.pending_document, None, "{id}");
+        }
+    }
+
+    #[test]
+    fn tests_that_only_the_pending_documents_failure_aborts_its_navigation() {
+        let mut state = PageState::default();
+        applied(&mut state, &committed("A"));
+        applied(
+            &mut state,
+            &request_started("B", MAIN, "https://a.test/B", "Document"),
+        );
+        let aborted = applied(&mut state, &request_failed("B", "net::ERR_ABORTED", true))
+            .navigation
+            .expect("the pending navigation failed");
+        assert_eq!(
+            aborted.error.as_deref(),
+            Some("net::ERR_ABORTED; maybe frame was detached?")
+        );
+        assert_eq!(
+            (aborted.document.as_deref(), aborted.url.as_str()),
+            (Some("B"), "https://a.test/A"),
+            "the failed navigation, at the URL the frame still shows"
+        );
+        assert_eq!(state.pending_document, None);
+        // A navigation the page replaced before its request failed: Playwright's pending
+        // document is the newer one by then, so nothing aborts.
+        applied(
+            &mut state,
+            &request_started("C", MAIN, "https://a.test/C", "Document"),
+        );
+        applied(
+            &mut state,
+            &event(
+                "Page.frameRequestedNavigation",
+                Some(SESSION),
+                json!({"frameId": MAIN, "url": "https://a.test/D", "disposition": "currentTab"}),
+            ),
+        );
+        assert_eq!(
+            applied(&mut state, &request_failed("C", "net::ERR_ABORTED", true)).navigation,
+            None
+        );
+        // An error page commits under the failed request's loader after the abort, without it.
+        applied(
+            &mut state,
+            &request_started("E", MAIN, "https://a.test/E", "Document"),
+        );
+        let failed = applied(
+            &mut state,
+            &request_failed("E", "net::ERR_EMPTY_RESPONSE", false),
+        );
+        assert_eq!(
+            failed.navigation.and_then(|navigation| navigation.error),
+            Some("net::ERR_EMPTY_RESPONSE".to_string())
+        );
+        let error_page = applied(&mut state, &committed("E"))
+            .navigation
+            .expect("commit");
+        assert!(!error_page.request);
+    }
+
+    #[test]
+    fn tests_that_a_later_navigation_stays_pending_through_an_earlier_commit() {
+        let mut state = PageState::default();
+        applied(
+            &mut state,
+            &request_started("NEW", MAIN, "https://a.test/new", "Document"),
+        );
+        // An error page of an earlier navigation commits after the new request started.
+        let navigation = applied(&mut state, &committed("OLD"))
+            .navigation
+            .expect("commit");
+        assert!(!navigation.request);
+        assert_eq!(
+            state.pending_document,
+            Some(PendingDocument::Started("NEW".to_string()))
+        );
+        assert!(
+            applied(&mut state, &request_failed("NEW", "net::ERR_FAILED", false))
+                .navigation
+                .is_some_and(|navigation| navigation.error.is_some())
+        );
     }
 
     #[test]
@@ -3165,6 +3450,8 @@ mod tests {
                     document: Some(url.clone()),
                     url,
                     lifecycle: Lifecycle::default(),
+                    request: true,
+                    error: None,
                 })
                 .expect("subscribed");
         }

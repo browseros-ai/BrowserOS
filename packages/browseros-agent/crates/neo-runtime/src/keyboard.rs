@@ -491,22 +491,30 @@ pub(crate) fn plan_restore_modifiers(
 
 /// Deviation: `server/input.ts` `Keyboard.up`: `this._pressedKeys.delete(description.code);` Playwright keeps a page's keys held until its script releases them; Neo releases at a run's end every key the run left held, newest first, because the tab is the user's and outlives the run. A held code is a layout name, so the release needs no platform.
 pub(crate) fn plan_key_releases(plan: &mut Plan, simulated: &mut InputDevices, owner: &Owner) {
-    let held: Vec<&'static str> = simulated
-        .keyboard
-        .pressed
-        .iter()
-        .rev()
-        .filter(|(_, holder)| holder == owner)
-        .map(|(code, _)| *code)
-        .collect();
+    // What this run holds, newest first, and what only ended runs hold (a release that failed
+    // at an earlier run's end).
+    let mut held: Vec<&'static str> = Vec::new();
+    for (code, holder) in simulated.keyboard.pressed.iter().rev() {
+        if simulated.releases(holder, owner) && !held.contains(code) {
+            held.push(code);
+        }
+    }
     for code in held {
         // A key another live run still holds stays down; this run only lets go of it.
         let shared = simulated
             .keyboard
             .pressed
             .iter()
-            .any(|(held, holder)| *held == code && holder != owner);
+            .any(|(held, holder)| *held == code && simulated.live_other(holder, owner));
         let at = if shared {
+            if !simulated
+                .keyboard
+                .pressed
+                .iter()
+                .any(|(held, holder)| *held == code && holder == owner)
+            {
+                continue;
+            }
             Some(plan.push(
                 simulated,
                 Planned::state_only(Effect::KeyLetGo {
@@ -523,6 +531,8 @@ pub(crate) fn plan_key_releases(plan: &mut Plan, simulated: &mut InputDevices, o
             plan.commands[at].always = true;
         }
     }
+    // Whatever stays held after a failed release is held by no live run.
+    input_devices::plan_retire(plan, simulated, owner);
 }
 
 /// Playwright: `server/input.ts` `kModifiers`: `['Alt', 'Control', 'Meta', 'Shift']`

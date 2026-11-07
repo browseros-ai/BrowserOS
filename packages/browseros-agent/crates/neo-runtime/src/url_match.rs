@@ -63,6 +63,66 @@ pub(crate) struct SerializedUrlMatch {
     pub(crate) regex_flags: Option<String>,
 }
 
+/// A WHATWG URL's parts, which the realm's `URL` (neo-sdk `url.ts`) serves to a URL predicate:
+/// Playwright's `urlMatches` calls `match(new URL(urlString))`, and the realm has no `URL`.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ParsedUrl {
+    pub(crate) href: String,
+    pub(crate) origin: String,
+    pub(crate) protocol: String,
+    pub(crate) username: String,
+    pub(crate) password: String,
+    pub(crate) host: String,
+    pub(crate) hostname: String,
+    pub(crate) port: String,
+    pub(crate) pathname: String,
+    pub(crate) search: String,
+    pub(crate) hash: String,
+    /// The query's `application/x-www-form-urlencoded` pairs, as `URLSearchParams` lists them.
+    pub(crate) search_params: Vec<(String, String)>,
+}
+
+/// `new URL(url)`, or `None` where the WHATWG parser throws, which makes `urlMatches` answer
+/// `false` without calling the predicate.
+///
+/// Playwright: `isomorphic/urlMatch.ts` `parseURL`: `return new URL(url);`
+pub(crate) fn parse_url(url: &str) -> Option<ParsedUrl> {
+    let parsed = Url::parse(url).ok()?;
+    let hostname = parsed.host_str().unwrap_or_default().to_string();
+    let port = parsed
+        .port()
+        .map(|port| port.to_string())
+        .unwrap_or_default();
+    let host = if port.is_empty() {
+        hostname.clone()
+    } else {
+        format!("{hostname}:{port}")
+    };
+    Some(ParsedUrl {
+        href: parsed.as_str().to_string(),
+        origin: parsed.origin().ascii_serialization(),
+        protocol: format!("{}:", parsed.scheme()),
+        username: parsed.username().to_string(),
+        password: parsed.password().unwrap_or_default().to_string(),
+        host,
+        hostname,
+        port,
+        pathname: parsed.path().to_string(),
+        search: parsed
+            .query()
+            .filter(|query| !query.is_empty())
+            .map(|query| format!("?{query}"))
+            .unwrap_or_default(),
+        hash: parsed
+            .fragment()
+            .filter(|fragment| !fragment.is_empty())
+            .map(|fragment| format!("#{fragment}"))
+            .unwrap_or_default(),
+        search_params: parsed.query_pairs().into_owned().collect(),
+    })
+}
+
 /// One compiled `waitForURL` match. `Send + Sync`: a wait holds it across awaits.
 pub(crate) struct UrlMatcher {
     glob: Option<String>,
@@ -460,8 +520,58 @@ mod tests {
 
     use serde::Deserialize;
 
-    use super::{SerializedUrlMatch, TEST_BUDGET, UrlMatcher, resolve_glob_to_regex_pattern};
+    use super::{
+        SerializedUrlMatch, TEST_BUDGET, UrlMatcher, parse_url, resolve_glob_to_regex_pattern,
+    };
     use crate::progress::ErrorName;
+
+    #[test]
+    fn tests_that_a_parsed_url_has_whatwg_parts() {
+        let url =
+            parse_url("https://user:pw@A.test:8443/a%20b/c?x=1&y=a+b&x=2#frag").expect("a URL");
+        assert_eq!(
+            url.href,
+            "https://user:pw@a.test:8443/a%20b/c?x=1&y=a+b&x=2#frag"
+        );
+        assert_eq!(
+            (
+                url.origin.as_str(),
+                url.protocol.as_str(),
+                url.host.as_str()
+            ),
+            ("https://a.test:8443", "https:", "a.test:8443")
+        );
+        assert_eq!(
+            (url.username.as_str(), url.password.as_str()),
+            ("user", "pw")
+        );
+        assert_eq!(
+            (
+                url.pathname.as_str(),
+                url.search.as_str(),
+                url.hash.as_str()
+            ),
+            ("/a%20b/c", "?x=1&y=a+b&x=2", "#frag")
+        );
+        assert_eq!(
+            url.search_params,
+            [("x", "1"), ("y", "a b"), ("x", "2")].map(|(k, v)| (k.to_string(), v.to_string()))
+        );
+        let default_port = parse_url("http://[::1]:80/?#").expect("a URL");
+        assert_eq!(
+            (default_port.host.as_str(), default_port.port.as_str()),
+            ("[::1]", "")
+        );
+        assert_eq!(
+            (default_port.search.as_str(), default_port.hash.as_str()),
+            ("", "")
+        );
+        assert_eq!(
+            parse_url("about:blank").map(|url| url.origin),
+            Some("null".to_string())
+        );
+        assert_eq!(parse_url("not a url"), None);
+    }
 
     /// `tests/fixtures/url-match-goldens.json`, written by `tests/url-match-goldens.mjs`.
     #[derive(Deserialize)]

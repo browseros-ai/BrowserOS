@@ -85,6 +85,31 @@ export const glue = {
     }
   },
 
+  /** `selectorState` plus the first match as a handle, for a wait that returns its element. */
+  // Playwright: `server/frames.ts` `Frame.waitForSelector`: `return { log, element, visible, attached: !!element };`
+  selectorElement: (injected, { selector, strict }) => {
+    const elements = query(injected, selector, strict)
+    const [element] = elements
+    if (!element) return { count: 0, visible: false }
+    return {
+      element,
+      count: elements.length,
+      visible: injected.elementState(element, 'visible', true).matches,
+      preview: injected.previewNode(element),
+    }
+  },
+
+  // Neo: the anchor `main_world.rs` resolves into the page's own world; Playwright's server
+  // finds that world by its execution context, which Neo does not watch.
+  // Rust only reads the node's `backendNodeId` (`DOM.describeNode`), which a `Document` has like
+  // any node; the cast is what lets the spec's one node handle kind carry it.
+  document: () => ({ node: document as unknown as Element }),
+
+  // Playwright: `server/dom.ts` `ElementHandle._initializePreview`: `this._setPreview(await utility.evaluate((injected, e) => 'JSHandle@' + injected.previewNode(e), this));`
+  previewNode: (injected, _params, node) => ({
+    preview: injected.previewNode(node),
+  }),
+
   textContent: (injected, { selector, strict }) => {
     const [element] = query(injected, selector, strict, {
       markTargets: 'first',
@@ -310,7 +335,9 @@ export const glue = {
   },
 
   // Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `const val = await didStartDrag;`
-  cleanupDrag: async () => ({ started: cleanupDrag ? await cleanupDrag() : false }),
+  cleanupDrag: async () => ({
+    started: cleanupDrag ? await cleanupDrag() : false,
+  }),
 
   stopHitTargetInterceptor: (_injected, _params, interceptor) => ({
     outcome: interceptor.stop(),
