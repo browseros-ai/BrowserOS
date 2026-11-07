@@ -125,6 +125,18 @@ const BINDINGS_CALL: &str = include_str!(concat!(
     "/../neo-runtime-injected/dist/bindings-call.js"
 ));
 
+/// Playwright: `server/clock.ts` `Clock._installIfNeeded`
+const CLOCK_INSTALL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/clock-install.js"
+));
+
+/// Playwright: `server/clock.ts` `Clock.install`
+const CLOCK_CALL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/clock-call.js"
+));
+
 /// A page function of Playwright's server, built in neo-runtime-injected, that runs as the
 /// `expression` of `UtilityScript.evaluate` (`EVALUATE`), so its arguments arrive parsed with
 /// their handles, primitives included. Agent code never takes this path.
@@ -148,6 +160,11 @@ pub(crate) enum BuiltExpression {
     BindingsController,
     /// `(op, arg) => void`: a call on that controller, by name (`bindings.rs`).
     BindingsCall,
+    /// `(browserName) => void`: installs Playwright's fake clock (`clock.rs`), also the source of
+    /// the run's clock init script.
+    ClockInstall,
+    /// `(op, ...args) => unknown`: a call on that clock's controller, by name (`clock.rs`).
+    ClockCall,
 }
 
 impl BuiltExpression {
@@ -162,6 +179,8 @@ impl BuiltExpression {
             Self::AddTag => ADD_TAG,
             Self::BindingsController => BINDINGS_CONTROLLER,
             Self::BindingsCall => BINDINGS_CALL,
+            Self::ClockInstall => CLOCK_INSTALL,
+            Self::ClockCall => CLOCK_CALL,
         }
     }
 }

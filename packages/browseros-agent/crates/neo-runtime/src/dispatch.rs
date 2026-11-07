@@ -64,6 +64,7 @@ use tracing::debug;
 use crate::bindings::{self, BindingRoute, Outcome};
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
+use crate::clock::{self, ClockRoute};
 use crate::dialogs;
 use crate::evaluate::{self, EvalCall};
 use crate::events::EventHub;
@@ -104,10 +105,10 @@ use crate::waits::{
 /// Unkept creations close their tabs when their late acknowledgements arrive.
 const RECORDS_WAIT: Duration = Duration::from_secs(1);
 
-/// Neo: how long the end of a run's bindings may take in its pages (`bindings.rs`), apart from
-/// [`RECORDS_WAIT`]: a frame it does not reach keeps a binding whose calls never settle. Free for
-/// a run that exposed none.
-const BINDINGS_END_WAIT: Duration = Duration::from_secs(3);
+/// Neo: how long the end of a run's bindings and clock may take in its pages (`bindings.rs`,
+/// `clock.rs`), apart from [`RECORDS_WAIT`]: a frame it does not reach keeps a binding whose
+/// calls never settle, or the run's fake timers. Free for a run that used neither.
+const PAGE_END_WAIT: Duration = Duration::from_secs(3);
 
 /// The most browser calls one run may have unfinished at once. Each holds its params, its call
 /// log and a task in Rust, outside the realm's memory limit, and a script can start calls without
@@ -315,6 +316,8 @@ enum ObjectCall {
     Init(InitRoute),
     /// A binding command (`bindings.rs`).
     Binding(BindingRoute),
+    /// A clock command (`clock.rs`).
+    Clock(ClockRoute),
     Dialog(u64, DialogCall),
 }
 
@@ -485,7 +488,11 @@ impl Dispatcher {
         // The scripts first, so no new document gets a binding; then each frame ends the run's
         // bindings, on a budget of its own, as a binding left in a page would hang its calls.
         let _removed = time::timeout_at(deadline, run.init_scripts.close()).await;
-        let _ended = time::timeout(BINDINGS_END_WAIT, run.bindings.close(&self.0.tabs)).await;
+        let _ended = time::timeout(PAGE_END_WAIT, async {
+            run.bindings.close(&self.0.tabs).await;
+            run.clock.close(&self.0.tabs).await;
+        })
+        .await;
         // Releases each session's handle group on its page's tracked task, before the sessions
         // detach; a run whose future is dropped releases them as `RunScope` drops.
         run.handles.close();
@@ -556,6 +563,14 @@ fn route_init(
             Ok(Routed {
                 meta: Some(meta),
                 route: route.map(ObjectCall::Binding),
+            })
+        }
+        ObjectKind::Context if clock::serves(method) => {
+            let (meta, route) = clock::decode(method, params)
+                .unwrap_or_else(|| unreachable!("clock::serves names every clock command"));
+            Ok(Routed {
+                meta: Some(meta),
+                route: route.map(ObjectCall::Clock),
             })
         }
         ObjectKind::BindingCall(guid) => Ok(match bindings::decode_call(&guid, method, params) {
@@ -881,6 +896,11 @@ async fn serve_call(
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
         (ObjectCall::Init(route), target) => init_call(&tabs, target, route, &progress).await,
         (ObjectCall::Binding(route), target) => binding_call(&tabs, target, route, &progress).await,
+        (ObjectCall::Clock(route), _) => progress
+            .race(progress.clock().call(&tabs, progress.init_scripts(), route))
+            .await
+            .and_then(|called| called.map_err(CallError::from))
+            .map(|()| Some(json!({}))),
         (ObjectCall::Page(call), Some((page, _))) => {
             tab_calls::page(&tabs, &page, call, &progress).await
         }
@@ -1516,6 +1536,7 @@ mod tests {
             | ObjectCall::Network(_)
             | ObjectCall::Init(_)
             | ObjectCall::Binding(_)
+            | ObjectCall::Clock(_)
             | ObjectCall::Dialog(..) => {
                 panic!("a Frame message routed to another object")
             }

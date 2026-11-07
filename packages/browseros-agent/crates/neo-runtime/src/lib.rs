@@ -51,6 +51,7 @@ mod bindings;
 mod bridge;
 mod check;
 mod click;
+mod clock;
 mod console;
 mod contexts;
 mod deadline;

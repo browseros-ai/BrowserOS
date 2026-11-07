@@ -3,12 +3,13 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (52)
+## Deviations (54)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
 | neo-runtime-injected/src/add-tag.ts | (file) | `server/frames.ts` `Frame._raceWithCSPError` | Playwright rejects a tag the page's Content Security Policy blocked by watching the console; Neo watches no console, so it waits for the document's `securitypolicyviolation` event instead, one task after the tag (Chromium reports an inline script's violation in a later task), and rejects with an Error naming the policy. |
 | neo-runtime-injected/src/bindings-call.ts | `endRun` | `server/page.ts` `Page.removeExposedBinding` | Playwright's bindings live as long as their page; Neo's end with the run, and a call still waiting on one is refused. |
+| neo-runtime-injected/src/clock-call.ts | `endRun` | `server/clock.ts` `Clock.uninstall` | Playwright's clock lives as long as its context; Neo's ends with the run, and each document gets its own timers back. |
 | neo-runtime-injected/src/main-injected.ts | `MainWorldInjectedScript` | `injected/src/injectedScript.ts` `InjectedScript.constructor` | Neo's main-world instance adds no window listener or document observer. |
 | neo-runtime/src/bindings.rs | `Bindings::close` | `server/page.ts` `Page.removeExposedBinding` | Playwright's bindings live as long as their page or context; Neo's live as long as the run. |
 | neo-runtime/src/click.rs | `PointerOptions::from_tap` | `server/frames.ts` `Frame.tap` | Neo's run attaches to the user's BrowserOS context, which has no hasTouch option, and its tab answers Input.dispatchTouchEvent with the events of a hasTouch context, so Neo taps where Playwright refuses. |
@@ -40,6 +41,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-sdk/src/browser-context.ts | `BrowserContext.#expose` | `client/browserContext.ts` `BrowserContext.exposeBinding` | Playwright sets the callback after its answer; Neo before, as the answer's events, a first page call among them, run before the caller goes on. |
 | neo-sdk/src/browser-context.ts | `BrowserContext.addInitScript` | `client/browserContext.ts` `BrowserContext.addInitScript` | Neo has no page-to-realm callback yet. |
 | neo-sdk/src/browser-context.ts | `BrowserContext.addInitScript` | `client/browserContext.ts` `BrowserContext.addInitScript` | Playwright sends no signal and ignores one; Neo refuses it. |
+| neo-sdk/src/clock.ts | `parseTicks` | `server/clock.ts` `parseTicks` | Playwright's server reads a NaN or an infinite count, which Neo's JSON to Rust cannot carry; the SDK refuses it as the server does. |
 | neo-sdk/src/console-message.ts | (file) | `client/consoleMessage.ts` `ConsoleMessage.args` | Neo has no `JSHandle` for a console argument yet, so a message has no `args()`; a script that calls it gets a TypeError rather than a list of stand-ins. |
 | neo-sdk/src/events.ts | `ChannelOwner.removeAllListeners` | `client/channelOwner.ts` `ChannelOwner.removeListener` | Playwright's removeAllListeners leaves its server subscriptions on; Neo turns off each one left without listeners, so Rust stops producing what nobody hears. |
 | neo-sdk/src/events.ts | `EventEmitter._addListener` | `client/eventEmitter.ts` `EventEmitter._addListener` | Neo runs are never Playwright's own tests, so the warning always goes to the run log. |

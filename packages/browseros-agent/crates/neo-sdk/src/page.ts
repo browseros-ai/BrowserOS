@@ -16,6 +16,7 @@ import {
   type BindingCallRecord,
 } from './binding-call'
 import type { BrowserContext } from './browser-context'
+import type { Clock } from './clock'
 import type { ApiName, Connection } from './connection'
 import { ConsoleMessage } from './console-message'
 import type { ElementHandle } from './element-handle'
@@ -163,6 +164,8 @@ export class Page extends ChannelOwner {
   readonly _timeoutSettings: TimeoutSettings
   /** The page's exposed callbacks, by name (Playwright's `Page._bindings`). */
   readonly _bindings = new Map<string, BindingCallback>()
+  /** Playwright's `page.clock`: its context's clock. */
+  readonly clock: Clock
 
   /** `guid` and `mainFrameGuid` come from one record Rust minted (`page@T`, `frame@T`), so a
    * page's calls and its frame's calls reach the same tab. */
@@ -177,6 +180,7 @@ export class Page extends ChannelOwner {
     this.#guid = guid
     this.#lastUrl = url
     this.#context = context
+    this.clock = context.clock
     this.#connection = connection
     this._timeoutSettings = new TimeoutSettings(context._timeoutSettings)
     this.#mainFrame = new Frame(mainFrameGuid, this, connection, {

@@ -28,6 +28,7 @@ use tokio_util::task::TaskTracker;
 use tracing::info;
 
 use crate::bindings::Bindings;
+use crate::clock::Clock;
 use crate::deadline::{Deadline, Stop};
 use crate::evaluate::Handles;
 use crate::init_scripts::InitScripts;
@@ -129,6 +130,8 @@ pub(crate) struct RunScope {
     pub(crate) init_scripts: Arc<InitScripts>,
     /// The run's exposed bindings (`bindings.rs`); ended in every frame at run end.
     pub(crate) bindings: Arc<Bindings>,
+    /// The run's fake clock (`clock.rs`); uninstalled in every frame at run end.
+    pub(crate) clock: Arc<Clock>,
 }
 
 impl RunScope {
@@ -141,6 +144,7 @@ impl RunScope {
             handles: Arc::default(),
             init_scripts: Arc::default(),
             bindings: Arc::default(),
+            clock: Arc::default(),
         }
     }
 
@@ -285,6 +289,11 @@ impl Progress {
     /// The run's exposed bindings (`bindings.rs`).
     pub(crate) fn bindings(&self) -> &Arc<Bindings> {
         &self.run.bindings
+    }
+
+    /// The run's fake clock (`clock.rs`).
+    pub(crate) fn clock(&self) -> &Arc<Clock> {
+        &self.run.clock
     }
 
     pub(crate) fn timeout_ms(&self) -> f64 {
