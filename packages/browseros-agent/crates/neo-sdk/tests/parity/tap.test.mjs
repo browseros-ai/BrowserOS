@@ -17,6 +17,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { assertDecoysUntouched, compareFrameCases, failed } from './frames.mjs'
 import {
   browserBinary,
   buildNeoRun,
@@ -179,4 +180,40 @@ test('tap sends the touch input of a hasTouch context, and Neo taps without one'
   } finally {
     await runCleanups(cleanups)
   }
+})
+
+/**
+ * Taps inside frames, on tabs of frame-top.html (frames.mjs), which run in the default context:
+ * Playwright refuses each tap there, and Neo taps (DECIDED A1-3). The touch lands on the Send
+ * button of the cross-site out-of-process frame and of the same-origin frame, which each get
+ * one trusted click from it, and no decoy frame sees one.
+ */
+const frameCases = [
+  {
+    name: 'a tap inside frames reaches the Send button of each frame and no decoy',
+    source: `return {
+      same: await settle(() => page.frameLocator('#same').locator('#send').tap()),
+      cross: await settle(() => page.frameLocator('#login-iframe').locator('#send').tap()),
+    }`,
+    expected: { same: failed('error'), cross: failed('error') },
+    effect: (effect) => assertDecoysUntouched(effect, []),
+    expectedNeo: { same: 'undefined', cross: 'undefined' },
+    neoEffect: (effect) => {
+      const touched = assertDecoysUntouched(effect, ['same', 'cross'])
+      for (const [who, facts] of Object.entries(touched))
+        assert.deepEqual(
+          facts.events.filter((event) => event.type === 'click'),
+          [{ type: 'click', target: 'send', trusted: true }],
+          `${who}'s tap`,
+        )
+    },
+    deliveries: { tap: ['done', 'done'] },
+  },
+]
+
+test('tap inside frames: Playwright refuses without hasTouch, Neo taps the right frame', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases)
 })

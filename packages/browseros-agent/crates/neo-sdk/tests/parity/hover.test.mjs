@@ -11,6 +11,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import { compareFrameCases } from './frames.mjs'
 import { compareMethod, skip } from './harness.mjs'
 
 test('hover returns undefined and moves the pointer onto the element', {
@@ -89,4 +90,38 @@ test('a hover whose move an overlay takes is moved again until it reaches the el
     outcome.calls.map((call) => call.delivery),
     ['done'],
   )
+})
+
+/** Every frame's hovered elements with an id. */
+const HOVERED =
+  '[...document.querySelectorAll(":hover")].map((element) => element.id).filter(Boolean)'
+
+/**
+ * Hover inside frames, on tabs of frame-top.html (frames.mjs): the pointer moves over the Send
+ * button of the same-origin frame, then of the cross-site out-of-process frame's 127.0.0.1
+ * child, which ends hovered. Chromium's hover state across processes (the first frame keeps
+ * its `:hover`) is whatever it is: every frame must read the same in both engines.
+ */
+const frameCases = [
+  {
+    name: 'a hover inside an out-of-process frame hovers that element',
+    source: `const login = page.frameLocator('#login-iframe')
+    return {
+      same: await settle(() => page.frameLocator('#same').locator('#send').hover()),
+      grandchild: await settle(() => login.frameLocator('#grandchild').locator('#send').hover()),
+    }`,
+    probe: HOVERED,
+    expected: { same: 'undefined', grandchild: 'undefined' },
+    effect: (effect) => {
+      assert.deepEqual(effect.grandchild, ['send'], 'the hovered button')
+    },
+    deliveries: { hover: ['done', 'done'] },
+  },
+]
+
+test('hover inside frames moves onto the same element through Neo and Playwright', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases)
 })

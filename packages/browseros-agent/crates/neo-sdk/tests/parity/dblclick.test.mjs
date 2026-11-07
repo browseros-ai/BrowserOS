@@ -10,6 +10,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import { assertDecoysUntouched, compareFrameCases } from './frames.mjs'
 import { compareMethod, skip } from './harness.mjs'
 
 test('dblclick returns undefined and presses twice with rising click counts', {
@@ -64,4 +65,50 @@ test('dblclick returns undefined and presses twice with rising click counts', {
     ],
     "Neo's delivery records",
   )
+})
+
+/**
+ * Double clicks inside frames, on tabs of frame-top.html (frames.mjs): the Send button of the
+ * cross-site out-of-process frame, of its 127.0.0.1 child and, through a child Frame, of the
+ * same-origin frame two levels deep get two trusted clicks each, and no decoy frame sees one.
+ */
+const frameCases = [
+  {
+    name: 'a double click reaches the Send button of each frame and no decoy',
+    source: `const login = page.frameLocator('#login-iframe')
+    return {
+      cross: await settle(() => login.locator('#send').dblclick()),
+      grandchild: await settle(() => login.frameLocator('#grandchild').locator('#send').dblclick()),
+      frame: await settle(() => page.frame('chain-inner').dblclick('#send')),
+    }`,
+    expected: {
+      cross: 'undefined',
+      grandchild: 'undefined',
+      frame: 'undefined',
+    },
+    effect: (effect) => {
+      const touched = assertDecoysUntouched(effect, [
+        'cross',
+        'grandchild',
+        'chain-inner',
+      ])
+      for (const [who, facts] of Object.entries(touched))
+        assert.deepEqual(
+          facts.events.filter((event) => event.type === 'click'),
+          [
+            { type: 'click', target: 'send', trusted: true },
+            { type: 'click', target: 'send', trusted: true },
+          ],
+          `${who}'s clicks`,
+        )
+    },
+    deliveries: { dblclick: ['done', 'done', 'done'] },
+  },
+]
+
+test('dblclick inside frames reaches the same element through Neo and Playwright', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases)
 })

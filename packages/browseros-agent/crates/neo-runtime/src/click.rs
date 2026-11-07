@@ -486,7 +486,11 @@ impl PointerOptions {
             trial,
             steps,
         } = params;
-        refuse_unserved("click", modifiers.is_some_and(|m| !m.is_empty()), steps)?;
+        refuse_unserved(
+            "click",
+            modifiers.is_some_and(|modifiers| !modifiers.is_empty()),
+            steps,
+        )?;
         // JS's `Math.max(0, n)` loop bound: zero or fewer clicks write only the move.
         let click_count = u32::try_from(click_count.unwrap_or(1).max(0)).unwrap_or(u32::MAX);
         if click_count > MAX_CLICK_COUNT {
@@ -531,7 +535,11 @@ impl PointerOptions {
             trial,
             steps,
         } = params;
-        refuse_unserved("dblclick", modifiers.is_some_and(|m| !m.is_empty()), steps)?;
+        refuse_unserved(
+            "dblclick",
+            modifiers.is_some_and(|modifiers| !modifiers.is_empty()),
+            steps,
+        )?;
         let button = match button.unwrap_or(FrameDblclickParamsButton::Left) {
             FrameDblclickParamsButton::Left => MouseButton::Left,
             FrameDblclickParamsButton::Right => MouseButton::Right,
@@ -566,7 +574,11 @@ impl PointerOptions {
             position,
             trial,
         } = params;
-        refuse_unserved("hover", modifiers.is_some_and(|m| !m.is_empty()), None)?;
+        refuse_unserved(
+            "hover",
+            modifiers.is_some_and(|modifiers| !modifiers.is_empty()),
+            None,
+        )?;
         Ok(Self {
             selector,
             strict: strict.unwrap_or(false),
@@ -592,7 +604,11 @@ impl PointerOptions {
             trial,
         } = params;
         // Deviation: `server/frames.ts` `Frame.tap`: `if (!this._page.browserContext._options.hasTouch)` Neo's run attaches to the user's BrowserOS context, which has no hasTouch option, and its tab answers Input.dispatchTouchEvent with the events of a hasTouch context, so Neo taps where Playwright refuses.
-        refuse_unserved("tap", modifiers.is_some_and(|m| !m.is_empty()), None)?;
+        refuse_unserved(
+            "tap",
+            modifiers.is_some_and(|modifiers| !modifiers.is_empty()),
+            None,
+        )?;
         Ok(Self {
             selector,
             strict: strict.unwrap_or(false),
@@ -954,8 +970,9 @@ async fn attempt<T: Tab>(
         }
     };
     if options.trial {
-        // Neo-only: a trial ends at its checks and sends no input. Dropping the interceptor
-        // disarms it, and the tab's input comes back once that stop has answered.
+        // Deviation: `server/dom.ts` `ElementHandle._performPointerAction`: `await action.perform(progress, point);` Playwright's trial still performs the input into an interceptor that blocks every event it judges, which the page's earlier listeners and the hover state still see; Neo's trial ends at its checks and sends no input.
+        // Dropping the interceptor disarms it, and the tab's input comes back once that stop has
+        // answered.
         drop(armed);
         progress.log(format!("  trial {} action done", action.name()));
         return Ok(Attempt::Done);
