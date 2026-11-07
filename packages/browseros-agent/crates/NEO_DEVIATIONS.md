@@ -3,10 +3,13 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (0)
+## Deviations (3)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
+| neo-runtime/src/waits.rs | `_` | `server/frames.ts` `Frame.waitForSelector` | Neo serves no `ElementHandle` yet, so `page`/`frame.waitForSelector` resolve null for every state until neo-evaluate's handles land. |
+| neo-sdk/src/frame.ts | (file) | `client/frame.ts` `Frame.waitForSelector` | Neo has no ElementHandle yet, so `waitForSelector` resolves null for every state. |
+| neo-sdk/src/frame.ts | (file) | `client/frame.ts` `Frame.waitForSelector` | Neo's `waitForSelector` takes null options as none, as its other methods do, where Playwright's throws a TypeError. |
 
 ## Unexplained: owner questions (0)
 

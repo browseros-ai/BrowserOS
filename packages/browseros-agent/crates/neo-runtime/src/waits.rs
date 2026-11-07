@@ -61,10 +61,11 @@ pub(crate) trait WaitTab: Send + Sync {
     ) -> impl Future<Output = Result<Option<SelectorMatch>, PageError>> + Send;
 }
 
-/// Decoded once by the route, with Playwright's defaults (`frames.ts:843`): `visible`, and not
-/// strict, so `page`/`frame.waitForSelector` judge the first match while `locator.waitFor` sends
+/// Decoded once by the route, with Playwright's defaults: `visible`, and not strict, so
+/// `page`/`frame.waitForSelector` judge the first match while `locator.waitFor` sends
 /// `strict: true`. `omitReturnValue` changes nothing yet. Every state replies `{}` until Neo
 /// serves `ElementHandle` (the assertion below).
+/// Playwright: `server/frames.ts` `Frame.waitForSelector`: `const { state = 'visible' } = options;`
 #[derive(Debug)]
 pub(crate) struct WaitForSelectorOptions {
     pub(crate) selector: String,
@@ -82,18 +83,18 @@ impl WaitForSelectorOptions {
     }
 }
 
-// Playwright resolves an `attached` or `visible` wait sent without `omitReturnValue` with the
-// element it judged, adopted into the main world (`frames.ts:879-894`). Neo has no
-// `ElementHandle` to send, so `FrameWaitForSelectorResult.element` is always `None`, and the
-// script gets `null` for every state (exception E1). The generated channel is uninhabited, and
-// so zero-sized, only while `spec/serve.yml` does not serve `ElementHandle`. This assertion stops
-// the build the day it does, so the handle step lands with it. That step belongs at
-// `wait_for_selector`'s success point, on the element the same probe judged; neo-evaluate owns
-// turning it into a handle (`main_world::adopt`, then `handles.mint`).
+/// Playwright resolves an `attached` or `visible` wait sent without `omitReturnValue` with the
+/// element it judged, adopted into the main world. Neo has no `ElementHandle` to send, so
+/// `FrameWaitForSelectorResult.element` is always `None`. The generated channel is uninhabited,
+/// and so zero-sized, only while `spec/serve.yml` does not serve `ElementHandle`; this assertion
+/// stops the build the day it does, so the handle step lands with it. That step belongs at
+/// `wait_for_selector`'s success point, on the element the same probe judged; neo-evaluate owns
+/// turning it into a handle (`main_world::adopt`, then `handles.mint`).
+/// Deviation: `server/frames.ts` `Frame.waitForSelector`: `const element = state === 'attached' || state === 'visible' ? await progress.race(result.evaluateHandle(r => r.element)) : null;` Neo serves no `ElementHandle` yet, so `page`/`frame.waitForSelector` resolve null for every state until neo-evaluate's handles land.
 const _: () = assert!(
     mem::size_of::<ElementHandleChannel>() == 0,
     "ElementHandle is served now: mint it for attached/visible waits without omitReturnValue \
-     (frames.ts:879-894) via neo-evaluate's main_world::adopt + handles.mint",
+     via neo-evaluate's main_world::adopt + handles.mint",
 );
 
 /// Neo extension on the Frame guid: the SDK sends one call because its bridge has no event
@@ -152,14 +153,15 @@ fn supported_lifecycle(
     Ok(state.unwrap_or(LifecycleEvent::Load))
 }
 
-/// Node's `TIMEOUT_MAX` (`lib/internal/timers.js`), 2^31 − 1 ms, the longest delay `setTimeout`
-/// keeps.
+/// Platform: Node's `TIMEOUT_MAX` in `lib/internal/timers.js`, 2^31 − 1 ms, the longest delay
+/// `setTimeout` keeps.
 const NODE_TIMEOUT_MAX_MS: f64 = 2_147_483_647.0;
 
 /// `waitForTimeout`'s delay, decoded once by the route. Playwright's server hands `waitTimeout`
-/// to Node's `setTimeout` (`frames.ts:1461`), so the delay follows Node's rule in
-/// `lib/internal/timers.js`. Its `Timeout` constructor turns a delay that is NaN, below 1 or
-/// above [`NODE_TIMEOUT_MAX_MS`] into 1 ms, and `insert` truncates any other to whole ms.
+/// to Node's `setTimeout`, so the delay follows Node's rule in `lib/internal/timers.js`: its
+/// `Timeout` constructor turns a delay that is NaN, below 1 or above [`NODE_TIMEOUT_MAX_MS`] into
+/// 1 ms, and `insert` truncates any other to whole ms.
+/// Playwright: `server/frames.ts` `Frame.waitForTimeout`: `const promise = new Promise<void>(f => timer = setTimeout(f, timeout));`
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct WaitForTimeoutOptions {
     pub(crate) delay: Duration,
@@ -490,7 +492,8 @@ fn lifecycle_reached(since: Lifecycle, current: Lifecycle, state: LifecycleEvent
     }
 }
 
-/// `frames.ts:1459-1471` `waitForTimeout`, a timer raced against the page closing.
+/// Playwright's `waitForTimeout`: a timer raced against the page closing.
+/// Playwright: `server/frames.ts` `Frame.waitForTimeout`: `await progress.race(LongStandingScope.raceMultiple([`
 ///
 /// The timer counts from the call's arrival at the dispatcher ([`Progress::started`]), so the
 /// tab's lazy session attach, which runs before this function, never stretches the delay. Neo

@@ -24,9 +24,9 @@
  * - `allTextContents` sends `client/locator.ts` source text; compiled Playwright clients may
  *   format it differently. It reads in Neo's isolated world, so page-defined `textContent`
  *   overrides (prototype patches, custom element classes or per-instance properties) can differ.
- * - `waitForSelector` resolves `null` for every state. Playwright resolves an `ElementHandle` for
- *   `attached` and `visible`, and Neo has no `ElementHandle` yet. It also takes `null` options as
- *   none, where Playwright's throws a `TypeError`.
+ *
+ * Deviation: `client/frame.ts` `Frame.waitForSelector`: `return ElementHandle.fromNullable(result.element) as ElementHandle<SVGElement | HTMLElement> | null;` Neo has no ElementHandle yet, so `waitForSelector` resolves null for every state.
+ * Deviation: `client/frame.ts` `Frame.waitForSelector`: `if ((options as any).visibility)` Neo's `waitForSelector` takes null options as none, as its other methods do, where Playwright's throws a TypeError.
  */
 
 import type {
@@ -134,9 +134,10 @@ export type WaitForSelectorOptions = Omit<
 > & { timeout?: number }
 
 /**
- * Playwright's client checks for two options its `waitForSelector` no longer takes
- * (`client/frame.ts:241-244`). They throw before any message and outside Playwright's
- * `_wrapApiCall`, so the error has no `<apiName>: ` prefix. `locator.waitFor` runs neither.
+ * Playwright's client checks for two options its `waitForSelector` no longer takes. They throw
+ * before any message and outside Playwright's `_wrapApiCall`, so the error has no `<apiName>: `
+ * prefix. `locator.waitFor` runs neither.
+ * Playwright: `client/frame.ts` `Frame.waitForSelector`: `throw new Error('options.visibility is not supported, did you mean options.state?');`
  */
 function verifyWaitForSelectorOptions(options: WaitForSelectorOptions): void {
   const legacy = options as { visibility?: unknown; waitFor?: unknown }
@@ -379,8 +380,8 @@ export class Frame {
   }
 
   /**
-   * Playwright's `waitForSelector` body (`client/frame.ts:240-247`), for `page` and `frame`: the
-   * legacy-option checks, then the call with the script's options. Once neo-evaluate's handles
+   * Playwright's `waitForSelector` body, for `page` and `frame`: the legacy-option checks, then
+   * the call with the script's options. Once neo-evaluate's handles
    * land it resolves an `ElementHandle` for `attached` and `visible`; until then, `null`. `null`
    * options count as none, as in Neo's other methods.
    */
@@ -428,10 +429,11 @@ export class Frame {
   }
 
   /**
-   * Sends `Frame.waitForTimeout` with `0` as the call timeout, Playwright's `kNoTimeout`
-   * (`client/frame.ts:488-490`). JSON has no NaN or ±Infinity (`JSON.stringify` writes `null`),
-   * so a non-finite number goes as `0`, which Node's rule turns into the same 1 ms. A value that
-   * is not a number goes as given, for Rust to refuse.
+   * Sends `Frame.waitForTimeout` with `0` as the call timeout, Playwright's `kNoTimeout`. JSON
+   * has no NaN or ±Infinity (`JSON.stringify` writes `null`), so a non-finite number goes as `0`,
+   * which Node's rule turns into the same 1 ms. A value that is not a number goes as given, for
+   * Rust to refuse.
+   * Playwright: `client/frame.ts` `Frame.waitForTimeout`: `await this._channel.waitForTimeout({ waitTimeout: timeout }, kNoTimeout);`
    */
   async _waitForTimeout(apiName: ApiName, timeout: number): Promise<void> {
     await this._connection.send(
