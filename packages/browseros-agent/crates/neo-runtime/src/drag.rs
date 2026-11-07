@@ -83,10 +83,12 @@ pub(crate) async fn drag_and_drop<T: KeyboardTab>(
     options: &DragOptions,
     progress: &Progress,
 ) -> Result<(), CallError> {
-    click::pointer_action(tab, &options.source, progress).await?;
     if let Some(delivery) = progress.delivery() {
+        // Said before the source half, so its acknowledgement, even one that comes after the
+        // call gave up on it, completes only that half: `Done` waits for the drop.
         delivery.expect_more();
     }
+    click::pointer_action(tab, &options.source, progress).await?;
     click::pointer_action(tab, &options.target, progress).await
 }
 
@@ -186,12 +188,11 @@ mod tests {
         let tab = FakeTab::ready();
         let options = decode(&json!({ "source": "#a", "target": "#b" })).expect("served");
         let progress = Progress::for_test(30_000.0);
+        let delivery = progress.delivery().expect("an input call");
+        delivery.expect_more();
         click::pointer_action(&tab, &options.source, &progress)
             .await
             .expect("the press");
-        let delivery = progress.delivery().expect("an input call");
-        assert_eq!(delivery.delivery(), Delivery::Done);
-        delivery.expect_more();
         assert_eq!(
             delivery.delivery(),
             Delivery::Unknown,

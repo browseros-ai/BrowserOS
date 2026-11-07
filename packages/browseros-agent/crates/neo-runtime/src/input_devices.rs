@@ -687,8 +687,14 @@ pub(crate) fn plan_button_releases(plan: &mut Plan, simulated: &mut InputDevices
             )
         } else {
             let at = plan_up(plan, simulated, button, 1, None);
-            // A drag the run left running is cancelled, never dropped.
-            plan.commands[at].drag = DragStep::Cancel;
+            // Only the left button holds a drag: its release cancels the drag, never drops it.
+            // Another button's release neither drops nor cancels a running drag, which belongs
+            // to whichever run holds the left button.
+            plan.commands[at].drag = if button == MouseButton::Left {
+                DragStep::Cancel
+            } else {
+                DragStep::None
+            };
             at
         };
         plan.commands[at].always = true;
@@ -955,9 +961,9 @@ impl Writer {
         }
     }
 
-    /// One batch command's answer, `None` for one that wrote nothing (a change of state alone,
-    /// or a press a drag skipped, never refused or failed, its release owed as if it went out).
-    /// Whether it counts as written.
+    /// One batch command's answer, `None` for one that wrote nothing: a change of state alone,
+    /// or a press a drag skipped, never refused or failed, answered and its release owed as if
+    /// it went out. Whether it counts as written.
     fn record(
         &mut self,
         sink: &impl EffectSink,
@@ -967,7 +973,13 @@ impl Writer {
     ) -> bool {
         let Some(result) = result else {
             sink.apply(&command.effect, true);
-            return command.method.is_some();
+            if command.method.is_none() {
+                return false;
+            }
+            // Playwright: `server/chromium/crInput.ts` `RawMouseImpl.down`: `if (this._dragManager.isDragging())`
+            // A press a running drag skipped returns as if answered, and counts as written.
+            self.outcomes.push(Ok(()));
+            return true;
         };
         let refused = matches!(result, Err(CdpError::ConnectionEpochChanged { .. }));
         if refused {
@@ -1445,11 +1457,15 @@ mod tests {
         );
         let sender = Sender::answering([]);
         let turn = Turn::of(running.clone(), "A");
-        let _written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        let written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
         assert_eq!(
             sender.sent(),
             ["mouseMoved", "drop"],
             "a click's move is never a drag's; its press is skipped and its release drops"
+        );
+        assert!(
+            written.complete,
+            "the click resolves: its skipped press counts as answered"
         );
 
         let mut simulated = running.clone();
@@ -1466,6 +1482,45 @@ mod tests {
         let after = turn.devices();
         assert_eq!(after.drag, None);
         assert!(after.mouse.buttons.is_empty());
+    }
+
+    /// A run end's release of a button other than the left neither drops nor cancels a drag
+    /// another live run holds with the left button: it goes out as a plain release, and the
+    /// drag runs on.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_another_buttons_release_leaves_a_live_runs_drag_running() {
+        let running = InputDevices {
+            drag: Some(DragState {
+                data: serde_json::json!({ "items": [], "dragOperationsMask": 1 }),
+                x: 5.0,
+                y: 5.0,
+            }),
+            mouse: MouseState {
+                x: 5.0,
+                y: 5.0,
+                last_button: Some(MouseButton::Right),
+                buttons: vec![
+                    (MouseButton::Left, run("B")),
+                    (MouseButton::Right, run("A")),
+                ],
+            },
+            ..InputDevices::default()
+        };
+        let mut simulated = running.clone();
+        let mut end_a = Plan::default();
+        plan_button_releases(&mut end_a, &mut simulated, &run("A"));
+        let sender = Sender::answering([]);
+        let turn = Turn::of(running, "observer");
+        let written = write_plan(&sender, &turn, &end_a, &CancellationToken::new()).await;
+        assert!(written.complete);
+        assert_eq!(
+            sender.sent(),
+            ["mouseReleased"],
+            "neither dragCancel nor drop"
+        );
+        let after = turn.devices();
+        assert!(after.drag.is_some(), "B's drag runs on");
+        assert_eq!(after.mouse.buttons, [(MouseButton::Left, run("B"))]);
     }
 
     /// A run end whose drag cancel is refused, fails or is dropped mid-write (the run's

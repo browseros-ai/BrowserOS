@@ -2541,20 +2541,19 @@ impl InputSender for Arc<PageSession> {
         .await;
         // Subscribed before interception is on, so its event cannot slip past.
         let mut events = self.session.cdp.events();
-        self.send_input_json("Input.setInterceptDrags", r#"{"enabled":true}"#)
-            .await?;
+        if let Err(error) = self
+            .send_input_json("Input.setInterceptDrags", r#"{"enabled":true}"#)
+            .await
+        {
+            // Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `this._crPage._page.safeNonStallingEvaluateInAllFrames('window.__cleanupDrag?.()', 'utility').catch(() => {});`
+            // The listeners go on every exit, this one included.
+            PageSession::cleanup_drag(&frames).await;
+            return Err(error);
+        }
         let moved = self
             .send_input_json("Input.dispatchMouseEvent", &params)
             .await;
-        let started = future::join_all(frames.iter().map(|frame| {
-            time::timeout(
-                DRAG_FRAME_CALL_WAIT,
-                frame.call(None, &InjectedCleanupDragParams {}),
-            )
-        }))
-        .await
-        .into_iter()
-        .any(|cleaned| cleaned.is_ok_and(|result| result.is_ok_and(|cleaned| cleaned.started)));
+        let started = PageSession::cleanup_drag(&frames).await;
         let disabled = self
             .send_input_json("Input.setInterceptDrags", r#"{"enabled":false}"#)
             .await;
@@ -2588,6 +2587,20 @@ impl InputSender for Arc<PageSession> {
 
 // The frames a drag's listeners go to.
 impl PageSession {
+    /// Neo: `cleanupDrag` in every frame, each call bounded: removes the drag listeners and
+    /// answers whether any frame saw the move start a drag the page did not prevent.
+    async fn cleanup_drag(frames: &[Arc<FrameContext>]) -> bool {
+        future::join_all(frames.iter().map(|frame| {
+            time::timeout(
+                DRAG_FRAME_CALL_WAIT,
+                frame.call(None, &InjectedCleanupDragParams {}),
+            )
+        }))
+        .await
+        .into_iter()
+        .any(|cleaned| cleaned.is_ok_and(|result| result.is_ok_and(|cleaned| cleaned.started)))
+    }
+
     /// Neo: every frame's context, the main one first, then the frame tree in pre-order. A
     /// frame whose context cannot be reached is left out, as Playwright's evaluation in all
     /// frames skips one it cannot reach.
@@ -3972,6 +3985,9 @@ mod tests {
         /// call (a modifier's restore) is theirs again.
         released: HashMap<String, Vec<Owner>>,
         held_back: Vec<oneshot::Sender<()>>,
+        /// Whether an intercepted HTML5 drag runs: a move with the left button down may start
+        /// one; a drop or a cancel ends it.
+        dragging: bool,
         /// Once set, every write is answered at once.
         settled: bool,
         answers: Seeded,
@@ -3993,7 +4009,35 @@ mod tests {
 
         /// One write: what the browser does with it if `received`, and what this call released
         /// whether received or not, so its restore goes back to whoever had the key.
-        fn write(&mut self, event: &Value, writer: &Owner, run_end: bool, received: bool) {
+        fn write(
+            &mut self,
+            method: &str,
+            event: &Value,
+            writer: &Owner,
+            run_end: bool,
+            received: bool,
+        ) {
+            if method == "Input.dispatchDragEvent" {
+                let ends = matches!(event["type"].as_str(), Some("drop" | "dragCancel"));
+                if received && ends {
+                    self.dragging = false;
+                    // The drag held the left button, and a drop stands in for whichever
+                    // button's release made it (Playwright's `RawMouseImpl.up`): after it the
+                    // events carry the tab's own mask, so no button stays down.
+                    let pressers = self.down.remove("left").unwrap_or_default();
+                    self.down.remove("right");
+                    let live = pressers
+                        .iter()
+                        .find(|presser| *presser != writer && self.live.contains(presser));
+                    if let Some(live) = live
+                        && run_end
+                    {
+                        self.stolen
+                            .push(format!("{}'s end ended a drag under {}", writer.0, live.0));
+                    }
+                }
+                return;
+            }
             let what = event["code"]
                 .as_str()
                 .or_else(|| event["button"].as_str())
@@ -4042,6 +4086,8 @@ mod tests {
         browser: Arc<SyncMutex<FuzzBrowser>>,
         writer: Owner,
         run_end: bool,
+        /// Set once a write of this sender failed or was refused.
+        failed: Arc<AtomicBool>,
     }
 
     impl InputSender for FuzzSender {
@@ -4052,7 +4098,10 @@ mod tests {
                 let answer = browser.answer();
                 let received =
                     !matches!(answer, Answer::Refused | Answer::Fails { received: false });
-                browser.write(&event, &self.writer, self.run_end, received);
+                if matches!(answer, Answer::Refused | Answer::Fails { .. }) {
+                    self.failed.store(true, Ordering::SeqCst);
+                }
+                browser.write(method, &event, &self.writer, self.run_end, received);
                 let held_back = matches!(answer, Answer::HeldBack).then(|| {
                     let (release, wait) = oneshot::channel();
                     browser.held_back.push(release);
@@ -4074,10 +4123,26 @@ mod tests {
                 }),
             }
         }
+
+        /// The move, and then, with the left button down and no drag running, a drag the page
+        /// starts three times in four, which Chromium hands over (`Input.dragIntercepted`).
+        async fn move_intercepting_drag(&self, params: String) -> Result<Option<Value>, CdpError> {
+            self.send_input("Input.dispatchMouseEvent", params).await?;
+            let mut browser = self.browser.lock().expect("browser");
+            let left_down = browser
+                .down
+                .get("left")
+                .is_some_and(|pressers| !pressers.is_empty());
+            if left_down && !browser.dragging && browser.answers.below(4) != 0 {
+                browser.dragging = true;
+                return Ok(Some(json!({ "items": [], "dragOperationsMask": 1 })));
+            }
+            Ok(None)
+        }
     }
 
     /// One call of a run's script.
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     enum FuzzCall {
         Down(&'static str),
         Up(&'static str),
@@ -4085,22 +4150,31 @@ mod tests {
         Modifiers(u8),
         /// A click with modifiers: the change, a left press and its release, the restore.
         Click(u8),
-        Press,
-        Release,
+        /// `mouse.down` and `mouse.up` with the left button, or the right one.
+        Press(bool),
+        Release(bool),
+        /// A move that is not a click's, through the drag manager.
+        Move((f64, f64), u32),
     }
 
     impl FuzzCall {
         fn random(rng: &mut Seeded) -> Self {
             use crate::keyboard::{CONTROL, SHIFT};
-            const KEYS: [&str; 3] = ["Shift", "Control", "a"];
+            const KEYS: [&str; 4] = ["Shift", "Control", "a", "Escape"];
             const MASKS: [u8; 4] = [0, SHIFT, CONTROL, SHIFT | CONTROL];
-            match rng.below(6) {
+            const POINTS: [(f64, f64); 3] = [(10.0, 10.0), (60.0, 40.0), (250.0, 60.0)];
+            // Presses and moves weigh more, so that drags start and meet the other calls.
+            match rng.below(10) {
                 0 => Self::Down(KEYS[rng.index(KEYS.len())]),
                 1 => Self::Up(KEYS[rng.index(KEYS.len())]),
                 2 => Self::Modifiers(MASKS[rng.index(MASKS.len())]),
                 3 => Self::Click(MASKS[rng.index(MASKS.len())]),
-                4 => Self::Press,
-                _ => Self::Release,
+                4 | 5 => Self::Press(rng.below(3) == 0),
+                6 => Self::Release(rng.below(3) == 0),
+                _ => Self::Move(
+                    POINTS[rng.index(POINTS.len())],
+                    u32::try_from(1 + rng.below(3)).expect("steps"),
+                ),
             }
         }
 
@@ -4128,12 +4202,23 @@ mod tests {
                     input_devices::plan_up(plan, simulated, MouseButton::Left, 1, Some(down));
                     keyboard::plan_restore_modifiers(plan, simulated, &changes, linux, owner);
                 }
-                Self::Press => {
-                    input_devices::plan_down(plan, simulated, MouseButton::Left, 1, owner);
+                Self::Press(right) => {
+                    let button = if right {
+                        MouseButton::Right
+                    } else {
+                        MouseButton::Left
+                    };
+                    input_devices::plan_down(plan, simulated, button, 1, owner);
                 }
-                Self::Release => {
-                    input_devices::plan_up(plan, simulated, MouseButton::Left, 1, None);
+                Self::Release(right) => {
+                    let button = if right {
+                        MouseButton::Right
+                    } else {
+                        MouseButton::Left
+                    };
+                    input_devices::plan_up(plan, simulated, button, 1, None);
                 }
+                Self::Move(to, steps) => input_devices::plan_free_move(plan, simulated, to, steps),
             }
         }
     }
@@ -4163,6 +4248,7 @@ mod tests {
                     stolen: Vec::new(),
                     released: HashMap::new(),
                     held_back: Vec::new(),
+                    dragging: false,
                     settled: false,
                     answers: Seeded(seed ^ 0x5EED_5EED),
                 })),
@@ -4177,6 +4263,7 @@ mod tests {
                 browser: Arc::clone(&self.browser),
                 writer: fuzz_owner(run),
                 run_end,
+                failed: Arc::default(),
             }
         }
 
@@ -4193,8 +4280,20 @@ mod tests {
                 let mut simulated = permit.snapshot().expect("devices");
                 let mut plan = Plan::default();
                 call.plan(&mut plan, &mut simulated, &owner);
-                let _written = input_devices::write_plan(&sender, &permit, &plan, &stop).await;
-                sender.browser.lock().expect("browser").released.clear();
+                let written = input_devices::write_plan(&sender, &permit, &plan, &stop).await;
+                let mut browser = sender.browser.lock().expect("browser");
+                browser.released.clear();
+                // A call whose every write was answered resolves, a drag's skipped press
+                // included, unless its run ended under it.
+                if !written.complete
+                    && !sender.failed.load(Ordering::SeqCst)
+                    && !stop.is_cancelled()
+                {
+                    browser.stolen.push(format!(
+                        "{}'s {call:?} read incomplete, every write answered",
+                        owner.0
+                    ));
+                }
             }));
         }
 
@@ -4283,7 +4382,7 @@ mod tests {
     async fn fuzz_case(seed: u64) {
         let mut rng = Seeded(seed);
         let mut case = FuzzCase::new(seed);
-        for _ in 0..4 + rng.below(14) {
+        for _ in 0..4 + rng.below(20) {
             let run = rng.index(2);
             match rng.below(10) {
                 0..=5 if !case.ended[run] => case.call(run, FuzzCall::random(&mut rng)),
@@ -4309,6 +4408,7 @@ mod tests {
             "seed {seed}: still down {:?}",
             browser.down
         );
+        assert!(!browser.dragging, "seed {seed}: a drag still runs");
         let devices = case.tab.devices.lock().expect("devices").clone();
         assert_eq!(
             devices,
@@ -4321,10 +4421,13 @@ mod tests {
         assert!(devices.mouse.buttons.is_empty(), "seed {seed}: {devices:?}");
     }
 
-    /// Two runs and an observer on one tab, 3000 seeded schedules of key presses and releases,
-    /// modifier changes, clicks with modifiers, button presses, run ends (some bounded, cut off
-    /// waiting for the turn or mid-write, some dropped with no release at all), with each write
-    /// answered at once, held back, failed (received or not) or refused. Once every answer is in and every run has ended, nothing
+    /// Two runs and an observer on one tab, 3000 seeded schedules of key presses and releases
+    /// (Escape included), modifier changes, clicks with modifiers, button presses, free moves
+    /// that may start an intercepted HTML5 drag, run ends (some bounded, cut off waiting for
+    /// the turn or mid-write, some dropped with no release at all), with each write answered at
+    /// once, held back, failed (received or not) or refused. A call whose every write was
+    /// answered reads complete, a drag's skipped press included; no run's end ends a drag
+    /// another live run has the left button down for. Once every answer is in and every run has ended, nothing
     /// is down in the browser or held in the tab's devices, and no run's end ever released what
     /// a live run had pressed.
     #[tokio::test(start_paused = true)]
