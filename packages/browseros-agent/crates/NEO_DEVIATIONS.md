@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (82)
+## Deviations (83)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -29,6 +29,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/dialogs.rs | `Dialogs::left_open` | `server/dialog.ts` `DialogManager.dialogDidOpen` | Playwright answers a dialog only when nobody listens, and leaves a listener's unanswered dialog open for the page's life. Neo's tab outlives the run and must not stay frozen for its user, so the run's end gives a dialog it handed out and nobody answered the default answer, which this takes. |
 | neo-runtime/src/downloads.rs | `DOWNLOAD_EVENTS` | `server/chromium/crBrowser.ts` `CRBrowserContext.initialize` | Playwright has the browser save each download of its context into Playwright's own directory under a guid name, and removes that directory when it lets go of the browser. Neo's context is the user's browser, so Neo leaves the saving to it (`default`: where, and under which name, the user's settings say) and only turns the reports on. Off is `default` without reports: CDP has no read of the behavior to restore, and `default` is the browser's own. |
 | neo-runtime/src/downloads.rs | `save_as` | `server/dispatchers/artifactDispatcher.ts` `ArtifactDispatcher.saveAs` | Playwright copies the file to any path on its host. Neo writes a script's files only inside the artifact directory the host gives the run (`artifacts`), at a relative path without `..`, refusing a symbolic link on the way, and a run without one names the option. |
+| neo-runtime/src/element_ops.rs | `dispatch_on_aria_ref` | `server/frames.ts` `Frame.dispatchEvent` | Playwright resolves the selector in the page's own world, whose injected script holds no `ai` snapshot, so a selector with an `aria-ref` matches nothing there and the call waits out its timeout. Neo resolves such a selector in the utility world, as Playwright's `click` and `locator.evaluate` resolve it, adopts the match into its frame's main world and dispatches there as `ElementHandle.dispatchEvent` does, so the event reaches the element the ref names, in a hidden frame too. |
 | neo-runtime/src/evaluate.rs | `adopt_element` | `server/dom.ts` `FrameExecutionContext.adoptIfNeeded` | A handle of another session (an out-of-process frame's, another tab's) fails Playwright's adoption, which `_retryWithProgressIfNotConnected` retries until the call times out (TimeoutError); Neo refuses it at once with Playwright's adoption Error, since a script gains nothing from waiting its whole timeout to learn the handle is unusable. Neither selects anything. |
 | neo-runtime/src/evaluate.rs | `created_handle` | `server/dom.ts` `ElementHandle._initializePreview` | Playwright starts at `JSHandle@node` and updates the preview by event; Neo has no events, so the handle starts with the final preview. |
 | neo-runtime/src/evaluate.rs | `utility_root` | `server/frameSelectors.ts` `FrameSelectors._resolveChainedSelector` | Playwright resolves frame hops from a scope too; Neo serves a scoped query within the element's own document only. |

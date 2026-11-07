@@ -51,6 +51,24 @@ fn has_frame_controls(selector: &str) -> bool {
     })
 }
 
+/// Neo: whether a selector reads an `ai` snapshot's refs: it has an `aria-ref` part, at the top
+/// or inside a nested selector (`internal:has="aria-ref=e5"`), its parts found as
+/// [`has_frame_controls`] finds them, so text that only mentions one
+/// (`internal:text="aria-ref=e5"i`) is none. Neo's snapshots keep their refs in the utility
+/// world's injected script, so only a resolution there can match such a part.
+pub(crate) fn has_aria_ref(selector: &str) -> bool {
+    selector_parts(selector).into_iter().any(|part| {
+        let (name, body) = selector_part(part);
+        match name {
+            "aria-ref" => true,
+            name if NESTED_SELECTORS.contains(&name) => {
+                nested_selector(name, body).is_some_and(|nested| has_aria_ref(&nested))
+            }
+            _ => false,
+        }
+    })
+}
+
 /// Playwright's `parseSelectorString`, reduced to each part's engine name and body: split on
 /// `>>` outside quotes, then read `name=body` when the name is an engine name. Every other part
 /// (CSS, `//xpath`, a quoted text shorthand) gets an empty name. A backslash escapes the next
@@ -896,6 +914,26 @@ mod tests {
             "iframe >> internal:control=enter-frame >> >> internal:control=enter-frame >> b",
         ] {
             assert!(split(selector).is_err(), "{selector}");
+        }
+    }
+
+    #[test]
+    fn finds_aria_ref_parts_where_playwright_parses_them() {
+        for (selector, expected) in [
+            ("aria-ref=e5", true),
+            ("aria-ref=f7f2e1", true),
+            ("aria-ref=e5 >> span", true),
+            (
+                "#frame >> internal:control=enter-frame >> aria-ref=e2",
+                true,
+            ),
+            (r#"li >> internal:has="aria-ref=e5""#, true),
+            (r#"internal:text="aria-ref=e5"i"#, false),
+            ("text=aria-ref=e5", false),
+            ("aria-refs=e5", false),
+            ("button", false),
+        ] {
+            assert_eq!(has_aria_ref(selector), expected, "{selector}");
         }
     }
 

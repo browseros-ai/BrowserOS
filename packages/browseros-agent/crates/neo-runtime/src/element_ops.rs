@@ -12,6 +12,10 @@
 //!    eventInit as neo-sdk's `serializeArgument` left it, handles included; polls until the
 //!    selector matches, then `InjectedScript.dispatchEvent` on the first match, in the page's
 //!    own world, as Playwright's `mainWorld: true`
+//!    a selector with an `aria-ref` (Deviation): loop A resolves it in the utility world, where
+//!    Neo's snapshots keep their refs → adopted into its frame's main world as a handle of the
+//!    run → the same callback on that handle with `:scope` (`ElementHandle.dispatchEvent`) →
+//!    the handle released
 //!  scrollIntoViewIfNeeded / selectText / boundingBox
 //!    wait until the selector matches (strict) → one element, then on that element only:
 //!      scroll   retry_action: stable → DOM.scrollIntoViewIfNeeded; not visible → retry
@@ -27,8 +31,8 @@ use std::future::Future;
 use std::time::Duration;
 
 use neo_runtime_spec::injected::{
-    ElementState, InjectedBlurElementParams, InjectedSelectTextParams, SelectTextOutcome,
-    SelectTextOutcomeStatus,
+    ElementState, InjectedBlurElementParams, InjectedSelectTextParams,
+    InjectedSelectorElementParams, SelectTextOutcome, SelectTextOutcomeStatus,
 };
 use neo_runtime_spec::serve::{FrameBlurParams, FrameFocusParams};
 use neo_runtime_spec::{MethodFlag, MethodMeta};
@@ -40,8 +44,9 @@ use crate::click::{
     self, ActionResult, ElementAction, NotReady, PageError, Resolved, Scroll, StatesCheck, Stop,
     Tab,
 };
-use crate::evaluate::{self, MainCallback, SerializedArgument};
+use crate::evaluate::{self, CreatedHandle, EvalCall, MainCallback, SerializedArgument};
 use crate::forms::{FocusOutcome, FormTab};
+use crate::frame_selector;
 use crate::page::{FrameTab, InputPermit, ResolvedElement};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::reads::SelectorTab;
@@ -302,12 +307,16 @@ impl From<DispatchEventParams> for DispatchOptions {
 ///
 /// Serves `Frame.dispatchEvent`: waits until the selector matches, then dispatches once on the
 /// first match, built and sent in the page's own world by eval's element callback, with any
-/// handles `eventInit` holds.
+/// handles `eventInit` holds. A selector with an `aria-ref` is resolved in the utility world
+/// first ([`dispatch_on_aria_ref`]).
 pub(crate) async fn dispatch_event(
     page: &FrameTab,
     options: &DispatchOptions,
     progress: &Progress,
 ) -> Result<(), CallError> {
+    if frame_selector::has_aria_ref(&options.selector) {
+        return dispatch_on_aria_ref(page, options, progress).await;
+    }
     evaluate::call_on_element_main(
         page,
         None,
@@ -320,6 +329,106 @@ pub(crate) async fn dispatch_event(
         progress,
     )
     .await
+}
+
+/// Deviation: `server/frames.ts` `Frame.dispatchEvent`: `}, { type, eventInit }, { mainWorld: true });` Playwright resolves the selector in the page's own world, whose injected script holds no `ai` snapshot, so a selector with an `aria-ref` matches nothing there and the call waits out its timeout. Neo resolves such a selector in the utility world, as Playwright's `click` and `locator.evaluate` resolve it, adopts the match into its frame's main world and dispatches there as `ElementHandle.dispatchEvent` does, so the event reaches the element the ref names, in a hidden frame too.
+///
+/// Loop A until the first match resolves there (strict when asked); then eval's element callback
+/// on the run's handle of that element, with `:scope` (Neo's `ElementHandle.dispatchEvent`),
+/// and the handle is released.
+async fn dispatch_on_aria_ref(
+    page: &FrameTab,
+    options: &DispatchOptions,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    // Playwright names the locator before any page call; Neo learns its text from the page.
+    progress.name_locator(&options.selector);
+    let mut locator = None;
+    let mut waits = click::LoopAWaits::new(progress.timeout_ms());
+    let element = loop {
+        let wait = waits.next_wait();
+        if !wait.is_zero() {
+            progress.wait(wait).await?;
+        }
+        match ref_attempt(page, options, progress, &mut locator).await {
+            Ok(Some(element)) => break element,
+            Ok(None) | Err(Stop::Retry) => {}
+            Err(Stop::End(error)) => return Err(error),
+        }
+    };
+    let dispatched = evaluate::serve(
+        page,
+        EvalCall::DispatchEvent {
+            guid: element.guid.clone(),
+            kind: options.event_type.clone(),
+            event_init: options.event_init.clone(),
+        },
+        progress,
+    )
+    .await;
+    // The callback named its own `:scope` locator; the call's log names the agent's.
+    if let Some(locator) = &locator {
+        progress.name_locator(locator);
+    }
+    // The handle was this call's own: released as `JSHandle.dispose` releases one.
+    let _released = evaluate::serve(page, EvalCall::Dispose { guid: element.guid }, progress).await;
+    dispatched.map(|_| ())
+}
+
+/// Neo: one attempt of [`dispatch_on_aria_ref`]: the selector's first match in the utility world,
+/// unmarked, as `Frame.querySelector` finds it, adopted into its frame's main world as a handle of
+/// the run; `None` to poll again.
+async fn ref_attempt(
+    page: &FrameTab,
+    options: &DispatchOptions,
+    progress: &Progress,
+    locator: &mut Option<String>,
+) -> Result<Option<CreatedHandle>, Stop> {
+    progress.race(Tab::prepare(page)).await??;
+    if locator.is_none() {
+        let facts = progress
+            .race(Tab::describe(page, &options.selector))
+            .await??;
+        progress.name_locator(&facts.locator);
+        *locator = Some(facts.locator);
+        // Playwright parses the selector before its first page call and fails at once.
+        if let Some(message) = facts.invalid {
+            return Err(PlaywrightError::error(message).into());
+        }
+    }
+    let Some(located) = progress
+        .race(frame_selector::locate(
+            page,
+            &options.selector,
+            options.strict,
+        ))
+        .await??
+    else {
+        return Ok(None);
+    };
+    let group = page.group(&located.frame, "dispatch-ref");
+    let found = progress
+        .race(located.frame.call(
+            Some(group.group()),
+            &InjectedSelectorElementParams {
+                selector: located.selector,
+                strict: options.strict,
+            },
+        ))
+        .await??;
+    let (Some(element), Some(preview)) = (found.element, found.preview) else {
+        return Ok(None);
+    };
+    let created = progress
+        .race(evaluate::element_handle_for(
+            page,
+            &located.frame,
+            &element,
+            &preview,
+            progress.handles(),
+        ))
+        .await??;
+    Ok(Some(created))
 }
 
 // ---------------------------------------------------------------------------------------------

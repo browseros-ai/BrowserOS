@@ -260,32 +260,73 @@ test('dispatchEvent inside frames reaches the same button through Neo and Playwr
   await compareFrameCases(t, frameCases)
 })
 
-// Playwright resolves `dispatchEvent`'s selector in the page's own world (`mainWorld: true`),
-// whose injected script holds no `ai` snapshot, so an `aria-ref` from one matches nothing there
-// and the call waits out its timeout; `click` resolves it in the utility world, where the
-// snapshot was taken. Neo does the same.
-test('dispatchEvent on an aria-ref times out in both engines, as click resolves it', {
+// Deviation (neo-runtime `element_ops.rs` `dispatch_on_aria_ref`): Playwright resolves
+// `dispatchEvent`'s selector in the page's own world (`mainWorld: true`), whose injected script
+// holds no `ai` snapshot, so an `aria-ref` from one matches nothing there and the call waits out
+// its timeout. Neo resolves the ref in the utility world, as both engines' `click` does, and
+// dispatches in the page's world: its listener gets the event, a handle in its init too. A ref
+// no snapshot gave times out in both.
+test('dispatchEvent on an aria-ref: Neo dispatches where pinned Playwright times out', {
   skip,
   timeout: 120_000,
 }, async (t) => {
   const outcome = await compareMethod(t, {
-    html: `<button id="b" onclick="window.clicks = (window.clicks || 0) + 1">Go</button>
-<script>new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.remove()).observe(document.documentElement, { childList: true, subtree: true })</script>`,
+    html: `<button id="b">Go</button><span id="other">other</span>
+<script>
+window.seen = []
+document.getElementById('b').addEventListener('click', (event) => window.seen.push({
+  trusted: event.isTrusted,
+  mouse: event instanceof MouseEvent,
+  related: event.relatedTarget?.id ?? null,
+  x: event.isTrusted ? null : event.clientX,
+}))
+new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.remove()).observe(document.documentElement, { childList: true, subtree: true })
+</script>`,
     source: `
       const yaml = await page.locator('#b').ariaSnapshot({ mode: 'ai' })
       const ref = /\\[ref=([a-z0-9]+)\\]/.exec(yaml)?.[1]
+      const other = await page.$('#other')
       const settle = (call) => call.then(() => 'resolved', (error) => error.name)
       return {
-        dispatch: await settle(page.locator('aria-ref=' + ref).dispatchEvent('click', {}, { timeout: 1500 })),
+        dispatch: await settle(page.locator('aria-ref=' + ref).dispatchEvent('click', { relatedTarget: other, clientX: 7 }, { timeout: 1500 })),
+        stale: await settle(page.locator('aria-ref=e999').dispatchEvent('click', {}, { timeout: 500 })),
         click: await settle(page.locator('aria-ref=' + ref).click({ timeout: 1500 })),
-        clicks: await page.evaluate(() => window.clicks || 0),
+        seen: await page.evaluate(() => window.seen),
       }
     `,
-    probe: '({ clicks: window.clicks || 0 })',
+    probe: '({ seen: window.seen.length })',
+    values: ({ playwright, neo }) => {
+      const clicked = { trusted: true, mouse: true, related: null, x: null }
+      assert.deepEqual(playwright, {
+        dispatch: 'TimeoutError',
+        stale: 'TimeoutError',
+        click: 'resolved',
+        seen: [clicked],
+      })
+      assert.deepEqual(neo, {
+        dispatch: 'resolved',
+        stale: 'TimeoutError',
+        click: 'resolved',
+        seen: [
+          { trusted: false, mouse: true, related: 'other', x: 7 },
+          clicked,
+        ],
+      })
+    },
+    effects: ({ playwright, neo }) => {
+      assert.deepEqual(playwright, { seen: 1 })
+      assert.deepEqual(neo, { seen: 2 })
+    },
   })
-  assert.deepEqual(outcome.value, {
-    dispatch: 'TimeoutError',
-    click: 'resolved',
-    clicks: 1,
-  })
+  // The call's log names the agent's locator, not the `:scope` the handle step uses inside.
+  const [dispatched] = outcome.calls.filter(
+    (call) => call.method === 'dispatchEvent',
+  )
+  assert.match(
+    dispatched.log[0],
+    /^ {2}- waiting for locator\('aria-ref=e\d+'\)$/,
+  )
+  assert.deepEqual(dispatched.log.slice(1), [
+    '    - locator resolved to <button id="b">Go</button>',
+  ])
 })
