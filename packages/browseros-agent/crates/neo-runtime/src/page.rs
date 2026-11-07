@@ -307,6 +307,14 @@ impl PageState {
         }
     }
 
+    /// A document that counts as loaded the moment it commits: its lifecycle events, fired.
+    fn loaded_at_once(&mut self) -> Fired {
+        let before = (self.dom_content_loaded, self.load);
+        self.did_dom_content_load();
+        self.did_load();
+        Fired::between(before, self)
+    }
+
     fn did_load(&mut self) {
         if !self.load {
             self.load = true;
@@ -1500,10 +1508,7 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                     // finished loading and restores it without lifecycle events, reporting
                     // `frameStoppedLoading` before this commit (measured on BrowserOS neo): it
                     // counts as loaded at once.
-                    let before = (state.dom_content_loaded, state.load);
-                    state.did_dom_content_load();
-                    state.did_load();
-                    applied.fired = Fired::between(before, state);
+                    applied.fired = state.loaded_at_once();
                 }
                 state.pending_url = None;
                 applied.new_document = true;
