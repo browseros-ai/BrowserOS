@@ -30,7 +30,11 @@ const cases = [
       // The context also reports the browser's service workers' requests, which have no frame.
       if (!request.serviceWorker() && request.frame().page() === page) fromContext.set(request.url(), request)
     })
-    await page.goto(ORIGIN + '/net/page.html')
+    let documentResponse
+    page.on('response', (response) => {
+      if (response.url().endsWith('/net/page.html')) documentResponse = response
+    })
+    const answered = await page.goto(ORIGIN + '/net/page.html')
     await page.waitForLoadState('networkidle')
     // Frames are told apart once the page settled: a frame has its name only from its commit.
     const child = page.frame({ name: 'child' })
@@ -41,6 +45,7 @@ const cases = [
         .map(([event, request]) => JSON.stringify([event, path(request.url()), request.resourceType(), frameOf(request), request.isNavigationRequest()]))
         .sort(),
       sameObjects: seen.every(([event, request]) => event !== 'request' || fromContext.get(request.url()) === request),
+      gotoIsTheEventsResponse: answered === documentResponse && answered.request() === seen.find(([event, request]) => event === 'request' && request.url() === answered.url())[1],
       childUrl: path(child.url()),
     }`,
     expected: {
@@ -64,6 +69,7 @@ const cases = [
         .map((entry) => JSON.stringify(entry))
         .sort(),
       sameObjects: true,
+      gotoIsTheEventsResponse: true,
       childUrl: '/net/frame.html',
     },
   },
@@ -178,6 +184,45 @@ const cases = [
       origin: true,
       status: 200,
       body: { path: '/net/oopif-data.json', query: '' },
+    },
+  },
+  {
+    // tests/page/page-event-network.spec.ts "NE-084 Page.Events.Request @smoke" for a response
+    // the browser serves from its cache: the second fetch of a cacheable URL is still a request,
+    // a response and a finish, with the cached status and body.
+    name: 'a request the cache answers still reports its request, response and finish',
+    source: `await page.goto(ORIGIN + '/net/blank.html')
+    const url = '/net/cached.json?' + Math.random()
+    const events = []
+    page.on('request', (request) => { if (request.url().includes('/net/cached.json')) events.push('request') })
+    page.on('response', (response) => { if (response.url().includes('/net/cached.json')) events.push('response ' + response.status()) })
+    page.on('requestfinished', (request) => { if (request.url().includes('/net/cached.json')) events.push('finished') })
+    await page.evaluate((url) => fetch(url).then((r) => r.text()), url)
+    const [cached] = await Promise.all([
+      page.waitForResponse('**/net/cached.json*'),
+      page.evaluate((url) => fetch(url, { cache: 'force-cache' }).then((r) => r.text()), url),
+    ])
+    await page.waitForLoadState('networkidle')
+    return {
+      events,
+      status: cached.status(),
+      body: (await cached.json()).path,
+      ok: cached.ok(),
+      fromServiceWorker: cached.fromServiceWorker(),
+    }`,
+    expected: {
+      events: [
+        'request',
+        'response 200',
+        'finished',
+        'request',
+        'response 200',
+        'finished',
+      ],
+      status: 200,
+      body: '/net/cached.json',
+      ok: true,
+      fromServiceWorker: false,
     },
   },
   {

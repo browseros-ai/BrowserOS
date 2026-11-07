@@ -95,7 +95,8 @@ sessionStorage.setItem('loads', String(Number(sessionStorage.getItem('loads')) +
  * `/net/redirect` (to `/net/data.json`), a 204 at `/net/204`, a 404 at `/net/404`, a connection
  * dropped before any response at `/net/hangup`, `/net/slow?ms=N` after N ms, an event stream
  * that never ends at `/net/sse`, and `/net/echo` answering a POST's body. Each answer forbids
- * caching, so a second engine's turn makes the same requests.
+ * caching, so a second engine's turn makes the same requests, except `/net/cached.json`, which
+ * a script fetches under a query of its own.
  */
 export async function serveNetwork(cleanups) {
   const server = http.createServer(async (request, response) => {
@@ -142,6 +143,12 @@ export async function serveNetwork(cleanups) {
       response.end(PNG)
       return
     }
+    if (pathname === '/net/cached.json') {
+      response.setHeader('cache-control', 'public, max-age=600')
+      response.setHeader('content-type', 'application/json')
+      response.end(JSON.stringify({ path: pathname }))
+      return
+    }
     if (pathname.endsWith('.json')) {
       response.setHeader('content-type', 'application/json')
       response.end(JSON.stringify({ path: pathname, query }))
@@ -163,15 +170,18 @@ export async function serveNetwork(cleanups) {
   }
 }
 
-/** Runs each case of `cases` as a subtest of `t` (see the header). */
-export async function compareNetwork(t, cases) {
+/**
+ * Runs each case of `cases` as a subtest of `t` (see the header). `args` go to the browser's
+ * command line, such as Playwright's own `--disable-back-forward-cache` for history steps.
+ */
+export async function compareNetwork(t, cases, { args = [] } = {}) {
   t.diagnostic(`Playwright ${playwrightVersion}`)
   if (referenceOnly) t.diagnostic('NEO_PARITY_REFERENCE_ONLY: Playwright only')
   const neoRun = referenceOnly ? undefined : buildNeoRun()
   const cleanups = []
   try {
     const { origin, cross } = await serveNetwork(cleanups)
-    const browser = await launchBrowser(cleanups, browserBinary)
+    const browser = await launchBrowser(cleanups, browserBinary, args)
     const cdp = await connectCdp(cleanups, browser.port)
     const scripts = mkdtempSync(join(tmpdir(), 'neo-network-parity-'))
     cleanups.push(() => rmSync(scripts, { recursive: true, force: true }))
