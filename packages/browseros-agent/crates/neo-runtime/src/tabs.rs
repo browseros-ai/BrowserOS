@@ -28,6 +28,7 @@ use crate::network::HopId;
 use crate::page::{PageSession, Session, TabInputs};
 use crate::page_events;
 use crate::progress::PlaywrightError;
+use crate::routes::{self, ContextRoutes};
 use crate::run::{PageId, RunPage};
 
 /// Cheap clones share the run's registry, context boundary, and session ownership.
@@ -52,6 +53,8 @@ struct Inner {
     discovering: OnceLock<()>,
     /// Holds every call of the run until discovery has its baseline ([`ALL_PAGES`]).
     discovery_enabling: Mutex<Option<Enabling>>,
+    /// The run's context routes, which every tab it attaches pauses requests for.
+    routes: Arc<ContextRoutes>,
 }
 
 /// A page can be known without a session. Its closure token precedes the attachment so calls,
@@ -173,6 +176,7 @@ impl Tabs {
             discovery,
             discovering: OnceLock::new(),
             discovery_enabling: Mutex::new(None),
+            routes: Arc::default(),
         }));
         let entry = tabs.register(page.clone(), false)?;
         // The scope read above already checked this tab. Avoid a second startup read so
@@ -199,6 +203,11 @@ impl Tabs {
 
     pub(crate) fn events(&self) -> &EventHub {
         &self.0.events
+    }
+
+    /// The run's context routes (`context.route`).
+    pub(crate) fn routes(&self) -> &Arc<ContextRoutes> {
+        &self.0.routes
     }
 
     /// Runs `task` on the run's tracker, so `Dispatcher::finish` waits for it.
@@ -258,6 +267,8 @@ impl Tabs {
                 None => (frame, FrameScope::Main),
             }
         } else if let Some((target, _)) = dialogs::parse(guid) {
+            (target, FrameScope::Main)
+        } else if let Some((target, _)) = routes::parse(guid) {
             (target, FrameScope::Main)
         } else {
             // A hop is one of the main frame's navigation requests (network.rs).
@@ -334,6 +345,12 @@ impl Tabs {
                 {
                     page_events::enable(self, entry, needs);
                 }
+                // A context route pauses this tab's requests from its first call on.
+                if session.routes.wants_interception() == Some(true)
+                    && let Err(error) = session.intercept(true).await
+                {
+                    return Err(cdp_error(&error));
+                }
                 Ok(session)
             })
             .await?;
@@ -376,6 +393,7 @@ impl Tabs {
             entry.closed.clone(),
             self.0.events.clone(),
             entry.discovered.load(Ordering::Acquire),
+            Arc::clone(&self.0.routes),
         )))
     }
 

@@ -20,9 +20,10 @@
  * - `waitForURL`, `waitForLoadState` and `waitForNavigation` are `neo:` calls that Rust waits out
  *   (`neo-commands.ts`), where Playwright's client waits on `navigated` and `loadstate` events.
  *   A predicate `url` steps a cursor, one call per navigation, and receives Neo's read-only `URL`
- *   (`url.ts`). None takes `networkidle`. A failed navigation rejects a main-frame wait, as in
- *   Playwright, once Neo has seen its request start; a child frame's never does.
- *   `waitForNavigation` on a child frame rejects: Neo does not record a child frame's requests.
+ *   (`url.ts`). A failed navigation rejects the wait, as in Playwright, once Neo has
+ *   seen its request start. A child frame's `waitForNavigation` answers the frame's `Response`,
+ *   except that a frame whose document moves to another process mid-wait reports that commit on
+ *   a session Neo only reads once a call attached it.
  *   An unknown `waitUntil` is reported as `waitUntil`, where Playwright names it `state` when a
  *   glob or `RegExp` URL already matches.
  * - Text collections run as `$$eval` in the page's main world.
@@ -500,9 +501,8 @@ export class Frame {
    *
    * `url` is a glob string, where `**` crosses `/` and `{a,b}` alternates (`''` matches every
    * URL), a `RegExp`, flags included, tested as Playwright tests it, or a predicate that receives
-   * the URL as a read-only `URL` and may be async. `waitUntil` is `load`, `domcontentloaded` or
-   * `commit`. A navigation that fails before the URL matched rejects the wait. Neo limit:
-   * `networkidle` throws an `Error`.
+   * the URL as a read-only `URL` and may be async. `waitUntil` is `load`, `domcontentloaded`,
+   * `networkidle` or `commit`. A navigation that fails before the URL matched rejects the wait.
    */
   async waitForURL(
     url: NavigationURLMatch,
@@ -570,8 +570,7 @@ export class Frame {
    * navigation or a document without a request. A navigation that fails first rejects with its
    * error. Start it before the action that navigates:
    * `await Promise.all([page.waitForNavigation(), page.click('a')])`. Runs under the navigation
-   * timeout. Neo limits: `networkidle` throws, and a child frame's wait rejects, because Neo does
-   * not record a child frame's navigation requests.
+   * timeout.
    */
   async waitForNavigation(
     options: WaitForNavigationOptions = {},
@@ -781,8 +780,11 @@ export class Frame {
    * Waits until `state` (default `load`) has fired for the frame's current document, at once if
    * it already has, and resolves `undefined`; `commit` always has. Otherwise the next document's
    * `state` counts. Runs under the navigation timeout, and rejects when the page closes.
-   * `state` is `load`, `domcontentloaded` or `commit`; `networkidle` is a Neo limit and throws an
-   * `Error`.
+   * `state` is `load`, `domcontentloaded`, `networkidle` or `commit`. `networkidle` fires once
+   * no request of the frame or of its frames has been in flight for 500 ms; Neo judges it on the
+   * requests it has seen since it began recording the page's network (this wait starts that if
+   * nothing did), so it fires no sooner than 500 ms after that start. Requests of an
+   * out-of-process frame do not hold it.
    */
   async waitForLoadState(
     state?: LifecycleEvent,

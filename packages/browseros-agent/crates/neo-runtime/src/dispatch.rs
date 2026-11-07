@@ -52,7 +52,7 @@ use neo_runtime_spec::serve::{
     FramePressResult, FrameQueryCountParams, FrameSelectOptionParams, FrameSelectOptionResult,
     FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameTypeParams, FrameTypeResult,
     FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
-    Metadata, PageCall, RequestCall, ResponseCall,
+    Metadata, PageCall, RequestCall, ResponseCall, RouteCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -95,13 +95,14 @@ use crate::progress::{
 };
 use crate::reads::{self, AttributeOptions, ReadOptions, SnapshotOptions};
 use crate::responses::{self, NetworkCall};
+use crate::routes;
 use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
 use crate::states::{self, StateOptions};
 use crate::tab_calls;
 use crate::tabs::{PageEntry, Tabs};
 use crate::waits::{
     self, NeoWaitForLoadStateParams, NeoWaitForUrlParams, WaitForLoadStateOptions,
-    WaitForSelectorOptions, WaitForUrlOptions,
+    WaitForSelectorOptions, WaitForUrlOptions, WaitTab,
 };
 
 /// The shared budget for creation settlement, call draining and closing-state reads after
@@ -309,6 +310,9 @@ enum ObjectKind {
     Handle(String),
     /// A JavaScript dialog the run's `dialog` event handed out, by its index on the tab.
     Dialog(u64),
+    /// A paused request the run's `route` event handed out (Playwright's `Route`), by its index
+    /// on the tab; named apart from this module's call-routing `Route`.
+    Intercepted(u64),
     Unknown,
 }
 
@@ -320,6 +324,9 @@ enum ObjectCall {
     Frame(Route),
     Network(NetworkCall),
     Dialog(u64, DialogCall),
+    Intercepted(u64, RouteCall),
+    /// `route.fetch` (`neo:fetch`) on a paused request.
+    InterceptedFetch(u64, routes::NeoRouteFetchParams),
 }
 
 /// What a message asks for. One variant per served (object, method).
@@ -522,6 +529,13 @@ impl Dispatcher {
         // sessions detach (`Dialogs::left_open`).
         self.0.tabs.events().close();
         let _answered = time::timeout_at(deadline, answer_left_open(&self.0.tabs)).await;
+        // Every request a route handler left paused goes on, and no tab keeps pausing requests
+        // for a run that is over (`routes.rs`).
+        let _routed = time::timeout_at(deadline, async {
+            let sessions = self.0.tabs.attached_sessions();
+            future::join_all(sessions.iter().map(|session| routes::finish(session))).await;
+        })
+        .await;
         // Keys and buttons this run left held are released on each tab it touched, under a
         // turn (design section 4.6), once the dialogs it left open are answered. Each tab's
         // release is a task of the run's tracker, started before the tracker closes, so the
@@ -594,6 +608,18 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         }
         ObjectKind::Dialog(index) => DialogCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
+        ObjectKind::Intercepted(index) if method == routes::FETCH_META.method => {
+            return Routed {
+                meta: Some(&routes::FETCH_META),
+                route: decode_neo_params::<routes::NeoRouteFetchParams>(
+                    params,
+                    &routes::FETCH_META,
+                )
+                .map(|params| ObjectCall::InterceptedFetch(index, params)),
+            };
+        }
+        ObjectKind::Intercepted(index) => RouteCall::decode(method, params)
+            .map(|call| (call.meta(), Ok(ObjectCall::Intercepted(index, call)))),
         ObjectKind::Unknown => {
             return Routed {
                 meta: None,
@@ -647,7 +673,7 @@ fn route_frame_extension(method: &str, params: Option<&Value>) -> Option<Routed>
                 params.cloned(),
                 &WAIT_FOR_LOAD_STATE_META,
             )
-            .and_then(WaitForLoadStateOptions::from_params)
+            .map(WaitForLoadStateOptions::from_params)
             .map(|options| ObjectCall::Frame(Route::FrameWaitForLoadState(options))),
         });
     }
@@ -712,7 +738,7 @@ fn route_navigation_wait(method: &str, params: Option<&Value>) -> Option<Routed>
         (&NEXT_NAVIGATION_META, route)
     } else if method == FINISH_NAVIGATION_META.method {
         let route = decode_neo_params::<NeoFinishNavigationParams>(params, &FINISH_NAVIGATION_META)
-            .and_then(|params| FinishNavigationOptions::from_params(&params))
+            .map(|params| FinishNavigationOptions::from_params(&params))
             .map(Route::FrameFinishNavigation);
         (&FINISH_NAVIGATION_META, route)
     } else if method == RELEASE_NAVIGATION_META.method {
@@ -775,7 +801,7 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         }
         FrameCall::Hover(params) => Ok(Route::FramePointer(PointerOptions::from_hover(params))),
         FrameCall::Tap(params) => Ok(Route::FramePointer(PointerOptions::from_tap(params))),
-        FrameCall::Goto(params) => GotoOptions::from_params(params).map(Route::FrameGoto),
+        FrameCall::Goto(params) => Ok(Route::FrameGoto(GotoOptions::from_params(params))),
         FrameCall::Title(_) => Ok(Route::FrameTitle),
         FrameCall::TextContent(params) => {
             Ok(Route::FrameTextContent(ReadOptions::from_params(params)))
@@ -860,7 +886,12 @@ async fn serve_call(
     // context call (`newPage`) waits for target discovery's baseline. A dialog's answer never
     // waits: an open dialog can hold that very enable, and only the answer frees the page.
     let gate = match (&route, &target) {
-        (ObjectCall::Dialog(..), _) => None,
+        // A route's answer never waits either: the paused request may be what the page's
+        // enable, or the script's goto, waits for.
+        (
+            ObjectCall::Dialog(..) | ObjectCall::Intercepted(..) | ObjectCall::InterceptedFetch(..),
+            _,
+        ) => None,
         (ObjectCall::Context(_), _) => Some(ALL_PAGES),
         (_, Some((page, _))) => Some(page.id.as_str()),
         (_, None) => None,
@@ -931,6 +962,17 @@ async fn serve_call(
             Some(session) => dialogs::serve(&session, index, call, &progress).await,
             None => Err(PlaywrightError::target_closed().into()),
         },
+        // A paused request exists only after its tab's watcher handed it to this run.
+        (ObjectCall::Intercepted(index, call), Some((page, _))) => match page.attached_session() {
+            Some(session) => routes::serve(&session, index, call, &progress).await,
+            None => Err(PlaywrightError::target_closed().into()),
+        },
+        (ObjectCall::InterceptedFetch(index, params), Some((page, _))) => {
+            match page.attached_session() {
+                Some(session) => routes::fetch(&session, index, params, &progress).await,
+                None => Err(PlaywrightError::target_closed().into()),
+            }
+        }
         _ => Err(PlaywrightError::target_closed().into()),
     };
     finish_reply(result, reply).await;
@@ -1016,9 +1058,17 @@ async fn serve(
                 .map(|()| Some(json!({})))
         }
         Route::FrameWaitForNavigation(options) => {
-            history::wait_for_navigation(&page, &options, &progress)
-                .await
-                .and_then(|response| encode_neo(&NeoNavigationResult { response }))
+            let waited = if matches!(page.scope, FrameScope::Main) {
+                history::wait_for_navigation(&page, &options, &progress).await
+            } else {
+                match WaitTab::observe(&page) {
+                    Ok(events) => {
+                        history::wait_for_navigation_on(&page, events, &options, &progress).await
+                    }
+                    Err(error) => Err(navigate::page_error(error).into()),
+                }
+            };
+            waited.and_then(|response| encode_neo(&NeoNavigationResult { response }))
         }
         Route::FrameNextNavigation(params) => {
             history::next_frame_navigation(cursors, page, &params, &progress)
@@ -1156,11 +1206,6 @@ fn unsupported_child_call(scope: &FrameScope, route: &Route) -> Option<Playwrigh
     }
     let method = match route {
         Route::FrameGoto(_) => "goto",
-        // Deviation: `client/frame.ts` `Frame.waitForNavigation` Playwright answers a child
-        // frame's navigation Response; the network log records only the main frame's requests,
-        // so Neo refuses the wait. A predicate wait that answers none (`waitForURL`) is served.
-        Route::FrameWaitForNavigation(_) => "waitForNavigation",
-        Route::FrameNextNavigation(params) if params.response => "waitForNavigation",
         _ => return None,
     };
     Some(PlaywrightError::error(format!(
@@ -1295,6 +1340,8 @@ fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
         ObjectKind::Network(kind, hop)
     } else if let Some((_, index)) = dialogs::parse(guid) {
         ObjectKind::Dialog(index)
+    } else if let Some((_, index)) = routes::parse(guid) {
+        ObjectKind::Intercepted(index)
     } else {
         ObjectKind::Page
     }
@@ -1597,7 +1644,9 @@ mod tests {
             | ObjectCall::Page(_)
             | ObjectCall::Device(_)
             | ObjectCall::Network(_)
-            | ObjectCall::Dialog(..) => {
+            | ObjectCall::Dialog(..)
+            | ObjectCall::Intercepted(..)
+            | ObjectCall::InterceptedFetch(..) => {
                 panic!("a Frame message routed to another object")
             }
         })
@@ -2049,14 +2098,27 @@ mod tests {
             }
         }
         assert!(route_frame("waitForSelector", json!({"selector":"iframe >> internal:control=enter-frame >> button", "omitReturnValue": true})).route.is_ok());
+        // `networkidle` is served by every wait (`network_idle.rs`).
         for (method, params) in [
             (
                 "neo:waitForURL",
                 json!({"url":{"glob":""},"waitUntil":"networkidle"}),
             ),
             ("neo:waitForLoadState", json!({"state":"networkidle"})),
+            (
+                "neo:waitForNavigation",
+                json!({"url":{"glob":""},"waitUntil":"networkidle"}),
+            ),
+            (
+                "neo:finishNavigation",
+                json!({"cursor":1,"index":0,"waitUntil":"networkidle"}),
+            ),
+            (
+                "goto",
+                json!({"url":"https://example.test","waitUntil":"networkidle"}),
+            ),
         ] {
-            assert_eq!(error_of(route_frame(method, params)).name, ErrorName::Error);
+            assert!(route_frame(method, params).route.is_ok(), "{method}");
         }
         for (method, params) in [
             (
@@ -2116,18 +2178,10 @@ mod tests {
             assert!(routed.route.is_ok(), "{method}");
         }
         for (method, params) in [
-            (
-                "neo:waitForNavigation",
-                json!({"url":{"glob":""},"waitUntil":"networkidle"}),
-            ),
             ("neo:waitForNavigation", json!({"url":{}})),
             ("neo:waitForNavigation", json!({"url":{"glob":"**/{a"}})),
             ("neo:nextNavigation", json!({})),
             ("neo:nextNavigation", json!({"response":true,"extra":1})),
-            (
-                "neo:finishNavigation",
-                json!({"cursor":1,"index":0,"waitUntil":"networkidle"}),
-            ),
             (
                 "neo:finishNavigation",
                 json!({"index":0,"waitUntil":"load"}),
@@ -2144,14 +2198,15 @@ mod tests {
                 "{method}"
             );
         }
-        // A child frame's Response is unknown, so a wait that answers one is refused before it
-        // starts; a URL-only cursor (`waitForURL`) is served there.
+        // Every frame's requests are recorded, so a child frame's navigation waits are served
+        // with their Response, as the main frame's; only `goto` stays refused on a child.
         let child = FrameScope::Frame("child".to_string());
         for (method, params, refused) in [
-            ("neo:waitForNavigation", json!({"url":{"glob":""}}), true),
-            ("neo:nextNavigation", json!({"response":true}), true),
+            ("neo:waitForNavigation", json!({"url":{"glob":""}}), false),
+            ("neo:nextNavigation", json!({"response":true}), false),
             ("neo:nextNavigation", json!({"response":false}), false),
             ("neo:releaseNavigation", json!({"cursor":1}), false),
+            ("goto", json!({"url":"https://example.test"}), true),
         ] {
             let Ok(ObjectCall::Frame(route)) = route_frame(method, params).route else {
                 panic!("{method} routes");
@@ -2464,14 +2519,6 @@ mod tests {
                 route_frame("expect", json!({ "selector": "#go" })),
                 None,
                 PlaywrightError::error("Neo does not serve Frame.expect"),
-            ),
-            (
-                route_frame(
-                    "goto",
-                    json!({ "url": "https://example.test", "waitUntil": "networkidle" }),
-                ),
-                Some("Navigate"),
-                PlaywrightError::error("Neo does not support waitUntil: \"networkidle\" yet"),
             ),
             (
                 route(ObjectKind::Page, "click", None),

@@ -49,7 +49,10 @@ use crate::dialogs::{self, Dialogs};
 use crate::events::{CONTEXT_GUID, Emitted, EventHub, Needs};
 use crate::frame_events::FrameModel;
 use crate::frames::{self, Host};
+use crate::network::{Happening, NetworkLog};
+use crate::network_events;
 use crate::page::{Applied, DialogAnswer};
+use crate::routes::Channel;
 use crate::run::PageId;
 use crate::tabs::{PageEntry, Tabs};
 
@@ -167,6 +170,26 @@ impl PageEvents {
 
     pub(crate) fn hub(&self) -> &EventHub {
         &self.hub
+    }
+
+    /// The run's network events for what the tab's network log just applied
+    /// (`network_events.rs`).
+    pub(crate) fn network(&self, log: &NetworkLog, happenings: &[Happening]) {
+        if !happenings.is_empty() {
+            network_events::emit(&self.hub, &self.page_guid, log, happenings);
+        }
+    }
+
+    /// The run's `route` event for a pause of this tab (`routes.rs`): on the page, whose handlers
+    /// come first, or on the context. Whether it was queued for the script, which then owes the
+    /// pause its answer.
+    pub(crate) fn route(&self, channel: Channel, params: &Value) -> bool {
+        let guid = match channel {
+            Channel::Page => self.page_guid.as_str(),
+            Channel::Context => CONTEXT_GUID,
+        };
+        self.hub.subscribed(guid, "route")
+            && self.hub.emit(guid, "route", params) == Emitted::Queued
     }
 
     /// The tab's target id.
@@ -574,6 +597,11 @@ pub(crate) fn enable(tabs: &Tabs, entry: Arc<PageEntry>, needs: Needs) {
             && let Err(error) = session.enable_runtime().await
         {
             debug!(?error, "a subscription could not enable the page's console");
+        }
+        if needs.network
+            && let Err(error) = session.enable_network().await
+        {
+            debug!(?error, "a subscription could not enable the page's network");
         }
     });
 }

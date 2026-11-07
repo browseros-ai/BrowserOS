@@ -71,7 +71,7 @@ const REPLAY_WAIT: Duration = Duration::from_secs(5);
 
 /// Neo: the listener events Neo produces on a `Page`, under the names Playwright's client gives
 /// them (`Events.Page`), and what each needs switched on in the page's session.
-const PAGE_EVENTS: [(&str, Needs); 12] = [
+const PAGE_EVENTS: [(&str, Needs); 17] = [
     ("console", Needs::RUNTIME),
     ("pageerror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
@@ -84,11 +84,18 @@ const PAGE_EVENTS: [(&str, Needs); 12] = [
     ("framedetached", Needs::WATCHER),
     ("framenavigated", Needs::WATCHER),
     ("popup", Needs::DISCOVERY),
+    ("request", Needs::NETWORK),
+    ("response", Needs::NETWORK),
+    ("requestfinished", Needs::NETWORK),
+    ("requestfailed", Needs::NETWORK),
+    // A paused request of a route (`routes.rs`): Playwright's channel event, which the SDK
+    // listens to while the page has routes. Its request's record needs the network log.
+    ("route", Needs::NETWORK),
 ];
 
 /// Neo: the listener events Neo produces on the run's `BrowserContext` (`Events.BrowserContext`),
 /// for every page the run has a session on; `page` for every new tab of the context.
-const CONTEXT_EVENTS: [(&str, Needs); 10] = [
+const CONTEXT_EVENTS: [(&str, Needs); 15] = [
     ("console", Needs::RUNTIME),
     ("weberror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
@@ -99,15 +106,26 @@ const CONTEXT_EVENTS: [(&str, Needs); 10] = [
     ("framedetached", Needs::WATCHER),
     ("framenavigated", Needs::WATCHER),
     ("page", Needs::DISCOVERY),
+    ("request", Needs::NETWORK),
+    ("response", Needs::NETWORK),
+    ("requestfinished", Needs::NETWORK),
+    ("requestfailed", Needs::NETWORK),
+    ("route", Needs::NETWORK),
 ];
 
 /// What a subscription switches on in a page's session before that page's next call runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent switch a subscription may need, combined with ||"
+)]
 pub(crate) struct Needs {
     /// `PageSession::prepare`: the watcher, which is the producer, with `Page.enable`.
     pub(crate) watcher: bool,
     /// `Runtime.enable` and `Log.enable`, which report console messages and page errors.
     pub(crate) runtime: bool,
+    /// `Network.enable` (`PageSession::enable_network`), which reports the tab's requests.
+    pub(crate) network: bool,
     /// The run's target discovery (`discovery.rs`), which reports new tabs. Not a page's: every
     /// call of the run waits for it ([`ALL_PAGES`]).
     pub(crate) discovery: bool,
@@ -118,24 +136,34 @@ impl Needs {
     pub(crate) const WATCHER: Self = Self {
         watcher: true,
         runtime: false,
+        network: false,
         discovery: false,
     };
     /// Neo: an event only `Runtime.enable` and `Log.enable` report.
     const RUNTIME: Self = Self {
         watcher: true,
         runtime: true,
+        network: false,
+        discovery: false,
+    };
+    /// Neo: an event only `Network.enable` reports: a request's.
+    const NETWORK: Self = Self {
+        watcher: true,
+        runtime: false,
+        network: true,
         discovery: false,
     };
     /// Neo: an event the run's target discovery produces, about a page no session watches yet.
     const DISCOVERY: Self = Self {
         watcher: false,
         runtime: false,
+        network: false,
         discovery: true,
     };
 
     /// Whether a page's session has anything to switch on for it.
     pub(crate) fn of_page(self) -> bool {
-        self.watcher || self.runtime
+        self.watcher || self.runtime || self.network
     }
 }
 
@@ -282,6 +310,7 @@ impl EventHub {
                 .reduce(|left, right| Needs {
                     watcher: left.watcher || right.watcher,
                     runtime: left.runtime || right.runtime,
+                    network: left.network || right.network,
                     discovery: left.discovery || right.discovery,
                 })
         })
@@ -626,7 +655,8 @@ mod tests {
         assert_eq!(needs("page@T", "dialog"), Some(Needs::WATCHER));
         assert_eq!(needs(CONTEXT_GUID, "weberror"), Some(Needs::RUNTIME));
         assert_eq!(needs(CONTEXT_GUID, "pageerror"), None);
-        assert_eq!(needs("page@T", "request"), None);
+        assert_eq!(needs("page@T", "request"), Some(Needs::NETWORK));
+        assert_eq!(needs(CONTEXT_GUID, "requestfailed"), Some(Needs::NETWORK));
         assert_eq!(needs("frame@T", "console"), None);
         assert_eq!(needs("page@T", "popup"), Some(Needs::DISCOVERY));
         assert_eq!(needs(CONTEXT_GUID, "page"), Some(Needs::DISCOVERY));

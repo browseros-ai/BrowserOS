@@ -126,6 +126,12 @@ var uncaughtListenerError;
 function onUncaughtListenerError(report) {
   uncaughtListenerError = report;
 }
+function reportUncaught(error) {
+  if (uncaughtListenerError)
+    uncaughtListenerError(error);
+  else
+    throw error;
+}
 
 class EventEmitter {
   _events = undefined;
@@ -459,6 +465,9 @@ class ChannelOwner extends EventEmitter {
     if (this.#served(event))
       this.#pipe._subscribe(this._guid, event, enabled);
   }
+  _listenToChannel(event, enabled) {
+    this.#pipe._subscribe(this._guid, event, enabled);
+  }
   on(event, listener) {
     this._refuseUnserved(event);
     if (!this.listenerCount(event))
@@ -608,6 +617,585 @@ class Dialog extends EventEmitter {
   }
 }
 
+// src/disposable.ts
+class DisposableStub {
+  #dispose;
+  constructor(dispose) {
+    this.#dispose = dispose;
+    const asyncDispose = Symbol.asyncDispose;
+    if (asyncDispose)
+      Object.defineProperty(this, asyncDispose, {
+        value: () => this.dispose()
+      });
+  }
+  async dispose() {
+    if (!this.#dispose)
+      return;
+    try {
+      const dispose = this.#dispose;
+      this.#dispose = undefined;
+      await dispose();
+    } catch (e) {
+      if (isTargetClosedError(e))
+        return;
+      throw e;
+    }
+  }
+}
+
+// src/network.ts
+class RawHeaders {
+  #headersArray;
+  #headersMap = new Map;
+  constructor(headers) {
+    this.#headersArray = headers;
+    for (const header of headers) {
+      const name = header.name.toLowerCase();
+      const values = this.#headersMap.get(name);
+      if (values)
+        values.push(header.value);
+      else
+        this.#headersMap.set(name, [header.value]);
+    }
+  }
+  static _fromHeadersObjectLossy(headers) {
+    return new RawHeaders(Object.entries(headers).filter(([, value]) => value !== undefined).map(([name, value]) => ({ name, value })));
+  }
+  get(name) {
+    const values = this.getAll(name);
+    if (!values.length)
+      return null;
+    return values.join(name.toLowerCase() === "set-cookie" ? `
+` : ", ");
+  }
+  getAll(name) {
+    return [...this.#headersMap.get(name.toLowerCase()) ?? []];
+  }
+  headers() {
+    const result = {};
+    for (const name of this.#headersMap.keys())
+      result[name] = this.get(name) ?? "";
+    return result;
+  }
+  headersArray() {
+    return this.#headersArray;
+  }
+}
+
+class Request {
+  _guid;
+  #initializer;
+  #frame;
+  #connection;
+  #redirectedFrom;
+  _redirectedTo = null;
+  _response = null;
+  #provisionalHeaders;
+  #actualHeadersPromise;
+  #fallbackOverrides = {};
+  #timing = {
+    startTime: 0,
+    domainLookupStart: -1,
+    domainLookupEnd: -1,
+    connectStart: -1,
+    secureConnectionStart: -1,
+    connectEnd: -1,
+    requestStart: -1,
+    responseStart: -1,
+    responseEnd: -1
+  };
+  constructor(guid, initializer, frame, redirectedFrom, connection) {
+    this._guid = guid;
+    this.#initializer = initializer;
+    this.#frame = frame;
+    this.#connection = connection;
+    this.#redirectedFrom = redirectedFrom;
+    if (redirectedFrom)
+      redirectedFrom._redirectedTo = this;
+    this.#provisionalHeaders = new RawHeaders(initializer.headers);
+  }
+  url() {
+    return this.#fallbackOverrides.url || this.#initializer.url;
+  }
+  resourceType() {
+    return this.#initializer.resourceType;
+  }
+  method() {
+    return this.#fallbackOverrides.method || this.#initializer.method;
+  }
+  postData() {
+    return this.postDataBuffer()?.toString("utf-8") ?? null;
+  }
+  postDataBuffer() {
+    if (this.#fallbackOverrides.postDataBuffer)
+      return this.#fallbackOverrides.postDataBuffer;
+    const data = this.#initializer.postData;
+    return data ? Buffer.fromBinary(data) : null;
+  }
+  postDataJSON() {
+    const postData = this.postData();
+    if (!postData)
+      return null;
+    const contentType = this.headers()["content-type"];
+    if (contentType?.includes("application/x-www-form-urlencoded"))
+      return parseFormBody(postData);
+    try {
+      return JSON.parse(postData);
+    } catch {
+      throw new Error(`POST data is not a valid JSON object: ${postData}`);
+    }
+  }
+  headers() {
+    if (this.#fallbackOverrides.headers)
+      return RawHeaders._fromHeadersObjectLossy(this.#fallbackOverrides.headers).headers();
+    return this.#provisionalHeaders.headers();
+  }
+  _applyFallbackOverrides(overrides) {
+    if (overrides.url)
+      this.#fallbackOverrides.url = overrides.url;
+    if (overrides.method)
+      this.#fallbackOverrides.method = overrides.method;
+    if (overrides.headers)
+      this.#fallbackOverrides.headers = overrides.headers;
+    if (typeof overrides.postData === "string")
+      this.#fallbackOverrides.postDataBuffer = encodeUtf8(overrides.postData);
+    else if (overrides.postData instanceof Uint8Array) {
+      const bytes = new Buffer(overrides.postData.length);
+      bytes.set(overrides.postData);
+      this.#fallbackOverrides.postDataBuffer = bytes;
+    } else if (overrides.postData)
+      this.#fallbackOverrides.postDataBuffer = encodeUtf8(JSON.stringify(overrides.postData));
+  }
+  _fallbackOverridesForContinue() {
+    return this.#fallbackOverrides;
+  }
+  async allHeaders() {
+    return (await this.#actualHeaders("request.allHeaders")).headers();
+  }
+  async headersArray() {
+    return (await this.#actualHeaders("request.headersArray")).headersArray();
+  }
+  async headerValue(name) {
+    return (await this.#actualHeaders("request.headerValue")).get(name);
+  }
+  async response() {
+    return await this.#response("request.response");
+  }
+  existingResponse() {
+    if (this._response)
+      return this._response;
+    const guid = get(this._guid, "existingResponse");
+    return guid ? networkObject(this.#connection, guid, this.#frame._page) : null;
+  }
+  frame() {
+    return this.#frame;
+  }
+  serviceWorker() {
+    return null;
+  }
+  isNavigationRequest() {
+    return this.#initializer.isNavigationRequest;
+  }
+  redirectedFrom() {
+    return this.#redirectedFrom;
+  }
+  redirectedTo() {
+    if (this._redirectedTo)
+      return this._redirectedTo;
+    const guid = get(this._guid, "redirectedTo");
+    return guid ? networkObject(this.#connection, guid, this.#frame._page) : null;
+  }
+  failure() {
+    const errorText = get(this._guid, "failure");
+    return errorText ? { errorText } : null;
+  }
+  timing() {
+    return Object.assign(this.#timing, get(this._guid, "timing"));
+  }
+  async sizes() {
+    const response = await this.#response("request.sizes");
+    if (!response)
+      throw new Error("Unable to fetch sizes for failed request");
+    return await response._sizes("request.sizes");
+  }
+  toJSON() {
+    return { _type: "Request", _guid: this._guid };
+  }
+  async#response(apiName) {
+    const { response } = await this.#connection.sendRequest(apiName, this._guid, "response", {}, 0);
+    return response ? networkObject(this.#connection, response.guid, this.#frame._page) : null;
+  }
+  #actualHeaders(apiName) {
+    if (this.#fallbackOverrides.headers)
+      return Promise.resolve(RawHeaders._fromHeadersObjectLossy(this.#fallbackOverrides.headers));
+    this.#actualHeadersPromise ??= this.#connection.sendRequest(apiName, this._guid, "rawRequestHeaders", {}, 0).then(({ headers }) => new RawHeaders(headers));
+    return this.#actualHeadersPromise;
+  }
+}
+
+class Response {
+  _guid;
+  #initializer;
+  #request;
+  #connection;
+  #provisionalHeaders;
+  #actualHeadersPromise;
+  constructor(guid, initializer, request, connection) {
+    this._guid = guid;
+    this.#initializer = initializer;
+    this.#request = request;
+    this.#connection = connection;
+    this.#provisionalHeaders = new RawHeaders(initializer.headers);
+    request._response = this;
+  }
+  url() {
+    return this.#initializer.url;
+  }
+  ok() {
+    const status = this.#initializer.status;
+    return status === 0 || status >= 200 && status <= 299;
+  }
+  status() {
+    return this.#initializer.status;
+  }
+  statusText() {
+    return this.#initializer.statusText;
+  }
+  fromServiceWorker() {
+    return this.#initializer.fromServiceWorker;
+  }
+  headers() {
+    return this.#provisionalHeaders.headers();
+  }
+  async allHeaders() {
+    return (await this.#actualHeaders("response.allHeaders")).headers();
+  }
+  async headersArray() {
+    return (await this.#actualHeaders("response.headersArray")).headersArray().slice();
+  }
+  async headerValue(name) {
+    return (await this.#actualHeaders("response.headerValue")).get(name);
+  }
+  async headerValues(name) {
+    return (await this.#actualHeaders("response.headerValues")).getAll(name);
+  }
+  async finished() {
+    for (let delay = 0;; delay = Math.min(delay * 2 || 4, 100)) {
+      const state = get(this._guid, "finished");
+      if (state === "finished")
+        return null;
+      if (state === "closed")
+        throw targetClosedError();
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  async body() {
+    return await this.#body("response.body");
+  }
+  async text() {
+    return (await this.#body("response.text")).toString("utf8");
+  }
+  async json() {
+    return JSON.parse((await this.#body("response.json")).toString("utf8"));
+  }
+  request() {
+    return this.#request;
+  }
+  frame() {
+    return this.#request.frame();
+  }
+  async serverAddr() {
+    const { value } = await this.#connection.sendResponse("response.serverAddr", this._guid, "serverAddr", {}, 0);
+    return value || null;
+  }
+  async securityDetails() {
+    const { value } = await this.#connection.sendResponse("response.securityDetails", this._guid, "securityDetails", {}, 0);
+    return value || null;
+  }
+  async httpVersion() {
+    const { value } = await this.#connection.sendResponse("response.httpVersion", this._guid, "httpVersion", {}, 0);
+    return value;
+  }
+  toJSON() {
+    return { _type: "Response", _guid: this._guid };
+  }
+  async _sizes(apiName) {
+    const { sizes } = await this.#connection.sendResponse(apiName, this._guid, "sizes", {}, 0);
+    return sizes;
+  }
+  async#body(apiName) {
+    const { binary } = await this.#connection.sendResponse(apiName, this._guid, "body", {}, 0);
+    return Buffer.fromBinary(binary);
+  }
+  #actualHeaders(apiName) {
+    this.#actualHeadersPromise ??= this.#connection.sendResponse(apiName, this._guid, "rawResponseHeaders", {}, 0).then(({ headers }) => new RawHeaders(headers));
+    return this.#actualHeadersPromise;
+  }
+}
+function responseFor(connection, guid, frame) {
+  const built = networkObject(connection, guid, frame._page);
+  if (!(built instanceof Response))
+    throw new Error(`neo-sdk: Rust's chain for ${guid} has no such response`);
+  return built;
+}
+function networkObject(connection, guid, page) {
+  const known = connection._objects.get(guid);
+  if (known)
+    return known;
+  const chain = get(guid, "chain");
+  let previous = null;
+  for (const [index, created] of chain.requests.entries()) {
+    let request = connection._objects.get(created.guid);
+    if (!(request instanceof Request)) {
+      request = new Request(created.guid, created.initializer, page._frameForGuid(created.initializer.frame?.guid), previous, connection);
+      connection._objects.set(created.guid, request);
+    }
+    const response = chain.responses[index];
+    if (response && !connection._objects.has(response.guid))
+      connection._objects.set(response.guid, new Response(response.guid, response.initializer, request, connection));
+    previous = request;
+  }
+  const built = connection._objects.get(guid);
+  if (!built)
+    throw new Error(`neo-sdk: Rust's chain for ${guid} has no such object`);
+  return built;
+}
+function requestFromRecord(connection, record, page) {
+  const known = connection._objects.get(record.guid);
+  if (known instanceof Request)
+    return known;
+  const from = record.initializer.redirectedFrom?.guid;
+  let redirectedFrom = null;
+  if (from) {
+    try {
+      const earlier = networkObject(connection, from, page);
+      if (earlier instanceof Request)
+        redirectedFrom = earlier;
+    } catch {
+      redirectedFrom = null;
+    }
+  }
+  const request = new Request(record.guid, record.initializer, page._frameForGuid(record.initializer.frame?.guid), redirectedFrom, connection);
+  connection._objects.set(record.guid, request);
+  return request;
+}
+function responseFromRecord(connection, record, request) {
+  const known = connection._objects.get(record.guid);
+  if (known instanceof Response)
+    return known;
+  const response = new Response(record.guid, record.initializer, request, connection);
+  connection._objects.set(record.guid, response);
+  return response;
+}
+function parseFormBody(body) {
+  const entries = {};
+  for (const pair of body.split("&")) {
+    if (!pair)
+      continue;
+    const at = pair.indexOf("=");
+    const decode = (text) => decodeURIComponent(text.replace(/\+/g, " "));
+    const name = decode(at < 0 ? pair : pair.slice(0, at));
+    entries[name] = at < 0 ? "" : decode(pair.slice(at + 1));
+  }
+  return entries;
+}
+var BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+var BASE64_INDEX = new Map([...BASE64].map((char, index) => [char, index]));
+
+class Buffer extends Uint8Array {
+  static fromBinary(text) {
+    const clean = text.replace(/=+$/, "");
+    const bytes = new Buffer(Math.floor(clean.length * 3 / 4));
+    let bits = 0;
+    let value = 0;
+    let at = 0;
+    for (const char of clean) {
+      const index = BASE64_INDEX.get(char);
+      if (index === undefined)
+        throw new Error("neo-sdk: invalid base64 from Rust");
+      value = value << 6 | index;
+      bits += 6;
+      if (bits >= 8) {
+        bits -= 8;
+        bytes[at++] = value >> bits & 255;
+      }
+    }
+    return bytes;
+  }
+  toString(...args) {
+    if (args.length === 0)
+      return decodeUtf8(this);
+    const [encoding, start, end] = args;
+    const length = this.length;
+    let from;
+    if (start <= 0)
+      from = 0;
+    else if (start >= length)
+      return "";
+    else
+      from = Math.trunc(start) || 0;
+    const to = end === undefined || end > length ? length : Math.trunc(end) || 0;
+    if (to <= from)
+      return "";
+    const bytes = this.subarray(from, to);
+    if (encoding === undefined)
+      return decodeUtf8(bytes);
+    switch (String(encoding).toLowerCase()) {
+      case "utf8":
+      case "utf-8":
+        return decodeUtf8(bytes);
+      case "ucs2":
+      case "ucs-2":
+      case "utf16le":
+      case "utf-16le":
+        return fromCodeUnits(utf16Units(bytes), (unit) => unit);
+      case "latin1":
+      case "binary":
+        return fromCodeUnits(bytes, (byte) => byte);
+      case "ascii":
+        return fromCodeUnits(bytes, (byte) => byte & 127);
+      case "base64":
+        return encodeBase64(bytes);
+      case "base64url":
+        return encodeBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      case "hex":
+        return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+      default:
+        throw new TypeError(`Unknown encoding: ${encoding}`);
+    }
+  }
+  toJSON() {
+    return { type: "Buffer", data: [...this] };
+  }
+  equals(other) {
+    return this.length === other.length && this.every((byte, i) => byte === other[i]);
+  }
+}
+function utf8Lead(byte) {
+  if (byte >= 194 && byte <= 223)
+    return { needed: 1, codePoint: byte & 31, lower: 128, upper: 191 };
+  if (byte >= 224 && byte <= 239)
+    return {
+      needed: 2,
+      codePoint: byte & 15,
+      lower: byte === 224 ? 160 : 128,
+      upper: byte === 237 ? 159 : 191
+    };
+  if (byte >= 240 && byte <= 244)
+    return {
+      needed: 3,
+      codePoint: byte & 7,
+      lower: byte === 240 ? 144 : 128,
+      upper: byte === 244 ? 143 : 191
+    };
+  return null;
+}
+function decodeUtf8(bytes) {
+  const units = new CodeUnits;
+  let lead = null;
+  for (let i = 0;i < bytes.length; i++) {
+    const byte = bytes[i];
+    if (!lead) {
+      lead = byte <= 127 ? null : utf8Lead(byte);
+      if (byte <= 127)
+        units.push(byte);
+      else if (!lead)
+        units.push(65533);
+      continue;
+    }
+    if (byte < lead.lower || byte > lead.upper) {
+      lead = null;
+      units.push(65533);
+      i--;
+      continue;
+    }
+    lead.codePoint = lead.codePoint << 6 | byte & 63;
+    lead.lower = 128;
+    lead.upper = 191;
+    lead.needed--;
+    if (lead.needed === 0) {
+      units.push(lead.codePoint);
+      lead = null;
+    }
+  }
+  if (lead)
+    units.push(65533);
+  return units.text();
+}
+
+class CodeUnits {
+  #units = [];
+  #out = "";
+  push(codePoint) {
+    if (codePoint > 65535) {
+      const offset = codePoint - 65536;
+      this.#units.push(55296 + (offset >> 10), 56320 + (offset & 1023));
+    } else {
+      this.#units.push(codePoint);
+    }
+    if (this.#units.length >= 4096)
+      this.#flush();
+  }
+  text() {
+    this.#flush();
+    return this.#out;
+  }
+  #flush() {
+    this.#out += String.fromCharCode(...this.#units);
+    this.#units = [];
+  }
+}
+function utf16Units(bytes) {
+  const units = new Uint16Array(bytes.length >> 1);
+  for (let i = 0;i < units.length; i++)
+    units[i] = bytes[2 * i] | bytes[2 * i + 1] << 8;
+  return units;
+}
+function fromCodeUnits(bytes, unit) {
+  let out = "";
+  for (let i = 0;i < bytes.length; i += 4096)
+    out += String.fromCharCode(...[...bytes.subarray(i, i + 4096)].map(unit));
+  return out;
+}
+function encodeUtf8(text) {
+  const bytes = [];
+  for (let index = 0;index < text.length; index++) {
+    let code = text.charCodeAt(index);
+    if (code >= 55296 && code <= 56319 && index + 1 < text.length) {
+      const next = text.charCodeAt(index + 1);
+      if (next >= 56320 && next <= 57343) {
+        code = 65536 + (code - 55296 << 10) + (next - 56320);
+        index++;
+      } else
+        code = 65533;
+    } else if (code >= 55296 && code <= 57343)
+      code = 65533;
+    if (code < 128)
+      bytes.push(code);
+    else if (code < 2048)
+      bytes.push(192 | code >> 6, 128 | code & 63);
+    else if (code < 65536)
+      bytes.push(224 | code >> 12, 128 | code >> 6 & 63, 128 | code & 63);
+    else
+      bytes.push(240 | code >> 18, 128 | code >> 12 & 63, 128 | code >> 6 & 63, 128 | code & 63);
+  }
+  const buffer = new Buffer(bytes.length);
+  buffer.set(bytes);
+  return buffer;
+}
+function encodeBase64(bytes) {
+  let out = "";
+  for (let i = 0;i < bytes.length; i += 3) {
+    const [a = 0, b = 0, c = 0] = [bytes[i], bytes[i + 1], bytes[i + 2]];
+    const triple = a << 16 | b << 8 | c;
+    out += BASE64[triple >> 18 & 63];
+    out += BASE64[triple >> 12 & 63];
+    out += i + 1 < bytes.length ? BASE64[triple >> 6 & 63] : "=";
+    out += i + 2 < bytes.length ? BASE64[triple & 63] : "=";
+  }
+  return out;
+}
+
 // vendor/playwright/isomorphic/stringUtils.ts
 function escapeWithQuotes(text, char = "'") {
   const stringified = JSON.stringify(text);
@@ -646,6 +1234,17 @@ function escapeForAttributeSelector(value, exact) {
   if (typeof value !== "string")
     return escapeRegexForSelector(value);
   return `"${value.replace(/\\/g, "\\\\").replace(/["]/g, "\\\"")}"${exact ? "s" : "i"}`;
+}
+function trimString(input, cap, suffix = "") {
+  if (input.length <= cap)
+    return input;
+  const chars = [...input];
+  if (chars.length > cap)
+    return chars.slice(0, cap - suffix.length).join("") + suffix;
+  return chars.join("");
+}
+function trimStringWithEllipsis(input, cap) {
+  return trimString(input, cap, "…");
 }
 var ansiRegex = new RegExp("([\\u001B\\u009B][[\\]()#?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]*)*)?\\u0007)|(?:(?:\\d{0,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-ntqry=><~])))", "g");
 
@@ -715,7 +1314,7 @@ class URL2 {
     return "URL";
   }
 }
-var Buffer = {
+var Buffer2 = {
   from(buffer, byteOffset, length) {
     return new Uint8Array(buffer, byteOffset, length);
   }
@@ -1165,7 +1764,7 @@ function innerSerializeValue(value, handleSerializer, visitorInfo, accessChain) 
     return { r: { p: value.source, f: value.flags } };
   const typedArrayKind = constructorToTypedArrayKind.get(value.constructor);
   if (typedArrayKind)
-    return { ta: { b: Buffer.from(value.buffer, value.byteOffset, value.byteLength), k: typedArrayKind } };
+    return { ta: { b: Buffer2.from(value.buffer, value.byteOffset, value.byteLength), k: typedArrayKind } };
   const id = visitorInfo.visited.get(value);
   if (id)
     return { ref: id };
@@ -1254,6 +1853,12 @@ class Connection {
   }
   async sendResponse(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendRoute(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendRouteFetch(apiName, guid, params, timeout) {
+    return await this.#send(apiName, guid, "neo:fetch", params, timeout);
   }
   async sendDialog(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
@@ -3688,32 +4293,6 @@ function isRegExp3(obj) {
   return obj instanceof RegExp;
 }
 
-// src/disposable.ts
-class DisposableStub {
-  #dispose;
-  constructor(dispose) {
-    this.#dispose = dispose;
-    const asyncDispose = Symbol.asyncDispose;
-    if (asyncDispose)
-      Object.defineProperty(this, asyncDispose, {
-        value: () => this.dispose()
-      });
-  }
-  async dispose() {
-    if (!this.#dispose)
-      return;
-    try {
-      const dispose = this.#dispose;
-      this.#dispose = undefined;
-      await dispose();
-    } catch (e) {
-      if (isTargetClosedError(e))
-        return;
-      throw e;
-    }
-  }
-}
-
 // src/locator.ts
 class Locator {
   _frame;
@@ -4127,465 +4706,6 @@ function serializeUrlMatch(apiName, url) {
 }
 function isRegExp4(value) {
   return value instanceof RegExp || Object.prototype.toString.call(value) === "[object RegExp]";
-}
-
-// src/network.ts
-class RawHeaders {
-  #headersArray;
-  #headersMap = new Map;
-  constructor(headers) {
-    this.#headersArray = headers;
-    for (const header of headers) {
-      const name = header.name.toLowerCase();
-      const values = this.#headersMap.get(name);
-      if (values)
-        values.push(header.value);
-      else
-        this.#headersMap.set(name, [header.value]);
-    }
-  }
-  get(name) {
-    const values = this.getAll(name);
-    if (!values.length)
-      return null;
-    return values.join(name.toLowerCase() === "set-cookie" ? `
-` : ", ");
-  }
-  getAll(name) {
-    return [...this.#headersMap.get(name.toLowerCase()) ?? []];
-  }
-  headers() {
-    const result = {};
-    for (const name of this.#headersMap.keys())
-      result[name] = this.get(name) ?? "";
-    return result;
-  }
-  headersArray() {
-    return this.#headersArray;
-  }
-}
-
-class Request {
-  _guid;
-  #initializer;
-  #frame;
-  #connection;
-  #redirectedFrom;
-  _redirectedTo = null;
-  _response = null;
-  #provisionalHeaders;
-  #actualHeadersPromise;
-  #timing = {
-    startTime: 0,
-    domainLookupStart: -1,
-    domainLookupEnd: -1,
-    connectStart: -1,
-    secureConnectionStart: -1,
-    connectEnd: -1,
-    requestStart: -1,
-    responseStart: -1,
-    responseEnd: -1
-  };
-  constructor(guid, initializer, frame, redirectedFrom, connection) {
-    this._guid = guid;
-    this.#initializer = initializer;
-    this.#frame = frame;
-    this.#connection = connection;
-    this.#redirectedFrom = redirectedFrom;
-    if (redirectedFrom)
-      redirectedFrom._redirectedTo = this;
-    this.#provisionalHeaders = new RawHeaders(initializer.headers);
-  }
-  url() {
-    return this.#initializer.url;
-  }
-  resourceType() {
-    return this.#initializer.resourceType;
-  }
-  method() {
-    return this.#initializer.method;
-  }
-  postData() {
-    return this.postDataBuffer()?.toString("utf-8") ?? null;
-  }
-  postDataBuffer() {
-    const data = this.#initializer.postData;
-    return data ? Buffer3.fromBinary(data) : null;
-  }
-  postDataJSON() {
-    const postData = this.postData();
-    if (!postData)
-      return null;
-    const contentType = this.headers()["content-type"];
-    if (contentType?.includes("application/x-www-form-urlencoded"))
-      return parseFormBody(postData);
-    try {
-      return JSON.parse(postData);
-    } catch {
-      throw new Error(`POST data is not a valid JSON object: ${postData}`);
-    }
-  }
-  headers() {
-    return this.#provisionalHeaders.headers();
-  }
-  async allHeaders() {
-    return (await this.#actualHeaders("request.allHeaders")).headers();
-  }
-  async headersArray() {
-    return (await this.#actualHeaders("request.headersArray")).headersArray();
-  }
-  async headerValue(name) {
-    return (await this.#actualHeaders("request.headerValue")).get(name);
-  }
-  async response() {
-    return await this.#response("request.response");
-  }
-  existingResponse() {
-    return this._response;
-  }
-  frame() {
-    return this.#frame;
-  }
-  serviceWorker() {
-    return null;
-  }
-  isNavigationRequest() {
-    return this.#initializer.isNavigationRequest;
-  }
-  redirectedFrom() {
-    return this.#redirectedFrom;
-  }
-  redirectedTo() {
-    return this._redirectedTo;
-  }
-  failure() {
-    const errorText = get(this._guid, "failure");
-    return errorText ? { errorText } : null;
-  }
-  timing() {
-    return Object.assign(this.#timing, get(this._guid, "timing"));
-  }
-  async sizes() {
-    const response = await this.#response("request.sizes");
-    if (!response)
-      throw new Error("Unable to fetch sizes for failed request");
-    return await response._sizes("request.sizes");
-  }
-  toJSON() {
-    return { _type: "Request", _guid: this._guid };
-  }
-  async#response(apiName) {
-    const { response } = await this.#connection.sendRequest(apiName, this._guid, "response", {}, 0);
-    return response ? responseFor(this.#connection, response.guid, this.#frame) : null;
-  }
-  #actualHeaders(apiName) {
-    this.#actualHeadersPromise ??= this.#connection.sendRequest(apiName, this._guid, "rawRequestHeaders", {}, 0).then(({ headers }) => new RawHeaders(headers));
-    return this.#actualHeadersPromise;
-  }
-}
-
-class Response {
-  _guid;
-  #initializer;
-  #request;
-  #connection;
-  #provisionalHeaders;
-  #actualHeadersPromise;
-  constructor(guid, initializer, request, connection) {
-    this._guid = guid;
-    this.#initializer = initializer;
-    this.#request = request;
-    this.#connection = connection;
-    this.#provisionalHeaders = new RawHeaders(initializer.headers);
-    request._response = this;
-  }
-  url() {
-    return this.#initializer.url;
-  }
-  ok() {
-    const status = this.#initializer.status;
-    return status === 0 || status >= 200 && status <= 299;
-  }
-  status() {
-    return this.#initializer.status;
-  }
-  statusText() {
-    return this.#initializer.statusText;
-  }
-  fromServiceWorker() {
-    return this.#initializer.fromServiceWorker;
-  }
-  headers() {
-    return this.#provisionalHeaders.headers();
-  }
-  async allHeaders() {
-    return (await this.#actualHeaders("response.allHeaders")).headers();
-  }
-  async headersArray() {
-    return (await this.#actualHeaders("response.headersArray")).headersArray().slice();
-  }
-  async headerValue(name) {
-    return (await this.#actualHeaders("response.headerValue")).get(name);
-  }
-  async headerValues(name) {
-    return (await this.#actualHeaders("response.headerValues")).getAll(name);
-  }
-  async finished() {
-    for (let delay = 0;; delay = Math.min(delay * 2 || 4, 100)) {
-      const state = get(this._guid, "finished");
-      if (state === "finished")
-        return null;
-      if (state === "closed")
-        throw targetClosedError();
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-  }
-  async body() {
-    return await this.#body("response.body");
-  }
-  async text() {
-    return (await this.#body("response.text")).toString("utf8");
-  }
-  async json() {
-    return JSON.parse((await this.#body("response.json")).toString("utf8"));
-  }
-  request() {
-    return this.#request;
-  }
-  frame() {
-    return this.#request.frame();
-  }
-  async serverAddr() {
-    const { value } = await this.#connection.sendResponse("response.serverAddr", this._guid, "serverAddr", {}, 0);
-    return value || null;
-  }
-  async securityDetails() {
-    const { value } = await this.#connection.sendResponse("response.securityDetails", this._guid, "securityDetails", {}, 0);
-    return value || null;
-  }
-  async httpVersion() {
-    const { value } = await this.#connection.sendResponse("response.httpVersion", this._guid, "httpVersion", {}, 0);
-    return value;
-  }
-  toJSON() {
-    return { _type: "Response", _guid: this._guid };
-  }
-  async _sizes(apiName) {
-    const { sizes } = await this.#connection.sendResponse(apiName, this._guid, "sizes", {}, 0);
-    return sizes;
-  }
-  async#body(apiName) {
-    const { binary } = await this.#connection.sendResponse(apiName, this._guid, "body", {}, 0);
-    return Buffer3.fromBinary(binary);
-  }
-  #actualHeaders(apiName) {
-    this.#actualHeadersPromise ??= this.#connection.sendResponse(apiName, this._guid, "rawResponseHeaders", {}, 0).then(({ headers }) => new RawHeaders(headers));
-    return this.#actualHeadersPromise;
-  }
-}
-function responseFor(connection, guid, frame) {
-  const known = connection._objects.get(guid);
-  if (known instanceof Response)
-    return known;
-  const chain = get(guid, "chain");
-  let previous = null;
-  for (const [index, created] of chain.requests.entries()) {
-    let request = connection._objects.get(created.guid);
-    if (!(request instanceof Request)) {
-      request = new Request(created.guid, created.initializer, frame, previous, connection);
-      connection._objects.set(created.guid, request);
-    }
-    const response = chain.responses[index];
-    if (response && !connection._objects.has(response.guid))
-      connection._objects.set(response.guid, new Response(response.guid, response.initializer, request, connection));
-    previous = request;
-  }
-  const built = connection._objects.get(guid);
-  if (!(built instanceof Response))
-    throw new Error(`neo-sdk: Rust's chain for ${guid} has no such response`);
-  return built;
-}
-function parseFormBody(body) {
-  const entries = {};
-  for (const pair of body.split("&")) {
-    if (!pair)
-      continue;
-    const at = pair.indexOf("=");
-    const decode = (text) => decodeURIComponent(text.replace(/\+/g, " "));
-    const name = decode(at < 0 ? pair : pair.slice(0, at));
-    entries[name] = at < 0 ? "" : decode(pair.slice(at + 1));
-  }
-  return entries;
-}
-var BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-var BASE64_INDEX = new Map([...BASE64].map((char, index) => [char, index]));
-
-class Buffer3 extends Uint8Array {
-  static fromBinary(text) {
-    const clean = text.replace(/=+$/, "");
-    const bytes = new Buffer3(Math.floor(clean.length * 3 / 4));
-    let bits = 0;
-    let value = 0;
-    let at = 0;
-    for (const char of clean) {
-      const index = BASE64_INDEX.get(char);
-      if (index === undefined)
-        throw new Error("neo-sdk: invalid base64 from Rust");
-      value = value << 6 | index;
-      bits += 6;
-      if (bits >= 8) {
-        bits -= 8;
-        bytes[at++] = value >> bits & 255;
-      }
-    }
-    return bytes;
-  }
-  toString(...args) {
-    if (args.length === 0)
-      return decodeUtf8(this);
-    const [encoding, start, end] = args;
-    const length = this.length;
-    let from;
-    if (start <= 0)
-      from = 0;
-    else if (start >= length)
-      return "";
-    else
-      from = Math.trunc(start) || 0;
-    const to = end === undefined || end > length ? length : Math.trunc(end) || 0;
-    if (to <= from)
-      return "";
-    const bytes = this.subarray(from, to);
-    if (encoding === undefined)
-      return decodeUtf8(bytes);
-    switch (String(encoding).toLowerCase()) {
-      case "utf8":
-      case "utf-8":
-        return decodeUtf8(bytes);
-      case "ucs2":
-      case "ucs-2":
-      case "utf16le":
-      case "utf-16le":
-        return fromCodeUnits(utf16Units(bytes), (unit) => unit);
-      case "latin1":
-      case "binary":
-        return fromCodeUnits(bytes, (byte) => byte);
-      case "ascii":
-        return fromCodeUnits(bytes, (byte) => byte & 127);
-      case "base64":
-        return encodeBase64(bytes);
-      case "base64url":
-        return encodeBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-      case "hex":
-        return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-      default:
-        throw new TypeError(`Unknown encoding: ${encoding}`);
-    }
-  }
-  toJSON() {
-    return { type: "Buffer", data: [...this] };
-  }
-  equals(other) {
-    return this.length === other.length && this.every((byte, i) => byte === other[i]);
-  }
-}
-function utf8Lead(byte) {
-  if (byte >= 194 && byte <= 223)
-    return { needed: 1, codePoint: byte & 31, lower: 128, upper: 191 };
-  if (byte >= 224 && byte <= 239)
-    return {
-      needed: 2,
-      codePoint: byte & 15,
-      lower: byte === 224 ? 160 : 128,
-      upper: byte === 237 ? 159 : 191
-    };
-  if (byte >= 240 && byte <= 244)
-    return {
-      needed: 3,
-      codePoint: byte & 7,
-      lower: byte === 240 ? 144 : 128,
-      upper: byte === 244 ? 143 : 191
-    };
-  return null;
-}
-function decodeUtf8(bytes) {
-  const units = new CodeUnits;
-  let lead = null;
-  for (let i = 0;i < bytes.length; i++) {
-    const byte = bytes[i];
-    if (!lead) {
-      lead = byte <= 127 ? null : utf8Lead(byte);
-      if (byte <= 127)
-        units.push(byte);
-      else if (!lead)
-        units.push(65533);
-      continue;
-    }
-    if (byte < lead.lower || byte > lead.upper) {
-      lead = null;
-      units.push(65533);
-      i--;
-      continue;
-    }
-    lead.codePoint = lead.codePoint << 6 | byte & 63;
-    lead.lower = 128;
-    lead.upper = 191;
-    lead.needed--;
-    if (lead.needed === 0) {
-      units.push(lead.codePoint);
-      lead = null;
-    }
-  }
-  if (lead)
-    units.push(65533);
-  return units.text();
-}
-
-class CodeUnits {
-  #units = [];
-  #out = "";
-  push(codePoint) {
-    if (codePoint > 65535) {
-      const offset = codePoint - 65536;
-      this.#units.push(55296 + (offset >> 10), 56320 + (offset & 1023));
-    } else {
-      this.#units.push(codePoint);
-    }
-    if (this.#units.length >= 4096)
-      this.#flush();
-  }
-  text() {
-    this.#flush();
-    return this.#out;
-  }
-  #flush() {
-    this.#out += String.fromCharCode(...this.#units);
-    this.#units = [];
-  }
-}
-function utf16Units(bytes) {
-  const units = new Uint16Array(bytes.length >> 1);
-  for (let i = 0;i < units.length; i++)
-    units[i] = bytes[2 * i] | bytes[2 * i + 1] << 8;
-  return units;
-}
-function fromCodeUnits(bytes, unit) {
-  let out = "";
-  for (let i = 0;i < bytes.length; i += 4096)
-    out += String.fromCharCode(...[...bytes.subarray(i, i + 4096)].map(unit));
-  return out;
-}
-function encodeBase64(bytes) {
-  let out = "";
-  for (let i = 0;i < bytes.length; i += 3) {
-    const [a = 0, b = 0, c = 0] = [bytes[i], bytes[i + 1], bytes[i + 2]];
-    const triple = a << 16 | b << 8 | c;
-    out += BASE64[triple >> 18 & 63];
-    out += BASE64[triple >> 12 & 63];
-    out += i + 1 < bytes.length ? BASE64[triple >> 6 & 63] : "=";
-    out += i + 2 < bytes.length ? BASE64[triple & 63] : "=";
-  }
-  return out;
 }
 
 // src/plain-argument.ts
@@ -5772,47 +5892,53 @@ class Touchscreen {
   }
 }
 
-// src/timeout-settings.ts
-var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
+// src/api-response.ts
+var DISPOSED = "Response has been disposed";
 
-class TimeoutSettings {
-  #parent;
-  #defaultTimeout;
-  #defaultNavigationTimeout;
-  constructor(parent) {
-    this.#parent = parent;
+class APIResponse {
+  #url;
+  #status;
+  #statusText;
+  #headers;
+  #body;
+  constructor(record) {
+    this.#url = record.url;
+    this.#status = record.status;
+    this.#statusText = record.statusText;
+    this.#headers = new RawHeaders(record.headers);
+    this.#body = Buffer.fromBinary(record.body);
   }
-  setDefaultTimeout(timeout) {
-    this.#defaultTimeout = timeout;
+  ok() {
+    return this.#status >= 200 && this.#status <= 299;
   }
-  setDefaultNavigationTimeout(timeout) {
-    this.#defaultNavigationTimeout = timeout;
+  url() {
+    return this.#url;
   }
-  timeout(options, _apiName) {
-    return { signal: options.signal, timeout: this.#timeout(options) };
+  status() {
+    return this.#status;
   }
-  navigationTimeout(options, _apiName) {
-    return { signal: options.signal, timeout: this.#navigationTimeout(options) };
+  statusText() {
+    return this.#statusText;
   }
-  #timeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.#timeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  headers() {
+    return this.#headers.headers();
   }
-  #navigationTimeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultNavigationTimeout !== undefined)
-      return this.#defaultNavigationTimeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.#navigationTimeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  headersArray() {
+    return this.#headers.headersArray();
+  }
+  async body() {
+    if (!this.#body)
+      throw new Error(DISPOSED);
+    return this.#body;
+  }
+  async text() {
+    return (await this.body()).toString("utf8");
+  }
+  async json() {
+    return JSON.parse(await this.text());
+  }
+  async dispose() {
+    this.#body = null;
   }
 }
 
@@ -5953,6 +6079,314 @@ ${lines.join(`
   return e;
 }
 
+// src/route.ts
+var MAX_FULFILL_BYTES = 6 * 1024 * 1024;
+var BODY_TOO_LARGE = "route.fulfill: Neo carries a body of at most 6291456 bytes (6 MiB) to the browser";
+var ROUTE_HANDLED = "Route is already handled!";
+var BODY_AND_JSON = "Can specify either body or json parameters";
+var NO_PATH = `route.fulfill: Neo cannot read a file for "path" yet (it reads only inside the run's artifact directory, which this build lacks); pass "body" instead`;
+function postDataBytes(postData) {
+  if (postData === undefined || postData === null)
+    return;
+  if (typeof postData === "string")
+    return encodeUtf8(postData);
+  if (postData instanceof Uint8Array)
+    return postData;
+  return encodeUtf8(JSON.stringify(postData));
+}
+function deferred() {
+  let resolve = () => {};
+  const promise = new Promise((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+function headersObjectToArray(headers) {
+  return Object.entries(headers).filter(([, value]) => value !== undefined).map(([name, value]) => ({ name, value }));
+}
+function serializeURLMatch(match) {
+  if (typeof match === "string")
+    return { glob: match };
+  if (isRegExp4(match))
+    return { regexSource: match.source, regexFlags: match.flags };
+  return null;
+}
+function urlMatchesEqual(match1, match2) {
+  if (isRegExp4(match1) && isRegExp4(match2))
+    return match1.source === match2.source && match1.flags === match2.flags;
+  return match1 === match2;
+}
+
+class Route {
+  _guid;
+  #request;
+  #connection;
+  #timeoutSettings;
+  #handlingPromise = null;
+  _didThrow = false;
+  constructor(guid, request, connection, timeoutSettings) {
+    this._guid = guid;
+    this.#request = request;
+    this.#connection = connection;
+    this.#timeoutSettings = timeoutSettings;
+  }
+  request() {
+    return this.#request;
+  }
+  async#raceWithTargetClose(promise) {
+    try {
+      await promise;
+    } catch (error) {
+      if (isTargetClosedError(error))
+        return;
+      throw error;
+    }
+  }
+  _startHandling() {
+    this.#handlingPromise = deferred();
+    return this.#handlingPromise.promise;
+  }
+  async fallback(options = {}) {
+    this._checkNotHandled();
+    this.#request._applyFallbackOverrides(options);
+    this._reportHandled(false);
+  }
+  async abort(errorCode) {
+    await this.#handleRoute(async () => {
+      await this.#raceWithTargetClose(this.#connection.sendRoute("route.abort", this._guid, "abort", { errorCode }, 0));
+    });
+  }
+  async fetch(options = {}) {
+    await wrapApiCall("route.fetch", async () => {
+      if (options.maxRedirects !== undefined && options.maxRedirects < 0)
+        throw new Error(`'maxRedirects' must be greater than or equal to '0'`);
+      if (options.maxRetries !== undefined && options.maxRetries < 0)
+        throw new Error(`'maxRetries' must be greater than or equal to '0'`);
+    });
+    {
+      const overrides = this.#request._fallbackOverridesForContinue();
+      const headers = options.headers ?? overrides.headers;
+      const postData = postDataBytes(options.postData) ?? overrides.postDataBuffer;
+      const result = await this.#connection.sendRouteFetch("route.fetch", this._guid, {
+        url: options.url ?? overrides.url,
+        method: options.method ?? overrides.method,
+        headers: headers ? headersObjectToArray(headers) : undefined,
+        postData: postData ? encodeBase64(postData) : undefined,
+        maxRedirects: options.maxRedirects
+      }, this.#timeoutSettings.timeout(options, "route.fetch"));
+      return new APIResponse(result);
+    }
+  }
+  async fulfill(options = {}) {
+    await this.#handleRoute(async () => {
+      await this.#innerFulfill(options);
+    });
+  }
+  async#handleRoute(callback) {
+    this._checkNotHandled();
+    try {
+      await callback();
+      this._reportHandled(true);
+    } catch (error) {
+      this._didThrow = true;
+      throw error;
+    }
+  }
+  async#innerFulfill(options) {
+    let { status: statusOption, headers: headersOption, body } = options;
+    if (options.json !== undefined) {
+      if (options.body !== undefined)
+        throw new Error(BODY_AND_JSON);
+      body = JSON.stringify(options.json);
+    }
+    if (options.response instanceof APIResponse) {
+      statusOption ??= options.response.status();
+      headersOption ??= options.response.headers();
+      if (body === undefined && options.path === undefined)
+        body = await options.response.body();
+    }
+    if (options.path !== undefined)
+      throw new Error(NO_PATH);
+    let isBase64 = false;
+    let length = 0;
+    let wire;
+    if (typeof body === "string") {
+      length = encodeUtf8(body).length;
+      wire = body;
+    } else if (body instanceof Uint8Array) {
+      length = body.length;
+      wire = encodeBase64(body);
+      isBase64 = true;
+    }
+    if (length > MAX_FULFILL_BYTES)
+      throw new Error(BODY_TOO_LARGE);
+    const headers = {};
+    for (const header of Object.keys(headersOption || {}))
+      headers[header.toLowerCase()] = String(headersOption[header]);
+    if (options.contentType)
+      headers["content-type"] = String(options.contentType);
+    else if (options.json)
+      headers["content-type"] = "application/json";
+    if (length && !("content-length" in headers))
+      headers["content-length"] = String(length);
+    await this.#raceWithTargetClose(this.#connection.sendRoute("route.fulfill", this._guid, "fulfill", {
+      status: statusOption || 200,
+      headers: headersObjectToArray(headers),
+      body: wire,
+      isBase64
+    }, 0));
+  }
+  async continue(options = {}) {
+    await this.#handleRoute(async () => {
+      this.#request._applyFallbackOverrides(options);
+      await this._innerContinue(false);
+    });
+  }
+  _checkNotHandled() {
+    if (!this.#handlingPromise)
+      throw new Error(ROUTE_HANDLED);
+  }
+  _reportHandled(done) {
+    const chain = this.#handlingPromise;
+    this.#handlingPromise = null;
+    chain?.resolve(done);
+  }
+  async _innerContinue(isFallback) {
+    const options = this.#request._fallbackOverridesForContinue();
+    await this.#raceWithTargetClose(this.#connection.sendRoute("route.continue", this._guid, "continue", {
+      url: options.url,
+      method: options.method,
+      headers: options.headers ? headersObjectToArray(options.headers) : undefined,
+      postData: options.postDataBuffer ? encodeBase64(options.postDataBuffer) : undefined,
+      isFallback
+    }, 0));
+  }
+}
+
+class RouteHandler {
+  #handledCount = 0;
+  #times;
+  url;
+  handler;
+  #ignoreException = false;
+  #activeInvocations = new Set;
+  constructor(url, handler, times = Number.MAX_SAFE_INTEGER) {
+    this.#times = times;
+    this.url = url;
+    this.handler = handler;
+    if (typeof url === "string")
+      matchesURL("about:blank", { glob: url });
+  }
+  static prepareInterceptionPatterns(handlers) {
+    const patterns = [];
+    let all = false;
+    for (const handler of handlers) {
+      const serialized = serializeURLMatch(handler.url);
+      if (serialized)
+        patterns.push(serialized);
+      else
+        all = true;
+    }
+    if (all)
+      return [{ glob: "**/*" }];
+    return patterns;
+  }
+  matches(requestURL) {
+    if (typeof this.url === "function") {
+      const url = urlFor(requestURL);
+      return !!url && !!this.url(url);
+    }
+    const serialized = serializeURLMatch(this.url);
+    return !!serialized && matchesURL(requestURL, serialized);
+  }
+  async handle(route) {
+    const invocation = { complete: deferred(), route };
+    this.#activeInvocations.add(invocation);
+    try {
+      return await this.#handleInternal(route);
+    } catch (error) {
+      if (this.#ignoreException)
+        return false;
+      if (isTargetClosedError(error) && error instanceof Error)
+        rewriteErrorMessage(error, `"${error.message}" while running route callback.
+Consider awaiting \`await page.unrouteAll({ behavior: 'ignoreErrors' })\`
+before the end of the test to ignore remaining routes in flight.`);
+      throw error;
+    } finally {
+      invocation.complete.resolve();
+      this.#activeInvocations.delete(invocation);
+    }
+  }
+  async stop(behavior) {
+    if (behavior === "ignoreErrors") {
+      this.#ignoreException = true;
+      return;
+    }
+    const promises = [];
+    for (const activation of this.#activeInvocations)
+      if (!activation.route._didThrow)
+        promises.push(activation.complete.promise);
+    await Promise.all(promises);
+  }
+  async#handleInternal(route) {
+    ++this.#handledCount;
+    const handledPromise = route._startHandling();
+    const handler = this.handler;
+    const [handled] = await Promise.all([
+      handledPromise,
+      handler(route, route.request())
+    ]);
+    return handled;
+  }
+  willExpire() {
+    return this.#handledCount + 1 >= this.#times;
+  }
+}
+
+// src/timeout-settings.ts
+var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
+
+class TimeoutSettings {
+  #parent;
+  #defaultTimeout;
+  #defaultNavigationTimeout;
+  constructor(parent) {
+    this.#parent = parent;
+  }
+  setDefaultTimeout(timeout) {
+    this.#defaultTimeout = timeout;
+  }
+  setDefaultNavigationTimeout(timeout) {
+    this.#defaultNavigationTimeout = timeout;
+  }
+  timeout(options, _apiName) {
+    return { signal: options.signal, timeout: this.#timeout(options) };
+  }
+  navigationTimeout(options, _apiName) {
+    return { signal: options.signal, timeout: this.#navigationTimeout(options) };
+  }
+  #timeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#timeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+  #navigationTimeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultNavigationTimeout !== undefined)
+      return this.#defaultNavigationTimeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#navigationTimeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+}
+
 // src/page.ts
 var PAGE_EVENTS = {
   receiver: "Page",
@@ -5968,20 +6402,22 @@ var PAGE_EVENTS = {
     "frameattached",
     "framedetached",
     "framenavigated",
-    "popup"
-  ],
-  quiet: [],
-  unserved: [
-    "download",
-    "filechooser",
+    "popup",
     "request",
     "response",
     "requestfailed",
-    "requestfinished",
-    "websocket",
-    "worker"
-  ]
+    "requestfinished"
+  ],
+  quiet: [],
+  unserved: ["download", "filechooser", "websocket", "worker"]
 };
+function trimUrl(param) {
+  if (isRegExp4(param))
+    return `/${trimStringWithEllipsis(param.source, 50)}/${param.flags}`;
+  if (isString(param))
+    return `"${trimStringWithEllipsis(param, 50)}"`;
+  return;
+}
 
 class Page extends ChannelOwner {
   #guid;
@@ -5995,6 +6431,9 @@ class Page extends ChannelOwner {
   mouse;
   touchscreen;
   #closedLocally = false;
+  _routes = [];
+  #routeListening = false;
+  #patternsSent = Promise.resolve();
   #closeReason;
   constructor(guid, mainFrameGuid, url, context, connection) {
     super(guid, context._pipe, PAGE_EVENTS);
@@ -6066,6 +6505,76 @@ class Page extends ChannelOwner {
       this.#onFrameDetached(params.frame);
     else if (method === "frameNavigated")
       this.#onFrameNavigated(params);
+    else if (method === "route")
+      this.#onRouteEvent(params);
+  }
+  #onRouteEvent({ route, request }) {
+    const routed = new Route(route.guid, requestFromRecord(this.#connection, request, this), this.#connection, this.#context._timeoutSettings);
+    this._onRoute(routed).catch(reportUncaught);
+  }
+  async _onRoute(route) {
+    const routeHandlers = this._routes;
+    for (const routeHandler of routeHandlers.slice()) {
+      if (this.#closedLocally || this.#context.isClosed())
+        return;
+      if (!routeHandler.matches(route.request().url()))
+        continue;
+      const index = this._routes.indexOf(routeHandler);
+      if (index === -1)
+        continue;
+      if (routeHandler.willExpire())
+        this._routes.splice(index, 1);
+      const handled = await routeHandler.handle(route);
+      if (routeHandlers === this._routes && !this._routes.length)
+        this.#updateInterceptionPatterns("page.route").catch(() => {});
+      if (handled)
+        return;
+    }
+    await this.#context._onRoute(route);
+  }
+  async route(url, handler, options = {}) {
+    const routeHandler = await wrapApiCall("page.route", async () => new RouteHandler(url, handler, options.times));
+    this._routes.unshift(routeHandler);
+    await this.#updateInterceptionPatterns("page.route");
+    return new DisposableStub(() => this.unroute(url, handler));
+  }
+  async unrouteAll(options) {
+    await this.#unrouteInternal("page.unrouteAll", this._routes, [], options?.behavior);
+  }
+  async unroute(url, handler) {
+    const removed = [];
+    const remaining = [];
+    for (const route of this._routes) {
+      if (urlMatchesEqual(route.url, url) && (!handler || route.handler === handler))
+        removed.push(route);
+      else
+        remaining.push(route);
+    }
+    await this.#unrouteInternal("page.unroute", removed, remaining, "default");
+  }
+  async#unrouteInternal(apiName, removed, remaining, behavior) {
+    this._routes = remaining;
+    if (behavior && behavior !== "default")
+      await Promise.all(removed.map((handler) => handler.stop(behavior)));
+    await this.#updateInterceptionPatterns(apiName);
+  }
+  async#updateInterceptionPatterns(apiName) {
+    const update = this.#patternsSent.then(() => this.#sendInterceptionPatterns(apiName));
+    this.#patternsSent = update.catch(() => {});
+    await update;
+  }
+  async#sendInterceptionPatterns(apiName) {
+    const patterns = RouteHandler.prepareInterceptionPatterns(this._routes);
+    const listening = patterns.length > 0;
+    if (listening && !this.#routeListening) {
+      this.#routeListening = true;
+      this._listenToChannel("route", true);
+    }
+    await this.#connection.sendPage(apiName, this.#guid, "setNetworkInterceptionPatterns", { patterns }, 0);
+    if (!this._routes.length && this.#routeListening) {
+      this.#routeListening = false;
+      this._listenToChannel("route", false);
+    }
   }
   #onFrameAttached(record) {
     this.#frameEvent(record, "frameattached", false);
@@ -6107,6 +6616,34 @@ class Page extends ChannelOwner {
   async waitForEvent(event, optionsOrPredicate = {}) {
     return await wrapApiCall("page.waitForEvent", () => this._waitForEvent(event, optionsOrPredicate, `waiting for event "${event}"`));
   }
+  async waitForRequest(urlOrPredicate, options = {}) {
+    return await wrapApiCall("page.waitForRequest", async () => {
+      const predicate = async (request) => {
+        if (isString(urlOrPredicate) || isRegExp4(urlOrPredicate))
+          return matchesURL(request.url(), serializeUrlMatch("page.waitForRequest", urlOrPredicate));
+        return await urlOrPredicate(request);
+      };
+      const trimmedUrl = trimUrl(urlOrPredicate);
+      const logLine = trimmedUrl ? `waiting for request ${trimmedUrl}` : undefined;
+      return await this._waitForEvent("request", { predicate, timeout: options.timeout, signal: options.signal }, logLine);
+    });
+  }
+  async waitForResponse(urlOrPredicate, options = {}) {
+    return await wrapApiCall("page.waitForResponse", async () => {
+      const predicate = async (response) => {
+        if (isString(urlOrPredicate) || isRegExp4(urlOrPredicate))
+          return matchesURL(response.url(), serializeUrlMatch("page.waitForResponse", urlOrPredicate));
+        return await urlOrPredicate(response);
+      };
+      const trimmedUrl = trimUrl(urlOrPredicate);
+      const logLine = trimmedUrl ? `waiting for response ${trimmedUrl}` : undefined;
+      return await this._waitForEvent("response", { predicate, timeout: options.timeout, signal: options.signal }, logLine);
+    });
+  }
+  async requests() {
+    const { requests } = await this.#connection.sendPage("page.requests", this.#guid, "requests", {}, 0);
+    return requests.map((request) => networkObject(this.#connection, request.guid, this));
+  }
   async _waitForEvent(event, optionsOrPredicate, logLine) {
     const options = typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate;
     const timeoutOptions = this._timeoutSettings.timeout(options, null);
@@ -6144,6 +6681,16 @@ class Page extends ChannelOwner {
   }
   mainFrame() {
     return this.#mainFrame;
+  }
+  _frameForGuid(guid) {
+    if (!guid)
+      return this.#mainFrame;
+    let frame = this.#frames.get(guid);
+    if (!frame) {
+      frame = new Frame(guid, this, this.#connection);
+      this.#frames.set(guid, frame);
+    }
+    return frame;
   }
   _frameFrom(record) {
     let frame = this.#frames.get(record.guid);
@@ -6389,6 +6936,10 @@ var CONTEXT_EVENTS = {
     "weberror",
     "dialog",
     "dialogclosed",
+    "request",
+    "response",
+    "requestfailed",
+    "requestfinished",
     "page",
     "pageclose",
     "pageload",
@@ -6398,19 +6949,15 @@ var CONTEXT_EVENTS = {
   ],
   local: ["close"],
   quiet: ["backgroundpage"],
-  unserved: [
-    "download",
-    "serviceworker",
-    "request",
-    "response",
-    "requestfailed",
-    "requestfinished"
-  ]
+  unserved: ["download", "serviceworker"]
 };
 
 class BrowserContext extends ChannelOwner {
   #guid;
   #connection;
+  _routes = [];
+  #routeListening = false;
+  #patternsSent = Promise.resolve();
   #pages = new Map;
   #dialogs = new Map;
   _timeoutSettings = new TimeoutSettings;
@@ -6466,6 +7013,109 @@ class BrowserContext extends ChannelOwner {
       this.#onDialog(params.dialog);
     else if (method === "dialogClosed")
       this.#onDialogClosed(params.dialog);
+    else if (method === "request")
+      this.#onRequest(params);
+    else if (method === "response")
+      this.#onResponse(params);
+    else if (method === "requestFinished")
+      this.#onRequestFinished(params);
+    else if (method === "requestFailed")
+      this.#onRequestFailed(params);
+    else if (method === "route")
+      this.#onRouteEvent(params);
+  }
+  #onRouteEvent({ route, request, page }) {
+    const pageObject = this.#pageFor(page.guid);
+    const routed = new Route(route.guid, requestFromRecord(this.#connection, request, pageObject), this.#connection, this._timeoutSettings);
+    this._onRoute(routed, pageObject).catch(reportUncaught);
+  }
+  async _onRoute(route, page) {
+    const routeHandlers = this._routes;
+    for (const routeHandler of routeHandlers.slice()) {
+      if (page?._isClosedLocally() || this.isClosed())
+        return;
+      if (!routeHandler.matches(route.request().url()))
+        continue;
+      const index = this._routes.indexOf(routeHandler);
+      if (index === -1)
+        continue;
+      if (routeHandler.willExpire())
+        this._routes.splice(index, 1);
+      const handled = await routeHandler.handle(route);
+      if (routeHandlers === this._routes && !this._routes.length)
+        this.#updateInterceptionPatterns().catch(() => {});
+      if (handled)
+        return;
+    }
+    await route._innerContinue(true).catch(() => {});
+  }
+  async route(url, handler, options = {}) {
+    const routeHandler = await wrapApiCall("browserContext.route", async () => new RouteHandler(url, handler, options.times));
+    this._routes.unshift(routeHandler);
+    await this.#updateInterceptionPatterns();
+    return new DisposableStub(() => this.unroute(url, handler));
+  }
+  async unrouteAll(options) {
+    await this.#unrouteInternal(this._routes, [], options?.behavior);
+  }
+  async unroute(url, handler) {
+    const removed = [];
+    const remaining = [];
+    for (const route of this._routes) {
+      if (urlMatchesEqual(route.url, url) && (!handler || route.handler === handler))
+        removed.push(route);
+      else
+        remaining.push(route);
+    }
+    await this.#unrouteInternal(removed, remaining, "default");
+  }
+  async#unrouteInternal(removed, remaining, behavior) {
+    this._routes = remaining;
+    if (behavior && behavior !== "default")
+      await Promise.all(removed.map((handler) => handler.stop(behavior)));
+    await this.#updateInterceptionPatterns();
+  }
+  async#updateInterceptionPatterns() {
+    const update = this.#patternsSent.then(() => this.#sendInterceptionPatterns());
+    this.#patternsSent = update.catch(() => {});
+    await update;
+  }
+  async#sendInterceptionPatterns() {
+    const patterns = RouteHandler.prepareInterceptionPatterns(this._routes);
+    const listening = patterns.length > 0;
+    if (listening && !this.#routeListening) {
+      this.#routeListening = true;
+      this._listenToChannel("route", true);
+    }
+    await this.#connection.sendContext("browserContext.route", this._guid, "setNetworkInterceptionPatterns", { patterns }, 0);
+    if (!this._routes.length && this.#routeListening) {
+      this.#routeListening = false;
+      this._listenToChannel("route", false);
+    }
+  }
+  #onRequest({ request, page }) {
+    const pageObject = this.#pageFor(page.guid);
+    const requestObject = requestFromRecord(this.#connection, request, pageObject);
+    this.emit("request", requestObject);
+    pageObject.emit("request", requestObject);
+  }
+  #onResponse({ response, request, page }) {
+    const pageObject = this.#pageFor(page.guid);
+    const responseObject = responseFromRecord(this.#connection, response, requestFromRecord(this.#connection, request, pageObject));
+    this.emit("response", responseObject);
+    pageObject.emit("response", responseObject);
+  }
+  #onRequestFinished({ request, page }) {
+    const pageObject = this.#pageFor(page.guid);
+    const requestObject = requestFromRecord(this.#connection, request, pageObject);
+    this.emit("requestfinished", requestObject);
+    pageObject.emit("requestfinished", requestObject);
+  }
+  #onRequestFailed({ request, page }) {
+    const pageObject = this.#pageFor(page.guid);
+    const requestObject = requestFromRecord(this.#connection, request, pageObject);
+    this.emit("requestfailed", requestObject);
+    pageObject.emit("requestfailed", requestObject);
   }
   #onPage(created) {
     const page = this._pageFrom(created);

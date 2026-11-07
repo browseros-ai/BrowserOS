@@ -48,6 +48,25 @@ import type {
 import { isString } from '../vendor/playwright/isomorphic/stringUtils'
 import type { ApiName } from './connection'
 
+/** `neo:fetch` on a route's guid: `route.fetch`'s overrides, as Rust reads them (neo-runtime
+ * `routes.rs`). `postData` is base64. */
+export type NeoRouteFetchParams = {
+  url?: string
+  method?: string
+  headers?: { name: string; value: string }[]
+  postData?: string
+  maxRedirects?: number
+}
+
+/** `neo:fetch`'s answer: the fetched response, its body base64. */
+export type NeoRouteFetchResult = {
+  url: string
+  status: number
+  statusText: string
+  headers: { name: string; value: string }[]
+  body: string
+}
+
 /** Playwright's `SerializedURLMatch` (`isomorphic/urlMatch.ts`) without `urlPattern`. A glob of
  * `''` matches every URL. */
 export type NeoSerializedUrlMatch =
@@ -55,15 +74,14 @@ export type NeoSerializedUrlMatch =
   | { regexSource: string; regexFlags: string }
 
 /** `neo:waitForURL`: once the main frame's URL has matched `url`, resolves when `waitUntil` fires,
- * at once if the current document already fired it, as Playwright's `waitForURL` does. Rust
- * refuses `networkidle`. */
+ * at once if the current document already fired it, as Playwright's `waitForURL` does. */
 export type NeoWaitForURLParams = {
   url: NeoSerializedUrlMatch
   waitUntil: LifecycleEvent
 }
 
 /** `neo:waitForLoadState`: resolves once `state` fired for the main frame's current document,
- * or for the next one. Rust refuses `networkidle`. */
+ * or for the next one. */
 export type NeoWaitForLoadStateParams = { state: LifecycleEvent }
 
 /** `neo:scrollIntoViewIfNeeded` and `neo:boundingBox`: Playwright's `Locator` methods that its
@@ -81,10 +99,9 @@ export const NEO_SELECT_TEXT_KEYS = ['selector', 'strict', 'force'] as const
 /** Playwright's `Rect`, in the main frame's CSS pixels. */
 export type NeoRect = { x: number; y: number; width: number; height: number }
 
-/** `neo:waitForNavigation`: Playwright's `waitForNavigation` for the main frame with a glob or
+/** `neo:waitForNavigation`: Playwright's `waitForNavigation` for a frame with a glob or
  * `RegExp` `url` (`''` for none): the first navigation after the call whose URL matches (a
- * same-document one counts; a failed one rejects), then `waitUntil`. Rust refuses `networkidle`
- * and child frames, whose navigation requests it does not record. */
+ * same-document one counts; a failed one rejects), then `waitUntil`, on any frame. */
 export type NeoWaitForNavigationParams = {
   url: NeoSerializedUrlMatch
   waitUntil: LifecycleEvent
@@ -191,7 +208,7 @@ export function serializeUrlMatch(
 }
 
 /** Playwright's `isRegExp` (`isomorphic/urlMatch.ts`), which that module does not export. */
-function isRegExp(value: unknown): value is RegExp {
+export function isRegExp(value: unknown): value is RegExp {
   return (
     value instanceof RegExp ||
     Object.prototype.toString.call(value) === '[object RegExp]'
