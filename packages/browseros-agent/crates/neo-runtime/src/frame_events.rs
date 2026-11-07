@@ -16,8 +16,13 @@
 //! goes away (measured on BrowserOS neo, `page.rs` `FrameFeeds::detach_all`), so the model drops
 //! that subtree itself on the parent's commit, as Playwright's `removeChildFramesRecursively`
 //! does. CDP does not replay existing frames, so the model starts from the tab's frame tree read
-//! when its watcher starts ([`FrameModel::seed`]); an out-of-process frame's own changes reach it
-//! only from the frame sessions the run has attached.
+//! when its watcher starts ([`FrameModel::seed`]).
+//!
+//! Deviation: `server/chromium/crPage.ts` `FrameSession._initialize`: `this._client.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }),`
+//! Playwright attaches every out-of-process frame as it starts, paused until attached. Neo
+//! attaches one when the run first reaches into it (a frame read, a locator in it), so that
+//! frame's own commits before then are not reported; its attach and removal, which the tab's
+//! session reports, always are.
 
 use std::collections::HashMap;
 

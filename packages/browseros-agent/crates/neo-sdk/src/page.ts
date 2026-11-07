@@ -244,33 +244,49 @@ export class Page extends ChannelOwner {
       this.#onFrameNavigated(params as FrameEventParams)
   }
 
-  /** Playwright's `Page._onFrameAttached`. */
+  /** Playwright's `Page._onFrameAttached`: a frame attaches with no name or URL yet. */
   #onFrameAttached(record: CreatedFrame): void {
-    const frame = this._frameFrom(record)
-    this.emit('frameattached', frame)
-    this.#context.emit('frameattached', frame)
+    this.#frameEvent(record, 'frameattached', false)
   }
 
   /** Playwright's `Page._onFrameDetached`. */
   #onFrameDetached(record: CreatedFrame): void {
-    const frame = this._frameFrom(record)
-    this.emit('framedetached', frame)
-    this.#context.emit('framedetached', frame)
+    this.#frameEvent(record, 'framedetached', true)
   }
 
   /** Playwright's `Frame` `navigated` handler: the frame takes the committed URL and name, then
    * the page's and the context's `framenavigated` run. */
   #onFrameNavigated({ frame, url, name }: FrameEventParams): void {
-    const frameObject = this._frameFrom({
-      guid: frame.guid,
-      initializer: {
-        ...frame.initializer,
-        url: url ?? frame.initializer.url,
-        name: name ?? frame.initializer.name,
+    this.#frameEvent(
+      {
+        guid: frame.guid,
+        initializer: {
+          ...frame.initializer,
+          url: url ?? frame.initializer.url,
+          name: name ?? frame.initializer.name,
+        },
       },
+      'framenavigated',
+      false,
+    )
+  }
+
+  /**
+   * The page's listeners of a frame event, then the context's, with the Frame of the record,
+   * which answers as the event describes it while they run (`Frame._during`), as Playwright's
+   * client frame does: its state comes from these very events.
+   */
+  #frameEvent(
+    record: CreatedFrame,
+    event: 'frameattached' | 'framedetached' | 'framenavigated',
+    detached: boolean,
+  ): void {
+    const frame = this._frameFrom(record)
+    const { url, name } = record.initializer
+    frame._during({ url, name, detached }, () => {
+      this.emit(event, frame)
+      this.#context.emit(event, frame)
     })
-    this.emit('framenavigated', frameObject)
-    this.#context.emit('framenavigated', frameObject)
   }
 
   /**

@@ -3789,6 +3789,7 @@ class Frame {
   _connection;
   #lastUrl;
   #lastName;
+  #during;
   constructor(guid, page, connection, initializer = { url: "", name: "" }) {
     this._guid = guid;
     this._page = page;
@@ -3803,13 +3804,26 @@ class Frame {
   page() {
     return this._page;
   }
+  _during(state, emit) {
+    const outer = this.#during;
+    this.#during = state;
+    try {
+      emit();
+    } finally {
+      this.#during = outer;
+    }
+  }
   url() {
+    if (this.#during)
+      return this.#during.url;
     const url = get(this._guid, "url");
     if (url !== null)
       this.#lastUrl = url;
     return this.#lastUrl;
   }
   name() {
+    if (this.#during)
+      return this.#during.name;
     const name = get(this._guid, "name");
     if (name !== null)
       this.#lastName = name;
@@ -3823,6 +3837,8 @@ class Frame {
     return get(this._guid, "childFrames").map((record) => this._page._frameFrom(record));
   }
   isDetached() {
+    if (this.#during)
+      return this.#during.detached;
     return get(this._guid, "isDetached");
   }
   async goto(url, options = {}) {
@@ -4420,26 +4436,28 @@ class Page extends ChannelOwner {
       this.#onFrameNavigated(params);
   }
   #onFrameAttached(record) {
-    const frame = this._frameFrom(record);
-    this.emit("frameattached", frame);
-    this.#context.emit("frameattached", frame);
+    this.#frameEvent(record, "frameattached", false);
   }
   #onFrameDetached(record) {
-    const frame = this._frameFrom(record);
-    this.emit("framedetached", frame);
-    this.#context.emit("framedetached", frame);
+    this.#frameEvent(record, "framedetached", true);
   }
   #onFrameNavigated({ frame, url, name }) {
-    const frameObject = this._frameFrom({
+    this.#frameEvent({
       guid: frame.guid,
       initializer: {
         ...frame.initializer,
         url: url ?? frame.initializer.url,
         name: name ?? frame.initializer.name
       }
+    }, "framenavigated", false);
+  }
+  #frameEvent(record, event, detached) {
+    const frame = this._frameFrom(record);
+    const { url, name } = record.initializer;
+    frame._during({ url, name, detached }, () => {
+      this.emit(event, frame);
+      this.#context.emit(event, frame);
     });
-    this.emit("framenavigated", frameObject);
-    this.#context.emit("framenavigated", frameObject);
   }
   async opener() {
     const record = get(this.#guid, "opener");
