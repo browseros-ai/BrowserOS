@@ -11,10 +11,13 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { assertDecoysUntouched, compareFrameCases, failed } from './frames.mjs'
+import {
+  assertDecoysUntouched,
+  compareFrameCases,
+  failed,
+  value,
+} from './frames.mjs'
 import { skip } from './harness.mjs'
-
-const value = (v) => ({ value: v })
 
 const cases = [
   {

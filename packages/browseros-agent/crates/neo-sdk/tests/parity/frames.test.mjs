@@ -18,6 +18,8 @@
 //   page, because the frame's own CDP session closed; Neo rejects it as "Frame was detached",
 //   as for any detached frame, since only the tab's end closes a page (design §3.1, §3.4).
 //   A gone same-process frame fails "Frame was detached" on both.
+// - `goto` on a child frame (design §4.5): Playwright navigates the frame; Neo refuses it with an
+//   `Error` and leaves the frame as it was.
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs, frames.mjs).
 
@@ -29,10 +31,10 @@ import {
   FRAME_TREE,
   failed,
   pristine,
+  value,
 } from './frames.mjs'
 import { skip } from './harness.mjs'
 
-const value = (v) => ({ value: v })
 /** A frame URL as the scripts report it: the host kept, the port dropped. */
 const WHERE = `const where = (url) => url.replace(/^http:\\/\\/([^:/]+):\\d+/, '$1')\n`
 const NAME = `const name = (frame) => frame.name() || 'top'\n`
@@ -261,8 +263,27 @@ const cases = [
       assert.deepEqual(cross, { ...pristine('cross'), gen: 2 })
     },
   },
+  {
+    name: 'goto on a child frame',
+    source: `const same = page.frame('same')
+    const url = same.url().replace('who=same', 'who=same&gen=5')
+    return {
+      goto: await settle(() => same.goto(url).then((response) => typeof response)),
+      who: await settle(() => same.textContent('#who')),
+    }`,
+    perEngine: ['goto'],
+    expected: { who: value('same') },
+    effect: (effect) => {
+      const { same } = assertDecoysUntouched(effect, ['same'])
+      assert.deepEqual(same, { ...pristine('same'), gen: 5 })
+    },
+    neoEffect: (effect) => assertDecoysUntouched(effect, []),
+    checkPlaywright: ({ result }) =>
+      assert.deepEqual(result.value.goto, value('object'), 'a Response'),
+    checkNeo: ({ result }) =>
+      assert.deepEqual(result.value.goto, failed('error'), 'design §4.5'),
+  },
 ]
-
 test('the frame API lists and follows the same frames through Neo and Playwright', {
   skip,
   timeout: 300_000,

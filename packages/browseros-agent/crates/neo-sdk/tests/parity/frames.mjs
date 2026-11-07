@@ -75,6 +75,9 @@ const SETTLE = `const settle = async (call) => {
 }
 `
 
+/** `settle`'s report of a call that resolved to `v`. */
+export const value = (v) => ({ value: v })
+
 /** `settle`'s report of a call that rejected with a plain `Error` of `category`. */
 export const failed = (category) => ({
   error: category,
@@ -153,13 +156,16 @@ const referenceOnly = Boolean(process.env.NEO_PARITY_REFERENCE_ONLY)
 
 /**
  * Runs each case as a subtest of `t` on both engines (`withFrames`) and checks it:
- * - Playwright's value is `c.expected`, and `c.effect` accepts Playwright's frames (it checks
- *   the decoys, `assertDecoysUntouched`);
+ * - Playwright's value is `c.expected` (an entry that is a function asserts Playwright's value
+ *   for its key instead, for values too long to spell out), and `c.effect` accepts Playwright's
+ *   frames (it checks the decoys, `assertDecoysUntouched`);
  * - Neo's value is Playwright's, or `c.expectedNeo` where the design makes Neo differ;
- * - every frame of Neo's tab holds what the same frame of Playwright's does;
+ * - every frame of Neo's tab holds what the same frame of Playwright's does, or, where the
+ *   design makes Neo leave the page differently, what `c.neoEffect` accepts;
  * - Neo's delivery record for each method in `c.deliveries` (calls in order).
  * Value keys in `c.perEngine` differ by design and are left out of both comparisons;
- * `c.checkPlaywright(value)` and `c.checkNeo(neo)` assert them, and anything else, per engine.
+ * `c.checkPlaywright(playwright)` and `c.checkNeo(neo, playwright)` assert them, and anything
+ * else, per engine.
  */
 export async function compareFrameCases(t, cases) {
   await withFrames(t, async (run) => {
@@ -167,7 +173,7 @@ export async function compareFrameCases(t, cases) {
       await t.test(c.name, async () => {
         const { playwright, neo } = await run(c)
         const reference = shared(playwright.result, c.perEngine)
-        assert.deepEqual(reference, { value: c.expected }, 'Playwright')
+        assertExpected(reference, c.expected)
         c.effect?.(playwright.effect)
         await c.checkPlaywright?.(playwright)
         if (referenceOnly) return
@@ -176,7 +182,13 @@ export async function compareFrameCases(t, cases) {
           c.expectedNeo === undefined ? reference : { value: c.expectedNeo },
           c.expectedNeo === undefined ? 'Neo vs Playwright' : 'Neo, per design',
         )
-        assert.deepEqual(neo.effect, playwright.effect, 'what every frame saw')
+        if (c.neoEffect) c.neoEffect(neo.effect)
+        else
+          assert.deepEqual(
+            neo.effect,
+            playwright.effect,
+            'what every frame saw',
+          )
         for (const [method, deliveries] of Object.entries(c.deliveries ?? {}))
           assert.deepEqual(
             neo.outcome.calls
@@ -185,10 +197,24 @@ export async function compareFrameCases(t, cases) {
             deliveries,
             `Neo's ${method} delivery record`,
           )
-        await c.checkNeo?.(neo)
+        await c.checkNeo?.(neo, playwright)
       })
     }
   })
+}
+
+/** Asserts Playwright's `result` against `expected`, whose function entries assert their key. */
+function assertExpected(result, expected) {
+  const checked = Object.entries(
+    expected !== null && typeof expected === 'object' ? expected : {},
+  ).filter(([, check]) => typeof check === 'function')
+  const keys = checked.map(([key]) => key)
+  assert.deepEqual(
+    shared(result, keys),
+    shared({ value: expected }, keys),
+    'Playwright',
+  )
+  for (const [key, check] of checked) check(result.value[key])
 }
 
 /** `result` without the value keys in `perEngine`. */

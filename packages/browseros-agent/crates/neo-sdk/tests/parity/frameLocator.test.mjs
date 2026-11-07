@@ -23,11 +23,11 @@ import {
   FRAME_TREE,
   failed,
   pristine,
+  value,
 } from './frames.mjs'
 import { skip } from './harness.mjs'
 
 const RESOLVED = 'undefined'
-const value = (v) => ({ value: v })
 
 const cases = [
   {

@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import { assertDecoysUntouched, compareFrameCases, value } from './frames.mjs'
 import { compareMethod, skip } from './harness.mjs'
 
 test('isVisible returns booleans at once and rejects ambiguous or invalid targets', {
@@ -47,4 +48,46 @@ test('isVisible returns booleans at once and rejects ambiguous or invalid target
   const reads = outcome.calls.filter((c) => c.method === 'isVisible')
   assert.equal(reads.length, 11)
   assert.ok(reads.every((c) => c.delivery === undefined))
+})
+
+/**
+ * isVisible inside frames, on tabs of frame-top.html (frames.mjs). Playwright counts an element
+ * visible only if every iframe it was reached through is visible too: inside the
+ * `visibility: hidden` and `display: none` iframes it reads false, though the element is visible
+ * in its own document. A Frame of the hidden iframe, asked directly, reached it through no
+ * iframe and reads true. A missing iframe reads false at once.
+ */
+const frameCases = [
+  {
+    name: 'isVisible inside frames needs every iframe on the way visible',
+    source: `const login = page.frameLocator('#login-iframe')
+    return {
+      same: await settle(() => page.frameLocator('#same').locator('#send').isVisible()),
+      cross: await settle(() => login.getByRole('button', { name: 'Send' }).isVisible()),
+      grandchild: await settle(() => login.frameLocator('#grandchild').locator('#send').isVisible()),
+      hiddenInFrame: await settle(() => page.frameLocator('#same').locator('li[hidden]').isVisible()),
+      visibilityHiddenFrame: await settle(() => page.frameLocator('#hidden-same').locator('#send').isVisible()),
+      displayNoneFrame: await settle(() => page.frameLocator('#hidden-cross').locator('#send').isVisible()),
+      frameOfHiddenIframe: await settle(() => page.frame('hidden-same').isVisible('#send')),
+      missingFrame: await settle(() => page.frameLocator('#nope').locator('#send').isVisible()),
+    }`,
+    expected: {
+      same: value(true),
+      cross: value(true),
+      grandchild: value(true),
+      hiddenInFrame: value(false),
+      visibilityHiddenFrame: value(false),
+      displayNoneFrame: value(false),
+      frameOfHiddenIframe: value(true),
+      missingFrame: value(false),
+    },
+    effect: (effect) => assertDecoysUntouched(effect, []),
+  },
+]
+
+test('isVisible inside frames reads the same through Neo and Playwright', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases)
 })
