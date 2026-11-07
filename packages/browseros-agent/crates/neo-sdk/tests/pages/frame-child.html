@@ -10,9 +10,10 @@ iframe { width: 420px; height: 130px; border: 1px solid #888 }
 </head>
 <!-- One document of tests/pages/frame-top.html's tree. `?who=` names it (each frame reads its
      own effect as `window.__facts()`, keyed by `who`); `?gen=` counts the documents a control
-     loaded into its frame; `?kids=name[@host],…` adds child iframes, on `host` (default: this
-     frame's own) at this server's port. The widgets repeat in every document with the same ids,
-     so a call routed to the wrong frame changes or reads a decoy. -->
+     loaded into its frame; `?slow=1` holds its load on the server's /slow;
+     `?kids=name[@host],…` adds child iframes, on `host` (default: this frame's own) at this
+     server's port. The widgets repeat in every document with the same ids, so a call routed to
+     the wrong frame changes or reads a decoy. -->
 <body>
 <p><b id="who"></b> <span id="gen"></span></p>
 <label for="email">Email</label> <input id="email">
@@ -49,11 +50,19 @@ for (const kid of (params.get('kids') ?? '').split(',').filter(Boolean)) {
   document.body.append(frame)
   kids.push(frame)
 }
+// ?slow=1: an image from the server's /slow, which answers late, holds this document's load.
+if (params.get('slow')) {
+  const image = document.createElement('img')
+  image.alt = ''
+  image.src = '/slow'
+  document.body.append(image)
+}
 window.__who = who
 window.__events = []
-for (const type of ['click', 'focus', 'input', 'change']) {
+for (const type of ['click', 'focus', 'keydown', 'input', 'change']) {
   document.addEventListener(type, (event) => {
-    window.__events.push({ type, target: event.target.id || event.target.tagName?.toLowerCase(), trusted: event.isTrusted })
+    const key = type === 'keydown' ? { key: event.key } : {}
+    window.__events.push({ type, target: event.target.id || event.target.tagName?.toLowerCase(), trusted: event.isTrusted, ...key })
   }, true)
 }
 // The top page's #arm reaches every frame as this message: 500 ms later each document adds

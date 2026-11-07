@@ -167,8 +167,8 @@ const referenceOnly = Boolean(process.env.NEO_PARITY_REFERENCE_ONLY)
  * `c.checkPlaywright(playwright)` and `c.checkNeo(neo, playwright)` assert them, and anything
  * else, per engine.
  */
-export async function compareFrameCases(t, cases) {
-  await withFrames(t, async (run) => {
+export async function compareFrameCases(t, cases, { slowMs = 0 } = {}) {
+  await withFrames(t, { slowMs }, async (run) => {
     for (const c of cases) {
       await t.test(c.name, async () => {
         const { playwright, neo } = await run(c)
@@ -226,19 +226,20 @@ function shared(result, perEngine = []) {
 }
 
 /**
- * Launches the browser, serves `FRAME_PAGES` and connects both engines, then calls `body` with
+ * Launches the browser, serves `FRAME_PAGES` (`/slow` answers after `slowMs`) and connects both
+ * engines, then calls `body` with
  * `run(c)`, which runs case `c` (its `source`, an optional `probe`) on both engines and returns
  * each side's `result`, per-frame `effect` and `iframes` (the out-of-process frames of its tab
  * as CDP listed them after the run), plus Neo's `outcome`. With `NEO_PARITY_REFERENCE_ONLY`,
  * Neo's side is `undefined`.
  */
-export async function withFrames(t, body) {
+export async function withFrames(t, { slowMs = 0 }, body) {
   t.diagnostic(`Playwright ${playwrightVersion}`)
   if (referenceOnly) t.diagnostic('NEO_PARITY_REFERENCE_ONLY: Playwright only')
   const neoRun = referenceOnly ? undefined : buildNeoRun()
   const cleanups = []
   try {
-    const origin = await serveFixture(cleanups, { pages: FRAME_PAGES })
+    const origin = await serveFixture(cleanups, { pages: FRAME_PAGES, slowMs })
     const browser = await launchBrowser(cleanups, browserBinary)
     const cdp = await connectCdp(cleanups, browser.port)
     const playwright = await chromium.connectOverCDP(
