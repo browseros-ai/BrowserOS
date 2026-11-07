@@ -67,7 +67,12 @@ function startFrames(initial?: CreatedFrame[]) {
           return JSON.stringify([...records.values()])
         if (field === 'isDetached') return JSON.stringify(!records.has(guid))
         const frame = records.get(guid)
-        if (!frame) throw new Error('Frame was detached')
+        if (!frame) {
+          if (field === 'url' || field === 'name' || field === 'parentFrame')
+            return JSON.stringify(null)
+          if (field === 'childFrames') return JSON.stringify([])
+          throw new Error('Frame was detached')
+        }
         if (field === 'url') return JSON.stringify(frame.initializer.url)
         if (field === 'name') return JSON.stringify(frame.initializer.name)
         if (field === 'parentFrame')
@@ -128,8 +133,39 @@ describe('direct frame identity', () => {
     expect(login.isDetached()).toBe(true)
     expect(page.frames()).not.toContain(login)
     expect(page.mainFrame().childFrames()).toHaveLength(1)
-    expect(() => login.url()).toThrow(Error)
-    expect(() => login.childFrames()).toThrow(Error)
+    expect(login.url()).toBe('https://login.test/new')
+    expect(login.name()).toBe('renamed')
+    expect(login.parentFrame()).toBeNull()
+    expect(login.childFrames()).toEqual([])
+  })
+
+  test('tests that a frame removed after enumeration retains its initializer values', () => {
+    const { page, records } = startFrames()
+    const [main, login, nested, pay] = page.frames()
+    records.clear()
+    expect(main!.url()).toBe('https://run.test/')
+    expect(main!.name()).toBe('')
+    for (const [frame, name, url] of [
+      [login!, 'login', 'https://login.test/'],
+      [nested!, 'nested', 'https://nested.test/'],
+      [pay!, 'pay', 'https://pay.test/'],
+    ] as const) {
+      expect(frame.isDetached()).toBe(true)
+      expect(frame.name()).toBe(name)
+      expect(frame.url()).toBe(url)
+      expect(frame.parentFrame()).toBeNull()
+      expect(frame.childFrames()).toEqual([])
+    }
+  })
+
+  test('tests that later frame records refresh the values retained after detachment', () => {
+    const { page, records } = startFrames()
+    const frame = page.frames()[1]!
+    records.set(LOGIN, record(LOGIN, 'renamed', 'https://login.test/new', MAIN))
+    expect(page.frames()[1]).toBe(frame)
+    records.delete(LOGIN)
+    expect(frame.name()).toBe('renamed')
+    expect(frame.url()).toBe('https://login.test/new')
   })
 
   test('tests that frame names are exact and take precedence over URL', () => {

@@ -11,6 +11,8 @@
  * script's call site.
  *
  * What differs from Playwright:
+ * - Detached frames retain the last URL and name read by a getter or frame record, as Page
+ *   retains its last URL after closure; without frame events, unseen changes are not retained.
  * - `goto` resolves `null` for every navigation, because Neo creates no `Response` objects yet
  *   (Playwright returns `null` only for navigations without one, such as `about:blank` or a
  *   same-document change).
@@ -34,6 +36,7 @@ import type {
   FrameGetAttributeParams,
   FrameGetAttributeResult,
   FrameGotoParams,
+  FrameInitializer,
   FrameInnerTextParams,
   FrameInnerTextResult,
   FrameInputValueParams,
@@ -215,11 +218,28 @@ export class Frame {
   readonly _guid: string
   readonly _page: Page
   readonly _connection: Connection
+  #lastUrl: string
+  #lastName: string
 
-  constructor(guid: string, page: Page, connection: Connection) {
+  constructor(
+    guid: string,
+    page: Page,
+    connection: Connection,
+    initializer: Pick<FrameInitializer, 'url' | 'name'> = { url: '', name: '' },
+  ) {
     this._guid = guid
     this._page = page
     this._connection = connection
+    this.#lastUrl = initializer.url
+    this.#lastName = initializer.name
+  }
+
+  /** Refreshes values observed through frame records without changing this object's identity. */
+  _updateInitializer(
+    initializer: Pick<FrameInitializer, 'url' | 'name'>,
+  ): void {
+    this.#lastUrl = initializer.url
+    this.#lastName = initializer.name
   }
 
   page(): Page {
@@ -228,12 +248,14 @@ export class Frame {
 
   url(): string {
     const url = get(this._guid, 'url')
-    if (url === null) throw new Error('neo-sdk: missing frame URL')
-    return url
+    if (url !== null) this.#lastUrl = url
+    return this.#lastUrl
   }
 
   name(): string {
-    return get(this._guid, 'name')
+    const name = get(this._guid, 'name')
+    if (name !== null) this.#lastName = name
+    return this.#lastName
   }
 
   parentFrame(): Frame | null {

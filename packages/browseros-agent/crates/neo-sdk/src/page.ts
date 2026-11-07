@@ -79,7 +79,10 @@ export class Page {
     this.#context = context
     this.#connection = connection
     this._timeoutSettings = new TimeoutSettings(context._timeoutSettings)
-    this.#mainFrame = new Frame(mainFrameGuid, this, connection)
+    this.#mainFrame = new Frame(mainFrameGuid, this, connection, {
+      url,
+      name: '',
+    })
     this.#frames.set(mainFrameGuid, this.#mainFrame)
   }
 
@@ -149,9 +152,9 @@ export class Page {
   _frameFrom(record: CreatedFrame): Frame {
     let frame = this.#frames.get(record.guid)
     if (!frame) {
-      frame = new Frame(record.guid, this, this.#connection)
+      frame = new Frame(record.guid, this, this.#connection, record.initializer)
       this.#frames.set(record.guid, frame)
-    }
+    } else frame._updateInitializer(record.initializer)
     return frame
   }
 
@@ -255,9 +258,13 @@ export class Page {
   }
 
   /**
-   * The main frame's accessibility tree as Playwright's YAML. With `mode: 'ai'`, nodes carry
-   * `[ref=eN]` refs that `page.locator('aria-ref=eN')` resolves in this document until the next
-   * snapshot or navigation.
+   * The main frame's accessibility tree as Playwright's YAML. With `mode: 'ai'`, each rendered
+   * iframe's document appears under its `iframe` node, as in Playwright, and nodes carry refs that
+   * `page.locator('aria-ref=…')` resolves, in this run or a later one, until that document's next
+   * snapshot or navigation. A ref inside a frame is its path from the main frame:
+   * `- iframe [ref=e7]:` holds `- textbox "Email" [ref=f7e3]`, and a frame inside it adds a step
+   * (`f7f2e1`); Playwright numbers frames instead (`f1e3`). The default mode prints iframes without
+   * their content, as Playwright's does.
    */
   async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
     return await this.#mainFrame._ariaSnapshot('page.ariaSnapshot', options)

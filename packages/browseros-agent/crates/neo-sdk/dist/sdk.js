@@ -523,22 +523,33 @@ class Frame {
   _guid;
   _page;
   _connection;
-  constructor(guid, page, connection) {
+  #lastUrl;
+  #lastName;
+  constructor(guid, page, connection, initializer = { url: "", name: "" }) {
     this._guid = guid;
     this._page = page;
     this._connection = connection;
+    this.#lastUrl = initializer.url;
+    this.#lastName = initializer.name;
+  }
+  _updateInitializer(initializer) {
+    this.#lastUrl = initializer.url;
+    this.#lastName = initializer.name;
   }
   page() {
     return this._page;
   }
   url() {
     const url = get(this._guid, "url");
-    if (url === null)
-      throw new Error("neo-sdk: missing frame URL");
-    return url;
+    if (url !== null)
+      this.#lastUrl = url;
+    return this.#lastUrl;
   }
   name() {
-    return get(this._guid, "name");
+    const name = get(this._guid, "name");
+    if (name !== null)
+      this.#lastName = name;
+    return this.#lastName;
   }
   parentFrame() {
     const record = get(this._guid, "parentFrame");
@@ -836,7 +847,10 @@ class Page {
     this.#context = context;
     this.#connection = connection;
     this._timeoutSettings = new TimeoutSettings(context._timeoutSettings);
-    this.#mainFrame = new Frame(mainFrameGuid, this, connection);
+    this.#mainFrame = new Frame(mainFrameGuid, this, connection, {
+      url,
+      name: ""
+    });
     this.#frames.set(mainFrameGuid, this.#mainFrame);
   }
   url() {
@@ -871,9 +885,10 @@ class Page {
   _frameFrom(record) {
     let frame = this.#frames.get(record.guid);
     if (!frame) {
-      frame = new Frame(record.guid, this, this.#connection);
+      frame = new Frame(record.guid, this, this.#connection, record.initializer);
       this.#frames.set(record.guid, frame);
-    }
+    } else
+      frame._updateInitializer(record.initializer);
     return frame;
   }
   frames() {

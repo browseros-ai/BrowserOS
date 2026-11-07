@@ -52,9 +52,8 @@ const matching = page.frame({url: '**/remote'}) === remote &&
 await page.click('#remove');
 while (!remote.isDetached() && Date.now() < deadline)
   await new Promise(resolve => setTimeout(resolve, 10));
-let detachedError;
-try { remote.url(); } catch (error) { detachedError = error.name; }
-return {rows, identity, matching, detachedError,
+return {rows, identity, matching,
+  detachedGetters: remote.url() === rows.find(frame => frame.name === 'remote').url && remote.name() === 'remote' && remote.parentFrame() === null && remote.childFrames().length === 0,
   detached: remote.isDetached() && remoteNested.isDetached(),
   survivors: page.frames().map(frame => frame.name()).sort(),
   sameStillAttached: !same.isDetached() && same.childFrames()[0] === nested,
@@ -128,7 +127,7 @@ async fn tests_that_frame_getters_keep_identity_and_track_oopif_removal() {
             ],
             "identity": true,
             "matching": true,
-            "detachedError": "Error",
+            "detachedGetters": true,
             "detached": true,
             "survivors": ["", "nested", "same"],
             "sameStillAttached": true,

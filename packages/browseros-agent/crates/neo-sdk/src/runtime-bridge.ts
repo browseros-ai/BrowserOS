@@ -44,7 +44,7 @@ export interface CreatedFrame {
  * throws `Error` for any other.
  */
 export interface GetterReplies {
-  /** `null` once the page is closed: every CDP source errors then. */
+  /** `null` once the page is closed or the frame is detached. */
   url: string | null
   isClosed: boolean
   /** On the context: its open tabs, in the order Rust first saw them, the run page first. */
@@ -53,8 +53,8 @@ export interface GetterReplies {
   initializer: CreatedPage
   /** On a page: its live frame tree in pre-order, main frame first. */
   frames: CreatedFrame[]
-  /** On a frame: live values from its page's frame tree. */
-  name: string
+  /** On a frame: live values from its page's frame tree; detached metadata is null. */
+  name: string | null
   parentFrame: CreatedFrame | null
   childFrames: CreatedFrame[]
   isDetached: boolean

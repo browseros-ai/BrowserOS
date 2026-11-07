@@ -45,8 +45,8 @@ pub(crate) async fn frames(frames: &Frames, page: &PageId) -> Result<Value, Play
     frame_records(page, &tree, tree.iter())
 }
 
-/// A direct frame's live field. A removed frame stays a valid SDK object but only its
-/// `isDetached` getter can answer; the other getters report detachment immediately.
+/// A direct frame's live field. Detached metadata is null so the SDK can return its last
+/// observed URL/name; a removed frame has no parent or children.
 pub(crate) async fn frame(
     frames: &Frames,
     page: &PageId,
@@ -67,10 +67,13 @@ fn frame_value(
         FrameScope::Main => tree.first(),
         FrameScope::Frame(id) => tree.iter().find(|frame| frame.id == *id),
     };
-    if matches!(field, FrameField::IsDetached) {
-        return Ok(json!(info.is_none()));
-    }
-    let info = info.ok_or_else(|| PlaywrightError::error("Frame was detached"))?;
+    let Some(info) = info else {
+        return Ok(match field {
+            FrameField::IsDetached => json!(true),
+            FrameField::ChildFrames => json!([]),
+            _ => Value::Null,
+        });
+    };
     match field {
         FrameField::Url => Ok(json!(info.url)),
         FrameField::Name => Ok(json!(info.name)),
@@ -335,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_detachment_is_a_boolean_only_for_is_detached() {
+    fn tests_that_detached_frames_return_empty_live_getter_values() {
         let page = PageId::new("tab".to_string());
         let tree = tree();
         let removed = FrameScope::Frame("removed".to_string());
@@ -343,20 +346,16 @@ mod tests {
             frame_value(&page, &tree, &removed, FrameField::IsDetached).unwrap(),
             true
         );
-        for field in [
-            FrameField::Url,
-            FrameField::Name,
-            FrameField::ParentFrame,
-            FrameField::ChildFrames,
-        ] {
+        for field in [FrameField::Url, FrameField::Name, FrameField::ParentFrame] {
             assert_eq!(
-                frame_value(&page, &tree, &removed, field)
-                    .unwrap_err()
-                    .name
-                    .as_str(),
-                "Error"
+                frame_value(&page, &tree, &removed, field).unwrap(),
+                Value::Null
             );
         }
+        assert_eq!(
+            frame_value(&page, &tree, &removed, FrameField::ChildFrames).unwrap(),
+            json!([])
+        );
     }
 
     #[test]
