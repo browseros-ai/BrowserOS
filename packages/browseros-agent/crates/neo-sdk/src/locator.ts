@@ -148,8 +148,10 @@ export class Locator {
 
   /**
    * Playwright: `client/locator.ts` `Locator.ariaSnapshot`: `selector: this._selector,`
-   * The matched subtree as YAML, in the main frame only. Default mode waits for a match;
-   * `mode: 'ai'` adds refs and does not auto-wait: use `waitFor()` first if needed.
+   * The matched subtree as YAML in the selected frame. Default mode waits for a match,
+   * omits refs and leaves iframe contents unstitched. Main-frame `mode: 'ai'` snapshots stitch
+   * iframe content with refs rooted in the main frame. AI does not auto-wait: use `waitFor()`
+   * first if needed. Child-frame AI snapshots are refused; use `page.ariaSnapshot({ mode: 'ai' })`.
    * `depth` limits tree levels (0 means unlimited). AI refs work with `page.locator('aria-ref=…')`
    * until the next snapshot or navigation replaces them. Every mode requires one match.
    */
@@ -239,10 +241,9 @@ export class Locator {
    * - `visible` (the default): the matching element is visible; `hidden`: no element matches,
    *   or the one that does is hidden.
    *
-   * Strict: a selector that matches more than one element throws an `Error` at once, as does an
-   * invalid one or one that enters a frame (Neo serves the main frame only). Runs under the action
-   * timeout and polls the page. It never takes the tab's input, so a click or typing in the same
-   * run can be what satisfies it.
+   * Strict: multiple matches or an invalid selector throw an `Error` at once. Frame-entering
+   * selectors resolve inside their selected frames. Runs under the action timeout and polls
+   * the page. It never takes the tab's input, so a click or typing in the same run can satisfy it.
    */
   async waitFor(options?: WaitForSelectorOptions): Promise<void> {
     await this._frame._waitForSelector('locator.waitFor', this._selector, {
