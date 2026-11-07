@@ -99,10 +99,10 @@ const PAGE_EVENTS: EventTable = {
     'framenavigated',
     'popup',
     'filechooser',
+    'download',
   ],
   quiet: [],
   unserved: [
-    'download',
     'request',
     'response',
     'requestfailed',

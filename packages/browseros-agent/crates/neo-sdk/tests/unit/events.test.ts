@@ -123,8 +123,8 @@ test('tests that an unserved Playwright event refuses a listener instead of neve
     /BrowserContext/,
   )
   expect(page.listenerCount('request')).toBe(0)
-  await expect(page.waitForEvent('download')).rejects.toThrow(
-    'page.waitForEvent: Neo does not serve the "download" event on Page yet',
+  await expect(page.waitForEvent('worker')).rejects.toThrow(
+    'page.waitForEvent: Neo does not serve the "worker" event on Page yet',
   )
   // The context never closes during a run: listening to it is allowed and silent.
   context.on('close', () => {})

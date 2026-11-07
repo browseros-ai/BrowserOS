@@ -71,7 +71,7 @@ const REPLAY_WAIT: Duration = Duration::from_secs(5);
 
 /// Neo: the listener events Neo produces on a `Page`, under the names Playwright's client gives
 /// them (`Events.Page`), and what each needs switched on in the page's session.
-const PAGE_EVENTS: [(&str, Needs); 13] = [
+const PAGE_EVENTS: [(&str, Needs); 14] = [
     ("console", Needs::RUNTIME),
     ("pageerror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
@@ -87,11 +87,12 @@ const PAGE_EVENTS: [(&str, Needs); 13] = [
     // The watcher reports it once the page intercepts its file chooser (`page_events.rs`
     // `intercept_file_chooser`).
     ("filechooser", Needs::WATCHER),
+    ("download", Needs::DOWNLOADS),
 ];
 
 /// Neo: the listener events Neo produces on the run's `BrowserContext` (`Events.BrowserContext`),
 /// for every page the run has a session on; `page` for every new tab of the context.
-const CONTEXT_EVENTS: [(&str, Needs); 10] = [
+const CONTEXT_EVENTS: [(&str, Needs); 11] = [
     ("console", Needs::RUNTIME),
     ("weberror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
@@ -102,10 +103,15 @@ const CONTEXT_EVENTS: [(&str, Needs); 10] = [
     ("framedetached", Needs::WATCHER),
     ("framenavigated", Needs::WATCHER),
     ("page", Needs::DISCOVERY),
+    ("download", Needs::DOWNLOADS),
 ];
 
 /// What a subscription switches on in a page's session before that page's next call runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one flag per producer a subscription switches on"
+)]
 pub(crate) struct Needs {
     /// `PageSession::prepare`: the watcher, which is the producer, with `Page.enable`.
     pub(crate) watcher: bool,
@@ -114,6 +120,9 @@ pub(crate) struct Needs {
     /// The run's target discovery (`discovery.rs`), which reports new tabs. Not a page's: every
     /// call of the run waits for it ([`ALL_PAGES`]).
     pub(crate) discovery: bool,
+    /// The run's download reports (`downloads.rs`). Not a page's either: every call of the run
+    /// waits for them ([`ALL_PAGES`]).
+    pub(crate) downloads: bool,
 }
 
 impl Needs {
@@ -122,18 +131,29 @@ impl Needs {
         watcher: true,
         runtime: false,
         discovery: false,
+        downloads: false,
     };
     /// Neo: an event only `Runtime.enable` and `Log.enable` report.
     const RUNTIME: Self = Self {
         watcher: true,
         runtime: true,
         discovery: false,
+        downloads: false,
     };
     /// Neo: an event the run's target discovery produces, about a page no session watches yet.
     const DISCOVERY: Self = Self {
         watcher: false,
         runtime: false,
         discovery: true,
+        downloads: false,
+    };
+    /// Neo: an event the run's download watcher produces from the browser's reports, for any
+    /// tab of the run's context.
+    const DOWNLOADS: Self = Self {
+        watcher: false,
+        runtime: false,
+        discovery: false,
+        downloads: true,
     };
 
     /// Whether a page's session has anything to switch on for it.
@@ -286,6 +306,7 @@ impl EventHub {
                     watcher: left.watcher || right.watcher,
                     runtime: left.runtime || right.runtime,
                     discovery: left.discovery || right.discovery,
+                    downloads: left.downloads || right.downloads,
                 })
         })
         .flatten()

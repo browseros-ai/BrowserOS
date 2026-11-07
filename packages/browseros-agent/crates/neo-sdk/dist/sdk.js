@@ -634,6 +634,9 @@ class Connection {
   async sendDialog(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
+  async sendArtifact(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
   async sendNeo(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
@@ -1397,6 +1400,53 @@ class Dialog extends EventEmitter {
   }
   toJSON() {
     return { _type: "Dialog", _guid: this.#guid };
+  }
+}
+
+// src/download.ts
+var NO_STREAMS = "Neo cannot stream a download: its scripts have no streams; download.path() names the file";
+
+class Download {
+  #page;
+  #url;
+  #suggestedFilename;
+  #guid;
+  #connection;
+  constructor(page, url, suggestedFilename, guid, connection) {
+    this.#page = page;
+    this.#url = url;
+    this.#suggestedFilename = suggestedFilename;
+    this.#guid = guid;
+    this.#connection = connection;
+  }
+  page() {
+    return this.#page;
+  }
+  url() {
+    return this.#url;
+  }
+  suggestedFilename() {
+    return this.#suggestedFilename;
+  }
+  async path() {
+    const { value } = await this.#connection.sendArtifact("download.path", this.#guid, "pathAfterFinished", {}, 0);
+    return value;
+  }
+  async saveAs(path) {
+    await this.#connection.sendArtifact("download.saveAs", this.#guid, "saveAs", { path }, 0);
+  }
+  async failure() {
+    const { error } = await this.#connection.sendArtifact("download.failure", this.#guid, "failure", {}, 0);
+    return error || null;
+  }
+  async createReadStream() {
+    throw new Error(NO_STREAMS);
+  }
+  async cancel() {
+    await this.#connection.sendArtifact("download.cancel", this.#guid, "cancel", {}, 0);
+  }
+  async delete() {
+    await this.#connection.sendArtifact("download.delete", this.#guid, "delete", {}, 0);
   }
 }
 
@@ -5617,11 +5667,11 @@ var PAGE_EVENTS = {
     "framedetached",
     "framenavigated",
     "popup",
-    "filechooser"
+    "filechooser",
+    "download"
   ],
   quiet: [],
   unserved: [
-    "download",
     "request",
     "response",
     "requestfailed",
@@ -6025,12 +6075,12 @@ var CONTEXT_EVENTS = {
     "pageload",
     "frameattached",
     "framedetached",
-    "framenavigated"
+    "framenavigated",
+    "download"
   ],
   local: ["close"],
   quiet: ["backgroundpage"],
   unserved: [
-    "download",
     "serviceworker",
     "request",
     "response",
@@ -6097,6 +6147,8 @@ class BrowserContext extends ChannelOwner {
       this.#onDialog(params.dialog);
     else if (method === "dialogClosed")
       this.#onDialogClosed(params.dialog);
+    else if (method === "download")
+      this.#onDownload(params);
   }
   #onPage(created) {
     const page = this._pageFrom(created);
@@ -6117,6 +6169,12 @@ class BrowserContext extends ChannelOwner {
     this.emit("weberror", new WebError(pageObject, parsedError, location));
     if (pageObject)
       pageObject.emit("pageerror", parsedError);
+  }
+  #onDownload(event) {
+    const page = this.#pageFor(event.page.guid);
+    const download = new Download(page, event.url, event.suggestedFilename, event.artifact, this.#connection);
+    page.emit("download", download);
+    this.emit("download", download);
   }
   #onDialog(record) {
     const dialogObject = this.#dialogFrom(record);

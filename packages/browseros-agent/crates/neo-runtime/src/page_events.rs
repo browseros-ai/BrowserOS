@@ -8,6 +8,7 @@
 //!  Runtime.exceptionThrown ───────────────────▶ history ─┘▶ pageError
 //!  Page.javascriptDialogOpening ─▶ dialog record ─▶ dialog (listener) | default answer (none)
 //!  Page.javascriptDialogClosed ──▶ dialogClosed
+//!  Page.fileChooserOpened, the tab's or an out-of-process frame's ─▶ fileChooser (listener)
 //!  detach, Inspector.detached / targetCrashed ─▶ close | crash        on the page
 //!  the main frame's DOMContentLoaded / load ──▶ domcontentloaded | load
 //!  Page.frameAttached / frameDetached / frameNavigated / navigatedWithinDocument
@@ -162,6 +163,53 @@ impl PageEvents {
         if self.console.requested(&self.session) {
             self.enable_child(host).await;
         }
+        if self.hub.subscribed(&self.page_guid, "filechooser") {
+            self.intercept_child(host.session_id(), true).await;
+        }
+    }
+
+    /// Switches the file chooser interception of every out-of-process frame session of this tab
+    /// the run attached (`intercept_file_chooser`).
+    pub(crate) async fn intercept_children(&self, enabled: bool) {
+        let sessions: Vec<SessionId> = self
+            .children
+            .lock()
+            .map(|children| children.keys().cloned().collect())
+            .unwrap_or_default();
+        for session in sessions {
+            self.intercept_child(&session, enabled).await;
+        }
+    }
+
+    /// Playwright: `server/chromium/crPage.ts` `FrameSession._initialize`: `promises.push(this._updateFileChooserInterception(true));`
+    ///
+    /// One out-of-process frame's interception: Chromium reports a frame's file chooser only to
+    /// a session intercepting that frame's own, and a session intercepts only once its `Page`
+    /// domain is on (measured). Bounded by [`CHILD_ENABLE_WAIT`]; a failure is logged.
+    async fn intercept_child(&self, session: &SessionId, enabled: bool) {
+        let switch = async {
+            if enabled {
+                self.cdp
+                    .send("Page.enable", json!({}), Some(session))
+                    .await?;
+            }
+            self.cdp
+                .send(
+                    "Page.setInterceptFileChooserDialog",
+                    json!({ "enabled": enabled }),
+                    Some(session),
+                )
+                .await
+        };
+        match time::timeout(CHILD_ENABLE_WAIT, switch).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                debug!(%session, %error, "a frame's file chooser interception did not switch");
+            }
+            Err(_) => {
+                debug!(%session, "a frame's file chooser interception did not switch in time");
+            }
+        }
     }
 
     /// `Runtime.enable` and `Log.enable` on an out-of-process frame's session, its replay applied
@@ -195,6 +243,18 @@ impl PageEvents {
         &self.target
     }
 
+    /// Whether `frame` is one of the tab's frames: its main frame, a frame its model knows, or
+    /// an out-of-process frame whose session the run attached.
+    pub(crate) fn has_frame(&self, frame: &str) -> bool {
+        frame == self.target
+            || self.frames.lock().is_ok_and(|model| model.contains(frame))
+            || self.children.lock().is_ok_and(|children| {
+                children
+                    .values()
+                    .any(|hosted| hosted.as_deref() == Some(frame))
+            })
+    }
+
     /// Applies one event the watcher already applied to the page's state (`applied`), and
     /// returns the dialog answer the watcher still owes: `applied.dialog` unless a listener now
     /// owns the dialog.
@@ -203,13 +263,17 @@ impl PageEvents {
             return applied.dialog;
         };
         if session != &self.session {
-            // An out-of-process frame of this tab: its console only. Chromium reports its
-            // dialogs on the tab's own session.
-            if self
+            // An out-of-process frame of this tab: its console, frames and file choosers.
+            // Chromium reports its dialogs on the tab's own session.
+            let hosted = self
                 .children
                 .lock()
-                .is_ok_and(|children| children.contains_key(session))
-            {
+                .ok()
+                .and_then(|children| children.get(session).cloned());
+            if let Some(hosted) = hosted {
+                if event.method == "Page.fileChooserOpened" {
+                    self.file_chooser(&event.params, hosted);
+                }
                 self.console_event(event, session);
                 self.frame_event(event);
             }
@@ -219,7 +283,7 @@ impl PageEvents {
         match event.method.as_str() {
             "Page.javascriptDialogOpening" => answer = self.dialog_opening(&event.params, answer),
             "Page.javascriptDialogClosed" => self.dialog_closed(),
-            "Page.fileChooserOpened" => self.file_chooser(&event.params),
+            "Page.fileChooserOpened" => self.file_chooser(&event.params, None),
             _ => self.console_event(event, session),
         }
         if applied.new_document {
@@ -430,8 +494,9 @@ impl PageEvents {
 
     /// Playwright: `server/page.ts` `Page._onFileChooserOpened`: `if (!this.listenerCount(Page.Events.FileChooser)) {`
     /// A file chooser the page opened while the run intercepts them: Playwright's `fileChooser`
-    /// event on the page when the run listens, else nothing (the chooser stays closed).
-    fn file_chooser(&self, params: &Value) {
+    /// event on the page when the run listens, else nothing (the chooser stays closed). `host`:
+    /// the out-of-process frame whose session reported it, `None` for the tab's own.
+    fn file_chooser(&self, params: &Value, host: Option<String>) {
         let Ok(opened) = serde_json::from_value::<FileChooserOpened>(params.clone()) else {
             return;
         };
@@ -441,7 +506,7 @@ impl PageEvents {
         if !self.hub.subscribed(&self.page_guid, "filechooser") {
             return;
         }
-        let id = self.choosers.keep(opened.frame_id, backend);
+        let id = self.choosers.keep(opened.frame_id, backend, host);
         self.hub.emit(
             &self.page_guid,
             "fileChooser",
@@ -687,8 +752,9 @@ impl ConsoleArgs {
 /// `element()` throws an Error naming this cap.
 pub(crate) const MAX_KEPT_CHOOSERS: usize = 100;
 
-/// The file choosers a page opened while the run listened: the frame and the input's backend
-/// node, and once read, the `ElementHandle` record made of it (`Tabs::file_chooser_element`).
+/// The file choosers a page opened while the run listened: the frame, the session that reported
+/// it and the input's backend node, and once read, the `ElementHandle` record made of it
+/// (`Tabs::file_chooser_element`).
 #[derive(Default)]
 pub(crate) struct Choosers(Mutex<KeptChoosers>);
 
@@ -702,12 +768,15 @@ struct KeptChoosers {
 pub(crate) struct Chooser {
     pub(crate) id: u64,
     pub(crate) frame: String,
+    /// The out-of-process frame whose session reported it, whose DOM the backend node is of;
+    /// `None` for the tab's own session.
+    pub(crate) host: Option<String>,
     pub(crate) backend: i64,
     pub(crate) handle: Option<Value>,
 }
 
 impl Choosers {
-    fn keep(&self, frame: String, backend: i64) -> u64 {
+    fn keep(&self, frame: String, backend: i64, host: Option<String>) -> u64 {
         let Ok(mut state) = self.0.lock() else {
             return 0;
         };
@@ -716,6 +785,7 @@ impl Choosers {
         state.kept.push_back(Chooser {
             id,
             frame,
+            host,
             backend,
             handle: None,
         });
@@ -779,6 +849,7 @@ pub(crate) fn intercept_file_chooser(tabs: &Tabs, entry: Arc<PageEntry>, enabled
         if let Err(error) = intercepted {
             debug!(%error, "the page's file chooser interception did not switch");
         }
+        session.events.intercept_children(enabled).await;
     });
 }
 

@@ -186,6 +186,9 @@ fn subscribe(tabs: &Tabs, request: &str) -> Result<(), String> {
     if enabled && needs.discovery {
         tabs.discover();
     }
+    if enabled && needs.downloads {
+        tabs.watch_downloads();
+    }
     if !needs.of_page() {
         return Ok(());
     }

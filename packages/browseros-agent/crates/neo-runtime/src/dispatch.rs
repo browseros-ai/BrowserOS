@@ -39,17 +39,17 @@ use std::time::Duration;
 use futures_util::future;
 use neo_runtime_spec::injected::ReadableElementState;
 use neo_runtime_spec::serve::{
-    BrowserContextCall, DialogCall, FrameAriaSnapshotParams, FrameCall, FrameCheckParams,
-    FrameCheckResult, FrameClickParams, FrameDblclickParams, FrameFillParams, FrameFillResult,
-    FrameGetAttributeParams, FrameGotoParams, FrameHoverParams, FrameInnerHTMLParams,
-    FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams,
-    FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult, FrameIsEditableParams,
-    FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult, FrameIsHiddenParams,
-    FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams,
-    FramePressResult, FrameQueryCountParams, FrameSelectOptionParams, FrameSelectOptionResult,
-    FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameUncheckParams,
-    FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult, Metadata, PageCall,
-    RequestCall, ResponseCall,
+    ArtifactCall, BrowserContextCall, DialogCall, FrameAriaSnapshotParams, FrameCall,
+    FrameCheckParams, FrameCheckResult, FrameClickParams, FrameDblclickParams, FrameFillParams,
+    FrameFillResult, FrameGetAttributeParams, FrameGotoParams, FrameHoverParams,
+    FrameInnerHTMLParams, FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult,
+    FrameIsCheckedParams, FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult,
+    FrameIsEditableParams, FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult,
+    FrameIsHiddenParams, FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult,
+    FramePressParams, FramePressResult, FrameQueryCountParams, FrameSelectOptionParams,
+    FrameSelectOptionResult, FrameTapParams, FrameTextContentParams, FrameTitleParams,
+    FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
+    Metadata, PageCall, RequestCall, ResponseCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -64,6 +64,7 @@ use tracing::debug;
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::dialogs;
+use crate::downloads;
 use crate::evaluate::{self, EvalCall};
 use crate::events::{ALL_PAGES, EventHub};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
@@ -289,6 +290,9 @@ enum ObjectKind {
     Handle(String),
     /// A JavaScript dialog the run's `dialog` event handed out, by its index on the tab.
     Dialog(u64),
+    /// A download the run's `download` event handed out, by the browser's guid
+    /// (`downloads.rs`). It belongs to the run, not to its tab, which may close first.
+    Download(String),
     Unknown,
 }
 
@@ -298,6 +302,7 @@ enum ObjectCall {
     Frame(Route),
     Network(NetworkCall),
     Dialog(u64, DialogCall),
+    Download(String, ArtifactCall),
 }
 
 /// What a message asks for. One variant per served (object, method).
@@ -560,6 +565,8 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         }
         ObjectKind::Dialog(index) => DialogCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
+        ObjectKind::Download(guid) => ArtifactCall::decode(method, params)
+            .map(|call| (call.meta(), Ok(ObjectCall::Download(guid, call)))),
         ObjectKind::Unknown => {
             return Routed {
                 meta: None,
@@ -724,7 +731,8 @@ async fn serve_call(
     // context call (`newPage`) waits for target discovery's baseline. A dialog's answer never
     // waits: an open dialog can hold that very enable, and only the answer frees the page.
     let gate = match (&route, &target) {
-        (ObjectCall::Dialog(..), _) => None,
+        // A download's calls start nothing in a page; `cancel` must not wait for a page's enables.
+        (ObjectCall::Dialog(..) | ObjectCall::Download(..), _) => None,
         (ObjectCall::Context(_), _) => Some(ALL_PAGES),
         (_, Some((page, _))) => Some(page.id.as_str()),
         (_, None) => None,
@@ -776,6 +784,9 @@ async fn serve_call(
             Some(session) => dialogs::serve(&session, index, call, &progress).await,
             None => Err(PlaywrightError::target_closed().into()),
         },
+        (ObjectCall::Download(guid, call), _) => {
+            downloads::serve(&tabs, &guid, call, &progress).await
+        }
         _ => Err(PlaywrightError::target_closed().into()),
     };
     finish_reply(result, reply).await;
@@ -1059,6 +1070,8 @@ async fn serve_route<T: FormTab + KeyboardTab>(
 fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
     if guid == "context@default" {
         ObjectKind::Context
+    } else if let Some(download) = guid.strip_prefix(downloads::DOWNLOAD_PREFIX) {
+        ObjectKind::Download(download.to_owned())
     } else if !resolved {
         ObjectKind::Unknown
     } else if guid.starts_with(evaluate::HANDLE_PREFIX) {
@@ -1230,13 +1243,13 @@ mod tests {
 
     use crate::click::tests::FakeTab;
     use crate::deadline::Deadline;
-    use crate::discovery::Discovery;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::forms::SelectOption;
     use crate::page::TabInputs;
     use crate::progress::{self, ErrorName};
     use crate::run::Delivery;
     use crate::run::PageId;
+    use crate::switch::Switches;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
 
@@ -1250,7 +1263,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
-            Discovery::default(),
+            Switches::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1326,7 +1339,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
-            Discovery::default(),
+            Switches::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1368,7 +1381,8 @@ mod tests {
             ObjectCall::Context(_)
             | ObjectCall::Page(_)
             | ObjectCall::Network(_)
-            | ObjectCall::Dialog(..) => {
+            | ObjectCall::Dialog(..)
+            | ObjectCall::Download(..) => {
                 panic!("a Frame message routed to another object")
             }
         })

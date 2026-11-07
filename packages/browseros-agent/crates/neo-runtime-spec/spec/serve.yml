@@ -38,6 +38,14 @@ interfaces:
   Dialog:
     - accept
     - dismiss
+  # A download the run's `download` event handed out (neo-runtime `downloads.rs`). `stream` and
+  # `saveAsStream` stay unserved: they answer with a `Stream`, and QuickJS has none.
+  Artifact:
+    - pathAfterFinished
+    - saveAs
+    - failure
+    - cancel
+    - delete
   # The objects behind `goto`'s answer: its request, every redirect hop, and their responses.
   Request:
     - response

@@ -20,6 +20,7 @@
  */
 
 import type {
+  ArtifactCommands,
   BrowserContextCommands,
   DialogCommands,
   FrameCommands,
@@ -171,6 +172,11 @@ export type ApiName =
   | 'page.clearPageErrors'
   | 'dialog.accept'
   | 'dialog.dismiss'
+  | 'download.path'
+  | 'download.saveAs'
+  | 'download.failure'
+  | 'download.cancel'
+  | 'download.delete'
   // Element reads and states (B1).
   | 'locator.isEnabled'
   | 'page.isEnabled'
@@ -338,6 +344,23 @@ export class Connection {
       params,
       timeout,
     )) as Resolved<DialogCommands[M]['result']>
+  }
+
+  /** {@link Connection.send} for an `Artifact` command, to a `download@…` guid. */
+  async sendArtifact<M extends keyof ArtifactCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: ArtifactCommands[M]['params'],
+    timeout: number,
+  ): Promise<Resolved<ArtifactCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<ArtifactCommands[M]['result']>
   }
 
   /**

@@ -23,7 +23,8 @@ use tracing::debug;
 use crate::bridge;
 use crate::click::PageError;
 use crate::dialogs;
-use crate::discovery::{self, Discovery, TargetInfo};
+use crate::discovery::{self, TargetInfo};
+use crate::downloads::{self, Downloads, Opened};
 use crate::evaluate::{self, Handles};
 use crate::events::{ALL_PAGES, CONTEXT_GUID, Enabling, EventHub, Needs};
 use crate::frames::FrameScope;
@@ -33,6 +34,7 @@ use crate::page::{FrameTab, PageSession, Session, TabInputs};
 use crate::page_events::{self, MAX_KEPT_ARGS, MAX_KEPT_CHOOSERS};
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunPage};
+use crate::switch::Switches;
 
 /// Neo: how long `ConsoleMessage.args()` waits for its arguments' handles. A page a dialog holds
 /// answers no call until the dialog is answered, which the script may be about to do.
@@ -53,13 +55,19 @@ struct Inner {
     pages: Mutex<Vec<Arc<PageEntry>>>,
     /// The run's event queue and subscriptions, shared with every page session it attaches.
     events: EventHub,
-    /// The `Runtime`'s target discovery switch, which this run holds while it listens for new
-    /// pages ([`Tabs::discover`]).
-    discovery: Discovery,
+    /// The `Runtime`'s shared switches: target discovery, which this run holds while it listens
+    /// for new pages ([`Tabs::discover`]), and download reports ([`Tabs::watch_downloads`]).
+    switches: Switches,
     /// Set once this run started its discovery.
     discovering: OnceLock<()>,
     /// Holds every call of the run until discovery has its baseline ([`ALL_PAGES`]).
     discovery_enabling: Mutex<Option<Enabling>>,
+    /// Set once this run started watching downloads.
+    watching_downloads: OnceLock<()>,
+    /// Holds every call of the run until the download reports are on ([`ALL_PAGES`]).
+    downloads_enabling: Mutex<Option<Enabling>>,
+    /// The downloads the run's `download` events handed out.
+    downloads: Downloads,
 }
 
 /// A page can be known without a session. Its closure token precedes the attachment so calls,
@@ -158,7 +166,7 @@ impl Tabs {
         cdp: CdpClient,
         tokio: Handle,
         inputs: TabInputs,
-        discovery: Discovery,
+        switches: Switches,
         tasks: TaskTracker,
         page: &PageId,
     ) -> Result<(Self, String), PlaywrightError> {
@@ -178,9 +186,12 @@ impl Tabs {
             run_page: page.clone(),
             pages: Mutex::new(Vec::new()),
             events: EventHub::default(),
-            discovery,
+            switches,
             discovering: OnceLock::new(),
             discovery_enabling: Mutex::new(None),
+            watching_downloads: OnceLock::new(),
+            downloads_enabling: Mutex::new(None),
+            downloads: Downloads::default(),
         }));
         let entry = tabs.register(page.clone(), false)?;
         // The scope read above already checked this tab. Avoid a second startup read so
@@ -600,7 +611,10 @@ impl Tabs {
         if let Ok(mut held) = self.0.discovery_enabling.lock() {
             *held = Some(enabling);
         }
-        self.spawn(discovery::run(self.clone(), self.0.discovery.clone()));
+        self.spawn(discovery::run(
+            self.clone(),
+            self.0.switches.discovery.clone(),
+        ));
     }
 
     /// Discovery has its baseline, or failed to start: the run's calls go on.
@@ -608,6 +622,100 @@ impl Tabs {
         if let Ok(mut held) = self.0.discovery_enabling.lock() {
             held.take();
         }
+    }
+
+    /// Starts watching the browser's download reports once (`downloads.rs`), for a `download`
+    /// listener. Every call of the run waits until the reports are on, so no call can start a
+    /// download before the run hears of it.
+    pub(crate) fn watch_downloads(&self) {
+        if self.0.watching_downloads.set(()).is_err() {
+            return;
+        }
+        let enabling = self.0.events.begin_enable(ALL_PAGES);
+        if let Ok(mut held) = self.0.downloads_enabling.lock() {
+            *held = Some(enabling);
+        }
+        self.spawn(downloads::run(self.clone(), self.0.switches.clone()));
+    }
+
+    /// The download reports are on, or failed to turn on: the run's calls go on.
+    pub(crate) fn downloads_ready(&self) {
+        if let Ok(mut held) = self.0.downloads_enabling.lock() {
+            held.take();
+        }
+    }
+
+    /// The downloads the run's `download` events handed out.
+    pub(crate) fn downloads(&self) -> &Downloads {
+        &self.0.downloads
+    }
+
+    /// The browser context of the run's tabs, when BrowserOS names it.
+    pub(crate) fn context_id(&self) -> Option<&str> {
+        self.0.scope.context.as_deref()
+    }
+
+    /// Playwright: `server/chromium/crBrowser.ts` `CRBrowser._onDownloadWillBegin`: `// If it's a new window download, report it on the opener page.`
+    ///
+    /// The tab of the run's context that a download's frame belongs to, as Playwright's
+    /// `_findOwningPage` finds it: a tab by its own id (a tab's main frame has its target id,
+    /// measured), by a frame of a tab the run watches, or a tab of the context the run has not
+    /// met yet, which it registers. A tab whose first document never committed reports on the
+    /// tab that opened it: a link with `target=_blank` to an attachment opens a tab that begins
+    /// the download and closes, often before this asks of it (measured), so what discovery
+    /// reported of it (`opened`) decides. A frame of a tab the run knows but does not watch is
+    /// not found, nor is anything that is no tab (an extension page, a developer tools window).
+    pub(crate) async fn download_page(
+        &self,
+        frame: &str,
+        opened: Option<&Opened>,
+    ) -> Option<Arc<PageEntry>> {
+        let id = PageId::new(frame.to_string());
+        if let Some(entry) = self.entry(&id) {
+            return Some(entry);
+        }
+        if let Some((entry, _)) = self
+            .attached()
+            .into_iter()
+            .find(|(_, session)| session.events.has_frame(frame))
+        {
+            return Some(entry);
+        }
+        let info = self
+            .0
+            .cdp
+            .send_typed::<_, TargetInfoReply>(
+                "Target.getTargetInfo",
+                json!({ "targetId": frame }),
+                None,
+            )
+            .await
+            .ok()
+            .map(|reply| reply.target_info);
+        let owner = match (info, opened) {
+            (Some(info), _) if info.kind != "page" => return None,
+            // Discovery saw the tab open and never commit. Its target names the URL it navigates
+            // to by now (measured), so only discovery's report tells.
+            (info, Some(opened)) if !opened.committed => PageId::new(
+                opened
+                    .opener
+                    .clone()
+                    .or_else(|| info.and_then(|info| info.opener_id))?,
+            ),
+            (Some(info), None) if discovery::is_initial_empty(&info.url) => {
+                PageId::new(info.opener_id?)
+            }
+            (Some(_), _) => id,
+            (None, _) => return None,
+        };
+        if let Some(entry) = self.entry(&owner) {
+            return Some(entry);
+        }
+        let tab = tab_info(&self.0.cdp, &owner).await.ok()??;
+        if !self.0.scope.includes(&tab) {
+            return None;
+        }
+        self.register(owner, false).ok()
     }
 
     /// A new page target discovery saw (`discovery.rs`). When the run listens for new pages and
@@ -790,6 +898,11 @@ impl Tabs {
         Ok(records)
     }
 
+    /// Deviation: `server/chromium/crPage.ts` `FrameSession._onFileChooserOpened`: `const utilityContext = await frame.utilityContext();`
+    /// Playwright makes the input's handle in its utility world as the chooser opens; Neo makes it
+    /// in the main world, where every Neo `ElementHandle` lives (`evaluate.rs`), at the first
+    /// read, so `element().evaluate` sees the page's own globals.
+    ///
     /// `FileChooser.element()`: the run's `ElementHandle` of the input file chooser `id` of page
     /// `target` opened for, made at the first read and the same record after.
     pub(crate) async fn file_chooser_element(
@@ -813,9 +926,22 @@ impl Tabs {
             return Ok(record);
         }
         let main = session.frames.main();
+        // A frame inside an out-of-process frame lives on that frame's session, which the run
+        // attached before it reported the chooser.
+        let parent = match &chooser.host {
+            Some(host) => {
+                let root = session
+                    .frames
+                    .context(host, Some(&main.host))
+                    .await
+                    .map_err(|error| args_error(&error))?;
+                Arc::clone(&root.host)
+            }
+            None => Arc::clone(&main.host),
+        };
         let frame = session
             .frames
-            .context(&chooser.frame, Some(&main.host))
+            .context(&chooser.frame, Some(&parent))
             .await
             .map_err(|error| args_error(&error))?;
         let tab = FrameTab {
@@ -967,7 +1093,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
-            Discovery::default(),
+            Switches::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
         )

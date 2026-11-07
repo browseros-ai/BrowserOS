@@ -687,6 +687,8 @@ fn answer(
         }
         "Browser.getVersion"
         | "Target.setDiscoverTargets"
+        | "Browser.setDownloadBehavior"
+        | "Browser.cancelDownload"
         | "Page.close"
         | "Page.enable"
         | "Network.enable"

@@ -2,8 +2,8 @@
 // tests/pages/file-chooser.html tabs (events.mjs): a click on a file input while the page listens
 // reaches each wait once, as one FileChooser whose page() is the page, whose element() is that
 // input (the same handle at every read), and whose isMultiple() says whether it takes several
-// files; an input in a frame reaches the page's listeners too. setFiles waits for Neo's
-// setInputFiles (file-chooser.ts, Deviation), which a Neo-only case pins.
+// files (fileChooserFrames.test.mjs: inputs in frames). setFiles waits for Neo's setInputFiles
+// (file-chooser.ts, Deviation), which a Neo-only case pins.
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs, events.mjs).
 
@@ -48,21 +48,6 @@ const cases = [
     source: `const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#multiple')])
     return { multiple: chooser.isMultiple(), id: await chooser.element().evaluate((input) => input.id) }`,
     expected: { multiple: true, id: 'multiple' },
-  },
-  {
-    // page-filechooser.spec.ts "FC-004 should emit event for iframe".
-    name: 'an input in a frame opens a chooser on the page, its element in that frame',
-    path: '/file-chooser.html',
-    source: `const [chooser] = await Promise.all([
-      page.waitForEvent('filechooser'),
-      page.frameLocator('#frame').locator('#inner').click(),
-    ])
-    return {
-      page: chooser.page() === page,
-      id: await chooser.element().evaluate((input) => input.id),
-      inFrame: await chooser.element().evaluate((input) => input.ownerDocument !== window.top.document),
-    }`,
-    expected: { page: true, id: 'inner', inFrame: true },
   },
   {
     // Neo only (file-chooser.ts, Deviation): setFiles is setInputFiles, which Neo does not serve
