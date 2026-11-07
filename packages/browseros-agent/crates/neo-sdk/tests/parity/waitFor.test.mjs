@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import {
   assertDecoysUntouched,
+  CROSS_REMOVAL,
   compareFrameCases,
   FRAME_TREE,
   failed,
@@ -198,10 +199,13 @@ const frameCases = [
   },
   {
     name: 'waits on a frame end when its iframe is removed',
+    // `removeCross` (frames.mjs `CROSS_REMOVAL`): Neo removes the iframe at once; the Playwright
+    // reference removes it only between polls, as it treats a session closed mid-poll as final.
+    prelude: CROSS_REMOVAL,
     source: `const login = page.frameLocator('#login-iframe')
     const detached = settle(() => login.locator('#who').waitFor({ state: 'detached', timeout: 5000 }))
     const hidden = settle(() => login.frameLocator('#grandchild').locator('#send').waitFor({ state: 'hidden', timeout: 5000 }))
-    await page.click('#remove-cross')
+    await removeCross(2)
     return { detached: await detached, hidden: await hidden }`,
     expected: { detached: RESOLVED, hidden: RESOLVED },
     effect: (effect) => {

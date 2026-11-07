@@ -75,6 +75,65 @@ const SETTLE = `const settle = async (call) => {
 }
 `
 
+/**
+ * `removeCross(n)` for waitFor.test.mjs: the out-of-process `#login-iframe` goes, through a real
+ * `page.click('#remove-cross')` in both engines, while `n` waits poll into it. Neo clicks at once.
+ * The pinned Playwright treats a session closed in the middle of a poll as final (server
+ * `frames.ts` `isNonRetriableError`: `if (js.isJavaScriptErrorInEvaluate(e) || isSessionClosedError(e))`):
+ * a poll that found `#login-iframe` in the top page, then steps into that frame after the removal
+ * closed its session, rejects ("has been closed") instead of seeing the frame gone, and such a
+ * remote step can outlast any fixed wait. So the reference removes the iframe only between polls, through its
+ * in-process server objects: once the `n` waits (the main frame's `waitForSelector` loops) have
+ * each polled the live frame, a new poll of theirs is held; the polls already running finish,
+ * with every step they take into the frame; the click removes the iframe; and the held polls go
+ * on and find it gone. Nothing waits a fixed time, and the click's own loop is never held.
+ */
+export const CROSS_REMOVAL = {
+  playwright: `const removeCross = await (async () => {
+  const main = page._connection.toImpl(page.mainFrame())
+  const gate = { armed: false, creating: false, running: 0, polled: 0, waiters: [] }
+  const wake = () => { for (const resolve of gate.waiters.splice(0)) resolve() }
+  const until = async (ready) => { while (!ready()) await new Promise((resolve) => gate.waiters.push(resolve)) }
+  // A wait's retry loop is made synchronously inside its waitForSelector call.
+  const waitForSelector = main.waitForSelector.bind(main)
+  main.waitForSelector = (...args) => {
+    gate.creating = true
+    try { return waitForSelector(...args) } finally { gate.creating = false }
+  }
+  const retry = main.retryWithProgressAndTimeouts.bind(main)
+  main.retryWithProgressAndTimeouts = (progress, timeouts, action) => {
+    if (!gate.creating) return retry(progress, timeouts, action)
+    let first = true
+    return retry(progress, timeouts, async (...args) => {
+      await until(() => !gate.armed)
+      gate.running++
+      try {
+        return await action(...args)
+      } finally {
+        gate.running--
+        if (first) gate.polled++
+        first = false
+        wake()
+      }
+    })
+  }
+  return async (polling) => {
+    await until(() => gate.polled >= polling)
+    gate.armed = true
+    await until(() => gate.running === 0)
+    try {
+      await page.click('#remove-cross')
+    } finally {
+      gate.armed = false
+      wake()
+    }
+  }
+})()
+`,
+  neo: `const removeCross = () => page.click('#remove-cross')
+`,
+}
+
 /** `settle`'s report of a call that resolved to `v`. */
 export const value = (v) => ({ value: v })
 
@@ -317,7 +376,7 @@ async function viaPlaywright(cdp, context, url, c) {
     const result = await new AsyncFunction(
       'page',
       'context',
-      SETTLE + c.source,
+      SETTLE + (c.prelude?.playwright ?? '') + c.source,
     )(page, context).then(
       (value) => ({ value }),
       (error) => ({ error: { name: error.name, message: error.message } }),
@@ -366,7 +425,7 @@ async function viaNeo({ cdp, context, port, neoRun, scripts }, index, url, c) {
       `${url} loaded`,
     )
     const scriptPath = join(scripts, `frame-case-${index}.js`)
-    writeFileSync(scriptPath, SETTLE + c.source)
+    writeFileSync(scriptPath, SETTLE + (c.prelude?.neo ?? '') + c.source)
     const neo = startNeo(neoRun, port, targetId, scriptPath)
     await neo.connected
     const outcome = await neo.outcome
