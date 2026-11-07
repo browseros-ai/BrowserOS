@@ -10,6 +10,7 @@ description = "Runs an agent's Playwright-style script in a QuickJS realm agains
 # browseros-cdp and neo-runtime-spec are the only first-party dependencies; see
 # crates/NEO_STYLE.md. futures-util's `join_all` writes a click's pipelined mouse events in order.
 [dependencies]
+base64.workspace = true
 browseros-cdp.workspace = true
 futures-util.workspace = true
 neo-runtime-spec.workspace = true

@@ -3,7 +3,7 @@
  * built by Playwright's own code: the method bodies here are Playwright's, over the vendored,
  * unchanged `locatorUtils.ts` and `stringUtils.ts`. That is what makes Neo's selectors
  * byte-identical to Playwright's, inside QuickJS too (`neo-runtime/tests/selector_goldens.rs`
- * runs the 94 goldens in `tests/goldens/selector-goldens.json` through the realm).
+ * runs `tests/goldens/*selector-goldens.json` through the realm).
  *
  * What differs from Playwright, all listed here:
  * - Imports point at the vendored copies; `isString` comes straight from `stringUtils.ts`,
@@ -11,8 +11,7 @@
  * - The constructor drops Playwright's `inspect.custom` hook (Node's `util`, absent in QuickJS).
  * - Browser calls pass their public `apiName` to the corresponding `Frame` helper: Playwright reads
  *   it off V8 stack frames, and QuickJS frames carry no class names (`connection.ts`).
- * - Absent: `frameLocator`, `contentFrame` (frames come later; calling one is a `TypeError`),
- *   `toString` and `description` (they need Playwright's ~2,500-line locator generators), and
+ * - Absent: `toString` and `description` (they need Playwright's ~2,500-line locator generators), and
  *   actions and reads Neo does not serve. Explicit names preserve the outer `clear` and
  *   `setChecked` API names through their delegated calls (`_wrapApiCall` in Playwright).
  * - `waitFor` sends Playwright's own `Frame.waitForSelector` through `Frame._waitForSelector`,
@@ -23,8 +22,8 @@
  *   (prototype patches, custom element classes or per-instance properties) can differ.
  *
  * Frame identity is load-bearing: `has`, `hasNot`, `and`, `or` and `locator(Locator)` throw
- * unless both locators hold the same `Frame` object, which is why a page builds its main frame
- * once (`Page.mainFrame`).
+ * unless both locators hold the same `Frame` object, which is why a page interns every frame
+ * by its Rust-minted guid.
  */
 
 import {
@@ -58,6 +57,7 @@ import type {
   UncheckOptions,
   WaitForSelectorOptions,
 } from './frame'
+import { FrameLocator } from './frame-locator'
 import type { Page } from './page'
 import type { SelectOptionValues } from './select-option'
 
@@ -72,6 +72,8 @@ export type LocatorOptions = {
 export class Locator {
   _frame: Frame
   _selector: string
+  /** Playwright's type tag, which its test matchers read; it also shows in `JSON.stringify`. */
+  _apiName = 'Locator'
 
   constructor(frame: Frame, selector: string, options?: LocatorOptions) {
     this._frame = frame
@@ -298,6 +300,14 @@ export class Locator {
 
   within(locator: Locator): Locator {
     return locator.locator(this)
+  }
+
+  frameLocator(selector: string): FrameLocator {
+    return new FrameLocator(this._frame, this._selector + ' >> ' + selector)
+  }
+
+  contentFrame(): FrameLocator {
+    return new FrameLocator(this._frame, this._selector)
   }
 
   getByTestId(testId: string | RegExp): Locator {

@@ -152,6 +152,7 @@ pub struct FakeBrowser {
 /// The page's own state, shared by every connection, as one tab is.
 pub struct Page {
     pub tabs: Vec<Value>,
+    pub frames: Option<FrameReplies>,
     pub tab_info_delay: Option<Duration>,
     next_tab: usize,
     active_window: i64,
@@ -168,6 +169,14 @@ pub struct Page {
     clicks: usize,
 }
 
+/// Recorded CDP shapes used to exercise the full local/remote frame-tree join.
+#[derive(Default)]
+pub struct FrameReplies {
+    pub targets: Vec<Value>,
+    /// Page.getFrameTree answers, keyed by the session's target id.
+    pub trees: HashMap<String, Value>,
+}
+
 impl Default for Page {
     fn default() -> Self {
         Self {
@@ -175,6 +184,7 @@ impl Default for Page {
                 "targetId": PAGE, "url": PAGE_URL, "windowId": 1,
                 "liveBrowserContextId": "profile", "isActive": true,
             })],
+            frames: None,
             tab_info_delay: None,
             next_tab: 0,
             active_window: 1,
@@ -545,6 +555,26 @@ async fn emit_navigation(
     {
         tab["url"] = url.clone();
     }
+    let send = |method: &str, params: Value| {
+        let _ =
+            outgoing.send(json!({"sessionId":session,"method":method,"params":params}).to_string());
+    };
+    if !script.same_document {
+        // The document's request and response precede its commit, as BrowserOS sends them.
+        send(
+            "Network.requestWillBeSent",
+            json!({"requestId":"new","loaderId":"new","type":"Document","frameId":PAGE,
+                   "request":{"url":url,"method":"GET","headers":{"Accept":"text/html"}},
+                   "timestamp":1.0,"wallTime":1_700_000_000.0}),
+        );
+        send(
+            "Network.responseReceived",
+            json!({"requestId":"new","type":"Document","frameId":PAGE,"hasExtraInfo":false,
+                   "response":{"url":url,"status":200,"statusText":"OK",
+                               "headers":{"Content-Type":"text/html"},"protocol":"http/1.1",
+                               "remoteIPAddress":"127.0.0.1","remotePort":443}}),
+        );
+    }
     let (method, params) = if script.same_document {
         (
             "Page.navigatedWithinDocument",
@@ -556,7 +586,7 @@ async fn emit_navigation(
             json!({"frame":{"id":PAGE,"loaderId":"new","url":url},"type":if script.restored_from_bfcache { "BackForwardCacheRestore" } else { "Navigation" }}),
         )
     };
-    let _ = outgoing.send(json!({"sessionId":session,"method":method,"params":params}).to_string());
+    send(method, params);
     if script.stop_loading {
         let _ = outgoing.send(json!({"sessionId":session,"method":"Page.frameStoppedLoading","params":{"frameId":PAGE}}).to_string());
     } else {
@@ -619,10 +649,13 @@ fn answer(
     page: &Mutex<Page>,
 ) -> (Value, Option<Duration>) {
     let now = Some(Duration::ZERO);
-    if let Some(answer) = tab_command(command, replies, page) {
+    if let Some(answer) = tab_command(command, replies, page)
+        .or_else(|| frame_command(command, calls, page).map(|reply| (reply, now)))
+    {
         return answer;
     }
     match command["method"].as_str().unwrap_or_default() {
+        "Target.getTargets" => (json!({"result":{"targetInfos":[]}}), now),
         "Page.bringToFront" => (bring_to_front(command, calls, page), now),
         "Target.attachToTarget" => {
             let call = calls.attach;
@@ -655,6 +688,7 @@ fn answer(
         "Browser.getVersion"
         | "Page.close"
         | "Page.enable"
+        | "Network.enable"
         | "Page.setLifecycleEventsEnabled"
         | "Emulation.setFocusEmulationEnabled"
         | "Runtime.releaseObjectGroup"
@@ -697,16 +731,7 @@ fn answer(
             json!({ "result": { "quads": [[8, 8, 65.5, 8, 65.5, 29, 8, 29]] } }),
             now,
         ),
-        "DOM.getBoxModel" => {
-            let quad = json!([8, 8, 65.5, 8, 65.5, 29, 8, 29]);
-            (
-                json!({ "result": { "model": {
-                    "content": quad, "padding": quad, "border": quad, "margin": quad,
-                    "width": 58, "height": 21,
-                } } }),
-                now,
-            )
-        }
+        "DOM.getBoxModel" => (box_model(), now),
         "Input.dispatchMouseEvent" => {
             let call = calls.mouse;
             calls.mouse += 1;
@@ -717,6 +742,34 @@ fn answer(
             now,
         ),
     }
+}
+
+fn box_model() -> Value {
+    let quad = json!([8, 8, 65.5, 8, 65.5, 29, 8, 29]);
+    json!({ "result": { "model": { "content":quad, "padding":quad, "border":quad, "margin":quad, "width":58,"height":21 } } })
+}
+
+fn frame_command(command: &Value, calls: &Calls, page: &Mutex<Page>) -> Option<Value> {
+    let page = lock(page);
+    let frames = page.frames.as_ref()?;
+    Some(match command["method"].as_str()? {
+        "Page.getFrameTree" => {
+            let target = command["sessionId"]
+                .as_str()
+                .and_then(|session| calls.sessions.get(session))?;
+            json!({"result":frames.trees.get(target)?})
+        }
+        "Target.getTargets" => json!({"result":{"targetInfos":frames.targets}}),
+        "Target.getTargetInfo" => match frames
+            .targets
+            .iter()
+            .find(|target| target["targetId"] == command["params"]["targetId"])
+        {
+            Some(target) => json!({"result":{"targetInfo":target}}),
+            None => json!({"error":{"code":-32602,"message":"No target with given id found"}}),
+        },
+        _ => return None,
+    })
 }
 
 fn glue_delay(params: &Value, calls: &mut Calls, replies: &Replies) -> Option<Duration> {

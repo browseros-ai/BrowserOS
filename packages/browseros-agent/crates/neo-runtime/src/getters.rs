@@ -1,19 +1,357 @@
-//! Live reads of page state, nothing cached. Each source was chosen because it matches what
+//! Live reads of page state, retaining observed Frame metadata after page closure.
+//! Each source was chosen because it matches what
 //! real Playwright returns at the same moment, including while a navigation is in flight (see
 //! `sync-getters-design.md`). A read is normally one CDP call. The exception is a `url` read
 //! that lands in the few milliseconds of a cross-document commit, when BrowserOS refuses
 //! navigation history: it checks the tab is still open and retries until the new document
-//! answers.
+//! answers. The main frame's URL uses that same history source, including in frame records.
+//! Frame-tree getters still call Page.getFrameTree, which can block until a pending main-frame
+//! navigation commits; their main-frame URL is read from history after the tree answers.
 
+use std::collections::HashSet;
+use std::sync::MutexGuard;
 use std::time::Duration;
 
-use browseros_cdp::{CdpClient, CdpError, SessionId, browser};
+use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId, browser};
+use neo_runtime_spec::serve::{FrameChannel, FrameInitializer};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::sync::broadcast;
+use tokio::sync::broadcast::error::TryRecvError;
 use tokio::time;
 use tokio::time::Instant;
 
+use crate::bridge;
+use crate::click::PageError;
+use crate::frames::{FrameInfo, FrameScope, Host};
+use crate::progress::PlaywrightError;
 use crate::run::PageId;
+use crate::tabs::{PageEntry, Tabs};
+use crate::url_match::{SerializedUrlMatch, UrlMatcher};
+
+/// Frame fields. The main URL comes directly from history; other fields read a fresh tree.
+#[derive(Clone, Copy)]
+pub(crate) enum FrameField {
+    Url,
+    Name,
+    ParentFrame,
+    ChildFrames,
+    IsDetached,
+}
+
+/// Neo: A run's observed frame graph outlives its page, with real removals kept separately
+/// from page closure. The receiver precedes domain setup; draining before each snapshot
+/// prevents a detach between the last getter and page.close from reviving an old frame.
+pub(crate) struct FrameMetadata {
+    events: broadcast::Receiver<CdpEvent>,
+    watched: HashSet<SessionId>,
+    known: Vec<FrameInfo>,
+    live: Vec<String>,
+    detached: HashSet<String>,
+    closing: bool,
+    lost_events: bool,
+}
+
+/// Neo: Keeps observed metadata and real detach events separate from session closure.
+impl FrameMetadata {
+    pub(crate) fn new(cdp: &CdpClient) -> Self {
+        Self {
+            events: cdp.events(),
+            watched: HashSet::new(),
+            known: Vec::new(),
+            live: Vec::new(),
+            detached: HashSet::new(),
+            closing: false,
+            lost_events: false,
+        }
+    }
+
+    /// Neo: Consume real removals before issuing close; OOPIF teardown during that write
+    /// is page closure, not a new frame-detached event in Playwright's client graph.
+    pub(crate) fn closing(&mut self) {
+        let _observed = self.drain();
+        self.closing = true;
+    }
+
+    fn drain(&mut self) -> Result<(), PlaywrightError> {
+        if self.lost_events {
+            return Err(PlaywrightError::error("Frame metadata events were lost"));
+        }
+        if self.closing {
+            return Ok(());
+        }
+        loop {
+            match self.events.try_recv() {
+                Ok(event)
+                    if event
+                        .session_id
+                        .as_ref()
+                        .is_some_and(|id| self.watched.contains(id)) =>
+                {
+                    if event.method == "Page.frameDetached"
+                        && event.params["reason"] == "remove"
+                        && let Some(id) = event.params["frameId"].as_str()
+                    {
+                        self.detached.insert(id.to_string());
+                    }
+                }
+                Ok(_) => {}
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Closed | TryRecvError::Lagged(_)) => {
+                    self.lost_events = true;
+                    return Err(PlaywrightError::error("Frame metadata events were lost"));
+                }
+            }
+        }
+        loop {
+            let mut added = false;
+            for frame in &self.known {
+                if frame
+                    .parent
+                    .as_ref()
+                    .is_some_and(|id| self.detached.contains(id))
+                {
+                    added |= self.detached.insert(frame.id.clone());
+                }
+            }
+            if !added {
+                break;
+            }
+        }
+        self.live.retain(|id| !self.detached.contains(id));
+        Ok(())
+    }
+
+    fn observe(&mut self, tree: &[FrameInfo]) -> Result<(), PlaywrightError> {
+        // A close attempt that left the page alive does not freeze later live reads.
+        self.closing = false;
+        for frame in tree {
+            match self.known.iter_mut().find(|known| known.id == frame.id) {
+                Some(known) => *known = frame.clone(),
+                None => self.known.push(frame.clone()),
+            }
+        }
+        self.live = tree.iter().map(|frame| frame.id.clone()).collect();
+        self.drain()
+    }
+
+    fn tree(&mut self) -> Result<Vec<FrameInfo>, PlaywrightError> {
+        self.drain()?;
+        Ok(self
+            .live
+            .iter()
+            .filter_map(|id| self.known.iter().find(|frame| &frame.id == id).cloned())
+            .collect())
+    }
+
+    fn value(
+        &mut self,
+        page: &PageId,
+        scope: &FrameScope,
+        field: FrameField,
+    ) -> Result<Value, PlaywrightError> {
+        self.drain()?;
+        let id = match scope {
+            FrameScope::Main => page.as_str(),
+            FrameScope::Frame(id) => id,
+        };
+        match field {
+            FrameField::IsDetached => Ok(json!(
+                !matches!(scope, FrameScope::Main) && !self.live.iter().any(|live| live == id)
+            )),
+            FrameField::ChildFrames => frame_records(
+                page,
+                &self.known,
+                self.known.iter().filter(|frame| {
+                    frame.parent.as_deref() == Some(id) && self.live.contains(&frame.id)
+                }),
+            ),
+            _ => frame_value(page, &self.known, scope, field),
+        }
+    }
+}
+
+fn metadata(page: &PageEntry) -> Result<MutexGuard<'_, FrameMetadata>, PlaywrightError> {
+    page.frame_metadata
+        .lock()
+        .map_err(|_| PlaywrightError::error("Frame metadata cannot be accessed"))
+}
+
+async fn watch_frame_host(page: &PageEntry, host: &Host) -> Result<bool, PlaywrightError> {
+    if metadata(page)?.watched.contains(host.session_id()) {
+        return Ok(false);
+    }
+    host.send("Page.enable", json!({}))
+        .await
+        .map_err(|error| frame_tree_error(host.classify(&error)))?;
+    metadata(page)?.watched.insert(host.session_id().clone());
+    Ok(true)
+}
+
+/// Uses the same matcher as `waitForURL`, without retaining a guid or matcher state.
+pub(crate) fn matches_url(
+    url: &str,
+    matcher: &SerializedUrlMatch,
+) -> Result<bool, PlaywrightError> {
+    UrlMatcher::new(matcher)?.matches(url)
+}
+
+/// Every current frame, in the core's tree order. Rust alone mints the SDK's opaque guids.
+/// This can wait for a pending main-frame navigation to commit before the tree answers.
+pub(crate) async fn frames(tabs: &Tabs, page: &PageEntry) -> Result<Value, PlaywrightError> {
+    let tree = frame_tree(tabs, page).await?;
+    frame_records(&page.id, &tree, tree.iter())
+}
+
+/// A direct frame's live field, or its observed metadata after page closure. A real detach
+/// preserves the frame's parent identity while removing it from the parent's child list.
+/// Only the main URL avoids a frame-tree read while the page is alive.
+pub(crate) async fn frame(
+    tabs: &Tabs,
+    page: &PageEntry,
+    scope: &FrameScope,
+    field: FrameField,
+) -> Result<Value, PlaywrightError> {
+    if page.closed.is_cancelled() {
+        return metadata(page)?.value(&page.id, scope, field);
+    }
+    if matches!((scope, field), (FrameScope::Main, FrameField::Url)) {
+        let url = tabs.url(page).await?;
+        if let Some(url) = &url
+            && let Some(main) = metadata(page)?
+                .known
+                .iter_mut()
+                .find(|frame| frame.id == page.id.as_str())
+        {
+            main.url.clone_from(url);
+        }
+        return Ok(json!(url));
+    }
+    frame_tree(tabs, page).await?;
+    metadata(page)?.value(&page.id, scope, field)
+}
+
+/// Neo: Keeps frame records on the same committed-URL source as the page getter.
+async fn frame_tree(tabs: &Tabs, page: &PageEntry) -> Result<Vec<FrameInfo>, PlaywrightError> {
+    if page.closed.is_cancelled() {
+        return metadata(page)?.tree();
+    }
+    let session = tabs.session(page).await?;
+    watch_frame_host(page, &session.frames.main().host).await?;
+    let mut tree = session.frames.tree().await.map_err(frame_tree_error)?;
+    loop {
+        let mut watched = false;
+        for frame in &tree {
+            if let Some(context) = session.frames.cached(&frame.id) {
+                watched |= watch_frame_host(page, &context.host).await?;
+            }
+        }
+        if !watched {
+            break;
+        }
+        // A host can lose a frame before Page.enable. Re-read after subscribing so that
+        // missing frames cannot enter the retained graph without a corresponding event.
+        tree = session.frames.tree().await.map_err(frame_tree_error)?;
+    }
+    if let Some(main) = tree.first_mut() {
+        main.url = tabs
+            .url(page)
+            .await?
+            .ok_or_else(PlaywrightError::target_closed)?;
+    }
+    let mut metadata = metadata(page)?;
+    metadata.observe(&tree)?;
+    metadata.tree()
+}
+
+fn frame_value(
+    page: &PageId,
+    tree: &[FrameInfo],
+    scope: &FrameScope,
+    field: FrameField,
+) -> Result<Value, PlaywrightError> {
+    let info = match scope {
+        FrameScope::Main => tree.first(),
+        FrameScope::Frame(id) => tree.iter().find(|frame| frame.id == *id),
+    };
+    let Some(info) = info else {
+        return Ok(match field {
+            FrameField::IsDetached => json!(true),
+            FrameField::ChildFrames => json!([]),
+            _ => Value::Null,
+        });
+    };
+    match field {
+        FrameField::Url => Ok(json!(info.url)),
+        FrameField::Name => Ok(json!(info.name)),
+        FrameField::ParentFrame => info.parent.as_ref().map_or(Ok(Value::Null), |id| {
+            let parent = tree.iter().find(|frame| frame.id == *id).ok_or_else(|| {
+                PlaywrightError::error("Frame parent is missing from the frame tree")
+            })?;
+            frame_record(page, tree, parent)
+        }),
+        FrameField::ChildFrames => frame_records(
+            page,
+            tree,
+            tree.iter()
+                .filter(|frame| frame.parent.as_ref() == Some(&info.id)),
+        ),
+        FrameField::IsDetached => Ok(json!(false)),
+    }
+}
+
+fn frame_records<'a>(
+    page: &PageId,
+    tree: &[FrameInfo],
+    records: impl Iterator<Item = &'a FrameInfo>,
+) -> Result<Value, PlaywrightError> {
+    records
+        .map(|frame| frame_record(page, tree, frame))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Value::Array)
+}
+
+fn frame_record(
+    page: &PageId,
+    tree: &[FrameInfo],
+    frame: &FrameInfo,
+) -> Result<Value, PlaywrightError> {
+    let parent_frame = frame
+        .parent
+        .as_ref()
+        .map(|id| -> Result<FrameChannel, PlaywrightError> {
+            let parent = tree.iter().find(|info| info.id == *id).ok_or_else(|| {
+                PlaywrightError::error("Frame parent is missing from the frame tree")
+            })?;
+            Ok(FrameChannel {
+                guid: frame_guid(page, parent),
+            })
+        })
+        .transpose()?;
+    let initializer = FrameInitializer {
+        url: frame.url.clone(),
+        name: frame.name.clone(),
+        parent_frame,
+        load_states: Vec::new(),
+    };
+    Ok(json!({ "guid": frame_guid(page, frame), "initializer": initializer }))
+}
+
+fn frame_guid(page: &PageId, frame: &FrameInfo) -> String {
+    if frame.parent.is_none() {
+        bridge::frame_guid(page)
+    } else {
+        format!("frame@{}/{}", page.as_str(), frame.id)
+    }
+}
+
+fn frame_tree_error(error: PageError) -> PlaywrightError {
+    match error {
+        PageError::Closed => PlaywrightError::target_closed(),
+        PageError::Threw(message) | PageError::Contract(message) => PlaywrightError::error(message),
+        PageError::NotConnected => PlaywrightError::error("Frame tree is not available"),
+    }
+}
 
 /// BrowserOS's `Browser.getTabInfo` error message for a tab that no longer exists. It is the
 /// only signal that tells "closed" apart from a failed call, so `Runtime::connect` checks the
@@ -107,5 +445,200 @@ pub(crate) async fn is_closed(cdp: &CdpClient, page: &PageId) -> Result<bool, Cd
         Ok(_) => Ok(false),
         Err(CdpError::Protocol { message, .. }) if message.contains(CLOSED_TAB_MESSAGE) => Ok(true),
         Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use tokio::runtime::Handle;
+    use tokio_util::task::TaskTracker;
+
+    use super::{FrameField, frame, frame_records, frame_value, matches_url};
+    use crate::fake_browser::{FakeBrowser, FrameReplies, PAGE, PAGE_URL, Replies};
+    use crate::frames::{FrameInfo, FrameScope};
+    use crate::page::TabInputs;
+    use crate::progress::ErrorName;
+    use crate::run::PageId;
+    use crate::tabs::Tabs;
+    use crate::url_match::SerializedUrlMatch;
+
+    fn tree() -> Vec<FrameInfo> {
+        [
+            ("root", None, "", "https://root.test/"),
+            ("local", Some("root"), "login", "https://root.test/login"),
+            ("remote", Some("local"), "payment", "https://pay.test/"),
+            (
+                "nested",
+                Some("remote"),
+                "nested",
+                "https://pay.test/nested",
+            ),
+        ]
+        .into_iter()
+        .map(|(id, parent, name, url)| FrameInfo {
+            id: id.to_string(),
+            parent: parent.map(str::to_string),
+            name: name.to_string(),
+            url: url.to_string(),
+        })
+        .collect()
+    }
+
+    #[test]
+    fn tests_that_frame_records_use_generated_initializers_and_opaque_guids() {
+        let page = PageId::new("tab".to_string());
+        let tree = tree();
+        let records = frame_records(&page, &tree, tree.iter()).unwrap();
+        assert_eq!(
+            records[0],
+            json!({
+                "guid": "frame@tab",
+                "initializer": {"url": "https://root.test/", "name": "", "loadStates": []},
+            })
+        );
+        assert_eq!(
+            records[1],
+            json!({
+                "guid": "frame@tab/local",
+                "initializer": {"url": "https://root.test/login", "name": "login", "loadStates": [], "parentFrame": {"guid": "frame@tab"}},
+            })
+        );
+        assert_eq!(
+            records[2]["initializer"]["parentFrame"],
+            json!({"guid": "frame@tab/local"})
+        );
+        assert_eq!(
+            records[3]["initializer"]["parentFrame"],
+            json!({"guid": "frame@tab/remote"})
+        );
+    }
+
+    #[test]
+    fn tests_that_each_frame_getter_reads_its_own_scope() {
+        let page = PageId::new("tab".to_string());
+        let tree = tree();
+        let main = FrameScope::Main;
+        let remote = FrameScope::Frame("remote".to_string());
+        assert_eq!(
+            frame_value(&page, &tree, &main, FrameField::ParentFrame).unwrap(),
+            Value::Null
+        );
+        assert_eq!(
+            frame_value(&page, &tree, &remote, FrameField::Url).unwrap(),
+            "https://pay.test/"
+        );
+        assert_eq!(
+            frame_value(&page, &tree, &remote, FrameField::Name).unwrap(),
+            "payment"
+        );
+        assert_eq!(
+            frame_value(&page, &tree, &remote, FrameField::IsDetached).unwrap(),
+            false
+        );
+        assert_eq!(
+            frame_value(&page, &tree, &remote, FrameField::ParentFrame).unwrap()["guid"],
+            "frame@tab/local"
+        );
+        let children = frame_value(&page, &tree, &remote, FrameField::ChildFrames).unwrap();
+        assert_eq!(children.as_array().unwrap().len(), 1);
+        assert_eq!(children[0]["guid"], "frame@tab/nested");
+        let leaf = FrameScope::Frame("nested".to_string());
+        assert_eq!(
+            frame_value(&page, &tree, &leaf, FrameField::ChildFrames).unwrap(),
+            json!([])
+        );
+    }
+
+    #[test]
+    fn tests_that_detached_frames_return_empty_live_getter_values() {
+        let page = PageId::new("tab".to_string());
+        let tree = tree();
+        let removed = FrameScope::Frame("removed".to_string());
+        assert_eq!(
+            frame_value(&page, &tree, &removed, FrameField::IsDetached).unwrap(),
+            true
+        );
+        for field in [FrameField::Url, FrameField::Name, FrameField::ParentFrame] {
+            assert_eq!(
+                frame_value(&page, &tree, &removed, field).unwrap(),
+                Value::Null
+            );
+        }
+        assert_eq!(
+            frame_value(&page, &tree, &removed, FrameField::ChildFrames).unwrap(),
+            json!([])
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_observed_frame_metadata_does_not_hide_connection_errors() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        browser.page.lock().unwrap().frames = Some(FrameReplies {
+            trees: [(
+                PAGE.to_string(),
+                json!({"frameTree":{"frame":{"id":PAGE,"url":PAGE_URL}}}),
+            )]
+            .into(),
+            ..FrameReplies::default()
+        });
+        let cdp = browser.cdp().await;
+        let (tabs, _) = Tabs::open(
+            cdp.clone(),
+            Handle::current(),
+            TabInputs::default(),
+            TaskTracker::new(),
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap();
+        let (page, scope) = tabs.resolve(&format!("frame@{PAGE}")).unwrap();
+        assert_eq!(
+            frame(&tabs, &page, &scope, FrameField::Name).await.unwrap(),
+            ""
+        );
+        cdp.disconnect().await;
+        let error = frame(&tabs, &page, &scope, FrameField::Name)
+            .await
+            .unwrap_err();
+        assert_eq!(error.name, ErrorName::TargetClosedError);
+    }
+
+    #[test]
+    fn tests_that_url_matching_reuses_all_recorded_playwright_cases() {
+        let goldens: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/url-match-goldens.json")).unwrap();
+        for golden in goldens["globs"].as_array().unwrap() {
+            let matcher: SerializedUrlMatch =
+                serde_json::from_value(json!({"glob": golden["glob"]})).unwrap();
+            if golden.get("error").is_some() {
+                assert!(
+                    matches_url("https://a.test/", &matcher).is_err(),
+                    "{golden}"
+                );
+                continue;
+            }
+            for case in golden["urls"].as_array().unwrap() {
+                assert_eq!(
+                    matches_url(case[0].as_str().unwrap(), &matcher).unwrap(),
+                    case[1].as_bool().unwrap(),
+                    "{golden}: {case}"
+                );
+            }
+        }
+        for golden in goldens["regexes"].as_array().unwrap() {
+            let matcher: SerializedUrlMatch = serde_json::from_value(
+                json!({"regexSource": golden["source"], "regexFlags": golden["flags"]}),
+            )
+            .unwrap();
+            for case in golden["urls"].as_array().unwrap() {
+                assert_eq!(
+                    matches_url(case[0].as_str().unwrap(), &matcher).unwrap(),
+                    case[1].as_bool().unwrap(),
+                    "{golden}: {case}"
+                );
+            }
+        }
     }
 }

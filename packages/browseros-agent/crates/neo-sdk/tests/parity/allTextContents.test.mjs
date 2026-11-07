@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import { assertDecoysUntouched, compareFrameCases, value } from './frames.mjs'
 import { compareMethod, skip } from './harness.mjs'
 
 const FRUITS = ['Apple', '  Banana\n    split  ', '', 'Cherry', 'Date']
@@ -30,11 +31,38 @@ test('allTextContents returns the textContent of every match, at once', {
       if (JSON.stringify(lists) !== JSON.stringify(expected)) throw new Error('lists: ' + JSON.stringify(lists))
       let invalid = 'resolved'
       try { await page.locator('.fruit >>').allTextContents() } catch (error) { invalid = errorCategory(error) }
-      if (invalid !== 'error') throw new Error('an invalid selector must reject')
+      if (invalid !== 'Error') throw new Error('an invalid selector must reject')
       return { lists, invalid }
     `,
     // The DOM's own textContent, which Playwright's page function returns as is.
     probe: `['.fruit', '#veg > li'].map(s => [...document.querySelectorAll(s)].map(e => e.textContent))`,
   })
   assert.ok(outcome.calls.every((c) => c.delivery === undefined))
+})
+
+/** allTextContents inside frames, on tabs of frame-top.html (frames.mjs): each frame names
+ * itself in its items, hidden ones included; a missing iframe reads [] at once. */
+const frameCases = [
+  {
+    name: 'allTextContents reads the items of the frame it names',
+    source: `page.setDefaultTimeout(1)
+    return {
+      cross: await settle(() => page.frameLocator('#login-iframe').locator('.item').allTextContents()),
+      frame: await settle(() => page.frame('grandchild').locator('.item').allTextContents()),
+      missingFrame: await settle(() => page.frameLocator('#nope').locator('.item').allTextContents()),
+    }`,
+    expected: {
+      cross: value(['cross one', 'cross two', 'cross hidden']),
+      frame: value(['grandchild one', 'grandchild two', 'grandchild hidden']),
+      missingFrame: value([]),
+    },
+    effect: (effect) => assertDecoysUntouched(effect, []),
+  },
+]
+
+test('allTextContents inside frames reads the same texts through Neo and Playwright', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases)
 })

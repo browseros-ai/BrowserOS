@@ -121,15 +121,22 @@ export function startNeo(neoRun, port, targetId, scriptPath) {
   return { connected, outcome }
 }
 
-/** Shared inside each script, so both engines compare failure categories in the same way. */
-function errorCategory(error) {
-  if (error.name === 'TimeoutError') return 'timeout'
-  if (/strict mode violation/.test(error.message)) return 'strict'
-  return 'error'
+/**
+ * A rejection's kind: the error's name, with `:strict` for a strict mode violation (a plain
+ * `Error` in Playwright), never its wording. Shared inside each script, so both engines report
+ * their rejections in the same way and a `TypeError` never passes for an `Error`.
+ */
+export function errorCategory(error) {
+  const strict = /strict mode violation/.test(error.message)
+  return strict ? `${error.name}:strict` : error.name
 }
 
-/** Runs one method's public script on fresh pages and compares its result and browser effect. */
-export async function compareMethod(t, { html, source, probe }) {
+/**
+ * Runs one method's public script on fresh pages and compares its result and browser effect.
+ * `effects({ playwright, neo })`, for a deliberate difference, asserts both effects itself in
+ * place of the equality check.
+ */
+export async function compareMethod(t, { html, source, probe, effects }) {
   t.diagnostic(
     `Playwright ${playwrightVersion}; ${playwrightDir ?? 'npm playwright-core'}`,
   )
@@ -169,7 +176,8 @@ export async function compareMethod(t, { html, source, probe }) {
     await page.close()
     assert.equal(outcome.status, 'ok', JSON.stringify(outcome))
     assert.deepEqual(outcome.value, value, 'public return values and types')
-    assert.deepEqual(actualEffect, effect, 'browser effect')
+    if (effects) effects({ playwright: effect, neo: actualEffect })
+    else assert.deepEqual(actualEffect, effect, 'browser effect')
     return outcome
   } finally {
     await runCleanups(cleanups)
@@ -259,8 +267,11 @@ export async function eventually(check, what, timeoutMs = 15_000) {
 }
 
 /**
- * Serves `pages[path]` for a path it names, and a small page titled with the path otherwise.
- * `/slow` answers after `slowMs`, so a navigation to it stays in flight before it commits.
+ * Serves `pages[path]` for a path it names (with or without a query, so one frame page serves
+ * every `?who=`), and a small page titled with the path otherwise. `/slow` answers after
+ * `slowMs`, so a navigation to it stays in flight before it commits. It listens on 127.0.0.1;
+ * the frame tests also load it as `localhost`, a different site, which BrowserOS neo reaches on
+ * the same address.
  */
 export async function serveFixture(cleanups, { pages = {}, slowMs = 0 } = {}) {
   const server = http.createServer(async (request, response) => {
@@ -268,6 +279,7 @@ export async function serveFixture(cleanups, { pages = {}, slowMs = 0 } = {}) {
     response.setHeader('content-type', 'text/html; charset=utf-8')
     response.end(
       pages[request.url] ??
+        pages[request.url.split('?')[0]] ??
         `<title>${request.url}</title><h1>${request.url}</h1>`,
     )
   })

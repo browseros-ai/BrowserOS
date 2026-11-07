@@ -20,7 +20,7 @@ use rmcp::{
     },
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tokio::{
     sync::{Mutex, OnceCell},
     time::Instant,
@@ -303,21 +303,22 @@ fn stopped(status: &str, timeout: u64) -> Value {
 }
 
 fn tool() -> Tool {
-    Tool::new("run", INSTRUCTIONS, Arc::new(serde_json::from_value(json!({
-        "type":"object", "additionalProperties":false,
-        "oneOf":[
+    Tool::new("run", INSTRUCTIONS, Arc::new(Map::from_iter([
+        ("type".into(), json!("object")),
+        ("additionalProperties".into(), json!(false)),
+        ("oneOf".into(), json!([
             {"required":["code"],"not":{"anyOf":[{"required":["result"]},{"required":["field"]},{"required":["offset"]}]}},
             {"required":["result"],"not":{"anyOf":[{"required":["code"]},{"required":["page"]},{"required":["timeout"]}]}}
-        ],
-        "properties": {
+        ])),
+        ("properties".into(), json!({
             "code":{"type":"string","description":"Playwright async function body; page and context are provided. Return a value."},
             "page":{"type":"string","minLength":1,"description":"A pages[].id from an earlier result. Omit to open a background tab."},
             "timeout":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT,"default":DEFAULT_TIMEOUT,"description":"Whole-run timeout in milliseconds."},
             "result":{"type":"string","minLength":1,"description":"Stored truncated result ID. Use instead of code, without page or timeout; retrieval never touches the browser. Process-local LRU: 16 results, 64 MiB; cleared on restart."},
             "field":{"type":"string","enum":["value","logs","calls","error"],"default":"value","description":"Original field to retrieve. Strings are raw text; other values and logs/calls/error use pretty JSON. Follow truncated.next verbatim."},
             "offset":{"type":"integer","minimum":0,"default":0,"description":"UTF-8 byte offset into the original field text. Prefer the next arguments returned with truncation metadata."}
-        }
-    })).unwrap_or_default()))
+        })),
+    ])))
     .with_title("Run Playwright code")
     .with_annotations(ToolAnnotations::new().read_only(false).destructive(true).open_world(true))
 }

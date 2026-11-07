@@ -178,7 +178,7 @@ async fn tests_that_input_value_reads_live_values_and_follows_labels_without_del
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn tests_that_validation_strict_and_frame_failures_reject_without_delivery() {
+async fn tests_that_validation_and_strict_failures_reject_without_delivery() {
     let Some(tab) = open().await else { return };
     let scripts = [
         "await page.locator('#number').fill('abc')",
@@ -188,7 +188,6 @@ async fn tests_that_validation_strict_and_frame_failures_reject_without_delivery
         "await page.locator('#plain').inputValue()",
         "await page.locator('.duplicate').fill('x')",
         "await page.locator('.duplicate').inputValue()",
-        "await page.locator('iframe >> internal:control=enter-frame >> input').fill('x')",
     ];
     let mut outcomes = Vec::new();
     for source in scripts {

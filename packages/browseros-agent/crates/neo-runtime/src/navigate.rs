@@ -1,7 +1,10 @@
-//! Main-frame navigation and title policy. CDP lives in `page.rs`; this seam keeps event
-//! ordering, lifecycle waits and cancellation testable without a browser or input turns.
+//! Main-frame navigation and title policy. CDP lives in `page.rs` and the navigation's network
+//! record in `network.rs`; this seam keeps event ordering, lifecycle waits, the response lookup
+//! and cancellation testable without a browser or input turns.
 
-use neo_runtime_spec::serve::{FrameGotoParams, FrameGotoResult, FrameTitleResult, LifecycleEvent};
+use neo_runtime_spec::serve::{
+    FrameGotoParams, FrameGotoResult, FrameTitleResult, LifecycleEvent, ResponseChannel,
+};
 use url::Url;
 
 use crate::click::PageError;
@@ -68,6 +71,16 @@ pub(crate) trait NavigationTab: Sync {
     type Observation: Observation;
 
     async fn prepare(&self) -> Result<(), PageError>;
+    /// Starts recording the page's navigation requests, once per session, and answers how many
+    /// times the recording has lagged so far.
+    async fn track_network(&self) -> Result<u64, PageError>;
+    /// The committed `document`'s navigation response, once known: `None` where Playwright's
+    /// goto answers `null`. A lag since `lags` that may have lost it is an error.
+    async fn navigation_response(
+        &self,
+        document: &str,
+        lags: u64,
+    ) -> Result<Option<ResponseChannel>, PlaywrightError>;
     fn observe(&self) -> Result<Self::Observation, PageError>;
     async fn navigate(
         &self,
@@ -114,6 +127,11 @@ pub(crate) async fn goto(
         url
     };
     progress.race(tab.prepare()).await?.map_err(page_error)?;
+    // Before `Page.navigate`: the navigation's request events come first and are never replayed.
+    let lags = progress
+        .race(tab.track_network())
+        .await?
+        .map_err(page_error)?;
     let mut events = tab.observe().map_err(page_error)?;
     // The subscription outlives the request: commits can arrive before its acknowledgement.
     let reply = progress
@@ -151,7 +169,17 @@ pub(crate) async fn goto(
             LifecycleEvent::Networkidle => false,
         };
         if done {
-            return Ok(FrameGotoResult { response: None });
+            // server/frames.ts:750: the new document's request, after its redirects, and that
+            // request's response; a same-document navigation has neither.
+            let response = match &document {
+                Some(document) => {
+                    progress
+                        .race(tab.navigation_response(document, lags))
+                        .await??
+                }
+                None => None,
+            };
+            return Ok(FrameGotoResult { response });
         }
         progress.race(events.next()).await?.map_err(page_error)?;
     }
@@ -266,6 +294,11 @@ mod tests {
         title_pending: bool,
         document: Mutex<Option<(String, Option<String>)>>,
         observed: Arc<Mutex<NavigationState>>,
+        /// What the page did, in order, for the calls whose order matters.
+        calls: Mutex<Vec<String>>,
+        /// The navigation response the page's network log answers, after `response_after` ms.
+        response: Result<Option<ResponseChannel>, PlaywrightError>,
+        response_after: u64,
     }
 
     impl FakeTab {
@@ -282,7 +315,16 @@ mod tests {
                 title_pending: false,
                 document: Mutex::new(None),
                 observed: Arc::default(),
+                calls: Mutex::default(),
+                response: Ok(Some(ResponseChannel {
+                    guid: "response@T:new:0".to_string(),
+                })),
+                response_after: 0,
             }
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().expect("calls").clone()
         }
     }
 
@@ -307,11 +349,36 @@ mod tests {
             })
         }
 
+        fn track_network(&self) -> impl Future<Output = Result<u64, PageError>> {
+            self.calls
+                .lock()
+                .expect("calls")
+                .push("track network".to_string());
+            future::ready(Ok(7))
+        }
+
+        async fn navigation_response(
+            &self,
+            document: &str,
+            lags: u64,
+        ) -> Result<Option<ResponseChannel>, PlaywrightError> {
+            self.calls
+                .lock()
+                .expect("calls")
+                .push(format!("response of {document} since {lags} lags"));
+            time::sleep(Duration::from_millis(self.response_after)).await;
+            self.response.clone()
+        }
+
         async fn navigate(
             &self,
             url: &str,
             referer: Option<&str>,
         ) -> Result<NavigateReply, PlaywrightError> {
+            self.calls
+                .lock()
+                .expect("calls")
+                .push("navigate".to_string());
             *self.document.lock().expect("page document") =
                 Some((url.to_string(), referer.map(str::to_string)));
             time::sleep(Duration::from_millis(self.reply_after)).await;
@@ -399,9 +466,87 @@ mod tests {
             let (progress, _) = progress(100.0);
             assert_eq!(
                 goto(&tab, &options(LifecycleEvent::Commit), &progress).await,
-                Ok(FrameGotoResult { response: None })
+                Ok(FrameGotoResult {
+                    response: Some(ResponseChannel {
+                        guid: "response@T:new:0".to_string()
+                    })
+                })
             );
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_goto_answers_the_committed_documents_response() {
+        let tab = FakeTab::new([commit(1, Some("new")), lifecycle(10, true, true)]);
+        let (progress, _) = progress(100.0);
+        let result = goto(&tab, &options(LifecycleEvent::Load), &progress).await;
+        assert_eq!(
+            result.map(|result| result.response),
+            Ok(Some(ResponseChannel {
+                guid: "response@T:new:0".to_string()
+            }))
+        );
+        assert_eq!(
+            tab.calls(),
+            ["track network", "navigate", "response of new since 7 lags"],
+            "the network is tracked before the navigation starts, and the response looked up \
+             for the document the navigation committed"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_goto_answers_null_where_the_navigation_has_no_response() {
+        let mut tab = FakeTab::new([commit(1, Some("new")), lifecycle(10, true, true)]);
+        tab.response = Ok(None);
+        let (progress, _) = progress(100.0);
+        let result = goto(&tab, &options(LifecycleEvent::Load), &progress).await;
+        assert_eq!(result, Ok(FrameGotoResult { response: None }));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_same_document_navigation_answers_null_without_a_lookup() {
+        let mut step = commit(1, None);
+        step.state = NavigationState {
+            lifecycle: Lifecycle {
+                dom_content_loaded: true,
+                load: true,
+                ..Lifecycle::default()
+            },
+            ..NavigationState::default()
+        };
+        let mut tab = FakeTab::new([step]);
+        tab.reply = Ok(NavigateReply::default());
+        let (progress, _) = progress(100.0);
+        let result = goto(&tab, &options(LifecycleEvent::Load), &progress).await;
+        assert_eq!(result, Ok(FrameGotoResult { response: None }));
+        assert!(
+            !tab.calls()
+                .iter()
+                .any(|call| call.starts_with("response of")),
+            "{:?}",
+            tab.calls()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_the_response_wait_shares_the_navigation_timeout() {
+        let mut tab = FakeTab::new([commit(1, Some("new")), lifecycle(10, true, true)]);
+        tab.response_after = 1_000;
+        let (progress, _) = progress(100.0);
+        let error = failure(goto(&tab, &options(LifecycleEvent::Load), &progress).await);
+        assert_eq!(error.name, ErrorName::TimeoutError);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_lost_network_events_reject_instead_of_guessing() {
+        let mut tab = FakeTab::new([commit(1, Some("new")), lifecycle(10, true, true)]);
+        tab.response = Err(PlaywrightError::error("lost"));
+        let (progress, _) = progress(100.0);
+        let error = failure(goto(&tab, &options(LifecycleEvent::Load), &progress).await);
+        assert_eq!(
+            (error.name, error.message.as_str()),
+            (ErrorName::Error, "lost")
+        );
     }
 
     #[tokio::test(start_paused = true)]

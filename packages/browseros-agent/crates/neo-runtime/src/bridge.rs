@@ -32,9 +32,12 @@ use tokio::task;
 
 use crate::deadline::{Deadline, Stop};
 use crate::dispatch::Dispatcher;
+use crate::getters::{self, FrameField};
+use crate::network::{HopId, LogError, ObjectKind as NetworkObject};
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunError};
 use crate::tabs::Tabs;
+use crate::url_match::SerializedUrlMatch;
 
 /// The guid the realm gives a run's page, in the `<type>@<id>` form Playwright's protocol uses.
 pub(crate) fn page_guid(page: &PageId) -> String {
@@ -185,13 +188,48 @@ enum GetterField {
     IsClosed,
     Pages,
     Initializer,
+    /// On a response: its request and every hop before, for the SDK to build.
+    Chain,
+    /// On a request: `timing()`, which Playwright's client updates from events.
+    Timing,
+    /// On a request: `failure()`'s text, set by Playwright's `requestFailed` event.
+    Failure,
+    /// On a response: `"finished"`, `"pending"` or `"closed"`, which `finished()` waits on.
+    Finished,
+    Frames,
+    Name,
+    ParentFrame,
+    ChildFrames,
+    IsDetached,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct GetRequest {
+struct ObjectRequest {
     guid: String,
     field: GetterField,
+}
+
+#[derive(Deserialize)]
+enum MatchField {
+    #[serde(rename = "matchesURL")]
+    MatchesUrl,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MatchRequest {
+    #[serde(rename = "field")]
+    _field: MatchField,
+    url: String,
+    matcher: SerializedUrlMatch,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum GetRequest {
+    Object(ObjectRequest),
+    Match(MatchRequest),
 }
 
 /// Why a getter threw. Each maps to the JS error the script sees.
@@ -221,17 +259,44 @@ impl Getters {
     fn answer(&self, request: &str) -> Result<Value, GetError> {
         let request: GetRequest = serde_json::from_str(request)
             .map_err(|error| GetError::BadRequest(format!("bad getter request: {error}")))?;
+        let request = match request {
+            GetRequest::Object(request) => request,
+            GetRequest::Match(request) => {
+                return self.wait(async {
+                    getters::matches_url(&request.url, &request.matcher).map(|value| json!(value))
+                });
+            }
+        };
         if request.guid == "context@default" && matches!(request.field, GetterField::Pages) {
             return self.wait(async {
                 serde_json::to_value(self.tabs.pages().await?)
                     .map_err(|error| PlaywrightError::error(error.to_string()))
             });
         }
-        let page = self
+        if let Some((kind, _, hop)) = HopId::parse(&request.guid) {
+            return self.network(&request.guid, kind, &hop, request.field);
+        }
+        let (page, scope) = self
             .tabs
             .resolve(&request.guid)
-            .filter(|_| request.guid.starts_with("page@"))
             .ok_or_else(|| GetError::BadRequest(format!("unknown guid {:?}", request.guid)))?;
+        if request.guid.starts_with("frame@") {
+            let field = match request.field {
+                GetterField::Url => FrameField::Url,
+                GetterField::Name => FrameField::Name,
+                GetterField::ParentFrame => FrameField::ParentFrame,
+                GetterField::ChildFrames => FrameField::ChildFrames,
+                GetterField::IsDetached => FrameField::IsDetached,
+                _ => return Err(GetError::BadRequest("not a frame getter".to_string())),
+            };
+            return self.wait(async { getters::frame(&self.tabs, &page, &scope, field).await });
+        }
+        if !request.guid.starts_with("page@") {
+            return Err(GetError::BadRequest(format!(
+                "unknown guid {:?}",
+                request.guid
+            )));
+        }
         match request.field {
             GetterField::Url => self.wait(self.tabs.url(&page)).map(|url| json!(url)),
             GetterField::IsClosed => self
@@ -244,7 +309,57 @@ impl Getters {
             GetterField::Pages => Err(GetError::BadRequest(
                 "pages is a context getter".to_string(),
             )),
+            GetterField::Chain
+            | GetterField::Timing
+            | GetterField::Failure
+            | GetterField::Finished => Err(GetError::BadRequest(format!(
+                "{:?} is a request or response getter",
+                request.field
+            ))),
+            GetterField::Frames => self.wait(async { getters::frames(&self.tabs, &page).await }),
+            GetterField::Name
+            | GetterField::ParentFrame
+            | GetterField::ChildFrames
+            | GetterField::IsDetached => Err(GetError::BadRequest("not a page getter".to_string())),
         }
+    }
+
+    /// A hop's live client state, read from the network log of the session that recorded it.
+    /// Nothing here waits: every value is already in Rust.
+    fn network(
+        &self,
+        guid: &str,
+        kind: NetworkObject,
+        hop: &HopId,
+        field: GetterField,
+    ) -> Result<Value, GetError> {
+        let unknown = || GetError::BadRequest(format!("unknown guid {guid:?}"));
+        let (page, _) = self.tabs.resolve(guid).ok_or_else(unknown)?;
+        // A hop exists only after a goto on this session, which stays attached for the run.
+        let session = page.attached_session().ok_or_else(unknown)?;
+        let log = &session.network;
+        let value = match (kind, field) {
+            (NetworkObject::Response, GetterField::Chain) => log
+                .chain(hop)
+                .and_then(|chain| serde_json::to_value(chain).map_err(|_| LogError::Poisoned)),
+            (NetworkObject::Request, GetterField::Timing) => log
+                .timing(hop)
+                .and_then(|timing| serde_json::to_value(timing).map_err(|_| LogError::Poisoned)),
+            (NetworkObject::Request, GetterField::Failure) => {
+                log.failure(hop).map(|text| json!(text))
+            }
+            (NetworkObject::Response, GetterField::Finished) => log.finished(hop).map(|finished| {
+                json!(if finished {
+                    "finished"
+                } else if page.closed.is_cancelled() {
+                    "closed"
+                } else {
+                    "pending"
+                })
+            }),
+            (_, field) => return Err(GetError::BadRequest(format!("no {field:?} on {guid:?}"))),
+        };
+        value.map_err(|error| GetError::Page(PlaywrightError::error(error.to_string())))
     }
 
     /// Waits on the current thread for one CDP reply, so a JS getter can return a plain
@@ -291,4 +406,37 @@ fn throw_named(ctx: &Ctx<'_>, name: &str, message: &str) -> rquickjs::Error {
         return error;
     }
     exception.throw()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::GetRequest;
+    use crate::getters;
+
+    #[test]
+    fn tests_that_matches_url_uses_the_wait_for_url_wire_shape_without_a_guid() {
+        for wire in [
+            r#"{"field":"matchesURL","url":"https://a.test/","matcher":{"glob":"https://A.test/"}}"#,
+            r#"{"field":"matchesURL","url":"https://a.test/","matcher":{"regexSource":"A\\.test","regexFlags":"i"}}"#,
+        ] {
+            let GetRequest::Match(request) = serde_json::from_str(wire).unwrap() else {
+                panic!("expected the pure URL matcher getter");
+            };
+            assert!(getters::matches_url(&request.url, &request.matcher).unwrap());
+        }
+    }
+
+    #[test]
+    fn tests_that_frame_getter_requests_preserve_the_opaque_guid() {
+        for field in ["url", "name", "parentFrame", "childFrames", "isDetached"] {
+            let wire = json!({"guid": "frame@tab/child", "field": field});
+            let GetRequest::Object(request) = serde_json::from_value(wire).unwrap() else {
+                panic!("expected a frame getter");
+            };
+            assert_eq!(request.guid, "frame@tab/child");
+        }
+        assert!(serde_json::from_str::<GetRequest>(r#"{"field":"matchesURL","url":"https://a.test/","matcher":{"glob":"**"},"guid":"frame@tab"}"#).is_err());
+    }
 }

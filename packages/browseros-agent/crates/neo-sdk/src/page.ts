@@ -3,6 +3,7 @@ import type {
   PageCloseParams,
 } from '@browseros/neo-runtime-spec/serve'
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
+import { isString } from '../vendor/playwright/isomorphic/stringUtils'
 import type { BrowserContext } from './browser-context'
 import type { Connection } from './connection'
 import { isTargetClosedError } from './errors'
@@ -26,9 +27,12 @@ import {
   type WaitForLoadStateOptions,
   type WaitForURLOptions,
 } from './frame'
+import type { FrameLocator } from './frame-locator'
 import type { Locator, LocatorOptions } from './locator'
+import { serializeUrlMatch } from './neo-commands'
+import type { Response } from './network'
 import { PAGE_CLOSE_KEYS, pickParams } from './protocol'
-import { get } from './runtime-bridge'
+import { type CreatedFrame, get, matchesURL } from './runtime-bridge'
 import type { SelectOptionValues } from './select-option'
 import { TimeoutSettings } from './timeout-settings'
 
@@ -58,6 +62,8 @@ export class Page {
   /** Built once: `Locator` throws `… must belong to the same frame.` when two locators hold
    * different `Frame` objects, so `mainFrame()` must always return this one. */
   readonly #mainFrame: Frame
+  /** Stable identity, including detached frames a script may still hold. */
+  readonly #frames = new Map<string, Frame>()
   readonly _timeoutSettings: TimeoutSettings
 
   /** `guid` and `mainFrameGuid` come from one record Rust minted (`page@T`, `frame@T`), so a
@@ -74,7 +80,11 @@ export class Page {
     this.#context = context
     this.#connection = connection
     this._timeoutSettings = new TimeoutSettings(context._timeoutSettings)
-    this.#mainFrame = new Frame(mainFrameGuid, this, connection)
+    this.#mainFrame = new Frame(mainFrameGuid, this, connection, {
+      url,
+      name: '',
+    })
+    this.#frames.set(mainFrameGuid, this.#mainFrame)
   }
 
   url(): string {
@@ -139,6 +149,41 @@ export class Page {
     return this.#mainFrame
   }
 
+  /** Interns records from every getter so frame comparisons remain valid across reads. */
+  _frameFrom(record: CreatedFrame): Frame {
+    let frame = this.#frames.get(record.guid)
+    if (!frame) {
+      frame = new Frame(record.guid, this, this.#connection, record.initializer)
+      this.#frames.set(record.guid, frame)
+    } else frame._updateInitializer(record.initializer)
+    return frame
+  }
+
+  frames(): Frame[] {
+    return get(this.#guid, 'frames').map((record) => this._frameFrom(record))
+  }
+
+  /** As Playwright, a nonempty name takes precedence when both selectors are given. */
+  frame(
+    frameSelector: string | { name?: string; url?: URLMatch },
+  ): Frame | null {
+    const name = isString(frameSelector) ? frameSelector : frameSelector.name
+    const url =
+      typeof frameSelector === 'object' ? frameSelector.url : undefined
+    if (!name && !url)
+      throw new Error('Either name or url matcher should be specified')
+    const matcher = name ? undefined : serializeUrlMatch('page.frame', url)
+    // Neo: Reuses one live frame-tree reply and refreshes its canonical Frame objects.
+    const records = get(this.#guid, 'frames')
+    const frames = records.map((record) => this._frameFrom(record))
+    const index = records.findIndex(({ initializer }) =>
+      matcher
+        ? matchesURL(initializer.url, matcher)
+        : initializer.name === name,
+    )
+    return frames[index] ?? null
+  }
+
   context(): BrowserContext {
     return this.#context
   }
@@ -151,8 +196,8 @@ export class Page {
     this._timeoutSettings.setDefaultNavigationTimeout(timeout)
   }
 
-  /** Resolves `null`: Neo creates no `Response` objects yet. */
-  async goto(url: string, options: GotoOptions = {}): Promise<null> {
+  /** The navigation's `Response`, or `null` where Playwright's has none. */
+  async goto(url: string, options: GotoOptions = {}): Promise<Response | null> {
     return await this.#mainFrame._goto('page.goto', url, options)
   }
 
@@ -218,11 +263,15 @@ export class Page {
   }
 
   /**
-   * The main frame's accessibility tree as YAML. Default mode omits refs; `mode: 'ai'` adds
-   * `[ref=eN]` for `page.locator('aria-ref=eN')`. The next snapshot or navigation replaces refs.
-   * `depth` limits tree levels (0 means unlimited). Iframe contents are omitted.
-   * For a section, use `locator.ariaSnapshot()`: AI mode does not auto-wait for that locator,
-   * so use `locator.waitFor()` first if needed.
+   * The main frame's accessibility tree as YAML. Default mode omits refs and prints iframes
+   * without their content, as Playwright's does. `mode: 'ai'` adds `[ref=eN]` refs that
+   * `page.locator('aria-ref=…')` resolves, in this run or a later one, until that document's
+   * next snapshot or navigation, and puts each rendered iframe's document under its `iframe`
+   * node, as in Playwright. A ref inside a frame is its path from the main frame:
+   * `- iframe [ref=e7]:` holds `- textbox "Email" [ref=f7e3]`, and a frame inside it adds a step
+   * (`f7f2e1`); Playwright numbers frames instead (`f1e3`). `depth` limits tree levels (0 means
+   * unlimited). For a section, use `locator.ariaSnapshot()`: AI mode does not auto-wait for that
+   * locator, so use `locator.waitFor()` first if needed.
    */
   async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
     return await this.#mainFrame._ariaSnapshot('page.ariaSnapshot', options)
@@ -309,6 +358,10 @@ export class Page {
     return this.mainFrame().locator(selector, options)
   }
 
+  frameLocator(selector?: string): FrameLocator {
+    return this.mainFrame().frameLocator(selector)
+  }
+
   getByTestId(testId: string | RegExp): Locator {
     return this.mainFrame().getByTestId(testId)
   }
@@ -338,5 +391,11 @@ export class Page {
 
   getByRole(role: string, options: ByRoleOptions = {}): Locator {
     return this.mainFrame().getByRole(role, options)
+  }
+
+  /** Playwright's `ChannelOwner.toJSON`: `JSON.stringify(page)`, and a script that returns its
+   * page, give its type and guid only, never this object's internals. */
+  toJSON(): { _type: 'Page'; _guid: string } {
+    return { _type: 'Page', _guid: this.#guid }
   }
 }

@@ -22,7 +22,7 @@ test('setChecked returns undefined and applies both states on every receiver', {
       if (!voids.every(Boolean)) throw new Error('setChecked must return undefined')
       let wrong = 'resolved'
       try { await page.locator('#plain').setChecked(true) } catch (error) { wrong = errorCategory(error) }
-      if (wrong !== 'error') throw new Error('wrong element must reject')
+      if (wrong !== 'Error') throw new Error('wrong element must reject')
       return { voids, wrong }
     `,
     probe: 'window.__facts()',

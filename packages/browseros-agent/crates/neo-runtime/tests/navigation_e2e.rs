@@ -12,7 +12,10 @@ use tokio::time;
 
 const ONE: &str = r#"<!doctype html><title>First</title><h1>First page</h1>
 <a id="next" href="/two">Next</a><a id="slow" href="/slow">Slow</a>
-<script>window.__restored = false; addEventListener('pageshow', e => window.__restored = e.persisted)</script>"#;
+<script>
+document.documentElement.dataset.historyDocument = crypto.randomUUID();
+window.__restored = false; addEventListener('pageshow', e => window.__restored = e.persisted)
+</script>"#;
 const TWO: &str = r#"<!doctype html><title>Second</title><h1>Second page</h1>
 <button id="go" onclick="document.title='Clicked'">Go</button>
 <button id="back" onclick="history.back()">Back</button>"#;
@@ -58,12 +61,15 @@ async fn tests_that_goto_waits_for_each_supported_lifecycle_and_reads_the_new_ti
     let Some(tab) = open().await else { return };
     for wait in ["commit", "domcontentloaded", "load"] {
         let result = value(run(&tab, &format!(
-            "const result = await page.goto({:?}, {{waitUntil: {:?}}}); return {{isNull: result === null, title: await page.title(), url: page.url()}}",
+            "const result = await page.goto({:?}, {{waitUntil: {:?}}}); return {{status: result.status(), ok: result.ok(), responseUrl: result.url(), method: result.request().method(), contentType: (await result.allHeaders())['content-type'], title: await page.title(), url: page.url()}}",
             format!("{}/two", tab.origin), wait,
         )).await);
         assert_eq!(
             result,
-            json!({"isNull":true, "title":"Second", "url":format!("{}/two", tab.origin)})
+            json!({"status":200, "ok":true, "responseUrl":format!("{}/two", tab.origin),
+                   "method":"GET", "contentType":"text/html; charset=utf-8", "title":"Second",
+                   "url":format!("{}/two", tab.origin)}),
+            "{wait}"
         );
     }
     tab.close().await;
@@ -81,7 +87,8 @@ async fn tests_that_goto_waits_for_load_but_not_slow_subresources_at_commit_or_d
             ),
         )
         .await;
-        assert_eq!(value(outcome), Value::Null);
+        // A returned Response serializes as Playwright's channel objects do.
+        assert_eq!(value(outcome)["_type"], "Response", "{wait}");
         let mut state = tab.evaluate("document.readyState").await;
         // Commit may precede HTML parsing. Wait only for the parser, while the image is held.
         for _ in 0..50 {
@@ -238,20 +245,53 @@ async fn tests_that_two_runs_on_the_same_tab_read_the_current_document() {
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_history_navigation_restores_a_readable_document() {
     let Some(tab) = open().await else { return };
+    let original = history_document(&tab).await;
     let result = value(run(&tab, &format!(
-        "await page.goto({:?}); const before=await page.title(); await page.locator('#back').click(); const after=await page.title(); await page.goto({:?}, {{timeout:1500}}); return {{before,after,afterHash:await page.title()}}",
+        "await page.goto({:?}); const before=await page.title(); await page.locator('#back').click(); const after=await page.title(); const afterBackMarker=await page.locator('html').getAttribute('data-history-document'); await page.goto({:?}, {{timeout:1500}}); return {{titles:{{before,after,afterHash:await page.title()}},afterBackMarker,afterHashMarker:await page.locator('html').getAttribute('data-history-document')}}",
         format!("{}/two",tab.origin), format!("{}/one#restored",tab.origin),
     )).await);
+    let current = history_document(&tab).await;
+    tab.close().await;
     assert_eq!(
-        result,
+        result["titles"],
         json!({"before":"Second","after":"First","afterHash":"First"})
     );
+    assert!(original["marker"].is_string(), "{original}");
+    assert!(current["marker"].is_string(), "{current}");
+    assert!(current["restored"].is_boolean(), "{current}");
     assert_eq!(
-        tab.evaluate("window.__restored").await,
-        true,
-        "pageshow must report a persisted document"
+        result["afterBackMarker"], current["marker"],
+        "Neo must read the driver's current document after history navigation"
     );
-    tab.close().await;
+    assert_eq!(
+        result["afterHashMarker"], current["marker"],
+        "the fragment change must keep the current document readable"
+    );
+    // Chromium may flush an eligible cache entry. A cache hit retains this document;
+    // a history reload creates a new one, which Neo must read just as faithfully.
+    if current["restored"] == true {
+        assert_eq!(current["marker"], original["marker"]);
+    } else {
+        assert_eq!(current["navigationType"], "back_forward");
+        assert_ne!(current["marker"], original["marker"]);
+    }
+}
+
+/// Reads the actual document independently of Neo after its fixture script has run.
+async fn history_document(tab: &Tab) -> Value {
+    let reply = tab.cdp.send("Runtime.evaluate", json!({
+        "expression": r"(async () => {
+            if (document.readyState === 'loading')
+                await new Promise(resolve => addEventListener('DOMContentLoaded', resolve, {once:true}));
+            return {marker:document.documentElement.dataset.historyDocument,
+                restored:window.__restored,
+                navigationType:performance.getEntriesByType('navigation')[0].type};
+        })()",
+        "awaitPromise":true,
+        "returnByValue":true,
+    }), Some(&tab.driver)).await.unwrap_or_else(|error| panic!("read history fixture document: {error}"));
+    assert!(reply.get("exceptionDetails").is_none(), "{reply}");
+    reply["result"]["value"].clone()
 }
 
 #[tokio::test(flavor = "multi_thread")]

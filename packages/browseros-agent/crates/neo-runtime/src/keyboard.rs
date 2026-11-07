@@ -42,7 +42,7 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 use crate::click::{PageError, PressReport, Tab};
-use crate::page::{InputPermit, PageSession};
+use crate::page::{FrameTab, InputPermit, PageSession};
 use crate::progress::InputTicket;
 use crate::world;
 
@@ -88,7 +88,7 @@ pub(crate) trait KeyboardTab: Tab {
     ) -> impl Future<Output = PressReport> + Send;
 }
 
-impl KeyboardTab for Arc<PageSession> {
+impl KeyboardTab for FrameTab {
     async fn platform(&self) -> Result<Platform, PageError> {
         let user_agent = self
             .user_agent()

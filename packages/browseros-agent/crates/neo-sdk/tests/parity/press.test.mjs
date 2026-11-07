@@ -1,9 +1,13 @@
 // Press's Page, Frame and Locator receivers share one behavior check on fresh pages: the same
-// keys type the same text and the page sees the same key events. `Shift+Foo` is left out on
-// purpose: Playwright presses Shift and leaves it held, Neo sends nothing (press_e2e.rs checks it).
+// keys type the same text and the page sees the same key events.
+//
+// One difference is deliberate and asserted, not hidden: on `Shift+Foo` Playwright presses Shift,
+// rejects on the unknown `Foo` and leaves Shift held; Neo checks every key before it presses any,
+// so its page sees no key at all (press_e2e.rs). Both reject with the same error.
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import { assertDecoysUntouched, compareFrameCases } from './frames.mjs'
 import { compareMethod, skip } from './harness.mjs'
 
 test('press returns undefined and types through ordinary key events', {
@@ -34,10 +38,10 @@ test('press returns undefined and types through ordinary key events', {
           invalid.push({ category: errorCategory(error), unknownKey: /Unknown key/.test(error.message) })
         }
       }
-      if (invalid.length !== 3 || !invalid.every(result => result.category === 'error')) throw new Error('invalid keys must reject')
+      if (invalid.length !== 3 || !invalid.every(result => result.category === 'Error')) throw new Error('invalid keys must reject')
       let timeout = 'resolved'
       try { await page.locator('#missing').press('Enter', {timeout:500}) } catch (error) { timeout = errorCategory(error) }
-      if (timeout !== 'timeout') throw new Error('missing press must time out')
+      if (timeout !== 'TimeoutError') throw new Error('missing press must time out')
       return { voids, invalid, timeout }
     `,
     probe: 'window.__facts()',
@@ -53,4 +57,117 @@ test('press returns undefined and types through ordinary key events', {
     ['Foo', 'notSent'],
     ['', 'notSent'],
   ])
+})
+
+test('Shift+Foo rejects alike: Playwright leaves Shift down, Neo presses no key', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  const outcome = await compareMethod(t, {
+    html: readFileSync(
+      new URL('../pages/form-actions.html', import.meta.url),
+      'utf8',
+    ),
+    source: `
+      try {
+        await page.locator('#text').press('Shift+Foo')
+        return 'resolved'
+      } catch (error) {
+        return errorCategory(error)
+      }
+    `,
+    probe: 'window.__facts()',
+    effects: ({ playwright, neo }) => {
+      const event = (type, key) => ({
+        type,
+        target: 'text',
+        key,
+        data: null,
+        inputType: null,
+      })
+      const untouched = { ...neo, events: [] }
+      assert.deepEqual(
+        { ...playwright, events: [] },
+        untouched,
+        'the same values',
+      )
+      assert.deepEqual(
+        playwright.events,
+        [event('focus', null), event('keydown', 'Shift')],
+        "Playwright's page: Shift went down and stayed",
+      )
+      assert.deepEqual(
+        neo.events,
+        [event('focus', null)],
+        "Neo's page: focused, no key",
+      )
+    },
+  })
+  assert.equal(outcome.value, 'Error')
+  assert.deepEqual(
+    outcome.calls.map((c) => [c.params.key, c.delivery]),
+    [['Shift+Foo', 'notSent']],
+  )
+})
+
+/**
+ * Press inside frames, on tabs of frame-top.html (frames.mjs): keys into the Email of the
+ * cross-site, out-of-process frame, into the Search of the same-origin frame (Enter, then a
+ * letter) and, through a child Frame, into the 127.0.0.1 frame inside the cross-site one. The
+ * parent and every other frame keep their values and see no key, the pressed frames' other
+ * inputs included.
+ */
+const frameCases = [
+  {
+    name: 'press types into one frame and no decoy',
+    source: `const email = page.frameLocator('#login-iframe').getByLabel('Email')
+    const search = page.frameLocator('#same').getByPlaceholder('Search')
+    return {
+      end: await settle(() => email.press('End')),
+      typed: await settle(() => email.press('x')),
+      enter: await settle(() => search.press('Enter')),
+      sameTyped: await settle(() => search.press('a')),
+      frame: await settle(() => page.frame('grandchild').press('#search', 'b')),
+    }`,
+    expected: {
+      end: 'undefined',
+      typed: 'undefined',
+      enter: 'undefined',
+      sameTyped: 'undefined',
+      frame: 'undefined',
+    },
+    effect: (effect) => {
+      const { cross, same, grandchild } = assertDecoysUntouched(effect, [
+        'cross',
+        'same',
+        'grandchild',
+      ])
+      assert.deepEqual(
+        {
+          cross: [cross.email, cross.search],
+          same: [same.email, same.search],
+          grandchild: [grandchild.email, grandchild.search],
+        },
+        {
+          cross: ['cross@seed.testx', ''],
+          same: ['same@seed.test', 'a'],
+          grandchild: ['grandchild@seed.test', 'b'],
+        },
+      )
+      assert.deepEqual(
+        same.events
+          .filter((event) => event.type === 'keydown')
+          .map((event) => event.key),
+        ['Enter', 'a'],
+      )
+    },
+    deliveries: { press: ['done', 'done', 'done', 'done', 'done'] },
+  },
+]
+
+test('press inside frames types into the same input through Neo and Playwright', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases)
 })

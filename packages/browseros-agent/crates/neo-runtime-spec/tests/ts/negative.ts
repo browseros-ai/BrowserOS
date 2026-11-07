@@ -7,7 +7,11 @@ import type {
   InjectedApi,
   InjectedInitializer,
 } from '../../ts/injected'
-import type { FrameGotoParams, FrameGotoResult } from '../../ts/serve'
+import type {
+  FrameGotoParams,
+  FrameGotoResult,
+  RequestInitializer,
+} from '../../ts/serve'
 import type { InjectedScript } from './injected-script'
 
 /** The named handle kinds, bound as the real glue binds them to Playwright's page types. */
@@ -28,13 +32,15 @@ const valid = {
   isVisible: () => ({ value: false }),
   isChecked: () => ({}),
   ariaSnapshot: () => ({}),
-  frameOwner: () => ({}),
+  frameOwner: () => ({ visible: false }),
   describeSelector: (_injected, { selector }) => ({ locator: selector }),
   resolve: () => ({ count: 0 }),
   checkElementStates: () => ({}),
   scrollIntoView: () => ({}),
   viewportSize: () => ({ width: 1280, height: 720 }),
   getElementBorderWidth: () => ({ left: 0, top: 0 }),
+  describeIFrameStyle: () => ({ style: { left: 0, top: 0 } }),
+  expectHitTarget: () => ({ outcome: 'done' }),
   setupHitTargetInterceptor: () => ({ outcome: 'error:notconnected' }),
   stopHitTargetInterceptor: (_injected, _params, interceptor) => ({
     outcome: interceptor.stop(),
@@ -146,8 +152,18 @@ export const noFrameSeq: InjectedInitializer = {
 }
 
 export const gotoResponse: FrameGotoResult = {
-  // @ts-expect-error Neo creates no Response objects, so goto never answers with one.
-  response: { guid: 'response@1' },
+  // @ts-expect-error a Response is named by its guid only.
+  response: { guid: 'response@T:L:0', status: 200 },
+}
+
+export const workerRequest: RequestInitializer = {
+  url: 'https://a.test',
+  resourceType: 'document',
+  method: 'GET',
+  headers: [],
+  isNavigationRequest: true,
+  // @ts-expect-error Neo serves no Worker objects, so a request names no service worker.
+  serviceWorker: { guid: 'worker@1' },
 }
 
 export const gotoLater: FrameGotoParams = {
