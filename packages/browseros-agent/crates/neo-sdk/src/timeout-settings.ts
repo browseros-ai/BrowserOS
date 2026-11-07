@@ -24,7 +24,7 @@ const DEFAULT_PLAYWRIGHT_TIMEOUT = 30_000
 export type TimeoutInput = { timeout?: number; signal?: unknown }
 
 /**
- * Deviation: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };` Playwright hands the signal to the call, which aborts when it aborts; Neo has no way to abort a sent call yet, so it refuses any signal, an aborted one included, before sending anything.
+ * Deviation: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };` Playwright hands the signal to the call, which aborts when it aborts; Neo has no way to abort a sent call yet, so it refuses any signal, an aborted one included, before sending anything; null and undefined are none.
  *
  * `waiter.ts`'s `refuseSignal`, the one refusal, prefixed with `apiName` as Playwright's
  * `_wrapApiCall` prefixes a client-side error; `null` inside a `wrapApiCall` body, which adds

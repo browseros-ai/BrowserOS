@@ -5,7 +5,7 @@
 // An already-aborted signal: both engines reject before anything is sent, so the page sees no
 // click and stays where it was; Playwright's error is `AbortError`, Neo's an `Error` (Neo refuses
 // every signal, DECIDED S1-1). A live signal: Playwright runs each call; Neo still refuses each
-// and the page sees nothing. Each engine's results are asserted against its own contract, and the
+// and the page sees nothing. `null` is no signal in either engine: both run every call. Each engine's results are asserted against its own contract, and the
 // browser effects compared where both promise the same. Never the error's wording.
 //
 // The scripts build the second URL with a string replace: Neo's realm has no global `URL`.
@@ -131,6 +131,16 @@ test('a signal is refused before any browser effect', {
         assert.deepEqual(neo.outcome.calls, [], 'Neo sent no call')
       },
     )
+
+    await t.test('null is no signal: both engines run the calls', async () => {
+      const none = script('null', { goto: false })
+      const reference = await viaPlaywright(none)
+      assert.deepEqual(reference.value, EVERY('resolved', NAMES))
+      assert.deepEqual(reference.effect, { clicks: 3, path: '/signal.html' })
+      const neo = await viaNeo('null', none)
+      assert.deepEqual(neo.value, reference.value)
+      assert.deepEqual(neo.effect, reference.effect, 'what the page saw')
+    })
 
     await t.test(
       'a live signal: Playwright runs the calls, Neo refuses them',

@@ -1,10 +1,11 @@
 /**
  * Every method Neo serves that takes Playwright's `signal` option refuses one before sending
  * anything (`TimeoutSettings.timeout`/`navigationTimeout`, the one place a call resolves its
- * options into a timeout): an already-aborted signal, a live one and `null` alike reject with an
- * `Error` prefixed with the method's api name, and no message reaches the runtime, so the
- * browser sees nothing. Playwright aborts the call instead (`AbortError` for an aborted signal),
- * which Neo cannot do for a sent call yet.
+ * options into a timeout): an already-aborted signal and a live one alike reject with an `Error`
+ * prefixed with the method's api name, and no message reaches the runtime, so the browser sees
+ * nothing. Playwright aborts the call instead (`AbortError` for an aborted signal), which Neo
+ * cannot do for a sent call yet. `null` and `undefined` are no signal, as Playwright reads them
+ * (supermediator DECIDED 01:27): the call is sent.
  */
 
 import { expect, test } from 'bun:test'
@@ -16,7 +17,6 @@ const SIGNALS: [string, unknown][] = [
     'a live signal',
     { aborted: false, addEventListener() {}, removeEventListener() {} },
   ],
-  ['null', null],
 ]
 
 type Call = [apiName: string, call: (signal: never) => Promise<unknown>]
@@ -191,16 +191,28 @@ for (const [family, calls] of [
   })
 }
 
-test('tests that no signal, or an undefined one, still sends the call', async () => {
+test('tests that no signal, an undefined one or null still sends the call', async () => {
   const { page, fake } = start()
   const sent = fake.messages.length
   await page
     .locator('#target')
     .click(withSignal(undefined as never))
     .catch(() => {})
+  await page
+    .locator('#target')
+    .click(withSignal(null as never))
+    .catch(() => {})
+  await page.click('#target', withSignal(null as never)).catch(() => {})
+  await page
+    .mainFrame()
+    .textContent('#target', withSignal(null as never))
+    .catch(() => {})
   await page.click('#target').catch(() => {})
   expect(fake.messages.slice(sent).map(({ method }) => method)).toEqual([
     'click',
+    'click',
+    'click',
+    'textContent',
     'click',
   ])
 })
