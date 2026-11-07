@@ -290,8 +290,9 @@ async fn a_frame_changing_process_stays_attached() {
     let mut flip = 0;
     while !pending.is_finished() {
         let origin = if flip % 2 == 0 { &cross } else { &tab.origin };
+        // Fragments vary the URL while keeping the fixture's exact path match.
         tab.evaluate(&format!(
-            "document.getElementById('f').src = '{origin}/leaf.html?flip={flip}'"
+            "document.getElementById('f').src = '{origin}/leaf.html#flip={flip}'"
         ))
         .await;
         flip += 1;

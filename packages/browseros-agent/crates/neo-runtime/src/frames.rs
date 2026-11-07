@@ -271,6 +271,19 @@ impl Frames {
     /// target to its parent's frame, then read that target's local subtree on its own host.
     /// A child disappearing during enumeration does not invalidate unrelated frame records.
     pub(crate) async fn tree(&self) -> Result<Vec<FrameInfo>, PageError> {
+        let (frames, changed_host) = self.read_tree().await?;
+        if changed_host {
+            // The old target can disappear as the same frame moves to another process.
+            // Re-read both sources before treating the missing subtree as detached.
+            self.read_tree().await.map(|(frames, _)| frames)
+        } else {
+            Ok(frames)
+        }
+    }
+
+    /// Neo: Reads fresh host trees and reports a child lost during enumeration.
+    async fn read_tree(&self) -> Result<(Vec<FrameInfo>, bool), PageError> {
+        let mut changed_host = false;
         let local = self.main.host.send("Page.getFrameTree", json!({}));
         let targets = self.main.host.session.cdp.send(
             "Target.getTargets",
@@ -323,7 +336,10 @@ impl Frames {
             }
             let context = match self.context(id, Some(&parent)).await {
                 Ok(context) => context,
-                Err(PageError::NotConnected) => continue,
+                Err(PageError::NotConnected) => {
+                    changed_host = true;
+                    continue;
+                }
                 Err(error) => return Err(error),
             };
             let local = match context
@@ -333,7 +349,10 @@ impl Frames {
                 .map_err(|error| context.host.classify(&error))
             {
                 Ok(local) => local,
-                Err(PageError::NotConnected) => continue,
+                Err(PageError::NotConnected) => {
+                    changed_host = true;
+                    continue;
+                }
                 Err(error) => return Err(error),
             };
             for mut frame in local_tree(&local)? {
@@ -349,7 +368,7 @@ impl Frames {
                 }
             }
         }
-        Ok(preorder(&frames, &self.main.id))
+        Ok((preorder(&frames, &self.main.id), changed_host))
     }
 
     /// Parent worlds and child ids from main to leaf, for direct scopes' owner visibility
