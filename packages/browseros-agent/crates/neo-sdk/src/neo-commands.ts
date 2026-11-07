@@ -15,9 +15,11 @@
  *    ◀ {"id":7,"result":{}}  → undefined
  *
  *  page.waitForNavigation({ url: (url) => url.pathname === '/done' })
- *    neo:nextNavigation {response: true}       ◀ {cursor: 3, url: '…/start#a'}   predicate false
- *    neo:nextNavigation {cursor: 3, …}         ◀ {cursor: 3, url: '…/done'}      predicate true
- *    neo:finishNavigation {cursor: 3, waitUntil: 'load'}   ◀ {response: {guid}}  → Response
+ *    neo:nextNavigation {response: true}   ◀ {cursor: 3, index: 0, url: '…/start#a'}  test it
+ *    neo:nextNavigation {cursor: 3, …}     ◀ {cursor: 3, index: 1, url: '…/done'}     test it
+ *    neo:nextNavigation {cursor: 3, …}     (waiting)       index 0: false; index 1: true
+ *    neo:finishNavigation {cursor: 3, index: 1, waitUntil: 'load'}  ◀ {response: {guid}}
+ *    (the waiting next answers {cursor: 3}: the wait ended)
  * ```
  *
  * The seam's decisions (the med-neo-waits design, DECIDED 1-3, and pw-net-nav):
@@ -32,8 +34,10 @@
  * 3. `url` is a string glob or a `RegExp`, serialized as Playwright's `serializeURLMatch` without
  *    `urlPattern` (QuickJS has no `URLPattern`), and matched in Rust. A predicate function
  *    cannot cross: `waitForURL` and `waitForNavigation` step a cursor instead, one
- *    `neo:nextNavigation` per navigation, testing each URL in the realm, and Rust keeps the
- *    cursor's subscription between calls so no navigation is lost while the predicate runs.
+ *    `neo:nextNavigation` per navigation and one always waiting, and test each URL in the realm
+ *    on its own, as Playwright's waiter does: a pending answer holds back no later navigation, and
+ *    the waiting call carries the page's closure and failed navigations to the wait. Every exit
+ *    ends the cursor (`neo:finishNavigation`, `neo:releaseNavigation`, or a failed step).
  *    `page.frame({ url })` still refuses one.
  */
 
@@ -77,18 +81,29 @@ export type NeoNavigationResult = { response?: ResponseChannel }
 /** `neo:nextNavigation`: the next navigation of a URL-predicate wait, whose URL the realm tests.
  * Without `cursor` it opens the wait on this frame, subscribed before the call returns anything;
  * `response` says whether its finish answers the navigation's `Response` (`waitForNavigation`,
- * main frame only) or nothing (`waitForURL`). A failed navigation rejects. */
+ * main frame only) or nothing (`waitForURL`). A failed navigation, the page's closure or the
+ * call's timeout rejects, and ends the wait. */
 export type NeoNextNavigationParams = { cursor?: number; response: boolean }
 
-/** The navigation `neo:nextNavigation` saw, and the cursor to continue or finish with. */
-export type NeoNextNavigationResult = { cursor: number; url: string }
+/** The navigation `neo:nextNavigation` saw, by its index in the cursor, and the cursor to continue
+ * or finish with; no `index` once the wait ended under the call (its finish or release). */
+export type NeoNextNavigationResult = {
+  cursor: number
+  index?: number
+  url?: string
+}
 
-/** `neo:finishNavigation`: `waitUntil` since the cursor's last navigation, then its `Response`
- * when the cursor answers one; the cursor ends. */
+/** `neo:finishNavigation`: ends the cursor with navigation `index`, the first the predicate
+ * accepted: `waitUntil` since it, then its `Response` when the cursor answers one. */
 export type NeoFinishNavigationParams = {
   cursor: number
+  index: number
   waitUntil: LifecycleEvent
 }
+
+/** `neo:releaseNavigation`: ends a cursor whose wait ended in the realm, stopping its waiting
+ * `neo:nextNavigation`. */
+export type NeoReleaseNavigationParams = { cursor: number }
 
 /** Neo's commands on a frame guid, shaped as the generated `FrameCommands`. */
 export type NeoFrameCommands = {
@@ -111,6 +126,10 @@ export type NeoFrameCommands = {
   'neo:finishNavigation': {
     params: NeoFinishNavigationParams
     result: NeoNavigationResult
+  }
+  'neo:releaseNavigation': {
+    params: NeoReleaseNavigationParams
+    result: Record<string, never>
   }
 }
 

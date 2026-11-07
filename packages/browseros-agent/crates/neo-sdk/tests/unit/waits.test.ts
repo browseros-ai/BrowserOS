@@ -195,7 +195,7 @@ describe('waitForURL', () => {
 
   test('a predicate function steps a navigation cursor (tests/unit/history.test.ts)', async () => {
     const { page } = run()
-    replies.push({ result: { cursor: 1, url: 'http://a.test/done' } })
+    replies.push({ result: { cursor: 1, index: 0, url: 'http://a.test/done' } })
     // The stub parses no URL, so no navigation is accepted before the timeout's step fails.
     replies.push({
       error: {
@@ -209,6 +209,7 @@ describe('waitForURL', () => {
     expect(sent.map(({ method }) => method)).toEqual([
       'neo:nextNavigation',
       'neo:nextNavigation',
+      'neo:releaseNavigation',
     ])
   })
 

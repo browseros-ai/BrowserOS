@@ -63,8 +63,8 @@ use crate::forms::FormTab;
 use crate::frames::FrameScope;
 use crate::history::{
     self, Cursors, FinishNavigationOptions, FrameCursor, NeoFinishNavigationParams,
-    NeoNavigationResult, NeoNextNavigationParams, NeoWaitForNavigationParams,
-    WaitForNavigationOptions,
+    NeoNavigationResult, NeoNextNavigationParams, NeoReleaseNavigationParams,
+    NeoWaitForNavigationParams, WaitForNavigationOptions,
 };
 use crate::keyboard::KeyboardTab;
 use crate::lists;
@@ -154,6 +154,16 @@ static NEXT_NAVIGATION_META: MethodMeta = MethodMeta {
 static FINISH_NAVIGATION_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "neo:finishNavigation",
+    title: Some("Wait for navigation"),
+    subtitle: None,
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[],
+};
+static RELEASE_NAVIGATION_META: MethodMeta = MethodMeta {
+    interface: "Frame",
+    method: "neo:releaseNavigation",
     title: Some("Wait for navigation"),
     subtitle: None,
     group: None,
@@ -312,6 +322,7 @@ enum Route {
     FrameWaitForNavigation(WaitForNavigationOptions),
     FrameNextNavigation(NeoNextNavigationParams),
     FrameFinishNavigation(FinishNavigationOptions),
+    FrameReleaseNavigation(NeoReleaseNavigationParams),
 }
 
 impl Dispatcher {
@@ -541,6 +552,11 @@ fn route_navigation_wait(method: &str, params: Option<&Value>) -> Option<Routed>
             .and_then(|params| FinishNavigationOptions::from_params(&params))
             .map(Route::FrameFinishNavigation);
         (&FINISH_NAVIGATION_META, route)
+    } else if method == RELEASE_NAVIGATION_META.method {
+        let route =
+            decode_neo_params::<NeoReleaseNavigationParams>(params, &RELEASE_NAVIGATION_META)
+                .map(Route::FrameReleaseNavigation);
+        (&RELEASE_NAVIGATION_META, route)
     } else {
         return None;
     };
@@ -779,6 +795,9 @@ async fn serve(
                 .await
                 .and_then(|result| encode_neo(&result))
         }
+        Route::FrameReleaseNavigation(params) => {
+            encode_neo(&history::release_frame_navigation(cursors, &params))
+        }
         route @ (Route::FrameIsVisible(_)
         | Route::FrameIsHidden(_)
         | Route::FrameIsChecked(_)
@@ -938,7 +957,8 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameWaitForLoadState(_)
         | Route::FrameWaitForNavigation(_)
         | Route::FrameNextNavigation(_)
-        | Route::FrameFinishNavigation(_) => Err(PlaywrightError::error(
+        | Route::FrameFinishNavigation(_)
+        | Route::FrameReleaseNavigation(_) => Err(PlaywrightError::error(
             "neo-runtime: navigation and page reads are served by `serve`",
         )
         .into()),
@@ -1363,7 +1383,8 @@ mod tests {
                 | Route::FrameWaitForLoadState(_)
                 | Route::FrameWaitForNavigation(_)
                 | Route::FrameNextNavigation(_)
-                | Route::FrameFinishNavigation(_) => {
+                | Route::FrameFinishNavigation(_)
+                | Route::FrameReleaseNavigation(_) => {
                     panic!("a form is not a navigation, read or wait")
                 }
             }
@@ -1612,8 +1633,9 @@ mod tests {
             ("neo:nextNavigation", json!({"cursor":4,"response":false})),
             (
                 "neo:finishNavigation",
-                json!({"cursor":4,"waitUntil":"domcontentloaded"}),
+                json!({"cursor":4,"index":2,"waitUntil":"domcontentloaded"}),
             ),
+            ("neo:releaseNavigation", json!({"cursor":4})),
         ] {
             let routed = route_frame(method, params);
             let meta = routed.meta.expect("navigation wait metadata");
@@ -1635,9 +1657,17 @@ mod tests {
             ("neo:nextNavigation", json!({"response":true,"extra":1})),
             (
                 "neo:finishNavigation",
-                json!({"cursor":1,"waitUntil":"networkidle"}),
+                json!({"cursor":1,"index":0,"waitUntil":"networkidle"}),
             ),
-            ("neo:finishNavigation", json!({"waitUntil":"load"})),
+            (
+                "neo:finishNavigation",
+                json!({"index":0,"waitUntil":"load"}),
+            ),
+            (
+                "neo:finishNavigation",
+                json!({"cursor":1,"waitUntil":"load"}),
+            ),
+            ("neo:releaseNavigation", json!({})),
         ] {
             assert_eq!(
                 error_of(route_frame(method, params)).name,
@@ -1652,6 +1682,7 @@ mod tests {
             ("neo:waitForNavigation", json!({"url":{"glob":""}}), true),
             ("neo:nextNavigation", json!({"response":true}), true),
             ("neo:nextNavigation", json!({"response":false}), false),
+            ("neo:releaseNavigation", json!({"cursor":1}), false),
         ] {
             let Ok(ObjectCall::Frame(route)) = route_frame(method, params).route else {
                 panic!("{method} routes");

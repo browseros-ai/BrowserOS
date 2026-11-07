@@ -27,6 +27,14 @@ const html = readFileSync(
   'utf8',
 )
 const LOADS = "sessionStorage.getItem('loads')"
+/** The review's page: each button pushes one history entry; `#chain` pushes /first, then /goal
+ * 100 ms later. */
+const REVIEW = `<!doctype html><title>review</title>
+<button id="hold" onclick="history.pushState({}, '', '#hold')">hold</button>
+<button id="tick" onclick="history.pushState({}, '', '#tick' + (++window.ticks))">tick</button>
+<button id="goal" onclick="history.pushState({}, '', '#goal')">goal</button>
+<button id="chain" onclick="history.pushState({}, '', '/first'); setTimeout(() => history.pushState({}, '', '/goal'), 100)">chain</button>
+<script>window.ticks = 0</script>`
 /** `/slow` (slow-load.html's image) answers this late, so its load trails its DOMContentLoaded. */
 const SLOW_MS = 1500
 const NEXT = { status: 200, ok: true, path: '/next.html?q=a+b' }
@@ -197,6 +205,52 @@ const cases = [
     },
     neoExpected: { waited: { error: 'Error' }, child: '/next.html' },
   },
+  // The three below are the independent review's regressions (review-review-b1.md): Playwright's
+  // waiter tests each navigation's predicate on its own, so a pending answer holds back nothing.
+  {
+    name: 'a later navigation the predicate accepts wins while an earlier answer is pending',
+    path: '/review',
+    source: `const wait = settle(page.waitForNavigation({ timeout: 1800, url: (url) =>
+      url.pathname === '/first' ? new Promise(() => {}) : url.pathname === '/goal' }))
+    await page.click('#chain')
+    return { wait: await wait, path: path() }`,
+    expected: { wait: null, path: '/goal' },
+  },
+  {
+    name: 'closing the page rejects a wait without a timeout whose predicate is pending',
+    path: '/review',
+    source: `const victim = await page.context().newPage()
+    await victim.goto(origin + '/review')
+    let entered = false
+    const wait = settle(victim.waitForNavigation({ timeout: 0, url: () => {
+      entered = true
+      return new Promise(() => {})
+    } }))
+    await victim.click('#hold')
+    while (!entered) await new Promise((resolve) => setTimeout(resolve, 10))
+    await victim.close()
+    return { wait: await wait, closed: victim.isClosed() }`,
+    expected: { wait: { error: 'closed' }, closed: true },
+  },
+  {
+    name: 'predicates that throw end their waits without displacing a live one',
+    path: '/review',
+    source: `let release
+    const wait = settle(page.waitForNavigation({ timeout: 25000, url: (url) =>
+      url.hash === '#hold' ? new Promise((resolve) => { release = resolve }) : url.hash === '#goal' }))
+    await page.click('#hold')
+    while (!release) await new Promise((resolve) => setTimeout(resolve, 10))
+    let rejected = 0
+    for (let i = 0; i < 64; ++i) {
+      const bad = settle(page.waitForNavigation({ timeout: 5000, url: () => { throw new Error('predicate failed') } }))
+      await page.click('#tick')
+      if ((await bad)?.error === 'Error') ++rejected
+    }
+    release(false)
+    await page.click('#goal')
+    return { wait: await wait, rejected, hash: page.url().split('#')[1] }`,
+    expected: { wait: null, rejected: 64, hash: 'goal' },
+  },
   {
     name: 'an unknown waitUntil is refused before anything is waited for',
     path: '/history.html',
@@ -217,6 +271,7 @@ test('page.waitForNavigation answers the same through Neo and Playwright', {
         new URL('../pages/slow-load.html', import.meta.url),
         'utf8',
       ),
+      '/review': REVIEW,
       '/framed.html':
         '<!doctype html><title>framed</title><iframe name="child" src="/history.html"></iframe>',
     },

@@ -8,7 +8,7 @@ mod browser;
 use std::time::Duration;
 
 use browser::{Fixture, Tab};
-use neo_runtime::{RunOutcome, RunStatus};
+use neo_runtime::{CallResult, RunOutcome, RunStatus};
 use serde_json::{Value, json};
 
 const ONE: &str = r#"<!doctype html><title>One</title>
@@ -228,6 +228,10 @@ async fn tests_that_a_slow_predicate_still_sees_each_navigation_in_order() {
         .iter()
         .map(|call| call.method.clone())
         .collect();
+    let replied = outcome
+        .calls
+        .iter()
+        .all(|call| call.result == CallResult::Ok);
     let result = value(outcome);
     let origin = tab.origin.clone();
     tab.close().await;
@@ -246,8 +250,14 @@ async fn tests_that_a_slow_predicate_still_sees_each_navigation_in_order() {
         [
             "neo:nextNavigation",
             "neo:nextNavigation",
+            "neo:nextNavigation",
             "neo:finishNavigation"
         ],
-        "one call per navigation the predicate tested, then the finish"
+        "one call per navigation the predicates tested, the one still waiting when the second \
+         was accepted (its finish ended it), then the finish"
+    );
+    assert!(
+        replied,
+        "every call of the wait replied before the run ended, the ended next too"
     );
 }

@@ -79,7 +79,11 @@ import type { ApiName, Connection } from './connection'
 import { TimeoutError } from './errors'
 import { FrameLocator, kAnyFrameSelector } from './frame-locator'
 import { Locator, type LocatorOptions, testIdAttributeName } from './locator'
-import { type NeoNavigationResult, serializeUrlMatch } from './neo-commands'
+import {
+  type NeoNavigationResult,
+  type NeoNextNavigationResult,
+  serializeUrlMatch,
+} from './neo-commands'
 import { type Response, responseFor } from './network'
 import type { Page } from './page'
 import {
@@ -500,12 +504,14 @@ export class Frame {
   }
 
   /**
-   * A URL predicate's wait (`neo-commands.ts`, DECIDED 3): Rust answers each navigation of this
-   * frame in order, from a cursor subscribed by the first call; the predicate tests its `URL`,
-   * awaited as Playwright's waiter awaits it (a URL the parser rejects is never accepted); the first
-   * it accepts is settled for `waitUntil`. `respond` asks for that navigation's `Response`.
-   * `timeout` (0 for none) bounds the whole loop: each call gets what is left, and a predicate
-   * still pending at the deadline rejects the wait then, as Playwright's waiter does.
+   * A URL predicate's wait (`neo-commands.ts`, DECIDED 3), as Playwright's waiter runs it: each
+   * navigation's predicate is tested on its own, sync or async, and the first to accept wins,
+   * whatever earlier answers are still pending (a URL the parser rejects is never accepted). One
+   * `neo:nextNavigation` is always waiting, so later navigations keep arriving and the page's
+   * closure or a failed navigation rejects the wait even with no timeout. `respond` asks for the
+   * winning navigation's `Response`. `timeout` (0 for none) bounds the whole wait: each call gets
+   * what is left, and the deadline also rejects while only predicates are pending. However the wait
+   * ends, its cursor ends with it: by the finish, or by a release when the realm ended it.
    */
   async _navigationMatching(
     apiName: ApiName,
@@ -521,39 +527,89 @@ export class Frame {
       if (ms <= 0) throw navigationTimeout(apiName, timeout)
       return ms
     }
-    try {
-      let cursor: number | undefined
-      for (;;) {
-        const next = await this._connection.sendNeo(
-          apiName,
-          this._guid,
-          'neo:nextNavigation',
-          cursor === undefined
-            ? { response: respond }
-            : { cursor, response: respond },
-          left(),
+    let cursor: number | undefined
+    /** Set once a finish was sent: Rust ends the cursor itself then. */
+    let finishing = false
+    const next = () => {
+      const call = this._connection.sendNeo(
+        apiName,
+        this._guid,
+        'neo:nextNavigation',
+        cursor === undefined
+          ? { response: respond }
+          : { cursor, response: respond },
+        left(),
+      )
+      call.catch(() => {})
+      return call
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const expired = new Promise<never>((_, reject) => {
+      if (deadline)
+        timer = setTimeout(
+          () => reject(navigationTimeout(apiName, timeout)),
+          Math.max(0, deadline - Date.now()),
         )
-        cursor = next.cursor
-        const url = urlFor(next.url)
-        let verdict: boolean | Promise<boolean> = false
-        try {
-          if (url) verdict = predicate(url)
-        } catch (error) {
-          throw prefixed(apiName, error)
-        }
-        const accepted = await verdictBefore(verdict, deadline, () =>
-          navigationTimeout(apiName, timeout),
-        ).catch((error) => {
-          throw error instanceof TimeoutError ? error : prefixed(apiName, error)
-        })
-        if (accepted)
-          return await this._connection.sendNeo(
+    })
+    expired.catch(() => {})
+    /** Each pending predicate's answer, by the index of the navigation it tests. */
+    const verdicts = new Map<number, Promise<Verdict>>()
+    let waiting = next()
+    try {
+      for (;;) {
+        const step: Verdict | { reply: NeoNextNavigationResult } =
+          await Promise.race([
+            waiting.then((reply) => ({ reply })),
+            ...verdicts.values(),
+            expired,
+          ])
+        if ('reply' in step) {
+          const { cursor: id, index, url } = step.reply
+          cursor = id
+          if (index === undefined || url === undefined)
+            throw new Error(
+              'neo-sdk: neo-runtime ended this navigation wait under it',
+            )
+          waiting = next()
+          const parsed = urlFor(url)
+          if (!parsed) continue
+          let verdict: boolean | Promise<boolean>
+          try {
+            verdict = predicate(parsed)
+          } catch (error) {
+            throw prefixed(apiName, error)
+          }
+          if (isPromiseLike(verdict)) {
+            const answer = Promise.resolve(verdict).then(
+              (value) => ({ index, accepted: !!value }),
+              (error) => {
+                throw prefixed(apiName, error)
+              },
+            )
+            answer.catch(() => {})
+            verdicts.set(index, answer)
+            continue
+          }
+          if (!verdict) continue
+          finishing = true
+          return await this.#finishNavigation(
             apiName,
-            this._guid,
-            'neo:finishNavigation',
-            { cursor, waitUntil },
+            id,
+            index,
+            waitUntil,
             left(),
           )
+        }
+        verdicts.delete(step.index)
+        if (!step.accepted || cursor === undefined) continue
+        finishing = true
+        return await this.#finishNavigation(
+          apiName,
+          cursor,
+          step.index,
+          waitUntil,
+          left(),
+        )
       }
     } catch (error) {
       // Each step ran under what was left of `timeout`; its message names the whole timeout.
@@ -563,7 +619,30 @@ export class Frame {
           `Timeout ${timeout}ms exceeded.`,
         )
       throw error
+    } finally {
+      clearTimeout(timer)
+      if (!finishing && cursor !== undefined)
+        this._connection
+          .sendNeo(apiName, this._guid, 'neo:releaseNavigation', { cursor }, 0)
+          .catch(() => {})
     }
+  }
+
+  /** Sends `neo:finishNavigation` for the navigation the predicate accepted. */
+  async #finishNavigation(
+    apiName: ApiName,
+    cursor: number,
+    index: number,
+    waitUntil: LifecycleEvent,
+    timeout: number,
+  ): Promise<NeoNavigationResult> {
+    return await this._connection.sendNeo(
+      apiName,
+      this._guid,
+      'neo:finishNavigation',
+      { cursor, index, waitUntil },
+      timeout,
+    )
   }
 
   /**
@@ -1368,29 +1447,14 @@ function prefixed(apiName: ApiName, error: unknown): unknown {
   return error
 }
 
-/**
- * A predicate's verdict, truthy or not, or the waiter's timeout once `deadline` (0 for none)
- * passes while it is still pending, as Playwright's waiter rejects a wait whose predicate has not
- * answered by its deadline.
- */
-async function verdictBefore(
-  verdict: boolean | Promise<boolean>,
-  deadline: number,
-  timedOut: () => TimeoutError,
-): Promise<boolean> {
-  const settled = Promise.resolve(verdict).then((value) => !!value)
-  if (!deadline) return await settled
-  const ms = deadline - Date.now()
-  if (ms <= 0) throw timedOut()
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      settled,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(timedOut()), ms)
-      }),
-    ])
-  } finally {
-    clearTimeout(timer)
-  }
+/** One predicate's answer for the navigation at `index` of its wait. */
+type Verdict = { index: number; accepted: boolean }
+
+/** Whether a predicate answered asynchronously: Playwright's waiter awaits any thenable. */
+function isPromiseLike(value: unknown): value is PromiseLike<boolean> {
+  return (
+    (typeof value === 'object' || typeof value === 'function') &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === 'function'
+  )
 }

@@ -5,5 +5,6 @@
 <a id="to-slow" href="/slow-load.html">Slow</a>
 <a id="to-unsafe" href="http://127.0.0.1:1/unsafe">Unsafe port</a>
 <button id="push" type="button" onclick="history.pushState({}, '', '/pushed')">Push</button>
+<button id="chain" type="button" onclick="history.pushState({}, '', '/first'); setTimeout(() => history.pushState({}, '', '/goal'), 100)">Chain</button>
 <p id="section">Section</p>
 </body></html>

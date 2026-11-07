@@ -154,6 +154,15 @@ const cases = [
     },
   },
   {
+    // The independent review's regression (review-review-b1.md), after the current-URL check.
+    name: 'a later navigation the predicate accepts wins while an earlier answer is pending',
+    source: `const waited = settle(page.waitForURL((url) =>
+      url.pathname === '/first' ? new Promise(() => {}) : url.pathname === '/goal', { timeout: 1800 }))
+    await page.click('#chain')
+    return { waited: await waited, path: ${PATH} }`,
+    expected: { waited: RESOLVED, path: '/goal' },
+  },
+  {
     name: 'a navigation that fails before the URL matched rejects the wait',
     source: `const waited = settle(page.waitForURL('**/never.html', { timeout: 10000 }))
     await page.click('#to-unsafe')

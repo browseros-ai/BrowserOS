@@ -15,9 +15,10 @@
 //!  page.goBack()     ─ Page.goBack ────┤ subscribe → act → next navigation → waitUntil
 //!  page.goForward()  ─ Page.goForward ─┘                                   → Response | null
 //!  waitForNavigation({url: glob | RegExp}) ─ neo:waitForNavigation: the same wait, URL matched here
-//!  waitForNavigation({url: predicate})     ─ neo:nextNavigation × n: one navigation per call,
-//!  waitForURL(predicate)                     whose URL the realm tests; then neo:finishNavigation:
-//!                                            waitUntil → Response | null
+//!  waitForNavigation({url: predicate})     ─ neo:nextNavigation × n: one navigation per call, one
+//!  waitForURL(predicate)                     always waiting; the realm tests each URL on its own;
+//!                                            neo:finishNavigation names the first it accepted:
+//!                                            waitUntil → Response | null (or neo:releaseNavigation)
 //! ```
 //!
 //! Every wait subscribes to its frame's navigation events before it prepares the page, enables
@@ -27,14 +28,17 @@
 //! same-document navigation, and for a document whose request the watcher never saw start: a
 //! back-forward cache restore, or a request that started before this session's `Network.enable`.
 //!
-//! A URL predicate cannot cross into Rust, so its wait is a cursor: the first `neo:nextNavigation`
-//! subscribes and parks the subscription in the run's [`Cursors`] between calls, so navigations
-//! that happen while the realm runs the predicate stay queued. A cursor ends with its
-//! `neo:finishNavigation`, a failed step (its timeout included), or the run.
+//! A URL predicate cannot cross into Rust, so its wait is a cursor in the run's [`Cursors`]: the
+//! first `neo:nextNavigation` subscribes, and the realm keeps one such call waiting at all times,
+//! so a navigation reaches it while earlier predicates are still pending (Playwright's waiter tests
+//! each navigation's predicate on its own; the first to accept wins), and the page's closure or a
+//! failed navigation rejects the wait even with no timeout. A cursor ends with its
+//! `neo:finishNavigation`, its `neo:releaseNavigation` (the realm's wait ended otherwise), a failed
+//! step (its timeout included), or the run.
 
-use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use browseros_cdp::CdpError;
 use neo_runtime_spec::serve::{
@@ -42,6 +46,8 @@ use neo_runtime_spec::serve::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::sync::Mutex as AsyncMutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::click::PageError;
 use crate::frames::FrameScope;
@@ -53,9 +59,15 @@ use crate::waits::{self, WaitObservation, WaitTab};
 use crate::world;
 
 /// Deviation: `client/frame.ts` `Frame.waitForNavigation` the most URL-predicate waits one run
-/// may hold open between their calls; Playwright's waiter has no cap. A wait whose predicate threw
-/// never finishes, so past the cap the oldest idle cursor is dropped, and its next call rejects.
+/// may run at once; Playwright's waiter has no cap. Every wait ends its cursor however it ends
+/// (accepted, released by the realm, failed), so only live waits count, and one past the cap is
+/// refused rather than displacing a live one.
 const MAX_CURSORS: usize = 64;
+
+/// Deviation: `client/frame.ts` `Frame.waitForNavigation` the navigations one predicate wait
+/// keeps for its finish to name, the most recent first; Playwright's waiter keeps every event its
+/// pending predicates hold. A predicate still pending this many navigations later cannot win.
+const MAX_ANSWERED: usize = 4096;
 
 /// The history step a `Page` command takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -226,12 +238,13 @@ pub(crate) async fn wait_for_navigation(
 }
 
 /// `neo:nextNavigation`: opens a cursor on the frame (`cursor` absent) or continues one, and
-/// answers the next navigation it observes. `response` says what its finish answers: the
-/// navigation's `Response` (`waitForNavigation`) or nothing (`waitForURL`).
+/// answers the next navigation it observes, while the realm may still be testing earlier ones.
+/// `response` says what its finish answers: the navigation's `Response` (`waitForNavigation`) or
+/// nothing (`waitForURL`).
 ///
 /// Deviation: `client/frame.ts` `Frame.waitForNavigation` Playwright tests a URL predicate inside
 /// one API call, on its client's `navigated` events; Neo makes one call per navigation the
-/// predicate tests, each in the run's call records.
+/// predicate tests, plus the one still waiting when the wait ends, each in the run's call records.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NeoNextNavigationParams {
@@ -247,19 +260,24 @@ pub(crate) struct NeoNavigationResult {
     pub(crate) response: Option<ResponseChannel>,
 }
 
-/// `neo:nextNavigation`'s reply.
-#[derive(Debug, Serialize)]
+/// `neo:nextNavigation`'s reply: the navigation's index in its cursor and its URL, or neither once
+/// the wait ended under the call (its finish or release stopped it).
+#[derive(Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct NeoNextNavigationResult {
     pub(crate) cursor: u64,
-    pub(crate) url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) index: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) url: Option<String>,
 }
 
-/// `neo:finishNavigation`: waits for `waitUntil` since the cursor's last navigation and answers
-/// as `neo:waitForNavigation` does; the cursor ends.
+/// `neo:finishNavigation`: ends the cursor with the navigation `index` names, the first the
+/// predicate accepted: waits for `waitUntil` since it and answers as `neo:waitForNavigation` does.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct NeoFinishNavigationParams {
     pub(crate) cursor: u64,
+    pub(crate) index: u64,
     pub(crate) wait_until: Option<LifecycleEvent>,
 }
 
@@ -267,6 +285,7 @@ pub(crate) struct NeoFinishNavigationParams {
 #[derive(Debug)]
 pub(crate) struct FinishNavigationOptions {
     pub(crate) cursor: u64,
+    index: u64,
     wait_until: LifecycleEvent,
 }
 
@@ -275,20 +294,41 @@ impl FinishNavigationOptions {
     pub(crate) fn from_params(params: &NeoFinishNavigationParams) -> Result<Self, PlaywrightError> {
         Ok(Self {
             cursor: params.cursor,
+            index: params.index,
             wait_until: waits::supported_lifecycle(params.wait_until, "waitUntil")?,
         })
     }
 }
 
-/// One predicate wait's subscription and what its finish needs, kept between its calls.
+/// `neo:releaseNavigation`: ends a cursor whose wait ended in the realm (its predicate threw, its
+/// deadline passed); a `neo:nextNavigation` still waiting on it answers at once.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NeoReleaseNavigationParams {
+    pub(crate) cursor: u64,
+}
+
+/// One predicate wait's subscription and what its finish needs, shared by the wait's calls: a
+/// `neo:nextNavigation` waits on the frame's queue while the realm tests earlier navigations, and
+/// a finish or release from another call ends the wait, stopping that next.
 pub(crate) struct Cursor<T, O> {
     tab: T,
-    events: O,
+    /// The frame's queue: a next holds it while it waits, a finish takes it to settle the load.
+    events: AsyncMutex<O>,
     /// The network log's lag count when the wait began, for its response lookup.
     lags: u64,
     respond: bool,
-    /// The navigation the realm saw last, which a finish settles.
-    last: Option<Navigation>,
+    /// The navigations answered so far, for a finish to name by index.
+    answered: Mutex<Answered>,
+    /// Cancelled when the wait ends: a next still waiting answers that it ended.
+    ended: CancellationToken,
+}
+
+/// A cursor's answered navigations: `navigations[i]` has index `first + i`.
+#[derive(Default)]
+struct Answered {
+    first: u64,
+    navigations: VecDeque<Navigation>,
 }
 
 /// The cursor the dispatcher keeps for a frame call.
@@ -310,43 +350,79 @@ impl<T: NavigationTab, O: Observation> Cursor<T, O> {
             .map_err(navigate::page_error)?;
         Ok(Self {
             tab,
-            events,
+            events: AsyncMutex::new(events),
             lags,
             respond,
-            last: None,
+            answered: Mutex::default(),
+            ended: CancellationToken::new(),
         })
     }
 
-    /// The URL of the next navigation; a failed navigation rejects.
-    pub(crate) async fn next(&mut self, progress: &Progress) -> Result<String, CallError> {
-        let navigation = next_navigation(&mut self.events, progress, |_| Ok(true)).await?;
+    /// The next navigation's index and URL, or `None` once the wait ended; a failed navigation
+    /// rejects.
+    pub(crate) async fn next(
+        &self,
+        progress: &Progress,
+    ) -> Result<Option<(u64, String)>, CallError> {
+        let mut events = tokio::select! {
+            biased;
+            () = self.ended.cancelled() => return Ok(None),
+            events = self.events.lock() => events,
+        };
+        let navigation = tokio::select! {
+            biased;
+            () = self.ended.cancelled() => return Ok(None),
+            navigation = next_navigation(&mut *events, progress, |_| Ok(true)) => navigation?,
+        };
         let url = navigation.url.clone();
-        self.last = Some(navigation);
-        Ok(url)
+        let mut answered = self.answered.lock().map_err(|_| cursors_poisoned())?;
+        let held = u64::try_from(answered.navigations.len()).unwrap_or(u64::MAX);
+        let index = answered.first.saturating_add(held);
+        answered.navigations.push_back(navigation);
+        if answered.navigations.len() > MAX_ANSWERED {
+            answered.navigations.pop_front();
+            answered.first = answered.first.saturating_add(1);
+        }
+        Ok(Some((index, url)))
     }
 
-    /// `waitUntil` since the last navigation, then its `Response` if this wait answers one.
+    /// Ends the wait with navigation `index`: `waitUntil` since it, then its `Response` if this
+    /// wait answers one. A next still waiting answers that the wait ended.
     pub(crate) async fn finish(
-        mut self,
+        &self,
+        index: u64,
         wait_until: LifecycleEvent,
         progress: &Progress,
     ) -> Result<Option<ResponseChannel>, CallError> {
-        let Some(navigation) = self.last.take() else {
-            return Err(finish_before_next().into());
-        };
-        settle(&mut self.events, navigation.lifecycle, wait_until, progress).await?;
+        self.end();
+        let navigation = {
+            let answered = self.answered.lock().map_err(|_| cursors_poisoned())?;
+            index
+                .checked_sub(answered.first)
+                .and_then(|offset| usize::try_from(offset).ok())
+                .and_then(|offset| answered.navigations.get(offset))
+                .cloned()
+        }
+        .ok_or_else(|| unanswered(index))?;
+        let mut events = progress.race(self.events.lock()).await?;
+        settle(&mut *events, navigation.lifecycle, wait_until, progress).await?;
         if !self.respond {
             return Ok(None);
         }
         response_of(&self.tab, &navigation, self.lags, progress).await
     }
+
+    /// Ends the wait: a next still waiting answers that it ended.
+    pub(crate) fn end(&self) {
+        self.ended.cancel();
+    }
 }
 
-/// The run's open cursors by id, shared by its call tasks; a cursor is out of the map while a
-/// call uses it, so a second call naming it meanwhile finds nothing.
+/// The run's open cursors by id, shared by its call tasks. A cursor leaves the table when its
+/// wait ends: on its finish, its release, or a failed step.
 pub(crate) struct Cursors<C> {
     next: AtomicU64,
-    open: Mutex<BTreeMap<u64, C>>,
+    open: Mutex<BTreeMap<u64, Arc<C>>>,
 }
 
 /// Neo: an empty cursor table at run start; no script sees it.
@@ -359,40 +435,45 @@ impl<C> Default for Cursors<C> {
     }
 }
 
-/// Neo: the run's cursor table between a predicate wait's calls; its cap is `MAX_CURSORS`'s.
+/// Neo: the run's cursor table for its live predicate waits; its cap is `MAX_CURSORS`'s.
 impl<C> Cursors<C> {
-    /// A fresh cursor id.
-    pub(crate) fn mint(&self) -> u64 {
-        self.next.fetch_add(1, Ordering::Relaxed)
+    /// Opens `cursor` under a fresh id, refusing one past [`MAX_CURSORS`] live waits.
+    pub(crate) fn insert(&self, cursor: C) -> Result<(u64, Arc<C>), PlaywrightError> {
+        let mut open = self.open.lock().map_err(|_| cursors_poisoned())?;
+        if open.len() >= MAX_CURSORS {
+            return Err(PlaywrightError::error(format!(
+                "neo-runtime: a run may wait on at most {MAX_CURSORS} URL predicates at once"
+            )));
+        }
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        let cursor = Arc::new(cursor);
+        open.insert(id, Arc::clone(&cursor));
+        Ok((id, cursor))
     }
 
-    /// Takes cursor `id` out for one call.
-    pub(crate) fn take(&self, id: u64) -> Result<C, PlaywrightError> {
+    /// Cursor `id`, while its wait is live.
+    pub(crate) fn get(&self, id: u64) -> Result<Arc<C>, PlaywrightError> {
         self.open
             .lock()
             .map_err(|_| cursors_poisoned())?
-            .remove(&id)
+            .get(&id)
+            .cloned()
             .ok_or_else(|| {
                 PlaywrightError::error(format!(
-                    "neo-runtime: navigation wait {id} is not open: it finished, failed, or is \
-                     already waiting"
+                    "neo-runtime: navigation wait {id} is not open: it finished, failed or was \
+                     released"
                 ))
             })
     }
 
-    /// Parks cursor `id` until its next call, dropping the oldest idle one past [`MAX_CURSORS`].
-    pub(crate) fn put(&self, id: u64, cursor: C) -> Result<(), PlaywrightError> {
-        let mut open = self.open.lock().map_err(|_| cursors_poisoned())?;
-        open.insert(id, cursor);
-        while open.len() > MAX_CURSORS {
-            open.pop_first();
-        }
-        Ok(())
+    /// Takes cursor `id` out of the table; its wait has ended.
+    pub(crate) fn remove(&self, id: u64) -> Option<Arc<C>> {
+        self.open.lock().ok()?.remove(&id)
     }
 }
 
 /// `neo:nextNavigation` on `tab`'s frame: opens a cursor there (subscribed before the page is
-/// prepared) or continues the one `params` names, and parks it again once a navigation answered.
+/// prepared) or continues the one `params` names. A failed step ends the wait.
 ///
 /// Neo: the dispatcher's glue from a frame call to its cursor; what a script sees is `Cursor`'s.
 pub(crate) async fn next_frame_navigation(
@@ -401,8 +482,8 @@ pub(crate) async fn next_frame_navigation(
     params: &NeoNextNavigationParams,
     progress: &Progress,
 ) -> Result<NeoNextNavigationResult, CallError> {
-    let (id, mut cursor) = if let Some(id) = params.cursor {
-        (id, cursors.take(id)?)
+    let (id, cursor) = if let Some(id) = params.cursor {
+        (id, cursors.get(id)?)
     } else {
         // The main frame's queue, as `wait_for_navigation` reads it, rejects on an overflow
         // rather than skip a navigation the predicate never saw; a child frame's rechecks.
@@ -413,14 +494,27 @@ pub(crate) async fn next_frame_navigation(
         };
         waits::prepare_tab(&tab, progress).await?;
         let cursor = Cursor::open(tab, events, params.response, progress).await?;
-        (cursors.mint(), cursor)
+        cursors.insert(cursor)?
     };
-    let url = cursor.next(progress).await?;
-    cursors.put(id, cursor)?;
-    Ok(NeoNextNavigationResult { cursor: id, url })
+    match cursor.next(progress).await {
+        Ok(next) => {
+            let (index, url) = next.unzip();
+            Ok(NeoNextNavigationResult {
+                cursor: id,
+                index,
+                url,
+            })
+        }
+        Err(error) => {
+            if let Some(cursor) = cursors.remove(id) {
+                cursor.end();
+            }
+            Err(error)
+        }
+    }
 }
 
-/// `neo:finishNavigation`: ends the cursor `options` names.
+/// `neo:finishNavigation`: ends the cursor `options` names with the navigation it names.
 ///
 /// Neo: the dispatcher's glue from a frame call to its cursor; what a script sees is `Cursor`'s.
 pub(crate) async fn finish_frame_navigation(
@@ -428,16 +522,36 @@ pub(crate) async fn finish_frame_navigation(
     options: &FinishNavigationOptions,
     progress: &Progress,
 ) -> Result<NeoNavigationResult, CallError> {
-    let cursor = cursors.take(options.cursor)?;
-    let response = cursor.finish(options.wait_until, progress).await?;
+    let cursor = cursors.remove(options.cursor).ok_or_else(|| {
+        PlaywrightError::error(format!(
+            "neo-runtime: navigation wait {} is not open: it finished, failed or was released",
+            options.cursor
+        ))
+    })?;
+    let response = cursor
+        .finish(options.index, options.wait_until, progress)
+        .await?;
     Ok(NeoNavigationResult { response })
 }
 
-/// Neo: an SDK that finishes a cursor before any navigation answered; no script can.
-fn finish_before_next() -> PlaywrightError {
-    PlaywrightError::error(
-        "neo-runtime: neo:finishNavigation before any neo:nextNavigation answered",
-    )
+/// `neo:releaseNavigation`: ends the cursor `params` names, if its wait is still open.
+///
+/// Neo: the dispatcher's glue from a frame call to its cursor; no script sees it.
+pub(crate) fn release_frame_navigation(
+    cursors: &Cursors<FrameCursor>,
+    params: &NeoReleaseNavigationParams,
+) -> NeoNavigationResult {
+    if let Some(cursor) = cursors.remove(params.cursor) {
+        cursor.end();
+    }
+    NeoNavigationResult { response: None }
+}
+
+/// Neo: a finish naming a navigation its cursor never answered or no longer holds.
+fn unanswered(index: u64) -> PlaywrightError {
+    PlaywrightError::error(format!(
+        "neo-runtime: navigation {index} of this wait was never answered or is no longer held"
+    ))
 }
 
 /// Neo: a `Page.getNavigationHistory` reply Chromium never sends.
@@ -1015,7 +1129,7 @@ mod tests {
         let tab = FakeTab::new([]);
         let events = tab.observe().expect("observe");
         let progress = progress(1_000.0);
-        let mut cursor = Cursor::open(tab.clone(), events, true, &progress)
+        let cursor = Cursor::open(tab.clone(), events, true, &progress)
             .await
             .expect("open");
         // Both happen before the realm asks for the second one.
@@ -1023,16 +1137,57 @@ mod tests {
         tab.emit(Event::Commit("D", "https://a.test/b", true));
         assert_eq!(
             cursor.next(&progress).await,
-            Ok("https://a.test/start#a".to_string())
+            Ok(Some((0, "https://a.test/start#a".to_string())))
         );
         assert_eq!(
             cursor.next(&progress).await,
-            Ok("https://a.test/b".to_string())
+            Ok(Some((1, "https://a.test/b".to_string())))
         );
         tab.emit(Event::Load);
         assert_eq!(
-            cursor.finish(LifecycleEvent::Load, &progress).await,
+            cursor.finish(1, LifecycleEvent::Load, &progress).await,
             Ok(Some(response("response@T:D:0")))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_finish_stops_a_waiting_next_and_settles_the_navigation_it_names() {
+        let tab = FakeTab::new([]);
+        let events = tab.observe().expect("observe");
+        let progress = progress(1_000.0);
+        let cursor = Cursor::open(tab.clone(), events, true, &progress)
+            .await
+            .expect("open");
+        tab.emit(Event::Commit("D", "https://a.test/first", true));
+        tab.emit(Event::SameDocument("https://a.test/first#later"));
+        assert_eq!(
+            cursor.next(&progress).await,
+            Ok(Some((0, "https://a.test/first".to_string())))
+        );
+        assert_eq!(
+            cursor.next(&progress).await,
+            Ok(Some((1, "https://a.test/first#later".to_string())))
+        );
+        // The realm keeps a next waiting while its predicates run; the first navigation's
+        // predicate accepts later, so the finish names navigation 0, not the latest.
+        let waiting = cursor.next(&progress);
+        let finished = async {
+            time::sleep(Duration::from_millis(5)).await;
+            tab.emit(Event::Load);
+            cursor.finish(0, LifecycleEvent::Load, &progress).await
+        };
+        let (waiting, finished) = tokio::join!(waiting, finished);
+        assert_eq!(waiting, Ok(None), "the finish ended the waiting next");
+        assert_eq!(finished, Ok(Some(response("response@T:D:0"))));
+        assert_eq!(
+            cursor.next(&progress).await,
+            Ok(None),
+            "an ended wait answers no further navigation"
+        );
+        assert!(
+            rejection(cursor.finish(7, LifecycleEvent::Load, &progress).await)
+                .message
+                .contains("never answered")
         );
     }
 
@@ -1041,18 +1196,18 @@ mod tests {
         let tab = FakeTab::new([]);
         let progress = progress(1_000.0);
         let events = tab.observe().expect("observe");
-        let mut cursor = Cursor::open(tab.clone(), events, false, &progress)
+        let cursor = Cursor::open(tab.clone(), events, false, &progress)
             .await
             .expect("open");
         tab.emit(Event::Commit("D", "https://a.test/b", true));
         cursor.next(&progress).await.expect("a navigation");
         tab.emit(Event::Load);
         assert_eq!(
-            cursor.finish(LifecycleEvent::Load, &progress).await,
+            cursor.finish(0, LifecycleEvent::Load, &progress).await,
             Ok(None)
         );
         let events = tab.observe().expect("observe");
-        let mut failing = Cursor::open(tab.clone(), events, true, &progress)
+        let failing = Cursor::open(tab.clone(), events, true, &progress)
             .await
             .expect("open");
         tab.emit(Event::Failed("net::ERR_ABORTED; maybe frame was detached?"));
@@ -1063,15 +1218,19 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_cursors_are_taken_once_and_the_oldest_idle_one_goes_past_the_cap() {
+    fn tests_that_cursors_refuse_one_past_the_cap_and_forget_an_ended_one() {
         let cursors = Cursors::<u64>::default();
-        let ids: Vec<u64> = (0..=MAX_CURSORS).map(|_| cursors.mint()).collect();
-        for id in &ids {
-            cursors.put(*id, *id).expect("put");
-        }
-        assert!(cursors.take(ids[0]).is_err(), "evicted past the cap");
-        assert_eq!(cursors.take(ids[1]), Ok(ids[1]));
-        assert!(cursors.take(ids[1]).is_err(), "out while in use");
+        let ids: Vec<u64> = (0..MAX_CURSORS)
+            .map(|value| cursors.insert(value as u64).expect("under the cap").0)
+            .collect();
+        assert!(
+            cursors.insert(99).is_err(),
+            "a live wait is never displaced"
+        );
+        assert_eq!(cursors.get(ids[0]).map(|cursor| *cursor), Ok(0));
+        assert!(cursors.remove(ids[0]).is_some());
+        assert!(cursors.get(ids[0]).is_err(), "an ended wait is gone");
+        assert!(cursors.insert(99).is_ok(), "its slot is free again");
     }
 
     #[test]

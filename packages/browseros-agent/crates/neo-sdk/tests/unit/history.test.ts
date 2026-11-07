@@ -17,6 +17,9 @@ type Sent = {
   timeout: number
 }
 
+/** A reply that never comes, as Rust's answer to a next navigation that has not happened. */
+const HOLD = Symbol('hold')
+
 let sent: Sent[] = []
 let replies: unknown[] = []
 /** The page's URL, as the live `url` getter answers it. */
@@ -102,6 +105,8 @@ beforeEach(() => {
       const { id, guid, method, params, metadata } = JSON.parse(message)
       sent.push({ guid, method, params, timeout: metadata.timeout })
       const reply = replies.shift()
+      // A call Rust keeps waiting, as the next navigation a predicate wait keeps asking for.
+      if (reply === HOLD) return await new Promise<string>(() => {})
       if (reply && typeof reply === 'object' && 'error' in reply)
         return JSON.stringify({ id, ...reply })
       return JSON.stringify({ id, result: reply ?? {} })
@@ -215,11 +220,12 @@ describe('waitForNavigation', () => {
     ])
   })
 
-  test('a predicate steps a cursor and resolves the accepted navigation Response', async () => {
+  test('a predicate steps a cursor, keeps one next waiting and finishes the accepted navigation', async () => {
     const { page } = run()
     replies.push(
-      { cursor: 4, url: 'http://a.test/start#hash' },
-      { cursor: 4, url: 'http://a.test/next?q=a+b' },
+      { cursor: 4, index: 0, url: 'http://a.test/start#hash' },
+      { cursor: 4, index: 1, url: 'http://a.test/next?q=a+b' },
+      HOLD,
       { response: { guid: 'response@T:D:0' } },
     )
     const seen: unknown[] = []
@@ -238,15 +244,69 @@ describe('waitForNavigation', () => {
     expect(sent.map(({ method, params }) => [method, params])).toEqual([
       ['neo:nextNavigation', { response: true }],
       ['neo:nextNavigation', { cursor: 4, response: true }],
-      ['neo:finishNavigation', { cursor: 4, waitUntil: 'domcontentloaded' }],
+      ['neo:nextNavigation', { cursor: 4, response: true }],
+      [
+        'neo:finishNavigation',
+        { cursor: 4, index: 1, waitUntil: 'domcontentloaded' },
+      ],
+    ])
+  })
+
+  test('a later navigation the predicate accepts wins while an earlier answer is pending', async () => {
+    const { page } = run()
+    replies.push(
+      { cursor: 5, index: 0, url: 'http://a.test/first' },
+      { cursor: 5, index: 1, url: 'http://a.test/goal' },
+      HOLD,
+      { response: { guid: 'response@T:D:0' } },
+    )
+    const response = await page.waitForNavigation({
+      url: (url) =>
+        url.pathname === '/first'
+          ? new Promise<boolean>(() => {})
+          : url.pathname === '/goal',
+    })
+    expect(response?.status()).toBe(200)
+    expect(sent.at(-1)?.params).toEqual({
+      cursor: 5,
+      index: 1,
+      waitUntil: 'load',
+    })
+  })
+
+  test("the page's closure rejects a wait whose predicate is pending, with no timeout", async () => {
+    const { page } = run()
+    replies.push(
+      { cursor: 6, index: 0, url: 'http://a.test/x' },
+      {
+        error: {
+          error: {
+            name: 'TargetClosedError',
+            message: 'Target page, context or browser has been closed',
+          },
+        },
+      },
+    )
+    const error = await page
+      .waitForNavigation({
+        url: () => new Promise<boolean>(() => {}),
+        timeout: 0,
+      })
+      .catch((e) => e)
+    expect(error.message).toContain('has been closed')
+    expect(sent.map(({ method }) => method)).toEqual([
+      'neo:nextNavigation',
+      'neo:nextNavigation',
+      'neo:releaseNavigation',
     ])
   })
 
   test("a predicate's URL is read-only and a URL that does not parse is never accepted", async () => {
     const { page } = run()
     replies.push(
-      { cursor: 1, url: 'not a url' },
-      { cursor: 1, url: 'http://a.test/x' },
+      { cursor: 1, index: 0, url: 'not a url' },
+      { cursor: 1, index: 1, url: 'http://a.test/x' },
+      HOLD,
       {},
     )
     const urls: string[] = []
@@ -262,9 +322,9 @@ describe('waitForNavigation', () => {
     expect(urls).toEqual(['http://a.test/x'])
   })
 
-  test("a predicate's throw rejects with the API prefix and finishes nothing", async () => {
+  test("a predicate's throw rejects with the API prefix and releases its cursor", async () => {
     const { page } = run()
-    replies.push({ cursor: 2, url: 'http://a.test/x' })
+    replies.push({ cursor: 2, index: 0, url: 'http://a.test/x' }, HOLD)
     const error = await page
       .waitForNavigation({
         url: () => {
@@ -274,7 +334,11 @@ describe('waitForNavigation', () => {
       .catch((e) => e)
     expect(error.name).toBe('RangeError')
     expect(error.message).toBe('page.waitForNavigation: nope')
-    expect(sent.map(({ method }) => method)).toEqual(['neo:nextNavigation'])
+    expect(sent.map(({ method, params }) => [method, params])).toEqual([
+      ['neo:nextNavigation', { response: true }],
+      ['neo:nextNavigation', { cursor: 2, response: true }],
+      ['neo:releaseNavigation', { cursor: 2 }],
+    ])
   })
 
   test('a step that times out names the whole timeout', async () => {
@@ -293,9 +357,9 @@ describe('waitForNavigation', () => {
     )
   })
 
-  test('a predicate still pending at the deadline rejects the wait then', async () => {
+  test('a predicate still pending at the deadline rejects the wait then and releases it', async () => {
     const { page } = run()
-    replies.push({ cursor: 3, url: 'http://a.test/x' })
+    replies.push({ cursor: 3, index: 0, url: 'http://a.test/x' }, HOLD)
     const started = Date.now()
     const error = await page
       .waitForNavigation({
@@ -308,12 +372,16 @@ describe('waitForNavigation', () => {
       'page.waitForNavigation: Timeout 50ms exceeded.',
     )
     expect(Date.now() - started).toBeLessThan(5000)
-    expect(sent.map(({ method }) => method)).toEqual(['neo:nextNavigation'])
+    expect(sent.map(({ method }) => method)).toEqual([
+      'neo:nextNavigation',
+      'neo:nextNavigation',
+      'neo:releaseNavigation',
+    ])
   })
 
   test("an async predicate's rejection rejects with the API prefix", async () => {
     const { page } = run()
-    replies.push({ cursor: 3, url: 'http://a.test/x' })
+    replies.push({ cursor: 3, index: 0, url: 'http://a.test/x' }, HOLD)
     const error = await page
       .waitForNavigation({
         url: async () => Promise.reject(new TypeError('bad')),
@@ -321,6 +389,7 @@ describe('waitForNavigation', () => {
       .catch((e) => e)
     expect(error.name).toBe('TypeError')
     expect(error.message).toBe('page.waitForNavigation: bad')
+    expect(sent.at(-1)?.method).toBe('neo:releaseNavigation')
   })
 
   test('an unknown waitUntil throws, prefixed, before anything is sent', async () => {
@@ -348,11 +417,12 @@ describe('waitForURL with a predicate', () => {
 
   test('otherwise it waits for the next accepted navigation, answering no Response', async () => {
     const { page } = run()
-    replies.push({ cursor: 9, url: 'http://a.test/done' }, {})
+    replies.push({ cursor: 9, index: 0, url: 'http://a.test/done' }, HOLD, {})
     await page.waitForURL((url) => url.pathname === '/done')
     expect(sent.map(({ method, params }) => [method, params])).toEqual([
       ['neo:nextNavigation', { response: false }],
-      ['neo:finishNavigation', { cursor: 9, waitUntil: 'load' }],
+      ['neo:nextNavigation', { cursor: 9, response: false }],
+      ['neo:finishNavigation', { cursor: 9, index: 0, waitUntil: 'load' }],
     ])
   })
 })
