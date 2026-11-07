@@ -9,7 +9,8 @@
 //!    → setHighlights(every entry of that document); the overlay follows them each frame
 //!  Frame.hideHighlight {selector}      that entry goes → setHighlights(the rest); [] clears
 //!  Page.hideHighlight {}               every entry goes → hideHighlight in each document the
-//!                                      run put an overlay in, emptied ones included
+//!                                      run put an overlay in, emptied ones included; under
+//!                                      each document's turn, one highlighted since keeps that
 //!  run end (`Dispatcher::finish`)      as Page.hideHighlight, on every tab the run touched
 //! ```
 
@@ -172,7 +173,10 @@ pub(crate) async fn hide_highlight(
 
 /// Serves `Page.hideHighlight`: every highlight of the tab goes, and the overlay of the main
 /// frame and of every document the run put one in, emptied ones included. A document that
-/// cannot be reached is skipped.
+/// cannot be reached is skipped. A highlight added after this call cleared the registry is
+/// newer than it: under each document's turn the registry is read again, as `show_each` reads
+/// it, and a document that holds one gets that list instead of the hide, so this call never
+/// erases it (Playwright hides each frame on its own, and a frame that finished stays).
 ///
 /// Playwright: `server/highlightController.ts` `HighlightController.hideHighlights`: `await injectedScript?.evaluate(injected => injected.hideHighlight());`
 pub(crate) async fn hide_all(page: &PageSession, progress: &Progress) -> Result<(), CallError> {
@@ -180,10 +184,21 @@ pub(crate) async fn hide_all(page: &PageSession, progress: &Progress) -> Result<
         let _turn = progress
             .race(page.highlights.turn(&frame.id)?.lock_owned())
             .await?;
+        let specs = page
+            .highlights
+            .update(|registry| specs_of(&registry.entries, &frame))?;
         // Playwright: `server/highlightController.ts` `HighlightController.hideHighlights`: `}).catch(() => {})));`
-        let _hidden = progress
-            .race(frame.call(None, &InjectedHideHighlightParams {}))
-            .await?;
+        let _written = if specs.is_empty() {
+            progress
+                .race(frame.call(None, &InjectedHideHighlightParams {}))
+                .await?
+                .map(drop)
+        } else {
+            progress
+                .race(frame.call(None, &InjectedSetHighlightsParams { highlights: specs }))
+                .await?
+                .map(drop)
+        };
     }
     Ok(())
 }

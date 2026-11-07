@@ -316,10 +316,12 @@ fn plain_event_init(argument: &SerializedArgument) -> Result<Value, PlaywrightEr
         .map_err(|kind| PlaywrightError::error(format!("{EVENT_INIT_UNSERVED} {kind}")))
 }
 
-/// Neo: how many JSON values one `eventInit` may expand to. Playwright's serializer writes a
-/// value met again as a `ref` to its first occurrence; JSON repeats it instead, so a chain of
-/// values each holding the next twice would double at every level.
+/// Deviation: `protocol/src/serializers.ts` `innerSerializeValue`: `return { ref: id };` Playwright's serializer writes a value met again as a `ref` to its first occurrence and its server hands the refs on, so any number of references to one value dispatches; Neo hands `eventInit` to its isolated world as JSON, which writes a repeated value out in full each time (a chain of values each holding the next twice doubles at every level), so one `eventInit` expands to at most this many values and a larger one is refused, naming the limit, before any page call.
 const EXPANDED_VALUES_MAX: usize = 100_000;
+
+/// Neo: the refusal of an `eventInit` past [`EXPANDED_VALUES_MAX`], which it names.
+const EXPANSION_REFUSED: &str =
+    "more than 100000 values once each repeated value is written out in full (Neo's limit)";
 
 /// Neo: the arrays and objects decoded so far, by their serialized `id`, the ones still open (an
 /// ancestor of the value being decoded), and how many values the expansion has written. A `ref`
@@ -337,7 +339,7 @@ impl Refs {
     fn write(&mut self, values: usize) -> Result<(), &'static str> {
         self.written = self.written.saturating_add(values);
         if self.written > EXPANDED_VALUES_MAX {
-            return Err("more shared values than Neo expands");
+            return Err(EXPANSION_REFUSED);
         }
         Ok(())
     }
@@ -919,9 +921,29 @@ mod tests {
         }
         let error = plain_event_init(&argument(level)).expect_err("too large");
         assert!(
-            error
-                .message
-                .ends_with("more shared values than Neo expands"),
+            error.message.ends_with(EXPANSION_REFUSED),
+            "{}",
+            error.message
+        );
+        assert!(EXPANSION_REFUSED.contains(&EXPANDED_VALUES_MAX.to_string()));
+    }
+
+    #[test]
+    fn tests_that_many_references_to_one_value_expand_up_to_the_limit() {
+        // Playwright's `Array(n).fill(shared)`: the first item in full, every other a `ref`.
+        let shallow = |n: usize| {
+            let mut items = vec![json!({ "o": [{ "k": "leaf", "v": { "b": true } }], "id": 2 })];
+            items.extend((1..n).map(|_| json!({ "ref": 2 })));
+            argument(json!({ "a": items, "id": 1 }))
+        };
+        let expanded = plain_event_init(&shallow(10_000)).expect("within the limit");
+        let items = expanded.as_array().expect("an array");
+        assert_eq!(items.len(), 10_000);
+        assert!(items.iter().all(|item| item == &json!({ "leaf": true })));
+        // The review's 60,000 references expand past 100,000 values; Playwright dispatches them.
+        let error = plain_event_init(&shallow(60_000)).expect_err("past the limit");
+        assert!(
+            error.message.ends_with(EXPANSION_REFUSED),
             "{}",
             error.message
         );

@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (44)
+## Deviations (45)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -20,6 +20,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/dialogs.rs | `Dialogs::left_open` | `server/dialog.ts` `DialogManager.dialogDidOpen` | Playwright answers a dialog only when nobody listens, and leaves a listener's unanswered dialog open for the page's life. Neo's tab outlives the run and must not stay frozen for its user, so the run's end gives a dialog it handed out and nobody answered the default answer, which this takes. |
 | neo-runtime/src/dispatch.rs | `unsupported_child_call` | `client/frame.ts` `Frame.waitForNavigation` | Playwright answers a child frame's navigation Response; the network log records only the main frame's requests, so Neo refuses the wait. A predicate wait that answers none (`waitForURL`) is served. |
 | neo-runtime/src/element_ops.rs | `EVENT_INIT_UNSERVED` | `server/frames.ts` `Frame.dispatchEvent` | Playwright builds and dispatches the event in the page's main world from any serialized value, handles included; Neo dispatches from its isolated world, so `eventInit` takes plain values only (strings, finite numbers, booleans, null, arrays and plain objects) and anything else is refused before any page call. |
+| neo-runtime/src/element_ops.rs | `EXPANDED_VALUES_MAX` | `protocol/src/serializers.ts` `innerSerializeValue` | Playwright's serializer writes a value met again as a `ref` to its first occurrence and its server hands the refs on, so any number of references to one value dispatches; Neo hands `eventInit` to its isolated world as JSON, which writes a repeated value out in full each time (a chain of values each holding the next twice doubles at every level), so one `eventInit` expands to at most this many values and a larger one is refused, naming the limit, before any page call. |
 | neo-runtime/src/element_ops.rs | `FrameTab::bounding_box` | `server/chromium/crPage.ts` `FrameSession._framePosition` | an out-of-process frame's boxes move by its iframe's content box (the frames foundation's geometry, as a click aims), where Playwright adds the iframe's border box, so Neo's sit the iframe's border and padding further in. |
 | neo-runtime/src/evaluate.rs | `created_handle` | `server/dom.ts` `ElementHandle._initializePreview` | Playwright starts at `JSHandle@node` and updates the preview by event; Neo has no events, so the handle starts with the final preview. |
 | neo-runtime/src/evaluate.rs | `route_frame` | `server/frames.ts` `Frame.waitForFunctionExpressionOnElement` | Neo has no main-world injected script yet to run the predicate on an element, so it refuses the selector form. |
