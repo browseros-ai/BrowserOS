@@ -20,6 +20,7 @@ neo-runtime/src/content.rs
 neo-runtime/src/devices.rs
 neo-runtime/src/dialogs.rs
 neo-runtime/src/discovery.rs
+neo-runtime/src/downloads.rs
 neo-runtime/src/drag.rs
 neo-runtime/src/element_ops.rs
 neo-runtime/src/evaluate.rs
@@ -34,11 +35,14 @@ neo-runtime/src/main_world.rs
 neo-runtime/src/network_events.rs
 neo-runtime/src/network_idle.rs
 neo-runtime/src/page_events.rs
+neo-runtime/src/switch.rs
 neo-sdk/src/console-message.ts
 neo-sdk/src/dialog.ts
 neo-sdk/src/disposable.ts
+neo-sdk/src/download.ts
 neo-sdk/src/element-handle.ts
 neo-sdk/src/events.ts
+neo-sdk/src/file-chooser.ts
 neo-sdk/src/input.ts
 neo-sdk/src/js-handle.ts
 neo-sdk/src/plain-argument.ts

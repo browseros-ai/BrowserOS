@@ -72,7 +72,7 @@ const REPLAY_WAIT: Duration = Duration::from_secs(5);
 /// Neo: the listener events Neo produces on a `Page`, under the names Playwright's client gives
 /// them (`Events.Page`), and what each needs switched on in the page's session; and the one
 /// channel event the SDK handles itself, `locatorHandlerTriggered` (`locator_handlers.rs`).
-const PAGE_EVENTS: [(&str, Needs); 17] = [
+const PAGE_EVENTS: [(&str, Needs); 19] = [
     ("console", Needs::RUNTIME),
     ("pageerror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
@@ -85,6 +85,10 @@ const PAGE_EVENTS: [(&str, Needs); 17] = [
     ("framedetached", Needs::WATCHER),
     ("framenavigated", Needs::WATCHER),
     ("popup", Needs::DISCOVERY),
+    // The watcher reports it once the page intercepts its file chooser (`page_events.rs`
+    // `intercept_file_chooser`).
+    ("filechooser", Needs::WATCHER),
+    ("download", Needs::DOWNLOADS),
     ("request", Needs::NETWORK),
     ("response", Needs::NETWORK),
     ("requestfinished", Needs::NETWORK),
@@ -94,7 +98,7 @@ const PAGE_EVENTS: [(&str, Needs); 17] = [
 
 /// Neo: the listener events Neo produces on the run's `BrowserContext` (`Events.BrowserContext`),
 /// for every page the run has a session on; `page` for every new tab of the context.
-const CONTEXT_EVENTS: [(&str, Needs); 14] = [
+const CONTEXT_EVENTS: [(&str, Needs); 15] = [
     ("console", Needs::RUNTIME),
     ("weberror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
@@ -105,6 +109,7 @@ const CONTEXT_EVENTS: [(&str, Needs); 14] = [
     ("framedetached", Needs::WATCHER),
     ("framenavigated", Needs::WATCHER),
     ("page", Needs::DISCOVERY),
+    ("download", Needs::DOWNLOADS),
     ("request", Needs::NETWORK),
     ("response", Needs::NETWORK),
     ("requestfinished", Needs::NETWORK),
@@ -115,7 +120,7 @@ const CONTEXT_EVENTS: [(&str, Needs); 14] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "each flag is an independent switch a subscription may need, combined with ||"
+    reason = "one flag per producer a subscription may switch on, combined with ||"
 )]
 pub(crate) struct Needs {
     /// `PageSession::prepare`: the watcher, which is the producer, with `Page.enable`.
@@ -127,6 +132,9 @@ pub(crate) struct Needs {
     /// The run's target discovery (`discovery.rs`), which reports new tabs. Not a page's: every
     /// call of the run waits for it ([`ALL_PAGES`]).
     pub(crate) discovery: bool,
+    /// The run's download reports (`downloads.rs`). Not a page's either: every call of the run
+    /// waits for them ([`ALL_PAGES`]).
+    pub(crate) downloads: bool,
 }
 
 impl Needs {
@@ -137,6 +145,7 @@ impl Needs {
         runtime: false,
         network: false,
         discovery: false,
+        downloads: false,
     };
     /// Neo: an event the page watcher produces from the domains it always enables.
     pub(crate) const WATCHER: Self = Self {
@@ -144,6 +153,7 @@ impl Needs {
         runtime: false,
         network: false,
         discovery: false,
+        downloads: false,
     };
     /// Neo: an event only `Runtime.enable` and `Log.enable` report.
     const RUNTIME: Self = Self {
@@ -151,6 +161,7 @@ impl Needs {
         runtime: true,
         network: false,
         discovery: false,
+        downloads: false,
     };
     /// Neo: an event only `Network.enable` reports: a request's.
     const NETWORK: Self = Self {
@@ -158,6 +169,7 @@ impl Needs {
         runtime: false,
         network: true,
         discovery: false,
+        downloads: false,
     };
     /// Neo: an event the run's target discovery produces, about a page no session watches yet.
     const DISCOVERY: Self = Self {
@@ -165,6 +177,16 @@ impl Needs {
         runtime: false,
         network: false,
         discovery: true,
+        downloads: false,
+    };
+    /// Neo: an event the run's download watcher produces from the browser's reports, for any
+    /// tab of the run's context.
+    const DOWNLOADS: Self = Self {
+        watcher: false,
+        runtime: false,
+        network: false,
+        discovery: false,
+        downloads: true,
     };
 
     /// Whether a page's session has anything to switch on for it.
@@ -318,6 +340,7 @@ impl EventHub {
                     runtime: left.runtime || right.runtime,
                     network: left.network || right.network,
                     discovery: left.discovery || right.discovery,
+                    downloads: left.downloads || right.downloads,
                 })
         })
         .flatten()

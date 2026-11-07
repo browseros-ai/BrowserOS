@@ -28,6 +28,7 @@ import {
   targetClosedError,
 } from './errors'
 import { ChannelOwner, type EventTable } from './events'
+import { FileChooser } from './file-chooser'
 import {
   type AriaSnapshotJSON,
   type AriaSnapshotOptions,
@@ -122,13 +123,15 @@ const PAGE_EVENTS: EventTable = {
     'framedetached',
     'framenavigated',
     'popup',
+    'filechooser',
+    'download',
     'request',
     'response',
     'requestfailed',
     'requestfinished',
   ],
   quiet: [],
-  unserved: ['download', 'filechooser', 'websocket', 'worker'],
+  unserved: ['websocket', 'worker'],
 }
 
 /** `waitForRequest` and `waitForResponse`'s options: Playwright's `TimeoutOptions`; the Waiter
@@ -335,6 +338,17 @@ export class Page extends ChannelOwner {
       this.#onLocatorHandlerTriggered((params as { uid: number }).uid).catch(
         (error) => this.#context._pipe.report(error),
       )
+    else if (method === 'fileChooser') {
+      // Playwright: `client/page.ts` `Page.constructor`: `this._channel.on('fileChooser', ({ element, isMultiple }) => this.emit(Events.Page.FileChooser, new FileChooser(this, ElementHandle.from(element), isMultiple)));`
+      const { chooser, isMultiple } = params as {
+        chooser: string
+        isMultiple: boolean
+      }
+      this.emit(
+        'filechooser',
+        new FileChooser(this, chooser, isMultiple, this.#connection),
+      )
+    }
   }
 
   /** Playwright: `client/page.ts` `Page._locatorHandlers` */

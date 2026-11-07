@@ -2,9 +2,9 @@
  * Playwright's `BrowserContext` (`client/browserContext.ts` at 26137face), cut to what a run
  * needs: its pages, `newPage`, the default timeout its pages fall back to, and the events Rust
  * sends on it (`page`, `console`, `pageError`, `dialog`, `dialogClosed`, `request`, `response`,
- * `requestFinished`, `requestFailed`), which it fans out to the page each names and to its own
- * listeners in Playwright's order. Its `pageload`, `pageclose` and frame events come from its
- * pages. Scripts receive it as `context`.
+ * `requestFinished`, `requestFailed`, `download`), which it fans out to the page each names and
+ * to its own listeners in Playwright's order. Its `pageload`, `pageclose` and frame events come
+ * from its pages. Scripts receive it as `context`.
  *
  * Its page-level listeners cover the pages the run has a session on, which include every page a
  * `page` event handed out: Neo does not attach to the user's other tabs just to listen
@@ -29,6 +29,7 @@ import type {
 import type { Connection } from './connection'
 import { ConsoleMessage, type ConsoleMessagePayload } from './console-message'
 import { Dialog } from './dialog'
+import { Download } from './download'
 import { parseSerializedError, targetClosedError } from './errors'
 import { ChannelOwner, type EventPipe, type EventTable } from './events'
 import { type Created, requestFromRecord, responseFromRecord } from './network'
@@ -60,10 +61,11 @@ const CONTEXT_EVENTS: EventTable = {
     'frameattached',
     'framedetached',
     'framenavigated',
+    'download',
   ],
   local: ['close'],
   quiet: ['backgroundpage'],
-  unserved: ['download', 'serviceworker'],
+  unserved: ['serviceworker'],
 }
 
 /** A dialog record Rust sends: Playwright's `{guid, initializer}`. */
@@ -164,6 +166,8 @@ export class BrowserContext extends ChannelOwner {
       this.#onDialog((params as { dialog: DialogRecord }).dialog)
     else if (method === 'dialogClosed')
       this.#onDialogClosed((params as { dialog: DialogRecord }).dialog)
+    else if (method === 'download')
+      this.#onDownload(params as DownloadEventParams)
     else if (method === 'request') this.#onRequest(params as RequestEventParams)
     else if (method === 'response')
       this.#onResponse(params as ResponseEventParams)
@@ -240,7 +244,12 @@ export class BrowserContext extends ChannelOwner {
 
   #onConsole(event: ConsoleEventParams): void {
     const page = event.page ? this.#pageFor(event.page.guid) : null
-    const consoleMessage = new ConsoleMessage(event, page, null)
+    const consoleMessage = new ConsoleMessage(
+      event,
+      page,
+      null,
+      this.#connection,
+    )
     page?.emit('console', consoleMessage)
     this.emit('console', consoleMessage)
   }
@@ -250,6 +259,24 @@ export class BrowserContext extends ChannelOwner {
     const parsedError = parseSerializedError(error)
     this.emit('weberror', new WebError(pageObject, parsedError, location))
     if (pageObject) pageObject.emit('pageerror', parsedError)
+  }
+
+  /**
+   * Playwright: `client/page.ts` `Page.constructor`: `this._browserContext.emit(Events.BrowserContext.Download, download);`
+   * One `Download` for the page's `download`, then the context's. Rust sends it on the context,
+   * naming the page, since a tab the run has not met yet can begin one too.
+   */
+  #onDownload(event: DownloadEventParams): void {
+    const page = this.#pageFor(event.page.guid)
+    const download = new Download(
+      page,
+      event.url,
+      event.suggestedFilename,
+      event.artifact,
+      this.#connection,
+    )
+    page.emit('download', download)
+    this.emit('download', download)
   }
 
   #onDialog(record: DialogRecord): void {
@@ -406,6 +433,15 @@ export class BrowserContext extends ChannelOwner {
 type ConsoleEventParams = ConsoleMessagePayload & {
   page?: PageChannel
   worker?: unknown
+}
+
+/** Playwright's `download` event params (`spec/playwright/page.yml`), sent on the context with
+ * the page it names, and `artifact` the download's guid. */
+interface DownloadEventParams {
+  page: PageChannel
+  url: string
+  suggestedFilename: string
+  artifact: string
 }
 
 /** Playwright's `pageError` event params (`spec/playwright/browserContext.yml`). */
