@@ -36,7 +36,7 @@ use tokio::sync::broadcast::{self, error::RecvError};
 use tokio_util::sync::CancellationToken;
 
 use crate::page::PageSession;
-use crate::progress::PlaywrightError;
+use crate::progress::{PlaywrightError, RunScope};
 
 /// Neo: the guid prefix of an init script's `Disposable`, which the SDK disposes by guid.
 pub(crate) const DISPOSABLE_PREFIX: &str = "disposable@";
@@ -558,6 +558,19 @@ impl InitScripts {
             true
         });
     }
+}
+
+/// Releases the run's init scripts, as a closed context and the run's end let go of what the
+/// run holds (`Tabs::release_run_scoped`, awaited before the close is acknowledged and at run
+/// end): every script the run added leaves every session that shows it, the out-of-process
+/// iframes' included, and the registry closes first, so an attach still pending installs nothing
+/// and a reply that comes late undoes itself ([`InitScripts::close`]). No document loaded after
+/// it returns runs one of the run's scripts; a second call finds nothing left. It waits on the
+/// browser's replies, so its caller bounds it.
+///
+/// Playwright: `server/browserContext.ts` `BrowserContext.close`: `const disposition = await progress.race(this.doClose(options.reason));`
+pub(crate) async fn release_all(run: &RunScope) {
+    run.init_scripts.close().await;
 }
 
 /// A target one of the run's sessions attached, as its event names it.
