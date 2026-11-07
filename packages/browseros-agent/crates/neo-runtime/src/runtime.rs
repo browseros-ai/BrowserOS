@@ -30,6 +30,7 @@ use crate::progress::{ErrorName, RunScope};
 use crate::realm;
 use crate::realm::Script;
 use crate::run::{RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
+use crate::screenshot::TabScreenshots;
 use crate::tabs::Tabs;
 
 /// A target id no tab can have, used to see how the browser reports a missing tab.
@@ -37,12 +38,15 @@ const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
 
 /// Runs agent scripts against tabs of one BrowserOS browser. Runs are independent: each gets
 /// its own CDP session and its own QuickJS realm, so one `Runtime` serves any number of
-/// concurrent runs. Runs on one tab share only its input: their clicks take turns at it, from
-/// interceptor setup to stop (`page.rs` `TabInputs`). Clones share those turns too.
+/// concurrent runs. Runs on one tab share only its input and its screenshots: their clicks take
+/// turns at its input, from interceptor setup to stop (`page.rs` `TabInputs`), and their
+/// screenshots at its capture, cleanup included (`screenshot.rs` `TabScreenshots`). Clones share
+/// those turns too.
 #[derive(Clone)]
 pub struct Runtime {
     cdp: CdpClient,
     inputs: TabInputs,
+    screenshots: TabScreenshots,
     cleanup: TaskTracker,
 }
 
@@ -92,6 +96,7 @@ impl Runtime {
                 Ok(Self {
                     cdp,
                     inputs: TabInputs::default(),
+                    screenshots: TabScreenshots::default(),
                     cleanup: TaskTracker::new(),
                 })
             }
@@ -148,7 +153,7 @@ impl Runtime {
             stop = deadline.reached() => {
                 return RunOutcome::stopped(stop, deadline.timeout(), Vec::new());
             }
-            opened = Tabs::open(self.cdp.clone(), tokio.clone(), self.inputs.clone(), tasks.clone(), &page) => opened,
+            opened = Tabs::open(self.cdp.clone(), tokio.clone(), self.inputs.clone(), self.screenshots.clone(), tasks.clone(), &page) => opened,
         };
         let (tabs, url) = match opened {
             Ok(opened) => opened,

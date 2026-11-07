@@ -8,7 +8,7 @@
 //! world and no `Runtime.*` method is sent from here.
 //!
 //! ```text
-//!  screenshot_page / screenshot_element      one at a time per tab (PageSession.screenshots)
+//!  screenshot_page / screenshot_element      one at a time per tab, across runs (TabScreenshots)
 //!    viewportSize (main frame)
 //!    Prepared: prepareForScreenshot in every frame, fontsReady       → restored on every exit
 //!    [element] scroll-into-view loop, DOM.getBoxModel, scrollOffset
@@ -21,8 +21,9 @@
 //! still restores the page, removes its masks and resets the background (Playwright sends the
 //! same steps without waiting for them when a screenshot fails).
 
+use std::collections::HashMap;
 use std::mem;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -42,7 +43,7 @@ use neo_runtime_spec::serve::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::sync::{OwnedMutexGuard, oneshot};
+use tokio::sync::{Mutex, OwnedMutexGuard, oneshot};
 use tracing::debug;
 
 use crate::capture;
@@ -51,6 +52,7 @@ use crate::frame_selector;
 use crate::frames::{FrameContext, FrameScope};
 use crate::page::{FrameTab, GroupGuard, PageSession, ResolvedElement};
 use crate::progress::{CallError, PlaywrightError, Progress};
+use crate::run::PageId;
 use crate::waits::{self, WaitForSelectorOptions};
 
 /// Playwright: `server/screenshotter.ts` `Screenshotter._maskElements`: `options.maskColor || '#F0F'`
@@ -205,6 +207,34 @@ impl ScreenshotOptions {
 /// has undone its part of the page, so a call that stopped early never leaks its style, caret,
 /// masks or transparent background into the next capture.
 type Turn = Arc<OwnedMutexGuard<()>>;
+
+/// One `Runtime`'s screenshot turns, one per tab, each shared by every run the `Runtime` makes on
+/// that tab, as [`TabInputs`](crate::page::TabInputs) shares the tab's input. Every Neo run on a
+/// tab captures the same page, so they share its queue: a run a host cancels or drops mid-capture
+/// leaves cleanup tasks holding the turn (the background reset, the page restore), and the next
+/// run's capture waits until they have run, instead of capturing over a transparent background
+/// or a prepared page.
+///
+/// Entries are weak: a tab's turn lives while a run on the tab, or a cleanup still holding it,
+/// does. Runs of another `Runtime`, and other CDP clients, are not coordinated.
+#[derive(Clone, Default)]
+pub(crate) struct TabScreenshots(Arc<Mutex<HashMap<PageId, Weak<Mutex<()>>>>>);
+
+/// Playwright: `server/screenshotter.ts` `Screenshotter`: `private _queue = new TaskQueue();`
+impl TabScreenshots {
+    /// The screenshot turn of `page`, the one every live run on it shares.
+    pub(crate) async fn turn_for(&self, page: &PageId) -> Arc<Mutex<()>> {
+        let mut turns = self.0.lock().await;
+        if let Some(turn) = turns.get(page).and_then(Weak::upgrade) {
+            return turn;
+        }
+        // Tabs whose runs and cleanups are all gone go too, so the map holds only live tabs.
+        turns.retain(|_, turn| turn.strong_count() > 0);
+        let turn = Arc::default();
+        turns.insert(page.clone(), Arc::downgrade(&turn));
+        turn
+    }
+}
 
 /// Waits for a screenshot's turn at its tab.
 /// Neo: Playwright's `TaskQueue` per page, held past the call by its cleanup.
@@ -1100,6 +1130,32 @@ fn element_error(error: PageError) -> CallError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A run's session is gone but its cleanup still holds the tab's turn: the next run's session
+    /// gets the same turn and waits; once nothing holds it, the tab starts afresh.
+    #[tokio::test]
+    async fn a_tabs_screenshot_turn_outlives_its_run_while_cleanup_holds_it() {
+        let turns = TabScreenshots::default();
+        let page = PageId::new("T".to_string());
+        let first_run = turns.turn_for(&page).await;
+        let cleanup = Arc::clone(&first_run).lock_owned().await;
+        drop(first_run);
+        let next_run = turns.turn_for(&page).await;
+        assert!(
+            next_run.try_lock().is_err(),
+            "the next run waits for the cleanup"
+        );
+        drop(cleanup);
+        assert!(next_run.try_lock().is_ok());
+        let other = turns.turn_for(&PageId::new("U".to_string())).await;
+        assert!(
+            !Arc::ptr_eq(&next_run, &other),
+            "another tab has its own turn"
+        );
+        drop((next_run, other));
+        assert!(turns.turn_for(&page).await.try_lock().is_ok());
+        assert_eq!(turns.0.lock().await.len(), 1, "gone tabs leave the map");
+    }
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
         Rect {

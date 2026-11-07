@@ -577,6 +577,7 @@ mod tests {
     use crate::page::TabInputs;
     use crate::progress::ErrorName;
     use crate::run::PageId;
+    use crate::screenshot::TabScreenshots;
     use crate::tabs::{PageEntry, Tabs};
     use crate::url_match::SerializedUrlMatch;
 
@@ -630,6 +631,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
         )
@@ -811,6 +813,7 @@ mod tests {
             cdp.clone(),
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
         )

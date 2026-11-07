@@ -1285,6 +1285,7 @@ mod tests {
     use crate::progress::{self, ErrorName};
     use crate::run::Delivery;
     use crate::run::PageId;
+    use crate::screenshot::TabScreenshots;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
 
@@ -1298,6 +1299,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1373,6 +1375,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )

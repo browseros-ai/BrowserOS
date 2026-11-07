@@ -196,7 +196,8 @@ pub(crate) struct PageSession {
     network_enabled: OnceCell<()>,
     /// Playwright's `Screenshotter` task queue: one screenshot at a time on this tab, so one's
     /// background override, masks and page preparation never overlap another's. Its cleanup
-    /// tasks hold the turn too, until they have undone their part (`screenshot.rs`).
+    /// tasks hold the turn too, until they have undone their part. The turn is the tab's, shared
+    /// with every other run of the `Runtime` on it (`screenshot.rs` `TabScreenshots`).
     pub(crate) screenshots: Arc<Mutex<()>>,
     /// What the watcher turns into the run's events, and the tab's console history and dialogs.
     pub(crate) events: PageEvents,
@@ -502,12 +503,14 @@ pub(crate) struct Applied {
 }
 
 impl PageSession {
-    /// `input` is the tab's lock from the `Runtime`'s [`TabInputs`].
+    /// `input` is the tab's lock from the `Runtime`'s [`TabInputs`], `screenshots` its screenshot
+    /// turn from the `Runtime`'s `TabScreenshots`.
     pub(crate) fn new(
         session: Session,
         page: &PageId,
         tasks: TaskTracker,
         input: Arc<Mutex<()>>,
+        screenshots: Arc<Mutex<()>>,
         closed: CancellationToken,
         hub: EventHub,
     ) -> Self {
@@ -551,7 +554,7 @@ impl PageSession {
             input,
             network: Arc::new(NetworkLog::new(page.as_str().to_string())),
             network_enabled: OnceCell::new(),
-            screenshots: Arc::new(Mutex::new(())),
+            screenshots,
             events,
             runtime_enabled: OnceCell::new(),
         }
@@ -3554,6 +3557,7 @@ mod tests {
             session,
             &id,
             TaskTracker::new(),
+            Arc::new(Mutex::new(())),
             Arc::new(Mutex::new(())),
             CancellationToken::new(),
             EventHub::default(),
