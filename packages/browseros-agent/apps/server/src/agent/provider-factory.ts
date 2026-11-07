@@ -16,6 +16,7 @@ import {
 import { createCodexFetch } from '../lib/clients/oauth/codex-fetch'
 import { createCopilotFetch } from '../lib/clients/oauth/copilot-fetch'
 import { createOpenRouterCompatibleFetch } from '../lib/openrouter-fetch'
+import { getOpenRouterReasoning } from '../lib/openrouter-reasoning'
 import type { ResolvedAgentConfig } from './types'
 
 type ProviderFactory = (
@@ -69,7 +70,9 @@ function createOpenRouterFactory(
   return createOpenRouter({
     ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
-    extraBody: { reasoning: {} },
+    extraBody: {
+      reasoning: getOpenRouterReasoning(config.model, config.reasoningEffort),
+    },
     fetch: createOpenRouterCompatibleFetch(),
     ...(config.baseUrl && { baseURL: config.baseUrl }),
   })
