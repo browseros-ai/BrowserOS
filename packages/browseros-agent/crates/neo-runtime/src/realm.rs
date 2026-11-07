@@ -19,6 +19,8 @@ use crate::bridge::{Getters, Logs};
 use crate::deadline::Deadline;
 use crate::dispatch::Dispatcher;
 use crate::run::{RunError, RunOutcome};
+#[cfg(feature = "test-host")]
+use crate::test_host::TestHost;
 use crate::{bridge, world};
 
 const MEMORY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
@@ -71,7 +73,7 @@ const HOST_GLOBALS: &str = r"(sleep) => {
 /// changes the wrapper fails that test, not every recorded location.
 const AGENT_LINE_OFFSET: u32 = 2;
 
-/// What the realm needs to know about the run's page.
+/// Inputs owned by one realm, including its starting page identities and optional test host.
 pub(crate) struct Script {
     pub(crate) code: String,
     pub(crate) page_guid: String,
@@ -79,6 +81,10 @@ pub(crate) struct Script {
     pub(crate) frame_guid: String,
     /// The page's URL when the run started, which seeds `Page`'s memory of its last URL.
     pub(crate) url: String,
+    /// Per-run ownership prevents test commands from crossing between concurrent realms.
+    /// Only `bridge::install` may turn this optional transport into a JS global.
+    #[cfg(feature = "test-host")]
+    pub(crate) test_host: Option<Box<dyn TestHost>>,
 }
 
 /// Runs `script` to completion, failure, its deadline or cancellation. Browser calls go to
@@ -152,7 +158,14 @@ fn start<'js>(
     dispatcher: Dispatcher,
     deadline: Deadline,
 ) -> rquickjs::Result<Promise<'js>> {
-    bridge::install(ctx, getters, logs, dispatcher)?;
+    bridge::install(
+        ctx,
+        getters,
+        logs,
+        dispatcher,
+        #[cfg(feature = "test-host")]
+        script.test_host,
+    )?;
     let sleep = Func::from(Async(move |delay_ms: f64| {
         let deadline = deadline.clone();
         async move { deadline.sleep(delay_from_millis(delay_ms)).await }

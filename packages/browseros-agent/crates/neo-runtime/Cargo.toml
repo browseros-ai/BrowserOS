@@ -7,6 +7,11 @@ license.workspace = true
 repository.workspace = true
 description = "Runs an agent's Playwright-style script in a QuickJS realm against one BrowserOS tab."
 
+[features]
+default = []
+# A per-run opaque transport for the upstream test runner. Ordinary runs never install it.
+test-host = []
+
 # browseros-cdp and neo-runtime-spec are the only first-party dependencies; see
 # crates/NEO_STYLE.md. futures-util's `join_all` writes a click's pipelined mouse events in order.
 [dependencies]
