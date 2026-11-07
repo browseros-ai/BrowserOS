@@ -1,0 +1,15 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>opener</title>
+<script>
+// The popup, contextPage, opener and pageClose parity tests serve this page. Each control opens
+// a popup in one of the ways a page can: window.open with a URL, with 'noopener', with no URL
+// and with about:blank, and a target=_blank link (a noopener one, as Chromium treats every
+// target=_blank link without rel=opener). The URLs load tests/pages/popup.html on this origin,
+// its query naming the control. window.__opened counts the popups this page opened.
+window.__opened = 0;
+</script></head><body>
+<button type="button" id="open" onclick="__opened++; window.open('/popup.html?open')">Open</button>
+<button type="button" id="noopener" onclick="__opened++; window.open('/popup.html?noopener', '', 'noopener')">Open without opener</button>
+<button type="button" id="empty" onclick="__opened++; window.open()">Open empty</button>
+<button type="button" id="blank" onclick="__opened++; window.open('about:blank')">Open about:blank</button>
+<a id="link" href="/popup.html?link" target="_blank" onclick="__opened++">Open in a new tab</a>
+</body></html>
