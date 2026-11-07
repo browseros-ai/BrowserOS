@@ -21,6 +21,7 @@
 
 import type {
   BrowserContextCommands,
+  DialogCommands,
   FrameCommands,
   Metadata,
   PageCommands,
@@ -38,6 +39,9 @@ import { call } from './runtime-bridge'
 export type ApiName =
   | 'page.frame'
   | 'locator.click'
+  | 'locator.dblclick'
+  | 'locator.hover'
+  | 'locator.tap'
   | 'locator.fill'
   | 'locator.press'
   | 'locator.inputValue'
@@ -49,6 +53,9 @@ export type ApiName =
   | 'locator.selectOption'
   | 'locator.clear'
   | 'page.click'
+  | 'page.dblclick'
+  | 'page.hover'
+  | 'page.tap'
   | 'page.fill'
   | 'page.press'
   | 'page.inputValue'
@@ -59,6 +66,9 @@ export type ApiName =
   | 'page.setChecked'
   | 'page.selectOption'
   | 'frame.click'
+  | 'frame.dblclick'
+  | 'frame.hover'
+  | 'frame.tap'
   | 'page.goto'
   | 'frame.goto'
   | 'page.title'
@@ -93,6 +103,11 @@ export type ApiName =
   | 'frame.waitForURL'
   | 'page.waitForLoadState'
   | 'frame.waitForLoadState'
+  | 'page.waitForNavigation'
+  | 'frame.waitForNavigation'
+  | 'page.reload'
+  | 'page.goBack'
+  | 'page.goForward'
   | 'request.response'
   | 'request.allHeaders'
   | 'request.headersArray'
@@ -151,6 +166,32 @@ export type ApiName =
   | 'locator.evaluateAll'
   | 'locator.elementHandle'
   | 'locator.elementHandles'
+  | 'page.waitForEvent'
+  | 'browserContext.waitForEvent'
+  | 'page.consoleMessages'
+  | 'page.pageErrors'
+  | 'page.clearConsoleMessages'
+  | 'page.clearPageErrors'
+  | 'dialog.accept'
+  | 'dialog.dismiss'
+  // Element reads and states (B1).
+  | 'locator.isEnabled'
+  | 'page.isEnabled'
+  | 'frame.isEnabled'
+  | 'locator.isDisabled'
+  | 'page.isDisabled'
+  | 'frame.isDisabled'
+  | 'locator.isEditable'
+  | 'page.isEditable'
+  | 'frame.isEditable'
+  | 'locator.isHidden'
+  | 'page.isHidden'
+  | 'frame.isHidden'
+  | 'locator.innerHTML'
+  | 'page.innerHTML'
+  | 'frame.innerHTML'
+  | 'locator.allInnerTexts'
+  | 'locator.all'
 
 /** Playwright's wire error, `{error: {name, message}}`'s inner object. */
 export type WireError = { name: string; message: string }
@@ -274,6 +315,23 @@ export class Connection {
       params,
       timeout,
     )) as ResponseCommands[M]['result']
+  }
+
+  /** {@link Connection.send} for a `Dialog` command, to a `dialog@…` guid. */
+  async sendDialog<M extends keyof DialogCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: DialogCommands[M]['params'],
+    timeout: number,
+  ): Promise<Resolved<DialogCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<DialogCommands[M]['result']>
   }
 
   /**

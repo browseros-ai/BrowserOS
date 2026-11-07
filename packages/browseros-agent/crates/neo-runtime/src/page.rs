@@ -1,7 +1,7 @@
 //! One handed-out tab as the server side of a browser call sees it (Playwright's `server/page.ts`
 //! with `chromium/crPage.ts` and `crInput.ts`): this tab's CDP session,
 //! the domains a browser call needs, one watcher task that answers dialogs and tracks
-//! navigations, the tab's input turns ([`TabInputs`]), the mouse writer, and the `click::Tab`
+//! navigations, the tab's input turns ([`TabInputs`]), the pointer writers, and the `click::Tab`
 //! implementation over all of it and the utility world (`world.rs`).
 //!
 //! This file is mechanism; `click.rs` and `navigate.rs` own policy. Nothing here writes a
@@ -9,7 +9,7 @@
 //!
 //! Lifetime: [`PageSession`] owns this tab's [`Session`], whose `Drop` detaches, so the session
 //! detaches when the last `Arc<PageSession>` drops. Every task that writes on the session holds
-//! one: the dispatcher's call tasks, the interceptor setups, the mouse writers, the interceptor
+//! one: the dispatcher's call tasks, the interceptor setups, the pointer writers, the interceptor
 //! stops and the object-group releases, all spawned on the run's `TaskTracker`. So no release
 //! can find its session gone, and no end-of-run step has to order a drain before a detach; this
 //! also covers a caller that drops the run's future. The watcher holds no `Arc<PageSession>` (it would keep
@@ -33,7 +33,9 @@
 //!   frames before, 30 per 500 ms after). The page also sees itself visible and focused while
 //!   attached. A failure is logged and ignored: a foreground tab paints anyway.
 //! - Not `Runtime.enable` (worlds are found by name, `world.rs`) and not `DOM.enable` (quads,
-//!   box models and scrolls by `objectId` need none, probe P2).
+//!   box models and scrolls by `objectId` need none, probe P2). A run that listens to console
+//!   messages or page errors, or reads their history, enables Runtime and Log on its own
+//!   ([`PageSession::enable_runtime`]); the watcher then also feeds `page_events.rs`.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -48,8 +50,8 @@ use browseros_cdp::input::DispatchMouseEventParams;
 use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId, dom, target};
 use futures_util::future;
 use neo_runtime_spec::injected::{
-    ElementState, ElementStatesOutcome, FrameStyle, FrameStyleStatus, HitTargetInterceptor,
-    HitTargetOutcome, HitTargetSetup, InjectedCheckElementStatesParams,
+    ElementState, ElementStatesOutcome, FrameStyle, FrameStyleStatus, HitTargetAction,
+    HitTargetInterceptor, HitTargetOutcome, HitTargetSetup, InjectedCheckElementStatesParams,
     InjectedDescribeIFrameStyleParams, InjectedDescribeSelectorParams,
     InjectedExpectHitTargetParams, InjectedGetElementBorderWidthParams, InjectedResolveParams,
     InjectedScrollIntoViewParams, InjectedSetupHitTargetInterceptorParams,
@@ -69,15 +71,18 @@ use tokio_util::task::TaskTracker;
 use tracing::{debug, warn};
 
 use crate::click::{
-    Arming, Geometry, MouseButton, MouseClick, NotReady, PageError, PressReport, Resolved, Scroll,
-    SelectorFacts, StatesCheck, Tab, Verdict,
+    Arming, Geometry, MouseButton, MouseClick, NotReady, PageError, PointerInput, PressReport,
+    Resolved, Scroll, SelectorFacts, StatesCheck, Tab, Verdict,
 };
+use crate::events::{EventHub, Flushes};
 use crate::frame_selector::{self, FrameOwner};
 use crate::frames::{FrameContext, FrameScope, Frames, Host, local_tree};
+use crate::keyboard::{self, InputSender};
 use crate::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
 };
 use crate::network::{Lookup, NetworkLog};
+use crate::page_events::PageEvents;
 use crate::progress::InputTicket;
 use crate::progress::PlaywrightError;
 use crate::run::PageId;
@@ -189,6 +194,11 @@ pub(crate) struct PageSession {
     pub(crate) network: Arc<NetworkLog>,
     /// `Network.enable`, sent on this session's first goto and kept for the run.
     network_enabled: OnceCell<()>,
+    /// What the watcher turns into the run's events, and the tab's console history and dialogs.
+    pub(crate) events: PageEvents,
+    /// `Runtime.enable` and `Log.enable`, sent once a run listens to console messages or page
+    /// errors (or reads their history) and kept for the run.
+    runtime_enabled: OnceCell<()>,
 }
 
 /// One call's frame scope over the tab's shared input, navigation and lifetime.
@@ -229,6 +239,9 @@ struct PageUpdates<S> {
     /// Where the child frames' events go; `None` in tests of the main frame alone.
     feeds: Option<Arc<FrameFeeds>>,
     initial_url: S,
+    /// The run's events from this tab, and the hub's flushes; `None` in tests of navigation
+    /// alone.
+    producer: Option<(PageEvents, Flushes)>,
 }
 
 /// What the run's session has reported since `prepare`. Counters only grow, so a caller takes
@@ -252,10 +265,22 @@ pub(crate) struct PageState {
     pub(crate) load: bool,
     pub(crate) dom_content_loaded_count: u64,
     pub(crate) load_count: u64,
-    /// Chromium emits no load lifecycle when restoring this document from bfcache.
-    restored_from_bfcache: bool,
+    /// Playwright's `Frame.pendingDocument()`: the navigation the frame requested or whose
+    /// request started, until a commit takes it or its request fails. Requests are seen only once
+    /// `Network.enable` ran.
+    pending_document: Option<PendingDocument>,
     /// `Page.javascriptDialogOpening` events seen; each was answered.
     pub(crate) dialogs_opened: u64,
+}
+
+/// The navigation a frame is waiting to commit ([`PageState::pending_document`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PendingDocument {
+    /// Requested (`Page.frameRequestedNavigation`), with no request known yet.
+    Requested,
+    /// Its request started (`Network.requestWillBeSent`): the request id, which is also the
+    /// document's loader id.
+    Started(String),
 }
 
 /// A snapshot of the counters in [`PageState`], taken when an interceptor is armed.
@@ -381,7 +406,7 @@ impl FrameFeeds {
                     page.document = None;
                     page.dom_content_loaded = false;
                     page.load = false;
-                    page.restored_from_bfcache = false;
+                    page.pending_document = None;
                     state.swaps += 1;
                     state.swapped_from = Some(session.clone());
                 } else {
@@ -440,7 +465,7 @@ fn feeds_error() -> PageError {
 }
 
 /// The frame a `Page` event is about: `frame.id` of a commit, `frameId` of the others.
-fn event_frame(event: &CdpEvent) -> Option<&str> {
+pub(crate) fn event_frame(event: &CdpEvent) -> Option<&str> {
     match event.method.as_str() {
         "Page.frameNavigated" => event.params["frame"]["id"].as_str(),
         "Page.frameRequestedNavigation"
@@ -480,7 +505,10 @@ impl PageSession {
         tasks: TaskTracker,
         input: Arc<Mutex<()>>,
         closed: CancellationToken,
+        hub: EventHub,
     ) -> Self {
+        let events = PageEvents::new(hub, page.as_str(), session.cdp.clone(), session.id.clone());
+        let child_events = events.clone();
         let world = World::new(
             session.cdp.clone(),
             session.id.clone(),
@@ -494,6 +522,12 @@ impl PageSession {
             Arc::clone(&world),
             tasks.clone(),
         ));
+        // An out-of-process frame's console is this tab's: it turns on when the frame's session
+        // is attached, if the run wants the tab's console by then.
+        frames.on_child_host(Arc::new(move |host| {
+            let events = child_events.clone();
+            Box::pin(async move { events.child_attached(&host).await })
+        }));
         let (state_updates, state) = watch::channel(PageState::default());
         let (navigations, _) = broadcast::channel(4096);
         Self {
@@ -513,6 +547,8 @@ impl PageSession {
             input,
             network: Arc::new(NetworkLog::new(page.as_str().to_string())),
             network_enabled: OnceCell::new(),
+            events,
+            runtime_enabled: OnceCell::new(),
         }
     }
 
@@ -564,6 +600,7 @@ impl PageSession {
                         frames: Some(Arc::clone(&self.frames)),
                         feeds: Some(Arc::clone(&self.frame_feeds)),
                         initial_url,
+                        producer: Some((self.events.clone(), self.events.hub().watcher())),
                     },
                     self.closed.clone(),
                     stop,
@@ -589,6 +626,37 @@ impl PageSession {
             })
             .await
             .map(|_| ())
+    }
+
+    /// `Runtime.enable` and `Log.enable`, once per session and after [`Self::prepare`]: what
+    /// reports console messages and page errors to the watcher (`page_events.rs`). Neo sends
+    /// them only for a run that listens to those events or reads their history.
+    ///
+    /// The enable replays what V8 kept for the tab's live documents before it replies. The hub's
+    /// flush then makes the watcher apply everything that came before the replies, so that
+    /// replay lands in the history before the console log goes live.
+    ///
+    /// # Errors
+    ///
+    /// The CDP error of `Page.enable` or of a setup command here.
+    pub(crate) async fn enable_runtime(&self) -> Result<(), CdpError> {
+        self.prepare().await?;
+        self.runtime_enabled
+            .get_or_try_init(|| async {
+                self.events.console.request(self.session_id());
+                self.send("Runtime.enable", json!({})).await?;
+                self.send("Log.enable", json!({})).await?;
+                self.events.hub().replay_barrier().await;
+                self.events.console.go_live(self.session_id());
+                // The out-of-process frames this run already attached report on their own
+                // sessions; later ones turn on when they attach (`PageEvents::child_attached`).
+                for host in self.frames.child_hosts() {
+                    self.events.enable_child(&host).await;
+                }
+                Ok::<(), CdpError>(())
+            })
+            .await
+            .copied()
     }
 
     pub(crate) async fn send(&self, method: &str, params: Value) -> Result<Value, CdpError> {
@@ -875,7 +943,7 @@ impl TabInputs {
 /// every party that operates a click's input holds a copy, and the tab's input is free for the
 /// next click once the last copy drops. The click holds one from before its interceptor's setup
 /// to its verdict; the setup's task until the page answers; the armed interceptor until its
-/// stop has answered, `Drop`'s stop included; the mouse writer until its last event is answered.
+/// stop has answered, `Drop`'s stop included; the pointer writer until its last event is answered.
 /// So a call that stops early lets go of its own copy only, and the next click on the tab never
 /// replaces an interceptor whose events may still land, nor presses into one still armed.
 #[derive(Clone)]
@@ -940,7 +1008,22 @@ async fn watch_events(
         frames,
         feeds,
         initial_url,
+        producer,
     } = updates;
+    let (producer, mut flushes) = producer.unzip();
+    let mut watcher = Watcher {
+        cdp,
+        session,
+        main_frame,
+        state,
+        navigations,
+        world,
+        network,
+        frames,
+        feeds,
+        producer,
+        closed,
+    };
     tokio::pin!(initial_url);
     let mut seed_pending = true;
     loop {
@@ -950,11 +1033,29 @@ async fn watch_events(
             biased;
             () = stop.cancelled() => return,
             event = events.recv() => event,
+            // A reply barrier (`events.rs`): every event already in the ring preceded the reply
+            // that asked for it, so apply them all before answering. Selected after the events,
+            // so it never jumps ahead of one that was ready.
+            Some(ack) = next_flush(&mut flushes) => {
+                loop {
+                    let drained = match events.try_recv() {
+                        Ok(event) => Ok(event),
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Lagged(skipped)) => Err(RecvError::Lagged(skipped)),
+                        Err(TryRecvError::Closed) => Err(RecvError::Closed),
+                    };
+                    if !watcher.on(drained) {
+                        return;
+                    }
+                }
+                let _waiter = ack.send(());
+                continue;
+            }
             seed = &mut initial_url, if seed_pending => {
                 seed_pending = false;
                 match seed {
                     Ok(Some(url)) => {
-                        state.send_if_modified(|state| {
+                        watcher.state.send_if_modified(|state| {
                             if state.committed_url.is_some() {
                                 return false;
                             }
@@ -962,65 +1063,117 @@ async fn watch_events(
                             true
                         });
                     }
-                    Ok(None) => debug!(%session, "initial page URL empty; waiting for a commit"),
-                    Err(error) => debug!(%session, %error, "initial page URL unavailable; waiting for a commit"),
+                    Ok(None) => debug!(session = %watcher.session, "initial page URL empty; waiting for a commit"),
+                    Err(error) => debug!(session = %watcher.session, %error, "initial page URL unavailable; waiting for a commit"),
                 }
                 continue;
             }
         };
+        if !watcher.on(event) {
+            return;
+        }
+    }
+}
+
+/// The hub's next flush for a watcher that has one; never for one that has none.
+async fn next_flush(flushes: &mut Option<Flushes>) -> Option<oneshot::Sender<()>> {
+    match flushes {
+        Some(flushes) => flushes.recv().await,
+        None => future::pending().await,
+    }
+}
+
+/// What [`watch_events`] applies each event to.
+struct Watcher {
+    cdp: CdpClient,
+    session: SessionId,
+    main_frame: String,
+    state: watch::Sender<PageState>,
+    navigations: broadcast::Sender<Navigation>,
+    world: Arc<World>,
+    network: Arc<NetworkLog>,
+    frames: Option<Arc<Frames>>,
+    feeds: Option<Arc<FrameFeeds>>,
+    producer: Option<PageEvents>,
+    closed: CancellationToken,
+}
+
+impl Watcher {
+    /// Applies one event, or the ring's lag or end. Returns `false` once the session is gone.
+    fn on(&mut self, event: Result<CdpEvent, RecvError>) -> bool {
+        let session = &self.session;
         match event {
             Ok(event) => {
                 // Before the Page events that follow it, so a commit never outruns its request.
                 if event.method.starts_with("Network.")
-                    && event.session_id.as_ref() == Some(&session)
+                    && event.session_id.as_ref() == Some(session)
                 {
-                    network.apply(&event.method, &event.params);
+                    self.network.apply(&event.method, &event.params);
                 }
                 if event.method == "Page.frameNavigated"
-                    && event.session_id.as_ref() == Some(&session)
+                    && event.session_id.as_ref() == Some(session)
                     && let Some(frame) = event.params["frame"]["id"].as_str()
-                    && frame != main_frame
-                    && let Some(frames) = &frames
+                    && frame != self.main_frame
+                    && let Some(frames) = &self.frames
                 {
                     frames.committed(frame);
                 }
                 let mut applied = Applied::default();
-                state.send_if_modified(|state| {
-                    applied = apply(state, &event, &session, &main_frame);
+                let world = &self.world;
+                let main_frame = &self.main_frame;
+                self.state.send_if_modified(|state| {
+                    applied = apply(state, &event, session, main_frame);
                     if applied.new_document {
                         // Before notifying readers: no in-flight read may return old-document data.
                         world.document_committed();
                     }
                     applied.changed
                 });
-                if let Some(navigation) = applied.navigation {
-                    let _listeners = navigations.send(navigation);
+                if let Some(navigation) = applied.navigation.clone() {
+                    let _listeners = self.navigations.send(navigation);
                 }
-                if let Some(feeds) = &feeds {
+                if let Some(feeds) = &self.feeds {
                     if applied.new_document {
                         feeds.detach_all();
                     }
-                    feeds.apply(&event, &session, Some(&main_frame));
+                    feeds.apply(&event, session, Some(&self.main_frame));
                 }
-                if let Some(answer) = applied.dialog {
-                    answer_dialog(&cdp, &session, answer);
+                // The run's events from this one, after the page state they may describe. A
+                // dialog a listener owns is the script's to answer.
+                let answer = match &self.producer {
+                    Some(producer) => producer.apply(&event, &applied),
+                    None => applied.dialog,
+                };
+                if let Some(answer) = answer {
+                    answer_dialog(&self.cdp, session, answer);
                 }
                 if applied.closed {
-                    closed.cancel();
-                    return;
+                    if let Some(producer) = &self.producer {
+                        producer.closing(Some(&event));
+                    }
+                    self.closed.cancel();
+                    return false;
                 }
             }
             Err(RecvError::Lagged(skipped)) => {
                 warn!(%session, skipped, "the run's event watcher lagged; answering any dialog");
-                network.lagged();
-                state.send_if_modified(|state| state.pending_url.take().is_some());
-                answer_dialog(&cdp, &session, DialogAnswer::Dismiss);
+                self.network.lagged();
+                self.state
+                    .send_if_modified(|state| state.pending_url.take().is_some());
+                if let Some(producer) = &self.producer {
+                    producer.lagged();
+                }
+                answer_dialog(&self.cdp, session, DialogAnswer::Dismiss);
             }
             Err(RecvError::Closed) => {
-                closed.cancel();
-                return;
+                if let Some(producer) = &self.producer {
+                    producer.closing(None);
+                }
+                self.closed.cancel();
+                return false;
             }
         }
+        true
     }
 }
 
@@ -1148,6 +1301,56 @@ struct FrameEvent {
     url: Option<String>,
 }
 
+/// The fields of `Network.requestWillBeSent` that tell a navigation request.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NavigationRequestStarted {
+    request_id: String,
+    loader_id: String,
+    #[serde(default)]
+    frame_id: Option<String>,
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
+    request: StartedRequest,
+}
+
+#[derive(Deserialize)]
+struct StartedRequest {
+    url: String,
+}
+
+/// The fields of `Network.loadingFailed` a navigation's failure needs.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NavigationRequestFailed {
+    request_id: String,
+    #[serde(default)]
+    error_text: Option<String>,
+    #[serde(default)]
+    blocked_reason: Option<String>,
+    #[serde(default)]
+    canceled: bool,
+}
+
+impl NavigationRequestFailed {
+    /// The text a navigation wait rejects with.
+    ///
+    /// Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager._onLoadingFailed`: `request.request._setFailureText(event.errorText || event.blockedReason || '');`
+    /// Playwright: `server/frames.ts` `FrameManager.requestFailed`: `errorText += '; maybe frame was detached?';`
+    fn error_text(&self) -> String {
+        let mut text = [&self.error_text, &self.blocked_reason]
+            .into_iter()
+            .flatten()
+            .find(|text| !text.is_empty())
+            .cloned()
+            .unwrap_or_default();
+        if self.canceled {
+            text.push_str("; maybe frame was detached?");
+        }
+        text
+    }
+}
+
 #[derive(Deserialize)]
 struct DialogOpening {
     #[serde(rename = "type")]
@@ -1199,10 +1402,18 @@ pub(crate) fn apply(
 }
 
 /// The part of [`apply`] that follows one frame, `frame`: its requested navigations, commits,
-/// same-document navigations, stops and lifecycle. The main frame's state and every child
-/// frame's feed ([`FrameFeeds`]) both take it, so a child frame's document is followed exactly
-/// as the main frame's is. The caller has already matched the event's session.
+/// same-document navigations, stops and lifecycle, and, for the main frame, its navigation
+/// requests' start and failure (Network events name no frame, so a child frame's feed never
+/// receives them). The main frame's state and every child frame's feed ([`FrameFeeds`]) both
+/// take it, so a child frame's document is followed exactly as the main frame's is. The caller
+/// has already matched the event's session.
 fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> Applied {
+    if matches!(
+        event.method.as_str(),
+        "Network.requestWillBeSent" | "Network.loadingFailed"
+    ) {
+        return apply_navigation_request(state, event, main_frame);
+    }
     let mut applied = Applied::default();
     let params = event.params.clone();
     match event.method.as_str() {
@@ -1213,6 +1424,9 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
             {
                 state.navigations_requested += 1;
                 state.pending_url = Some(requested.url);
+                // server/frames.ts frameRequestedNavigation: a navigation whose request is not
+                // known yet replaces any pending one.
+                state.pending_document = Some(PendingDocument::Requested);
                 applied.changed = true;
             }
         }
@@ -1224,15 +1438,42 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                 let fragment = frame.url_fragment.as_deref().unwrap_or("");
                 state.committed_url = Some(format!("{}{fragment}", frame.url));
                 state.document = frame.loader_id;
+                // server/frames.ts frameCommittedNewDocumentNavigation: the pending document is
+                // this one, with its request, or, with no request known, assumed to be; a later
+                // navigation whose request already started stays pending.
+                let request = match state.pending_document.take() {
+                    Some(PendingDocument::Started(pending))
+                        if state.document.as_ref() == Some(&pending) =>
+                    {
+                        true
+                    }
+                    Some(PendingDocument::Started(later)) => {
+                        state.pending_document = Some(PendingDocument::Started(later));
+                        false
+                    }
+                    Some(PendingDocument::Requested) | None => false,
+                };
                 state.dom_content_loaded = false;
                 state.load = false;
-                state.restored_from_bfcache = kind.as_deref() == Some("BackForwardCacheRestore");
+                if kind.as_deref() == Some("BackForwardCacheRestore") {
+                    // Deviation: `server/chromium/chromiumSwitches.ts` `chromiumSwitches`: `'--disable-back-forward-cache',`
+                    // Playwright's Chromium never restores a cached document, and one it met
+                    // would never fire `load`, so its history navigation would time out. Neo
+                    // runs in the user's browser, where Chromium caches only a document that
+                    // finished loading and restores it without lifecycle events, reporting
+                    // `frameStoppedLoading` before this commit (measured on BrowserOS neo): it
+                    // counts as loaded at once.
+                    state.did_dom_content_load();
+                    state.did_load();
+                }
                 state.pending_url = None;
                 applied.new_document = true;
                 applied.navigation = Some(Navigation {
                     document: state.document.clone(),
                     url: state.committed_url.clone().unwrap_or_default(),
                     lifecycle: state.lifecycle(),
+                    request,
+                    error: None,
                 });
                 applied.changed = true;
             }
@@ -1247,10 +1488,16 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                 state.commits += 1;
                 state.committed_url = Some(url.clone());
                 state.pending_url = None;
+                // server/frames.ts frameCommittedSameDocumentNavigation.
+                if state.pending_document == Some(PendingDocument::Requested) {
+                    state.pending_document = None;
+                }
                 applied.navigation = Some(Navigation {
                     document: None,
                     url,
                     lifecycle: state.lifecycle(),
+                    request: false,
+                    error: None,
                 });
                 applied.changed = true;
             }
@@ -1260,12 +1507,6 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                 && frame_id == main_frame
             {
                 state.pending_url = None;
-                // Playwright 26137face ignores stop-loading. Only bfcache needs this fallback:
-                // Chromium restores a loaded document without replaying its lifecycle events.
-                if state.restored_from_bfcache {
-                    state.did_dom_content_load();
-                    state.did_load();
-                }
                 applied.changed = true;
             }
         }
@@ -1277,6 +1518,45 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
             }
         }
         _ => {}
+    }
+    applied
+}
+
+/// The main frame's navigation requests, for [`apply_frame`]: one starting is the pending
+/// document; the pending document's request failing aborts its navigation, as a navigation event
+/// with its error.
+fn apply_navigation_request(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> Applied {
+    let mut applied = Applied::default();
+    // Read in place: every subresource request passes through here.
+    let params = &event.params;
+    if event.method == "Network.requestWillBeSent" {
+        // server/frames.ts requestStarted, for crNetworkManager.ts's navigation requests:
+        // `requestId === loaderId`, type `Document`, and never a `data:` URL.
+        if let Ok(started) = NavigationRequestStarted::deserialize(params)
+            && started.frame_id.as_deref() == Some(main_frame)
+            && started.request_id == started.loader_id
+            && started.kind.as_deref() == Some("Document")
+            && !started.request.url.starts_with("data:")
+        {
+            state.pending_document = Some(PendingDocument::Started(started.request_id));
+            applied.changed = true;
+        }
+        return applied;
+    }
+    // server/frames.ts requestFailed: only the pending document's request aborts the navigation;
+    // an older one that a newer navigation replaced fails silently.
+    if let Ok(failed) = NavigationRequestFailed::deserialize(params)
+        && state.pending_document == Some(PendingDocument::Started(failed.request_id.clone()))
+    {
+        state.pending_document = None;
+        applied.navigation = Some(Navigation {
+            url: state.committed_url.clone().unwrap_or_default(),
+            lifecycle: state.lifecycle(),
+            request: false,
+            error: Some(failed.error_text()),
+            document: Some(failed.request_id),
+        });
+        applied.changed = true;
     }
     applied
 }
@@ -1518,10 +1798,14 @@ impl Tab for FrameTab {
         &self,
         element: &ResolvedElement,
         states: &[ElementState],
+        scroll: bool,
     ) -> Result<StatesCheck, PageError> {
         // An offscreen OOPIF can throttle animation frames indefinitely. Bring its owners
-        // into view before a stability check waits on that frame's animation callbacks.
-        if states.contains(&ElementState::Stable) {
+        // into view before a stability check waits on that frame's animation callbacks, as
+        // Playwright's best-effort scroll of an element in a child frame does; never under
+        // `scroll: 'none'`, where Playwright scrolls nothing and the frame stays offscreen.
+        // Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `if (scroll === 'none')`
+        if scroll && states.contains(&ElementState::Stable) {
             for owner in &element.owners {
                 owner
                     .frame
@@ -1737,6 +2021,7 @@ impl Tab for FrameTab {
         &self,
         element: &ResolvedElement,
         hit_point: Point,
+        action: HitTargetAction,
         input: InputPermit,
     ) -> impl Future<Output = Result<Arming<ArmedInterceptor>, PageError>> + Send {
         let page = Arc::clone(self);
@@ -1751,7 +2036,7 @@ impl Tab for FrameTab {
                 }
             };
             let (answer, armed) = oneshot::channel();
-            let setup = arm_interceptor(Arc::clone(&page), element, hit_point, input);
+            let setup = arm_interceptor(Arc::clone(&page), element, hit_point, action, input);
             page.spawn(async move {
                 // Nobody may be waiting any more; the unsent answer drops here, disarming.
                 let _waiting = answer.send(setup.await);
@@ -1760,25 +2045,39 @@ impl Tab for FrameTab {
         }
     }
 
-    /// Spawns [`write_mouse`] on the run's tracker now, with an `Arc` of this page (so of the
-    /// session), the ticket and the armed interceptor, and returns a future that awaits its
-    /// report while holding a drop guard on the writer's `cut_short` token: dropping the future
-    /// (the call stopped) cuts any remaining `delay` short, and the writer still sends the
-    /// release and marks the ticket. The interceptor stays in the writer's task until the last
-    /// event is acknowledged; if nobody waits for the report then, it drops there and disarms,
-    /// after the page has handled the release. The writer's copy of `input` goes once the last
-    /// event is answered.
+    /// Spawns the action's writer ([`write_mouse`] for a move or a click, [`write_tap`] for a
+    /// tap) on the run's tracker now, with an `Arc` of this page (so of the session), the ticket
+    /// and the armed interceptor, and returns a future that awaits its report while holding a
+    /// drop guard on the writer's `cut_short` token: dropping the future (the call stopped) cuts
+    /// any remaining `delay` short, and the writer still sends the release and marks the ticket.
+    /// The interceptor stays in the writer's task until the last event is acknowledged; if nobody
+    /// waits for the report then, it drops there and disarms, after the page has handled the
+    /// release. The writer's copy of `input` goes once the last event is answered.
     fn press(
         &self,
         point: Point,
-        click: MouseClick,
+        pointer: PointerInput,
         ticket: InputTicket,
         armed: Option<ArmedInterceptor>,
         input: InputPermit,
     ) -> impl Future<Output = (PressReport, Option<ArmedInterceptor>)> + Send {
         let cut_short = CancellationToken::new();
         let (report, receiver) = oneshot::channel();
-        let writer = write_mouse(Arc::clone(self), point, click, ticket, cut_short.clone());
+        let page = Arc::clone(self);
+        let writer_cut_short = cut_short.clone();
+        let writer = async move {
+            match pointer {
+                PointerInput::Click(click) => {
+                    let events = mouse_events(&point, &click);
+                    write_mouse(page, events, click.delay, ticket, writer_cut_short).await
+                }
+                PointerInput::Move => {
+                    let events = vec![move_event(&point)];
+                    write_mouse(page, events, None, ticket, writer_cut_short).await
+                }
+                PointerInput::Tap => write_tap(page, point, ticket).await,
+            }
+        };
         self.spawn(async move {
             let written = writer.await;
             drop(input);
@@ -1791,7 +2090,7 @@ impl Tab for FrameTab {
             let pressed = receiver.await.unwrap_or_else(|_| {
                 let failed = PressReport::Failed {
                     closed: true,
-                    message: "the mouse writer stopped before reporting".to_string(),
+                    message: "the pointer writer stopped before reporting".to_string(),
                 };
                 (failed, None)
             });
@@ -1997,6 +2296,7 @@ async fn arm_interceptor(
     page: Arc<PageSession>,
     element: ResolvedElement,
     hit_point: Option<Point>,
+    action: HitTargetAction,
     input: InputPermit,
 ) -> Result<Arming<ArmedInterceptor>, PageError> {
     let mark = page.mark();
@@ -2007,6 +2307,7 @@ async fn arm_interceptor(
             Some(group.group()),
             &InjectedSetupHitTargetInterceptorParams {
                 element: element.handle.clone(),
+                action,
                 hit_point,
                 // Only Playwright's trial blocks every event, and Neo's trial sends none.
                 block_all_events: false,
@@ -2072,73 +2373,74 @@ fn pixels(value: i64) -> f64 {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The mouse writer.
+// The pointer writers.
 // ---------------------------------------------------------------------------------------------
 
-/// The writer task. It owns every mouse event of one attempt and the ticket that records them,
-/// and holds the page (so the session) until the last event is acknowledged or failed:
+/// The mouse writer task. It owns every mouse event of one attempt (a hover's move, or a click's
+/// move, presses and releases) and the ticket that records them, and holds the sender (for the
+/// real tab, the page and so the session) until the last event is acknowledged or failed:
 /// cancellation can stop a caller's wait, never split a press from its release.
 ///
-/// Without `delay`: every event from [`mouse_events`] is sent at once with `send_at_epoch` and
-/// awaited together (`join_all` polls them in order, and browseros-cdp's FIFO send lock writes
-/// them in that order: Playwright's pipelined move, press, release). With `delay`: move, then
-/// per click press, sleep `delay` (ended early by `cut_short`), release, and the same sleep
-/// between clicks; after `cut_short` no further click starts. A release is sent after every
-/// press that may have been written, whatever happened in between.
-///
-/// Report: every written event acknowledged → `ticket.acked()`; every event refused with
-/// `ConnectionEpochChanged` (raised before writing) → `ticket.unsent()`; otherwise the ticket is
-/// dropped (`Unknown`) and the first error is reported.
-async fn write_mouse(
-    page: Arc<PageSession>,
-    point: Point,
-    click: MouseClick,
+/// Without `delay`: every event is sent at once at the session's socket incarnation and awaited
+/// together (`join_all` polls them in order, and browseros-cdp's FIFO send lock writes them in
+/// that order: Playwright's pipelined move, press, release). With `delay`: move, then per click
+/// press, sleep `delay` (ended early by `cut_short`), release, and the same sleep between
+/// clicks; after `cut_short` no further click starts. A release is sent after every press that
+/// may have been written, whatever happened in between. Delivery is `Done` only once every
+/// planned event was written and acknowledged: a double click cut short after its first click
+/// stays `Unknown` (`keyboard::report`).
+pub(crate) async fn write_mouse(
+    sender: impl InputSender,
+    events: Vec<DispatchMouseEventParams>,
+    delay: Option<Duration>,
     ticket: InputTicket,
     cut_short: CancellationToken,
 ) -> PressReport {
-    let events = mouse_events(&point, &click);
-    let outcomes = match click.delay {
-        None => future::join_all(events.iter().map(|event| send_input(&page, event))).await,
-        Some(delay) => write_with_delay(&page, events, delay, &cut_short).await,
+    let outcomes = match delay {
+        None => future::join_all(events.iter().map(|event| send_mouse(&sender, event))).await,
+        Some(delay) => write_with_delay(&sender, &events, delay, &cut_short).await,
     };
-    let first_error = outcomes.iter().find_map(|outcome| outcome.as_ref().err());
-    match first_error {
-        None => PressReport::Acked(ticket.acked()),
-        Some(_)
-            if outcomes
-                .iter()
-                .all(|outcome| matches!(outcome, Err(CdpError::ConnectionEpochChanged { .. }))) =>
-        {
-            ticket.unsent();
-            PressReport::NothingWritten
-        }
-        Some(error) => {
-            drop(ticket);
-            PressReport::Failed {
-                closed: world::classify(error) == PageError::Closed,
-                message: error.to_string(),
-            }
-        }
-    }
+    let complete = outcomes.len() == events.len();
+    keyboard::report(&outcomes, complete, ticket)
+}
+
+/// The touch writer: Playwright's `touchStart` at the point and the `touchEnd` with no points,
+/// sent together as the mouse writer's pipelined events are, so a stopped call never leaves a
+/// touch down: both are written whoever still waits. `Done` once both are acknowledged.
+/// Playwright: `server/chromium/crInput.ts` `RawTouchscreenImpl.tap`: `await progress.race(Promise.all([`
+pub(crate) async fn write_tap(
+    sender: impl InputSender,
+    point: Point,
+    ticket: InputTicket,
+) -> PressReport {
+    let events = tap_events(&point);
+    let outcomes = future::join_all(
+        events
+            .iter()
+            .map(|event| sender.send_input("Input.dispatchTouchEvent", event.clone())),
+    )
+    .await;
+    let complete = outcomes.len() == events.len();
+    keyboard::report(&outcomes, complete, ticket)
 }
 
 /// Playwright's sequential path (`input.ts` `Mouse.click` with `delay`).
 async fn write_with_delay(
-    page: &PageSession,
-    events: Vec<DispatchMouseEventParams>,
+    sender: &impl InputSender,
+    events: &[DispatchMouseEventParams],
     delay: Duration,
     cut_short: &CancellationToken,
 ) -> Vec<Result<(), CdpError>> {
     let mut outcomes = Vec::with_capacity(events.len());
-    let mut events = events.into_iter();
+    let mut events = events.iter();
     if let Some(moved) = events.next() {
-        outcomes.push(send_input(page, &moved).await);
+        outcomes.push(send_mouse(sender, moved).await);
     }
     while let Some(pressed) = events.next() {
         if cut_short.is_cancelled() || outcomes.iter().any(Result::is_err) {
             break;
         }
-        let written = send_input(page, &pressed).await;
+        let written = send_mouse(sender, pressed).await;
         let refused = matches!(written, Err(CdpError::ConnectionEpochChanged { .. }));
         outcomes.push(written);
         if refused {
@@ -2146,7 +2448,7 @@ async fn write_with_delay(
         }
         pause(delay, cut_short).await;
         if let Some(released) = events.next() {
-            outcomes.push(send_input(page, &released).await);
+            outcomes.push(send_mouse(sender, released).await);
         }
         if !events.as_slice().is_empty() {
             pause(delay, cut_short).await;
@@ -2163,19 +2465,15 @@ async fn pause(delay: Duration, cut_short: &CancellationToken) {
     }
 }
 
-/// One mouse event on the session's own socket incarnation.
-async fn send_input(page: &PageSession, event: &DispatchMouseEventParams) -> Result<(), CdpError> {
-    let params = serde_json::to_value(event)?;
-    page.session
-        .cdp
-        .send_at_epoch(
-            page.session.epoch,
-            "Input.dispatchMouseEvent",
-            params,
-            Some(&page.session.id),
-        )
-        .await
-        .map(|_| ())
+/// One mouse event, serialized as Playwright sends it. Serializing this plain struct cannot
+/// fail; if it ever did, the error counts as a failed event, so delivery stays `Unknown` rather
+/// than claiming nothing was written.
+async fn send_mouse(
+    sender: &impl InputSender,
+    event: &DispatchMouseEventParams,
+) -> Result<(), CdpError> {
+    let params = serde_json::to_string(event)?;
+    sender.send_input("Input.dispatchMouseEvent", params).await
 }
 
 // Keyboard input (`keyboard.rs`) goes through these two.
@@ -2234,10 +2532,7 @@ pub(crate) fn mouse_events(point: &Point, click: &MouseClick) -> Vec<DispatchMou
         buttons: Some(buttons),
         ..DispatchMouseEventParams::default()
     };
-    let mut events = vec![DispatchMouseEventParams {
-        force: Some(0.0),
-        ..event("mouseMoved", "none", 0)
-    }];
+    let mut events = vec![move_event(point)];
     for count in 1..=click.click_count {
         events.push(DispatchMouseEventParams {
             click_count: Some(i64::from(count)),
@@ -2252,9 +2547,45 @@ pub(crate) fn mouse_events(point: &Point, click: &MouseClick) -> Vec<DispatchMou
     events
 }
 
+/// The one move of a hover, and the first event of a click: `crInput.ts` `RawMouseImpl.move`
+/// with no button held (`button: 'none'`, `buttons: 0`, `force: 0`) and no modifier. Pure.
+/// Playwright: `server/chromium/crInput.ts` `RawMouseImpl.move`: `type: 'mouseMoved',`
+pub(crate) fn move_event(point: &Point) -> DispatchMouseEventParams {
+    DispatchMouseEventParams {
+        r#type: "mouseMoved".to_string(),
+        x: point.x,
+        y: point.y,
+        modifiers: Some(0),
+        button: Some("none".to_string()),
+        buttons: Some(0),
+        force: Some(0.0),
+        ..DispatchMouseEventParams::default()
+    }
+}
+
+/// Playwright's two touch events for a tap (`crInput.ts` `RawTouchscreenImpl.tap`), as the JSON
+/// params of `Input.dispatchTouchEvent`: a start with one touch point at `point`, then an end
+/// with none, both without modifiers. browseros-cdp has no typed touch params. Pure.
+/// Playwright: `server/chromium/crInput.ts` `RawTouchscreenImpl.tap`: `touchPoints: []`
+pub(crate) fn tap_events(point: &Point) -> [String; 2] {
+    // Playwright: `server/chromium/crInput.ts` `RawTouchscreenImpl.tap`: `type: 'touchStart',`
+    let start = json!({
+        "type": "touchStart",
+        "modifiers": 0,
+        "touchPoints": [{ "x": point.x, "y": point.y }],
+    });
+    // Playwright: `server/chromium/crInput.ts` `RawTouchscreenImpl.tap`: `type: 'touchEnd',`
+    let end = json!({ "type": "touchEnd", "modifiers": 0, "touchPoints": [] });
+    [start.to_string(), end.to_string()]
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+
     use super::*;
+    use crate::progress::DeliveryCell;
+    use crate::run::Delivery;
 
     const SESSION: &str = "S1";
     const MAIN: &str = "MAIN";
@@ -2505,6 +2836,192 @@ mod tests {
         }
     }
 
+    /// A scripted session for the pointer writers, under paused time: each send is recorded
+    /// with its event type and answers the next scripted outcome after a round trip; `Hang`
+    /// never answers, as a renderer frozen mid-event.
+    #[derive(Clone)]
+    enum Answer {
+        Ok,
+        Fail,
+        Refuse,
+        Hang,
+    }
+
+    struct WriterSender {
+        sent: Arc<SyncMutex<Vec<String>>>,
+        answers: Arc<SyncMutex<VecDeque<Answer>>>,
+    }
+
+    impl WriterSender {
+        fn new(answers: impl IntoIterator<Item = Answer>) -> (Self, Arc<SyncMutex<Vec<String>>>) {
+            let sent = Arc::<SyncMutex<Vec<String>>>::default();
+            let sender = Self {
+                sent: Arc::clone(&sent),
+                answers: Arc::new(SyncMutex::new(answers.into_iter().collect())),
+            };
+            (sender, sent)
+        }
+    }
+
+    impl InputSender for WriterSender {
+        async fn send_input(&self, _method: &'static str, params: String) -> Result<(), CdpError> {
+            let params: Value = serde_json::from_str(&params).expect("params are JSON");
+            let kind = params["type"].as_str().unwrap_or_default().to_string();
+            self.sent.lock().expect("sent").push(kind);
+            let answer = self
+                .answers
+                .lock()
+                .expect("answers")
+                .pop_front()
+                .unwrap_or(Answer::Ok);
+            time::sleep(Duration::from_millis(1)).await;
+            match answer {
+                Answer::Ok => Ok(()),
+                Answer::Fail => Err(CdpError::Timeout {
+                    method: "Input.dispatchMouseEvent".to_string(),
+                }),
+                Answer::Refuse => Err(CdpError::ConnectionEpochChanged {
+                    expected: 1,
+                    actual: 2,
+                }),
+                Answer::Hang => future::pending().await,
+            }
+        }
+    }
+
+    fn fresh_ticket() -> (Arc<DeliveryCell>, InputTicket) {
+        let cell = Arc::new(DeliveryCell::default());
+        let ticket = cell.begin().expect("a fresh cell");
+        (cell, ticket)
+    }
+
+    fn dblclick(delay: Option<Duration>) -> Vec<DispatchMouseEventParams> {
+        let click = MouseClick {
+            button: MouseButton::Left,
+            click_count: 2,
+            delay,
+        };
+        mouse_events(&Point { x: 5.0, y: 6.0 }, &click)
+    }
+
+    /// Design §4.7: a double click the call stopped after its first click is partial input,
+    /// `Unknown`, never `Done`; the release its press owes is still written.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_double_click_cut_short_after_its_first_click_reads_unknown() {
+        let (sender, sent) = WriterSender::new([]);
+        let (cell, ticket) = fresh_ticket();
+        let cut_short = CancellationToken::new();
+        let delay = Duration::from_millis(50);
+        let writer = tokio::spawn(write_mouse(
+            sender,
+            dblclick(Some(delay)),
+            Some(delay),
+            ticket,
+            cut_short.clone(),
+        ));
+        time::sleep(Duration::from_millis(10)).await;
+        cut_short.cancel();
+        let report = writer.await.expect("the writer task");
+        assert!(
+            matches!(report, PressReport::Failed { closed: false, .. }),
+            "{report:?}"
+        );
+        assert_eq!(cell.delivery(), Delivery::Unknown);
+        assert_eq!(
+            *sent.lock().expect("sent"),
+            ["mouseMoved", "mousePressed", "mouseReleased"],
+            "the first press is released; the second click never starts"
+        );
+
+        let (sender, sent) = WriterSender::new([]);
+        let (cell, ticket) = fresh_ticket();
+        let report = write_mouse(
+            sender,
+            dblclick(Some(delay)),
+            Some(delay),
+            ticket,
+            CancellationToken::new(),
+        )
+        .await;
+        assert!(matches!(report, PressReport::Acked(_)), "{report:?}");
+        assert_eq!(cell.delivery(), Delivery::Done);
+        assert_eq!(
+            sent.lock().expect("sent").len(),
+            5,
+            "the whole double click"
+        );
+    }
+
+    /// A tap whose answers are lost still ends its touch (both events are written together),
+    /// and reads `Unknown`: the page may have seen them.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_tap_whose_answers_fail_ends_its_touch_and_reads_unknown() {
+        let (sender, sent) = WriterSender::new([Answer::Fail, Answer::Fail]);
+        let (cell, ticket) = fresh_ticket();
+        let report = write_tap(sender, Point { x: 1.0, y: 2.0 }, ticket).await;
+        assert!(
+            matches!(report, PressReport::Failed { closed: false, .. }),
+            "{report:?}"
+        );
+        assert_eq!(cell.delivery(), Delivery::Unknown);
+        assert_eq!(*sent.lock().expect("sent"), ["touchStart", "touchEnd"]);
+    }
+
+    /// A tap whose start is never answered has still written its end, and stays `Unknown`
+    /// while it waits; a tap whose caller stopped finishes anyway and reads `Done`; a refused
+    /// tap wrote nothing.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_tap_survives_a_lost_answer_and_a_stopped_caller() {
+        let (sender, sent) = WriterSender::new([Answer::Hang, Answer::Ok]);
+        let (cell, ticket) = fresh_ticket();
+        let writer = tokio::spawn(write_tap(sender, Point { x: 1.0, y: 2.0 }, ticket));
+        time::sleep(Duration::from_secs(5)).await;
+        assert_eq!(*sent.lock().expect("sent"), ["touchStart", "touchEnd"]);
+        assert_eq!(cell.delivery(), Delivery::Unknown);
+        writer.abort();
+
+        let (sender, sent) = WriterSender::new([]);
+        let (cell, ticket) = fresh_ticket();
+        // Detached, as `Tab::press` starts it: nobody awaits the report.
+        drop(tokio::spawn(write_tap(
+            sender,
+            Point { x: 1.0, y: 2.0 },
+            ticket,
+        )));
+        time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(cell.delivery(), Delivery::Done);
+        assert_eq!(sent.lock().expect("sent").len(), 2);
+
+        let (sender, _) = WriterSender::new([Answer::Refuse, Answer::Refuse]);
+        let (cell, ticket) = fresh_ticket();
+        let report = write_tap(sender, Point { x: 1.0, y: 2.0 }, ticket).await;
+        assert!(matches!(report, PressReport::NothingWritten), "{report:?}");
+        assert_eq!(cell.delivery(), Delivery::NotSent);
+    }
+
+    /// A hover's one move is a click's first event, and a tap is Playwright's two touch events:
+    /// the start with one touch point at the point, the end with none, both without modifiers.
+    #[test]
+    fn tests_that_a_hover_moves_like_a_click_and_a_tap_starts_and_ends_one_touch() {
+        let point = Point { x: 10.5, y: 20.25 };
+        let click = MouseClick {
+            button: MouseButton::Left,
+            click_count: 1,
+            delay: None,
+        };
+        assert_eq!(move_event(&point), mouse_events(&point, &click)[0]);
+        let [start, end] = tap_events(&point)
+            .map(|event| serde_json::from_str::<Value>(&event).expect("touch params are JSON"));
+        assert_eq!(
+            start,
+            json!({ "type": "touchStart", "modifiers": 0, "touchPoints": [{ "x": 10.5, "y": 20.25 }] })
+        );
+        assert_eq!(
+            end,
+            json!({ "type": "touchEnd", "modifiers": 0, "touchPoints": [] })
+        );
+    }
+
     #[test]
     fn requested_main_frame_navigations_in_this_tab_are_pending_until_they_commit() {
         let mut state = PageState::default();
@@ -2658,15 +3175,17 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_stopped_loading_completes_only_a_bfcache_document() {
-        let mut state = PageState::default();
+    fn tests_that_a_bfcache_restore_commits_a_loaded_document_without_a_request() {
+        // BrowserOS neo reports a restore's stop before its commit, then no lifecycle at all.
         let stopped = event(
             "Page.frameStoppedLoading",
             Some(SESSION),
             json!({"frameId":MAIN}),
         );
-        for (kind, expected) in [("BackForwardCacheRestore", true), ("Navigation", false)] {
-            applied(
+        for (kind, loaded) in [("BackForwardCacheRestore", true), ("Navigation", false)] {
+            let mut state = PageState::default();
+            applied(&mut state, &stopped);
+            let commit = applied(
                 &mut state,
                 &event(
                     "Page.frameNavigated",
@@ -2676,10 +3195,154 @@ mod tests {
                     }),
                 ),
             );
-            applied(&mut state, &stopped);
-            assert_eq!(state.dom_content_loaded, expected);
-            assert_eq!(state.load, expected);
+            assert_eq!((state.dom_content_loaded, state.load), (loaded, loaded));
+            let navigation = commit.navigation.expect("a commit");
+            assert_eq!(navigation.lifecycle.load, loaded, "{kind}");
+            assert!(!navigation.request, "no request started for {kind}");
         }
+    }
+
+    fn request_started(id: &str, frame: &str, url: &str, kind: &str) -> CdpEvent {
+        event(
+            "Network.requestWillBeSent",
+            Some(SESSION),
+            json!({
+                "requestId": id, "loaderId": id, "frameId": frame, "type": kind,
+                "request": {"url": url, "method": "GET", "headers": {}}
+            }),
+        )
+    }
+
+    fn request_failed(id: &str, error: &str, canceled: bool) -> CdpEvent {
+        event(
+            "Network.loadingFailed",
+            Some(SESSION),
+            json!({"requestId": id, "errorText": error, "canceled": canceled, "type": "Document"}),
+        )
+    }
+
+    fn committed(loader: &str) -> CdpEvent {
+        event(
+            "Page.frameNavigated",
+            Some(SESSION),
+            json!({"frame": {"id": MAIN, "url": format!("https://a.test/{loader}"), "loaderId": loader}}),
+        )
+    }
+
+    #[test]
+    fn tests_that_a_commit_carries_its_request_only_when_its_navigation_request_started() {
+        let mut state = PageState::default();
+        applied(
+            &mut state,
+            &request_started("D", MAIN, "https://a.test/D", "Document"),
+        );
+        let navigation = applied(&mut state, &committed("D"))
+            .navigation
+            .expect("commit");
+        assert!(navigation.request && navigation.error.is_none());
+        // A navigation requested from the page, whose request Neo never saw start.
+        applied(
+            &mut state,
+            &event(
+                "Page.frameRequestedNavigation",
+                Some(SESSION),
+                json!({"frameId": MAIN, "url": "https://a.test/E", "disposition": "currentTab"}),
+            ),
+        );
+        let navigation = applied(&mut state, &committed("E"))
+            .navigation
+            .expect("commit");
+        assert!(!navigation.request);
+        // Subresources, child frames and `data:` documents are never a navigation's request.
+        for (id, frame, url, kind) in [
+            ("S", MAIN, "https://a.test/s.js", "Script"),
+            ("C", "child", "https://a.test/c", "Document"),
+            ("U", MAIN, "data:text/html,x", "Document"),
+        ] {
+            applied(&mut state, &request_started(id, frame, url, kind));
+            assert_eq!(state.pending_document, None, "{id}");
+        }
+    }
+
+    #[test]
+    fn tests_that_only_the_pending_documents_failure_aborts_its_navigation() {
+        let mut state = PageState::default();
+        applied(&mut state, &committed("A"));
+        applied(
+            &mut state,
+            &request_started("B", MAIN, "https://a.test/B", "Document"),
+        );
+        let aborted = applied(&mut state, &request_failed("B", "net::ERR_ABORTED", true))
+            .navigation
+            .expect("the pending navigation failed");
+        assert_eq!(
+            aborted.error.as_deref(),
+            Some("net::ERR_ABORTED; maybe frame was detached?")
+        );
+        assert_eq!(
+            (aborted.document.as_deref(), aborted.url.as_str()),
+            (Some("B"), "https://a.test/A"),
+            "the failed navigation, at the URL the frame still shows"
+        );
+        assert_eq!(state.pending_document, None);
+        // A navigation the page replaced before its request failed: Playwright's pending
+        // document is the newer one by then, so nothing aborts.
+        applied(
+            &mut state,
+            &request_started("C", MAIN, "https://a.test/C", "Document"),
+        );
+        applied(
+            &mut state,
+            &event(
+                "Page.frameRequestedNavigation",
+                Some(SESSION),
+                json!({"frameId": MAIN, "url": "https://a.test/D", "disposition": "currentTab"}),
+            ),
+        );
+        assert_eq!(
+            applied(&mut state, &request_failed("C", "net::ERR_ABORTED", true)).navigation,
+            None
+        );
+        // An error page commits under the failed request's loader after the abort, without it.
+        applied(
+            &mut state,
+            &request_started("E", MAIN, "https://a.test/E", "Document"),
+        );
+        let failed = applied(
+            &mut state,
+            &request_failed("E", "net::ERR_EMPTY_RESPONSE", false),
+        );
+        assert_eq!(
+            failed.navigation.and_then(|navigation| navigation.error),
+            Some("net::ERR_EMPTY_RESPONSE".to_string())
+        );
+        let error_page = applied(&mut state, &committed("E"))
+            .navigation
+            .expect("commit");
+        assert!(!error_page.request);
+    }
+
+    #[test]
+    fn tests_that_a_later_navigation_stays_pending_through_an_earlier_commit() {
+        let mut state = PageState::default();
+        applied(
+            &mut state,
+            &request_started("NEW", MAIN, "https://a.test/new", "Document"),
+        );
+        // An error page of an earlier navigation commits after the new request started.
+        let navigation = applied(&mut state, &committed("OLD"))
+            .navigation
+            .expect("commit");
+        assert!(!navigation.request);
+        assert_eq!(
+            state.pending_document,
+            Some(PendingDocument::Started("NEW".to_string()))
+        );
+        assert!(
+            applied(&mut state, &request_failed("NEW", "net::ERR_FAILED", false))
+                .navigation
+                .is_some_and(|navigation| navigation.error.is_some())
+        );
     }
 
     #[test]
@@ -2843,6 +3506,7 @@ mod tests {
                 frames: None,
                 feeds: None,
                 initial_url,
+                producer: None,
             };
             let watcher = watch_events(
                 receiver,
@@ -2887,6 +3551,7 @@ mod tests {
             TaskTracker::new(),
             Arc::new(Mutex::new(())),
             CancellationToken::new(),
+            EventHub::default(),
         ));
         let tab = FrameTab {
             page: Arc::clone(&page),
@@ -2939,6 +3604,7 @@ mod tests {
                 frames: None,
                 feeds: None,
                 initial_url,
+                producer: None,
             },
             closed.clone(),
             stop.clone(),
@@ -3040,6 +3706,8 @@ mod tests {
                     document: Some(url.clone()),
                     url,
                     lifecycle: Lifecycle::default(),
+                    request: true,
+                    error: None,
                 })
                 .expect("subscribed");
         }

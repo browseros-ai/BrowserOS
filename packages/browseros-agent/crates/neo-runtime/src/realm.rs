@@ -18,6 +18,7 @@ use serde_json::Value;
 use crate::bridge::{Getters, Logs};
 use crate::deadline::Deadline;
 use crate::dispatch::Dispatcher;
+use crate::events::EventHub;
 use crate::run::{RunError, RunOutcome};
 use crate::{bridge, world};
 
@@ -65,6 +66,12 @@ const HOST_GLOBALS: &str = r"(sleep) => {
   globalThis.console = { log, info: log, warn: log, error: log, debug: log }
 }";
 
+/// Deviation: `client/eventEmitter.ts` `EventEmitter._handleListenerError`: `throw error;`
+/// A listener's throw, or its rejection with no `error` listener, is an uncaught exception in
+/// Node, which exits. QuickJS has no such exit, so neo-sdk reports the first one on its
+/// `uncaught` promise, and the run ends with that error at once instead of running on.
+const RACE_UNCAUGHT: &str = "(script, uncaught) => Promise.race([script, uncaught])";
+
 /// How many lines QuickJS reports before the agent's line 1 in an `AsyncFunction`-constructed
 /// function (`async function anonymous(page,context\n) {\n`). Measured by probe P4 and pinned by
 /// `tests/realm_limits.rs`, which reads the line a call records, so a QuickJS upgrade that
@@ -89,14 +96,25 @@ pub(crate) async fn run(
     getters: Getters,
     dispatcher: Dispatcher,
     deadline: Deadline,
+    events: EventHub,
 ) -> RunOutcome {
     let logs = Logs::default();
     let evaluated = evaluate(script, getters, logs.clone(), dispatcher, deadline.clone());
     // Dropping `evaluated` here drops the whole realm mid-script, timers and pending
     // promises included; nothing outlives the run.
-    let result = tokio::select! {
-        stop = deadline.reached() => return RunOutcome::stopped(stop, deadline.timeout(), logs.take()),
-        result = evaluated => result,
+    let ended = tokio::select! {
+        stop = deadline.reached() => Err(stop),
+        result = evaluated => Ok(result),
+    };
+    // The realm is gone, and its listeners with it: no event is delivered from now on, and a
+    // drop period the script never drained still leaves its note.
+    events.close();
+    for note in events.take_notes() {
+        logs.push(note);
+    }
+    let result = match ended {
+        Ok(result) => result,
+        Err(stop) => return RunOutcome::stopped(stop, deadline.timeout(), logs.take()),
     };
     // A stop that fired during evaluation decides the outcome, however the script ended. It
     // reaches the script as a JS error from the interrupt handler or from a getter waiting on
@@ -172,6 +190,7 @@ fn start<'js>(
     let objects: Object<'js> = create_run.call((init,))?;
     let page: rquickjs::Value<'js> = objects.get("page")?;
     let context: rquickjs::Value<'js> = objects.get("context")?;
+    let uncaught: rquickjs::Value<'js> = objects.get("uncaught")?;
 
     // The AsyncFunction constructor, as Playwright users write `new AsyncFunction(...)`: the
     // code is a function body that cannot close the wrapper early, and a syntax error in it
@@ -179,7 +198,9 @@ fn start<'js>(
     let async_function: Constructor<'js> = ctx.eval("(async () => {}).constructor")?;
     let agent_function: Function<'js> =
         async_function.construct(("page", "context", script.code))?;
-    agent_function.call((page, context))
+    let script: Promise<'js> = agent_function.call((page, context))?;
+    let race: Function<'js> = ctx.eval(RACE_UNCAUGHT)?;
+    race.call((script, uncaught))
 }
 
 /// `setTimeout` delays in JS milliseconds. A delay too large for a `Duration` is due after

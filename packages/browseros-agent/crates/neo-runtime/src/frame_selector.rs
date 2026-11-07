@@ -3,7 +3,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use neo_runtime_spec::injected::InjectedFrameOwnerParams;
+use neo_runtime_spec::injected::{InjectedFrameOwnerByRefParams, InjectedFrameOwnerParams};
 use neo_runtime_spec::{Element, Handle};
 use serde_json::{Value, json};
 
@@ -140,31 +140,155 @@ fn selector_part(part: &str) -> (&str, &str) {
 /// string, followed by a number for the engines that take a distance. `None` where Playwright
 /// throws `Malformed selector`.
 fn nested_selector(name: &str, body: &str) -> Option<String> {
+    nested_body(name, body).map(|(selector, _)| selector)
+}
+
+/// Playwright: `isomorphic/selectorParser.ts` `parseSelector`: `const unescaped = JSON.parse('[' + part.body + ']');`
+fn nested_body(name: &str, body: &str) -> Option<(String, Option<Value>)> {
+    if !NESTED_SELECTORS.contains(&name) {
+        return None;
+    }
     let parsed: Vec<Value> = serde_json::from_str(&format!("[{body}]")).ok()?;
     match parsed.as_slice() {
-        [Value::String(selector)] => Some(selector.clone()),
-        [Value::String(selector), Value::Number(_)]
+        [Value::String(selector)] => Some((selector.clone(), None)),
+        [Value::String(selector), distance @ Value::Number(_)]
             if matches!(name, "left-of" | "right-of" | "above" | "below" | "near") =>
         {
-            Some(selector.clone())
+            Some((selector.clone(), Some(distance.clone())))
         }
         _ => None,
     }
 }
 
+/// Neo: Retains each original prefix spelling for comparison while nested bodies are
+/// rewritten. Capture stays attached to its part, so removing a prefix also shifts it.
+struct SelectorPart {
+    text: String,
+    comparable: String,
+    capture: bool,
+}
+
+/// Playwright: `isomorphic/selectorParser.ts` `selectorPartsEqual`: `return stringifySelector({ parts: list1 }) === stringifySelector({ parts: list2 });`
+fn comparable_part(part: &str) -> (String, bool) {
+    let (name, body) = selector_part(part);
+    let capture = !name.is_empty()
+        && part.split_once('=').is_some_and(|(name, _)| {
+            name.trim_matches(progress::is_js_whitespace)
+                .starts_with('*')
+        });
+    let name = if name.is_empty() {
+        if body.len() > 1
+            && ((body.starts_with('"') && body.ends_with('"'))
+                || (body.starts_with('\'') && body.ends_with('\'')))
+        {
+            "text"
+        } else if body.trim_start_matches('(').starts_with("//") || body.starts_with("..") {
+            "xpath"
+        } else {
+            "css"
+        }
+    } else {
+        name
+    };
+    let comparable = match name {
+        "css" => body.to_string(),
+        "css:light" => format!(":light({body})"),
+        "xpath" if body.starts_with("//") || body.starts_with("..") => body.to_string(),
+        _ => format!("{name}={body}"),
+    };
+    (comparable, capture)
+}
+
+/// Playwright: `isomorphic/selectorParser.ts` `parseSelector`: `nested.body.parsed.capture -= lastFrameIndex + 1;`
+fn normalize_composites(selector: &str) -> Result<Vec<SelectorPart>, String> {
+    let mut parts: Vec<SelectorPart> = Vec::new();
+    for part in selector_parts(selector) {
+        let part = part.trim_matches(progress::is_js_whitespace);
+        let (comparable, capture) = comparable_part(part);
+        let mut text = part.to_string();
+        let (name, body) = selector_part(part);
+        if let Some((nested, distance)) = nested_body(name, body) {
+            let mut nested = normalize_composites(&nested)?;
+            let outer = if parts
+                .first()
+                .is_some_and(|part| selector_part(&part.text) == ("internal:control", "any-frame"))
+            {
+                &parts[1..]
+            } else {
+                &parts[..]
+            };
+            if let Some(last_frame) = nested
+                .iter()
+                .rposition(|part| selector_part(&part.text) == ("internal:control", "enter-frame"))
+                && last_frame < outer.len()
+                && nested[..=last_frame]
+                    .iter()
+                    .zip(outer)
+                    .all(|(a, b)| a.comparable == b.comparable)
+            {
+                if nested[..=last_frame].iter().any(|part| part.capture) {
+                    return Err(capture_before_frame());
+                }
+                nested.drain(..=last_frame);
+            }
+            let local = nested
+                .iter()
+                .map(|part| part.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" >> ");
+            let encoded = Value::String(local).to_string();
+            let distance = distance.map_or_else(String::new, |value| format!(",{value}"));
+            let capture = if capture { "*" } else { "" };
+            text = format!("{capture}{name}={encoded}{distance}");
+        }
+        parts.push(SelectorPart {
+            text,
+            comparable,
+            capture,
+        });
+    }
+    Ok(parts)
+}
+
+/// Playwright: `isomorphic/selectorParser.ts` `parseSelector`: `if (nested.body.parsed.capture <= lastFrameIndex)`
+fn capture_before_frame() -> String {
+    "Can not capture the selector before diving into the frame. Only use * after the last frame has been selected".to_string()
+}
+
 /// A selector's document-local chunks. Path references always start at the main frame.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Chunks {
-    pub(crate) hops: Vec<String>,
+    pub(crate) hops: Vec<Hop>,
     pub(crate) last: String,
     pub(crate) from_main: bool,
+}
+
+/// One step into a child frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Hop {
+    /// A frame chunk: the selector of the `<iframe>` in the current document.
+    Chunk(String),
+    /// One owner of a main-rooted path ref, by the aria ref its document's snapshots keep on it
+    /// (`e7` for `aria-ref=f7…`), found whatever the document's last snapshot holds.
+    ///
+    /// Deviation: `server/frameSelectors.ts` `FrameSelectors._jumpToAriaRefFrameIfNeeded`: `const jumptToFrame = this.frame._page.frameManager.frames().find(frame => frame.seq === frameSeq);` Playwright names a frame's refs by the frame's number; Neo names them by the path of iframe refs from the main frame (`f7f2e1`), which a later run can still follow. Such a ref stops routing when an iframe on its path is replaced, or its accessible role or name changes (its snapshots then give it a new ref), where Playwright's frame number stays.
+    Owner(String),
 }
 
 pub(crate) fn split(selector: &str) -> Result<Chunks, String> {
     let mut hops = Vec::new();
     let mut current = Vec::new();
     let mut from_main = false;
-    for (index, part) in selector_parts(selector).into_iter().enumerate() {
+    let parts = normalize_composites(selector)?;
+    if let Some(last_frame) = parts
+        .iter()
+        .rposition(|part| selector_part(&part.text) == ("internal:control", "enter-frame"))
+        && parts[..=last_frame].iter().any(|part| part.capture)
+    {
+        return Err(capture_before_frame());
+    }
+    for (index, part) in parts.iter().enumerate() {
+        let part = part.text.as_str();
         let (name, body) = selector_part(part);
         if NESTED_SELECTORS.contains(&name)
             && nested_selector(name, body).is_some_and(|nested| has_frame_controls(&nested))
@@ -179,18 +303,15 @@ pub(crate) fn split(selector: &str) -> Result<Chunks, String> {
             if chunk.trim().is_empty() {
                 return Err("Selector cannot start with entering frame".to_string());
             }
-            hops.push(chunk);
+            hops.push(Hop::Chunk(chunk));
             current.clear();
         } else if index == 0
             && name == "aria-ref"
-            && let Some(mut path) = path_ref(body)
+            && let Some((path, element)) = path_ref(body)
         {
             from_main = true;
-            let last = path
-                .pop()
-                .ok_or_else(|| "Empty frame reference".to_string())?;
             hops.extend(path);
-            current.push(last);
+            current.push(element);
         } else {
             current.push(part.trim_matches(progress::is_js_whitespace).to_string());
         }
@@ -206,8 +327,9 @@ pub(crate) fn split(selector: &str) -> Result<Chunks, String> {
     })
 }
 
-/// Path refs encode iframe owner refs, followed by the final document's element ref.
-fn path_ref(body: &str) -> Option<Vec<String>> {
+/// Path refs encode iframe owner refs, followed by the final document's element ref: the owner
+/// hops, then the element's local `aria-ref=eN` selector.
+fn path_ref(body: &str) -> Option<(Vec<Hop>, String)> {
     let mut rest = body;
     let mut path = Vec::new();
     while let Some(after_f) = rest.strip_prefix('f') {
@@ -215,15 +337,14 @@ fn path_ref(body: &str) -> Option<Vec<String>> {
         if digits == 0 {
             return None;
         }
-        path.push(format!("aria-ref=e{}", &after_f[..digits]));
+        path.push(Hop::Owner(format!("e{}", &after_f[..digits])));
         rest = &after_f[digits..];
     }
     let element = rest.strip_prefix('e')?;
     if path.is_empty() || element.is_empty() || !element.bytes().all(|c| c.is_ascii_digit()) {
         return None;
     }
-    path.push(format!("aria-ref={rest}"));
-    Some(path)
+    Some((path, format!("aria-ref={rest}")))
 }
 
 /// One attempt's destination and the visibility of its iframe owners. Visibility belongs to
@@ -298,7 +419,7 @@ trait Hops {
     fn enter(
         &mut self,
         context: Self::Context,
-        selector: &str,
+        hop: &Hop,
         strict: bool,
     ) -> impl Future<Output = Result<Option<(Self::Context, bool)>, PageError>> + Send;
 }
@@ -336,20 +457,36 @@ impl Hops for Resolver<'_> {
     async fn enter(
         &mut self,
         frame: Arc<FrameContext>,
-        selector: &str,
+        hop: &Hop,
         strict: bool,
     ) -> Result<Option<(Arc<FrameContext>, bool)>, PageError> {
         let group = self.tab.group(&frame, "frame-hop");
-        let owner = frame
-            .call(
-                Some(group.group()),
-                &InjectedFrameOwnerParams {
-                    selector: selector.to_string(),
-                    strict,
-                },
-            )
-            .await?;
-        let Some(element) = owner.element else {
+        let (element, visible) = match hop {
+            Hop::Chunk(selector) => {
+                let owner = frame
+                    .call(
+                        Some(group.group()),
+                        &InjectedFrameOwnerParams {
+                            selector: selector.clone(),
+                            strict,
+                        },
+                    )
+                    .await?;
+                (owner.element, owner.visible)
+            }
+            Hop::Owner(aria_ref) => {
+                let owner = frame
+                    .call(
+                        Some(group.group()),
+                        &InjectedFrameOwnerByRefParams {
+                            r#ref: aria_ref.clone(),
+                        },
+                    )
+                    .await?;
+                (owner.element, owner.visible)
+            }
+        };
+        let Some(element) = element else {
             return Ok(None);
         };
         let described = frame
@@ -375,7 +512,7 @@ impl Hops for Resolver<'_> {
             element,
             _group: Arc::new(group),
         });
-        Ok(Some((child, owner.visible)))
+        Ok(Some((child, visible)))
     }
 }
 
@@ -394,7 +531,7 @@ mod tests {
         fn enter(
             &mut self,
             _context: u32,
-            _selector: &str,
+            _hop: &Hop,
             _strict: bool,
         ) -> impl Future<Output = Result<Option<(u32, bool)>, PageError>> + Send {
             future::ready(self.0.pop_front().expect("scripted frame outcome"))
@@ -498,12 +635,189 @@ mod tests {
             assert_eq!(
                 split(selector).unwrap(),
                 Chunks {
-                    hops: hops.into_iter().map(str::to_string).collect(),
+                    hops: hops
+                        .into_iter()
+                        .map(|hop| Hop::Chunk(hop.to_string()))
+                        .collect(),
                     last: last.to_string(),
                     from_main: false
                 },
                 "{selector}"
             );
+        }
+    }
+
+    #[test]
+    fn tests_that_nested_selectors_repeating_the_frame_prefix_are_local() {
+        let hop = " >> internal:control=enter-frame >> ";
+        let f = format!("#f{hop}");
+        let inner = format!("{f}#inner{hop}");
+        let nested = |engine: &str, selector: &str| {
+            format!("{engine}={}", serde_json::to_string(selector).unwrap())
+        };
+        for (outer, engine, target, local) in [
+            (f.as_str(), "internal:and", "button", "button"),
+            (f.as_str(), "internal:has", "span", "span"),
+            (f.as_str(), "internal:has-not", "span", "span"),
+            (f.as_str(), "internal:or", "button", "button"),
+            (f.as_str(), "internal:chain", "button", "button"),
+            (inner.as_str(), "internal:and", "button", "button"),
+            (inner.as_str(), "internal:has", "span", "span"),
+            (inner.as_str(), "internal:or", "button", "button"),
+            (
+                inner.as_str(),
+                "internal:and",
+                "div >> *css=button",
+                "div >> *css=button",
+            ),
+            (
+                f.as_str(),
+                "internal:and",
+                "div >> *css=button",
+                "div >> *css=button",
+            ),
+        ] {
+            let source = format!(
+                "{outer}div >> {}",
+                nested(engine, &format!("{outer}{target}"))
+            );
+            let found = split(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+            assert_eq!(
+                found.last,
+                format!("div >> {}", nested(engine, local)),
+                "{source}"
+            );
+            assert_eq!(
+                found.hops.len(),
+                outer.matches("enter-frame").count(),
+                "{source}"
+            );
+        }
+        let twice = nested(
+            "internal:has",
+            &format!(
+                "{f}div >> {}",
+                nested("internal:and", &format!("{f}button"))
+            ),
+        );
+        let local = nested(
+            "internal:has",
+            &format!("div >> {}", nested("internal:and", "button")),
+        );
+        assert_eq!(
+            split(&format!("{f}section >> {twice}")).unwrap().last,
+            format!("section >> {local}"),
+            "normalization recurses into each nested selector",
+        );
+        for engine in ["left-of", "right-of", "above", "below", "near"] {
+            let source = format!(
+                "{f}div >> {engine}={},50",
+                serde_json::to_string(&format!("{f}button")).unwrap()
+            );
+            assert_eq!(
+                split(&source).unwrap().last,
+                format!("div >> {engine}=\"button\",50"),
+                "distance is retained for {source}"
+            );
+        }
+        let source = format!(
+            "{inner}div >> {}",
+            nested("internal:and", &format!("{f}button"))
+        );
+        assert_eq!(
+            split(&source).unwrap().last,
+            "div >> internal:and=\"button\"",
+            "the nested selector's complete prefix matches the outer prefix"
+        );
+    }
+
+    #[test]
+    fn tests_that_frame_prefix_comparison_uses_playwright_serialization() {
+        let hop = " >> internal:control=enter-frame >> ";
+        for (outer, repeated) in [
+            ("css=#f", "#f"),
+            ("#f", "css=#f"),
+            ("xpath=//iframe", "//iframe"),
+            ("xpath=../iframe", "../iframe"),
+            ("xpath=(//iframe)", "(//iframe)"),
+            ("css:light=#f", ":light(#f)"),
+            ("text=\"frame\"", "\"frame\""),
+            ("text='frame'", "'frame'"),
+            ("css= #f", "css= #f"),
+        ] {
+            let repeated = format!("{repeated}{hop}css=  button");
+            let source = format!(
+                "{outer}{hop}div >> internal:and={}",
+                serde_json::to_string(&repeated).unwrap()
+            );
+            let found = split(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+            assert_eq!(
+                found.hops,
+                [Hop::Chunk(outer.to_string())],
+                "the outer owner is unchanged: {source}"
+            );
+            assert_eq!(
+                found.last, "div >> internal:and=\"css=  button\"",
+                "local body whitespace is preserved: {source}"
+            );
+        }
+        for (outer, repeated) in [("#f", "css= #f"), ("css= #f", "#f")] {
+            let repeated = format!("{repeated}{hop}button");
+            let source = format!(
+                "{outer}{hop}div >> internal:and={}",
+                serde_json::to_string(&repeated).unwrap()
+            );
+            assert!(
+                split(&source).is_err(),
+                "prefix body whitespace participates in equality: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn tests_that_nested_prefix_comparison_skips_the_outer_any_frame_token() {
+        let source = r##"internal:control=any-frame >> #f >> internal:control=enter-frame >> div >> internal:and="#f >> internal:control=enter-frame >> button""##;
+        let parts = normalize_composites(source).unwrap();
+        assert_eq!(
+            parts.last().unwrap().text,
+            "internal:and=\"button\"",
+            "the whole-selector any-frame token does not enter prefix comparison"
+        );
+        assert!(
+            split(source).is_err(),
+            "serving any-frame remains unsupported"
+        );
+    }
+
+    #[test]
+    fn tests_that_capture_before_a_repeated_frame_prefix_is_refused() {
+        for (outer, target) in [
+            ("#f", "*css=#f >> internal:control=enter-frame >> button"),
+            ("#f", "#f >> *internal:control=enter-frame >> button"),
+            (
+                "#f >> internal:control=enter-frame >> #inner",
+                "#f >> internal:control=enter-frame >> *css=#inner >> internal:control=enter-frame >> button",
+            ),
+        ] {
+            let source = format!(
+                "{outer} >> internal:control=enter-frame >> div >> internal:and={}",
+                serde_json::to_string(target).unwrap()
+            );
+            assert!(split(&source).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn tests_that_composite_selectors_entering_a_different_frame_stay_refused() {
+        for target in [
+            "#other >> internal:control=enter-frame >> button",
+            "#f >> internal:control=enter-frame >> #other >> internal:control=enter-frame >> button",
+        ] {
+            let source = format!(
+                "#f >> internal:control=enter-frame >> div >> internal:and={}",
+                serde_json::to_string(target).unwrap()
+            );
+            assert!(split(&source).is_err(), "{source}");
         }
     }
 
@@ -526,15 +840,10 @@ mod tests {
     #[test]
     fn rewrites_path_refs_from_main_and_keeps_ordinary_refs() {
         for (selector, hops, last, from_main) in [
-            (
-                "aria-ref=f7f2e1",
-                vec!["aria-ref=e7", "aria-ref=e2"],
-                "aria-ref=e1",
-                true,
-            ),
+            ("aria-ref=f7f2e1", vec!["e7", "e2"], "aria-ref=e1", true),
             (
                 "aria-ref=f7e8 >> button",
-                vec!["aria-ref=e7"],
+                vec!["e7"],
                 "aria-ref=e8 >> button",
                 true,
             ),
@@ -545,7 +854,10 @@ mod tests {
             assert_eq!(
                 split(selector).unwrap(),
                 Chunks {
-                    hops: hops.into_iter().map(str::to_string).collect(),
+                    hops: hops
+                        .into_iter()
+                        .map(|hop| Hop::Owner(hop.to_string()))
+                        .collect(),
                     last: last.to_string(),
                     from_main
                 },

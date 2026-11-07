@@ -24,6 +24,8 @@ use tokio::time::Instant;
 use crate::bridge;
 use crate::click::PageError;
 use crate::frames::{FrameInfo, FrameScope, Host};
+use crate::page;
+use crate::page::PageState;
 use crate::progress::PlaywrightError;
 use crate::run::PageId;
 use crate::tabs::{PageEntry, Tabs};
@@ -50,6 +52,14 @@ pub(crate) struct FrameMetadata {
     detached: HashSet<String>,
     closing: bool,
     lost_events: bool,
+    revision: u64,
+}
+
+/// Neo: A closing graph stays frozen across failed or cancelled live reads. Its candidate
+/// owns a separate event cursor and can replace retained state only after reconciliation.
+struct FrameSnapshot {
+    revision: u64,
+    closing_events: Option<broadcast::Receiver<CdpEvent>>,
 }
 
 /// Neo: Keeps observed metadata and real detach events separate from session closure.
@@ -63,6 +73,7 @@ impl FrameMetadata {
             detached: HashSet::new(),
             closing: false,
             lost_events: false,
+            revision: 0,
         }
     }
 
@@ -74,12 +85,18 @@ impl FrameMetadata {
     }
 
     fn drain(&mut self) -> Result<(), PlaywrightError> {
+        if !self.closing {
+            self.collect_events(&[])?;
+        }
         if self.lost_events {
             return Err(PlaywrightError::error("Frame metadata events were lost"));
         }
-        if self.closing {
-            return Ok(());
-        }
+        Ok(())
+    }
+
+    /// Neo: Post-read events also cover frames first seen in the candidate tree. An
+    /// unrelated unknown frame's commit does not require the candidate to be retried.
+    fn collect_events(&mut self, candidate: &[FrameInfo]) -> Result<(), PlaywrightError> {
         loop {
             match self.events.try_recv() {
                 Ok(event)
@@ -88,17 +105,53 @@ impl FrameMetadata {
                         .as_ref()
                         .is_some_and(|id| self.watched.contains(id)) =>
                 {
-                    if event.method == "Page.frameDetached"
-                        && event.params["reason"] == "remove"
-                        && let Some(id) = event.params["frameId"].as_str()
-                    {
+                    let Some(id) = page::event_frame(&event) else {
+                        continue;
+                    };
+                    let Some(session) = &event.session_id else {
+                        continue;
+                    };
+                    let observed = self
+                        .known
+                        .iter()
+                        .chain(candidate)
+                        .any(|frame| frame.id == id);
+                    let applied = page::apply(&mut PageState::default(), &event, session, id);
+                    let removed =
+                        event.method == "Page.frameDetached" && event.params["reason"] == "remove";
+                    let swapped =
+                        event.method == "Page.frameDetached" && event.params["reason"] == "swap";
+                    let navigated = applied.navigation.is_some();
+                    // Playwright: `server/frames.ts` `FrameManager.frameCommittedNewDocumentNavigation`: `this.removeChildFramesRecursively(frame);`
+                    // Playwright: `server/chromium/crPage.ts` `FrameSession._onFrameDetached`: `this._page.frameManager.removeChildFramesRecursively(frame);`
+                    if applied.new_document || swapped {
+                        self.detached.extend(
+                            self.known
+                                .iter()
+                                .filter(|frame| frame.parent.as_deref() == Some(id))
+                                .map(|frame| frame.id.clone()),
+                        );
+                    }
+                    if removed {
                         self.detached.insert(id.to_string());
+                    }
+                    if let Some(navigation) = applied.navigation
+                        && let Some(frame) = self.known.iter_mut().find(|frame| frame.id == id)
+                    {
+                        frame.url = navigation.url;
+                        if let Some(name) = event.params["frame"]["name"].as_str() {
+                            frame.name = name.to_string();
+                        }
+                    }
+                    if removed || (observed && (applied.new_document || swapped || navigated)) {
+                        self.revision = self.revision.wrapping_add(1);
                     }
                 }
                 Ok(_) => {}
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Closed | TryRecvError::Lagged(_)) => {
                     self.lost_events = true;
+                    self.revision = self.revision.wrapping_add(1);
                     return Err(PlaywrightError::error("Frame metadata events were lost"));
                 }
             }
@@ -122,9 +175,55 @@ impl FrameMetadata {
         Ok(())
     }
 
-    fn observe(&mut self, tree: &[FrameInfo]) -> Result<(), PlaywrightError> {
-        // A close attempt that left the page alive does not freeze later live reads.
-        self.closing = false;
+    /// Neo: A fresh receiver precedes recovery's live read. Lost history remains explicit
+    /// until that read succeeds and no queued structural change invalidates its snapshot.
+    fn begin_snapshot(&mut self, cdp: &CdpClient) -> FrameSnapshot {
+        if self.closing {
+            return FrameSnapshot {
+                revision: self.revision,
+                closing_events: Some(self.events.resubscribe()),
+            };
+        }
+        let _collected = self.collect_events(&[]);
+        if self.lost_events {
+            self.events = cdp.events();
+        }
+        FrameSnapshot {
+            revision: self.revision,
+            closing_events: None,
+        }
+    }
+
+    fn finish_snapshot(&mut self, tree: &[FrameInfo], snapshot: FrameSnapshot) -> bool {
+        if let Some(events) = snapshot.closing_events {
+            let mut candidate = Self {
+                events,
+                watched: self.watched.clone(),
+                known: self.known.clone(),
+                live: self.live.clone(),
+                detached: self.detached.clone(),
+                closing: false,
+                lost_events: self.lost_events,
+                revision: self.revision,
+            };
+            let accepted = candidate.publish_snapshot(tree, snapshot.revision);
+            if accepted {
+                *self = candidate;
+            }
+            return accepted;
+        }
+        if self.closing {
+            // Closure started while this observation was in flight. Its queued teardown
+            // belongs to the frozen graph, not an open-page observation.
+            return false;
+        }
+        self.publish_snapshot(tree, snapshot.revision)
+    }
+
+    fn publish_snapshot(&mut self, tree: &[FrameInfo], revision: u64) -> bool {
+        if self.collect_events(tree).is_err() || revision != self.revision {
+            return false;
+        }
         for frame in tree {
             match self.known.iter_mut().find(|known| known.id == frame.id) {
                 Some(known) => *known = frame.clone(),
@@ -132,7 +231,10 @@ impl FrameMetadata {
             }
         }
         self.live = tree.iter().map(|frame| frame.id.clone()).collect();
-        self.drain()
+        // A complete, reconciled live tree is authoritative after lost event history.
+        self.detached.retain(|id| !self.live.contains(id));
+        self.lost_events = false;
+        true
     }
 
     fn tree(&mut self) -> Result<Vec<FrameInfo>, PlaywrightError> {
@@ -177,13 +279,17 @@ fn metadata(page: &PageEntry) -> Result<MutexGuard<'_, FrameMetadata>, Playwrigh
         .map_err(|_| PlaywrightError::error("Frame metadata cannot be accessed"))
 }
 
+/// Neo: A newly enabled or disappeared child host requires a fresh tree. Only a confirmed
+/// vanished session is rediscovered; connection, timeout and other protocol errors propagate.
 async fn watch_frame_host(page: &PageEntry, host: &Host) -> Result<bool, PlaywrightError> {
     if metadata(page)?.watched.contains(host.session_id()) {
         return Ok(false);
     }
-    host.send("Page.enable", json!({}))
-        .await
-        .map_err(|error| frame_tree_error(host.classify(&error)))?;
+    let enabled = host.send("Page.enable", json!({})).await;
+    if host.is_child() && matches!(&enabled, Err(CdpError::SessionGone)) {
+        return Ok(true);
+    }
+    enabled.map_err(|error| frame_tree_error(host.classify(&error)))?;
     metadata(page)?.watched.insert(host.session_id().clone());
     Ok(true)
 }
@@ -237,31 +343,35 @@ async fn frame_tree(tabs: &Tabs, page: &PageEntry) -> Result<Vec<FrameInfo>, Pla
         return metadata(page)?.tree();
     }
     let session = tabs.session(page).await?;
-    watch_frame_host(page, &session.frames.main().host).await?;
-    let mut tree = session.frames.tree().await.map_err(frame_tree_error)?;
     loop {
-        let mut watched = false;
-        for frame in &tree {
-            if let Some(context) = session.frames.cached(&frame.id) {
-                watched |= watch_frame_host(page, &context.host).await?;
+        let snapshot = metadata(page)?.begin_snapshot(tabs.cdp());
+        watch_frame_host(page, &session.frames.main().host).await?;
+        let mut tree = session.frames.tree().await.map_err(frame_tree_error)?;
+        loop {
+            let mut refresh = false;
+            for frame in &tree {
+                if let Some(context) = session.frames.cached(&frame.id) {
+                    refresh |= watch_frame_host(page, &context.host).await?;
+                }
             }
+            if !refresh {
+                break;
+            }
+            // A host can lose a frame before Page.enable. Re-read after subscribing so that
+            // missing frames cannot enter the retained graph without a corresponding event.
+            tree = session.frames.tree().await.map_err(frame_tree_error)?;
         }
-        if !watched {
-            break;
+        if let Some(main) = tree.first_mut() {
+            main.url = tabs
+                .url(page)
+                .await?
+                .ok_or_else(PlaywrightError::target_closed)?;
         }
-        // A host can lose a frame before Page.enable. Re-read after subscribing so that
-        // missing frames cannot enter the retained graph without a corresponding event.
-        tree = session.frames.tree().await.map_err(frame_tree_error)?;
+        let mut metadata = metadata(page)?;
+        if metadata.finish_snapshot(&tree, snapshot) {
+            return metadata.tree();
+        }
     }
-    if let Some(main) = tree.first_mut() {
-        main.url = tabs
-            .url(page)
-            .await?
-            .ok_or_else(PlaywrightError::target_closed)?;
-    }
-    let mut metadata = metadata(page)?;
-    metadata.observe(&tree)?;
-    metadata.tree()
 }
 
 fn frame_value(
@@ -450,18 +560,24 @@ pub(crate) async fn is_closed(cdp: &CdpClient, page: &PageId) -> Result<bool, Cd
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use browseros_cdp::{CdpEvent, SessionId};
     use serde_json::{Value, json};
 
     use tokio::runtime::Handle;
+    use tokio::sync::broadcast;
     use tokio_util::task::TaskTracker;
 
-    use super::{FrameField, frame, frame_records, frame_value, matches_url};
+    use super::{
+        FrameField, FrameMetadata, frame, frame_records, frame_value, matches_url, watch_frame_host,
+    };
     use crate::fake_browser::{FakeBrowser, FrameReplies, PAGE, PAGE_URL, Replies};
-    use crate::frames::{FrameInfo, FrameScope};
+    use crate::frames::{FrameInfo, FrameScope, Host};
     use crate::page::TabInputs;
     use crate::progress::ErrorName;
     use crate::run::PageId;
-    use crate::tabs::Tabs;
+    use crate::tabs::{PageEntry, Tabs};
     use crate::url_match::SerializedUrlMatch;
 
     fn tree() -> Vec<FrameInfo> {
@@ -484,6 +600,113 @@ mod tests {
             url: url.to_string(),
         })
         .collect()
+    }
+
+    fn fixture_tree(name: &str, old_child: bool) -> FrameReplies {
+        let mut children = vec![
+            json!({"frame":{"id":"local","parentId":PAGE,"name":name,"url":"https://example.test/local"}}),
+        ];
+        if old_child {
+            children.push(json!({"frame":{"id":"old","parentId":PAGE,"name":"old","url":"https://example.test/old"}}));
+        }
+        FrameReplies {
+            trees: [(
+                PAGE.to_string(),
+                json!({"frameTree":{"frame":{"id":PAGE,"url":PAGE_URL},"childFrames":children}}),
+            )]
+            .into(),
+            ..FrameReplies::default()
+        }
+    }
+
+    async fn frame_fixture() -> (FakeBrowser, Tabs, Arc<PageEntry>) {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        browser
+            .page
+            .lock()
+            .unwrap_or_else(|error| panic!("fixture state: {error}"))
+            .frames = Some(fixture_tree("before", true));
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            TaskTracker::new(),
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("open fixture: {error:?}"));
+        let (page, _) = tabs
+            .resolve(&format!("frame@{PAGE}"))
+            .unwrap_or_else(|| panic!("fixture page was not registered"));
+        (browser, tabs, page)
+    }
+
+    async fn remote_fixture() -> (FakeBrowser, Tabs, Arc<PageEntry>, Arc<Host>) {
+        let (browser, tabs, page) = frame_fixture().await;
+        let mut replies = fixture_tree("before", true);
+        replies
+            .targets
+            .push(json!({"type":"iframe","targetId":"remote","parentFrameId":PAGE}));
+        replies.trees.insert("remote".to_string(), json!({"frameTree":{"frame":{"id":"remote","name":"remote","url":"https://remote.test/"}}}));
+        browser
+            .page
+            .lock()
+            .unwrap_or_else(|error| panic!("fixture state: {error}"))
+            .frames = Some(replies);
+        let session = page
+            .attached_session()
+            .unwrap_or_else(|| panic!("fixture has no session"));
+        session
+            .frames
+            .tree()
+            .await
+            .unwrap_or_else(|error| panic!("fixture frame tree: {error:?}"));
+        let context = session
+            .frames
+            .cached("remote")
+            .unwrap_or_else(|| panic!("remote host missing"));
+        let host = Arc::clone(&context.host);
+        (browser, tabs, page, host)
+    }
+
+    fn lose_events(page: &PageEntry) -> broadcast::Sender<CdpEvent> {
+        let (sender, receiver) = broadcast::channel(1);
+        page.frame_metadata
+            .lock()
+            .unwrap_or_else(|error| panic!("metadata state: {error}"))
+            .events = receiver;
+        for _ in 0..2 {
+            let _sent = sender.send(CdpEvent {
+                method: "Runtime.consoleAPICalled".to_string(),
+                params: json!({}),
+                session_id: None,
+            });
+        }
+        sender
+    }
+
+    fn metadata_events(page: &PageEntry) -> (broadcast::Sender<CdpEvent>, SessionId) {
+        let (sender, receiver) = broadcast::channel(16);
+        let mut metadata = page
+            .frame_metadata
+            .lock()
+            .unwrap_or_else(|error| panic!("metadata state: {error}"));
+        let session = metadata
+            .watched
+            .iter()
+            .next()
+            .cloned()
+            .unwrap_or_else(|| panic!("fixture has no watched host"));
+        metadata.events = receiver;
+        (sender, session)
+    }
+
+    fn commit(session: &SessionId, id: &str) -> CdpEvent {
+        CdpEvent {
+            method: "Page.frameNavigated".to_string(),
+            params: json!({"frame":{"id":id,"url":"https://example.test/new","loaderId":"new-document"}}),
+            session_id: Some(session.clone()),
+        }
     }
 
     #[test]
@@ -603,6 +826,532 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.name, ErrorName::TargetClosedError);
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_fresh_live_tree_recovers_lost_metadata_events_before_close() {
+        let (browser, tabs, page) = frame_fixture().await;
+        let local = FrameScope::Frame("local".to_string());
+        let old = FrameScope::Frame("old".to_string());
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::Name).await.unwrap(),
+            "before"
+        );
+        let _events = lose_events(&page);
+        browser.page.lock().unwrap().frames = Some(fixture_tree("after", false));
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::Name).await.unwrap(),
+            "after"
+        );
+        assert_eq!(
+            frame(&tabs, &page, &old, FrameField::IsDetached)
+                .await
+                .unwrap(),
+            true
+        );
+        page.request_close();
+        tabs.cdp()
+            .send("Target.closeTarget", json!({"targetId":PAGE}), None)
+            .await
+            .unwrap();
+        assert!(tabs.is_closed(&page).await.unwrap());
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::Name).await.unwrap(),
+            "after"
+        );
+        assert_eq!(
+            frame(&tabs, &page, &old, FrameField::IsDetached)
+                .await
+                .unwrap(),
+            true
+        );
+        assert_eq!(
+            frame(&tabs, &page, &old, FrameField::Name).await.unwrap(),
+            "old"
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_event_loss_without_a_fresh_tree_stays_explicit_after_close() {
+        let (_browser, tabs, page) = frame_fixture().await;
+        let local = FrameScope::Frame("local".to_string());
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::Name).await.unwrap(),
+            "before"
+        );
+        let _events = lose_events(&page);
+        page.request_close();
+        tabs.cdp()
+            .send("Target.closeTarget", json!({"targetId":PAGE}), None)
+            .await
+            .unwrap();
+        assert!(tabs.is_closed(&page).await.unwrap());
+        assert!(frame(&tabs, &page, &local, FrameField::Name).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn tests_that_lost_metadata_never_hides_a_failed_live_recovery() {
+        let (_browser, tabs, page) = frame_fixture().await;
+        let local = FrameScope::Frame("local".to_string());
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::Name).await.unwrap(),
+            "before"
+        );
+        let _events = lose_events(&page);
+        tabs.cdp().disconnect().await;
+        let error = frame(&tabs, &page, &local, FrameField::Name)
+            .await
+            .unwrap_err();
+        assert_eq!(error.name, ErrorName::TargetClosedError);
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_commit_during_the_first_snapshot_cannot_keep_old_children() {
+        let (_browser, tabs, page) = frame_fixture().await;
+        frame(&tabs, &page, &FrameScope::Main, FrameField::Name)
+            .await
+            .unwrap();
+        let old_tree = page.frame_metadata.lock().unwrap().known.clone();
+        let (sender, session) = metadata_events(&page);
+        let mut fresh = super::FrameMetadata::new(tabs.cdp());
+        fresh.events = sender.subscribe();
+        fresh.watched.insert(session.clone());
+        let snapshot = fresh.begin_snapshot(tabs.cdp());
+        sender.send(commit(&session, PAGE)).unwrap();
+        if !fresh.finish_snapshot(&old_tree, snapshot) {
+            let snapshot = fresh.begin_snapshot(tabs.cdp());
+            assert!(fresh.finish_snapshot(&[old_tree[0].clone()], snapshot));
+        }
+        fresh.closing();
+        assert_eq!(
+            fresh
+                .value(
+                    &page.id,
+                    &FrameScope::Frame("local".to_string()),
+                    FrameField::IsDetached
+                )
+                .unwrap(),
+            true
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_initial_commit_replay_cannot_detach_a_fresh_snapshot() {
+        let (_browser, tabs, page) = frame_fixture().await;
+        frame(&tabs, &page, &FrameScope::Main, FrameField::Name)
+            .await
+            .unwrap();
+        let (sender, session) = metadata_events(&page);
+        let tree = page.frame_metadata.lock().unwrap().known.clone();
+        let mut metadata = FrameMetadata::new(tabs.cdp());
+        metadata.events = sender.subscribe();
+        metadata.watched.insert(session.clone());
+        sender.send(commit(&session, PAGE)).unwrap();
+        let revision = metadata.begin_snapshot(tabs.cdp());
+        assert!(metadata.finish_snapshot(&tree, revision));
+        metadata.closing();
+        assert_eq!(
+            metadata
+                .value(
+                    &page.id,
+                    &FrameScope::Frame("local".to_string()),
+                    FrameField::IsDetached
+                )
+                .unwrap(),
+            false
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_commit_before_a_snapshot_keeps_the_new_children_attached() {
+        let (_browser, tabs, page) = frame_fixture().await;
+        frame(&tabs, &page, &FrameScope::Main, FrameField::Name)
+            .await
+            .unwrap();
+        let (sender, session) = metadata_events(&page);
+        sender.send(commit(&session, PAGE)).unwrap();
+        let mut metadata = page.frame_metadata.lock().unwrap();
+        let revision = metadata.begin_snapshot(tabs.cdp());
+        let mut tree = metadata.known.clone();
+        tree.retain(|frame| frame.id != "old" && frame.id != "grand");
+        tree.iter_mut()
+            .find(|frame| frame.id == "local")
+            .unwrap()
+            .id = "new-local".to_string();
+        assert!(metadata.finish_snapshot(&tree, revision));
+        metadata.closing();
+        assert_eq!(
+            metadata
+                .value(
+                    &page.id,
+                    &FrameScope::Frame("new-local".to_string()),
+                    FrameField::IsDetached
+                )
+                .unwrap(),
+            false
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_commit_after_a_snapshot_cannot_revive_old_children() {
+        let (_browser, tabs, page) = frame_fixture().await;
+        frame(&tabs, &page, &FrameScope::Main, FrameField::Name)
+            .await
+            .unwrap();
+        let (sender, session) = metadata_events(&page);
+        let mut metadata = page.frame_metadata.lock().unwrap();
+        let stale = metadata.known.clone();
+        let revision = metadata.begin_snapshot(tabs.cdp());
+        sender.send(commit(&session, PAGE)).unwrap();
+        if !metadata.finish_snapshot(&stale, revision) {
+            let revision = metadata.begin_snapshot(tabs.cdp());
+            let current = vec![stale[0].clone()];
+            assert!(metadata.finish_snapshot(&current, revision));
+        }
+        metadata.closing();
+        assert_eq!(
+            metadata
+                .value(
+                    &page.id,
+                    &FrameScope::Frame("local".to_string()),
+                    FrameField::IsDetached
+                )
+                .unwrap(),
+            true
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_same_document_event_after_a_snapshot_keeps_its_url_and_children() {
+        let (_browser, tabs, page) = frame_fixture().await;
+        frame(&tabs, &page, &FrameScope::Main, FrameField::Name)
+            .await
+            .unwrap();
+        let (sender, session) = metadata_events(&page);
+        let mut metadata = page.frame_metadata.lock().unwrap();
+        let stale = metadata.known.clone();
+        let revision = metadata.begin_snapshot(tabs.cdp());
+        sender
+            .send(CdpEvent {
+                method: "Page.navigatedWithinDocument".to_string(),
+                params: json!({"frameId":PAGE,"url":format!("{PAGE_URL}#next")}),
+                session_id: Some(session),
+            })
+            .unwrap();
+        if !metadata.finish_snapshot(&stale, revision) {
+            let revision = metadata.begin_snapshot(tabs.cdp());
+            let mut current = stale;
+            current[0].url = format!("{PAGE_URL}#next");
+            assert!(metadata.finish_snapshot(&current, revision));
+        }
+        metadata.closing();
+        assert_eq!(
+            metadata
+                .value(&page.id, &FrameScope::Main, FrameField::Url)
+                .unwrap(),
+            format!("{PAGE_URL}#next")
+        );
+        assert_eq!(
+            metadata
+                .value(
+                    &page.id,
+                    &FrameScope::Frame("local".to_string()),
+                    FrameField::IsDetached
+                )
+                .unwrap(),
+            false
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_unrelated_broadcast_events_do_not_invalidate_live_snapshots() {
+        let (_browser, tabs, page) = frame_fixture().await;
+        frame(&tabs, &page, &FrameScope::Main, FrameField::Name)
+            .await
+            .unwrap();
+        let (sender, session) = metadata_events(&page);
+        let mut metadata = page.frame_metadata.lock().unwrap();
+        let tree = metadata.known.clone();
+        let revision = metadata.begin_snapshot(tabs.cdp());
+        sender
+            .send(CdpEvent {
+                method: "Runtime.consoleAPICalled".to_string(),
+                params: json!({}),
+                session_id: Some(session.clone()),
+            })
+            .unwrap();
+        sender.send(commit(&session, "unobserved-churn")).unwrap();
+        assert!(metadata.finish_snapshot(&tree, revision));
+        assert_eq!(
+            metadata
+                .value(
+                    &page.id,
+                    &FrameScope::Frame("local".to_string()),
+                    FrameField::IsDetached
+                )
+                .unwrap(),
+            false
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_oopif_root_commit_only_detaches_its_own_descendants() {
+        let (browser, tabs, page) = frame_fixture().await;
+        browser
+            .page
+            .lock()
+            .unwrap()
+            .frames
+            .as_mut()
+            .unwrap()
+            .trees
+            .get_mut(PAGE)
+            .unwrap()["frameTree"]["childFrames"][0]["childFrames"] = json!([{"frame":{"id":"grand","parentId":"local","name":"grand","url":"https://example.test/grand"}}]);
+        frame(&tabs, &page, &FrameScope::Main, FrameField::Name)
+            .await
+            .unwrap();
+        let (sender, session) = metadata_events(&page);
+        sender.send(commit(&session, "local")).unwrap();
+        let mut metadata = page.frame_metadata.lock().unwrap();
+        metadata.closing();
+        assert_eq!(
+            metadata
+                .value(
+                    &page.id,
+                    &FrameScope::Frame("local".to_string()),
+                    FrameField::IsDetached
+                )
+                .unwrap(),
+            false
+        );
+        assert_eq!(
+            metadata
+                .value(
+                    &page.id,
+                    &FrameScope::Frame("grand".to_string()),
+                    FrameField::IsDetached
+                )
+                .unwrap(),
+            true
+        );
+        assert_eq!(
+            metadata
+                .value(
+                    &page.id,
+                    &FrameScope::Frame("old".to_string()),
+                    FrameField::IsDetached
+                )
+                .unwrap(),
+            false
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_process_swap_retires_descendants_without_detaching_the_frame() {
+        let (browser, tabs, page) = frame_fixture().await;
+        browser
+            .page
+            .lock()
+            .unwrap()
+            .frames
+            .as_mut()
+            .unwrap()
+            .trees
+            .get_mut(PAGE)
+            .unwrap()["frameTree"]["childFrames"][0]["childFrames"] = json!([{"frame":{"id":"grand","parentId":"local","name":"grand","url":"https://example.test/grand"}}]);
+        frame(&tabs, &page, &FrameScope::Main, FrameField::Name)
+            .await
+            .unwrap();
+        let (sender, session) = metadata_events(&page);
+        sender
+            .send(CdpEvent {
+                method: "Page.frameDetached".to_string(),
+                params: json!({"frameId":"local","reason":"swap"}),
+                session_id: Some(session),
+            })
+            .unwrap();
+        let mut metadata = page.frame_metadata.lock().unwrap();
+        metadata.closing();
+        assert_eq!(
+            metadata
+                .value(
+                    &page.id,
+                    &FrameScope::Frame("local".to_string()),
+                    FrameField::IsDetached
+                )
+                .unwrap(),
+            false
+        );
+        assert_eq!(
+            metadata
+                .value(
+                    &page.id,
+                    &FrameScope::Frame("grand".to_string()),
+                    FrameField::IsDetached
+                )
+                .unwrap(),
+            true
+        );
+        assert_eq!(
+            metadata
+                .value(
+                    &page.id,
+                    &FrameScope::Frame("old".to_string()),
+                    FrameField::IsDetached
+                )
+                .unwrap(),
+            false
+        );
+        assert_eq!(
+            metadata
+                .value(
+                    &page.id,
+                    &FrameScope::Frame("grand".to_string()),
+                    FrameField::Name
+                )
+                .unwrap(),
+            "grand"
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_failed_read_during_close_keeps_retained_attachment() {
+        let (_browser, tabs, page) = frame_fixture().await;
+        let local = FrameScope::Frame("local".to_string());
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::Name).await.unwrap(),
+            "before"
+        );
+        let (sender, receiver) = broadcast::channel(8);
+        let session = {
+            let mut metadata = page.frame_metadata.lock().unwrap();
+            metadata.events = receiver;
+            metadata.watched.iter().next().cloned().unwrap()
+        };
+        page.request_close();
+        tabs.cdp()
+            .send("Target.closeTarget", json!({"targetId":PAGE}), None)
+            .await
+            .unwrap();
+        sender
+            .send(CdpEvent {
+                method: "Page.frameDetached".to_string(),
+                params: json!({"frameId":"local","reason":"remove"}),
+                session_id: Some(session),
+            })
+            .unwrap();
+        tabs.cdp().disconnect().await;
+        assert!(frame(&tabs, &page, &local, FrameField::Name).await.is_err());
+        page.closed.cancel();
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::IsDetached)
+                .await
+                .unwrap(),
+            false
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_invalidated_read_during_close_keeps_retained_attachment() {
+        let (_browser, tabs, page) = frame_fixture().await;
+        let local = FrameScope::Frame("local".to_string());
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::Name).await.unwrap(),
+            "before"
+        );
+        let (sender, session) = metadata_events(&page);
+        page.request_close();
+        tabs.cdp()
+            .send("Target.closeTarget", json!({"targetId":PAGE}), None)
+            .await
+            .unwrap();
+        {
+            let mut metadata = page.frame_metadata.lock().unwrap();
+            let tree = metadata.known.clone();
+            let snapshot = metadata.begin_snapshot(tabs.cdp());
+            sender
+                .send(CdpEvent {
+                    method: "Page.frameDetached".to_string(),
+                    params: json!({"frameId":"local","reason":"remove"}),
+                    session_id: Some(session),
+                })
+                .unwrap();
+            assert!(!metadata.finish_snapshot(&tree, snapshot));
+        }
+        tabs.cdp().disconnect().await;
+        assert!(frame(&tabs, &page, &local, FrameField::Name).await.is_err());
+        page.closed.cancel();
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::IsDetached)
+                .await
+                .unwrap(),
+            false
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_observation_started_before_close_preserves_the_closing_snapshot() {
+        let (_browser, tabs, page) = frame_fixture().await;
+        let local = FrameScope::Frame("local".to_string());
+        frame(&tabs, &page, &local, FrameField::Name).await.unwrap();
+        let (sender, session) = metadata_events(&page);
+        let (tree, snapshot) = {
+            let mut metadata = page.frame_metadata.lock().unwrap();
+            (metadata.known.clone(), metadata.begin_snapshot(tabs.cdp()))
+        };
+        page.request_close();
+        tabs.cdp()
+            .send("Target.closeTarget", json!({"targetId":PAGE}), None)
+            .await
+            .unwrap();
+        sender
+            .send(CdpEvent {
+                method: "Page.frameDetached".to_string(),
+                params: json!({"frameId":"local","reason":"remove"}),
+                session_id: Some(session),
+            })
+            .unwrap();
+        assert!(
+            !page
+                .frame_metadata
+                .lock()
+                .unwrap()
+                .finish_snapshot(&tree, snapshot)
+        );
+        tabs.cdp().disconnect().await;
+        assert!(frame(&tabs, &page, &local, FrameField::Name).await.is_err());
+        page.closed.cancel();
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::IsDetached)
+                .await
+                .unwrap(),
+            false
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_disappearing_child_host_requests_fresh_discovery() {
+        let (_browser, tabs, page, host) = remote_fixture().await;
+        host.gone().cancel();
+        assert!(watch_frame_host(&page, &host).await.unwrap());
+        assert_eq!(
+            frame(
+                &tabs,
+                &page,
+                &FrameScope::Frame("remote".to_string()),
+                FrameField::Name
+            )
+            .await
+            .unwrap(),
+            "remote"
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_child_host_setup_preserves_connection_failures() {
+        let (_browser, tabs, page, host) = remote_fixture().await;
+        tabs.cdp().disconnect().await;
+        assert!(watch_frame_host(&page, &host).await.is_err());
     }
 
     #[test]

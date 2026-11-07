@@ -33,12 +33,22 @@ impl GotoOptions {
     }
 }
 
-/// One committed main-frame navigation; `None` identifies a same-document commit.
+/// One navigation event of a frame, Playwright's `NavigationEvent`: a commit, where `document`
+/// `None` identifies a same-document one, or, with `error`, the frame's pending navigation
+/// failing before it committed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Navigation {
     pub(crate) document: Option<String>,
     pub(crate) url: String,
     pub(crate) lifecycle: Lifecycle,
+    /// Playwright's `newDocument.request` is set: the watcher saw this document's navigation
+    /// request start before it committed, so the network log holds its response. A document
+    /// restored from the back-forward cache, or one whose request started before `Network.enable`,
+    /// has none, and a navigation wait answers `null` for it.
+    pub(crate) request: bool,
+    /// The failure text of the pending navigation's request; `url` is then the frame's current
+    /// URL and `document` the navigation that failed.
+    pub(crate) error: Option<String>,
 }
 
 /// Flags for the current document, and counts across every document since the watcher started.
@@ -148,6 +158,13 @@ pub(crate) async fn goto(
         let Some(navigation) = progress.race(events.next()).await?.map_err(page_error)? else {
             continue;
         };
+        // server/frames.ts gotoImpl: another document's failure is not this navigation's.
+        if let Some(error) = navigation.error {
+            if document.is_some() && navigation.document == document {
+                return Err(PlaywrightError::error(error).into());
+            }
+            continue;
+        }
         match (&document, &navigation.document) {
             (Some(expected), Some(actual)) if expected != actual => {
                 return Err(PlaywrightError::error(format!(
@@ -228,7 +245,7 @@ async fn pending_url(events: &mut impl Observation) -> Result<String, PageError>
     }
 }
 
-fn page_error(error: PageError) -> PlaywrightError {
+pub(crate) fn page_error(error: PageError) -> PlaywrightError {
     match error {
         PageError::Closed => PlaywrightError::target_closed(),
         PageError::Threw(message) | PageError::Contract(message) => PlaywrightError::error(message),
@@ -404,6 +421,8 @@ mod tests {
                 document: document.map(str::to_string),
                 url: "https://other.test/".to_string(),
                 lifecycle: Lifecycle::default(),
+                request: document.is_some(),
+                error: None,
             }),
             state: NavigationState::default(),
         }

@@ -134,9 +134,12 @@ export function errorCategory(error) {
 /**
  * Runs one method's public script on fresh pages and compares its result and browser effect.
  * `effects({ playwright, neo })`, for a deliberate difference, asserts both effects itself in
- * place of the equality check.
+ * place of the equality check; `values({ playwright, neo })` does the same for the values.
  */
-export async function compareMethod(t, { html, source, probe, effects }) {
+export async function compareMethod(
+  t,
+  { html, source, probe, effects, values },
+) {
   t.diagnostic(
     `Playwright ${playwrightVersion}; ${playwrightDir ?? 'npm playwright-core'}`,
   )
@@ -175,7 +178,9 @@ export async function compareMethod(t, { html, source, probe, effects }) {
     const actualEffect = await page.evaluate(probe)
     await page.close()
     assert.equal(outcome.status, 'ok', JSON.stringify(outcome))
-    assert.deepEqual(outcome.value, value, 'public return values and types')
+    if (values) values({ playwright: value, neo: outcome.value })
+    else
+      assert.deepEqual(outcome.value, value, 'public return values and types')
     if (effects) effects({ playwright: effect, neo: actualEffect })
     else assert.deepEqual(actualEffect, effect, 'browser effect')
     return outcome
@@ -296,8 +301,9 @@ export async function serveFixture(cleanups, { pages = {}, slowMs = 0 } = {}) {
  * Launches a headless BrowserOS neo on a throwaway profile, leading a process group of its own.
  * Every helper it starts (GPU, utility, renderers) joins that group (`ps -o pid,pgid` on
  * 155.0.8318.26), so one signal to the group reaches them all. Its cleanup is `closeBrowser`.
+ * `args` go before the first URL, such as Playwright's own `--disable-back-forward-cache`.
  */
-export async function launchBrowser(cleanups, binary) {
+export async function launchBrowser(cleanups, binary, args = []) {
   const profile = mkdtempSync(join(tmpdir(), 'neo-parity-'))
   const child = spawn(
     binary,
@@ -309,6 +315,7 @@ export async function launchBrowser(cleanups, binary) {
       '--remote-debugging-port=0',
       `--user-data-dir=${profile}`,
       '--no-first-run',
+      ...args,
       'about:blank',
     ],
     // `detached` makes it a group leader, as Playwright's launcher does, so one SIGKILL to the

@@ -42,9 +42,12 @@ const valid = {
   innerText: () => ({}),
   getAttribute: () => ({}),
   isVisible: () => ({ value: false }),
-  isChecked: () => ({}),
+  elementStateOnSelector: () => ({}),
+  innerHTML: () => ({}),
   ariaSnapshot: () => ({}),
   frameOwner: () => ({ visible: false }),
+  frameOwnerByRef: () => ({ visible: false }),
+  frameOwnerRef: () => ({}),
   describeSelector: (_injected, { selector }) => ({ locator: selector }),
   resolve: () => ({ count: 0 }),
   checkElementStates: () => ({}),
@@ -63,7 +66,15 @@ const valid = {
   focusElement: () => ({ outcome: 'done' }),
   inputValue: () => ({}),
   queryCount: () => ({ value: 0 }),
-  allTextContents: () => ({ values: [] }),
+} satisfies Api
+
+export const unknownElementState = {
+  ...valid,
+  elementStateOnSelector: (_injected, { state }) => {
+    // @ts-expect-error a state read asks for checked, enabled, disabled or editable only.
+    if (state === 'visible') return {}
+    return {}
+  },
 } satisfies Api
 
 export const unknownFillOutcome = {

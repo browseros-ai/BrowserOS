@@ -8,6 +8,7 @@
 import type { WireError } from '../../src/connection'
 import { createRun } from '../../src/index'
 import type { CreatedPage } from '../../src/runtime-bridge'
+import { eventless } from './bridge-stub'
 
 export type Message = {
   id: number
@@ -136,7 +137,12 @@ export function start(tabs: Tab[] = [RUN_TAB]) {
   const [runTab = RUN_TAB] = tabs
   const fake = new FakeRuntime(tabs)
   fake.handed.add(pageGuid(runTab))
-  Object.assign(globalThis, { __neo_runtime: fake })
+  Object.assign(globalThis, {
+    __neo_runtime: eventless({
+      get: fake.get.bind(fake),
+      call: fake.call.bind(fake),
+    }),
+  })
   const run = createRun({
     page: pageGuid(runTab),
     mainFrame: frameGuid(runTab),

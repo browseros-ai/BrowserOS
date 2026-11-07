@@ -1,7 +1,11 @@
 /**
  * Playwright's `BrowserContext` (`client/browserContext.ts` at 26137face), cut to what a run
- * needs: its pages, `newPage`, and the default timeout its pages fall back to. Scripts receive
- * it as `context`.
+ * needs: its pages, `newPage`, the default timeout its pages fall back to, and the events Rust
+ * sends on it (`console`, `pageError`, `dialog`, `dialogClosed`), which it fans out to the page
+ * each names and to its own listeners in Playwright's order. Scripts receive it as `context`.
+ *
+ * Its listeners cover the pages the run has a session on: Neo does not attach to the user's
+ * other tabs just to listen (med-pw-net design, Decisions).
  *
  * Playwright keeps its page list current from the server's `page` and `close` events. Neo has
  * no events, so `pages()` reads the context's open tabs live, and this class keeps one `Page`
@@ -10,14 +14,60 @@
  * its main frame are built once, from the record Rust minted their guids in.
  */
 
+import type {
+  DialogInitializer,
+  PageChannel,
+  SerializedError,
+} from '@browseros/neo-runtime-spec/serve'
 import type { Connection } from './connection'
+import { ConsoleMessage, type ConsoleMessagePayload } from './console-message'
+import { Dialog } from './dialog'
+import { parseSerializedError, targetClosedError } from './errors'
+import { ChannelOwner, type EventPipe, type EventTable } from './events'
 import { Disposable, evaluationScript, type InitScript } from './init-script'
 import { assertEvaluateOptions, type EvaluateOptions } from './js-handle'
 import { Page } from './page'
 import { type CreatedPage, get } from './runtime-bridge'
 import { TimeoutSettings } from './timeout-settings'
+import {
+  refuseSignal,
+  Waiter,
+  type WaitForEventOptions,
+  wrapApiCall,
+} from './waiter'
+import { WebError, type WebErrorLocation } from './web-error'
 
-export class BrowserContext {
+/**
+ * Neo: the context's listener events, by Playwright's names (`Events.BrowserContext`). `close`
+ * never happens: the run's context is the user's browser, which outlives the run.
+ */
+const CONTEXT_EVENTS: EventTable = {
+  receiver: 'BrowserContext',
+  served: ['console', 'weberror', 'dialog', 'dialogclosed'],
+  quiet: ['close', 'backgroundpage'],
+  unserved: [
+    'download',
+    'frameattached',
+    'framedetached',
+    'framenavigated',
+    'page',
+    'pageclose',
+    'pageload',
+    'serviceworker',
+    'request',
+    'response',
+    'requestfailed',
+    'requestfinished',
+  ],
+}
+
+/** A dialog record Rust sends: Playwright's `{guid, initializer}`. */
+interface DialogRecord {
+  guid: string
+  initializer: DialogInitializer
+}
+
+export class BrowserContext extends ChannelOwner {
   /** `context@default`, the guid Rust serves this context's getters and calls on. */
   readonly #guid: string
   readonly #connection: Connection
@@ -29,11 +79,109 @@ export class BrowserContext {
    * `pages()` call would return new objects.
    */
   readonly #pages = new Map<string, Page>()
+  /** Every dialog the run's events handed out, by guid: one object per dialog. */
+  readonly #dialogs = new Map<string, Dialog>()
   readonly _timeoutSettings = new TimeoutSettings()
+  /** The run's event pipe, which this context's pages share. */
+  readonly _pipe: EventPipe
 
-  constructor(guid: string, connection: Connection) {
+  constructor(guid: string, connection: Connection, pipe: EventPipe) {
+    super(guid, pipe, CONTEXT_EVENTS)
     this.#guid = guid
     this.#connection = connection
+    this._pipe = pipe
+  }
+
+  /** Playwright's context channel handlers (`client/browserContext.ts` constructor). */
+  _onEvent(method: string, params: unknown): void {
+    if (method === 'console') this.#onConsole(params as ConsoleEventParams)
+    else if (method === 'pageError')
+      this.#onPageError(params as PageErrorEventParams)
+    else if (method === 'dialog')
+      this.#onDialog((params as { dialog: DialogRecord }).dialog)
+    else if (method === 'dialogClosed')
+      this.#onDialogClosed((params as { dialog: DialogRecord }).dialog)
+  }
+
+  #onConsole(event: ConsoleEventParams): void {
+    const page = event.page ? this.#pageFor(event.page.guid) : null
+    const consoleMessage = new ConsoleMessage(event, page, null)
+    page?.emit('console', consoleMessage)
+    this.emit('console', consoleMessage)
+  }
+
+  #onPageError({ error, page, location }: PageErrorEventParams): void {
+    const pageObject = this.#pageFor(page.guid)
+    const parsedError = parseSerializedError(error)
+    this.emit('weberror', new WebError(pageObject, parsedError, location))
+    if (pageObject) pageObject.emit('pageerror', parsedError)
+  }
+
+  #onDialog(record: DialogRecord): void {
+    const dialogObject = this.#dialogFrom(record)
+    let hasListeners = this.emit('dialog', dialogObject)
+    const page = dialogObject.page()
+    if (page) hasListeners = page.emit('dialog', dialogObject) || hasListeners
+    // Playwright answers here too: its listener may have gone between its subscription and the
+    // dialog (a `once` listener of an earlier dialog, an `off` in flight).
+    if (!hasListeners) dialogObject._answerDefault()
+  }
+
+  #onDialogClosed(record: DialogRecord): void {
+    const dialogObject = this.#dialogFrom(record)
+    this.emit('dialogclosed', dialogObject)
+    const page = dialogObject.page()
+    if (page) page.emit('dialogclosed', dialogObject)
+  }
+
+  #dialogFrom(record: DialogRecord): Dialog {
+    let dialog = this.#dialogs.get(record.guid)
+    if (!dialog) {
+      const page = record.initializer.page
+        ? this.#pageFor(record.initializer.page.guid)
+        : null
+      dialog = new Dialog(
+        record.guid,
+        record.initializer,
+        page,
+        this.#connection,
+      )
+      this.#dialogs.set(record.guid, dialog)
+    }
+    return dialog
+  }
+
+  /**
+   * Playwright's `BrowserContext.waitForEvent`: resolves with the first `event` its predicate
+   * accepts, or rejects at the timeout (the context's default, 30 s unless set). The context
+   * never closes during a run, so only the timeout or the predicate ends it otherwise.
+   */
+  async waitForEvent(
+    event: string,
+    optionsOrPredicate: WaitForEventOptions = {},
+  ): Promise<unknown> {
+    return await wrapApiCall('browserContext.waitForEvent', async () => {
+      const options =
+        typeof optionsOrPredicate === 'function' ? {} : optionsOrPredicate
+      refuseSignal(options)
+      this._refuseUnserved(event)
+      // Inside `wrapApiCall`, which prefixes the api name.
+      const timeout = this._timeoutSettings.timeout(options, null)
+      const predicate =
+        typeof optionsOrPredicate === 'function'
+          ? optionsOrPredicate
+          : optionsOrPredicate.predicate
+      const waiter = Waiter.createForEvent()
+      waiter.rejectOnTimeout(
+        timeout,
+        `Timeout ${timeout}ms exceeded while waiting for event "${event}"`,
+      )
+      if (event !== 'close')
+        waiter.rejectOnEvent(this, 'close', () => targetClosedError())
+      const result = await waiter.waitForEvent(this, event, predicate)
+      waiter.dispose()
+      return result
+    })
   }
 
   /** Every open tab of the context, in the order Rust first saw them, the run page first; a
@@ -127,4 +275,17 @@ export class BrowserContext {
     this.#pages.set(created.guid, page)
     return page
   }
+}
+
+/** Playwright's `console` event params (`spec/playwright/browserContext.yml`). */
+type ConsoleEventParams = ConsoleMessagePayload & {
+  page?: PageChannel
+  worker?: unknown
+}
+
+/** Playwright's `pageError` event params (`spec/playwright/browserContext.yml`). */
+interface PageErrorEventParams {
+  error: SerializedError
+  page: PageChannel
+  location: WebErrorLocation
 }
