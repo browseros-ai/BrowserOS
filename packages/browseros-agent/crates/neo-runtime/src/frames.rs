@@ -123,6 +123,12 @@ impl Host {
         self.target_id.is_some()
     }
 
+    /// Cancelled when this host's session detaches: an OOPIF that was removed or moved back
+    /// into its parent's process. Never cancelled for the tab's own host.
+    pub(crate) fn gone(&self) -> &CancellationToken {
+        &self.gone
+    }
+
     pub(crate) fn session_id(&self) -> &SessionId {
         &self.session.id
     }
@@ -169,6 +175,14 @@ impl Frames {
 
     pub(crate) fn main(&self) -> Arc<FrameContext> {
         Arc::clone(&self.main)
+    }
+
+    /// `frame`'s context as the last [`Self::tree`] or hop left it, without CDP traffic.
+    pub(crate) fn cached(&self, frame: &str) -> Option<Arc<FrameContext>> {
+        if frame == self.main.id {
+            return Some(self.main());
+        }
+        self.contexts.lock().ok()?.get(frame).cloned()
     }
 
     pub(crate) async fn context(
@@ -478,7 +492,7 @@ struct LocalTree {
     child_frames: Vec<LocalTree>,
 }
 
-fn local_tree(reply: &Value) -> Result<Vec<FrameInfo>, PageError> {
+pub(crate) fn local_tree(reply: &Value) -> Result<Vec<FrameInfo>, PageError> {
     fn flatten(tree: LocalTree, frames: &mut Vec<FrameInfo>) {
         frames.push(tree.frame);
         for child in tree.child_frames {

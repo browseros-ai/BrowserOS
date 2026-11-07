@@ -655,8 +655,6 @@ fn unsupported_child_call(scope: &FrameScope, route: &Route) -> Option<Playwrigh
     }
     let method = match route {
         Route::FrameGoto(_) => "goto",
-        Route::FrameWaitForUrl(_) => "waitForURL",
-        Route::FrameWaitForLoadState(_) => "waitForLoadState",
         _ => return None,
     };
     Some(PlaywrightError::error(format!(

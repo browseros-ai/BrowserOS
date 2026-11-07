@@ -378,12 +378,10 @@ async fn direct_child_navigation_is_explicitly_unserved_and_missing_scopes_are_d
             call({guid},'neo:waitForURL',{{url:{{glob:'**'}}}}),
             call({guid},'neo:waitForLoadState',{{state:'load'}}),
             call({missing},'isVisible',{{selector:'#email'}}),
-        ]).then(replies=>replies.map(reply=>reply.error.error.name));
+        ]).then(replies=>replies.map(reply=>reply.error?.error.name ?? 'ok'));
     ")).await;
     tab.close().await;
     assert_ok(&outcome);
-    assert_eq!(
-        outcome.value,
-        Some(json!(["Error", "Error", "Error", "Error"]))
-    );
+    // A child frame's waits are served (nf-waits, `frames_waits_e2e.rs`); its `goto` is not.
+    assert_eq!(outcome.value, Some(json!(["Error", "ok", "ok", "Error"])));
 }

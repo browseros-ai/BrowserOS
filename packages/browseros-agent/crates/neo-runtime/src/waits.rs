@@ -1,4 +1,5 @@
-//! Main-frame selector, URL and lifecycle waits behind one loop and an input-free tab seam.
+//! Selector, URL and lifecycle waits behind one loop and an input-free tab seam, in the main
+//! frame or a child frame.
 //!
 //! ```text
 //! wait_for_selector ── SelectorCondition ── check: prepare, pre-check, selectorState
@@ -14,20 +15,30 @@
 //! All awaits use the call's existing [`Progress`], so its deadline never restarts. Dropping
 //! the condition drops every subscription and timer; waits spawn no tasks. Commit queues
 //! retain intermediate URLs, and lifecycle counters retain events across watch coalescing.
+//!
+//! A child frame's URL and lifecycle waits run the same [`NavigationCondition`] over a
+//! [`FrameObservation`]: the frame's feed (`page.rs` `FrameFeeds`), which the tab's watcher and
+//! the watcher of the OOPIF session hosting the frame write. The observation finds that host on
+//! its first `next`, and again after the frame's document moves to another process or its host
+//! session goes; a removed frame ends the wait with `Frame was detached`.
 
 use std::future::{self, Future};
+use std::sync::Arc;
 
 use neo_runtime_spec::injected::{InjectedSelectorStateParams, SelectorMatch};
 use neo_runtime_spec::serve::{
     FrameWaitForSelectorParams, FrameWaitForSelectorParamsState as SelectorState, LifecycleEvent,
 };
 use serde::Deserialize;
+use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{broadcast, watch};
 use tokio::time;
 
 use crate::click::{LoopAWaits, PageError, SelectorFacts, Tab};
 use crate::frame_selector;
-use crate::navigate::{Lifecycle, Navigation, Observation};
-use crate::page::{FrameTab, NavigationObservation, PageSession};
+use crate::frames::{FrameScope, Host};
+use crate::navigate::{Lifecycle, Navigation, NavigationState, Observation};
+use crate::page::{FrameState, FrameTab, NavigationObservation, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::url_match::{SerializedUrlMatch, UrlMatcher};
 use crate::world;
@@ -452,8 +463,152 @@ fn page_error(error: PageError) -> PlaywrightError {
     }
 }
 
+/// What one wait observes: the main frame's commits and state, or one child frame's.
+pub(crate) enum WaitObservation {
+    Main(NavigationObservation),
+    Frame(FrameObservation),
+}
+
+impl Observation for WaitObservation {
+    fn state(&self) -> NavigationState {
+        match self {
+            Self::Main(main) => main.state(),
+            Self::Frame(frame) => frame.state(),
+        }
+    }
+
+    async fn next(&mut self) -> Result<Option<Navigation>, PageError> {
+        match self {
+            Self::Main(main) => main.next().await,
+            Self::Frame(frame) => frame.next().await,
+        }
+    }
+}
+
+/// A child frame's navigation for one wait: the frame's feed, subscribed when the wait starts so
+/// no later commit is lost, and the host session whose events reach it. `next` finds that host
+/// first (and waits for an OOPIF host's watcher to seed the feed), then reports the frame's
+/// commits and state changes; after the frame's document moves to another process, or its host
+/// session goes, the next `next` finds the host again. Each `next` is raced by the wait's
+/// `Progress`, so finding a host never outlives the call.
+pub(crate) struct FrameObservation {
+    tab: FrameTab,
+    frame: String,
+    state: watch::Receiver<FrameState>,
+    navigations: broadcast::Receiver<Navigation>,
+    /// The host found last; `None` until the first `next`.
+    host: Option<Arc<Host>>,
+    /// The feed's swap count when `host` was found.
+    swaps: u64,
+}
+
+/// Why [`FrameObservation::next`] woke.
+enum Woke {
+    Navigation(Result<Navigation, RecvError>),
+    Changed(bool),
+    HostGone,
+}
+
+impl FrameObservation {
+    fn new(tab: FrameTab, frame: &str) -> Result<Self, PageError> {
+        let (state, navigations) = tab.subscribe_frame(frame)?;
+        Ok(Self {
+            tab,
+            frame: frame.to_string(),
+            state,
+            navigations,
+            host: None,
+            swaps: 0,
+        })
+    }
+
+    /// The host found last, while it still reports this frame.
+    fn current_host(&self) -> Option<Arc<Host>> {
+        let swaps = self.state.borrow().swaps;
+        self.host
+            .as_ref()
+            .filter(|host| !host.gone().is_cancelled() && swaps == self.swaps)
+            .cloned()
+    }
+
+    /// Finds the frame in the tab's live tree, watches its host and seeds its URL from the tree,
+    /// retrying with loop A's backoff while the tree or a host is mid-change.
+    async fn locate(&mut self) -> Result<(), PageError> {
+        let mut backoff = LoopAWaits::new(0.0);
+        let _ = backoff.next_wait();
+        loop {
+            match self.try_locate().await {
+                Err(PageError::NotConnected) => time::sleep(backoff.next_wait()).await,
+                result => return result,
+            }
+        }
+    }
+
+    async fn try_locate(&mut self) -> Result<(), PageError> {
+        let swaps = self.state.borrow().swaps;
+        let tree = self.tab.frames.tree().await?;
+        let Some(info) = tree.iter().find(|info| info.id == self.frame) else {
+            return Err(detached());
+        };
+        let context = self
+            .tab
+            .frames
+            .cached(&self.frame)
+            .ok_or(PageError::NotConnected)?;
+        self.tab.watch_host(&context.host).await?;
+        self.tab.seed_frame(&self.frame, &info.url);
+        self.host = Some(Arc::clone(&context.host));
+        self.swaps = swaps;
+        Ok(())
+    }
+}
+
+impl Observation for FrameObservation {
+    fn state(&self) -> NavigationState {
+        let state = self.state.borrow();
+        NavigationState {
+            pending_url: state.page.pending_url.clone(),
+            url: state.page.committed_url.clone(),
+            lifecycle: state.page.lifecycle(),
+        }
+    }
+
+    async fn next(&mut self) -> Result<Option<Navigation>, PageError> {
+        if self.state.borrow().detached {
+            return Err(detached());
+        }
+        let Some(host) = self.current_host() else {
+            self.locate().await?;
+            // The host's seed may have changed the state: the wait checks it again.
+            return Ok(None);
+        };
+        let woke = tokio::select! {
+            biased;
+            navigation = self.navigations.recv() => Woke::Navigation(navigation),
+            changed = self.state.changed() => Woke::Changed(changed.is_ok()),
+            () = host.gone().cancelled() => Woke::HostGone,
+        };
+        match woke {
+            Woke::Navigation(Ok(navigation)) => Ok(Some(navigation)),
+            // The feed only closes when its frame is removed.
+            Woke::Navigation(Err(RecvError::Closed)) | Woke::Changed(false) => Err(detached()),
+            Woke::Changed(true) if self.state.borrow().detached => Err(detached()),
+            // A lagging queue, a state change or a lost host: the wait rechecks the state, and
+            // the next `next` finds the host again if it went.
+            Woke::Navigation(Err(RecvError::Lagged(_))) | Woke::Changed(true) | Woke::HostGone => {
+                Ok(None)
+            }
+        }
+    }
+}
+
+/// Neo's error for a frame that is gone, as a direct scope reports it (`frames.rs`).
+fn detached() -> PageError {
+    PageError::Threw("Frame was detached".to_string())
+}
+
 impl WaitTab for FrameTab {
-    type Observation = NavigationObservation;
+    type Observation = WaitObservation;
 
     async fn prepare(&self) -> Result<(), PageError> {
         PageSession::prepare(self)
@@ -466,7 +621,12 @@ impl WaitTab for FrameTab {
     }
 
     fn observe(&self) -> Result<Self::Observation, PageError> {
-        Ok(self.observe_waits())
+        match &self.scope {
+            FrameScope::Frame(frame) if *frame != self.frames.main().id => Ok(
+                WaitObservation::Frame(FrameObservation::new(self.clone(), frame)?),
+            ),
+            _ => Ok(WaitObservation::Main(self.observe_waits())),
+        }
     }
     fn pending_navigation(&self) -> Option<String> {
         PageSession::pending_navigation(self)

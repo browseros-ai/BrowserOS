@@ -39,6 +39,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::iter;
 use std::ops::Deref;
+use std::sync::Mutex as SyncMutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -69,7 +70,7 @@ use crate::click::{
     SelectorFacts, StatesCheck, Tab, Verdict,
 };
 use crate::frame_selector::{self, FrameOwner};
-use crate::frames::{FrameContext, FrameScope, Frames};
+use crate::frames::{FrameContext, FrameScope, Frames, Host, local_tree};
 use crate::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
 };
@@ -170,6 +171,11 @@ pub(crate) struct PageSession {
     /// The main frame's utility world, where the glue runs.
     pub(crate) world: Arc<World>,
     pub(crate) frames: Arc<Frames>,
+    /// Child frames' navigation, written by this tab's watcher and every OOPIF host's.
+    frame_feeds: Arc<FrameFeeds>,
+    /// The navigation watcher of each OOPIF host session, started by the first wait on one of
+    /// its frames. Dropping a guard (with the page) stops that watcher.
+    host_watchers: SyncMutex<HashMap<SessionId, Arc<OnceCell<DropGuard>>>>,
     /// Names this session's object groups apart.
     next_group: AtomicU64,
     /// The tab's input lock, shared with every other run of the `Runtime` on this tab
@@ -211,6 +217,8 @@ struct PageUpdates<S> {
     navigations: broadcast::Sender<Navigation>,
     world: Arc<World>,
     frames: Option<Arc<Frames>>,
+    /// Where the child frames' events go; `None` in tests of the main frame alone.
+    feeds: Option<Arc<FrameFeeds>>,
     initial_url: S,
 }
 
@@ -249,7 +257,7 @@ pub(crate) struct PageMark {
 }
 
 impl PageState {
-    fn lifecycle(&self) -> Lifecycle {
+    pub(crate) fn lifecycle(&self) -> Lifecycle {
         Lifecycle {
             dom_content_loaded: self.dom_content_loaded,
             load: self.load,
@@ -270,6 +278,155 @@ impl PageState {
             self.load = true;
             self.load_count += 1;
         }
+    }
+}
+
+/// A child frame's navigation as the watchers report it: the same [`PageState`] the main frame
+/// keeps (URL, document, lifecycle flags and counts, through [`apply_frame`]), plus what only a
+/// child frame does.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FrameState {
+    pub(crate) page: PageState,
+    /// Removed from its parent (`Page.frameDetached`, reason `remove`), or gone with the main
+    /// frame's document.
+    pub(crate) detached: bool,
+    /// How often its document moved to another process (`Page.frameDetached`, reason `swap`).
+    /// Its events then come from another session, which a wait has to find and watch.
+    pub(crate) swaps: u64,
+    /// The session that reported the last swap. Its late events about this frame would describe
+    /// the old document, so they are dropped until that session hosts the frame again.
+    swapped_from: Option<SessionId>,
+}
+
+/// One child frame's state and commit queue.
+struct FrameFeed {
+    state: watch::Sender<FrameState>,
+    navigations: broadcast::Sender<Navigation>,
+}
+
+/// Commits a child frame's queue keeps for a slow wait; a wait that lags behind rechecks the
+/// frame's current state instead.
+const FRAME_NAVIGATIONS: usize = 256;
+
+/// Every child frame's feed on a tab, by frame id, created by the first event or wait that names
+/// the frame. The tab's watcher and every OOPIF host's watcher write here, so a frame keeps one
+/// feed, and one set of lifecycle counts, when its document moves between processes. A feed
+/// goes when its frame is removed; a wait still holding it sees `detached`.
+#[derive(Default)]
+pub(crate) struct FrameFeeds {
+    frames: SyncMutex<HashMap<String, FrameFeed>>,
+}
+
+impl FrameFeeds {
+    /// `frame`'s current state and its commits from now on.
+    pub(crate) fn subscribe(
+        &self,
+        frame: &str,
+    ) -> Result<(watch::Receiver<FrameState>, broadcast::Receiver<Navigation>), PageError> {
+        let mut frames = self.frames.lock().map_err(|_| feeds_error())?;
+        let feed = frames.entry(frame.to_string()).or_insert_with(new_feed);
+        Ok((feed.state.subscribe(), feed.navigations.subscribe()))
+    }
+
+    /// Records `url` as `frame`'s URL while no commit has given it one: what the frame tree said
+    /// when a wait found the frame, or when its host's watcher started.
+    pub(crate) fn seed(&self, frame: &str, url: &str) {
+        if let Ok(mut frames) = self.frames.lock() {
+            let feed = frames.entry(frame.to_string()).or_insert_with(new_feed);
+            feed.state.send_if_modified(|state| {
+                if state.page.committed_url.is_some() {
+                    return false;
+                }
+                state.page.committed_url = Some(url.to_string());
+                true
+            });
+        }
+    }
+
+    /// Applies one event of `session` to the child frame it names. `main_frame` is the tab's
+    /// main frame, whose events the tab's own [`PageState`] takes instead.
+    fn apply(&self, event: &CdpEvent, session: &SessionId, main_frame: Option<&str>) {
+        if event.session_id.as_ref() != Some(session) {
+            return;
+        }
+        let Some(frame) = event_frame(event) else {
+            return;
+        };
+        if Some(frame) == main_frame {
+            return;
+        }
+        let Ok(mut frames) = self.frames.lock() else {
+            return;
+        };
+        let feed = frames.entry(frame.to_string()).or_insert_with(new_feed);
+        let mut navigation = None;
+        let mut removed = false;
+        feed.state.send_if_modified(|state| {
+            if event.method == "Page.frameDetached" {
+                if event.params["reason"] == "swap" {
+                    // The frame's next document lives in another process: forget this one so
+                    // that process's lifecycle replay seeds the new document.
+                    let page = &mut state.page;
+                    page.committed_url = None;
+                    page.pending_url = None;
+                    page.document = None;
+                    page.dom_content_loaded = false;
+                    page.load = false;
+                    page.restored_from_bfcache = false;
+                    state.swaps += 1;
+                    state.swapped_from = Some(session.clone());
+                } else {
+                    state.detached = true;
+                    removed = true;
+                }
+                return true;
+            }
+            if state.swapped_from.as_ref() == Some(session) {
+                // A frame coming back to this session announces itself before its document.
+                if !matches!(
+                    event.method.as_str(),
+                    "Page.frameAttached" | "Page.frameNavigated"
+                ) {
+                    return false;
+                }
+                state.swapped_from = None;
+            }
+            let applied = apply_frame(&mut state.page, event, frame);
+            navigation = applied.navigation;
+            applied.changed
+        });
+        if let Some(navigation) = navigation {
+            let _listeners = feed.navigations.send(navigation);
+        }
+        if removed {
+            // Waits keep their receivers and read `detached`; the frame id is never reused.
+            frames.remove(frame);
+        }
+    }
+}
+
+fn new_feed() -> FrameFeed {
+    FrameFeed {
+        state: watch::channel(FrameState::default()).0,
+        navigations: broadcast::channel(FRAME_NAVIGATIONS).0,
+    }
+}
+
+fn feeds_error() -> PageError {
+    PageError::Contract("neo-runtime: frame feeds cannot be accessed".to_string())
+}
+
+/// The frame a `Page` event is about: `frame.id` of a commit, `frameId` of the others.
+fn event_frame(event: &CdpEvent) -> Option<&str> {
+    match event.method.as_str() {
+        "Page.frameNavigated" => event.params["frame"]["id"].as_str(),
+        "Page.frameRequestedNavigation"
+        | "Page.navigatedWithinDocument"
+        | "Page.frameStoppedLoading"
+        | "Page.lifecycleEvent"
+        | "Page.frameAttached"
+        | "Page.frameDetached" => event.params["frameId"].as_str(),
+        _ => None,
     }
 }
 
@@ -327,6 +484,8 @@ impl PageSession {
             closed,
             world,
             frames,
+            frame_feeds: Arc::default(),
+            host_watchers: SyncMutex::default(),
             next_group: AtomicU64::new(1),
             input,
         }
@@ -377,6 +536,7 @@ impl PageSession {
                         navigations: self.navigations.clone(),
                         world: Arc::clone(&self.world),
                         frames: Some(Arc::clone(&self.frames)),
+                        feeds: Some(Arc::clone(&self.frame_feeds)),
                         initial_url,
                     },
                     self.closed.clone(),
@@ -450,6 +610,58 @@ impl PageSession {
         let mut observation = self.observe_navigations();
         observation.recover_lag = true;
         observation
+    }
+
+    /// `frame`'s navigation state and its commits from now on.
+    pub(crate) fn subscribe_frame(
+        &self,
+        frame: &str,
+    ) -> Result<(watch::Receiver<FrameState>, broadcast::Receiver<Navigation>), PageError> {
+        self.frame_feeds.subscribe(frame)
+    }
+
+    /// See [`FrameFeeds::seed`].
+    pub(crate) fn seed_frame(&self, frame: &str, url: &str) {
+        self.frame_feeds.seed(frame, url);
+    }
+
+    /// Makes sure `host`'s frames feed [`FrameFeeds`]. The tab's own frames do once the page is
+    /// prepared; an OOPIF host gets its own watcher, once per session, and this resolves when
+    /// that watcher has applied its seed: `Page.enable`, then `Page.setLifecycleEventsEnabled`,
+    /// whose replay reports each of the host's frames' current lifecycle, then the host's frame
+    /// tree for their URLs. A setup the call abandons stops its watcher, and the next wait
+    /// starts another.
+    ///
+    /// # Errors
+    ///
+    /// The host's classified CDP error; `NotConnected` when its session went meanwhile.
+    pub(crate) async fn watch_host(&self, host: &Arc<Host>) -> Result<(), PageError> {
+        if !host.is_child() {
+            return Ok(());
+        }
+        let watcher = {
+            let mut watchers = self.host_watchers.lock().map_err(|_| feeds_error())?;
+            Arc::clone(watchers.entry(host.session_id().clone()).or_default())
+        };
+        watcher
+            .get_or_try_init(|| async {
+                // Subscribed before any command, so no event the setup causes is missed.
+                let events = self.session.cdp.events();
+                let (seeded, ready) = oneshot::channel();
+                let stop = CancellationToken::new();
+                let guard = stop.clone().drop_guard();
+                self.session.tokio.spawn(watch_host_frames(
+                    events,
+                    Arc::clone(host),
+                    Arc::clone(&self.frame_feeds),
+                    seeded,
+                    stop,
+                ));
+                ready.await.map_err(|_| PageError::NotConnected)??;
+                Ok(guard)
+            })
+            .await
+            .map(|_| ())
     }
 
     fn observe_navigations(&self) -> NavigationObservation {
@@ -660,6 +872,7 @@ async fn watch_events(
         navigations,
         world,
         frames,
+        feeds,
         initial_url,
     } = updates;
     tokio::pin!(initial_url);
@@ -711,6 +924,9 @@ async fn watch_events(
                 if let Some(navigation) = applied.navigation {
                     let _listeners = navigations.send(navigation);
                 }
+                if let Some(feeds) = &feeds {
+                    feeds.apply(&event, &session, Some(&main_frame));
+                }
                 if let Some(answer) = applied.dialog {
                     answer_dialog(&cdp, &session, answer);
                 }
@@ -750,6 +966,68 @@ fn answer_dialog(cdp: &CdpClient, session: &SessionId, answer: DialogAnswer) {
             debug!(%session, %error, "answering a dialog failed");
         }
     });
+}
+
+/// An OOPIF host's navigation watcher: one `cdp.events()` receiver filtered to the host's
+/// session, every frame event applied to `feeds`, until the session detaches or the page goes
+/// (`stop`). Its setup (`Page.enable`, lifecycle events, frame tree) runs inside the same loop,
+/// with events drained first, so the URL seed lands after every event that preceded its reply
+/// and never overwrites a commit. Dialogs are the tab's: Chromium reports an OOPIF's dialog on
+/// the tab session only (spike Q12). Holds the host, so its session stays attached while it
+/// runs; holds no page, so the page's drop stops it.
+async fn watch_host_frames(
+    mut events: broadcast::Receiver<CdpEvent>,
+    host: Arc<Host>,
+    feeds: Arc<FrameFeeds>,
+    seeded: oneshot::Sender<Result<(), PageError>>,
+    stop: CancellationToken,
+) {
+    let session = host.session_id().clone();
+    let setup = async {
+        host.send("Page.enable", json!({})).await?;
+        host.send("Page.setLifecycleEventsEnabled", json!({ "enabled": true }))
+            .await?;
+        host.send("Page.getFrameTree", json!({})).await
+    };
+    tokio::pin!(setup);
+    let mut seeded = Some(seeded);
+    loop {
+        tokio::select! {
+            biased;
+            () = stop.cancelled() => return,
+            event = events.recv() => match event {
+                Ok(event) => {
+                    if event.method == "Target.detachedFromTarget"
+                        && event.params["sessionId"].as_str() == Some(session.as_str())
+                    {
+                        return;
+                    }
+                    feeds.apply(&event, &session, None);
+                }
+                Err(RecvError::Lagged(skipped)) => {
+                    warn!(%session, skipped, "a frame host's event watcher lagged");
+                }
+                Err(RecvError::Closed) => return,
+            },
+            tree = &mut setup, if seeded.is_some() => {
+                let seed = tree
+                    .map_err(|error| host.classify(&error))
+                    .and_then(|tree| local_tree(&tree));
+                let result = seed.map(|frames| {
+                    for frame in frames {
+                        feeds.seed(&frame.id, &frame.url);
+                    }
+                });
+                let failed = result.is_err();
+                if let Some(seeded) = seeded.take() {
+                    let _waiter = seeded.send(result);
+                }
+                if failed {
+                    return;
+                }
+            }
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -826,6 +1104,30 @@ pub(crate) fn apply(
     if event.session_id.as_ref() != Some(session) {
         return applied;
     }
+    match event.method.as_str() {
+        "Page.javascriptDialogOpening" => {
+            let beforeunload = serde_json::from_value::<DialogOpening>(event.params.clone())
+                .is_ok_and(|dialog| dialog.kind == "beforeunload");
+            state.dialogs_opened += 1;
+            applied.changed = true;
+            applied.dialog = Some(if beforeunload {
+                DialogAnswer::Accept
+            } else {
+                DialogAnswer::Dismiss
+            });
+        }
+        "Inspector.detached" | "Inspector.targetCrashed" => applied.closed = true,
+        _ => applied = apply_frame(state, event, main_frame),
+    }
+    applied
+}
+
+/// The part of [`apply`] that follows one frame, `frame`: its requested navigations, commits,
+/// same-document navigations, stops and lifecycle. The main frame's state and every child
+/// frame's feed ([`FrameFeeds`]) both take it, so a child frame's document is followed exactly
+/// as the main frame's is. The caller has already matched the event's session.
+fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> Applied {
+    let mut applied = Applied::default();
     let params = event.params.clone();
     match event.method.as_str() {
         "Page.frameRequestedNavigation" => {
@@ -898,18 +1200,6 @@ pub(crate) fn apply(
                 applied.changed = apply_lifecycle(state, &event);
             }
         }
-        "Page.javascriptDialogOpening" => {
-            let beforeunload = serde_json::from_value::<DialogOpening>(params)
-                .is_ok_and(|dialog| dialog.kind == "beforeunload");
-            state.dialogs_opened += 1;
-            applied.changed = true;
-            applied.dialog = Some(if beforeunload {
-                DialogAnswer::Accept
-            } else {
-                DialogAnswer::Dismiss
-            });
-        }
-        "Inspector.detached" | "Inspector.targetCrashed" => applied.closed = true,
         _ => {}
     }
     applied
@@ -2194,6 +2484,7 @@ mod tests {
                     MAIN.to_string(),
                 )),
                 frames: None,
+                feeds: None,
                 initial_url,
             };
             let watcher = watch_events(
@@ -2288,6 +2579,7 @@ mod tests {
                 navigations,
                 world: Arc::new(World::new(cdp, SessionId::from(SESSION), MAIN.to_string())),
                 frames: None,
+                feeds: None,
                 initial_url,
             },
             closed.clone(),
