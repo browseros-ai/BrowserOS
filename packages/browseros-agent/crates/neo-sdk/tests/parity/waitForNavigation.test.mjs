@@ -5,7 +5,8 @@
 // ("WA-101 should work with history.pushState()", "WA-102 should work with
 // history.replaceState()"), `url` as a glob, a RegExp and a predicate that skip a navigation
 // that does not match ("WA-105 should work with url match", "WA-106 should work with url match for
-// same document navigations"), a timeout ("WA-096 should respect timeout"), a navigation that
+// same document navigations"), each waitUntil ("WA-097 should work with both domcontentloaded and
+// load", "WA-098 should work with commit"), a timeout ("WA-096 should respect timeout"), a navigation that
 // fails, and an option refused at once. Compared: the script's values, the URL it ended on, and
 // each page's load count.
 //
@@ -26,6 +27,8 @@ const html = readFileSync(
   'utf8',
 )
 const LOADS = "sessionStorage.getItem('loads')"
+/** `/slow` (slow-load.html's image) answers this late, so its load trails its DOMContentLoaded. */
+const SLOW_MS = 1500
 const NEXT = { status: 200, ok: true, path: '/next.html?q=a+b' }
 
 /** A wait started before `#chain`'s click: a pushState to /not-yet.html, then /next.html?q=a+b
@@ -117,6 +120,43 @@ const cases = [
     expected: { response: null, path: '/first.html' },
   },
   {
+    // A page whose image answers late, so each lifecycle event is a title of its own.
+    name: 'commit and domcontentloaded resolve before load, which resolves last',
+    path: '/history.html',
+    source: `const [committed] = await Promise.all([
+      page.waitForNavigation({ waitUntil: 'commit' }),
+      page.click('#to-slow', { noWaitAfter: true }),
+    ])
+    const atCommit = await page.title()
+    await page.goBack()
+    const [dom] = await Promise.all([
+      page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+      page.click('#to-slow', { noWaitAfter: true }),
+    ])
+    const atDom = await page.title()
+    await page.goBack()
+    const [load] = await Promise.all([
+      page.waitForNavigation(),
+      page.click('#to-slow', { noWaitAfter: true }),
+    ])
+    return {
+      responses: [committed, dom, load].map(describe),
+      loadedAtCommit: atCommit === 'load',
+      atDom,
+      atLoad: await page.title(),
+    }`,
+    expected: {
+      responses: [
+        { status: 200, ok: true, path: '/slow-load.html' },
+        { status: 200, ok: true, path: '/slow-load.html' },
+        { status: 200, ok: true, path: '/slow-load.html' },
+      ],
+      loadedAtCommit: false,
+      atDom: 'domcontentloaded',
+      atLoad: 'load',
+    },
+  },
+  {
     name: 'nothing navigates: the wait times out',
     path: '/history.html',
     source: `return {
@@ -170,8 +210,13 @@ test('page.waitForNavigation answers the same through Neo and Playwright', {
   timeout: 300_000,
 }, async (t) => {
   await compareCases(t, cases, {
+    slowMs: SLOW_MS,
     pages: {
       '/history.html': html,
+      '/slow-load.html': readFileSync(
+        new URL('../pages/slow-load.html', import.meta.url),
+        'utf8',
+      ),
       '/framed.html':
         '<!doctype html><title>framed</title><iframe name="child" src="/history.html"></iframe>',
     },

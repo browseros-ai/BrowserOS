@@ -1267,6 +1267,12 @@ pub(crate) fn apply(
 /// take it, so a child frame's document is followed exactly as the main frame's is. The caller
 /// has already matched the event's session.
 fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> Applied {
+    if matches!(
+        event.method.as_str(),
+        "Network.requestWillBeSent" | "Network.loadingFailed"
+    ) {
+        return apply_navigation_request(state, event, main_frame);
+    }
     let mut applied = Applied::default();
     let params = event.params.clone();
     match event.method.as_str() {
@@ -1282,9 +1288,6 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                 state.pending_document = Some(PendingDocument::Requested);
                 applied.changed = true;
             }
-        }
-        "Network.requestWillBeSent" | "Network.loadingFailed" => {
-            applied = apply_navigation_request(state, event, main_frame);
         }
         "Page.frameNavigated" => {
             if let Ok(FrameNavigated { frame, kind }) = serde_json::from_value(params)
@@ -1383,11 +1386,12 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
 /// with its error.
 fn apply_navigation_request(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> Applied {
     let mut applied = Applied::default();
-    let params = event.params.clone();
+    // Read in place: every subresource request passes through here.
+    let params = &event.params;
     if event.method == "Network.requestWillBeSent" {
         // server/frames.ts requestStarted, for crNetworkManager.ts's navigation requests:
         // `requestId === loaderId`, type `Document`, and never a `data:` URL.
-        if let Ok(started) = serde_json::from_value::<NavigationRequestStarted>(params)
+        if let Ok(started) = NavigationRequestStarted::deserialize(params)
             && started.frame_id.as_deref() == Some(main_frame)
             && started.request_id == started.loader_id
             && started.kind.as_deref() == Some("Document")
@@ -1400,7 +1404,7 @@ fn apply_navigation_request(state: &mut PageState, event: &CdpEvent, main_frame:
     }
     // server/frames.ts requestFailed: only the pending document's request aborts the navigation;
     // an older one that a newer navigation replaced fails silently.
-    if let Ok(failed) = serde_json::from_value::<NavigationRequestFailed>(params)
+    if let Ok(failed) = NavigationRequestFailed::deserialize(params)
         && state.pending_document == Some(PendingDocument::Started(failed.request_id.clone()))
     {
         state.pending_document = None;

@@ -140,10 +140,14 @@ export type WaitForSelectorOptions = Omit<
   'selector'
 > & { timeout?: number }
 
-/** Playwright's `URLMatch` without `URLPattern`, which QuickJS lacks: a glob string, a `RegExp`,
- * or a predicate on the navigated `URL` (Neo's read-only one, `url.ts`). `waitForURL` and
- * `waitForNavigation` take all three; `page.frame({ url })` refuses a predicate. */
-export type URLMatch = string | RegExp | URLPredicate
+/** What `page.frame({ url })` matches: a glob string or a `RegExp`, two of Playwright's four
+ * `URLMatch` forms; a predicate function is refused there (`neo-commands.ts`). */
+export type URLMatch = string | RegExp
+
+/** What `waitForURL` and `waitForNavigation` match: Playwright's `URLMatch` without
+ * `URLPattern`, which QuickJS lacks: a glob string, a `RegExp`, or a predicate on the navigated
+ * `URL` (Neo's read-only one, `url.ts`). */
+export type NavigationURLMatch = URLMatch | URLPredicate
 
 /** `waitForURL`'s options, as Playwright's. */
 export type WaitForURLOptions = { waitUntil?: LifecycleEvent; timeout?: number }
@@ -151,7 +155,7 @@ export type WaitForURLOptions = { waitUntil?: LifecycleEvent; timeout?: number }
 /** Playwright's `WaitForNavigationOptions` (`client/frame.ts`), without `signal`: Neo takes no
  * `AbortSignal` (`errors.ts`). */
 export type WaitForNavigationOptions = {
-  url?: URLMatch
+  url?: NavigationURLMatch
   waitUntil?: LifecycleEvent
   timeout?: number
 }
@@ -332,7 +336,7 @@ export class Frame {
    * `networkidle` throws an `Error`.
    */
   async waitForURL(
-    url: URLMatch,
+    url: NavigationURLMatch,
     options: WaitForURLOptions = {},
   ): Promise<void> {
     return await this._waitForURL('frame.waitForURL', url, options)
@@ -345,7 +349,7 @@ export class Frame {
    */
   async _waitForURL(
     apiName: ApiName,
-    url: URLMatch,
+    url: NavigationURLMatch,
     options: WaitForURLOptions | undefined,
   ): Promise<void> {
     const waitOptions = options ?? {}

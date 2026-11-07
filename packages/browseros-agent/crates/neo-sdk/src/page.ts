@@ -23,6 +23,7 @@ import {
   type InputValueOptions,
   type IsCheckedOptions,
   type IsVisibleOptions,
+  type NavigationURLMatch,
   type PressOptions,
   type SelectOptionOptions,
   type TextContentOptions,
@@ -312,7 +313,10 @@ export class Page {
    * `networkidle` throws) fires, at once if the current document already fired it, and resolves
    * `undefined`.
    */
-  async waitForURL(url: URLMatch, options?: WaitForURLOptions): Promise<void> {
+  async waitForURL(
+    url: NavigationURLMatch,
+    options?: WaitForURLOptions,
+  ): Promise<void> {
     return await this.#mainFrame._waitForURL('page.waitForURL', url, options)
   }
 

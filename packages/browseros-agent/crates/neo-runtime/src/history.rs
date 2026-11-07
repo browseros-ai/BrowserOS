@@ -44,6 +44,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::click::PageError;
+use crate::frames::FrameScope;
 use crate::navigate::{self, Lifecycle, Navigation, NavigationTab, Observation};
 use crate::page::FrameTab;
 use crate::progress::{CallError, PlaywrightError, Progress};
@@ -403,7 +404,13 @@ pub(crate) async fn next_frame_navigation(
     let (id, mut cursor) = if let Some(id) = params.cursor {
         (id, cursors.take(id)?)
     } else {
-        let events = WaitTab::observe(&tab).map_err(navigate::page_error)?;
+        // The main frame's queue, as `wait_for_navigation` reads it, rejects on an overflow
+        // rather than skip a navigation the predicate never saw; a child frame's rechecks.
+        let events = if matches!(tab.scope, FrameScope::Main) {
+            WaitObservation::Main(NavigationTab::observe(&tab).map_err(navigate::page_error)?)
+        } else {
+            WaitTab::observe(&tab).map_err(navigate::page_error)?
+        };
         waits::prepare_tab(&tab, progress).await?;
         let cursor = Cursor::open(tab, events, params.response, progress).await?;
         (cursors.mint(), cursor)
