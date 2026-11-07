@@ -130,12 +130,12 @@ export class BrowserContext extends ChannelOwner {
   }
 
   /** Playwright's `BrowserContext._onResponse`. */
-  #onResponse({ response, page }: ResponseEventParams): void {
+  #onResponse({ response, request, page }: ResponseEventParams): void {
     const pageObject = this.#pageFor(page.guid)
     const responseObject = responseFromRecord(
       this.#connection,
       response,
-      pageObject,
+      requestFromRecord(this.#connection, request, pageObject),
     )
     this.emit('response', responseObject)
     pageObject.emit('response', responseObject)
@@ -331,9 +331,11 @@ interface RequestEventParams {
   page: PageChannel
 }
 
-/** Playwright's `response` event params, the response as its full record. */
+/** Playwright's `response` event params, the response as its full record, with Neo's record of
+ * its request, so the event builds both without asking Rust. */
 interface ResponseEventParams {
   response: Created<ResponseInitializer>
+  request: Created<RequestInitializer>
   page: PageChannel
 }
 

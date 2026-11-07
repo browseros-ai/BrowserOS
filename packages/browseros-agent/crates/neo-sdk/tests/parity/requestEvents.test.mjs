@@ -142,6 +142,126 @@ const cases = [
       failure204: null,
     },
   },
+  {
+    // tests/page/page-event-request.spec.ts "NE-092 should fire for iframes", for an
+    // out-of-process frame: its fetch reaches the page's listeners with that frame, and its body
+    // reads. Neo reports such a frame's requests once the run has reached the frame (here
+    // `page.frames()`), and then from the frame's own CDP session.
+    name: "an out-of-process frame's fetch reaches the page's listeners with that frame",
+    source: `await page.goto(ORIGIN + '/net/oopif-top.html')
+    let cross
+    for (let tries = 0; !cross && tries < 50; tries++) {
+      cross = page.frames().find((frame) => frame.name() === 'cross' && frame.url().endsWith('/net/oopif-child.html'))
+      if (!cross) await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    await cross.waitForLoadState('load')
+    const seen = []
+    page.on('request', (request) => seen.push(['request', path(request.url()), request.frame() === cross, request.resourceType()]))
+    page.on('requestfinished', (request) => seen.push(['finished', path(request.url()), request.frame() === cross]))
+    const finished = page.waitForEvent('requestfinished', (request) => request.url().endsWith('/net/oopif-data.json'))
+    await cross.click('#fetch')
+    const request = await finished
+    const response = await request.response()
+    return {
+      seen: seen.filter(([, url]) => url === '/net/oopif-data.json'),
+      origin: request.url().startsWith('http://localhost:'),
+      status: response.status(),
+      body: await response.json(),
+    }`,
+    expected: {
+      seen: [
+        ['request', '/net/oopif-data.json', true, 'fetch'],
+        ['finished', '/net/oopif-data.json', true],
+      ],
+      origin: true,
+      status: 200,
+      body: { path: '/net/oopif-data.json', query: '' },
+    },
+  },
+  {
+    // tests/page/page-network-request.spec.ts and page-network-response.spec.ts read the same
+    // values off goto's objects; here off objects an event handed out: provisional and raw
+    // headers, post data, sizes, the server's address, the HTTP version, the service-worker
+    // fields, and timing's shape (its values are a clock's, never compared).
+    name: "an event's request and response describe themselves as Playwright's",
+    source: `await page.goto(ORIGIN + '/net/blank.html')
+    const [request] = await Promise.all([
+      page.waitForRequest('**/net/echo'),
+      page.evaluate(() => fetch('/net/echo', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-neo': 'yes' },
+        body: JSON.stringify({ a: 1 }),
+      }).then((r) => r.text())),
+    ])
+    const response = await request.response()
+    const all = await request.allHeaders()
+    const responseHeaders = await response.allHeaders()
+    const timing = request.timing()
+    const sizes = await request.sizes()
+    return {
+      method: request.method(),
+      postData: request.postData(),
+      postDataJSON: request.postDataJSON(),
+      postDataBuffer: request.postDataBuffer().toString('utf8'),
+      provisional: [request.headers()['content-type'], request.headers()['x-neo']],
+      raw: [all['content-type'], all['x-neo'], await request.headerValue('X-Neo')],
+      rawNames: (await request.headersArray()).map((header) => header.name.toLowerCase()).sort(),
+      status: [response.status(), response.statusText(), response.ok(), await response.text()],
+      responseHeaders: [responseHeaders['content-type'], responseHeaders['cache-control'], await response.headerValue('Content-Type')],
+      responseNames: (await response.headersArray()).map((header) => header.name.toLowerCase()).sort(),
+      headerValues: await response.headerValues('cache-control'),
+      sizes,
+      serverAddr: (await response.serverAddr()).ipAddress,
+      securityDetails: await response.securityDetails(),
+      httpVersion: await response.httpVersion(),
+      fromServiceWorker: response.fromServiceWorker(),
+      serviceWorker: request.serviceWorker(),
+      timingKeys: Object.keys(timing).sort(),
+      timingTypes: Object.values(timing).every((value) => typeof value === 'number'),
+      ended: timing.responseEnd >= 0,
+      frame: request.frame() === page.mainFrame() && response.frame() === page.mainFrame(),
+    }`,
+    expected: {
+      method: 'POST',
+      postData: '{"a":1}',
+      postDataJSON: { a: 1 },
+      postDataBuffer: '{"a":1}',
+      provisional: ['application/json', 'yes'],
+      raw: ['application/json', 'yes', 'yes'],
+      rawNames: 'FROM_PLAYWRIGHT',
+      status: [200, 'OK', true, 'POST {"a":1}'],
+      responseHeaders: ['text/plain', 'no-store', 'text/plain'],
+      responseNames: [
+        'cache-control',
+        'connection',
+        'content-length',
+        'content-type',
+        'date',
+        'keep-alive',
+      ],
+      headerValues: ['no-store'],
+      sizes: 'FROM_PLAYWRIGHT',
+      serverAddr: '127.0.0.1',
+      securityDetails: null,
+      httpVersion: 'HTTP/1.1',
+      fromServiceWorker: false,
+      serviceWorker: null,
+      timingKeys: [
+        'connectEnd',
+        'connectStart',
+        'domainLookupEnd',
+        'domainLookupStart',
+        'requestStart',
+        'responseEnd',
+        'responseStart',
+        'secureConnectionStart',
+        'startTime',
+      ],
+      timingTypes: true,
+      ended: true,
+      frame: true,
+    },
+  },
 ]
 
 test('request events match Playwright', {

@@ -518,23 +518,14 @@ export function requestFromRecord(
   return request
 }
 
-/** The `Response` a `response` event's record names, its request built first if need be. */
+/** The `Response` a `response` event's record names, for its `request` (built from the event). */
 export function responseFromRecord(
   connection: Connection,
   record: Created<ResponseInitializer>,
-  page: Page,
+  request: Request,
 ): Response {
   const known = connection._objects.get(record.guid)
   if (known instanceof Response) return known
-  const request = networkObject(
-    connection,
-    record.initializer.request.guid,
-    page,
-  )
-  if (!(request instanceof Request))
-    throw new Error(`neo-sdk: ${record.guid} names no request`)
-  const existing = connection._objects.get(record.guid)
-  if (existing instanceof Response) return existing
   const response = new Response(
     record.guid,
     record.initializer,

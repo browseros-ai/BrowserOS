@@ -50,11 +50,13 @@ fn params(log: &NetworkLog, page_guid: &str, method: &str, id: &HopId) -> Result
             "page": page,
         }),
         // Playwright: `server/dispatchers/browserContextDispatcher.ts` `BrowserContextDispatcher.constructor`: `this._dispatchEvent('response', {`
+        // Neo adds the response's request record, so the SDK builds both from the event alone,
+        // even once the log dropped the hop (a long backlog of undelivered events).
         "response" => {
             let Some(response) = log.created_response(id)? else {
                 return Err(LogError::Dropped("response"));
             };
-            json!({ "response": response, "page": page })
+            json!({ "response": response, "request": log.created_request(id)?, "page": page })
         }
         // Playwright: `server/dispatchers/browserContextDispatcher.ts` `BrowserContextDispatcher.constructor`: `responseEndTiming: request._responseEndTiming,`
         "requestFinished" => json!({

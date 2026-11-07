@@ -73,6 +73,15 @@ setTimeout(() => fetch('/net/slow?ms=700').then((r) => r.text()).then(() => { do
   '/net/late-child.html': `<title>late child</title><script>
 setTimeout(() => fetch('/net/slow?ms=700').then((r) => r.text()).then(() => { parent.document.title = 'done' }), 300)
 </script>`,
+  // A frame from localhost, another site, so Chromium runs it in its own process.
+  '/net/oopif-top.html': `<title>oopif top</title><script>
+const frame = document.createElement('iframe')
+frame.name = 'cross'
+frame.src = 'http://localhost:' + location.port + '/net/oopif-child.html'
+document.body.append(frame)
+</script>`,
+  '/net/oopif-child.html': `<title>oopif child</title>
+<button id="fetch" onclick="fetch('/net/oopif-data.json').then((r) => r.text())">fetch</button>`,
   // Counts its loads in sessionStorage, so a script can tell whether a call loaded it.
   '/net/counted.html': `<title>counted</title><script>
 sessionStorage.setItem('loads', String(Number(sessionStorage.getItem('loads')) + 1))

@@ -903,16 +903,10 @@ function requestFromRecord(connection, record, page) {
   connection._objects.set(record.guid, request);
   return request;
 }
-function responseFromRecord(connection, record, page) {
+function responseFromRecord(connection, record, request) {
   const known = connection._objects.get(record.guid);
   if (known instanceof Response)
     return known;
-  const request = networkObject(connection, record.initializer.request.guid, page);
-  if (!(request instanceof Request))
-    throw new Error(`neo-sdk: ${record.guid} names no request`);
-  const existing = connection._objects.get(record.guid);
-  if (existing instanceof Response)
-    return existing;
   const response = new Response(record.guid, record.initializer, request, connection);
   connection._objects.set(record.guid, response);
   return response;
@@ -5912,9 +5906,9 @@ class BrowserContext extends ChannelOwner {
     this.emit("request", requestObject);
     pageObject.emit("request", requestObject);
   }
-  #onResponse({ response, page }) {
+  #onResponse({ response, request, page }) {
     const pageObject = this.#pageFor(page.guid);
-    const responseObject = responseFromRecord(this.#connection, response, pageObject);
+    const responseObject = responseFromRecord(this.#connection, response, requestFromRecord(this.#connection, request, pageObject));
     this.emit("response", responseObject);
     pageObject.emit("response", responseObject);
   }
