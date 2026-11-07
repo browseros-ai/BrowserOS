@@ -17,6 +17,22 @@
 //! hosted contract; nothing here serves HTTP. Design: `designs/neo-host-events/design.md` in
 //! the claw-sdk-v2 notes.
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "pure core: tests drive it until the host task does"
+    )
+)]
+mod cdp;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "pure core: tests drive it until the host task does"
+    )
+)]
+mod directory;
 #[expect(
     dead_code,
     reason = "scaffold: the host ledger consumes these, the run path emits them"
