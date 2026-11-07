@@ -73,6 +73,10 @@ setTimeout(() => fetch('/net/slow?ms=700').then((r) => r.text()).then(() => { do
   '/net/late-child.html': `<title>late child</title><script>
 setTimeout(() => fetch('/net/slow?ms=700').then((r) => r.text()).then(() => { parent.document.title = 'done' }), 300)
 </script>`,
+  // Counts its loads in sessionStorage, so a script can tell whether a call loaded it.
+  '/net/counted.html': `<title>counted</title><script>
+sessionStorage.setItem('loads', String(Number(sessionStorage.getItem('loads')) + 1))
+</script>`,
   // An EventSource never holds networkidle.
   '/net/event-source.html': `<title>events</title><script>new EventSource('/net/sse')</script>`,
 }
