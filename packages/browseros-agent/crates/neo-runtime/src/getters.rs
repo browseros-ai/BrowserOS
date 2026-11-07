@@ -451,7 +451,7 @@ fn frame_guid(page: &PageId, frame: &FrameInfo) -> String {
     if frame.parent.is_none() {
         bridge::frame_guid(page)
     } else {
-        format!("frame@{}/{}", page.as_str(), frame.id)
+        bridge::frame_guid_of(page, &frame.id)
     }
 }
 
@@ -577,6 +577,8 @@ mod tests {
     use crate::page::TabInputs;
     use crate::progress::ErrorName;
     use crate::run::PageId;
+    use crate::screenshot::TabScreenshots;
+    use crate::session_state::Permissions;
     use crate::switch::Switches;
     use crate::tabs::{PageEntry, Tabs};
     use crate::url_match::SerializedUrlMatch;
@@ -631,7 +633,9 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             Switches::default(),
+            Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
         )
@@ -813,7 +817,9 @@ mod tests {
             cdp.clone(),
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             Switches::default(),
+            Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
         )

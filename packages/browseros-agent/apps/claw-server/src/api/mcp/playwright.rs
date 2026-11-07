@@ -196,6 +196,7 @@ impl PlaywrightService {
                 page: PageId::new(page.clone()),
                 timeout: deadline.saturating_duration_since(Instant::now()),
                 cancel,
+                artifacts: None,
             })
             .await;
         if created {

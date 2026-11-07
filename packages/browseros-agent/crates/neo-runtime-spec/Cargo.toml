@@ -7,8 +7,10 @@ license.workspace = true
 repository.workspace = true
 description = "Neo's cross-language runtime contracts, translated from Playwright's protocol YAML dialect."
 
-# Types only. serde_json backs `FrameCall::decode` and `Command::reply`.
+# Types only. serde_json backs `FrameCall::decode` and `Command::reply`; base64 is the wire form
+# of `Binary`.
 [dependencies]
+base64.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

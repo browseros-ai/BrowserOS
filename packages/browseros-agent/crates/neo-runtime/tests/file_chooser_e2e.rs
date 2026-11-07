@@ -87,6 +87,7 @@ return [chooser.isMultiple(), await chooser.element().evaluate((input) => input.
             page: PageId::new(tab.target_id.clone()),
             timeout: Duration::from_secs(30),
             cancel: CancellationToken::new(),
+            artifacts: None,
         })
         .await;
     assert_eq!(

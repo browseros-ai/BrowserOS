@@ -34,6 +34,8 @@ use crate::page::{FrameTab, PageSession, Session, TabInputs};
 use crate::page_events::{self, Kept, MAX_KEPT_ARGS, MAX_KEPT_CHOOSERS};
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunPage};
+use crate::screenshot::TabScreenshots;
+use crate::session_state::{self, Overrides, Permissions};
 use crate::switch::Switches;
 
 /// Neo: how long `ConsoleMessage.args()` waits for its arguments' handles. A page a dialog holds
@@ -48,6 +50,8 @@ struct Inner {
     cdp: CdpClient,
     tokio: Handle,
     inputs: TabInputs,
+    /// The `Runtime`'s screenshot turns, one per tab, across runs.
+    screenshots: TabScreenshots,
     tasks: TaskTracker,
     creations: TaskTracker,
     scope: Scope,
@@ -68,6 +72,11 @@ struct Inner {
     downloads_enabling: Mutex<Option<Enabling>>,
     /// The downloads the run's `download` events handed out.
     downloads: Downloads,
+    /// The run's session-scoped state, which each session it attaches gets (`session_state.rs`).
+    overrides: Arc<Overrides>,
+    /// The `Runtime`'s permission grants, and this run's id among them.
+    permissions: Permissions,
+    run_id: u64,
 }
 
 /// A page can be known without a session. Its closure token precedes the attachment so calls,
@@ -162,11 +171,17 @@ struct CreatedFrame {
 }
 
 impl Tabs {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each per-tab share the Runtime keeps (inputs, screenshots, switches, permissions) is one argument"
+    )]
     pub(crate) async fn open(
         cdp: CdpClient,
         tokio: Handle,
         inputs: TabInputs,
+        screenshots: TabScreenshots,
         switches: Switches,
+        permissions: Permissions,
         tasks: TaskTracker,
         page: &PageId,
     ) -> Result<(Self, String), PlaywrightError> {
@@ -177,6 +192,7 @@ impl Tabs {
             cdp,
             tokio,
             inputs,
+            screenshots,
             tasks,
             creations: TaskTracker::new(),
             scope: Scope {
@@ -192,6 +208,9 @@ impl Tabs {
             watching_downloads: OnceLock::new(),
             downloads_enabling: Mutex::new(None),
             downloads: Downloads::default(),
+            overrides: Arc::default(),
+            permissions,
+            run_id: session_state::next_run(),
         }));
         let entry = tabs.register(page.clone(), false)?;
         // The scope read above already checked this tab. Avoid a second startup read so
@@ -387,15 +406,35 @@ impl Tabs {
             return Err(PlaywrightError::target_closed());
         }
         let input = self.0.inputs.lock_for(&entry.id).await;
-        Ok(Arc::new(PageSession::new(
+        let screenshots = self.0.screenshots.turn_for(&entry.id).await;
+        let page = Arc::new(PageSession::new(
             session,
             &entry.id,
             self.0.tasks.clone(),
             input,
+            screenshots,
             entry.closed.clone(),
             self.0.events.clone(),
             entry.discovered.load(Ordering::Acquire),
-        )))
+        ));
+        // The run's session state reaches this tab's sessions before the call that attached
+        // each goes on: the tab's own now, each out-of-process frame's as it attaches.
+        let overrides = Arc::clone(&self.0.overrides);
+        let cdp = page.events.cdp().clone();
+        let id = entry.id.clone();
+        page.events.on_child_session(Arc::new(move |session| {
+            let overrides = Arc::clone(&overrides);
+            let cdp = cdp.clone();
+            let id = id.clone();
+            Box::pin(async move { overrides.apply_to_new(&cdp, session, &id, true).await })
+        }));
+        if let Some(own) = page.events.sessions().into_iter().next() {
+            self.0
+                .overrides
+                .apply_to_new(page.events.cdp(), own, &entry.id, false)
+                .await;
+        }
+        Ok(page)
     }
 
     pub(crate) async fn url(&self, entry: &PageEntry) -> Result<Option<String>, PlaywrightError> {
@@ -754,6 +793,21 @@ impl Tabs {
             return None;
         }
         self.register(owner, false).ok()
+    }
+
+    /// The run's session-scoped state (`session_state.rs`).
+    pub(crate) fn overrides(&self) -> &Overrides {
+        &self.0.overrides
+    }
+
+    /// The `Runtime`'s permission grants (`session_state.rs`).
+    pub(crate) fn permissions(&self) -> &Permissions {
+        &self.0.permissions
+    }
+
+    /// This run's id among the `Runtime`'s runs.
+    pub(crate) fn run_id(&self) -> u64 {
+        self.0.run_id
     }
 
     /// A new page target discovery saw (`discovery.rs`). When the run listens for new pages and
@@ -1209,7 +1263,9 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             Switches::default(),
+            Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
         )

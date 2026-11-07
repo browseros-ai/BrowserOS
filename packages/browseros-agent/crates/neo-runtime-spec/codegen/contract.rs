@@ -149,7 +149,8 @@ pub enum FieldType {
     Bool,
     Int,
     Float,
-    /// `binary`: base64 text, left encoded.
+    /// `binary`: base64 text on the wire, `neo_runtime_spec::Binary` in Rust, `string` in
+    /// TypeScript.
     Base64,
     Json,
     /// A type in the same module.
