@@ -21,13 +21,14 @@ use neo_runtime_spec::serve::{
     FrameContentResult, FrameResolveSelectorResult, FrameSetContentParams, LifecycleEvent,
 };
 
-use std::collections::HashMap;
-use std::sync::Mutex;
+use std::collections::{BTreeSet, HashMap};
+use std::pin::pin;
+use std::sync::{Arc, Mutex};
 
 use browseros_cdp::{CdpEvent, SessionId};
+use tokio::sync::Notify;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::oneshot;
 
 use crate::click::{PageError, Tab};
 use crate::frame_selector;
@@ -53,45 +54,90 @@ pub(crate) struct SetContentOptions {
 
 /// Neo: the run's `setContent` writes into each frame, in the order the calls arrived. Playwright
 /// sends each write's `document.open()` in call order, so of overlapping writes the later one's
-/// document stays; Neo's calls run as tasks, so each waits for the frame's previous write to
-/// answer first. The order is taken when the call arrives (`Dispatcher::call`, synchronous).
+/// document stays; Neo's calls run as tasks, so each waits until every earlier write into its
+/// frame that is still live (waiting or writing) is gone. The order is taken when the call
+/// arrives (`Dispatcher::call`, synchronous); a call that stops while it waits just leaves it.
 #[derive(Debug, Default)]
 pub(crate) struct WriteOrder {
-    /// Per frame guid, the answer of the last write that arrived.
-    last: Mutex<HashMap<String, oneshot::Receiver<()>>>,
+    /// Per frame guid, its writes.
+    frames: Mutex<HashMap<String, Arc<FrameWrites>>>,
 }
 
-/// Neo: one write's place in its frame's order: the previous write's answer, and its own,
-/// given when it is dropped (written, failed or stopped alike).
+/// Neo: one frame's live writes, by the ticket each took at arrival, and the wake for a change.
+#[derive(Debug, Default)]
+struct FrameWrites {
+    live: Mutex<Tickets>,
+    changed: Notify,
+}
+
+#[derive(Debug, Default)]
+struct Tickets {
+    next: u64,
+    live: BTreeSet<u64>,
+}
+
+/// Neo: one write's place in its frame's order. It may write once no earlier ticket is live;
+/// dropping it (written, failed, stopped, or cancelled while it waits) leaves the order, so a
+/// later write still waits for every earlier one that is live.
 #[derive(Debug)]
 pub(crate) struct WriteTurn {
-    previous: Option<oneshot::Receiver<()>>,
-    _answered: oneshot::Sender<()>,
+    frame: Arc<FrameWrites>,
+    ticket: u64,
 }
 
 impl WriteOrder {
     /// The next place in `frame`'s order, taken in arrival order.
     pub(crate) fn turn(&self, frame: &str) -> WriteTurn {
-        let (answered, next) = oneshot::channel();
-        let previous = self
-            .last
+        let writes = self
+            .frames
             .lock()
-            .ok()
-            .and_then(|mut last| last.insert(frame.to_string(), next));
+            .map(|mut frames| Arc::clone(frames.entry(frame.to_string()).or_default()))
+            .unwrap_or_default();
+        let ticket = writes.live.lock().map_or(0, |mut tickets| {
+            let ticket = tickets.next;
+            tickets.next += 1;
+            tickets.live.insert(ticket);
+            ticket
+        });
         WriteTurn {
-            previous,
-            _answered: answered,
+            frame: writes,
+            ticket,
         }
     }
 }
 
+impl FrameWrites {
+    /// Whether no ticket before `ticket` is live (a poisoned lock orders nothing).
+    fn first(&self, ticket: u64) -> bool {
+        self.live.lock().map_or(true, |tickets| {
+            tickets.live.first().is_none_or(|first| *first >= ticket)
+        })
+    }
+}
+
 impl WriteTurn {
-    /// Waits until the frame's previous write answered (or went), and holds this one's place.
-    async fn ready(mut self) -> Self {
-        if let Some(previous) = self.previous.take() {
-            let _answered = previous.await;
+    /// Waits until every earlier live write into the frame is gone, and holds this one's place.
+    async fn ready(self) -> Self {
+        let frame = Arc::clone(&self.frame);
+        loop {
+            // Registered before the check, so a release between the two is not missed.
+            let mut changed = pin!(frame.changed.notified());
+            changed.as_mut().enable();
+            if frame.first(self.ticket) {
+                return self;
+            }
+            changed.await;
         }
-        self
+    }
+}
+
+/// Neo: a write leaves its frame's order however it ends, and wakes the writes behind it.
+impl Drop for WriteTurn {
+    fn drop(&mut self) {
+        if let Ok(mut tickets) = self.frame.live.lock() {
+            tickets.live.remove(&self.ticket);
+        }
+        self.frame.changed.notify_waiters();
     }
 }
 
@@ -351,6 +397,32 @@ mod tests {
     use tokio::time::timeout;
 
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn review_cancelled_middle_write_keeps_the_first_write_ahead_of_the_last() {
+        let order = WriteOrder::default();
+        let first = order.turn("frame@A").ready().await;
+        let middle = order.turn("frame@A");
+        let last = order.turn("frame@A");
+        let mut middle = Box::pin(middle.ready());
+        assert!(
+            timeout(Duration::from_millis(1), &mut middle)
+                .await
+                .is_err()
+        );
+        // A stopped call waiting in the chain releases its own place, but the first
+        // call may still be preparing its write and must remain ahead of the last.
+        drop(middle);
+        let mut last = Box::pin(last.ready());
+        assert!(
+            timeout(Duration::from_millis(1), &mut last).await.is_err(),
+            "the last write passed a live first write after the middle call stopped"
+        );
+        drop(first);
+        let _last = timeout(Duration::from_millis(1), last)
+            .await
+            .expect("cancellation must not leave the later write stuck");
+    }
 
     #[tokio::test]
     async fn tests_that_writes_into_one_frame_go_in_arrival_order() {
