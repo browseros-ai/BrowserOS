@@ -120,6 +120,7 @@ function run() {
     page: 'page@T',
     mainFrame: 'frame@T',
     context: 'context@default',
+    browser: 'browser@default',
     url: 'about:blank',
     testIdAttribute: 'data-testid',
     lineOffset: 0,

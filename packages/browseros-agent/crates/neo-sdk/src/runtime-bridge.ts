@@ -83,6 +83,10 @@ export interface GetterReplies {
   parentFrame: CreatedFrame | null
   childFrames: CreatedFrame[]
   isDetached: boolean
+  /** On the browser: its version, as Playwright reports it (`155.0.8318.26`). */
+  version: string
+  /** On the browser: whether the runtime's connection to it is up. */
+  isConnected: boolean
 }
 
 export function get<Field extends keyof GetterReplies>(
@@ -103,6 +107,14 @@ export function matchesURL(
   return JSON.parse(
     __neo_runtime.get(JSON.stringify({ field: 'matchesURL', url, matcher })),
   )
+}
+
+/**
+ * Playwright's device descriptors, by name: the vendored data neo-runtime embeds
+ * (`neo-sdk/vendor/playwright/isomorphic/deviceDescriptorsSource.json`), read once per run.
+ */
+export function devices(): Record<string, unknown> {
+  return JSON.parse(__neo_runtime.get(JSON.stringify({ field: 'devices' })))
 }
 
 /**

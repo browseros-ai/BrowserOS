@@ -20,6 +20,7 @@
  */
 
 import type {
+  BrowserCommands,
   BrowserContextCommands,
   DialogCommands,
   FrameCommands,
@@ -142,6 +143,14 @@ export type ApiName =
   | 'frame.innerHTML'
   | 'locator.allInnerTexts'
   | 'locator.all'
+  // Browser and emulation (platform).
+  | 'browser.newContext'
+  | 'browser.close'
+  | 'browserContext.close'
+  | 'page.setViewportSize'
+  | 'page.emulateMedia'
+  | 'page.requestGC'
+  | 'page.pause'
 
 /** Playwright's wire error, `{error: {name, message}}`'s inner object. */
 export type WireError = { name: string; message: string }
@@ -172,6 +181,8 @@ const AGENT_FRAME = /^ {4}at .* \(<input>:(\d+):(\d+)\)$/
 
 export class Connection {
   #nextId = 1
+  /** Set by `browser.close()`: every later call fails as on a closed browser. */
+  #disconnected = false
   readonly #lineOffset: number
   /** Every `Request` and `Response` built so far, by guid, as Playwright's connection keeps its
    * objects: one guid is always one object (`network.ts` `responseFor`). */
@@ -214,6 +225,33 @@ export class Connection {
       params,
       timeout,
     )) as Resolved<PageCommands[M]['result']>
+  }
+
+  /** {@link Connection.send} for a `Browser` command, to the run's `browser@default`. */
+  async sendBrowser<M extends keyof BrowserCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: BrowserCommands[M]['params'],
+    timeout: number,
+  ): Promise<Resolved<BrowserCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<BrowserCommands[M]['result']>
+  }
+
+  /** Whether `browser.close()` ran: the run's objects read closed from then on. */
+  get _disconnected(): boolean {
+    return this.#disconnected
+  }
+
+  /** Playwright's connection after its browser closed: calls reject without reaching Rust. */
+  _disconnect(): void {
+    this.#disconnected = true
   }
 
   /** {@link Connection.send} for a `BrowserContext` command, to the context's guid. */
@@ -330,6 +368,16 @@ export class Connection {
       location: captureLocation(this.#lineOffset),
       timeout,
     }
+    // Playwright's client rejects a call on a closed connection with its closed-target error.
+    if (this.#disconnected)
+      throw rebuildError(
+        apiName,
+        {
+          name: 'TargetClosedError',
+          message: 'Target page, context or browser has been closed',
+        },
+        [],
+      )
     const message = { id: this.#nextId++, guid, method, params, metadata }
     const reply: Reply = JSON.parse(await call(JSON.stringify(message)))
     if (reply.error) throw rebuildError(apiName, reply.error.error, reply.log)

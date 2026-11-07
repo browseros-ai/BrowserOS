@@ -74,6 +74,7 @@ use crate::click::{
     Arming, Geometry, MouseButton, MouseClick, NotReady, PageError, PointerInput, PressReport,
     Resolved, Scroll, SelectorFacts, StatesCheck, Tab, Verdict,
 };
+use crate::emulation::PageEmulation;
 use crate::events::{EventHub, Flushes};
 use crate::frame_selector::{self, FrameOwner};
 use crate::frames::{FrameContext, FrameScope, Frames, Host, local_tree};
@@ -199,6 +200,9 @@ pub(crate) struct PageSession {
     /// `Runtime.enable` and `Log.enable`, sent once a run listens to console messages or page
     /// errors (or reads their history) and kept for the run.
     runtime_enabled: OnceCell<()>,
+    /// What the page emulates for the run: its viewport and media, and its created context's
+    /// options (`emulation.rs`). Dropped with the session, as Chromium drops the overrides.
+    pub(crate) emulation: Arc<PageEmulation>,
 }
 
 /// One call's frame scope over the tab's shared input, navigation and lifetime.
@@ -511,10 +515,16 @@ impl PageSession {
             tasks.clone(),
         ));
         // An out-of-process frame's console is this tab's: it turns on when the frame's session
-        // is attached, if the run wants the tab's console by then.
+        // is attached, if the run wants the tab's console by then. Its emulation is the tab's too.
+        let emulation = Arc::new(PageEmulation::default());
+        let child_emulation = Arc::clone(&emulation);
         frames.on_child_host(Arc::new(move |host| {
             let events = child_events.clone();
-            Box::pin(async move { events.child_attached(&host).await })
+            let emulation = Arc::clone(&child_emulation);
+            Box::pin(async move {
+                events.child_attached(&host).await;
+                emulation.child_attached(&host).await;
+            })
         }));
         let (state_updates, state) = watch::channel(PageState::default());
         let (navigations, _) = broadcast::channel(4096);
@@ -537,6 +547,7 @@ impl PageSession {
             network_enabled: OnceCell::new(),
             events,
             runtime_enabled: OnceCell::new(),
+            emulation,
         }
     }
 

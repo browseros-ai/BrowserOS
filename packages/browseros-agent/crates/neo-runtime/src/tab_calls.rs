@@ -16,6 +16,7 @@ use tracing::debug;
 
 use crate::bridge;
 use crate::dispatch::encode_result;
+use crate::emulation::{self, Size};
 use crate::page::PageSession;
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::tabs::{self, PageEntry, Tabs};
@@ -55,6 +56,14 @@ pub(crate) async fn context(
             created.keep();
             Ok(Some(value))
         }
+        // Neo: the run's own context is the user's browser, which a run never closes; a context
+        // the run created closes (`browser_calls.rs`).
+        BrowserContextCall::Close(_) => Err(PlaywrightError::error(
+            "Neo does not close the run's own context: it is the user's browser",
+        )
+        .into()),
+        // Playwright: `server/dispatchers/browserContextDispatcher.ts` `BrowserContextDispatcher.pause`: `// Debugger will take care of this.`
+        BrowserContextCall::Pause(_) => Ok(None),
     }
 }
 
@@ -102,6 +111,24 @@ pub(crate) async fn page(
             return encode_result::<PageClearPageErrorsParams>(&PageClearPageErrorsResult {});
         }
         PageCall::Close(_) => close(tabs, entry, progress).await?,
+        PageCall::SetViewportSize(params) => {
+            let page = progress.race(tabs.session(entry)).await??;
+            let size = Size {
+                width: params.viewport_size.width,
+                height: params.viewport_size.height,
+            };
+            page.emulation
+                .set_viewport_size(&page, size, progress)
+                .await?;
+        }
+        PageCall::EmulateMedia(params) => {
+            let page = progress.race(tabs.session(entry)).await??;
+            page.emulation.emulate_media(&page, &params, progress).await?;
+        }
+        PageCall::RequestGC(_) => {
+            let page = progress.race(tabs.session(entry)).await??;
+            emulation::request_gc(&page, progress).await?;
+        }
         PageCall::RunBeforeUnload(_) => {
             // Playwright 26137face server/page.ts:852-861 and chromium/crPage.ts:264-270:
             // Page.close runs beforeunload; errors are logged and closure is not awaited.

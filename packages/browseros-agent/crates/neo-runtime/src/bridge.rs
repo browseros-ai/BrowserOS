@@ -38,6 +38,7 @@ use serde_json::{Value, json};
 use tokio::runtime::Handle;
 use tokio::task;
 
+use crate::browser_calls::{self, BROWSER_GUID};
 use crate::deadline::{Deadline, Stop};
 use crate::dispatch::Dispatcher;
 use crate::events::{self, CONTEXT_GUID};
@@ -167,9 +168,11 @@ fn subscribe(tabs: &Tabs, request: &str) -> Result<(), String> {
     let needs = events::needs(&guid, &event)
         .ok_or_else(|| format!("Neo does not produce {event:?} events on {guid:?}"))?;
     let pages = if guid == CONTEXT_GUID {
+        // The run's own context's pages: a created context's page is not one of them.
         tabs.attached()
             .into_iter()
             .map(|(entry, _)| entry)
+            .filter(|entry| entry.context.get().is_none())
             .collect()
     } else {
         let (entry, _) = tabs
@@ -311,6 +314,10 @@ enum GetterField {
     ParentFrame,
     ChildFrames,
     IsDetached,
+    /// On the browser: `version()`, as Playwright reports it.
+    Version,
+    /// On the browser: whether the run's CDP connection to it is up.
+    IsConnected,
 }
 
 #[derive(Deserialize)]
@@ -336,10 +343,25 @@ struct MatchRequest {
 }
 
 #[derive(Deserialize)]
+enum DevicesField {
+    #[serde(rename = "devices")]
+    Devices,
+}
+
+/// `playwright.devices`: Playwright's device descriptors, the same for every run.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DevicesRequest {
+    #[serde(rename = "field")]
+    _field: DevicesField,
+}
+
+#[derive(Deserialize)]
 #[serde(untagged)]
 enum GetRequest {
     Object(ObjectRequest),
     Match(MatchRequest),
+    Devices(DevicesRequest),
 }
 
 /// Why a getter threw. Each maps to the JS error the script sees.
@@ -376,10 +398,33 @@ impl Getters {
                     getters::matches_url(&request.url, &request.matcher).map(|value| json!(value))
                 });
             }
+            GetRequest::Devices(_) => {
+                return serde_json::from_str(browser_calls::DEVICE_DESCRIPTORS).map_err(|error| {
+                    GetError::Page(PlaywrightError::error(format!(
+                        "neo-runtime: the device descriptors are unreadable: {error}"
+                    )))
+                });
+            }
         };
         if request.guid == "context@default" && matches!(request.field, GetterField::Pages) {
             return self.wait(async {
                 serde_json::to_value(self.tabs.pages().await?)
+                    .map_err(|error| PlaywrightError::error(error.to_string()))
+            });
+        }
+        if request.guid == BROWSER_GUID {
+            return match request.field {
+                GetterField::Version => self.wait(browser_calls::version(&self.tabs)),
+                GetterField::IsConnected => Ok(json!(self.tabs.cdp().is_connected())),
+                _ => Err(GetError::BadRequest("not a browser getter".to_string())),
+            };
+        }
+        if let Some(context) = self.tabs.created().find(&request.guid) {
+            if !matches!(request.field, GetterField::Pages) {
+                return Err(GetError::BadRequest("not a context getter".to_string()));
+            }
+            return self.wait(async {
+                serde_json::to_value(browser_calls::context_pages(&self.tabs, &context).await?)
                     .map_err(|error| PlaywrightError::error(error.to_string()))
             });
         }
@@ -430,7 +475,11 @@ impl Getters {
             GetterField::Name
             | GetterField::ParentFrame
             | GetterField::ChildFrames
-            | GetterField::IsDetached => Err(GetError::BadRequest("not a page getter".to_string())),
+            | GetterField::IsDetached
+            | GetterField::Version
+            | GetterField::IsConnected => {
+                Err(GetError::BadRequest("not a page getter".to_string()))
+            }
         }
     }
 

@@ -48,12 +48,14 @@ mod fake_browser;
 
 mod aria_yaml;
 mod bridge;
+mod browser_calls;
 mod check;
 mod click;
 mod console;
 mod deadline;
 mod dialogs;
 mod dispatch;
+mod emulation;
 mod events;
 mod fill;
 mod forms;

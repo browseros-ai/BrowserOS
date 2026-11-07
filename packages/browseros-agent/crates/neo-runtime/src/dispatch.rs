@@ -39,7 +39,7 @@ use std::time::Duration;
 use futures_util::future;
 use neo_runtime_spec::injected::ReadableElementState;
 use neo_runtime_spec::serve::{
-    BrowserContextCall, DialogCall, FrameAriaSnapshotParams, FrameCall, FrameCheckParams,
+    BrowserCall, BrowserContextCall, DialogCall, FrameAriaSnapshotParams, FrameCall, FrameCheckParams,
     FrameCheckResult, FrameClickParams, FrameDblclickParams, FrameEvalOnSelectorAllParams,
     FrameFillParams, FrameFillResult, FrameGetAttributeParams, FrameGotoParams, FrameHoverParams,
     FrameInnerHTMLParams, FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult,
@@ -61,6 +61,7 @@ use tokio::time::Instant;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
+use crate::browser_calls::{self, BROWSER_GUID, CreatedContext};
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::dialogs;
@@ -233,6 +234,10 @@ struct Routed {
 #[derive(Clone)]
 enum ObjectKind {
     Context,
+    /// The run's `Browser`, `browser@default` (`browser_calls.rs`).
+    Browser,
+    /// A context the run created with `browser.newContext`.
+    CreatedContext(Arc<CreatedContext>),
     Page,
     Frame,
     /// A hop's `Request` or `Response`, behind `goto`'s answer.
@@ -244,6 +249,9 @@ enum ObjectKind {
 
 enum ObjectCall {
     Context(BrowserContextCall),
+    /// Boxed: `newContext`'s params are the largest of any call.
+    Browser(Box<BrowserCall>),
+    CreatedContext(Arc<CreatedContext>, BrowserContextCall),
     Page(PageCall),
     Frame(Route),
     Network(NetworkCall),
@@ -317,6 +325,10 @@ impl Dispatcher {
         let target = inner.tabs.resolve(&guid);
         let object = if guid == "context@default" {
             ObjectKind::Context
+        } else if guid == BROWSER_GUID {
+            ObjectKind::Browser
+        } else if let Some(context) = inner.tabs.created().find(&guid) {
+            ObjectKind::CreatedContext(context)
         } else if target.is_none() {
             ObjectKind::Unknown
         } else if guid.starts_with("frame@") {
@@ -407,6 +419,8 @@ impl Dispatcher {
         // sessions detach (`Dialogs::left_open`).
         self.0.tabs.events().close();
         let _answered = time::timeout_at(deadline, answer_left_open(&self.0.tabs)).await;
+        // The contexts the run created go with it, their pages too (`browser_calls.rs`).
+        let _disposed = time::timeout_at(deadline, browser_calls::dispose_all(&self.0.tabs)).await;
         let _created = time::timeout_at(deadline, self.0.tabs.finish_creations()).await;
         run.tasks.close();
         let _waited = time::timeout_at(deadline, run.tasks.wait()).await;
@@ -420,6 +434,10 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
     let decoded = match object {
         ObjectKind::Context => BrowserContextCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Context(call)))),
+        ObjectKind::Browser => BrowserCall::decode(method, params)
+            .map(|call| (call.meta(), Ok(ObjectCall::Browser(Box::new(call))))),
+        ObjectKind::CreatedContext(context) => BrowserContextCall::decode(method, params)
+            .map(|call| (call.meta(), Ok(ObjectCall::CreatedContext(context, call)))),
         ObjectKind::Page => {
             PageCall::decode(method, params).map(|call| (call.meta(), Ok(ObjectCall::Page(call))))
         }
@@ -629,6 +647,10 @@ async fn serve_call(
     }
     let result = match (route, target) {
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
+        (ObjectCall::Browser(call), _) => browser_calls::browser(&tabs, *call, &progress).await,
+        (ObjectCall::CreatedContext(context, call), _) => {
+            browser_calls::context(&tabs, &context, call, &progress).await
+        }
         (ObjectCall::Page(call), Some((page, _))) => {
             tab_calls::page(&tabs, &page, call, &progress).await
         }
@@ -1173,6 +1195,8 @@ mod tests {
         route.map(|call| match call {
             ObjectCall::Frame(route) => route,
             ObjectCall::Context(_)
+            | ObjectCall::Browser(_)
+            | ObjectCall::CreatedContext(..)
             | ObjectCall::Page(_)
             | ObjectCall::Network(_)
             | ObjectCall::Dialog(..) => {

@@ -13,6 +13,17 @@
 interfaces:
   BrowserContext:
     - newPage
+    # (platform) Closes a context `browser.newContext` created (neo-runtime `browser_calls.rs`);
+    # the run's own context refuses it.
+    - close
+    # (platform) `page.pause()`: Playwright's server handler does nothing itself; its debugger
+    # pauses the call only when enabled, which Neo's never is (no Inspector, no human).
+    - pause
+  # (platform) The BrowserOS the run is attached to, `browser@default`: contexts the run creates
+  # and its connected-browser `close` (`browser_calls.rs`). Its initializer is never sent.
+  Browser:
+    - newContext
+    - close
   # A BrowserContext initializer requires these three. Neo never sends one (a run receives its
   # context at start) and serves no command on them; listing them keeps the type constructible.
   APIRequestContext: []
@@ -22,6 +33,10 @@ interfaces:
     - close
     - runBeforeUnload
     - bringToFront
+    # (platform) Emulation and GC on the page's own session (neo-runtime `emulation.rs`).
+    - setViewportSize
+    - emulateMedia
+    - requestGC
     # The page's console and page-error history (`page.consoleMessages()`, `page.pageErrors()`).
     # A message's `args` are JSHandles, which are not a key here, so they always travel empty.
     - consoleMessages
