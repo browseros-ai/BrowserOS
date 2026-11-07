@@ -69,7 +69,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
 use crate::abort::{Aborts, Registration};
-use crate::bindings::{self, BindingRoute, Outcome};
+use crate::bindings::{self, Answering, BindingRoute, Outcome};
 use crate::capture::{
     self, Capture, ELEMENT_HANDLE_SCREENSHOT_META, ElementScreenshotParams, NEO_SCREENSHOT_META,
     NeoScreenshotParams,
@@ -266,13 +266,15 @@ struct Admission {
     share: Option<Admitted>,
     ending: Option<Ending<FrameCursor>>,
     resolving: Option<Resolving>,
+    answering: Option<Answering>,
 }
 
 impl Inner {
     /// Admits `route`: a share of the in-flight caps, or none for a call that ends calls in
     /// flight, with its claim. A navigation's release, a running locator handler's completion
-    /// (which frees the action waiting on it) and the context's close: the cap never refuses
-    /// them, or a full run could not let go.
+    /// (which frees the action waiting on it), a waiting binding call's answer (which frees the
+    /// page call waiting on it) and the context's close: the cap never refuses them, or a full
+    /// run could not let go.
     fn admit(
         &self,
         route: &ObjectCall,
@@ -284,8 +286,12 @@ impl Inner {
             let page = target?.0.attached_session()?;
             locator_handlers::begin_resolving(&page, uid)
         });
+        // A binding call's answer frees the page call waiting on it: one per waiting call.
+        let answering =
+            answered_binding(route).and_then(|guid| self.run.bindings.begin_answering(guid));
         let releases = ending.is_some()
             || resolving.is_some()
+            || answering.is_some()
             || matches!(route, ObjectCall::Context(BrowserContextCall::Close(_)));
         let share = if releases {
             None
@@ -296,6 +302,7 @@ impl Inner {
             share,
             ending,
             resolving,
+            answering,
         })
     }
 
@@ -606,6 +613,7 @@ impl Dispatcher {
                 share: admission.share,
                 ending: admission.ending,
                 resolving: admission.resolving,
+                answering: admission.answering,
                 abortable,
             },
         );
@@ -1305,6 +1313,8 @@ struct CallReply {
     /// A running locator handler's completion: its claim on that handler
     /// (`locator_handlers::begin_resolving`).
     resolving: Option<Resolving>,
+    /// A waiting binding call's answer: its claim on that call (`Bindings::begin_answering`).
+    answering: Option<Answering>,
     /// The call's place in the abort registry; `None` for an id that is not an integer.
     abortable: Option<Registration>,
 }
@@ -1765,6 +1775,7 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
         share,
         ending,
         resolving,
+        answering,
         abortable,
     } = target;
     // The outcome is decided: an abort from now on is ignored, as Playwright drops a call's
@@ -1782,7 +1793,7 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
     events.barrier().await;
     // Given back before the reply leaves, so a script that awaited this call can start another
     // at once. A call that never replies gives them back as its task ends.
-    drop((share, ending, resolving));
+    drop((share, ending, resolving, answering));
     // The script may have stopped waiting (the realm is gone); the record already holds the
     // outcome.
     let _sent = reply.send((text, events.seq()));
@@ -1951,6 +1962,16 @@ fn route_frame_element(method: &str) -> Option<Routed> {
 fn completed_handler(call: &ObjectCall) -> Option<i64> {
     match call {
         ObjectCall::Page(PageCall::ResolveLocatorHandlerNoReply(params)) => Some(params.uid),
+        _ => None,
+    }
+}
+
+/// The waiting binding call a `BindingCall.resolve` or `reject` answers.
+fn answered_binding(call: &ObjectCall) -> Option<&str> {
+    match call {
+        ObjectCall::Binding(
+            BindingRoute::Resolve { guid, .. } | BindingRoute::Reject { guid, .. },
+        ) => Some(guid),
         _ => None,
     }
 }
@@ -2143,6 +2164,7 @@ mod tests {
                 share: None,
                 ending: None,
                 resolving: None,
+                answering: None,
                 abortable: None,
             },
         );
@@ -3260,6 +3282,7 @@ mod tests {
                 share: Some(in_flight.admit(10).expect("under the caps")),
                 ending: None,
                 resolving: None,
+                answering: None,
                 abortable: None,
             },
         ));
@@ -3601,6 +3624,7 @@ mod review_abort_priority {
                 share: None,
                 ending: None,
                 resolving: None,
+                answering: None,
                 abortable: None,
             },
         );
