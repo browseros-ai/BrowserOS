@@ -62,6 +62,10 @@ interfaces:
     - webStorageSetItem
     - webStorageRemoveItem
     - webStorageClear
+  # A dedicated worker of a page (workers.rs), for its initializer: its `evaluateExpression` and
+  # `evaluateExpressionHandle` are routed by hand, as the frame and handle evaluations are
+  # (`evaluate.rs`), and run in the worker's own execution context (worker_world.rs).
+  Worker: []
   # A JavaScript dialog the run's `dialog` event handed out.
   Dialog:
     - accept

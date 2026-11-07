@@ -386,15 +386,7 @@ impl MainWorld {
         }
         let reply = match frame.host.send("Runtime.callFunctionOn", request).await {
             Ok(reply) => reply,
-            Err(CdpError::Protocol { message, .. }) => {
-                return Ok(
-                    if message.contains(CONTEXT_GONE) || message.contains(OBJECT_GONE) {
-                        Called::Stale
-                    } else {
-                        Called::Protocol(message)
-                    },
-                );
-            }
+            Err(CdpError::Protocol { message, .. }) => return Ok(stale_or_protocol(message)),
             Err(error) => {
                 return match frame.host.classify(&error) {
                     // A request timeout or a vanished OOPIF: the document is gone for this call.
@@ -526,7 +518,18 @@ async fn describe(frame: &FrameContext, object_id: &str) -> Result<i64, PageErro
 }
 
 /// Playwright: `server/chromium/crProtocolHelper.ts` `getExceptionMessage`: `return exceptionDetails.exception.description || String(exceptionDetails.exception.value);`
-fn exception_message(details: ExceptionDetails) -> String {
+/// Neo: what a call's protocol error means: the `UtilityScript`, its context or an argument's
+/// object was gone before the call ran (`Stale`), or Playwright's `rewriteError` decides
+/// (`Protocol`). `worker_world.rs` reads a worker's answers the same way.
+pub(crate) fn stale_or_protocol(message: String) -> Called {
+    if message.contains(CONTEXT_GONE) || message.contains(OBJECT_GONE) {
+        Called::Stale
+    } else {
+        Called::Protocol(message)
+    }
+}
+
+pub(crate) fn exception_message(details: ExceptionDetails) -> String {
     if let Some(exception) = details.exception {
         if let Some(description) = exception.description {
             return description;

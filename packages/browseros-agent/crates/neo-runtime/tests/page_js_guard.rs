@@ -59,6 +59,11 @@ const ALLOWED: &[(&str, &[&str])] = &[
         &["Runtime.callFunctionOn", "Page.createIsolatedWorld"],
     ),
     ("neo-runtime/src/main_world.rs", &["Runtime.callFunctionOn"]),
+    // Slice W: a dedicated worker's execution context, through its own built functions.
+    (
+        "neo-runtime/src/worker_world.rs",
+        &["Runtime.callFunctionOn"],
+    ),
     (
         INIT_SCRIPTS,
         &[
@@ -197,6 +202,33 @@ fn tests_that_comments_and_test_modules_are_not_code() {
         1,
         "code after a test module is still code"
     );
+}
+
+/// The worker row (slice W, DECIDED): `worker_world.rs` calls its own built functions in a
+/// worker's execution context, and never evaluates or names a world.
+#[test]
+fn tests_that_worker_world_rs_may_call_built_functions_in_a_worker_but_never_evaluate() {
+    const WORKER_WORLD: &str = "neo-runtime/src/worker_world.rs";
+    let call = "self.cdp.send(\"Runtime.callFunctionOn\", request, Some(&self.session))";
+    assert!(check(WORKER_WORLD, call).is_empty());
+    for refused in [
+        "self.cdp.send(\"Runtime.evaluate\", request, Some(&self.session))",
+        "self.cdp.send(\"Page.createIsolatedWorld\", params, None)",
+        "self.cdp.send(\"Runtime.compileScript\", params, None)",
+    ] {
+        assert!(!check(WORKER_WORLD, refused).is_empty(), "{refused}");
+    }
+    let built = "const UTILITY: &str = include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../neo-runtime-injected/dist/utility.js\"));\n";
+    let ok = format!(
+        "{built}fn f() {{ json!({{\"functionDeclaration\": UTILITY, \"executionContextId\": 1}}); }}\n"
+    );
+    assert!(check(WORKER_WORLD, &ok).is_empty());
+    let literal = format!(
+        "{built}fn f() {{ json!({{\"functionDeclaration\": \"() => self.secret\", \"executionContextId\": 1}}); }}\n"
+    );
+    assert!(!check(WORKER_WORLD, &literal).is_empty());
+    // The row is this file's alone: its sends stay refused anywhere else.
+    assert!(!check("neo-runtime/src/workers.rs", call).is_empty());
 }
 
 #[test]
