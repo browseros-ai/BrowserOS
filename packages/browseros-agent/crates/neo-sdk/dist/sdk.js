@@ -655,6 +655,9 @@ class Connection {
   async sendEval(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
+  async sendInit(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout) ?? {};
+  }
   async sendHandle(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout) ?? {};
   }
@@ -1517,6 +1520,42 @@ function headersObjectToArray(headers) {
   return result;
 }
 
+// src/init-script.ts
+function evaluationScript(apiName, fun, arg) {
+  if (typeof fun === "function") {
+    const source = fun.toString();
+    const argString = Object.is(arg, undefined) ? "undefined" : JSON.stringify(arg);
+    return `(${source})(${argString})`;
+  }
+  if (arg !== undefined)
+    throw new Error("Cannot evaluate a string with arguments");
+  if (typeof fun === "string")
+    return fun;
+  if (fun.content !== undefined)
+    return fun.content;
+  if (fun.path !== undefined)
+    throw new Error(`${apiName}: path: this run has no artifact directory, so Neo cannot read "${fun.path}"`);
+  throw new Error("Either path or content property must be present");
+}
+
+class Disposable {
+  #connection;
+  #guid;
+  constructor(connection, guid) {
+    this.#connection = connection;
+    this.#guid = guid;
+  }
+  async dispose() {
+    try {
+      await this.#connection.sendInit("disposable.dispose", this.#guid, "dispose", {}, 0);
+    } catch (error) {
+      if (isTargetClosedError(error))
+        return;
+      throw error;
+    }
+  }
+}
+
 // src/network.ts
 class RawHeaders {
   #headersArray;
@@ -2177,6 +2216,9 @@ class ElementHandle extends JSHandle {
     const params = evaluateParams("elementHandle.$$eval", pageFunction, arg, undefined);
     const result = await this._connection.sendHandle("elementHandle.$$eval", this._guid, "evalOnSelectorAll", { selector, ...params }, 0);
     return parseResult(result.value);
+  }
+  async dispatchEvent(type, eventInit = {}) {
+    await this._connection.sendHandle("elementHandle.dispatchEvent", this._guid, "dispatchEvent", { type, eventInit: serializeArgument(eventInit) }, 0);
   }
 }
 function elementsFrom(connection, created) {
@@ -5228,6 +5270,10 @@ function formEncode(text2) {
 }
 
 // src/frame.ts
+var TAG_KEYS = {
+  script: ["url", "content", "type"],
+  style: ["url", "content"]
+};
 function nodeTimerDelay(timeout) {
   if (typeof timeout !== "number")
     return timeout;
@@ -5548,6 +5594,29 @@ class Frame {
       arg: serializeArgument(undefined)
     }, 0);
     return parseResult(result?.value);
+  }
+  async addScriptTag(options = {}) {
+    return await this._addTag("frame.addScriptTag", "addScriptTag", options);
+  }
+  async addStyleTag(options = {}) {
+    return await this._addTag("frame.addStyleTag", "addStyleTag", options);
+  }
+  async _addTag(apiName, method, options) {
+    if (options.path)
+      throw new Error(`${apiName}: path: this run has no artifact directory, so Neo cannot read "${options.path}"`);
+    let params;
+    try {
+      params = pickParams(method === "addScriptTag" ? TAG_KEYS.script : TAG_KEYS.style, options);
+    } catch (error) {
+      if (error instanceof Error)
+        error.message = `${apiName}: ${error.message}`;
+      throw error;
+    }
+    const result = await this._connection.sendEval(apiName, this._guid, method, params, 0);
+    const handle = ElementHandle.fromNullable(this._connection, result.element);
+    if (!handle)
+      throw new Error(`neo-sdk: Frame.${method} contract error: no element`);
+    return handle;
   }
   async _allInnerTexts(apiName, selector) {
     const result = await this._connection.sendEval(apiName, this._guid, "evalOnSelectorAll", {
@@ -6579,6 +6648,23 @@ class Page extends ChannelOwner {
   async goto(url, options = {}) {
     return await this.#mainFrame._goto("page.goto", url, options);
   }
+  async addInitScript(script, arg, options) {
+    assertEvaluateOptions(options);
+    const signal = options?.signal;
+    if (signal !== undefined && signal !== null)
+      throw new Error(`page.addInitScript: Neo does not support signal yet`);
+    if (options?.exposeFunctions)
+      throw new Error(`page.addInitScript: Neo does not support exposeFunctions yet`);
+    const source = evaluationScript("page.addInitScript", script, arg);
+    const result = await this.#connection.sendInit("page.addInitScript", this.#guid, "addInitScript", { source }, 0);
+    return new Disposable(this.#connection, result.disposable.guid);
+  }
+  async addScriptTag(options = {}) {
+    return await this.mainFrame()._addTag("page.addScriptTag", "addScriptTag", options);
+  }
+  async addStyleTag(options = {}) {
+    return await this.mainFrame()._addTag("page.addStyleTag", "addStyleTag", options);
+  }
   async $(selector, options) {
     return await this.mainFrame()._querySelector("page.$", selector, options);
   }
@@ -7012,6 +7098,17 @@ class BrowserContext extends ChannelOwner {
     if (this.#closingStatus === "closed")
       return [];
     return get(this.#guid, "pages").map((created) => this.#pages.get(created.guid) ?? this.#add(created)).filter((page) => !page._isClosedLocally());
+  }
+  async addInitScript(script, arg, options) {
+    assertEvaluateOptions(options);
+    const signal = options?.signal;
+    if (signal !== undefined && signal !== null)
+      throw new Error(`browserContext.addInitScript: Neo does not support signal yet`);
+    if (options?.exposeFunctions)
+      throw new Error(`browserContext.addInitScript: Neo does not support exposeFunctions yet`);
+    const source = evaluationScript("browserContext.addInitScript", script, arg);
+    const result = await this.#connection.sendInit("browserContext.addInitScript", this.#guid, "addInitScript", { source }, 0);
+    return new Disposable(this.#connection, result.disposable.guid);
   }
   async newPage() {
     const { page } = await this.#connection.sendContext("browserContext.newPage", this.#guid, "newPage", {}, 0);
