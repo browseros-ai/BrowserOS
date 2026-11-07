@@ -77,7 +77,10 @@ mod runtime;
 mod url_match;
 
 pub use artifacts::{AbsolutePaths, RunArtifact};
-pub use host::{EpochMs, Host, HostOptions, RunPass, SessionKey, TabId};
+pub use host::{
+    CallArtifacts, EpochMs, Host, HostOptions, HostStore, MemoryStore, RunPass, SessionKey,
+    StoreError, TabId,
+};
 pub use run::{
     CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, PageId, RunBinary, RunEnd,
     RunError, RunId, RunOutcome, RunPage, RunRequest, RunStatus,

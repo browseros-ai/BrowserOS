@@ -324,6 +324,8 @@ impl Drop for Grants {
 
 #[cfg(test)]
 mod tests {
+    use crate::host::MemoryStore;
+    use std::sync::Arc;
     use std::time::Duration;
 
     use tokio_util::sync::CancellationToken;
@@ -338,7 +340,7 @@ mod tests {
         let browser = FakeBrowser::start(Replies::default()).await;
         assert!(browser.runtime().await.host().is_none());
         let options = RuntimeOptions {
-            host: Some(HostOptions::new(9222, 1)),
+            host: Some(HostOptions::new(9222, 1, Arc::new(MemoryStore::default()))),
         };
         let hosted = Runtime::connect_with(browser.cdp().await, options)
             .await

@@ -1554,6 +1554,7 @@ mod tests {
 
 #[cfg(test)]
 mod host_tests {
+    use crate::host::MemoryStore;
     use std::time::SystemTime;
 
     use super::*;
@@ -1594,7 +1595,7 @@ mod host_tests {
         let browser = FakeBrowser::start(Replies::default()).await;
         let cdp = browser.cdp().await;
         for keep in [false, true] {
-            let host = Host::new(HostOptions::new(9222, 1));
+            let host = Host::new(HostOptions::new(9222, 1, Arc::new(MemoryStore::default())));
             let session = SessionKey::new("s");
             let run = RunId::mint();
             let emitter = RunEmitter::new(Some(&host), Some(&session), &run);

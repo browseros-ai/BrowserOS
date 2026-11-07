@@ -68,9 +68,11 @@ mod presence;
     )
 )]
 mod sessions;
+mod store;
 mod tap;
 mod view;
 
+use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -79,13 +81,14 @@ use crate::host::tap::Tap;
 pub(crate) use emit::RunEmitter;
 pub(crate) use events::HostEvent;
 pub use ids::{EpochMs, SessionKey, TabId};
+pub use store::{CallArtifacts, HostStore, MemoryStore, StoreError};
 
 /// How long a session stays live after its last run unless the server says otherwise:
 /// claw-server's `DEFAULT_SESSION_IDLE_MS` (`apps/claw-server/src/config.rs:19`, origin/main).
 const DEFAULT_IDLE: Duration = Duration::from_mins(30);
 
 /// What a server sets to give its `Runtime` a host side (`RuntimeOptions::host`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct HostOptions {
     /// The browser's CDP port. The host side opens its own connection to it, never sharing the
     /// runs' client, so capture frames never queue behind run commands.
@@ -95,17 +98,30 @@ pub struct HostOptions {
     /// The most runs the server admits at once. It sizes the tap's lifecycle band, so run and
     /// pass events are refused only when more runs than this are in flight.
     pub max_runs: usize,
+    /// The trace store that persists artifacts and acknowledges completion.
+    pub store: Arc<dyn HostStore>,
+}
+
+impl fmt::Debug for HostOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HostOptions")
+            .field("cdp_port", &self.cdp_port)
+            .field("idle", &self.idle)
+            .field("max_runs", &self.max_runs)
+            .finish_non_exhaustive()
+    }
 }
 
 impl HostOptions {
     /// Options for a browser on `cdp_port` and a server admitting `max_runs` runs at once, with
     /// sessions idling out after 30 minutes.
     #[must_use]
-    pub fn new(cdp_port: u16, max_runs: usize) -> Self {
+    pub fn new(cdp_port: u16, max_runs: usize, store: Arc<dyn HostStore>) -> Self {
         Self {
             cdp_port,
             idle: DEFAULT_IDLE,
             max_runs,
+            store,
         }
     }
 }
@@ -201,7 +217,7 @@ mod tests {
 
     #[test]
     fn a_dropped_pass_releases_its_session_in_the_tap() {
-        let host = Host::new(HostOptions::new(9222, 1));
+        let host = Host::new(HostOptions::new(9222, 1, Arc::new(MemoryStore::default())));
         let label = SessionKey::new("ended-label");
         let pass = host.issue_pass(SessionKey::new("successor"), Some(label.clone()));
         assert_eq!(pass.session(), &SessionKey::new("successor"));
@@ -222,7 +238,7 @@ mod tests {
 
     #[test]
     fn options_default_to_claw_servers_idle() {
-        let options = HostOptions::new(9222, 4);
+        let options = HostOptions::new(9222, 4, Arc::new(MemoryStore::default()));
         assert_eq!(options.idle, Duration::from_mins(30));
         assert_eq!((options.cdp_port, options.max_runs), (9222, 4));
     }

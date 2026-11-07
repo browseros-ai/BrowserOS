@@ -240,6 +240,7 @@ fn stamp(time: Option<EpochMs>) -> EpochMs {
 
 #[cfg(test)]
 mod tests {
+    use crate::host::MemoryStore;
     use std::time::{Duration, Instant, UNIX_EPOCH};
 
     use serde_json::{Value, json};
@@ -270,7 +271,7 @@ mod tests {
 
     async fn hosted(browser: &FakeBrowser) -> Runtime {
         let options = RuntimeOptions {
-            host: Some(HostOptions::new(9222, 1)),
+            host: Some(HostOptions::new(9222, 1, Arc::new(MemoryStore::default()))),
         };
         Runtime::connect_with(browser.cdp().await, options)
             .await
@@ -456,7 +457,7 @@ mod tests {
 
     /// A trace whose calls report to a fresh host, as a hosted run's trace does.
     fn traced() -> (Host, Trace, RunEmitter) {
-        let host = Host::new(HostOptions::new(9222, 1));
+        let host = Host::new(HostOptions::new(9222, 1, Arc::new(MemoryStore::default())));
         let emitter = RunEmitter::new(Some(&host), Some(&SessionKey::new(SESSION)), &RunId::mint());
         let trace = Trace::new(emitter.clone());
         (host, trace, emitter)
@@ -894,7 +895,7 @@ mod tests {
     /// call ending or starting later adds nothing, so a pass released next lands last.
     #[test]
     fn nothing_follows_the_end_of_a_run() {
-        let host = Host::new(HostOptions::new(9222, 1));
+        let host = Host::new(HostOptions::new(9222, 1, Arc::new(MemoryStore::default())));
         let run = RunId::mint();
         let emitter = RunEmitter::new(Some(&host), Some(&SessionKey::new(SESSION)), &run);
         let ending = emitter.run_started(&PageId::new(PAGE.to_string()));
