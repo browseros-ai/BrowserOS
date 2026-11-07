@@ -89,9 +89,10 @@ export function buildNeoRun() {
 
 /**
  * Runs the script file at `scriptPath` through Neo against `targetId`. `connected` settles once
- * neo_run has a CDP connection; `outcome` is the `RunOutcome` it prints.
+ * neo_run has a CDP connection; `outcome` is the `RunOutcome` it prints. `extraArgs` go before
+ * the script, such as `['--artifacts', dir]`.
  */
-export function startNeo(neoRun, port, targetId, scriptPath) {
+export function startNeo(neoRun, port, targetId, scriptPath, extraArgs = []) {
   const child = spawn(neoRun, [
     '--cdp-port',
     String(port),
@@ -99,6 +100,7 @@ export function startNeo(neoRun, port, targetId, scriptPath) {
     targetId,
     '--timeout-ms',
     '60000',
+    ...extraArgs,
     scriptPath,
   ])
   let stdout = ''
@@ -296,12 +298,14 @@ export async function serveFixture(cleanups, { pages = {}, slowMs = 0 } = {}) {
  * Launches a headless BrowserOS neo on a throwaway profile, leading a process group of its own.
  * Every helper it starts (GPU, utility, renderers) joins that group (`ps -o pid,pgid` on
  * 155.0.8318.26), so one signal to the group reaches them all. Its cleanup is `closeBrowser`.
+ * `extraArgs` are more switches, such as `--force-device-scale-factor=2`.
  */
-export async function launchBrowser(cleanups, binary) {
+export async function launchBrowser(cleanups, binary, extraArgs = []) {
   const profile = mkdtempSync(join(tmpdir(), 'neo-parity-'))
   const child = spawn(
     binary,
     [
+      ...extraArgs,
       '--headless=new',
       // Otherwise the browser starts a browseros-claw-server sidecar that outlives it.
       '--disable-browseros-server',
