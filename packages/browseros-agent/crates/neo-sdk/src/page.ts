@@ -178,7 +178,13 @@ export class Page extends ChannelOwner {
     return this.#lastUrl
   }
 
-  /** Makes this the active tab of its window. */
+  /**
+   * Makes this the active tab of its window.
+   *
+   * Deviation: `server/chromium/crPage.ts` `CRPage.bringToFront`: `await this._mainFrameSession._client.send('Page.bringToFront');`
+   * Playwright sends `Page.bringToFront` alone. Neo also activates the tab in BrowserOS's tab
+   * strip when it is not the active one, which `Page.bringToFront` leaves as it was.
+   */
   async bringToFront(): Promise<void> {
     await this.#connection.sendPage(
       'page.bringToFront',

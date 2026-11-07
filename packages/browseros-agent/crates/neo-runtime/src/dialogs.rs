@@ -183,9 +183,11 @@ impl Dialogs {
         let Ok(mut state) = self.0.lock() else {
             return false;
         };
-        let Some(open) = state.open.clone().filter(|open| {
-            open.emitted && open.record.initializer.r#type == "beforeunload"
-        }) else {
+        let Some(open) = state
+            .open
+            .clone()
+            .filter(|open| open.emitted && open.record.initializer.r#type == "beforeunload")
+        else {
             return false;
         };
         state.handled.insert(open.index)

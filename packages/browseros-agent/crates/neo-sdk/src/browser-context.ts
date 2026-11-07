@@ -257,8 +257,15 @@ export class BrowserContext extends ChannelOwner {
     })
   }
 
-  /** Every open tab of the context, in the order Rust first saw them, the run page first; a
-   * page seen before keeps its object. A live read, like every Neo getter. */
+  /**
+   * Every open tab of the context, in the order Rust first saw them, the run page first; a
+   * page seen before keeps its object. A live read, like every Neo getter, so it can list a new
+   * tab before that tab's `page` event has run; after `close()`, nothing.
+   *
+   * Deviation: `client/browserContext.ts` `BrowserContext.pages`: `return [...this._pages];`
+   * Playwright lists the pages its client was told of, in that order. Neo lists the context's
+   * tabs as the browser reports them, the run page first.
+   */
   pages(): Page[] {
     if (this.#closingStatus === 'closed') return []
     return get(this.#guid, 'pages')
@@ -266,9 +273,15 @@ export class BrowserContext extends ChannelOwner {
       .filter((page) => !page._isClosedLocally())
   }
 
-  /** Opens a tab on `about:blank` and resolves with its `Page` once the tab answers that URL.
-   * Neo opens it in the background, by design: the active tab stays active until a script
-   * calls `bringToFront`. */
+  /**
+   * Opens a tab on `about:blank` and resolves with its `Page` once the tab answers that URL; a
+   * `page` listener has run for it by then.
+   *
+   * Deviation: `server/chromium/crBrowser.ts` `CRBrowserContext.doCreateNewPage`: `const { targetId } = await this._browser._session.send('Target.createTarget', { url: 'about:blank', browserContextId: this._browserContextId });`
+   * Playwright's new page takes the window's focus. Neo opens it in the background of the run
+   * page's window, by design: the user's active tab stays active until a script calls
+   * `bringToFront`.
+   */
   async newPage(): Promise<Page> {
     const { page } = await this.#connection.sendContext(
       'browserContext.newPage',

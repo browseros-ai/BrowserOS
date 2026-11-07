@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (26)
+## Deviations (29)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -25,10 +25,13 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/frame_events.rs | (file) | `server/chromium/crPage.ts` `FrameSession._initialize` | Playwright attaches every out-of-process frame as it starts, paused until attached. Neo attaches one when the run first reaches into it (a frame read, a locator in it), so that frame's own commits before then are not reported; its attach and removal, which the tab's session reports, always are. |
 | neo-runtime/src/reads.rs | `CHILD_AI_SNAPSHOT_UNSERVED` | `server/frames.ts` `Frame.ariaSnapshotJSON` | Child-frame scoped AI refs cannot be main-frame paths; use the page snapshot until frame-id-prefixed refs are served. |
 | neo-runtime/src/realm.rs | `RACE_UNCAUGHT` | `client/eventEmitter.ts` `EventEmitter._handleListenerError` | A listener's throw, or its rejection with no `error` listener, is an uncaught exception in Node, which exits. QuickJS has no such exit, so neo-sdk reports the first one on its `uncaught` promise, and the run ends with that error at once instead of running on. |
+| neo-sdk/src/browser-context.ts | `BrowserContext.newPage` | `server/chromium/crBrowser.ts` `CRBrowserContext.doCreateNewPage` | Playwright's new page takes the window's focus. Neo opens it in the background of the run page's window, by design: the user's active tab stays active until a script calls `bringToFront`. |
+| neo-sdk/src/browser-context.ts | `BrowserContext.pages` | `client/browserContext.ts` `BrowserContext.pages` | Playwright lists the pages its client was told of, in that order. Neo lists the context's tabs as the browser reports them, the run page first. |
 | neo-sdk/src/console-message.ts | (file) | `client/consoleMessage.ts` `ConsoleMessage.args` | Neo has no `JSHandle` for a console argument yet, so a message has no `args()`; a script that calls it gets a TypeError rather than a list of stand-ins. |
 | neo-sdk/src/events.ts | `ChannelOwner.removeAllListeners` | `client/channelOwner.ts` `ChannelOwner.removeListener` | Playwright's removeAllListeners leaves its server subscriptions on; Neo turns off each one left without listeners, so Rust stops producing what nobody hears. |
 | neo-sdk/src/events.ts | `EventEmitter._addListener` | `client/eventEmitter.ts` `EventEmitter._addListener` | Neo runs are never Playwright's own tests, so the warning always goes to the run log. |
 | neo-sdk/src/events.ts | `EventEmitter._callHandler` | `client/eventEmitter.ts` `EventEmitter._callHandler` | There the rethrow is an unhandled rejection, and Node exits; QuickJS ignores one, so Neo hands it to the run, which ends with it. |
+| neo-sdk/src/page.ts | `Page.bringToFront` | `server/chromium/crPage.ts` `CRPage.bringToFront` | Playwright sends `Page.bringToFront` alone. Neo also activates the tab in BrowserOS's tab strip when it is not the active one, which `Page.bringToFront` leaves as it was. |
 | neo-sdk/src/page.ts | `Page.consoleMessages` | `server/page.ts` `Page.addConsoleMessage` | Playwright's server keeps a page's messages and errors from the page's first moment. Neo keeps them from the run's first look (a listener, or a read like this one), starting with what the browser kept of the current document; the browser keeps nothing of a document the page left before then, so `'all'` does not reach back past it. |
 | neo-sdk/src/page.ts | `Page.opener` | `client/page.ts` `Page.opener` | Playwright's page keeps the opener its server named when it reported the page. Neo reads the tab's opener when asked, so the run page and a `pages()` page name theirs too. |
 | neo-sdk/src/page.ts | `Page` | `client/page.ts` `Page.constructor` | Playwright's page holds a `close` and a `crash` listener of its own from its first moment, which `eventNames()` and `listenerCount` report; Neo's holds none, so a page nobody listens to costs the run nothing. |

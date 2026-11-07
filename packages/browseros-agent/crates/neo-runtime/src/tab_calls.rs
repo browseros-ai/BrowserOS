@@ -71,10 +71,7 @@ async fn close_context(tabs: &Tabs, progress: &Progress) -> Result<(), CallError
     for (_, session) in tabs.attached() {
         if session.events.dialogs.take_open_beforeunload() {
             let dismissed = progress
-                .race(session.send(
-                    "Page.handleJavaScriptDialog",
-                    json!({ "accept": false }),
-                ))
+                .race(session.send("Page.handleJavaScriptDialog", json!({ "accept": false })))
                 .await?;
             if let Err(error) = dismissed {
                 debug!(%error, "dismissing a beforeunload dialog at the context's close failed");

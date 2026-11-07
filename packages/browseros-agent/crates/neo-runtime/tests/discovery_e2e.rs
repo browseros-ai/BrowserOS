@@ -262,3 +262,74 @@ return 'done'",
     );
     tab.close().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_closing_the_context_lets_go_at_once_and_leaves_every_tab_open() {
+    let Some(tab) = open().await else {
+        return;
+    };
+    let runtime = Runtime::connect(tab.cdp.clone())
+        .await
+        .unwrap_or_else(|error| panic!("Runtime::connect: {error}"));
+    let mut events = tab.cdp.events();
+    let running = {
+        let runtime = runtime.clone();
+        let page = tab.target_id.clone();
+        tokio::spawn(async move {
+            run(
+                &runtime,
+                &page,
+                r"context.on('page', () => {})
+const other = await context.newPage()
+await context.close({ reason: 'done here' })
+const after = { closed: [context.isClosed(), page.isClosed(), other.isClosed()], pages: context.pages().length }
+await new Promise(resolve => setTimeout(resolve, 4000))
+return after",
+            )
+            .await
+        })
+    };
+    discovery_turned_on(&mut events).await;
+    // Discovery ends with the close, while the script still runs.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut off = false;
+    while !off && Instant::now() < deadline {
+        let mut probe = tab.cdp.events();
+        let opened = new_tab(&tab).await;
+        off = !reports_created(&mut probe, &opened, Duration::from_millis(300)).await;
+    }
+    assert!(off, "the context's close turned discovery off");
+    assert!(!running.is_finished(), "before the run ended");
+    let outcome = time::timeout(Duration::from_secs(20), running)
+        .await
+        .unwrap_or_else(|_| panic!("the run ended"))
+        .unwrap_or_else(|error| panic!("run task: {error}"));
+    assert_eq!(
+        value(&outcome),
+        &json!({ "closed": [true, true, true], "pages": 0 })
+    );
+    assert!(
+        outcome.pages.iter().all(|page| !page.closed),
+        "the run closed no tab: {:#?}",
+        outcome.pages
+    );
+    let targets = tab
+        .cdp
+        .send("Target.getTargets", json!({}), None)
+        .await
+        .unwrap_or_else(|error| panic!("Target.getTargets: {error}"));
+    for page in &outcome.pages {
+        assert!(
+            targets["targetInfos"]
+                .as_array()
+                .unwrap_or_else(|| panic!("Target.getTargets answered {targets}"))
+                .iter()
+                .any(|info| info["targetId"] == page.id.as_str()),
+            "tab {} is still open",
+            page.id
+        );
+    }
+    let next = run(&runtime, &tab.target_id, "return await page.title()").await;
+    assert_eq!(value(&next), &json!(""), "the next run uses the same tab");
+    tab.close().await;
+}
