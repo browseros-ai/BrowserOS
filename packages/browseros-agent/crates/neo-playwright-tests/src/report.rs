@@ -1,4 +1,4 @@
-//! Classifies raw outcomes and ranks distinct blocked cases. No matching failures count as pass.
+//! Neo: Classifies raw outcomes and ranks distinct blocked cases. No matching failures count as pass.
 
 use std::char;
 use std::collections::{BTreeMap, BTreeSet};

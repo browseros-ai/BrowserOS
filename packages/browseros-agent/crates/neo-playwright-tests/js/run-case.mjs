@@ -1,4 +1,4 @@
-/** Owns whole-case cancellation, both sequential engine phases, and their private children. */
+/** Neo: Owns whole-case cancellation, both sequential engine phases, and their private children. */
 import { execFileSync, spawn } from 'node:child_process'
 import { randomInt, randomUUID } from 'node:crypto'
 import fs from 'node:fs'

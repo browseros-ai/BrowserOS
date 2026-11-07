@@ -1,4 +1,4 @@
-//! Each original upstream case is one Cargo trial. The opt-in suite records expected Neo gaps.
+//! Neo: Each original upstream case is one Cargo trial. The opt-in suite records expected Neo gaps.
 
 use std::env;
 use std::fs;
@@ -13,7 +13,9 @@ use neo_playwright_tests::report;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 
+/// Neo: Cargo supplies the harness source location for collection.
 const CRATE: &str = env!("CARGO_MANIFEST_DIR");
+/// Neo: Cargo supplies the native worker built from this exact checkout.
 const WORKER: &str = env!("CARGO_BIN_EXE_neo-playwright-tests-worker");
 
 #[expect(

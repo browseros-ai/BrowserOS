@@ -1,4 +1,4 @@
-//! Policy regressions that would turn missing coverage or ignored return differences green.
+//! Neo: Policy regressions that would turn missing coverage or ignored return differences green.
 use std::slice;
 
 use neo_playwright_tests::model::{Pair, ResultRecord, Verdict};

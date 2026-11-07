@@ -1,4 +1,4 @@
-/** Host-side views keep native object identity and log results without emulating browser APIs. */
+/** Neo: Host-side views keep native object identity and log results without emulating browser APIs. */
 
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'

@@ -1,4 +1,4 @@
-/** Offline provenance regression tests use a tiny real git archive, never the shared build. */
+/** Neo: Offline provenance regression tests use a tiny real git archive, never the shared build. */
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'

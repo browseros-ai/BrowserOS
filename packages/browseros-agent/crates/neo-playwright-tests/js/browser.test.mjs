@@ -1,4 +1,4 @@
-/** Offline transport checks and an opt-in owned-browser lifecycle gate. */
+/** Neo: Offline transport checks and an opt-in owned-browser lifecycle gate. */
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'

@@ -1,4 +1,4 @@
-/** Physical fixture overlay keeps upstream spec modules and their lexical closures intact. */
+/** Neo: Physical fixture overlay keeps upstream spec modules and their lexical closures intact. */
 import fs from 'node:fs'
 import path from 'node:path'
 import { corpus, crate, sha256, source, verifySource } from './prepare.mjs'

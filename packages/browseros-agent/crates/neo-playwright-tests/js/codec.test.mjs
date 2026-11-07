@@ -1,4 +1,4 @@
-/** Wire values must preserve distinctions JavaScript and UTF-8 JSON normally erase. */
+/** Neo: Wire values must preserve distinctions JavaScript and UTF-8 JSON normally erase. */
 
 import assert from 'node:assert/strict'
 import test from 'node:test'

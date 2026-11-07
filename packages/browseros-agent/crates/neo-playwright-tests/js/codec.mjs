@@ -1,4 +1,4 @@
-/** Lossless values for the private host/QuickJS transport. Strings never pass through UTF-8. */
+/** Neo: Lossless values for the private host/QuickJS transport. Strings never pass through UTF-8. */
 export function codecFactory({ identify, resolve }) {
   class CodecError extends Error {
     name = 'HarnessCodecError'

@@ -1,4 +1,4 @@
-/** Offline membrane checks use genuine pinned PW client classes and wire-only I/O doubles.
+/** Neo: Offline membrane checks use genuine pinned PW client classes and wire-only I/O doubles.
  * They verify evidence production and transport, never establish browser compatibility. */
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
