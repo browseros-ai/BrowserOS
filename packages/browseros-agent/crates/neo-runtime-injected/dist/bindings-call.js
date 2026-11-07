@@ -32,7 +32,7 @@ function endRun(controller, { names, message }, global) {
   const bindings = controller._bindings;
   if (typeof bindings?.get !== "function")
     throw new Error("neo-runtime-injected: BindingsController has no _bindings");
-  for (const name of new Set([...names, ...bindings.keys()])) {
+  for (const name of new Set(names)) {
     for (const waiting of bindings.get(name)?.callbacks.values() ?? [])
       waiting.reject(new Error(message));
     controller.removeBinding(name);

@@ -223,6 +223,15 @@ pub(crate) enum MainFunction {
     JsonValue,
 }
 
+/// The execution context a pinned call runs in ([`MainWorld::call_in`]): its system-unique id
+/// when Chromium reported one, which a context of another process never reuses (a frame that
+/// changed process may number its new contexts as its old ones), else its numeric id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ContextPin {
+    pub(crate) id: i64,
+    pub(crate) unique: Option<String>,
+}
+
 /// How a main-world call answered.
 #[derive(Debug)]
 pub(crate) enum Called {
@@ -419,7 +428,7 @@ impl MainWorld {
         &self,
         frame: &FrameContext,
         installed: &Installed,
-        context: Option<i64>,
+        context: Option<&ContextPin>,
         function: MainFunction,
         arguments: Vec<Value>,
         return_by_value: bool,
@@ -539,7 +548,7 @@ impl MainWorld {
 /// id, always the first argument): on that object, or in the execution context `context`.
 fn call_request(
     utility: &str,
-    context: Option<i64>,
+    context: Option<&ContextPin>,
     function: MainFunction,
     arguments: Vec<Value>,
     return_by_value: bool,
@@ -554,7 +563,11 @@ fn call_request(
         MainFunction::JsonValue => json!({ "functionDeclaration": JSON_VALUE }),
     };
     match context {
-        Some(context) => request["executionContextId"] = json!(context),
+        Some(ContextPin {
+            unique: Some(unique),
+            ..
+        }) => request["uniqueContextId"] = json!(unique),
+        Some(pin) => request["executionContextId"] = json!(pin.id),
         None => request["objectId"] = json!(utility),
     }
     request["arguments"] = json!(all);
@@ -652,9 +665,13 @@ mod tests {
 
     #[test]
     fn a_call_pinned_to_a_context_names_it_and_passes_the_utility_script() {
+        let numbered = ContextPin {
+            id: 7,
+            unique: None,
+        };
         let pinned = call_request(
             "utility-1",
-            Some(7),
+            Some(&numbered),
             MainFunction::Evaluate,
             vec![json!({ "value": 1 })],
             true,
@@ -670,6 +687,21 @@ mod tests {
             json!([{ "objectId": "utility-1" }, { "value": 1 }]),
             "the UtilityScript argument ties the call to its document"
         );
+        // A context of another process may reuse 7: its unique id names this one alone.
+        let unique = ContextPin {
+            id: 7,
+            unique: Some("-123.456".to_string()),
+        };
+        let pinned = call_request(
+            "utility-1",
+            Some(&unique),
+            MainFunction::Evaluate,
+            Vec::new(),
+            true,
+            None,
+        );
+        assert_eq!(pinned["uniqueContextId"], json!("-123.456"));
+        assert!(pinned.get("executionContextId").is_none());
         let unpinned = call_request(
             "utility-1",
             None,

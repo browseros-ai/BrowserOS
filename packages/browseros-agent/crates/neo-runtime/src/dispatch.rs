@@ -260,8 +260,9 @@ struct Admission {
 impl Inner {
     /// Admits `route`: a share of the in-flight caps, or none for a call that ends calls in
     /// flight, with its claim. A navigation's release, a running locator handler's completion
-    /// (which frees the action waiting on it) and the context's close: the cap never refuses
-    /// them, or a full run could not let go.
+    /// (which frees the action waiting on it), a waiting binding call's answer (which frees the
+    /// page call waiting on it) and the context's close: the cap never refuses them, or a full
+    /// run could not let go.
     fn admit(
         &self,
         route: &ObjectCall,
@@ -273,8 +274,12 @@ impl Inner {
             let page = target?.0.attached_session()?;
             locator_handlers::begin_resolving(&page, uid)
         });
+        // A binding call's answer frees the page call waiting on it: one per waiting call.
+        let answering =
+            answered_binding(route).is_some_and(|guid| self.run.bindings.begin_answering(guid));
         let releases = ending.is_some()
             || resolving.is_some()
+            || answering
             || matches!(route, ObjectCall::Context(BrowserContextCall::Close(_)));
         let share = if releases {
             None
@@ -1786,6 +1791,16 @@ fn route_frame_element(method: &str) -> Option<Routed> {
 fn completed_handler(call: &ObjectCall) -> Option<i64> {
     match call {
         ObjectCall::Page(PageCall::ResolveLocatorHandlerNoReply(params)) => Some(params.uid),
+        _ => None,
+    }
+}
+
+/// The waiting binding call a `BindingCall.resolve` or `reject` answers.
+fn answered_binding(call: &ObjectCall) -> Option<&str> {
+    match call {
+        ObjectCall::Binding(
+            BindingRoute::Resolve { guid, .. } | BindingRoute::Reject { guid, .. },
+        ) => Some(guid),
         _ => None,
     }
 }

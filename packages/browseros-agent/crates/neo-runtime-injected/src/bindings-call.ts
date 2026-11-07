@@ -71,10 +71,11 @@ export default function bindingsCall<Op extends keyof Ops>(
 /**
  * Deviation: `server/page.ts` `Page.removeExposedBinding`: `await this.delegate.removeInitScripts([binding.initScript]);` Playwright's bindings live as long as their page; Neo's end with the run, and a call still waiting on one is refused.
  *
- * Every call still waiting on one of the run's bindings rejects with `message`; each binding is
- * removed, as Playwright's cleanup script removes it; the controller goes too once it holds
- * none, and the CDP binding function, which outlives the session that added it (probe C2), so
- * the page keeps nothing of the run.
+ * Every call still waiting on one of the run's bindings (`names`, every name the run began to
+ * expose) rejects with `message`; each of them is removed, as Playwright's cleanup script
+ * removes it. Another run's names on the same page stay, with the controller they need; the
+ * controller goes once it holds none, and the CDP binding function, which outlives the session
+ * that added it (probe C2), so the page keeps nothing of the runs.
  */
 function endRun(
   controller: BindingsController,
@@ -84,9 +85,7 @@ function endRun(
   const bindings = (controller as unknown as Internals)._bindings
   if (typeof bindings?.get !== 'function')
     throw new Error('neo-runtime-injected: BindingsController has no _bindings')
-  // Every name the controller holds: the run's (`names`, which the run's end leaves empty), and
-  // any a step of an expose cut short by the run's end added.
-  for (const name of new Set([...names, ...bindings.keys()])) {
+  for (const name of new Set(names)) {
     for (const waiting of bindings.get(name)?.callbacks.values() ?? [])
       waiting.reject(new Error(message))
     controller.removeBinding(name)

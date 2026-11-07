@@ -47,7 +47,9 @@ use tokio::time;
 use crate::click::{self, LoopAWaits, PageError};
 use crate::frame_selector;
 use crate::frames::{FrameContext, FrameScope};
-use crate::main_world::{self, BuiltExpression, Called, DocumentId, Installed, MainFunction};
+use crate::main_world::{
+    self, BuiltExpression, Called, ContextPin, DocumentId, Installed, MainFunction,
+};
 use crate::page::{FrameTab, GroupGuard};
 use crate::progress::{CallError, PlaywrightError, Progress, js_number};
 use crate::reads::SelectorTab;
@@ -1171,7 +1173,7 @@ struct Invocation<'a> {
     frame: &'a Arc<FrameContext>,
     /// The execution context a binding call's answer is pinned to (`MainWorld::call_in`), never
     /// installed again for; `None` for every other call.
-    context: Option<i64>,
+    context: Option<&'a ContextPin>,
     /// The handle whose document must still be the frame's (Playwright's destroyed context).
     receiver: Option<&'a HandleEntry>,
     expression: &'a str,
@@ -1286,14 +1288,14 @@ async fn invoke_with(
             let installed = Arc::clone(&installed);
             let group = group.clone();
             let return_by_value = invocation.return_by_value;
-            let context = invocation.context;
+            let context = invocation.context.cloned();
             Box::pin(async move {
                 frame
                     .main
                     .call_in(
                         &frame,
                         &installed,
-                        context,
+                        context.as_ref(),
                         MainFunction::Evaluate,
                         values,
                         return_by_value,
@@ -1365,7 +1367,7 @@ pub(crate) async fn run_built(
 /// As [`run_built`].
 pub(crate) async fn run_built_on(
     frame: &Arc<FrameContext>,
-    context: Option<i64>,
+    context: Option<&ContextPin>,
     expression: BuiltExpression,
     leading: Vec<Value>,
 ) -> Result<(), PageError> {
@@ -1411,7 +1413,7 @@ pub(crate) async fn run_built_on(
 pub(crate) async fn call_built_on(
     tab: &FrameTab,
     frame: &Arc<FrameContext>,
-    context: i64,
+    context: &ContextPin,
     expression: BuiltExpression,
     leading: Vec<Value>,
     arg: &SerializedArgument,
