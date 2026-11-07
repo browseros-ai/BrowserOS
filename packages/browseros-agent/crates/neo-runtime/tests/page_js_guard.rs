@@ -1,7 +1,7 @@
 //! Neo's page JavaScript guard: which Neo file may reach which page world, and with what code.
 //!
 //! The owner's constraint: page JavaScript never bypasses one narrow, deliberate path. In Neo
-//! that path is three files of `neo-runtime`:
+//! that path is four files of `neo-runtime`:
 //!
 //! - `src/world.rs`, Neo's isolated (utility) world: `Page.createIsolatedWorld` and
 //!   `Runtime.callFunctionOn`, for every read and action.
@@ -10,6 +10,9 @@
 //!   built `(object) => object`, which keeps it in a run's handle group).
 //! - `src/init_scripts.rs`, the agent's init scripts: `Page.addScriptToEvaluateOnNewDocument` and
 //!   `Page.removeScriptToEvaluateOnNewDocument`, in the page's own world only (no `worldName`).
+//! - `src/bindings.rs`, `exposeBinding`: `Runtime.addBinding` and `Runtime.removeBinding` of
+//!   Playwright's one CDP binding, which runs no script; the page half is built artifacts it hands
+//!   to `init_scripts.rs` and `main_world.rs`.
 //!
 //! In both, every `functionDeclaration` is a `const` whose initializer is exactly
 //! `include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/<name>.js"))`
@@ -45,6 +48,7 @@ const GUARDED: &[&str] = &[
     "Runtime.compileScript",
     "Runtime.runScript",
     "Runtime.addBinding",
+    "Runtime.removeBinding",
     "Page.addScriptToEvaluateOnNewDocument",
     "Page.removeScriptToEvaluateOnNewDocument",
     "Page.createIsolatedWorld",
@@ -71,10 +75,14 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "Page.removeScriptToEvaluateOnNewDocument",
         ],
     ),
+    (BINDINGS, &["Runtime.addBinding", "Runtime.removeBinding"]),
 ];
 
 /// The init scripts' file: its scripts run in the page's own world, so it never names a world.
 const INIT_SCRIPTS: &str = "neo-runtime/src/init_scripts.rs";
+
+/// The bindings' file: it adds and removes Playwright's CDP binding, and runs no script itself.
+const BINDINGS: &str = "neo-runtime/src/bindings.rs";
 
 /// Where a built artifact lives: the only source a `functionDeclaration` may have.
 const BUILT_PREFIX: &str = "/../neo-runtime-injected/dist/";
@@ -839,6 +847,34 @@ fn tests_that_only_init_scripts_rs_adds_init_scripts_and_never_names_a_world() {
         !check(INIT_SCRIPTS, "cdp.send(\"Runtime.evaluate\", params, None)").is_empty(),
         "init_scripts.rs may not evaluate"
     );
+}
+
+#[test]
+fn tests_that_only_bindings_rs_adds_and_removes_the_binding_and_runs_no_script() {
+    for method in ["Runtime.addBinding", "Runtime.removeBinding"] {
+        let send = format!("cdp.send(\"{method}\", json!({{\"name\": NAME}}), Some(session))");
+        assert!(check(BINDINGS, &send).is_empty(), "{method} in bindings.rs");
+        for elsewhere in [
+            INIT_SCRIPTS,
+            "neo-runtime/src/page.rs",
+            "neo-runtime/src/main_world.rs",
+        ] {
+            assert!(
+                !check(elsewhere, &send).is_empty(),
+                "{method} in {elsewhere}"
+            );
+        }
+    }
+    for script in [
+        "cdp.send(\"Runtime.evaluate\", params, Some(session))",
+        "cdp.send(\"Runtime.callFunctionOn\", params, Some(session))",
+        "cdp.send(\"Page.addScriptToEvaluateOnNewDocument\", params, Some(session))",
+    ] {
+        assert!(
+            !check(BINDINGS, script).is_empty(),
+            "bindings.rs may not run script: {script}"
+        );
+    }
 }
 
 #[test]

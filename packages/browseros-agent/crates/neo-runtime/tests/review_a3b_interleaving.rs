@@ -29,6 +29,7 @@ fn request(tab: &Tab, code: &str) -> RunRequest {
         code: code.to_string(),
         timeout: Duration::from_secs(30),
         cancel: CancellationToken::new(),
+        artifacts: None,
     }
 }
 

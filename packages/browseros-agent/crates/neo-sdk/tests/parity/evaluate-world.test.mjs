@@ -7,7 +7,11 @@
 //   `locator.evaluate` sees the patches and `locator.getAttribute` / `innerText` / `textContent`
 //   do not, in both tools;
 // - evaluations, handles and disposal leave the page's global names as they were, and no Neo name
-//   is reachable from the page's world.
+//   is reachable from the page's world;
+// - with a binding exposed, the one exception Playwright itself has: the binding's name, its CDP
+//   binding `__playwright__binding__` and its controller `__playwright__binding__controller__`
+//   (each engine in a browser of its own, `isolate`, as both put that CDP binding on every page
+//   of a shared browser).
 // Values by `describe` (values.mjs); the page's own state by `window.__facts()`.
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -91,4 +95,28 @@ test('evaluations and handles leave the page world without new names', {
     neoNames: [],
     neoGlobals: ['undefined', 'undefined', 'undefined'],
   })
+})
+
+test('an exposed binding adds only Playwright’s own names', {
+  skip,
+  timeout: 180_000,
+}, async (t) => {
+  const outcome = await compareMethod(t, {
+    html,
+    source: `
+      const names = () => page.evaluate(() => Object.getOwnPropertyNames(globalThis).sort())
+      const before = await names()
+      await page.exposeFunction('woof', () => 'woof')
+      await page.evaluate(async () => window.woof())
+      const after = await names()
+      return after.filter((name) => !before.includes(name))
+    `,
+    isolate: true,
+    probe: 'window.__facts()',
+  })
+  assert.deepEqual(outcome.value, [
+    '__playwright__binding__',
+    '__playwright__binding__controller__',
+    'woof',
+  ])
 })

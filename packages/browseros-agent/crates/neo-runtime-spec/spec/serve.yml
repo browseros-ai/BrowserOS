@@ -14,6 +14,20 @@ interfaces:
   BrowserContext:
     - newPage
     - close
+    # Session state (neo-runtime `session_state.rs`): cookies and storage are the user's browser
+    # data; headers, offline, geolocation and credentials live on the run's sessions;
+    # permission overrides are reset when the last run that granted lets go. `clearCookies` is
+    # the SDK's: it matches its filter, `RegExp` included, and expires the matches by `addCookies`.
+    - addCookies
+    - cookies
+    - storageState
+    - setStorageState
+    - setExtraHTTPHeaders
+    - setGeolocation
+    - setOffline
+    - setHTTPCredentials
+    - grantPermissions
+    - clearPermissions
   # A BrowserContext initializer requires these three. Neo never sends one (a run receives its
   # context at start) and serves no command on them; listing them keeps the type constructible.
   APIRequestContext: []
@@ -23,6 +37,8 @@ interfaces:
     - close
     - runBeforeUnload
     - bringToFront
+    # The page's own extra HTTP headers, over the context's (neo-runtime `session_state.rs`).
+    - setExtraHTTPHeaders
     # Element operations (element_ops.rs, highlight.rs): every highlight of the page.
     - hideHighlight
     # `page.keyboard`, `page.mouse` and `page.touchscreen` (neo-runtime `devices.rs`).
@@ -42,6 +58,9 @@ interfaces:
     - reload
     - goBack
     - goForward
+    # `binary` results: neo-runtime answers `neo_runtime_spec::Binary`, the SDK a `Buffer`.
+    - screenshot
+    - pdf
     # The page's console and page-error history (`page.consoleMessages()`, `page.pageErrors()`).
     # A message's `args` are JSHandles, which are not a key here, so they always travel empty.
     - consoleMessages

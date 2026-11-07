@@ -58,6 +58,7 @@ async fn run(runtime: &Runtime, page: &str, code: &str) -> RunOutcome {
             page: PageId::new(page.to_string()),
             timeout: Duration::from_secs(30),
             cancel: CancellationToken::new(),
+            artifacts: None,
         })
         .await
 }

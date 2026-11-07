@@ -6,27 +6,31 @@ use std::time::Duration;
 
 use browseros_cdp::CdpError;
 use neo_runtime_spec::serve::{
-    BrowserContextCall, BrowserContextNewPageResult, ConsoleMessagesFilter, PageCall, PageChannel,
-    PageClearConsoleMessagesParams, PageClearConsoleMessagesResult, PageClearPageErrorsParams,
-    PageClearPageErrorsResult, PageConsoleMessagesParams, PageConsoleMessagesResult,
-    PageGoBackParams, PageGoBackResult, PageGoForwardParams, PageGoForwardResult,
-    PagePageErrorsParams, PagePageErrorsResult, PageRegisterLocatorHandlerParams,
-    PageRegisterLocatorHandlerResult, PageReloadParams, PageReloadResult, PageRequestsParams,
-    PageRequestsResult, PageResolveLocatorHandlerNoReplyParams,
-    PageResolveLocatorHandlerNoReplyResult, PageUnregisterLocatorHandlerParams,
-    PageUnregisterLocatorHandlerResult, ResponseChannel,
+    BrowserContextCall, BrowserContextCookiesParams, BrowserContextCookiesResult,
+    BrowserContextNewPageResult, BrowserContextStorageStateParams, ConsoleMessagesFilter,
+    NameValue, PageCall, PageChannel, PageClearConsoleMessagesParams,
+    PageClearConsoleMessagesResult, PageClearPageErrorsParams, PageClearPageErrorsResult,
+    PageConsoleMessagesParams, PageConsoleMessagesResult, PageGoBackParams, PageGoBackResult,
+    PageGoForwardParams, PageGoForwardResult, PagePageErrorsParams, PagePageErrorsResult,
+    PageRegisterLocatorHandlerParams, PageRegisterLocatorHandlerResult, PageReloadParams,
+    PageReloadResult, PageRequestsParams, PageRequestsResult,
+    PageResolveLocatorHandlerNoReplyParams, PageResolveLocatorHandlerNoReplyResult,
+    PageUnregisterLocatorHandlerParams, PageUnregisterLocatorHandlerResult, ResponseChannel,
 };
 use serde_json::{Value, json};
 use tracing::debug;
 
 use crate::bridge;
+use crate::click::PageError;
 use crate::content::WriteTurn;
 use crate::dispatch::encode_result;
 use crate::frames::FrameScope;
 use crate::highlight;
 use crate::history::{self, HistoryOptions};
+use crate::navigate;
 use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
+use crate::session_state;
 use crate::tabs::{self, PageEntry, Tabs};
 use crate::web_storage;
 
@@ -78,7 +82,76 @@ pub(crate) async fn context(
             close_context(tabs, progress).await?;
             Ok(None)
         }
+        BrowserContextCall::Cookies(params) => {
+            let cookies = session_state::cookies(tabs, &params.urls, progress).await?;
+            encode_result::<BrowserContextCookiesParams>(&BrowserContextCookiesResult { cookies })
+        }
+        BrowserContextCall::AddCookies(params) => {
+            session_state::add_cookies(tabs, params.cookies, progress).await?;
+            Ok(None)
+        }
+        BrowserContextCall::SetExtraHTTPHeaders(params) => {
+            tabs.overrides()
+                .set_context_headers(tabs, params.headers, progress)
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::SetOffline(params) => {
+            tabs.overrides()
+                .set_offline(tabs, params.offline, progress)
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::SetGeolocation(params) => {
+            tabs.overrides()
+                .set_geolocation(tabs, params.geolocation, progress)
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::GrantPermissions(params) => {
+            tabs.permissions()
+                .grant(
+                    tabs,
+                    tabs.run_id(),
+                    params.origin.as_deref(),
+                    &params.permissions,
+                    progress,
+                )
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::ClearPermissions(_) => {
+            tabs.permissions()
+                .clear(tabs, tabs.run_id(), progress)
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::SetHTTPCredentials(_) => {
+            session_state::set_http_credentials()?;
+            Ok(None)
+        }
+        BrowserContextCall::StorageState(params) => {
+            let state = session_state::storage_state(tabs, &params, progress).await?;
+            encode_result::<BrowserContextStorageStateParams>(&state)
+        }
+        BrowserContextCall::SetStorageState(params) => {
+            session_state::set_storage_state(tabs, params.storage_state, progress).await?;
+            Ok(None)
+        }
     }
+}
+
+/// `page.setExtraHTTPHeaders`: the page's own, over the context's (`session_state.rs`).
+async fn set_page_headers(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    headers: Vec<NameValue>,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    tabs.overrides()
+        .set_page_headers(&page, &entry.id, headers, progress)
+        .await
 }
 
 /// Playwright's close of a connectOverCDP default context, which only disconnects: every tab
@@ -103,6 +176,14 @@ async fn close_context(tabs: &Tabs, progress: &Progress) -> Result<(), CallError
     // before the close resolves, so none writes input to a tab the run let go of.
     progress.stop_the_runs_calls();
     Ok(())
+}
+
+/// Neo: `dispatch::route` hands every `Page.screenshot` and `Page.pdf` to `capture.rs`, so one
+/// reaching the tab-lifecycle handler is a routing bug, reported as such.
+const CAPTURE_MISROUTED: &str = "neo-runtime: a capture reached the tab-lifecycle handler";
+
+fn misrouted_capture() -> CallError {
+    PlaywrightError::error(CAPTURE_MISROUTED).into()
 }
 
 pub(crate) async fn page(
@@ -185,7 +266,11 @@ pub(crate) async fn page(
             return Err(PlaywrightError::error(STORAGE_MISROUTED).into());
         }
         PageCall::Close(_) => close(tabs, entry, progress).await?,
+        PageCall::SetExtraHTTPHeaders(params) => {
+            set_page_headers(tabs, entry, params.headers, progress).await?;
+        }
         PageCall::RunBeforeUnload(_) => run_before_unload(tabs, entry, progress).await?,
+        PageCall::Screenshot(_) | PageCall::Pdf(_) => return Err(misrouted_capture()),
         // The dispatcher serves these over the tab's input devices (`devices.rs`).
         PageCall::KeyboardDown(_)
         | PageCall::KeyboardUp(_)
@@ -344,7 +429,19 @@ pub(crate) async fn storage(
         Some(turn) => Some(progress.race(turn.ready()).await?),
         None => None,
     };
-    web_storage::serve(page, call, progress).await
+    // The call belongs to the document it starts in. A commit that replaces that document ends
+    // it with Playwright's destroyed-context error and hands its turn on, as Playwright's
+    // utility-world evaluation rejects once its context is gone: a later call never waits for
+    // an obsolete document's reply.
+    let document = page.main_document();
+    let serving = web_storage::serve(Arc::clone(&page), call, progress);
+    tokio::select! {
+        biased;
+        result = serving => result,
+        () = page.main_document_replaced(document) => {
+            Err(navigate::page_error(PageError::NotConnected).into())
+        }
+    }
 }
 
 /// `entry`'s session with its watcher running (`PageSession::prepare`), as a call on its frames
