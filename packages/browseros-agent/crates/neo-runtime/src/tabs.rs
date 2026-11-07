@@ -192,6 +192,11 @@ impl Tabs {
         &self.0.cdp
     }
 
+    /// The page the run started from.
+    pub(crate) fn run_page(&self) -> &PageId {
+        &self.0.run_page
+    }
+
     pub(crate) fn events(&self) -> &EventHub {
         &self.0.events
     }

@@ -221,6 +221,8 @@ pub(crate) async fn run(tabs: Tabs, discovery: Discovery) {
         }
     };
     let mut targets = Targets::default();
+    // The run's own page is never new to the run, whatever its document.
+    targets.known.insert(tabs.run_page().as_str().to_string());
     for info in baseline.target_infos {
         if info.kind == "page" {
             targets.baseline(info);
@@ -280,6 +282,9 @@ impl Targets {
     /// A page target from before the run listened: known, unless it is itself a page still on
     /// its initial empty document, which reports once it commits, as a tab opened just now.
     fn baseline(&mut self, info: TargetInfo) {
+        if self.known.contains(&info.target_id) {
+            return;
+        }
         if is_initial_empty(&info.url) {
             self.pending.insert(info.target_id.clone(), info);
         } else {
