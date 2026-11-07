@@ -1438,13 +1438,7 @@ async fn serve_call(
             capture::serve(&tabs, &page, scope, call, &progress).await
         }
         (ObjectCall::Frame(route), Some((page, scope))) => {
-            let session = match page.attached_session() {
-                Some(session) => Ok(session),
-                None => match progress.race(tabs.session(&page)).await {
-                    Ok(result) => result.map_err(CallError::from),
-                    Err(error) => Err(error),
-                },
-            };
+            let session = page_session(&tabs, &page, &progress).await;
             match session {
                 Ok(page) => {
                     // A page the run's init scripts have not reached yet gets them first.
@@ -1464,13 +1458,7 @@ async fn serve_call(
             }
         }
         (ObjectCall::Device(call), Some((page, _))) => {
-            let session = match page.attached_session() {
-                Some(session) => Ok(session),
-                None => match progress.race(tabs.session(&page)).await {
-                    Ok(result) => result.map_err(CallError::from),
-                    Err(error) => Err(error),
-                },
-            };
+            let session = page_session(&tabs, &page, &progress).await;
             match session {
                 Ok(page) => {
                     let tab = FrameTab {
@@ -1504,6 +1492,22 @@ async fn serve_call(
         _ => Err(PlaywrightError::target_closed().into()),
     };
     finish_reply(result, reply).await;
+}
+
+/// The page's session for a call: the one already attached, else the one attaching makes, raced
+/// against the call's progress.
+async fn page_session(
+    tabs: &Tabs,
+    page: &PageEntry,
+    progress: &Progress,
+) -> Result<Arc<PageSession>, CallError> {
+    match page.attached_session() {
+        Some(session) => Ok(session),
+        None => match progress.race(tabs.session(page)).await {
+            Ok(result) => result.map_err(CallError::from),
+            Err(error) => Err(error),
+        },
+    }
 }
 
 fn page_id(page: &PageSession) -> &str {
