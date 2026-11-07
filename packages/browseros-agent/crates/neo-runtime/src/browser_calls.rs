@@ -439,7 +439,9 @@ pub(crate) async fn dispose_all(tabs: &Tabs) {
                         page.closed_by_run();
                     }
                 }
-                Err(error) => debug!(error = %error.message, "disposing a context at run end failed"),
+                Err(error) => {
+                    debug!(error = %error.message, "disposing a context at run end failed");
+                }
             }
         })
     });
@@ -457,9 +459,7 @@ async fn dispose(cdp: &CdpClient, id: &str) -> Result<(), PlaywrightError> {
         .await
     {
         Ok(_) => Ok(()),
-        Err(CdpError::Protocol { message, .. })
-            if message.contains("Failed to find context") =>
-        {
+        Err(CdpError::Protocol { message, .. }) if message.contains("Failed to find context") => {
             Ok(())
         }
         Err(error) => Err(tabs::cdp_error(&error)),
@@ -468,7 +468,10 @@ async fn dispose(cdp: &CdpClient, id: &str) -> Result<(), PlaywrightError> {
 
 /// The emulation a created page of `entry`'s context runs under, applied to its fresh session
 /// before any call on the page (`Tabs::session`). A page of the run's own context gets nothing.
-pub(crate) async fn prepare(entry: &PageEntry, session: &PageSession) -> Result<(), PlaywrightError> {
+pub(crate) async fn prepare(
+    entry: &PageEntry,
+    session: &PageSession,
+) -> Result<(), PlaywrightError> {
     let Some(context) = entry.context.get() else {
         return Ok(());
     };
@@ -510,7 +513,9 @@ pub(crate) async fn context_pages(
 
 /// Playwright's `validateBrowserContextOptions` and the options Neo serves, as the emulation a
 /// created context's pages run under. An option Neo does not serve is refused by name.
-fn context_emulation(params: &BrowserNewContextParams) -> Result<ContextEmulation, PlaywrightError> {
+fn context_emulation(
+    params: &BrowserNewContextParams,
+) -> Result<ContextEmulation, PlaywrightError> {
     refuse_unserved(params)?;
     let no_default_viewport = params.no_default_viewport == Some(true);
     if no_default_viewport && params.device_scale_factor.is_some() {
@@ -526,10 +531,13 @@ fn context_emulation(params: &BrowserNewContextParams) -> Result<ContextEmulatio
         ));
     }
     let viewport = (!no_default_viewport).then(|| {
-        params.viewport.as_ref().map_or(DEFAULT_VIEWPORT, |viewport| Size {
-            width: viewport.width,
-            height: viewport.height,
-        })
+        params
+            .viewport
+            .as_ref()
+            .map_or(DEFAULT_VIEWPORT, |viewport| Size {
+                width: viewport.width,
+                height: viewport.height,
+            })
     });
     Ok(ContextEmulation {
         viewport,
@@ -588,7 +596,10 @@ fn refuse_unserved(params: &BrowserNewContextParams) -> Result<(), PlaywrightErr
                 .as_ref()
                 .is_some_and(|engines| !engines.is_empty()),
         ),
-        ("testIdAttributeName", params.test_id_attribute_name.is_some()),
+        (
+            "testIdAttributeName",
+            params.test_id_attribute_name.is_some(),
+        ),
     ];
     match given.into_iter().find(|(_, given)| *given) {
         Some((name, _)) => Err(PlaywrightError::error(format!(

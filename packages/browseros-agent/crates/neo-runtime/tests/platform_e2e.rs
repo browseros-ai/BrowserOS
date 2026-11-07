@@ -52,7 +52,10 @@ async fn a_run_that_times_out_disposes_the_contexts_it_created() {
     assert_eq!(created_contexts(&tab).await, json!([]));
     let created: Vec<_> = outcome.pages.iter().filter(|page| page.created).collect();
     assert_eq!(created.len(), 1, "{:?}", outcome.pages);
-    assert!(created[0].closed, "the created page reads closed by the run");
+    assert!(
+        created[0].closed,
+        "the created page reads closed by the run"
+    );
     tab.close().await;
 }
 
@@ -73,11 +76,22 @@ async fn emulation_lasts_for_the_run() {
     .await;
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
     assert_eq!(outcome.value, Some(json!({ "width": 333, "height": 222 })));
-    assert_eq!(tab.evaluate("innerWidth").await, width, "the viewport is the tab's own again");
-    assert_eq!(tab.evaluate("matchMedia('print').matches").await, json!(false));
+    assert_eq!(
+        tab.evaluate("innerWidth").await,
+        width,
+        "the viewport is the tab's own again"
+    );
+    assert_eq!(
+        tab.evaluate("matchMedia('print').matches").await,
+        json!(false)
+    );
     let next = finished(&tab, "return page.viewportSize()", SHORT_RUN).await;
     assert_eq!(next.status, RunStatus::Ok, "{next:?}");
-    assert_eq!(next.value, Some(Value::Null), "a later run starts with no viewport");
+    assert_eq!(
+        next.value,
+        Some(Value::Null),
+        "a later run starts with no viewport"
+    );
     tab.close().await;
 }
 

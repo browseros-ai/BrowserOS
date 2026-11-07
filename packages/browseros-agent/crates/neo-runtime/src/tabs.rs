@@ -692,7 +692,12 @@ fn created_page(entry: &PageEntry, url: String, closed: bool) -> CreatedPage {
     let viewport = entry
         .attached_session()
         .and_then(|session| session.emulation.viewport())
-        .or_else(|| entry.context.get().and_then(|context| context.emulation.viewport));
+        .or_else(|| {
+            entry
+                .context
+                .get()
+                .and_then(|context| context.emulation.viewport)
+        });
     CreatedPage {
         guid: bridge::page_guid(&entry.id),
         initializer: PageInitializer {

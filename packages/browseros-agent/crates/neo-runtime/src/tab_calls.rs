@@ -123,7 +123,9 @@ pub(crate) async fn page(
         }
         PageCall::EmulateMedia(params) => {
             let page = progress.race(tabs.session(entry)).await??;
-            page.emulation.emulate_media(&page, &params, progress).await?;
+            page.emulation
+                .emulate_media(&page, &params, progress)
+                .await?;
         }
         PageCall::RequestGC(_) => {
             let page = progress.race(tabs.session(entry)).await??;

@@ -189,7 +189,10 @@ impl PageEmulation {
     /// keeps the browser's own media, locale, time zone and user agent.
     pub(crate) async fn child_attached(&self, host: &Host) {
         let (context, media_set) = match self.state.lock() {
-            Ok(state) => (state.context.clone(), state.media != EmulatedMedia::default()),
+            Ok(state) => (
+                state.context.clone(),
+                state.media != EmulatedMedia::default(),
+            ),
             Err(_) => return,
         };
         let mut steps: Vec<future::BoxFuture<'_, Result<(), CdpError>>> = Vec::new();
@@ -200,7 +203,9 @@ impl PageEmulation {
         }
         if context.is_some() || media_set {
             let params = self.media_params();
-            steps.push(Box::pin(sent(host.send("Emulation.setEmulatedMedia", params))));
+            steps.push(Box::pin(sent(
+                host.send("Emulation.setEmulatedMedia", params),
+            )));
         }
         for result in future::join_all(steps).await {
             if let Err(error) = result {
@@ -277,7 +282,9 @@ impl PageEmulation {
         self.state
             .lock()
             .map(|mut state| change(&mut state))
-            .map_err(|_| PlaywrightError::error("neo-runtime: the page's emulation is unreadable").into())
+            .map_err(|_| {
+                PlaywrightError::error("neo-runtime: the page's emulation is unreadable").into()
+            })
     }
 
     /// Playwright's background re-send after a failed update: `this.delegate.updateEmulateMedia().catch(() => {});`
@@ -302,7 +309,12 @@ impl PageEmulation {
     /// device metrics override, after the window around it when the page has one, skipped when
     /// it is the override already sent.
     async fn update_viewport(&self, page: &PageSession) -> Result<(), CdpError> {
-        let Some((metrics, window)) = self.state.lock().ok().and_then(|state| state.metrics_update()) else {
+        let Some((metrics, window)) = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|state| state.metrics_update())
+        else {
             return Ok(());
         };
         if let Some((window, width, height)) = window {
@@ -507,7 +519,10 @@ where
         ));
     }
     if context.user_agent.is_some() || context.locale.is_some() {
-        steps.push(send("Emulation.setUserAgentOverride", user_agent_params(context)));
+        steps.push(send(
+            "Emulation.setUserAgentOverride",
+            user_agent_params(context),
+        ));
     }
     if let Some(locale) = &context.locale {
         let locale = send("Emulation.setLocaleOverride", json!({ "locale": locale }));
@@ -525,9 +540,7 @@ where
 
 /// Playwright's `emulateLocale`: an override another page of the renderer already set is the
 /// same locale, which is not an error.
-async fn emulate_locale(
-    sent: future::BoxFuture<'_, Result<(), CdpError>>,
-) -> Result<(), CdpError> {
+async fn emulate_locale(sent: future::BoxFuture<'_, Result<(), CdpError>>) -> Result<(), CdpError> {
     match sent.await {
         // Playwright: `server/chromium/crPage.ts` `emulateLocale`: `if (exception.message.includes('Another locale override is already in effect'))`
         Err(CdpError::Protocol { message, .. })
@@ -639,7 +652,10 @@ fn windows_version(ua: &str) -> Option<String> {
 
 /// `\d+(<sep>\d+)?…` at the start of `text`, with at most `parts` numbers.
 fn numbers(text: &str, separator: char, parts: usize) -> Option<String> {
-    let digits = |text: &str| text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len());
+    let digits = |text: &str| {
+        text.find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(text.len())
+    };
     let first = digits(text);
     if first == 0 {
         return None;
@@ -685,9 +701,7 @@ pub(crate) async fn request_gc(page: &PageSession, progress: &Progress) -> Resul
 }
 
 /// A write's reply, dropped: every emulation command replies `{}`.
-async fn sent(
-    reply: impl Future<Output = Result<Value, CdpError>>,
-) -> Result<(), CdpError> {
+async fn sent(reply: impl Future<Output = Result<Value, CdpError>>) -> Result<(), CdpError> {
     reply.await.map(|_| ())
 }
 
@@ -774,7 +788,13 @@ mod tests {
             (ipad, true, "iOS", "12_2", "arm"),
             ("Mozilla/5.0 (X11; Linux x86_64)", false, "Linux", "", "x86"),
             ("Mozilla/5.0 (X11; Linux ARM)", false, "Linux", "", "arm"),
-            ("Mozilla/5.0 (Macintosh; Mac OS X 14_1)", false, "macOS", "14_1", "arm"),
+            (
+                "Mozilla/5.0 (Macintosh; Mac OS X 14_1)",
+                false,
+                "macOS",
+                "14_1",
+                "arm",
+            ),
         ];
         for (ua, mobile, platform, version, architecture) in cases {
             assert_eq!(
@@ -794,11 +814,23 @@ mod tests {
 
     #[test]
     fn version_patterns_stop_where_playwrights_regexes_stop() {
-        assert_eq!(version_after("Android 4.4.2.1", "Android ", '.', 3), Some("4.4.2".into()));
-        assert_eq!(version_after("Android x Android 9", "Android ", '.', 3), Some("9".into()));
+        assert_eq!(
+            version_after("Android 4.4.2.1", "Android ", '.', 3),
+            Some("4.4.2".into())
+        );
+        assert_eq!(
+            version_after("Android x Android 9", "Android ", '.', 3),
+            Some("9".into())
+        );
         assert_eq!(version_after("Android .5", "Android ", '.', 3), None);
-        assert_eq!(version_after("iPhone OS 15_0_1", "iPhone OS ", '_', 2), Some("15_0".into()));
-        assert_eq!(version_after("Android 7.", "Android ", '.', 3), Some("7".into()));
+        assert_eq!(
+            version_after("iPhone OS 15_0_1", "iPhone OS ", '_', 2),
+            Some("15_0".into())
+        );
+        assert_eq!(
+            version_after("Android 7.", "Android ", '.', 3),
+            Some("7".into())
+        );
         assert_eq!(windows_version("Windows NT 6.1; WOW64"), Some("6.1".into()));
         assert_eq!(windows_version("Windows10"), None);
         assert_eq!(windows_version("Windows Phone 10.0"), Some("10.0".into()));
@@ -878,9 +910,16 @@ mod tests {
                 "screenOrientation": {"angle": 0, "type": "portraitPrimary"},
             })
         );
-        assert_eq!(window, Some((7, 390, 664)), "headless windows have no insets");
+        assert_eq!(
+            window,
+            Some((7, 390, 664)),
+            "headless windows have no insets"
+        );
         state.metrics = Some(metrics);
-        assert!(state.metrics_update().is_none(), "the same override is not sent twice");
+        assert!(
+            state.metrics_update().is_none(),
+            "the same override is not sent twice"
+        );
         assert!(
             State::default().metrics_update().is_none(),
             "the run's own context emulates no size until the script sets one"
