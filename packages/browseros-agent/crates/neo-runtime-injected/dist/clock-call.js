@@ -33,8 +33,8 @@ function clockCall(op, ...args) {
   return call.apply(clock.controller, args);
 }
 function endRun(clock, global) {
-  stop(clock.controller);
   try {
+    stop(clock.controller);
     clock.controller.uninstall();
   } finally {
     for (const replaced of clock.replaced)

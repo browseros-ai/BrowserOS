@@ -59,10 +59,12 @@ export default function clockCall(op: string, ...args: unknown[]): unknown {
  * Nothing of the clock outlives the run, however it ended: no timer still waiting on the fake
  * clock fires, its real time stops for good, and every property the install replaced is back as
  * it was before (`clock-install.ts`), including the two the controller's own `uninstall` leaves.
+ * The properties come back even when stopping throws, as it would on a vendored controller whose
+ * state has other names; the throw is then the call's error, which run end logs.
  */
 function endRun(clock: Installed, global: Record<string, unknown>): void {
-  stop(clock.controller)
   try {
+    stop(clock.controller)
     clock.controller.uninstall()
   } finally {
     for (const replaced of clock.replaced) restore(replaced)
