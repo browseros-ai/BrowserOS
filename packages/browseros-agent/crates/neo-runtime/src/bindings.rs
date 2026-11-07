@@ -45,7 +45,10 @@ use neo_runtime_spec::{MethodGroup, MethodMeta};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use tokio::sync::broadcast::{self, error::RecvError};
+use tokio::sync::broadcast::{
+    self,
+    error::{RecvError, TryRecvError},
+};
 use tokio::sync::{Mutex, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -1062,45 +1065,79 @@ async fn watch(bindings: Weak<Bindings>, tabs: Tabs, mut events: broadcast::Rece
         return;
     };
     let mut flushes = Some(tabs.events().watcher());
-    let mut reading: Vec<JoinHandle<()>> = Vec::new();
-    let mut last: Option<oneshot::Receiver<()>> = None;
+    let mut reader = Reader {
+        bindings,
+        tabs,
+        reading: Vec::new(),
+        last: None,
+    };
     loop {
         let arrived = tokio::select! {
             biased;
             () = stop.cancelled() => return,
-            event = events.recv() => Step::Event(event),
+            event = receive(&mut events) => Step::Event(event),
             flush = next_flush(&mut flushes) => Step::Flush(flush),
         };
-        let event = match arrived {
-            Step::Flush(Some(done)) => {
-                for call in reading.drain(..) {
-                    let _read = call.await;
+        match arrived {
+            Step::Event(event) => {
+                if !reader.on(event).await {
+                    return;
                 }
+            }
+            // A reply barrier (`events.rs`): every event already in the ring preceded the reply
+            // that asked for it. Read them all first, as the page watcher drains its ring, even
+            // those that arrived after this reader last looked; then wait until each call read
+            // has reached the hub, and only then answer.
+            Step::Flush(Some(done)) => {
+                loop {
+                    let drained = match events.try_recv() {
+                        Ok(event) => Ok(event),
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Lagged(skipped)) => Err(RecvError::Lagged(skipped)),
+                        Err(TryRecvError::Closed) => Err(RecvError::Closed),
+                    };
+                    if !reader.on(drained).await {
+                        return;
+                    }
+                }
+                reader.read_all().await;
                 let _acked = done.send(());
-                continue;
             }
-            Step::Flush(None) => {
-                flushes = None;
-                continue;
-            }
-            Step::Event(Ok(event)) => event,
-            Step::Event(Err(RecvError::Lagged(_))) => continue,
-            Step::Event(Err(RecvError::Closed)) => return,
+            Step::Flush(None) => flushes = None,
+        }
+    }
+}
+
+/// The session reader's state: the calls it has started reading, and the turn of the last one.
+struct Reader {
+    bindings: Weak<Bindings>,
+    tabs: Tabs,
+    reading: Vec<JoinHandle<()>>,
+    last: Option<oneshot::Receiver<()>>,
+}
+
+impl Reader {
+    /// Reads one event of the run's sessions: `false` once the reader must stop.
+    async fn on(&mut self, event: Result<CdpEvent, RecvError>) -> bool {
+        let event = match event {
+            Ok(event) => event,
+            Err(RecvError::Lagged(_)) => return true,
+            Err(RecvError::Closed) => return false,
         };
-        let Some(bindings) = bindings.upgrade() else {
-            return;
+        let Some(bindings) = self.bindings.upgrade() else {
+            return false;
         };
         if event.method == "Target.detachedFromTarget" {
             if let Some(session) = event.params["sessionId"].as_str() {
                 bindings.forget(session).await;
             }
-            continue;
+            return true;
         }
         let Some(session) = event.session_id.as_ref().map(SessionId::as_str) else {
-            continue;
+            return true;
         };
         let Some(prepared) = bindings.prepared(session).await else {
-            continue;
+            return true;
         };
         match event.method.as_str() {
             "Runtime.executionContextCreated"
@@ -1113,7 +1150,7 @@ async fn watch(bindings: Weak<Bindings>, tabs: Tabs, mut events: broadcast::Rece
                     event.params["executionContextId"].as_i64(),
                     event.params["payload"].as_str(),
                 ) else {
-                    continue;
+                    return true;
                 };
                 // The calling frame, read here in event order, before a later event can end that
                 // context: this reader's own map for a context it saw created, else net's for a
@@ -1123,13 +1160,13 @@ async fn watch(bindings: Weak<Bindings>, tabs: Tabs, mut events: broadcast::Rece
                     if prepared.child {
                         return None;
                     }
-                    page_of(&tabs, &prepared.target)
+                    page_of(&self.tabs, &prepared.target)
                         .and_then(|page| page.events.contexts.frame_of(session, context))
                 });
                 let (done, next) = oneshot::channel();
                 let incoming = Incoming {
                     turn: Turn {
-                        previous: last.replace(next),
+                        previous: self.last.replace(next),
                         done,
                     },
                     session: session.to_string(),
@@ -1138,14 +1175,34 @@ async fn watch(bindings: Weak<Bindings>, tabs: Tabs, mut events: broadcast::Rece
                     frame,
                     payload: payload.to_string(),
                 };
-                reading.retain(|call| !call.is_finished());
-                reading.push(tokio::spawn(
-                    Arc::clone(&bindings).called(tabs.clone(), incoming),
+                self.reading.retain(|call| !call.is_finished());
+                self.reading.push(tokio::spawn(
+                    Arc::clone(&bindings).called(self.tabs.clone(), incoming),
                 ));
             }
             _ => {}
         }
+        true
     }
+
+    /// Waits until every call read so far has reached the hub, or found it has nothing to send.
+    async fn read_all(&mut self) {
+        for call in self.reading.drain(..) {
+            let _read = call.await;
+        }
+    }
+}
+
+/// The next event of the run's sessions. In debug builds, `NEO_TEST_BINDING_POLL_PAUSE_MS` makes
+/// a look that finds none hold the reader's thread that long (`test_hooks::receive_paused`), as a
+/// preemption right after that look would: the events and the reply after them all arrive
+/// before the reader looks again (`neo-sdk/tests/parity/binding-order.test.mjs`).
+async fn receive(events: &mut broadcast::Receiver<CdpEvent>) -> Result<CdpEvent, RecvError> {
+    #[cfg(debug_assertions)]
+    if let Some(pause) = test_hooks::poll_pause() {
+        return test_hooks::receive_paused(events, pause).await;
+    }
+    events.recv().await
 }
 
 /// Neo: a test hook, in debug builds only. With `NEO_TEST_BINDING_READ_DELAYS_MS` set to
@@ -1155,14 +1212,51 @@ async fn watch(bindings: Weak<Bindings>, tabs: Tabs, mut events: broadcast::Rece
 /// (`neo-sdk/tests/parity/binding-order.test.mjs`). Release builds have no such wait.
 #[cfg(debug_assertions)]
 mod test_hooks {
-    use std::env;
+    use std::future::{self, Future};
+    use std::pin::pin;
+    use std::sync::OnceLock;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+    use std::{env, thread};
 
+    use browseros_cdp::CdpEvent;
+    use tokio::sync::broadcast::{self, error::RecvError};
     use tokio::time;
 
     /// Neo: how many binding calls this process has read, which picks each one's delay.
     static READS: AtomicUsize = AtomicUsize::new(0);
+
+    /// Neo: the pause `NEO_TEST_BINDING_POLL_PAUSE_MS` sets, read once.
+    static POLL_PAUSE: OnceLock<Option<Duration>> = OnceLock::new();
+
+    pub(super) fn poll_pause() -> Option<Duration> {
+        *POLL_PAUSE.get_or_init(|| {
+            env::var("NEO_TEST_BINDING_POLL_PAUSE_MS")
+                .ok()?
+                .trim()
+                .parse()
+                .ok()
+                .map(Duration::from_millis)
+        })
+    }
+
+    /// `events.recv()`, with `pause` held on the reader's thread after each look that finds no
+    /// event, which the scheduler could do there anyway.
+    pub(super) async fn receive_paused(
+        events: &mut broadcast::Receiver<CdpEvent>,
+        pause: Duration,
+    ) -> Result<CdpEvent, RecvError> {
+        future::poll_fn(|cx| {
+            let receive = events.recv();
+            let mut receive = pin!(receive);
+            let polled = receive.as_mut().poll(cx);
+            if polled.is_pending() {
+                thread::sleep(pause);
+            }
+            polled
+        })
+        .await
+    }
 
     pub(super) async fn read_delay() {
         let Ok(delays) = env::var("NEO_TEST_BINDING_READ_DELAYS_MS") else {
