@@ -277,10 +277,14 @@ pub(crate) async fn context(
         | BrowserContextCall::SetHTTPCredentials(_)
         | BrowserContextCall::GrantPermissions(_)
         | BrowserContextCall::ClearPermissions(_)) => Err(created_state(call.meta().method).into()),
+        // Deviation: `client/browserContext.ts` `BrowserContext.route` Neo serves context routes only on the run's own context; a created context's page routes remain available.
+        call @ BrowserContextCall::SetNetworkInterceptionPatterns(_) => {
+            Err(created_state(call.meta().method).into())
+        }
     }
 }
 
-/// Neo: session state and bindings on a context the run created, which Neo does not serve yet:
+/// Neo: session state, bindings and context routes on a context the run created, which Neo does not serve yet:
 /// the run's own context's cookies, storage, headers, offline mode, geolocation, permissions and
 /// bindings never reach a created context's pages, and the call fails instead of answering
 /// with them.

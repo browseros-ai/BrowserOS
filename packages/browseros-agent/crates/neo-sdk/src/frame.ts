@@ -59,6 +59,7 @@ import type {
   FrameDblclickParams,
   FrameDispatchEventParams,
   FrameDragAndDropParams,
+  FrameDropParams,
   FrameFillParams,
   FrameFocusParams,
   FrameGetAttributeParams,
@@ -85,6 +86,7 @@ import type {
   FrameResolveSelectorResult,
   FrameSelectOptionParams,
   FrameSetContentParams,
+  FrameSetInputFilesParams,
   FrameTapParams,
   FrameTextContentParams,
   FrameTextContentResult,
@@ -145,6 +147,7 @@ import {
   FRAME_DBLCLICK_KEYS,
   FRAME_DISPATCH_EVENT_KEYS,
   FRAME_DRAG_AND_DROP_KEYS,
+  FRAME_DROP_KEYS,
   FRAME_FILL_KEYS,
   FRAME_FOCUS_KEYS,
   FRAME_GET_ATTRIBUTE_KEYS,
@@ -166,6 +169,7 @@ import {
   FRAME_RESOLVE_SELECTOR_KEYS,
   FRAME_SELECT_OPTION_KEYS,
   FRAME_SET_CONTENT_KEYS,
+  FRAME_SET_INPUT_FILES_KEYS,
   FRAME_TAP_KEYS,
   FRAME_TEXT_CONTENT_KEYS,
   FRAME_TYPE_KEYS,
@@ -179,6 +183,12 @@ import {
   convertSelectOptionValues,
   type SelectOptionValues,
 } from './select-option'
+import {
+  convertDropPayload,
+  convertInputFiles,
+  type DropPayload,
+  type InputFiles,
+} from './set-input-files'
 import type {
   SignalLike,
   TimeoutInput,
@@ -523,6 +533,21 @@ export type SelectOptionOptions = Omit<
    * @deprecated This option has no effect.
    */
   noWaitAfter?: boolean
+}
+
+/** `setInputFiles`' options as a script passes them. */
+export type SetInputFilesOptions = Pick<FrameSetInputFilesParams, 'strict'> & {
+  timeout?: number
+  /**
+   * This option has no effect.
+   * @deprecated This option has no effect.
+   */
+  noWaitAfter?: boolean
+}
+
+/** `Locator.drop`'s options as a script passes them. */
+export type DropOptions = Pick<FrameDropParams, 'position'> & {
+  timeout?: number
 }
 
 /** `focus`'s and `blur`'s options as a script passes them. */
@@ -2204,6 +2229,61 @@ export class Frame {
         'neo-sdk: Frame.selectOption contract error: missing result',
       )
     return result.values
+  }
+
+  async setInputFiles(
+    selector: string,
+    files: InputFiles,
+    options: SetInputFilesOptions = {},
+  ): Promise<void> {
+    return await this._setInputFiles(
+      'frame.setInputFiles',
+      selector,
+      files,
+      options,
+    )
+  }
+
+  /** Synchronously reaches `send` so it captures the script's call site.
+   * Playwright: `client/frame.ts` `Frame.setInputFiles`: `await this._channel.setInputFiles({ selector, ...converted, ...options }, this._timeout(options));` */
+  async _setInputFiles(
+    apiName: ApiName,
+    selector: string,
+    files: InputFiles,
+    options: SetInputFilesOptions,
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'setInputFiles',
+      pickParams(FRAME_SET_INPUT_FILES_KEYS, {
+        selector,
+        ...convertInputFiles(files),
+        ...options,
+      }) as FrameSetInputFilesParams,
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
+    )
+  }
+
+  /** Playwright's client `Frame._drop`, behind `Locator.drop`.
+   * Playwright: `client/frame.ts` `Frame._drop`: `await this._channel.drop({` */
+  async _drop(
+    apiName: ApiName,
+    selector: string,
+    payload: DropPayload,
+    options: DropOptions & { strict?: boolean },
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'drop',
+      pickParams(FRAME_DROP_KEYS, {
+        selector,
+        ...convertDropPayload(payload),
+        ...options,
+      }) as FrameDropParams,
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
+    )
   }
 
   async setChecked(

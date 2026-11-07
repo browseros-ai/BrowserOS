@@ -43,6 +43,13 @@ export function onUncaughtListenerError(
   uncaughtListenerError = report
 }
 
+/** Neo: a channel handler's error (a route handler's), which Playwright's channel emitter
+ * rethrows as an unhandled rejection: the run ends with it. */
+export function reportUncaught(error: unknown): void {
+  if (uncaughtListenerError) uncaughtListenerError(error)
+  else throw error
+}
+
 /** Playwright: `client/eventEmitter.ts` `EventEmitter` */
 export class EventEmitter {
   private _events: EventMap | undefined = undefined

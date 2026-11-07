@@ -7,15 +7,17 @@ use std::time::Duration;
 use browseros_cdp::CdpError;
 use neo_runtime_spec::serve::{
     BrowserContextCall, BrowserContextCookiesParams, BrowserContextCookiesResult,
-    BrowserContextNewPageResult, BrowserContextStorageStateParams, ConsoleMessagesFilter,
-    NameValue, PageCall, PageChannel, PageClearConsoleMessagesParams,
-    PageClearConsoleMessagesResult, PageClearPageErrorsParams, PageClearPageErrorsResult,
-    PageConsoleMessagesParams, PageConsoleMessagesResult, PageGoBackParams, PageGoBackResult,
-    PageGoForwardParams, PageGoForwardResult, PagePageErrorsParams, PagePageErrorsResult,
-    PageRegisterLocatorHandlerParams, PageRegisterLocatorHandlerResult, PageReloadParams,
-    PageReloadResult, PageRequestsParams, PageRequestsResult,
-    PageResolveLocatorHandlerNoReplyParams, PageResolveLocatorHandlerNoReplyResult,
-    PageUnregisterLocatorHandlerParams, PageUnregisterLocatorHandlerResult, ResponseChannel,
+    BrowserContextNewPageResult, BrowserContextSetNetworkInterceptionPatternsParams,
+    BrowserContextStorageStateParams, ConsoleMessagesFilter, NameValue, PageCall, PageChannel,
+    PageClearConsoleMessagesParams, PageClearConsoleMessagesResult, PageClearPageErrorsParams,
+    PageClearPageErrorsResult, PageConsoleMessagesParams, PageConsoleMessagesResult,
+    PageGoBackParams, PageGoBackResult, PageGoForwardParams, PageGoForwardResult,
+    PagePageErrorsParams, PagePageErrorsResult, PageRegisterLocatorHandlerParams,
+    PageRegisterLocatorHandlerResult, PageReloadParams, PageReloadResult, PageRequestsParams,
+    PageRequestsResult, PageResolveLocatorHandlerNoReplyParams,
+    PageResolveLocatorHandlerNoReplyResult, PageSetNetworkInterceptionPatternsParams,
+    PageSetNetworkInterceptionPatternsResult, PageUnregisterLocatorHandlerParams,
+    PageUnregisterLocatorHandlerResult, ResponseChannel,
 };
 use serde_json::{Value, json};
 use tracing::debug;
@@ -30,6 +32,7 @@ use crate::highlight;
 use crate::history::{self, HistoryOptions};
 use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
+use crate::routes::{self, Patterns};
 use crate::session_state;
 use crate::tabs::{self, PageEntry, Tabs};
 
@@ -84,6 +87,9 @@ pub(crate) async fn context(
         // Playwright: `server/dispatchers/browserContextDispatcher.ts` `BrowserContextDispatcher.pause`: `// Debugger will take care of this.`
         // `setTestIdAttributeName`: `Dispatcher::call` applied it before this call started.
         BrowserContextCall::Pause(_) | BrowserContextCall::SetTestIdAttributeName(_) => Ok(None),
+        BrowserContextCall::SetNetworkInterceptionPatterns(params) => {
+            context_patterns(tabs, params, progress).await
+        }
         BrowserContextCall::Cookies(params) => {
             let cookies = session_state::cookies(tabs, &params.urls, progress).await?;
             encode_result::<BrowserContextCookiesParams>(&BrowserContextCookiesResult { cookies })
@@ -239,6 +245,10 @@ pub(crate) async fn page(
         // `Network.enable`: the first goto, history step or navigation wait, a network event
         // listener, or this read, as Chromium replays no earlier request.
         PageCall::Requests(_) => return requests(tabs, entry, progress).await,
+        // The page's routes (`routes.rs`): its sessions pause every request while one exists.
+        PageCall::SetNetworkInterceptionPatterns(params) => {
+            return set_page_patterns(tabs, entry, params, progress).await;
+        }
         PageCall::Close(_) => close(tabs, entry, progress).await?,
         call @ (PageCall::SetViewportSize(_)
         | PageCall::EmulateMedia(_)
@@ -383,6 +393,48 @@ async fn emulated(
         PageCall::RequestGC(_) => emulation::request_gc(&page, progress).await,
         _ => Err(PlaywrightError::error("neo-runtime: not an emulation call").into()),
     }
+}
+
+/// Neo: `page.route`'s patterns (`setNetworkInterceptionPatterns`): which of the page's requests
+/// pause for its handlers (`routes.rs`).
+async fn set_page_patterns(
+    tabs: &Tabs,
+    entry: &PageEntry,
+    params: PageSetNetworkInterceptionPatternsParams,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let patterns = Patterns::new(params.patterns.into_iter().map(|pattern| {
+        (
+            pattern.glob,
+            pattern.regex_source,
+            pattern.regex_flags,
+            pattern.url_pattern.is_some(),
+        )
+    }))?;
+    let page = progress.race(tabs.session(entry)).await??;
+    routes::set_page_patterns(&page, patterns, progress).await?;
+    encode_result::<PageSetNetworkInterceptionPatternsParams>(
+        &PageSetNetworkInterceptionPatternsResult {},
+    )
+}
+
+/// Neo: `context.route`'s patterns (`setNetworkInterceptionPatterns`): which requests of every
+/// tab of the run pause for the context's handlers (`routes.rs`).
+async fn context_patterns(
+    tabs: &Tabs,
+    params: BrowserContextSetNetworkInterceptionPatternsParams,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let patterns = Patterns::new(params.patterns.into_iter().map(|pattern| {
+        (
+            pattern.glob,
+            pattern.regex_source,
+            pattern.regex_flags,
+            pattern.url_pattern.is_some(),
+        )
+    }))?;
+    routes::set_context_patterns(tabs, patterns, progress).await?;
+    Ok(Some(json!({})))
 }
 
 /// `page.requests()`: what the session's network log recorded, after making sure it records.

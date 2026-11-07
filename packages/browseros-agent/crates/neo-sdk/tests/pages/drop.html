@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Drop</title>
+<style>
+  #dropzone { position: absolute; left: 20px; top: 20px; width: 300px; height: 200px; border: 2px dashed #888; }
+  #nodrop { position: absolute; left: 20px; top: 260px; width: 200px; height: 100px; background: #eee; }
+</style>
+<div id="dropzone"></div>
+<div id="nodrop"></div>
+<script>
+  // tests/page/page-drop.spec.ts `setupDropzone`, plus every event each zone saw.
+  window.__dropInfo = null
+  window.__events = []
+  const zone = document.getElementById('dropzone')
+  zone.addEventListener('dragenter', (e) => e.preventDefault())
+  zone.addEventListener('dragover', (e) => e.preventDefault())
+  zone.addEventListener('drop', async (e) => {
+    e.preventDefault()
+    const files = []
+    for (const file of e.dataTransfer.files)
+      files.push({ name: file.name, type: file.type, size: file.size, text: await file.text(), dated: file.lastModified > 0 })
+    const data = {}
+    for (const t of e.dataTransfer.types) {
+      if (t !== 'Files') data[t] = e.dataTransfer.getData(t)
+    }
+    window.__dropInfo = { files, data }
+  })
+  for (const target of [zone, document.getElementById('nodrop')]) {
+    for (const type of ['dragenter', 'dragover', 'dragleave', 'drop'])
+      target.addEventListener(type, (e) => window.__events.push({
+        target: target.id, type, x: e.clientX, y: e.clientY, trusted: e.isTrusted,
+        bubbles: e.bubbles, cancelable: e.cancelable, composed: e.composed,
+      }))
+  }
+  window.__facts = () => ({ events: window.__events, drop: window.__dropInfo })
+</script>

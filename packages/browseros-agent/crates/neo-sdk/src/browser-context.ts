@@ -42,15 +42,29 @@ import type { ApiName, Connection } from './connection'
 import { ConsoleMessage, type ConsoleMessagePayload } from './console-message'
 import { Debugger } from './debugger'
 import { Dialog } from './dialog'
+import { DisposableStub } from './disposable'
 import { Download } from './download'
 import { parseSerializedError, targetClosedError } from './errors'
-import { ChannelOwner, type EventPipe, type EventTable } from './events'
+import {
+  ChannelOwner,
+  type EventPipe,
+  type EventTable,
+  reportUncaught,
+} from './events'
 import { type Headers, headersObjectToArray, validateHeaders } from './headers'
 import { Disposable, evaluationScript, type InitScript } from './init-script'
 import { assertEvaluateOptions, type EvaluateOptions } from './js-handle'
 import { type Created, requestFromRecord, responseFromRecord } from './network'
 import { Page } from './page'
 import { BROWSER_CONTEXT_CLOSE_KEYS, pickParams } from './protocol'
+import {
+  Route,
+  RouteHandler,
+  type RouteHandlerCallback,
+  type RouteURLMatch,
+  type UnrouteBehavior,
+  urlMatchesEqual,
+} from './route'
 import { type CreatedPage, get } from './runtime-bridge'
 import { TimeoutSettings } from './timeout-settings'
 import { Waiter, type WaitForEventOptions, wrapApiCall } from './waiter'
@@ -157,6 +171,12 @@ export class BrowserContext extends ChannelOwner {
   /** `context@default`, the guid Rust serves this context's getters and calls on. */
   readonly #guid: string
   readonly #connection: Connection
+  /** Playwright's `BrowserContext._routes`: the context's route handlers, newest first. */
+  _routes: RouteHandler[] = []
+  /** Whether the client listens to the context's `route` channel event (`_subscribeChannelEvent`). */
+  #routeListening = false
+  /** The last pattern update sent, which the next one waits for. */
+  #patternsSent: Promise<void> = Promise.resolve()
   /**
    * By guid, every page the run was handed: the run page, every `pages()` record, every
    * `newPage` result. An entry stays for the whole run, so a tab that one read leaves out and
@@ -273,6 +293,148 @@ export class BrowserContext extends ChannelOwner {
       this.#onRequestFinished(params as RequestEndEventParams)
     else if (method === 'requestFailed')
       this.#onRequestFailed(params as RequestEndEventParams)
+    else if (method === 'route') this.#onRouteEvent(params as RouteEventParams)
+  }
+
+  /** The context's `route` event: a request only a context route names. */
+  #onRouteEvent({ route, request, page }: RouteEventParams): void {
+    const pageObject = this.#pageFor(page.guid)
+    const routed = new Route(
+      route.guid,
+      requestFromRecord(this.#connection, request, pageObject),
+      this.#connection,
+      this._timeoutSettings,
+    )
+    this._onRoute(routed, pageObject).catch(reportUncaught)
+  }
+
+  /** Playwright's `BrowserContext._onRoute`: the context's handlers, newest first, then the
+   * network, with what their `fallback()` calls changed. */
+  async _onRoute(route: Route, page?: Page): Promise<void> {
+    const routeHandlers = this._routes
+    for (const routeHandler of routeHandlers.slice()) {
+      // A page or context whose close ran stalls its requests at once, as Playwright's does.
+      if (page?._isClosedLocally() || this.isClosed()) return
+      if (!routeHandler.matches(route.request().url())) continue
+      const index = this._routes.indexOf(routeHandler)
+      if (index === -1) continue
+      if (routeHandler.willExpire()) this._routes.splice(index, 1)
+      const handled = await routeHandler.handle(route)
+      // unrouteAll() replaces _routes and updates the patterns after waiting for handlers.
+      if (routeHandlers === this._routes && !this._routes.length)
+        this.#updateInterceptionPatterns().catch(() => {})
+      if (handled) return
+    }
+    // A closed page, or an unrouteAll() that did not wait, makes this throw: silenced.
+    await route._innerContinue(true).catch(() => {})
+  }
+
+  /** Playwright's `BrowserContext.route`: for every page of the run's context. */
+  async route(
+    url: RouteURLMatch,
+    handler: RouteHandlerCallback,
+    options: { times?: number } = {},
+  ): Promise<DisposableStub> {
+    this.#assertOwnRouting('route')
+    // A bad glob throws here, prefixed; the call's own errors come back prefixed already.
+    const routeHandler = await wrapApiCall(
+      'browserContext.route',
+      async () => new RouteHandler(url, handler, options.times),
+    )
+    this._routes.unshift(routeHandler)
+    await this.#updateInterceptionPatterns()
+    return new DisposableStub(() => this.unroute(url, handler))
+  }
+
+  /** Playwright's `BrowserContext.unrouteAll`. */
+  async unrouteAll(options?: { behavior?: UnrouteBehavior }): Promise<void> {
+    this.#assertOwnRouting('unrouteAll')
+    await this.#unrouteInternal(this._routes, [], options?.behavior)
+  }
+
+  /** Playwright's `BrowserContext.unroute`. */
+  async unroute(
+    url: RouteURLMatch,
+    handler?: RouteHandlerCallback,
+  ): Promise<void> {
+    this.#assertOwnRouting('unroute')
+    const removed: RouteHandler[] = []
+    const remaining: RouteHandler[] = []
+    for (const route of this._routes) {
+      if (
+        urlMatchesEqual(route.url, url) &&
+        (!handler || route.handler === handler)
+      )
+        removed.push(route)
+      else remaining.push(route)
+    }
+    await this.#unrouteInternal(removed, remaining, 'default')
+  }
+
+  /** Deviation: `client/browserContext.ts` `BrowserContext.routeFromHAR` Neo does not serve HAR routing yet. */
+  async routeFromHAR(_har: string, _options?: unknown): Promise<never> {
+    this.#assertOwnRouting('routeFromHAR')
+    throw new Error(
+      'browserContext.routeFromHAR: neo-runtime: routeFromHAR is not served yet',
+    )
+  }
+
+  /** Deviation: `client/browserContext.ts` `BrowserContext.routeWebSocket` Neo does not serve WebSocket routing yet. */
+  async routeWebSocket(_url: RouteURLMatch, _handler: unknown): Promise<never> {
+    this.#assertOwnRouting('routeWebSocket')
+    throw new Error(
+      'browserContext.routeWebSocket: neo-runtime: routeWebSocket is not served yet',
+    )
+  }
+
+  /** Deviation: `client/browserContext.ts` `BrowserContext.route` Created-context route, unroute, unrouteAll, routeFromHAR and routeWebSocket calls fail before changing handlers; Neo serves context routes only on the run's own context. */
+  #assertOwnRouting(method: string): void {
+    if (this.#guid !== 'context@default') {
+      throw new Error(
+        `browserContext.${method}: neo-runtime: ${method} is not served yet for a context browser.newContext created, only for the run's own context`,
+      )
+    }
+  }
+
+  async #unrouteInternal(
+    removed: RouteHandler[],
+    remaining: RouteHandler[],
+    behavior?: UnrouteBehavior,
+  ): Promise<void> {
+    this._routes = remaining
+    if (behavior && behavior !== 'default')
+      await Promise.all(removed.map((handler) => handler.stop(behavior)))
+    await this.#updateInterceptionPatterns()
+  }
+
+  /** Playwright's `BrowserContext._updateInterceptionPatterns`; the client listens to the
+   * context's `route` event while it has routes. The updates queue, as the page's do. */
+  async #updateInterceptionPatterns(): Promise<void> {
+    const update = this.#patternsSent.then(() =>
+      this.#sendInterceptionPatterns(),
+    )
+    this.#patternsSent = update.catch(() => {})
+    await update
+  }
+
+  async #sendInterceptionPatterns(): Promise<void> {
+    const patterns = RouteHandler.prepareInterceptionPatterns(this._routes)
+    const listening = patterns.length > 0
+    if (listening && !this.#routeListening) {
+      this.#routeListening = true
+      this._subscribeChannelEvent('route', true)
+    }
+    await this.#connection.sendContext(
+      'browserContext.route',
+      this._guid,
+      'setNetworkInterceptionPatterns',
+      { patterns },
+      0,
+    )
+    if (!this._routes.length && this.#routeListening) {
+      this.#routeListening = false
+      this._subscribeChannelEvent('route', false)
+    }
   }
 
   /** A call of the context's binding: on its page's frame, answered by the context's callback. */
@@ -922,6 +1084,13 @@ interface PageErrorEventParams {
 
 /** Playwright's `request` event params (`spec/playwright/browserContext.yml`), with Neo's full
  * record in place of a `__create__` reference. */
+/** The context's `route` event params from Rust (`routes.rs`), naming the request's page. */
+interface RouteEventParams {
+  route: { guid: string }
+  request: Created<RequestInitializer>
+  page: { guid: string }
+}
+
 interface RequestEventParams {
   request: Created<RequestInitializer>
   page: PageChannel

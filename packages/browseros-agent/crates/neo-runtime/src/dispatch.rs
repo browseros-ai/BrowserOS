@@ -45,18 +45,18 @@ use neo_runtime_spec::serve::{
     ArtifactCall, BrowserCall, BrowserContextCall, DebuggerCall, DialogCall,
     FrameAriaSnapshotJSONParams, FrameAriaSnapshotParams, FrameCall, FrameCheckParams,
     FrameCheckResult, FrameClickParams, FrameContentParams, FrameDblclickParams,
-    FrameDragAndDropParams, FrameDragAndDropResult, FrameFillParams, FrameFillResult,
-    FrameGetAttributeParams, FrameGotoParams, FrameHoverParams, FrameInnerHTMLParams,
-    FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams,
-    FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult, FrameIsEditableParams,
-    FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult, FrameIsHiddenParams,
-    FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams,
-    FramePressResult, FrameQueryCountParams, FrameResolveSelectorParams, FrameSelectOptionParams,
-    FrameSelectOptionResult, FrameSetContentParams, FrameSetContentResult, FrameTapParams,
-    FrameTextContentParams, FrameTitleParams, FrameTypeParams, FrameTypeResult, FrameUncheckParams,
-    FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
-    FrameWaitForTimeoutParams, FrameWaitForTimeoutResult, Metadata, PageCall, RequestCall,
-    ResponseCall,
+    FrameDragAndDropParams, FrameDragAndDropResult, FrameDropParams, FrameDropResult,
+    FrameFillParams, FrameFillResult, FrameGetAttributeParams, FrameGotoParams, FrameHoverParams,
+    FrameInnerHTMLParams, FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult,
+    FrameIsCheckedParams, FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult,
+    FrameIsEditableParams, FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult,
+    FrameIsHiddenParams, FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult,
+    FramePressParams, FramePressResult, FrameQueryCountParams, FrameResolveSelectorParams,
+    FrameSelectOptionParams, FrameSelectOptionResult, FrameSetContentParams, FrameSetContentResult,
+    FrameSetInputFilesParams, FrameSetInputFilesResult, FrameTapParams, FrameTextContentParams,
+    FrameTitleParams, FrameTypeParams, FrameTypeResult, FrameUncheckParams, FrameUncheckResult,
+    FrameWaitForSelectorParams, FrameWaitForSelectorResult, FrameWaitForTimeoutParams,
+    FrameWaitForTimeoutResult, Metadata, PageCall, RequestCall, ResponseCall, RouteCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -80,6 +80,7 @@ use crate::devices::{self, DeviceCall};
 use crate::dialogs;
 use crate::downloads;
 use crate::drag::{self, DragOptions};
+use crate::drop_on;
 use crate::element_ops::{
     self, BOUNDING_BOX_META, DispatchOptions, ElementTarget, NeoElementParams, NeoSelectTextParams,
     SCROLL_INTO_VIEW_META, SELECT_TEXT_META,
@@ -112,7 +113,9 @@ use crate::progress::{
 };
 use crate::reads::{self, AttributeOptions, ReadOptions, SnapshotOptions};
 use crate::responses::{self, NetworkCall};
+use crate::routes;
 use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
+use crate::set_input_files;
 use crate::states::{self, StateOptions};
 use crate::tab_calls;
 use crate::tabs::{PageEntry, Tabs};
@@ -380,6 +383,9 @@ enum ObjectKind {
     BindingCall(String),
     /// A JavaScript dialog the run's `dialog` event handed out, by its index on the tab.
     Dialog(u64),
+    /// A paused request the run's `route` event handed out (Playwright's `Route`), by its index
+    /// on the tab; named apart from this module's call-routing `Route`.
+    Intercepted(u64),
     /// A download the run's `download` event handed out, by the browser's guid
     /// (`downloads.rs`). It belongs to the run, not to its tab, which may close first.
     Download(String),
@@ -415,6 +421,8 @@ enum ObjectCall {
     /// A binding command (`bindings.rs`).
     Binding(BindingRoute),
     Dialog(u64, DialogCall),
+    /// A paused request's answer or `route.fetch` (`routes.rs`).
+    Intercepted(u64, routes::InterceptedCall),
     Download(String, ArtifactCall),
 }
 
@@ -450,6 +458,10 @@ enum Route {
     FrameIsEditable(StateOptions),
     FrameSetChecked(CheckOptions),
     FrameSelectOption(SelectOptions),
+    /// `Frame.setInputFiles` (`set_input_files.rs`).
+    FrameSetInputFiles(FrameSetInputFilesParams),
+    /// `Frame.drop`, behind `Locator.drop` (`drop_on.rs`).
+    FrameDrop(FrameDropParams),
     FrameWaitForSelector(WaitForSelectorOptions),
     /// `Frame.frameElement` (`frame_element.rs`).
     FrameFrameElement,
@@ -693,6 +705,13 @@ impl Dispatcher {
         // sessions detach (`Dialogs::left_open`).
         self.0.tabs.events().close();
         let _answered = time::timeout_at(deadline, answer_left_open(&self.0.tabs)).await;
+        // Every request a route handler left paused goes on, and no tab keeps pausing requests
+        // for a run that is over (`routes.rs`).
+        let _routed = time::timeout_at(deadline, async {
+            let sessions = self.0.tabs.attached_sessions();
+            future::join_all(sessions.iter().map(|session| routes::finish(session))).await;
+        })
+        .await;
         // Keys and buttons this run left held are released on each tab it touched, under a
         // turn (design section 4.6), once the dialogs it left open are answered. Each tab's
         // release is a task of the run's tracker, started before the tracker closes, so the
@@ -932,6 +951,7 @@ fn debugger_context(
         ObjectKind::Page
         | ObjectKind::Frame
         | ObjectKind::Network(..)
+        | ObjectKind::Intercepted(_)
         | ObjectKind::Handle(_)
         | ObjectKind::Dialog(_) => target.map(|(page, _)| page.context_id()),
     }
@@ -1048,6 +1068,23 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         }
         ObjectKind::Dialog(index) => DialogCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
+        ObjectKind::Intercepted(index) if method == routes::FETCH_META.method => {
+            return Routed {
+                meta: Some(&routes::FETCH_META),
+                route: decode_neo_params::<routes::NeoRouteFetchParams>(
+                    params,
+                    &routes::FETCH_META,
+                )
+                .map(|params| {
+                    ObjectCall::Intercepted(index, routes::InterceptedCall::Fetch(params))
+                }),
+            };
+        }
+        ObjectKind::Intercepted(index) => RouteCall::decode(method, params).map(|call| {
+            let meta = call.meta();
+            let route = ObjectCall::Intercepted(index, routes::InterceptedCall::Answer(call));
+            (meta, Ok(route))
+        }),
         ObjectKind::Download(guid) => ArtifactCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Download(guid, call)))),
         // `route_init` answers every Disposable and BindingCall message.
@@ -1363,6 +1400,8 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::SelectOption(params) => {
             Ok(Route::FrameSelectOption(SelectOptions::from_params(params)))
         }
+        FrameCall::SetInputFiles(params) => Ok(Route::FrameSetInputFiles(params)),
+        FrameCall::Drop(params) => Ok(Route::FrameDrop(params)),
         FrameCall::WaitForSelector(params) => Ok(Route::FrameWaitForSelector(
             WaitForSelectorOptions::from_params(params),
         )),
@@ -1432,8 +1471,12 @@ async fn serve_call(
     // context call (`newPage`) waits for target discovery's baseline. A dialog's answer never
     // waits: an open dialog can hold that very enable, and only the answer frees the page.
     let gate = match (&route, &target) {
-        // A download's calls start nothing in a page; `cancel` must not wait for a page's enables.
-        (ObjectCall::Dialog(..) | ObjectCall::Download(..), _) => None,
+        // A route's answer never waits either: the paused request may be what the page's
+        // enable, or the script's goto, waits for. A download's calls start nothing in a page;
+        // `cancel` must not wait for a page's enables.
+        (ObjectCall::Dialog(..) | ObjectCall::Download(..) | ObjectCall::Intercepted(..), _) => {
+            None
+        }
         (ObjectCall::Context(_), _) => Some(ALL_PAGES),
         (_, Some((page, _))) => Some(page.id.as_str()),
         (_, None) => None,
@@ -1524,6 +1567,11 @@ async fn serve_call(
         // A dialog exists only after its tab's watcher saw it open on this run's session.
         (ObjectCall::Dialog(index, call), Some((page, _))) => match page.attached_session() {
             Some(session) => dialogs::serve(&session, index, call, &progress).await,
+            None => Err(PlaywrightError::target_closed().into()),
+        },
+        // A paused request exists only after its tab's watcher handed it to this run.
+        (ObjectCall::Intercepted(index, call), Some((page, _))) => match page.attached_session() {
+            Some(session) => routes::serve_intercepted(&session, index, call, &progress).await,
             None => Err(PlaywrightError::target_closed().into()),
         },
         (ObjectCall::Download(guid, call), _) => {
@@ -1655,6 +1703,9 @@ async fn serve(
         | Route::FrameWaitForTimeout(_)
         | Route::FrameResolveSelector(_)
         | Route::FrameAriaSnapshotJson(_)) => serve_document(&page, route, &progress).await,
+        route @ (Route::FrameSetInputFiles(_) | Route::FrameDrop(_)) => {
+            serve_files(&page, route, &progress).await
+        }
         route @ (Route::FrameFocus(_)
         | Route::FrameBlur(_)
         | Route::FrameDispatchEvent(_)
@@ -1666,6 +1717,31 @@ async fn serve(
         route => serve_route(&page, route, &progress).await,
     };
     finish_reply(result, reply).await;
+}
+
+/// The file calls `serve` answers on the call's page: `setInputFiles` and `drop`, which read
+/// the run's artifact directory. Each replies `{}`.
+async fn serve_files(
+    page: &FrameTab,
+    route: Route,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    match route {
+        Route::FrameSetInputFiles(params) => {
+            set_input_files::set_input_files(page, params, progress)
+                .await
+                .and_then(|()| {
+                    encode_result::<FrameSetInputFilesParams>(&FrameSetInputFilesResult {})
+                })
+        }
+        Route::FrameDrop(params) => drop_on::drop_on(page, params, progress)
+            .await
+            .and_then(|()| encode_result::<FrameDropParams>(&FrameDropResult {})),
+        _ => Err(PlaywrightError::error(
+            "neo-runtime: `serve_files` serves setInputFiles and drop only",
+        )
+        .into()),
+    }
 }
 
 /// The element operations `serve` answers on the call's page (`element_ops.rs`,
@@ -1930,6 +2006,8 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameBoundingBox(_)
         | Route::FrameHighlight(_)
         | Route::FrameHideHighlight(_)
+        | Route::FrameSetInputFiles(_)
+        | Route::FrameDrop(_)
         | Route::FrameWaitForNavigation(_)
         | Route::FrameNextNavigation(_)
         | Route::FrameFinishNavigation(_)
@@ -1962,6 +2040,8 @@ fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
         ObjectKind::Network(kind, hop)
     } else if let Some((_, index)) = dialogs::parse(guid) {
         ObjectKind::Dialog(index)
+    } else if let Some((_, index)) = routes::parse(guid) {
+        ObjectKind::Intercepted(index)
     } else {
         ObjectKind::Page
     }
@@ -2295,6 +2375,7 @@ mod tests {
             | ObjectCall::Capture(_)
             | ObjectCall::Binding(_)
             | ObjectCall::Dialog(..)
+            | ObjectCall::Intercepted(..)
             | ObjectCall::Download(..) => {
                 panic!("a Frame message routed to another object")
             }

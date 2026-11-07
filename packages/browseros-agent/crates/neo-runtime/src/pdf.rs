@@ -414,6 +414,7 @@ mod tests {
                 closed: closed.clone(),
                 hub: EventHub::default(),
                 test_id: Arc::default(),
+                context_routes: Arc::default(),
                 discovered: false,
             },
         ))
