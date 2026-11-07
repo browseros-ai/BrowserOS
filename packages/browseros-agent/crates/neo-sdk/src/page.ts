@@ -10,8 +10,13 @@ import type {
 } from '@browseros/neo-runtime-spec/serve'
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
 import { isString } from '../vendor/playwright/isomorphic/stringUtils'
+import {
+  BindingCall,
+  type BindingCallback,
+  type BindingCallRecord,
+} from './binding-call'
 import type { BrowserContext } from './browser-context'
-import type { Connection } from './connection'
+import type { ApiName, Connection } from './connection'
 import { ConsoleMessage } from './console-message'
 import type { ElementHandle } from './element-handle'
 import {
@@ -170,6 +175,8 @@ export class Page extends ChannelOwner {
   #closedLocally = false
   /** Playwright's `_closeReason`: what `close({ reason })` was given. */
   #closeReason: string | undefined
+  /** The page's exposed callbacks, by name (Playwright's `Page._bindings`). */
+  readonly _bindings = new Map<string, BindingCallback>()
 
   /** `guid` and `mainFrameGuid` come from one record Rust minted (`page@T`, `frame@T`), so a
    * page's calls and its frame's calls reach the same tab. */
@@ -286,6 +293,39 @@ export class Page extends ChannelOwner {
       this.#onFrameDetached((params as FrameEventParams).frame)
     else if (method === 'frameNavigated')
       this.#onFrameNavigated(params as FrameEventParams)
+    else if (method === 'bindingCall')
+      void this._onBinding((params as { binding: BindingCallRecord }).binding)
+  }
+
+  /** Playwright: `client/page.ts` `Page._onBinding`: `await this._browserContext._onBinding(bindingCall);` */
+  async _onBinding(record: BindingCallRecord): Promise<void> {
+    const call = new BindingCall(
+      this.#connection,
+      record,
+      this._frameForGuid(record.frame.guid),
+    )
+    const func = this._bindings.get(record.name)
+    if (func) {
+      await call.call(func)
+      return
+    }
+    await this.#context._onBinding(call)
+  }
+
+  /**
+   * The frame a binding call came from: the frame object this page already has for `guid`, the
+   * one it held when that frame detached included, as Playwright's client resolves the call's
+   * frame channel to its object. A frame the page never handed out gets its object now.
+   *
+   * Playwright: `server/page.ts` `PageBinding.dispatch`: `const result = await binding.playwrightFunction({ frame: context.frame, page, context: page.browserContext }, ...args);`
+   */
+  _frameForGuid(guid: string): Frame {
+    let frame = this.#frames.get(guid)
+    if (!frame) {
+      frame = new Frame(guid, this, this.#connection)
+      this.#frames.set(guid, frame)
+    }
+    return frame
   }
 
   /** Playwright's `Page._onFrameAttached`: a frame attaches with no name or URL yet. */
@@ -525,6 +565,52 @@ export class Page extends ChannelOwner {
   /** The navigation's `Response`, or `null` where Playwright's has none. */
   async goto(url: string, options: GotoOptions = {}): Promise<Response | null> {
     return await this.#mainFrame._goto('page.goto', url, options)
+  }
+
+  /** Playwright's `page.exposeFunction`: `window[name](...args)` in every frame of the page calls
+   * `callback(...args)` in the run and answers with its result. `dispose()` removes it. */
+  async exposeFunction(
+    name: string,
+    // biome-ignore lint/suspicious/noExplicitAny: Playwright's callback type.
+    callback: (...args: any[]) => unknown,
+  ): Promise<Disposable> {
+    return await this.#expose('page.exposeFunction', name, (_source, ...args) =>
+      callback(...args),
+    )
+  }
+
+  /** Playwright's `page.exposeBinding`: as `exposeFunction`, with the call's
+   * `{ context, page, frame }` first. */
+  async exposeBinding(
+    name: string,
+    callback: BindingCallback,
+  ): Promise<Disposable> {
+    return await this.#expose('page.exposeBinding', name, callback)
+  }
+
+  async #expose(
+    apiName: ApiName,
+    name: string,
+    callback: BindingCallback,
+  ): Promise<Disposable> {
+    // Deviation: `client/page.ts` `Page.exposeBinding`: `this._bindings.set(name, callback);` Playwright sets the callback after its answer; Neo before, as the answer's events, a first page call among them, run before the caller goes on.
+    const previous = this._bindings.get(name)
+    this._bindings.set(name, callback)
+    this._subscribeChannelEvent('bindingCall')
+    try {
+      const result = await this.#connection.sendBinding(
+        apiName,
+        this.#guid,
+        'exposeBinding',
+        { name },
+        0,
+      )
+      return new Disposable(this.#connection, result.disposable.guid)
+    } catch (error) {
+      if (previous) this._bindings.set(name, previous)
+      else this._bindings.delete(name)
+      throw error
+    }
   }
 
   /** Playwright's `page.addInitScript`: `script` (a function called with `arg`, source text, or

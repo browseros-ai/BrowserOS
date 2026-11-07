@@ -3,12 +3,14 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (53)
+## Deviations (57)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
 | neo-runtime-injected/src/add-tag.ts | (file) | `server/frames.ts` `Frame._raceWithCSPError` | Playwright rejects a tag the page's Content Security Policy blocked by watching the console; Neo watches no console, so it waits for the document's `securitypolicyviolation` event instead, one task after the tag (Chromium reports an inline script's violation in a later task), and rejects with an Error naming the policy. |
+| neo-runtime-injected/src/bindings-call.ts | `endRun` | `server/page.ts` `Page.removeExposedBinding` | Playwright's bindings live as long as their page; Neo's end with the run, and a call still waiting on one is refused. |
 | neo-runtime-injected/src/main-injected.ts | `MainWorldInjectedScript` | `injected/src/injectedScript.ts` `InjectedScript.constructor` | Neo's main-world instance adds no window listener or document observer. |
+| neo-runtime/src/bindings.rs | `Bindings::close` | `server/page.ts` `Page.removeExposedBinding` | Playwright's bindings live as long as their page or context; Neo's live as long as the run. |
 | neo-runtime/src/click.rs | `PointerOptions::from_tap` | `server/frames.ts` `Frame.tap` | Neo's run attaches to the user's BrowserOS context, which has no hasTouch option, and its tab answers Input.dispatchTouchEvent with the events of a hasTouch context, so Neo taps where Playwright refuses. |
 | neo-runtime/src/click.rs | `attempt` | `server/dom.ts` `ElementHandle._performPointerAction` | Playwright's trial still performs the input into an interceptor that blocks every event it judges, which the page's earlier listeners and the hover state still see; Neo's trial ends at its checks and sends no input. Dropping the interceptor disarms it, and the tab's input comes back once that stop has answered. |
 | neo-runtime/src/click.rs | `refuse_unserved` | `server/dom.ts` `ElementHandle._performPointerAction` | Neo's tab keeps no keyboard state yet to press and restore them with, so it refuses them before any work. |
@@ -36,6 +38,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/page.rs | `apply_frame` | `server/chromium/chromiumSwitches.ts` `chromiumSwitches` | Playwright's Chromium never restores a cached document, and one it met would never fire `load`, so its history navigation would time out. Neo runs in the user's browser, where Chromium caches only a document that finished loading and restores it without lifecycle events, reporting `frameStoppedLoading` before this commit (measured on BrowserOS neo): it counts as loaded at once. |
 | neo-runtime/src/reads.rs | `UNNAMED_FRAME` | `server/page.ts` `ariaSnapshotJSONForFrame` | Playwright names a child frame's refs by the frame's number, which needs no ref on its `<iframe>`; Neo's refs inside a frame are the path of iframe refs from the main frame, and an iframe that is not visible or receives no pointer events gets no ref unless an earlier snapshot gave it one. So an AI snapshot inside a frame behind such an iframe throws, before that frame is snapshotted, rather than answer refs no selector could route. |
 | neo-runtime/src/realm.rs | `RACE_UNCAUGHT` | `client/eventEmitter.ts` `EventEmitter._handleListenerError` | A listener's throw, or its rejection with no `error` listener, is an uncaught exception in Node, which exits. QuickJS has no such exit, so neo-sdk reports the first one on its `uncaught` promise, and the run ends with that error at once instead of running on. |
+| neo-sdk/src/browser-context.ts | `BrowserContext.#expose` | `client/browserContext.ts` `BrowserContext.exposeBinding` | Playwright sets the callback after its answer; Neo before, as the answer's events, a first page call among them, run before the caller goes on. |
 | neo-sdk/src/browser-context.ts | `BrowserContext.addInitScript` | `client/browserContext.ts` `BrowserContext.addInitScript` | Neo has no page-to-realm callback yet. |
 | neo-sdk/src/browser-context.ts | `BrowserContext.addInitScript` | `client/browserContext.ts` `BrowserContext.addInitScript` | Playwright sends no signal and ignores one; Neo refuses it. |
 | neo-sdk/src/browser-context.ts | `BrowserContext.newPage` | `server/chromium/crBrowser.ts` `CRBrowserContext.doCreateNewPage` | Playwright's new page takes the window's focus. Neo opens it in the background of the run page's window, by design: the user's active tab stays active until a script calls `bringToFront`. |
@@ -49,6 +52,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-sdk/src/init-script.ts | `evaluationScript` | `client/clientHelper.ts` `evaluationScript` | Neo reads files only from the run's artifact directory. |
 | neo-sdk/src/js-handle.ts | `evaluateParams` | `client/jsHandle.ts` `JSHandle.evaluate` | Neo has no realm callback from the page, so it refuses the option rather than ignore it. |
 | neo-sdk/src/js-handle.ts | `evaluateParams` | `client/jsHandle.ts` `JSHandle.evaluate` | Playwright's evaluations send no signal and ignore one; Neo refuses any signal rather than ignore one. |
+| neo-sdk/src/page.ts | `Page.#expose` | `client/page.ts` `Page.exposeBinding` | Playwright sets the callback after its answer; Neo before, as the answer's events, a first page call among them, run before the caller goes on. |
 | neo-sdk/src/page.ts | `Page.addInitScript` | `client/page.ts` `Page.addInitScript` | Neo has no page-to-realm callback yet. |
 | neo-sdk/src/page.ts | `Page.addInitScript` | `client/page.ts` `Page.addInitScript` | Playwright sends no signal and ignores one; Neo refuses it. |
 | neo-sdk/src/page.ts | `Page.bringToFront` | `server/chromium/crPage.ts` `CRPage.bringToFront` | Playwright sends `Page.bringToFront` alone. Neo also activates the tab in BrowserOS's tab strip when it is not the active one, which `Page.bringToFront` leaves as it was. |

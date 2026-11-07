@@ -1090,6 +1090,7 @@ pub(crate) async fn evaluate(
     let (document, called) = invoke(
         tab,
         &Invocation {
+            context: None,
             frame,
             receiver,
             expression: &evaluation.expression,
@@ -1131,6 +1132,9 @@ enum Extra<'a> {
 /// after the agent's handles.
 struct Invocation<'a> {
     frame: &'a Arc<FrameContext>,
+    /// The execution context a binding call's answer is pinned to (`MainWorld::call_in`), never
+    /// installed again for; `None` for every other call.
+    context: Option<i64>,
     /// The handle whose document must still be the frame's (Playwright's destroyed context).
     receiver: Option<&'a HandleEntry>,
     expression: &'a str,
@@ -1182,7 +1186,19 @@ async fn invoke_with(
     let mut attempt = 0;
     loop {
         attempt += 1;
-        let installed = installed(tab, frame, invocation.receiver, progress).await?;
+        let installed = if invocation.context.is_some() {
+            // A pinned call answers one document: that document's install or none. A document
+            // gone drops the call, never waits for the next one.
+            match progress.race(frame.main.installed(frame)).await? {
+                Ok(installed) => installed,
+                Err(PageError::NotConnected) => {
+                    return Err(PlaywrightError::error(CONTEXT_DESTROYED).into());
+                }
+                Err(error) => return Err(page_error(error).into()),
+            }
+        } else {
+            installed(tab, frame, invocation.receiver, progress).await?
+        };
         let wants_injected = invocation
             .extras
             .iter()
@@ -1233,12 +1249,14 @@ async fn invoke_with(
             let installed = Arc::clone(&installed);
             let group = group.clone();
             let return_by_value = invocation.return_by_value;
+            let context = invocation.context;
             Box::pin(async move {
                 frame
                     .main
-                    .call(
+                    .call_in(
                         &frame,
                         &installed,
+                        context,
                         MainFunction::Evaluate,
                         values,
                         return_by_value,
@@ -1253,7 +1271,11 @@ async fn invoke_with(
         }
         .map_err(page_error)?;
         match called {
-            Called::Stale if attempt == 1 => frame.main.invalidate(&installed).await,
+            // A pinned call's context is gone with its document: installing in the next one
+            // would answer a call that document never made.
+            Called::Stale if attempt == 1 && invocation.context.is_none() => {
+                frame.main.invalidate(&installed).await;
+            }
             called => return Ok((installed.document, called)),
         }
     }
@@ -1280,6 +1302,109 @@ fn tag_source(
     })
 }
 
+/// Neo: runs built `expression` on page-format `leading` arguments in `tab`'s frame's main
+/// world, by value, outside any call of the run (`bindings.rs`'s installs, removals and run
+/// end, as Playwright's `safeNonStallingEvaluateInAllFrames`): a gone document or a throw is the
+/// caller's to ignore.
+///
+/// # Errors
+///
+/// The frame's [`PageError`]; a throw or a stale document reads `NotConnected`.
+pub(crate) async fn run_built(
+    tab: &FrameTab,
+    expression: BuiltExpression,
+    leading: Vec<Value>,
+) -> Result<(), PageError> {
+    let frame = tab.context().await?;
+    run_built_on(&frame, None, expression, leading).await
+}
+
+/// Neo: [`run_built`] on `frame`, a frame context as the caller kept it, never the frame's
+/// current one, and in the execution context `context` names when given
+/// (`MainWorld::call_in`): `bindings.rs` refuses a binding call in the context that made it.
+///
+/// # Errors
+///
+/// As [`run_built`].
+pub(crate) async fn run_built_on(
+    frame: &Arc<FrameContext>,
+    context: Option<i64>,
+    expression: BuiltExpression,
+    leading: Vec<Value>,
+) -> Result<(), PageError> {
+    let installed = frame.main.installed(frame).await?;
+    let mut values = vec![
+        json!({ "value": true }),
+        json!({ "value": true }),
+        json!({ "value": expression.source() }),
+        json!({ "value": leading.len() }),
+    ];
+    values.extend(leading.into_iter().map(|value| json!({ "value": value })));
+    match frame
+        .main
+        .call_in(
+            frame,
+            &installed,
+            context,
+            MainFunction::Evaluate,
+            values,
+            true,
+            None,
+        )
+        .await?
+    {
+        Called::Value(_) | Called::Object(_) => Ok(()),
+        Called::Threw(_) | Called::Stale | Called::Protocol(_) => Err(PageError::NotConnected),
+    }
+}
+
+/// Neo: [`run_built`] within a call of the run, with the agent's `arg` (and its handles) after
+/// `leading`, on `frame` as the caller kept it and pinned to its execution context `context`
+/// (`MainWorld::call_in`): `bindings.rs` answers a binding call in the context that made it,
+/// through the session it came from, so an answer for a document that is gone is dropped
+/// (Playwright's `PageBinding.dispatch` logs the failed evaluation).
+///
+/// # Errors
+///
+/// The call's error; a throw in the page is Playwright's plain `Error`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "an invocation's every part, and the frame context and execution context it is pinned to"
+)]
+pub(crate) async fn call_built_on(
+    tab: &FrameTab,
+    frame: &Arc<FrameContext>,
+    context: i64,
+    expression: BuiltExpression,
+    leading: Vec<Value>,
+    arg: &SerializedArgument,
+    handles: &Handles,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let leading = move |_: usize| leading.clone();
+    let (_, called) = invoke(
+        tab,
+        &Invocation {
+            context: Some(context),
+            frame,
+            receiver: None,
+            expression: expression.source(),
+            is_function: Some(true),
+            return_by_value: true,
+            leading: &leading,
+            extras: &[],
+            arg,
+        },
+        handles,
+        progress,
+    )
+    .await?;
+    match called {
+        Called::Threw(message) => Err(PlaywrightError::error(message).into()),
+        _ => Ok(()),
+    }
+}
+
 /// `Frame.addScriptTag` / `addStyleTag`: the new element, as an `ElementHandle` of the run.
 async fn add_tag(
     tab: &FrameTab,
@@ -1300,6 +1425,7 @@ async fn add_tag(
     let (document, called) = invoke(
         tab,
         &Invocation {
+            context: None,
             frame: &frame,
             receiver: None,
             expression: BuiltExpression::AddTag.source(),
@@ -1761,6 +1887,7 @@ async fn eval_on_selector_all(
     let invoked = invoke(
         tab,
         &Invocation {
+            context: None,
             frame: &frame,
             receiver: None,
             expression: &evaluation.expression,
@@ -1802,6 +1929,7 @@ async fn get_property(
     let (document, called) = invoke(
         tab,
         &Invocation {
+            context: None,
             frame: &frame,
             receiver: Some(receiver),
             expression: BuiltExpression::GetProperty.source(),
@@ -1923,6 +2051,7 @@ async fn wait_once(
     let started = invoke_with(
         tab,
         &Invocation {
+            context: None,
             frame,
             receiver: None,
             expression: BuiltExpression::WaitForFunction.source(),
@@ -1963,6 +2092,7 @@ async fn wait_once(
     let answered = invoke(
         tab,
         &Invocation {
+            context: None,
             frame,
             receiver: None,
             expression: BuiltExpression::WaitResult.source(),
@@ -2164,6 +2294,7 @@ async fn call_on_element_once(
     let called = invoke(
         tab,
         &Invocation {
+            context: None,
             frame: &frame,
             receiver: target.scope,
             expression: BuiltExpression::CallOnElement.source(),

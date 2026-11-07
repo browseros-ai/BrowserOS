@@ -61,6 +61,7 @@ use tokio::time::Instant;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
+use crate::bindings::{self, BindingRoute, Outcome};
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::dialogs;
@@ -103,9 +104,10 @@ use crate::waits::{
 /// Unkept creations close their tabs when their late acknowledgements arrive.
 const RECORDS_WAIT: Duration = Duration::from_secs(1);
 
-/// Neo: how long removing the run's init scripts may take at run end, apart from
-/// [`RECORDS_WAIT`]: a session it does not reach keeps a script the next run's documents would
-/// run. Free for a run that added none.
+/// Neo: how long run end may take removing the run's init scripts and ending its bindings in
+/// its pages (`init_scripts.rs`, `bindings.rs`), apart from [`RECORDS_WAIT`]: a session it does
+/// not reach keeps a script the next run's documents would run, or a binding whose calls never
+/// settle. Free for a run that used neither.
 const PAGE_END_WAIT: Duration = Duration::from_secs(3);
 
 /// The most browser calls one run may have unfinished at once. Each holds its params, its call
@@ -296,8 +298,10 @@ enum ObjectKind {
     Network(NetworkObject, HopId),
     /// A run's `JSHandle` or `ElementHandle` (`evaluate.rs`), by guid.
     Handle(String),
-    /// An init script's `Disposable` (`init_scripts.rs`), by guid.
+    /// An init script's or a binding's `Disposable` (`init_scripts.rs`, `bindings.rs`), by guid.
     Disposable(String),
+    /// A binding call the realm answers (`bindings.rs`), by guid.
+    BindingCall(String),
     /// A JavaScript dialog the run's `dialog` event handed out, by its index on the tab.
     Dialog(u64),
     Unknown,
@@ -310,6 +314,8 @@ enum ObjectCall {
     Network(NetworkCall),
     /// An init script command (`init_scripts.rs`).
     Init(InitRoute),
+    /// A binding command (`bindings.rs`).
+    Binding(BindingRoute),
     Dialog(u64, DialogCall),
 }
 
@@ -478,9 +484,14 @@ impl Dispatcher {
         let deadline = Instant::now() + RECORDS_WAIT;
         let run = &self.0.run;
         run.end(reason);
-        // The run's init scripts go first, on a budget of their own: removal never waits on a
-        // call still running, so no document loaded after the run returns runs one.
-        let _removed = time::timeout(PAGE_END_WAIT, run.init_scripts.close()).await;
+        // The run's init scripts go first, then its bindings, on a budget of their own: neither
+        // waits on a call still running, so no document loaded after the run returns runs one
+        // of its scripts, and no page keeps one of its bindings.
+        let _removed = time::timeout(PAGE_END_WAIT, async {
+            run.init_scripts.close().await;
+            run.bindings.close(&self.0.tabs).await;
+        })
+        .await;
         // The realm is gone with its listeners: from now on the watchers answer dialogs
         // themselves, and a dialog a listener left open gets the default answer before the
         // sessions detach (`Dialogs::left_open`).
@@ -525,6 +536,12 @@ async fn init_call(
             }
             guid
         }
+        InitRoute::Dispose(guid) if bindings::owns(&guid) => {
+            progress
+                .race(progress.bindings().dispose(tabs, scripts, &guid))
+                .await??;
+            return Ok(Some(json!({})));
+        }
         InitRoute::Dispose(guid) => {
             progress.race(scripts.dispose(&guid)).await??;
             return Ok(Some(json!({})));
@@ -551,6 +568,29 @@ fn route_init(
             route: init_scripts::source_of(&PAGE_ADD_INIT_SCRIPT_META, params)
                 .map(|source| ObjectCall::Init(InitRoute::Page(source))),
         }),
+        ObjectKind::Context | ObjectKind::Page
+            if method == bindings::PAGE_EXPOSE_BINDING_META.method =>
+        {
+            let (meta, route) =
+                bindings::decode_expose(matches!(object, ObjectKind::Context), params);
+            Ok(Routed {
+                meta: Some(meta),
+                route: route.map(ObjectCall::Binding),
+            })
+        }
+        ObjectKind::BindingCall(guid) => Ok(match bindings::decode_call(&guid, method, params) {
+            Some((meta, route)) => Routed {
+                meta: Some(meta),
+                route: route.map(ObjectCall::Binding),
+            },
+            None => Routed {
+                meta: None,
+                // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection.dispatch`: `Mismatching dispatcher: "${dispatcher._type}" does not implement "${method}"`
+                route: Err(PlaywrightError::error(format!(
+                    "Mismatching dispatcher: \"BindingCall\" does not implement \"{method}\""
+                ))),
+            },
+        }),
         ObjectKind::Disposable(guid) => {
             Ok(Routed {
                 meta: Some(&DISPOSABLE_DISPOSE_META),
@@ -566,6 +606,40 @@ fn route_init(
         }
         object => Err((object, params)),
     }
+}
+
+/// A binding command: `exposeBinding` answers its `Disposable`, as Playwright's
+/// `{ disposable }`; a binding call's answer answers nothing.
+async fn binding_call(
+    tabs: &Tabs,
+    target: Option<(Arc<PageEntry>, FrameScope)>,
+    route: BindingRoute,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let bindings = progress.bindings();
+    let scripts = progress.init_scripts();
+    let (outcome, guid) = match route {
+        BindingRoute::Page { name, no_global } => {
+            let (page, _) = target.ok_or_else(PlaywrightError::target_closed)?;
+            let session = progress.race(tabs.session(&page)).await??;
+            let guid = progress
+                .race(bindings.expose(tabs, scripts, Some(&session), &name, no_global))
+                .await??;
+            return Ok(Some(json!({ "disposable": { "guid": guid } })));
+        }
+        BindingRoute::Context { name, no_global } => {
+            let guid = progress
+                .race(bindings.expose(tabs, scripts, None, &name, no_global))
+                .await??;
+            return Ok(Some(json!({ "disposable": { "guid": guid } })));
+        }
+        BindingRoute::Resolve { guid, result } => (Outcome::Result(result), guid),
+        BindingRoute::Reject { guid, error } => (Outcome::Error(error), guid),
+    };
+    bindings
+        .answer(tabs, &guid, outcome, progress.handles(), progress)
+        .await?;
+    Ok(Some(json!({})))
 }
 
 /// Names a message's target and decodes its params. Pure.
@@ -651,8 +725,8 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         }
         ObjectKind::Dialog(index) => DialogCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
-        // `route_init` answers every Disposable message.
-        ObjectKind::Disposable(_) | ObjectKind::Unknown => {
+        // `route_init` answers every Disposable and BindingCall message.
+        ObjectKind::Disposable(_) | ObjectKind::BindingCall(_) | ObjectKind::Unknown => {
             return Routed {
                 meta: None,
                 route: Err(PlaywrightError::target_closed()),
@@ -831,6 +905,7 @@ async fn serve_call(
     let result = match (route, target) {
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
         (ObjectCall::Init(route), target) => init_call(&tabs, target, route, &progress).await,
+        (ObjectCall::Binding(route), target) => binding_call(&tabs, target, route, &progress).await,
         (ObjectCall::Page(call), Some((page, _))) => {
             // A page call that navigates (`reload`, `goBack`, …) shows the run's scripts first,
             // as a Frame call does.
@@ -1163,6 +1238,8 @@ fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
         ObjectKind::Context
     } else if guid.starts_with(init_scripts::DISPOSABLE_PREFIX) {
         ObjectKind::Disposable(guid.to_owned())
+    } else if guid.starts_with(bindings::BINDING_CALL_PREFIX) {
+        ObjectKind::BindingCall(guid.to_owned())
     } else if !resolved {
         ObjectKind::Unknown
     } else if guid.starts_with(evaluate::HANDLE_PREFIX) {
@@ -1473,6 +1550,7 @@ mod tests {
             | ObjectCall::Page(_)
             | ObjectCall::Network(_)
             | ObjectCall::Init(_)
+            | ObjectCall::Binding(_)
             | ObjectCall::Dialog(..) => {
                 panic!("a Frame message routed to another object")
             }

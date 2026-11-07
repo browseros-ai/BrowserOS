@@ -45,6 +45,7 @@ use crate::bridge;
 use crate::console::{
     self, ConsoleApiCalled, ConsoleRecord, ExceptionThrown, History, LogEntryAdded, PageErrorRecord,
 };
+use crate::contexts::ContextFrames;
 use crate::dialogs::{self, Dialogs};
 use crate::events::{CONTEXT_GUID, Emitted, EventHub, Needs};
 use crate::frame_events::FrameModel;
@@ -77,6 +78,9 @@ pub(crate) struct PageEvents {
     /// lifecycle replay of its start ([`Self::lifecycle_replayed`]), or from the start on a page
     /// the run's discovery reported.
     lifecycle_live: Arc<AtomicBool>,
+    /// The frame of each main-world context of the tab's session and of its frame hosts, fed
+    /// here in socket order (`contexts.rs`): `bindings.rs` names a binding call's frame with it.
+    pub(crate) contexts: Arc<ContextFrames>,
 }
 
 #[derive(Deserialize)]
@@ -111,6 +115,7 @@ impl PageEvents {
             dialogs: Arc::default(),
             frames: Arc::new(Mutex::new(FrameModel::new(target))),
             lifecycle_live: Arc::new(AtomicBool::new(discovered)),
+            contexts: Arc::default(),
         }
     }
 
@@ -189,11 +194,13 @@ impl PageEvents {
                 .lock()
                 .is_ok_and(|children| children.contains(session))
             {
+                self.contexts.apply(event);
                 self.console_event(event, session);
                 self.frame_event(event);
             }
             return applied.dialog;
         }
+        self.contexts.apply(event);
         let mut answer = applied.dialog;
         match event.method.as_str() {
             "Page.javascriptDialogOpening" => answer = self.dialog_opening(&event.params, answer),

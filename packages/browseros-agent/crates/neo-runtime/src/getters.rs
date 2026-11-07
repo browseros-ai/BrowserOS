@@ -451,7 +451,7 @@ fn frame_guid(page: &PageId, frame: &FrameInfo) -> String {
     if frame.parent.is_none() {
         bridge::frame_guid(page)
     } else {
-        format!("frame@{}/{}", page.as_str(), frame.id)
+        bridge::frame_guid_of(page, &frame.id)
     }
 }
 

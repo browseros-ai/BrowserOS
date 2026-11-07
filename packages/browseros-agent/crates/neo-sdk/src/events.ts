@@ -515,6 +515,12 @@ export abstract class ChannelOwner extends EventEmitter {
     if (this.#served(event)) this.#pipe._subscribe(this._guid, event, enabled)
   }
 
+  /** Neo: turns on a protocol event no listener counts, for good: `bindingCall` once a binding
+   * is exposed, so its calls reach the realm while the script waits. */
+  _subscribeChannelEvent(event: string): void {
+    this.#pipe._subscribe(this._guid, event, true)
+  }
+
   override on(event: EventType, listener: Listener): this {
     this._refuseUnserved(event)
     if (!this.listenerCount(event)) this.#updateSubscription(event, true)

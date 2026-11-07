@@ -71,7 +71,7 @@ const REPLAY_WAIT: Duration = Duration::from_secs(5);
 
 /// Neo: the listener events Neo produces on a `Page`, under the names Playwright's client gives
 /// them (`Events.Page`), and what each needs switched on in the page's session.
-const PAGE_EVENTS: [(&str, Needs); 12] = [
+const PAGE_EVENTS: [(&str, Needs); 13] = [
     ("console", Needs::RUNTIME),
     ("pageerror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
@@ -84,11 +84,14 @@ const PAGE_EVENTS: [(&str, Needs); 12] = [
     ("framedetached", Needs::WATCHER),
     ("framenavigated", Needs::WATCHER),
     ("popup", Needs::DISCOVERY),
+    // The protocol event of an exposed binding (`bindings.rs`), which the SDK listens to while
+    // one is exposed; a binding needs `Runtime.enable` on the tab.
+    ("bindingCall", Needs::RUNTIME),
 ];
 
 /// Neo: the listener events Neo produces on the run's `BrowserContext` (`Events.BrowserContext`),
 /// for every page the run has a session on; `page` for every new tab of the context.
-const CONTEXT_EVENTS: [(&str, Needs); 10] = [
+const CONTEXT_EVENTS: [(&str, Needs); 11] = [
     ("console", Needs::RUNTIME),
     ("weberror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
@@ -99,6 +102,7 @@ const CONTEXT_EVENTS: [(&str, Needs); 10] = [
     ("framedetached", Needs::WATCHER),
     ("framenavigated", Needs::WATCHER),
     ("page", Needs::DISCOVERY),
+    ("bindingCall", Needs::RUNTIME),
 ];
 
 /// What a subscription switches on in a page's session before that page's next call runs.

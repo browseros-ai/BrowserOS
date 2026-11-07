@@ -50,10 +50,12 @@ extern crate self as neo_runtime;
 mod fake_browser;
 
 mod aria_yaml;
+mod bindings;
 mod bridge;
 mod check;
 mod click;
 mod console;
+mod contexts;
 mod deadline;
 mod dialogs;
 mod discovery;

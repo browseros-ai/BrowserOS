@@ -17,6 +17,9 @@
 //!  a commit (the world's document generation moved) → install again on the next call
 //!  a call whose UtilityScript or context is gone before it ran → `Stale`; the caller installs
 //!    again and retries once
+//!  a binding call's answer (bindings.rs): the same call, in the execution context that called
+//!    {executionContextId, arguments: [{objectId: UtilityScript}, …]}: it runs only while that
+//!    context lives and holds the UtilityScript, so it never reaches the next document
 //! ```
 //!
 //! Measured on BrowserOS neo 155.0.8318.26 (probe M1): `DOM.resolveNode` without an execution
@@ -113,6 +116,18 @@ const ADD_TAG: &str = include_str!(concat!(
     "/../neo-runtime-injected/dist/add-tag.js"
 ));
 
+/// Playwright: `server/page.ts` `PageBinding.createInitScript`
+const BINDINGS_CONTROLLER: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/bindings-controller.js"
+));
+
+/// Playwright: `server/page.ts` `PageBinding.dispatch`
+const BINDINGS_CALL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/bindings-call.js"
+));
+
 /// A page function of Playwright's server, built in neo-runtime-injected, that runs as the
 /// `expression` of `UtilityScript.evaluate` (`EVALUATE`), so its arguments arrive parsed with
 /// their handles, primitives included. Agent code never takes this path.
@@ -131,6 +146,11 @@ pub(crate) enum BuiltExpression {
     CallOnElement,
     /// `(utilityScript, kind, value, type) => element`: `addScriptTag` / `addStyleTag`.
     AddTag,
+    /// `() => void`: installs Playwright's `BindingsController` (`bindings.rs`), also the source
+    /// of the run's bindings init script.
+    BindingsController,
+    /// `(op, arg) => void`: a call on that controller, by name (`bindings.rs`).
+    BindingsCall,
 }
 
 impl BuiltExpression {
@@ -143,6 +163,8 @@ impl BuiltExpression {
             Self::WaitAbort => WAIT_ABORT,
             Self::CallOnElement => CALL_ON_ELEMENT,
             Self::AddTag => ADD_TAG,
+            Self::BindingsController => BINDINGS_CONTROLLER,
+            Self::BindingsCall => BINDINGS_CALL,
         }
     }
 }
@@ -361,22 +383,49 @@ impl MainWorld {
         return_by_value: bool,
         group: Option<&ObjectGroup>,
     ) -> Result<Called, PageError> {
-        let mut all = Vec::with_capacity(arguments.len() + 1);
-        all.push(json!({ "objectId": installed.utility.object_id() }));
-        all.extend(arguments);
-        // Each declaration is named at its key, so the page JS guard can see it is built.
-        let mut request = match function {
-            MainFunction::Evaluate => json!({ "functionDeclaration": EVALUATE }),
-            MainFunction::JsonValue => json!({ "functionDeclaration": JSON_VALUE }),
-        };
-        request["objectId"] = json!(installed.utility.object_id());
-        request["arguments"] = json!(all);
-        request["returnByValue"] = json!(return_by_value);
-        request["awaitPromise"] = json!(true);
-        request["userGesture"] = json!(true);
-        if let Some(ObjectGroup(group)) = group {
-            request["objectGroup"] = json!(group);
-        }
+        self.call_in(
+            frame,
+            installed,
+            None,
+            function,
+            arguments,
+            return_by_value,
+            group,
+        )
+        .await
+    }
+
+    /// [`Self::call`], in the execution context `context` names when given: the call runs only
+    /// while that context lives and holds `installed`'s `UtilityScript`, which it is passed, so
+    /// an answer meant for a document that is gone never reaches the next one (`Called::Stale`
+    /// or `Called::Protocol`).
+    /// Playwright: `server/page.ts` `PageBinding.dispatch`: `{ isFunction: true }, { name, seq, result }).catch(e => debugLogger.log('error', e));`
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::call`].
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one CDP call's every field, as `call` takes them, and the context it is pinned to"
+    )]
+    pub(crate) async fn call_in(
+        &self,
+        frame: &FrameContext,
+        installed: &Installed,
+        context: Option<i64>,
+        function: MainFunction,
+        arguments: Vec<Value>,
+        return_by_value: bool,
+        group: Option<&ObjectGroup>,
+    ) -> Result<Called, PageError> {
+        let request = call_request(
+            installed.utility.object_id(),
+            context,
+            function,
+            arguments,
+            return_by_value,
+            group,
+        );
         let reply = match frame.host.send("Runtime.callFunctionOn", request).await {
             Ok(reply) => reply,
             Err(CdpError::Protocol { message, .. }) => {
@@ -479,6 +528,38 @@ impl MainWorld {
 /// # Errors
 ///
 /// `NotConnected` when the object or its context is gone; `Closed` when the session is.
+/// One `Runtime.callFunctionOn` of a built function on `utility` (the `UtilityScript`'s object
+/// id, always the first argument): on that object, or in the execution context `context`.
+fn call_request(
+    utility: &str,
+    context: Option<i64>,
+    function: MainFunction,
+    arguments: Vec<Value>,
+    return_by_value: bool,
+    group: Option<&ObjectGroup>,
+) -> Value {
+    let mut all = Vec::with_capacity(arguments.len() + 1);
+    all.push(json!({ "objectId": utility }));
+    all.extend(arguments);
+    // Each declaration is named at its key, so the page JS guard can see it is built.
+    let mut request = match function {
+        MainFunction::Evaluate => json!({ "functionDeclaration": EVALUATE }),
+        MainFunction::JsonValue => json!({ "functionDeclaration": JSON_VALUE }),
+    };
+    match context {
+        Some(context) => request["executionContextId"] = json!(context),
+        None => request["objectId"] = json!(utility),
+    }
+    request["arguments"] = json!(all);
+    request["returnByValue"] = json!(return_by_value);
+    request["awaitPromise"] = json!(true);
+    request["userGesture"] = json!(true);
+    if let Some(ObjectGroup(group)) = group {
+        request["objectGroup"] = json!(group);
+    }
+    request
+}
+
 pub(crate) async fn retain(
     frame: &FrameContext,
     object_id: &str,
@@ -556,4 +637,43 @@ fn exception_message(details: ExceptionDetails) -> String {
         }
     }
     message
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_call_pinned_to_a_context_names_it_and_passes_the_utility_script() {
+        let pinned = call_request(
+            "utility-1",
+            Some(7),
+            MainFunction::Evaluate,
+            vec![json!({ "value": 1 })],
+            true,
+            None,
+        );
+        assert_eq!(pinned["executionContextId"], json!(7));
+        assert!(
+            pinned.get("objectId").is_none(),
+            "a pinned call names its context, not an object: {pinned}"
+        );
+        assert_eq!(
+            pinned["arguments"],
+            json!([{ "objectId": "utility-1" }, { "value": 1 }]),
+            "the UtilityScript argument ties the call to its document"
+        );
+        let unpinned = call_request(
+            "utility-1",
+            None,
+            MainFunction::JsonValue,
+            Vec::new(),
+            false,
+            Some(&ObjectGroup("group".to_string())),
+        );
+        assert_eq!(unpinned["objectId"], json!("utility-1"));
+        assert!(unpinned.get("executionContextId").is_none());
+        assert_eq!(unpinned["objectGroup"], json!("group"));
+        assert_eq!(unpinned["functionDeclaration"], json!(JSON_VALUE));
+    }
 }

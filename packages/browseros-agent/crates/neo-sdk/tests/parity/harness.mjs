@@ -135,10 +135,13 @@ export function errorCategory(error) {
  * Runs one method's public script on fresh pages and compares its result and browser effect.
  * `effects({ playwright, neo })`, for a deliberate difference, asserts both effects itself in
  * place of the equality check; `values({ playwright, neo })` does the same for the values.
+ * `isolate` runs Neo in a browser of its own, its effect read over raw CDP: for what Playwright
+ * installs context-wide in the shared browser, its exposed bindings' `__playwright__binding__`
+ * above all, which would answer Neo's page too.
  */
 export async function compareMethod(
   t,
-  { html, source, probe, effects, values },
+  { html, source, probe, effects, values, isolate = false },
 ) {
   t.diagnostic(
     `Playwright ${playwrightVersion}; ${playwrightDir ?? 'npm playwright-core'}`,
@@ -165,18 +168,38 @@ export async function compareMethod(
     const effect = await reference.evaluate(probe)
     await reference.close()
 
-    const page = await context.newPage()
-    await page.goto(`${origin}/method.html`)
-    const session = await context.newCDPSession(page)
-    const { targetInfo } = await session.send('Target.getTargetInfo')
-    await session.detach()
     const script = join(scripts, 'method.js')
     writeFileSync(script, scriptSource)
-    const neo = startNeo(neoRun, browser.port, targetInfo.targetId, script)
-    await neo.connected
-    const outcome = await neo.outcome
-    const actualEffect = await page.evaluate(probe)
-    await page.close()
+    let outcome
+    let actualEffect
+    if (isolate) {
+      const own = await launchBrowser(cleanups, browserBinary)
+      const cdp = await connectCdp(cleanups, own.port)
+      const { targetId, sessionId } = await openTab(
+        cdp,
+        `${origin}/method.html`,
+      )
+      const neo = startNeo(neoRun, own.port, targetId, script)
+      await neo.connected
+      outcome = await neo.outcome
+      const probed = await cdp.send(
+        'Runtime.evaluate',
+        { expression: probe, returnByValue: true, awaitPromise: true },
+        sessionId,
+      )
+      actualEffect = probed.result.value
+    } else {
+      const page = await context.newPage()
+      await page.goto(`${origin}/method.html`)
+      const session = await context.newCDPSession(page)
+      const { targetInfo } = await session.send('Target.getTargetInfo')
+      await session.detach()
+      const neo = startNeo(neoRun, browser.port, targetInfo.targetId, script)
+      await neo.connected
+      outcome = await neo.outcome
+      actualEffect = await page.evaluate(probe)
+      await page.close()
+    }
     assert.equal(outcome.status, 'ok', JSON.stringify(outcome))
     if (values) values({ playwright: value, neo: outcome.value })
     else

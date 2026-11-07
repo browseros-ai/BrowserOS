@@ -27,6 +27,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::info;
 
+use crate::bindings::Bindings;
 use crate::deadline::{Deadline, Stop};
 use crate::evaluate::Handles;
 use crate::init_scripts::InitScripts;
@@ -130,6 +131,8 @@ pub(crate) struct RunScope {
     /// every call still running stops at its next await or check, as Playwright's calls stop
     /// with its connection, and none writes input after.
     pub(crate) context_closed: CancellationToken,
+    /// The run's exposed bindings (`bindings.rs`); ended in every frame at run end.
+    pub(crate) bindings: Arc<Bindings>,
 }
 
 impl RunScope {
@@ -142,6 +145,7 @@ impl RunScope {
             handles: Arc::default(),
             init_scripts: Arc::default(),
             context_closed: CancellationToken::new(),
+            bindings: Arc::default(),
         }
     }
 
@@ -300,6 +304,11 @@ impl Progress {
     /// The run's init scripts (`init_scripts.rs`).
     pub(crate) fn init_scripts(&self) -> &Arc<InitScripts> {
         &self.run.init_scripts
+    }
+
+    /// The run's exposed bindings (`bindings.rs`).
+    pub(crate) fn bindings(&self) -> &Arc<Bindings> {
+        &self.run.bindings
     }
 
     pub(crate) fn timeout_ms(&self) -> f64 {
