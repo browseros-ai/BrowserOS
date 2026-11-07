@@ -208,6 +208,11 @@ pub(crate) struct PageSession {
     pub(crate) network: Arc<NetworkLog>,
     /// `Network.enable`, sent on this session's first goto and kept for the run.
     network_enabled: OnceCell<()>,
+    /// Playwright's `Screenshotter` task queue: one screenshot at a time on this tab, so one's
+    /// background override, masks and page preparation never overlap another's. Its cleanup
+    /// tasks hold the turn too, until they have undone their part. The turn is the tab's, shared
+    /// with every other run of the `Runtime` on it (`screenshot.rs` `TabScreenshots`).
+    pub(crate) screenshots: Arc<Mutex<()>>,
     /// The tab's frames' `networkidle`, fed and timed by the watcher.
     idle: Arc<SharedIdle>,
     /// The run's highlights on this tab, hidden when the run ends (`highlight.rs`).
@@ -302,6 +307,9 @@ pub(crate) struct PageState {
     /// `document.open()`. Overlapping writes each get their own clear; a new document drops them
     /// (a write still pending then targets the old document, and fails).
     pub(crate) reopens_expected: u32,
+    /// Neo: how many of those reopens cleared this frame's lifecycle so far, across documents
+    /// ([`Lifecycle::reopens`]).
+    pub(crate) reopens: u64,
 }
 
 /// The navigation a frame is waiting to commit ([`PageState::pending_document`]).
@@ -330,6 +338,7 @@ impl PageState {
             load_count: self.load_count,
             network_idle: self.network_idle,
             network_idle_count: self.network_idle_count,
+            reopens: self.reopens,
         }
     }
 
@@ -370,11 +379,15 @@ impl PageState {
     }
 
     /// Playwright's `Frame._onClearLifecycle` right after one `setContent` write's
-    /// `document.open()`: that write's clear, and only that one, is spent.
+    /// `document.open()`: that write's clear, and only that one, is spent. Its `networkidle`
+    /// clears too, as the tab's idle tracker clears the frame (`Watcher::idle_event`), and the
+    /// reopen counts, so the write's own wait tells its document's idleness from the old one's.
     fn reopened(&mut self) {
         self.reopens_expected -= 1;
+        self.reopens += 1;
         self.dom_content_loaded = false;
         self.load = false;
+        self.network_idle = false;
     }
 
     fn did_load(&mut self) {
@@ -422,13 +435,15 @@ pub(crate) struct FrameFeeds {
 }
 
 impl FrameFeeds {
-    /// [`PageSession::expect_reopen`] for a child frame.
-    pub(crate) fn expect_reopen(&self, frame: &str, expected: bool) {
+    /// [`PageSession::expect_reopen`] for a child frame (0 if the feeds' lock is poisoned).
+    pub(crate) fn expect_reopen(&self, frame: &str, expected: bool) -> u64 {
+        let mut reopens = 0;
         if let Ok(mut frames) = self.frames.lock() {
             let feed = frames.entry(frame.to_string()).or_insert_with(new_feed);
             feed.state
-                .send_modify(|state| expect(&mut state.page, expected));
+                .send_modify(|state| reopens = expect(&mut state.page, expected));
         }
+        reopens
     }
 
     /// `frame`'s current state and its commits from now on.
@@ -457,23 +472,25 @@ impl FrameFeeds {
     }
 
     /// Applies one event of `session` to the child frame it names. `main_frame` is the tab's
-    /// main frame, whose events the tab's own [`PageState`] takes instead.
-    fn apply(&self, event: &CdpEvent, session: &SessionId, main_frame: Option<&str>) {
+    /// main frame, whose events the tab's own [`PageState`] takes instead. Whether the event was
+    /// the `init` of the frame's document a `setContent` write reopened.
+    fn apply(&self, event: &CdpEvent, session: &SessionId, main_frame: Option<&str>) -> bool {
         if event.session_id.as_ref() != Some(session) {
-            return;
+            return false;
         }
         let Some(frame) = event_frame(event) else {
-            return;
+            return false;
         };
         if Some(frame) == main_frame {
-            return;
+            return false;
         }
         let Ok(mut frames) = self.frames.lock() else {
-            return;
+            return false;
         };
         let feed = frames.entry(frame.to_string()).or_insert_with(new_feed);
         let mut navigation = None;
         let mut removed = false;
+        let mut reopened = false;
         feed.state.send_if_modified(|state| {
             if event.method == "Page.frameDetached" {
                 if event.params["reason"] == "swap" {
@@ -503,8 +520,10 @@ impl FrameFeeds {
                 }
                 state.swapped_from = None;
             }
+            let reopens = state.page.reopens;
             let applied = apply_frame(&mut state.page, event, frame);
             navigation = applied.navigation;
+            reopened = state.page.reopens > reopens;
             applied.changed
         });
         if let Some(navigation) = navigation {
@@ -514,6 +533,7 @@ impl FrameFeeds {
             // Waits keep their receivers and read `detached`; the frame id is never reused.
             frames.remove(frame);
         }
+        reopened
     }
 }
 
@@ -624,14 +644,20 @@ impl Fired {
 }
 
 impl PageSession {
-    /// `input` is the tab's lock and devices from the `Runtime`'s [`TabInputs`].
+    /// `input` is the tab's lock and devices from the `Runtime`'s [`TabInputs`], `screenshots` its
+    /// screenshot turn from the `Runtime`'s `TabScreenshots`.
     /// `discovered`: the run's discovery reported the page as new (`Tabs::report_new`), so the
     /// first lifecycle replay is the page's own new life ([`PageEvents::new`]).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the tab's turns come from the Runtime and the rest from the run; each is one field"
+    )]
     pub(crate) fn new(
         session: Session,
         page: &PageId,
         tasks: TaskTracker,
         input: Arc<TabInput>,
+        screenshots: Arc<Mutex<()>>,
         closed: CancellationToken,
         hub: EventHub,
         discovered: bool,
@@ -690,6 +716,7 @@ impl PageSession {
             input,
             network,
             network_enabled: OnceCell::new(),
+            screenshots,
             idle: Arc::new(SharedIdle::new(page.as_str(), Instant::now())),
             highlights: Highlights::default(),
             events,
@@ -899,6 +926,25 @@ impl PageSession {
         self.tasks.spawn_on(task, &self.session.tokio);
     }
 
+    /// Neo: [`Self::spawn`] for page-side work that matters only while the tab is open (a
+    /// capture's restore or reset, an object group's release); browser-side cleanup such as a
+    /// PDF stream's close (`pdf.rs`) does not use it. It ends when the tab closes or crashes,
+    /// and dropping it drops what it holds (a screenshot turn, an object group): a gone tab has
+    /// nothing left to undo, and a crashed one does not answer what is sent to it (BrowserOS
+    /// neo, the crashed case of `capture-turn-liveness-review`), so the task would otherwise
+    /// hold those, and a host's `Runtime::drain`, until browseros-cdp's request timeout. Only a
+    /// prepared session's watcher sees the tab go ([`Self::prepare`]).
+    pub(crate) fn spawn_while_open(&self, task: impl Future<Output = ()> + Send + 'static) {
+        let closed = self.closed.clone();
+        self.spawn(async move {
+            tokio::select! {
+                biased;
+                () = closed.cancelled() => {}
+                () = task => {}
+            }
+        });
+    }
+
     fn state(&self) -> Option<watch::Receiver<PageState>> {
         self.prepared.get().map(|_| self.state.clone())
     }
@@ -923,13 +969,16 @@ impl PageSession {
     /// Neo: one `setContent` write expects (or, failing before its `document.open()`, no longer
     /// expects) its reopened document's `init` in `frame`, which clears the frame's lifecycle once,
     /// as Playwright's `_onClearLifecycle` right after `document.open()`, so a later
-    /// `waitForLoadState` waits for that write's document.
-    pub(crate) fn expect_reopen(&self, frame: &str, expected: bool) {
+    /// `waitForLoadState` waits for that write's document. Answers the frame's count of reopens
+    /// once this one is in ([`Lifecycle::reopens`]).
+    pub(crate) fn expect_reopen(&self, frame: &str, expected: bool) -> u64 {
         if frame == self.main_frame {
+            let mut reopens = 0;
             self.state_updates
-                .send_modify(|state| expect(state, expected));
+                .send_modify(|state| reopens = expect(state, expected));
+            reopens
         } else {
-            self.frame_feeds.expect_reopen(frame, expected);
+            self.frame_feeds.expect_reopen(frame, expected)
         }
     }
 
@@ -1494,7 +1543,10 @@ struct Watcher {
 impl Watcher {
     /// Applies what `networkidle` makes of one event of the tab's session: its requests (the
     /// network log's `happenings`) and its frames' attach, detach, commit and lifecycle.
-    fn idle_event(&self, event: &CdpEvent, happenings: &[Happening]) {
+    /// `reopened`: the event was the `init` of a frame's document a `setContent` write reopened,
+    /// which clears the frame here in socket order, before any request the written document
+    /// starts.
+    fn idle_event(&self, event: &CdpEvent, happenings: &[Happening], reopened: bool) {
         let Some(idle) = &self.idle else {
             return;
         };
@@ -1548,6 +1600,13 @@ impl Watcher {
                         };
                         match (params["frameId"].as_str(), name) {
                             (Some(frame), Some(name)) => idle.lifecycle_event(frame, name),
+                            // Playwright: `server/frames.ts` `Frame.setContent`: `this._onClearLifecycle();`
+                            (Some(frame), None) if reopened && params["name"] == "init" => idle
+                                .clear_lifecycle(
+                                    frame,
+                                    params["loaderId"].as_str().unwrap_or_default(),
+                                    now,
+                                ),
                             _ => Vec::new(),
                         }
                     }
@@ -1667,10 +1726,14 @@ impl Watcher {
                     frames.committed(frame);
                 }
                 let mut applied = Applied::default();
+                // The event reopened the main frame's document for a `setContent` write.
+                let mut reopened = false;
                 let world = &self.world;
                 let main_frame = &self.main_frame;
                 self.state.send_if_modified(|state| {
+                    let reopens = state.reopens;
                     applied = apply(state, &event, session, main_frame);
+                    reopened = state.reopens > reopens;
                     if applied.new_document {
                         // Before notifying readers: no in-flight read may return old-document data.
                         world.document_committed();
@@ -1684,13 +1747,13 @@ impl Watcher {
                     if applied.new_document {
                         feeds.detach_all();
                     }
-                    feeds.apply(&event, session, Some(&self.main_frame));
+                    reopened |= feeds.apply(&event, session, Some(&self.main_frame));
                     self.child_navigation_request(feeds, &event, recorded);
                 }
                 // After the frames' state, so a commit's cleared lifecycle comes first. Only the
                 // tab's own session reports the frames `networkidle` follows (`network_idle.rs`).
                 if event.session_id.as_ref() == Some(session) {
-                    self.idle_event(&event, &happenings);
+                    self.idle_event(&event, &happenings, reopened);
                 }
                 // The run's events from this one, after the page state they may describe. A
                 // dialog a listener owns is the script's to answer.
@@ -2143,13 +2206,15 @@ fn apply_navigation_request(state: &mut PageState, event: &CdpEvent, main_frame:
     applied
 }
 
-/// Neo: one write's expected reopen, counted in or given back.
-fn expect(state: &mut PageState, expected: bool) {
+/// Neo: one write's expected reopen, counted in or given back. Answers the count of reopens
+/// ([`PageState::reopens`]) once that write's is in, the expected ones going in order.
+fn expect(state: &mut PageState, expected: bool) -> u64 {
     state.reopens_expected = if expected {
         state.reopens_expected.saturating_add(1)
     } else {
         state.reopens_expected.saturating_sub(1)
     };
+    state.reopens + u64::from(state.reopens_expected)
 }
 
 fn apply_lifecycle(state: &mut PageState, event: &LifecycleEvent) -> bool {
@@ -2177,7 +2242,9 @@ fn apply_lifecycle(state: &mut PageState, event: &LifecycleEvent) -> bool {
 /// An object group this session holds. Dropping it releases the group
 /// (`Runtime.releaseObjectGroup`) on a tracked task holding the page, fire and forget: a
 /// renderer stuck on a dialog must not hold the dropping call. One release frees the result
-/// object and every handle `getProperties` read out of it (probe P1).
+/// object and every handle `getProperties` read out of it (probe P1). A tab that closed or
+/// crashed took its groups with it, so no release waits on it
+/// ([`PageSession::spawn_while_open`]).
 pub(crate) struct GroupGuard {
     page: Arc<PageSession>,
     frame: Arc<FrameContext>,
@@ -2194,7 +2261,7 @@ impl Drop for GroupGuard {
     fn drop(&mut self) {
         let frame = Arc::clone(&self.frame);
         let ObjectGroup(group) = self.group.clone();
-        self.page.spawn(async move {
+        self.page.spawn_while_open(async move {
             let released = frame
                 .host
                 .send(
@@ -3776,6 +3843,64 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_a_reopen_clears_networkidle_and_counts_for_the_writes_own_wait() {
+        let lifecycle = |state: &mut PageState, name: &str| {
+            applied(
+                state,
+                &event(
+                    "Page.lifecycleEvent",
+                    Some(SESSION),
+                    json!({ "frameId": MAIN, "loaderId": "one", "name": name }),
+                ),
+            )
+        };
+        let mut state = PageState::default();
+        applied(
+            &mut state,
+            &event(
+                "Page.frameNavigated",
+                Some(SESSION),
+                json!({ "frame": {"id": MAIN, "url": "https://a.test/", "loaderId": "one"} }),
+            ),
+        );
+        assert!(state.set_network_idle(true));
+        // A page's own document.open(), unarmed: Playwright keeps the frame's networkidle.
+        lifecycle(&mut state, "init");
+        assert!(state.network_idle && state.lifecycle().reopens == 0);
+        // Two overlapping writes: each learns the reopen count its own reopen reaches.
+        assert_eq!(expect(&mut state, true), 1);
+        assert_eq!(expect(&mut state, true), 2);
+        lifecycle(&mut state, "init");
+        assert!(
+            !state.network_idle,
+            "the first reopen clears the old document's idleness"
+        );
+        assert_eq!(state.lifecycle().reopens, 1);
+        assert!(
+            state.set_network_idle(true),
+            "the first written document went idle"
+        );
+        lifecycle(&mut state, "init");
+        assert!(
+            !state.network_idle,
+            "the second write's reopen clears it again"
+        );
+        assert_eq!(
+            (state.lifecycle().reopens, state.network_idle_count),
+            (2, 2)
+        );
+        lifecycle(&mut state, "init");
+        assert_eq!(
+            state.lifecycle().reopens,
+            2,
+            "no write expects another reopen"
+        );
+        // A write that failed before document.open() gives its place back.
+        assert_eq!(expect(&mut state, true), 3);
+        assert_eq!(expect(&mut state, false), 2);
+    }
+
+    #[test]
     fn tests_that_a_reopened_document_clears_its_lifecycle_only_when_set_content_armed_it() {
         let lifecycle = |state: &mut PageState, name: &str| {
             applied(
@@ -3978,6 +4103,7 @@ mod tests {
             &id,
             TaskTracker::new(),
             Arc::default(),
+            Arc::new(Mutex::new(())),
             CancellationToken::new(),
             EventHub::default(),
             false,
@@ -4006,6 +4132,133 @@ mod tests {
         drop(navigation);
         assert_eq!(page.navigations.receiver_count(), 0);
         assert_eq!(page.state_updates.receiver_count(), 1);
+    }
+
+    /// A session on the fake's tab with its own tracker and closed token.
+    async fn tracked_page(
+        cdp: CdpClient,
+        tasks: &TaskTracker,
+        closed: &CancellationToken,
+    ) -> Arc<PageSession> {
+        use crate::fake_browser::PAGE;
+
+        let id = PageId::new(PAGE.to_string());
+        let session = Session::attach(cdp, id.clone(), TokioHandle::current())
+            .await
+            .expect("attach");
+        Arc::new(PageSession::new(
+            session,
+            &id,
+            tasks.clone(),
+            Arc::default(),
+            Arc::new(Mutex::new(())),
+            closed.clone(),
+            EventHub::default(),
+            false,
+        ))
+    }
+
+    /// A task waiting for an answer its gone tab will never send ends when the tab goes, and
+    /// what it held (here a sender standing in for the tab's screenshot turn) goes with it, so
+    /// the run's tracker drains.
+    #[tokio::test]
+    async fn a_background_task_ends_when_its_tab_goes() {
+        use std::future;
+
+        use crate::fake_browser::{FakeBrowser, Replies};
+
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let closed = CancellationToken::new();
+        let page = tracked_page(browser.cdp().await, &tasks, &closed).await;
+        let (held, released) = oneshot::channel::<()>();
+        page.spawn_while_open(async move {
+            future::pending::<()>().await;
+            drop(held);
+        });
+        closed.cancel();
+        assert!(
+            time::timeout(Duration::from_secs(5), released)
+                .await
+                .is_ok(),
+            "the task's hold went with the tab"
+        );
+        tasks.close();
+        assert!(
+            time::timeout(Duration::from_secs(5), tasks.wait())
+                .await
+                .is_ok()
+        );
+    }
+
+    /// While the tab stays, the task runs to its end.
+    #[tokio::test]
+    async fn a_background_task_runs_to_its_end_while_its_tab_stays() {
+        use crate::fake_browser::{FakeBrowser, Replies};
+
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let closed = CancellationToken::new();
+        let page = tracked_page(browser.cdp().await, &tasks, &closed).await;
+        let (done, finished) = oneshot::channel();
+        page.spawn_while_open(async move {
+            time::sleep(Duration::from_millis(20)).await;
+            let _sent = done.send("ran");
+        });
+        assert_eq!(
+            time::timeout(Duration::from_secs(5), finished)
+                .await
+                .ok()
+                .and_then(Result::ok),
+            Some("ran")
+        );
+    }
+
+    /// A dropped group is released while its tab is open, and not once the tab went: the tab
+    /// took the group with it, and a crashed one would never answer the release.
+    #[tokio::test]
+    async fn a_group_is_released_only_while_its_tab_is_open() {
+        use crate::fake_browser::{FakeBrowser, Replies};
+
+        fn released(browser: &FakeBrowser) -> Vec<String> {
+            browser
+                .exchanges()
+                .iter()
+                .filter(|exchange| exchange.method() == "Runtime.releaseObjectGroup")
+                .filter_map(|exchange| {
+                    exchange.command["params"]["objectGroup"]
+                        .as_str()
+                        .map(str::to_string)
+                })
+                .collect()
+        }
+
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let closed = CancellationToken::new();
+        let page = tracked_page(browser.cdp().await, &tasks, &closed).await;
+        let tab = FrameTab {
+            page: Arc::clone(&page),
+            scope: FrameScope::Main,
+        };
+        let frame = tab.context().await.expect("the main frame");
+        drop(tab.group(&frame, "open"));
+        time::timeout(Duration::from_secs(5), async {
+            while released(&browser).is_empty() {
+                time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the open tab's group is released");
+        closed.cancel();
+        drop(tab.group(&frame, "gone"));
+        tasks.close();
+        time::timeout(Duration::from_secs(5), tasks.wait())
+            .await
+            .expect("the tracker drains");
+        let groups = released(&browser);
+        assert_eq!(groups.len(), 1, "{groups:?}");
+        assert!(groups[0].starts_with("neo-open-"), "{groups:?}");
     }
 
     async fn assert_seed_keeps_watcher_open(

@@ -68,6 +68,8 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
 use crate::abort::{Aborts, Registration};
+use crate::bindings::{self, BindingRoute, Outcome};
+use crate::capture::{self, Capture, NEO_SCREENSHOT_META, NeoScreenshotParams};
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::content::{self, SetContentOptions, WriteOrder, WriteTurn};
@@ -97,6 +99,7 @@ use crate::init_scripts::{
 };
 use crate::keyboard::KeyboardTab;
 use crate::lists;
+use crate::locator_handlers::{self, Resolving};
 use crate::navigate::{self, GotoOptions};
 use crate::network::{HopId, ObjectKind as NetworkObject};
 use crate::page::{DialogAnswer, FrameTab, PageSession};
@@ -120,9 +123,10 @@ use crate::waits::{
 /// Unkept creations close their tabs when their late acknowledgements arrive.
 const RECORDS_WAIT: Duration = Duration::from_secs(1);
 
-/// Neo: how long removing the run's init scripts may take at run end, apart from
-/// [`RECORDS_WAIT`]: a session it does not reach keeps a script the next run's documents would
-/// run. Free for a run that added none.
+/// Neo: how long run end may take removing the run's init scripts and ending its bindings in
+/// its pages (`init_scripts.rs`, `bindings.rs`), apart from [`RECORDS_WAIT`]: a session it does
+/// not reach keeps a script the next run's documents would run, or a binding whose calls never
+/// settle. Free for a run that used neither.
 const PAGE_END_WAIT: Duration = Duration::from_secs(3);
 /// Neo: the budget for removing the run's highlights at its end, after [`RECORDS_WAIT`] and
 /// apart from it, so a document that does not answer delays the outcome by at most this and
@@ -245,7 +249,45 @@ struct Inner {
     _ending: DropGuard,
 }
 
+/// What admitted one call ([`Inner::admit`]): its share of the in-flight caps, and the claim of
+/// a call that ends calls in flight.
+struct Admission {
+    share: Option<Admitted>,
+    ending: Option<Ending<FrameCursor>>,
+    resolving: Option<Resolving>,
+}
+
 impl Inner {
+    /// Admits `route`: a share of the in-flight caps, or none for a call that ends calls in
+    /// flight, with its claim. A navigation's release, a running locator handler's completion
+    /// (which frees the action waiting on it) and the context's close: the cap never refuses
+    /// them, or a full run could not let go.
+    fn admit(
+        &self,
+        route: &ObjectCall,
+        target: Option<&(Arc<PageEntry>, FrameScope)>,
+        bytes: usize,
+    ) -> Result<Admission, PlaywrightError> {
+        let ending = ending_cursor(route).and_then(|id| self.cursors.begin_ending(id));
+        let resolving = completed_handler(route).and_then(|uid| {
+            let page = target?.0.attached_session()?;
+            locator_handlers::begin_resolving(&page, uid)
+        });
+        let releases = ending.is_some()
+            || resolving.is_some()
+            || matches!(route, ObjectCall::Context(BrowserContextCall::Close(_)));
+        let share = if releases {
+            None
+        } else {
+            Some(self.in_flight.admit(bytes)?)
+        };
+        Ok(Admission {
+            share,
+            ending,
+            resolving,
+        })
+    }
+
     /// A `setContent` call takes its place in its frame's write order as it arrives.
     fn ordered(&self, guid: &str, mut call: ObjectCall) -> ObjectCall {
         if let ObjectCall::Frame(Route::FrameSetContent(_, turn)) = &mut call {
@@ -329,8 +371,10 @@ enum ObjectKind {
     Network(NetworkObject, HopId),
     /// A run's `JSHandle` or `ElementHandle` (`evaluate.rs`), by guid.
     Handle(String),
-    /// An init script's `Disposable` (`init_scripts.rs`), by guid.
+    /// An init script's or a binding's `Disposable` (`init_scripts.rs`, `bindings.rs`), by guid.
     Disposable(String),
+    /// A binding call the realm answers (`bindings.rs`), by guid.
+    BindingCall(String),
     /// A JavaScript dialog the run's `dialog` event handed out, by its index on the tab.
     Dialog(u64),
     /// A download the run's `download` event handed out, by the browser's guid
@@ -348,6 +392,10 @@ enum ObjectCall {
     Network(NetworkCall),
     /// An init script command (`init_scripts.rs`).
     Init(InitRoute),
+    /// `Page.screenshot`, `Page.pdf` and `neo:screenshot`, with Neo's `path` (`capture.rs`).
+    Capture(Capture),
+    /// A binding command (`bindings.rs`).
+    Binding(BindingRoute),
     Dialog(u64, DialogCall),
     Download(String, ArtifactCall),
 }
@@ -473,19 +521,10 @@ impl Dispatcher {
         }));
         inner.trace.push(Arc::clone(&entry));
         let admitted = route.and_then(|route| {
-            let ending = ending_cursor(&route).and_then(|id| inner.cursors.begin_ending(id));
-            // A navigation's release, and the context's close, end calls in flight: the cap
-            // never refuses them, or a full run could not let go.
-            let releases = ending.is_some()
-                || matches!(route, ObjectCall::Context(BrowserContextCall::Close(_)));
-            let share = if releases {
-                None
-            } else {
-                Some(inner.in_flight.admit(message.len())?)
-            };
-            Ok((route, share, ending))
+            let admission = inner.admit(&route, target.as_ref(), message.len())?;
+            Ok((route, admission))
         });
-        let (route, share, ending) = match admitted {
+        let (route, admission) = match admitted {
             Ok(admitted) => admitted,
             Err(error) => {
                 entry.finish(error.to_result());
@@ -532,8 +571,9 @@ impl Dispatcher {
                 id,
                 reply,
                 events: inner.tabs.events().clone(),
-                share,
-                ending,
+                share: admission.share,
+                ending: admission.ending,
+                resolving: admission.resolving,
                 abortable,
             },
         );
@@ -560,9 +600,14 @@ impl Dispatcher {
         // Before anything below waits: what the run holds is held by no live run from now on,
         // however its release goes (`TabInput::mark_ended`).
         self.0.tabs.mark_input_ended();
-        // The run's init scripts go first, on a budget of their own: removal never waits on a
-        // call still running, so no document loaded after the run returns runs one.
-        let _removed = time::timeout(PAGE_END_WAIT, run.init_scripts.close()).await;
+        // The run's init scripts go first, then its bindings, on a budget of their own: neither
+        // waits on a call still running, so no document loaded after the run returns runs one
+        // of its scripts, and no page keeps one of its bindings.
+        let _removed = time::timeout(PAGE_END_WAIT, async {
+            run.init_scripts.close().await;
+            run.bindings.close(&self.0.tabs).await;
+        })
+        .await;
         // The realm is gone with its listeners: from now on the watchers answer dialogs
         // themselves, and a dialog a listener left open gets the default answer before the
         // sessions detach (`Dialogs::left_open`).
@@ -623,6 +668,12 @@ async fn init_call(
             }
             guid
         }
+        InitRoute::Dispose(guid) if bindings::owns(&guid) => {
+            progress
+                .race(progress.bindings().dispose(tabs, scripts, &guid))
+                .await??;
+            return Ok(Some(json!({})));
+        }
         InitRoute::Dispose(guid) => {
             progress.race(scripts.dispose(&guid)).await??;
             return Ok(Some(json!({})));
@@ -649,6 +700,29 @@ fn route_init(
             route: init_scripts::source_of(&PAGE_ADD_INIT_SCRIPT_META, params)
                 .map(|source| ObjectCall::Init(InitRoute::Page(source))),
         }),
+        ObjectKind::Context | ObjectKind::Page
+            if method == bindings::PAGE_EXPOSE_BINDING_META.method =>
+        {
+            let (meta, route) =
+                bindings::decode_expose(matches!(object, ObjectKind::Context), params);
+            Ok(Routed {
+                meta: Some(meta),
+                route: route.map(ObjectCall::Binding),
+            })
+        }
+        ObjectKind::BindingCall(guid) => Ok(match bindings::decode_call(&guid, method, params) {
+            Some((meta, route)) => Routed {
+                meta: Some(meta),
+                route: route.map(ObjectCall::Binding),
+            },
+            None => Routed {
+                meta: None,
+                // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection.dispatch`: `Mismatching dispatcher: "${dispatcher._type}" does not implement "${method}"`
+                route: Err(PlaywrightError::error(format!(
+                    "Mismatching dispatcher: \"BindingCall\" does not implement \"{method}\""
+                ))),
+            },
+        }),
         ObjectKind::Disposable(guid) => {
             Ok(Routed {
                 meta: Some(&DISPOSABLE_DISPOSE_META),
@@ -666,6 +740,40 @@ fn route_init(
     }
 }
 
+/// A binding command: `exposeBinding` answers its `Disposable`, as Playwright's
+/// `{ disposable }`; a binding call's answer answers nothing.
+async fn binding_call(
+    tabs: &Tabs,
+    target: Option<(Arc<PageEntry>, FrameScope)>,
+    route: BindingRoute,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let bindings = progress.bindings();
+    let scripts = progress.init_scripts();
+    let (outcome, guid) = match route {
+        BindingRoute::Page { name, no_global } => {
+            let (page, _) = target.ok_or_else(PlaywrightError::target_closed)?;
+            let session = progress.race(tabs.session(&page)).await??;
+            let guid = progress
+                .race(bindings.expose(tabs, scripts, Some(&session), &name, no_global))
+                .await??;
+            return Ok(Some(json!({ "disposable": { "guid": guid } })));
+        }
+        BindingRoute::Context { name, no_global } => {
+            let guid = progress
+                .race(bindings.expose(tabs, scripts, None, &name, no_global))
+                .await??;
+            return Ok(Some(json!({ "disposable": { "guid": guid } })));
+        }
+        BindingRoute::Resolve { guid, result } => (Outcome::Result(result), guid),
+        BindingRoute::Reject { guid, error } => (Outcome::Error(error), guid),
+    };
+    bindings
+        .answer(tabs, &guid, outcome, progress.handles(), progress)
+        .await?;
+    Ok(Some(json!({})))
+}
+
 /// Names a message's target and decodes its params. Pure.
 fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
     let (object, params) = match route_init(object, method, params) {
@@ -675,15 +783,21 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
     let decoded = match object {
         ObjectKind::Context => BrowserContextCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Context(call)))),
-        ObjectKind::Page => PageCall::decode(method, params).map(|call| {
-            let meta = call.meta();
-            let routed = match DeviceCall::from_page_call(call) {
-                Ok(device) => device.map(ObjectCall::Device),
-                Err(call) => Ok(ObjectCall::Page(call)),
-            };
-            (meta, routed)
-        }),
+        ObjectKind::Page => {
+            let path = neo_path(params.as_ref());
+            PageCall::decode(method, params).map(|call| {
+                let meta = call.meta();
+                let routed = match DeviceCall::from_page_call(call) {
+                    Ok(device) => device.map(ObjectCall::Device),
+                    Err(call) => page_call(call, path),
+                };
+                (meta, routed)
+            })
+        }
         ObjectKind::Frame => {
+            if let Some(routed) = route_neo_screenshot(method, params.as_ref()) {
+                return routed;
+            }
             if let Some(routed) = route_frame_extension(method, params.as_ref()) {
                 return routed;
             }
@@ -717,8 +831,8 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
         ObjectKind::Download(guid) => ArtifactCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Download(guid, call)))),
-        // `route_init` answers every Disposable message.
-        ObjectKind::Disposable(_) | ObjectKind::Unknown => {
+        // `route_init` answers every Disposable and BindingCall message.
+        ObjectKind::Disposable(_) | ObjectKind::BindingCall(_) | ObjectKind::Unknown => {
             return Routed {
                 meta: None,
                 route: Err(PlaywrightError::target_closed()),
@@ -738,6 +852,59 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             route: Err(PlaywrightError::error(error.to_string())),
         },
     }
+}
+
+/// Neo's `neo:screenshot` on a Frame guid (`locator.screenshot`, `capture.rs`), or `None` for
+/// another method.
+fn route_neo_screenshot(method: &str, params: Option<&Value>) -> Option<Routed> {
+    (method == NEO_SCREENSHOT_META.method).then(|| Routed {
+        meta: Some(&NEO_SCREENSHOT_META),
+        route: decode_neo_params::<NeoScreenshotParams>(params.cloned(), &NEO_SCREENSHOT_META)
+            .map(|params| ObjectCall::Capture(Capture::Locator(Box::new(params)))),
+    })
+}
+
+/// Neo's `path` beside Playwright's params of a page call (`capture.rs`); Playwright's own
+/// decode ignores the key.
+fn neo_path(params: Option<&Value>) -> Result<Option<String>, PlaywrightError> {
+    match params.and_then(|params| params.get("path")) {
+        None => Ok(None),
+        Some(Value::String(path)) => Ok(Some(path.clone())),
+        Some(other) => Err(PlaywrightError::error(format!(
+            "path: expected string, got {}",
+            json_kind(other)
+        ))),
+    }
+}
+
+/// The JSON kind of `value`, as a validator names it.
+fn json_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// A decoded page call: the ones that answer bytes go to `capture.rs` with their `path`.
+fn page_call(
+    call: PageCall,
+    path: Result<Option<String>, PlaywrightError>,
+) -> Result<ObjectCall, PlaywrightError> {
+    Ok(match call {
+        PageCall::Screenshot(params) => ObjectCall::Capture(Capture::Page {
+            params: Box::new(params),
+            path: path?,
+        }),
+        PageCall::Pdf(params) => ObjectCall::Capture(Capture::Pdf {
+            params: Box::new(params),
+            path: path?,
+        }),
+        call => ObjectCall::Page(call),
+    })
 }
 
 /// A frame's calls that are not one generated `FrameCall` (Neo's URL and load-state waits,
@@ -983,8 +1150,10 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::Content(params) => {
             Ok(Route::FrameContent(params.include_shadow.unwrap_or(false)))
         }
-        FrameCall::SetContent(params) => SetContentOptions::from_params(params)
-            .map(|options| Route::FrameSetContent(options, None)),
+        FrameCall::SetContent(params) => Ok(Route::FrameSetContent(
+            SetContentOptions::from_params(params),
+            None,
+        )),
         FrameCall::WaitForTimeout(params) => Ok(Route::FrameWaitForTimeout(params.wait_timeout)),
         FrameCall::ResolveSelector(params) => Ok(Route::FrameResolveSelector(params.selector)),
         FrameCall::AriaSnapshotJSON(params) => Ok(Route::FrameAriaSnapshotJson(
@@ -1015,6 +1184,9 @@ struct CallReply {
     share: Option<Admitted>,
     /// A wait's finish or release: its claim on the wait it ends (`Cursors::begin_ending`).
     ending: Option<Ending<FrameCursor>>,
+    /// A running locator handler's completion: its claim on that handler
+    /// (`locator_handlers::begin_resolving`).
+    resolving: Option<Resolving>,
     /// The call's place in the abort registry; `None` for an id that is not an integer.
     abortable: Option<Registration>,
 }
@@ -1057,6 +1229,7 @@ async fn serve_call(
     let result = match (route, target) {
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
         (ObjectCall::Init(route), target) => init_call(&tabs, target, route, &progress).await,
+        (ObjectCall::Binding(route), target) => binding_call(&tabs, target, route, &progress).await,
         (ObjectCall::Page(call), Some((page, _))) => {
             // A page call that navigates (`reload`, `goBack`, …) shows the run's scripts first,
             // as a Frame call does.
@@ -1066,6 +1239,9 @@ async fn serve_call(
                 progress.init_scripts().ensure(tabs.cdp(), &session).await;
             }
             tab_calls::page(&tabs, &page, call, &progress).await
+        }
+        (ObjectCall::Capture(call), Some((page, scope))) => {
+            capture::serve(&tabs, &page, scope, call, &progress).await
         }
         (ObjectCall::Frame(route), Some((page, scope))) => {
             let session = match page.attached_session() {
@@ -1427,6 +1603,7 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
         events,
         share,
         ending,
+        resolving,
         abortable,
     } = target;
     // The outcome is decided: an abort from now on is ignored, as Playwright drops a call's
@@ -1444,7 +1621,7 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
     events.barrier().await;
     // Given back before the reply leaves, so a script that awaited this call can start another
     // at once. A call that never replies gives them back as its task ends.
-    drop((share, ending));
+    drop((share, ending, resolving));
     // The script may have stopped waiting (the realm is gone); the record already holds the
     // outcome.
     let _sent = reply.send((text, events.seq()));
@@ -1544,6 +1721,8 @@ fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
         ObjectKind::Context
     } else if guid.starts_with(init_scripts::DISPOSABLE_PREFIX) {
         ObjectKind::Disposable(guid.to_owned())
+    } else if guid.starts_with(bindings::BINDING_CALL_PREFIX) {
+        ObjectKind::BindingCall(guid.to_owned())
     } else if let Some(download) = guid.strip_prefix(downloads::DOWNLOAD_PREFIX) {
         ObjectKind::Download(download.to_owned())
     } else if !resolved {
@@ -1603,6 +1782,14 @@ fn route_frame_element(method: &str) -> Option<Routed> {
 /// The cursor a URL-predicate wait's finish or release names. Each skips the in-flight caps for
 /// the one call that claims its open cursor (`Cursors::begin_ending`): the wait it ends may hold
 /// that capacity, and the claim counts against the cursor cap instead.
+/// The locator handler a `Page.resolveLocatorHandlerNoReply` completes.
+fn completed_handler(call: &ObjectCall) -> Option<i64> {
+    match call {
+        ObjectCall::Page(PageCall::ResolveLocatorHandlerNoReply(params)) => Some(params.uid),
+        _ => None,
+    }
+}
+
 fn ending_cursor(call: &ObjectCall) -> Option<u64> {
     match call {
         ObjectCall::Frame(Route::FrameFinishNavigation(options)) => Some(options.cursor),
@@ -1733,6 +1920,8 @@ mod tests {
     use crate::progress::{self, ErrorName};
     use crate::run::Delivery;
     use crate::run::PageId;
+    use crate::screenshot::TabScreenshots;
+    use crate::session_state::Permissions;
     use crate::switch::Switches;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
@@ -1747,7 +1936,9 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             Switches::default(),
+            Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1786,6 +1977,7 @@ mod tests {
                 events: EventHub::default(),
                 share: None,
                 ending: None,
+                resolving: None,
                 abortable: None,
             },
         );
@@ -1824,7 +2016,9 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             Switches::default(),
+            Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1868,6 +2062,8 @@ mod tests {
             | ObjectCall::Device(_)
             | ObjectCall::Network(_)
             | ObjectCall::Init(_)
+            | ObjectCall::Capture(_)
+            | ObjectCall::Binding(_)
             | ObjectCall::Dialog(..)
             | ObjectCall::Download(..) => {
                 panic!("a Frame message routed to another object")
@@ -2717,6 +2913,62 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_capture_calls_route_with_neos_path() {
+        let screenshot = route(
+            ObjectKind::Page,
+            "screenshot",
+            Some(json!({"type": "jpeg", "quality": 50, "path": "shots/a.jpg"})),
+        );
+        assert_eq!(screenshot.meta.map(|meta| meta.method), Some("screenshot"));
+        match screenshot.route {
+            Ok(ObjectCall::Capture(Capture::Page { params, path })) => {
+                assert_eq!(params.quality, Some(50));
+                assert_eq!(path.as_deref(), Some("shots/a.jpg"));
+            }
+            Ok(_) => panic!("expected a page screenshot"),
+            Err(error) => panic!("expected a page screenshot, got {error:?}"),
+        }
+        let pdf = route(ObjectKind::Page, "pdf", None);
+        assert_eq!(pdf.meta.map(|meta| meta.title), Some(Some("PDF")));
+        assert!(
+            matches!(
+                pdf.route,
+                Ok(ObjectCall::Capture(Capture::Pdf { path: None, .. }))
+            ),
+            "a pdf without a path writes nothing"
+        );
+        let bad_path = error_of(route(
+            ObjectKind::Page,
+            "screenshot",
+            Some(json!({"path": 5})),
+        ));
+        assert_eq!(bad_path.message, "path: expected string, got number");
+
+        let locator = route_frame(
+            "neo:screenshot",
+            json!({"selector": "#a", "strict": true, "path": "a.png", "omitBackground": true}),
+        );
+        assert_eq!(
+            locator.meta.map(|meta| (meta.method, meta.title)),
+            Some(("neo:screenshot", Some("Screenshot")))
+        );
+        match locator.route {
+            Ok(ObjectCall::Capture(Capture::Locator(params))) => {
+                assert_eq!(params.selector, "#a");
+                assert_eq!(params.path.as_deref(), Some("a.png"));
+                assert_eq!(params.omit_background, Some(true));
+            }
+            Ok(_) => panic!("expected a locator screenshot"),
+            Err(error) => panic!("expected a locator screenshot, got {error:?}"),
+        }
+        let no_selector = error_of(route_frame("neo:screenshot", json!({})));
+        assert!(
+            no_selector.message.contains("neo:screenshot"),
+            "{no_selector:?}"
+        );
+    }
+
+    #[test]
     fn unserved_methods_and_objects_reply_as_playwrights_dispatcher_would() {
         let cases = [
             (
@@ -2809,6 +3061,7 @@ mod tests {
                 events: EventHub::default(),
                 share: Some(in_flight.admit(10).expect("under the caps")),
                 ending: None,
+                resolving: None,
                 abortable: None,
             },
         ));
@@ -3086,6 +3339,8 @@ mod review_abort_priority {
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::page::TabInputs;
     use crate::run::PageId;
+    use crate::screenshot::TabScreenshots;
+    use crate::session_state::Permissions;
     use crate::switch::Switches;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
@@ -3102,7 +3357,9 @@ mod review_abort_priority {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             Switches::default(),
+            Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -3145,6 +3402,7 @@ mod review_abort_priority {
                 events: EventHub::default(),
                 share: None,
                 ending: None,
+                resolving: None,
                 abortable: None,
             },
         );

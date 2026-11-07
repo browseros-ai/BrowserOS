@@ -19,6 +19,7 @@ use serde_json::Value;
 use tokio::runtime::{Handle, RuntimeFlavor};
 use tokio_util::task::TaskTracker;
 
+use crate::artifacts::Artifacts;
 use crate::bridge;
 use crate::bridge::Getters;
 use crate::deadline::Deadline;
@@ -29,6 +30,8 @@ use crate::progress::{ErrorName, RunScope};
 use crate::realm;
 use crate::realm::Script;
 use crate::run::{RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
+use crate::screenshot::TabScreenshots;
+use crate::session_state::Permissions;
 use crate::switch::Switches;
 use crate::tabs::Tabs;
 
@@ -37,8 +40,10 @@ const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
 
 /// Runs agent scripts against tabs of one BrowserOS browser. Runs are independent: each gets
 /// its own CDP session and its own QuickJS realm, so one `Runtime` serves any number of
-/// concurrent runs. Runs on one tab share only its input: their clicks take turns at it, from
-/// interceptor setup to stop (`page.rs` `TabInputs`). Clones share those turns too.
+/// concurrent runs. Runs on one tab share only its input and its screenshots: their clicks take
+/// turns at its input, from interceptor setup to stop (`page.rs` `TabInputs`), and their
+/// screenshots at its capture, cleanup included (`screenshot.rs` `TabScreenshots`). Clones share
+/// those turns too.
 ///
 /// Runs also share the connection's target discovery, on while any of them listens for new
 /// pages (`discovery.rs`), and its download reports, on while any listens for downloads
@@ -49,8 +54,11 @@ const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
 pub struct Runtime {
     cdp: CdpClient,
     inputs: TabInputs,
+    screenshots: TabScreenshots,
     /// Target discovery and download reports on `cdp`, each on while any run listens for them.
     switches: Switches,
+    /// The runs' permission grants on `cdp`, reset once no run holds one (`session_state.rs`).
+    permissions: Permissions,
     cleanup: TaskTracker,
 }
 
@@ -101,7 +109,9 @@ impl Runtime {
                 Ok(Self {
                     cdp,
                     inputs: TabInputs::default(),
+                    screenshots: TabScreenshots::default(),
                     switches: Switches::new(cleanup.clone()),
+                    permissions: Permissions::new(cleanup.clone()),
                     cleanup,
                 })
             }
@@ -138,6 +148,7 @@ impl Runtime {
             page,
             timeout,
             cancel,
+            artifacts,
         } = request;
         let deadline = Deadline::new(timeout, cancel);
         let tokio = match Handle::try_current() {
@@ -158,7 +169,7 @@ impl Runtime {
             stop = deadline.reached() => {
                 return RunOutcome::stopped(stop, deadline.timeout(), Vec::new());
             }
-            opened = Tabs::open(self.cdp.clone(), tokio.clone(), self.inputs.clone(), self.switches.clone(), tasks.clone(), &page) => opened,
+            opened = Tabs::open(self.cdp.clone(), tokio.clone(), self.inputs.clone(), self.screenshots.clone(), self.switches.clone(), self.permissions.clone(), tasks.clone(), &page) => opened,
         };
         let (tabs, url) = match opened {
             Ok(opened) => opened,
@@ -180,7 +191,8 @@ impl Runtime {
         };
         // One tracker for the run: call tasks, and the writer, interceptor-stop and
         // group-release tasks the page spawns, so `finish` waits for them all.
-        let run = RunScope::new(deadline.clone(), tasks);
+        let artifacts = Arc::new(Artifacts::new(artifacts));
+        let run = RunScope::new(deadline.clone(), tasks).with_artifacts(Arc::clone(&artifacts));
         let getters = Getters::new(
             tabs.clone(),
             deadline.clone(),
@@ -189,11 +201,44 @@ impl Runtime {
         );
         let dispatcher = Dispatcher::new(tabs.clone(), run);
         let events = tabs.events().clone();
+        // A run whose future is dropped lets go of its permission grants on the cleanup tracker.
+        let grants = Grants {
+            permissions: self.permissions.clone(),
+            cdp: self.cdp.clone(),
+            run: tabs.run_id(),
+            released: false,
+        };
         let outcome = realm::run(script, getters, dispatcher.clone(), deadline, events).await;
         let (calls, dropped) = dispatcher.finish(run_end_of(&outcome)).await;
+        grants.release().await;
         outcome
             .with_calls(calls, dropped)
             .with_pages(tabs.outcome())
+            .with_artifacts(artifacts.written())
+    }
+}
+
+/// A run's hold on its permission grants (`session_state.rs` `Permissions`): released at its
+/// end, before its outcome returns, so the next run finds the browser's permissions as they were.
+struct Grants {
+    permissions: Permissions,
+    cdp: CdpClient,
+    run: u64,
+    released: bool,
+}
+
+impl Grants {
+    async fn release(mut self) {
+        self.released = true;
+        self.permissions.release(&self.cdp, self.run).await;
+    }
+}
+
+impl Drop for Grants {
+    fn drop(&mut self) {
+        if !self.released && Handle::try_current().is_ok() {
+            self.permissions.release_later(self.cdp.clone(), self.run);
+        }
     }
 }
 

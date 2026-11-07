@@ -18,7 +18,13 @@ import {
   isString,
   trimStringWithEllipsis,
 } from '../vendor/playwright/isomorphic/stringUtils'
+import {
+  BindingCall,
+  type BindingCallback,
+  type BindingCallRecord,
+} from './binding-call'
 import type { BrowserContext } from './browser-context'
+import type { Buffer } from './buffer'
 import type { ApiName, Connection } from './connection'
 import { ConsoleMessage } from './console-message'
 import type { ElementHandle } from './element-handle'
@@ -71,6 +77,7 @@ import {
   type WaitForURLOptions,
 } from './frame'
 import type { FrameLocator } from './frame-locator'
+import { type Headers, headersObjectToArray, validateHeaders } from './headers'
 import { Disposable, evaluationScript, type InitScript } from './init-script'
 import { Keyboard, Mouse, Touchscreen } from './input'
 import {
@@ -103,6 +110,13 @@ import {
   pickParams,
 } from './protocol'
 import { type CreatedFrame, get, matchesURL } from './runtime-bridge'
+import {
+  type PageScreenshotOptions,
+  type PDFOptions,
+  pageScreenshotParams,
+  pdfParams,
+  resultBuffer,
+} from './screenshot'
 import type { SelectOptionValues } from './select-option'
 import { type TimeoutInput, TimeoutSettings } from './timeout-settings'
 import { Waiter, type WaitForEventOptions, wrapApiCall } from './waiter'
@@ -209,6 +223,8 @@ export class Page extends ChannelOwner {
   #closedLocally = false
   /** Playwright's `_closeReason`: what `close({ reason })` was given. */
   #closeReason: string | undefined
+  /** The page's exposed callbacks, by name (Playwright's `Page._bindings`). */
+  readonly _bindings = new Map<string, BindingCallback>()
 
   /** `guid` and `mainFrameGuid` come from one record Rust minted (`page@T`, `frame@T`), so a
    * page's calls and its frame's calls reach the same tab. */
@@ -264,6 +280,19 @@ export class Page extends ChannelOwner {
       this.#guid,
       'bringToFront',
       {},
+      0,
+    )
+  }
+
+  /** Playwright: `client/page.ts` `Page.setExtraHTTPHeaders`: `validateHeaders(headers);`
+   * Sent with every request of this tab, over the context's, until the run ends. */
+  async setExtraHTTPHeaders(headers: Headers): Promise<void> {
+    validateHeaders(headers)
+    await this.#connection.sendPage(
+      'page.setExtraHTTPHeaders',
+      this.#guid,
+      'setExtraHTTPHeaders',
+      { headers: headersObjectToArray(headers) },
       0,
     )
   }
@@ -337,6 +366,8 @@ export class Page extends ChannelOwner {
       this.#onFrameDetached((params as FrameEventParams).frame)
     else if (method === 'frameNavigated')
       this.#onFrameNavigated(params as FrameEventParams)
+    else if (method === 'bindingCall')
+      void this._onBinding((params as { binding: BindingCallRecord }).binding)
     else if (method === 'locatorHandlerTriggered')
       this.#onLocatorHandlerTriggered((params as { uid: number }).uid).catch(
         (error) => this.#context._pipe.report(error),
@@ -352,6 +383,21 @@ export class Page extends ChannelOwner {
         new FileChooser(this, chooser, isMultiple, this.#connection),
       )
     }
+  }
+
+  /** Playwright: `client/page.ts` `Page._onBinding`: `await this._browserContext._onBinding(bindingCall);` */
+  async _onBinding(record: BindingCallRecord): Promise<void> {
+    const call = new BindingCall(
+      this.#connection,
+      record,
+      this._frameForGuid(record.frame.guid),
+    )
+    const func = this._bindings.get(record.name)
+    if (func) {
+      await call.call(func)
+      return
+    }
+    await this.#context._onBinding(call)
   }
 
   /** Playwright: `client/page.ts` `Page._locatorHandlers` */
@@ -737,8 +783,12 @@ export class Page extends ChannelOwner {
   }
 
   /**
-   * The frame a request's record names, by guid: the object this page handed out for it, or a
-   * new one, which reads its url and name live like any other.
+   * The frame a request's or a binding call's record names, by guid: the object this page
+   * handed out for it (the one it held when that frame detached included, as Playwright's client
+   * resolves a call's frame channel to its object), or a new one, which reads its url and name
+   * live like any other.
+   *
+   * Playwright: `server/page.ts` `PageBinding.dispatch`: `const result = await binding.playwrightFunction({ frame: context.frame, page, context: page.browserContext }, ...args);`
    */
   _frameForGuid(guid: string | undefined): Frame {
     if (!guid) return this.#mainFrame
@@ -800,6 +850,52 @@ export class Page extends ChannelOwner {
   /** The navigation's `Response`, or `null` where Playwright's has none. */
   async goto(url: string, options: GotoOptions = {}): Promise<Response | null> {
     return await this.#mainFrame._goto('page.goto', url, options)
+  }
+
+  /** Playwright's `page.exposeFunction`: `window[name](...args)` in every frame of the page calls
+   * `callback(...args)` in the run and answers with its result. `dispose()` removes it. */
+  async exposeFunction(
+    name: string,
+    // biome-ignore lint/suspicious/noExplicitAny: Playwright's callback type.
+    callback: (...args: any[]) => unknown,
+  ): Promise<Disposable> {
+    return await this.#expose('page.exposeFunction', name, (_source, ...args) =>
+      callback(...args),
+    )
+  }
+
+  /** Playwright's `page.exposeBinding`: as `exposeFunction`, with the call's
+   * `{ context, page, frame }` first. */
+  async exposeBinding(
+    name: string,
+    callback: BindingCallback,
+  ): Promise<Disposable> {
+    return await this.#expose('page.exposeBinding', name, callback)
+  }
+
+  async #expose(
+    apiName: ApiName,
+    name: string,
+    callback: BindingCallback,
+  ): Promise<Disposable> {
+    // Deviation: `client/page.ts` `Page.exposeBinding`: `this._bindings.set(name, callback);` Playwright sets the callback after its answer; Neo before, as the answer's events, a first page call among them, run before the caller goes on.
+    const previous = this._bindings.get(name)
+    this._bindings.set(name, callback)
+    this._subscribeChannelEvent('bindingCall', true)
+    try {
+      const result = await this.#connection.sendBinding(
+        apiName,
+        this.#guid,
+        'exposeBinding',
+        { name },
+        0,
+      )
+      return new Disposable(this.#connection, result.disposable.guid)
+    } catch (error) {
+      if (previous) this._bindings.set(name, previous)
+      else this._bindings.delete(name)
+      throw error
+    }
   }
 
   /** Playwright's `page.addInitScript`: `script` (a function called with `arg`, source text, or
@@ -1132,6 +1228,37 @@ export class Page extends ChannelOwner {
    * For a section, use `locator.ariaSnapshot()`. AI mode does not auto-wait for that locator,
    * so use `locator.waitFor()` first if needed.
    */
+  /**
+   * Playwright's `Page.screenshot`: the viewport, the full page, or a clip of either, as PNG,
+   * JPEG or WebP bytes. `path` (relative to the run's artifact directory) also writes them
+   * there (`screenshot.ts`).
+   */
+  async screenshot(options: PageScreenshotOptions = {}): Promise<Buffer> {
+    const result = await this.#connection.sendPage(
+      'page.screenshot',
+      this.#guid,
+      'screenshot',
+      pageScreenshotParams('page.screenshot', options),
+      this._timeoutSettings.timeout(options, 'page.screenshot'),
+    )
+    return resultBuffer(result.binary)
+  }
+
+  /**
+   * Playwright's `Page.pdf`: the page printed as PDF bytes, with no timeout, as Playwright's
+   * client calls it. `path` (relative to the run's artifact directory) also writes them there.
+   */
+  async pdf(options: PDFOptions = {}): Promise<Buffer> {
+    const result = await this.#connection.sendPage(
+      'page.pdf',
+      this.#guid,
+      'pdf',
+      pdfParams('page.pdf', options),
+      0,
+    )
+    return resultBuffer(result.pdf)
+  }
+
   async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
     return await this.#mainFrame._ariaSnapshot('page.ariaSnapshot', options)
   }

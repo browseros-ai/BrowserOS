@@ -57,7 +57,8 @@ pub fn is_headed() -> bool {
 }
 
 /// What the fixture server serves. A path in `pages` gets its HTML; any other path gets a small
-/// page titled with the path. A path starting with `/slow` answers after `slow_response`, so a
+/// page titled with the path; `/echo-headers` answers with the request's head. A path starting
+/// with `/slow` answers after `slow_response`, so a
 /// navigation to it stays in flight before it commits.
 #[derive(Clone, Default)]
 pub struct Fixture {
@@ -142,7 +143,7 @@ impl Tab {
 
     /// Starts `code` as a Neo run against this tab; it reads the tab while the test drives it.
     pub async fn start_run(&self, code: String) -> JoinHandle<RunOutcome> {
-        self.start_run_within(code, Duration::from_secs(30)).await
+        self.start_run_within(code, RUN_TIMEOUT).await
     }
 
     /// [`Tab::start_run`] with the run's own deadline.
@@ -162,6 +163,7 @@ impl Tab {
                     page,
                     timeout,
                     cancel: CancellationToken::new(),
+                    artifacts: None,
                 })
                 .await
         })
@@ -277,14 +279,19 @@ async fn serve_fixture(fixture: Fixture) -> String {
                     if path.starts_with("/slow") {
                         time::sleep(fixture.slow_response).await;
                     }
-                    let body = fixture
-                        .pages
-                        .iter()
-                        .find(|(page, _)| *page == path)
-                        .map_or_else(
-                            || format!("<title>{path}</title><h1>{path}</h1>"),
-                            |(_, html)| html.clone(),
-                        );
+                    // `/echo-headers` answers with the request's own head, for the headers it sent.
+                    let body = if path == "/echo-headers" {
+                        head.to_string()
+                    } else {
+                        fixture
+                            .pages
+                            .iter()
+                            .find(|(page, _)| *page == path)
+                            .map_or_else(
+                                || format!("<title>{path}</title><h1>{path}</h1>"),
+                                |(_, html)| html.clone(),
+                            )
+                    };
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                         body.len()
@@ -299,6 +306,10 @@ async fn serve_fixture(fixture: Fixture) -> String {
 }
 
 /// How long [`Browser::close`] waits for the browser to exit after `Browser.close` before it
+/// The suite's bound on one run ([`Tab::start_run`]), which a loaded machine needs as much for a
+/// fixture's frames to load as a run needs for its calls.
+pub const RUN_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// SIGKILLs the browser's process group: Playwright's `closeOrKill` timeout
 /// (`DEFAULT_PLAYWRIGHT_TIMEOUT`).
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(30);

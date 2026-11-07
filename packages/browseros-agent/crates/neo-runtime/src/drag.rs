@@ -8,7 +8,9 @@
 //!   source: loop A + loop B, "move and down" (visible and stable; the `mouse` interceptor)
 //!     a move to the source point, then a left press
 //!   the cell: Done → Unknown until the drop is answered too
-//!   target: loop A + loop B, "move and up" (visible and stable; the `drag` interceptor)
+//!   target: loop A + loop B, "move and up" (visible and stable; the `drag` interceptor),
+//!     without the action pre-checks: no navigation wait and no locator handler while the
+//!     button is held (`PointerAction::skips_action_pre_checks`)
 //!     a move in `steps` to the target point (each step meets Chromium's drag manager:
 //!     the first one starts the drag the page allows, the rest are `dragOver`), then the
 //!     release, a `drop` when a drag runs
@@ -179,6 +181,56 @@ mod tests {
         );
         let mouse = tab.devices.lock().expect("devices").mouse.clone();
         assert!(mouse.buttons.is_empty(), "released on the target");
+    }
+
+    /// Playwright's target half skips `performActionPreChecks` in loops A and B: with the
+    /// source's button held, no locator handler runs and no pending navigation is waited for,
+    /// since either would move the mouse or wait in the middle of the drag. The source half runs
+    /// both, in loop A and in loop B.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_only_the_source_half_runs_the_action_pre_checks() {
+        let tab = FakeTab::ready();
+        let options = decode(&json!({ "source": "#a", "target": "#b" })).expect("served");
+        let progress = Progress::for_test(30_000.0);
+        let delivery = progress.delivery().expect("an input call");
+        delivery.expect_more();
+        *tab.pending.lock().expect("pending") = Some("http://localhost/first".to_string());
+        click::pointer_action(&tab, &options.source, &progress)
+            .await
+            .expect("the press");
+        assert_eq!(
+            tab.count("navigation_settled"),
+            1,
+            "the source waits out a pending navigation: {:?}",
+            tab.calls()
+        );
+        assert_eq!(
+            *tab.checkpoints.lock().expect("checkpoints"),
+            [0, 0],
+            "loop A's and loop B's checkpoints, both before the press"
+        );
+
+        *tab.pending.lock().expect("pending") = Some("http://localhost/second".to_string());
+        click::pointer_action(&tab, &options.target, &progress)
+            .await
+            .expect("the drop");
+        assert_eq!(
+            *tab.checkpoints.lock().expect("checkpoints"),
+            [0, 0],
+            "no handler runs with the button held"
+        );
+        assert_eq!(
+            tab.count("navigation_settled"),
+            1,
+            "the target waits for no navigation: {:?}",
+            tab.calls()
+        );
+        assert_eq!(
+            tab.plans.lock().expect("plans").len(),
+            2,
+            "pressed, then released"
+        );
+        assert_eq!(delivery.delivery(), Delivery::Done);
     }
 
     /// A drag whose target never appears stops after its press: the cell reads `Unknown`, the

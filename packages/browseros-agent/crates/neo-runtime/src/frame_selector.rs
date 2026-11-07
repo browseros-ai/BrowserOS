@@ -273,6 +273,24 @@ pub(crate) enum Hop {
     ///
     /// Deviation: `server/frameSelectors.ts` `FrameSelectors._jumpToAriaRefFrameIfNeeded`: `const jumptToFrame = this.frame._page.frameManager.frames().find(frame => frame.seq === frameSeq);` Playwright names a frame's refs by the frame's number; Neo names them by the path of iframe refs from the main frame (`f7f2e1`), which a later run can still follow. Such a ref stops routing when an iframe on its path is replaced, or its accessible role or name changes (its snapshots then give it a new ref), where Playwright's frame number stays.
     Owner(String),
+    /// Neo: a frame named by its identity, the CDP frame id, for a frame behind an iframe that
+    /// gets no aria ref (not visible, or receiving no pointer events): `fi`, then the id's 32 hex
+    /// digits in lowercase (`aria-ref=fi35f6…b0f5e3`). The frame is entered directly, wherever it
+    /// sits, as Playwright jumps to a frame by its number, so a later run still routes it; the
+    /// ref stops routing when that frame goes, as Playwright's does.
+    Frame(String),
+}
+
+/// The hex digits of a CDP frame id (a Chromium devtools frame token), which [`Hop::Frame`]
+/// carries.
+const FRAME_ID_DIGITS: usize = 32;
+
+/// Neo: the path hop naming the frame `id` by its identity ([`Hop::Frame`]); `None` for an id
+/// that is not [`FRAME_ID_DIGITS`] hex digits. BrowserOS's are uppercase; the hop is lowercase
+/// so a ref stays `[a-z0-9]+`, as every other ref is.
+pub(crate) fn identity_hop(id: &str) -> Option<String> {
+    (id.len() == FRAME_ID_DIGITS && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| format!("fi{}", id.to_ascii_lowercase()))
 }
 
 pub(crate) fn split(selector: &str) -> Result<Chunks, String> {
@@ -333,6 +351,18 @@ fn path_ref(body: &str) -> Option<(Vec<Hop>, String)> {
     let mut rest = body;
     let mut path = Vec::new();
     while let Some(after_f) = rest.strip_prefix('f') {
+        if let Some(after_i) = after_f.strip_prefix('i') {
+            let id = after_i.get(..FRAME_ID_DIGITS)?;
+            if !id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return None;
+            }
+            path.push(Hop::Frame(id.to_ascii_uppercase()));
+            rest = &after_i[FRAME_ID_DIGITS..];
+            continue;
+        }
         let digits = after_f.bytes().take_while(u8::is_ascii_digit).count();
         if digits == 0 {
             return None;
@@ -382,7 +412,11 @@ pub(crate) async fn locate(
     };
     // Direct receivers start visible; only explicit selector hops contribute visibility.
     // Retain direct owners for geometry and hit checks, independently of that visibility.
-    let mut resolver = Resolver { tab, owners };
+    let mut resolver = Resolver {
+        tab,
+        owners,
+        selector,
+    };
     let mut located = follow(&mut resolver, initial, chunks, strict).await?;
     if let Some(located) = &mut located {
         located.owners = resolver.owners;
@@ -449,6 +483,30 @@ async fn follow<T: Hops>(
 struct Resolver<'a> {
     tab: &'a FrameTab,
     owners: Vec<FrameOwner>,
+    /// The whole selector, for Playwright's message naming it.
+    selector: &'a str,
+}
+
+impl Resolver<'_> {
+    /// Neo: enters the frame a path ref names by identity ([`Hop::Frame`]) directly, as
+    /// Playwright's `_jumpToAriaRefFrameIfNeeded` jumps to a frame by its number, and takes its
+    /// owners from the main frame for geometry and hit checks, as a direct receiver's are; like a
+    /// direct receiver, it starts visible. A frame that is gone fails the selector at once.
+    ///
+    /// Playwright: `server/frameSelectors.ts` `FrameSelectors._jumpToAriaRefFrameIfNeeded`
+    async fn jump(&mut self, id: &str) -> Result<Option<(Arc<FrameContext>, bool)>, PageError> {
+        let child = match self.tab.frames.context(id, None).await {
+            Err(PageError::Threw(_)) => {
+                return Err(PageError::Threw(format!(
+                    "Invalid frame in aria-ref selector \"{}\"",
+                    self.selector
+                )));
+            }
+            other => other?,
+        };
+        self.owners = direct_owners(self.tab, &child.id).await?;
+        Ok(Some((child, true)))
+    }
 }
 
 impl Hops for Resolver<'_> {
@@ -460,9 +518,12 @@ impl Hops for Resolver<'_> {
         hop: &Hop,
         strict: bool,
     ) -> Result<Option<(Arc<FrameContext>, bool)>, PageError> {
-        let group = self.tab.group(&frame, "frame-hop");
-        let (element, visible) = match hop {
+        let (element, visible, group) = match hop {
+            // Boxed: the jump walks the frame tree and the owners, which would otherwise widen
+            // every caller's future.
+            Hop::Frame(id) => return Box::pin(self.jump(id)).await,
             Hop::Chunk(selector) => {
+                let group = self.tab.group(&frame, "frame-hop");
                 let owner = frame
                     .call(
                         Some(group.group()),
@@ -472,9 +533,10 @@ impl Hops for Resolver<'_> {
                         },
                     )
                     .await?;
-                (owner.element, owner.visible)
+                (owner.element, owner.visible, group)
             }
             Hop::Owner(aria_ref) => {
+                let group = self.tab.group(&frame, "frame-hop");
                 let owner = frame
                     .call(
                         Some(group.group()),
@@ -483,7 +545,7 @@ impl Hops for Resolver<'_> {
                         },
                     )
                     .await?;
-                (owner.element, owner.visible)
+                (owner.element, owner.visible, group)
             }
         };
         let Some(element) = element else {
@@ -864,5 +926,53 @@ mod tests {
                 "{selector}"
             );
         }
+    }
+
+    #[test]
+    fn tests_that_identity_refs_name_a_frame_by_its_id_and_stay_lowercase() {
+        // A BrowserOS frame id (measured: main, same-origin and out-of-process frames alike).
+        const ID: &str = "35F6D2E61FAC8516061D7F5EC28EB0F5";
+        let hop = identity_hop(ID).unwrap();
+        assert_eq!(hop, "fi35f6d2e61fac8516061d7f5ec28eb0f5");
+        assert!(
+            hop.bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        );
+        assert_eq!(
+            split(&format!("aria-ref={hop}e3")).unwrap(),
+            Chunks {
+                hops: vec![Hop::Frame(ID.to_string())],
+                last: "aria-ref=e3".to_string(),
+                from_main: true,
+            }
+        );
+        // A frame inside it, by its iframe's ref.
+        assert_eq!(
+            split(&format!("aria-ref={hop}f2e1 >> button")).unwrap(),
+            Chunks {
+                hops: vec![Hop::Frame(ID.to_string()), Hop::Owner("e2".to_string())],
+                last: "aria-ref=e1 >> button".to_string(),
+                from_main: true,
+            }
+        );
+        // Anything else stays a document-local ref: a short id, an uppercase one, a non-hex one.
+        for body in [
+            format!("fi{}e3", &hop[2..33]),
+            format!("fi{ID}e3"),
+            format!("fi{}e3", "g".repeat(32)),
+        ] {
+            let selector = format!("aria-ref={body}");
+            assert_eq!(
+                split(&selector).unwrap(),
+                Chunks {
+                    hops: vec![],
+                    last: selector.clone(),
+                    from_main: false,
+                },
+                "{selector}"
+            );
+        }
+        assert_eq!(identity_hop(&ID[..31]), None);
+        assert_eq!(identity_hop("not-a-frame-id-but-32-chars-long"), None);
     }
 }

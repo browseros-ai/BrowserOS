@@ -30,6 +30,7 @@ import type {
   RequestCommands,
   ResponseCommands,
 } from '@browseros/neo-runtime-spec/serve'
+import type { BindingCommands } from './binding-call'
 import {
   AbortError,
   isTargetClosedError,
@@ -135,6 +136,18 @@ export type ApiName =
   | 'frame.selectOption'
   | 'browserContext.newPage'
   | 'browserContext.close'
+  | 'browserContext.cookies'
+  | 'browserContext.addCookies'
+  | 'browserContext.clearCookies'
+  | 'browserContext.setExtraHTTPHeaders'
+  | 'browserContext.setOffline'
+  | 'browserContext.setGeolocation'
+  | 'browserContext.grantPermissions'
+  | 'browserContext.clearPermissions'
+  | 'browserContext.setHTTPCredentials'
+  | 'browserContext.storageState'
+  | 'browserContext.setStorageState'
+  | 'page.setExtraHTTPHeaders'
   | 'page.close'
   | 'page.bringToFront'
   | 'page.addLocatorHandler'
@@ -192,6 +205,12 @@ export type ApiName =
   | 'page.addInitScript'
   | 'browserContext.addInitScript'
   | 'disposable.dispose'
+  | 'page.exposeBinding'
+  | 'page.exposeFunction'
+  | 'browserContext.exposeBinding'
+  | 'browserContext.exposeFunction'
+  | 'bindingCall.resolve'
+  | 'bindingCall.reject'
   | 'page.addScriptTag'
   | 'page.addStyleTag'
   | 'frame.addScriptTag'
@@ -210,6 +229,9 @@ export type ApiName =
   | 'locator.evaluateAll'
   | 'locator.elementHandle'
   | 'locator.elementHandles'
+  | 'page.screenshot'
+  | 'page.pdf'
+  | 'locator.screenshot'
   | 'page.waitForEvent'
   | 'browserContext.waitForEvent'
   | 'page.consoleMessages'
@@ -464,6 +486,19 @@ export class Connection {
       params,
       timeout,
     )) as EvalFrameCommands[M]['result']
+  }
+
+  /** {@link Connection.send} for a binding command (`binding-call.ts`): `exposeBinding` on a
+   * page or the context, `resolve` / `reject` on a call's `bindingcall@` guid. */
+  async sendBinding<M extends keyof BindingCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: BindingCommands[M]['params'],
+    timeout: number,
+  ): Promise<BindingCommands[M]['result']> {
+    return ((await this.#send(apiName, guid, method, params, timeout)) ??
+      {}) as BindingCommands[M]['result']
   }
 
   /** {@link Connection.send} for an init script command (`init-script.ts`): `addInitScript` on a
