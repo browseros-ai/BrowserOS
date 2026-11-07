@@ -2414,6 +2414,191 @@ mod tests {
         );
     }
 
+    fn sub(id: &str, url: &str, kind: &str) -> (String, Value) {
+        event(
+            "Network.requestWillBeSent",
+            json!({
+                "requestId": id, "loaderId": "DOC", "type": kind, "frameId": "MAIN",
+                "request": {"url": url, "method": "GET", "headers": {}},
+                "timestamp": 1.0, "wallTime": 1.0,
+            }),
+        )
+    }
+
+    fn apply_all(log: &NetworkLog, events: &[(String, Value)]) -> Vec<Happening> {
+        events
+            .iter()
+            .flat_map(|(method, params)| log.apply(None, method, params))
+            .collect()
+    }
+
+    fn at(id: &str, hop: usize) -> HopId {
+        HopId {
+            request: id.to_string(),
+            hop,
+        }
+    }
+
+    #[test]
+    fn tests_that_a_redirect_reports_its_hops_in_playwrights_order() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let mut redirected = sub("R", "https://a.test/target", "Fetch");
+        redirected.1["redirectResponse"] =
+            json!({"status": 302, "statusText": "Found", "headers": {}});
+        redirected.1["timestamp"] = json!(1.5);
+        let happenings = apply_all(
+            &log,
+            &[
+                sub("R", "https://a.test/start", "Fetch"),
+                redirected,
+                response("R", false),
+                event(
+                    "Network.loadingFinished",
+                    json!({"requestId": "R", "timestamp": 2.0, "encodedDataLength": 3.0}),
+                ),
+            ],
+        );
+        assert_eq!(
+            happenings,
+            [
+                Happening::Request(at("R", 0)),
+                Happening::Response(at("R", 0)),
+                Happening::Finished(at("R", 0)),
+                Happening::Request(at("R", 1)),
+                Happening::Response(at("R", 1)),
+                Happening::Finished(at("R", 1)),
+            ],
+            "_handleRequestRedirect reports the old hop's response and finish first"
+        );
+        assert_eq!(log.redirected_to(&at("R", 0)), Ok(Some(at("R", 1))));
+        assert_eq!(log.redirected_to(&at("R", 1)), Ok(None));
+    }
+
+    #[test]
+    fn tests_that_a_subresource_204_finishes_and_a_navigation_204_fails() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let mut no_content = response("S", false);
+        no_content.1["response"]["status"] = json!(204);
+        let aborted = event(
+            "Network.loadingFailed",
+            json!({"requestId": "S", "timestamp": 2.0, "errorText": "net::ERR_ABORTED"}),
+        );
+        let happenings = apply_all(
+            &log,
+            &[
+                sub("S", "https://a.test/beacon", "Fetch"),
+                no_content.clone(),
+                aborted.clone(),
+            ],
+        );
+        assert_eq!(happenings.last(), Some(&Happening::Finished(at("S", 0))));
+        assert_eq!(log.failure(&at("S", 0)), Ok(None));
+        assert!(log.finished(&at("S", 0)).expect("hop"));
+        let mut navigation_204 = response("N", false);
+        navigation_204.1["response"]["status"] = json!(204);
+        let mut navigation_failed = aborted;
+        navigation_failed.1["requestId"] = json!("N");
+        let happenings = apply_all(
+            &log,
+            &[
+                navigation("N", "MAIN", "Document", "https://a.test/empty"),
+                navigation_204,
+                navigation_failed,
+            ],
+        );
+        assert_eq!(happenings.last(), Some(&Happening::Failed(at("N", 0))));
+        assert_eq!(
+            log.failure(&at("N", 0)),
+            Ok(Some("net::ERR_ABORTED".to_string()))
+        );
+    }
+
+    #[test]
+    fn tests_that_favicons_are_recorded_but_never_reported() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let happenings = apply_all(
+            &log,
+            &[
+                sub("F", "https://a.test/favicon.ico", "Image"),
+                response("F", false),
+            ],
+        );
+        assert!(happenings.is_empty(), "{happenings:?}");
+        assert_eq!(log.requests(), Ok(Vec::new()), "nor listed by requests()");
+    }
+
+    #[test]
+    fn tests_that_requests_keep_playwrights_window() {
+        let log = NetworkLog::new("MAIN".to_string());
+        for i in 0..101 {
+            log.apply(
+                None,
+                &sub(&format!("S{i}"), "https://a.test/x", "Fetch").0,
+                &sub(&format!("S{i}"), "https://a.test/x", "Fetch").1,
+            );
+        }
+        let listed = log.requests().expect("requests");
+        assert_eq!(listed.len(), 91, "at 101 the oldest tenth goes");
+        assert_eq!(listed[0].guid, "request@MAIN:S10:0");
+    }
+
+    #[test]
+    fn tests_that_other_requests_past_their_cap_drop_an_ended_one_first() {
+        let log = NetworkLog::new("MAIN".to_string());
+        log.apply(
+            None,
+            &sub("LIVE", "https://a.test/stream", "Fetch").0,
+            &sub("LIVE", "https://a.test/stream", "Fetch").1,
+        );
+        let finished = |id: &str| {
+            event(
+                "Network.loadingFinished",
+                json!({"requestId": id, "timestamp": 2.0, "encodedDataLength": 0.0}),
+            )
+        };
+        for i in 0..MAX_REQUESTS {
+            let id = format!("E{i}");
+            let start = sub(&id, "https://a.test/e", "Fetch");
+            log.apply(None, &start.0, &start.1);
+            let end = finished(&id);
+            log.apply(None, &end.0, &end.1);
+        }
+        assert!(
+            log.created_request(&at("LIVE", 0)).is_ok(),
+            "the loading request outlives finished ones"
+        );
+        assert_eq!(
+            log.created_request(&at("E0", 0)).map(|_| ()),
+            Err(LogError::Dropped("request")),
+            "the oldest finished request went"
+        );
+        assert!(
+            LogError::Dropped("request")
+                .to_string()
+                .contains("its last 1000 other requests")
+        );
+    }
+
+    #[test]
+    fn tests_that_a_navigation_ending_in_a_frame_session_reads_its_body_there() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let child = SessionId::from("OOPIF");
+        log.apply(
+            None,
+            &navigation("D", "FRAME", "Document", "https://b.test/").0,
+            &navigation("D", "FRAME", "Document", "https://b.test/").1,
+        );
+        log.apply(None, &response("D", false).0, &response("D", false).1);
+        let finished = event(
+            "Network.loadingFinished",
+            json!({"requestId": "D", "timestamp": 2.0, "encodedDataLength": 5.0}),
+        );
+        log.apply(Some(&child), &finished.0, &finished.1);
+        let read = log.body(&at("D", 0)).expect("a body").expect("done");
+        assert_eq!(read.session, Some(child), "_maybeUpdateRequestSession");
+        assert_eq!(log.frame_of("D").as_deref(), Some("FRAME"));
+    }
+
     #[test]
     fn tests_that_a_cached_response_uses_provisional_headers_and_wall_time_timing() {
         let log = replay(
