@@ -33,6 +33,11 @@ export default defineContentScript({
 
     const ui = await createShadowRootUi<TakeoverBar>(ctx, {
       name: 'browseros-neo-takeover',
+      // Closed, so the bar stays out of the page's DOM queries and of agents'
+      // selectors and snapshots, which pierce open roots: an open root's own
+      // <html>/<body> made `locator('body')` match twice. WXT hands back the
+      // root and container it created; nothing reads `host.shadowRoot`.
+      mode: 'closed',
       position: 'overlay',
       alignment: 'bottom-left',
       zIndex: 2147483000,
