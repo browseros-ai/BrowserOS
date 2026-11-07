@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Keyboard</title>
+<textarea id="area" aria-label="Area"></textarea>
+<script>
+// Every key and input event the textarea sees, with the modifiers each carries, so two
+// engines' runs compare by what reached the page.
+window.__events = []
+const area = document.querySelector('#area')
+const modifiers = (event) =>
+  ['alt', 'ctrl', 'meta', 'shift'].filter((name) => event[`${name}Key`]).join('+')
+for (const type of ['keydown', 'keypress', 'keyup']) {
+  area.addEventListener(type, (event) => {
+    window.__events.push({
+      type,
+      key: event.key,
+      code: event.code,
+      location: event.location,
+      repeat: event.repeat,
+      modifiers: modifiers(event),
+      isTrusted: event.isTrusted,
+    })
+  })
+}
+area.addEventListener('input', (event) => {
+  window.__events.push({ type: 'input', inputType: event.inputType, data: event.data })
+})
+window.__facts = () => ({ value: area.value, events: window.__events })
+</script>

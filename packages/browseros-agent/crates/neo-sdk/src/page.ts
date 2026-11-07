@@ -1,6 +1,7 @@
 import type {
   LifecycleEvent,
   PageCloseParams,
+  PageCommands,
   PageConsoleMessagesParams,
   PageGoBackParams,
   PageGoForwardParams,
@@ -11,7 +12,7 @@ import type {
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
 import { isString } from '../vendor/playwright/isomorphic/stringUtils'
 import type { BrowserContext } from './browser-context'
-import type { Connection } from './connection'
+import type { ApiName, Connection } from './connection'
 import { ConsoleMessage } from './console-message'
 import type { ElementHandle } from './element-handle'
 import {
@@ -47,6 +48,7 @@ import {
   type SelectOptionOptions,
   type TapOptions,
   type TextContentOptions,
+  type TypeOptions,
   type UncheckOptions,
   type URLMatch,
   verifyLoadState,
@@ -56,6 +58,7 @@ import {
   type WaitForURLOptions,
 } from './frame'
 import type { FrameLocator } from './frame-locator'
+import { Keyboard, Mouse, Touchscreen } from './input'
 import {
   assertMaxArguments,
   type EvaluateOptions,
@@ -166,6 +169,10 @@ export class Page extends ChannelOwner {
   /** Stable identity, including detached frames a script may still hold. */
   readonly #frames = new Map<string, Frame>()
   readonly _timeoutSettings: TimeoutSettings
+  /** Playwright's `page.keyboard`, `page.mouse` and `page.touchscreen`, one each per page. */
+  readonly keyboard: Keyboard
+  readonly mouse: Mouse
+  readonly touchscreen: Touchscreen
   /** Set when this page's `close` ran (`_onClose`): what Playwright's client flips then. */
   #closedLocally = false
   /** Playwright's `_closeReason`: what `close({ reason })` was given. */
@@ -191,6 +198,18 @@ export class Page extends ChannelOwner {
       name: '',
     })
     this.#frames.set(mainFrameGuid, this.#mainFrame)
+    this.keyboard = new Keyboard(this)
+    this.mouse = new Mouse(this)
+    this.touchscreen = new Touchscreen(this)
+  }
+
+  /** Sends a device command to this page's tab, with no timeout (Playwright's `kNoTimeout`). */
+  async _sendInput<M extends keyof PageCommands>(
+    apiName: ApiName,
+    method: M,
+    params: PageCommands[M]['params'],
+  ): Promise<void> {
+    await this.#connection.sendPage(apiName, this.#guid, method, params, 0)
   }
 
   url(): string {
@@ -396,9 +415,8 @@ export class Page extends ChannelOwner {
   ): Promise<unknown> {
     const options =
       typeof optionsOrPredicate === 'function' ? {} : optionsOrPredicate
-    // Refuses a signal first (TimeoutSettings), inside its callers' `wrapApiCall`, which
-    // prefixes the api name.
-    const timeout = this._timeoutSettings.timeout(options, null)
+    // Inside its callers' `wrapApiCall`, which prefixes the api name.
+    const timeoutOptions = this._timeoutSettings.timeout(options, null)
     this._refuseUnserved(event)
     const predicate =
       typeof optionsOrPredicate === 'function'
@@ -407,8 +425,8 @@ export class Page extends ChannelOwner {
     const waiter = Waiter.createForEvent()
     if (logLine) waiter.log(logLine)
     waiter.rejectOnTimeout(
-      timeout,
-      `Timeout ${timeout}ms exceeded while waiting for event "${event}"`,
+      timeoutOptions,
+      `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`,
     )
     if (event !== 'crash')
       waiter.rejectOnEvent(this, 'crash', new Error('Page crashed'))
@@ -869,6 +887,15 @@ export class Page extends ChannelOwner {
     options: PressOptions = {},
   ): Promise<void> {
     return await this.#mainFrame._press('page.press', selector, key, options)
+  }
+
+  /** Deprecated in Playwright for `Locator.pressSequentially`, and served the same way. */
+  async type(
+    selector: string,
+    text: string,
+    options: TypeOptions = {},
+  ): Promise<void> {
+    return await this.#mainFrame._type('page.type', selector, text, options)
   }
 
   async inputValue(

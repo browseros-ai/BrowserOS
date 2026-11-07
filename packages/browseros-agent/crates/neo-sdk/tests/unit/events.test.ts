@@ -186,18 +186,27 @@ test('tests that waitForEvent rejects when the page closes, unless it waits for 
   )
 })
 
-test('tests that a signal is refused before any effect, and null is no signal', async () => {
+test('tests that an object that is no signal throws before any effect, and null is no signal', async () => {
   const { page, context } = run()
-  await expect(
-    page.waitForEvent('console', { signal: {} } as never),
-  ).rejects.toThrow(
-    'page.waitForEvent: Neo does not support the "signal" option yet',
-  )
-  await expect(
-    context.waitForEvent('page', { signal: {} } as never),
-  ).rejects.toThrow(
-    'browserContext.waitForEvent: Neo does not support the "signal" option yet',
-  )
+  // Playwright's `Waiter.rejectOnTimeout` reads `signal.addEventListener`, which `{}` lacks, before
+  // the wait listens (aborted and aborting signals: signal.test.ts).
+  for (const [apiName, waiting] of [
+    [
+      'page.waitForEvent',
+      page.waitForEvent('console', { signal: {} } as never),
+    ],
+    [
+      'browserContext.waitForEvent',
+      context.waitForEvent('page', { signal: {} } as never),
+    ],
+  ] as const) {
+    const error = await waiting.then(
+      () => null,
+      (error: Error) => error,
+    )
+    expect(error, apiName).toBeInstanceOf(TypeError)
+    expect(error?.message.startsWith(`${apiName}: `), apiName).toBe(true)
+  }
   expect(subscriptions).toEqual([])
   expect(page.listenerCount('console') + context.listenerCount('page')).toBe(0)
   const waited = page.waitForEvent('console', { signal: null } as never)

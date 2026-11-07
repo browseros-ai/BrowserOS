@@ -49,12 +49,14 @@ extern crate self as neo_runtime;
 )]
 mod fake_browser;
 
+mod abort;
 mod aria_yaml;
 mod bridge;
 mod check;
 mod click;
 mod console;
 mod deadline;
+mod devices;
 mod dialogs;
 mod discovery;
 mod dispatch;
@@ -70,6 +72,7 @@ mod frames;
 mod getters;
 mod highlight;
 mod history;
+mod input_devices;
 mod keyboard;
 mod lists;
 mod main_world;
