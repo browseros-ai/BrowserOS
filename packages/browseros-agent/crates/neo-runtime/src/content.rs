@@ -113,7 +113,7 @@ pub(crate) async fn set_content(
     let events = frame.host.events();
     let mut observation = WaitTab::observe(tab).map_err(call_error)?;
     // Playwright: `server/frames.ts` `Frame.setContent`: `// Clear lifecycle right after document.open() - see 'tag' below.`
-    tab.page.clear_lifecycle_at_reopen(&frame.id, true);
+    tab.page.expect_reopen(&frame.id, true);
     let written = progress
         .race(frame.call(
             None,
@@ -122,8 +122,12 @@ pub(crate) async fn set_content(
             },
         ))
         .await;
-    if !matches!(written, Ok(Ok(_))) {
-        tab.page.clear_lifecycle_at_reopen(&frame.id, false);
+    // A write the page refused never opened the document: it gives its clear back. A stopped
+    // call may still be writing, and a contract error came after the write, so those keep it.
+    if let Ok(Err(error)) = &written
+        && !matches!(error, PageError::Contract(_))
+    {
+        tab.page.expect_reopen(&frame.id, false);
     }
     written?.map_err(call_error)?;
     if options.wait_until == LifecycleEvent::Commit {

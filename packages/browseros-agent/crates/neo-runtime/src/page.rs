@@ -276,9 +276,11 @@ pub(crate) struct PageState {
     pending_document: Option<PendingDocument>,
     /// `Page.javascriptDialogOpening` events seen; each was answered.
     pub(crate) dialogs_opened: u64,
-    /// Neo: `setContent` asked to clear this frame's lifecycle at its reopened document's `init`,
-    /// as Playwright's clears it right after `document.open()`. A new document disarms it.
-    pub(crate) clear_at_reopen: bool,
+    /// Neo: how many `setContent` writes still expect their reopened document's `init`, each to
+    /// clear this frame's lifecycle once, as Playwright's clears it right after each
+    /// `document.open()`. Overlapping writes each get their own clear; a new document drops them
+    /// (a write still pending then targets the old document, and fails).
+    pub(crate) reopens_expected: u32,
 }
 
 /// The navigation a frame is waiting to commit ([`PageState::pending_document`]).
@@ -323,10 +325,18 @@ impl PageState {
         Fired::between(before, self)
     }
 
-    /// Playwright's `Frame._onClearLifecycle`: a new document's `DOMContentLoaded` and `load`
-    /// count again, whether it committed or `setContent` reopened it, and an armed clear is spent.
+    /// Playwright's `Frame._onClearLifecycle` for a committed document: its `DOMContentLoaded` and
+    /// `load` count again, and no write still expects a reopen of the previous one.
     fn clear_lifecycle(&mut self) {
-        self.clear_at_reopen = false;
+        self.reopens_expected = 0;
+        self.dom_content_loaded = false;
+        self.load = false;
+    }
+
+    /// Playwright's `Frame._onClearLifecycle` right after one `setContent` write's
+    /// `document.open()`: that write's clear, and only that one, is spent.
+    fn reopened(&mut self) {
+        self.reopens_expected -= 1;
         self.dom_content_loaded = false;
         self.load = false;
     }
@@ -376,12 +386,12 @@ pub(crate) struct FrameFeeds {
 }
 
 impl FrameFeeds {
-    /// [`PageSession::clear_lifecycle_at_reopen`] for a child frame.
-    pub(crate) fn clear_lifecycle_at_reopen(&self, frame: &str, armed: bool) {
+    /// [`PageSession::expect_reopen`] for a child frame.
+    pub(crate) fn expect_reopen(&self, frame: &str, expected: bool) {
         if let Ok(mut frames) = self.frames.lock() {
             let feed = frames.entry(frame.to_string()).or_insert_with(new_feed);
             feed.state
-                .send_modify(|state| state.page.clear_at_reopen = armed);
+                .send_modify(|state| expect(&mut state.page, expected));
         }
     }
 
@@ -763,15 +773,16 @@ impl PageSession {
         })
     }
 
-    /// Neo: arms or disarms the clear of `frame`'s lifecycle at its reopened document's `init`:
-    /// `setContent`, as Playwright's `_onClearLifecycle` right after `document.open()`, so a later
-    /// `waitForLoadState` waits for the written document.
-    pub(crate) fn clear_lifecycle_at_reopen(&self, frame: &str, armed: bool) {
+    /// Neo: one `setContent` write expects (or, failing before its `document.open()`, no longer
+    /// expects) its reopened document's `init` in `frame`, which clears the frame's lifecycle once,
+    /// as Playwright's `_onClearLifecycle` right after `document.open()`, so a later
+    /// `waitForLoadState` waits for that write's document.
+    pub(crate) fn expect_reopen(&self, frame: &str, expected: bool) {
         if frame == self.main_frame {
             self.state_updates
-                .send_modify(|state| state.clear_at_reopen = armed);
+                .send_modify(|state| expect(state, expected));
         } else {
-            self.frame_feeds.clear_lifecycle_at_reopen(frame, armed);
+            self.frame_feeds.expect_reopen(frame, expected);
         }
     }
 
@@ -1748,6 +1759,15 @@ fn apply_navigation_request(state: &mut PageState, event: &CdpEvent, main_frame:
     applied
 }
 
+/// Neo: one write's expected reopen, counted in or given back.
+fn expect(state: &mut PageState, expected: bool) {
+    state.reopens_expected = if expected {
+        state.reopens_expected.saturating_add(1)
+    } else {
+        state.reopens_expected.saturating_sub(1)
+    };
+}
+
 fn apply_lifecycle(state: &mut PageState, event: &LifecycleEvent) -> bool {
     let seeded = state.document.is_none();
     if seeded {
@@ -1760,7 +1780,7 @@ fn apply_lifecycle(state: &mut PageState, event: &LifecycleEvent) -> bool {
         "DOMContentLoaded" => state.did_dom_content_load(),
         "load" => state.did_load(),
         // Playwright: `server/frames.ts` `Frame.setContent`: `this._onClearLifecycle();`
-        "init" if state.clear_at_reopen => state.clear_lifecycle(),
+        "init" if state.reopens_expected > 0 => state.reopened(),
         _ => return seeded,
     }
     true
@@ -3285,16 +3305,32 @@ mod tests {
         lifecycle(&mut state, "init");
         assert!(state.load && state.dom_content_loaded);
         // setContent's: the reopened document's events count again.
-        state.clear_at_reopen = true;
+        expect(&mut state, true);
         assert!(lifecycle(&mut state, "init").changed);
-        assert!(!state.load && !state.dom_content_loaded && !state.clear_at_reopen);
+        assert!(!state.load && !state.dom_content_loaded && state.reopens_expected == 0);
         for name in ["DOMContentLoaded", "load"] {
             lifecycle(&mut state, name);
         }
         assert!(state.load && state.dom_content_loaded);
         assert_eq!((state.dom_content_loaded_count, state.load_count), (2, 2));
-        // A new document disarms a clear nothing consumed.
-        state.clear_at_reopen = true;
+        // Two overlapping writes: each init spends its own clear, so the later document's
+        // unfired load is not the earlier one's.
+        expect(&mut state, true);
+        expect(&mut state, true);
+        lifecycle(&mut state, "init");
+        for name in ["DOMContentLoaded", "load"] {
+            lifecycle(&mut state, name);
+        }
+        lifecycle(&mut state, "init");
+        lifecycle(&mut state, "DOMContentLoaded");
+        assert!(state.dom_content_loaded && !state.load && state.reopens_expected == 0);
+        // A write that failed before document.open() gives its clear back.
+        expect(&mut state, true);
+        expect(&mut state, false);
+        lifecycle(&mut state, "init");
+        assert!(state.dom_content_loaded);
+        // A new document drops the clears nothing consumed.
+        expect(&mut state, true);
         applied(
             &mut state,
             &event(
@@ -3303,7 +3339,7 @@ mod tests {
                 json!({ "frame": {"id": MAIN, "url": "https://a.test/b", "loaderId": "two"} }),
             ),
         );
-        assert!(!state.clear_at_reopen);
+        assert_eq!(state.reopens_expected, 0);
     }
 
     #[test]
