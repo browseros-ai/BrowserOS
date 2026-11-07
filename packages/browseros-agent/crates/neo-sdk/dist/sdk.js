@@ -624,6 +624,9 @@ class Connection {
     return;
   };
   _closedFor = () => false;
+  _frameFor = () => {
+    throw new Error("neo-sdk: a frame record arrived before the run had its context");
+  };
   _objects = new Map;
   constructor(lineOffset) {
     this.#lineOffset = lineOffset;
@@ -654,6 +657,9 @@ class Connection {
   }
   async sendEval(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendElement(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout) ?? {};
   }
   async sendHandle(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout) ?? {};
@@ -2141,6 +2147,53 @@ class ElementHandle extends JSHandle {
   asElement() {
     return this;
   }
+  async ownerFrame() {
+    const result = await this._connection.sendElement("elementHandle.ownerFrame", this._guid, "ownerFrame", {}, 0);
+    return frameFrom(this._connection, result.frame);
+  }
+  async contentFrame() {
+    const result = await this._connection.sendElement("elementHandle.contentFrame", this._guid, "contentFrame", {}, 0);
+    return frameFrom(this._connection, result.frame);
+  }
+  async getAttribute(name) {
+    const value = (await this._connection.sendElement("elementHandle.getAttribute", this._guid, "getAttribute", { name }, 0)).value;
+    return value === undefined ? null : value;
+  }
+  async inputValue() {
+    return (await this._connection.sendElement("elementHandle.inputValue", this._guid, "inputValue", {}, 0)).value;
+  }
+  async textContent() {
+    const value = (await this._connection.sendElement("elementHandle.textContent", this._guid, "textContent", {}, 0)).value;
+    return value === undefined ? null : value;
+  }
+  async innerText() {
+    return (await this._connection.sendElement("elementHandle.innerText", this._guid, "innerText", {}, 0)).value;
+  }
+  async innerHTML() {
+    return (await this._connection.sendElement("elementHandle.innerHTML", this._guid, "innerHTML", {}, 0)).value;
+  }
+  async isChecked() {
+    return (await this._connection.sendElement("elementHandle.isChecked", this._guid, "isChecked", {}, 0)).value;
+  }
+  async isDisabled() {
+    return (await this._connection.sendElement("elementHandle.isDisabled", this._guid, "isDisabled", {}, 0)).value;
+  }
+  async isEditable() {
+    return (await this._connection.sendElement("elementHandle.isEditable", this._guid, "isEditable", {}, 0)).value;
+  }
+  async isEnabled() {
+    return (await this._connection.sendElement("elementHandle.isEnabled", this._guid, "isEnabled", {}, 0)).value;
+  }
+  async isHidden() {
+    return (await this._connection.sendElement("elementHandle.isHidden", this._guid, "isHidden", {}, 0)).value;
+  }
+  async isVisible() {
+    return (await this._connection.sendElement("elementHandle.isVisible", this._guid, "isVisible", {}, 0)).value;
+  }
+  async boundingBox() {
+    const value = (await this._connection.sendElement("elementHandle.boundingBox", this._guid, "boundingBox", {}, 0)).value;
+    return value === undefined ? null : value;
+  }
   async $(selector) {
     const result = await this._connection.sendHandle("elementHandle.$", this._guid, "querySelector", { selector }, 0);
     return ElementHandle.fromNullable(this._connection, result.element);
@@ -2159,6 +2212,9 @@ class ElementHandle extends JSHandle {
     const result = await this._connection.sendHandle("elementHandle.$$eval", this._guid, "evalOnSelectorAll", { selector, ...params }, 0);
     return parseResult(result.value);
   }
+}
+function frameFrom(connection, record) {
+  return record ? connection._frameFor(record) : null;
 }
 function elementsFrom(connection, created) {
   return created.map((record) => ElementHandle.fromNullable(connection, record)).filter((handle) => handle !== null);
@@ -6809,6 +6865,7 @@ class BrowserContext extends ChannelOwner {
     this._pipe = pipe;
     connection._closeReasonFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._closeReason() ?? this.#closeReason;
     connection._closedFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._isClosedLocally() ?? false;
+    connection._frameFor = (record) => this.#pageFor(pageGuidOf(record.guid))._frameFrom(record);
   }
   isClosed() {
     return this.#closingStatus !== "none";

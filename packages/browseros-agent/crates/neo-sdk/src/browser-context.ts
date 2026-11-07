@@ -104,6 +104,8 @@ export class BrowserContext extends ChannelOwner {
       this.#pages.get(pageGuidOf(callGuid))?._closeReason() ?? this.#closeReason
     connection._closedFor = (callGuid) =>
       this.#pages.get(pageGuidOf(callGuid))?._isClosedLocally() ?? false
+    connection._frameFor = (record) =>
+      this.#pageFor(pageGuidOf(record.guid))._frameFrom(record)
   }
 
   /** Playwright's `BrowserContext.isClosed`: true from the moment `close()` is called. */
