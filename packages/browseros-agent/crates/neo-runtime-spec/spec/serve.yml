@@ -13,6 +13,7 @@
 interfaces:
   BrowserContext:
     - newPage
+    - close
   # A BrowserContext initializer requires these three. Neo never sends one (a run receives its
   # context at start) and serves no command on them; listing them keeps the type constructible.
   APIRequestContext: []
