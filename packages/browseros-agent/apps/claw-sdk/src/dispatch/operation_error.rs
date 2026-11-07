@@ -113,98 +113,123 @@ impl fmt::Display for OperationError {
 impl Error for OperationError {}
 
 /// A stable `snake_case` code. The one list lives here, so the trace, the script's `NeoError`
-/// and the run description cannot disagree; each feature adds its codes to it.
+/// and the run description cannot disagree; each feature adds its codes to it, in
+/// `error_codes!` below.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ErrorCode(&'static str);
 
-impl ErrorCode {
+/// Declares each [`ErrorCode`] constant and [`ErrorCode::KNOWN`] from the same tokens, as
+/// browseros-playwright's `listed_enum!` does for its enums. A refusal comes back through that
+/// crate as a bare string, and [`ErrorCode::known`] reads it back by this list, so a code kept
+/// off a hand-kept list would compile and then reach the agent as `internal_error`.
+macro_rules! error_codes {
+    ($($(#[$doc:meta])* $name:ident = $code:literal;)+) => {
+        impl ErrorCode {
+            $($(#[$doc])* pub(crate) const $name: Self = Self($code);)+
+
+            /// Every code above, in declaration order.
+            const KNOWN: &'static [Self] = &[$(Self::$name),+];
+        }
+    };
+}
+
+error_codes! {
     /// No method has that name, or a script asked for one only Neo may call.
-    pub(crate) const METHOD_UNAVAILABLE: Self = Self("method_unavailable");
+    METHOD_UNAVAILABLE = "method_unavailable";
     /// The input did not decode into the method's input type.
-    pub(crate) const INVALID_INPUT: Self = Self("invalid_input");
+    INVALID_INPUT = "invalid_input";
     /// The script returned while this op still ran.
-    pub(crate) const NOT_AWAITED: Self = Self("not_awaited");
+    NOT_AWAITED = "not_awaited";
     /// The caller went away, or a crate's own cancel fired.
-    pub(crate) const CANCELLED: Self = Self("cancelled");
+    CANCELLED = "cancelled";
     /// The run's time budget ran out.
-    pub(crate) const RUN_TIMEOUT: Self = Self("run_timeout");
+    RUN_TIMEOUT = "run_timeout";
     /// Neo is stopping.
-    pub(crate) const SHUTTING_DOWN: Self = Self("shutting_down");
+    SHUTTING_DOWN = "shutting_down";
     /// The CDP link is down, or was replaced since the run began.
-    pub(crate) const BROWSER_DISCONNECTED: Self = Self("browser_disconnected");
+    BROWSER_DISCONNECTED = "browser_disconnected";
     /// The target tab is gone.
-    pub(crate) const PAGE_CLOSED: Self = Self("page_closed");
+    PAGE_CLOSED = "page_closed";
     /// The handle names a page id that now belongs to another tab: it predates a Neo restart.
-    pub(crate) const STALE_PAGE: Self = Self("stale_page");
+    STALE_PAGE = "stale_page";
     /// A bug in Neo.
-    pub(crate) const INTERNAL_ERROR: Self = Self("internal_error");
+    INTERNAL_ERROR = "internal_error";
     /// A CDP call got no answer in time.
-    pub(crate) const CDP_TIMEOUT: Self = Self("cdp_timeout");
+    CDP_TIMEOUT = "cdp_timeout";
     /// The browser answered a CDP call with an error.
-    pub(crate) const CDP_ERROR: Self = Self("cdp_error");
+    CDP_ERROR = "cdp_error";
     /// The owner holds the tab (sdk-traces' takeover lock).
-    pub(crate) const OWNER_HAS_CONTROL: Self = Self("owner_has_control");
+    OWNER_HAS_CONTROL = "owner_has_control";
     /// The script's code did not compile.
-    pub(crate) const SYNTAX_ERROR: Self = Self("syntax_error");
+    SYNTAX_ERROR = "syntax_error";
     /// The script threw something other than an operation's `NeoError`.
-    pub(crate) const SCRIPT_ERROR: Self = Self("script_error");
+    SCRIPT_ERROR = "script_error";
     /// One stretch of the script's JavaScript ran past the slice budget without awaiting.
-    pub(crate) const LONG_TASK: Self = Self("long_task");
+    LONG_TASK = "long_task";
     /// The script filled its run's JavaScript heap.
-    pub(crate) const OUT_OF_MEMORY: Self = Self("out_of_memory");
+    OUT_OF_MEMORY = "out_of_memory";
     /// The script's return value is larger than a run may return.
-    pub(crate) const RESULT_TOO_LARGE: Self = Self("result_too_large");
+    RESULT_TOO_LARGE = "result_too_large";
     /// The host's `_meta["com.browseros.neo/run"]` is malformed.
-    pub(crate) const INVALID_META: Self = Self("invalid_meta");
+    INVALID_META = "invalid_meta";
     /// This `requestId` already ran, and its replay window has passed.
-    pub(crate) const DUPLICATE_REQUEST: Self = Self("duplicate_request");
+    DUPLICATE_REQUEST = "duplicate_request";
     /// The trace store could not be read, so a `requestId` cannot be checked against it.
-    pub(crate) const TRACE_UNAVAILABLE: Self = Self("trace_unavailable");
+    TRACE_UNAVAILABLE = "trace_unavailable";
     /// The browser has not connected yet, so a run has no view to start with.
-    pub(crate) const BROWSER_UNAVAILABLE: Self = Self("browser_unavailable");
+    BROWSER_UNAVAILABLE = "browser_unavailable";
     /// The page did not load: a network error, a refused connection, a dialog in the way, or
     /// no answer within core's navigation timeout.
-    pub(crate) const NAVIGATION_FAILED: Self = Self("navigation_failed");
+    NAVIGATION_FAILED = "navigation_failed";
     /// A `neo.solveCaptcha` holds the page: another solve, or a write while one runs.
-    pub(crate) const PAGE_BUSY: Self = Self("page_busy");
+    PAGE_BUSY = "page_busy";
     /// This Neo has no CAPTCHA provider key, so `neo.solveCaptcha` is off. The deployment adds
     /// one; the script cannot.
-    pub(crate) const CAPTCHA_UNAVAILABLE: Self = Self("captcha_unavailable");
+    CAPTCHA_UNAVAILABLE = "captcha_unavailable";
     /// The tab is private, so Neo captures no more of its pixels (sdk-traces' privacy).
-    pub(crate) const PAGE_PRIVATE: Self = Self("page_private");
+    PAGE_PRIVATE = "page_private";
     /// A value the run's output had to be masked with is masked nowhere: more were typed into
     /// sensitive fields while it ran than Neo keeps, or the process's secret set was full and
     /// refused one. Its reply and later records are withheld.
-    pub(crate) const OUTPUT_WITHHELD: Self = Self("output_withheld");
+    OUTPUT_WITHHELD = "output_withheld";
 
     // browseros-playwright's codes. The crate's own error table picks each one's owner, whether
     // it is a timeout and whether Neo can vouch for what happened; builtins/playwright_ops.rs
     // carries them over unchanged.
 
     /// A strict locator matched two or more elements.
-    pub(crate) const STRICT_MODE_VIOLATION: Self = Self("strict_mode_violation");
+    STRICT_MODE_VIOLATION = "strict_mode_violation";
     /// Nothing matched for the op's whole timeout; also `expect` with no element.
-    pub(crate) const NO_MATCH: Self = Self("no_match");
+    NO_MATCH = "no_match";
     /// An element matched, but stayed hidden, disabled, unstable, not editable or covered.
-    pub(crate) const NOT_ACTIONABLE: Self = Self("not_actionable");
+    NOT_ACTIONABLE = "not_actionable";
     /// An `expect` matcher failed with its element present.
-    pub(crate) const ASSERTION_FAILED: Self = Self("assertion_failed");
+    ASSERTION_FAILED = "assertion_failed";
     /// A ref or element handle whose element or document is gone. Never waits.
-    pub(crate) const ELEMENT_DETACHED: Self = Self("element_detached");
+    ELEMENT_DETACHED = "element_detached";
     /// A script the agent ran in the page threw (`evaluate`, `waitForFunction`).
-    pub(crate) const PAGE_ERROR: Self = Self("page_error");
+    PAGE_ERROR = "page_error";
     /// The page never reached a state the op waited for: a load state, a URL, an event.
-    pub(crate) const WAIT_TIMEOUT: Self = Self("wait_timeout");
+    WAIT_TIMEOUT = "wait_timeout";
     /// A Playwright feature Neo does not support here, such as a popup opened as a window.
-    pub(crate) const UNSUPPORTED: Self = Self("unsupported");
+    UNSUPPORTED = "unsupported";
     /// Copy or cut in a password, card or one-time-code field.
-    pub(crate) const SENSITIVE_COPY_REFUSED: Self = Self("sensitive_copy_refused");
+    SENSITIVE_COPY_REFUSED = "sensitive_copy_refused";
     /// `setInputFiles` named one of Neo's own secret files (its host token, a CAPTCHA key, its
     /// trace store, the browser profile), or a directory that holds or sits in one. The message
     /// never names the path.
-    pub(crate) const SECRET_UPLOAD_REFUSED: Self = Self("neo_secret_upload_refused");
+    SECRET_UPLOAD_REFUSED = "neo_secret_upload_refused";
     /// The page or frame closed, or left the run's view, while a Playwright op worked on it.
-    pub(crate) const TARGET_CLOSED: Self = Self("target_closed");
+    TARGET_CLOSED = "target_closed";
+}
+
+impl ErrorCode {
+    /// The code named `name`, if it is one of claw-sdk's: how a refusal that a crate hands back
+    /// as a string keeps its code.
+    #[must_use]
+    pub(crate) fn known(name: &str) -> Option<Self> {
+        Self::KNOWN.iter().copied().find(|code| code.0 == name)
+    }
 
     /// The stored and wire name.
     #[must_use]

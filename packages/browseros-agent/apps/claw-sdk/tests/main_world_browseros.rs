@@ -1,7 +1,8 @@
 //! The main-world scripts on a real BrowserOS, through MCP `run` (S4, S5): each API that runs the
 //! agent's script or HTML in the page behaves as Playwright 1.64.1's, the frame forms in a child
-//! frame included, no password field's value reaches the realm or the trace raw, and an owner's
-//! lock that blocks reads withholds what a script that was already running read.
+//! frame included, no password field's value reaches the realm or the trace raw, an owner's lock
+//! that blocks reads withholds what a script that was already running read, and a popup's script,
+//! which can act on its opener, is refused as unsupported while Neo checks no rules there.
 //!
 //! ```text
 //!  page.evaluate, frame.evaluate ──────────────────────────────────▶ page.evaluate
@@ -101,6 +102,11 @@ async fn an_owner_lock_that_blocks_reads_withholds_what_a_running_script_read() 
 async fn a_long_wait_on_a_password_field_registers_its_value_once_not_once_per_poll() -> TestResult
 {
     on_browseros_logging(Some(REGISTRATIONS), |rig| Box::pin(long_wait(rig))).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_popups_script_is_refused_as_unsupported_and_never_runs() -> TestResult {
+    on_browseros(|rig| Box::pin(popup_script_unchecked(rig))).await
 }
 
 /// `drive` on a fresh BrowserOS within the test's budget, with both processes' logs on failure.
@@ -730,6 +736,45 @@ async fn lock_while_a_script_runs(rig: &Rig) -> TestResult {
         )
         .await?;
     assert_eq!(released.status, 200, "{}", released.text());
+    Ok(())
+}
+
+/// A popup's script can act on its opener through `window.opener`, and this door checks no rules
+/// on the opener (browseros-playwright's default `OpEnv::recheck_reach`), so Neo sends the popup no
+/// script. The agent reads that as `neo / unsupported`, not sent: Neo does not support it here,
+/// which a script can work around, rather than a bug in Neo. The refused script never ran.
+async fn popup_script_unchecked(rig: &Rig) -> TestResult {
+    let script = r"
+        await page.goto('data:text/html,' + encodeURIComponent(`<title>Opener</title>
+          <button id='open'>Open</button>
+          <script>
+            document.getElementById('open').onclick = () => {
+              const popup = window.open('', 'popup');
+              popup.document.write('<title>Popup</title>');
+              popup.document.close();
+            };
+          </script>`));
+        const opened = page.waitForEvent('popup');
+        await page.locator('#open').click();
+        const popup = await opened;
+        let refused = 'resolved';
+        try {
+          await popup.evaluate(() => { document.title = 'ran'; });
+        } catch (error) {
+          refused = [error.owner, error.code, error.delivery];
+        }
+        return { refused, title: await popup.title() };";
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+    let result =
+        browseros_rig::run(&client, script, &json!({ "taskId": "popup-unchecked" })).await?;
+    client.cancel().await?;
+    assert_eq!(
+        returned(&result)?,
+        json!({ "refused": ["neo", "unsupported", "not_sent"], "title": "Popup" }),
+        "the popup's script is refused before it is sent, under a code the agent can act on, and \
+         the title it would have set is the popup's own"
+    );
     Ok(())
 }
 

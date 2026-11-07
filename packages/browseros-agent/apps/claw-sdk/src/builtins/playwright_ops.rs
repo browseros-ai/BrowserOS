@@ -542,15 +542,19 @@ fn refusal(error: &OperationError) -> Refusal {
 /// can vouch for what happened, from which the door derives delivery once the op is sent.
 pub(super) fn leaf_error(error: &PlaywrightError) -> LeafError {
     let code = match error.error_code() {
-        Some(code) => error_code(code),
+        Some(code) => Some(error_code(code)),
         None => refusal_code(error),
     };
     let message = error.message();
-    let failure = match error.owner() {
-        ErrorOwner::Neo => OperationError::neo(code, message),
-        ErrorOwner::Script => OperationError::script(code, message),
-        ErrorOwner::Website => OperationError::website(code, message),
-        ErrorOwner::Host => OperationError::host(code, message),
+    let failure = match code {
+        Some(code) => match error.owner() {
+            ErrorOwner::Neo => OperationError::neo(code, message),
+            ErrorOwner::Script => OperationError::script(code, message),
+            ErrorOwner::Website => OperationError::website(code, message),
+            ErrorOwner::Host => OperationError::host(code, message),
+        },
+        // Neo and its crate disagree on the codes, whoever the refusal named.
+        None => OperationError::neo(ErrorCode::INTERNAL_ERROR, message),
     };
     let failure = match error.timed_out() {
         TimedOut::Yes => failure.timed_out(),
@@ -584,15 +588,14 @@ fn error_code(code: PlaywrightCode) -> ErrorCode {
     }
 }
 
-/// The code of one of Neo's own refusals, coming back through the crate. Two paths refuse: the
-/// door's rules through `OpEnv::recheck`, whose refusal the door keeps standing as the op's
-/// error whatever this returns, and the capture hook, whose only refusal is `page_private`.
-fn refusal_code(error: &PlaywrightError) -> ErrorCode {
-    if error.code() == ErrorCode::PAGE_PRIVATE.as_str() {
-        ErrorCode::PAGE_PRIVATE
-    } else {
-        ErrorCode::INTERNAL_ERROR
-    }
+/// The code of one of Neo's own refusals, coming back through the crate as a string, or `None`
+/// when claw-sdk does not know it. Three paths refuse: the door's rules through `OpEnv::recheck`,
+/// whose refusal the door keeps standing as the op's error whatever this returns; the capture
+/// hook, as `page_private`; and the crate itself, as `unsupported`, when a main-world script
+/// could act on a tab no host rule checked (`OpEnv::recheck_reach`'s default, and a tab of the
+/// page's opener group with no tab id). Each keeps its code, so the agent reads who must act.
+fn refusal_code(error: &PlaywrightError) -> Option<ErrorCode> {
+    ErrorCode::known(error.code())
 }
 
 #[cfg(test)]
@@ -903,19 +906,76 @@ mod tests {
         }
     }
 
+    /// A refusal the crate hands back reads as whoever refused made it, so the agent learns who
+    /// must act and why, never a bug in Neo.
     #[test]
-    fn the_capture_hooks_refusal_comes_back_as_page_private() {
+    fn a_refusal_the_crate_hands_back_keeps_its_owner_and_code() {
+        let cases = [
+            // The crate's own, when no host rule checked a tab the page's script can act on
+            // (`op_env::unchecked_reach`, also `OpEnv::recheck_reach`'s default).
+            (
+                ErrorOwner::Neo,
+                "unsupported",
+                "Neo refused this call: the page is linked to 1 other tab(s) through window.opener",
+            ),
+            // The door's rules, through `OpEnv::recheck`.
+            (
+                ErrorOwner::Host,
+                "owner_has_control",
+                "the owner has control of this tab",
+            ),
+            (
+                ErrorOwner::Script,
+                "method_unavailable",
+                "this method is not available here",
+            ),
+            // The capture hook.
+            (
+                ErrorOwner::Host,
+                "page_private",
+                "this tab is private (takeover)",
+            ),
+        ];
+        let read: Vec<_> = cases
+            .iter()
+            .map(|&(owner, code, message)| {
+                let leaf = leaf_error(&PlaywrightError::from(Refusal {
+                    owner,
+                    code: code.to_owned(),
+                    message: message.to_owned(),
+                    host_code: None,
+                }));
+                let error = leaf.error();
+                (
+                    error.owner(),
+                    error.code().as_str(),
+                    error.is_timeout(),
+                    error.message().to_owned(),
+                )
+            })
+            .collect();
+        let made: Vec<_> = cases
+            .iter()
+            .map(|&(owner, code, message)| (owner, code, false, message.to_owned()))
+            .collect();
+        assert_eq!(read, made, "the agent reads each refusal as it was made");
+    }
+
+    /// A code claw-sdk does not know means Neo and its Playwright disagree on the list: a bug in
+    /// Neo, whoever the refusal named.
+    #[test]
+    fn a_refusal_under_a_code_neo_does_not_know_reads_as_a_bug_in_neo() {
         let leaf = leaf_error(&PlaywrightError::from(Refusal {
             owner: ErrorOwner::Host,
-            code: "page_private".to_owned(),
-            message: "this tab is private (takeover)".to_owned(),
+            code: "not_a_neo_code".to_owned(),
+            message: "refused".to_owned(),
             host_code: None,
         }));
         let error = leaf.error();
         assert_eq!(
-            (error.owner(), error.code(), error.is_timeout()),
-            (ErrorOwner::Host, ErrorCode::PAGE_PRIVATE, false)
+            (error.owner(), error.code()),
+            (ErrorOwner::Neo, ErrorCode::INTERNAL_ERROR),
+            "the host did not make that code, so it is not the host's to fix"
         );
-        assert_eq!(error.message(), "this tab is private (takeover)");
     }
 }
