@@ -441,7 +441,7 @@ mod tests {
             "the second write waits for the first"
         );
         drop(first.ready().await);
-        let _second = timeout(Duration::from_millis(1000), waiting)
+        let _second = timeout(Duration::from_secs(1), waiting)
             .await
             .expect("the second write goes once the first answered");
         drop(other);
