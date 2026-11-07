@@ -174,6 +174,26 @@ impl Dialogs {
     }
 }
 
+impl Dialogs {
+    /// Playwright: `server/dialog.ts` `DialogManager.closeBeforeUnloadDialogs`: `if (dialog.type() === 'beforeunload')`
+    ///
+    /// Whether a `beforeunload` dialog the run handed out is still open: the context's close
+    /// dismisses it, so the tab stays. Marks it answered.
+    pub(crate) fn take_open_beforeunload(&self) -> bool {
+        let Ok(mut state) = self.0.lock() else {
+            return false;
+        };
+        let Some(open) = state
+            .open
+            .clone()
+            .filter(|open| open.emitted && open.record.initializer.r#type == "beforeunload")
+        else {
+            return false;
+        };
+        state.handled.insert(open.index)
+    }
+}
+
 /// Playwright: `server/dialog.ts` `Dialog._close`: `if (this._type === 'beforeunload')`
 ///
 /// Accept `beforeunload`, dismiss every other dialog.
