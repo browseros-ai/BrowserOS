@@ -86,6 +86,10 @@ const CONTEXT_EVENTS: [(&str, Needs); 4] = [
     ("dialogclosed", Needs::WATCHER),
 ];
 
+/// Neo: the listener event of a context's `Debugger` (`Events.Debugger`), which needs nothing
+/// switched on: the debugger queues it itself (`debugger.rs`).
+const DEBUGGER_EVENTS: [(&str, Needs); 1] = [("pausedstatechanged", Needs::NONE)];
+
 /// What a subscription switches on in a page's session before that page's next call runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Needs {
@@ -106,6 +110,11 @@ impl Needs {
         watcher: true,
         runtime: true,
     };
+    /// Neo: an event no page produces, such as the debugger's.
+    const NONE: Self = Self {
+        watcher: false,
+        runtime: false,
+    };
 }
 
 /// What a listener event on `guid` needs, or `None` when Neo does not produce it there. `guid`
@@ -115,6 +124,8 @@ pub(crate) fn needs(guid: &str, event: &str) -> Option<Needs> {
         &CONTEXT_EVENTS
     } else if guid.starts_with("page@") {
         &PAGE_EVENTS
+    } else if guid.starts_with("debugger@") {
+        &DEBUGGER_EVENTS
     } else {
         return None;
     };

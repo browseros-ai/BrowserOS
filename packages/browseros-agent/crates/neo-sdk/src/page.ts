@@ -309,8 +309,9 @@ export class Page extends ChannelOwner {
 
   /**
    * Playwright's `Page.pause`: its default timeouts are off while the context's `pause` call
-   * runs, which Playwright's debugger holds only while it is enabled; a run's never is, so the
-   * call returns at once, as Playwright's does with a headless browser and no inspector.
+   * runs, which the context's debugger holds only once it is enabled (`context.debugger`'s
+   * `requestPause`, `next` or `runTo`), until it is resumed; otherwise the call returns at once,
+   * as Playwright's does with a headless browser and no inspector.
    *
    * Deviation: `client/page.ts` `Page.pause`: `await this._closedOrCrashedScope.safeRace(this.context()._channel.pause({}, kNoTimeout));`
    * With a headed browser Playwright opens its Inspector and waits for a human to resume. A Neo

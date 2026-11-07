@@ -36,49 +36,6 @@ class ConsoleMessage {
   }
 }
 
-// src/errors.ts
-class PlaywrightError extends Error {
-  log = [];
-}
-
-class TimeoutError extends PlaywrightError {
-  constructor(message) {
-    super(message);
-    this.name = "TimeoutError";
-  }
-}
-
-class TargetClosedError extends PlaywrightError {
-  constructor(cause) {
-    super(cause || "Target page, context or browser has been closed");
-  }
-}
-function targetClosedError() {
-  return new TargetClosedError;
-}
-function isTargetClosedError(error) {
-  return error instanceof TargetClosedError;
-}
-function parseError(error) {
-  let e;
-  if (error.name === "TimeoutError")
-    e = new TimeoutError(error.message);
-  else if (error.name === "TargetClosedError")
-    e = new TargetClosedError(error.message);
-  else
-    e = Object.assign(new PlaywrightError(error.message), {
-      name: error.name
-    });
-  if (error.stack !== undefined)
-    e.stack = error.stack;
-  return e;
-}
-function parseSerializedError(error) {
-  if (!error.error)
-    throw new Error("Serialized error must have either an error or a value");
-  return parseError({ ...error.error, stack: error.error.stack || "" });
-}
-
 // src/runtime-bridge.ts
 var deliverEvents;
 function onReplyEvents(deliver) {
@@ -561,6 +518,84 @@ ${event}`;
         this.#arm();
     });
   }
+}
+
+// src/debugger.ts
+var DEBUGGER_EVENTS = {
+  receiver: "Debugger",
+  served: ["pausedstatechanged"],
+  quiet: [],
+  unserved: ["apicallsupdated"]
+};
+
+class Debugger extends ChannelOwner {
+  #connection;
+  constructor(guid, connection, pipe) {
+    super(guid, pipe, DEBUGGER_EVENTS);
+    this.#connection = connection;
+  }
+  _onEvent(method) {
+    if (method === "pausedStateChanged")
+      this.emit("pausedstatechanged");
+  }
+  async requestPause() {
+    await this.#connection.sendDebugger("debugger.requestPause", this._guid, "requestPause", {}, 0);
+  }
+  async resume() {
+    await this.#connection.sendDebugger("debugger.resume", this._guid, "resume", {}, 0);
+  }
+  async next() {
+    await this.#connection.sendDebugger("debugger.next", this._guid, "next", {}, 0);
+  }
+  async runTo(location) {
+    await this.#connection.sendDebugger("debugger.runTo", this._guid, "runTo", { location }, 0);
+  }
+  pausedDetails() {
+    return get(this._guid, "pausedDetails");
+  }
+}
+
+// src/errors.ts
+class PlaywrightError extends Error {
+  log = [];
+}
+
+class TimeoutError extends PlaywrightError {
+  constructor(message) {
+    super(message);
+    this.name = "TimeoutError";
+  }
+}
+
+class TargetClosedError extends PlaywrightError {
+  constructor(cause) {
+    super(cause || "Target page, context or browser has been closed");
+  }
+}
+function targetClosedError() {
+  return new TargetClosedError;
+}
+function isTargetClosedError(error) {
+  return error instanceof TargetClosedError;
+}
+function parseError(error) {
+  let e;
+  if (error.name === "TimeoutError")
+    e = new TimeoutError(error.message);
+  else if (error.name === "TargetClosedError")
+    e = new TargetClosedError(error.message);
+  else
+    e = Object.assign(new PlaywrightError(error.message), {
+      name: error.name
+    });
+  if (error.stack !== undefined)
+    e.stack = error.stack;
+  return e;
+}
+function parseSerializedError(error) {
+  if (!error.error)
+    throw new Error("Serialized error must have either an error or a value");
+  return parseError({ ...error.error, stack: error.error.stack || "" });
 }
 
 // src/dialog.ts
@@ -4717,6 +4752,7 @@ class BrowserContext extends ChannelOwner {
   _browser = null;
   _ownerPage;
   #closingStatus = "none";
+  #debugger;
   constructor(guid, connection, pipe) {
     super(guid, pipe, CONTEXT_EVENTS);
     this.#guid = guid;
@@ -4791,6 +4827,10 @@ class BrowserContext extends ChannelOwner {
     if (this.#closingStatus === "closed" || this.#connection._disconnected)
       return [];
     return get(this.#guid, "pages").map((created) => this.#pages.get(created.guid) ?? this.#add(created));
+  }
+  get debugger() {
+    this.#debugger ??= new Debugger(get(this.#guid, "debugger"), this.#connection, this._pipe);
+    return this.#debugger;
   }
   browser() {
     return this._browser;
@@ -5062,6 +5102,9 @@ class Connection {
     return await this.#send(apiName, guid, method, params, timeout);
   }
   async sendBrowser(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendDebugger(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
   get _disconnected() {

@@ -39,7 +39,7 @@ use std::time::Duration;
 use futures_util::future;
 use neo_runtime_spec::injected::ReadableElementState;
 use neo_runtime_spec::serve::{
-    BrowserCall, BrowserContextCall, DialogCall, FrameAriaSnapshotParams, FrameCall,
+    BrowserCall, BrowserContextCall, DebuggerCall, DialogCall, FrameAriaSnapshotParams, FrameCall,
     FrameCheckParams, FrameCheckResult, FrameClickParams, FrameDblclickParams,
     FrameEvalOnSelectorAllParams, FrameFillParams, FrameFillResult, FrameGetAttributeParams,
     FrameGotoParams, FrameHoverParams, FrameInnerHTMLParams, FrameInnerTextParams,
@@ -65,6 +65,7 @@ use tracing::debug;
 use crate::browser_calls::{self, BROWSER_GUID, CreatedContext};
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
+use crate::debugger::{CallToGate, DEBUGGER_PREFIX, DEFAULT_CONTEXT};
 use crate::dialogs;
 use crate::events::EventHub;
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
@@ -239,6 +240,8 @@ enum ObjectKind {
     Browser,
     /// A context the run created with `browser.newContext`.
     CreatedContext(Arc<CreatedContext>),
+    /// A context's debugger, by the context's key (`debugger.rs`).
+    Debugger(String),
     Page,
     Frame,
     /// A hop's `Request` or `Response`, behind `goto`'s answer.
@@ -253,6 +256,7 @@ enum ObjectCall {
     /// Boxed: `newContext`'s params are the largest of any call.
     Browser(Box<BrowserCall>),
     CreatedContext(Arc<CreatedContext>, BrowserContextCall),
+    Debugger(String, DebuggerCall),
     Page(PageCall),
     Frame(Route),
     Network(NetworkCall),
@@ -326,10 +330,8 @@ impl Dispatcher {
         let target = inner.tabs.resolve(&guid);
         let object = if guid == "context@default" {
             ObjectKind::Context
-        } else if guid == BROWSER_GUID {
-            ObjectKind::Browser
-        } else if let Some(context) = inner.tabs.created().find(&guid) {
-            ObjectKind::CreatedContext(context)
+        } else if let Some(object) = self.platform_object(&guid) {
+            object
         } else if target.is_none() {
             ObjectKind::Unknown
         } else if guid.starts_with("frame@") {
@@ -341,6 +343,7 @@ impl Dispatcher {
         } else {
             ObjectKind::Page
         };
+        let debugged = debugger_context(&object, target.as_ref());
         let Routed { meta, route } = route(object, &method, params.clone());
         let metadata = metadata.unwrap_or(Metadata {
             location: None,
@@ -380,32 +383,70 @@ impl Dispatcher {
                 .as_ref()
                 .map_or_else(CancellationToken::new, |(page, _)| page.closed.clone())
         };
-        let progress = Progress::new(
-            Arc::clone(&entry),
-            metadata.timeout.unwrap_or(0.0),
-            inner.run.clone(),
-            closed,
-        );
+        // The debugger decides here, in call order, whether this call waits before it starts.
+        let held = meta
+            .zip(debugged)
+            .and_then(|(meta, context)| self.hold(meta, &context, &metadata, &entry));
         let (reply, receiver) = oneshot::channel();
-        let served = serve_call(
-            inner.tabs.clone(),
-            target,
-            route,
-            progress,
-            CallReply {
-                entry,
-                trace: inner.trace.clone(),
-                id,
-                reply,
-                events: inner.tabs.events().clone(),
-            },
-        );
+        let call_reply = CallReply {
+            entry: Arc::clone(&entry),
+            trace: inner.trace.clone(),
+            id,
+            reply,
+            events: inner.tabs.events().clone(),
+        };
+        let timeout = metadata.timeout.unwrap_or(0.0);
+        let run = inner.run.clone();
+        let tabs = inner.tabs.clone();
         inner.run.tasks.spawn(async move {
             // The call's share of the in-flight caps, given back however the task ends.
             let _admitted = admitted;
-            served.await;
+            if let Some(resumed) = held
+                && !released(&run, resumed).await
+            {
+                return;
+            }
+            let progress = Progress::new(entry, timeout, run, closed);
+            serve_call(tabs, target, route, progress, call_reply).await;
         });
         PendingReply(PendingInner::Waiting(receiver))
+    }
+
+    /// The run's browser, a context it created or a context's debugger, by guid
+    /// (`browser_calls.rs`, `debugger.rs`); `None` for every other object.
+    fn platform_object(&self, guid: &str) -> Option<ObjectKind> {
+        let created = self.0.tabs.created();
+        if guid == BROWSER_GUID {
+            Some(ObjectKind::Browser)
+        } else if let Some(context) = created.find(guid) {
+            Some(ObjectKind::CreatedContext(context))
+        } else {
+            let context = guid.strip_prefix(DEBUGGER_PREFIX)?;
+            (context == DEFAULT_CONTEXT || created.find(&format!("context@{context}")).is_some())
+                .then(|| ObjectKind::Debugger(context.to_string()))
+        }
+    }
+
+    /// Asks `context`'s debugger whether the call `entry` stops before it starts
+    /// (`Debuggers::before_call`); the answer resolves once something resumes it.
+    fn hold(
+        &self,
+        meta: &'static MethodMeta,
+        context: &str,
+        metadata: &Metadata,
+        entry: &CallEntry,
+    ) -> Option<oneshot::Receiver<()>> {
+        self.0.tabs.debuggers().before_call(
+            &CallToGate {
+                context,
+                meta,
+                internal: metadata.internal == Some(true),
+                location: metadata.location.as_ref(),
+                params: entry.params(),
+                title: metadata.title.as_deref(),
+            },
+            self.0.tabs.events(),
+        )
     }
 
     /// Ends the run's calls after the realm is gone: records why the run ended (the first
@@ -430,6 +471,42 @@ impl Dispatcher {
     }
 }
 
+/// Whether a call the debugger holds may go on: `true` once something resumed it, `false` when
+/// the run ended first (nobody waits for its reply then).
+///
+/// Deviation: `server/progress.ts` `ProgressController.run`: `if (this.metadata.pauseStartTime && !this.metadata.pauseEndTime)`
+/// Playwright's timeout already runs while its debugger holds a call (one that fires meanwhile is
+/// dropped); Neo starts the call, and its own timeout, once the debugger lets it go.
+async fn released(run: &RunScope, resumed: oneshot::Receiver<()>) -> bool {
+    tokio::select! {
+        biased;
+        _ = run.deadline.reached() => false,
+        () = run.ended.cancelled() => false,
+        resumed = resumed => resumed.is_ok(),
+    }
+}
+
+/// The context whose debugger sees a call: the run's own, a created one, or none (a `Browser`
+/// call, which no context's debugger stops, as in Playwright).
+fn debugger_context(
+    object: &ObjectKind,
+    target: Option<&(Arc<PageEntry>, FrameScope)>,
+) -> Option<String> {
+    match object {
+        ObjectKind::Context => Some(DEFAULT_CONTEXT.to_string()),
+        ObjectKind::CreatedContext(context) => Some(context.id.clone()),
+        ObjectKind::Debugger(context) => Some(context.clone()),
+        ObjectKind::Browser | ObjectKind::Unknown => None,
+        ObjectKind::Page | ObjectKind::Frame | ObjectKind::Network(..) | ObjectKind::Dialog(_) => {
+            target.map(|(page, _)| {
+                page.context
+                    .get()
+                    .map_or_else(|| DEFAULT_CONTEXT.to_string(), |context| context.id.clone())
+            })
+        }
+    }
+}
+
 /// Names a message's target and decodes its params. Pure.
 fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
     let decoded = match object {
@@ -439,6 +516,8 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             .map(|call| (call.meta(), Ok(ObjectCall::Browser(Box::new(call))))),
         ObjectKind::CreatedContext(context) => BrowserContextCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::CreatedContext(context, call)))),
+        ObjectKind::Debugger(context) => DebuggerCall::decode(method, params)
+            .map(|call| (call.meta(), Ok(ObjectCall::Debugger(context, call)))),
         ObjectKind::Page => {
             PageCall::decode(method, params).map(|call| (call.meta(), Ok(ObjectCall::Page(call))))
         }
@@ -651,6 +730,9 @@ async fn serve_call(
         (ObjectCall::Browser(call), _) => browser_calls::browser(&tabs, *call, &progress).await,
         (ObjectCall::CreatedContext(context, call), _) => {
             browser_calls::context(&tabs, &context, call, &progress).await
+        }
+        (ObjectCall::Debugger(context, call), _) => {
+            tabs.debuggers().serve(&context, &call, tabs.events())
         }
         (ObjectCall::Page(call), Some((page, _))) => {
             tab_calls::page(&tabs, &page, call, &progress).await
@@ -1198,6 +1280,7 @@ mod tests {
             ObjectCall::Context(_)
             | ObjectCall::Browser(_)
             | ObjectCall::CreatedContext(..)
+            | ObjectCall::Debugger(..)
             | ObjectCall::Page(_)
             | ObjectCall::Network(_)
             | ObjectCall::Dialog(..) => {

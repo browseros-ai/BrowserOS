@@ -22,6 +22,7 @@ use tracing::debug;
 
 use crate::bridge;
 use crate::browser_calls::{self, CreatedContext, CreatedContexts};
+use crate::debugger::Debuggers;
 use crate::dialogs;
 use crate::events::EventHub;
 use crate::frames::FrameScope;
@@ -49,6 +50,8 @@ struct Inner {
     events: EventHub,
     /// The contexts the run created with `browser.newContext` (`browser_calls.rs`).
     created: CreatedContexts,
+    /// `context.debugger` of the run's own context and of each context it created.
+    debuggers: Debuggers,
 }
 
 /// A page can be known without a session. Its closure token precedes the attachment so calls,
@@ -147,6 +150,7 @@ impl Tabs {
             .ok_or_else(PlaywrightError::target_closed)?;
         let tabs = Self(Arc::new(Inner {
             created: CreatedContexts::new(cdp.clone(), tokio.clone()),
+            debuggers: Debuggers::default(),
             cdp,
             tokio,
             inputs,
@@ -185,6 +189,11 @@ impl Tabs {
     /// The contexts the run created.
     pub(crate) fn created(&self) -> &CreatedContexts {
         &self.0.created
+    }
+
+    /// The run's debuggers (`debugger.rs`).
+    pub(crate) fn debuggers(&self) -> &Debuggers {
+        &self.0.debuggers
     }
 
     /// Runs `task` on the run's tracker, so `Dispatcher::finish` waits for it.

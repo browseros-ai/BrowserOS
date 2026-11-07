@@ -8,6 +8,7 @@
 # the list grows until it holds every neo source.
 neo-runtime/src/browser_calls.rs
 neo-runtime/src/console.rs
+neo-runtime/src/debugger.rs
 neo-runtime/src/dialogs.rs
 neo-runtime/src/emulation.rs
 neo-runtime/src/events.rs
@@ -15,6 +16,7 @@ neo-runtime/src/page_events.rs
 neo-sdk/src/browser-type.ts
 neo-sdk/src/browser.ts
 neo-sdk/src/console-message.ts
+neo-sdk/src/debugger.ts
 neo-sdk/src/dialog.ts
 neo-sdk/src/events.ts
 neo-sdk/src/playwright.ts

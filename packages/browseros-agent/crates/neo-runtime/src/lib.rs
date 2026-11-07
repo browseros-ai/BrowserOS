@@ -53,6 +53,7 @@ mod check;
 mod click;
 mod console;
 mod deadline;
+mod debugger;
 mod dialogs;
 mod dispatch;
 mod emulation;

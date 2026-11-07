@@ -23,6 +23,7 @@ import type {
 import type { Browser } from './browser'
 import type { Connection } from './connection'
 import { ConsoleMessage, type ConsoleMessagePayload } from './console-message'
+import { Debugger } from './debugger'
 import { Dialog } from './dialog'
 import { parseSerializedError, targetClosedError } from './errors'
 import { ChannelOwner, type EventPipe, type EventTable } from './events'
@@ -95,6 +96,7 @@ export class BrowserContext extends ChannelOwner {
   _ownerPage: Page | undefined
   /** Playwright's `BrowserContext._closingStatus`. */
   #closingStatus: 'none' | 'closing' | 'closed' = 'none'
+  #debugger: Debugger | undefined
 
   constructor(guid: string, connection: Connection, pipe: EventPipe) {
     super(guid, pipe, CONTEXT_EVENTS)
@@ -209,6 +211,17 @@ export class BrowserContext extends ChannelOwner {
     return get(this.#guid, 'pages').map(
       (created) => this.#pages.get(created.guid) ?? this.#add(created),
     )
+  }
+
+  /** Playwright's `BrowserContext.debugger`: the context's own debugger (`debugger.ts`), made
+   * when a script first reads it, with the guid Rust names for it. */
+  get debugger(): Debugger {
+    this.#debugger ??= new Debugger(
+      get(this.#guid, 'debugger'),
+      this.#connection,
+      this._pipe,
+    )
+    return this.#debugger
   }
 
   /** Playwright's `BrowserContext.browser`: the run's `Browser`, the BrowserOS it is attached

@@ -473,6 +473,11 @@ impl CallEntry {
         }
     }
 
+    /// The call's params as the script sent them.
+    pub(crate) fn params(&self) -> &Value {
+        &self.params
+    }
+
     /// Ends the call with `result` and returns its folded log, which the reply carries. Only
     /// the first end counts.
     pub(crate) fn finish(&self, result: CallResult) -> Vec<String> {

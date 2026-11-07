@@ -22,6 +22,7 @@
 import type {
   BrowserCommands,
   BrowserContextCommands,
+  DebuggerCommands,
   DialogCommands,
   FrameCommands,
   Metadata,
@@ -151,6 +152,10 @@ export type ApiName =
   | 'page.emulateMedia'
   | 'page.requestGC'
   | 'page.pause'
+  | 'debugger.requestPause'
+  | 'debugger.resume'
+  | 'debugger.next'
+  | 'debugger.runTo'
 
 /** Playwright's wire error, `{error: {name, message}}`'s inner object. */
 export type WireError = { name: string; message: string }
@@ -242,6 +247,23 @@ export class Connection {
       params,
       timeout,
     )) as Resolved<BrowserCommands[M]['result']>
+  }
+
+  /** {@link Connection.send} for a `Debugger` command, to a context's `debugger@…` guid. */
+  async sendDebugger<M extends keyof DebuggerCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: DebuggerCommands[M]['params'],
+    timeout: number,
+  ): Promise<Resolved<DebuggerCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<DebuggerCommands[M]['result']>
   }
 
   /** Whether `browser.close()` ran: the run's objects read closed from then on. */

@@ -17,6 +17,7 @@ import type {
   FrameInitializer,
   PageInitializer,
 } from '@browseros/neo-runtime-spec/serve'
+import type { PausedDetails } from './debugger'
 import type { RawEvent } from './events'
 import type { NeoSerializedUrlMatch } from './neo-commands'
 import type { CreatedChain, Timing } from './network'
@@ -87,6 +88,10 @@ export interface GetterReplies {
   version: string
   /** On the browser: whether the runtime's connection to it is up. */
   isConnected: boolean
+  /** On a debugger: the call it holds, `null` while none. */
+  pausedDetails: PausedDetails | null
+  /** On a context: its debugger's guid (`debugger@<context>`). */
+  debugger: string
 }
 
 export function get<Field extends keyof GetterReplies>(

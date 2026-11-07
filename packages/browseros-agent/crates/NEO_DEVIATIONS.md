@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (43)
+## Deviations (46)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -21,7 +21,9 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/console.rs | `from_console_api` | `server/chromium/crPage.ts` `FrameSession._onConsoleAPI` | Neo serves no JSHandle objects, so a message carries no arguments; its text still renders each one. |
 | neo-runtime/src/console.rs | `from_console_api` | `server/chromium/crPage.ts` `FrameSession._onConsoleAPI` | Playwright also drops a message from a context it holds no record of (none created in a frame it knows, or one already destroyed); Neo keeps no table of contexts and keeps it. |
 | neo-runtime/src/console.rs | `split_error_message` | `utils/stackTrace.ts` `splitErrorMessage` | Playwright cuts a character outside the BMP in half and keeps its low surrogate, which a Rust string cannot hold; Neo writes U+FFFD there, one UTF-16 unit as in JS. |
+| neo-runtime/src/debugger.rs | `format_param` | `isomorphic/protocolFormatter.ts` `_formatProtocolParam` | Playwright shows a selector as the JavaScript locator that builds it (`locator('div')`); Rust has no locator generator, so a paused call's title shows the selector itself (`div`). |
 | neo-runtime/src/dialogs.rs | `Dialogs::left_open` | `server/dialog.ts` `DialogManager.dialogDidOpen` | Playwright answers a dialog only when nobody listens, and leaves a listener's unanswered dialog open for the page's life. Neo's tab outlives the run and must not stay frozen for its user, so the run's end gives a dialog it handed out and nobody answered the default answer, which this takes. |
+| neo-runtime/src/dispatch.rs | `released` | `server/progress.ts` `ProgressController.run` | Playwright's timeout already runs while its debugger holds a call (one that fires meanwhile is dropped); Neo starts the call, and its own timeout, once the debugger lets it go. |
 | neo-runtime/src/emulation.rs | `ATTACHED_CONTEXT_MEDIA` | `server/page.ts` `Page.emulatedMedia` | Playwright's context, connected or created, emulates a light color scheme (and no reduced motion, forced colors or contrast) on every page from its first moment. The run's own context is the user's browser, which Neo leaves as the user set it: a feature the script never emulated keeps the browser's own value, as in a Playwright context created with `colorScheme: null` (and the others `null`). |
 | neo-runtime/src/emulation.rs | `PageEmulation::child_attached` | `server/chromium/crPage.ts` `FrameSession._initialize` | Playwright attaches every out-of-process frame before it runs and emulates there from its first moment. Neo attaches one when a call first reaches it, so a frame no call reached keeps the browser's own media, locale, time zone and user agent. |
 | neo-runtime/src/emulation.rs | `PageEmulation::prepare` | `server/chromium/crPage.ts` `FrameSession._initialize` | Neo leaves the headless browser's default font families, so text renders in BrowserOS's fonts, not the ones Playwright picks per platform. |
@@ -38,6 +40,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-sdk/src/browser.ts | `CLIENT_OPTIONS` | `client/browser.ts` `Browser._innerNewContext` | Playwright's client logs each API call of a context created with `logger`, and records a HAR for `recordHar`, both in its own process. Neo records every call in the run's outcome instead and serves neither option yet, so each refuses by name. |
 | neo-sdk/src/browser.ts | `STORAGE_STATE_REFUSAL` | `client/browserContext.ts` `prepareBrowserContextParams` | A storage state file path needs the host's filesystem, which a run's realm has none of; the refusal is the one neo-runtime gives a storage state object. |
 | neo-sdk/src/console-message.ts | (file) | `client/consoleMessage.ts` `ConsoleMessage.args` | Neo has no `JSHandle` for a console argument yet, so a message has no `args()`; a script that calls it gets a TypeError rather than a list of stand-ins. |
+| neo-sdk/src/debugger.ts | (file) | `client/debugger.ts` `Debugger.constructor` | Playwright's client keeps the details its server sent last; Neo reads them from Rust at each call, so they are current even when nothing listens to `pausedstatechanged`. |
 | neo-sdk/src/events.ts | `ChannelOwner.removeAllListeners` | `client/channelOwner.ts` `ChannelOwner.removeListener` | Playwright's removeAllListeners leaves its server subscriptions on; Neo turns off each one left without listeners, so Rust stops producing what nobody hears. |
 | neo-sdk/src/events.ts | `EventEmitter._addListener` | `client/eventEmitter.ts` `EventEmitter._addListener` | Neo runs are never Playwright's own tests, so the warning always goes to the run log. |
 | neo-sdk/src/events.ts | `EventEmitter._callHandler` | `client/eventEmitter.ts` `EventEmitter._callHandler` | There the rethrow is an unhandled rejection, and Node exits; QuickJS ignores one, so Neo hands it to the run, which ends with it. |
