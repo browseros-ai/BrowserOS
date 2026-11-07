@@ -8,6 +8,8 @@
 //
 // `path`: Playwright's client reads the file into `content`. Neo reads files only from the run's
 // artifact directory (eval B1), so it refuses the option, naming it. Its case asserts each side.
+// A `null` path is ignored, as Playwright's client (`if (copy.path)`) and validator ignore it; a
+// `null` url, content or type is refused before any effect (addTag-options-review.test.mjs).
 //
 // Cases from tests/page/page-add-script-tag.spec.ts at 26137face: AT-001 "should throw an error if
 // no options are provided", AT-002 "should work with a url", AT-003 "should work with a url and
@@ -51,11 +53,17 @@ test('addScriptTag adds a loaded or run script as Playwright does', {
         }),
         fails: await outcome(() => page.addScriptTag({ url: 'http://127.0.0.1:1/missing.js' }), ['Failed to load script at']),
         frameForm: await outcome(async () => (await page.mainFrame().addScriptTag({ content: 'window.__frame = 1' })).evaluate((e) => e.text)),
+        pathNull: await outcome(async () => [await tag({ path: null, content: 'window.__pathNull = 5' }), await page.evaluate(() => window.__pathNull)]),
       }
     `,
     probe,
   })
   assert.deepEqual(outcome.value.afterUrl, 42)
+  assert.deepEqual(
+    outcome.value.pathNull,
+    { value: [['SCRIPT', 'text/javascript'], 5] },
+    'a null path is no path',
+  )
   assert.equal(outcome.value.fails.error, 'Error')
 })
 

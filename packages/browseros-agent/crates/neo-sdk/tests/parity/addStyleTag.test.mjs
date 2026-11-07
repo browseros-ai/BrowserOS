@@ -4,7 +4,9 @@
 // No source, a URL that fails to load and a page whose Content Security Policy blocks the style
 // are refused, and the page's style stays. Values by `describe` (values.mjs), errors by category
 // and the words Playwright's tests look for. URLs are `data:` stylesheets and an unreachable port.
-// `path` is refused by Neo as in addScriptTag.test.mjs.
+// `path` is refused by Neo as in addScriptTag.test.mjs. A `null` path, and a `type` (no style
+// field), are ignored, as Playwright ignores them; a `null` url or content is refused before any
+// effect (addTag-options-review.test.mjs).
 //
 // Cases from tests/page/page-add-style-tag.spec.ts at 26137face: AT-013 "should throw an error if
 // no options are provided", AT-014 "should work with a url", AT-015 "should throw an error if
@@ -34,12 +36,18 @@ test('addStyleTag adds a loaded stylesheet as Playwright does', {
         content: await outcome(() => tag({ content: '#q { color: rgb(0, 0, 255) }' })),
         fails: await outcome(() => page.addStyleTag({ url: 'http://127.0.0.1:1/missing.css' })),
         frameForm: await outcome(async () => (await page.mainFrame().addStyleTag({ content: 'body { margin: 3px }' })).evaluate((e) => e.textContent)),
+        ignoredNulls: await outcome(() => tag({ path: null, type: null, content: 'body { padding: 1px }' })),
       }
     `,
     probe,
   })
   assert.deepEqual(outcome.value.url, { value: 'LINK' })
   assert.deepEqual(outcome.value.content, { value: 'STYLE' })
+  assert.deepEqual(
+    outcome.value.ignoredNulls,
+    { value: 'STYLE' },
+    'a null path, and a type a style has no field for, are ignored',
+  )
 })
 
 test('a page whose Content Security Policy blocks the style refuses the tag', {
