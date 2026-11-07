@@ -155,12 +155,16 @@ test('waitForSelector waits in its own frame and fails alike', {
         strict: await outcome(() => page.waitForSelector('iframe', { strict: true, state: 'attached', timeout: 1000 })),
         nullOptions: await outcome(() => page.waitForSelector('article', null)),
         frameNullOptions: await outcome(() => frame1.waitForSelector('body', null)),
-        // WA-043: the frame is removed while its wait runs.
-        frameDetached: await outcome(async () => {
-          const watchdog = frame1.waitForSelector('.box')
+        // WA-043: the frame is removed while its wait runs. The outcome is settled as the wait
+        // starts, so its rejection is handled before the removal lands.
+        frameDetached: await (async () => {
+          const watchdog = frame1.waitForSelector('.box').then(
+            (value) => ({ value: describe(value) }),
+            (error) => ({ error: errorCategory(error) }),
+          )
           await page.evaluate(() => document.querySelector('iframe[name=frame1]').remove())
           return watchdog
-        }),
+        })(),
       }
     `,
     probe: 'document.querySelectorAll("iframe").length',
