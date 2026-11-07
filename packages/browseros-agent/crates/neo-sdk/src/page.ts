@@ -344,16 +344,40 @@ export class Page extends ChannelOwner {
     this.#context.setDefaultNavigationTimeout(0)
     this.#context.setDefaultTimeout(0)
     try {
-      await this.#connection.sendContext(
-        'page.pause',
-        this.#context._guid,
-        'pause',
-        {},
-        0,
+      await this.#closedOrCrashedRace(
+        this.#connection.sendContext(
+          'page.pause',
+          this.#context._guid,
+          'pause',
+          {},
+          0,
+        ),
       )
     } finally {
       this.#context.setDefaultNavigationTimeout(defaultNavigationTimeout)
       this.#context.setDefaultTimeout(defaultTimeout)
+    }
+  }
+
+  /**
+   * Playwright's `_closedOrCrashedScope.safeRace`: `promise`, or nothing once the page closes or
+   * crashes first, which ends a pause the debugger still holds. A closed page ends it at once.
+   */
+  async #closedOrCrashedRace(promise: Promise<unknown>): Promise<void> {
+    // The call keeps running in Rust after the page goes; its answer is nobody's then.
+    promise.catch(() => {})
+    let settle = (): void => {}
+    const ended = new Promise<void>((resolve) => {
+      settle = resolve
+    })
+    this.once('close', settle)
+    this.once('crash', settle)
+    try {
+      if (this.isClosed()) return
+      await Promise.race([promise, ended])
+    } finally {
+      this.off('close', settle)
+      this.off('crash', settle)
     }
   }
 

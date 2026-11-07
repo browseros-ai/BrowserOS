@@ -453,6 +453,17 @@ export class Connection {
       )
     const message = { id: this.#nextId++, guid, method, params, metadata }
     const reply: Reply = JSON.parse(await call(JSON.stringify(message)))
+    // Playwright's connection rejects every call still pending when it closes: a reply that
+    // arrives after `browser.close()` (a `newContext` Rust answered meanwhile) creates nothing.
+    if (this.#disconnected && method !== 'close')
+      throw rebuildError(
+        apiName,
+        {
+          name: 'TargetClosedError',
+          message: 'Target page, context or browser has been closed',
+        },
+        [],
+      )
     if (reply.error) throw rebuildError(apiName, reply.error.error, reply.log)
     return reply.result
   }

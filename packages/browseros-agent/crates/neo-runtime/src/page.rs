@@ -569,6 +569,11 @@ impl PageSession {
         &self.session.id
     }
 
+    /// The browser connection the session lives on, for commands to its child sessions.
+    pub(crate) fn cdp(&self) -> &CdpClient {
+        &self.session.cdp
+    }
+
     pub(crate) fn closed(&self) -> CancellationToken {
         self.closed.clone()
     }

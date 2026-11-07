@@ -17,18 +17,23 @@
 //! for the page's life. A failed update restores the previous state and re-sends it in the
 //! background, as Playwright does, so the page never keeps half of a rejected change.
 
+use std::collections::HashSet;
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use browseros_cdp::CdpError;
+use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId};
 use futures_util::future;
 use neo_runtime_spec::serve::{
     PageEmulateMediaParams, PageEmulateMediaParamsColorScheme, PageEmulateMediaParamsContrast,
     PageEmulateMediaParamsForcedColors, PageEmulateMediaParamsMedia,
     PageEmulateMediaParamsReducedMotion,
 };
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::broadcast;
+use tokio::sync::broadcast::error::RecvError;
+use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
 use crate::frames::Host;
@@ -116,6 +121,36 @@ pub(crate) struct PageEmulation {
     /// Serializes this page's updates, so two calls never interleave their writes and the state
     /// sent last is the state kept.
     updates: AsyncMutex<()>,
+    /// The sessions Chromium attached for a created context's out-of-process frames
+    /// ([`watch_targets`]), which `emulateMedia` reaches too.
+    frames: Mutex<Vec<SessionId>>,
+    /// Stops [`watch_targets`] when the page's session, and this emulation with it, goes.
+    watching: OnceLock<DropGuard>,
+}
+
+/// The paused auto-attach Playwright sets on every frame session and worker.
+fn auto_attach() -> Value {
+    // Playwright: `server/chromium/crPage.ts` `FrameSession._initialize`: `this._client.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }),`
+    json!({ "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AttachedTarget {
+    session_id: SessionId,
+    target_info: AttachedTargetInfo,
+}
+
+#[derive(Deserialize)]
+struct AttachedTargetInfo {
+    #[serde(rename = "type")]
+    kind: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DetachedTarget {
+    session_id: SessionId,
 }
 
 #[derive(Default)]
@@ -148,7 +183,7 @@ impl PageEmulation {
     /// Neo leaves the headless browser's default font families, so text renders in BrowserOS's
     /// fonts, not the ones Playwright picks per platform.
     pub(crate) async fn prepare(
-        &self,
+        self: &Arc<Self>,
         page: &PageSession,
         context: Arc<ContextEmulation>,
     ) -> Result<(), CdpError> {
@@ -176,7 +211,110 @@ impl PageEmulation {
         steps.extend(frame_options(&context, |method, params| {
             Box::pin(sent(page.send(method, params))) as future::BoxFuture<'_, _>
         }));
-        future::try_join_all(steps).await.map(|_| ())
+        future::try_join_all(steps).await?;
+        self.attach_targets(page).await
+    }
+
+    /// Playwright's paused auto-attach on the main frame session of a created context's page:
+    /// every out-of-process frame or worker the page starts waits for [`watch_targets`], which
+    /// applies the context's options to it and only then lets it run.
+    async fn attach_targets(self: &Arc<Self>, page: &PageSession) -> Result<(), CdpError> {
+        let cdp = page.cdp().clone();
+        let parent = page.session_id().clone();
+        // Subscribed before auto-attach is on, so no target it pauses goes unseen and unreleased.
+        let events = cdp.events();
+        let stop = CancellationToken::new();
+        if self.watching.set(stop.clone().drop_guard()).is_err() {
+            return Ok(());
+        }
+        tokio::spawn(watch_targets(
+            cdp.clone(),
+            parent.clone(),
+            events,
+            Arc::downgrade(self),
+            stop,
+        ));
+        cdp.send("Target.setAutoAttach", auto_attach(), Some(&parent))
+            .await
+            .map(|_| ())
+    }
+
+    /// Playwright's `FrameSession._onAttachedToTarget` for a target Chromium attached to the
+    /// session `parent` and paused: an `iframe` gets the context's per-frame options and the
+    /// page's media before it runs, a worker its user agent; any other target is let go.
+    /// Returns whether its own session is watched for the targets it starts in turn.
+    async fn configure_target(
+        &self,
+        cdp: &CdpClient,
+        parent: &SessionId,
+        child: &SessionId,
+        kind: &str,
+    ) -> bool {
+        let send = |method: &'static str, params: Value| {
+            Box::pin(sent(cdp.send(method, params, Some(child)))) as future::BoxFuture<'_, _>
+        };
+        let context = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|state| state.context.clone());
+        let mut steps: Vec<future::BoxFuture<'_, Result<(), CdpError>>> = Vec::new();
+        match kind {
+            "iframe" => {
+                if let Some(context) = &context {
+                    steps.extend(frame_options(context, send));
+                }
+                steps.push(send("Emulation.setEmulatedMedia", self.media_params()));
+                steps.push(send("Target.setAutoAttach", auto_attach()));
+                if let Ok(mut frames) = self.frames.lock() {
+                    frames.push(child.clone());
+                }
+            }
+            "worker" => {
+                // Playwright: `server/chromium/crPage.ts` `FrameSession._initializeWorker`: `if (options.userAgent || options.locale)`
+                if let Some(context) = context
+                    .as_deref()
+                    .filter(|context| context.user_agent.is_some() || context.locale.is_some())
+                {
+                    steps.push(send(
+                        "Emulation.setUserAgentOverride",
+                        user_agent_params(context),
+                    ));
+                }
+                steps.push(send("Target.setAutoAttach", auto_attach()));
+            }
+            _ => {
+                // Playwright: `server/chromium/crPage.ts` `FrameSession._onAttachedToTarget`: `parentSession._sendMayFail('Target.detachFromTarget', { sessionId: event.sessionId });`
+                let detached = cdp
+                    .send(
+                        "Target.detachFromTarget",
+                        json!({ "sessionId": child }),
+                        Some(parent),
+                    )
+                    .await;
+                if let Err(error) = detached {
+                    debug!(%error, "letting go of an attached target failed");
+                }
+                return false;
+            }
+        }
+        for result in future::join_all(steps).await {
+            if let Err(error) = result {
+                debug!(%error, "configuring an attached target failed");
+            }
+        }
+        // Playwright: `server/chromium/crPage.ts` `FrameSession._initialize`: `promises.push(this._client.send('Runtime.runIfWaitingForDebugger'));`
+        if let Err(error) = send("Runtime.runIfWaitingForDebugger", json!({})).await {
+            debug!(%error, "releasing an attached target failed");
+        }
+        true
+    }
+
+    /// Forgets an out-of-process frame session Chromium detached.
+    fn forget_frame(&self, session: &SessionId) {
+        if let Ok(mut frames) = self.frames.lock() {
+            frames.retain(|frame| frame != session);
+        }
     }
 
     /// What an out-of-process frame's session gets once the run attaches it: its context's
@@ -185,8 +323,9 @@ impl PageEmulation {
     ///
     /// Deviation: `server/chromium/crPage.ts` `FrameSession._initialize`: `this._client.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }),`
     /// Playwright attaches every out-of-process frame before it runs and emulates there from its
-    /// first moment. Neo attaches one when a call first reaches it, so a frame no call reached
-    /// keeps the browser's own media, locale, time zone and user agent.
+    /// first moment; so does Neo for a context the run created ([`watch_targets`]). The run's own
+    /// context is the user's browser, whose frames Neo never holds paused: Neo attaches one when a
+    /// call first reaches it, so a frame no call reached keeps the browser's own media.
     pub(crate) async fn child_attached(&self, host: &Host) {
         let (context, media_set) = match self.state.lock() {
             Ok(state) => (
@@ -349,9 +488,32 @@ impl PageEmulation {
                 }
             }
         });
-        let (main, frames) = tokio::join!(main, future::try_join_all(frames));
+        let attached = self
+            .frames
+            .lock()
+            .map(|frames| frames.clone())
+            .unwrap_or_default();
+        let auto = attached.iter().map(|session| {
+            let params = params.clone();
+            async move {
+                match page
+                    .cdp()
+                    .send("Emulation.setEmulatedMedia", params, Some(session))
+                    .await
+                {
+                    Err(CdpError::SessionGone) => Ok(Value::Null),
+                    other => other,
+                }
+            }
+        });
+        let (main, frames, auto) = tokio::join!(
+            main,
+            future::try_join_all(frames),
+            future::try_join_all(auto)
+        );
         main?;
-        frames.map(|_| ())
+        frames?;
+        auto.map(|_| ())
     }
 
     /// Playwright's `FrameSession._updateEmulateMedia` params for the media emulated now.
@@ -461,6 +623,73 @@ impl State {
             (window, viewport.width + width, viewport.height + height)
         });
         Some((metrics, window))
+    }
+}
+
+/// Watches the targets Chromium auto-attaches under a created context's page (`parent`) and the
+/// frames and workers it attached in turn, configuring and releasing each
+/// ([`PageEmulation::configure_target`]). Ends when the page's emulation is gone or `stop` fires.
+///
+/// Every target it misses stays paused, so it never skips one: a lagged event stream is logged,
+/// and Chromium lets a paused target run once the session that paused it detaches, with the run.
+async fn watch_targets(
+    cdp: CdpClient,
+    parent: SessionId,
+    mut events: broadcast::Receiver<CdpEvent>,
+    emulation: Weak<PageEmulation>,
+    stop: CancellationToken,
+) {
+    let mut watched = HashSet::from([parent]);
+    loop {
+        let event = tokio::select! {
+            biased;
+            () = stop.cancelled() => return,
+            event = events.recv() => event,
+        };
+        let event = match event {
+            Ok(event) => event,
+            Err(RecvError::Lagged(missed)) => {
+                debug!(
+                    missed,
+                    "the auto-attach watcher lagged behind the browser's events"
+                );
+                continue;
+            }
+            Err(RecvError::Closed) => return,
+        };
+        let Some(from) = event
+            .session_id
+            .clone()
+            .filter(|from| watched.contains(from))
+        else {
+            continue;
+        };
+        match event.method.as_str() {
+            "Target.attachedToTarget" => {
+                let Ok(attached) = serde_json::from_value::<AttachedTarget>(event.params) else {
+                    continue;
+                };
+                let Some(emulation) = emulation.upgrade() else {
+                    return;
+                };
+                let child = attached.session_id;
+                if emulation
+                    .configure_target(&cdp, &from, &child, &attached.target_info.kind)
+                    .await
+                {
+                    watched.insert(child);
+                }
+            }
+            "Target.detachedFromTarget" => {
+                if let Ok(detached) = serde_json::from_value::<DetachedTarget>(event.params) {
+                    watched.remove(&detached.session_id);
+                    if let Some(emulation) = emulation.upgrade() {
+                        emulation.forget_frame(&detached.session_id);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 }
 

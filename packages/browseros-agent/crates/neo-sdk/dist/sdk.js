@@ -1329,6 +1329,11 @@ class Connection {
       }, []);
     const message = { id: this.#nextId++, guid, method, params, metadata };
     const reply = JSON.parse(await call(JSON.stringify(message)));
+    if (this.#disconnected && method !== "close")
+      throw rebuildError(apiName, {
+        name: "TargetClosedError",
+        message: "Target page, context or browser has been closed"
+      }, []);
     if (reply.error)
       throw rebuildError(apiName, reply.error.error, reply.log);
     return reply.result;
@@ -5595,10 +5600,27 @@ class Page extends ChannelOwner {
     this.#context.setDefaultNavigationTimeout(0);
     this.#context.setDefaultTimeout(0);
     try {
-      await this.#connection.sendContext("page.pause", this.#context._guid, "pause", {}, 0);
+      await this.#closedOrCrashedRace(this.#connection.sendContext("page.pause", this.#context._guid, "pause", {}, 0));
     } finally {
       this.#context.setDefaultNavigationTimeout(defaultNavigationTimeout);
       this.#context.setDefaultTimeout(defaultTimeout);
+    }
+  }
+  async#closedOrCrashedRace(promise) {
+    promise.catch(() => {});
+    let settle = () => {};
+    const ended = new Promise((resolve) => {
+      settle = resolve;
+    });
+    this.once("close", settle);
+    this.once("crash", settle);
+    try {
+      if (this.isClosed())
+        return;
+      await Promise.race([promise, ended]);
+    } finally {
+      this.off("close", settle);
+      this.off("crash", settle);
     }
   }
   _onEvent(method) {

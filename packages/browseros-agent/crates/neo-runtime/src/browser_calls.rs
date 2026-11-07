@@ -320,7 +320,9 @@ async fn new_context(
     })
 }
 
-/// Records a created context in the run, or disposes it when the run already disposed its own.
+/// Records a created context in the run, or disposes it when the run already disposed its own or
+/// the script closed the browser: Playwright's connected browser rejects a creation still
+/// pending at its close, and no context outlives it.
 async fn register(
     tabs: &Tabs,
     id: String,
@@ -334,7 +336,7 @@ async fn register(
     });
     let late = match tabs.created().registry.lock() {
         Ok(mut registry) => {
-            let late = registry.finished;
+            let late = registry.finished || registry.browser_closed;
             registry.contexts.push(Arc::clone(&context));
             late
         }
