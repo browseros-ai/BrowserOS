@@ -9,6 +9,8 @@
  *   the script never awaits still finishes and leaves its trace record. Its reply carries the
  *   event watermark W: `call` runs the listeners of every event up to W (`events.ts`) before it
  *   returns the reply text, so they run before the caller continues, Playwright's order.
+ * - `abort` aborts one call in flight, from its `signal`'s `abort` listener: the call stops and
+ *   replies `AbortError`.
  * - `subscribe` turns the run's listening to one event of a page or the context on or off.
  * - `drain` takes queued events; `nextEvents` resolves once one is queued (the idle wake).
  */
@@ -24,6 +26,7 @@ import type { CreatedChain, Timing } from './network'
 declare const __neo_runtime: {
   get(request: string): string
   callWithEvents(message: string): Promise<{ reply: string; events: number }>
+  abort(id: number, reason: string): void
   subscribe(request: string): void
   drain(until: number): string
   nextEvents(): Promise<void>
@@ -143,6 +146,15 @@ export async function call(message: string): Promise<string> {
   const { reply, events } = await __neo_runtime.callWithEvents(message)
   deliverEvents?.(events)
   return reply
+}
+
+/**
+ * Aborts the call sent as message `id`, which stops at its next wait and replies `AbortError`
+ * with `reason`; one that already replied is left alone. Only `connection.ts` calls it, from the
+ * call's `signal` listener (Playwright's `__abort__ {id, reason}`).
+ */
+export function abort(id: number, reason: string): void {
+  __neo_runtime.abort(id, reason)
 }
 
 /** Turns the run's listening to `event` on `guid` on or off; throws for one Neo cannot produce. */

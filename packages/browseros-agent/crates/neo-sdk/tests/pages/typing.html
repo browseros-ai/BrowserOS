@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Typing</title>
+<input id="name" value="abc" aria-label="Name">
+<input class="dup" aria-label="First"><input class="dup" aria-label="Second">
+<script>
+// Every key and input event the input sees, so two engines' runs compare by what reached it.
+window.__events = []
+const name = document.querySelector('#name')
+for (const type of ['keydown', 'keypress', 'input', 'keyup']) {
+  name.addEventListener(type, (event) => {
+    window.__events.push({
+      type,
+      key: event.key ?? null,
+      data: event.data ?? null,
+      shift: event.shiftKey ?? null,
+      isTrusted: event.isTrusted,
+    })
+  })
+}
+window.__facts = () => ({
+  value: name.value,
+  focused: document.activeElement?.id || null,
+  events: window.__events,
+})
+</script>

@@ -25,6 +25,18 @@ interfaces:
     - bringToFront
     # Element operations (element_ops.rs, highlight.rs): every highlight of the page.
     - hideHighlight
+    # `page.keyboard`, `page.mouse` and `page.touchscreen` (neo-runtime `devices.rs`).
+    - keyboardDown
+    - keyboardUp
+    - keyboardInsertText
+    - keyboardType
+    - keyboardPress
+    - mouseMove
+    - mouseDown
+    - mouseUp
+    - mouseClick
+    - mouseWheel
+    - touchscreenTap
     # History navigations answer the new document's `Response` as `Frame.goto` does, or `{}`
     # where Playwright's has none: no history entry, a same-document entry, a restored document.
     - reload
@@ -63,6 +75,9 @@ interfaces:
     - tap
     - fill
     - press
+    # `Locator.pressSequentially` and the deprecated `type`s: focus, then `Keyboard.type`
+    # (neo-runtime `press.rs`).
+    - type
     - inputValue
     - isChecked
     - isVisible

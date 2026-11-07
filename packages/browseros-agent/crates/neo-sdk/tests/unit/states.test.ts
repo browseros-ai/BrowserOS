@@ -57,15 +57,21 @@ test('tests that checked reads honour receiver options and the default timeout',
       'frame@T',
       'isChecked',
       { selector: '#control', strict: true },
-      10,
+      { signal: undefined, timeout: 10 },
     ],
-    ['page.isChecked', 'frame@T', 'isChecked', { selector: '#control' }, 700],
+    [
+      'page.isChecked',
+      'frame@T',
+      'isChecked',
+      { selector: '#control' },
+      { signal: undefined, timeout: 700 },
+    ],
     [
       'frame.isChecked',
       'frame@T',
       'isChecked',
       { selector: '#control', strict: true },
-      0,
+      { signal: undefined, timeout: 0 },
     ],
   ])
 })
@@ -82,8 +88,20 @@ test('tests that page and frame state reads accept null options', async () => {
     false,
   )
   expect(messages).toEqual([
-    ['page.isChecked', 'frame@T', 'isChecked', { selector: '#control' }, 700],
-    ['frame.isChecked', 'frame@T', 'isChecked', { selector: '#control' }, 700],
+    [
+      'page.isChecked',
+      'frame@T',
+      'isChecked',
+      { selector: '#control' },
+      { signal: undefined, timeout: 700 },
+    ],
+    [
+      'frame.isChecked',
+      'frame@T',
+      'isChecked',
+      { selector: '#control' },
+      { signal: undefined, timeout: 700 },
+    ],
     ['page.isVisible', 'frame@T', 'isVisible', { selector: '#control' }, 0],
     ['frame.isVisible', 'frame@T', 'isVisible', { selector: '#control' }, 0],
   ])

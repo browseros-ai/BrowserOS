@@ -71,6 +71,7 @@ import type {
   SelectTextOptions,
   TapOptions,
   TextContentOptions,
+  TypeOptions,
   UncheckOptions,
   WaitForSelectorOptions,
 } from './frame'
@@ -83,6 +84,7 @@ import type {
 } from './js-handle'
 import type { Page } from './page'
 import type { SelectOptionValues } from './select-option'
+import type { SignalLike, TimeoutInput } from './timeout-settings'
 
 export type LocatorOptions = {
   hasText?: string | RegExp
@@ -337,6 +339,27 @@ export class Locator {
     })
   }
 
+  /** Playwright's `pressSequentially`: focus, then each character typed as `keyboard.type`. */
+  async pressSequentially(
+    text: string,
+    options: TypeOptions = {},
+  ): Promise<void> {
+    return await this._frame._type(
+      'locator.pressSequentially',
+      this._selector,
+      text,
+      { strict: true, ...options },
+    )
+  }
+
+  /** Deprecated in Playwright for {@link pressSequentially}, and served the same way. */
+  async type(text: string, options: TypeOptions = {}): Promise<void> {
+    return await this._frame._type('locator.type', this._selector, text, {
+      strict: true,
+      ...options,
+    })
+  }
+
   async inputValue(options: InputValueOptions = {}): Promise<string> {
     return await this._frame._inputValue('locator.inputValue', this._selector, {
       strict: true,
@@ -431,7 +454,7 @@ export class Locator {
   async evaluate<R, Arg>(
     pageFunction: PageFunctionOn<PageElement, Arg, R>,
     arg?: Arg,
-    options?: EvaluateOptions & { timeout?: number; signal?: unknown },
+    options?: EvaluateOptions & TimeoutInput,
   ): Promise<R> {
     return await this._frame._withElement(
       'locator.evaluate',
@@ -446,7 +469,7 @@ export class Locator {
   async evaluateHandle<R, Arg>(
     pageFunction: PageFunctionOn<PageElement, Arg, R>,
     arg?: Arg,
-    options?: EvaluateOptions & { timeout?: number; signal?: unknown },
+    options?: EvaluateOptions & TimeoutInput,
   ): Promise<JSHandle<R>> {
     return await this._frame._withElement(
       'locator.evaluateHandle',
@@ -479,7 +502,7 @@ export class Locator {
   /** Playwright's `locator.elementHandle`: the one element, once attached, as a handle. */
   async elementHandle(options?: {
     timeout?: number
-    signal?: unknown
+    signal?: SignalLike | null
   }): Promise<ElementHandle> {
     const handle = await this._frame._waitForSelectorElement(
       'locator.elementHandle',
