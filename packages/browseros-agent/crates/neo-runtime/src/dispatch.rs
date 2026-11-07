@@ -56,7 +56,6 @@ use crate::check::{self, CheckOptions};
 use crate::click::{self, ClickOptions};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
-use crate::frame_selector::enters_frame;
 use crate::frames::FrameScope;
 use crate::keyboard::KeyboardTab;
 use crate::lists;
@@ -92,11 +91,6 @@ const MAX_CALLS_IN_FLIGHT: usize = 64;
 /// may total, for the same reason: a few calls with huge selectors would otherwise hold several
 /// copies of each outside the realm.
 const MAX_REQUEST_BYTES_IN_FLIGHT: usize = 8 * 1024 * 1024;
-
-/// Neo's message for a selector that enters a frame. Playwright has none: Neo serves the main
-/// frame only, and without this check the injected engine would match nothing there and the call
-/// would time out without saying why.
-const FRAMES_UNSUPPORTED: &str = "Neo does not support frames yet: the selector enters a frame";
 
 /// Neo has no `ElementHandle` objects to pass as `selectOption` values.
 const ELEMENTS_UNSUPPORTED: &str = "Neo does not support ElementHandle values in selectOption yet";
@@ -460,49 +454,25 @@ fn decode_neo_params<T: DeserializeOwned>(
 /// stops compiling until the command is routed.
 fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
     match call {
-        FrameCall::IsVisible(params) if enters_frame(&params.selector) => {
-            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
-        }
         FrameCall::IsVisible(params) => {
             Ok(Route::FrameIsVisible(StateOptions::from_is_visible(params)))
-        }
-        FrameCall::IsChecked(params) if enters_frame(&params.selector) => {
-            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
         }
         FrameCall::IsChecked(params) => {
             Ok(Route::FrameIsChecked(StateOptions::from_is_checked(params)))
         }
-        FrameCall::Click(params) if enters_frame(&params.selector) => {
-            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
-        }
         FrameCall::Click(params) => ClickOptions::from_params(params).map(Route::FrameClick),
         FrameCall::Goto(params) => GotoOptions::from_params(params).map(Route::FrameGoto),
         FrameCall::Title(_) => Ok(Route::FrameTitle),
-        FrameCall::TextContent(params) if enters_frame(&params.selector) => {
-            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
-        }
         FrameCall::TextContent(params) => {
             Ok(Route::FrameTextContent(ReadOptions::from_params(params)))
-        }
-        FrameCall::InnerText(params) if enters_frame(&params.selector) => {
-            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
         }
         FrameCall::InnerText(params) => {
             Ok(Route::FrameInnerText(ReadOptions::from_inner_text(params)))
         }
-        FrameCall::GetAttribute(params) if enters_frame(&params.selector) => {
-            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
-        }
         FrameCall::GetAttribute(params) => Ok(Route::FrameGetAttribute(
             AttributeOptions::from_params(params),
         )),
-        FrameCall::QueryCount(params) if enters_frame(&params.selector) => {
-            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
-        }
         FrameCall::QueryCount(params) => Ok(Route::FrameQueryCount(params.selector)),
-        FrameCall::EvalOnSelectorAll(params) if enters_frame(&params.selector) => {
-            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
-        }
         FrameCall::EvalOnSelectorAll(params)
             if params.expression == lists::ALL_TEXT_CONTENTS_EXPRESSION
                 && params.is_function == Some(true) =>
@@ -515,38 +485,17 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::AriaSnapshot(params) => {
             SnapshotOptions::from_params(params).map(Route::FrameAriaSnapshot)
         }
-        FrameCall::Fill(params) if enters_frame(&params.selector) => {
-            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
-        }
         FrameCall::Fill(params) => Ok(Route::FrameFill(FillOptions::from_params(params))),
-        FrameCall::Press(params) if enters_frame(&params.selector) => {
-            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
-        }
         FrameCall::Press(params) => Ok(Route::FramePress(PressOptions::from_params(params))),
-        FrameCall::InputValue(params) if enters_frame(&params.selector) => {
-            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
-        }
         FrameCall::InputValue(params) => Ok(Route::FrameInputValue(
             InputValueOptions::from_params(params),
         )),
-        FrameCall::Check(params) if enters_frame(&params.selector) => {
-            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
-        }
         FrameCall::Check(params) => Ok(Route::FrameSetChecked(CheckOptions::from_check(params))),
-        FrameCall::Uncheck(params) if enters_frame(&params.selector) => {
-            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
-        }
         FrameCall::Uncheck(params) => {
             Ok(Route::FrameSetChecked(CheckOptions::from_uncheck(params)))
         }
-        FrameCall::SelectOption(params) if enters_frame(&params.selector) => {
-            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
-        }
         FrameCall::SelectOption(params) => {
             Ok(Route::FrameSelectOption(SelectOptions::from_params(params)))
-        }
-        FrameCall::WaitForSelector(params) if enters_frame(&params.selector) => {
-            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
         }
         FrameCall::WaitForSelector(params) => {
             WaitForSelectorOptions::from_params(params).map(Route::FrameWaitForSelector)
@@ -1133,13 +1082,13 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_all_forms_refuse_frames_and_malformed_params_before_page_work() {
+    fn tests_that_all_forms_route_frames_and_refuse_malformed_params() {
         for method in FORMS {
             let routed = route_frame(
                 method,
                 forms_params(method, "iframe >> internal:control=enter-frame >> input"),
             );
-            assert_eq!(error_of(routed), PlaywrightError::error(FRAMES_UNSUPPORTED));
+            assert!(routed.route.is_ok());
             let mut params = forms_params(method, "input");
             params["selector"] = json!(5);
             let error = error_of(route_frame(method, params));
@@ -1299,14 +1248,7 @@ mod tests {
                 ErrorName::Error
             );
         }
-        // Frame refusal wins even when omitReturnValue is missing.
-        assert_eq!(
-            error_of(route_frame(
-                "waitForSelector",
-                json!({"selector":"iframe >> internal:control=enter-frame >> button"})
-            )),
-            PlaywrightError::error(FRAMES_UNSUPPORTED)
-        );
+        assert!(route_frame("waitForSelector", json!({"selector":"iframe >> internal:control=enter-frame >> button", "omitReturnValue": true})).route.is_ok());
         for (method, params) in [
             (
                 "neo:waitForURL",
@@ -1459,16 +1401,9 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_text_reads_refuse_frame_selectors_before_any_work() {
-        for method in ["innerText", "getAttribute"] {
-            for selector in [
-                "iframe >> internal:control=enter-frame >> li",
-                "internal:control=any-frame >> li",
-                "li >> internal:has=\"iframe >> internal:control=enter-frame >> b\"",
-            ] {
-                let routed = route_frame(method, json!({ "selector": selector, "name": "title" }));
-                assert_eq!(error_of(routed), PlaywrightError::error(FRAMES_UNSUPPORTED));
-            }
+    fn tests_that_text_reads_route_frame_selectors() {
+        for method in ["innerText", "getAttribute", "textContent"] {
+            assert!(route_frame(method, json!({"selector": "iframe >> internal:control=enter-frame >> li", "name": "title"})).route.is_ok());
         }
     }
 
@@ -1537,14 +1472,15 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_state_reads_refuse_frame_selectors_and_malformed_params() {
+    fn tests_that_state_reads_route_frames_and_refuse_malformed_params() {
         for method in ["isVisible", "isChecked"] {
-            assert_eq!(
-                error_of(route_frame(
+            assert!(
+                route_frame(
                     method,
-                    json!({ "selector": "iframe >> internal:control=enter-frame >> #control" }),
-                )),
-                PlaywrightError::error(FRAMES_UNSUPPORTED)
+                    json!({ "selector": "iframe >> internal:control=enter-frame >> #control" })
+                )
+                .route
+                .is_ok()
             );
             assert!(route_frame(method, json!({ "selector": 5 })).route.is_err());
             assert!(
@@ -1557,13 +1493,6 @@ mod tests {
 
     #[test]
     fn reads_neo_does_not_serve_are_refused_before_any_work() {
-        assert_eq!(
-            error_of(route_frame(
-                "textContent",
-                json!({ "selector": "iframe >> internal:control=enter-frame >> li" }),
-            )),
-            PlaywrightError::error(FRAMES_UNSUPPORTED)
-        );
         let routed = route_frame("ariaSnapshot", json!({ "selector": "#list", "mode": "ai" }));
         assert_eq!(
             routed.meta.and_then(|meta| meta.title),
@@ -1625,56 +1554,6 @@ mod tests {
         assert_eq!(
             error_of(routed),
             PlaywrightError::error("Neo does not support click modifiers yet")
-        );
-    }
-
-    #[test]
-    fn a_selector_that_enters_a_frame_is_refused_at_once() {
-        for selector in [
-            "iframe >> internal:control=enter-frame >> button",
-            "li >> internal:has=\"iframe >> internal:control=enter-frame >> b\"",
-            "li >> internal:and=\"internal:has=\\\"iframe >> internal:control=enter-frame >> b\\\"\"",
-            "button >> near=\"iframe >> internal:control=enter-frame >> b\",50",
-            "internal:control=any-frame >> button",
-            " *internal:control=enter-frame ",
-        ] {
-            let error = error_of(route_frame("click", json!({ "selector": selector })));
-            assert_eq!(
-                error,
-                PlaywrightError::error(FRAMES_UNSUPPORTED),
-                "{selector}"
-            );
-        }
-    }
-
-    /// Text that only names the marker is text: these are what `getByText`, `getByRole`'s
-    /// `name`, a `has=` filter on text, and a quoted `text=` selector build from it.
-    #[test]
-    fn text_that_mentions_a_frame_control_enters_no_frame() {
-        for selector in [
-            "internal:text=\"internal:control=enter-frame\"i",
-            "internal:role=button[name=\"x >> internal:control=enter-frame\"i]",
-            "li >> internal:has=\"internal:text=\\\"internal:control=any-frame\\\"i\"",
-            "text=\"a >> internal:control=enter-frame\"",
-            "text=it's >> internal:text=\"x >> internal:control=enter-frame\"i",
-        ] {
-            let routed = route_frame("click", json!({ "selector": selector }));
-            assert!(
-                matches!(routed.route, Ok(ObjectCall::Frame(Route::FrameClick(_)))),
-                "{selector} is a click, not a frame"
-            );
-        }
-        assert!(
-            enters_frame("text=it's >> internal:control=enter-frame >> b"),
-            "a quote inside an unquoted text= body opens nothing"
-        );
-        assert!(
-            !enters_frame("text=it\n's >> internal:control=enter-frame >> b"),
-            "after a line break it does, as JS's `.` stops there"
-        );
-        assert!(
-            !enters_frame("div >> internal:has=\"iframe >> internal:control=enter-frame >> b\",5"),
-            "a malformed nested part is left to the page's parser, which names it"
         );
     }
 
@@ -1888,17 +1767,23 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_collection_commands_refuse_frames_before_the_eval_function() {
+    fn tests_that_collection_commands_route_frames_and_restrict_evaluation() {
         let selector = "iframe >> internal:control=enter-frame >> .item";
-        assert_eq!(
-            error_of(route_frame("queryCount", json!({"selector": selector}))),
-            PlaywrightError::error(FRAMES_UNSUPPORTED)
+        assert!(
+            route_frame("queryCount", json!({"selector": selector}))
+                .route
+                .is_ok()
+        );
+        assert!(
+            route_frame("evalOnSelectorAll", all_text_contents_params(selector))
+                .route
+                .is_ok()
         );
         let mut params = all_text_contents_params(selector);
         params["expression"] = json!("ee => ee.length");
         assert_eq!(
             error_of(route_frame("evalOnSelectorAll", params)),
-            PlaywrightError::error(FRAMES_UNSUPPORTED)
+            PlaywrightError::error(EVAL_ON_SELECTOR_ALL_UNSERVED)
         );
     }
 

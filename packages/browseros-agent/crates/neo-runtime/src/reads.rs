@@ -57,6 +57,7 @@ use neo_runtime_spec::serve::{
 
 use crate::aria_yaml;
 use crate::click::{self, LoopAWaits, PageError, SelectorFacts};
+use crate::frame_selector;
 use crate::page::FrameTab;
 use crate::progress::{CallError, PlaywrightError, Progress};
 
@@ -423,12 +424,15 @@ impl ReadTab for FrameTab {
         selector: &str,
         strict: bool,
     ) -> Result<Option<TextMatch>, PageError> {
-        let read = self
-            .world
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok(None);
+        };
+        let read = located
+            .frame
             .call(
                 None,
                 &InjectedTextContentParams {
-                    selector: selector.to_string(),
+                    selector: located.selector,
                     strict,
                 },
             )
@@ -441,12 +445,15 @@ impl ReadTab for FrameTab {
         selector: &str,
         strict: bool,
     ) -> Result<Option<TextMatch>, PageError> {
-        let read = self
-            .world
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok(None);
+        };
+        let read = located
+            .frame
             .call(
                 None,
                 &InjectedInnerTextParams {
-                    selector: selector.to_string(),
+                    selector: located.selector,
                     strict,
                 },
             )
@@ -460,12 +467,15 @@ impl ReadTab for FrameTab {
         strict: bool,
         name: &str,
     ) -> Result<Option<AttributeMatch>, PageError> {
-        let read = self
-            .world
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok(None);
+        };
+        let read = located
+            .frame
             .call(
                 None,
                 &InjectedGetAttributeParams {
-                    selector: selector.to_string(),
+                    selector: located.selector,
                     strict,
                     name: name.to_string(),
                 },
@@ -478,7 +488,7 @@ impl ReadTab for FrameTab {
         &self,
         params: &InjectedAriaSnapshotParams,
     ) -> Result<Option<AriaFrameSnapshot>, PageError> {
-        Ok(self.world.call(None, params).await?.snapshot)
+        Ok(self.context().await?.call(None, params).await?.snapshot)
     }
 }
 

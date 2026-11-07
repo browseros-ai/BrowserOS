@@ -20,6 +20,7 @@ pub(crate) use neo_runtime_spec::injected::{
 };
 
 use crate::click::{PageError, Tab};
+use crate::frame_selector;
 use crate::page::{FrameTab, InputPermit, PageSession, ResolvedElement};
 use crate::progress::InputTicket;
 
@@ -93,14 +94,13 @@ impl FormTab for FrameTab {
         input: InputPermit,
         ticket: InputTicket,
     ) -> impl Future<Output = Result<FillOutcome, PageError>> + Send {
-        let page = Arc::clone(self);
         let element = element.clone();
         let value = value.to_string();
         let (sender, receiver) = oneshot::channel();
         self.spawn(async move {
             let _input = input;
-            let result = page
-                .world
+            let result = element
+                .frame
                 .call(
                     None,
                     &InjectedFillParams {
@@ -125,13 +125,12 @@ impl FormTab for FrameTab {
         input: InputPermit,
         ticket: InputTicket,
     ) -> impl Future<Output = Result<SelectOutcome, PageError>> + Send {
-        let page = Arc::clone(self);
         let element = element.clone();
         let options = options.to_vec();
         page_step(self, async move {
             let _input = input;
-            let result = page
-                .world
+            let result = element
+                .frame
                 .call(
                     None,
                     &InjectedSelectOptionsParams {
@@ -147,7 +146,8 @@ impl FormTab for FrameTab {
     }
 
     async fn checked_state(&self, element: &ResolvedElement) -> Result<CheckedState, PageError> {
-        self.world
+        element
+            .frame
             .call(
                 None,
                 &InjectedElementStateParams {
@@ -164,12 +164,11 @@ impl FormTab for FrameTab {
         reset_selection_if_not_focused: bool,
         input: InputPermit,
     ) -> impl Future<Output = Result<FocusOutcome, PageError>> + Send {
-        let page = Arc::clone(self);
         let element = element.clone();
         page_step(self, async move {
             let _input = input;
-            let result = page
-                .world
+            let result = element
+                .frame
                 .call(
                     None,
                     &InjectedFocusElementParams {
@@ -188,11 +187,15 @@ impl FormTab for FrameTab {
         selector: &str,
         strict: bool,
     ) -> Result<Option<InputValueMatch>, PageError> {
-        self.world
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok(None);
+        };
+        located
+            .frame
             .call(
                 None,
                 &InjectedInputValueParams {
-                    selector: selector.to_string(),
+                    selector: located.selector,
                     strict,
                 },
             )

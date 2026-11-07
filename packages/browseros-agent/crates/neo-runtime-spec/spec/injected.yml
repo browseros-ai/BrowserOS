@@ -119,6 +119,7 @@ Injected:
       parameters:
         selector: string
         strict: boolean
+        frameVisible: boolean
       returns:
         value: boolean
 
@@ -169,6 +170,8 @@ Injected:
         # The first match, which stays in the page in the caller's object group. Absent when
         # nothing matched yet.
         element: Element?
+        # Visibility of the first iframe owner, false when nothing matched.
+        visible: boolean
 
     # Names a selector the way Playwright's call log does, for a click's first log line
     # `waiting for <locator>`, and reports a selector the page cannot parse. Playwright computes

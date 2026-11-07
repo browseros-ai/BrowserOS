@@ -1,6 +1,14 @@
 //! Splits Playwright selectors at frame boundaries, preserving quoted and composite selectors.
 
-use serde_json::Value;
+use std::future::Future;
+use std::sync::Arc;
+
+use neo_runtime_spec::injected::InjectedFrameOwnerParams;
+use serde_json::{Value, json};
+
+use crate::click::PageError;
+use crate::frames::FrameContext;
+use crate::page::{FrameTab, GroupGuard};
 
 use crate::progress;
 
@@ -197,14 +205,6 @@ pub(crate) fn split(selector: &str) -> Result<Chunks, String> {
     })
 }
 
-// Temporary dispatch guard while frame routing is introduced in the next slice.
-pub(crate) fn enters_frame(selector: &str) -> bool {
-    match split(selector) {
-        Ok(chunks) => !chunks.hops.is_empty(),
-        Err(_) => true,
-    }
-}
-
 /// Path refs encode iframe owner refs, followed by the final document's element ref.
 fn path_ref(body: &str) -> Option<Vec<String>> {
     let mut rest = body;
@@ -225,9 +225,185 @@ fn path_ref(body: &str) -> Option<Vec<String>> {
     Some(path)
 }
 
+/// One attempt's destination and the visibility of its iframe owners. Visibility belongs to
+/// the selector path, rather than the shared cached context.
+pub(crate) struct Located<C = Arc<FrameContext>> {
+    pub(crate) frame: C,
+    pub(crate) selector: String,
+    pub(crate) frame_visible: bool,
+}
+
+pub(crate) async fn locate(
+    tab: &FrameTab,
+    selector: &str,
+    strict: bool,
+) -> Result<Option<Located>, PageError> {
+    let chunks = split(selector).map_err(PageError::Threw)?;
+    let initial = if chunks.from_main {
+        tab.frames.main()
+    } else {
+        tab.context().await?
+    };
+    follow(
+        &mut Resolver {
+            tab,
+            groups: Vec::new(),
+        },
+        initial,
+        chunks,
+        strict,
+    )
+    .await
+}
+
+/// The hop seam keeps the traversal's retry/error rules testable without CDP or a browser.
+trait Hops {
+    type Context: Send;
+
+    fn enter(
+        &mut self,
+        context: Self::Context,
+        selector: &str,
+        strict: bool,
+    ) -> impl Future<Output = Result<Option<(Self::Context, bool)>, PageError>> + Send;
+}
+
+async fn follow<T: Hops>(
+    resolver: &mut T,
+    mut frame: T::Context,
+    chunks: Chunks,
+    strict: bool,
+) -> Result<Option<Located<T::Context>>, PageError> {
+    let mut frame_visible = true;
+    for hop in chunks.hops {
+        let Some((child, visible)) = resolver.enter(frame, &hop, strict).await? else {
+            return Ok(None);
+        };
+        frame = child;
+        frame_visible &= visible;
+    }
+    Ok(Some(Located {
+        frame,
+        selector: chunks.last,
+        frame_visible,
+    }))
+}
+
+struct Resolver<'a> {
+    tab: &'a FrameTab,
+    groups: Vec<GroupGuard>,
+}
+
+impl Hops for Resolver<'_> {
+    type Context = Arc<FrameContext>;
+
+    async fn enter(
+        &mut self,
+        frame: Arc<FrameContext>,
+        selector: &str,
+        strict: bool,
+    ) -> Result<Option<(Arc<FrameContext>, bool)>, PageError> {
+        let group = self.tab.group(&frame, "frame-hop");
+        let owner = frame
+            .call(
+                Some(group.group()),
+                &InjectedFrameOwnerParams {
+                    selector: selector.to_string(),
+                    strict,
+                },
+            )
+            .await?;
+        self.groups.push(group);
+        let Some(element) = owner.element else {
+            return Ok(None);
+        };
+        let described = frame
+            .host
+            .send(
+                "DOM.describeNode",
+                json!({ "objectId": element.id().object_id() }),
+            )
+            .await
+            .map_err(|error| {
+                let error = frame.host.classify(&error);
+                if error == PageError::NotConnected {
+                    self.tab.frames.forget(&frame);
+                }
+                error
+            })?;
+        let Some(id) = described["node"]["frameId"].as_str() else {
+            return Ok(None);
+        };
+        let child = self.tab.frames.context(id, Some(&frame.host)).await?;
+        Ok(Some((child, owner.visible)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::collections::VecDeque;
+
+    struct ScriptedHops(VecDeque<Result<Option<(u32, bool)>, PageError>>);
+
+    impl Hops for ScriptedHops {
+        type Context = u32;
+
+        async fn enter(
+            &mut self,
+            _context: u32,
+            _selector: &str,
+            _strict: bool,
+        ) -> Result<Option<(u32, bool)>, PageError> {
+            self.0.pop_front().expect("scripted frame outcome")
+        }
+    }
+
+    fn chunks() -> Chunks {
+        split("iframe >> internal:control=enter-frame >> input").unwrap()
+    }
+
+    #[tokio::test]
+    async fn missing_iframe_keeps_the_attempt_retryable() {
+        let mut script = ScriptedHops([Ok(None), Ok(Some((7, true)))].into());
+        assert!(
+            follow(&mut script, 0, chunks(), true)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let found = follow(&mut script, 0, chunks(), true)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.frame, 7);
+        assert_eq!(found.selector, "input");
+    }
+
+    #[tokio::test]
+    async fn strict_and_non_iframe_hops_fail_the_attempt() {
+        for message in ["strict mode violation", "<iframe> was expected"] {
+            let error = PageError::Threw(message.to_string());
+            let mut script = ScriptedHops([Err(error.clone())].into());
+            assert_eq!(
+                follow(&mut script, 0, chunks(), true).await.err(),
+                Some(error)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn every_hop_contributes_to_visibility() {
+        let chunks = split(
+            "#a >> internal:control=enter-frame >> #b >> internal:control=enter-frame >> input",
+        )
+        .unwrap();
+        let mut script = ScriptedHops([Ok(Some((1, false))), Ok(Some((2, true)))].into());
+        let found = follow(&mut script, 0, chunks, true).await.unwrap().unwrap();
+        assert_eq!(found.frame, 2);
+        assert!(!found.frame_visible);
+    }
 
     #[test]
     fn splits_only_real_frame_boundaries() {
