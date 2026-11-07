@@ -35,6 +35,13 @@ import type { AriaNodeJSON } from '../vendor/playwright/isomorphic/ariaSnapshot'
  * `computeAriaRef`: `(element as any)._ariaRef = ariaRef;`). */
 type NamedElement = Element & { _ariaRef?: { ref: string } }
 
+/**
+ * Neo: every owner `frameOwnerRef` named, by its ref, kept weakly. `frameOwnerByRef` finds an
+ * owner here first: CDP hands `frameOwnerRef` owners a selector cannot reach (inside a closed
+ * shadow root), and a ref Neo answers must route. One table per document, as the glue is.
+ */
+const namedOwners = new Map<string, WeakRef<Element>>()
+
 /** The Playwright page types behind the spec's named handle kinds. */
 type Handles = { HitTargetInterceptor: HitTargetInterceptionResult }
 
@@ -214,9 +221,13 @@ export const glue = {
   /** Neo: one hop of a main-rooted path ref, by the owner's kept aria ref rather than the
    * document's last snapshot, so a later snapshot of another part of the document leaves it. */
   frameOwnerByRef: (injected, { ref }) => {
-    const element = injected
-      .querySelectorAll(injected.parseSelector('iframe, frame'), document)
-      .find((owner) => (owner as NamedElement)._ariaRef?.ref === ref)
+    const named = namedOwners.get(ref)?.deref()
+    const element =
+      named?.isConnected && (named as NamedElement)._ariaRef?.ref === ref
+        ? named
+        : injected
+            .querySelectorAll(injected.parseSelector('iframe, frame'), document)
+            .find((owner) => (owner as NamedElement)._ariaRef?.ref === ref)
     return {
       element,
       visible: !!element && injected.utils.isElementVisible(element),
@@ -229,7 +240,9 @@ export const glue = {
   frameOwnerRef: (injected, _params, element) => {
     injected.ariaSnapshotForExpectFailure(element, { mode: 'ai' })
     const ref = (element as NamedElement)._ariaRef?.ref
-    return ref === undefined ? {} : { ref }
+    if (ref === undefined) return {}
+    namedOwners.set(ref, new WeakRef(element))
+    return { ref }
   },
 
   describeSelector: (injected, { selector }) => {

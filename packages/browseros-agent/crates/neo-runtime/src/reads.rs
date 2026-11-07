@@ -45,8 +45,9 @@
 //! another part of that document leaves the ref routable, as Playwright's frame-numbered refs
 //! stay. Playwright numbers its frames instead (`f1e3`), which a later run could not rebuild. An
 //! `ai` snapshot taken inside a child frame names its refs the same way: the iframes on the way
-//! from the main frame each give their ref (`frameOwnerRef`), and an iframe that gets none
-//! (hidden) makes it throw ([`UNNAMED_FRAME`]). The `default` mode gives no node a ref, so, as in
+//! from the main frame each give their ref (`frameOwnerRef`, which also keeps the owner, so one
+//! inside a closed shadow root still routes), and an iframe that gets none (hidden) makes it
+//! throw before the frame is snapshotted ([`UNNAMED_FRAME`]). The `default` mode gives no node a ref, so, as in
 //! Playwright, its iframe nodes keep only what the page gave them.
 //!
 //! Neo-only: a lone surrogate (a truncated emoji) in any page call's answer or thrown message
@@ -93,7 +94,7 @@ const FRAME_HOP: &str = " >> internal:control=enter-frame >> ";
 /// immediate first try, the last repeating, and never capped by the call's timeout.
 const SNAPSHOT_WAITS_MS: [u64; 5] = [0, 1000, 2000, 4000, 8000];
 
-/// Deviation: `server/page.ts` `ariaSnapshotJSONForFrame`: `return { ...resolved.result, resolvedFrame: resolved.frame };` Playwright names a child frame's refs by the frame's number, which needs no ref on its `<iframe>`; Neo's refs inside a frame are the path of iframe refs from the main frame, and an iframe that is not visible or receives no pointer events gets no ref. So an AI snapshot inside a frame behind such an iframe throws, when it would hold refs, rather than answer refs no selector could route.
+/// Deviation: `server/page.ts` `ariaSnapshotJSONForFrame`: `return { ...resolved.result, resolvedFrame: resolved.frame };` Playwright names a child frame's refs by the frame's number, which needs no ref on its `<iframe>`; Neo's refs inside a frame are the path of iframe refs from the main frame, and an iframe that is not visible or receives no pointer events gets no ref unless an earlier snapshot gave it one. So an AI snapshot inside a frame behind such an iframe throws, before that frame is snapshotted, rather than answer refs no selector could route.
 const UNNAMED_FRAME: &str = "Neo cannot name refs inside a frame whose <iframe> gets no ref (it is not visible or receives no pointer events); snapshot without mode: 'ai'";
 
 // ---------------------------------------------------------------------------------------------
@@ -801,26 +802,6 @@ async fn owner_path(owners: &[FrameOwner]) -> Result<String, PageError> {
     Ok(path)
 }
 
-/// Neo: whether any node of `nodes` has a ref.
-fn has_refs(nodes: &[AriaNode]) -> bool {
-    let mut stack: Vec<&AriaNode> = nodes.iter().collect();
-    while let Some(node) = stack.pop() {
-        if node.r#ref.is_some() {
-            return true;
-        }
-        stack.extend(
-            node.children
-                .iter()
-                .flatten()
-                .filter_map(|child| match child {
-                    AriaChild::Node(node) => Some(node.as_ref()),
-                    AriaChild::Text(_) => None,
-                }),
-        );
-    }
-    false
-}
-
 /// A node's child nodes, skipping its text runs.
 fn child_nodes(node: &mut AriaNode) -> impl Iterator<Item = &mut AriaNode> {
     node.children
@@ -957,25 +938,21 @@ impl ReadTab for FrameTab {
                 base: String::new(),
             });
         };
+        // The path first: behind an iframe that gets no ref, the call throws before the frame's
+        // document is snapshotted, so its refs keep their lifetime.
+        let base = if !stitching
+            && params.mode == AriaSnapshotMode::Ai
+            && located.frame.id != self.frames.main().id
+        {
+            owner_path(&located.owners).await?
+        } else {
+            String::new()
+        };
         let frame_params = InjectedAriaSnapshotParams {
             selector: located.selector.clone(),
             ..params.clone()
         };
         let result = located.frame.call(None, &frame_params).await?;
-        // The path is only needed when there are refs to name: a snapshot without one answers
-        // as it is, even behind an iframe that gets no ref.
-        let named = !stitching
-            && params.mode == AriaSnapshotMode::Ai
-            && located.frame.id != self.frames.main().id
-            && result
-                .snapshot
-                .as_ref()
-                .is_some_and(|snapshot| has_refs(&snapshot.nodes));
-        let base = if named {
-            owner_path(&located.owners).await?
-        } else {
-            String::new()
-        };
         Ok(AriaRead { result, base })
     }
 }

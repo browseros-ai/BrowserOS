@@ -193,7 +193,8 @@ Injected:
     # path ref (`aria-ref=f7e2` enters the frame of the owner named `e7`). The ref is the one
     # Playwright's snapshots keep on the element (`_ariaRef`), so the hop does not depend on the
     # document's last snapshot: a later snapshot of another part of that document leaves the
-    # path routable, as a Playwright frame-numbered ref stays.
+    # path routable, as a Playwright frame-numbered ref stays. An owner `frameOwnerRef` named is
+    # found even where no selector reaches (inside a closed shadow root).
     frameOwnerByRef:
       internal: true
       parameters:
