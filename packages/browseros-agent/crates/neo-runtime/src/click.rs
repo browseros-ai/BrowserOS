@@ -106,11 +106,12 @@ pub(crate) trait Tab: Send + Sync {
     ) -> impl Future<Output = Result<Option<Resolved<Self::Element>>, PageError>> + Send;
 
     /// `checkElementStates` with `frameVisible` inherited from the selector's iframe hop
-    /// owners (`true` when the selector has no frame hops).
+    /// owners (`true` when the selector has no frame hops). Owner preparation honors `scroll`.
     fn check_states(
         &self,
         element: &Self::Element,
         states: &[ElementState],
+        scroll: bool,
     ) -> impl Future<Output = Result<StatesCheck, PageError>> + Send;
 
     /// [`Scroll::Protocol`]: CDP `DOM.scrollIntoViewIfNeeded` (`position` as a zero rect); the
@@ -689,7 +690,7 @@ async fn attempt<T: Tab>(
     if !options.force {
         progress.log("  waiting for element to be visible, enabled and stable");
         match progress
-            .race(tab.check_states(element, &CLICK_STATES))
+            .race(tab.check_states(element, &CLICK_STATES, options.scroll))
             .await??
         {
             StatesCheck::Ready => {}
@@ -1271,6 +1272,7 @@ pub(crate) mod tests {
             &self,
             _element: &u32,
             states: &[ElementState],
+            _scroll: bool,
         ) -> Result<StatesCheck, PageError> {
             assert_eq!(
                 states, CLICK_STATES,
