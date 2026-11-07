@@ -10,8 +10,12 @@
 // has resolved and the realm is still live, so the driver navigates the tab and reads the
 // script's marker.
 //
+// The second case holds the browser's reply to the script's installation, so the close comes
+// while that installation is still out: the tab's next document runs no script, before or
+// after the reply arrives, as Playwright's control of the same delay reads none.
+//
 // From the batch-2 delta review (review-delta-8d74c805a, D1, the init-script half of its
-// `context-close-scope` repro).
+// `context-close-scope` repro) and the D1 re-review's item 2 (`late-init`).
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
@@ -95,12 +99,14 @@ function buildHost(root) {
 
 /**
  * A CDP proxy in front of `upstream` that counts the `Browser.getTabs` requests sent after the
- * run's init script went in (`Page.addScriptToEvaluateOnNewDocument` with the marker).
+ * run's init script went in (`Page.addScriptToEvaluateOnNewDocument` with the marker). With
+ * `hold`, it keeps the browser's reply to that installation until `release()`.
  */
-async function countingProxy(cleanups, upstream) {
+async function countingProxy(cleanups, upstream, { hold = false } = {}) {
   let port
   let armed = false
   let reads = 0
+  let held = null
   const sockets = new Set()
   const server = http.createServer((_request, response) =>
     response.end(
@@ -111,6 +117,7 @@ async function countingProxy(cleanups, upstream) {
   wss.on('connection', (down) => {
     const up = new WebSocket(upstream)
     const queue = []
+    const installs = new Set()
     sockets.add(down)
     sockets.add(up)
     up.on('open', () => {
@@ -123,14 +130,21 @@ async function countingProxy(cleanups, upstream) {
       if (
         message.method === 'Page.addScriptToEvaluateOnNewDocument' &&
         String(message.params?.source).includes(MARKER)
-      )
+      ) {
         armed = true
+        installs.add(message.id)
+      }
       if (armed && message.method === 'Browser.getTabs') reads++
       if (up.readyState === WebSocket.OPEN) up.send(text)
       else queue.push(text)
     })
     up.on('message', (data) => {
-      if (down.readyState === WebSocket.OPEN) down.send(data.toString())
+      const text = data.toString()
+      const reply = () => {
+        if (down.readyState === WebSocket.OPEN) down.send(text)
+      }
+      if (hold && !held && installs.has(JSON.parse(text).id)) held = reply
+      else reply()
     })
     down.on('close', () => up.close())
     up.on('close', () => down.close())
@@ -139,7 +153,13 @@ async function countingProxy(cleanups, upstream) {
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   port = server.address().port
+  const release = () => {
+    const reply = held
+    held = () => {}
+    reply?.()
+  }
   cleanups.push(async () => {
+    release()
     for (const socket of sockets) socket.close()
     await new Promise((resolve) => wss.close(resolve))
     await new Promise((resolve) => server.close(resolve))
@@ -149,7 +169,45 @@ async function countingProxy(cleanups, upstream) {
     get reads() {
       return reads
     },
+    get held() {
+      return held !== null
+    },
+    release,
   }
+}
+
+/** The tab's marker on its next document, loaded from `path`. */
+async function afterNavigation(cdp, session, origin, path) {
+  const read = async (expression) =>
+    (
+      await cdp.send(
+        'Runtime.evaluate',
+        { expression, returnByValue: true },
+        session,
+      )
+    ).result.value
+  await cdp.send('Page.navigate', { url: `${origin}${path}` }, session)
+  await eventually(
+    async () =>
+      (await read(
+        `document.readyState === "complete" && location.pathname`,
+      )) === path,
+    `the tab loaded ${path}`,
+  )
+  return await read(`window.${MARKER} ?? null`)
+}
+
+/** Starts the host on `targetId` behind `proxy`, with its output kept. */
+function startHost(bin, proxy, targetId, script) {
+  const child = spawn(bin, [String(proxy.port), targetId, script])
+  const host = { child, stdout: '', stderr: '', exited: once(child, 'exit') }
+  child.stdout.on('data', (chunk) => {
+    host.stdout += chunk
+  })
+  child.stderr.on('data', (chunk) => {
+    host.stderr += chunk
+  })
+  return host
 }
 
 test('context.close releases the run’s init scripts while the realm goes on', {
@@ -242,6 +300,97 @@ await new Promise(() => {})`,
     if (child && child.exitCode === null) {
       child.kill('SIGTERM')
       await once(child, 'exit')
+    }
+    await runCleanups(cleanups)
+  }
+})
+
+test('an init-script installation still out at context.close leaves no script', {
+  skip,
+  timeout: 180_000,
+}, async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'neo-context-close-late-'))
+  const cleanups = [() => rmSync(root, { recursive: true, force: true })]
+  let host
+  try {
+    const bin = buildHost(root)
+    const origin = await serveFixture(cleanups, {
+      pages: {
+        '/top.html': '<!doctype html><title>top</title>',
+        '/after-close.html': '<!doctype html><title>after close</title>',
+        '/after-reply.html': '<!doctype html><title>after reply</title>',
+      },
+    })
+    const { port } = await launchBrowser(cleanups, browserBinary)
+    const cdp = await connectCdp(cleanups, port)
+    const tab = await openTab(cdp, `${origin}/top.html`)
+    const read = async (expression) =>
+      (
+        await cdp.send(
+          'Runtime.evaluate',
+          { expression, returnByValue: true },
+          tab.sessionId,
+        )
+      ).result.value
+    const upstream = (
+      await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()
+    ).webSocketDebuggerUrl
+    const proxy = await countingProxy(cleanups, upstream, { hold: true })
+    const script = join(root, 'context-close-late.js')
+    // The installation starts unawaited; the driver lets the close go once its reply is held.
+    writeFileSync(
+      script,
+      `const closeGate = page.evaluate(() => new Promise((resolve) => { window.closeNow = resolve }))
+await page.evaluate(() => true)
+context.addInitScript(() => { window.${MARKER} = 19 }).catch(() => {})
+await closeGate
+await context.close()
+for (let i = 0; i < ${READS}; i++)
+  __neo_runtime.get(JSON.stringify({ guid: 'context@default', field: 'pages' }))
+await new Promise(() => {})`,
+    )
+    host = startHost(bin, proxy, tab.targetId, script)
+    await eventually(
+      () => proxy.held,
+      'the installation’s reply is held',
+      20_000,
+    )
+    await eventually(
+      async () => await read("typeof window.closeNow === 'function'"),
+      'the script waits to close',
+    )
+    await read('window.closeNow()')
+    await eventually(
+      () => proxy.reads >= READ,
+      'the realm read the context after its close',
+      30_000,
+    )
+    const beforeReply = await afterNavigation(
+      cdp,
+      tab.sessionId,
+      origin,
+      '/after-close.html',
+    )
+    proxy.release()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const afterReply = await afterNavigation(
+      cdp,
+      tab.sessionId,
+      origin,
+      '/after-reply.html',
+    )
+    host.child.stdin.write('stop\n')
+    const [code] = await host.exited
+    t.diagnostic(
+      JSON.stringify({ beforeReply, afterReply, run: host.stdout.trim() }),
+    )
+    assert.equal(code, 0, host.stderr)
+    assert.equal(beforeReply, null, 'no script runs after the awaited close')
+    assert.equal(afterReply, null, 'the late reply installs nothing')
+  } finally {
+    if (host && host.child.exitCode === null) {
+      host.child.kill('SIGTERM')
+      await host.exited
     }
     await runCleanups(cleanups)
   }
