@@ -58,7 +58,7 @@ async fn run(runtime: &Runtime, page: &PageId, code: &str) -> RunOutcome {
         .run(RunRequest {
             code: code.to_string(),
             page: page.clone(),
-            timeout: Duration::from_secs(120),
+            timeout: Duration::from_mins(2),
             cancel: CancellationToken::new(),
         })
         .await
