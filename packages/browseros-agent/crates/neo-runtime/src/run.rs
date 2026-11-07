@@ -38,7 +38,10 @@ impl PageId {
 pub struct RunId(Arc<str>);
 
 impl RunId {
-    #[expect(dead_code, reason = "scaffold: Runtime::run mints one per run")]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "scaffold: Runtime::run mints one per run")
+    )]
     pub(crate) fn mint() -> Self {
         Self(ulid::Ulid::new().to_string().into())
     }

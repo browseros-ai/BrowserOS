@@ -25,10 +25,6 @@ impl SessionKey {
     /// A fresh 8-hex-digit key, the shape claw-server mints for stateless sessions
     /// (`apps/claw-server/src/api/mcp/session_handle.rs:31-33`). Uniqueness against live and
     /// stored sessions is the caller's check.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "scaffold: used by the host ledger's admission")
-    )]
     pub(crate) fn mint() -> Self {
         // The low 32 random bits of a ULID; its timestamp bits would make keys sortable.
         let random = Ulid::new().random() & u128::from(u32::MAX);

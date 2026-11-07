@@ -39,6 +39,14 @@ mod directory;
 )]
 mod events;
 mod ids;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "pure core: tests drive it until the host task does"
+    )
+)]
+mod sessions;
 mod view;
 
 pub use ids::{EpochMs, SessionKey, TabId};

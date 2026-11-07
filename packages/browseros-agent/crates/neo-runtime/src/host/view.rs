@@ -19,10 +19,6 @@ pub(crate) struct ShownTab {
 /// A session's live view. `tabs[0]` is the current tab: the one rule the screencast follower,
 /// the `?tab=` check and `/v1`'s `currentTabId` all read.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[expect(
-    dead_code,
-    reason = "scaffold: the ledger derives it, capture follows it"
-)]
 pub(crate) struct FollowView {
     /// The session can still be watched; false once it ended (idle, explicit end, restart).
     pub(crate) live: bool,
