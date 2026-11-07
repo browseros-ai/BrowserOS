@@ -1514,14 +1514,7 @@ async fn serve_call(
         }
         (ObjectCall::Frame(route), Some((page, scope))) => {
             let entry = Arc::clone(&page);
-            let session = match page.attached_session() {
-                Some(session) => Ok(session),
-                None => match progress.race(tabs.session(&page)).await {
-                    Ok(result) => result.map_err(CallError::from),
-                    Err(error) => Err(error),
-                },
-            };
-            match session {
+            match call_session(&tabs, &page, &progress).await {
                 Ok(page) => {
                     // A page the run's init scripts have not reached yet gets them first.
                     show_scripts(&tabs, &entry, &page, &progress).await;
@@ -1540,14 +1533,7 @@ async fn serve_call(
             }
         }
         (ObjectCall::Device(call), Some((page, _))) => {
-            let session = match page.attached_session() {
-                Some(session) => Ok(session),
-                None => match progress.race(tabs.session(&page)).await {
-                    Ok(result) => result.map_err(CallError::from),
-                    Err(error) => Err(error),
-                },
-            };
-            match session {
+            match call_session(&tabs, &page, &progress).await {
                 Ok(page) => {
                     let tab = FrameTab {
                         page,
@@ -1580,6 +1566,21 @@ async fn serve_call(
         _ => Err(PlaywrightError::target_closed().into()),
     };
     finish_reply(result, reply).await;
+}
+
+/// Neo: a call reuses its page's session or attaches within the call's deadline and cancellation.
+async fn call_session(
+    tabs: &Tabs,
+    page: &PageEntry,
+    progress: &Progress,
+) -> Result<Arc<PageSession>, CallError> {
+    match page.attached_session() {
+        Some(session) => Ok(session),
+        None => progress
+            .race(tabs.session(page))
+            .await?
+            .map_err(CallError::from),
+    }
 }
 
 fn page_id(page: &PageSession) -> &str {
