@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8">
+  <title>Scoped snapshots</title>
+  <header><button type="button">Outside</button></header>
+  <main>
+    <section aria-label="Featured">
+      <h2>Featured</h2>
+      <ul>
+        <li>Apple <button type="button" id="buy">Buy apple</button></li>
+        <li>Banana</li>
+      </ul>
+      <p role="status" id="result">Ready</p>
+    </section>
+    <section aria-label="Other"><h2>Other products</h2></section>
+  </main>
+  <script>
+    document.querySelector('#buy').addEventListener('click', () => {
+      document.querySelector('#result').textContent = 'Bought apple'
+    })
+  </script>
+</html>

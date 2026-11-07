@@ -167,7 +167,7 @@ async fn rpc(
 fn parse_reply(id: u64, status: reqwest::StatusCode, body: &str) -> anyhow::Result<Value> {
     anyhow::ensure!(status.is_success(), "MCP: HTTP {status}: {body}");
     let reply = if body.trim_start().starts_with('{') {
-        serde_json::from_str(&body)?
+        serde_json::from_str(body)?
     } else {
         body.lines()
             .filter_map(|line| line.strip_prefix("data:"))
@@ -251,10 +251,10 @@ async fn wait_skill(root: &Path, needle: &str) -> anyhow::Result<String> {
     let path = root.join("home/.agents/skills/browseros-neo/SKILL.md");
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if let Ok(content) = fs::read_to_string(&path) {
-            if content.contains(needle) {
-                return Ok(content);
-            }
+        if let Ok(content) = fs::read_to_string(&path)
+            && content.contains(needle)
+        {
+            return Ok(content);
         }
         anyhow::ensure!(
             Instant::now() < deadline,
@@ -274,6 +274,10 @@ async fn stop_server(client: &Client, base: &str, process: &mut Process) -> anyh
     process.wait().await
 }
 
+#[expect(
+    clippy::print_stderr,
+    reason = "Report opt-in browser skips and verification steps"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::Result<()> {
     let Some(binary) = env::var_os("NEO_E2E_BROWSER") else {
@@ -296,14 +300,13 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
     let deadline = Instant::now() + Duration::from_secs(15);
     let port_file = profile.join("DevToolsActivePort");
     let cdp_port = loop {
-        if let Ok(content) = fs::read_to_string(&port_file) {
-            if let Some(port) = content
+        if let Ok(content) = fs::read_to_string(&port_file)
+            && let Some(port) = content
                 .lines()
                 .next()
                 .and_then(|line| line.parse::<u16>().ok())
-            {
-                break port;
-            }
+        {
+            break port;
         }
         anyhow::ensure!(
             browser.child.try_wait()?.is_none() && Instant::now() < deadline,

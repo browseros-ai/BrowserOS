@@ -17,6 +17,7 @@
  *   `setChecked` API names through their delegated calls (`_wrapApiCall` in Playwright).
  * - `waitFor` sends Playwright's own `Frame.waitForSelector` through `Frame._waitForSelector`,
  *   as Playwright's goes straight to the frame's channel.
+ * - `ariaSnapshot` shares `Frame._ariaSnapshot` with page snapshots, sending this selector.
  * - `allTextContents` sends `client/locator.ts` source text; compiled clients may format it
  *   differently. It reads in Neo's isolated world, so page-defined `textContent` overrides
  *   (prototype patches, custom element classes or per-instance properties) can differ.
@@ -41,6 +42,7 @@ import {
   isString,
 } from '../vendor/playwright/isomorphic/stringUtils'
 import type {
+  AriaSnapshotOptions,
   CheckOptions,
   ClickOptions,
   FillOptions,
@@ -141,6 +143,21 @@ export class Locator {
       this._selector,
       name,
       { strict: true, ...options },
+    )
+  }
+
+  /**
+   * Playwright: `client/locator.ts` `Locator.ariaSnapshot`: `selector: this._selector,`
+   * The matched subtree as YAML, in the main frame only. Default mode waits for a match;
+   * `mode: 'ai'` adds refs and does not auto-wait: use `waitFor()` first if needed.
+   * `depth` limits tree levels (0 means unlimited). AI refs work with `page.locator('aria-ref=…')`
+   * until the next snapshot or navigation replaces them. Every mode requires one match.
+   */
+  async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
+    return await this._frame._ariaSnapshot(
+      'locator.ariaSnapshot',
+      options,
+      this._selector,
     )
   }
 

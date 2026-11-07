@@ -510,9 +510,9 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::EvalOnSelectorAll(_) => {
             Err(PlaywrightError::error(EVAL_ON_SELECTOR_ALL_UNSERVED))
         }
-        FrameCall::AriaSnapshot(params) => {
-            SnapshotOptions::from_params(params).map(Route::FrameAriaSnapshot)
-        }
+        FrameCall::AriaSnapshot(params) => Ok(Route::FrameAriaSnapshot(
+            SnapshotOptions::from_params(params),
+        )),
         FrameCall::Fill(params) if enters_frame(&params.selector) => {
             Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
         }
@@ -1548,6 +1548,7 @@ mod tests {
         assert_eq!(
             options,
             SnapshotOptions {
+                selector: None,
                 mode: AriaSnapshotMode::Ai,
                 depth: Some(3),
                 boxes: None,
@@ -1689,7 +1690,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_neo_does_not_serve_are_refused_before_any_work() {
+    fn tests_that_locator_snapshots_route_and_unserved_frame_reads_reject() {
         assert_eq!(
             error_of(route_frame(
                 "textContent",
@@ -1702,10 +1703,11 @@ mod tests {
             routed.meta.and_then(|meta| meta.title),
             Some("Aria snapshot")
         );
-        assert_eq!(
-            error_of(routed),
-            PlaywrightError::error("Neo does not serve locator.ariaSnapshot yet")
-        );
+        let Ok(ObjectCall::Frame(Route::FrameAriaSnapshot(options))) = routed.route else {
+            panic!("a locator snapshot routes to Frame.ariaSnapshot");
+        };
+        assert_eq!(options.selector.as_deref(), Some("#list"));
+        assert_eq!(options.mode, AriaSnapshotMode::Ai);
     }
 
     /// Playwright's dispatcher sends `{id, result}` for every command with `returns`; the
