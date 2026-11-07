@@ -665,18 +665,20 @@ impl Tabs {
     }
 
     /// Whether a new target is a tab of the run's context, as `pages()` decides, and whether it
-    /// is closed: `None` when it is not the run's. A tab gone before the read is the run's when
-    /// it belonged to the run's browser context.
+    /// is closed: `None` when it is not the run's. A live target BrowserOS knows no tab for is
+    /// not a tab (an extension's action popup, a DevTools window) and is left out, as is a tab
+    /// that closed between its commit and this read. A target destroyed before its first commit
+    /// is the run's when it belonged to the run's browser context.
     async fn new_tab_state(&self, id: &PageId, info: &TargetInfo, closed: bool) -> Option<bool> {
         if !closed {
-            match tab_info(&self.0.cdp, id).await {
-                Ok(Some(tab)) => return self.0.scope.includes(&tab).then_some(false),
-                Ok(None) => {}
+            return match tab_info(&self.0.cdp, id).await {
+                Ok(Some(tab)) => self.0.scope.includes(&tab).then_some(false),
+                Ok(None) => None,
                 Err(error) => {
                     debug!(?error, "a new tab's info could not be read");
-                    return None;
+                    None
                 }
-            }
+            };
         }
         let context = self.0.scope.context.as_ref()?;
         (info.browser_context_id.as_ref() == Some(context)).then_some(true)

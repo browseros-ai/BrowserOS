@@ -245,10 +245,10 @@ async fn watch(
             biased;
             () = ended.cancelled() => return,
             event = events.recv() => match event {
-                Ok(event) => targets.on(&event, tabs).await,
+                Ok(event) => report(targets.on(&event), tabs).await,
                 Err(RecvError::Lagged(skipped)) => {
                     warn!(skipped, "the run's target watcher lagged; reporting pending pages");
-                    targets.report_pending(tabs).await;
+                    report_pending(targets, tabs).await;
                 }
                 Err(RecvError::Closed) => return,
             },
@@ -257,14 +257,31 @@ async fn watch(
                 // the reply that asked for it.
                 loop {
                     match events.try_recv() {
-                        Ok(event) => targets.on(&event, tabs).await,
+                        Ok(event) => report(targets.on(&event), tabs).await,
                         Err(TryRecvError::Empty | TryRecvError::Closed) => break,
-                        Err(TryRecvError::Lagged(_)) => targets.report_pending(tabs).await,
+                        Err(TryRecvError::Lagged(_)) => report_pending(targets, tabs).await,
                     }
                 }
                 let _waiter = ack.send(());
             }
         }
+    }
+}
+
+/// A new page for the run: its target, and whether it closed before its first commit.
+type Report = (TargetInfo, bool);
+
+async fn report(report: Option<Report>, tabs: &Tabs) {
+    if let Some((info, closed)) = report {
+        tabs.report_new(&info, closed).await;
+    }
+}
+
+/// After lost events, a pending page may have committed or closed unseen: each reports as it
+/// stands, as Playwright reports a page whose initialization ended either way.
+async fn report_pending(targets: &mut Targets, tabs: &Tabs) {
+    for info in targets.drain_pending() {
+        tabs.report_new(&info, false).await;
     }
 }
 
@@ -292,50 +309,45 @@ impl Targets {
         }
     }
 
-    async fn on(&mut self, event: &CdpEvent, tabs: &Tabs) {
+    /// The report one browser-level target event makes, if any: a page target's first non-empty
+    /// URL (its first commit), or its end while still on its initial empty document. Each target
+    /// reports at most once.
+    fn on(&mut self, event: &CdpEvent) -> Option<Report> {
         if event.session_id.is_some() {
-            return;
+            return None;
         }
         match event.method.as_str() {
             "Target.targetCreated" | "Target.targetInfoChanged" => {
-                let Ok(TargetEvent { target_info: info }) =
-                    serde_json::from_value::<TargetEvent>(event.params.clone())
-                else {
-                    return;
-                };
+                let TargetEvent { target_info: info } =
+                    serde_json::from_value::<TargetEvent>(event.params.clone()).ok()?;
                 if info.kind != "page" || self.known.contains(&info.target_id) {
-                    return;
+                    return None;
                 }
                 if is_initial_empty(&info.url) {
                     self.pending.insert(info.target_id.clone(), info);
-                } else {
-                    self.pending.remove(&info.target_id);
-                    self.known.insert(info.target_id.clone());
-                    tabs.report_new(&info, false).await;
+                    return None;
                 }
+                self.pending.remove(&info.target_id);
+                self.known.insert(info.target_id.clone());
+                Some((info, false))
             }
             "Target.targetDestroyed" => {
-                let Ok(TargetDestroyed { target_id }) =
-                    serde_json::from_value::<TargetDestroyed>(event.params.clone())
-                else {
-                    return;
-                };
-                if let Some(info) = self.pending.remove(&target_id) {
-                    self.known.insert(target_id);
-                    tabs.report_new(&info, true).await;
-                }
+                let TargetDestroyed { target_id } =
+                    serde_json::from_value::<TargetDestroyed>(event.params.clone()).ok()?;
+                let info = self.pending.remove(&target_id)?;
+                self.known.insert(target_id);
+                Some((info, true))
             }
-            _ => {}
+            _ => None,
         }
     }
 
-    /// After lost events, a pending page may have committed or closed unseen: report each as it
-    /// stands, as Playwright reports a page whose initialization ended either way.
-    async fn report_pending(&mut self, tabs: &Tabs) {
-        for (target, info) in self.pending.drain() {
-            self.known.insert(target);
-            tabs.report_new(&info, false).await;
-        }
+    /// Every pending page, known from now on.
+    fn drain_pending(&mut self) -> Vec<TargetInfo> {
+        let pending: Vec<TargetInfo> = self.pending.drain().map(|(_, info)| info).collect();
+        self.known
+            .extend(pending.iter().map(|info| info.target_id.clone()));
+        pending
     }
 }
 
@@ -384,6 +396,109 @@ mod tests {
         }
         assert!(targets.known.contains("OLD"));
         assert!(targets.pending.contains_key("OPENING"));
+    }
+
+    fn target_event(method: &str, target: &str, kind: &str, url: &str) -> CdpEvent {
+        CdpEvent {
+            method: method.to_string(),
+            params: json!({ "targetInfo": {
+                "targetId": target, "type": kind, "url": url, "openerId": "OPENER",
+                "browserContextId": "CONTEXT",
+            }}),
+            session_id: None,
+        }
+    }
+
+    fn destroyed(target: &str) -> CdpEvent {
+        CdpEvent {
+            method: "Target.targetDestroyed".to_string(),
+            params: json!({ "targetId": target }),
+            session_id: None,
+        }
+    }
+
+    /// What each event of a sequence reports: `Some((target, closed))` or `None`.
+    fn reports(targets: &mut Targets, events: &[CdpEvent]) -> Vec<Option<(String, bool)>> {
+        events
+            .iter()
+            .map(|event| {
+                targets
+                    .on(event)
+                    .map(|(info, closed)| (info.target_id, closed))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tests_that_a_new_page_reports_once_at_its_first_commit_or_its_end() {
+        let created = "Target.targetCreated";
+        let changed = "Target.targetInfoChanged";
+        let report = |target: &str, closed| Some((target.to_string(), closed));
+        for (name, events, expected) in [
+            (
+                "window.open: empty, then committed, then navigated again",
+                vec![
+                    target_event(created, "P", "page", ""),
+                    target_event(changed, "P", "page", "https://a.test/popup"),
+                    target_event(changed, "P", "page", "https://a.test/next"),
+                ],
+                vec![None, report("P", false), None],
+            ),
+            (
+                "closed before its first commit",
+                vec![
+                    target_event(created, "Q", "page", ""),
+                    destroyed("Q"),
+                    destroyed("Q"),
+                ],
+                vec![None, report("Q", true), None],
+            ),
+            (
+                "createTab reports about:blank at once",
+                vec![target_event(created, "N", "page", "about:blank")],
+                vec![report("N", false)],
+            ),
+            (
+                "a tab from before the run, a worker, and a reported page that closes",
+                vec![
+                    target_event(changed, "OLD", "page", "https://a.test/moved"),
+                    target_event(created, "W", "service_worker", "https://a.test/sw.js"),
+                    target_event(created, "R", "page", "https://a.test/r"),
+                    destroyed("R"),
+                ],
+                vec![None, None, report("R", false), None],
+            ),
+        ] {
+            let mut targets = Targets::default();
+            targets.baseline(TargetInfo {
+                target_id: "OLD".to_string(),
+                kind: "page".to_string(),
+                url: "https://a.test/".to_string(),
+                opener_id: None,
+                browser_context_id: None,
+            });
+            assert_eq!(reports(&mut targets, &events), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn tests_that_a_session_event_and_a_lag_are_handled_as_the_watcher_needs() {
+        let mut targets = Targets::default();
+        let mut attached = target_event("Target.targetInfoChanged", "S", "page", "https://a/");
+        attached.session_id = Some(browseros_cdp::SessionId::from("session"));
+        assert!(
+            targets.on(&attached).is_none(),
+            "a session's own target events"
+        );
+        assert!(
+            targets
+                .on(&target_event("Target.targetCreated", "L", "page", ""))
+                .is_none()
+        );
+        let drained = targets.drain_pending();
+        assert_eq!(drained.len(), 1, "a pending page reports after lost events");
+        let committed = target_event("Target.targetInfoChanged", "L", "page", "https://a/");
+        assert!(targets.on(&committed).is_none(), "and only once");
     }
 
     #[tokio::test]

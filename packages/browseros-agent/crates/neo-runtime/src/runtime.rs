@@ -37,6 +37,11 @@ const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
 /// its own CDP session and its own QuickJS realm, so one `Runtime` serves any number of
 /// concurrent runs. Runs on one tab share only its input: their clicks take turns at it, from
 /// interceptor setup to stop (`page.rs` `TabInputs`). Clones share those turns too.
+///
+/// Runs also share the connection's target discovery, on while any of them listens for new
+/// pages (`discovery.rs`), which the `Runtime` counts. Give a `CdpClient` one `Runtime` (clones
+/// are fine): a second `Runtime` on the same client would count its own runs, and the first to
+/// let go would turn discovery off for the other's.
 #[derive(Clone)]
 pub struct Runtime {
     cdp: CdpClient,
