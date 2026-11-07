@@ -13,6 +13,10 @@ and NOTICE.
 | --- | --- |
 | `LICENSE` | `45873d00a0dd243596deb4aa23b2493b3d1f0671921bf2538ea431d7380220eb` |
 | `NOTICE` | `6d602191187b35b9b01d2cffa01c8469c2c8d9de8a96f1bf868e0f264f51c81d` |
+| `packages/isomorphic/headers.ts` | `63475803fbffb1303909f42101dbc1631d9a3f0b1c617c20070fc2b1bf352381` |
+| `packages/playwright-core/src/client/browser.ts` | `1509e38f3ca65b6be04a6d43e49622c7587643687b8a75da05ec4a83e08c6258` |
+| `packages/playwright-core/src/client/browserContext.ts` | `1d882f7d1e6f8bc108a19528f88f734691fad38f358adebb86e01730274fad42` |
+| `packages/playwright-core/src/client/browserType.ts` | `aba34e19637e207ec2bc845dfa894cf83f9c5bad554e948f50b886b07b646df9` |
 | `packages/playwright-core/src/client/channelOwner.ts` | `3e69df35c3f6deb444bb84fb5eff6fada175d44586d4fd4906cd986eb6b98706` |
 | `packages/playwright-core/src/client/connection.ts` | `d0d7bb74eb984f3a9316f77304d24b1a2698aededfba181cfb59cfde62b189fc` |
 | `packages/playwright-core/src/client/consoleMessage.ts` | `379d334d4abfff811612837b5f701e5c6d184d1b0e09e7f9aefade7bc395b1a7` |
@@ -20,8 +24,13 @@ and NOTICE.
 | `packages/playwright-core/src/client/eventEmitter.ts` | `1217614d01c9c4986ef61b307672c09ce74db90a46d4880376bc0ec743879f3a` |
 | `packages/playwright-core/src/client/locator.ts` | `c1db3374b461c7065b58c426a8bb70ff622388781f3942be6aa46d616e3b7a09` |
 | `packages/playwright-core/src/client/page.ts` | `7bea585eda246c5f6fbdf8fe0b21af24b88b49e11d0f701e553e7099d36b2c9b` |
+| `packages/playwright-core/src/client/playwright.ts` | `5722ca620042b074ca4f9fe4c0b30af39d93d5c7356e5b48ad011b006ff79379` |
+| `packages/playwright-core/src/client/selectors.ts` | `3c347555ec097cc8739be8323f0f86fc983c0d3087637d18869e5a5ca1f9426d` |
 | `packages/playwright-core/src/client/waiter.ts` | `fd4a8f0a723e56cc6e3e02bebf7e3e5ff6b169070a37a9617111db291722cbc9` |
 | `packages/playwright-core/src/client/webError.ts` | `e322ebd2c4e1a7a8b036840ac50be2ed191aac6f8668911d582fd9f613fa780a` |
+| `packages/playwright-core/src/server/browser.ts` | `8b48913bf967f440be683281833869d6b485a01d5c7b8126c508b540dfd141f8` |
+| `packages/playwright-core/src/server/browserContext.ts` | `3be62c84d9b26756a31d3e9c69c62b87950fd42db238beb16f6bdb04f9c95cde` |
+| `packages/playwright-core/src/server/chromium/crBrowser.ts` | `b8553078358be5326ca4905983059947a0f838111f0fde73940bf0e7792c43c9` |
 | `packages/playwright-core/src/server/chromium/crExecutionContext.ts` | `4ae617fd41123eac3946187cd55474f89049cb082ea15c1bae240004a325f996` |
 | `packages/playwright-core/src/server/chromium/crInput.ts` | `20b43d336519f9bc8da1504fb503e711466ca8471aa68af67e867d0535840221` |
 | `packages/playwright-core/src/server/chromium/crPage.ts` | `918f0f9beed354c579d00f5656662e36264043b3b59c420d4369fd15b119dd99` |

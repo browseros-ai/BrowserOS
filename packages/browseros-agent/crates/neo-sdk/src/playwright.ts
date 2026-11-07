@@ -12,7 +12,7 @@ import { TimeoutError } from './errors'
 import { setTestIdAttribute } from './locator'
 import { devices } from './runtime-bridge'
 
-/** Playwright's `DeviceDescriptor` (`client/types.ts`), a `newContext` options bag. */
+/** Playwright's `DeviceDescriptor`, a `newContext` options bag. */
 export interface DeviceDescriptor {
   userAgent: string
   viewport: { width: number; height: number }

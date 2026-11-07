@@ -514,13 +514,13 @@ fn context_emulation(params: &BrowserNewContextParams) -> Result<ContextEmulatio
     refuse_unserved(params)?;
     let no_default_viewport = params.no_default_viewport == Some(true);
     if no_default_viewport && params.device_scale_factor.is_some() {
-        // Playwright: `server/browserContext.ts` `validateBrowserContextOptions`: `throw new Error(`"deviceScaleFactor" option is not supported with null "viewport"`);`
+        // Playwright: `server/browserContext.ts` `validateBrowserContextOptions`: `"deviceScaleFactor" option is not supported with null "viewport"`
         return Err(PlaywrightError::error(
             "\"deviceScaleFactor\" option is not supported with null \"viewport\"",
         ));
     }
     if no_default_viewport && params.is_mobile == Some(true) {
-        // Playwright: `server/browserContext.ts` `validateBrowserContextOptions`: `throw new Error(`"isMobile" option is not supported with null "viewport"`);`
+        // Playwright: `server/browserContext.ts` `validateBrowserContextOptions`: `"isMobile" option is not supported with null "viewport"`
         return Err(PlaywrightError::error(
             "\"isMobile\" option is not supported with null \"viewport\"",
         ));

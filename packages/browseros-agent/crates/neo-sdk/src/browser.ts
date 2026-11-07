@@ -37,12 +37,12 @@ const BROWSER_EVENTS: EventTable = {
   unserved: [],
 }
 
-/** Playwright: `client/browser.ts` `Browser.close`: `await this._channel.close(options, kNoTimeout);` */
+/** Neo: `Browser.close`'s params in Playwright's schema order (`spec/playwright/browser.yml`). */
 const BROWSER_CLOSE_KEYS = ['reason'] as const
 
 /**
- * `Browser.newContext`'s params in Playwright's schema order (`spec/playwright/browser.yml`,
- * its `ContextOptions` mixin first).
+ * Neo: `Browser.newContext`'s params in Playwright's schema order (`spec/playwright/browser.yml`,
+ * its `ContextOptions` mixin first), checked against the generated spec type below.
  */
 const BROWSER_NEW_CONTEXT_KEYS = [
   'noDefaultViewport',
@@ -234,8 +234,11 @@ export class Browser extends ChannelOwner {
     this._closeReason = options.reason
     if (!this.#isConnected) return
     // The pages open now are the ones that close: a created context's pages are gone once
-    // Rust answers, so they are read before.
+    // Rust answers, so they are read before. The pipe shuts first: Rust's own close events for
+    // those pages would reach their listeners before this call answers, out of the order
+    // Playwright's connected close reports them in (`_didClose`).
     const open = this.contexts().map((context) => context._openPages())
+    this.#pipe._disconnect()
     await this.#connection.sendBrowser(
       'browser.close',
       this._guid,
@@ -253,7 +256,6 @@ export class Browser extends ChannelOwner {
   _didClose(open: Page[][]): void {
     this.#isConnected = false
     this.#connection._disconnect()
-    this.#pipe._disconnect()
     const contexts = this.contexts()
     for (const pages of open) for (const page of pages) page._onClose()
     for (const context of contexts.slice(1)) context._onClose()
@@ -291,7 +293,10 @@ export class Browser extends ChannelOwner {
     )
   }
 
-  /** The other half of {@link Browser.bind}, refused as it is. */
+  /**
+   * Deviation: `client/browser.ts` `Browser.unbind`: `await this._channel.stopServer({}, kNoTimeout);`
+   * The other half of {@link Browser.bind}: no server to stop, so it refuses as `bind` does.
+   */
   async unbind(): Promise<void> {
     throw new Error(
       'browser.unbind: Neo runs inside BrowserOS and serves the browser to no other client',

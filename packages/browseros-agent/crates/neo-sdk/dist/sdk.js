@@ -4954,6 +4954,7 @@ class Browser extends ChannelOwner {
     if (!this.#isConnected)
       return;
     const open = this.contexts().map((context) => context._openPages());
+    this.#pipe._disconnect();
     await this.#connection.sendBrowser("browser.close", this._guid, "close", pickParams(BROWSER_CLOSE_KEYS, {
       reason: options.reason
     }), 0);
@@ -4962,7 +4963,6 @@ class Browser extends ChannelOwner {
   _didClose(open) {
     this.#isConnected = false;
     this.#connection._disconnect();
-    this.#pipe._disconnect();
     const contexts = this.contexts();
     for (const pages of open)
       for (const page of pages)

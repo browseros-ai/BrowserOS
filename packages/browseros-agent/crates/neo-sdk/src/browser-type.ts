@@ -83,6 +83,7 @@ export class BrowserType {
     return { _type: 'BrowserType', _guid: `browser-type@${this.#name}` }
   }
 
+  /** Neo: the refusal every launch and connect method gives, prefixed with its API name. */
   #refuse(apiName: string): never {
     throw new Error(
       `${apiName}: ${this.#name === 'chromium' ? ATTACHED_REFUSAL : CHROMIUM_ONLY_REFUSAL}`,

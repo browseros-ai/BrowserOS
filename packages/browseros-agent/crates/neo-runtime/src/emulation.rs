@@ -552,7 +552,7 @@ async fn emulate_timezone(
         {
             Ok(())
         }
-        // Playwright: `server/chromium/crPage.ts` `emulateTimezone`: `throw new Error(`Invalid timezone ID: ${timezoneId}`);`
+        // Playwright: `server/chromium/crPage.ts` `emulateTimezone`: `Invalid timezone ID: ${timezoneId}`
         Err(CdpError::Protocol { code, message }) if message.contains("Invalid timezone") => {
             Err(CdpError::Protocol {
                 code,
