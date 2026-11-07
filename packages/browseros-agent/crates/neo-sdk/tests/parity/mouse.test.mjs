@@ -40,7 +40,18 @@ test('mouse methods send the same events with the state they keep', {
       voids.push(await mouse.wheel(0, 100))
       return voids.every((value) => value === undefined)
     `,
-    probe: 'window.__facts()',
+    // mouse.wheel does not wait for the wheel's effects (Playwright's docs), so the page may not
+    // have seen it yet when the run ends. Both engines' pages are read the same way: at once if
+    // the fixture has recorded this case's one wheel, else when the wheel event comes (this
+    // listener runs after the fixture's), bounded at 5 s. Everything is still compared.
+    probe: `new Promise((resolve, reject) => {
+      if (window.__wheels.length > 0) return resolve(window.__facts())
+      const bound = setTimeout(() => reject(new Error('the page recorded no wheel in 5 s')), 5_000)
+      document.addEventListener('wheel', () => {
+        clearTimeout(bound)
+        resolve(window.__facts())
+      }, { once: true })
+    })`,
     effects: ({ playwright, neo }) => {
       const kinds = playwright.events.map((event) => event.type)
       assert.ok(
