@@ -20,6 +20,7 @@ use crate::bridge;
 use crate::capture::{self, Capture};
 use crate::dispatch::encode_result;
 use crate::frames::FrameScope;
+use crate::highlight;
 use crate::history::{self, HistoryOptions};
 use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
@@ -60,33 +61,35 @@ pub(crate) async fn context(
             created.keep();
             Ok(Some(value))
         }
+        BrowserContextCall::Close(_) => {
+            close_context(tabs, progress).await?;
+            Ok(None)
+        }
     }
 }
 
-/// `Page.runBeforeUnload`'s close: Playwright 26137face server/page.ts:852-861 and
-/// chromium/crPage.ts:264-270. Page.close runs beforeunload; errors are logged and closure is
-/// not awaited.
-async fn run_before_unload(
-    tabs: &Tabs,
-    entry: &Arc<PageEntry>,
-    progress: &Progress,
-) -> Result<(), CallError> {
-    let page = progress.race(tabs.session(entry)).await??;
-    let prepared = progress.race(page.prepare()).await?;
-    checked(tabs, entry, progress, prepared).await?;
-    progress.check()?;
-    entry.request_close();
-    tabs.finish_close(Arc::clone(&page), Arc::clone(entry));
-    match progress.race(page.send("Page.close", json!({}))).await {
-        Ok(Ok(_)) => Ok(()),
-        Ok(Err(error)) => {
-            debug!(%error, "running beforeunload failed");
-            Ok(())
+/// Playwright's close of a connectOverCDP default context, which only disconnects: every tab
+/// stays open (measured on BrowserOS neo, a2-mapping-evidence.md §2). The run lets go of what it
+/// holds in the browser: a `beforeunload` dialog a listener holds is dismissed, so its tab stays,
+/// every subscription ends with target discovery, and every other call of the run stops, as
+/// Playwright's calls stop with its connection. The SDK closes the run's pages and context as the
+/// script sees them; the reason stays there.
+async fn close_context(tabs: &Tabs, progress: &Progress) -> Result<(), CallError> {
+    for (_, session) in tabs.attached() {
+        if session.events.dialogs.take_open_beforeunload() {
+            let dismissed = progress
+                .race(session.send("Page.handleJavaScriptDialog", json!({ "accept": false })))
+                .await?;
+            if let Err(error) = dismissed {
+                debug!(%error, "dismissing a beforeunload dialog at the context's close failed");
+            }
         }
-        // The watcher can report closure before Page.close's acknowledgement.
-        Err(CallError::Playwright(error)) if error == PlaywrightError::target_closed() => Ok(()),
-        Err(error) => Err(error),
     }
+    tabs.events().end_subscriptions();
+    // The script's promises for them have rejected (the SDK); this stops the calls themselves
+    // before the close resolves, so none writes input to a tab the run let go of.
+    progress.stop_the_runs_calls();
+    Ok(())
 }
 
 pub(crate) async fn page(
@@ -168,6 +171,23 @@ pub(crate) async fn page(
             };
             return capture::serve(tabs, entry, FrameScope::Main, capture, progress).await;
         }
+        // The dispatcher serves these over the tab's input devices (`devices.rs`).
+        PageCall::KeyboardDown(_)
+        | PageCall::KeyboardUp(_)
+        | PageCall::KeyboardInsertText(_)
+        | PageCall::KeyboardType(_)
+        | PageCall::KeyboardPress(_)
+        | PageCall::MouseMove(_)
+        | PageCall::MouseDown(_)
+        | PageCall::MouseUp(_)
+        | PageCall::MouseClick(_)
+        | PageCall::MouseWheel(_)
+        | PageCall::TouchscreenTap(_) => {
+            return Err(PlaywrightError::error(
+                "neo-runtime: a device call reached the tab-lifecycle handler",
+            )
+            .into());
+        }
         PageCall::BringToFront(_) => {
             // Playwright 26137face server/chromium/crPage.ts:207 sends Page.bringToFront.
             let page = progress.race(tabs.session(entry)).await??;
@@ -191,6 +211,10 @@ pub(crate) async fn page(
                     .await?;
                 checked(tabs, entry, progress, activated).await?;
             }
+        }
+        PageCall::HideHighlight(_) => {
+            let page = progress.race(tabs.session(entry)).await??;
+            highlight::hide_all(&page, progress).await?;
         }
     }
     Ok(None)
@@ -244,6 +268,29 @@ async fn checked<T>(
             }
         }
     }
+}
+
+/// Playwright 26137face server/page.ts:852-861 and chromium/crPage.ts:264-270: Page.close runs
+/// beforeunload; errors are logged and closure is not awaited.
+async fn run_before_unload(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    let prepared = progress.race(page.prepare()).await?;
+    checked(tabs, entry, progress, prepared).await?;
+    progress.check()?;
+    entry.request_close();
+    tabs.finish_close(Arc::clone(&page), Arc::clone(entry));
+    match progress.race(page.send("Page.close", json!({}))).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => debug!(%error, "running beforeunload failed"),
+        // The watcher can report closure before Page.close's acknowledgement.
+        Err(CallError::Playwright(error)) if error == PlaywrightError::target_closed() => {}
+        Err(error) => return Err(error),
+    }
+    Ok(())
 }
 
 async fn close(tabs: &Tabs, entry: &PageEntry, progress: &Progress) -> Result<(), CallError> {

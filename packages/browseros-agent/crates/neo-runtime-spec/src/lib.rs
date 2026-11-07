@@ -92,6 +92,10 @@ mod call;
 #[rustfmt::skip]
 pub mod injected;
 #[rustfmt::skip]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Frame.dispatchEvent carries Playwright's full SerializedArgument wire value"
+)]
 pub mod serve;
 #[rustfmt::skip]
 mod spec_hash;

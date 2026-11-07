@@ -80,6 +80,21 @@ export type NeoScreenshotParams = Omit<
   path?: string
 }
 
+/** `neo:scrollIntoViewIfNeeded` and `neo:boundingBox`: Playwright's `Locator` methods that its
+ * client reaches through an `ElementHandle` (`_withElement`), which Rust serves whole
+ * (`neo-runtime/src/element_ops.rs`). */
+export type NeoElementParams = { selector: string; strict: boolean }
+
+/** `neo:selectText`, with `ElementHandle.selectText`'s `force`. */
+export type NeoSelectTextParams = NeoElementParams & { force?: boolean }
+
+/** `neo:selectText`'s params in `ElementHandle.selectText`'s schema order; `pickParams` turns
+ * a `null` `force` into Playwright's validator error. */
+export const NEO_SELECT_TEXT_KEYS = ['selector', 'strict', 'force'] as const
+
+/** Playwright's `Rect`, in the main frame's CSS pixels. */
+export type NeoRect = { x: number; y: number; width: number; height: number }
+
 /** `neo:waitForNavigation`: Playwright's `waitForNavigation` for the main frame with a glob or
  * `RegExp` `url` (`''` for none): the first navigation after the call whose URL matches (a
  * same-document one counts; a failed one rejects), then `waitUntil`. Rust refuses `networkidle`
@@ -119,8 +134,21 @@ export type NeoFinishNavigationParams = {
  * `neo:nextNavigation`. */
 export type NeoReleaseNavigationParams = { cursor: number }
 
-/** Neo's commands on a frame guid, shaped as the generated `FrameCommands`. */
+/** Neo's commands on a frame guid, shaped as the generated `FrameCommands`;
+ * `neo:boundingBox`'s `value` is absent when the element has no box. */
 export type NeoFrameCommands = {
+  'neo:scrollIntoViewIfNeeded': {
+    params: NeoElementParams
+    result: Record<string, never>
+  }
+  'neo:selectText': {
+    params: NeoSelectTextParams
+    result: Record<string, never>
+  }
+  'neo:boundingBox': {
+    params: NeoElementParams
+    result: { value?: NeoRect }
+  }
   'neo:waitForURL': {
     params: NeoWaitForURLParams
     result: Record<string, never>

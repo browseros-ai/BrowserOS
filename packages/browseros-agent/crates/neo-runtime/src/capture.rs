@@ -195,17 +195,26 @@ fn masks(
         .collect()
 }
 
-/// The tab's session, attached once per run.
-/// Neo: the call's own lazy attach, as dispatch's frame calls do.
+/// The tab's session for a capture, with its watcher running (`PageSession::prepare`). Only the
+/// watcher tells a call that its tab closed or crashed, and a capture may wait for the tab's
+/// screenshot turn behind another run's cleanup (`screenshot.rs` `TabScreenshots`): that wait
+/// races the call's `Progress`, whose closed token the watcher cancels, so it ends with
+/// `TargetClosedError` when the tab goes, even on a session nothing else of this run prepared.
+/// Neo: the call's own lazy attach, as dispatch's frame calls do, watched before it waits.
 async fn session(
     tabs: &Tabs,
     entry: &PageEntry,
     progress: &Progress,
 ) -> Result<Arc<PageSession>, CallError> {
-    if let Some(session) = entry.attached_session() {
-        return Ok(session);
-    }
-    Ok(progress.race(tabs.session(entry)).await??)
+    let page = match entry.attached_session() {
+        Some(session) => session,
+        None => progress.race(tabs.session(entry)).await??,
+    };
+    progress
+        .race(page.prepare())
+        .await?
+        .map_err(|error| protocol_error("Page.enable", &error))?;
+    Ok(page)
 }
 
 /// Playwright's wording for a failed CDP command; a closed tab is `TargetClosedError`.

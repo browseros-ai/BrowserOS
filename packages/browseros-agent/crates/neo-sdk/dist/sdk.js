@@ -48,13 +48,20 @@ class TimeoutError extends PlaywrightError {
   }
 }
 
+class AbortError extends PlaywrightError {
+  constructor(message = "The operation was aborted", options) {
+    super(message, options);
+    this.name = "AbortError";
+  }
+}
+
 class TargetClosedError extends PlaywrightError {
   constructor(cause) {
     super(cause || "Target page, context or browser has been closed");
   }
 }
-function targetClosedError() {
-  return new TargetClosedError;
+function targetClosedError(reason) {
+  return new TargetClosedError(reason);
 }
 function isTargetClosedError(error) {
   return error instanceof TargetClosedError;
@@ -65,6 +72,8 @@ function parseError(error) {
     e = new TimeoutError(error.message);
   else if (error.name === "TargetClosedError")
     e = new TargetClosedError(error.message);
+  else if (error.name === "AbortError")
+    e = new AbortError(error.message);
   else
     e = Object.assign(new PlaywrightError(error.message), {
       name: error.name
@@ -97,6 +106,9 @@ async function call(message) {
   const { reply, events } = await __neo_runtime.callWithEvents(message);
   deliverEvents?.(events);
   return reply;
+}
+function abort(id, reason) {
+  __neo_runtime.abort(id, reason);
 }
 function subscribe(guid, event, enabled) {
   __neo_runtime.subscribe(JSON.stringify({ guid, event, enabled }));
@@ -688,7 +700,7 @@ function getByRoleSelector(role, options = {}) {
 // src/vendor-shims.ts
 var DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-class URL {
+class URL2 {
   href;
   constructor(href) {
     this.href = String(href);
@@ -761,7 +773,7 @@ function isDate(obj) {
 }
 function isURL(obj) {
   try {
-    return obj instanceof URL || Object.prototype.toString.call(obj) === "[object URL]";
+    return obj instanceof URL2 || Object.prototype.toString.call(obj) === "[object URL]";
   } catch (error) {
     return false;
   }
@@ -852,7 +864,7 @@ function parseEvaluationResultValue(value, handles = [], refs = new Map) {
       return new Date(value.d);
     }
     if ("u" in value)
-      return new URL(value.u);
+      return new URL2(value.u);
     if ("bi" in value)
       return BigInt(value.bi);
     if ("e" in value) {
@@ -1071,7 +1083,7 @@ function innerParseSerializedValue(value, handles, refs, accessChain) {
   if (value.d !== undefined)
     return new Date(value.d);
   if (value.u !== undefined)
-    return new URL(value.u);
+    return new URL2(value.u);
   if (value.bi !== undefined)
     return BigInt(value.bi);
   if (value.e !== undefined) {
@@ -1190,7 +1202,7 @@ function isDate2(obj) {
   return obj instanceof Date || Object.prototype.toString.call(obj) === "[object Date]";
 }
 function isURL2(obj) {
-  return obj instanceof URL || Object.prototype.toString.call(obj) === "[object URL]";
+  return obj instanceof URL2 || Object.prototype.toString.call(obj) === "[object URL]";
 }
 function isError2(obj) {
   const proto = obj ? Object.getPrototypeOf(obj) : null;
@@ -1218,6 +1230,12 @@ var AGENT_FRAME = /^ {4}at .* \(<input>:(\d+):(\d+)\)$/;
 class Connection {
   #nextId = 1;
   #lineOffset;
+  #closed = false;
+  #inFlight = new Set;
+  _closeReasonFor = () => {
+    return;
+  };
+  _closedFor = () => false;
   _objects = new Map;
   constructor(lineOffset) {
     this.#lineOffset = lineOffset;
@@ -1249,19 +1267,78 @@ class Connection {
   async sendHandle(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout) ?? {};
   }
-  async#send(apiName, guid, method, params, timeout) {
+  async#send(apiName, guid, method, params, options) {
+    const { timeout, signal } = typeof options === "number" ? { timeout: options, signal: undefined } : options;
+    if (this.#closed)
+      throw closedError(apiName);
+    if (signal?.aborted)
+      throw prefixed(apiName, new AbortError(undefined, { cause: signal.reason }));
     if (typeof timeout !== "number")
       throw new Error(`timeout: expected float, got ${timeout === null ? "object" : typeof timeout}`);
     const metadata = {
       location: captureLocation(this.#lineOffset),
       timeout
     };
-    const message = { id: this.#nextId++, guid, method, params, metadata };
-    const reply = JSON.parse(await call(JSON.stringify(message)));
-    if (reply.error)
-      throw rebuildError(apiName, reply.error.error, reply.log);
+    const closedBefore = this._closedFor(guid);
+    const id = this.#nextId++;
+    const message = { id, guid, method, params, metadata };
+    const pending = new Promise((resolve, reject) => {
+      const abandon = (reason) => reject(closedError(apiName, reason));
+      this.#inFlight.add(abandon);
+      call(JSON.stringify(message)).then(resolve, reject).finally(() => this.#inFlight.delete(abandon));
+    });
+    let listener;
+    try {
+      listener = signal ? listenForAbort(apiName, id, signal) : undefined;
+    } catch (error) {
+      pending.catch(() => {});
+      throw error;
+    }
+    let text;
+    try {
+      text = await pending;
+    } finally {
+      if (signal && listener)
+        signal.removeEventListener("abort", listener);
+    }
+    const reply = JSON.parse(text);
+    if (reply.error) {
+      const error = rebuildError(apiName, reply.error.error, reply.log, signal);
+      const reason = isTargetClosedError(error) && !closedBefore ? this._closeReasonFor(guid) : undefined;
+      if (reason)
+        error.message = `${apiName}: ${reason}${formatCallLog(reply.log)}`;
+      throw error;
+    }
     return reply.result;
   }
+  _close(reason) {
+    this.#closed = true;
+    for (const abandon of this.#inFlight)
+      abandon(reason);
+    this.#inFlight.clear();
+  }
+}
+function closedError(apiName, reason) {
+  const error = targetClosedError(reason);
+  error.message = `${apiName}: ${error.message}`;
+  return error;
+}
+function listenForAbort(apiName, id, signal) {
+  const listener = () => {
+    const reason = signal.reason instanceof Error ? signal.reason.message : String(signal.reason);
+    abort(id, reason);
+  };
+  try {
+    signal.addEventListener("abort", listener, { once: true });
+  } catch (error) {
+    throw prefixed(apiName, error);
+  }
+  return listener;
+}
+function prefixed(apiName, error) {
+  if (error instanceof Error)
+    error.message = `${apiName}: ${error.message}`;
+  return error;
 }
 function captureLocation(lineOffset) {
   const stackTraceLimit = Error.stackTraceLimit;
@@ -1283,8 +1360,10 @@ function agentLocation(stack, lineOffset) {
   }
   return { file: SCRIPT_FILE };
 }
-function rebuildError(apiName, error, log) {
+function rebuildError(apiName, error, log, signal) {
   const rebuilt = parseError(error);
+  if (signal?.aborted && rebuilt instanceof AbortError)
+    rebuilt.cause = signal.reason;
   rebuilt.log = log || [];
   rebuilt.message = `${apiName}: ${rebuilt.message}${formatCallLog(log)}`;
   return rebuilt;
@@ -1377,10 +1456,6 @@ function handleFrom(connection, created) {
   return new JSHandle(connection, created.guid, created.initializer);
 }
 function evaluateParams(apiName, pageFunction, arg, options) {
-  const signal = options?.signal;
-  if (signal !== undefined && signal !== null) {
-    throw new Error(`${apiName}: Neo does not support signal yet`);
-  }
   if (options?.exposeFunctions) {
     throw new Error(`${apiName}: Neo does not support exposeFunctions yet`);
   }
@@ -3613,6 +3688,32 @@ function isRegExp3(obj) {
   return obj instanceof RegExp;
 }
 
+// src/disposable.ts
+class DisposableStub {
+  #dispose;
+  constructor(dispose) {
+    this.#dispose = dispose;
+    const asyncDispose = Symbol.asyncDispose;
+    if (asyncDispose)
+      Object.defineProperty(this, asyncDispose, {
+        value: () => this.dispose()
+      });
+  }
+  async dispose() {
+    if (!this.#dispose)
+      return;
+    try {
+      const dispose = this.#dispose;
+      this.#dispose = undefined;
+      await dispose();
+    } catch (e) {
+      if (isTargetClosedError(e))
+        return;
+      throw e;
+    }
+  }
+}
+
 // vendor/playwright/isomorphic/mimeType.ts
 function getMimeTypeForPath(path) {
   const dotIndex = path.lastIndexOf(".");
@@ -4247,6 +4348,23 @@ var FRAME_TAP_KEYS = [
   "position",
   "trial"
 ];
+var PAGE_KEYBOARD_DOWN_KEYS = ["key"];
+var PAGE_KEYBOARD_UP_KEYS = ["key"];
+var PAGE_KEYBOARD_INSERT_TEXT_KEYS = ["text"];
+var PAGE_KEYBOARD_TYPE_KEYS = ["text", "delay"];
+var PAGE_KEYBOARD_PRESS_KEYS = ["key", "delay"];
+var PAGE_MOUSE_MOVE_KEYS = ["x", "y", "steps"];
+var PAGE_MOUSE_DOWN_KEYS = ["button", "clickCount"];
+var PAGE_MOUSE_UP_KEYS = ["button", "clickCount"];
+var PAGE_MOUSE_CLICK_KEYS = [
+  "x",
+  "y",
+  "delay",
+  "button",
+  "clickCount"
+];
+var PAGE_MOUSE_WHEEL_KEYS = ["deltaX", "deltaY"];
+var PAGE_TOUCHSCREEN_TAP_KEYS = ["x", "y"];
 var FRAME_FILL_KEYS = ["selector", "strict", "value", "force"];
 var FRAME_PRESS_KEYS = [
   "selector",
@@ -4255,6 +4373,7 @@ var FRAME_PRESS_KEYS = [
   "delay",
   "noWaitAfter"
 ];
+var FRAME_TYPE_KEYS = ["selector", "strict", "text", "delay"];
 var FRAME_INPUT_VALUE_KEYS = ["selector", "strict"];
 var FRAME_IS_CHECKED_KEYS = ["selector", "strict"];
 var FRAME_IS_VISIBLE_KEYS = ["selector", "strict"];
@@ -4292,6 +4411,17 @@ var FRAME_WAIT_FOR_SELECTOR_KEYS = [
   "state",
   "omitReturnValue"
 ];
+var FRAME_FOCUS_KEYS = ["selector", "strict"];
+var FRAME_BLUR_KEYS = ["selector", "strict"];
+var FRAME_DISPATCH_EVENT_KEYS = [
+  "selector",
+  "strict",
+  "type",
+  "eventInit"
+];
+var FRAME_HIGHLIGHT_KEYS = ["selector", "style"];
+var FRAME_HIDE_HIGHLIGHT_KEYS = ["selector"];
+var BROWSER_CONTEXT_CLOSE_KEYS = ["reason"];
 var PAGE_CLOSE_KEYS = ["reason"];
 var PAGE_SCREENSHOT_KEYS = [
   "type",
@@ -4460,6 +4590,42 @@ class Locator {
   page() {
     return this._frame.page();
   }
+  async boundingBox(options) {
+    return await this._frame._boundingBox("locator.boundingBox", this._selector, options ?? {});
+  }
+  async dispatchEvent(type, eventInit = {}, options) {
+    return await this._frame._dispatchEvent("locator.dispatchEvent", this._selector, type, eventInit, { strict: true, ...options });
+  }
+  async focus(options) {
+    return await this._frame._focus("locator.focus", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
+  async blur(options) {
+    await this._frame._blur("locator.blur", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
+  async scrollIntoViewIfNeeded(options = {}) {
+    return await this._frame._scrollIntoViewIfNeeded("locator.scrollIntoViewIfNeeded", this._selector, { ...options, timeout: options.timeout });
+  }
+  async selectText(options = {}) {
+    const timeout = options.timeout;
+    return await this._frame._selectText("locator.selectText", this._selector, {
+      ...options,
+      timeout
+    });
+  }
+  async highlight(options = {}) {
+    const style = typeof options.style === "object" ? cssObjectToString(options.style) : options.style;
+    await this._frame._highlight("locator.highlight", this._selector, style);
+    return new DisposableStub(() => this.hideHighlight());
+  }
+  async hideHighlight() {
+    await this._frame._hideHighlight("locator.hideHighlight", this._selector);
+  }
   async click(options = {}) {
     return await this._frame._click("locator.click", this._selector, {
       strict: true,
@@ -4525,6 +4691,15 @@ class Locator {
   }
   async press(key, options = {}) {
     return await this._frame._press("locator.press", this._selector, key, {
+      strict: true,
+      ...options
+    });
+  }
+  async pressSequentially(text, options = {}) {
+    return await this._frame._type("locator.pressSequentially", this._selector, text, { strict: true, ...options });
+  }
+  async type(text, options = {}) {
+    return await this._frame._type("locator.type", this._selector, text, {
       strict: true,
       ...options
     });
@@ -4712,6 +4887,12 @@ function testIdAttributeName() {
 function setTestIdAttribute(attributeName) {
   _testIdAttributeName = attributeName;
 }
+function cssObjectToString(style) {
+  return Object.entries(style).map(([key, value]) => {
+    const property = key.startsWith("--") ? key : key.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase());
+    return `${property}: ${value}`;
+  }).join("; ");
+}
 
 // src/frame-locator.ts
 var kAnyFrameSelector = "internal:control=any-frame";
@@ -4779,6 +4960,7 @@ class FrameLocator {
 }
 
 // src/neo-commands.ts
+var NEO_SELECT_TEXT_KEYS = ["selector", "strict", "force"];
 function serializeUrlMatch(apiName, url) {
   if (url === undefined || url === "")
     return { glob: "" };
@@ -5083,6 +5265,79 @@ function parseFormBody(body) {
   return entries;
 }
 
+// src/plain-argument.ts
+function serializePlainArgument(value) {
+  return {
+    value: serialize2(value, { lastId: 0, visited: new Map }, []),
+    handles: []
+  };
+}
+function serialize2(value, visitorInfo, accessChain) {
+  if (typeof value === "symbol")
+    return { v: "undefined" };
+  if (Object.is(value, undefined))
+    return { v: "undefined" };
+  if (Object.is(value, null))
+    return { v: "null" };
+  if (Object.is(value, Number.NaN))
+    return { v: "NaN" };
+  if (Object.is(value, Number.POSITIVE_INFINITY))
+    return { v: "Infinity" };
+  if (Object.is(value, Number.NEGATIVE_INFINITY))
+    return { v: "-Infinity" };
+  if (Object.is(value, -0))
+    return { v: "-0" };
+  if (typeof value === "boolean")
+    return { b: value };
+  if (typeof value === "number")
+    return { n: value };
+  if (typeof value === "string")
+    return { s: value };
+  if (typeof value === "bigint")
+    return { bi: value.toString() };
+  if (value instanceof Error)
+    return { e: { n: value.name, m: value.message, s: value.stack || "" } };
+  if (value instanceof Date)
+    return { d: value.toJSON() };
+  if (typeof URL !== "undefined" && value instanceof URL)
+    return { u: value.toJSON() };
+  if (value instanceof RegExp)
+    return { r: { p: value.source, f: value.flags } };
+  if (ArrayBuffer.isView(value))
+    refuseTypedArray();
+  if (typeof value === "object") {
+    const object = value;
+    const seen = visitorInfo.visited.get(object);
+    if (seen)
+      return { ref: seen };
+    if (Array.isArray(object)) {
+      const id2 = ++visitorInfo.lastId;
+      visitorInfo.visited.set(object, id2);
+      const a = object.map((item, i) => serialize2(item, visitorInfo, [...accessChain, i]));
+      return { a, id: id2 };
+    }
+    const id = ++visitorInfo.lastId;
+    visitorInfo.visited.set(object, id);
+    const o = Object.keys(object).map((name) => ({
+      k: name,
+      v: serialize2(object[name], visitorInfo, [...accessChain, name])
+    }));
+    return { o, id };
+  }
+  throw new Error(`Attempting to serialize unexpected value${accessChainToDisplayString2(accessChain)}: ${String(value)}`);
+}
+function refuseTypedArray() {
+  throw new Error("Neo's dispatchEvent takes plain eventInit values (strings, finite numbers, booleans, null, arrays and plain objects); this one holds a typed array");
+}
+function accessChainToDisplayString2(accessChain) {
+  const chainString = accessChain.map((accessor, i) => {
+    if (typeof accessor === "string")
+      return i ? `.${accessor}` : accessor;
+    return `[${accessor}]`;
+  }).join("");
+  return chainString.length > 0 ? ` at position "${chainString}"` : "";
+}
+
 // src/select-option.ts
 function convertSelectOptionValues(values) {
   if (values === null)
@@ -5109,195 +5364,10 @@ function convertSelectOptionValues(values) {
   return { options };
 }
 
-// src/waiter.ts
-function refuseSignal2(options) {
-  if (options.signal !== undefined && options.signal !== null)
-    throw new Error('Neo does not support the "signal" option yet');
-}
-async function wrapApiCall(apiName, body) {
-  try {
-    return await body();
-  } catch (e) {
-    if (e instanceof Error)
-      e.message = `${apiName}: ${e.message}`;
-    throw e;
-  }
-}
-
-class Waiter {
-  _dispose = [];
-  _failures = [];
-  _immediateError;
-  _logs = [];
-  static createForEvent() {
-    return new Waiter;
-  }
-  async waitForEvent(emitter, event, predicate) {
-    const { promise, dispose } = waitForEvent(emitter, event, predicate);
-    return await this.waitForPromise(promise, dispose);
-  }
-  rejectOnEvent(emitter, event, error, predicate) {
-    const { promise, dispose } = waitForEvent(emitter, event, predicate);
-    this._rejectOn(promise.then(() => {
-      throw typeof error === "function" ? error() : error;
-    }), dispose);
-  }
-  rejectOnTimeout(timeout, timeoutMessage) {
-    if (timeout) {
-      const { promise, dispose } = waitForTimeout(timeout);
-      this._rejectOn(promise.then(() => {
-        throw new TimeoutError(timeoutMessage);
-      }), dispose);
-    }
-  }
-  rejectImmediately(error) {
-    this._immediateError = error;
-  }
-  throwIfImmediatelyRejected() {
-    if (this._immediateError)
-      throw this._immediateError;
-  }
-  dispose() {
-    for (const dispose of this._dispose)
-      dispose();
-  }
-  async waitForPromise(promise, dispose) {
-    try {
-      if (this._immediateError)
-        throw this._immediateError;
-      const result = await Promise.race([promise, ...this._failures]);
-      if (dispose)
-        dispose();
-      return result;
-    } catch (e) {
-      if (dispose)
-        dispose();
-      this.dispose();
-      if (e instanceof Error)
-        rewriteErrorMessage(e, e.message + formatLogRecording(this._logs));
-      throw e;
-    }
-  }
-  log(s) {
-    this._logs.push(s);
-  }
-  _rejectOn(promise, dispose) {
-    this._failures.push(promise);
-    if (dispose)
-      this._dispose.push(dispose);
-  }
-}
-function waitForEvent(emitter, event, predicate) {
-  let listener = () => {};
-  const promise = new Promise((resolve, reject) => {
-    listener = async (eventArg) => {
-      try {
-        if (predicate && !await predicate(eventArg))
-          return;
-        emitter.removeListener(event, listener);
-        resolve(eventArg);
-      } catch (e) {
-        emitter.removeListener(event, listener);
-        reject(e);
-      }
-    };
-    emitter.addListener(event, listener);
-  });
-  const dispose = () => emitter.removeListener(event, listener);
-  return { promise, dispose };
-}
-function waitForTimeout(timeout) {
-  let timeoutId;
-  const promise = new Promise((resolve) => {
-    timeoutId = setTimeout(resolve, timeout);
-  });
-  const dispose = () => clearTimeout(timeoutId);
-  return { promise, dispose };
-}
-function formatLogRecording(log) {
-  if (!log.length)
-    return "";
-  const header = " logs ";
-  const headerLength = 60;
-  const leftLength = (headerLength - header.length) / 2;
-  const rightLength = headerLength - header.length - leftLength;
-  return `
-${"=".repeat(leftLength)}${header}${"=".repeat(rightLength)}
-${log.join(`
-`)}
-${"=".repeat(headerLength)}`;
-}
-function rewriteErrorMessage(e, newMessage) {
-  const lines = (e.stack?.split(`
-`) || []).filter((l) => l.startsWith("    at "));
-  e.message = newMessage;
-  const errorTitle = `${e.name}: ${e.message}`;
-  if (lines.length)
-    e.stack = `${errorTitle}
-${lines.join(`
-`)}`;
-  return e;
-}
-
-// src/timeout-settings.ts
-var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
-function refuseSignalFor(options, apiName) {
-  try {
-    refuseSignal2(options);
-  } catch (error) {
-    if (apiName !== null && error instanceof Error)
-      error.message = `${apiName}: ${error.message}`;
-    throw error;
-  }
-}
-
-class TimeoutSettings {
-  #parent;
-  #defaultTimeout;
-  #defaultNavigationTimeout;
-  constructor(parent) {
-    this.#parent = parent;
-  }
-  setDefaultTimeout(timeout) {
-    this.#defaultTimeout = timeout;
-  }
-  setDefaultNavigationTimeout(timeout) {
-    this.#defaultNavigationTimeout = timeout;
-  }
-  timeout(options, apiName) {
-    refuseSignalFor(options, apiName);
-    return this.#timeout(options);
-  }
-  navigationTimeout(options, apiName) {
-    refuseSignalFor(options, apiName);
-    return this.#navigationTimeout(options);
-  }
-  #timeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.#timeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
-  }
-  #navigationTimeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultNavigationTimeout !== undefined)
-      return this.#defaultNavigationTimeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.#navigationTimeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
-  }
-}
-
 // src/url.ts
 var READ_ONLY = "Neo's URL is read-only: build a new URL string instead";
 
-class URL2 {
+class URL3 {
   #parts;
   #searchParams;
   constructor(parts) {
@@ -5432,7 +5502,7 @@ class URLSearchParams {
 }
 function urlFor(url) {
   const parts = parseURL(url);
-  return parts ? new URL2(parts) : null;
+  return parts ? new URL3(parts) : null;
 }
 function formEncode(text) {
   return encodeURIComponent(text).replace(/%20/g, "+").replace(/[!'()~]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
@@ -5468,6 +5538,7 @@ class Frame {
   _connection;
   #lastUrl;
   #lastName;
+  #during;
   constructor(guid, page, connection, initializer = { url: "", name: "" }) {
     this._guid = guid;
     this._page = page;
@@ -5482,13 +5553,26 @@ class Frame {
   page() {
     return this._page;
   }
+  _during(state, emit) {
+    const outer = this.#during;
+    this.#during = state;
+    try {
+      emit();
+    } finally {
+      this.#during = outer;
+    }
+  }
   url() {
+    if (this.#during)
+      return this.#during.url;
     const url = get(this._guid, "url");
     if (url !== null)
       this.#lastUrl = url;
     return this.#lastUrl;
   }
   name() {
+    if (this.#during)
+      return this.#during.name;
     const name = get(this._guid, "name");
     if (name !== null)
       this.#lastName = name;
@@ -5502,6 +5586,8 @@ class Frame {
     return get(this._guid, "childFrames").map((record) => this._page._frameFrom(record));
   }
   isDetached() {
+    if (this.#during)
+      return this.#during.detached;
     return get(this._guid, "isDetached");
   }
   async goto(url, options = {}) {
@@ -5539,12 +5625,12 @@ class Frame {
   }
   async _waitForNavigation(apiName, options) {
     const waitUntil = verifyWaitState(apiName, "waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
-    const timeout = this._page._timeoutSettings.navigationTimeout(options, apiName);
-    const result = typeof options.url === "function" ? await this._navigationMatching(apiName, options.url, waitUntil, timeout, true) : await this._connection.sendNeo(apiName, this._guid, "neo:waitForNavigation", { url: serializeUrlMatch(apiName, options.url), waitUntil }, timeout);
+    const timeoutOptions = this._page._timeoutSettings.navigationTimeout(options, apiName);
+    const result = typeof options.url === "function" ? await this._navigationMatching(apiName, options.url, waitUntil, timeoutOptions, true) : await this._connection.sendNeo(apiName, this._guid, "neo:waitForNavigation", { url: serializeUrlMatch(apiName, options.url), waitUntil }, timeoutOptions);
     const guid = result?.response?.guid;
     return guid ? responseFor(this._connection, guid, this) : null;
   }
-  async _navigationMatching(apiName, predicate, waitUntil, timeout, respond) {
+  async _navigationMatching(apiName, predicate, waitUntil, { timeout, signal }, respond) {
     const deadline = timeout ? Date.now() + timeout : 0;
     const left = () => {
       if (!deadline)
@@ -5557,12 +5643,12 @@ class Frame {
     let cursor;
     let finished = false;
     const finish = async (id, index) => {
-      const result = await this.#finishNavigation(apiName, id, index, waitUntil, left());
+      const result = await this.#finishNavigation(apiName, id, index, waitUntil, { timeout: left(), signal });
       finished = true;
       return result;
     };
     const next = () => {
-      const call2 = this._connection.sendNeo(apiName, this._guid, "neo:nextNavigation", cursor === undefined ? { response: respond } : { cursor, response: respond }, left());
+      const call2 = this._connection.sendNeo(apiName, this._guid, "neo:nextNavigation", cursor === undefined ? { response: respond } : { cursor, response: respond }, { timeout: left(), signal });
       call2.catch(() => {});
       return call2;
     };
@@ -5594,11 +5680,11 @@ class Frame {
           try {
             verdict = predicate(parsed);
           } catch (error) {
-            throw prefixed(apiName, error);
+            throw prefixed2(apiName, error);
           }
           if (isPromiseLike(verdict)) {
             const answer = Promise.resolve(verdict).then((value) => ({ index, accepted: !!value }), (error) => {
-              throw prefixed(apiName, error);
+              throw prefixed2(apiName, error);
             });
             answer.catch(() => {});
             verdicts.set(index, answer);
@@ -5752,8 +5838,6 @@ class Frame {
     return await this._querySelector("frame.$", selector, options);
   }
   async _querySelector(apiName, selector, options) {
-    if (options?.signal !== undefined && options.signal !== null)
-      throw new Error(`${apiName}: Neo does not support signal yet`);
     const params = {
       selector,
       ...pickParams(["strict"], options ?? {})
@@ -5871,6 +5955,16 @@ class Frame {
       ...options
     }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
+  async type(selector, text, options = {}) {
+    return await this._type("frame.type", selector, text, options);
+  }
+  async _type(apiName, selector, text, options) {
+    await this._connection.send(apiName, this._guid, "type", pickParams(FRAME_TYPE_KEYS, {
+      selector,
+      text,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
   async inputValue(selector, options = {}) {
     return await this._inputValue("frame.inputValue", selector, options);
   }
@@ -5887,7 +5981,6 @@ class Frame {
     return await this._isVisible("frame.isVisible", selector, options);
   }
   async _isVisible(apiName, selector, options) {
-    refuseSignalFor(options ?? {}, apiName);
     const result = await this._connection.send(apiName, this._guid, "isVisible", pickParams(FRAME_IS_VISIBLE_KEYS, {
       selector,
       ...options
@@ -5900,7 +5993,6 @@ class Frame {
     return await this._isHidden("frame.isHidden", selector, options);
   }
   async _isHidden(apiName, selector, options) {
-    refuseSignalFor(options ?? {}, apiName);
     const result = await this._connection.send(apiName, this._guid, "isHidden", pickParams(FRAME_IS_HIDDEN_KEYS, {
       selector,
       ...options
@@ -5994,6 +6086,59 @@ class Frame {
     else
       await this._uncheck("frame.setChecked", selector, options);
   }
+  async focus(selector, options = {}) {
+    return await this._focus("frame.focus", selector, options);
+  }
+  async _focus(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "focus", pickParams(FRAME_FOCUS_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async _blur(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "blur", pickParams(FRAME_BLUR_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async dispatchEvent(selector, type, eventInit, options = {}) {
+    return await this._dispatchEvent("frame.dispatchEvent", selector, type, eventInit, options);
+  }
+  async _dispatchEvent(apiName, selector, type, eventInit, options) {
+    await this._connection.send(apiName, this._guid, "dispatchEvent", pickParams(FRAME_DISPATCH_EVENT_KEYS, {
+      selector,
+      type,
+      eventInit: serializePlainArgument(eventInit),
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async _scrollIntoViewIfNeeded(apiName, selector, options) {
+    await this._connection.sendNeo(apiName, this._guid, "neo:scrollIntoViewIfNeeded", { selector, strict: true }, this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async _selectText(apiName, selector, options) {
+    const opts = options ?? {};
+    await this._connection.sendNeo(apiName, this._guid, "neo:selectText", pickParams(NEO_SELECT_TEXT_KEYS, {
+      selector,
+      strict: true,
+      force: opts.force
+    }), this._page._timeoutSettings.timeout(opts, apiName));
+  }
+  async _boundingBox(apiName, selector, options) {
+    const result = await this._connection.sendNeo(apiName, this._guid, "neo:boundingBox", { selector, strict: true }, this._page._timeoutSettings.timeout(options ?? {}, apiName));
+    const box = result?.value;
+    return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null;
+  }
+  async _highlight(apiName, selector, style) {
+    await this._connection.send(apiName, this._guid, "highlight", pickParams(FRAME_HIGHLIGHT_KEYS, {
+      selector,
+      style
+    }), 0);
+  }
+  async _hideHighlight(apiName, selector) {
+    await this._connection.send(apiName, this._guid, "hideHighlight", pickParams(FRAME_HIDE_HIGHLIGHT_KEYS, {
+      selector
+    }), 0);
+  }
   locator(selector, options) {
     return new Locator(this, selector, options);
   }
@@ -6028,7 +6173,7 @@ class Frame {
 function navigationTimeout(apiName, timeout) {
   return new TimeoutError(`${apiName}: Timeout ${timeout}ms exceeded.`);
 }
-function prefixed(apiName, error) {
+function prefixed2(apiName, error) {
   if (error instanceof Error)
     error.message = `${apiName}: ${error.message}`;
   return error;
@@ -6037,24 +6182,295 @@ function isPromiseLike(value) {
   return (typeof value === "object" || typeof value === "function") && value !== null && typeof value.then === "function";
 }
 
+// src/input.ts
+class Keyboard {
+  #page;
+  constructor(page) {
+    this.#page = page;
+  }
+  async down(key) {
+    await this.#page._sendInput("keyboard.down", "keyboardDown", pickParams(PAGE_KEYBOARD_DOWN_KEYS, { key }));
+  }
+  async up(key) {
+    await this.#page._sendInput("keyboard.up", "keyboardUp", pickParams(PAGE_KEYBOARD_UP_KEYS, { key }));
+  }
+  async insertText(text) {
+    await this.#page._sendInput("keyboard.insertText", "keyboardInsertText", pickParams(PAGE_KEYBOARD_INSERT_TEXT_KEYS, {
+      text
+    }));
+  }
+  async type(text, options = {}) {
+    await this.#page._sendInput("keyboard.type", "keyboardType", pickParams(PAGE_KEYBOARD_TYPE_KEYS, {
+      text,
+      ...options
+    }));
+  }
+  async press(key, options = {}) {
+    await this.#page._sendInput("keyboard.press", "keyboardPress", pickParams(PAGE_KEYBOARD_PRESS_KEYS, {
+      key,
+      ...options
+    }));
+  }
+}
+
+class Mouse {
+  #page;
+  constructor(page) {
+    this.#page = page;
+  }
+  async move(x, y, options = {}) {
+    await this.#page._sendInput("mouse.move", "mouseMove", pickParams(PAGE_MOUSE_MOVE_KEYS, {
+      x,
+      y,
+      ...options
+    }));
+  }
+  async down(options = {}) {
+    await this.#page._sendInput("mouse.down", "mouseDown", pickParams(PAGE_MOUSE_DOWN_KEYS, { ...options }));
+  }
+  async up(options = {}) {
+    await this.#page._sendInput("mouse.up", "mouseUp", pickParams(PAGE_MOUSE_UP_KEYS, { ...options }));
+  }
+  async click(x, y, options = {}) {
+    await this._click("mouse.click", x, y, options);
+  }
+  async dblclick(x, y, options = {}) {
+    await this._click("mouse.dblclick", x, y, { ...options, clickCount: 2 });
+  }
+  async wheel(deltaX, deltaY) {
+    await this.#page._sendInput("mouse.wheel", "mouseWheel", pickParams(PAGE_MOUSE_WHEEL_KEYS, {
+      deltaX,
+      deltaY
+    }));
+  }
+  async _click(apiName, x, y, options) {
+    await this.#page._sendInput(apiName, "mouseClick", pickParams(PAGE_MOUSE_CLICK_KEYS, {
+      x,
+      y,
+      ...options
+    }));
+  }
+}
+
+class Touchscreen {
+  #page;
+  constructor(page) {
+    this.#page = page;
+  }
+  async tap(x, y) {
+    await this.#page._sendInput("touchscreen.tap", "touchscreenTap", pickParams(PAGE_TOUCHSCREEN_TAP_KEYS, {
+      x,
+      y
+    }));
+  }
+}
+
+// src/timeout-settings.ts
+var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
+
+class TimeoutSettings {
+  #parent;
+  #defaultTimeout;
+  #defaultNavigationTimeout;
+  constructor(parent) {
+    this.#parent = parent;
+  }
+  setDefaultTimeout(timeout) {
+    this.#defaultTimeout = timeout;
+  }
+  setDefaultNavigationTimeout(timeout) {
+    this.#defaultNavigationTimeout = timeout;
+  }
+  timeout(options, _apiName) {
+    return { signal: options.signal, timeout: this.#timeout(options) };
+  }
+  navigationTimeout(options, _apiName) {
+    return { signal: options.signal, timeout: this.#navigationTimeout(options) };
+  }
+  #timeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#timeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+  #navigationTimeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultNavigationTimeout !== undefined)
+      return this.#defaultNavigationTimeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#navigationTimeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+}
+
+// src/waiter.ts
+async function wrapApiCall(apiName, body) {
+  try {
+    return await body();
+  } catch (e) {
+    if (e instanceof Error)
+      e.message = `${apiName}: ${e.message}`;
+    throw e;
+  }
+}
+
+class Waiter {
+  _dispose = [];
+  _failures = [];
+  _immediateError;
+  _logs = [];
+  static createForEvent() {
+    return new Waiter;
+  }
+  async waitForEvent(emitter, event, predicate) {
+    const { promise, dispose } = waitForEvent(emitter, event, predicate);
+    return await this.waitForPromise(promise, dispose);
+  }
+  rejectOnEvent(emitter, event, error, predicate) {
+    const { promise, dispose } = waitForEvent(emitter, event, predicate);
+    this._rejectOn(promise.then(() => {
+      throw typeof error === "function" ? error() : error;
+    }), dispose);
+  }
+  rejectOnTimeout({ timeout, signal }, timeoutMessage) {
+    if (signal) {
+      if (signal.aborted)
+        return this.rejectImmediately(new AbortError(undefined, { cause: signal.reason }));
+      let rejectPromise = () => {};
+      const promise = new Promise((_, reject) => {
+        rejectPromise = reject;
+      });
+      const listener = () => rejectPromise(new AbortError(undefined, { cause: signal.reason }));
+      signal.addEventListener("abort", listener, { once: true });
+      this._rejectOn(promise, () => signal.removeEventListener("abort", listener));
+    }
+    if (timeout) {
+      const { promise, dispose } = waitForTimeout(timeout);
+      this._rejectOn(promise.then(() => {
+        throw new TimeoutError(timeoutMessage);
+      }), dispose);
+    }
+  }
+  rejectImmediately(error) {
+    this._immediateError = error;
+  }
+  throwIfImmediatelyRejected() {
+    if (this._immediateError)
+      throw this._immediateError;
+  }
+  dispose() {
+    for (const dispose of this._dispose)
+      dispose();
+  }
+  async waitForPromise(promise, dispose) {
+    try {
+      if (this._immediateError)
+        throw this._immediateError;
+      const result = await Promise.race([promise, ...this._failures]);
+      if (dispose)
+        dispose();
+      return result;
+    } catch (e) {
+      if (dispose)
+        dispose();
+      this.dispose();
+      if (e instanceof Error)
+        rewriteErrorMessage(e, e.message + formatLogRecording(this._logs));
+      throw e;
+    }
+  }
+  log(s) {
+    this._logs.push(s);
+  }
+  _rejectOn(promise, dispose) {
+    this._failures.push(promise);
+    if (dispose)
+      this._dispose.push(dispose);
+  }
+}
+function waitForEvent(emitter, event, predicate) {
+  let listener = () => {};
+  const promise = new Promise((resolve, reject) => {
+    listener = async (eventArg) => {
+      try {
+        if (predicate && !await predicate(eventArg))
+          return;
+        emitter.removeListener(event, listener);
+        resolve(eventArg);
+      } catch (e) {
+        emitter.removeListener(event, listener);
+        reject(e);
+      }
+    };
+    emitter.addListener(event, listener);
+  });
+  const dispose = () => emitter.removeListener(event, listener);
+  return { promise, dispose };
+}
+function waitForTimeout(timeout) {
+  let timeoutId;
+  const promise = new Promise((resolve) => {
+    timeoutId = setTimeout(resolve, timeout);
+  });
+  const dispose = () => clearTimeout(timeoutId);
+  return { promise, dispose };
+}
+function formatLogRecording(log) {
+  if (!log.length)
+    return "";
+  const header = " logs ";
+  const headerLength = 60;
+  const leftLength = (headerLength - header.length) / 2;
+  const rightLength = headerLength - header.length - leftLength;
+  return `
+${"=".repeat(leftLength)}${header}${"=".repeat(rightLength)}
+${log.join(`
+`)}
+${"=".repeat(headerLength)}`;
+}
+function rewriteErrorMessage(e, newMessage) {
+  const lines = (e.stack?.split(`
+`) || []).filter((l) => l.startsWith("    at "));
+  e.message = newMessage;
+  const errorTitle = `${e.name}: ${e.message}`;
+  if (lines.length)
+    e.stack = `${errorTitle}
+${lines.join(`
+`)}`;
+  return e;
+}
+
 // src/page.ts
 var PAGE_EVENTS = {
   receiver: "Page",
-  served: ["console", "pageerror", "dialog", "dialogclosed", "close", "crash"],
+  served: [
+    "console",
+    "pageerror",
+    "dialog",
+    "dialogclosed",
+    "close",
+    "crash",
+    "load",
+    "domcontentloaded",
+    "frameattached",
+    "framedetached",
+    "framenavigated",
+    "popup"
+  ],
   quiet: [],
   unserved: [
     "download",
     "filechooser",
-    "domcontentloaded",
     "request",
     "response",
     "requestfailed",
     "requestfinished",
-    "frameattached",
-    "framedetached",
-    "framenavigated",
-    "load",
-    "popup",
     "websocket",
     "worker"
   ]
@@ -6068,6 +6484,11 @@ class Page extends ChannelOwner {
   #mainFrame;
   #frames = new Map;
   _timeoutSettings;
+  keyboard;
+  mouse;
+  touchscreen;
+  #closedLocally = false;
+  #closeReason;
   constructor(guid, mainFrameGuid, url, context, connection) {
     super(guid, context._pipe, PAGE_EVENTS);
     this.#guid = guid;
@@ -6080,8 +6501,16 @@ class Page extends ChannelOwner {
       name: ""
     });
     this.#frames.set(mainFrameGuid, this.#mainFrame);
+    this.keyboard = new Keyboard(this);
+    this.mouse = new Mouse(this);
+    this.touchscreen = new Touchscreen(this);
+  }
+  async _sendInput(apiName, method, params) {
+    await this.#connection.sendPage(apiName, this.#guid, method, params, 0);
   }
   url() {
+    if (this.#closedLocally)
+      return this.#lastUrl;
     const url = get(this.#guid, "url");
     if (url !== null)
       this.#lastUrl = url;
@@ -6091,6 +6520,7 @@ class Page extends ChannelOwner {
     await this.#connection.sendPage("page.bringToFront", this.#guid, "bringToFront", {}, 0);
   }
   async close(options = {}) {
+    this.#closeReason = options.reason;
     try {
       if (options.runBeforeUnload)
         await this.#connection.sendPage("page.close", this.#guid, "runBeforeUnload", {}, 0);
@@ -6105,15 +6535,65 @@ class Page extends ChannelOwner {
     }
   }
   isClosed() {
-    return get(this.#guid, "isClosed");
+    return this.#closedLocally || get(this.#guid, "isClosed");
   }
-  _onEvent(method) {
+  _isClosedLocally() {
+    return this.#closedLocally;
+  }
+  _closeReason() {
+    return this.#closeReason ?? this.#context._closeReason();
+  }
+  _onEvent(method, params) {
     if (method === "close")
       this._onClose();
     else if (method === "crash")
       this.emit("crash", this);
+    else if (method === "load") {
+      this.emit("load", this);
+      this.#context.emit("pageload", this);
+    } else if (method === "domcontentloaded")
+      this.emit("domcontentloaded", this);
+    else if (method === "frameAttached")
+      this.#onFrameAttached(params.frame);
+    else if (method === "frameDetached")
+      this.#onFrameDetached(params.frame);
+    else if (method === "frameNavigated")
+      this.#onFrameNavigated(params);
+  }
+  #onFrameAttached(record) {
+    this.#frameEvent(record, "frameattached", false);
+  }
+  #onFrameDetached(record) {
+    this.#frameEvent(record, "framedetached", true);
+  }
+  #onFrameNavigated({ frame, url, name }) {
+    this.#frameEvent({
+      guid: frame.guid,
+      initializer: {
+        ...frame.initializer,
+        url: url ?? frame.initializer.url,
+        name: name ?? frame.initializer.name
+      }
+    }, "framenavigated", false);
+  }
+  #frameEvent(record, event, detached) {
+    const frame = this._frameFrom(record);
+    const { url, name } = record.initializer;
+    frame._during({ url, name, detached }, () => {
+      this.emit(event, frame);
+      this.#context.emit(event, frame);
+    });
+  }
+  async opener() {
+    if (this.#context.isClosed())
+      return null;
+    const record = get(this.#guid, "opener");
+    return record ? this.#context._pageFrom(record) : null;
   }
   _onClose() {
+    if (this.#closedLocally)
+      return;
+    this.#closedLocally = true;
     this.emit("close", this);
     this.#context.emit("pageclose", this);
   }
@@ -6122,18 +6602,17 @@ class Page extends ChannelOwner {
   }
   async _waitForEvent(event, optionsOrPredicate, logLine) {
     const options = typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate;
-    refuseSignal2(options);
+    const timeoutOptions = this._timeoutSettings.timeout(options, null);
     this._refuseUnserved(event);
-    const timeout = this._timeoutSettings.timeout(options, null);
     const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : optionsOrPredicate.predicate;
     const waiter = Waiter.createForEvent();
     if (logLine)
       waiter.log(logLine);
-    waiter.rejectOnTimeout(timeout, `Timeout ${timeout}ms exceeded while waiting for event "${event}"`);
+    waiter.rejectOnTimeout(timeoutOptions, `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`);
     if (event !== "crash")
       waiter.rejectOnEvent(this, "crash", new Error("Page crashed"));
     if (event !== "close")
-      waiter.rejectOnEvent(this, "close", () => targetClosedError());
+      waiter.rejectOnEvent(this, "close", () => targetClosedError(this._closeReason()));
     const result = await waiter.waitForEvent(this, event, predicate);
     waiter.dispose();
     return result;
@@ -6284,6 +6763,15 @@ class Page extends ChannelOwner {
   async click(selector, options = {}) {
     return await this.#mainFrame._click("page.click", selector, options);
   }
+  async focus(selector, options = {}) {
+    return await this.#mainFrame._focus("page.focus", selector, options);
+  }
+  async dispatchEvent(selector, type, eventInit, options = {}) {
+    return await this.#mainFrame._dispatchEvent("page.dispatchEvent", selector, type, eventInit, options);
+  }
+  async hideHighlight() {
+    await this.#connection.sendPage("page.hideHighlight", this.#guid, "hideHighlight", {}, 0);
+  }
   async dblclick(selector, options = {}) {
     return await this.#mainFrame._dblclick("page.dblclick", selector, options);
   }
@@ -6298,6 +6786,9 @@ class Page extends ChannelOwner {
   }
   async press(selector, key, options = {}) {
     return await this.#mainFrame._press("page.press", selector, key, options);
+  }
+  async type(selector, text, options = {}) {
+    return await this.#mainFrame._type("page.type", selector, text, options);
   }
   async inputValue(selector, options = {}) {
     return await this.#mainFrame._inputValue("page.inputValue", selector, options);
@@ -6394,16 +6885,22 @@ class WebError {
 // src/browser-context.ts
 var CONTEXT_EVENTS = {
   receiver: "BrowserContext",
-  served: ["console", "weberror", "dialog", "dialogclosed"],
-  quiet: ["close", "backgroundpage"],
-  unserved: [
-    "download",
-    "frameattached",
-    "framedetached",
-    "framenavigated",
+  served: [
+    "console",
+    "weberror",
+    "dialog",
+    "dialogclosed",
     "page",
     "pageclose",
     "pageload",
+    "frameattached",
+    "framedetached",
+    "framenavigated"
+  ],
+  local: ["close"],
+  quiet: ["backgroundpage"],
+  unserved: [
+    "download",
     "serviceworker",
     "request",
     "response",
@@ -6419,14 +6916,50 @@ class BrowserContext extends ChannelOwner {
   #dialogs = new Map;
   _timeoutSettings = new TimeoutSettings;
   _pipe;
+  #closingStatus = "none";
+  #closeReason;
   constructor(guid, connection, pipe) {
     super(guid, pipe, CONTEXT_EVENTS);
     this.#guid = guid;
     this.#connection = connection;
     this._pipe = pipe;
+    connection._closeReasonFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._closeReason() ?? this.#closeReason;
+    connection._closedFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._isClosedLocally() ?? false;
+  }
+  isClosed() {
+    return this.#closingStatus !== "none";
+  }
+  _closeReason() {
+    return this.#closeReason;
+  }
+  async close(options = {}) {
+    if (this.isClosed())
+      return;
+    this.#closeReason = options.reason;
+    this.#closingStatus = "closing";
+    try {
+      await this.#connection.sendContext("browserContext.close", this.#guid, "close", pickParams(BROWSER_CONTEXT_CLOSE_KEYS, {
+        reason: options.reason
+      }), 0);
+    } catch (error) {
+      this.#closingStatus = "none";
+      this.#closeReason = undefined;
+      throw error;
+    }
+    this.#connection._close(options.reason);
+    const pages = this.pages();
+    for (const page of this.#pages.values())
+      if (!pages.includes(page) && !page._isClosedLocally())
+        pages.push(page);
+    for (const page of pages)
+      page._onClose();
+    this.#closingStatus = "closed";
+    this.emit("close", this);
   }
   _onEvent(method, params) {
-    if (method === "console")
+    if (method === "page")
+      this.#onPage(params.page);
+    else if (method === "console")
       this.#onConsole(params);
     else if (method === "pageError")
       this.#onPageError(params);
@@ -6434,6 +6967,13 @@ class BrowserContext extends ChannelOwner {
       this.#onDialog(params.dialog);
     else if (method === "dialogClosed")
       this.#onDialogClosed(params.dialog);
+  }
+  #onPage(created) {
+    const page = this._pageFrom(created);
+    this.emit("page", page);
+    const opener = created.initializer.opener ? this.#pages.get(created.initializer.opener.guid) : undefined;
+    if (opener)
+      opener.emit("popup", page);
   }
   #onConsole(event) {
     const page = event.page ? this.#pageFor(event.page.guid) : null;
@@ -6476,21 +7016,22 @@ class BrowserContext extends ChannelOwner {
   async waitForEvent(event, optionsOrPredicate = {}) {
     return await wrapApiCall("browserContext.waitForEvent", async () => {
       const options = typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate;
-      refuseSignal2(options);
+      const timeoutOptions = this._timeoutSettings.timeout(options, null);
       this._refuseUnserved(event);
-      const timeout = this._timeoutSettings.timeout(options, null);
       const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : optionsOrPredicate.predicate;
       const waiter = Waiter.createForEvent();
-      waiter.rejectOnTimeout(timeout, `Timeout ${timeout}ms exceeded while waiting for event "${event}"`);
+      waiter.rejectOnTimeout(timeoutOptions, `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`);
       if (event !== "close")
-        waiter.rejectOnEvent(this, "close", () => targetClosedError());
+        waiter.rejectOnEvent(this, "close", () => targetClosedError(this.#closeReason));
       const result = await waiter.waitForEvent(this, event, predicate);
       waiter.dispose();
       return result;
     });
   }
   pages() {
-    return get(this.#guid, "pages").map((created) => this.#pages.get(created.guid) ?? this.#add(created));
+    if (this.#closingStatus === "closed")
+      return [];
+    return get(this.#guid, "pages").map((created) => this.#pages.get(created.guid) ?? this.#add(created)).filter((page) => !page._isClosedLocally());
   }
   async newPage() {
     const { page } = await this.#connection.sendContext("browserContext.newPage", this.#guid, "newPage", {}, 0);
@@ -6510,6 +7051,9 @@ class BrowserContext extends ChannelOwner {
     this.#pages.set(guid, page);
     return page;
   }
+  _pageFrom(created) {
+    return this.#pages.get(created.guid) ?? this.#add(created);
+  }
   #pageFor(guid) {
     return this.#pages.get(guid) ?? this.#add(get(guid, "initializer"));
   }
@@ -6518,6 +7062,10 @@ class BrowserContext extends ChannelOwner {
     this.#pages.set(created.guid, page);
     return page;
   }
+}
+function pageGuidOf(guid) {
+  const target = guid.slice(guid.indexOf("@") + 1).split(/[/:]/)[0];
+  return `page@${target}`;
 }
 
 // src/index.ts

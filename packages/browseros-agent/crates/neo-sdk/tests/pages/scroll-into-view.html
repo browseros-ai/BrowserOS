@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Scroll into view</title>
+<!-- Tests select by id or class only: BrowserOS neo's takeover bar adds shadow-root buttons to
+     every page, and Playwright's CSS pierces open shadow roots. -->
+<style>
+  body { margin: 0; }
+  .spacer { height: 1600px; }
+  .row { position: relative; height: 40px; }
+  #wide { position: absolute; left: 2400px; top: 0; width: 80px; height: 30px; }
+  #far, #later, #vis-hidden, .dup { width: 100px; height: 40px; }
+  #vis-hidden { visibility: hidden; }
+  #zero { height: 0; overflow: hidden; }
+  #later, #none { display: none; }
+</style>
+<button id="reveal" type="button">Reveal later</button>
+<div class="row"><div id="wide">Wide</div></div>
+<div class="spacer"></div>
+<div id="far">Far</div>
+<div class="spacer"></div>
+<div id="vis-hidden">Hidden</div>
+<div class="spacer"></div>
+<div id="zero">Zero</div>
+<div class="spacer"></div>
+<div id="later">Later</div>
+<div id="none">None</div>
+<div class="dup">A</div>
+<div class="dup">B</div>
+<script>
+// BrowserOS neo's takeover bar is not the page's (frame-top.html): removed on sight, so it
+// never moves the layout one engine measures.
+new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.remove()).observe(
+  document.documentElement,
+  { childList: true, subtree: true },
+)
+// The click starts the timer, never page load: Neo's half starts seconds after its page loads.
+document.querySelector('#reveal').addEventListener('click', () => setTimeout(() => {
+  document.querySelector('#later').style.display = 'block'
+}, 500))
+window.__facts = () => ({ scrollX: Math.round(scrollX), scrollY: Math.round(scrollY) })
+</script>

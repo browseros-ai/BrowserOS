@@ -13,9 +13,10 @@
  *   bytes into the run's artifact directory (`artifacts.rs`), relative paths only. A run
  *   without one refuses `path` with an Error naming the option.
  * - Deviation: `client/page.ts` `Page.pdf`: `const result = await this._channel.pdf(transportOptions, kNoTimeout);`
- *   Neo takes no `signal` yet: the screenshots refuse one through `TimeoutSettings` (med-pw-dom
- *   S1), and `page.pdf`, which resolves no timeout, refuses one itself, before anything reaches
- *   the page, never ignored. `undefined` and `null` are no signal.
+ *   `page.screenshot` and `locator.screenshot` resolve their timeout through `TimeoutSettings`,
+ *   so their `signal` aborts the capture as Playwright's does (slice S). `page.pdf`, which
+ *   Playwright sends with no signal, refuses one before anything reaches the page instead of
+ *   ignoring it (med-pw-eval DECIDED). `undefined` and `null` are no signal.
  */
 
 import type {
@@ -167,7 +168,7 @@ function screenshotFields(
 
 /**
  * `page.pdf`'s refusal of a supplied `signal`, before any option is mapped or sent: it resolves
- * no timeout, so S1's central refusal in `TimeoutSettings` never sees it. `undefined` and `null`
+ * no timeout, so `TimeoutSettings` never hands it a signal to forward. `undefined` and `null`
  * are no signal, as Playwright's client acts only on a truthy one.
  * Deviation: `client/page.ts` `Page.pdf`: `const result = await this._channel.pdf(transportOptions, kNoTimeout);` until Neo can abort a call, a signal is refused rather than ignored.
  */

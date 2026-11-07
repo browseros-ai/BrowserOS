@@ -2,7 +2,9 @@
  * The realm half of the event pipe against a stub `__neo_runtime`: listener counts turn Rust
  * subscriptions on and off as Playwright's `ChannelOwner` does, a reply's events run before its
  * caller continues, the idle wake delivers while the script waits, unserved Playwright events
- * refuse a listener, and a listener error nobody handles ends the run.
+ * refuse a listener, and a listener error nobody handles ends the run. New pages, lifecycle and
+ * frame events reach the page's and the context's listeners in Playwright's order, one object
+ * per guid.
  */
 import { beforeEach, expect, test } from 'bun:test'
 import type { BrowserContext } from '../../src/browser-context'
@@ -117,7 +119,9 @@ test('tests that an unserved Playwright event refuses a listener instead of neve
   expect(() => page.on('request', () => {})).toThrow(
     'Neo does not serve the "request" event on Page yet',
   )
-  expect(() => context.once('page', () => {})).toThrow(/BrowserContext/)
+  expect(() => context.once('serviceworker', () => {})).toThrow(
+    /BrowserContext/,
+  )
   expect(page.listenerCount('request')).toBe(0)
   await expect(page.waitForEvent('download')).rejects.toThrow(
     'page.waitForEvent: Neo does not serve the "download" event on Page yet',
@@ -180,7 +184,34 @@ test('tests that waitForEvent rejects when the page closes, unless it waits for 
   expect(error.message).toStartWith(
     'page.waitForEvent: Target page, context or browser has been closed',
   )
-  expect(() => page.waitForEvent('console', { signal: {} } as never)).toThrow()
+})
+
+test('tests that an object that is no signal throws before any effect, and null is no signal', async () => {
+  const { page, context } = run()
+  // Playwright's `Waiter.rejectOnTimeout` reads `signal.addEventListener`, which `{}` lacks, before
+  // the wait listens (aborted and aborting signals: signal.test.ts).
+  for (const [apiName, waiting] of [
+    [
+      'page.waitForEvent',
+      page.waitForEvent('console', { signal: {} } as never),
+    ],
+    [
+      'browserContext.waitForEvent',
+      context.waitForEvent('page', { signal: {} } as never),
+    ],
+  ] as const) {
+    const error = await waiting.then(
+      () => null,
+      (error: Error) => error,
+    )
+    expect(error, apiName).toBeInstanceOf(TypeError)
+    expect(error?.message.startsWith(`${apiName}: `), apiName).toBe(true)
+  }
+  expect(subscriptions).toEqual([])
+  expect(page.listenerCount('console') + context.listenerCount('page')).toBe(0)
+  const waited = page.waitForEvent('console', { signal: null } as never)
+  queueEvent('context@default', 'console', consoleEvent('with no signal'))
+  expect(((await waited) as { text(): string }).text()).toBe('with no signal')
 })
 
 test('tests that a dialog nobody listens to by then gets the default answer', async () => {
@@ -255,4 +286,266 @@ test('tests that removeAllListeners with wait waits for running async listeners'
   expect(finished).toBe(true)
   expect(page.getMaxListeners()).toBe(0)
   expect(new EventEmitter().getMaxListeners()).toBe(10)
+})
+
+/** A frame record Rust would send (`frame_events.rs`). */
+function frameRecord(guid: string, url: string, name: string) {
+  return {
+    guid,
+    initializer: {
+      url,
+      name,
+      parentFrame: { guid: 'frame@T' },
+      loadStates: [],
+    },
+  }
+}
+
+/** A new page's record Rust would send (`tabs.rs` `Tabs::report_new`). */
+function pageRecord(target: string, url: string, opener?: string) {
+  return {
+    guid: `page@${target}`,
+    initializer: {
+      mainFrame: { guid: `frame@${target}` },
+      isClosed: false,
+      ...(opener ? { opener: { guid: opener } } : {}),
+    },
+    mainFrame: {
+      guid: `frame@${target}`,
+      initializer: { url, name: '', loadStates: [] },
+    },
+  }
+}
+
+test('tests that a new page reaches the context, then its opener as a popup, as one object', async () => {
+  const { page, context } = run()
+  const order: string[] = []
+  let fromContext: Page | undefined
+  context.on('page', (created) => {
+    fromContext = created
+    order.push(`page ${created.url()}`)
+  })
+  page.on('popup', (popup) => order.push(`popup ${popup === fromContext}`))
+  queueEvent('context@default', 'page', {
+    page: pageRecord('P', 'https://popup.test/', 'page@T'),
+  })
+  // A page whose opener the run does not know is nobody's popup.
+  queueEvent('context@default', 'page', {
+    page: pageRecord('Q', 'about:blank'),
+  })
+  await page.bringToFront()
+  expect(order).toEqual([
+    'page https://popup.test/',
+    'popup true',
+    'page about:blank',
+  ])
+  expect(subscriptions).toEqual([
+    { guid: 'context@default', event: 'page', enabled: true },
+    { guid: 'page@T', event: 'popup', enabled: true },
+  ])
+})
+
+test("tests that the main frame's load runs the page's listeners, then the context's", async () => {
+  const { page, context } = run()
+  const order: string[] = []
+  page.on('domcontentloaded', (loaded) =>
+    order.push(`domcontentloaded ${loaded === page}`),
+  )
+  page.on('load', (loaded) => order.push(`load ${loaded === page}`))
+  context.on('pageload', (loaded) => order.push(`pageload ${loaded === page}`))
+  queueEvent('page@T', 'domcontentloaded', {})
+  queueEvent('page@T', 'load', {})
+  await page.bringToFront()
+  expect(order).toEqual(['domcontentloaded true', 'load true', 'pageload true'])
+})
+
+test('tests that frame events hand out one Frame per guid and a navigation updates it', async () => {
+  const { page, context } = run()
+  const seen: unknown[] = []
+  let attached: unknown
+  page.on('frameattached', (frame) => {
+    attached = frame
+    seen.push(['attached', frame.name()])
+  })
+  context.on('frameattached', (frame) =>
+    seen.push(['context attached', frame === attached]),
+  )
+  page.on('framenavigated', (frame) =>
+    seen.push(['navigated', frame === attached, frame.url(), frame.name()]),
+  )
+  context.on('framenavigated', (frame) =>
+    seen.push(['context navigated', frame === page.mainFrame()]),
+  )
+  page.on('framedetached', (frame) =>
+    seen.push(['detached', frame === attached]),
+  )
+  context.on('framedetached', (frame) =>
+    seen.push(['context detached', frame === attached]),
+  )
+  queueEvent('page@T', 'frameAttached', {
+    frame: frameRecord('frame@T/A', '', ''),
+  })
+  queueEvent('page@T', 'frameNavigated', {
+    frame: frameRecord('frame@T/A', 'https://a.test/', 'x'),
+    url: 'https://a.test/#f',
+    name: 'x',
+  })
+  queueEvent('page@T', 'frameDetached', {
+    frame: frameRecord('frame@T/A', 'https://a.test/#f', 'x'),
+  })
+  queueEvent('page@T', 'frameNavigated', {
+    frame: {
+      guid: 'frame@T',
+      initializer: { url: 'https://run.test/next', name: '', loadStates: [] },
+    },
+    url: 'https://run.test/next',
+    name: '',
+  })
+  await page.bringToFront()
+  expect(seen).toEqual([
+    ['attached', ''],
+    ['context attached', true],
+    ['navigated', true, 'https://a.test/#f', 'x'],
+    ['context navigated', false],
+    ['detached', true],
+    ['context detached', true],
+    ['navigated', false, 'https://run.test/next', ''],
+    ['context navigated', true],
+  ])
+})
+
+test("tests that a closing page runs its close listeners, then the context's pageclose", async () => {
+  const { page, context } = run()
+  const order: string[] = []
+  page.on('close', (closed) => order.push(`close ${closed === page}`))
+  context.on('pageclose', (closed) =>
+    order.push(`pageclose ${closed === page}`),
+  )
+  queueEvent('page@T', 'close', {})
+  await page.bringToFront()
+  expect(order).toEqual(['close true', 'pageclose true'])
+})
+
+test("tests that a context's close closes its pages as the script sees them, in Playwright's order", async () => {
+  const { page, context } = run()
+  const sent: string[] = []
+  const native = (
+    globalThis as unknown as Record<
+      string,
+      { callWithEvents: unknown; get: unknown }
+    >
+  ).__neo_runtime
+  native.get = (request: string) => {
+    const { field } = JSON.parse(request)
+    if (field === 'pages')
+      return JSON.stringify([pageRecord('T', 'https://run.test/')])
+    if (field === 'isClosed') return 'false'
+    return JSON.stringify(null)
+  }
+  let release: (() => void) | undefined
+  native.callWithEvents = async (message: string) => {
+    const { id, method } = JSON.parse(message)
+    sent.push(method)
+    if (method === 'click')
+      await new Promise<void>((resolve) => (release = resolve))
+    return { reply: JSON.stringify({ id }), events: 0 }
+  }
+  const order: string[] = []
+  page.on('close', () => order.push(`close ${page.isClosed()}`))
+  context.on('pageclose', (closed) =>
+    order.push(`pageclose ${closed === page} ${context.pages().length}`),
+  )
+  context.on('close', (closed) =>
+    order.push(`context close ${closed === context}`),
+  )
+  const waiting = page.waitForEvent('console').catch((e: Error) => e.message)
+  const contextWaiting = context
+    .waitForEvent('page')
+    .catch((e: Error) => e.message)
+  const inFlight = page.click('#never').catch((e: Error) => e.message)
+  const closing = context.close({ reason: 'all done' })
+  expect([context.isClosed(), page.isClosed()]).toEqual([true, false])
+  await closing
+  order.push('resolved')
+  expect(order).toEqual([
+    'close true',
+    'pageclose true 0',
+    'context close true',
+    'resolved',
+  ])
+  expect(await waiting).toStartWith('page.waitForEvent: all done\n')
+  // Playwright's context wait logs no line, so its message is the reason alone.
+  expect(await contextWaiting).toBe('browserContext.waitForEvent: all done')
+  expect(await inFlight).toBe('page.click: all done')
+  release?.()
+  expect([context.pages(), page.isClosed(), page.url()]).toEqual([
+    [],
+    true,
+    'https://run.test/',
+  ])
+  await expect(page.title()).rejects.toThrow(
+    'page.title: Target page, context or browser has been closed',
+  )
+  await context.close()
+  expect(sent).toEqual(['click', 'close'])
+})
+
+test("tests that a page's close reason reaches its waits and the calls it interrupted, not later ones", async () => {
+  const { page } = run()
+  const native = (
+    globalThis as unknown as Record<string, { callWithEvents: unknown }>
+  ).__neo_runtime
+  native.callWithEvents = async (message: string) => {
+    const { id, method } = JSON.parse(message)
+    if (method === 'close') {
+      queueEvent('page@T', 'close', {})
+      return { reply: JSON.stringify({ id }), events: seq }
+    }
+    const closed = {
+      error: {
+        error: {
+          name: 'TargetClosedError',
+          message: 'Target page, context or browser has been closed',
+        },
+      },
+    }
+    return { reply: JSON.stringify({ id, ...closed }), events: 0 }
+  }
+  const waiting = page.waitForEvent('console').catch((e: Error) => e.message)
+  await page.close({ reason: 'bye' })
+  expect(await waiting).toStartWith('page.waitForEvent: bye\n')
+  // A call made once the page reads closed keeps the default message, as in Playwright.
+  await expect(page.title()).rejects.toThrow(
+    'page.title: Target page, context or browser has been closed',
+  )
+})
+
+test('tests that a close Rust refuses leaves the context open, to close again', async () => {
+  const { context } = run()
+  const native = (
+    globalThis as unknown as Record<
+      string,
+      { callWithEvents: unknown; get: unknown }
+    >
+  ).__neo_runtime
+  native.get = (request: string) =>
+    JSON.parse(request).field === 'pages'
+      ? JSON.stringify([pageRecord('T', 'https://run.test/')])
+      : JSON.stringify(null)
+  let refuse = true
+  native.callWithEvents = async (message: string) => {
+    const { id } = JSON.parse(message)
+    const refused = {
+      error: { error: { name: 'Error', message: 'neo-runtime: refused' } },
+    }
+    const reply = refuse ? { id, ...refused } : { id }
+    refuse = false
+    return { reply: JSON.stringify(reply), events: 0 }
+  }
+  await expect(context.close({ reason: 'first' })).rejects.toThrow(
+    'browserContext.close: neo-runtime: refused',
+  )
+  expect(context.isClosed()).toBe(false)
+  await context.close({ reason: 'second' })
+  expect(context.isClosed()).toBe(true)
 })

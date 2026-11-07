@@ -1,6 +1,7 @@
-// B1 regressions. Signal cases assert the fleet’s explicit Neo refusal contract: a supplied
-// signal is refused before any browser effect, and `signal: null` is no signal (supermediator
-// DECIDED 01:27), so those cases compare with Playwright like the rest.
+// B1 regressions. Since slice S the screenshot signal cases compare with Playwright like the rest
+// (an aborted signal rejects AbortError before any browser effect). page.pdf keeps Neo's own
+// refusal (med-pw-eval DECIDED): Playwright reads no signal there and prints, so that case
+// asserts Neo's refusal and its lack of effect. `signal: null` is no signal (DECIDED 01:27).
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { withEngines } from './capture.mjs'
@@ -14,12 +15,10 @@ test('B1 independent option probes', { skip, timeout: 600000 }, async (t) => {
       [
         'page signal',
         `try {await page.screenshot({signal:{aborted:true},style:'body{color:red}',path:at('signal.png')});return 'captured'}catch(e){return {name:e.name,signal:/signal/.test(e.message)}}`,
-        'signal',
       ],
       [
         'locator signal',
         `try {await page.locator('#far').screenshot({signal:{aborted:true},style:'body{color:red}',path:at('signal.png')});return 'captured'}catch(e){return {name:e.name,signal:/signal/.test(e.message)}}`,
-        'signal',
       ],
       [
         'page null signal',
@@ -78,7 +77,7 @@ test('B1 independent option probes', { skip, timeout: 600000 }, async (t) => {
           assert.deepEqual(
             r.neo.value,
             { name: 'Error', signal: true },
-            'Neo refuses every supplied signal',
+            'Neo refuses a signal on page.pdf',
           )
           assert.equal(r.neo.probe.prints, 0)
           assert.equal(r.neo.probe.styleAdds, 0)

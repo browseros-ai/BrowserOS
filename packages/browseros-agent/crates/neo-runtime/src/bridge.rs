@@ -15,6 +15,9 @@
 //!         ◀─ Promise of {reply: '{"id":1}' | '{"id":1,"error":{…},"log":[…]}', events: W}
 //!    (`call` is the same without `events`: the reply text alone, for white-box tests)
 //!
+//!  controller.abort()                            JS, a call's `abort` listener (connection.ts)
+//!    └─ __neo_runtime.abort(1, 'reason')         sync: aborts message 1's call (`abort.rs`)
+//!
 //!  page.on('console', f)                         JS, when a listener count leaves 0
 //!    └─ __neo_runtime.subscribe('{"guid":"page@<id>","event":"console","enabled":true}')
 //!  runtime-bridge.ts, before a reply's caller continues, and on its idle wake
@@ -75,6 +78,17 @@ pub(crate) fn install<'js>(
     )?;
     let log = logs.clone();
     bridge.set("log", Func::from(move |line: String| log.push(line)))?;
+    let aborts = dispatcher.clone();
+    bridge.set(
+        "abort",
+        // Synchronous, inside the signal's `abort` listener: the call stops at its next race or
+        // check and replies `AbortError`. An id that is not a call in flight is ignored.
+        Func::from(move |id: i64, reason: String| {
+            if let Ok(id) = u64::try_from(id) {
+                aborts.abort(id, reason);
+            }
+        }),
+    )?;
     let calls = dispatcher.clone();
     bridge.set(
         "call",
@@ -166,6 +180,10 @@ fn subscribe(tabs: &Tabs, request: &str) -> Result<(), String> {
     } = serde_json::from_str(request).map_err(|error| format!("bad subscribe request: {error}"))?;
     let needs = events::needs(&guid, &event)
         .ok_or_else(|| format!("Neo does not produce {event:?} events on {guid:?}"))?;
+    // A closed context listens to nothing more, and must not attach to its still-open tabs.
+    if tabs.events().subscriptions_ended() {
+        return Ok(());
+    }
     let pages = if guid == CONTEXT_GUID {
         tabs.attached()
             .into_iter()
@@ -178,6 +196,12 @@ fn subscribe(tabs: &Tabs, request: &str) -> Result<(), String> {
         vec![entry]
     };
     tabs.events().subscribe(&guid, &event, enabled);
+    if enabled && needs.discovery {
+        tabs.discover();
+    }
+    if !needs.of_page() {
+        return Ok(());
+    }
     for entry in pages {
         if enabled {
             page_events::enable(tabs, entry, needs);
@@ -311,6 +335,8 @@ enum GetterField {
     ParentFrame,
     ChildFrames,
     IsDetached,
+    /// On a page: `opener()`'s record, `null` when none is open in the run's context.
+    Opener,
 }
 
 #[derive(Deserialize)]
@@ -434,6 +460,10 @@ impl Getters {
                 .map(|closed| json!(closed)),
             GetterField::Initializer => self.wait(async {
                 serde_json::to_value(self.tabs.initializer(&page).await?)
+                    .map_err(|error| PlaywrightError::error(error.to_string()))
+            }),
+            GetterField::Opener => self.wait(async {
+                serde_json::to_value(self.tabs.opener(&page).await?)
                     .map_err(|error| PlaywrightError::error(error.to_string()))
             }),
             GetterField::Pages => Err(GetError::BadRequest(

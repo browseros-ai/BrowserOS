@@ -58,6 +58,7 @@ const KEYS = {
   getAttribute: ['selector', 'strict', 'name'],
   ariaSnapshot: ['mode', 'depth', 'boxes'],
   goto: ['url', 'waitUntil', 'referer'],
+  dispatchEvent: ['selector', 'strict', 'type', 'eventInit'],
 }
 
 /** Each method: its target, the arguments between the selector and the options, its keys. */
@@ -75,8 +76,29 @@ const METHODS = [
   ['textContent', '#plain', [], KEYS.read],
   ['innerText', '#plain', [], KEYS.read],
   ['getAttribute', '#text', ['value'], KEYS.getAttribute],
+  ['focus', '#text', [], KEYS.read],
+  ['dispatchEvent', '#plain', ['click', {}], KEYS.dispatchEvent],
 ]
-const LOCATOR_ONLY = [['clear', '#area', [], KEYS.fill]]
+const LOCATOR_ONLY = [
+  ['clear', '#area', [], KEYS.fill],
+  ['blur', '#text', [], KEYS.read],
+  ['boundingBox', '#plain', [], []],
+]
+/** Locator methods Playwright serves through an ElementHandle, whose `null` options settle
+ * differently: each reads a property of its options first (`options.timeout`, or
+ * `options.style` for `highlight`), and `highlight` turns an object `style` into CSS. */
+const HANDLE_SHAPED = [
+  ['scrollIntoViewIfNeeded', '#plain', [], []],
+  ['selectText', '#text', [], ['force']],
+  ['highlight', '#plain', [], ['style']],
+]
+const HANDLE_SHAPED_KINDS = {
+  'locator.scrollIntoViewIfNeeded(..., null)': 'rejected TypeError',
+  'locator.selectText(..., null)': 'rejected TypeError',
+  'locator.selectText(..., { force: null })': 'rejected Error',
+  'locator.highlight(..., null)': 'rejected TypeError',
+  'locator.highlight(..., { style: null })': 'rejected TypeError',
+}
 const BUILDERS = [
   ['locator', '#plain'],
   ['getByRole', 'textbox'],
@@ -100,7 +122,8 @@ const source = `
   }
   for (const [receiver, target] of Object.entries(receivers)) {
     const methods = ${JSON.stringify(METHODS)}
-    if (receiver === 'locator') methods.push(...${JSON.stringify(LOCATOR_ONLY)})
+    if (receiver === 'locator')
+      methods.push(...${JSON.stringify([...LOCATOR_ONLY, ...HANDLE_SHAPED])})
     for (const [method, selector, args, keys] of methods) {
       const [object, head] = target(selector)
       await settle(receiver + '.' + method + '(..., null)', () => object[method](...head, ...args, null))
@@ -141,7 +164,9 @@ function expectedMethodKinds() {
   const kinds = {}
   for (const receiver of ['page', 'frame', 'locator']) {
     const methods =
-      receiver === 'locator' ? [...METHODS, ...LOCATOR_ONLY] : METHODS
+      receiver === 'locator'
+        ? [...METHODS, ...LOCATOR_ONLY, ...HANDLE_SHAPED]
+        : METHODS
     for (const [method, , , keys] of methods) {
       kinds[`${receiver}.${method}(..., null)`] = 'resolved'
       for (const key of keys)
@@ -150,7 +175,7 @@ function expectedMethodKinds() {
       kinds[`${receiver}.${method}(..., { unknown: null })`] = 'resolved'
     }
   }
-  return kinds
+  return { ...kinds, ...HANDLE_SHAPED_KINDS }
 }
 
 /** How every other call must settle. */
