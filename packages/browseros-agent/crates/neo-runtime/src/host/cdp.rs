@@ -17,6 +17,7 @@ use browseros_cdp::{
     CdpClient, CdpError, CdpEvent, ConnectOptions, EmptyParams, ReconnectPolicy, SessionId,
     browser, page, target,
 };
+use bytes::Bytes;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -26,6 +27,7 @@ use crate::host::capture::Preset;
 use crate::host::directory::{DirectoryInput, PageTarget, TabEntry};
 use crate::host::ids::TabId;
 use crate::host::link::{Attached, HostLink, LinkError};
+use crate::host::store::CallArtifacts;
 use crate::run::PageId;
 use tokio::sync::broadcast;
 
@@ -220,6 +222,146 @@ pub(crate) async fn emulate_focus(session: &Attached) -> Result<(), CdpError> {
         )
         .await?;
     Ok(())
+}
+
+// ----- after-call artifacts (`after_call.rs`) ------------------------------------------------
+
+/// Screenshot concurrency and timeout copied from claw-server's cockpit visual worker:
+/// `apps/claw-server/src/services/cockpit/visual.rs:25-26,305-322` (origin/main).
+pub(crate) const SCREENSHOT_SLOTS: usize = 2;
+pub(crate) const SCREENSHOT_TIMEOUT: Duration = Duration::from_secs(2);
+/// Neo policy: Zuzu accepts at most 64 KiB JPEGs in audit records (design §8).
+pub(crate) const MAX_STILL_BYTES: usize = 64 * 1024;
+
+#[derive(Clone, Copy)]
+pub(crate) struct StillRung {
+    width: u32,
+    height: u32,
+    quality: i64,
+}
+
+/// Neo's bounded audit-image ladder, rather than full viewport images that Zuzu discards.
+pub(crate) const STILL_LADDER: [StillRung; 3] = [
+    StillRung {
+        width: 800,
+        height: 500,
+        quality: 50,
+    },
+    StillRung {
+        width: 640,
+        height: 400,
+        quality: 50,
+    },
+    StillRung {
+        width: 640,
+        height: 400,
+        quality: 30,
+    },
+];
+
+/// One browser-level page-facts read. `None` means the tab closed; only that case may use the
+/// directory's tombstone. Other failures are permanent absence, never filled from live state.
+pub(crate) async fn tab_facts(
+    link: &HostLink,
+    target: &PageId,
+) -> Result<Option<CallArtifacts>, LinkError> {
+    let epoch = link.current()?.epoch();
+    let result: Result<browser::GetTabInfoResult, _> = send_at(
+        link.client(),
+        epoch,
+        "Browser.getTabInfo",
+        browser::GetTabInfoParams {
+            target_id: Some(target.as_str().to_string()),
+            tab_id: None,
+        },
+        None,
+    )
+    .await;
+    match result {
+        Ok(info) => {
+            let tab = TabId::parse(info.tab.tab_id).ok_or_else(|| {
+                CdpError::Transport("page facts carried an invalid tab id".to_string())
+            })?;
+            Ok(Some(CallArtifacts {
+                tab,
+                url: info.tab.url,
+                title: info.tab.title,
+                screenshot: None,
+            }))
+        }
+        Err(CdpError::Protocol { message, .. }) if message.contains("No target with given id") => {
+            Ok(None)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// The geometry Playwright reads before taking a viewport screenshot. The clip uses document
+/// coordinates, enclosing integer size, current page scale and device-scale correction:
+/// `packages/playwright-core/src/server/chromium/crPage.ts:275-296` at 26137face.
+pub(crate) struct ScreenshotViewport {
+    metrics: page::GetLayoutMetricsResult,
+}
+
+pub(crate) async fn screenshot_viewport(
+    session: &Attached,
+) -> Result<ScreenshotViewport, CdpError> {
+    let metrics = send_on(session, "Page.getLayoutMetrics", EmptyParams {}).await?;
+    Ok(ScreenshotViewport { metrics })
+}
+
+pub(crate) async fn capture_still(
+    session: &Attached,
+    viewport: &ScreenshotViewport,
+    rung: StillRung,
+) -> Result<Bytes, CdpError> {
+    let metrics = &viewport.metrics;
+    let visual = &metrics.visual_viewport;
+    if !visual.scale.is_finite()
+        || visual.scale <= 0.0
+        || visual.client_width <= 0.0
+        || visual.client_height <= 0.0
+    {
+        return Err(CdpError::Transport(
+            "invalid screenshot viewport".to_string(),
+        ));
+    }
+    let fit = (f64::from(rung.width) / visual.client_width)
+        .min(f64::from(rung.height) / visual.client_height)
+        .min(1.0);
+    let device_scale = metrics.content_size.width / metrics.css_content_size.width;
+    let device_scale = if device_scale.is_finite() && device_scale > 0.0 {
+        device_scale
+    } else {
+        1.0
+    };
+    let clip = page::Viewport {
+        x: visual.page_x,
+        y: visual.page_y,
+        width: (visual.client_width / visual.scale).ceil(),
+        height: (visual.client_height / visual.scale).ceil(),
+        scale: visual.scale * fit / device_scale,
+    };
+    let reply: page::CaptureScreenshotResult = send_on(
+        session,
+        "Page.captureScreenshot",
+        page::CaptureScreenshotParams {
+            format: Some("jpeg".to_string()),
+            quality: Some(rung.quality),
+            clip: Some(clip),
+            capture_beyond_viewport: Some(false),
+            ..page::CaptureScreenshotParams::default()
+        },
+    )
+    .await?;
+    let data = reply
+        .data
+        .as_str()
+        .ok_or_else(|| CdpError::Transport("screenshot had no base64 data".to_string()))?;
+    BASE64
+        .decode(data)
+        .map(Bytes::from)
+        .map_err(|error| CdpError::Transport(error.to_string()))
 }
 
 // ----- live capture (`capture.rs`): claw-server `services/capture`, unchanged values ---------

@@ -1,7 +1,7 @@
 //! The host side's persistence port. The trace store owns rows and retention; the host only
 //! attaches after-call artifacts and fences completion. No database type crosses this seam.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
@@ -28,6 +28,7 @@ pub struct StoreError(pub String);
 /// The only persistence operations the host requires. Implementations serialize accepted writes
 /// with `withhold`: once withheld, later artifact writes must discard images too. `flushed` is a
 /// barrier requested after the ledger has consumed all passes and settled all derived work.
+/// Implementations retain only the newest 64 screenshots per session (Neo policy, design §8).
 pub type WithheldSessions = Vec<(SessionKey, Vec<PageId>)>;
 
 /// Object-safe asynchronous port implemented by the trace store.
@@ -55,6 +56,31 @@ struct Memory {
     targets: HashMap<SessionKey, HashSet<PageId>>,
     withheld: HashSet<SessionKey>,
     artifacts: HashMap<(RunId, Option<u64>), CallArtifacts>,
+    images: VecDeque<(RunId, Option<u64>)>,
+}
+
+impl Memory {
+    fn prune_images(&mut self, session: &SessionKey) {
+        let withheld = self.withheld.contains(session);
+        let mut kept = 0;
+        for key in self.images.iter().rev() {
+            if self.runs.get(&key.0) != Some(session) {
+                continue;
+            }
+            if let Some(row) = self.artifacts.get_mut(key) {
+                if !withheld && kept < 64 {
+                    kept += 1;
+                } else {
+                    row.screenshot = None;
+                }
+            }
+        }
+        self.images.retain(|key| {
+            self.artifacts
+                .get(key)
+                .is_some_and(|row| row.screenshot.is_some())
+        });
+    }
 }
 
 impl MemoryStore {
@@ -66,6 +92,7 @@ impl MemoryStore {
             .entry(session.clone())
             .or_default()
             .extend(pages.iter().cloned());
+        memory.prune_images(session);
     }
 
     pub async fn artifacts(&self, run: &RunId) -> HashMap<Option<u64>, CallArtifacts> {
@@ -110,7 +137,14 @@ impl HostStore for MemoryStore {
                     .get(&key)
                     .and_then(|old| old.screenshot.clone());
             }
+            if artifacts.screenshot.is_some() {
+                memory.images.retain(|old| old != &key);
+                memory.images.push_back(key.clone());
+            }
             memory.artifacts.insert(key, artifacts);
+            if let Some(session) = memory.runs.get(run).cloned() {
+                memory.prune_images(&session);
+            }
             Ok(())
         })
     }

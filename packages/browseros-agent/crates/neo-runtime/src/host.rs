@@ -19,6 +19,11 @@
 
 #[cfg_attr(
     not(test),
+    expect(dead_code, reason = "runtime wiring starts the after-call worker next")
+)]
+mod after_call;
+#[cfg_attr(
+    not(test),
     expect(
         dead_code,
         reason = "live views open once Runtime is built with host options"

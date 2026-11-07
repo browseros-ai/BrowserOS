@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::{mpsc, oneshot, watch};
+use tokio::task::JoinSet;
 use tokio::time::{self, Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
@@ -166,6 +167,19 @@ pub(super) struct Work {
     settled: mpsc::UnboundedSender<SessionKey>,
 }
 
+#[cfg(test)]
+impl Work {
+    pub(super) fn testing(job: Job, settled: mpsc::UnboundedSender<SessionKey>) -> Self {
+        Self {
+            job,
+            fallback: None,
+            revoked: CancellationToken::new(),
+            newest: CancellationToken::new(),
+            settled,
+        }
+    }
+}
+
 impl Drop for Work {
     fn drop(&mut self) {
         let _ = self.settled.send(self.job.session.clone());
@@ -179,7 +193,7 @@ pub(super) struct Artifacts {
 
 pub(super) struct Jobs {
     pub(super) waiting: mpsc::Receiver<Work>,
-    pub(super) results: mpsc::UnboundedSender<Artifacts>,
+    pub(super) results: mpsc::Sender<Artifacts>,
 }
 
 /// Started separately from runtime wiring so fake socket tests can hold jobs and flushes at
@@ -203,7 +217,7 @@ pub(super) async fn start(
         published.revoke_targets(&restored);
     }
     let (jobs, waiting) = mpsc::channel(JOB_INGRESS);
-    let (results, artifacts) = mpsc::unbounded_channel();
+    let (results, artifacts) = mpsc::channel(JOB_INGRESS);
     let (settled, settlements) = mpsc::unbounded_channel();
     let (flush, flushes) = mpsc::unbounded_channel();
     let (directory, inputs) = mpsc::channel(JOB_INGRESS);
@@ -221,6 +235,7 @@ pub(super) async fn start(
         settlements,
         flush,
         flushes,
+        writes: JoinSet::new(),
         completion: HashMap::new(),
         latest: HashMap::new(),
     };
@@ -244,11 +259,12 @@ struct Task {
     commands: mpsc::UnboundedReceiver<Command>,
     inputs: mpsc::Receiver<DirectoryInput>,
     jobs: mpsc::Sender<Work>,
-    artifacts: mpsc::UnboundedReceiver<Artifacts>,
+    artifacts: mpsc::Receiver<Artifacts>,
     settled: mpsc::UnboundedSender<SessionKey>,
     settlements: mpsc::UnboundedReceiver<SessionKey>,
     flush: mpsc::UnboundedSender<(SessionKey, bool)>,
     flushes: mpsc::UnboundedReceiver<(SessionKey, bool)>,
+    writes: JoinSet<()>,
     completion: HashMap<SessionKey, Fence>,
     latest: HashMap<SessionKey, CancellationToken>,
 }
@@ -270,9 +286,10 @@ impl Task {
                 command = self.commands.recv() => if let Some(command) = command {
                     self.command(command).await;
                 },
-                artifacts = self.artifacts.recv() => if let Some(artifacts) = artifacts {
+                artifacts = self.artifacts.recv(), if self.writes.len() < 8 => if let Some(artifacts) = artifacts {
                     self.persist(artifacts);
                 },
+                _ = self.writes.join_next(), if !self.writes.is_empty() => {},
                 key = self.settlements.recv() => if let Some(key) = key {
                     self.ledger.job_settled(&key);
                 },
@@ -289,6 +306,16 @@ impl Task {
             let keys: Vec<_> = published.slots.keys().cloned().collect();
             for key in keys {
                 published.end(&key);
+            }
+            for durability in published.withholds.values() {
+                durability.send_if_modified(|value| {
+                    if value.is_none() {
+                        *value = Some(Err(HostError::Stopped));
+                        true
+                    } else {
+                        false
+                    }
+                });
             }
         }
         self.presences.prune(|_| false).await;
@@ -413,7 +440,7 @@ impl Task {
             })
     }
 
-    fn persist(&self, artifacts: Artifacts) {
+    fn persist(&mut self, artifacts: Artifacts) {
         let Artifacts { work, mut value } = artifacts;
         if work.job.kind == JobKind::Still
             && (work.revoked.is_cancelled()
@@ -430,7 +457,7 @@ impl Task {
             return;
         };
         let store = Arc::clone(&self.host.0.options.store);
-        tokio::spawn(async move {
+        self.writes.spawn(async move {
             if let Err(error) = store
                 .put_artifacts(&work.job.run, work.job.call_id, value)
                 .await
@@ -441,8 +468,7 @@ impl Task {
         });
     }
 
-    async fn refresh(&mut self) {
-        self.ledger.expire(Instant::now());
+    fn controls(&mut self) {
         if let Ok(published) = self.host.0.published.lock() {
             for key in &published.ended {
                 self.ledger.end(key, Instant::now());
@@ -451,6 +477,11 @@ impl Task {
                 self.ledger.withhold(key);
             }
         }
+    }
+
+    async fn refresh(&mut self) {
+        self.ledger.expire(Instant::now());
+        self.controls();
         if self.tabs.ready()
             && let (Some(hub), Ok(published)) =
                 (&self.host.0.captures, self.host.0.published.lock())
@@ -1115,6 +1146,7 @@ mod tests {
         h.jobs
             .results
             .send(Artifacts { work: facts, value })
+            .await
             .ok()
             .unwrap();
         drop(h.job().await);

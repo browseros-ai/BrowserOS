@@ -301,24 +301,12 @@ impl FakeHostCdp {
     pub fn delay_seeds(&self, delay: Duration) {
         lock(&self.shared.state).seed_delay = delay;
     }
-    #[expect(
-        dead_code,
-        reason = "after-call and lag tests use this scripted reply control next"
-    )]
     pub fn delay_facts(&self, delay: Duration) {
         lock(&self.shared.state).facts_delay = delay;
     }
-    #[expect(
-        dead_code,
-        reason = "after-call and lag tests use this scripted reply control next"
-    )]
     pub fn delay_screenshots(&self, delay: Duration) {
         lock(&self.shared.state).screenshot_delay = delay;
     }
-    #[expect(
-        dead_code,
-        reason = "after-call and lag tests use this scripted reply control next"
-    )]
     pub fn screenshot_sizes(&self, sizes: &[usize]) {
         lock(&self.shared.state).screenshots = sizes.iter().copied().collect();
     }
@@ -501,9 +489,7 @@ fn answer(shared: &Shared, connection: usize, command: &Value) -> Answer {
                     None => Err((-32000, "No target with given id".to_string())),
                 }
             }
-            "Page.getLayoutMetrics" => Ok(json!({"visualViewport":{
-                "pageX":20,"pageY":30,"clientWidth":1280,"clientHeight":800,"scale":1},
-                "contentSize":{"width":1280,"height":800}})),
+            "Page.getLayoutMetrics" => Ok(layout_metrics()),
             "Page.captureScreenshot" => {
                 delay = state.screenshot_delay;
                 let size = state.screenshots.pop_front().unwrap_or(1024);
@@ -581,4 +567,14 @@ fn read_recording(state: &mut State, session: &str) -> Result<Value, (i64, Strin
             None => json!({ "data": "", "base64Encoded": true, "eof": true }),
         },
     )
+}
+
+fn layout_metrics() -> Value {
+    json!({"visualViewport":{
+                "offsetX":0,"offsetY":0,"pageX":20,"pageY":30,"clientWidth":1280,"clientHeight":800,"scale":1},
+                "layoutViewport":{"pageX":0,"pageY":0,"clientWidth":1280,"clientHeight":800},
+                "contentSize":{"x":0,"y":0,"width":1280,"height":800},
+                "cssVisualViewport":{"offsetX":0,"offsetY":0,"pageX":20,"pageY":30,"clientWidth":1280,"clientHeight":800,"scale":1},
+                "cssLayoutViewport":{"pageX":0,"pageY":0,"clientWidth":1280,"clientHeight":800},
+                "cssContentSize":{"x":0,"y":0,"width":1280,"height":800}})
 }
