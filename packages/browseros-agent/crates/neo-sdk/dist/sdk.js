@@ -2337,6 +2337,11 @@ var ELEMENT_HANDLE_SELECT_OPTION_KEYS = [
   "force"
 ];
 var ELEMENT_HANDLE_SELECT_TEXT_KEYS = ["force"];
+var ELEMENT_HANDLE_WAIT_FOR_SELECTOR_KEYS = [
+  "selector",
+  "strict",
+  "state"
+];
 var FRAME_IS_CHECKED_KEYS = ["selector", "strict"];
 var FRAME_IS_VISIBLE_KEYS = ["selector", "strict"];
 var FRAME_IS_HIDDEN_KEYS = ["selector", "strict"];
@@ -2593,6 +2598,19 @@ class ElementHandle extends JSHandle {
   async uncheck(options = {}) {
     const apiName = "elementHandle.uncheck";
     await this._connection.sendElement(apiName, this._guid, "uncheck", pickParams(ELEMENT_HANDLE_UNCHECK_KEYS, options), this._timeout(options, apiName));
+  }
+  async waitForElementState(state, options = {}) {
+    const apiName = "elementHandle.waitForElementState";
+    await this._connection.sendElement(apiName, this._guid, "waitForElementState", { state }, this._timeout(options, apiName));
+  }
+  async waitForSelector(selector, options = {}) {
+    const apiName = "elementHandle.waitForSelector";
+    const result = await this._connection.sendElement(apiName, this._guid, "waitForSelector", pickParams(ELEMENT_HANDLE_WAIT_FOR_SELECTOR_KEYS, {
+      selector,
+      ...options
+    }), this._timeout(options, apiName));
+    const element = result.element;
+    return ElementHandle.fromNullable(this._connection, element);
   }
   async setChecked(checked, options) {
     if (checked)

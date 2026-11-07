@@ -21,6 +21,7 @@ import type {
   ElementHandleTapParams,
   ElementHandleTypeParams,
   ElementHandleUncheckParams,
+  ElementHandleWaitForSelectorParams,
   FrameAriaSnapshotJSONParams,
   FrameAriaSnapshotParams,
   FrameBlurParams,
@@ -333,6 +334,11 @@ export const ELEMENT_HANDLE_SELECT_OPTION_KEYS = [
   'force',
 ] as const
 export const ELEMENT_HANDLE_SELECT_TEXT_KEYS = ['force'] as const
+export const ELEMENT_HANDLE_WAIT_FOR_SELECTOR_KEYS = [
+  'selector',
+  'strict',
+  'state',
+] as const
 
 /** `Frame.isChecked` in Playwright schema order. */
 export const FRAME_IS_CHECKED_KEYS = ['selector', 'strict'] as const
@@ -465,6 +471,12 @@ type _ElementHandleSelectTextKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof ELEMENT_HANDLE_SELECT_TEXT_KEYS)[number], true>,
     Required<ElementHandleSelectTextParams>
+  >
+>
+type _ElementHandleWaitForSelectorKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof ELEMENT_HANDLE_WAIT_FOR_SELECTOR_KEYS)[number], true>,
+    Required<ElementHandleWaitForSelectorParams>
   >
 >
 type _FrameClickKeysMatchSpec = Assert<

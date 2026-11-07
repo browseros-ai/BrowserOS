@@ -219,6 +219,8 @@ export type ApiName =
   | 'elementHandle.selectText'
   | 'elementHandle.focus'
   | 'elementHandle.scrollIntoViewIfNeeded'
+  | 'elementHandle.waitForElementState'
+  | 'elementHandle.waitForSelector'
   | 'elementHandle.dispatchEvent'
   | 'page.addInitScript'
   | 'browserContext.addInitScript'

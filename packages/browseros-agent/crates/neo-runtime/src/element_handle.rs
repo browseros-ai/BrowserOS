@@ -26,42 +26,43 @@ use std::future::{self, Future};
 use std::sync::{Arc, OnceLock};
 
 use neo_runtime_spec::injected::{
-    AttributeMatch, ElementStateMatch, FormInputValueMatch, InjectedAriaSnapshotParams,
-    InjectedMarkTargetParams, InjectedOwnerDocumentElementParams,
+    AttributeMatch, ElementState, ElementStateMatch, FormInputValueMatch,
+    InjectedAriaSnapshotParams, InjectedMarkTargetParams, InjectedOwnerDocumentElementParams,
     InjectedScopedElementStateOnSelectorParams, InjectedScopedGetAttributeParams,
     InjectedScopedInnerHTMLParams, InjectedScopedInnerTextParams, InjectedScopedInputValueParams,
-    InjectedScopedIsVisibleParams, InjectedScopedTextContentParams, ReadableElementState,
-    TextMatch,
+    InjectedScopedIsVisibleParams, InjectedScopedSelectorElementParams,
+    InjectedScopedTextContentParams, ReadableElementState, SelectorMatch, TextMatch,
 };
 use neo_runtime_spec::serve::{
     ElementHandleBoundingBoxResult, ElementHandleCall, ElementHandleGetAttributeResult,
     ElementHandleInnerHTMLResult, ElementHandleInnerTextResult, ElementHandleInputValueResult,
     ElementHandleIsCheckedResult, ElementHandleIsDisabledResult, ElementHandleIsEditableResult,
     ElementHandleIsEnabledResult, ElementHandleIsHiddenResult, ElementHandleIsVisibleResult,
-    ElementHandleTextContentResult, Rect,
+    ElementHandleTextContentResult, FrameWaitForSelectorParamsState as SelectorState, Rect,
 };
-use neo_runtime_spec::{InjectedCall, MethodMeta};
+use neo_runtime_spec::{Element, Handle, InjectedCall, MethodMeta};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::check::{CheckAction, CheckOptions};
 use crate::click::{
-    self, ActionResult, ElementAction, PageError, PointerOptions, SelectorFacts, Stop,
+    self, ActionResult, ElementAction, PageError, PointerOptions, SelectorFacts, StatesCheck, Stop,
     Tab as ClickTab, WaitAfter,
 };
-use crate::element_ops::{self, ElementOpsTab, Focus};
-use crate::evaluate::{self, UtilityElement};
+use crate::element_ops::{self, Attempt, ElementOpsTab, Focus};
+use crate::evaluate::{self, CreatedHandle, Handles, UtilityElement};
 use crate::fill::{FillAction, FillOptions, SelectAction, SelectOptions};
 use crate::frame_selector;
 use crate::getters;
 use crate::keyboard::KeyboardTab;
-use crate::page::{FrameTab, ResolvedElement};
+use crate::page::{FrameTab, GroupGuard, ResolvedElement};
 use crate::press::{PressAction, PressOptions};
 use crate::progress::{CallError, DeliveryCell, PlaywrightError, Progress};
 use crate::reads::{self, AriaRead, AttributeOptions, Matched, ReadOptions, ReadTab, SelectorTab};
 use crate::states::{self, StateOptions, StateTab};
 use crate::tabs::Tabs;
+use crate::waits::{self, WaitForSelectorOptions, WaitTab};
 
 /// The selector each handle read resolves from the handle's node: the node itself.
 ///
@@ -161,7 +162,9 @@ pub(crate) async fn serve(
         | ElementHandleCall::SelectOption(_)
         | ElementHandleCall::SelectText(_)
         | ElementHandleCall::Focus(_)
-        | ElementHandleCall::ScrollIntoViewIfNeeded(_)) => {
+        | ElementHandleCall::ScrollIntoViewIfNeeded(_)
+        | ElementHandleCall::WaitForElementState(_)
+        | ElementHandleCall::WaitForSelector(_)) => {
             let node = match node {
                 Ok(node) => node,
                 Err(PageError::Closed) => return Err(PlaywrightError::target_closed().into()),
@@ -329,7 +332,194 @@ async fn act(
             let options = PointerOptions::from_tap(frame_params(&params)?);
             pointer(tab, node, options, progress).await
         }
+        call @ (ElementHandleCall::WaitForElementState(_)
+        | ElementHandleCall::WaitForSelector(_)) => wait(tab, node, call, progress).await,
         call => form(tab, node, call, progress).await,
+    }
+}
+
+/// The waits on the node. `waitForElementState` retries its one state check on the node, as
+/// Playwright's `_retryAction` does (a pending navigation and the locator handlers first, unless
+/// forced: never here); `waitForSelector` waits for a selector within the node, as Playwright's
+/// `Frame.waitForSelector` with the handle as its `scope`, and answers the element it found.
+async fn wait(
+    tab: &FrameTab,
+    node: &UtilityElement,
+    call: ElementHandleCall,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    match call {
+        ElementHandleCall::WaitForElementState(params) => {
+            let state = wanted_state(&params.state)?;
+            prepare(tab, progress).await?;
+            let element = adopted(tab, node, progress).await?;
+            let name = format!("wait for {}", state_name(state));
+            element_ops::retry_action(tab, progress, &name, false, || async {
+                match progress
+                    .race(ClickTab::check_states(tab, &element, &[state], false))
+                    .await?
+                {
+                    Ok(StatesCheck::Ready) => Ok(Attempt::Done),
+                    Ok(StatesCheck::NotConnected) => Ok(Attempt::NotConnected),
+                    Ok(StatesCheck::Missing(missing)) => Ok(Attempt::Missing(missing)),
+                    Err(error) => element_ops::page_attempt(error),
+                }
+            })
+            .await?;
+            Ok(None)
+        }
+        ElementHandleCall::WaitForSelector(params) => {
+            // The frame command's params are the handle's, its selector included.
+            let params = serde_json::to_value(&params)
+                .and_then(serde_json::from_value)
+                .map_err(|error| {
+                    PlaywrightError::error(format!(
+                        "neo-runtime: an ElementHandle waitForSelector's params: {error}"
+                    ))
+                })?;
+            let options = WaitForSelectorOptions::from_params(params);
+            let created =
+                waits::wait_for_selector_element(&ScopedWait { tab, node }, &options, progress)
+                    .await?;
+            Ok(Some(created.map_or_else(
+                || json!({}),
+                |element| json!({ "element": element }),
+            )))
+        }
+        _ => Err(PlaywrightError::error("neo-runtime: not an ElementHandle wait").into()),
+    }
+}
+
+/// The state a `waitForElementState` names, as the page's state check takes it.
+fn wanted_state(state: &impl Serialize) -> Result<ElementState, CallError> {
+    serde_json::to_value(state)
+        .and_then(serde_json::from_value)
+        .map_err(|error| {
+            PlaywrightError::error(format!("neo-runtime: an element state: {error}")).into()
+        })
+}
+
+/// An element state as Playwright's log names it.
+fn state_name(state: ElementState) -> String {
+    serde_json::to_value(state)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+/// The frame tab of a handle's `waitForSelector`: each probe resolves the selector within the
+/// node (`scopedSelectorElement`), as Playwright's scoped `Frame.waitForSelector` does; the page
+/// steps (its watcher, a pending navigation, the locator handlers) are the frame tab's.
+struct ScopedWait<'a> {
+    tab: &'a FrameTab,
+    node: &'a UtilityElement,
+}
+
+impl ScopedWait<'_> {
+    /// The first match within the node, in `group`.
+    async fn first(
+        &self,
+        group: &GroupGuard,
+        selector: &str,
+        strict: bool,
+    ) -> Result<Option<(Handle<Element>, SelectorMatch)>, PageError> {
+        let found = self
+            .node
+            .frame
+            .call(
+                Some(group.group()),
+                &InjectedScopedSelectorElementParams {
+                    selector: selector.to_string(),
+                    strict,
+                    root: self.node.element.clone(),
+                },
+            )
+            .await?;
+        Ok(match (found.element, found.preview) {
+            (Some(element), Some(preview)) => Some((
+                element,
+                SelectorMatch {
+                    count: found.count,
+                    visible: found.visible,
+                    preview,
+                },
+            )),
+            _ => None,
+        })
+    }
+}
+
+impl WaitTab for ScopedWait<'_> {
+    type Observation = <FrameTab as WaitTab>::Observation;
+
+    async fn prepare(&self) -> Result<(), PageError> {
+        WaitTab::prepare(self.tab).await
+    }
+
+    async fn describe(&self, selector: &str) -> Result<SelectorFacts, PageError> {
+        WaitTab::describe(self.tab, selector).await
+    }
+
+    fn observe(&self) -> Result<Self::Observation, PageError> {
+        WaitTab::observe(self.tab)
+    }
+
+    async fn track_network(&self) -> Result<(), PageError> {
+        WaitTab::track_network(self.tab).await
+    }
+
+    fn pending_navigation(&self) -> Option<String> {
+        WaitTab::pending_navigation(self.tab)
+    }
+
+    async fn navigation_settled(&self) -> Result<(), PageError> {
+        WaitTab::navigation_settled(self.tab).await
+    }
+
+    async fn locator_handlers_checkpoint(&self, progress: &Progress) -> Result<(), CallError> {
+        WaitTab::locator_handlers_checkpoint(self.tab, progress).await
+    }
+
+    async fn selector_state(
+        &self,
+        selector: &str,
+        strict: bool,
+    ) -> Result<Option<SelectorMatch>, PageError> {
+        let group = self.tab.group(&self.node.frame, "scoped-wait");
+        Ok(self
+            .first(&group, selector, strict)
+            .await?
+            .map(|(_, matched)| matched))
+    }
+
+    async fn selector_element(
+        &self,
+        selector: &str,
+        strict: bool,
+        state: SelectorState,
+        handles: &Handles,
+    ) -> Result<(Option<SelectorMatch>, Option<CreatedHandle>), PageError> {
+        let group = self.tab.group(&self.node.frame, "wait-element");
+        let Some((element, matched)) = self.first(&group, selector, strict).await? else {
+            return Ok((None, None));
+        };
+        if state == SelectorState::Visible && !matched.visible {
+            return Ok((Some(matched), None));
+        }
+        let created = match evaluate::element_handle_for(
+            self.tab,
+            &self.node.frame,
+            &element,
+            &matched.preview,
+            handles,
+        )
+        .await
+        {
+            Ok(created) => Some(created),
+            Err(PageError::NotConnected) => None,
+            Err(error) => return Err(error),
+        };
+        Ok((Some(matched), created))
     }
 }
 

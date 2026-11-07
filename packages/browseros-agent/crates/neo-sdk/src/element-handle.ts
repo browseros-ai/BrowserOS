@@ -28,6 +28,8 @@ import type {
   ElementHandleTapParams,
   ElementHandleTypeParams,
   ElementHandleUncheckParams,
+  ElementHandleWaitForElementStateParams,
+  ElementHandleWaitForSelectorParams,
   Rect,
 } from '@browseros/neo-runtime-spec/serve'
 import type { ApiName, Connection } from './connection'
@@ -44,6 +46,7 @@ import type {
   TapOptions,
   TypeOptions,
   UncheckOptions,
+  WaitForSelectorOptions,
 } from './frame'
 import {
   type CreatedHandle,
@@ -69,6 +72,7 @@ import {
   ELEMENT_HANDLE_TAP_KEYS,
   ELEMENT_HANDLE_TYPE_KEYS,
   ELEMENT_HANDLE_UNCHECK_KEYS,
+  ELEMENT_HANDLE_WAIT_FOR_SELECTOR_KEYS,
   pickParams,
 } from './protocol'
 import type { CreatedFrame } from './runtime-bridge'
@@ -288,6 +292,41 @@ export class ElementHandle<T = unknown> extends JSHandle<T> {
       ) as ElementHandleUncheckParams,
       this._timeout(options, apiName),
     )
+  }
+
+  async waitForElementState(
+    state: ElementHandleWaitForElementStateParams['state'],
+    options: TimeoutInput = {},
+  ): Promise<void> {
+    const apiName = 'elementHandle.waitForElementState'
+    await this._connection.sendElement(
+      apiName,
+      this._guid,
+      'waitForElementState',
+      { state },
+      this._timeout(options, apiName),
+    )
+  }
+
+  /** Playwright: `client/elementHandle.ts` `ElementHandle.waitForSelector`: `return ElementHandle.fromNullable(result.element) as ElementHandle<SVGElement | HTMLElement> | null;` */
+  async waitForSelector(
+    selector: string,
+    options: WaitForSelectorOptions & TimeoutInput = {},
+  ): Promise<ElementHandle | null> {
+    const apiName = 'elementHandle.waitForSelector'
+    const result = await this._connection.sendElement(
+      apiName,
+      this._guid,
+      'waitForSelector',
+      pickParams(ELEMENT_HANDLE_WAIT_FOR_SELECTOR_KEYS, {
+        selector,
+        ...options,
+      }) as ElementHandleWaitForSelectorParams,
+      this._timeout(options, apiName),
+    )
+    // Neo answers the element's handle record, as `$` does, where the wire type names a channel.
+    const element = (result as unknown as { element?: CreatedHandle }).element
+    return ElementHandle.fromNullable(this._connection, element)
   }
 
   /** Playwright: `client/elementHandle.ts` `ElementHandle.setChecked`: `if (checked)` */

@@ -201,3 +201,60 @@ describe('ElementHandle actions', () => {
     ).toEqual([['selectOption', { elements: [{ guid: 'handle@r.1' }] }]])
   })
 })
+
+describe('ElementHandle waits', () => {
+  test('send their command with the page’s timeout and answer the found element', async () => {
+    const run = start()
+    run.fake.answer = () => ({
+      result: { element: { ...ELEMENT, frame: run.page.mainFrame()._guid } },
+      log: [],
+    })
+    const handle = (await run.page.$('#x')) as ElementHandle
+    run.page.setDefaultTimeout(700)
+    const found = {
+      type: 'ElementHandle',
+      guid: 'handle@r.2',
+      initializer: { preview: 'JSHandle@<span></span>' },
+    }
+    run.fake.answer = ({ method, params }) => ({
+      result:
+        method === 'waitForSelector' &&
+        (params as { state?: string }).state !== 'detached'
+          ? { element: found }
+          : {},
+      log: [],
+    })
+    run.fake.messages.length = 0
+    expect(await handle.waitForElementState('visible')).toBeUndefined()
+    const span = await handle.waitForSelector('span', {
+      state: 'attached',
+      timeout: 5,
+    })
+    expect(span?._guid).toBe('handle@r.2')
+    expect(
+      await handle.waitForSelector('span', { state: 'detached' }),
+    ).toBeNull()
+    expect(
+      run.fake.messages.map(({ guid, method, params, metadata }) => [
+        guid,
+        method,
+        params,
+        (metadata as { timeout?: number }).timeout,
+      ]),
+    ).toEqual([
+      ['handle@r.1', 'waitForElementState', { state: 'visible' }, 700],
+      [
+        'handle@r.1',
+        'waitForSelector',
+        { selector: 'span', state: 'attached' },
+        5,
+      ],
+      [
+        'handle@r.1',
+        'waitForSelector',
+        { selector: 'span', state: 'detached' },
+        700,
+      ],
+    ])
+  })
+})

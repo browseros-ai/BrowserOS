@@ -634,7 +634,9 @@ async fn attached<T: ElementOpsTab>(
 /// Neo: how one attempt of a handle action ended, Playwright's `PerformActionResult` reduced to
 /// what scroll and selectText answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Attempt {
+/// One attempt of [`retry_action`]: an element handle's `waitForElementState` retries its own
+/// (`element_handle.rs`).
+pub(crate) enum Attempt {
     Done,
     NotConnected,
     NotVisible,
@@ -655,7 +657,7 @@ const ELEMENT_NOT_VISIBLE: &str = "Element is not visible";
 /// Unless `force`, each attempt first waits out a pending navigation.
 ///
 /// Playwright: `server/dom.ts` `ElementHandle._retryAction`: `if (result === 'error:notvisible') {`
-async fn retry_action<T, F, Fut>(
+pub(crate) async fn retry_action<T, F, Fut>(
     tab: &T,
     progress: &Progress,
     action_name: &str,
@@ -708,7 +710,7 @@ where
 
 /// Neo: a page step's failure inside a handle action. A lost document is the element detaching
 /// (Playwright's handle then throws its detached error); the rest end the call as page reads do.
-fn page_attempt(error: PageError) -> Result<Attempt, CallError> {
+pub(crate) fn page_attempt(error: PageError) -> Result<Attempt, CallError> {
     match Stop::from(error) {
         Stop::Retry => Ok(Attempt::NotConnected),
         Stop::End(error) => Err(error),
