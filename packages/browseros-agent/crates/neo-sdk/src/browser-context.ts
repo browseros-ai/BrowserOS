@@ -20,6 +20,7 @@
 import type {
   BrowserContextCloseParams,
   DialogInitializer,
+  HttpCredentials,
   NetworkCookie,
   PageChannel,
   SerializedError,
@@ -484,6 +485,26 @@ export class BrowserContext extends ChannelOwner {
       this.#guid,
       'clearPermissions',
       {},
+      0,
+    )
+  }
+
+  /** Playwright: `client/browserContext.ts` `BrowserContext.setHTTPCredentials`: `await this._channel.setHTTPCredentials({ httpCredentials: toHttpCredentialsProtocol(httpCredentials || undefined) }, kNoTimeout);`
+   * Neo refuses it for now (neo-runtime `session_state.rs`): its routes do not yet answer a
+   * server's credentials challenge. */
+  async setHTTPCredentials(
+    httpCredentials: HttpCredentials | HttpCredentials[] | null,
+  ): Promise<void> {
+    const list = !httpCredentials
+      ? []
+      : Array.isArray(httpCredentials)
+        ? httpCredentials
+        : [httpCredentials]
+    await this.#connection.sendContext(
+      'browserContext.setHTTPCredentials',
+      this.#guid,
+      'setHTTPCredentials',
+      list.length ? { httpCredentials: list } : {},
       0,
     )
   }

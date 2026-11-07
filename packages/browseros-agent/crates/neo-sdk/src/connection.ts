@@ -128,6 +128,7 @@ export type ApiName =
   | 'browserContext.setGeolocation'
   | 'browserContext.grantPermissions'
   | 'browserContext.clearPermissions'
+  | 'browserContext.setHTTPCredentials'
   | 'page.setExtraHTTPHeaders'
   | 'page.close'
   | 'page.bringToFront'

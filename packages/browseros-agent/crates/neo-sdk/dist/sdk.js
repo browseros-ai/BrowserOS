@@ -6617,6 +6617,10 @@ class BrowserContext extends ChannelOwner {
   async clearPermissions() {
     await this.#connection.sendContext("browserContext.clearPermissions", this.#guid, "clearPermissions", {}, 0);
   }
+  async setHTTPCredentials(httpCredentials) {
+    const list = !httpCredentials ? [] : Array.isArray(httpCredentials) ? httpCredentials : [httpCredentials];
+    await this.#connection.sendContext("browserContext.setHTTPCredentials", this.#guid, "setHTTPCredentials", list.length ? { httpCredentials: list } : {}, 0);
+  }
   setDefaultTimeout(timeout) {
     this._timeoutSettings.setDefaultTimeout(timeout);
   }

@@ -547,6 +547,18 @@ impl Overrides {
     }
 }
 
+/// Deviation: `server/chromium/crNetworkManager.ts` `CRNetworkManager.authenticate`: `this._credentials = credentials;`
+/// Playwright answers a server's credentials challenge through `Fetch` request interception,
+/// which the run's routes own (pw-net-network B3, building); until that layer can answer
+/// `Fetch.authRequired`, Neo refuses `setHTTPCredentials` rather than send none.
+const CREDENTIALS_PENDING: &str = "Neo does not serve setHTTPCredentials yet: it answers a server's credentials challenge through request interception, which Neo's routes do not offer yet";
+
+/// `setHTTPCredentials`: refused until the routes' `Fetch` layer answers credential challenges
+/// ([`CREDENTIALS_PENDING`]).
+pub(crate) fn set_http_credentials() -> Result<(), CallError> {
+    Err(PlaywrightError::error(CREDENTIALS_PENDING).into())
+}
+
 /// Neo: each run's id among the process's runs, for the permission grants it holds.
 static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
 
