@@ -1,4 +1,5 @@
-//! `Frame.textContent`, `Frame.innerText`, `Frame.getAttribute` and `Frame.ariaSnapshot`:
+//! `Frame.textContent`, `Frame.innerText`, `Frame.innerHTML`, `Frame.getAttribute` and
+//! `Frame.ariaSnapshot`:
 //! Playwright's page and locator reads, in the structure of its
 //! server. The text reads use `frames.ts` `_waitForFunctionOnSelector` over
 //! `retryWithProgressAndBackoff`; `ariaSnapshot` is `page.ts`
@@ -6,11 +7,12 @@
 //! `frames.ts` `ariaSnapshot` does.
 //!
 //! ```text
-//!  text_content / inner_text / get_attribute           log: waiting for <locator>
+//!  text_content / inner_text / inner_html / get_attribute   log: waiting for <locator>
 //!   wait_for_function_on_selector  waits 0,20,50,100,100,500…  (click's LoopAWaits)
 //!   │ prepare the tab
 //!   │ first time only: describe → name the locator │ invalid selector → Error, at once
-//!   │ glue textContent / innerText / getAttribute {selector, strict, name?}: mark first match
+//!   │ glue textContent / innerText / innerHTML / getAttribute {selector, strict, name?}:
+//!   │   mark first match
 //!   │   matched → log "  locator resolved to <preview>" → {value} (missing attribute → {})
 //!   │   nothing matched, or NotConnected → poll again
 //!   │   Threw (strict mode violation) or Contract → Error with the page's message; Closed → closed
@@ -42,14 +44,6 @@
 //! numbers its frames instead (`f1e3`), which a later run could not rebuild. The `default` mode
 //! gives no node a ref, so, as in Playwright, its iframe nodes keep only what the page gave them.
 //!
-//! An `ai` locator snapshot answers refs of the same page-wide form, wherever its selector
-//! leads: its subtree's iframes are stitched in as the page snapshot's are, and a subtree inside
-//! a frame takes that frame's path, read from each iframe on the way (`frameOwnerRef`: the ref
-//! its document's last `ai` snapshot gave it, else a new snapshot of that document). A frame
-//! behind an iframe that has no ref (a hidden one, or one outside the accessibility tree) has no
-//! path, and
-//! its snapshot throws rather than answer refs that would name elements of another frame.
-//!
 //! Neo-only: a lone surrogate (a truncated emoji) in any page call's answer or thrown message
 //! reads as U+FFFD (`neo-runtime-injected/src/well-formed.ts`); Rust strings are UTF-8, and a CDP
 //! reply escaping one would be dropped. Playwright returns it unchanged.
@@ -66,13 +60,13 @@ use std::time::Duration;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use neo_runtime_spec::injected::{
     AriaChild, AriaFrameSnapshot, AriaIframe, AriaNode, AriaRole, AriaSnapshotMode, AttributeMatch,
-    InjectedAriaSnapshotParams, InjectedAriaSnapshotResult, InjectedFrameOwnerRefParams,
-    InjectedGetAttributeParams, InjectedInnerTextParams, InjectedTextContentParams, TextMatch,
+    InjectedAriaSnapshotParams, InjectedAriaSnapshotResult, InjectedGetAttributeParams,
+    InjectedInnerHTMLParams, InjectedInnerTextParams, InjectedTextContentParams, TextMatch,
 };
 use neo_runtime_spec::serve::{
     FrameAriaSnapshotParams, FrameAriaSnapshotParamsMode, FrameAriaSnapshotResult,
-    FrameGetAttributeParams, FrameGetAttributeResult, FrameInnerTextParams, FrameInnerTextResult,
-    FrameTextContentParams, FrameTextContentResult,
+    FrameGetAttributeParams, FrameGetAttributeResult, FrameInnerHTMLParams, FrameInnerHTMLResult,
+    FrameInnerTextParams, FrameInnerTextResult, FrameTextContentParams, FrameTextContentResult,
 };
 
 use crate::aria_yaml;
@@ -92,6 +86,9 @@ const FRAME_HOP: &str = " >> internal:control=enter-frame >> ";
 /// The waits before each snapshot attempt: Playwright's `[1000, 2000, 4000, 8000]` after an
 /// immediate first try, the last repeating, and never capped by the call's timeout.
 const SNAPSHOT_WAITS_MS: [u64; 5] = [0, 1000, 2000, 4000, 8000];
+
+/// Deviation: `server/frames.ts` `Frame.ariaSnapshotJSON`: `return { snapshot: await ariaSnapshotJSONForFrame(progress, this, options.selector, options) };` Child-frame scoped AI refs cannot be main-frame paths; use the page snapshot until frame-id-prefixed refs are served.
+const CHILD_AI_SNAPSHOT_UNSERVED: &str = "Neo does not serve scoped AI snapshots inside child frames; use page.ariaSnapshot({ mode: 'ai' })";
 
 // ---------------------------------------------------------------------------------------------
 // The seam.
@@ -129,6 +126,13 @@ pub(crate) trait ReadTab: SelectorTab {
         strict: bool,
     ) -> impl Future<Output = Result<Option<TextMatch>, PageError>> + Send;
 
+    /// The `innerHTML` glue: the first match's markup, any element kind.
+    fn inner_html(
+        &self,
+        selector: &str,
+        strict: bool,
+    ) -> impl Future<Output = Result<Option<TextMatch>, PageError>> + Send;
+
     /// The `getAttribute` glue: `None` while no element matches; a matched element can have
     /// no value for the requested attribute and still ends the read.
     fn get_attribute(
@@ -139,30 +143,14 @@ pub(crate) trait ReadTab: SelectorTab {
     ) -> impl Future<Output = Result<Option<AttributeMatch>, PageError>> + Send;
 
     /// The `ariaSnapshot` glue: the tree and preview of the first match of `params.selector`.
-    /// The snapshot is absent while nothing matches.
+    /// The snapshot is absent while nothing matches. `stitching` permits internal child AI reads:
+    /// their local refs are prefixed before publication. A caller's child-root AI read is refused
+    /// because its local refs would otherwise resolve against the main document.
     fn aria_snapshot(
         &self,
         params: &InjectedAriaSnapshotParams,
+        stitching: bool,
     ) -> impl Future<Output = Result<InjectedAriaSnapshotResult, PageError>> + Send;
-
-    /// An `ai` locator snapshot: the first match's tree, as [`ReadTab::aria_snapshot`] reads it,
-    /// and the path its document's refs take from the main frame, read after the snapshot from
-    /// each iframe on the way (`frameOwnerRef`, main frame first).
-    fn located_aria_snapshot(
-        &self,
-        params: &InjectedAriaSnapshotParams,
-    ) -> impl Future<Output = Result<LocatedSnapshot, PageError>> + Send;
-}
-
-/// An `ai` locator snapshot and where its document sits.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LocatedSnapshot {
-    /// Absent while nothing matches.
-    pub(crate) snapshot: Option<AriaFrameSnapshot>,
-    /// The prefix that names the document's refs from the main frame: empty for the main frame's
-    /// own document, `f4f2` through the iframes of refs `e4` then `e2`, and `None` when an iframe
-    /// on the way has no ref.
-    pub(crate) path: Option<String>,
 }
 
 /// What a read found on the first match: the value the call replies with, and
@@ -177,7 +165,8 @@ pub(crate) struct Matched<R> {
 // The policy.
 // ---------------------------------------------------------------------------------------------
 
-/// One `Frame.textContent` or `Frame.innerText` call's options, decoded once by its route.
+/// One `Frame.textContent`, `Frame.innerText` or `Frame.innerHTML` call's options, decoded once
+/// by its route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReadOptions {
     pub(crate) selector: String,
@@ -194,6 +183,13 @@ impl ReadOptions {
     }
 
     pub(crate) fn from_inner_text(params: FrameInnerTextParams) -> Self {
+        Self {
+            selector: params.selector,
+            strict: params.strict.unwrap_or(false),
+        }
+    }
+
+    pub(crate) fn from_inner_html(params: FrameInnerHTMLParams) -> Self {
         Self {
             selector: params.selector,
             strict: params.strict.unwrap_or(false),
@@ -309,6 +305,22 @@ pub(crate) async fn inner_text<T: ReadTab>(
     Ok(FrameInnerTextResult { value })
 }
 
+/// Serves `Frame.innerHTML`: `{value}`, the first match's markup.
+///
+/// Playwright: `server/frames.ts` `Frame.innerHTML`: `(injected, element) => ({ result: element.innerHTML })`
+pub(crate) async fn inner_html<T: ReadTab>(
+    tab: &T,
+    options: &ReadOptions,
+    progress: &Progress,
+) -> Result<FrameInnerHTMLResult, CallError> {
+    let value = wait_for_function_on_selector(tab, &options.selector, progress, || async {
+        let matched = tab.inner_html(&options.selector, options.strict).await?;
+        Ok(matched.map(|TextMatch { value, preview }| Matched { value, preview }))
+    })
+    .await?;
+    Ok(FrameInnerHTMLResult { value })
+}
+
 /// Serves `Frame.getAttribute`: a missing attribute ends the read with no `value`.
 pub(crate) async fn get_attribute<T: ReadTab>(
     tab: &T,
@@ -394,9 +406,8 @@ where
     Ok(Some(matched.value))
 }
 
-/// Serves `Frame.ariaSnapshot`: with a selector, a locator's subtree; without one, the frame's
-/// document with every rendered iframe's document stitched under its `iframe` node, as
-/// Playwright's YAML.
+/// Serves a document or locator snapshot. AI snapshots rooted in the main frame stitch
+/// rendered iframe documents and prefix their refs with paths from that main frame.
 pub(crate) async fn aria_snapshot<T: ReadTab>(
     tab: &T,
     options: &SnapshotOptions,
@@ -406,10 +417,12 @@ pub(crate) async fn aria_snapshot<T: ReadTab>(
         return locator_aria_snapshot(tab, selector, options, progress).await;
     }
     let root = snapshot_root(tab, options, progress).await?;
-    let nodes = stitch(tab, options, progress, root, "").await?;
-    let snapshot = aria_yaml::render(&nodes)
-        .map_err(|error| PlaywrightError::error(format!("neo-runtime: {error}")))?;
-    Ok(FrameAriaSnapshotResult { snapshot })
+    let nodes = if options.mode == AriaSnapshotMode::Ai {
+        stitch(tab, options, progress, root).await?
+    } else {
+        root.nodes
+    };
+    render_snapshot(&nodes)
 }
 
 /// The call's own document, polled until it has a body.
@@ -459,7 +472,7 @@ async fn locator_aria_snapshot<T: ReadTab>(
         return locator_ai_snapshot(tab, &params, options, progress).await;
     }
     let snapshot = wait_for_function_on_selector(tab, selector, progress, || async {
-        let result = tab.aria_snapshot(&params).await?;
+        let result = tab.aria_snapshot(&params, false).await?;
         let Some(value) = result.snapshot else {
             return Ok(None);
         };
@@ -472,12 +485,9 @@ async fn locator_aria_snapshot<T: ReadTab>(
         Ok(Some(Matched { value, preview }))
     })
     .await?;
-    render_locator_snapshot(&snapshot.nodes)
+    render_snapshot(&snapshot.nodes)
 }
 
-/// An `ai` locator snapshot: the strict match's subtree, polled only while its document is gone,
-/// with the iframes inside it stitched in and every ref named from the main frame.
-///
 /// Playwright: `server/page.ts` `ariaSnapshotJSONForFrame`: `frame.retryWithProgressAndTimeouts(progress, [1000, 2000, 4000, 8000],`
 async fn locator_ai_snapshot<T: ReadTab>(
     tab: &T,
@@ -486,18 +496,18 @@ async fn locator_ai_snapshot<T: ReadTab>(
     progress: &Progress,
 ) -> Result<FrameAriaSnapshotResult, CallError> {
     let mut attempt: usize = 0;
-    let (root, path) = loop {
+    loop {
         let wait = SNAPSHOT_WAITS_MS[attempt.min(SNAPSHOT_WAITS_MS.len() - 1)];
         attempt = attempt.saturating_add(1);
         if wait > 0 {
             progress.wait(Duration::from_millis(wait)).await?;
         }
-        match located_once(tab, params, progress).await {
-            Ok(LocatedSnapshot {
-                snapshot: Some(root),
-                path,
-            }) => break (root, path),
-            Ok(LocatedSnapshot { snapshot: None, .. }) => {
+        match snapshot_once(tab, params, progress).await {
+            Ok(Some(snapshot)) => {
+                let nodes = stitch(tab, options, progress, snapshot).await?;
+                return render_snapshot(&nodes);
+            }
+            Ok(None) => {
                 // Playwright: `server/page.ts` `ariaSnapshotJSONForFrame`: `throw new NonRecoverableDOMError(`
                 return Err(PlaywrightError::error(format!(
                     "Selector \"{}\" does not match any element",
@@ -508,53 +518,11 @@ async fn locator_ai_snapshot<T: ReadTab>(
             Err(Stop::Again) => {}
             Err(Stop::End(error)) => return Err(error),
         }
-    };
-    let nodes = match path {
-        Some(path) => stitch(tab, options, progress, root, &path).await?,
-        None if has_refs(&root.nodes) => {
-            return Err(PlaywrightError::error(UNNAMED_FRAME).into());
-        }
-        // Nothing in the subtree has a ref to route, so no other frame can be named by it.
-        None => root.nodes,
-    };
-    render_locator_snapshot(&nodes)
-}
-
-/// Deviation: `server/page.ts` `ariaSnapshotJSONForFrame`: `return injected.ariaSnapshotJSON(elements[0], ariaOptions);` Playwright names a frame's refs by its frame number; Neo names them by the refs of the iframes on the way from the main frame, so a frame behind an iframe that gets no ref has no usable refs, and its `ai` locator snapshot throws rather than answer refs that would name elements of another frame.
-const UNNAMED_FRAME: &str = "Neo cannot name this frame's elements from the main frame: an iframe on the way has no aria ref (it is hidden, or outside the accessibility tree); snapshot it in the default mode, or reach its elements through a frame locator";
-
-/// One located attempt: the subtree and its path, or nothing matched.
-async fn located_once<T: ReadTab>(
-    tab: &T,
-    params: &InjectedAriaSnapshotParams,
-    progress: &Progress,
-) -> Result<LocatedSnapshot, Stop> {
-    progress.race(tab.prepare()).await??;
-    Ok(progress.race(tab.located_aria_snapshot(params)).await??)
-}
-
-/// Whether any node in `nodes` or below has a ref.
-fn has_refs(nodes: &[AriaNode]) -> bool {
-    let mut stack: Vec<&AriaNode> = nodes.iter().collect();
-    while let Some(node) = stack.pop() {
-        if node.r#ref.is_some() {
-            return true;
-        }
-        stack.extend(
-            node.children
-                .iter()
-                .flatten()
-                .filter_map(|child| match child {
-                    AriaChild::Node(node) => Some(node.as_ref()),
-                    AriaChild::Text(_) => None,
-                }),
-        );
     }
-    false
 }
 
 /// Playwright: `server/frames.ts` `Frame.ariaSnapshot`: `return { snapshot: renderAriaSnapshotAsYaml(snapshot) };`
-fn render_locator_snapshot(nodes: &[AriaNode]) -> Result<FrameAriaSnapshotResult, CallError> {
+fn render_snapshot(nodes: &[AriaNode]) -> Result<FrameAriaSnapshotResult, CallError> {
     let snapshot = aria_yaml::render(nodes)
         .map_err(|error| PlaywrightError::error(format!("neo-runtime: {error}")))?;
     Ok(FrameAriaSnapshotResult { snapshot })
@@ -567,7 +535,10 @@ async fn snapshot_once<T: ReadTab>(
     progress: &Progress,
 ) -> Result<Option<AriaFrameSnapshot>, Stop> {
     progress.race(tab.prepare()).await??;
-    Ok(progress.race(tab.aria_snapshot(params)).await??.snapshot)
+    Ok(progress
+        .race(tab.aria_snapshot(params, false))
+        .await??
+        .snapshot)
 }
 
 /// One document of a stitched snapshot, in the order its snapshot answered: the root first, a
@@ -610,16 +581,11 @@ struct Pending {
 /// answered, from a queue rather than by recursion, so no frame tree deepens the stack. A child
 /// that cannot be read leaves its iframe node as the page gave it; only the tab closing or the
 /// run ending ends the call.
-///
-/// `base` is the root document's own path from the main frame, empty for the call frame's
-/// document of a page snapshot: the root's iframes are then entered from the main frame
-/// (`aria-ref=<base>eN`), and every ref of the stitched tree takes `base` in front.
 async fn stitch<T: ReadTab>(
     tab: &T,
     options: &SnapshotOptions,
     progress: &Progress,
     root: AriaFrameSnapshot,
-    base: &str,
 ) -> Result<Vec<AriaNode>, CallError> {
     let mut documents = vec![Document {
         nodes: root.nodes,
@@ -627,7 +593,7 @@ async fn stitch<T: ReadTab>(
         stitched: HashMap::new(),
     }];
     let mut snapshots = FuturesUnordered::new();
-    for child in children(0, "", base, options.depth, &root.iframes) {
+    for child in children(0, "", options.depth, &root.iframes) {
         snapshots.push(snapshot_child(tab, options, progress, child));
     }
     while let Some((child, snapshot)) = snapshots.next().await {
@@ -637,7 +603,7 @@ async fn stitch<T: ReadTab>(
         };
         let index = documents.len();
         let hops = format!("{}{FRAME_HOP}", child.hops);
-        for grandchild in children(index, &hops, "", child.depth, &snapshot.iframes) {
+        for grandchild in children(index, &hops, child.depth, &snapshot.iframes) {
             snapshots.push(snapshot_child(tab, options, progress, grandchild));
         }
         documents.push(Document {
@@ -651,9 +617,6 @@ async fn stitch<T: ReadTab>(
     while let Some(mut document) = documents.pop() {
         merge_iframes(&mut document.nodes, &mut document.stitched);
         let Some(slot) = document.slot else {
-            if !base.is_empty() {
-                prefix_refs(&mut document.nodes, base);
-            }
             return Ok(document.nodes);
         };
         prefix_refs(&mut document.nodes, &slot.prefix);
@@ -665,42 +628,29 @@ async fn stitch<T: ReadTab>(
 }
 
 /// The documents to snapshot for `iframes`, the rendered iframe nodes of document `owner`
-/// reached through `hops`, each iframe's ref behind `path` (its document's own path from the
-/// main frame, for the root of a locator snapshot inside a frame). Playwright's `childDepth`: a
-/// depth limit that is set and not zero, less the iframe's depth and its own level; JS's falsy
-/// `0` means no limit.
-fn children(
-    owner: usize,
-    hops: &str,
-    path: &str,
-    depth: Option<i64>,
-    iframes: &[AriaIframe],
-) -> Vec<Pending> {
+/// reached through `hops`. Playwright's `childDepth`: a depth limit that is set and not zero,
+/// less the iframe's depth and its own level; JS's falsy `0` means no limit.
+fn children(owner: usize, hops: &str, depth: Option<i64>, iframes: &[AriaIframe]) -> Vec<Pending> {
     iframes
         .iter()
         .filter_map(|iframe| {
             // A ref outside `eN` cannot become a path ref: its document could never be acted on.
-            let number = local_ref_number(&iframe.r#ref)?;
+            let number = iframe.r#ref.strip_prefix('e').filter(|number| {
+                !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
+            })?;
             Some(Pending {
                 slot: Slot {
                     owner,
                     iframe: iframe.r#ref.clone(),
                     prefix: format!("f{number}"),
                 },
-                hops: format!("{hops}aria-ref={path}{}", iframe.r#ref),
+                hops: format!("{hops}aria-ref={}", iframe.r#ref),
                 depth: depth
                     .filter(|depth| *depth != 0)
                     .map(|depth| depth.saturating_sub(iframe.depth).saturating_sub(1)),
             })
         })
         .collect()
-}
-
-/// The number of a document-local ref (`e12` → `12`), the only kind a path can carry.
-fn local_ref_number(aria_ref: &str) -> Option<&str> {
-    aria_ref
-        .strip_prefix('e')
-        .filter(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// One iframe's document, as Playwright's nested `ariaSnapshotJSONForFrame` reads it with a
@@ -731,8 +681,8 @@ async fn snapshot_child<T: ReadTab>(
         {
             break out_of_time(error);
         }
-        match progress.race(tab.aria_snapshot(&params)).await {
-            Ok(Ok(result)) => break Ok(result.snapshot),
+        match progress.race(tab.aria_snapshot(&params, true)).await {
+            Ok(Ok(snapshot)) => break Ok(snapshot.snapshot),
             Ok(Err(PageError::NotConnected)) => {}
             Ok(Err(PageError::Threw(_) | PageError::Contract(_))) => break Ok(None),
             Ok(Err(PageError::Closed)) => break Err(PlaywrightError::target_closed().into()),
@@ -865,6 +815,27 @@ impl ReadTab for FrameTab {
         Ok(read.matched)
     }
 
+    async fn inner_html(
+        &self,
+        selector: &str,
+        strict: bool,
+    ) -> Result<Option<TextMatch>, PageError> {
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok(None);
+        };
+        let read = located
+            .frame
+            .call(
+                None,
+                &InjectedInnerHTMLParams {
+                    selector: located.selector,
+                    strict,
+                },
+            )
+            .await?;
+        Ok(read.matched)
+    }
+
     async fn get_attribute(
         &self,
         selector: &str,
@@ -893,6 +864,7 @@ impl ReadTab for FrameTab {
     async fn aria_snapshot(
         &self,
         params: &InjectedAriaSnapshotParams,
+        stitching: bool,
     ) -> Result<InjectedAriaSnapshotResult, PageError> {
         let Some(located) = frame_selector::locate(self, &params.selector, params.strict).await?
         else {
@@ -901,59 +873,17 @@ impl ReadTab for FrameTab {
                 preview: None,
             });
         };
+        if !stitching
+            && params.mode == AriaSnapshotMode::Ai
+            && located.frame.id != self.frames.main().id
+        {
+            return Err(PageError::Threw(CHILD_AI_SNAPSHOT_UNSERVED.to_string()));
+        }
         let params = InjectedAriaSnapshotParams {
             selector: located.selector,
             ..params.clone()
         };
         located.frame.call(None, &params).await
-    }
-
-    /// Through `locate`, then each iframe owner on the way names itself in its own document, main
-    /// frame first. The owners are read after the snapshot: none of them lives in the snapshot's
-    /// document, and a lookup may snapshot its own document again.
-    async fn located_aria_snapshot(
-        &self,
-        params: &InjectedAriaSnapshotParams,
-    ) -> Result<LocatedSnapshot, PageError> {
-        let unmatched = LocatedSnapshot {
-            snapshot: None,
-            path: None,
-        };
-        let Some(located) = frame_selector::locate(self, &params.selector, params.strict).await?
-        else {
-            return Ok(unmatched);
-        };
-        let read = InjectedAriaSnapshotParams {
-            selector: located.selector.clone(),
-            ..params.clone()
-        };
-        let Some(snapshot) = located.frame.call(None, &read).await?.snapshot else {
-            return Ok(unmatched);
-        };
-        let mut path = String::new();
-        for owner in &located.owners {
-            let named = owner
-                .frame
-                .call(
-                    None,
-                    &InjectedFrameOwnerRefParams {
-                        element: owner.element.clone(),
-                    },
-                )
-                .await?;
-            let Some(number) = named.r#ref.as_deref().and_then(local_ref_number) else {
-                return Ok(LocatedSnapshot {
-                    snapshot: Some(snapshot),
-                    path: None,
-                });
-            };
-            path.push('f');
-            path.push_str(number);
-        }
-        Ok(LocatedSnapshot {
-            snapshot: Some(snapshot),
-            path: Some(path),
-        })
     }
 }
 
@@ -1015,6 +945,7 @@ mod tests {
         describe: Step<Result<SelectorFacts, PageError>>,
         text: Step<Result<Option<TextMatch>, PageError>>,
         inner: Step<Result<Option<TextMatch>, PageError>>,
+        html: Step<Result<Option<TextMatch>, PageError>>,
         attribute: Step<Result<Option<AttributeMatch>, PageError>>,
         read_params: Mutex<Vec<(String, bool, Option<String>)>>,
         /// The call frame's document, `body,frameset`, and a locator's subtree, `SELECTOR`.
@@ -1026,8 +957,6 @@ mod tests {
         meet: Option<(Vec<String>, Barrier)>,
         calls: Mutex<Vec<String>>,
         snapshot_params: Mutex<Vec<InjectedAriaSnapshotParams>>,
-        /// The path a located snapshot's document takes from the main frame.
-        path: Option<String>,
     }
 
     impl FakeReads {
@@ -1044,6 +973,7 @@ mod tests {
                 ),
                 text: Step::always(ROUND_TRIP, Ok(Some(apples()))),
                 inner: Step::always(ROUND_TRIP, Ok(Some(apples()))),
+                html: Step::always(ROUND_TRIP, Ok(Some(markup()))),
                 attribute: Step::always(ROUND_TRIP, Ok(Some(attribute(Some("fruit"))))),
                 read_params: Mutex::default(),
                 snapshot: Step::always(ROUND_TRIP, Ok(Some(tree()))),
@@ -1051,7 +981,6 @@ mod tests {
                 meet: None,
                 calls: Mutex::default(),
                 snapshot_params: Mutex::default(),
-                path: Some(String::new()),
             }
         }
 
@@ -1126,6 +1055,19 @@ mod tests {
             self.inner.answer().await
         }
 
+        async fn inner_html(
+            &self,
+            selector: &str,
+            strict: bool,
+        ) -> Result<Option<TextMatch>, PageError> {
+            self.record("innerHTML");
+            self.read_params
+                .lock()
+                .expect("params")
+                .push((selector.to_string(), strict, None));
+            self.html.answer().await
+        }
+
         async fn get_attribute(
             &self,
             selector: &str,
@@ -1144,6 +1086,7 @@ mod tests {
         async fn aria_snapshot(
             &self,
             params: &InjectedAriaSnapshotParams,
+            _stitching: bool,
         ) -> Result<InjectedAriaSnapshotResult, PageError> {
             self.record("ariaSnapshot");
             self.snapshot_params
@@ -1152,7 +1095,8 @@ mod tests {
                 .push(params.clone());
             // The call frame's document and a locator's own subtree answer from `snapshot`; every
             // other selector reaches an iframe's document and must be scripted in `frames`.
-            let snapshot = if params.selector == FRAME_ROOT || params.selector == SELECTOR {
+            let snapshot = if params.selector == FRAME_ROOT || !params.selector.contains(FRAME_HOP)
+            {
                 self.snapshot.answer().await?
             } else {
                 if let Some((selectors, barrier)) = &self.meet
@@ -1169,17 +1113,6 @@ mod tests {
             let preview = snapshot.as_ref().map(|_| "<ul>…</ul>".to_string());
             Ok(InjectedAriaSnapshotResult { snapshot, preview })
         }
-
-        async fn located_aria_snapshot(
-            &self,
-            params: &InjectedAriaSnapshotParams,
-        ) -> Result<LocatedSnapshot, PageError> {
-            let snapshot = self.aria_snapshot(params).await?.snapshot;
-            Ok(LocatedSnapshot {
-                path: snapshot.as_ref().and(self.path.clone()),
-                snapshot,
-            })
-        }
     }
 
     fn apples() -> TextMatch {
@@ -1187,6 +1120,28 @@ mod tests {
             value: "Apples".to_string(),
             preview: "<li>Apples</li>".to_string(),
         }
+    }
+
+    fn markup() -> TextMatch {
+        TextMatch {
+            value: "<b>Apples</b> &amp; pears".to_string(),
+            preview: "<li>Apples &amp; pears</li>".to_string(),
+        }
+    }
+
+    async fn read_html(
+        tab: &FakeReads,
+        timeout_ms: f64,
+    ) -> Result<FrameInnerHTMLResult, CallError> {
+        inner_html(
+            tab,
+            &ReadOptions {
+                selector: SELECTOR.to_string(),
+                strict: true,
+            },
+            &Progress::for_test(timeout_ms),
+        )
+        .await
     }
 
     fn attribute(value: Option<&str>) -> AttributeMatch {
@@ -1513,6 +1468,55 @@ mod tests {
                 value: "Apples".to_string()
             })
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_inner_html_reads_the_match_and_its_strictness() {
+        let tab = FakeReads::ready();
+        assert_eq!(
+            read_html(&tab, 30_000.0).await,
+            Ok(FrameInnerHTMLResult {
+                value: "<b>Apples</b> &amp; pears".to_string()
+            })
+        );
+        assert_eq!(tab.calls(), ["describe", "innerHTML"]);
+        assert_eq!(
+            *tab.read_params.lock().expect("params"),
+            [(SELECTOR.to_string(), true, None)]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_inner_html_waits_for_a_later_element_and_times_out_without_one() {
+        let mut later = FakeReads::ready();
+        later.html = Step::new(
+            ROUND_TRIP,
+            [Ok(None), Err(PageError::NotConnected), Ok(Some(markup()))],
+        );
+        assert_eq!(
+            read_html(&later, 30_000.0).await,
+            Ok(FrameInnerHTMLResult {
+                value: "<b>Apples</b> &amp; pears".to_string()
+            })
+        );
+        let mut never = FakeReads::ready();
+        never.html = Step::always(ROUND_TRIP, Ok(None));
+        assert_eq!(read_html(&never, 500.0).await, Err(timeout(500.0)));
+        assert!(never.count("innerHTML") > 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_inner_html_fails_at_once_for_a_strict_violation() {
+        let mut tab = FakeReads::ready();
+        tab.html = Step::always(
+            ROUND_TRIP,
+            Err(PageError::Threw("Error: strict mode violation".to_string())),
+        );
+        assert_eq!(
+            read_html(&tab, 30_000.0).await,
+            Err(PlaywrightError::error("Error: strict mode violation").into())
+        );
+        assert_eq!(tab.count("innerHTML"), 1);
     }
 
     #[tokio::test(start_paused = true)]
@@ -1918,7 +1922,7 @@ mod tests {
                 r#ref: "e1".to_string(),
                 depth: iframe_depth,
             };
-            children(0, "", "", depth, &[iframe])[0].depth
+            children(0, "", depth, &[iframe])[0].depth
         };
         assert_eq!(depth_of(None, 2), None, "no limit stays none");
         assert_eq!(depth_of(Some(5), 2), Some(2));
@@ -1950,7 +1954,7 @@ mod tests {
                 depth: 0,
             })
             .collect();
-        let entered: Vec<String> = children(0, "", "", None, &iframes)
+        let entered: Vec<String> = children(0, "", None, &iframes)
             .into_iter()
             .map(|child| child.hops)
             .collect();
@@ -2181,94 +2185,5 @@ mod tests {
             panic!("expected a Playwright error");
         };
         assert_eq!(error.name, ErrorName::Error);
-    }
-
-    /// An `ai` locator snapshot of `SELECTOR`, with no depth limit.
-    async fn locator_ai(tab: &FakeReads) -> Result<FrameAriaSnapshotResult, CallError> {
-        let options = SnapshotOptions::from_params(
-            serde_json::from_value(serde_json::json!({ "selector": SELECTOR, "mode": "ai" }))
-                .expect("params"),
-        );
-        aria_snapshot(tab, &options, &Progress::for_test(30_000.0)).await
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn tests_that_an_ai_locator_snapshot_stitches_the_iframes_inside_its_subtree() {
-        // The subtree is the main frame's own document, so its refs need no path.
-        let tab = framed_page();
-        assert_eq!(locator_ai(&tab).await, Ok(yaml(FRAMED_YAML)));
-        let mut frames = tab.snapshot_selectors()[1..].to_vec();
-        frames.sort();
-        let mut expected = [behind(&["e3"]), behind(&["e4"]), behind(&["e4", "e3"])];
-        expected.sort();
-        assert_eq!(
-            frames, expected,
-            "each iframe of the subtree entered from the main frame"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn tests_that_an_ai_locator_snapshot_inside_a_frame_names_its_refs_from_the_main_frame() {
-        // The subtree lives in the frame of the main frame's `e4`; its own frame `e3` holds a leaf.
-        let cross = document(
-            vec![element(
-                AriaRole::Generic,
-                None,
-                "e1",
-                vec![
-                    element(AriaRole::Textbox, Some("Email"), "e2", Vec::new()),
-                    iframe_node("e3", None),
-                ],
-            )],
-            &[("e3", 1)],
-        );
-        let leaf = document(
-            vec![element(AriaRole::Button, Some("Leaf"), "e2", Vec::new())],
-            &[],
-        );
-        let mut tab = FakeReads::framed(
-            cross,
-            [(
-                "aria-ref=f4e3 >> internal:control=enter-frame >> body,frameset".to_string(),
-                Ok(Some(leaf)),
-            )],
-        );
-        tab.path = Some("f4".to_string());
-        // The same refs `page.ariaSnapshot({ mode: 'ai' })` gives that frame (`FRAMED_YAML`).
-        assert_eq!(
-            locator_ai(&tab).await,
-            Ok(yaml(
-                "- generic [ref=f4e1]:
-  - textbox \"Email\" [ref=f4e2]
-  - iframe [ref=f4e3]:
-    - button \"Leaf\" [ref=f4f3e2]"
-            ))
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn tests_that_an_ai_locator_snapshot_behind_an_unnamed_iframe_never_answers_its_refs() {
-        let mut named = FakeReads::ready();
-        named.path = None;
-        let error = locator_ai(&named).await.expect_err("refs it cannot route");
-        let CallError::Playwright(error) = error else {
-            panic!("expected a Playwright error");
-        };
-        assert_eq!(error.name, ErrorName::Error);
-        assert_eq!(error.message, UNNAMED_FRAME);
-        // A subtree with no ref names nothing, so it answers as the page gave it.
-        let mut bare = FakeReads::ready();
-        bare.path = None;
-        bare.snapshot = Step::always(
-            ROUND_TRIP,
-            Ok(Some(document(
-                vec![AriaNode {
-                    name: Some("Hidden".to_string()),
-                    ..node(AriaRole::Button)
-                }],
-                &[],
-            ))),
-        );
-        assert_eq!(locator_ai(&bare).await, Ok(yaml("- button \"Hidden\"")));
     }
 }

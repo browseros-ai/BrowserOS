@@ -10,8 +10,8 @@ use neo_runtime_spec::serve::{
 };
 
 use crate::click::{
-    self, ActionResult, ClickOptions, ElementAction, MouseButton, MouseClick, PageError, Stop,
-    WaitAfter,
+    self, ActionResult, ElementAction, MouseButton, MouseClick, PageError, PointerAction,
+    PointerOptions, Stop, WaitAfter,
 };
 use crate::forms::{CheckedState, FormTab};
 use crate::progress::{CallError, DeliveryCell, PlaywrightError, Progress};
@@ -20,14 +20,14 @@ use crate::run::Delivery;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CheckOptions {
     pub(crate) checked: bool,
-    pub(crate) click: ClickOptions,
+    pub(crate) click: PointerOptions,
 }
 
 impl CheckOptions {
     pub(crate) fn from_check(params: FrameCheckParams) -> Self {
         Self {
             checked: true,
-            click: ClickOptions {
+            click: PointerOptions {
                 selector: params.selector,
                 strict: params.strict.unwrap_or(false),
                 force: params.force.unwrap_or(false),
@@ -37,11 +37,11 @@ impl CheckOptions {
                     x: point.x,
                     y: point.y,
                 }),
-                mouse: MouseClick {
+                action: PointerAction::Click(MouseClick {
                     button: MouseButton::Left,
                     click_count: 1,
                     delay: None,
-                },
+                }),
                 trial: params.trial.unwrap_or(false),
             },
         }
@@ -50,7 +50,7 @@ impl CheckOptions {
     pub(crate) fn from_uncheck(params: FrameUncheckParams) -> Self {
         Self {
             checked: false,
-            click: ClickOptions {
+            click: PointerOptions {
                 selector: params.selector,
                 strict: params.strict.unwrap_or(false),
                 force: params.force.unwrap_or(false),
@@ -60,11 +60,11 @@ impl CheckOptions {
                     x: point.x,
                     y: point.y,
                 }),
-                mouse: MouseClick {
+                action: PointerAction::Click(MouseClick {
                     button: MouseButton::Left,
                     click_count: 1,
                     delay: None,
-                },
+                }),
                 trial: params.trial.unwrap_or(false),
             },
         }

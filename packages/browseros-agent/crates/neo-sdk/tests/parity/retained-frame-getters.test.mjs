@@ -46,6 +46,62 @@ const cases = [
     `await page.goto(page.url().slice(0, page.url().lastIndexOf('/')) + '/new-root'); const observed = main.url(); await page.close(); return observed.endsWith('/new-root') && main.url() === observed;`,
   ],
   [
+    'main document commit then close without a frame getter',
+    `await page.goto(page.url().slice(0, page.url().lastIndexOf('/')) + '/new-root');
+    await page.close();
+    return {
+      detached: retained.slice(1).every(frame => frame.isDetached()),
+      kept: same.name() === 'same' && same.url().endsWith('/same') && nested.name() === 'nested' && nested.url().endsWith('/nested'),
+      parents: same.parentFrame() === main && nested.parentFrame() === same,
+      children: retained.every(frame => frame.childFrames().length === 0),
+      main: !main.isDetached() && main.url().endsWith('/new-root'),
+    };`,
+  ],
+  [
+    'same document navigation then close preserves descendants',
+    `await page.goto(page.url() + '#same-doc'); await page.close();
+    return {
+      attached: retained.every(frame => !frame.isDetached()),
+      parents: same.parentFrame() === main && nested.parentFrame() === same,
+      children: main.childFrames().length === 2 && same.childFrames()[0] === nested,
+      main: main.url().endsWith('#same-doc'),
+    };`,
+  ],
+  [
+    'child document commit then close preserves the child',
+    `await page.click('#navigate-same'); await page.getByText('same-ready', {exact:true}).waitFor(); await page.close();
+    return {
+      detached: nested.isDetached(),
+      kept: nested.name() === 'nested' && nested.url().endsWith('/nested'),
+      parent: nested.parentFrame() === same,
+      children: same.childFrames().length === 0 && main.childFrames().includes(same),
+      other: !remote.isDetached() && remote.childFrames()[0] === remoteNested,
+      same: !same.isDetached() && same.name() === 'same' && same.url().endsWith('/same-next'),
+    };`,
+  ],
+  [
+    'same to OOPIF swap retires the old descendant before close',
+    `await page.click('#swap-same'); await page.getByText('same-ready', {exact:true}).waitFor(); await page.close();
+    return {
+      attached: !same.isDetached(), detached: nested.isDetached(),
+      kept: nested.name() === 'nested' && nested.url().endsWith('/nested'),
+      parents: same.parentFrame() === main && nested.parentFrame() === same,
+      children: same.childFrames().length === 0 && main.childFrames().includes(same),
+      other: !remote.isDetached() && remote.childFrames()[0] === remoteNested,
+    };`,
+  ],
+  [
+    'OOPIF to same swap retires the old descendant before close',
+    `await page.click('#swap-remote'); await page.getByText('remote-ready', {exact:true}).waitFor(); await page.close();
+    return {
+      attached: !remote.isDetached(), detached: remoteNested.isDetached(),
+      kept: remoteNested.name() === 'remote-nested' && remoteNested.url().endsWith('/remote-nested'),
+      parents: remote.parentFrame() === main && remoteNested.parentFrame() === remote,
+      children: remote.childFrames().length === 0 && main.childFrames().includes(remote),
+      other: !same.isDetached() && same.childFrames()[0] === nested,
+    };`,
+  ],
+  [
     'detach status',
     `await page.close(); return retained.map(frame => frame.isDetached());`,
   ],
@@ -90,9 +146,20 @@ test('retained frame getters match Playwright after page close', {
   try {
     const origin = await serveFixture(cleanups, {
       pages: {
-        '/top': `<iframe name="same" src="/same"></iframe><iframe name="remote" id="remote"></iframe><button id="remove" onclick="document.querySelector('#remote').remove()">Remove</button><script>document.querySelector('#remote').src=location.origin.replace('127.0.0.1','localhost')+'/remote'</script>`,
+        '/top': `<iframe name="same" id="same" src="/same"></iframe><iframe name="remote" id="remote"></iframe>
+        <button id="remove" onclick="document.querySelector('#remote').remove()">Remove</button>
+        <button id="navigate-same" onclick="document.querySelector('#same').src='/same-next'">Navigate same</button>
+        <button id="swap-same" onclick="document.querySelector('#same').src=location.origin.replace('127.0.0.1','localhost')+'/same-next'">Swap same</button>
+        <button id="swap-remote" onclick="document.querySelector('#remote').src='/remote-next'">Swap remote</button>
+        <p id="nav-status">waiting</p>
+        <script>
+        addEventListener('message', event => { document.querySelector('#nav-status').textContent = event.data; });
+        document.querySelector('#remote').src=location.origin.replace('127.0.0.1','localhost')+'/remote';
+        </script>`,
         '/same': `<iframe name="nested" src="/nested"></iframe>`,
         '/remote': `<iframe name="remote-nested" src="/remote-nested"></iframe>`,
+        '/same-next': `<p>New same document</p><script>parent.postMessage('same-ready','*')</script>`,
+        '/remote-next': `<p>New remote document</p><script>parent.postMessage('remote-ready','*')</script>`,
       },
     })
     const browser = await launchBrowser(cleanups, browserBinary)

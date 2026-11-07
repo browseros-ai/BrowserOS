@@ -133,16 +133,36 @@ export const glue = {
     }
   },
 
-  isChecked: (injected, { selector, strict }) => {
+  /**
+   * Every `Frame.is*` read that waits for its match: one state of the first match, labels
+   * followed. `elementState` throws for a state the element cannot have.
+   *
+   * Playwright: `server/frames.ts` `Frame._elementState`: `return { result: injected.elementState(element, data.state) };`
+   */
+  elementStateOnSelector: (injected, { selector, strict, state }) => {
     const [element] = query(injected, selector, strict, {
       markTargets: 'first',
     })
     if (!element) return {}
-    const { matches, received } = injected.elementState(element, 'checked')
+    const { matches, received } = injected.elementState(element, state)
     return {
       matched: {
-        checked: matches,
+        matches,
         received,
+        preview: injected.previewNode(element),
+      },
+    }
+  },
+
+  /** Playwright: `server/frames.ts` `Frame.innerHTML`: `(injected, element) => ({ result: element.innerHTML })` */
+  innerHTML: (injected, { selector, strict }) => {
+    const [element] = query(injected, selector, strict, {
+      markTargets: 'first',
+    })
+    if (!element) return {}
+    return {
+      matched: {
+        value: element.innerHTML,
         preview: injected.previewNode(element),
       },
     }
@@ -185,34 +205,6 @@ export const glue = {
       element,
       visible: !!element && injected.utils.isElementVisible(element),
     }
-  },
-
-  /**
-   * The ref an iframe element answers to in this document. The ref the document's last `ai`
-   * snapshot gave it is reused when the `aria-ref` engine still resolves it to this element;
-   * otherwise the document is snapshotted again, which renews only the refs of elements whose
-   * role or name changed. Either way the answer is checked through the engine, so a ref Neo
-   * hands out never names another element.
-   *
-   * Deviation: `injected/src/injectedScript.ts` `InjectedScript.ariaSnapshotJSON`: `refPrefix: this._frameSeq && options.mode === 'ai' ? 'f' + this._frameSeq : ''` Neo names a frame's refs by the refs of the iframes on the way from the main frame instead of a frame number, so an `ai` locator snapshot inside a frame may snapshot an iframe's own document again to give that iframe a ref.
-   */
-  frameOwnerRef: (injected, _params, element) => {
-    const names = (ref: string | undefined): ref is string =>
-      !!ref &&
-      injected.querySelectorAll(
-        injected.parseSelector(`aria-ref=${ref}`),
-        document,
-      )[0] === element
-    // `computeAriaRef` keeps each element's ref on the element itself.
-    const cached = () =>
-      (element as { _ariaRef?: { ref: string } })._ariaRef?.ref
-    const known = cached()
-    if (names(known)) return { ref: known }
-    const [root] = query(injected, 'body,frameset', false)
-    if (!root) return {}
-    injected.ariaSnapshotJSON(root, { mode: 'ai' })
-    const renewed = cached()
-    return names(renewed) ? { ref: renewed } : {}
   },
 
   describeSelector: (injected, { selector }) => {
@@ -266,14 +258,15 @@ export const glue = {
     outcome: injected.expectHitTarget(point, element),
   }),
 
+  /** Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `injected.setupHitTargetInterceptor(node, actionType, hitPoint, trial)` */
   setupHitTargetInterceptor: (
     injected,
-    { hitPoint, blockAllEvents },
+    { action, hitPoint, blockAllEvents },
     element,
   ) => ({
     outcome: injected.setupHitTargetInterceptor(
       element,
-      'mouse',
+      action,
       hitPoint,
       blockAllEvents,
     ),
@@ -347,8 +340,22 @@ export const glue = {
     value: query(injected, selector, false).length,
   }),
 
+  /**
+   * Deviation: `client/locator.ts` `Locator.allTextContents`: `ee => ee.map(e => e.textContent || '')` runs in Neo's isolated world, where Playwright's `$$eval` runs in the page's main world, so a page's own `textContent` override (a prototype patch, a custom element class or a per-instance property) is not seen.
+   */
   allTextContents: (injected, { selector }) => ({
     values: query(injected, selector, false).map((e) => e.textContent || ''),
+  }),
+
+  /**
+   * Deviation: `client/locator.ts` `Locator.allInnerTexts`: `ee => ee.map(e => (e as HTMLElement).innerText)` runs in Neo's isolated world, where Playwright's `$$eval` runs in the page's main world, so a page's own `innerText` override (a prototype patch or a per-instance property) is not seen.
+   */
+  allInnerTexts: (injected, { selector }) => ({
+    values: query(injected, selector, false).map((e) => {
+      // Only HTML elements have `innerText`; the page function reads `undefined` for the rest.
+      const value = (e as Partial<HTMLElement>).innerText
+      return value === undefined ? {} : { value }
+    }),
   }),
 } satisfies InjectedApi<InjectedScript, Handles>
 

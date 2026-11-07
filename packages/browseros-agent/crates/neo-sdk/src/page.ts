@@ -11,16 +11,24 @@ import {
   type AriaSnapshotOptions,
   type CheckOptions,
   type ClickOptions,
+  type DblclickOptions,
   type FillOptions,
   Frame,
   type GetAttributeOptions,
   type GotoOptions,
+  type HoverOptions,
+  type InnerHTMLOptions,
   type InnerTextOptions,
   type InputValueOptions,
   type IsCheckedOptions,
+  type IsDisabledOptions,
+  type IsEditableOptions,
+  type IsEnabledOptions,
+  type IsHiddenOptions,
   type IsVisibleOptions,
   type PressOptions,
   type SelectOptionOptions,
+  type TapOptions,
   type TextContentOptions,
   type UncheckOptions,
   type URLMatch,
@@ -38,8 +46,9 @@ import { TimeoutSettings } from './timeout-settings'
 
 /**
  * Playwright's `Page`, backed by live reads from its own tab, which its guid names. Its
- * selector builders, `goto`, `title`, `textContent`, `innerText`, `getAttribute`, browser actions,
- * `waitForURL` and `waitForLoadState` forward to the main frame, as Playwright's do
+ * selector builders, `goto`, `title`, `textContent`, `innerText`, `innerHTML`, `getAttribute`,
+ * state reads, browser actions, `waitForURL` and `waitForLoadState` forward to the main frame, as
+ * Playwright's do
  * (`client/page.ts`); `ariaSnapshot` snapshots the main frame's document. Only the run's
  * `BrowserContext` builds one, once per guid.
  *
@@ -249,6 +258,13 @@ export class Page {
     return await this.#mainFrame._innerText('page.innerText', selector, options)
   }
 
+  async innerHTML(
+    selector: string,
+    options: InnerHTMLOptions = {},
+  ): Promise<string> {
+    return await this.#mainFrame._innerHTML('page.innerHTML', selector, options)
+  }
+
   async getAttribute(
     selector: string,
     name: string,
@@ -263,15 +279,15 @@ export class Page {
   }
 
   /**
-   * The main frame's accessibility tree as YAML. Default mode omits refs and prints iframes
-   * without their content, as Playwright's does. `mode: 'ai'` adds `[ref=eN]` refs that
-   * `page.locator('aria-ref=…')` resolves, in this run or a later one, until that document's
-   * next snapshot or navigation, and puts each rendered iframe's document under its `iframe`
-   * node, as in Playwright. A ref inside a frame is its path from the main frame:
+   * The main frame's accessibility tree as Playwright's YAML. With `mode: 'ai'`, each rendered
+   * iframe's document appears under its `iframe` node, as in Playwright, and nodes carry refs that
+   * `page.locator('aria-ref=…')` resolves, in this run or a later one, until that document's next
+   * snapshot or navigation. A ref inside a frame is its path from the main frame:
    * `- iframe [ref=e7]:` holds `- textbox "Email" [ref=f7e3]`, and a frame inside it adds a step
-   * (`f7f2e1`); Playwright numbers frames instead (`f1e3`). `depth` limits tree levels (0 means
-   * unlimited). For a section, use `locator.ariaSnapshot()`: AI mode does not auto-wait for that
-   * locator, so use `locator.waitFor()` first if needed.
+   * (`f7f2e1`); Playwright numbers frames instead (`f1e3`). The default mode prints iframes without
+   * their content, as Playwright's does. `depth` limits tree levels (0 means unlimited).
+   * For a section, use `locator.ariaSnapshot()`. AI mode does not auto-wait for that locator,
+   * so use `locator.waitFor()` first if needed.
    */
   async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
     return await this.#mainFrame._ariaSnapshot('page.ariaSnapshot', options)
@@ -280,6 +296,24 @@ export class Page {
   /** Not strict, as Playwright's `page.click`, which forwards to the main frame. */
   async click(selector: string, options: ClickOptions = {}): Promise<void> {
     return await this.#mainFrame._click('page.click', selector, options)
+  }
+
+  /** Not strict, as Playwright's `page.dblclick`, which forwards to the main frame. */
+  async dblclick(
+    selector: string,
+    options: DblclickOptions = {},
+  ): Promise<void> {
+    return await this.#mainFrame._dblclick('page.dblclick', selector, options)
+  }
+
+  /** Not strict, as Playwright's `page.hover`, which forwards to the main frame. */
+  async hover(selector: string, options: HoverOptions = {}): Promise<void> {
+    return await this.#mainFrame._hover('page.hover', selector, options)
+  }
+
+  /** Not strict, as Playwright's `page.tap`, which forwards to the main frame. */
+  async tap(selector: string, options: TapOptions = {}): Promise<void> {
+    return await this.#mainFrame._tap('page.tap', selector, options)
   }
 
   async fill(
@@ -323,6 +357,42 @@ export class Page {
     return await this.#mainFrame._isChecked('page.isChecked', selector, options)
   }
 
+  async isHidden(
+    selector: string,
+    options: IsHiddenOptions = {},
+  ): Promise<boolean> {
+    return await this.#mainFrame._isHidden('page.isHidden', selector, options)
+  }
+
+  async isEnabled(
+    selector: string,
+    options: IsEnabledOptions = {},
+  ): Promise<boolean> {
+    return await this.#mainFrame._isEnabled('page.isEnabled', selector, options)
+  }
+
+  async isDisabled(
+    selector: string,
+    options: IsDisabledOptions = {},
+  ): Promise<boolean> {
+    return await this.#mainFrame._isDisabled(
+      'page.isDisabled',
+      selector,
+      options,
+    )
+  }
+
+  async isEditable(
+    selector: string,
+    options: IsEditableOptions = {},
+  ): Promise<boolean> {
+    return await this.#mainFrame._isEditable(
+      'page.isEditable',
+      selector,
+      options,
+    )
+  }
+
   async check(selector: string, options: CheckOptions = {}): Promise<void> {
     return await this.#mainFrame._check('page.check', selector, options)
   }
@@ -356,6 +426,12 @@ export class Page {
 
   locator(selector: string, options?: LocatorOptions): Locator {
     return this.mainFrame().locator(selector, options)
+  }
+
+  /** The element an `ai` snapshot named `ref` (`page.ariaSnapshot({ mode: 'ai' })`), until a
+   * later snapshot of its document or a navigation renames it. */
+  getByRef(ref: string): Locator {
+    return this.locator(`aria-ref=${ref}`)
   }
 
   frameLocator(selector?: string): FrameLocator {

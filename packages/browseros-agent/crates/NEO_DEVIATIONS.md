@@ -3,12 +3,17 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (2)
+## Deviations (7)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
-| neo-runtime-injected/src/glue.ts | `glue.frameOwnerRef` | `injected/src/injectedScript.ts` `InjectedScript.ariaSnapshotJSON` | Neo names a frame's refs by the refs of the iframes on the way from the main frame instead of a frame number, so an `ai` locator snapshot inside a frame may snapshot an iframe's own document again to give that iframe a ref. |
-| neo-runtime/src/reads.rs | `UNNAMED_FRAME` | `server/page.ts` `ariaSnapshotJSONForFrame` | Playwright names a frame's refs by its frame number; Neo names them by the refs of the iframes on the way from the main frame, so a frame behind an iframe that gets no ref has no usable refs, and its `ai` locator snapshot throws rather than answer refs that would name elements of another frame. |
+| neo-runtime-injected/src/glue.ts | `glue.allInnerTexts` | `client/locator.ts` `Locator.allInnerTexts` | runs in Neo's isolated world, where Playwright's `$$eval` runs in the page's main world, so a page's own `innerText` override (a prototype patch or a per-instance property) is not seen. |
+| neo-runtime-injected/src/glue.ts | `glue.allTextContents` | `client/locator.ts` `Locator.allTextContents` | runs in Neo's isolated world, where Playwright's `$$eval` runs in the page's main world, so a page's own `textContent` override (a prototype patch, a custom element class or a per-instance property) is not seen. |
+| neo-runtime/src/click.rs | `PointerOptions::from_tap` | `server/frames.ts` `Frame.tap` | Neo's run attaches to the user's BrowserOS context, which has no hasTouch option, and its tab answers Input.dispatchTouchEvent with the events of a hasTouch context, so Neo taps where Playwright refuses. |
+| neo-runtime/src/click.rs | `attempt` | `server/dom.ts` `ElementHandle._performPointerAction` | Playwright's trial still performs the input into an interceptor that blocks every event it judges, which the page's earlier listeners and the hover state still see; Neo's trial ends at its checks and sends no input. Dropping the interceptor disarms it, and the tab's input comes back once that stop has answered. |
+| neo-runtime/src/click.rs | `refuse_unserved` | `server/dom.ts` `ElementHandle._performPointerAction` | Neo's tab keeps no keyboard state yet to press and restore them with, so it refuses them before any work. |
+| neo-runtime/src/click.rs | `refuse_unserved` | `server/dom.ts` `ElementHandle._performPointerAction` | Playwright moves in `steps` from the page's last mouse position, which Neo's tab does not keep yet, so it refuses other steps before any work. |
+| neo-runtime/src/reads.rs | `CHILD_AI_SNAPSHOT_UNSERVED` | `server/frames.ts` `Frame.ariaSnapshotJSON` | Child-frame scoped AI refs cannot be main-frame paths; use the page snapshot until frame-id-prefixed refs are served. |
 
 ## Unexplained: owner questions (0)
 

@@ -12,16 +12,24 @@ import type {
   FrameAriaSnapshotParams,
   FrameCheckParams,
   FrameClickParams,
+  FrameDblclickParams,
   FrameFillParams,
   FrameGetAttributeParams,
   FrameGotoParams,
+  FrameHoverParams,
+  FrameInnerHTMLParams,
   FrameInnerTextParams,
   FrameInputValueParams,
   FrameIsCheckedParams,
+  FrameIsDisabledParams,
+  FrameIsEditableParams,
+  FrameIsEnabledParams,
+  FrameIsHiddenParams,
   FrameIsVisibleParams,
   FramePressParams,
   FrameQueryCountParams,
   FrameSelectOptionParams,
+  FrameTapParams,
   FrameTextContentParams,
   FrameUncheckParams,
   FrameWaitForSelectorParams,
@@ -67,6 +75,42 @@ export const FRAME_CLICK_KEYS = [
   'steps',
 ] as const
 
+/** `Frame.dblclick` in Playwright schema order: no `clickCount` and no `noWaitAfter`. */
+export const FRAME_DBLCLICK_KEYS = [
+  'selector',
+  'strict',
+  'force',
+  'scroll',
+  'modifiers',
+  'position',
+  'delay',
+  'button',
+  'trial',
+  'steps',
+] as const
+
+/** `Frame.hover` in Playwright schema order: no `noWaitAfter`. */
+export const FRAME_HOVER_KEYS = [
+  'selector',
+  'strict',
+  'force',
+  'scroll',
+  'modifiers',
+  'position',
+  'trial',
+] as const
+
+/** `Frame.tap` in Playwright schema order: no `noWaitAfter`. */
+export const FRAME_TAP_KEYS = [
+  'selector',
+  'strict',
+  'force',
+  'scroll',
+  'modifiers',
+  'position',
+  'trial',
+] as const
+
 /** `Frame.fill` in Playwright schema order. */
 export const FRAME_FILL_KEYS = ['selector', 'strict', 'value', 'force'] as const
 
@@ -87,6 +131,21 @@ export const FRAME_IS_CHECKED_KEYS = ['selector', 'strict'] as const
 
 /** `Frame.isVisible` in Playwright schema order. */
 export const FRAME_IS_VISIBLE_KEYS = ['selector', 'strict'] as const
+
+/** `Frame.isHidden` in Playwright schema order. */
+export const FRAME_IS_HIDDEN_KEYS = ['selector', 'strict'] as const
+
+/** `Frame.isEnabled` in Playwright schema order. */
+export const FRAME_IS_ENABLED_KEYS = ['selector', 'strict'] as const
+
+/** `Frame.isDisabled` in Playwright schema order. */
+export const FRAME_IS_DISABLED_KEYS = ['selector', 'strict'] as const
+
+/** `Frame.isEditable` in Playwright schema order. */
+export const FRAME_IS_EDITABLE_KEYS = ['selector', 'strict'] as const
+
+/** `Frame.innerHTML` in Playwright schema order. */
+export const FRAME_INNER_HTML_KEYS = ['selector', 'strict'] as const
 
 /** `Frame.check` in Playwright schema order. */
 export const FRAME_CHECK_KEYS = [
@@ -138,6 +197,24 @@ type _FrameClickKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_CLICK_KEYS)[number], true>,
     Required<FrameClickParams>
+  >
+>
+type _FrameDblclickKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_DBLCLICK_KEYS)[number], true>,
+    Required<FrameDblclickParams>
+  >
+>
+type _FrameHoverKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_HOVER_KEYS)[number], true>,
+    Required<FrameHoverParams>
+  >
+>
+type _FrameTapKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_TAP_KEYS)[number], true>,
+    Required<FrameTapParams>
   >
 >
 type _FrameGotoKeysMatchSpec = Assert<
@@ -206,6 +283,36 @@ type _FrameIsVisibleKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_IS_VISIBLE_KEYS)[number], true>,
     Required<FrameIsVisibleParams>
+  >
+>
+type _FrameIsHiddenKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_IS_HIDDEN_KEYS)[number], true>,
+    Required<FrameIsHiddenParams>
+  >
+>
+type _FrameIsEnabledKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_IS_ENABLED_KEYS)[number], true>,
+    Required<FrameIsEnabledParams>
+  >
+>
+type _FrameIsDisabledKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_IS_DISABLED_KEYS)[number], true>,
+    Required<FrameIsDisabledParams>
+  >
+>
+type _FrameIsEditableKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_IS_EDITABLE_KEYS)[number], true>,
+    Required<FrameIsEditableParams>
+  >
+>
+type _FrameInnerHtmlKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_INNER_HTML_KEYS)[number], true>,
+    Required<FrameInnerHTMLParams>
   >
 >
 type _FrameCheckKeysMatchSpec = Assert<

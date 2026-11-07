@@ -3,7 +3,8 @@
  * built by Playwright's own code: the method bodies here are Playwright's, over the vendored,
  * unchanged `locatorUtils.ts` and `stringUtils.ts`. That is what makes Neo's selectors
  * byte-identical to Playwright's, inside QuickJS too (`neo-runtime/tests/selector_goldens.rs`
- * runs `tests/goldens/*selector-goldens.json` through the realm).
+ * runs `tests/goldens/*selector-goldens.json` through the realm). `toString` and `description`
+ * read a selector back with Playwright's vendored, unchanged `locatorGenerators.ts`.
  *
  * What differs from Playwright, all listed here:
  * - Imports point at the vendored copies; `isString` comes straight from `stringUtils.ts`,
@@ -11,21 +12,26 @@
  * - The constructor drops Playwright's `inspect.custom` hook (Node's `util`, absent in QuickJS).
  * - Browser calls pass their public `apiName` to the corresponding `Frame` helper: Playwright reads
  *   it off V8 stack frames, and QuickJS frames carry no class names (`connection.ts`).
- * - Absent: `toString` and `description` (they need Playwright's ~2,500-line locator generators), and
- *   actions and reads Neo does not serve. Explicit names preserve the outer `clear` and
- *   `setChecked` API names through their delegated calls (`_wrapApiCall` in Playwright).
+ * - Absent: actions and reads Neo does not serve. Explicit names preserve the outer `clear`,
+ *   `setChecked` and `all` API names through their delegated calls (`_wrapApiCall` in
+ *   Playwright).
  * - `waitFor` sends Playwright's own `Frame.waitForSelector` through `Frame._waitForSelector`,
  *   as Playwright's goes straight to the frame's channel.
  * - `ariaSnapshot` shares `Frame._ariaSnapshot` with page snapshots, sending this selector.
- * - `allTextContents` sends `client/locator.ts` source text; compiled clients may format it
- *   differently. It reads in Neo's isolated world, so page-defined `textContent` overrides
- *   (prototype patches, custom element classes or per-instance properties) can differ.
+ * - `allTextContents` and `allInnerTexts` send `client/locator.ts` source text (the latter
+ *   without its TypeScript cast); compiled clients may format it differently. They read in Neo's
+ *   isolated world, so page-defined `textContent` and `innerText` overrides (prototype patches,
+ *   custom element classes or per-instance properties) can differ.
  *
  * Frame identity is load-bearing: `has`, `hasNot`, `and`, `or` and `locator(Locator)` throw
  * unless both locators hold the same `Frame` object, which is why a page interns every frame
  * by its Rust-minted guid.
  */
 
+import {
+  asLocatorDescription,
+  locatorCustomDescription,
+} from '../vendor/playwright/isomorphic/locatorGenerators'
 import {
   type ByRoleOptions,
   getByAltTextSelector,
@@ -44,15 +50,23 @@ import type {
   AriaSnapshotOptions,
   CheckOptions,
   ClickOptions,
+  DblclickOptions,
   FillOptions,
   Frame,
   GetAttributeOptions,
+  HoverOptions,
+  InnerHTMLOptions,
   InnerTextOptions,
   InputValueOptions,
   IsCheckedOptions,
+  IsDisabledOptions,
+  IsEditableOptions,
+  IsEnabledOptions,
+  IsHiddenOptions,
   IsVisibleOptions,
   PressOptions,
   SelectOptionOptions,
+  TapOptions,
   TextContentOptions,
   UncheckOptions,
   WaitForSelectorOptions,
@@ -121,6 +135,27 @@ export class Locator {
     })
   }
 
+  async dblclick(options: DblclickOptions = {}): Promise<void> {
+    await this._frame._dblclick('locator.dblclick', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async hover(options: HoverOptions = {}): Promise<void> {
+    return await this._frame._hover('locator.hover', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async tap(options: TapOptions = {}): Promise<void> {
+    return await this._frame._tap('locator.tap', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
   async textContent(options?: TextContentOptions): Promise<string | null> {
     return await this._frame._textContent(
       'locator.textContent',
@@ -131,6 +166,13 @@ export class Locator {
 
   async innerText(options?: InnerTextOptions): Promise<string> {
     return await this._frame._innerText('locator.innerText', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async innerHTML(options?: InnerHTMLOptions): Promise<string> {
+    return await this._frame._innerHTML('locator.innerHTML', this._selector, {
       strict: true,
       ...options,
     })
@@ -150,13 +192,12 @@ export class Locator {
 
   /**
    * Playwright: `client/locator.ts` `Locator.ariaSnapshot`: `selector: this._selector,`
-   * The matched subtree as YAML, in whichever frame the locator reaches. Default mode waits for a
-   * match; `mode: 'ai'` adds refs, puts each iframe's document of the subtree under its `iframe`
-   * node, and does not auto-wait: use `waitFor()` first if needed. `depth` limits tree levels (0
-   * means unlimited). AI refs are page-wide, as `page.ariaSnapshot`'s: `page.getByRef(ref)` and
-   * `page.locator('aria-ref=…')` find the element from any receiver, until that document's next
-   * snapshot or navigation. A subtree inside a frame behind an iframe that has no ref (a hidden
-   * iframe) throws in `ai` mode rather than answer refs. Every mode requires one match.
+   * The matched subtree as YAML in the selected frame. Default mode waits for a match,
+   * omits refs and leaves iframe contents unstitched. Main-frame `mode: 'ai'` snapshots stitch
+   * iframe content with refs rooted in the main frame. AI does not auto-wait: use `waitFor()`
+   * first if needed. Child-frame AI snapshots are refused; use `page.ariaSnapshot({ mode: 'ai' })`.
+   * `depth` limits tree levels (0 means unlimited). AI refs work with `page.locator('aria-ref=…')`
+   * until the next snapshot or navigation replaces them. Every mode requires one match.
    */
   async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
     return await this._frame._ariaSnapshot(
@@ -175,6 +216,22 @@ export class Locator {
       'locator.allTextContents',
       this._selector,
     )
+  }
+
+  async allInnerTexts(): Promise<string[]> {
+    return await this._frame._allInnerTexts(
+      'locator.allInnerTexts',
+      this._selector,
+    )
+  }
+
+  /** One locator per match when it is called: `nth(i)` locators, which resolve again on use. */
+  async all(): Promise<Locator[]> {
+    return new Array(
+      await this._frame._queryCount('locator.all', this._selector),
+    )
+      .fill(0)
+      .map((e, i) => this.nth(i))
   }
 
   async fill(value: string, options: FillOptions = {}): Promise<void> {
@@ -212,6 +269,35 @@ export class Locator {
     })
   }
 
+  /** Reads once, without waiting, as `isVisible`; `timeout` is ignored. */
+  async isHidden(options?: IsHiddenOptions): Promise<boolean> {
+    return await this._frame._isHidden('locator.isHidden', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async isEnabled(options?: IsEnabledOptions): Promise<boolean> {
+    return await this._frame._isEnabled('locator.isEnabled', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async isDisabled(options?: IsDisabledOptions): Promise<boolean> {
+    return await this._frame._isDisabled('locator.isDisabled', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async isEditable(options?: IsEditableOptions): Promise<boolean> {
+    return await this._frame._isEditable('locator.isEditable', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
   async check(options: CheckOptions = {}): Promise<void> {
     return await this._frame._check('locator.check', this._selector, {
       strict: true,
@@ -244,10 +330,9 @@ export class Locator {
    * - `visible` (the default): the matching element is visible; `hidden`: no element matches,
    *   or the one that does is hidden.
    *
-   * Strict: a selector that matches more than one element throws an `Error` at once, as does an
-   * invalid one. A selector may enter frames, as a frame locator's does. Runs under the action
-   * timeout and polls the page. It never takes the tab's input, so a click or typing in the same
-   * run can be what satisfies it.
+   * Strict: multiple matches or an invalid selector throw an `Error` at once. Frame-entering
+   * selectors resolve inside their selected frames. Runs under the action timeout and polls
+   * the page. It never takes the tab's input, so a click or typing in the same run can satisfy it.
    */
   async waitFor(options?: WaitForSelectorOptions): Promise<void> {
     await this._frame._waitForSelector('locator.waitFor', this._selector, {
@@ -359,6 +444,11 @@ export class Locator {
     )
   }
 
+  /** The last `describe()` text, or `null`: no page call. */
+  description(): string | null {
+    return locatorCustomDescription(this._selector) || null
+  }
+
   first(): Locator {
     return new Locator(this._frame, this._selector + ' >> nth=0')
   }
@@ -387,6 +477,12 @@ export class Locator {
       this._frame,
       this._selector + ` >> internal:or=` + JSON.stringify(locator._selector),
     )
+  }
+
+  /** The locator as Playwright's JavaScript builder text (`getByRole('button')`), or its
+   * description when it has one; a selector the generator cannot read comes back as is. */
+  toString() {
+    return asLocatorDescription('javascript', this._selector)
   }
 }
 
