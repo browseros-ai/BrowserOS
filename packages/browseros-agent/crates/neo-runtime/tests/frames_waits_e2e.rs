@@ -391,6 +391,24 @@ async fn tests_that_removing_a_frame_ends_its_waits_at_once() {
     );
 }
 
+/// The page navigating away takes every frame of its document with it.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_page_navigation_ends_its_frames_waits() {
+    let Some(tab) = open().await else { return };
+    let outcome = run(
+        &tab,
+        "const pending = ['pay', 'cross'].map((name) =>
+           frame(name).waitForURL('**/never', { timeout: 60000 }).then(() => 'matched', caught));
+         await page.goto(page.url().replace('/top.html', '/elsewhere'));
+         return await Promise.all(pending);",
+    )
+    .await;
+    let result = value(&outcome);
+    tab.close().await;
+    let gone = json!({ "failed": "Error", "detached": true });
+    assert_eq!(result, json!([gone, gone]));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_a_frame_wait_without_a_match_times_out() {
     let Some(tab) = open().await else { return };

@@ -405,6 +405,20 @@ impl FrameFeeds {
     }
 }
 
+impl FrameFeeds {
+    /// Ends every child frame's feed: the main frame committed a new document, and the old
+    /// document's frames went with it. Chromium reports `frameDetached` for an OOPIF then, but
+    /// nothing for a same-process frame (measured on BrowserOS neo), so its wait would
+    /// otherwise run to its timeout.
+    fn detach_all(&self) {
+        if let Ok(mut frames) = self.frames.lock() {
+            for (_, feed) in frames.drain() {
+                feed.state.send_modify(|state| state.detached = true);
+            }
+        }
+    }
+}
+
 fn new_feed() -> FrameFeed {
     FrameFeed {
         state: watch::channel(FrameState::default()).0,
@@ -930,6 +944,9 @@ async fn watch_events(
                     let _listeners = navigations.send(navigation);
                 }
                 if let Some(feeds) = &feeds {
+                    if applied.new_document {
+                        feeds.detach_all();
+                    }
                     feeds.apply(&event, &session, Some(&main_frame));
                 }
                 if let Some(answer) = applied.dialog {
@@ -2096,6 +2113,184 @@ mod tests {
 
     fn applied(state: &mut PageState, event: &CdpEvent) -> Applied {
         apply(state, event, &SessionId::from(SESSION), MAIN)
+    }
+
+    const CHILD: &str = "CHILD";
+    const OOPIF_SESSION: &str = "S2";
+
+    fn lifecycle(session: &str, frame: &str, loader: &str, name: &str) -> CdpEvent {
+        event(
+            "Page.lifecycleEvent",
+            Some(session),
+            json!({ "frameId": frame, "loaderId": loader, "name": name }),
+        )
+    }
+
+    fn navigated(session: &str, frame: &str, url: &str, loader: &str) -> CdpEvent {
+        event(
+            "Page.frameNavigated",
+            Some(session),
+            json!({ "frame": { "id": frame, "url": url, "loaderId": loader } }),
+        )
+    }
+
+    fn detached(session: &str, frame: &str, reason: &str) -> CdpEvent {
+        event(
+            "Page.frameDetached",
+            Some(session),
+            json!({ "frameId": frame, "reason": reason }),
+        )
+    }
+
+    #[test]
+    fn tests_that_a_child_frames_events_feed_only_its_frame() {
+        let feeds = FrameFeeds::default();
+        let tab = SessionId::from(SESSION);
+        let (state, mut commits) = feeds.subscribe(CHILD).expect("feed");
+        for event in [
+            navigated(SESSION, CHILD, "https://b.test/pay", "doc-1"),
+            lifecycle(SESSION, CHILD, "doc-1", "DOMContentLoaded"),
+            lifecycle(SESSION, CHILD, "doc-1", "load"),
+            // Another session's and the main frame's events are not this frame's.
+            lifecycle(OOPIF_SESSION, CHILD, "doc-9", "load"),
+            navigated(SESSION, MAIN, "https://a.test/", "main-2"),
+        ] {
+            feeds.apply(&event, &tab, Some(MAIN));
+        }
+        let child = state.borrow().clone();
+        assert_eq!(
+            child.page.committed_url.as_deref(),
+            Some("https://b.test/pay")
+        );
+        assert_eq!(
+            (
+                child.page.load,
+                child.page.load_count,
+                child.page.document.as_deref()
+            ),
+            (true, 1, Some("doc-1"))
+        );
+        assert_eq!(
+            commits.try_recv().expect("the commit is queued").url,
+            "https://b.test/pay"
+        );
+        assert!(commits.try_recv().is_err(), "one commit only");
+
+        let mut main = PageState::default();
+        let event = navigated(SESSION, CHILD, "https://b.test/pay", "doc-1");
+        assert_eq!(
+            applied(&mut main, &event),
+            Applied::default(),
+            "the main frame's state ignores a child's commit"
+        );
+    }
+
+    #[test]
+    fn tests_that_a_swap_starts_a_new_document_and_ignores_the_old_process() {
+        let feeds = FrameFeeds::default();
+        let tab = SessionId::from(SESSION);
+        let oopif = SessionId::from(OOPIF_SESSION);
+        let (state, _commits) = feeds.subscribe(CHILD).expect("feed");
+        feeds.apply(
+            &navigated(SESSION, CHILD, "https://a.test/pay", "old"),
+            &tab,
+            Some(MAIN),
+        );
+        feeds.apply(&lifecycle(SESSION, CHILD, "old", "load"), &tab, Some(MAIN));
+        feeds.apply(&detached(SESSION, CHILD, "swap"), &tab, Some(MAIN));
+        // A late event of the old document from the old process must not seed the new one.
+        feeds.apply(&lifecycle(SESSION, CHILD, "old", "load"), &tab, Some(MAIN));
+        let swapped = state.borrow().clone();
+        assert_eq!(swapped.swaps, 1);
+        assert!(!swapped.detached);
+        assert_eq!(
+            (
+                swapped.page.committed_url,
+                swapped.page.document,
+                swapped.page.load
+            ),
+            (None, None, false)
+        );
+        // The new process's replay seeds the new document; the counts keep growing.
+        feeds.seed(CHILD, "https://c.test/pay");
+        feeds.apply(
+            &lifecycle(OOPIF_SESSION, CHILD, "new", "commit"),
+            &oopif,
+            None,
+        );
+        feeds.apply(
+            &lifecycle(OOPIF_SESSION, CHILD, "new", "load"),
+            &oopif,
+            None,
+        );
+        let replayed = state.borrow().clone();
+        assert_eq!(
+            replayed.page.committed_url.as_deref(),
+            Some("https://c.test/pay")
+        );
+        assert_eq!(
+            (
+                replayed.page.document.as_deref(),
+                replayed.page.load,
+                replayed.page.load_count
+            ),
+            (Some("new"), true, 2)
+        );
+        // Back in the page's process: its attach and commit are followed again.
+        feeds.apply(
+            &event(
+                "Page.frameAttached",
+                Some(SESSION),
+                json!({ "frameId": CHILD }),
+            ),
+            &tab,
+            Some(MAIN),
+        );
+        feeds.apply(
+            &navigated(SESSION, CHILD, "https://a.test/back", "back"),
+            &tab,
+            Some(MAIN),
+        );
+        assert_eq!(
+            state.borrow().page.committed_url.as_deref(),
+            Some("https://a.test/back")
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_removed_frame_or_a_page_commit_ends_its_feed() {
+        let feeds = FrameFeeds::default();
+        let tab = SessionId::from(SESSION);
+        let (mut removed, _commits) = feeds.subscribe(CHILD).expect("feed");
+        feeds.apply(&detached(SESSION, CHILD, "remove"), &tab, Some(MAIN));
+        removed.changed().await.expect("the removal is published");
+        assert!(removed.borrow_and_update().detached);
+        assert!(
+            removed.changed().await.is_err(),
+            "the feed is gone with its frame"
+        );
+
+        let (mut other, _other_commits) = feeds.subscribe("OTHER").expect("feed");
+        feeds.detach_all();
+        other.changed().await.expect("the page commit is published");
+        assert!(other.borrow().detached);
+    }
+
+    #[test]
+    fn tests_that_a_seed_never_replaces_a_commit() {
+        let feeds = FrameFeeds::default();
+        let tab = SessionId::from(SESSION);
+        let (state, _commits) = feeds.subscribe(CHILD).expect("feed");
+        feeds.apply(
+            &navigated(SESSION, CHILD, "https://a.test/new", "doc"),
+            &tab,
+            Some(MAIN),
+        );
+        feeds.seed(CHILD, "https://a.test/old");
+        assert_eq!(
+            state.borrow().page.committed_url.as_deref(),
+            Some("https://a.test/new")
+        );
     }
 
     /// An event's type, button, buttons mask and click count.
