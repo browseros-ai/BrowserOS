@@ -318,40 +318,6 @@ pub(crate) async fn wait_for_load_state<T: WaitTab>(
     .await
 }
 
-/// Neo: `Frame.setContent`'s wait. `since` is the frame's lifecycle before `document.open()`,
-/// which clears what had fired (Playwright's `_onClearLifecycle`), so only an event of the
-/// written content satisfies `state`; `commit` needs none.
-///
-/// Playwright: `server/frames.ts` `Frame.setContent`: `const lifecyclePromise = progress.race(tagPromise).then(() => this.waitForLoadState(progress, waitUntil));`
-pub(crate) async fn wait_for_written_content<O: Observation>(
-    events: O,
-    since: Lifecycle,
-    state: LifecycleEvent,
-    progress: &Progress,
-) -> Result<(), CallError> {
-    if state == LifecycleEvent::Commit {
-        return Ok(());
-    }
-    let cleared = Lifecycle {
-        dom_content_loaded: false,
-        load: false,
-        ..since
-    };
-    wait_until(
-        &mut NavigationCondition {
-            events,
-            matcher: None,
-            phase: Phase::Loading(cleared),
-            wait_until: state,
-            navigation: None,
-            check_current: false,
-            initial_check: false,
-        },
-        progress,
-    )
-    .await
-}
-
 /// Neo: the delay Node's `setTimeout` waits for Playwright's `waitForTimeout(ms)`: none for a
 /// negative or NaN delay, and [`OVERFLOWED_TIMER`] past the 32-bit timer range, as Node sets
 /// an overflowing delay to 1 ms.

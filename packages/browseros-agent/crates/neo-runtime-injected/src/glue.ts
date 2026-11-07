@@ -214,7 +214,8 @@ export const glue = {
 
   /** Playwright: `server/frames.ts` `Frame.setContent`: `document.write(html);` */
   writeContent: (_injected, { html }) => {
-    // No console tag marks the open: neo-runtime counts the frame's lifecycle events instead.
+    // No console tag marks the open: neo-runtime waits for the reopened document's lifecycle
+    // events, from its `init`, on the frame's own session.
     document.open()
     document.write(html)
     document.close()

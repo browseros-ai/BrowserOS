@@ -586,16 +586,12 @@ export class Page extends ChannelOwner {
 
   /** The main frame's markup, as Playwright's `page.content`. */
   async content(options?: ContentOptions): Promise<string> {
-    return await this.#mainFrame._content('page.content', options ?? {})
+    return await this.#mainFrame._content('page.content', options)
   }
 
   /** Writes `html` into the main frame, as Playwright's `page.setContent`. */
   async setContent(html: string, options?: SetContentOptions): Promise<void> {
-    return await this.#mainFrame._setContent(
-      'page.setContent',
-      html,
-      options ?? {},
-    )
+    return await this.#mainFrame._setContent('page.setContent', html, options)
   }
 
   /** Waits `timeout` milliseconds in the main frame, as Playwright's `page.waitForTimeout`. */

@@ -5,8 +5,9 @@
 //!
 //! ```text
 //!  Frame.content {includeShadow?}      prepare → documentContent in the frame's utility world
-//!  Frame.setContent {html, waitUntil?} prepare → lifecycle counts → writeContent
-//!                                        (document.open, write, close) → a new waitUntil event
+//!  Frame.setContent {html, waitUntil?} prepare → subscribe to the frame session's events
+//!                                        → writeContent (document.open, write, close)
+//!                                        → init, then DOMContentLoaded or load
 //!  Frame.resolveSelector {selector}    locate (not strict) → generateSelector for the match
 //!                                        → generateOwnerSelector for each iframe on the way
 //!                                        → joined by enter-frame hops, main frame first
@@ -20,12 +21,15 @@ use neo_runtime_spec::serve::{
     FrameContentResult, FrameResolveSelectorResult, FrameSetContentParams, LifecycleEvent,
 };
 
+use browseros_cdp::{CdpEvent, SessionId};
+use tokio::sync::broadcast;
+use tokio::sync::broadcast::error::RecvError;
+
 use crate::click::{PageError, Tab};
 use crate::frame_selector;
-use crate::navigate::{self, Lifecycle, Observation};
+use crate::navigate;
 use crate::page::FrameTab;
 use crate::progress::{CallError, PlaywrightError, Progress};
-use crate::waits::{self, WaitTab};
 
 /// Neo: Playwright's `Frame._content` error, word for word, for a document that changed under
 /// the read.
@@ -80,7 +84,11 @@ pub(crate) async fn content(
 }
 
 /// Serves `Frame.setContent`: the content written into the frame's document, then the wait for
-/// `waitUntil` among the events the new content fires.
+/// `waitUntil` among the lifecycle events the reopened document fires, read from the frame's own
+/// session: `document.open()` fires `init`, and only a `DOMContentLoaded` or `load` after it
+/// counts. Chromium reads `readyState` as `complete` at `document.close()`, before the content's
+/// images load, so the events decide. The page watcher's state is left as it was: Playwright,
+/// too, clears the frame's lifecycle only for its own `setContent`.
 ///
 /// Playwright: `server/frames.ts` `Frame.setContent`: `document.write(html);`
 pub(crate) async fn set_content(
@@ -93,16 +101,13 @@ pub(crate) async fn set_content(
         lifecycle_name(options.wait_until)
     ));
     progress
-        .race(WaitTab::prepare(tab))
+        .race(Tab::prepare(tab))
         .await?
-        .map_err(navigation_error)?;
-    // Before the write: `document.open()` fires its events while the write is still in flight.
-    let events = WaitTab::observe(tab).map_err(navigation_error)?;
-    let since = navigate_state(&events);
-    let frame = progress
-        .race(tab.context())
-        .await?
-        .map_err(navigation_error)?;
+        .map_err(call_error)?;
+    let frame = progress.race(tab.context()).await?.map_err(call_error)?;
+    // Before the write: the reopened document fires its first events while the write is in
+    // flight.
+    let events = frame.host.events();
     progress
         .race(frame.call(
             None,
@@ -111,8 +116,58 @@ pub(crate) async fn set_content(
             },
         ))
         .await?
-        .map_err(navigation_error)?;
-    waits::wait_for_written_content(events, since, options.wait_until, progress).await
+        .map_err(call_error)?;
+    if options.wait_until == LifecycleEvent::Commit {
+        return Ok(());
+    }
+    progress
+        .race(reopened(
+            events,
+            frame.host.session_id().clone(),
+            frame.id.clone(),
+            options.wait_until,
+        ))
+        .await?
+        .map_err(call_error)
+}
+
+/// Neo: waits until the frame `frame` on session `session` fires `wait_until` after the `init`
+/// of its reopened document.
+async fn reopened(
+    mut events: broadcast::Receiver<CdpEvent>,
+    session: SessionId,
+    frame: String,
+    wait_until: LifecycleEvent,
+) -> Result<(), PageError> {
+    let mut opened = false;
+    loop {
+        let event = match events.recv().await {
+            Ok(event) => event,
+            Err(RecvError::Closed) => return Err(PageError::Closed),
+            Err(RecvError::Lagged(_)) => {
+                return Err(PageError::Contract(
+                    "neo-runtime: lifecycle events were dropped while setContent waited"
+                        .to_string(),
+                ));
+            }
+        };
+        if event.method != "Page.lifecycleEvent"
+            || event.session_id.as_ref() != Some(&session)
+            || event.params["frameId"].as_str() != Some(frame.as_str())
+        {
+            continue;
+        }
+        match event.params["name"].as_str() {
+            Some("init") => opened = true,
+            Some("DOMContentLoaded")
+                if opened && wait_until == LifecycleEvent::Domcontentloaded =>
+            {
+                return Ok(());
+            }
+            Some("load") if opened => return Ok(()),
+            _ => {}
+        }
+    }
 }
 
 /// Serves `Frame.resolveSelector`: Playwright's simple selector for the first match, behind the
@@ -177,11 +232,6 @@ fn no_element(selector: &str) -> CallError {
     PlaywrightError::error(format!("No element matching {selector}")).into()
 }
 
-/// Neo: the lifecycle the observation holds now.
-fn navigate_state<O: Observation>(events: &O) -> Lifecycle {
-    events.state().lifecycle
-}
-
 /// Neo: the name Playwright's log gives a lifecycle event.
 fn lifecycle_name(state: LifecycleEvent) -> &'static str {
     match state {
@@ -200,11 +250,6 @@ fn read_error(error: PageError) -> CallError {
         PageError::Contract(message) => PlaywrightError::error(message).into(),
         PageError::NotConnected | PageError::Threw(_) => PlaywrightError::error(NAVIGATING).into(),
     }
-}
-
-/// Neo: a navigation-like call's page error (`setContent`), as `goto`'s.
-fn navigation_error(error: PageError) -> CallError {
-    navigate::page_error(error).into()
 }
 
 /// Neo: any other page error, as the page reported it.

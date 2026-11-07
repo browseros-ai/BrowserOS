@@ -1011,7 +1011,11 @@ export class Frame {
     return await this._content('frame.content', options)
   }
 
-  async _content(apiName: ApiName, options: ContentOptions): Promise<string> {
+  /** As Playwright's, `options` defaults only when `undefined`; `null` spreads to nothing. */
+  async _content(
+    apiName: ApiName,
+    options: ContentOptions = {},
+  ): Promise<string> {
     const result = (await this._connection.send(
       apiName,
       this._guid,
@@ -1031,10 +1035,12 @@ export class Frame {
     return await this._setContent('frame.setContent', html, options)
   }
 
+  /** As Playwright's, `options` defaults only when `undefined`: a `null` one throws its
+   * TypeError reading `waitUntil`. */
   async _setContent(
     apiName: ApiName,
     html: string,
-    options: SetContentOptions,
+    options: SetContentOptions = {},
   ): Promise<void> {
     const waitUntil = verifyLoadState(
       'waitUntil',

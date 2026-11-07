@@ -199,7 +199,7 @@ Injected:
         value: string
 
     # `frames.ts` `Frame.setContent`'s page function: `document.open()`, `write`, `close()`.
-    # neo-runtime records the frame's lifecycle counts before it and waits for a new event after.
+    # neo-runtime waits for the lifecycle events of the reopened document on the frame's session.
     writeContent:
       internal: true
       parameters:

@@ -4233,14 +4233,14 @@ class Frame {
   async content(options = {}) {
     return await this._content("frame.content", options);
   }
-  async _content(apiName, options) {
+  async _content(apiName, options = {}) {
     const result = await this._connection.send(apiName, this._guid, "content", pickParams(FRAME_CONTENT_KEYS, { ...options }), 0);
     return result.value;
   }
   async setContent(html, options = {}) {
     return await this._setContent("frame.setContent", html, options);
   }
-  async _setContent(apiName, html, options) {
+  async _setContent(apiName, html, options = {}) {
     const waitUntil = verifyLoadState("waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
     await this._connection.send(apiName, this._guid, "setContent", pickParams(FRAME_SET_CONTENT_KEYS, {
       html,
@@ -4865,10 +4865,10 @@ class Page extends ChannelOwner {
     return await this.#mainFrame._ariaSnapshotJSON("page.ariaSnapshotJSON", options);
   }
   async content(options) {
-    return await this.#mainFrame._content("page.content", options ?? {});
+    return await this.#mainFrame._content("page.content", options);
   }
   async setContent(html, options) {
-    return await this.#mainFrame._setContent("page.setContent", html, options ?? {});
+    return await this.#mainFrame._setContent("page.setContent", html, options);
   }
   async waitForTimeout(timeout) {
     return await this.#mainFrame._waitForTimeout("page.waitForTimeout", timeout);
