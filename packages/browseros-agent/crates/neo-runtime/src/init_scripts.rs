@@ -19,7 +19,7 @@ use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
 use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as SyncMutex, Weak};
+use std::sync::{Arc, Mutex as SyncMutex, OnceLock, Weak};
 
 use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId};
 use neo_runtime_spec::{MethodGroup, MethodMeta};
@@ -29,6 +29,7 @@ use tokio::sync::Mutex;
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio_util::sync::CancellationToken;
 
+use crate::bindings::Bindings;
 use crate::page::PageSession;
 use crate::progress::PlaywrightError;
 
@@ -117,6 +118,9 @@ pub(crate) struct InitScripts {
     sessions: SyncMutex<HashMap<String, Watched>>,
     /// Stops the event reader, at run end.
     stop: CancellationToken,
+    /// The run's bindings once it exposed one: each session this file shows a page on then gets
+    /// the CDP binding before the page runs (`bindings.rs`).
+    bindings: OnceLock<Weak<Bindings>>,
 }
 
 #[derive(Clone)]
@@ -153,13 +157,6 @@ impl Script {
 /// session that is already showing a page gets each script after the ones it has, in call order.
 /// Playwright: `server/page.ts` `Page.allInitScripts`: `return [...bindings, ...this.browserContext.initScripts, ...this.initScripts];`
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "bindings.rs adds the binding ranks (C2), after the EventHub merge"
-    )
-)]
 pub(crate) enum Rank {
     /// Playwright's `BindingsController` (`bindings.rs`).
     Controller,
@@ -197,9 +194,9 @@ struct Shown {
 
 /// A session that shows a page the run touched, with the token its detach cancels.
 #[derive(Clone)]
-struct Link {
-    session: SessionId,
-    gone: CancellationToken,
+pub(crate) struct Link {
+    pub(crate) session: SessionId,
+    pub(crate) gone: CancellationToken,
 }
 
 impl Default for InitScripts {
@@ -212,6 +209,7 @@ impl Default for InitScripts {
             state: Mutex::default(),
             sessions: SyncMutex::default(),
             stop: CancellationToken::new(),
+            bindings: OnceLock::new(),
         }
     }
 }
@@ -345,7 +343,37 @@ impl InitScripts {
             target,
             sessions: vec![shown],
         });
+        drop(state);
+        if let Some(bindings) = self.bindings() {
+            bindings.prepare_tab(cdp, page).await;
+        }
         Ok(())
+    }
+
+    /// From now on every session this file shows a page on gets `bindings`' CDP binding.
+    pub(crate) fn attach_bindings(&self, bindings: &Arc<Bindings>) {
+        let _set = self.bindings.set(Arc::downgrade(bindings));
+    }
+
+    fn bindings(&self) -> Option<Arc<Bindings>> {
+        self.bindings.get().and_then(Weak::upgrade)
+    }
+
+    /// The out-of-process iframe sessions this file holds for `target`'s page, tab excluded.
+    pub(crate) async fn child_links(&self, target: &str) -> Vec<Link> {
+        let state = self.state.lock().await;
+        state
+            .pages
+            .iter()
+            .find(|page| page.target == target)
+            .map(|page| {
+                page.sessions
+                    .iter()
+                    .skip(1)
+                    .map(|shown| shown.link.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// The token `session`'s detach cancels, the session now kept as one that shows `target`.
@@ -465,6 +493,11 @@ impl InitScripts {
                     shown_here = true;
                 }
             }
+        }
+        // Its CDP binding too, before it runs, once the run exposed one (checked after the push,
+        // so a binding exposed meanwhile reaches this session one way or the other).
+        if shown_here && let Some(bindings) = self.bindings() {
+            bindings.prepare_child(&cdp, &link, &target).await;
         }
         // Sent together, in this order, as Playwright's `FrameSession` sends its batch: a target
         // held at its start may answer `Target.setAutoAttach` only once it runs.
@@ -593,7 +626,7 @@ impl InitScripts {
 }
 
 /// `request`'s answer, or `None` once `gone` (its session detached) or on a CDP error.
-async fn until_gone<T>(
+pub(crate) async fn until_gone<T>(
     gone: &CancellationToken,
     request: impl Future<Output = Result<T, CdpError>>,
 ) -> Option<T> {
@@ -611,7 +644,7 @@ fn wrap(source: &str) -> String {
 }
 
 /// The page's target id, which is its main frame's id.
-fn target_of(page: &PageSession) -> String {
+pub(crate) fn target_of(page: &PageSession) -> String {
     page.frames.main().id.clone()
 }
 

@@ -2,6 +2,7 @@
 (function (...args) {
 // src/bindings-call.ts
 var CONTROLLER = "__playwright__binding__controller__";
+var BINDING = "__playwright__binding__";
 function bindingsCall(op, arg) {
   const global = globalThis;
   const controller = global[CONTROLLER];
@@ -33,8 +34,10 @@ function endRun(controller, { names, message }, global) {
       waiting.reject(new Error(message));
     controller.removeBinding(name);
   }
-  if (bindings.size === 0)
+  if (bindings.size === 0) {
     delete global[CONTROLLER];
+    delete global[BINDING];
+  }
 }
 return bindingsCall.apply(this, args);
 })

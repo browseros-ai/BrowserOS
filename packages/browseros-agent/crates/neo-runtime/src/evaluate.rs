@@ -1280,6 +1280,83 @@ fn tag_source(
     })
 }
 
+/// Neo: runs built `expression` on page-format `leading` arguments in `tab`'s frame's main
+/// world, by value, outside any call of the run (`bindings.rs`'s installs, removals and run
+/// end, as Playwright's `safeNonStallingEvaluateInAllFrames`): a gone document or a throw is the
+/// caller's to ignore.
+///
+/// # Errors
+///
+/// The frame's [`PageError`]; a throw or a stale document reads `NotConnected`.
+pub(crate) async fn run_built(
+    tab: &FrameTab,
+    expression: BuiltExpression,
+    leading: Vec<Value>,
+) -> Result<(), PageError> {
+    let frame = tab.context().await?;
+    let installed = frame.main.installed(&frame).await?;
+    let mut values = vec![
+        json!({ "value": true }),
+        json!({ "value": true }),
+        json!({ "value": expression.source() }),
+        json!({ "value": leading.len() }),
+    ];
+    values.extend(leading.into_iter().map(|value| json!({ "value": value })));
+    match frame
+        .main
+        .call(
+            &frame,
+            &installed,
+            MainFunction::Evaluate,
+            values,
+            true,
+            None,
+        )
+        .await?
+    {
+        Called::Value(_) | Called::Object(_) => Ok(()),
+        Called::Threw(_) | Called::Stale | Called::Protocol(_) => Err(PageError::NotConnected),
+    }
+}
+
+/// Neo: [`run_built`] within a call of the run, with the agent's `arg` (and its handles) after
+/// `leading`: `bindings.rs` delivers a binding call's answer with it.
+///
+/// # Errors
+///
+/// The call's error; a throw in the page is Playwright's plain `Error`.
+pub(crate) async fn call_built(
+    tab: &FrameTab,
+    expression: BuiltExpression,
+    leading: Vec<Value>,
+    arg: &SerializedArgument,
+    handles: &Handles,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let frame = tab.context().await.map_err(page_error)?;
+    let leading = move |_: usize| leading.clone();
+    let (_, called) = invoke(
+        tab,
+        &Invocation {
+            frame: &frame,
+            receiver: None,
+            expression: expression.source(),
+            is_function: Some(true),
+            return_by_value: true,
+            leading: &leading,
+            extras: &[],
+            arg,
+        },
+        handles,
+        progress,
+    )
+    .await?;
+    match called {
+        Called::Threw(message) => Err(PlaywrightError::error(message).into()),
+        _ => Ok(()),
+    }
+}
+
 /// `Frame.addScriptTag` / `addStyleTag`: the new element, as an `ElementHandle` of the run.
 async fn add_tag(
     tab: &FrameTab,

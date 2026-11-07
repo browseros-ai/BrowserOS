@@ -37,6 +37,7 @@ use crate::bridge;
 use crate::console::{
     self, ConsoleApiCalled, ConsoleRecord, ExceptionThrown, History, LogEntryAdded, PageErrorRecord,
 };
+use crate::contexts::ContextFrames;
 use crate::dialogs::{self, Dialogs};
 use crate::events::{CONTEXT_GUID, Emitted, EventHub, Needs};
 use crate::frames::Host;
@@ -62,6 +63,9 @@ pub(crate) struct PageEvents {
     children: Arc<Mutex<HashSet<SessionId>>>,
     pub(crate) console: Arc<ConsoleLog>,
     pub(crate) dialogs: Arc<Dialogs>,
+    /// The frame of each main-world context of the tab's session and of its frame hosts, fed
+    /// here in socket order (`contexts.rs`): `bindings.rs` names a binding call's frame with it.
+    pub(crate) contexts: Arc<ContextFrames>,
 }
 
 #[derive(Deserialize)]
@@ -86,6 +90,7 @@ impl PageEvents {
             children: Arc::default(),
             console: Arc::default(),
             dialogs: Arc::default(),
+            contexts: Arc::default(),
         }
     }
 
@@ -147,10 +152,12 @@ impl PageEvents {
                 .lock()
                 .is_ok_and(|children| children.contains(session))
             {
+                self.contexts.apply(event);
                 self.console_event(event, session);
             }
             return applied.dialog;
         }
+        self.contexts.apply(event);
         let mut answer = applied.dialog;
         match event.method.as_str() {
             "Page.javascriptDialogOpening" => answer = self.dialog_opening(&event.params, answer),

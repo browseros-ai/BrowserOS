@@ -113,6 +113,18 @@ const ADD_TAG: &str = include_str!(concat!(
     "/../neo-runtime-injected/dist/add-tag.js"
 ));
 
+/// Playwright: `server/page.ts` `PageBinding.createInitScript`
+const BINDINGS_CONTROLLER: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/bindings-controller.js"
+));
+
+/// Playwright: `server/page.ts` `PageBinding.dispatch`
+const BINDINGS_CALL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/bindings-call.js"
+));
+
 /// A page function of Playwright's server, built in neo-runtime-injected, that runs as the
 /// `expression` of `UtilityScript.evaluate` (`EVALUATE`), so its arguments arrive parsed with
 /// their handles, primitives included. Agent code never takes this path.
@@ -131,6 +143,11 @@ pub(crate) enum BuiltExpression {
     CallOnElement,
     /// `(utilityScript, kind, value, type) => element`: `addScriptTag` / `addStyleTag`.
     AddTag,
+    /// `() => void`: installs Playwright's `BindingsController` (`bindings.rs`), also the source
+    /// of the run's bindings init script.
+    BindingsController,
+    /// `(op, arg) => void`: a call on that controller, by name (`bindings.rs`).
+    BindingsCall,
 }
 
 impl BuiltExpression {
@@ -143,6 +160,8 @@ impl BuiltExpression {
             Self::WaitAbort => WAIT_ABORT,
             Self::CallOnElement => CALL_ON_ELEMENT,
             Self::AddTag => ADD_TAG,
+            Self::BindingsController => BINDINGS_CONTROLLER,
+            Self::BindingsCall => BINDINGS_CALL,
         }
     }
 }

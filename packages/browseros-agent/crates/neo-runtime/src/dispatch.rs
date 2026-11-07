@@ -61,6 +61,7 @@ use tokio::time::Instant;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
+use crate::bindings::{self, BindingRoute, Outcome};
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::dialogs;
@@ -102,6 +103,11 @@ use crate::waits::{
 /// the realm ends. Tasks still running keep their state and records read `Unfinished`.
 /// Unkept creations close their tabs when their late acknowledgements arrive.
 const RECORDS_WAIT: Duration = Duration::from_secs(1);
+
+/// Neo: how long the end of a run's bindings may take in its pages (`bindings.rs`), apart from
+/// [`RECORDS_WAIT`]: a frame it does not reach keeps a binding whose calls never settle. Free for
+/// a run that exposed none.
+const BINDINGS_END_WAIT: Duration = Duration::from_secs(3);
 
 /// The most browser calls one run may have unfinished at once. Each holds its params, its call
 /// log and a task in Rust, outside the realm's memory limit, and a script can start calls without
@@ -291,8 +297,10 @@ enum ObjectKind {
     Network(NetworkObject, HopId),
     /// A run's `JSHandle` or `ElementHandle` (`evaluate.rs`), by guid.
     Handle(String),
-    /// An init script's `Disposable` (`init_scripts.rs`), by guid.
+    /// An init script's or a binding's `Disposable` (`init_scripts.rs`, `bindings.rs`), by guid.
     Disposable(String),
+    /// A binding call the realm answers (`bindings.rs`), by guid.
+    BindingCall(String),
     /// A JavaScript dialog the run's `dialog` event handed out, by its index on the tab.
     Dialog(u64),
     Unknown,
@@ -305,6 +313,8 @@ enum ObjectCall {
     Network(NetworkCall),
     /// An init script command (`init_scripts.rs`).
     Init(InitRoute),
+    /// A binding command (`bindings.rs`).
+    Binding(BindingRoute),
     Dialog(u64, DialogCall),
 }
 
@@ -472,10 +482,13 @@ impl Dispatcher {
         let _created = time::timeout_at(deadline, self.0.tabs.finish_creations()).await;
         run.tasks.close();
         let _waited = time::timeout_at(deadline, run.tasks.wait()).await;
+        // The scripts first, so no new document gets a binding; then each frame ends the run's
+        // bindings, on a budget of its own, as a binding left in a page would hang its calls.
+        let _removed = time::timeout_at(deadline, run.init_scripts.close()).await;
+        let _ended = time::timeout(BINDINGS_END_WAIT, run.bindings.close(&self.0.tabs)).await;
         // Releases each session's handle group on its page's tracked task, before the sessions
         // detach; a run whose future is dropped releases them as `RunScope` drops.
         run.handles.close();
-        let _removed = time::timeout_at(deadline, run.init_scripts.close()).await;
         let _refreshed = time::timeout_at(deadline, self.0.tabs.refresh_closing()).await;
         self.0.trace.take(reason)
     }
@@ -503,6 +516,12 @@ async fn init_call(
                 .race(scripts.add(tabs.cdp(), None, &source))
                 .await??
         }
+        InitRoute::Dispose(guid) if bindings::owns(&guid) => {
+            progress
+                .race(progress.bindings().dispose(tabs, scripts, &guid))
+                .await??;
+            return Ok(Some(json!({})));
+        }
         InitRoute::Dispose(guid) => {
             progress.race(scripts.dispose(&guid)).await??;
             return Ok(Some(json!({})));
@@ -529,6 +548,29 @@ fn route_init(
             route: init_scripts::source_of(&PAGE_ADD_INIT_SCRIPT_META, params)
                 .map(|source| ObjectCall::Init(InitRoute::Page(source))),
         }),
+        ObjectKind::Context | ObjectKind::Page
+            if method == bindings::PAGE_EXPOSE_BINDING_META.method =>
+        {
+            let (meta, route) =
+                bindings::decode_expose(matches!(object, ObjectKind::Context), params);
+            Ok(Routed {
+                meta: Some(meta),
+                route: route.map(ObjectCall::Binding),
+            })
+        }
+        ObjectKind::BindingCall(guid) => Ok(match bindings::decode_call(&guid, method, params) {
+            Some((meta, route)) => Routed {
+                meta: Some(meta),
+                route: route.map(ObjectCall::Binding),
+            },
+            None => Routed {
+                meta: None,
+                // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection.dispatch`: `Mismatching dispatcher: "${dispatcher._type}" does not implement "${method}"`
+                route: Err(PlaywrightError::error(format!(
+                    "Mismatching dispatcher: \"BindingCall\" does not implement \"{method}\""
+                ))),
+            },
+        }),
         ObjectKind::Disposable(guid) => {
             Ok(Routed {
                 meta: Some(&DISPOSABLE_DISPOSE_META),
@@ -544,6 +586,40 @@ fn route_init(
         }
         object => Err((object, params)),
     }
+}
+
+/// A binding command: `exposeBinding` answers its `Disposable`, as Playwright's
+/// `{ disposable }`; a binding call's answer answers nothing.
+async fn binding_call(
+    tabs: &Tabs,
+    target: Option<(Arc<PageEntry>, FrameScope)>,
+    route: BindingRoute,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let bindings = progress.bindings();
+    let scripts = progress.init_scripts();
+    let (outcome, guid) = match route {
+        BindingRoute::Page { name, no_global } => {
+            let (page, _) = target.ok_or_else(PlaywrightError::target_closed)?;
+            let session = progress.race(tabs.session(&page)).await??;
+            let guid = progress
+                .race(bindings.expose(tabs, scripts, Some(&session), &name, no_global))
+                .await??;
+            return Ok(Some(json!({ "disposable": { "guid": guid } })));
+        }
+        BindingRoute::Context { name, no_global } => {
+            let guid = progress
+                .race(bindings.expose(tabs, scripts, None, &name, no_global))
+                .await??;
+            return Ok(Some(json!({ "disposable": { "guid": guid } })));
+        }
+        BindingRoute::Resolve { guid, result } => (Outcome::Result(result), guid),
+        BindingRoute::Reject { guid, error } => (Outcome::Error(error), guid),
+    };
+    bindings
+        .answer(tabs, &guid, outcome, progress.handles(), progress)
+        .await?;
+    Ok(Some(json!({})))
 }
 
 /// Names a message's target and decodes its params. Pure.
@@ -629,8 +705,8 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         }
         ObjectKind::Dialog(index) => DialogCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
-        // `route_init` answers every Disposable message.
-        ObjectKind::Disposable(_) | ObjectKind::Unknown => {
+        // `route_init` answers every Disposable and BindingCall message.
+        ObjectKind::Disposable(_) | ObjectKind::BindingCall(_) | ObjectKind::Unknown => {
             return Routed {
                 meta: None,
                 route: Err(PlaywrightError::target_closed()),
@@ -804,6 +880,7 @@ async fn serve_call(
     let result = match (route, target) {
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
         (ObjectCall::Init(route), target) => init_call(&tabs, target, route, &progress).await,
+        (ObjectCall::Binding(route), target) => binding_call(&tabs, target, route, &progress).await,
         (ObjectCall::Page(call), Some((page, _))) => {
             tab_calls::page(&tabs, &page, call, &progress).await
         }
@@ -1129,6 +1206,8 @@ fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
         ObjectKind::Context
     } else if guid.starts_with(init_scripts::DISPOSABLE_PREFIX) {
         ObjectKind::Disposable(guid.to_owned())
+    } else if guid.starts_with(bindings::BINDING_CALL_PREFIX) {
+        ObjectKind::BindingCall(guid.to_owned())
     } else if !resolved {
         ObjectKind::Unknown
     } else if guid.starts_with(evaluate::HANDLE_PREFIX) {
@@ -1436,6 +1515,7 @@ mod tests {
             | ObjectCall::Page(_)
             | ObjectCall::Network(_)
             | ObjectCall::Init(_)
+            | ObjectCall::Binding(_)
             | ObjectCall::Dialog(..) => {
                 panic!("a Frame message routed to another object")
             }

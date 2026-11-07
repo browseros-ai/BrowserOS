@@ -27,6 +27,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::info;
 
+use crate::bindings::Bindings;
 use crate::deadline::{Deadline, Stop};
 use crate::evaluate::Handles;
 use crate::init_scripts::InitScripts;
@@ -126,6 +127,8 @@ pub(crate) struct RunScope {
     pub(crate) handles: Arc<Handles>,
     /// The run's init scripts (`init_scripts.rs`); removed from every session at run end.
     pub(crate) init_scripts: Arc<InitScripts>,
+    /// The run's exposed bindings (`bindings.rs`); ended in every frame at run end.
+    pub(crate) bindings: Arc<Bindings>,
 }
 
 impl RunScope {
@@ -137,6 +140,7 @@ impl RunScope {
             tasks,
             handles: Arc::default(),
             init_scripts: Arc::default(),
+            bindings: Arc::default(),
         }
     }
 
@@ -276,6 +280,11 @@ impl Progress {
     /// The run's init scripts (`init_scripts.rs`).
     pub(crate) fn init_scripts(&self) -> &Arc<InitScripts> {
         &self.run.init_scripts
+    }
+
+    /// The run's exposed bindings (`bindings.rs`).
+    pub(crate) fn bindings(&self) -> &Arc<Bindings> {
+        &self.run.bindings
     }
 
     pub(crate) fn timeout_ms(&self) -> f64 {

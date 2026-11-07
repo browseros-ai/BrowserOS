@@ -14,6 +14,9 @@ import type { BindingsController } from '../vendor/playwright/injected/src/bindi
 /** Playwright: `isomorphic/utilityScriptSerializers.ts` `kBindingsControllerProperty`: `export const kBindingsControllerProperty = '__playwright__binding__controller__';` */
 const CONTROLLER = '__playwright__binding__controller__'
 
+/** Playwright: `server/page.ts` `PageBinding.kBindingName`: `static kBindingName = '__playwright__binding__';` */
+const BINDING = '__playwright__binding__'
+
 type Delivery = Parameters<BindingsController['deliverBindingResult']>[0]
 
 /** Neo: the controller's own state that `end` reads: its bindings and their waiting calls. */
@@ -65,7 +68,8 @@ export default function bindingsCall<Op extends keyof Ops>(
  *
  * Every call still waiting on one of the run's bindings rejects with `message`; each binding is
  * removed, as Playwright's cleanup script removes it; the controller goes too once it holds
- * none, so the page keeps nothing of the run.
+ * none, and the CDP binding function, which outlives the session that added it (probe C2), so
+ * the page keeps nothing of the run.
  */
 function endRun(
   controller: BindingsController,
@@ -80,5 +84,8 @@ function endRun(
       waiting.reject(new Error(message))
     controller.removeBinding(name)
   }
-  if (bindings.size === 0) delete global[CONTROLLER]
+  if (bindings.size === 0) {
+    delete global[CONTROLLER]
+    delete global[BINDING]
+  }
 }
