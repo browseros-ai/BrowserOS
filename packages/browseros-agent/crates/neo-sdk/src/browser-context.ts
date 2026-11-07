@@ -33,7 +33,12 @@ import type {
   SetNetworkCookie,
 } from '@browseros/neo-runtime-spec/serve'
 import { APIRequestContext } from './api-request'
-import type { Connection } from './connection'
+import {
+  BindingCall,
+  type BindingCallback,
+  type BindingCallRecord,
+} from './binding-call'
+import type { ApiName, Connection } from './connection'
 import { ConsoleMessage, type ConsoleMessagePayload } from './console-message'
 import { Dialog } from './dialog'
 import { DisposableStub } from './disposable'
@@ -184,9 +189,15 @@ export class BrowserContext extends ChannelOwner {
   /** Every dialog the run's events handed out, by guid: one object per dialog. */
   readonly #dialogs = new Map<string, Dialog>()
   readonly _timeoutSettings = new TimeoutSettings()
-  /** Playwright: `client/browserContext.ts` `BrowserContext.request`: the context's API request
-   * context, with the context's cookies and its timeout settings (`api-request.ts`). */
+  /**
+   * Playwright: `client/browserContext.ts` `BrowserContext.request`
+   *
+   * The context's API request context, with the context's cookies and its timeout settings
+   * (`api-request.ts`).
+   */
   readonly request: APIRequestContext
+  /** The context's exposed callbacks, by name (Playwright's `BrowserContext._bindings`). */
+  readonly _bindings = new Map<string, BindingCallback>()
   /** The run's event pipe, which this context's pages share. */
   readonly _pipe: EventPipe
   /** Playwright's `_closingStatus`: `closing` from `close()`'s call, `closed` once done. */
@@ -276,6 +287,10 @@ export class BrowserContext extends ChannelOwner {
       this.#onDialog((params as { dialog: DialogRecord }).dialog)
     else if (method === 'dialogClosed')
       this.#onDialogClosed((params as { dialog: DialogRecord }).dialog)
+    else if (method === 'bindingCall')
+      void this.#onBindingCall(
+        (params as { binding: BindingCallRecord }).binding,
+      )
     else if (method === 'download')
       this.#onDownload(params as DownloadEventParams)
     else if (method === 'request') this.#onRequest(params as RequestEventParams)
@@ -399,6 +414,20 @@ export class BrowserContext extends ChannelOwner {
       this.#routeListening = false
       this._subscribeChannelEvent('route', false)
     }
+  }
+
+  /** A call of the context's binding: on its page's frame, answered by the context's callback. */
+  async #onBindingCall(record: BindingCallRecord): Promise<void> {
+    const page = this.#pageFor(record.page.guid)
+    const frame = page._frameForGuid(record.frame.guid)
+    await this._onBinding(new BindingCall(this.#connection, record, frame))
+  }
+
+  /** Playwright: `client/browserContext.ts` `BrowserContext._onBinding`: `await bindingCall.call(func);` */
+  async _onBinding(call: BindingCall): Promise<void> {
+    const func = this._bindings.get(call.name)
+    if (!func) return
+    await call.call(func)
   }
 
   /** Playwright's `BrowserContext._onRequest`: the context's listeners, then the page's. */
@@ -585,6 +614,54 @@ export class BrowserContext extends ChannelOwner {
     return get(this.#guid, 'pages')
       .map((created) => this.#pages.get(created.guid) ?? this.#add(created))
       .filter((page) => !page._isClosedLocally())
+  }
+
+  /** Playwright's `browserContext.exposeFunction`: `window[name](...args)` in every frame of every page of the context calls
+   * `callback(...args)` in the run and answers with its result. `dispose()` removes it. */
+  async exposeFunction(
+    name: string,
+    // biome-ignore lint/suspicious/noExplicitAny: Playwright's callback type.
+    callback: (...args: any[]) => unknown,
+  ): Promise<Disposable> {
+    return await this.#expose(
+      'browserContext.exposeFunction',
+      name,
+      (_source, ...args) => callback(...args),
+    )
+  }
+
+  /** Playwright's `browserContext.exposeBinding`: as `exposeFunction`, with the call's
+   * `{ context, page, frame }` first. */
+  async exposeBinding(
+    name: string,
+    callback: BindingCallback,
+  ): Promise<Disposable> {
+    return await this.#expose('browserContext.exposeBinding', name, callback)
+  }
+
+  async #expose(
+    apiName: ApiName,
+    name: string,
+    callback: BindingCallback,
+  ): Promise<Disposable> {
+    // Deviation: `client/browserContext.ts` `BrowserContext.exposeBinding`: `this._bindings.set(name, callback);` Playwright sets the callback after its answer; Neo before, as the answer's events, a first page call among them, run before the caller goes on.
+    const previous = this._bindings.get(name)
+    this._bindings.set(name, callback)
+    this._subscribeChannelEvent('bindingCall', true)
+    try {
+      const result = await this.#connection.sendBinding(
+        apiName,
+        this.#guid,
+        'exposeBinding',
+        { name },
+        0,
+      )
+      return new Disposable(this.#connection, result.disposable.guid)
+    } catch (error) {
+      if (previous) this._bindings.set(name, previous)
+      else this._bindings.delete(name)
+      throw error
+    }
   }
 
   /** Playwright's `browserContext.addInitScript`: `script` (a function called with `arg`, source text, or

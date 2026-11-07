@@ -344,15 +344,20 @@ async fn covered_and_disabled_buttons_time_out_naming_the_reason() {
     }
 }
 
-/// The page the spec test clicks: a button under a full-page overlay that the test removes a
-/// moment after the run starts, so loop B's retries 1 to 3 scroll with the `scrollIntoView`
-/// glue before the click lands; and a bordered button clicked at a `position`, which reads its
-/// box model and `getElementBorderWidth`.
+/// The page the spec test clicks: a button in a scroll box, under a full-page overlay that goes
+/// at the box's first scroll, so the click's attempts, not the clock, decide when it goes. The
+/// first attempt finds the button in view and does not scroll, so the overlay always catches it;
+/// loop B's retries 1 to 3 align the button end, center and start with the `scrollIntoView` glue,
+/// one of them moves the box, the overlay goes, and the click lands. And a bordered button
+/// clicked at a `position`, which reads its box model and `getElementBorderWidth`.
 const CALLS_PAGE: &str = r#"<!doctype html><html><head><meta charset="utf-8"><title>calls</title>
 <script>window.__clicked = []</script></head><body>
+<div id="box" style="height:200px;overflow:auto"><div style="height:150px"></div>
 <button id="covered" onclick="__clicked.push('covered')">Covered</button>
+<div style="height:400px"></div></div>
 <button id="offset" style="border: 3px solid black" onclick="__clicked.push('offset:' + event.offsetX + ',' + event.offsetY)">Offset</button>
 <div id="overlay" style="position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:10"></div>
+<script>document.getElementById('box').addEventListener('scroll', () => document.getElementById('overlay').remove(), { once: true })</script>
 </body></html>"#;
 
 /// "Each glue function returns its spec'd shape", on a real page. Rust's strict decode is the
@@ -371,8 +376,6 @@ async fn every_click_page_call_decodes_against_the_spec() {
         ..Fixture::default()
     };
     let tab = Tab::open(binary, fixture, "/calls.html").await;
-    tab.evaluate("setTimeout(() => document.getElementById('overlay').remove(), 600)")
-        .await;
     let outcome = run(
         &tab,
         "await page.locator('#covered').click({ timeout: 10000 })

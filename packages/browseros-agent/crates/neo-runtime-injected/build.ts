@@ -18,6 +18,10 @@
  *   dist/call-on-element.js  Playwright's `mainWorld: true` element callbacks, run as a
  *                       `UtilityScript.evaluate` expression with that InjectedScript
  *   dist/add-tag.js     Playwright's `addScriptTag` / `addStyleTag` page functions, an expression
+ *   dist/bindings-controller.js  `() => void`                     installs Playwright's
+ *                       `BindingsController` on the page, an init script and an expression
+ *   dist/bindings-call.js  `(op, arg) => void`                    the calls on that controller
+ *                       (add, remove, deliver a result, end the run's bindings), by name
  *   dist/spec-sha256    neo-runtime-spec's SPEC_SHA256, no trailing newline, which neo-runtime
  *                       const-asserts against the Rust crate's own hash
  *
@@ -40,11 +44,12 @@
  * in a real page.
  *
  * Also enforced here, because Biome cannot tell a type import from a value import by path: no
- * file under `src/` except `install.ts`, `utility.ts` and `main-injected.ts` may value-import
- * vendored code (Playwright's DEPS.list rule: glue sees injected types, never injected code).
- * `install.ts` constructs `InjectedScript` for the utility world, `utility.ts` constructs
- * `UtilityScript` and `main-injected.ts` constructs `InjectedScript` for the main world, and
- * nothing else may build page code from the vendored tree. A violation fails
+ * file under `src/` except `install.ts`, `utility.ts`, `main-injected.ts` and
+ * `bindings-controller.ts` may value-import vendored code (Playwright's DEPS.list rule: glue sees
+ * injected types, never injected code). `install.ts` constructs `InjectedScript` for the utility
+ * world, `utility.ts` constructs `UtilityScript`, `main-injected.ts` constructs `InjectedScript`
+ * for the main world and `bindings-controller.ts` constructs `BindingsController`, and nothing
+ * else may build page code from the vendored tree. A violation fails
  * the build, and so neo-check.
  *
  * `scripts/neo-check.sh` runs this and fails when `dist/` differs from the committed files.
@@ -70,8 +75,15 @@ const ENTRIES = [
   'main-injected',
   'call-on-element',
   'add-tag',
+  'bindings-controller',
+  'bindings-call',
 ] as const
-const VALUE_IMPORTERS = ['install.ts', 'utility.ts', 'main-injected.ts']
+const VALUE_IMPORTERS = [
+  'install.ts',
+  'utility.ts',
+  'main-injected.ts',
+  'bindings-controller.ts',
+]
 const VENDOR_ALIASES = ['@injected/', '@isomorphic/', '@protocol/']
 
 const packageDir = import.meta.dir

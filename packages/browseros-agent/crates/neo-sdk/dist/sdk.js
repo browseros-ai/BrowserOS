@@ -1286,6 +1286,9 @@ class Connection {
   async sendEval(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
+  async sendBinding(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout) ?? {};
+  }
   async sendInit(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout) ?? {};
   }
@@ -1542,6 +1545,47 @@ function normalizeEvaluationExpression(expression, isFunction) {
   if (/^(async)?\s*function(\s|\()/.test(expression))
     expression = `(${expression})`;
   return expression;
+}
+
+// src/binding-call.ts
+class BindingCall {
+  #connection;
+  #record;
+  #frame;
+  constructor(connection, record, frame) {
+    this.#connection = connection;
+    this.#record = record;
+    this.#frame = frame;
+  }
+  get name() {
+    return this.#record.name;
+  }
+  async call(func) {
+    try {
+      const page = this.#frame.page();
+      const source = { context: page.context(), page, frame: this.#frame };
+      const result = await func(source, ...this.#record.args.map(parseResult));
+      this.#send("bindingCall.resolve", "resolve", {
+        result: serializeArgument(result)
+      });
+    } catch (error) {
+      this.#send("bindingCall.reject", "reject", { error: thrown(error) });
+    }
+  }
+  #send(apiName, method, params) {
+    this.#connection.sendBinding(apiName, this.#record.guid, method, params, 0).catch(() => {});
+  }
+}
+function thrown(error) {
+  if (error instanceof Error)
+    return {
+      error: { message: error.message, name: error.name, stack: error.stack }
+    };
+  try {
+    return { value: serializeArgument(error).value };
+  } catch {
+    return { value: { v: "undefined" } };
+  }
 }
 
 // src/console-message.ts
@@ -7306,6 +7350,7 @@ class Page extends ChannelOwner {
   #routeListening = false;
   #patternsSent = Promise.resolve();
   #closeReason;
+  _bindings = new Map;
   constructor(guid, mainFrameGuid, url, context, connection) {
     super(guid, context._pipe, PAGE_EVENTS);
     this.#guid = guid;
@@ -7380,6 +7425,8 @@ class Page extends ChannelOwner {
       this.#onFrameDetached(params.frame);
     else if (method === "frameNavigated")
       this.#onFrameNavigated(params);
+    else if (method === "bindingCall")
+      this._onBinding(params.binding);
     else if (method === "locatorHandlerTriggered")
       this.#onLocatorHandlerTriggered(params.uid).catch((error) => this.#context._pipe.report(error));
     else if (method === "fileChooser") {
@@ -7387,6 +7434,15 @@ class Page extends ChannelOwner {
       this.emit("filechooser", new FileChooser(this, chooser, isMultiple, this.#connection));
     } else if (method === "route")
       this.#onRouteEvent(params);
+  }
+  async _onBinding(record) {
+    const call2 = new BindingCall(this.#connection, record, this._frameForGuid(record.frame.guid));
+    const func = this._bindings.get(record.name);
+    if (func) {
+      await call2.call(func);
+      return;
+    }
+    await this.#context._onBinding(call2);
   }
   #locatorHandlers = new Map;
   async addLocatorHandler(locator, handler, options = {}) {
@@ -7670,6 +7726,27 @@ class Page extends ChannelOwner {
   }
   async goto(url, options = {}) {
     return await this.#mainFrame._goto("page.goto", url, options);
+  }
+  async exposeFunction(name, callback) {
+    return await this.#expose("page.exposeFunction", name, (_source, ...args) => callback(...args));
+  }
+  async exposeBinding(name, callback) {
+    return await this.#expose("page.exposeBinding", name, callback);
+  }
+  async#expose(apiName, name, callback) {
+    const previous = this._bindings.get(name);
+    this._bindings.set(name, callback);
+    this._subscribeChannelEvent("bindingCall", true);
+    try {
+      const result = await this.#connection.sendBinding(apiName, this.#guid, "exposeBinding", { name }, 0);
+      return new Disposable(this.#connection, result.disposable.guid);
+    } catch (error) {
+      if (previous)
+        this._bindings.set(name, previous);
+      else
+        this._bindings.delete(name);
+      throw error;
+    }
   }
   async addInitScript(script, arg, options) {
     assertEvaluateOptions(options);
@@ -7976,6 +8053,7 @@ class BrowserContext extends ChannelOwner {
   #dialogs = new Map;
   _timeoutSettings = new TimeoutSettings;
   request;
+  _bindings = new Map;
   _pipe;
   #closingStatus = "none";
   #closeReason;
@@ -8029,6 +8107,8 @@ class BrowserContext extends ChannelOwner {
       this.#onDialog(params.dialog);
     else if (method === "dialogClosed")
       this.#onDialogClosed(params.dialog);
+    else if (method === "bindingCall")
+      this.#onBindingCall(params.binding);
     else if (method === "download")
       this.#onDownload(params);
     else if (method === "request")
@@ -8110,6 +8190,17 @@ class BrowserContext extends ChannelOwner {
       this.#routeListening = false;
       this._subscribeChannelEvent("route", false);
     }
+  }
+  async#onBindingCall(record) {
+    const page = this.#pageFor(record.page.guid);
+    const frame = page._frameForGuid(record.frame.guid);
+    await this._onBinding(new BindingCall(this.#connection, record, frame));
+  }
+  async _onBinding(call2) {
+    const func = this._bindings.get(call2.name);
+    if (!func)
+      return;
+    await call2.call(func);
   }
   #onRequest({ request, page }) {
     const pageObject = this.#pageFor(page.guid);
@@ -8205,6 +8296,27 @@ class BrowserContext extends ChannelOwner {
     if (this.#closingStatus === "closed")
       return [];
     return get(this.#guid, "pages").map((created) => this.#pages.get(created.guid) ?? this.#add(created)).filter((page) => !page._isClosedLocally());
+  }
+  async exposeFunction(name, callback) {
+    return await this.#expose("browserContext.exposeFunction", name, (_source, ...args) => callback(...args));
+  }
+  async exposeBinding(name, callback) {
+    return await this.#expose("browserContext.exposeBinding", name, callback);
+  }
+  async#expose(apiName, name, callback) {
+    const previous = this._bindings.get(name);
+    this._bindings.set(name, callback);
+    this._subscribeChannelEvent("bindingCall", true);
+    try {
+      const result = await this.#connection.sendBinding(apiName, this.#guid, "exposeBinding", { name }, 0);
+      return new Disposable(this.#connection, result.disposable.guid);
+    } catch (error) {
+      if (previous)
+        this._bindings.set(name, previous);
+      else
+        this._bindings.delete(name);
+      throw error;
+    }
   }
   async addInitScript(script, arg, options) {
     assertEvaluateOptions(options);

@@ -29,22 +29,8 @@ import { encodeUtf8, type Headers, type Request } from './network'
 import { type TimeoutInput, TimeoutSettings } from './timeout-settings'
 import { wrapApiCall } from './waiter'
 
-/** Playwright: `client/fetch.ts` `APIRequestContext._innerFetch`: `assert((options.data === undefined ? 0 : 1) + (options.form === undefined ? 0 : 1) + (options.multipart === undefined ? 0 : 1) <= 1, `Only one of 'data', 'form' or 'multipart' can be specified`);` */
-const ONLY_ONE_BODY =
-  "Only one of 'data', 'form' or 'multipart' can be specified"
-
-/** Playwright: `client/fetch.ts` `APIRequestContext._innerFetch`: `assert(options.maxRedirects === undefined || options.maxRedirects >= 0, `'maxRedirects' must be greater than or equal to '0'`);` */
-const MAX_REDIRECTS_NEGATIVE =
-  "'maxRedirects' must be greater than or equal to '0'"
-
-/** Playwright: `client/fetch.ts` `APIRequestContext._innerFetch`: `assert(options.maxRetries === undefined || options.maxRetries >= 0, `'maxRetries' must be greater than or equal to '0'`);` */
-const MAX_RETRIES_NEGATIVE = "'maxRetries' must be greater than or equal to '0'"
-
-/** Playwright: `client/fetch.ts` `APIRequestContext._innerFetch`: `assert(options.request || typeof options.url === 'string', 'First argument must be either URL string or Request');` */
+/** Playwright: `client/fetch.ts` `APIRequestContext._innerFetch`: `'First argument must be either URL string or Request'` */
 const URL_OR_REQUEST = 'First argument must be either URL string or Request'
-
-/** Playwright: `client/fetch.ts` `APIRequestContext._innerFetch`: `throw new Error(`Unexpected 'data' type`);` */
-const UNEXPECTED_DATA = "Unexpected 'data' type"
 
 /** Deviation: `client/fetch.ts` `APIRequest.newContext`: `const storageState = typeof options.storageState === 'string' ?`
  * Playwright reads a storage state file. A run has no file system, so Neo takes the state
@@ -252,7 +238,7 @@ export class APIRequestContext {
     })
   }
 
-  /** Playwright: `client/fetch.ts` `APIRequestContext.get`: `return await this.fetch(url, { ...options, method: 'GET' });` */
+  /** Playwright: `client/fetch.ts` `APIRequestContext.get`: `method: 'GET',` */
   async #method(
     apiName: ApiName,
     method: string,
@@ -301,8 +287,11 @@ export class APIRequestContext {
     })
   }
 
-  /** Playwright: `client/fetch.ts` `APIRequestContext._innerFetch`: the fetch's params, after the
-   * client's checks. */
+  /**
+   * Playwright: `client/fetch.ts` `APIRequestContext._innerFetch`
+   *
+   * The fetch's params, after the client's checks.
+   */
   #fetchParams(
     options: FetchOptions & { url?: string; request?: Request },
   ): APIRequestContextCommands['fetch']['params'] {
@@ -313,11 +302,14 @@ export class APIRequestContext {
       (options.data === undefined ? 0 : 1) +
       (options.form === undefined ? 0 : 1) +
       (options.multipart === undefined ? 0 : 1)
-    if (bodies > 1) throw new Error(ONLY_ONE_BODY)
+    if (bodies > 1)
+      throw new Error(
+        "Only one of 'data', 'form' or 'multipart' can be specified",
+      )
     if (options.maxRedirects !== undefined && options.maxRedirects < 0)
-      throw new Error(MAX_REDIRECTS_NEGATIVE)
+      throw new Error("'maxRedirects' must be greater than or equal to '0'")
     if (options.maxRetries !== undefined && options.maxRetries < 0)
-      throw new Error(MAX_RETRIES_NEGATIVE)
+      throw new Error("'maxRetries' must be greater than or equal to '0'")
     const url = options.url ?? options.request?.url() ?? ''
     const method = options.method || options.request?.method()
     const encodedParams =
@@ -344,7 +336,7 @@ export class APIRequestContext {
       ) {
         jsonData = JSON.stringify(options.data)
       } else {
-        throw new Error(UNEXPECTED_DATA)
+        throw new Error("Unexpected 'data' type")
       }
     } else if (options.form) {
       formData = objectToArray(options.form)
@@ -464,7 +456,7 @@ function objectToArray(
   }))
 }
 
-/** Playwright: `utils/isomorphic/headers.ts` `headersObjectToArray` */
+/** Playwright: `isomorphic/headers.ts` `headersObjectToArray` */
 function headersArray(headers: Headers): NameValue[] {
   const result: NameValue[] = []
   for (const name in headers) {

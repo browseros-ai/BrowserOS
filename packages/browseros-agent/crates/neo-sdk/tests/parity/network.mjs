@@ -99,7 +99,8 @@ sessionStorage.setItem('loads', String(Number(sessionStorage.getItem('loads')) +
  * `/net/redirect` (to `?to=`, else `/net/data.json`), `Set-Cookie` of each `?cookie=` at
  * `/net/set-cookie`, the request's `Cookie` as JSON at `/net/cookies`, gzipped JSON at `/net/gzip`, `/net/headers` echoing the request's method,
  * headers and body as JSON, a 204 at `/net/204`, a 404 at `/net/404`, a connection
- * dropped before any response at `/net/hangup`, `/net/slow?ms=N` after N ms, an event stream
+ * dropped before any response at `/net/hangup`, `/net/slow?ms=N` after N ms (readable from
+ * any origin), an event stream
  * that never ends at `/net/sse`, `/net/echo` answering a POST's body, and `/net/hold?id=X`, which
  * sends `first` (with `&type=html`, the start of an HTML document a frame can stream) and holds the
  * response open until `/net/release?id=X` ends it with `last`. Each
@@ -139,6 +140,7 @@ export async function serveNetwork(cleanups) {
       return
     }
     if (pathname === '/net/slow') {
+      response.setHeader('access-control-allow-origin', '*')
       await sleep(Number(new URLSearchParams(query).get('ms') ?? 0))
       response.end('slow')
       return

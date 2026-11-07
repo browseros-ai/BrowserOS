@@ -58,6 +58,10 @@ pub(crate) struct Lifecycle {
     /// can also be removed again before the next commit.
     pub(crate) network_idle: bool,
     pub(crate) network_idle_count: u64,
+    /// How many `setContent` writes reopened the document so far (`page.rs`
+    /// `PageState::reopened`), each clearing its lifecycle: a write's `networkidle` wait starts
+    /// after its own.
+    pub(crate) reopens: u64,
 }
 
 /// The current URL and lifecycle, sampled without consuming buffered commits.

@@ -114,14 +114,20 @@ export class APIResponse {
     return this.#record.serverAddr ?? null
   }
 
-  /** Playwright: `client/fetch.ts` `APIResponse.securityDetails`. Deviation: Neo reads no
-   * certificate (no X.509 parser in its build), so it is `null`. */
+  /**
+   * Playwright: `client/fetch.ts` `APIResponse.securityDetails`
+   *
+   * Neo reads no certificate (no X.509 parser in its build), so it is `null`.
+   */
   async securityDetails(): Promise<SecurityDetails | null> {
     return this.#record.securityDetails ?? null
   }
 
-  /** Playwright: `client/fetch.ts` `APIResponse.timing`: `responseEnd` the response's end, and
-   * -1 for what Neo's client does not tell. */
+  /**
+   * Playwright: `client/fetch.ts` `APIResponse.timing`
+   *
+   * `responseEnd` is the response's end, and -1 is what Neo's client does not tell.
+   */
   timing(): ResourceTiming & { responseEnd: number } {
     const timing = this.#record.timing ?? {
       startTime: UNKNOWN_TIMING,
