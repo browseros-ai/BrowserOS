@@ -1,4 +1,4 @@
-//! Runs an agent's Playwright-style script from a starting BrowserOS tab. Each handed-out
+//! Neo: Runs an agent's Playwright-style script from a starting BrowserOS tab. Each handed-out
 //! Page keeps its target identity; live getters read CDP. Browser calls run on owned tasks,
 //! with progress and delivery records that outlive the script's realm.
 //!

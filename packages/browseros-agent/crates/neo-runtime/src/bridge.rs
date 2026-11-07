@@ -1,4 +1,4 @@
-//! The only installer of a run's JS-to-Rust bridges. neo-sdk's `runtime-bridge.ts` calls
+//! Neo: The only installer of a run's JS-to-Rust bridges. neo-sdk's `runtime-bridge.ts` calls
 //! `__neo_runtime.get` for every synchronous Playwright getter and `call` for every browser
 //! call, and the realm's `console` calls `log`. An explicitly supplied test host also gets an
 //! opaque receive/reply bridge; its frames never enter browser dispatch here.
@@ -88,7 +88,7 @@ pub(crate) fn install<'js>(
     ctx.globals().set("__neo_runtime", bridge)
 }
 
-/// Both callbacks share only this run's owned host. Receive parks the realm cooperatively;
+/// Neo: Both callbacks share only this run's owned host. Receive parks the realm cooperatively;
 /// reply stays synchronous so native getters and builders retain their actual JS behavior.
 #[cfg(feature = "test-host")]
 fn install_test_host<'js>(

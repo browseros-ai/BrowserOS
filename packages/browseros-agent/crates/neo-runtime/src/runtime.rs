@@ -1,4 +1,4 @@
-//! The entry point: owns the browser connection and runs each script from its requested tab.
+//! Neo: The entry point: owns the browser connection and runs each script from its requested tab.
 //!
 //! A run's order, after the tab check and the attach:
 //!
@@ -129,7 +129,7 @@ impl Runtime {
         .await
     }
 
-    /// Runs the same native script lifecycle as [`Self::run`], with an opaque test transport
+    /// Neo: Runs the same native script lifecycle as [`Self::run`], with an opaque test transport
     /// installed as `__neo_test_host` in this run's realm. Ownership moves into the run, never
     /// into `Runtime`, so concurrent runs and runtime clones cannot inherit another host.
     /// The host does not dispatch browser methods or change call cancellation and cleanup.
