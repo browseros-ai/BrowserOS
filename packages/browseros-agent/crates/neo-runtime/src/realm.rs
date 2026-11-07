@@ -21,7 +21,7 @@ use crate::deadline::Deadline;
 use crate::dispatch::Dispatcher;
 use crate::events::EventHub;
 use crate::run::{RunError, RunOutcome};
-use crate::{abort, bridge, world};
+use crate::{abort, bridge, request_contexts, world};
 
 const MEMORY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 // Well under a tokio worker's 2 MiB native stack, so deep JS recursion throws a RangeError
@@ -76,7 +76,7 @@ const RACE_UNCAUGHT: &str =
     "(script, uncaught, aborts) => Promise.race([script, uncaught, aborts])";
 
 /// How many lines QuickJS reports before the agent's line 1 in an `AsyncFunction`-constructed
-/// function (`async function anonymous(page,context\n) {\n`). Measured by probe P4 and pinned by
+/// function (`async function anonymous(page,context,playwright\n) {\n`). Measured by probe P4 and pinned by
 /// `tests/realm_limits.rs`, which reads the line a call records, so a QuickJS upgrade that
 /// changes the wrapper fails that test, not every recorded location.
 const AGENT_LINE_OFFSET: u32 = 2;
@@ -190,12 +190,22 @@ fn start<'js>(
     init.set("page", script.page_guid)?;
     init.set("mainFrame", script.frame_guid)?;
     init.set("context", "context@default")?;
+    init.set(
+        "request",
+        format!(
+            "{}{}",
+            request_contexts::REQUEST_CONTEXT_PREFIX,
+            request_contexts::BROWSER_CONTEXT_ID
+        ),
+    )?;
+    init.set("playwright", request_contexts::PLAYWRIGHT_GUID)?;
     init.set("url", script.url)?;
     init.set("testIdAttribute", world::TEST_ID_ATTRIBUTE)?;
     init.set("lineOffset", AGENT_LINE_OFFSET)?;
     let objects: Object<'js> = create_run.call((init,))?;
     let page: rquickjs::Value<'js> = objects.get("page")?;
     let context: rquickjs::Value<'js> = objects.get("context")?;
+    let playwright: rquickjs::Value<'js> = objects.get("playwright")?;
     let uncaught: rquickjs::Value<'js> = objects.get("uncaught")?;
 
     // The AsyncFunction constructor, as Playwright users write `new AsyncFunction(...)`: the
@@ -203,8 +213,8 @@ fn start<'js>(
     // throws a SyntaxError here.
     let async_function: Constructor<'js> = ctx.eval("(async () => {}).constructor")?;
     let agent_function: Function<'js> =
-        async_function.construct(("page", "context", script.code))?;
-    let script: Promise<'js> = agent_function.call((page, context))?;
+        async_function.construct(("page", "context", "playwright", script.code))?;
+    let script: Promise<'js> = agent_function.call((page, context, playwright))?;
     let race: Function<'js> = ctx.eval(RACE_UNCAUGHT)?;
     race.call((script, uncaught, abort_uncaught))
 }

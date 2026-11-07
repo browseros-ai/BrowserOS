@@ -21,12 +21,14 @@
  */
 
 import type {
+  APIRequestContextCommands,
   ArtifactCommands,
   BrowserContextCommands,
   DialogCommands,
   FrameCommands,
   Metadata,
   PageCommands,
+  PlaywrightCommands,
   RequestCommands,
   ResponseCommands,
   RouteCommands,
@@ -258,6 +260,22 @@ export type ApiName =
   | 'route.fulfill'
   | 'route.fallback'
   | 'route.fetch'
+  // API request contexts (C2, `api-request.ts`).
+  | 'apiRequest.newContext'
+  | 'apiRequestContext.fetch'
+  | 'apiRequestContext.get'
+  | 'apiRequestContext.post'
+  | 'apiRequestContext.put'
+  | 'apiRequestContext.patch'
+  | 'apiRequestContext.delete'
+  | 'apiRequestContext.head'
+  | 'apiRequestContext.dispose'
+  | 'apiRequestContext.storageState'
+  | 'apiRequestContext.cookies'
+  | 'apiRequestContext.addCookies'
+  | 'apiRequestContext.clearCookies'
+  | 'apiResponse.body'
+  | 'apiResponse.dispose'
   // Element reads and states (B1).
   | 'locator.isEnabled'
   | 'page.isEnabled'
@@ -456,6 +474,40 @@ export class Connection {
       params,
       timeout,
     )) as NeoRouteFetchResult
+  }
+
+  /** {@link Connection.send} for an `APIRequestContext` command, to a `request-context@…` guid. */
+  async sendRequestContext<M extends keyof APIRequestContextCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: APIRequestContextCommands[M]['params'],
+    timeout: number | TimeoutOptions,
+  ): Promise<Resolved<APIRequestContextCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<APIRequestContextCommands[M]['result']>
+  }
+
+  /** {@link Connection.send} for a `Playwright` command, to `playwright@default`. */
+  async sendPlaywright<M extends keyof PlaywrightCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: PlaywrightCommands[M]['params'],
+    timeout: number | TimeoutOptions,
+  ): Promise<Resolved<PlaywrightCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<PlaywrightCommands[M]['result']>
   }
 
   /** {@link Connection.send} for a `Dialog` command, to a `dialog@…` guid. */

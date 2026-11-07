@@ -41,6 +41,8 @@ function run() {
     page: 'page@T',
     mainFrame: 'frame@T',
     context: 'context@1',
+    request: 'request-context@default',
+    playwright: 'playwright@default',
     url: 'about:blank',
     testIdAttribute: 'data-testid',
     lineOffset: 0,

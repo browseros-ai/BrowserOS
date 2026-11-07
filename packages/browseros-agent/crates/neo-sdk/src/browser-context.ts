@@ -32,6 +32,7 @@ import type {
   SerializedError,
   SetNetworkCookie,
 } from '@browseros/neo-runtime-spec/serve'
+import { APIRequestContext } from './api-request'
 import type { Connection } from './connection'
 import { ConsoleMessage, type ConsoleMessagePayload } from './console-message'
 import { Dialog } from './dialog'
@@ -100,7 +101,7 @@ const STATE_FILE_PATH =
   'storageState: this run has no artifact directory, so Neo cannot read a state file; the host sets one per run'
 
 /** Neo: why `clearCookies()` without a filter throws. */
-const CLEAR_ALL_COOKIES_REFUSED =
+export const CLEAR_ALL_COOKIES_REFUSED =
   "Neo does not clear every cookie of the user's browser, which would sign the user out of every site: pass clearCookies a name, domain or path"
 
 /** Playwright's `clearCookies` options (`client/network.ts` `ClearNetworkCookieOptions`). */
@@ -112,7 +113,9 @@ export interface ClearCookieOptions {
 
 /** Playwright: `client/network.ts` `toClearCookiesParams`: `name: isString(options.name) ? options.name : undefined,`
  * The filters Playwright's client sends: a string or a `RegExp` each, anything else dropped. */
-function clearCookieFilter(options: ClearCookieOptions): ClearCookieOptions {
+export function clearCookieFilter(
+  options: ClearCookieOptions,
+): ClearCookieOptions {
   const kept = (value: unknown) =>
     typeof value === 'string' || value instanceof RegExp ? value : undefined
   return {
@@ -123,7 +126,7 @@ function clearCookieFilter(options: ClearCookieOptions): ClearCookieOptions {
 }
 
 /** Playwright: `server/network.ts` `hasClearCookiesFilter`: `return options.name !== undefined || options.domain !== undefined || options.path !== undefined;` */
-function hasClearCookieFilter(filter: ClearCookieOptions): boolean {
+export function hasClearCookieFilter(filter: ClearCookieOptions): boolean {
   return (
     filter.name !== undefined ||
     filter.domain !== undefined ||
@@ -132,7 +135,7 @@ function hasClearCookieFilter(filter: ClearCookieOptions): boolean {
 }
 
 /** Playwright: `server/network.ts` `cookieMatchesClearFilter`: `return matches('name', options.name) && matches('domain', options.domain) && matches('path', options.path);` */
-function clearCookieMatches(
+export function clearCookieMatches(
   cookie: NetworkCookie,
   filter: ClearCookieOptions,
 ): boolean {
@@ -181,14 +184,29 @@ export class BrowserContext extends ChannelOwner {
   /** Every dialog the run's events handed out, by guid: one object per dialog. */
   readonly #dialogs = new Map<string, Dialog>()
   readonly _timeoutSettings = new TimeoutSettings()
+  /** Playwright: `client/browserContext.ts` `BrowserContext.request`: the context's API request
+   * context, with the context's cookies and its timeout settings (`api-request.ts`). */
+  readonly request: APIRequestContext
   /** The run's event pipe, which this context's pages share. */
   readonly _pipe: EventPipe
   /** Playwright's `_closingStatus`: `closing` from `close()`'s call, `closed` once done. */
   #closingStatus: 'none' | 'closing' | 'closed' = 'none'
   #closeReason: string | undefined
 
-  constructor(guid: string, connection: Connection, pipe: EventPipe) {
+  /** `requestGuid`: the context's API request context, `RunInit.request` in a run. */
+  constructor(
+    guid: string,
+    connection: Connection,
+    pipe: EventPipe,
+    requestGuid = 'request-context@default',
+  ) {
     super(guid, pipe, CONTEXT_EVENTS)
+    this.request = new APIRequestContext(
+      requestGuid,
+      connection,
+      this._timeoutSettings,
+      false,
+    )
     this.#guid = guid
     this.#connection = connection
     this._pipe = pipe

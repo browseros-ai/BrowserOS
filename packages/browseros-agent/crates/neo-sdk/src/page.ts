@@ -19,6 +19,7 @@ import {
   isString,
   trimStringWithEllipsis,
 } from '../vendor/playwright/isomorphic/stringUtils'
+import type { APIRequestContext } from './api-request'
 import type { BrowserContext } from './browser-context'
 import type { Buffer } from './buffer'
 import type { ApiName, Connection } from './connection'
@@ -958,6 +959,11 @@ export class Page extends ChannelOwner {
 
   context(): BrowserContext {
     return this.#context
+  }
+
+  /** Playwright: `client/page.ts` `Page.request`: the page's context's API request context. */
+  get request(): APIRequestContext {
+    return this.#context.request
   }
 
   setDefaultTimeout(timeout: number): void {

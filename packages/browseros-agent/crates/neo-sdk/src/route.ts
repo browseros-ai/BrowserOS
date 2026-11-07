@@ -218,7 +218,7 @@ export class Route {
         },
         this.#timeoutSettings.timeout(options, 'route.fetch'),
       )
-      return new APIResponse(result)
+      return APIResponse.fromRouteFetch(result)
     }
   }
 
