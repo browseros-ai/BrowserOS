@@ -2,7 +2,9 @@
 //! are discarded after a disconnected evaluation; a retry discovers the current document.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, Weak};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use browseros_cdp::{CdpError, CdpEvent, SessionId};
 use neo_runtime_spec::{Element, Handle, InjectedCall};
@@ -138,11 +140,18 @@ impl Host {
     }
 }
 
+/// What the page does with an out-of-process frame's session once it is attached, before the
+/// call that attached it goes on (`page_events.rs` `PageEvents::child_attached`).
+pub(crate) type ChildHostHook =
+    Arc<dyn Fn(Arc<Host>) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
 /// The main context stays on the tab session; local child contexts share their parent's host.
 pub(crate) struct Frames {
     main: Arc<FrameContext>,
     contexts: Arc<Contexts>,
     tasks: TaskTracker,
+    /// Set once by the page session: the run's console producers on each new OOPIF session.
+    child_hook: OnceLock<ChildHostHook>,
 }
 
 impl Frames {
@@ -170,7 +179,27 @@ impl Frames {
             main,
             contexts,
             tasks,
+            child_hook: OnceLock::new(),
         }
+    }
+
+    /// Sets what every out-of-process frame session this page attaches from now on runs first.
+    pub(crate) fn on_child_host(&self, hook: ChildHostHook) {
+        let _first = self.child_hook.set(hook);
+    }
+
+    /// The out-of-process frame sessions this page has attached and still holds, one per session.
+    pub(crate) fn child_hosts(&self) -> Vec<Arc<Host>> {
+        let Ok(contexts) = self.contexts.lock() else {
+            return Vec::new();
+        };
+        let mut seen = HashSet::new();
+        contexts
+            .values()
+            .filter(|context| context.host.is_child() && !context.host.gone.is_cancelled())
+            .filter(|context| seen.insert(context.host.session_id().clone()))
+            .map(|context| Arc::clone(&context.host))
+            .collect()
     }
 
     pub(crate) fn main(&self) -> Arc<FrameContext> {
@@ -437,14 +466,18 @@ impl Frames {
             stop,
             Arc::downgrade(&self.contexts),
         ));
-        Ok(Arc::new(Host {
+        let host = Arc::new(Host {
             session: Arc::new(session),
             target_id: Some(frame.to_string()),
             parent: Some(Arc::clone(parent)),
             gone,
             _watch: Some(watch),
             contexts: Arc::downgrade(&self.contexts),
-        }))
+        });
+        if let Some(hook) = self.child_hook.get() {
+            hook(Arc::clone(&host)).await;
+        }
+        Ok(host)
     }
 
     /// Quads are local to a process's root. Crossing each remote boundary adds the owner's

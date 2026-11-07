@@ -21,6 +21,7 @@
 
 import type {
   BrowserContextCommands,
+  DialogCommands,
   FrameCommands,
   Metadata,
   PageCommands,
@@ -115,6 +116,14 @@ export type ApiName =
   | 'response.serverAddr'
   | 'response.securityDetails'
   | 'response.httpVersion'
+  | 'page.waitForEvent'
+  | 'browserContext.waitForEvent'
+  | 'page.consoleMessages'
+  | 'page.pageErrors'
+  | 'page.clearConsoleMessages'
+  | 'page.clearPageErrors'
+  | 'dialog.accept'
+  | 'dialog.dismiss'
   // Element reads and states (B1).
   | 'locator.isEnabled'
   | 'page.isEnabled'
@@ -256,6 +265,23 @@ export class Connection {
       params,
       timeout,
     )) as ResponseCommands[M]['result']
+  }
+
+  /** {@link Connection.send} for a `Dialog` command, to a `dialog@…` guid. */
+  async sendDialog<M extends keyof DialogCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: DialogCommands[M]['params'],
+    timeout: number,
+  ): Promise<Resolved<DialogCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<DialogCommands[M]['result']>
   }
 
   /**
