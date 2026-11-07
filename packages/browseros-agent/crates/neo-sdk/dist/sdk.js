@@ -3284,7 +3284,7 @@ class Frame {
       url,
       ...options,
       waitUntil
-    }), this._page._timeoutSettings.navigationTimeout(options));
+    }), this._page._timeoutSettings.navigationTimeout(options, apiName));
     const guid = result?.response?.guid;
     return guid ? responseFor(this._connection, guid, this) : null;
   }
@@ -3295,20 +3295,20 @@ class Frame {
     const waitOptions = options ?? {};
     const serialized = serializeUrlMatch(apiName, url);
     const waitUntil = verifyWaitState(apiName, "waitUntil", waitOptions.waitUntil === undefined ? "load" : waitOptions.waitUntil);
-    await this._connection.sendNeo(apiName, this._guid, "neo:waitForURL", { url: serialized, waitUntil }, this._page._timeoutSettings.navigationTimeout(waitOptions));
+    await this._connection.sendNeo(apiName, this._guid, "neo:waitForURL", { url: serialized, waitUntil }, this._page._timeoutSettings.navigationTimeout(waitOptions, apiName));
   }
   async waitForLoadState(state, options) {
     return await this._waitForLoadState("frame.waitForLoadState", state, options);
   }
   async _waitForLoadState(apiName, state, options) {
     const verified = verifyWaitState(apiName, "state", state === undefined ? "load" : state);
-    await this._connection.sendNeo(apiName, this._guid, "neo:waitForLoadState", { state: verified }, this._page._timeoutSettings.navigationTimeout(options ?? {}));
+    await this._connection.sendNeo(apiName, this._guid, "neo:waitForLoadState", { state: verified }, this._page._timeoutSettings.navigationTimeout(options ?? {}, apiName));
   }
   async _waitForSelector(apiName, selector, options) {
     await this._connection.send(apiName, this._guid, "waitForSelector", pickParams(FRAME_WAIT_FOR_SELECTOR_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options));
+    }), this._page._timeoutSettings.timeout(options, apiName));
   }
   async title() {
     return await this._title("frame.title");
@@ -3324,7 +3324,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "textContent", pickParams(FRAME_TEXT_CONTENT_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     return result.value === undefined ? null : result.value;
   }
   async innerText(selector, options = {}) {
@@ -3334,7 +3334,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "innerText", pickParams(FRAME_INNER_TEXT_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     return result.value;
   }
   async innerHTML(selector, options = {}) {
@@ -3344,7 +3344,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "innerHTML", pickParams(FRAME_INNER_HTML_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     return result.value;
   }
   async getAttribute(selector, name, options = {}) {
@@ -3355,7 +3355,7 @@ class Frame {
       selector,
       name,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     return result.value === undefined ? null : result.value;
   }
   async _queryCount(apiName, selector) {
@@ -3395,7 +3395,7 @@ class Frame {
       selector,
       depth: options.depth,
       boxes: options.boxes
-    }), this._page._timeoutSettings.timeout(options));
+    }), this._page._timeoutSettings.timeout(options, apiName));
     return result.snapshot;
   }
   async click(selector, options = {}) {
@@ -3405,7 +3405,7 @@ class Frame {
     await this._connection.send(apiName, this._guid, "click", pickParams(FRAME_CLICK_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async dblclick(selector, options = {}) {
     return await this._dblclick("frame.dblclick", selector, options);
@@ -3414,7 +3414,7 @@ class Frame {
     await this._connection.send(apiName, this._guid, "dblclick", pickParams(FRAME_DBLCLICK_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async hover(selector, options = {}) {
     return await this._hover("frame.hover", selector, options);
@@ -3423,7 +3423,7 @@ class Frame {
     await this._connection.send(apiName, this._guid, "hover", pickParams(FRAME_HOVER_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async tap(selector, options = {}) {
     return await this._tap("frame.tap", selector, options);
@@ -3432,7 +3432,7 @@ class Frame {
     await this._connection.send(apiName, this._guid, "tap", pickParams(FRAME_TAP_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async fill(selector, value, options = {}) {
     return await this._fill("frame.fill", selector, value, options);
@@ -3442,7 +3442,7 @@ class Frame {
       selector,
       value,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async press(selector, key, options = {}) {
     return await this._press("frame.press", selector, key, options);
@@ -3452,7 +3452,7 @@ class Frame {
       selector,
       key,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async inputValue(selector, options = {}) {
     return await this._inputValue("frame.inputValue", selector, options);
@@ -3461,7 +3461,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "inputValue", pickParams(FRAME_INPUT_VALUE_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     if (result === undefined)
       throw new Error("neo-sdk: Frame.inputValue contract error: missing result");
     return result.value;
@@ -3497,7 +3497,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "isChecked", pickParams(FRAME_IS_CHECKED_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     if (result === undefined)
       throw new Error("neo-sdk: Frame.isChecked contract error: missing result");
     return result.value;
@@ -3509,7 +3509,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "isEnabled", pickParams(FRAME_IS_ENABLED_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     if (result === undefined)
       throw new Error("neo-sdk: Frame.isEnabled contract error: missing result");
     return result.value;
@@ -3521,7 +3521,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "isDisabled", pickParams(FRAME_IS_DISABLED_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     if (result === undefined)
       throw new Error("neo-sdk: Frame.isDisabled contract error: missing result");
     return result.value;
@@ -3533,7 +3533,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "isEditable", pickParams(FRAME_IS_EDITABLE_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     if (result === undefined)
       throw new Error("neo-sdk: Frame.isEditable contract error: missing result");
     return result.value;
@@ -3545,7 +3545,7 @@ class Frame {
     await this._connection.send(apiName, this._guid, "check", pickParams(FRAME_CHECK_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async uncheck(selector, options = {}) {
     return await this._uncheck("frame.uncheck", selector, options);
@@ -3554,7 +3554,7 @@ class Frame {
     await this._connection.send(apiName, this._guid, "uncheck", pickParams(FRAME_UNCHECK_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async selectOption(selector, values, options = {}) {
     return await this._selectOption("frame.selectOption", selector, values, options);
@@ -3564,7 +3564,7 @@ class Frame {
       selector,
       ...convertSelectOptionValues(values),
       ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     if (result === undefined)
       throw new Error("neo-sdk: Frame.selectOption contract error: missing result");
     return result.values;
@@ -3609,6 +3609,10 @@ class Frame {
 
 // src/timeout-settings.ts
 var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
+function refuseSignal(options, apiName) {
+  if (options.signal !== undefined)
+    throw new Error(`${apiName}: Neo does not support the signal option yet`);
+}
 
 class TimeoutSettings {
   #parent;
@@ -3623,16 +3627,24 @@ class TimeoutSettings {
   setDefaultNavigationTimeout(timeout) {
     this.#defaultNavigationTimeout = timeout;
   }
-  timeout(options) {
+  timeout(options, apiName) {
+    refuseSignal(options, apiName);
+    return this.#timeout(options);
+  }
+  navigationTimeout(options, apiName) {
+    refuseSignal(options, apiName);
+    return this.#navigationTimeout(options);
+  }
+  #timeout(options) {
     if (typeof options.timeout === "number")
       return options.timeout;
     if (this.#defaultTimeout !== undefined)
       return this.#defaultTimeout;
     if (this.#parent)
-      return this.#parent.timeout(options);
+      return this.#parent.#timeout(options);
     return DEFAULT_PLAYWRIGHT_TIMEOUT;
   }
-  navigationTimeout(options) {
+  #navigationTimeout(options) {
     if (typeof options.timeout === "number")
       return options.timeout;
     if (this.#defaultNavigationTimeout !== undefined)
@@ -3640,7 +3652,7 @@ class TimeoutSettings {
     if (this.#defaultTimeout !== undefined)
       return this.#defaultTimeout;
     if (this.#parent)
-      return this.#parent.navigationTimeout(options);
+      return this.#parent.#navigationTimeout(options);
     return DEFAULT_PLAYWRIGHT_TIMEOUT;
   }
 }
