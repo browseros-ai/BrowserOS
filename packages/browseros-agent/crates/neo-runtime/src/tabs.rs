@@ -34,6 +34,7 @@ use crate::page::{FrameTab, PageSession, Session, TabInputs};
 use crate::page_events::{self, Kept, MAX_KEPT_ARGS, MAX_KEPT_CHOOSERS};
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunPage};
+use crate::screenshot::TabScreenshots;
 use crate::switch::Switches;
 
 /// Neo: how long `ConsoleMessage.args()` waits for its arguments' handles. A page a dialog holds
@@ -48,6 +49,8 @@ struct Inner {
     cdp: CdpClient,
     tokio: Handle,
     inputs: TabInputs,
+    /// The `Runtime`'s screenshot turns, one per tab, across runs.
+    screenshots: TabScreenshots,
     tasks: TaskTracker,
     creations: TaskTracker,
     scope: Scope,
@@ -166,6 +169,7 @@ impl Tabs {
         cdp: CdpClient,
         tokio: Handle,
         inputs: TabInputs,
+        screenshots: TabScreenshots,
         switches: Switches,
         tasks: TaskTracker,
         page: &PageId,
@@ -177,6 +181,7 @@ impl Tabs {
             cdp,
             tokio,
             inputs,
+            screenshots,
             tasks,
             creations: TaskTracker::new(),
             scope: Scope {
@@ -387,11 +392,13 @@ impl Tabs {
             return Err(PlaywrightError::target_closed());
         }
         let input = self.0.inputs.lock_for(&entry.id).await;
+        let screenshots = self.0.screenshots.turn_for(&entry.id).await;
         Ok(Arc::new(PageSession::new(
             session,
             &entry.id,
             self.0.tasks.clone(),
             input,
+            screenshots,
             entry.closed.clone(),
             self.0.events.clone(),
             entry.discovered.load(Ordering::Acquire),
@@ -1209,6 +1216,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             Switches::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),

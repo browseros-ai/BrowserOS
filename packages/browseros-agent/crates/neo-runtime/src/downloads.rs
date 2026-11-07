@@ -619,6 +619,7 @@ mod tests {
     use crate::page::TabInputs;
     use crate::progress::{CallEntry, CallStart, RunScope};
     use crate::run::PageId;
+    use crate::screenshot::TabScreenshots;
 
     fn progress(guid: &str, state: &str, file_path: Option<&str>) -> DownloadProgress {
         DownloadProgress {
@@ -855,6 +856,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             Switches::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),

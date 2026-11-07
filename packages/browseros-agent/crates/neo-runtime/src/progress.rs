@@ -32,6 +32,7 @@ use tokio_util::task::TaskTracker;
 use tracing::info;
 
 use crate::abort::CallAbort;
+use crate::artifacts::Artifacts;
 use crate::deadline::{Deadline, Stop};
 use crate::evaluate::Handles;
 use crate::init_scripts::InitScripts;
@@ -148,6 +149,8 @@ pub(crate) struct RunScope {
     /// every call still running stops at its next await or check, as Playwright's calls stop
     /// with its connection, and none writes input after.
     pub(crate) context_closed: CancellationToken,
+    /// Where the run's `path` options write, and what they wrote (`artifacts.rs`).
+    pub(crate) artifacts: Arc<Artifacts>,
 }
 
 impl RunScope {
@@ -160,7 +163,13 @@ impl RunScope {
             handles: Arc::default(),
             init_scripts: Arc::default(),
             context_closed: CancellationToken::new(),
+            artifacts: Arc::default(),
         }
+    }
+
+    /// The run's artifact directory and its record of written files.
+    pub(crate) fn with_artifacts(self, artifacts: Arc<Artifacts>) -> Self {
+        Self { artifacts, ..self }
     }
 
     /// Records `reason` (the first one wins) and cancels `ended`.
@@ -369,6 +378,11 @@ impl Progress {
     /// The call's delivery cell; `None` for a method the spec does not flag `input`.
     pub(crate) fn delivery(&self) -> Option<&Arc<DeliveryCell>> {
         self.entry.delivery.as_ref()
+    }
+
+    /// The run's artifact directory, where a `path` option writes.
+    pub(crate) fn artifacts(&self) -> &Artifacts {
+        &self.run.artifacts
     }
 }
 
