@@ -23,6 +23,7 @@ import type { RawEvent } from './events'
 import type { CreatedHandle } from './js-handle'
 import type { NeoSerializedUrlMatch } from './neo-commands'
 import type { CreatedChain, Timing } from './network'
+import type { CreatedWorker } from './worker'
 
 declare const __neo_runtime: {
   get(request: string): string
@@ -97,6 +98,9 @@ export interface GetterReplies {
   args: CreatedHandle[]
   /** On a file chooser (`filechooser@<targetId>:<n>`): its input as the run's handle. */
   element: CreatedHandle
+  /** On a page: its open dedicated workers' records, in attach order (`workers.rs`); none once
+   * the page is closed. */
+  workers: CreatedWorker[]
 }
 
 export function get<Field extends keyof GetterReplies>(

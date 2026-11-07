@@ -285,6 +285,10 @@ export type ApiName =
   | 'locator.highlight'
   | 'locator.hideHighlight'
   | 'page.hideHighlight'
+  // Dedicated workers (W2).
+  | 'worker.evaluate'
+  | 'worker.evaluateHandle'
+  | 'worker.waitForEvent'
 
 /** Playwright's wire error, `{error: {name, message}}`'s inner object. */
 export type WireError = { name: string; message: string }

@@ -1,0 +1,113 @@
+/**
+ * Copyright (c) Microsoft Corporation.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { LongStandingScope } from '@isomorphic/manualPromise';
+import { ChannelOwner, apiCall } from './channelOwner';
+import { ConsoleMessage } from './consoleMessage';
+import { isTargetClosedError, TargetClosedError } from './errors';
+import { Events } from './events';
+import { JSHandle, assertMaxArguments, parseResult, serializeArgument } from './jsHandle';
+import { TimeoutSettings, kNoTimeout } from './timeoutSettings';
+import { Waiter } from './waiter';
+
+import type { BrowserContext } from './browserContext';
+import type { Page } from './page';
+import type * as structs from '../../types/structs';
+import type * as api from '../../types/types';
+import type * as channels from './channels';
+import type { WaitForEventOptions } from './types';
+
+
+export class Worker extends ChannelOwner<channels.WorkerChannel> implements api.Worker {
+  _page: Page | undefined;  // Set for web workers.
+  _context: BrowserContext | undefined;  // Set for service workers.
+  readonly _closedScope = new LongStandingScope();
+  private _closeReason: string | undefined;
+
+  static fromNullable(worker: channels.WorkerChannel | undefined): Worker | null {
+    return worker ? Worker.from(worker) : null;
+  }
+
+  static from(worker: channels.WorkerChannel): Worker {
+    return (worker as any)._object;
+  }
+
+  constructor(parent: ChannelOwner, type: string, guid: string, initializer: channels.WorkerInitializer) {
+    super(parent, type, guid, initializer);
+    this._setEventToSubscriptionMapping(new Map<string, channels.WorkerUpdateSubscriptionParams['event']>([
+      [Events.Worker.Console, 'console'],
+    ]));
+    this._channel.on('console', event => {
+      // Note: we only receive console events here for workers from "chromium._connectToWorker".
+      this.emit(Events.Worker.Console, new ConsoleMessage(event, null, this));
+    });
+    this._channel.on('close', () => {
+      if (this._page)
+        this._page._workers.delete(this);
+      if (this._context)
+        this._context._serviceWorkers.delete(this);
+      this.emit(Events.Worker.Close, this);
+    });
+    this.once(Events.Worker.Close, () => this._closedScope.close(this._closeErrorWithReason()));
+  }
+
+  _closeErrorWithReason() {
+    if (this._closeReason)
+      return new TargetClosedError(this._closeReason);
+    return this._page?._closeErrorWithReason() || new TargetClosedError();
+  }
+
+  url(): string {
+    return this._initializer.url;
+  }
+
+  async evaluate<R, Arg>(pageFunction: structs.PageFunction<Arg, R>, arg?: Arg): Promise<R> {
+    assertMaxArguments(arguments.length, 2);
+    const result = await this._channel.evaluateExpression({ expression: String(pageFunction), isFunction: typeof pageFunction === 'function', arg: serializeArgument(arg) }, kNoTimeout);
+    return parseResult(result.value);
+  }
+
+  async evaluateHandle<R, Arg>(pageFunction: structs.PageFunction<Arg, R>, arg?: Arg): Promise<structs.SmartHandle<R>> {
+    assertMaxArguments(arguments.length, 2);
+    const result = await this._channel.evaluateExpressionHandle({ expression: String(pageFunction), isFunction: typeof pageFunction === 'function', arg: serializeArgument(arg) }, kNoTimeout);
+    return JSHandle.from(result.handle) as any as structs.SmartHandle<R>;
+  }
+
+  @apiCall()
+  async waitForEvent(event: string, optionsOrPredicate: WaitForEventOptions = {}): Promise<any> {
+    const timeoutSettings = this._page?._timeoutSettings ?? this._context?._timeoutSettings ?? new TimeoutSettings();
+    const timeoutOptions = timeoutSettings.timeout(typeof optionsOrPredicate === 'function' ? {} : optionsOrPredicate);
+    const predicate = typeof optionsOrPredicate === 'function' ? optionsOrPredicate : optionsOrPredicate.predicate;
+    const waiter = Waiter.createForEvent(this, event);
+    waiter.rejectOnTimeout(timeoutOptions, `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`);
+    if (event !== Events.Worker.Close)
+      waiter.rejectOnEvent(this, Events.Worker.Close, () => this._closeErrorWithReason());
+    const result = await waiter.waitForEvent(this, event, predicate as any);
+    waiter.dispose();
+    return result;
+  }
+
+  async _disconnect(options: { reason?: string } = {}): Promise<void> {
+    this._closeReason = options.reason;
+    try {
+      await this._channel.disconnect(options, kNoTimeout);
+    } catch (e) {
+      if (isTargetClosedError(e))
+        return;
+      throw e;
+    }
+  }
+}

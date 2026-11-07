@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (87)
+## Deviations (88)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -94,6 +94,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-sdk/src/url.ts | (file) | `isomorphic/urlMatch.ts` `urlMatches` | Playwright passes a URL predicate a WHATWG `URL`. The realm has no `URL`, so Neo passes this read-only one, built from Rust's WHATWG parser: every getter and `toString`/`toJSON` read as `URL`'s do, and `searchParams` reads as `URLSearchParams`; setters and `searchParams`' mutators throw, and `instanceof URL` cannot hold. |
 | neo-sdk/src/url.ts | `READ_ONLY` | `isomorphic/urlMatch.ts` `urlMatches` | the error a write to Neo's read-only `URL` throws, where Playwright's predicate gets a writable WHATWG `URL`. |
 | neo-sdk/src/vendor-shims.ts | `URL` | `isomorphic/utilityScriptSerializers.ts` `parseEvaluationResultValue` | QuickJS has no WHATWG URL, so a `URL` the page returns (and a `URL` an agent passes back) is this object: its `href`, `toString()` and `toJSON()` as Playwright's client gives them, and no parsed parts (`host`, `pathname`, `searchParams`). |
+| neo-sdk/src/worker.ts | (file) | `client/worker.ts` `Worker.constructor` | Neo reports no worker's console yet: a `console` listener on a worker throws, as every event Neo does not produce does. |
 
 ## Unexplained: owner questions (0)
 

@@ -6910,6 +6910,64 @@ class WebStorage {
   }
 }
 
+// src/worker.ts
+var WORKER_EVENTS = {
+  receiver: "Worker",
+  served: [],
+  local: ["close"],
+  quiet: [],
+  unserved: ["console"]
+};
+
+class Worker extends ChannelOwner {
+  #initializer;
+  #page;
+  #connection;
+  constructor(record, page, pipe, connection) {
+    super(record.guid, pipe, WORKER_EVENTS);
+    this.#initializer = record.initializer;
+    this.#page = page;
+    this.#connection = connection;
+  }
+  _onEvent(_method, _params) {}
+  _onClose() {
+    this.emit("close", this);
+  }
+  _closeErrorWithReason() {
+    return targetClosedError(this.#page._closeReason());
+  }
+  url() {
+    return this.#initializer.url;
+  }
+  async evaluate(pageFunction, arg) {
+    assertMaxArguments(arguments.length, 2);
+    const params = evaluateParams("worker.evaluate", pageFunction, arg, undefined);
+    const result = await this.#connection.sendEval("worker.evaluate", this._guid, "evaluateExpression", params, 0);
+    return parseResult(result.value);
+  }
+  async evaluateHandle(pageFunction, arg) {
+    assertMaxArguments(arguments.length, 2);
+    const params = evaluateParams("worker.evaluateHandle", pageFunction, arg, undefined);
+    const result = await this.#connection.sendEval("worker.evaluateHandle", this._guid, "evaluateExpressionHandle", params, 0);
+    return handleFrom(this.#connection, result.handle);
+  }
+  async waitForEvent(event, optionsOrPredicate = {}) {
+    return await wrapApiCall("worker.waitForEvent", async () => {
+      const options = typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate;
+      const timeoutOptions = this.#page._timeoutSettings.timeout(options, null);
+      this._refuseUnserved(event);
+      const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : optionsOrPredicate.predicate;
+      const waiter = Waiter.createForEvent();
+      waiter.rejectOnTimeout(timeoutOptions, `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`);
+      if (event !== "close")
+        waiter.rejectOnEvent(this, "close", () => this._closeErrorWithReason());
+      const result = await waiter.waitForEvent(this, event, predicate);
+      waiter.dispose();
+      return result;
+    });
+  }
+}
+
 // src/page.ts
 var PAGE_EVENTS = {
   receiver: "Page",
@@ -6931,10 +6989,11 @@ var PAGE_EVENTS = {
     "request",
     "response",
     "requestfailed",
-    "requestfinished"
+    "requestfinished",
+    "worker"
   ],
   quiet: [],
-  unserved: ["websocket", "worker"]
+  unserved: ["websocket"]
 };
 function trimUrl(param) {
   if (isRegExp4(param))
@@ -6951,6 +7010,8 @@ class Page extends ChannelOwner {
   #connection;
   #mainFrame;
   #frames = new Map;
+  #workers = new Map;
+  #workersTracked = false;
   _timeoutSettings;
   keyboard;
   mouse;
@@ -7040,10 +7101,54 @@ class Page extends ChannelOwner {
       this._onBinding(params.binding);
     else if (method === "locatorHandlerTriggered")
       this.#onLocatorHandlerTriggered(params.uid).catch((error) => this.#context._pipe.report(error));
+    else if (method === "worker")
+      this.emit("worker", this._workerFrom(params.worker));
+    else if (method === "workerClose")
+      this.#onWorkerClose(params.worker.guid);
     else if (method === "fileChooser") {
       const { chooser, isMultiple } = params;
       this.emit("filechooser", new FileChooser(this, chooser, isMultiple, this.#connection));
     }
+  }
+  _workerFrom(record) {
+    let worker = this.#workers.get(record.guid);
+    if (!worker) {
+      worker = new Worker(record, this, this.#context._pipe, this.#connection);
+      this.#workers.set(record.guid, worker);
+    }
+    return worker;
+  }
+  #onWorkerClose(guid) {
+    const worker = this.#workers.get(guid);
+    if (!worker)
+      return;
+    this.#workers.delete(guid);
+    worker._onClose();
+  }
+  #trackWorkers() {
+    if (this.#workersTracked)
+      return;
+    this.#workersTracked = true;
+    this._subscribeChannelEvent("workerClose", true);
+  }
+  on(event, listener) {
+    if (event === "worker")
+      this.#trackWorkers();
+    return super.on(event, listener);
+  }
+  addListener(event, listener) {
+    if (event === "worker")
+      this.#trackWorkers();
+    return super.addListener(event, listener);
+  }
+  prependListener(event, listener) {
+    if (event === "worker")
+      this.#trackWorkers();
+    return super.prependListener(event, listener);
+  }
+  workers() {
+    this.#trackWorkers();
+    return get(this.#guid, "workers").map((record) => this._workerFrom(record));
   }
   async _onBinding(record) {
     const call2 = new BindingCall(this.#connection, record, this._frameForGuid(record.frame.guid));
@@ -7759,6 +7864,9 @@ class BrowserContext extends ChannelOwner {
     if (this.#closingStatus === "closed")
       return [];
     return get(this.#guid, "pages").map((created) => this.#pages.get(created.guid) ?? this.#add(created)).filter((page) => !page._isClosedLocally());
+  }
+  backgroundPages() {
+    return [];
   }
   async exposeFunction(name, callback) {
     return await this.#expose("browserContext.exposeFunction", name, (_source, ...args) => callback(...args));

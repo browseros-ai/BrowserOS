@@ -76,3 +76,4 @@ neo-sdk/src/vendor-shims.ts
 neo-sdk/src/waiter.ts
 neo-sdk/src/web-error.ts
 neo-sdk/src/web-storage.ts
+neo-sdk/src/worker.ts
