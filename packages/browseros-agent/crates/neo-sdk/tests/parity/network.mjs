@@ -74,7 +74,7 @@ setTimeout(() => fetch('/net/slow?ms=700').then((r) => r.text()).then(() => { do
 setTimeout(() => fetch('/net/slow?ms=700').then((r) => r.text()).then(() => { parent.document.title = 'done' }), 300)
 </script>`,
   // A frame from localhost, another site, so Chromium runs it in its own process.
-  '/net/oopif-top.html': `<title>oopif top</title><script>
+  '/net/oopif-top.html': `<title>oopif top</title><body><script>
 const frame = document.createElement('iframe')
 frame.name = 'cross'
 frame.src = 'http://localhost:' + location.port + '/net/oopif-child.html'

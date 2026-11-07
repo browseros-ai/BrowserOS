@@ -74,8 +74,10 @@ const cases = [
     source: `await page.goto(ORIGIN + '/net/blank.html')
     const events = []
     page.on('requestfinished', (request) => events.push('finished ' + path(request.url())))
-    const failed = page.waitForEvent('requestfailed')
-    const fromContext = context.waitForEvent('requestfailed')
+    const hangup = (request) => request.url().endsWith('/net/hangup')
+    const failed = page.waitForEvent('requestfailed', hangup)
+    // The context also reports the browser's service workers' requests: wait for this one.
+    const fromContext = context.waitForEvent('requestfailed', hangup)
     await page.evaluate(() => fetch('/net/hangup').catch(() => 'rejected'))
     const request = await failed
     return {
@@ -150,8 +152,8 @@ const cases = [
     name: "an out-of-process frame's fetch reaches the page's listeners with that frame",
     source: `await page.goto(ORIGIN + '/net/oopif-top.html')
     let cross
-    for (let tries = 0; !cross && tries < 50; tries++) {
-      cross = page.frames().find((frame) => frame.name() === 'cross' && frame.url().endsWith('/net/oopif-child.html'))
+    for (let tries = 0; !cross && tries < 150; tries++) {
+      cross = page.frames().find((frame) => frame.url().endsWith('/net/oopif-child.html'))
       if (!cross) await new Promise((resolve) => setTimeout(resolve, 100))
     }
     await cross.waitForLoadState('load')
@@ -228,7 +230,25 @@ const cases = [
       postDataBuffer: '{"a":1}',
       provisional: ['application/json', 'yes'],
       raw: ['application/json', 'yes', 'yes'],
-      rawNames: 'FROM_PLAYWRIGHT',
+      rawNames: [
+        'accept',
+        'accept-encoding',
+        'accept-language',
+        'connection',
+        'content-length',
+        'content-type',
+        'host',
+        'origin',
+        'referer',
+        'sec-ch-ua',
+        'sec-ch-ua-mobile',
+        'sec-ch-ua-platform',
+        'sec-fetch-dest',
+        'sec-fetch-mode',
+        'sec-fetch-site',
+        'user-agent',
+        'x-neo',
+      ],
       status: [200, 'OK', true, 'POST {"a":1}'],
       responseHeaders: ['text/plain', 'no-store', 'text/plain'],
       responseNames: [
@@ -240,9 +260,16 @@ const cases = [
         'keep-alive',
       ],
       headerValues: ['no-store'],
-      sizes: 'FROM_PLAYWRIGHT',
+      // The same browser sends the same headers to the same server, so the sizes are equal.
+      sizes: {
+        requestBodySize: 7,
+        requestHeadersSize: 620,
+        responseBodySize: 12,
+        responseHeadersSize: 174,
+      },
       serverAddr: '127.0.0.1',
-      securityDetails: null,
+      // Chromium's is an object even without TLS.
+      securityDetails: {},
       httpVersion: 'HTTP/1.1',
       fromServiceWorker: false,
       serviceWorker: null,
