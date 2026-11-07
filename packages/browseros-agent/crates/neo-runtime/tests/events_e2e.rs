@@ -30,6 +30,22 @@ const EVENTS: &str = r#"<!doctype html><html><body>
 <script>console.log('before run')</script>
 </body></html>"#;
 
+/// A top document on 127.0.0.1 with a frame from localhost, another site, which Chromium runs in
+/// its own process and Neo reaches on its own CDP session.
+const OOPIF_TOP: &str = r"<!doctype html><html><body>
+<script>console.log('top loaded');
+const frame = document.createElement('iframe');
+frame.id = 'child';
+frame.src = 'http://localhost:' + location.port + '/oopif-child.html';
+document.body.append(frame);</script>
+</body></html>";
+
+const OOPIF_CHILD: &str = r#"<!doctype html><html><body>
+<button id="log" onclick="console.log('child click')">log</button>
+<button id="throw" onclick="throw new RangeError('child boom')">throw</button>
+<script>console.log('child loaded')</script>
+</body></html>"#;
+
 async fn open() -> Option<Tab> {
     let binary = browser::e2e_browser()?;
     Some(
@@ -117,6 +133,71 @@ return {
             "web": [[true, "boom"]],
         }),
         "events reach their listeners before the call that caused them resolves"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_an_out_of_process_frame_reports_its_console_to_the_page() {
+    let Some(binary) = browser::e2e_browser() else {
+        return;
+    };
+    let tab = Tab::open(
+        binary,
+        Fixture {
+            pages: vec![
+                ("/oopif-top.html".into(), OOPIF_TOP.into()),
+                ("/oopif-child.html".into(), OOPIF_CHILD.into()),
+            ],
+            ..Fixture::default()
+        },
+        "/oopif-top.html",
+    )
+    .await;
+    let outcome = run(
+        &tab,
+        r"const seen = []
+page.on('console', m => seen.push([m.text(), m.page() === page, m.location().url.endsWith('/oopif-child.html')]))
+const errors = []
+page.on('pageerror', e => errors.push([e.name, e.message]))
+const child = page.frameLocator('#child')
+await child.locator('#log').click()
+const atClick = seen.slice()
+await child.locator('#throw').click()
+const history = (await page.consoleMessages()).map(m => m.text())
+return { atClick, errors, history }",
+        Duration::from_secs(30),
+    )
+    .await;
+    // The frame really is out of process: it is a target of its own.
+    let targets = tab
+        .cdp
+        .send(
+            "Target.getTargets",
+            json!({ "filter": [{ "type": "iframe" }] }),
+            None,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("Target.getTargets: {error}"));
+    tab.close().await;
+    let out_of_process = targets["targetInfos"].as_array().is_some_and(|targets| {
+        targets.iter().any(|target| {
+            target["url"]
+                .as_str()
+                .is_some_and(|url| url.ends_with("/oopif-child.html"))
+        })
+    });
+    assert!(
+        out_of_process,
+        "the child frame is not out of process: {targets}"
+    );
+    assert_eq!(
+        value(&outcome),
+        &json!({
+            "atClick": [["child click", true, true]],
+            "errors": [["RangeError", "child boom"]],
+            "history": ["top loaded", "child loaded", "child click"],
+        }),
+        "the frame's messages are the page's; its load-time message is history"
     );
 }
 

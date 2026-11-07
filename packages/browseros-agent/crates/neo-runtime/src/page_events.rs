@@ -16,14 +16,21 @@
 //! replays what V8 kept for the tab's live documents; those messages predate the run's interest
 //! and go to the history alone, never to a listener, like messages Playwright's server saw
 //! before its client subscribed.
+//!
+//! An out-of-process frame reports its console on its own CDP session. The tab's watcher takes
+//! those events too, once the run has attached that frame's session: the page's console turns
+//! on there before the call that attached it goes on ([`PageEvents::child_attached`]), and the
+//! session's own replay is history only, as the tab's.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use browseros_cdp::{CdpClient, CdpEvent, SessionId};
 use neo_runtime_spec::serve::SerializedError;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::time;
 use tracing::debug;
 
 use crate::bridge;
@@ -32,9 +39,14 @@ use crate::console::{
 };
 use crate::dialogs::{self, Dialogs};
 use crate::events::{CONTEXT_GUID, Emitted, EventHub, Needs};
+use crate::frames::Host;
 use crate::page::{Applied, DialogAnswer};
 use crate::run::PageId;
 use crate::tabs::{PageEntry, Tabs};
+
+/// Neo: how long an out-of-process frame's first call waits for that frame's console to turn on.
+/// A frame frozen by its page's dialog may never answer; the call then goes on without it.
+const CHILD_ENABLE_WAIT: Duration = Duration::from_secs(5);
 
 /// The producer side of one tab's session: cheap to clone, shared by the tab's `PageSession`
 /// (which serves `consoleMessages` and dialog answers from it) and its watcher.
@@ -45,6 +57,9 @@ pub(crate) struct PageEvents {
     target: String,
     cdp: CdpClient,
     session: SessionId,
+    /// The out-of-process frame sessions of this tab the run attached, whose console events the
+    /// tab's watcher takes as the tab's.
+    children: Arc<Mutex<HashSet<SessionId>>>,
     pub(crate) console: Arc<ConsoleLog>,
     pub(crate) dialogs: Arc<Dialogs>,
 }
@@ -68,9 +83,44 @@ impl PageEvents {
             target: target.to_string(),
             cdp,
             session,
+            children: Arc::default(),
             console: Arc::default(),
             dialogs: Arc::default(),
         }
+    }
+
+    /// An out-of-process frame of this tab got a session: from now on its console events are
+    /// the tab's, and when the run already wants the tab's console, it turns on there before the
+    /// call that attached the frame goes on, so that call's messages are live, not replayed.
+    pub(crate) async fn child_attached(&self, host: &Arc<Host>) {
+        if let Ok(mut children) = self.children.lock() {
+            children.insert(host.session_id().clone());
+        }
+        if self.console.requested(&self.session) {
+            self.enable_child(host).await;
+        }
+    }
+
+    /// `Runtime.enable` and `Log.enable` on an out-of-process frame's session, its replay applied
+    /// as history before the session goes live, as `PageSession::enable_runtime` does for the
+    /// tab's own session. Bounded by [`CHILD_ENABLE_WAIT`]; a failure is logged.
+    pub(crate) async fn enable_child(&self, host: &Arc<Host>) {
+        let session = host.session_id().clone();
+        if self.console.requested(&session) {
+            return;
+        }
+        self.console.request(&session);
+        let enable = async {
+            host.send("Runtime.enable", json!({})).await?;
+            host.send("Log.enable", json!({})).await
+        };
+        match time::timeout(CHILD_ENABLE_WAIT, enable).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => debug!(%session, %error, "a frame's console did not turn on"),
+            Err(_) => debug!(%session, "a frame's console did not turn on in time"),
+        }
+        self.hub.replay_barrier().await;
+        self.console.go_live(&session);
     }
 
     pub(crate) fn hub(&self) -> &EventHub {
@@ -86,17 +136,26 @@ impl PageEvents {
     /// returns the dialog answer the watcher still owes: `applied.dialog` unless a listener now
     /// owns the dialog.
     pub(crate) fn apply(&self, event: &CdpEvent, applied: &Applied) -> Option<DialogAnswer> {
-        if event.session_id.as_ref() != Some(&self.session) {
+        let Some(session) = event.session_id.as_ref() else {
+            return applied.dialog;
+        };
+        if session != &self.session {
+            // An out-of-process frame of this tab: its console only. Chromium reports its
+            // dialogs on the tab's own session.
+            if self
+                .children
+                .lock()
+                .is_ok_and(|children| children.contains(session))
+            {
+                self.console_event(event, session);
+            }
             return applied.dialog;
         }
         let mut answer = applied.dialog;
         match event.method.as_str() {
-            "Runtime.consoleAPICalled" => self.console_api(&event.params),
-            "Log.entryAdded" => self.log_entry(&event.params),
-            "Runtime.exceptionThrown" => self.exception(&event.params),
             "Page.javascriptDialogOpening" => answer = self.dialog_opening(&event.params, answer),
             "Page.javascriptDialogClosed" => self.dialog_closed(),
-            _ => {}
+            _ => self.console_event(event, session),
         }
         if applied.new_document {
             self.console.mark_navigation();
@@ -118,17 +177,27 @@ impl PageEvents {
         self.dialogs.forget();
     }
 
-    fn console_api(&self, params: &Value) {
+    /// A console message, log entry or page error of `session`, the tab's or a frame's.
+    fn console_event(&self, event: &CdpEvent, session: &SessionId) {
+        match event.method.as_str() {
+            "Runtime.consoleAPICalled" => self.console_api(&event.params, session),
+            "Log.entryAdded" => self.log_entry(&event.params, session),
+            "Runtime.exceptionThrown" => self.exception(&event.params, session),
+            _ => {}
+        }
+    }
+
+    fn console_api(&self, params: &Value, session: &SessionId) {
         let Ok(event) = serde_json::from_value::<ConsoleApiCalled>(params.clone()) else {
             return;
         };
         let Some(record) = console::from_console_api(&event) else {
             return;
         };
-        self.message(record, event.timestamp);
+        self.message(record, event.timestamp, session);
     }
 
-    fn log_entry(&self, params: &Value) {
+    fn log_entry(&self, params: &Value, session: &SessionId) {
         let Ok(LogEntryAdded { entry }) = serde_json::from_value::<LogEntryAdded>(params.clone())
         else {
             return;
@@ -136,7 +205,7 @@ impl PageEvents {
         // Playwright: `server/chromium/crPage.ts` `FrameSession._onLogEntryAdded`: `args.map(arg => releaseObject(this._client, arg.objectId!));`
         for object in console::log_entry_object_ids(&entry) {
             let cdp = self.cdp.clone();
-            let session = self.session.clone();
+            let session = session.clone();
             tokio::spawn(async move {
                 let released = cdp
                     .send(
@@ -151,24 +220,24 @@ impl PageEvents {
             });
         }
         if let Some(record) = console::from_log_entry(&entry) {
-            self.message(record, entry.timestamp);
+            self.message(record, entry.timestamp, session);
         }
     }
 
-    fn message(&self, record: ConsoleRecord, timestamp: f64) {
+    fn message(&self, record: ConsoleRecord, timestamp: f64, session: &SessionId) {
         let params = self
             .hub
             .wants(&self.page_guid, "console", "console")
             .then(|| serde_json::to_value(&record).ok())
             .flatten();
-        let live = self.console.push_message(record, timestamp);
+        let live = self.console.push_message(record, timestamp, session);
         if let Some(mut params) = params.filter(|_| live) {
             params["page"] = json!({ "guid": self.page_guid });
             self.hub.emit(CONTEXT_GUID, "console", &params);
         }
     }
 
-    fn exception(&self, params: &Value) {
+    fn exception(&self, params: &Value, session: &SessionId) {
         let Ok(event) = serde_json::from_value::<ExceptionThrown>(params.clone()) else {
             return;
         };
@@ -188,7 +257,7 @@ impl PageEvents {
                     },
                 })
             });
-        let live = self.console.push_error(record, event.timestamp);
+        let live = self.console.push_error(record, event.timestamp, session);
         if let Some(params) = params.filter(|_| live) {
             self.hub.emit(CONTEXT_GUID, "pageError", &params);
         }
@@ -235,26 +304,32 @@ impl PageEvents {
         }
     }
 
-    /// Frees the objects the session's console events hold in the page (V8's `console` object
-    /// group), once nothing listens to them: Neo hands no console argument out as a handle yet.
+    /// Frees the objects the tab's console events hold in the page (V8's `console` object
+    /// group, on the tab's session and each frame session's), once nothing listens to them: Neo
+    /// hands no console argument out as a handle yet.
     pub(crate) fn release_console_objects(&self) {
-        if !self.console.requested() {
-            return;
+        let mut sessions = vec![self.session.clone()];
+        if let Ok(children) = self.children.lock() {
+            sessions.extend(children.iter().cloned());
         }
-        let cdp = self.cdp.clone();
-        let session = self.session.clone();
-        tokio::spawn(async move {
-            let released = cdp
-                .send(
-                    "Runtime.releaseObjectGroup",
-                    json!({ "objectGroup": "console" }),
-                    Some(&session),
-                )
-                .await;
-            if let Err(error) = released {
-                debug!(%session, %error, "releasing the console's objects failed");
+        for session in sessions {
+            if !self.console.requested(&session) {
+                continue;
             }
-        });
+            let cdp = self.cdp.clone();
+            tokio::spawn(async move {
+                let released = cdp
+                    .send(
+                        "Runtime.releaseObjectGroup",
+                        json!({ "objectGroup": "console" }),
+                        Some(&session),
+                    )
+                    .await;
+                if let Err(error) = released {
+                    debug!(%session, %error, "releasing the console's objects failed");
+                }
+            });
+        }
     }
 
     /// Whether no listener of the run wants this page's console messages or page errors.
@@ -265,9 +340,10 @@ impl PageEvents {
 }
 
 /// One tab's console messages and page errors as Playwright's server keeps them
-/// (`console::History`), and where `Runtime.enable`'s replay ends.
+/// (`console::History`), and where each session's `Runtime.enable` replay ends: the tab's own
+/// session and each out-of-process frame's.
 ///
-/// The replay comes before the enable's reply; [`ConsoleLog::go_live`] runs once the watcher has
+/// A replay comes before its enable's reply; [`ConsoleLog::go_live`] runs once the watcher has
 /// applied everything up to that reply. Until then a message counts as live only when V8 stamped
 /// it at or after the moment the enable was requested: it was logged after the subscription that
 /// asked for the enable (or the history read), so a listener must see it.
@@ -277,51 +353,64 @@ pub(crate) struct ConsoleLog(Mutex<ConsoleState>);
 #[derive(Default)]
 struct ConsoleState {
     history: History,
-    /// Epoch milliseconds when `Runtime.enable` was requested, as V8 stamps messages.
-    requested_at: Option<f64>,
+    /// Per session, where its `Runtime.enable` replay stands.
+    replays: HashMap<SessionId, Replay>,
+}
+
+/// One session's `Runtime.enable`.
+#[derive(Clone, Copy)]
+struct Replay {
+    /// Epoch milliseconds when the enable was requested, as V8 stamps messages.
+    requested_at: f64,
     live: bool,
 }
 
 impl ConsoleState {
-    fn live(&self, timestamp: f64) -> bool {
-        self.live || self.requested_at.is_some_and(|at| timestamp >= at)
+    fn live(&self, session: &SessionId, timestamp: f64) -> bool {
+        self.replays
+            .get(session)
+            .is_some_and(|replay| replay.live || timestamp >= replay.requested_at)
     }
 }
 
 impl ConsoleLog {
-    /// Records that `Runtime.enable` is about to be sent.
-    pub(crate) fn request(&self) {
-        if let Ok(mut state) = self.0.lock()
-            && state.requested_at.is_none()
-        {
-            state.requested_at = Some(now_ms());
+    /// Records that `Runtime.enable` is about to be sent on `session`.
+    pub(crate) fn request(&self, session: &SessionId) {
+        if let Ok(mut state) = self.0.lock() {
+            state.replays.entry(session.clone()).or_insert(Replay {
+                requested_at: now_ms(),
+                live: false,
+            });
         }
     }
 
-    fn requested(&self) -> bool {
+    /// Whether `Runtime.enable` was requested on `session`.
+    pub(crate) fn requested(&self, session: &SessionId) -> bool {
         self.0
             .lock()
-            .is_ok_and(|state| state.requested_at.is_some())
+            .is_ok_and(|state| state.replays.contains_key(session))
     }
 
-    /// The enable's replay has been applied; every later message is live.
-    pub(crate) fn go_live(&self) {
-        if let Ok(mut state) = self.0.lock() {
-            state.live = true;
+    /// `session`'s replay has been applied; every later message of it is live.
+    pub(crate) fn go_live(&self, session: &SessionId) {
+        if let Ok(mut state) = self.0.lock()
+            && let Some(replay) = state.replays.get_mut(session)
+        {
+            replay.live = true;
         }
     }
 
-    fn push_message(&self, record: ConsoleRecord, timestamp: f64) -> bool {
+    fn push_message(&self, record: ConsoleRecord, timestamp: f64, session: &SessionId) -> bool {
         self.0.lock().is_ok_and(|mut state| {
             state.history.push_message(record);
-            state.live(timestamp)
+            state.live(session, timestamp)
         })
     }
 
-    fn push_error(&self, record: PageErrorRecord, timestamp: f64) -> bool {
+    fn push_error(&self, record: PageErrorRecord, timestamp: f64, session: &SessionId) -> bool {
         self.0.lock().is_ok_and(|mut state| {
             state.history.push_error(record);
-            state.live(timestamp)
+            state.live(session, timestamp)
         })
     }
 

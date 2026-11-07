@@ -496,6 +496,7 @@ impl PageSession {
         hub: EventHub,
     ) -> Self {
         let events = PageEvents::new(hub, page.as_str(), session.cdp.clone(), session.id.clone());
+        let child_events = events.clone();
         let world = World::new(
             session.cdp.clone(),
             session.id.clone(),
@@ -509,6 +510,12 @@ impl PageSession {
             Arc::clone(&world),
             tasks.clone(),
         ));
+        // An out-of-process frame's console is this tab's: it turns on when the frame's session
+        // is attached, if the run wants the tab's console by then.
+        frames.on_child_host(Arc::new(move |host| {
+            let events = child_events.clone();
+            Box::pin(async move { events.child_attached(&host).await })
+        }));
         let (state_updates, state) = watch::channel(PageState::default());
         let (navigations, _) = broadcast::channel(4096);
         Self {
@@ -624,11 +631,16 @@ impl PageSession {
         self.prepare().await?;
         self.runtime_enabled
             .get_or_try_init(|| async {
-                self.events.console.request();
+                self.events.console.request(self.session_id());
                 self.send("Runtime.enable", json!({})).await?;
                 self.send("Log.enable", json!({})).await?;
                 self.events.hub().replay_barrier().await;
-                self.events.console.go_live();
+                self.events.console.go_live(self.session_id());
+                // The out-of-process frames this run already attached report on their own
+                // sessions; later ones turn on when they attach (`PageEvents::child_attached`).
+                for host in self.frames.child_hosts() {
+                    self.events.enable_child(&host).await;
+                }
                 Ok::<(), CdpError>(())
             })
             .await

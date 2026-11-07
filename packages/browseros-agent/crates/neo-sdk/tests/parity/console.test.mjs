@@ -3,8 +3,10 @@
 // listeners and then the context's, as one ConsoleMessage, before the click resolves; each
 // message's type, text, location, page and worker, for clicks and a timer; and the text
 // Playwright makes of several arguments: each argument's preview, joined by spaces, with format
-// specifiers left as written. Timestamps compare by type and order, never by value; no case
-// reads args().
+// specifiers left as written; the messages a navigation's document logs while it loads reach the
+// listener before `goto` resolves; a failed resource load is the browser's own console error
+// (Chromium's Log domain). Timestamps compare by type and order, never by value; no case reads
+// args().
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs, events.mjs).
 
@@ -113,6 +115,46 @@ const cases = [
     },
     probe: 'window.__logged',
     effect: 5,
+  },
+  {
+    // page-event-console.spec.ts "CM-004 should work for different console API calls" ("All
+    // console events will be reported before `page.evaluate` is finished"), for a goto: the
+    // second document logs while it loads, before its load event.
+    name: "a navigation's load-time messages reach the listener before goto resolves",
+    path: '/console.html',
+    source: `const seen = []
+    page.on('console', (message) => seen.push(message.type() + ' ' + message.text()))
+    await page.goto(page.url() + '?second')
+    return seen`,
+    expected: ['log loaded second', 'warning load warning'],
+    probe: 'window.__logged',
+    effect: 2,
+  },
+  {
+    // page-event-console.spec.ts "CM-008 should trigger correct Log": Chromium's own log
+    // entries (its Log domain) are console messages; a resource that fails to load is an
+    // 'error' one.
+    name: "a failed resource load is reported as the browser's console error",
+    path: '/console.html',
+    source: `const [message] = await Promise.all([
+      page.waitForEvent('console', (candidate) => candidate.type() === 'error'),
+      page.click('#broken'),
+    ])
+    return { type: message.type(), text: message.text(), location: message.location() }`,
+    // Port 1 is one Chromium refuses to fetch from, so the failure is the same on every run.
+    expected: {
+      type: 'error',
+      text: 'Failed to load resource: net::ERR_UNSAFE_PORT',
+      location: {
+        url: 'http://127.0.0.1:1/missing.png',
+        line: 0,
+        column: 0,
+        lineNumber: 0,
+        columnNumber: 0,
+      },
+    },
+    probe: 'window.__logged',
+    effect: 2,
   },
 ]
 
