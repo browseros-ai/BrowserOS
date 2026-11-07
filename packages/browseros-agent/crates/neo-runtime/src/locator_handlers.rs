@@ -15,15 +15,16 @@
 //! ```
 
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use neo_runtime_spec::serve::{
-    FrameWaitForSelectorParams, FrameWaitForSelectorParamsState as SelectorState,
-};
+use neo_runtime_spec::serve::FrameWaitForSelectorParamsState as SelectorState;
 use tokio::sync::watch;
 
 use crate::click::{SelectorFacts, Tab};
+use crate::evaluate::CreatedHandle;
 use crate::frames::FrameScope;
 use crate::page::FrameTab;
 use crate::progress::{CallError, PlaywrightError, Progress};
@@ -196,13 +197,15 @@ pub(crate) async fn checkpoint(tab: &FrameTab, progress: &Progress) -> Result<()
             progress.log(format!(
                 "  locator handler has finished, waiting for {locator} to be hidden"
             ));
-            let hidden = WaitForSelectorOptions::from_params(FrameWaitForSelectorParams {
+            // Playwright: `server/page.ts` `Page._performLocatorHandlersCheckpoint`: `await this.mainFrame().waitForSelector(progress, { selector: handler.selector }, false, { state: 'hidden' });`
+            let hidden = WaitForSelectorOptions {
                 selector: handler.selector.clone(),
-                strict: None,
-                state: Some(SelectorState::Hidden),
-                omit_return_value: Some(true),
-            });
-            let _hidden = waits::wait_for_selector_element(&main, &hidden, progress).await?;
+                strict: false,
+                state: SelectorState::Hidden,
+                return_element: false,
+                pre_checks: false,
+            };
+            let _hidden = wait_hidden(&main, &hidden, progress).await?;
         }
         progress.log("  interception handler has finished, continuing");
     }
@@ -229,6 +232,17 @@ fn trigger(main: &FrameTab, uid: i64) -> Result<Option<watch::Receiver<bool>>, C
         return Ok(None);
     }
     Ok(waiting)
+}
+
+/// Neo: the wait for a handled selector to hide. Boxed behind a named type: the wait's attempts
+/// reach this checkpoint through `WaitTab` (with no pre-checks at run time), so an unboxed
+/// future would contain itself.
+fn wait_hidden<'a>(
+    main: &'a FrameTab,
+    hidden: &'a WaitForSelectorOptions,
+    progress: &'a Progress,
+) -> Pin<Box<dyn Future<Output = Result<Option<CreatedHandle>, CallError>> + Send + 'a>> {
+    Box::pin(waits::wait_for_selector_element(main, hidden, progress))
 }
 
 /// Neo: the handler's resolve. A handler removed while it runs ends the wait too.

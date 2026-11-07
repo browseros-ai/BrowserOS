@@ -54,6 +54,7 @@ import {
   type WaitForFunctionOptions,
   type WaitForLoadStateOptions,
   type WaitForNavigationOptions,
+  type WaitForSelectorOptions,
   type WaitForURLOptions,
 } from './frame'
 import type { FrameLocator } from './frame-locator'
@@ -710,6 +711,31 @@ export class Page extends ChannelOwner {
     options?: WaitForURLOptions,
   ): Promise<void> {
     return await this.#mainFrame._waitForURL('page.waitForURL', url, options)
+  }
+
+  /**
+   * The main frame's {@link Frame.waitForSelector}: waits until `selector` meets `state`
+   * (default `visible`) and resolves its first match as an {@link ElementHandle}, or `null` for a
+   * `hidden` or `detached` wait, running the page's locator handlers before each attempt.
+   */
+  waitForSelector(
+    selector: string,
+    options?: WaitForSelectorOptions & { state?: 'attached' | 'visible' },
+  ): Promise<ElementHandle>
+  waitForSelector(
+    selector: string,
+    options: WaitForSelectorOptions,
+  ): Promise<ElementHandle | null>
+  /** Playwright: `client/page.ts` `Page.waitForSelector`: `return await this._mainFrame.waitForSelector(selector, options);` */
+  async waitForSelector(
+    selector: string,
+    options?: WaitForSelectorOptions,
+  ): Promise<ElementHandle | null> {
+    return await this.#mainFrame._waitForSelectorPublic(
+      'page.waitForSelector',
+      selector,
+      options,
+    )
   }
 
   /**

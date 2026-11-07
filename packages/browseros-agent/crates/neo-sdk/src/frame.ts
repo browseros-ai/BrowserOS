@@ -728,9 +728,8 @@ export class Frame {
   }
 
   /**
-   * Sends `Frame.waitForSelector` under the action timeout. Behind `locator.waitFor` only, which
-   * passes `omitReturnValue: true`: Neo has no `ElementHandle`s, so a public
-   * `frame.waitForSelector` would have nothing to return.
+   * Sends `Frame.waitForSelector` under the action timeout, answering nothing: behind
+   * `locator.waitFor`, which passes `omitReturnValue: true`.
    */
   async _waitForSelector(
     apiName: ApiName,
@@ -1187,8 +1186,75 @@ export class Frame {
   }
 
   /**
+   * Waits until `selector` meets `state` (default `visible`: `attached`, `detached`, `visible`
+   * or `hidden`) and resolves its first match as an {@link ElementHandle}, or `null` for a
+   * `hidden` or `detached` wait. Before each attempt it runs the page's locator handlers
+   * ({@link Page.addLocatorHandler}). Not strict unless `strict`; under the action timeout.
+   */
+  waitForSelector(
+    selector: string,
+    options?: WaitForSelectorOptions & { state?: 'attached' | 'visible' },
+  ): Promise<ElementHandle>
+  waitForSelector(
+    selector: string,
+    options: WaitForSelectorOptions,
+  ): Promise<ElementHandle | null>
+  async waitForSelector(
+    selector: string,
+    options?: WaitForSelectorOptions,
+  ): Promise<ElementHandle | null> {
+    return await this._waitForSelectorPublic(
+      'frame.waitForSelector',
+      selector,
+      options,
+    )
+  }
+
+  /** Playwright: `client/frame.ts` `Frame.waitForSelector`: `throw new Error('options.visibility is not supported, did you mean options.state?');` */
+  async _waitForSelectorPublic(
+    apiName: ApiName,
+    selector: string,
+    options: WaitForSelectorOptions = {},
+  ): Promise<ElementHandle | null> {
+    // Playwright reads two names older releases took, from any value a script passes.
+    const legacy = options as { visibility?: unknown; waitFor?: unknown }
+    if (legacy.visibility)
+      throw new Error(
+        'options.visibility is not supported, did you mean options.state?',
+      )
+    if (legacy.waitFor && legacy.waitFor !== 'visible')
+      throw new Error(
+        'options.waitFor is not supported, did you mean options.state?',
+      )
+    return await this._waitForSelectorElement(apiName, selector, options)
+  }
+
+  /**
+   * The `<iframe>` or `<frame>` element that owns this frame, as an {@link ElementHandle} in its
+   * parent's main world. The main frame, and a frame that is gone, throw "Frame has been
+   * detached.". Sent with no timeout, as Playwright's (`kNoTimeout`).
+   */
+  async frameElement(): Promise<ElementHandle> {
+    const result = (await this._connection.send(
+      'frame.frameElement',
+      this._guid,
+      'frameElement',
+      {},
+      0,
+    )) as { element?: CreatedHandle } | undefined
+    // Playwright: `client/frame.ts` `Frame.frameElement`: `return ElementHandle.from((await this._channel.frameElement({}, kNoTimeout)).element);`
+    const element = ElementHandle.fromNullable(
+      this._connection,
+      result?.element,
+    )
+    if (!element) throw new Error('neo-sdk: frameElement answered no element')
+    return element
+  }
+
+  /**
    * `Frame.waitForSelector` answering its element, as Playwright's `frame.waitForSelector` does
-   * for an attached or visible wait: behind `locator.elementHandle`.
+   * for an attached or visible wait: behind {@link Frame.waitForSelector} and
+   * `locator.elementHandle`.
    */
   async _waitForSelectorElement(
     apiName: ApiName,

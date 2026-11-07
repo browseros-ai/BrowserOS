@@ -58,6 +58,7 @@ mod evaluate;
 mod events;
 mod fill;
 mod forms;
+mod frame_element;
 mod frame_selector;
 mod frames;
 mod getters;

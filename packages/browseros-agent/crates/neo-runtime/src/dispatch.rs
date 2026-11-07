@@ -68,6 +68,7 @@ use crate::evaluate::{self, EvalCall};
 use crate::events::EventHub;
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
+use crate::frame_element;
 use crate::frames::FrameScope;
 use crate::history::{
     self, Cursors, Ending, FinishNavigationOptions, FrameCursor, NeoFinishNavigationParams,
@@ -329,6 +330,8 @@ enum Route {
     FrameSetChecked(CheckOptions),
     FrameSelectOption(SelectOptions),
     FrameWaitForSelector(WaitForSelectorOptions),
+    /// `Frame.frameElement` (`frame_element.rs`).
+    FrameFrameElement,
     FrameWaitForUrl(WaitForUrlOptions),
     FrameWaitForLoadState(WaitForLoadStateOptions),
     FrameWaitForNavigation(WaitForNavigationOptions),
@@ -491,6 +494,13 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             }
             if let Some(routed) = route_navigation_wait(method, params.as_ref()) {
                 return routed;
+            }
+            // Its result requires an `ElementHandle`, which the generated spec cannot create.
+            if method == frame_element::FRAME_ELEMENT_META.method {
+                return Routed {
+                    meta: Some(&frame_element::FRAME_ELEMENT_META),
+                    route: Ok(ObjectCall::Frame(Route::FrameFrameElement)),
+                };
             }
             if let Some((meta, call)) = evaluate::route_frame(method, params.as_ref()) {
                 return Routed {
@@ -836,6 +846,11 @@ async fn serve(
                 .await
                 .and_then(wait_for_selector_reply)
         }
+        // `ElementHandle` is no interface of the generated spec, so the element travels as the
+        // record the SDK builds it from, as `waitForSelector`'s does.
+        Route::FrameFrameElement => frame_element::frame_element(&page, &progress)
+            .await
+            .map(|created| Some(json!({ "element": created }))),
         Route::FrameEval(call) => evaluate::serve(&page, call, &progress).await,
         // Neo extensions answer an empty result.
         Route::FrameWaitForUrl(options) => waits::wait_for_url(&page, &options, &progress)
@@ -1027,6 +1042,7 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameIsEditable(_)
         | Route::FrameAriaSnapshot(_)
         | Route::FrameWaitForSelector(_)
+        | Route::FrameFrameElement
         | Route::FrameWaitForUrl(_)
         | Route::FrameWaitForLoadState(_)
         | Route::FrameWaitForNavigation(_)
@@ -1503,6 +1519,7 @@ mod tests {
                 | Route::FrameIsEditable(_)
                 | Route::FrameAriaSnapshot(_)
                 | Route::FrameWaitForSelector(_)
+                | Route::FrameFrameElement
                 | Route::FrameWaitForUrl(_)
                 | Route::FrameWaitForLoadState(_)
                 | Route::FrameWaitForNavigation(_)

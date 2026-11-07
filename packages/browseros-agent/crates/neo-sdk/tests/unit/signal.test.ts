@@ -87,6 +87,10 @@ function selectorCalls(
       `${name}.waitForLoadState`,
       (signal) => target.waitForLoadState('load', withSignal(signal)),
     ],
+    [
+      `${name}.waitForSelector`,
+      (signal) => target.waitForSelector('#target', withSignal(signal)),
+    ],
     [`${name}.click`, (signal) => target.click('#target', withSignal(signal))],
     [
       `${name}.dblclick`,

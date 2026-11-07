@@ -5279,6 +5279,24 @@ class Frame {
     const result = await this._connection.sendEval(apiName, this._guid, "waitForFunction", pollingInterval === undefined ? params : { ...params, pollingInterval }, this._page._timeoutSettings.timeout(options, apiName));
     return handleFrom(this._connection, result.handle);
   }
+  async waitForSelector(selector, options) {
+    return await this._waitForSelectorPublic("frame.waitForSelector", selector, options);
+  }
+  async _waitForSelectorPublic(apiName, selector, options = {}) {
+    const legacy = options;
+    if (legacy.visibility)
+      throw new Error("options.visibility is not supported, did you mean options.state?");
+    if (legacy.waitFor && legacy.waitFor !== "visible")
+      throw new Error("options.waitFor is not supported, did you mean options.state?");
+    return await this._waitForSelectorElement(apiName, selector, options);
+  }
+  async frameElement() {
+    const result = await this._connection.send("frame.frameElement", this._guid, "frameElement", {}, 0);
+    const element = ElementHandle.fromNullable(this._connection, result?.element);
+    if (!element)
+      throw new Error("neo-sdk: frameElement answered no element");
+    return element;
+  }
   async _waitForSelectorElement(apiName, selector, options) {
     const result = await this._connection.send(apiName, this._guid, "waitForSelector", pickParams(FRAME_WAIT_FOR_SELECTOR_KEYS, {
       selector,
@@ -5789,6 +5807,9 @@ class Page extends ChannelOwner {
   }
   async waitForURL(url, options) {
     return await this.#mainFrame._waitForURL("page.waitForURL", url, options);
+  }
+  async waitForSelector(selector, options) {
+    return await this.#mainFrame._waitForSelectorPublic("page.waitForSelector", selector, options);
   }
   async waitForLoadState(state, options) {
     return await this.#mainFrame._waitForLoadState("page.waitForLoadState", state, options);

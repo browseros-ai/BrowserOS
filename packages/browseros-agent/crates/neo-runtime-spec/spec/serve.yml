@@ -71,9 +71,11 @@ interfaces:
     - check
     - uncheck
     - selectOption
-    # `locator.waitFor` sends it with `omitReturnValue: true`. `element` is an `ElementHandle`, which
-    # is not a key here, so its result is always `{}`; neo-runtime refuses any other
-    # `omitReturnValue` rather than answer "no element".
+    # `element` is an `ElementHandle`, which is not a key here: the generated result is always
+    # `{}`, and neo-runtime answers a found element as the record the SDK builds its
+    # `ElementHandle` from (`dispatch.rs` `wait_for_selector_reply`). `locator.waitFor` sends
+    # `omitReturnValue: true`. Every attempt first runs the page's action pre-checks (the locator
+    # handlers included), as Playwright's dispatcher asks.
     - waitForSelector
     - innerText
     - getAttribute

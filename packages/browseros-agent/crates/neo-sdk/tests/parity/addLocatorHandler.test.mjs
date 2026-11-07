@@ -1,14 +1,18 @@
 // Page.addLocatorHandler and Page.removeLocatorHandler through Neo and Playwright on the pinned
 // interstitial page (tests/pages/handle-locator.html): an action that finds the handler's
 // locator visible runs the handler first (with that same locator), then waits for the locator to
-// hide unless `noWaitAfter`, at most `times` times; `force` skips handlers; a removed handler no
-// longer runs; a child-frame locator is refused. Handler counts, the page's click count, the
-// interstitial's visibility and each rejection's kind are compared, never the wording.
+// hide unless `noWaitAfter`, at most `times` times; a wait for a selector runs handlers too;
+// `force` skips them; a removed handler no longer runs; a child-frame locator is refused.
+// Handler counts, the page's click count, the interstitial's visibility and each rejection's
+// kind are compared, never the wording.
 //
 // From Playwright's specs at the pin (tests/page/page-add-locator-handler.spec.ts at 26137face):
-// 'LH-001 should work', 'LH-004 should not work with force:true', 'LH-010 should work with
-// times: option', 'LH-011 should wait for hidden by default', 'LH-012 should wait for hidden by
-// default 2', 'LH-013 should work with noWaitAfter' and 'LH-014 should removeLocatorHandler'.
+// 'LH-001 should work', 'LH-004 should not work with force:true', 'LH-005 should throw when
+// handler times out', 'LH-007 should work with locator.waitFor' (with page.waitForSelector, which
+// runs the same pre-checks), 'LH-009 should work when owner frame detaches', 'LH-010 should
+// work with times: option', 'LH-011 should wait for hidden by default', 'LH-012 should wait for
+// hidden by default 2', 'LH-013 should work with noWaitAfter' and 'LH-014 should
+// removeLocatorHandler'.
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
@@ -93,6 +97,51 @@ pinned(
 )
 
 pinned(
+  'locator.waitFor and page.waitForSelector run the handler first (LH-007)',
+  `let handled = 0
+  await page.addLocatorHandler(page.getByText('This interstitial covers the button'), async () => { handled++; await page.locator('#close').click() })
+  await page.locator('#aside').hover()
+  await page.evaluate(() => window.setupAnnoyingInterstitial('remove', 1))
+  await page.locator('#target').waitFor()
+  const waited = { handled, visible: await page.locator('#interstitial').isVisible() }
+  await page.evaluate(() => window.setupAnnoyingInterstitial('remove', 1))
+  const handle = await page.waitForSelector('#target')
+  const selected = { handled, visible: await page.locator('#interstitial').isVisible(), id: await handle.evaluate((e) => e.id) }
+  return { waited, selected }`,
+  {
+    waited: { handled: 1, visible: false },
+    selected: { handled: 2, visible: false, id: 'target' },
+  },
+)
+
+pinned(
+  'a handler that never resolves times the action out and is not entered again (LH-005)',
+  `let called = 0
+  let release
+  const released = new Promise((resolve) => { release = resolve })
+  let finish
+  const finished = new Promise((resolve) => { finish = resolve })
+  await page.addLocatorHandler(page.getByText('This interstitial covers the button'), async () => {
+    ++called
+    await released
+    finish(await page.locator('#close').click({ timeout: 3000 }).then(() => 'clicked', errorCategory))
+  })
+  await page.locator('#aside').hover()
+  await setup('mouseover', 1)
+  const first = await page.locator('#target').click({ timeout: 3000 }).then(() => 'resolved', errorCategory)
+  const second = await page.locator('#target').click({ timeout: 3000 }).then(() => 'resolved', errorCategory)
+  const calledWhileRunning = called
+  release()
+  return { first, second, calledWhileRunning, finished: await finished }`,
+  {
+    first: 'TimeoutError',
+    second: 'TimeoutError',
+    calledWhileRunning: 1,
+    finished: 'clicked',
+  },
+)
+
+pinned(
   'times runs a handler at most that often, noWaitAfter goes on at once (LH-010)',
   `let times = 0
   await page.addLocatorHandler(page.locator('body'), async () => { ++times }, { noWaitAfter: true, times: 2 })
@@ -139,6 +188,42 @@ pinned(
   return { noWait, ...(await facts()) }`,
   { noWait: 2, clicked: 1, visible: false },
 )
+
+test('a handler whose locator is inside a frame its click removes (LH-009)', {
+  skip,
+  timeout: 180_000,
+}, async (t) => {
+  const outcome = await compareMethod(t, {
+    html: '<!doctype html><html><body></body></html>',
+    source: `
+      await page.evaluate(() => {
+        const iframe = document.createElement('iframe')
+        iframe.src = 'data:text/html,<body>hello from iframe</body>'
+        document.body.append(iframe)
+        const target = document.createElement('button')
+        target.textContent = 'Click me'
+        target.id = 'target'
+        target.addEventListener('click', () => { window._clicked = true })
+        document.body.appendChild(target)
+        const close = document.createElement('button')
+        close.textContent = 'close'
+        close.id = 'close'
+        close.addEventListener('click', () => iframe.remove())
+        document.body.appendChild(close)
+      })
+      await page.frameLocator('iframe').locator('body').waitFor()
+      let called = 0
+      await page.addLocatorHandler(page.frameLocator('iframe').locator('body'), async () => {
+        ++called
+        await page.locator('#close').click()
+      })
+      await page.locator('#target').click()
+      return { called, frames: await page.locator('iframe').count(), clicked: await page.evaluate(() => window._clicked) }
+    `,
+    probe: 'window._clicked',
+  })
+  assert.deepEqual(outcome.value, { called: 1, frames: 0, clicked: true })
+})
 
 test('a removed handler no longer runs, and a child-frame locator is refused (LH-014)', {
   skip,
