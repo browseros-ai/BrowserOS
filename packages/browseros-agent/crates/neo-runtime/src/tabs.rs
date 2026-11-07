@@ -567,6 +567,29 @@ impl Tabs {
         self.0.creations.wait().await;
     }
 
+    /// Releases, on every tab this run attached to, the keys and buttons the run left held
+    /// (`PageSession::release_run_input`), one tab at a time, once every tab has recorded the
+    /// run's end. The caller bounds the whole batch.
+    pub(crate) async fn release_input(&self) {
+        let pages = self
+            .0
+            .pages
+            .lock()
+            .map_or_else(|_| Vec::new(), |pages| pages.clone());
+        let sessions: Vec<_> = pages
+            .iter()
+            .filter_map(|page| page.attached_session())
+            .collect();
+        // Every tab records the run's end before the first release waits for a turn: the
+        // caller's bound may cut the batch off at any tab.
+        for session in &sessions {
+            session.mark_input_ended();
+        }
+        for session in sessions {
+            session.release_run_input().await;
+        }
+    }
+
     pub(crate) async fn refresh_closing(&self) {
         let pages = self
             .0
@@ -579,6 +602,19 @@ impl Tabs {
                 let _checked = self.is_closed(&page).await;
             }
         }
+    }
+
+    /// Every session this run attached, for the run-end cleanup of what it left in its tabs.
+    pub(crate) fn attached_sessions(&self) -> Vec<Arc<PageSession>> {
+        self.0.pages.lock().map_or_else(
+            |_| Vec::new(),
+            |pages| {
+                pages
+                    .iter()
+                    .filter_map(|entry| entry.attached_session())
+                    .collect()
+            },
+        )
     }
 
     /// Starts the run's target discovery once (`discovery.rs`), for a `page` or `popup`
