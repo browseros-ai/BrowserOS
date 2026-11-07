@@ -4,8 +4,9 @@
 // Playwright's own tests check ("no object with guid").
 //
 // Cases from tests/page/page-evaluate.spec.ts at 26137face: EV-061 "should throw if underlying
-// element was disposed"; and client/jsHandle.ts `JSHandle.dispose`, which treats a disposed
-// handle's TargetClosedError as done.
+// element was disposed"; client/jsHandle.ts `JSHandle.dispose`, which treats a disposed handle's
+// TargetClosedError as done; and tests/page/frame-evaluate.spec.ts FR-003 "should dispose context
+// on navigation" for a handle whose document is gone (a primitive handle still passes by value).
 //
 // Then what Neo adds and Playwright has no counterpart for, asserted on Neo alone: handles last
 // one run. A guid kept from one run names nothing in the next: calling on it is a closed target,
@@ -67,6 +68,28 @@ test('dispose releases a handle as Playwright does', {
     error: 'Error',
     mentions: ['no object with guid'],
   })
+})
+
+test('a handle of a document that navigated away is refused as Playwright refuses it', {
+  skip,
+  timeout: 180_000,
+}, async (t) => {
+  const outcome = await compareMethod(t, {
+    html,
+    source: `${VALUES}
+      const object = await page.evaluateHandle(() => ({ a: 1 }))
+      const five = await page.evaluateHandle(() => 5)
+      await page.goto(page.url())
+      return {
+        evaluateAfter: await outcome(() => object.evaluate((o) => o.a), ['Execution context was destroyed']),
+        argumentAfter: await outcome(() => page.evaluate((o) => o.a, object), ['JSHandles can be evaluated only in the context they were created']),
+        primitiveAfter: await outcome(() => page.evaluate((n) => n * 2, five)),
+        freshWorks: await outcome(async () => (await page.evaluateHandle(() => ({ b: 2 }))).jsonValue()),
+      }
+    `,
+    probe: 'window.__facts()',
+  })
+  assert.deepEqual(outcome.value.primitiveAfter, { value: 10 })
 })
 
 test('a handle from one Neo run names nothing in the next', {
