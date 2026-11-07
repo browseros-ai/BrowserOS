@@ -84,7 +84,9 @@ export const parsedHighlightSelector = {
   setHighlights: (_injected, { highlights }) => {
     // @ts-expect-error a highlight's selector crosses as text; the glue parses it in the page.
     const parts: unknown[] = highlights[0]?.selector.parts ?? []
-    return parts.length ? {} : {}
+    if (parts.length)
+      throw new Error('a selector that crosses as text has no parts')
+    return {}
   },
 } satisfies Api
 

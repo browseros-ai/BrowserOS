@@ -335,7 +335,7 @@ struct Refs {
 }
 
 impl Refs {
-    /// Counts one more written value, refusing an expansion past [`EXPANDED_VALUES_MAX`].
+    /// Counts `values` more written values, refusing an expansion past [`EXPANDED_VALUES_MAX`].
     fn write(&mut self, values: usize) -> Result<(), &'static str> {
         self.written = self.written.saturating_add(values);
         if self.written > EXPANDED_VALUES_MAX {
@@ -422,7 +422,8 @@ fn plain_value(value: &SerializedValue, refs: &mut Refs) -> Result<Option<Value>
             .get(&id)
             .cloned()
             .ok_or("a reference to a value it does not hold")?;
-        refs.write(size_of_value(&shared))?;
+        // The `ref` itself was counted above, as the root of the value it writes out again.
+        refs.write(size_of_value(&shared).saturating_sub(1))?;
         return Ok(Some(shared));
     }
     Err(if value.d.is_some() {
@@ -942,6 +943,28 @@ mod tests {
         assert!(items.iter().all(|item| item == &json!({ "leaf": true })));
         // The review's 60,000 references expand past 100,000 values; Playwright dispatches them.
         let error = plain_event_init(&shallow(60_000)).expect_err("past the limit");
+        assert!(
+            error.message.ends_with(EXPANSION_REFUSED),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn tests_that_each_expanded_value_counts_once_against_the_limit() {
+        // `{ detail: Array(n).fill(shared) }` writes 2 + 2n values: the init object, the array,
+        // and each copy's object and boolean.
+        let detail = |n: usize| {
+            let mut items = vec![json!({ "o": [{ "k": "leaf", "v": { "b": true } }], "id": 3 })];
+            items.extend((1..n).map(|_| json!({ "ref": 3 })));
+            argument(json!({ "o": [{ "k": "detail", "v": { "a": items, "id": 2 } }], "id": 1 }))
+        };
+        // The second review's 40,000 references: 80,002 values.
+        let expanded = plain_event_init(&detail(40_000)).expect("80,002 values");
+        assert_eq!(expanded["detail"].as_array().map(Vec::len), Some(40_000));
+        // Exactly at the limit, and one copy past it.
+        assert!(plain_event_init(&detail(49_999)).is_ok(), "100,000 values");
+        let error = plain_event_init(&detail(50_000)).expect_err("100,002 values");
         assert!(
             error.message.ends_with(EXPANSION_REFUSED),
             "{}",
