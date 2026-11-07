@@ -259,3 +259,33 @@ test('dispatchEvent inside frames reaches the same button through Neo and Playwr
 }, async (t) => {
   await compareFrameCases(t, frameCases)
 })
+
+// Playwright resolves `dispatchEvent`'s selector in the page's own world (`mainWorld: true`),
+// whose injected script holds no `ai` snapshot, so an `aria-ref` from one matches nothing there
+// and the call waits out its timeout; `click` resolves it in the utility world, where the
+// snapshot was taken. Neo does the same.
+test('dispatchEvent on an aria-ref times out in both engines, as click resolves it', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  const outcome = await compareMethod(t, {
+    html: `<button id="b" onclick="window.clicks = (window.clicks || 0) + 1">Go</button>
+<script>new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.remove()).observe(document.documentElement, { childList: true, subtree: true })</script>`,
+    source: `
+      const yaml = await page.locator('#b').ariaSnapshot({ mode: 'ai' })
+      const ref = /\\[ref=([a-z0-9]+)\\]/.exec(yaml)?.[1]
+      const settle = (call) => call.then(() => 'resolved', (error) => error.name)
+      return {
+        dispatch: await settle(page.locator('aria-ref=' + ref).dispatchEvent('click', {}, { timeout: 1500 })),
+        click: await settle(page.locator('aria-ref=' + ref).click({ timeout: 1500 })),
+        clicks: await page.evaluate(() => window.clicks || 0),
+      }
+    `,
+    probe: '({ clicks: window.clicks || 0 })',
+  })
+  assert.deepEqual(outcome.value, {
+    dispatch: 'TimeoutError',
+    click: 'resolved',
+    clicks: 1,
+  })
+})

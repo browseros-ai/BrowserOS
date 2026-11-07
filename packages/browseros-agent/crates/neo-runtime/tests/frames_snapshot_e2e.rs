@@ -828,8 +828,11 @@ async fn tests_that_refs_inside_hidden_frames_name_their_frame_and_act_in_a_late
         &format!(
             "const refs = {refs};
              const ref = (name) => page.locator('aria-ref=' + refs[name]);
-             await ref('local').dispatchEvent('click');
-             await ref('remote').dispatchEvent('click');
+             // `dispatchEvent` resolves in the page's own world, where an `ai` snapshot's refs do
+             // not exist, so it waits out its timeout there as in Playwright; an element callback
+             // resolves the ref in the utility world first, then clicks in the page.
+             await ref('local').evaluate((button) => button.click());
+             await ref('remote').evaluate((button) => button.click());
              return {{ local: await ref('local').textContent(), remote: await ref('remote').textContent() }};"
         ),
     )
