@@ -587,30 +587,35 @@ export class Frame {
     apiName: ApiName,
     selector: string,
   ): Promise<string[]> {
-    return await this.#evalOnSelectorAllTexts(
+    return (await this.#evalOnSelectorAllTexts(
       apiName,
       selector,
       "ee => ee.map(e => e.textContent || '')",
-    )
+      false,
+    )) as string[]
   }
 
   /** `client/locator.ts`'s `allInnerTexts` page function without its TypeScript cast, the one
-   * expression neo-runtime serves for it. */
+   * expression neo-runtime serves for it. A match without `innerText` (an SVG element) reads
+   * `undefined`, as the page function reads it; the declared `string[]` is Playwright's own. */
   async _allInnerTexts(apiName: ApiName, selector: string): Promise<string[]> {
-    return await this.#evalOnSelectorAllTexts(
+    return (await this.#evalOnSelectorAllTexts(
       apiName,
       selector,
       'ee => ee.map(e => e.innerText)',
-    )
+      true,
+    )) as string[]
   }
 
   /** Sends one served `$$eval` collection read with `kNoTimeout`, and decodes the serialized
-   * string array Rust answers. Reaches `send` synchronously, so the location is the script's. */
+   * string array Rust answers, with `undefined` entries (`{v: 'undefined'}`) only when
+   * `undefinedAllowed`. Reaches `send` synchronously, so the location is the script's. */
   async #evalOnSelectorAllTexts(
     apiName: ApiName,
     selector: string,
     expression: string,
-  ): Promise<string[]> {
+    undefinedAllowed: boolean,
+  ): Promise<(string | undefined)[]> {
     const result = await this._connection.send(
       apiName,
       this._guid,
@@ -636,12 +641,10 @@ export class Frame {
         'neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string array',
       )
     return value.a.map((item) => {
-      if (
-        !item ||
-        typeof item !== 'object' ||
-        Object.keys(item).length !== 1 ||
-        typeof item.s !== 'string'
-      )
+      const single =
+        !!item && typeof item === 'object' && Object.keys(item).length === 1
+      if (single && undefinedAllowed && item.v === 'undefined') return undefined
+      if (!single || typeof item.s !== 'string')
         throw new Error(
           'neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string',
         )

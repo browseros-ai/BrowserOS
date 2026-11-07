@@ -72,3 +72,28 @@ test('allInnerTexts inside frames reads the same texts through Neo and Playwrigh
 }, async (t) => {
   await compareFrameCases(t, frameCases)
 })
+
+// A selector may include SVG: it has no innerText property, so preserve undefined entries.
+test('review: allInnerTexts preserves undefined for SVG matches', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  const outcome = await compareMethod(t, {
+    html: '<span class="item">HTML</span><svg class="item"><text>SVG</text></svg>',
+    source: `
+      try {
+        const texts = await page.locator('.item').allInnerTexts()
+        return texts.map(value => value === undefined
+          ? { type: typeof value, undefined: true }
+          : { type: typeof value, value })
+      } catch (error) {
+        return { error: errorCategory(error) }
+      }
+    `,
+    probe: '[...document.querySelectorAll(".item")].map(e => e.textContent)',
+  })
+  assert.deepEqual(outcome.value, [
+    { type: 'string', value: 'HTML' },
+    { type: 'undefined', undefined: true },
+  ])
+})

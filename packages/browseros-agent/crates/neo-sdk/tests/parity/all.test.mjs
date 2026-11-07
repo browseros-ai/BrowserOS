@@ -42,3 +42,35 @@ test('locator.all returns one nth locator per match', {
   // One count per all(); the reads come from the nth locators.
   assert.equal(outcome.calls.filter((c) => c.method === 'queryCount').length, 4)
 })
+
+test('review: all returns live nth locators in their original frame', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  const child = `<ul><li>A</li><li>B</li><li>C</li></ul>
+    <button id="remove" onclick="document.querySelector('li').remove()">Remove first</button>`
+  const outcome = await compareMethod(t, {
+    html: `<iframe id="child"></iframe><script>
+      document.querySelector('iframe').srcdoc = ${JSON.stringify(child)}
+    </script>`,
+    source: `
+      const frame = page.frameLocator('#child')
+      const items = await frame.locator('li').all()
+      await frame.locator('#remove').click()
+      const first = await items[0].textContent()
+      const second = await items[1].textContent()
+      let removed = 'resolved'
+      try { await items[2].textContent({ timeout: 500 }) }
+      catch (error) { removed = errorCategory(error) }
+      return { count: items.length, first, second, removed }
+    `,
+    probe:
+      '[...document.querySelector("iframe").contentDocument.querySelectorAll("li")].map(e => e.textContent)',
+  })
+  assert.deepEqual(outcome.value, {
+    count: 3,
+    first: 'B',
+    second: 'C',
+    removed: 'TimeoutError',
+  })
+})

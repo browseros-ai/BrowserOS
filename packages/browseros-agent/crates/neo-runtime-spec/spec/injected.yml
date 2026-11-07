@@ -398,7 +398,14 @@ Injected:
       returns:
         values:
           type: array
-          items: string
+          items: InnerTextEntry
+
+# One match's `innerText`. An element outside HTML (an `<svg>` element, say) has none, and
+# Playwright's `$$eval` answers `undefined` for it, so the entry carries no value.
+InnerTextEntry:
+  type: object
+  properties:
+    value: string?
 
 # `_fill` returns a string or the first missing state, without mutating when not ready.
 FormFillOutcome:

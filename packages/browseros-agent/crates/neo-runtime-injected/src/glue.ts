@@ -350,9 +350,11 @@ export const glue = {
    * Deviation: `client/locator.ts` `Locator.allInnerTexts`: `ee => ee.map(e => (e as HTMLElement).innerText)` runs in Neo's isolated world, where Playwright's `$$eval` runs in the page's main world, so a page's own `innerText` override (a prototype patch or a per-instance property) is not seen.
    */
   allInnerTexts: (injected, { selector }) => ({
-    values: query(injected, selector, false).map(
-      (e) => (e as HTMLElement).innerText,
-    ),
+    values: query(injected, selector, false).map((e) => {
+      // Only HTML elements have `innerText`; the page function reads `undefined` for the rest.
+      const value = (e as Partial<HTMLElement>).innerText
+      return value === undefined ? {} : { value }
+    }),
   }),
 } satisfies InjectedApi<InjectedScript, Handles>
 

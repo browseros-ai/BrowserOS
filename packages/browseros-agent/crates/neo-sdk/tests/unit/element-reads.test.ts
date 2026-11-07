@@ -86,8 +86,26 @@ test('tests that allInnerTexts sends the served function and unwraps ordered str
       metadata: NO_TIMEOUT,
     },
   ])
+  // An SVG match has no innerText: Playwright's page function reads undefined there.
+  fake.answer = () => ({
+    result: { value: { a: [{ s: 'HTML' }, { v: 'undefined' }], id: 1 } },
+  })
+  // Playwright declares string[] and answers undefined at runtime, as Neo does.
+  const withSvg: (string | undefined)[] = await page
+    .locator('.item')
+    .allInnerTexts()
+  expect(withSvg).toEqual(['HTML', undefined])
+  expect(withSvg.length).toBe(2)
+  expect(1 in withSvg).toBe(true)
   fake.answer = () => ({ result: { value: { a: [{ n: 1 }], id: 1 } } })
   await expect(page.locator('.item').allInnerTexts()).rejects.toThrow(
+    /contract error/,
+  )
+  // allTextContents never reads undefined (`textContent || ''`), so one is a contract error.
+  fake.answer = () => ({
+    result: { value: { a: [{ v: 'undefined' }], id: 1 } },
+  })
+  await expect(page.locator('.item').allTextContents()).rejects.toThrow(
     /contract error/,
   )
 })

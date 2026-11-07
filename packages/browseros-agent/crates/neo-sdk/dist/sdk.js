@@ -3317,12 +3317,12 @@ class Frame {
     return result.value;
   }
   async _allTextContents(apiName, selector) {
-    return await this.#evalOnSelectorAllTexts(apiName, selector, "ee => ee.map(e => e.textContent || '')");
+    return await this.#evalOnSelectorAllTexts(apiName, selector, "ee => ee.map(e => e.textContent || '')", false);
   }
   async _allInnerTexts(apiName, selector) {
-    return await this.#evalOnSelectorAllTexts(apiName, selector, "ee => ee.map(e => e.innerText)");
+    return await this.#evalOnSelectorAllTexts(apiName, selector, "ee => ee.map(e => e.innerText)", true);
   }
-  async#evalOnSelectorAllTexts(apiName, selector, expression) {
+  async#evalOnSelectorAllTexts(apiName, selector, expression, undefinedAllowed) {
     const result = await this._connection.send(apiName, this._guid, "evalOnSelectorAll", {
       selector,
       expression,
@@ -3333,7 +3333,10 @@ class Frame {
     if (!value || typeof value !== "object" || Object.keys(value).length !== 2 || value.id !== 1 || !Array.isArray(value.a))
       throw new Error("neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string array");
     return value.a.map((item) => {
-      if (!item || typeof item !== "object" || Object.keys(item).length !== 1 || typeof item.s !== "string")
+      const single = !!item && typeof item === "object" && Object.keys(item).length === 1;
+      if (single && undefinedAllowed && item.v === "undefined")
+        return;
+      if (!single || typeof item.s !== "string")
         throw new Error("neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string");
       return item.s;
     });

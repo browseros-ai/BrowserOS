@@ -152,7 +152,7 @@ test('the built bundle installs once per document and answers through call.js', 
       { value: { matched: { value: 'Only one', preview: lonePreview } } },
     )
     assert.deepEqual(await page('allInnerTexts', { selector: '#lone' }), {
-      value: { values: ['Only one'] },
+      value: { values: [{ value: 'Only one' }] },
     })
     assert.deepEqual(await page('allInnerTexts', { selector: '#missing' }), {
       value: { values: [] },

@@ -23,7 +23,7 @@ use neo_runtime_spec::injected::{
     InjectedAllInnerTextsParams, InjectedAllTextContentsParams, InjectedQueryCountParams,
 };
 use neo_runtime_spec::serve::{
-    FrameEvalOnSelectorAllResult, FrameQueryCountResult, SerializedValue,
+    FrameEvalOnSelectorAllResult, FrameQueryCountResult, SerializedValue, SerializedValueV,
 };
 
 use crate::click::PageError;
@@ -51,10 +51,11 @@ pub(crate) trait ListTab: SelectorTab {
         selector: &str,
     ) -> impl Future<Output = Result<Vec<String>, PageError>> + Send;
 
+    /// Every match's `innerText`, `None` for an element that has none (an SVG element).
     fn all_inner_texts(
         &self,
         selector: &str,
-    ) -> impl Future<Output = Result<Vec<String>, PageError>> + Send;
+    ) -> impl Future<Output = Result<Vec<Option<String>>, PageError>> + Send;
 }
 
 /// `frames.ts` `queryCount` catches retriable page errors and returns zero, without retrying.
@@ -92,10 +93,15 @@ pub(crate) async fn all_text_contents<T: ListTab>(
     selector: &str,
     progress: &Progress,
 ) -> Result<FrameEvalOnSelectorAllResult, CallError> {
-    collect_texts(tab, selector, progress, tab.all_text_contents(selector)).await
+    let read = async {
+        let texts = tab.all_text_contents(selector).await?;
+        Ok(texts.into_iter().map(Some).collect())
+    };
+    collect_texts(tab, selector, progress, read).await
 }
 
-/// Serves `locator.allInnerTexts`: every match's rendered `innerText`.
+/// Serves `locator.allInnerTexts`: every match's rendered `innerText`, `undefined` for a match
+/// without one, as Playwright's page function reads an SVG element.
 pub(crate) async fn all_inner_texts<T: ListTab>(
     tab: &T,
     selector: &str,
@@ -111,7 +117,7 @@ async fn collect_texts<T: ListTab>(
     tab: &T,
     selector: &str,
     progress: &Progress,
-    read: impl Future<Output = Result<Vec<String>, PageError>> + Send,
+    read: impl Future<Output = Result<Vec<Option<String>>, PageError>> + Send,
 ) -> Result<FrameEvalOnSelectorAllResult, CallError> {
     progress.race(tab.prepare()).await?.map_err(page_error)?;
     let facts = progress
@@ -123,7 +129,7 @@ async fn collect_texts<T: ListTab>(
     }
     let values = progress.race(read).await?.map_err(page_error)?;
     Ok(FrameEvalOnSelectorAllResult {
-        value: serialize_strings(values),
+        value: serialize_texts(values),
     })
 }
 
@@ -137,6 +143,26 @@ fn page_error(error: PageError) -> CallError {
             PlaywrightError::error("neo-runtime: document changed during collection read").into()
         }
     }
+}
+
+/// [`serialize_strings`] for texts that may be missing: a missing one is written as
+/// `undefined`, `{v: 'undefined'}`.
+///
+/// Playwright: `protocol/src/serializers.ts` `innerSerializeValue`: `return { v: 'undefined' };`
+pub(crate) fn serialize_texts(values: Vec<Option<String>>) -> SerializedValue {
+    let mut array = serialize_strings(Vec::new());
+    let items = values.into_iter().map(|value| {
+        let mut item = serialize_strings(Vec::new());
+        item.a = None;
+        item.id = None;
+        match value {
+            Some(text) => item.s = Some(text),
+            None => item.v = Some(SerializedValueV::Undefined),
+        }
+        item
+    });
+    array.a = Some(items.collect());
+    array
 }
 
 /// `packages/protocol/src/serializers.ts` `innerSerializeValue` at 26137face: the first array
@@ -209,7 +235,7 @@ impl ListTab for FrameTab {
             .values)
     }
 
-    async fn all_inner_texts(&self, selector: &str) -> Result<Vec<String>, PageError> {
+    async fn all_inner_texts(&self, selector: &str) -> Result<Vec<Option<String>>, PageError> {
         let Some(located) = frame_selector::locate(self, selector, false).await? else {
             return Ok(Vec::new());
         };
@@ -222,7 +248,10 @@ impl ListTab for FrameTab {
                 },
             )
             .await?
-            .values)
+            .values
+            .into_iter()
+            .map(|entry| entry.value)
+            .collect())
     }
 }
 
@@ -249,7 +278,7 @@ mod tests {
         Describe(Result<SelectorFacts, PageError>),
         Count(Result<i64, PageError>),
         Texts(Result<Vec<String>, PageError>),
-        InnerTexts(Result<Vec<String>, PageError>),
+        InnerTexts(Result<Vec<Option<String>>, PageError>),
     }
 
     struct FakeLists {
@@ -366,7 +395,7 @@ mod tests {
             result
         }
 
-        async fn all_inner_texts(&self, selector: &str) -> Result<Vec<String>, PageError> {
+        async fn all_inner_texts(&self, selector: &str) -> Result<Vec<Option<String>>, PageError> {
             assert_eq!(selector, SELECTOR);
             let Step::InnerTexts(result) = self.step("allInnerTexts").await else {
                 panic!("expected allInnerTexts");
@@ -377,23 +406,19 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn tests_that_all_inner_texts_reads_its_own_glue_once_after_the_selector_parses() {
-        let values = vec![
-            "Banana split".to_string(),
-            String::new(),
-            "Date".to_string(),
-        ];
+        // An SVG match has no innerText: Playwright's page function reads `undefined` there.
+        let values = vec![Some("Banana split".to_string()), Some(String::new()), None];
         let tab = FakeLists::new([
             Step::Prepare(Ok(())),
             valid_selector(),
-            Step::InnerTexts(Ok(values.clone())),
+            Step::InnerTexts(Ok(values)),
         ]);
         let result = all_inner_texts(&tab, SELECTOR, &Progress::for_test(0.0))
             .await
             .expect("inner texts");
-        let expected: Vec<_> = values.iter().map(|s| json!({"s": s})).collect();
         assert_eq!(
             serde_json::to_value(result).expect("wire result"),
-            json!({"value": {"a": expected, "id": 1}})
+            json!({"value": {"a": [{"s": "Banana split"}, {"s": ""}, {"v": "undefined"}], "id": 1}})
         );
         tab.assert_calls(&["prepare", "describe", "allInnerTexts"]);
     }
