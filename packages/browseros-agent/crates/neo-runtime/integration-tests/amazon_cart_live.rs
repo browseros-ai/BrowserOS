@@ -14,7 +14,7 @@
 //! Add `NEO_E2E_HEADED=1` to watch the browser. It stays open for 30 seconds after the
 //! cart read, then closes. This inspection pause runs outside the script's timeout.
 
-#[path = "support/browser.rs"]
+#[path = "../tests/support/browser.rs"]
 #[expect(
     dead_code,
     reason = "the live scenario uses only part of the shared browser support"

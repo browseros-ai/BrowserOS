@@ -205,6 +205,13 @@ class Locator {
   async selectOption(values, options = {}) {
     return await this._frame._selectOption("locator.selectOption", this._selector, values, { strict: true, ...options });
   }
+  async waitFor(options) {
+    await this._frame._waitForSelector("locator.waitFor", this._selector, {
+      strict: true,
+      omitReturnValue: true,
+      ...options
+    });
+  }
   async clear(options = {}) {
     return await this._frame._fill("locator.clear", this._selector, "", {
       strict: true,
@@ -289,6 +296,22 @@ function testIdAttributeName() {
 }
 function setTestIdAttribute(attributeName) {
   _testIdAttributeName = attributeName;
+}
+
+// src/neo-commands.ts
+function serializeUrlMatch(apiName, url) {
+  if (url === undefined || url === "")
+    return { glob: "" };
+  if (isString(url))
+    return url.length === 0 ? { regexSource: "^$", regexFlags: "" } : { glob: url };
+  if (isRegExp(url))
+    return { regexSource: url.source, regexFlags: url.flags };
+  if (typeof url === "function")
+    throw new Error(`${apiName}: Neo does not support a predicate function as url yet; pass a glob string or a RegExp`);
+  throw new Error("url parameter should be string, RegExp, URLPattern or function");
+}
+function isRegExp(value) {
+  return value instanceof RegExp || Object.prototype.toString.call(value) === "[object RegExp]";
 }
 
 // src/runtime-bridge.ts
@@ -789,6 +812,12 @@ var FRAME_SELECT_OPTION_KEYS = [
   "options",
   "force"
 ];
+var FRAME_WAIT_FOR_SELECTOR_KEYS = [
+  "selector",
+  "strict",
+  "state",
+  "omitReturnValue"
+];
 var PAGE_CLOSE_KEYS = ["reason"];
 function pickParams(keys, options) {
   const params = {};
@@ -842,6 +871,15 @@ function verifyLoadState(name, waitUntil) {
     throw new Error(`${name}: expected one of (load|domcontentloaded|networkidle|commit)`);
   return waitUntil;
 }
+function verifyWaitState(apiName, name, state) {
+  try {
+    return verifyLoadState(name, state);
+  } catch (error) {
+    if (error instanceof Error)
+      error.message = `${apiName}: ${error.message}`;
+    throw error;
+  }
+}
 
 class Frame {
   _guid;
@@ -867,6 +905,28 @@ class Frame {
     }), this._page._timeoutSettings.navigationTimeout(options));
     const guid = result?.response?.guid;
     return guid ? responseFor(this._connection, guid, this) : null;
+  }
+  async waitForURL(url, options = {}) {
+    return await this._waitForURL("frame.waitForURL", url, options);
+  }
+  async _waitForURL(apiName, url, options) {
+    const waitOptions = options ?? {};
+    const serialized = serializeUrlMatch(apiName, url);
+    const waitUntil = verifyWaitState(apiName, "waitUntil", waitOptions.waitUntil === undefined ? "load" : waitOptions.waitUntil);
+    await this._connection.sendNeo(apiName, this._guid, "neo:waitForURL", { url: serialized, waitUntil }, this._page._timeoutSettings.navigationTimeout(waitOptions));
+  }
+  async waitForLoadState(state, options) {
+    return await this._waitForLoadState("frame.waitForLoadState", state, options);
+  }
+  async _waitForLoadState(apiName, state, options) {
+    const verified = verifyWaitState(apiName, "state", state === undefined ? "load" : state);
+    await this._connection.sendNeo(apiName, this._guid, "neo:waitForLoadState", { state: verified }, this._page._timeoutSettings.navigationTimeout(options ?? {}));
+  }
+  async _waitForSelector(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "waitForSelector", pickParams(FRAME_WAIT_FOR_SELECTOR_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options));
   }
   async title() {
     return await this._title("frame.title");
@@ -1165,6 +1225,12 @@ class Page {
   async title() {
     return await this.#mainFrame._title("page.title");
   }
+  async waitForURL(url, options) {
+    return await this.#mainFrame._waitForURL("page.waitForURL", url, options);
+  }
+  async waitForLoadState(state, options) {
+    return await this.#mainFrame._waitForLoadState("page.waitForLoadState", state, options);
+  }
   async textContent(selector, options = {}) {
     return await this.#mainFrame._textContent("page.textContent", selector, options);
   }
@@ -1304,6 +1370,9 @@ class Connection {
     return await this.#send(apiName, guid, method, params, timeout);
   }
   async sendResponse(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendNeo(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
   async#send(apiName, guid, method, params, timeout) {

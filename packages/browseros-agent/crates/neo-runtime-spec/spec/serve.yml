@@ -47,6 +47,10 @@ interfaces:
     - check
     - uncheck
     - selectOption
+    # `locator.waitFor` sends it with `omitReturnValue: true`. `element` is an `ElementHandle`, which
+    # is not a key here, so its result is always `{}`; neo-runtime refuses any other
+    # `omitReturnValue` rather than answer "no element".
+    - waitForSelector
     - innerText
     - getAttribute
     - queryCount

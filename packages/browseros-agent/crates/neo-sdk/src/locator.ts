@@ -15,6 +15,8 @@
  *   `toString` and `description` (they need Playwright's ~2,500-line locator generators), and
  *   actions and reads Neo does not serve. Explicit names preserve the outer `clear` and
  *   `setChecked` API names through their delegated calls (`_wrapApiCall` in Playwright).
+ * - `waitFor` sends Playwright's own `Frame.waitForSelector` through `Frame._waitForSelector`,
+ *   as Playwright's goes straight to the frame's channel.
  * - `allTextContents` sends `client/locator.ts` source text; compiled clients may format it
  *   differently. It reads in Neo's isolated world, so page-defined `textContent` overrides
  *   (prototype patches, custom element classes or per-instance properties) can differ.
@@ -52,6 +54,7 @@ import type {
   SelectOptionOptions,
   TextContentOptions,
   UncheckOptions,
+  WaitForSelectorOptions,
 } from './frame'
 import type { Page } from './page'
 import type { SelectOptionValues } from './select-option'
@@ -213,6 +216,25 @@ export class Locator {
       values,
       { strict: true, ...options },
     )
+  }
+
+  /**
+   * Waits until the locator's element reaches `state`, and resolves `undefined`:
+   * - `attached`: an element matches; `detached`: none does;
+   * - `visible` (the default): the matching element is visible; `hidden`: no element matches,
+   *   or the one that does is hidden.
+   *
+   * Strict: a selector that matches more than one element throws an `Error` at once, as does an
+   * invalid one or one that enters a frame (Neo serves the main frame only). Runs under the action
+   * timeout and polls the page. It never takes the tab's input, so a click or typing in the same
+   * run can be what satisfies it.
+   */
+  async waitFor(options?: WaitForSelectorOptions): Promise<void> {
+    await this._frame._waitForSelector('locator.waitFor', this._selector, {
+      strict: true,
+      omitReturnValue: true,
+      ...options,
+    })
   }
 
   async clear(options: FillOptions = {}): Promise<void> {

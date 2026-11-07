@@ -24,6 +24,7 @@ import type {
   FrameSelectOptionParams,
   FrameTextContentParams,
   FrameUncheckParams,
+  FrameWaitForSelectorParams,
   PageCloseParams,
 } from '@browseros/neo-runtime-spec/serve'
 
@@ -114,6 +115,14 @@ export const FRAME_SELECT_OPTION_KEYS = [
   'elements',
   'options',
   'force',
+] as const
+
+/** `Frame.waitForSelector` in Playwright schema order. */
+export const FRAME_WAIT_FOR_SELECTOR_KEYS = [
+  'selector',
+  'strict',
+  'state',
+  'omitReturnValue',
 ] as const
 
 // A type cannot carry key order, so the order is a list, and the build fails when a list and
@@ -215,6 +224,12 @@ type _FrameSelectOptionKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_SELECT_OPTION_KEYS)[number], true>,
     Required<FrameSelectOptionParams>
+  >
+>
+type _FrameWaitForSelectorKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_WAIT_FOR_SELECTOR_KEYS)[number], true>,
+    Required<FrameWaitForSelectorParams>
   >
 >
 

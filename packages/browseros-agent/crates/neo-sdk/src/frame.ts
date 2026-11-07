@@ -1,8 +1,9 @@
 /**
  * Playwright's `Frame` (`client/frame.ts` at 26137face), cut to a page's main frame: its guid,
  * its page, the selector builders, whose bodies are Playwright's, `goto`, `title`,
- * `textContent`, `innerText`, `getAttribute` and browser actions. A page builds exactly one
- * `Frame` per run, because `Locator` compares frames by identity.
+ * `textContent`, `innerText`, `getAttribute`, browser actions, and the waits `waitForURL` and
+ * `waitForLoadState` (with `_waitForSelector` behind `locator.waitFor`). A page builds exactly
+ * one `Frame` per run, because `Locator` compares frames by identity.
  *
  * Each `_<method>` is where every public form of a browser call (`locator.textContent`,
  * `page.textContent`, `frame.textContent`) becomes a protocol message, with its caller's
@@ -12,9 +13,16 @@
  * `goto` resolves the navigation's `Response` (`network.ts`), or `null` where Playwright's does:
  * a same-document change, or a document without a network request (`about:blank`, `data:`).
  *
- * What differs from Playwright: `allTextContents` sends `client/locator.ts` source text; compiled Playwright clients may format
- * it differently. It reads in Neo's isolated world, so page-defined `textContent` overrides
- * (prototype patches, custom element classes or per-instance properties) can differ.
+ * What differs from Playwright:
+ * - `waitForURL` and `waitForLoadState` are one `neo:` call each, which Rust waits out
+ *   (`neo-commands.ts`), where Playwright's client waits on `navigated` and `loadstate` events.
+ *   `waitForURL` takes a glob or a `RegExp`, not a predicate function, and neither takes
+ *   `networkidle`. A failed navigation does not reject `waitForURL`, which waits on to its timeout.
+ *   An unknown `waitUntil` is reported as `waitUntil`, where Playwright names it `state` when the
+ *   URL already matches.
+ * - `allTextContents` sends `client/locator.ts` source text; compiled Playwright clients may
+ *   format it differently. It reads in Neo's isolated world, so page-defined `textContent`
+ *   overrides (prototype patches, custom element classes or per-instance properties) can differ.
  */
 
 import type {
@@ -38,6 +46,7 @@ import type {
   FrameTextContentResult,
   FrameTitleResult,
   FrameUncheckParams,
+  FrameWaitForSelectorParams,
   LifecycleEvent,
 } from '@browseros/neo-runtime-spec/serve'
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
@@ -52,6 +61,7 @@ import {
 } from '../vendor/playwright/isomorphic/locatorUtils'
 import type { ApiName, Connection } from './connection'
 import { Locator, type LocatorOptions, testIdAttributeName } from './locator'
+import { serializeUrlMatch } from './neo-commands'
 import { type Response, responseFor } from './network'
 import type { Page } from './page'
 import {
@@ -70,6 +80,7 @@ import {
   FRAME_SELECT_OPTION_KEYS,
   FRAME_TEXT_CONTENT_KEYS,
   FRAME_UNCHECK_KEYS,
+  FRAME_WAIT_FOR_SELECTOR_KEYS,
   pickParams,
 } from './protocol'
 import {
@@ -111,6 +122,24 @@ export type AriaSnapshotOptions = {
   timeout?: number
 }
 
+/** `Frame.waitForSelector`'s options as `locator.waitFor` takes them (Playwright's
+ * `channels.FrameWaitForSelectorOptions & TimeoutOptions`): `state` and `timeout`, plus `strict`
+ * and `omitReturnValue`, which Playwright's client also passes through. */
+export type WaitForSelectorOptions = Omit<
+  FrameWaitForSelectorParams,
+  'selector'
+> & { timeout?: number }
+
+/** What `waitForURL` matches: a glob string or a `RegExp`, two of Playwright's four `URLMatch`
+ * forms. A predicate function is refused (`neo-commands.ts`); QuickJS has no `URLPattern`. */
+export type URLMatch = string | RegExp
+
+/** `waitForURL`'s options, as Playwright's. */
+export type WaitForURLOptions = { waitUntil?: LifecycleEvent; timeout?: number }
+
+/** `waitForLoadState`'s options, as Playwright's `TimeoutOptions`. */
+export type WaitForLoadStateOptions = { timeout?: number }
+
 /** Playwright's `kLifecycleEvents` (`client/types.ts`). */
 const LIFECYCLE_EVENTS: ReadonlySet<string> = new Set([
   'load',
@@ -135,6 +164,25 @@ export function verifyLoadState(
     )
   return waitUntil
 }
+
+/**
+ * {@link verifyLoadState} as `waitForLoadState` and `waitForURL` run it: inside Playwright's
+ * `@apiCall` wrapper (`client/channelOwner.ts` `_wrapApiCall`), which prefixes its error with the
+ * apiName, unlike `goto`'s.
+ */
+function verifyWaitState(
+  apiName: ApiName,
+  name: string,
+  state: LifecycleEvent,
+): LifecycleEvent {
+  try {
+    return verifyLoadState(name, state)
+  } catch (error) {
+    if (error instanceof Error) error.message = `${apiName}: ${error.message}`
+    throw error
+  }
+}
+
 export type FillOptions = Omit<FrameFillParams, 'selector' | 'value'> & {
   timeout?: number
 }
@@ -205,6 +253,111 @@ export class Frame {
     )
     const guid = result?.response?.guid
     return guid ? responseFor(this._connection, guid, this) : null
+  }
+
+  /**
+   * Waits until the frame's URL matches `url`, then until `waitUntil` (default `load`) fires, and
+   * resolves `undefined`: at once if the current document already fired it, else on the next one
+   * fired, as Playwright's does. A URL that already matches goes straight to `waitUntil`;
+   * otherwise the next navigation that matches counts, a same-document one (a hash change,
+   * `history.pushState`) included. Runs under the navigation timeout.
+   *
+   * `url` is a glob string, where `**` crosses `/` and `{a,b}` alternates (`''` matches every
+   * URL), or a `RegExp`, flags included, tested as Playwright tests it. `waitUntil` is `load`,
+   * `domcontentloaded` or `commit`. Neo limits: a predicate function and `networkidle` throw an
+   * `Error`, and a failed navigation does not reject the wait.
+   */
+  async waitForURL(
+    url: URLMatch,
+    options: WaitForURLOptions = {},
+  ): Promise<void> {
+    return await this._waitForURL('frame.waitForURL', url, options)
+  }
+
+  /**
+   * Sends `neo:waitForURL` under the navigation timeout. The url is checked first, then
+   * `waitUntil`, and either throws before anything is sent, as Playwright's client does.
+   */
+  async _waitForURL(
+    apiName: ApiName,
+    url: URLMatch,
+    options: WaitForURLOptions | undefined,
+  ): Promise<void> {
+    const waitOptions = options ?? {}
+    const serialized = serializeUrlMatch(apiName, url)
+    const waitUntil = verifyWaitState(
+      apiName,
+      'waitUntil',
+      waitOptions.waitUntil === undefined ? 'load' : waitOptions.waitUntil,
+    )
+    await this._connection.sendNeo(
+      apiName,
+      this._guid,
+      'neo:waitForURL',
+      { url: serialized, waitUntil },
+      this._page._timeoutSettings.navigationTimeout(waitOptions),
+    )
+  }
+
+  /**
+   * Waits until `state` (default `load`) has fired for the frame's current document, at once if
+   * it already has, and resolves `undefined`; `commit` always has. Otherwise the next document's
+   * `state` counts. Runs under the navigation timeout, and rejects when the page closes.
+   * `state` is `load`, `domcontentloaded` or `commit`; `networkidle` is a Neo limit and throws an
+   * `Error`.
+   */
+  async waitForLoadState(
+    state?: LifecycleEvent,
+    options?: WaitForLoadStateOptions,
+  ): Promise<void> {
+    return await this._waitForLoadState(
+      'frame.waitForLoadState',
+      state,
+      options,
+    )
+  }
+
+  /** Sends `neo:waitForLoadState` under the navigation timeout; an unknown `state` throws before
+   * anything is sent. As Playwright's default parameter, only `undefined` means `load`. */
+  async _waitForLoadState(
+    apiName: ApiName,
+    state: LifecycleEvent | undefined,
+    options: WaitForLoadStateOptions | undefined,
+  ): Promise<void> {
+    const verified = verifyWaitState(
+      apiName,
+      'state',
+      state === undefined ? 'load' : state,
+    )
+    await this._connection.sendNeo(
+      apiName,
+      this._guid,
+      'neo:waitForLoadState',
+      { state: verified },
+      this._page._timeoutSettings.navigationTimeout(options ?? {}),
+    )
+  }
+
+  /**
+   * Sends `Frame.waitForSelector` under the action timeout. Behind `locator.waitFor` only, which
+   * passes `omitReturnValue: true`: Neo has no `ElementHandle`s, so a public
+   * `frame.waitForSelector` would have nothing to return.
+   */
+  async _waitForSelector(
+    apiName: ApiName,
+    selector: string,
+    options: WaitForSelectorOptions,
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'waitForSelector',
+      pickParams(FRAME_WAIT_FOR_SELECTOR_KEYS, {
+        selector,
+        ...options,
+      }) as FrameWaitForSelectorParams,
+      this._page._timeoutSettings.timeout(options),
+    )
   }
 
   async title(): Promise<string> {

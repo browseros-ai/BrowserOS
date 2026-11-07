@@ -1,0 +1,8 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>committed</title></head><body>
+<!-- The fixture server answers /slow late, so load fires long after DOMContentLoaded. -->
+<img src="/slow" alt="">
+<script>
+document.addEventListener('DOMContentLoaded', () => { document.title = 'domcontentloaded' })
+addEventListener('load', () => { document.title = 'load' })
+</script>
+</body></html>

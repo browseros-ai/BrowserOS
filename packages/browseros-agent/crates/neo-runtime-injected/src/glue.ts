@@ -67,6 +67,20 @@ function query(
 export const glue = {
   title: () => ({ value: document.title }),
 
+  /** `frames.ts:855-864`: one waitForSelector probe, without marking the matches. */
+  selectorState: (injected, { selector, strict }) => {
+    const elements = query(injected, selector, strict)
+    const [element] = elements
+    if (!element) return {}
+    return {
+      matched: {
+        count: elements.length,
+        visible: injected.elementState(element, 'visible', true).matches,
+        preview: injected.previewNode(element),
+      },
+    }
+  },
+
   textContent: (injected, { selector, strict }) => {
     const [element] = query(injected, selector, strict, {
       markTargets: 'first',

@@ -1,0 +1,531 @@
+{
+  "about": "Playwright 26137face packages/isomorphic/urlMatch.ts, no baseURL. Written by url-match-goldens.mjs; do not edit.",
+  "globs": [
+    {
+      "glob": "",
+      "pattern": "^$",
+      "urls": [
+        ["http://a.test/", true],
+        ["about:blank", true],
+        ["data:text/html,x", true]
+      ]
+    },
+    {
+      "glob": "**",
+      "pattern": "^(.*)$",
+      "urls": [
+        ["http://a.test/", true],
+        ["http://a.test/a/b?c#d", true],
+        ["about:blank", true]
+      ]
+    },
+    {
+      "glob": "*",
+      "pattern": "^([^/]*)$",
+      "urls": [
+        ["http://a.test/", false],
+        ["about:blank", true],
+        ["a.test", true]
+      ]
+    },
+    {
+      "glob": "**/*",
+      "pattern": "^(.*/)([^/]*)$",
+      "urls": [
+        ["http://a.test/", true],
+        ["http://a.test/a/b", true],
+        ["about:blank", false]
+      ]
+    },
+    {
+      "glob": "**/done.html",
+      "pattern": "^(.*/)done\\.html$",
+      "urls": [
+        ["http://a.test/done.html", true],
+        ["http://a.test/x/y/done.html", true],
+        ["http://a.test/undone.html", false],
+        ["http://a.test/done.html?x=1", false],
+        ["http://a.test/done.html#top", false]
+      ]
+    },
+    {
+      "glob": "**/done.html*",
+      "pattern": "^(.*/)done\\.html([^/]*)$",
+      "urls": [
+        ["http://a.test/done.html?x=1", true],
+        ["http://a.test/done.htm", false]
+      ]
+    },
+    {
+      "glob": "*/done.html",
+      "pattern": "^([^/]*)/done\\.html$",
+      "urls": [["http://a.test/done.html", false], ["a.test/done.html", true]]
+    },
+    {
+      "glob": "http://a.test/**",
+      "pattern": "^http://a\\.test/(.*)$",
+      "urls": [
+        ["http://a.test/", true],
+        ["http://a.test/a/b/c", true],
+        ["http://b.test/a", false]
+      ]
+    },
+    {
+      "glob": "http://a.test/*",
+      "pattern": "^http://a\\.test/([^/]*)$",
+      "urls": [["http://a.test/a", true], ["http://a.test/a/b", false]]
+    },
+    {
+      "glob": "**/a/**/b",
+      "pattern": "^(.*/)a/((.+/)|)b$",
+      "urls": [
+        ["http://a.test/a/b", true],
+        ["http://a.test/a/x/y/b", true],
+        ["http://a.test/ab", false]
+      ]
+    },
+    {
+      "glob": "**/a**",
+      "pattern": "^(.*/)a(.*)$",
+      "urls": [["http://a.test/a", true], ["http://a.test/ab/c", true]]
+    },
+    {
+      "glob": "**/{a,b}.html",
+      "pattern": "^(.*/)(a|b)\\.html$",
+      "urls": [
+        ["http://a.test/a.html", true],
+        ["http://a.test/b.html", true],
+        ["http://a.test/c.html", false]
+      ]
+    },
+    {
+      "glob": "http://a.test/{x,y}/*",
+      "pattern": "^http://a\\.test/(x|y)/([^/]*)$",
+      "urls": [
+        ["http://a.test/x/1", true],
+        ["http://a.test/y/2", true],
+        ["http://a.test/z/3", false]
+      ]
+    },
+    {
+      "glob": "http://a.test/{a,b/c}",
+      "pattern": "^http://a\\.test/(a|b/c)$",
+      "urls": [["http://a.test/a", true], ["http://a.test/b/c", true]]
+    },
+    {
+      "glob": "**/{,index.html}",
+      "pattern": "^(.*/)(|index\\.html)$",
+      "urls": [["http://a.test/", true], ["http://a.test/index.html", true]]
+    },
+    {
+      "glob": "**/a,b",
+      "pattern": "^(.*/)a\\,b$",
+      "urls": [["http://a.test/a,b", true], ["http://a.test/a", false]]
+    },
+    {
+      "glob": "**/{}",
+      "pattern": "^(.*/)()$",
+      "urls": [["http://a.test/", true]]
+    },
+    {
+      "glob": "{a",
+      "error": "Invalid glob pattern \"{a\": unmatched '{'"
+    },
+    {
+      "glob": "a}",
+      "error": "Invalid glob pattern \"a}\": unmatched '}'"
+    },
+    {
+      "glob": "**/{a,{b}}",
+      "error": "Invalid glob pattern \"**/{a,{b}}\": nested '{' is not supported"
+    },
+    {
+      "glob": "http://a.test/{a",
+      "error": "Invalid glob pattern \"http://a.test/{a\": unmatched '{'"
+    },
+    {
+      "glob": "**/search?q=*",
+      "pattern": "^(.*/)search\\?q=([^/]*)$",
+      "urls": [
+        ["http://a.test/search?q=neo", true],
+        ["http://a.test/searchXq=neo", false],
+        ["http://a.test/search?q=a/b", false]
+      ]
+    },
+    {
+      "glob": "http://a.test/search?q=1",
+      "pattern": "^http://a\\.test/search\\?q=1$",
+      "urls": [
+        ["http://a.test/search?q=1", true],
+        ["http://a.test/searchXq=1", false]
+      ]
+    },
+    {
+      "glob": "http://a.test/?q=*",
+      "pattern": "^http://a\\.test/\\?q=([^/]*)$",
+      "urls": [["http://a.test/?q=x", true], ["http://a.test/?r=x", false]]
+    },
+    {
+      "glob": "http://a.test/a?",
+      "pattern": "^http://a\\.test/a\\?$",
+      "urls": [["http://a.test/a?", true], ["http://a.test/a", false]]
+    },
+    {
+      "glob": "http://a.test/page\\\\?x",
+      "pattern": "^http://a\\.test/page\\?x$",
+      "urls": [["http://a.test/page?x", true]]
+    },
+    {
+      "glob": "**/page\\\\?x",
+      "pattern": "^(.*/)page\\\\\\?x$",
+      "urls": [
+        ["http://a.test/page\\?x", true],
+        ["http://a.test/page?x", false]
+      ]
+    },
+    {
+      "glob": "**/a\\*b",
+      "pattern": "^(.*/)a\\*b$",
+      "urls": [["http://a.test/a*b", true], ["http://a.test/axb", false]]
+    },
+    {
+      "glob": "**/\\{a\\}",
+      "pattern": "^(.*/)\\{a\\}$",
+      "urls": [["http://a.test/{a}", true], ["http://a.test/a", false]]
+    },
+    {
+      "glob": "**/a\\,b",
+      "pattern": "^(.*/)a,b$",
+      "urls": [["http://a.test/a,b", true]]
+    },
+    {
+      "glob": "**/a\\d",
+      "pattern": "^(.*/)ad$",
+      "urls": [["http://a.test/ad", true], ["http://a.test/a1", false]]
+    },
+    {
+      "glob": "**/a\\",
+      "pattern": "^(.*/)a\\\\$",
+      "urls": [["http://a.test/a\\", true]]
+    },
+    {
+      "glob": "**/a.b",
+      "pattern": "^(.*/)a\\.b$",
+      "urls": [["http://a.test/a.b", true], ["http://a.test/aXb", false]]
+    },
+    {
+      "glob": "**/x+(y)|[z]$^",
+      "pattern": "^(.*/)x\\+\\(y\\)\\|\\[z\\]\\$\\^$",
+      "urls": [
+        ["http://a.test/x+(y)|[z]$^", true],
+        ["http://a.test/xx(y)|[z]$^", false]
+      ]
+    },
+    {
+      "glob": "http://a.test",
+      "pattern": "^http://a\\.test/$",
+      "urls": [["http://a.test/", true], ["http://a.test", false]]
+    },
+    {
+      "glob": "https://a.test",
+      "pattern": "^https://a\\.test/$",
+      "urls": [["https://a.test/", true], ["http://a.test/", false]]
+    },
+    {
+      "glob": "http://a.test/path",
+      "pattern": "^http://a\\.test/path$",
+      "urls": [["http://a.test/path", true], ["http://a.test/path/", false]]
+    },
+    {
+      "glob": "http://a.test/path/",
+      "pattern": "^http://a\\.test/path/$",
+      "urls": [["http://a.test/path/", true], ["http://a.test/path", false]]
+    },
+    {
+      "glob": "http://a.test:80/x",
+      "pattern": "^http://a\\.test/x$",
+      "urls": [["http://a.test/x", true], ["http://a.test:80/x", false]]
+    },
+    {
+      "glob": "https://a.test:443/",
+      "pattern": "^https://a\\.test/$",
+      "urls": [["https://a.test/", true]]
+    },
+    {
+      "glob": "http://a.test:443/",
+      "pattern": "^http://a\\.test:443/$",
+      "urls": [["http://a.test:443/", true], ["http://a.test/", false]]
+    },
+    {
+      "glob": "http://a.test:8080/*",
+      "pattern": "^http://a\\.test:8080/([^/]*)$",
+      "urls": [["http://a.test:8080/a", true], ["http://a.test/a", false]]
+    },
+    {
+      "glob": "http://localhost:*/a",
+      "pattern": "^http://localhost:([^/]*)/a$",
+      "urls": [["http://localhost:3000/a", true], ["http://localhost/a", false]]
+    },
+    {
+      "glob": "http://a.test/a/../b",
+      "pattern": "^http://a\\.test/b$",
+      "urls": [["http://a.test/b", true], ["http://a.test/a/../b", false]]
+    },
+    {
+      "glob": "http://a.test/./x",
+      "pattern": "^http://a\\.test/x$",
+      "urls": [["http://a.test/x", true]]
+    },
+    {
+      "glob": "http://a.test/a b",
+      "pattern": "^http://a\\.test/a%20b$",
+      "urls": [["http://a.test/a%20b", true], ["http://a.test/a b", false]]
+    },
+    {
+      "glob": "http://a.test/é",
+      "pattern": "^http://a\\.test/%C3%A9$",
+      "urls": [["http://a.test/%C3%A9", true]]
+    },
+    {
+      "glob": "http://bücher.test/",
+      "pattern": "^http://xn--bcher-kva\\.test/$",
+      "urls": [["http://xn--bcher-kva.test/", true]]
+    },
+    {
+      "glob": "HTTP://A.TEST/Path",
+      "pattern": "^http://a\\.test/Path$",
+      "urls": [["http://a.test/Path", true], ["http://a.test/path", false]]
+    },
+    {
+      "glob": "http://*.EXAMPLE.com/",
+      "pattern": "^http://([^/]*)\\.example\\.com/$",
+      "urls": [
+        ["http://www.example.com/", true],
+        ["http://www.EXAMPLE.com/", false]
+      ]
+    },
+    {
+      "glob": "http://A.test/{X,Y}",
+      "pattern": "^http://a\\.test/(X|Y)$",
+      "urls": [["http://a.test/X", true], ["http://a.test/x", false]]
+    },
+    {
+      "glob": "http*://a.test/",
+      "pattern": "^http([^/]*)://a\\.test/$",
+      "urls": [
+        ["http://a.test/", true],
+        ["https://a.test/", true],
+        ["ws://a.test/", false]
+      ]
+    },
+    {
+      "glob": "*://a.test/",
+      "pattern": "^([^/]*)://a\\.test/$",
+      "urls": [["http://a.test/", true], ["https://a.test/", true]]
+    },
+    {
+      "glob": "http://*/x",
+      "pattern": "^http://([^/]*)/x$",
+      "urls": [["http://a.test/x", true], ["http://a.test/y/x", false]]
+    },
+    {
+      "glob": "WS://A.test/*",
+      "pattern": "^ws://a\\.test/([^/]*)$",
+      "urls": [["ws://a.test/x", true], ["WS://A.test/x", false]]
+    },
+    {
+      "glob": "blob:HTTP://A.test/*",
+      "pattern": "^blob:HTTP://A\\.test/([^/]*)$",
+      "urls": [["blob:http://a.test/x", false], ["blob:HTTP://A.test/x", true]]
+    },
+    {
+      "glob": "mailto:A@B.test",
+      "pattern": "^mailto:A@B\\.test$",
+      "urls": [["mailto:A@B.test", true], ["mailto:a@b.test", false]]
+    },
+    {
+      "glob": "javascript:void(0)",
+      "pattern": "^javascript:void\\(0\\)$",
+      "urls": [["javascript:void(0)", true]]
+    },
+    {
+      "glob": "about:blank",
+      "pattern": "^about:blank$",
+      "urls": [
+        ["about:blank", true],
+        ["about:blank#x", false],
+        ["about:BLANK", false]
+      ]
+    },
+    {
+      "glob": "about:*",
+      "pattern": "^about:([^/]*)$",
+      "urls": [["about:blank", true], ["about:srcdoc", true]]
+    },
+    {
+      "glob": "data:text/html,**",
+      "pattern": "^data:text/html\\,(.*)$",
+      "urls": [["data:text/html,<p>hi</p>", true], ["data:text/plain,x", false]]
+    },
+    {
+      "glob": "file:///tmp/*.html",
+      "pattern": "^file:///tmp/([^/]*)\\.html$",
+      "urls": [["file:///tmp/a.html", true], ["file:///tmp/a/b.html", false]]
+    },
+    {
+      "glob": "chrome://newtab/",
+      "pattern": "^chrome://newtab/$",
+      "urls": [["chrome://newtab/", true]]
+    },
+    {
+      "glob": "http://a.test/page#section",
+      "pattern": "^http://a\\.test/page#section$",
+      "urls": [
+        ["http://a.test/page#section", true],
+        ["http://a.test/page", false]
+      ]
+    },
+    {
+      "glob": "**/page#*",
+      "pattern": "^(.*/)page#([^/]*)$",
+      "urls": [["http://a.test/page#x", true], ["http://a.test/page", false]]
+    },
+    {
+      "glob": "http://a.test/page",
+      "pattern": "^http://a\\.test/page$",
+      "urls": [["http://a.test/page", true], ["http://a.test/page#x", false]]
+    },
+    {
+      "glob": "/done.html",
+      "pattern": "^/done\\.html$",
+      "urls": [["http://a.test/done.html", false], ["/done.html", true]]
+    },
+    {
+      "glob": "done.html",
+      "pattern": "^done\\.html$",
+      "urls": [["done.html", true]]
+    },
+    {
+      "glob": "./a/*",
+      "pattern": "^\\./a/([^/]*)$",
+      "urls": [["./a/b", true]]
+    },
+    {
+      "glob": "http://a.test/$&*",
+      "pattern": "^http://a\\.test/\\$&([^/]*)$",
+      "urls": [["http://a.test/$&x", true], ["http://a.test/x", false]]
+    },
+    {
+      "glob": "http://a.test/$_4_$/x*",
+      "pattern": "^http://a\\.test/x([^/]*)/\\$_4_\\$$",
+      "urls": [["http://a.test/x*/$_4_$", true], ["http://a.test/x", false]]
+    },
+    {
+      "glob": "**/ü*",
+      "pattern": "^(.*/)ü([^/]*)$",
+      "urls": [["http://a.test/ü", true], ["http://a.test/%C3%BC", false]]
+    },
+    {
+      "glob": "**/😀*",
+      "pattern": "^(.*/)😀([^/]*)$",
+      "urls": [["http://a.test/😀x", true]]
+    }
+  ],
+  "regexes": [
+    {
+      "source": "done\\.html$",
+      "flags": "",
+      "urls": [
+        ["http://a.test/done.html", true],
+        ["http://a.test/done.htm", false]
+      ]
+    },
+    {
+      "source": "DONE",
+      "flags": "i",
+      "urls": [["http://a.test/done", true], ["http://a.test/x", false]]
+    },
+    {
+      "source": "done",
+      "flags": "g",
+      "urls": [
+        ["http://a.test/done", true],
+        ["http://a.test/done", true],
+        ["http://a.test/x", false]
+      ]
+    },
+    {
+      "source": "done",
+      "flags": "y",
+      "urls": [["http://a.test/done", false], ["done", true]]
+    },
+    {
+      "source": "http",
+      "flags": "y",
+      "urls": [["http://a.test/", true]]
+    },
+    {
+      "source": "done",
+      "flags": "gi",
+      "urls": [["http://a.test/DONE", true], ["http://a.test/Done", true]]
+    },
+    {
+      "source": "^about:blank$",
+      "flags": "",
+      "urls": [["about:blank", true], ["about:blank#x", false]]
+    },
+    {
+      "source": "#section$",
+      "flags": "",
+      "urls": [
+        ["http://a.test/page#section", true],
+        ["http://a.test/page", false]
+      ]
+    },
+    {
+      "source": "^http:\\/\\/a\\.test\\/$",
+      "flags": "m",
+      "urls": [["http://a.test/", true]]
+    },
+    {
+      "source": "(?<word>o)\\k<word>",
+      "flags": "",
+      "urls": [["http://a.test/foo", true], ["http://a.test/fo", false]]
+    },
+    {
+      "source": "a(?=\\.test)",
+      "flags": "",
+      "urls": [["http://a.test/", true]]
+    },
+    {
+      "source": "(?<=a\\.)test",
+      "flags": "",
+      "urls": [["http://a.test/", true], ["http://b.test/", false]]
+    },
+    {
+      "source": "\\p{Lu}",
+      "flags": "u",
+      "urls": [["http://a.test/X", true], ["http://a.test/x", false]]
+    },
+    {
+      "source": ".",
+      "flags": "s",
+      "urls": [["about:blank", true]]
+    },
+    {
+      "source": "test",
+      "flags": "d",
+      "urls": [["http://a.test/", true]]
+    },
+    {
+      "source": "(?:)",
+      "flags": "",
+      "urls": [["http://a.test/", true], ["", true]]
+    },
+    {
+      "source": "a\\/b",
+      "flags": "",
+      "urls": [["http://a.test/a/b", true]]
+    }
+  ]
+}

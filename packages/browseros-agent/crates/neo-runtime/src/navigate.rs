@@ -38,14 +38,26 @@ impl GotoOptions {
 pub(crate) struct Navigation {
     pub(crate) document: Option<String>,
     pub(crate) url: String,
+    pub(crate) lifecycle: Lifecycle,
 }
 
-/// The current document's lifecycle, sampled by an observation without consuming commits.
+/// Flags for the current document, and counts across every document since the watcher started.
+/// Counts preserve lifecycle events across coalesced watch updates and subsequent commits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Lifecycle {
+    pub(crate) dom_content_loaded: bool,
+    pub(crate) load: bool,
+    pub(crate) dom_content_loaded_count: u64,
+    pub(crate) load_count: u64,
+}
+
+/// The current URL and lifecycle, sampled without consuming buffered commits.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct NavigationState {
     pub(crate) pending_url: Option<String>,
-    pub(crate) dom_content_loaded: bool,
-    pub(crate) load: bool,
+    /// Unknown until the initial history reply or the first commit.
+    pub(crate) url: Option<String>,
+    pub(crate) lifecycle: Lifecycle,
 }
 
 /// Subscribed before `navigate`: commits must remain queued while its reply is in flight.
@@ -152,8 +164,8 @@ pub(crate) async fn goto(
         let state = events.state();
         let done = match options.wait_until {
             LifecycleEvent::Commit => true,
-            LifecycleEvent::Domcontentloaded => state.dom_content_loaded,
-            LifecycleEvent::Load => state.load,
+            LifecycleEvent::Domcontentloaded => state.lifecycle.dom_content_loaded,
+            LifecycleEvent::Load => state.lifecycle.load,
             LifecycleEvent::Networkidle => false,
         };
         if done {
@@ -391,6 +403,7 @@ mod tests {
             navigation: Some(Navigation {
                 document: document.map(str::to_string),
                 url: "https://other.test/".to_string(),
+                lifecycle: Lifecycle::default(),
             }),
             state: NavigationState::default(),
         }
@@ -401,8 +414,11 @@ mod tests {
             at,
             navigation: None,
             state: NavigationState {
-                dom_content_loaded: dom,
-                load,
+                lifecycle: Lifecycle {
+                    dom_content_loaded: dom,
+                    load,
+                    ..Lifecycle::default()
+                },
                 ..NavigationState::default()
             },
         }
@@ -491,8 +507,11 @@ mod tests {
     async fn tests_that_a_same_document_navigation_answers_null_without_a_lookup() {
         let mut step = commit(1, None);
         step.state = NavigationState {
-            dom_content_loaded: true,
-            load: true,
+            lifecycle: Lifecycle {
+                dom_content_loaded: true,
+                load: true,
+                ..Lifecycle::default()
+            },
             ..NavigationState::default()
         };
         let mut tab = FakeTab::new([step]);
@@ -545,7 +564,10 @@ mod tests {
             let (progress, _) = progress(100.0);
             assert!(goto(&tab, &options(wait), &progress).await.is_ok());
             let page = tab.observed.lock().expect("page state");
-            assert_eq!((page.dom_content_loaded, page.load), ready);
+            assert_eq!(
+                (page.lifecycle.dom_content_loaded, page.lifecycle.load),
+                ready
+            );
         }
     }
 
@@ -553,8 +575,11 @@ mod tests {
     async fn tests_that_same_document_navigation_keeps_the_loaded_lifecycle() {
         let mut step = commit(1, None);
         step.state = NavigationState {
-            dom_content_loaded: true,
-            load: true,
+            lifecycle: Lifecycle {
+                dom_content_loaded: true,
+                load: true,
+                ..Lifecycle::default()
+            },
             ..NavigationState::default()
         };
         let mut tab = FakeTab::new([step]);

@@ -2,9 +2,10 @@
  * The client half of Playwright's wire inside the realm (Playwright's `client/connection.ts`
  * and `channelOwner.ts` `_wrapApiCall` at 26137face, cut to what a run needs). Every browser
  * call goes through a `Connection` method typed by the interface its guid names (`send` for a
- * `Frame`, `sendPage`, `sendContext`, `sendRequest`, `sendResponse`): it captures the caller's location synchronously, builds
- * Playwright's `{id, guid, method, params, metadata}`, hands it to `runtime-bridge.ts`, and
- * turns the reply into a value or a Playwright-shaped error.
+ * `Frame`, `sendPage`, `sendContext`, `sendRequest`, `sendResponse`, and `sendNeo` for Neo's own
+ * `neo:` frame commands, `neo-commands.ts`): it captures the caller's location synchronously,
+ * builds Playwright's `{id, guid, method, params, metadata}`, hands it to `runtime-bridge.ts`,
+ * and turns the reply into a value or a Playwright-shaped error.
  *
  * ```text
  *  locator.click() → frame._click('locator.click', …) → send(): location, message
@@ -27,6 +28,7 @@ import type {
   ResponseCommands,
 } from '@browseros/neo-runtime-spec/serve'
 import { type PlaywrightError, parseError } from './errors'
+import type { NeoFrameCommands } from './neo-commands'
 import type { Request, Response } from './network'
 import { call } from './runtime-bridge'
 
@@ -82,6 +84,11 @@ export type ApiName =
   | 'browserContext.newPage'
   | 'page.close'
   | 'page.bringToFront'
+  | 'locator.waitFor'
+  | 'page.waitForURL'
+  | 'frame.waitForURL'
+  | 'page.waitForLoadState'
+  | 'frame.waitForLoadState'
   | 'request.response'
   | 'request.allHeaders'
   | 'request.headersArray'
@@ -220,6 +227,27 @@ export class Connection {
       params,
       timeout,
     )) as ResponseCommands[M]['result']
+  }
+
+  /**
+   * {@link Connection.send} for one of Neo's own commands on a frame guid (`neo-commands.ts`):
+   * not Playwright protocol, but the same message, reply and error rebuild. `timeout` bounds the
+   * whole wait Rust runs for it.
+   */
+  async sendNeo<M extends keyof NeoFrameCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: NeoFrameCommands[M]['params'],
+    timeout: number,
+  ): Promise<Resolved<NeoFrameCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<NeoFrameCommands[M]['result']>
   }
 
   /**

@@ -33,6 +33,14 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite.workspace = true
 
+[[test]]
+name = "amazon_cart_live"
+path = "integration-tests/amazon_cart_live.rs"
+
+[[test]]
+name = "hacker_news_live"
+path = "integration-tests/hacker_news_live.rs"
+
 [lints.rust]
 unsafe_code = "forbid"
 
