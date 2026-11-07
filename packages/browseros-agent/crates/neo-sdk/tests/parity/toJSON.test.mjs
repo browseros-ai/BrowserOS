@@ -1,7 +1,8 @@
-// What JSON makes of a run's page, its main frame and its context, through Playwright and through
-// Neo: Playwright's `ChannelOwner.toJSON` gives each its type and guid only, whether a script
-// stringifies one or returns it. Guids differ by design (Neo's name the tab, `page@<targetId>`),
-// so only their type is compared.
+// What JSON makes of a run's page, its main frame, its context and a locator, through Playwright
+// and through Neo: Playwright's `ChannelOwner.toJSON` gives the first three their type and guid
+// only, and a locator its fields (its frame that way, its selector and its `_apiName` tag),
+// whether a script stringifies one or returns it. Guids differ by design (Neo's name the tab,
+// `page@<targetId>`), so only their type is compared.
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs).
 import assert from 'node:assert/strict'
@@ -37,9 +38,14 @@ const EXPECTED = {
   page: { _type: 'Page', _guid: 'string' },
   frame: { _type: 'Frame', _guid: 'string' },
   context: { _type: 'BrowserContext', _guid: 'string' },
+  locator: {
+    _frame: { _type: 'Frame', _guid: 'string' },
+    _selector: '#count',
+    _apiName: 'Locator',
+  },
 }
 
-test('JSON.stringify gives a page, its frame and its context their type and guid', {
+test('JSON.stringify gives a page, its frame and its context their type and guid, and a locator its fields', {
   skip,
   timeout: 120_000,
 }, async (t) => {
@@ -51,7 +57,14 @@ test('JSON.stringify gives a page, its frame and its context their type and guid
         const parsed = JSON.parse(json)
         return { keys: Object.keys(parsed), type: parsed._type, guid: typeof parsed._guid }
       }
-      return { page: shape(page), frame: shape(page.mainFrame()), context: shape(page.context()) }
+      const locator = JSON.parse(JSON.stringify(page.locator('#count')), (key, field) =>
+        key === '_guid' ? typeof field : field)
+      return {
+        page: shape(page),
+        frame: shape(page.mainFrame()),
+        context: shape(page.context()),
+        locator: { keys: Object.keys(locator), json: locator },
+      }
     `,
     probe: 'document.title',
   })
@@ -60,14 +73,19 @@ test('JSON.stringify gives a page, its frame and its context their type and guid
     page: { keys, type: 'Page', guid: 'string' },
     frame: { keys, type: 'Frame', guid: 'string' },
     context: { keys, type: 'BrowserContext', guid: 'string' },
+    locator: {
+      keys: ['_frame', '_selector', '_apiName'],
+      json: EXPECTED.locator,
+    },
   })
 })
 
-test(`a script that returns its page, frame and context returns their JSON, as with Playwright ${playwrightVersion}`, {
+test(`a script that returns its page, frame, context and a locator returns their JSON, as with Playwright ${playwrightVersion}`, {
   skip,
   timeout: 120_000,
 }, async () => {
-  const source = 'return { page, frame: page.mainFrame(), context }'
+  const source =
+    "return { page, frame: page.mainFrame(), context, locator: page.locator('#count') }"
   const neoRun = buildNeoRun()
   const cleanups = []
   try {

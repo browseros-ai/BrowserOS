@@ -107,6 +107,7 @@ function getByRoleSelector(role, options = {}) {
 class Locator {
   _frame;
   _selector;
+  _apiName = "Locator";
   constructor(frame, selector, options) {
     this._frame = frame;
     this._selector = selector;

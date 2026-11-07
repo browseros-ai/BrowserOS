@@ -18,6 +18,13 @@ test('tests that a page, its main frame and its context serialize as their type 
   )
 })
 
+test('tests that a locator serializes its frame, selector and Playwright type tag, in that order', () => {
+  const { page } = start()
+  expect(JSON.stringify(page.locator('#x').first())).toBe(
+    '{"_frame":{"_type":"Frame","_guid":"frame@RUN"},"_selector":"#x >> nth=0","_apiName":"Locator"}',
+  )
+})
+
 test('tests that nested pages serialize the same way, and serializing reads nothing from the tab', () => {
   const { page, context, fake } = start([RUN_TAB, OTHER_TAB])
   const pages = context.pages()
