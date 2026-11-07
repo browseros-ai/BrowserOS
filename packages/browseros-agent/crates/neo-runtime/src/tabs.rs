@@ -19,6 +19,7 @@ use tracing::debug;
 
 use crate::bridge;
 use crate::getters;
+use crate::network::HopId;
 use crate::page::{PageSession, Session, TabInputs};
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunPage};
@@ -177,10 +178,12 @@ impl Tabs {
         );
     }
 
+    /// The page a guid belongs to: `page@T`, `frame@T`, or a hop's `request@T:…`/`response@T:…`.
     pub(crate) fn resolve(&self, guid: &str) -> Option<Arc<PageEntry>> {
         let target = guid
             .strip_prefix("page@")
-            .or_else(|| guid.strip_prefix("frame@"))?;
+            .or_else(|| guid.strip_prefix("frame@"))
+            .or_else(|| HopId::parse(guid).map(|(_, target, _)| target))?;
         self.0
             .pages
             .lock()

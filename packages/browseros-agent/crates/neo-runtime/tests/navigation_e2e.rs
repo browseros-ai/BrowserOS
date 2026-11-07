@@ -58,12 +58,15 @@ async fn tests_that_goto_waits_for_each_supported_lifecycle_and_reads_the_new_ti
     let Some(tab) = open().await else { return };
     for wait in ["commit", "domcontentloaded", "load"] {
         let result = value(run(&tab, &format!(
-            "const result = await page.goto({:?}, {{waitUntil: {:?}}}); return {{isNull: result === null, title: await page.title(), url: page.url()}}",
+            "const result = await page.goto({:?}, {{waitUntil: {:?}}}); return {{status: result.status(), ok: result.ok(), responseUrl: result.url(), method: result.request().method(), contentType: (await result.allHeaders())['content-type'], title: await page.title(), url: page.url()}}",
             format!("{}/two", tab.origin), wait,
         )).await);
         assert_eq!(
             result,
-            json!({"isNull":true, "title":"Second", "url":format!("{}/two", tab.origin)})
+            json!({"status":200, "ok":true, "responseUrl":format!("{}/two", tab.origin),
+                   "method":"GET", "contentType":"text/html; charset=utf-8", "title":"Second",
+                   "url":format!("{}/two", tab.origin)}),
+            "{wait}"
         );
     }
     tab.close().await;
@@ -81,7 +84,8 @@ async fn tests_that_goto_waits_for_load_but_not_slow_subresources_at_commit_or_d
             ),
         )
         .await;
-        assert_eq!(value(outcome), Value::Null);
+        // A returned Response serializes as Playwright's channel objects do.
+        assert_eq!(value(outcome)["_type"], "Response", "{wait}");
         let mut state = tab.evaluate("document.readyState").await;
         // Commit may precede HTML parsing. Wait only for the parser, while the image is held.
         for _ in 0..50 {

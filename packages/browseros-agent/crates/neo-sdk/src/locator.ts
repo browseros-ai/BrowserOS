@@ -72,6 +72,8 @@ export type LocatorOptions = {
 export class Locator {
   _frame: Frame
   _selector: string
+  /** Playwright's type tag, which its test matchers read; it also shows in `JSON.stringify`. */
+  _apiName = 'Locator'
 
   constructor(frame: Frame, selector: string, options?: LocatorOptions) {
     this._frame = frame

@@ -5,6 +5,12 @@
 // listeners saw (which events reached which element). It never compares an error's wording, the
 // call log, click coordinates or retry timing.
 //
+// Two differences are deliberate (neo-runtime src/click.rs) and asserted, not hidden: Neo's
+// trial sends no input, where Playwright's presses into an interceptor whose blocked events the
+// page's own window listeners still see; and under noWaitAfter Neo still reads the press's
+// hit-target verdict and presses again after a block, where Playwright resolves on the blocked
+// press.
+//
 // The pages are tests/pages/; neo-runtime's click_e2e.rs runs them on Neo alone.
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs).
@@ -40,7 +46,9 @@ const EVENTS =
 
 /**
  * Each case's page, script, what to read from the page after the run (`probe`), and the delivery
- * Neo's one record must report. `closeAfterMs` closes the tab while the script runs.
+ * Neo's one record must report. `closeAfterMs` closes the tab while the script runs. A deliberate
+ * difference names what each engine's page must show (`pages`) and what both scripts return
+ * (`returns`).
  */
 const cases = [
   {
@@ -93,13 +101,41 @@ const cases = [
     delivery: 'done',
   },
   {
-    // Only the hash: Playwright's trial presses into an interceptor that blocks the click, and
-    // listeners the page added first still see its events. Neo's trial sends none (click_e2e.rs
-    // checks that). On both, neither button's handler runs.
+    // Both resolve. Playwright skips the verdict under noWaitAfter, so the press the overlay
+    // caught counts as its click; Neo reads it, presses again, and the button's handler runs.
+    name: 'blocked-once-no-wait-after',
+    html: page('blocked-once.html'),
+    source: `await ${SUBMIT}.click({ noWaitAfter: true })\nreturn 'clicked'`,
+    probe: 'window.__clicks',
+    returns: { value: 'clicked' },
+    pages: { playwright: 0, neo: 1 },
+    delivery: 'done',
+  },
+  {
+    // Both resolve and neither button's handler runs (the hash stays empty). Playwright's
+    // interceptor blocks the press only after the page's window listeners saw it; Neo sends none.
     name: 'trial',
     html: page('ok.html'),
     source: `await ${SUBMIT}.click({ trial: true })\nreturn page.url()`,
-    probe: 'location.hash',
+    probe: `[location.hash, ${EVENTS}]`,
+    pages: {
+      playwright: [
+        '',
+        [
+          ['pointermove', -1, 0],
+          ['pointerdown', 0, 0],
+          ['pointerup', 0, 0],
+          ['click', 0, 1],
+        ].map(([type, button, detail]) => ({
+          type,
+          target: 'button',
+          isTrusted: true,
+          button,
+          detail,
+        })),
+      ],
+      neo: ['', []],
+    },
     delivery: 'notSent',
   },
   {
@@ -124,7 +160,18 @@ test('clicks read the same through Neo and Playwright', {
           kind(playwright.result),
           'what the script saw',
         )
-        assert.deepEqual(neo.probe, playwright.probe, 'what the page saw')
+        if (c.returns)
+          assert.deepEqual(kind(playwright.result), c.returns, 'the value')
+        if (c.pages) {
+          assert.deepEqual(
+            playwright.probe,
+            c.pages.playwright,
+            "what Playwright's page saw",
+          )
+          assert.deepEqual(neo.probe, c.pages.neo, "what Neo's page saw")
+        } else {
+          assert.deepEqual(neo.probe, playwright.probe, 'what the page saw')
+        }
         assert.deepEqual(
           neo.outcome.calls.map((call) => call.delivery),
           [c.delivery],

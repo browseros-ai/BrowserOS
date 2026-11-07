@@ -48,10 +48,10 @@ test('innerText returns rendered text and rejects non-HTML, ambiguous or missing
     types: ['string', 'string', 'string'],
     textContent: 'Hello loudnext line secret',
     errors: {
-      svg: 'error',
-      strict: 'strict',
-      missing: 'timeout',
-      notAString: 'error',
+      svg: 'Error',
+      strict: 'Error:strict',
+      missing: 'TimeoutError',
+      notAString: 'Error',
     },
   })
 })

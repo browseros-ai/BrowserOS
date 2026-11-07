@@ -4,8 +4,8 @@
  * values. So `timeout` and unknown option keys never reach Rust, and Neo's messages carry the
  * same params as Playwright's.
  *
- * Values are not validated here: Rust decodes params with the spec's types and replies `Error`
- * when they do not fit, worded by serde rather than by Playwright's validator.
+ * Values are not validated here, except `null`: Rust decodes params with the spec's types and
+ * replies `Error` when they do not fit, worded by serde rather than by Playwright's validator.
  */
 
 import type {
@@ -243,7 +243,12 @@ type _PageCloseKeysMatchSpec = Assert<
   >
 >
 
-/** `options` reduced to `keys`, in `keys` order, without `undefined` values. */
+/**
+ * `options` reduced to `keys`, in `keys` order, without `undefined` values. A key set to `null`
+ * throws a plain `Error` before anything is sent, as Playwright's validator does: each of these
+ * keys is required or `tOptional`, which lets only `undefined` through. Rust's serde would read
+ * the `null` as an absent option and run the call.
+ */
 export function pickParams<Keys extends readonly string[]>(
   keys: Keys,
   options: Record<string, unknown>,
@@ -251,6 +256,7 @@ export function pickParams<Keys extends readonly string[]>(
   const params: { [K in Keys[number]]?: unknown } = {}
   for (const key of keys as readonly Keys[number][]) {
     const value = options[key]
+    if (value === null) throw new Error(`${key}: expected a value, got null`)
     if (value !== undefined) params[key] = value
   }
   return params

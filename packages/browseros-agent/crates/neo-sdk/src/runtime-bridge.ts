@@ -13,6 +13,7 @@ import type {
   FrameInitializer,
   PageInitializer,
 } from '@browseros/neo-runtime-spec/serve'
+import type { CreatedChain, Timing } from './network'
 
 declare const __neo_runtime: {
   get(request: string): string
@@ -33,8 +34,8 @@ export interface CreatedPage {
 
 /**
  * What each getter returns, keyed by the field name Rust dispatches on. Rust answers only for
- * guids it handed the run (the run page, every `pages` record, every `newPage` result) and
- * throws `Error` for any other.
+ * guids it handed the run (the run page, every `pages` record, every `newPage` result, every
+ * request and response of a `goto` answer) and throws `Error` for any other.
  */
 export interface GetterReplies {
   /** `null` once the page is closed: every CDP source errors then. */
@@ -44,6 +45,14 @@ export interface GetterReplies {
   pages: CreatedPage[]
   /** On a page: its creation record, which `newPage` builds its `Page` from. */
   initializer: CreatedPage
+  /** On a response: its request and every hop before it, oldest first. */
+  chain: CreatedChain
+  /** On a request: `timing()` now, `responseEnd` included once the request ended. */
+  timing: Timing
+  /** On a request: its failure text, `null` (or empty) while it has not failed. */
+  failure: string | null
+  /** On a response: whether its request finished, is still loading, or its page closed. */
+  finished: 'finished' | 'pending' | 'closed'
 }
 
 export function get<Field extends keyof GetterReplies>(

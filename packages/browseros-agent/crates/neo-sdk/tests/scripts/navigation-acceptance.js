@@ -5,7 +5,14 @@
 const here = page.url()
 const origin = here.slice(0, here.indexOf('/', 'http://'.length))
 
-const navigated = await page.goto(`${origin}/start`)
+const response = await page.goto(`${origin}/start`)
+const navigated = {
+  url: response.url().slice(origin.length),
+  status: response.status(),
+  ok: response.ok(),
+  contentType: await response.headerValue('content-type'),
+  bodyHasTitle: (await response.text()).includes('<title>Neo acceptance</title>'),
+}
 const title = await page.title()
 const snapshot = await page.ariaSnapshot({ mode: 'ai' })
 const ref = /- button "Increment" \[ref=(e\d+)\]/.exec(snapshot)?.[1]

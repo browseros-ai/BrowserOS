@@ -30,7 +30,7 @@ test('count returns how many elements match, at once', {
         try { await page.locator(selector).count(); errors.push('resolved') }
         catch (error) { errors.push(errorCategory(error)) }
       }
-      if (errors.join() !== 'error,error') throw new Error('invalid and non-string selectors must reject: ' + errors)
+      if (errors.join() !== 'Error,Error') throw new Error('invalid and non-string selectors must reject: ' + errors)
       return { counts, types: Object.values(counts).map(v => typeof v), errors }
     `,
     probe: `['.fruit', '.missing', '#veg > li'].map(s => document.querySelectorAll(s).length)`,

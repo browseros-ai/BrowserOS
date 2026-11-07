@@ -22,13 +22,13 @@ test('inputValue returns strings and rejects wrong or ambiguous targets', {
         try { await page.locator(selector).inputValue(); errors.push('resolved') }
         catch (error) { errors.push(errorCategory(error)) }
       }
-      if (errors.length !== 2 || errors[0] !== 'error' || errors[1] !== 'strict') throw new Error('wrong and strict targets must reject with their own categories')
+      if (errors.length !== 2 || errors[0] !== 'Error' || errors[1] !== 'Error:strict') throw new Error('wrong and strict targets must reject with their own categories')
       let invalid = 'resolved'
       try { await page.inputValue(123) } catch (error) { invalid = errorCategory(error) }
-      if (invalid !== 'error') throw new Error('invalid selector type must reject')
+      if (invalid !== 'Error') throw new Error('invalid selector type must reject')
       let timeout = 'resolved'
       try { await page.locator('#missing').inputValue({timeout:500}) } catch (error) { timeout = errorCategory(error) }
-      if (timeout !== 'timeout') throw new Error('missing inputValue must time out')
+      if (timeout !== 'TimeoutError') throw new Error('missing inputValue must time out')
       return { values, types: values.map(v => typeof v), errors, invalid, timeout }
     `,
     probe: 'window.__facts()',
