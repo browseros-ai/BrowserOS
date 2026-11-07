@@ -34,14 +34,19 @@ type Ops = {
   end: { names: string[]; message: string }
 }
 
-/** Neo: runs `op` on the page's controller; a document without one has nothing to do. */
+/** Neo: runs `op` on the page's controller. A document without one has nothing to do, but at
+ * the run's end: a setup cut short between `Runtime.addBinding` and the controller's install
+ * left it the CDP binding function, which goes as it goes from any other document. */
 export default function bindingsCall<Op extends keyof Ops>(
   op: Op,
   arg: Ops[Op],
 ): void {
   const global = globalThis as unknown as Record<string, unknown>
   const controller = global[CONTROLLER] as BindingsController | undefined
-  if (!controller) return
+  if (!controller) {
+    if (op === 'end') delete global[BINDING]
+    return
+  }
   switch (op) {
     case 'add': {
       const { name, noGlobal } = arg as Ops['add']

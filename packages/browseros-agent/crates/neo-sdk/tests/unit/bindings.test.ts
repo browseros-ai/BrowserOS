@@ -118,4 +118,31 @@ describe('BindingCall', () => {
     await page._onBinding(record('who', []))
     expect(seen).toEqual({ context, page, frame: page.mainFrame() })
   })
+
+  test('the callback gets its own frame, after that frame detached too, never the main frame', async () => {
+    const { fake, page } = start()
+    fake.answer = () => EXPOSED
+    const frames: unknown[] = []
+    await page.exposeBinding('who', (source) => {
+      frames.push(source.frame)
+    })
+    fake.answer = () => ({ result: {}, log: [] })
+    // A child the script held, then one it never saw and that left the tree before its call
+    // reached the realm.
+    const child = page._frameFrom({
+      guid: 'frame@RUN/child',
+      initializer: { url: 'http://fixture/child', name: '', loadStates: [] },
+    })
+    const from = (guid: string) => ({
+      ...record('who', []),
+      frame: { guid },
+    })
+    await page._onBinding(from('frame@RUN/child'))
+    await page._onBinding(from('frame@RUN/gone'))
+    await page._onBinding(from('frame@RUN/gone'))
+    expect(frames[0]).toBe(child)
+    expect(frames[1]).not.toBe(page.mainFrame())
+    expect((frames[1] as { _guid: string })._guid).toBe('frame@RUN/gone')
+    expect(frames[2]).toBe(frames[1])
+  })
 })
