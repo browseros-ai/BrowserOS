@@ -555,6 +555,8 @@ pub(crate) fn plan_tap(plan: &mut Plan, simulated: &mut InputDevices, at: (f64, 
 
 /// Deviation: `server/input.ts` `Mouse.up`: `this._buttons.delete(button);` Playwright keeps a page's buttons held until its script releases them; Neo releases at a run's end every button the run left held, oldest first at the pointer's last position, because the tab is the user's and outlives the run.
 pub(crate) fn plan_button_releases(plan: &mut Plan, simulated: &mut InputDevices, owner: &Owner) {
+    // First, before any release, as for keys: the run is over whatever its releases do.
+    retire(plan, simulated, owner);
     let mut held: Vec<MouseButton> = Vec::new();
     for (button, holder) in &simulated.mouse.buttons {
         if simulated.releases(holder, owner) && !held.contains(button) {
@@ -584,7 +586,6 @@ pub(crate) fn plan_button_releases(plan: &mut Plan, simulated: &mut InputDevices
         };
         plan.commands[at].always = true;
     }
-    retire(plan, simulated, owner);
 }
 
 /// Neo: a run end's last command: what the run still holds after its releases (one failed)
@@ -716,7 +717,17 @@ impl Writer {
     ) {
         let mut written = vec![false; commands.len()];
         let mut index = 0;
-        while index < commands.len() && !self.refused {
+        while index < commands.len() {
+            if self.refused {
+                // The socket that carried the session is gone: nothing more is written, but a
+                // run end's bookkeeping (state only, written even after a stop) still applies.
+                let command = &commands[index];
+                if command.method.is_none() && command.always {
+                    sink.apply(&command.effect, true);
+                }
+                index += 1;
+                continue;
+            }
             let mut end = index;
             while commands[end].with_next && end + 1 < commands.len() {
                 end += 1;
@@ -1140,6 +1151,8 @@ mod tests {
         Fail,
         Refuse,
         Hang,
+        /// The session went (`SessionGone`): a closed tab or detached session.
+        Gone,
     }
 
     /// Records each command's `type` (or `insertText`) and answers the next scripted outcome
@@ -1188,6 +1201,7 @@ mod tests {
                     actual: 2,
                 }),
                 Answer::Hang => future::pending().await,
+                Answer::Gone => Err(CdpError::SessionGone),
             }
         }
     }
@@ -1733,5 +1747,210 @@ mod tests {
             PressReport::NothingWritten
         ));
         assert_eq!(cell.delivery(), Delivery::NotSent);
+    }
+
+    /// Every way a run end's release can stop short leaves the finished run ended, its leftover
+    /// held by no live run: a call cut short before anything went out, a closed session, and a
+    /// release whose future is dropped while its write hangs (the run's deadline). Refused and
+    /// failed writes have cases of their own.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_every_early_exit_of_a_run_end_leaves_the_run_ended() {
+        let held = || {
+            let mut simulated = InputDevices::default();
+            let mut setup = Plan::default();
+            keyboard::plan_key_down(
+                &mut setup,
+                &mut simulated,
+                "Shift",
+                Platform::Linux,
+                &run("A"),
+            )
+            .expect("key");
+            plan_down(&mut setup, &mut simulated, MouseButton::Left, 1, &run("A"));
+            simulated
+        };
+        let end_of = |simulated: &mut InputDevices| {
+            let mut end = Plan::default();
+            keyboard::plan_key_releases(&mut end, simulated, &run("A"));
+            plan_button_releases(&mut end, simulated, &run("A"));
+            end
+        };
+
+        // Cut short before anything went out: a run end's releases are written all the same,
+        // and once they are answered nothing is left, the ended run included.
+        let mut simulated = held();
+        let turn = Turn::of(simulated.clone(), "observer");
+        let end = end_of(&mut simulated);
+        let cut_short = CancellationToken::new();
+        cut_short.cancel();
+        let sender = Sender::answering([]);
+        let _written = write_plan(&sender, &turn, &end, &cut_short).await;
+        assert_eq!(sender.sent(), ["keyUp", "mouseReleased"], "cut short");
+        assert_eq!(turn.devices().keyboard, KeyboardState::default());
+        assert!(turn.devices().ended.is_empty() && turn.devices().mouse.buttons.is_empty());
+
+        // The session went.
+        let mut simulated = held();
+        let turn = Turn::of(simulated.clone(), "observer");
+        let end = end_of(&mut simulated);
+        let sender = Sender::answering([Answer::Gone, Answer::Gone]);
+        let _written = write_plan(&sender, &turn, &end, &CancellationToken::new()).await;
+        assert_eq!(turn.devices().ended, [run("A")], "session gone");
+        assert_eq!(
+            sender.sent(),
+            ["keyUp", "mouseReleased"],
+            "each release still tried"
+        );
+
+        // The release's future is dropped while its first write hangs.
+        let mut simulated = held();
+        let turn = Turn::of(simulated.clone(), "observer");
+        let end = end_of(&mut simulated);
+        let sender = Sender::answering([Answer::Hang]);
+        let dropped = time::timeout(
+            Duration::from_secs(1),
+            write_plan(&sender, &turn, &end, &CancellationToken::new()),
+        )
+        .await;
+        assert!(dropped.is_err(), "the run's deadline dropped it");
+        assert_eq!(turn.devices().ended, [run("A")], "dropped mid-write");
+
+        // In each case a later run's end releases what A left, held by no live run.
+        let mut simulated = turn.devices();
+        let mut later = Plan::default();
+        keyboard::plan_key_releases(&mut later, &mut simulated, &run("B"));
+        plan_button_releases(&mut later, &mut simulated, &run("B"));
+        let sender = Sender::answering([]);
+        let _written = write_plan(&sender, &turn, &later, &CancellationToken::new()).await;
+        assert_eq!(sender.sent(), ["keyUp", "mouseReleased"]);
+        assert_eq!(
+            turn.devices(),
+            InputDevices {
+                mouse: MouseState {
+                    last_button: None,
+                    ..turn.devices().mouse
+                },
+                ..InputDevices::default()
+            }
+        );
+    }
+
+    /// A rejected write after an epoch change still ends this holder's ownership.
+    #[tokio::test(start_paused = true)]
+    async fn review_recheck2_epoch_refusal_still_retires_the_finished_owner() {
+        let mut simulated = InputDevices::default();
+        let mut setup = Plan::default();
+        keyboard::plan_key_down(
+            &mut setup,
+            &mut simulated,
+            "Shift",
+            Platform::Linux,
+            &run("A"),
+        )
+        .expect("key");
+        let turn = Turn::of(simulated.clone(), "observer");
+        let mut end_a = Plan::default();
+        keyboard::plan_key_releases(&mut end_a, &mut simulated, &run("A"));
+        plan_button_releases(&mut end_a, &mut simulated, &run("A"));
+        let refused = Sender::answering([Answer::Refuse]);
+        let written = write_plan(&refused, &turn, &end_a, &CancellationToken::new()).await;
+        assert!(matches!(
+            &written.outcomes[0],
+            Err(CdpError::ConnectionEpochChanged { .. })
+        ));
+        let mut simulated = turn.devices();
+        let mut down_b = Plan::default();
+        keyboard::plan_key_down(
+            &mut down_b,
+            &mut simulated,
+            "Shift",
+            Platform::Linux,
+            &run("B"),
+        )
+        .expect("key");
+        let sender = Sender::answering([]);
+        let _down = write_plan(&sender, &turn, &down_b, &CancellationToken::new()).await;
+        let mut simulated = turn.devices();
+        let mut end_b = Plan::default();
+        keyboard::plan_key_releases(&mut end_b, &mut simulated, &run("B"));
+        plan_button_releases(&mut end_b, &mut simulated, &run("B"));
+        let released = Sender::answering([]);
+        let _end = write_plan(&released, &turn, &end_b, &CancellationToken::new()).await;
+        assert_eq!(
+            released.sent(),
+            ["keyUp"],
+            "a rejected cleanup must not leave A live after B ends: {:?}",
+            turn.devices()
+        );
+        assert_eq!(turn.devices().keyboard, KeyboardState::default());
+        assert!(turn.devices().ended.is_empty());
+    }
+
+    /// Failed key/button releases can be recovered without a new press, while live holders survive.
+    #[tokio::test(start_paused = true)]
+    async fn review_recheck2_retired_key_and_button_recovery_preserves_live_holders() {
+        for live_b in [false, true] {
+            let mut simulated = InputDevices::default();
+            let mut setup = Plan::default();
+            keyboard::plan_key_down(
+                &mut setup,
+                &mut simulated,
+                "Shift",
+                Platform::Linux,
+                &run("A"),
+            )
+            .expect("key");
+            plan_down(&mut setup, &mut simulated, MouseButton::Left, 1, &run("A"));
+            let turn = Turn::of(simulated.clone(), "observer");
+            let mut end_a = Plan::default();
+            keyboard::plan_key_releases(&mut end_a, &mut simulated, &run("A"));
+            plan_button_releases(&mut end_a, &mut simulated, &run("A"));
+            let failed = Sender::answering([Answer::Fail, Answer::Fail]);
+            let _end = write_plan(&failed, &turn, &end_a, &CancellationToken::new()).await;
+            assert_eq!(turn.devices().ended, [run("A")]);
+            if live_b {
+                let mut simulated = turn.devices();
+                let mut down_b = Plan::default();
+                keyboard::plan_key_down(
+                    &mut down_b,
+                    &mut simulated,
+                    "Shift",
+                    Platform::Linux,
+                    &run("B"),
+                )
+                .expect("key");
+                plan_down(&mut down_b, &mut simulated, MouseButton::Left, 1, &run("B"));
+                let _down = write_plan(
+                    &Sender::answering([]),
+                    &turn,
+                    &down_b,
+                    &CancellationToken::new(),
+                )
+                .await;
+                let mut simulated = turn.devices();
+                let mut observer_end = Plan::default();
+                keyboard::plan_key_releases(&mut observer_end, &mut simulated, &run("observer"));
+                plan_button_releases(&mut observer_end, &mut simulated, &run("observer"));
+                let sender = Sender::answering([]);
+                let _end =
+                    write_plan(&sender, &turn, &observer_end, &CancellationToken::new()).await;
+                assert!(
+                    sender.sent().is_empty(),
+                    "a live holder still needs its key and button"
+                );
+            }
+            let owner = if live_b { run("B") } else { run("observer") };
+            let mut simulated = turn.devices();
+            let mut final_end = Plan::default();
+            keyboard::plan_key_releases(&mut final_end, &mut simulated, &owner);
+            plan_button_releases(&mut final_end, &mut simulated, &owner);
+            let sender = Sender::answering([]);
+            let _end = write_plan(&sender, &turn, &final_end, &CancellationToken::new()).await;
+            assert_eq!(sender.sent(), ["keyUp", "mouseReleased"]);
+            let actual = turn.devices();
+            assert_eq!(actual.keyboard, KeyboardState::default());
+            assert!(actual.mouse.buttons.is_empty());
+            assert!(actual.ended.is_empty());
+        }
     }
 }

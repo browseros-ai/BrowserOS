@@ -914,7 +914,32 @@ fn new_group(page: &Arc<PageSession>, frame: &Arc<FrameContext>, purpose: &str) 
 
 /// A tab's input: its turn lock, and inside it the tab's keyboard and mouse
 /// (`input_devices.rs`), so only a call holding the turn reaches them.
-pub(crate) type TabInput = Mutex<SyncMutex<InputDevices>>;
+#[derive(Default)]
+pub(crate) struct TabInput {
+    /// The turn, granted in arrival order.
+    turn: Arc<Mutex<()>>,
+    /// The tab's devices: reached through a held turn ([`InputPermit`]), and by
+    /// [`TabInput::mark_ended`] alone without one.
+    devices: SyncMutex<InputDevices>,
+}
+
+impl TabInput {
+    /// Neo: records that `owner`'s run ended (`Effect::Retire`) without waiting for the turn, so
+    /// whatever it still holds counts as held by no live run however its release goes: a release
+    /// that is refused, fails, or never gets the turn before the run's deadline. It writes
+    /// nothing, and a held turn's planning sees it at its next snapshot.
+    pub(crate) fn mark_ended(&self, owner: &Owner) {
+        // A poisoned lock means a panic mid-update; Neo never reaches inside one.
+        if let Ok(mut devices) = self.devices.lock() {
+            devices.apply(
+                &Effect::Retire {
+                    owner: owner.clone(),
+                },
+                true,
+            );
+        }
+    }
+}
 
 /// One `Runtime`'s input locks, one per tab, each shared by every run the `Runtime` makes on
 /// that tab. A tab has one keyboard and one mouse, whose state lives in its lock, and its
@@ -958,21 +983,35 @@ impl TabInputs {
 /// into them through it.
 #[derive(Clone)]
 pub(crate) struct InputPermit {
-    turn: Arc<OwnedMutexGuard<SyncMutex<InputDevices>>>,
+    _turn: Arc<OwnedMutexGuard<()>>,
+    tab: Arc<TabInput>,
     /// The run whose session took the turn.
     owner: Owner,
+}
+
+impl InputPermit {
+    /// A turn at `tab`'s input, granted in arrival order. tokio's lock is cancel-safe: a wait
+    /// dropped before its turn holds nothing.
+    async fn take(tab: &Arc<TabInput>, owner: Owner) -> Self {
+        Self {
+            _turn: Arc::new(Arc::clone(&tab.turn).lock_owned().await),
+            tab: Arc::clone(tab),
+            owner,
+        }
+    }
 }
 
 impl EffectSink for InputPermit {
     fn apply(&self, effect: &Effect, answered: bool) {
         // A poisoned lock means a panic mid-update; Neo never reaches inside one.
-        if let Ok(mut devices) = self.turn.lock() {
+        if let Ok(mut devices) = self.tab.devices.lock() {
             devices.apply(effect, answered);
         }
     }
 
     fn devices(&self) -> InputDevices {
-        self.turn
+        self.tab
+            .devices
             .lock()
             .map(|devices| devices.clone())
             .unwrap_or_default()
@@ -981,7 +1020,8 @@ impl EffectSink for InputPermit {
 
 impl Devices for InputPermit {
     fn snapshot(&self) -> Result<InputDevices, PageError> {
-        self.turn
+        self.tab
+            .devices
             .lock()
             .map(|devices| devices.clone())
             .map_err(|_| {
@@ -2048,10 +2088,7 @@ impl Tab for FrameTab {
     /// A turn at the tab's input lock, granted in arrival order. tokio's lock is cancel-safe: a
     /// wait dropped before its turn holds nothing.
     async fn input(&self) -> InputPermit {
-        InputPermit {
-            turn: Arc::new(Arc::clone(&self.input).lock_owned().await),
-            owner: self.session.id.clone(),
-        }
+        InputPermit::take(&self.input, self.session.id.clone()).await
     }
 
     /// [`arm_interceptor`] on the run's tracker, spawned on the first poll, and a wait for its
@@ -2405,17 +2442,17 @@ impl InputSender for Arc<PageSession> {
 impl PageSession {
     /// Releases every key and button this run's session left held on the tab (design section
     /// 4.6): a keyUp per held key, newest first, then a mouseUp per held button at the
-    /// pointer's last position, under a turn so no other call's input lands in between. A
-    /// closed tab is skipped; a failed release leaves the key held in the state, for the next
-    /// run's view. The caller bounds the wait for the turn and the writes.
+    /// pointer's last position, under a turn so no other call's input lands in between. The
+    /// run is recorded as ended first, before any wait or write ([`TabInput::mark_ended`]), so
+    /// a release that is refused, fails, or is cut off by the caller's bound (which covers the
+    /// wait for the turn and the writes) leaves what it holds to the next run's end, held by no
+    /// live run. A closed tab writes nothing.
     pub(crate) async fn release_run_input(self: &Arc<Self>) {
+        self.input.mark_ended(&self.session.id);
         if self.closed.is_cancelled() {
             return;
         }
-        let permit = InputPermit {
-            turn: Arc::new(Arc::clone(&self.input).lock_owned().await),
-            owner: self.session.id.clone(),
-        };
+        let permit = InputPermit::take(&self.input, self.session.id.clone()).await;
         let Ok(mut simulated) = permit.snapshot() else {
             return;
         };
@@ -2660,6 +2697,42 @@ mod tests {
         assert_eq!(
             state.borrow().page.committed_url.as_deref(),
             Some("https://a.test/new")
+        );
+    }
+
+    /// A run's end records the run as ended before it waits for the tab's turn, so a release
+    /// that never gets the turn before the run's deadline still leaves what the run held to the
+    /// next run's end.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_run_is_marked_ended_without_waiting_for_the_turn() {
+        use std::slice;
+
+        use crate::keyboard::SHIFT;
+
+        let tab = Arc::new(TabInput::default());
+        let a = SessionId("A".to_string());
+        let held = InputPermit::take(&tab, a.clone()).await;
+        held.apply(
+            &Effect::KeyDown {
+                code: "ShiftLeft",
+                modifier: SHIFT,
+                owner: a.clone(),
+            },
+            true,
+        );
+        // Another call holds the turn: the mark goes in at once all the same.
+        tab.mark_ended(&a);
+        assert_eq!(held.devices().ended, slice::from_ref(&a));
+        drop(held);
+        let next = InputPermit::take(&tab, SessionId("B".to_string())).await;
+        let devices = next.snapshot().expect("devices");
+        assert!(
+            !devices.live_other(&a, &SessionId("B".to_string())),
+            "A is not live"
+        );
+        assert!(
+            devices.releases(&a, &SessionId("B".to_string())),
+            "B's end releases A's keys"
         );
     }
 
