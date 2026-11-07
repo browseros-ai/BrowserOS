@@ -40,11 +40,12 @@ use neo_runtime_spec::injected::{
 use neo_runtime_spec::{Element, Handle, HandleId, MethodFlag, MethodGroup, MethodMeta};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::time;
 
 use crate::click::{LoopAWaits, PageError};
 use crate::frame_selector;
 use crate::frames::{FrameContext, FrameScope};
-use crate::main_world::{BuiltExpression, Called, DocumentId, Installed, MainFunction};
+use crate::main_world::{self, BuiltExpression, Called, DocumentId, Installed, MainFunction};
 use crate::page::{FrameTab, GroupGuard};
 use crate::progress::{CallError, PlaywrightError, Progress, js_number};
 
@@ -59,6 +60,10 @@ static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
 
 /// Playwright: `server/frames.ts` `Frame.waitForFunctionExpression`: `return this.retryWithProgressAndTimeouts(progress, [100], async () => {`
 const WAIT_FOR_FUNCTION_RETRY: Duration = Duration::from_millis(100);
+
+/// Neo: how long a `waitForFunction` reply waits for its page polling to stop before replying
+/// anyway (a frozen renderer); Playwright waits without a bound.
+const WAITER_ABORT_BOUND: Duration = Duration::from_secs(2);
 
 /// Playwright: `server/javascript.ts` `evaluateExpression`: `throw new JavaScriptErrorInEvaluate('JSHandles can be evaluated only in the context they were created!');`
 const OTHER_CONTEXT: &str = "JSHandles can be evaluated only in the context they were created!";
@@ -1147,7 +1152,7 @@ async fn utility_root(
 ) -> Result<Handle<Element>, CallError> {
     let chunks = frame_selector::split(selector).map_err(PlaywrightError::error)?;
     if !chunks.hops.is_empty() || chunks.from_main {
-        // Deviation: `server/frameSelectors.ts` `FrameSelectors.resolveFrameForSelector`: `const element = await this.frame.selectors.query(...)` Playwright resolves frame hops from a scope too; Neo serves a scoped query within the element's own document only.
+        // Deviation: `server/frameSelectors.ts` `FrameSelectors._resolveChainedSelector`: `const frames = await this._queryFrames(frame, info, i === 0 ? scope : undefined, noStall, frameVisible);` Playwright resolves frame hops from a scope too; Neo serves a scoped query within the element's own document only.
         return Err(PlaywrightError::error(
             "Neo does not support selectors that enter frames from an element handle yet",
         )
@@ -1168,9 +1173,9 @@ async fn utility_root(
         .map_err(|error| page_error(error).into())
 }
 
-/// Playwright's `frameSelectors.ts` `query`: the first match of `selector` (strict when asked),
-/// in the frame the selector ends in, adopted into that frame's main world; `None` when nothing
-/// matched. With `scope`, within that element.
+/// The first match of `selector` (strict when asked), in the frame the selector ends in, adopted
+/// into that frame's main world; `None` when nothing matched. With `scope`, within that element.
+/// Playwright: `server/frameSelectors.ts` `FrameSelectors.query`
 async fn query_one(
     tab: &FrameTab,
     scope: Option<&HandleEntry>,
@@ -1225,9 +1230,9 @@ async fn query_one(
         .map_err(|error| page_error(error).into())
 }
 
-/// Playwright's `frameSelectors.ts` `queryAll`: every match, in document order, each adopted
-/// into the main world of the frame the selector ends in; `None` when the selector's frame is not
-/// there. With `scope`, within that element.
+/// Every match, in document order, each adopted into the main world of the frame the selector
+/// ends in; `None` when the selector's frame is not there. With `scope`, within that element.
+/// Playwright: `server/frameSelectors.ts` `FrameSelectors.queryAll`
 async fn query_all(
     tab: &FrameTab,
     scope: Option<&HandleEntry>,
@@ -1352,7 +1357,7 @@ async fn eval_on_selector(
     progress: &Progress,
 ) -> Result<EvalResult, CallError> {
     let Some(created) = query_one(tab, scope, selector, strict, handles, progress).await? else {
-        // Playwright: `server/frames.ts` `Frame._evalOnSelector`: `throw new Error(`Failed to find element matching selector "${target.selector}"`);`
+        // Playwright: `server/frames.ts` `Frame._evalOnSelector`: `Failed to find element matching selector "${target.selector}"`
         return Err(PlaywrightError::error(format!(
             "Failed to find element matching selector \"{selector}\""
         ))
@@ -1619,13 +1624,14 @@ async fn wait_once(
         }
         Err(error) => Err(error),
     };
-    // Playwright awaits the abort, so no poll runs after the call returns; a stopped call's
-    // abort runs detached on the page's tracked tasks.
+    // Playwright awaits the abort, so no poll runs after the call returns, a timed-out or failed
+    // one included (`await handle.evaluate(h => h.abort()).catch(() => {})`), bounded here so a
+    // frozen page cannot hold the reply; only a run that ended leaves it to the page's tasks.
     let abort = abort_waiter(tab.clone(), Arc::clone(frame), waiter);
-    if outcome.is_ok() {
-        abort.await;
-    } else {
+    if matches!(outcome, Err(CallError::RunEnded(_))) {
         tab.spawn(abort);
+    } else {
+        let _stopped = time::timeout(WAITER_ABORT_BOUND, abort).await;
     }
     outcome.map(|created| created.map(EvalResult::Handle))
 }
@@ -1662,12 +1668,16 @@ async fn abort_waiter(tab: FrameTab, frame: Arc<FrameContext>, waiter: String) {
     drop(tab);
 }
 
-/// A page object another area found (a console message's argument) as a handle of the run, for
-/// med-pw-net's `ConsoleMessage.args()`: the object stays in the group CDP put it in.
+/// The seam of med-pw-net's `ConsoleMessage.args()`: `object`, a value an event of `frame`'s
+/// session carried (a console message's argument), as a handle of the run. An object is first
+/// re-wrapped into the run's handle group of that session (`main_world::retain`), so the handle
+/// outlives the event's own group (`Runtime.discardConsoleEntries`) and is released with the
+/// run's other handles; a node is an `ElementHandle`, and a value without an object keeps it.
+/// Playwright: `server/chromium/crExecutionContext.ts` `createHandle`: `if (remoteObject.subtype === 'node') {`
 ///
 /// # Errors
 ///
-/// See [`serve`].
+/// `NotConnected` when the object or its frame's document is gone; `Closed` once the run ended.
 #[expect(
     dead_code,
     reason = "the seam med-pw-net's ConsoleMessage.args() calls; remove this once it does"
@@ -1677,10 +1687,16 @@ pub(crate) async fn handle_for_remote_object(
     frame: &Arc<FrameContext>,
     object: RemoteObject,
     handles: &Handles,
-    progress: &Progress,
-) -> Result<CreatedHandle, CallError> {
-    let installed = installed(tab, frame, None, progress).await?;
-    create_handle(tab, frame, installed.document, object, handles, progress).await
+) -> Result<CreatedHandle, PageError> {
+    let installed = frame.main.installed(frame).await?;
+    let object = match object.object_id.as_deref() {
+        Some(object_id) => {
+            let group = handles.group(tab, frame)?;
+            main_world::retain(frame, object_id, group.group()).await?
+        }
+        None => object,
+    };
+    created_handle(tab, frame, installed.document, object, handles).await
 }
 
 /// Playwright's `JSHandle.jsonValue`: the page's `UtilityScript.jsonValue(true, handle)`.
@@ -1843,39 +1859,49 @@ async fn create_handle(
     handles: &Handles,
     progress: &Progress,
 ) -> Result<CreatedHandle, CallError> {
+    progress
+        .race(created_handle(tab, frame, document, object, handles))
+        .await?
+        .map_err(|error| page_error(error).into())
+}
+
+/// [`create_handle`] outside a call, for [`handle_for_remote_object`].
+async fn created_handle(
+    tab: &FrameTab,
+    frame: &Arc<FrameContext>,
+    document: DocumentId,
+    object: RemoteObject,
+    handles: &Handles,
+) -> Result<CreatedHandle, PageError> {
     let Some(object_id) = object.object_id.clone() else {
         let (argument, preview) = primitive(&object);
-        return handles
-            .register(
-                tab,
-                frame,
-                document,
-                Remote::Value(argument),
-                false,
-                preview,
-            )
-            .map_err(|error| page_error(error).into());
+        return handles.register(
+            tab,
+            frame,
+            document,
+            Remote::Value(argument),
+            false,
+            preview,
+        );
     };
     let element = object.subtype.as_deref() == Some(NODE_TYPE);
     let preview = if element {
         // Deviation: `server/dom.ts` `ElementHandle._initializePreview`: `this._setPreview(await utility.evaluate((injected, e) => 'JSHandle@' + injected.previewNode(e), this));` Playwright starts at `JSHandle@node` and updates the preview by event; Neo has no events, so the handle starts with the final preview.
-        match progress.race(node_preview(tab, frame, &object_id)).await? {
+        match node_preview(tab, frame, &object_id).await {
             Some(preview) => format!("{NODE_PREVIEW_PREFIX}{preview}"),
             None => format!("{NODE_PREVIEW_PREFIX}{NODE_TYPE}"),
         }
     } else {
         render_preview(&object)
     };
-    handles
-        .register(
-            tab,
-            frame,
-            document,
-            Remote::Object(HandleId::new(object_id)),
-            element,
-            preview,
-        )
-        .map_err(|error| page_error(error).into())
+    handles.register(
+        tab,
+        frame,
+        document,
+        Remote::Object(HandleId::new(object_id)),
+        element,
+        preview,
+    )
 }
 
 /// The utility world's `previewNode` of a main-world node, `None` when the node cannot be

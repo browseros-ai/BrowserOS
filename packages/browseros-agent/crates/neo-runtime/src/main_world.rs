@@ -86,6 +86,14 @@ const WAIT_ABORT: &str = include_str!(concat!(
     "/../neo-runtime-injected/dist/wait-abort.js"
 ));
 
+/// `(object) => object`, run on a page object an event named, with that object as its argument.
+/// Neo: Playwright's handles of console arguments stay in the group CDP put them in; Neo's live
+/// in the run's handle group, which Neo releases at run end (`evaluate::handle_for_remote_object`).
+const RETAIN: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/retain.js"
+));
+
 /// A page function of Playwright's server, built in neo-runtime-injected, that runs as the
 /// `expression` of `UtilityScript.evaluate` (`EVALUATE`), so its arguments arrive parsed with
 /// their handles, primitives included. Agent code never takes this path.
@@ -379,6 +387,41 @@ impl MainWorld {
             .map_err(|error| frame.host.classify(&error))?;
         serde_json::from_value(reply["object"].clone())
             .map_err(|error| PageError::Contract(format!("DOM.resolveNode answered: {error}")))
+    }
+}
+
+/// `object_id`, a page object an event named (a console message's argument), as the same object
+/// under a new id in `group`: CDP's answer to `RETAIN` run on it with the object as its argument.
+/// The new id lives until `group` is released, whatever becomes of the event's own group.
+///
+/// # Errors
+///
+/// `NotConnected` when the object or its context is gone; `Closed` when the session is.
+pub(crate) async fn retain(
+    frame: &FrameContext,
+    object_id: &str,
+    group: &ObjectGroup,
+) -> Result<RemoteObject, PageError> {
+    let reply = frame
+        .host
+        .send(
+            "Runtime.callFunctionOn",
+            json!({
+                "functionDeclaration": RETAIN,
+                "objectId": object_id,
+                "arguments": [{ "objectId": object_id }],
+                "objectGroup": group.0,
+                "returnByValue": false,
+            }),
+        )
+        .await
+        .map_err(|error| frame.host.classify(&error))?;
+    let answer: CallFunctionOnResult = serde_json::from_value(reply).map_err(|error| {
+        PageError::Contract(format!("Runtime.callFunctionOn answered: {error}"))
+    })?;
+    match answer.exception_details {
+        Some(details) => Err(PageError::Contract(exception_message(details))),
+        None => Ok(answer.result),
     }
 }
 
