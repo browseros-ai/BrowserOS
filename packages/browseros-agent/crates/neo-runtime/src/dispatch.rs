@@ -101,6 +101,7 @@ use crate::init_scripts::{
 };
 use crate::keyboard::KeyboardTab;
 use crate::lists;
+use crate::locator_handlers::{self, Resolving};
 use crate::navigate::{self, GotoOptions};
 use crate::network::{HopId, ObjectKind as NetworkObject};
 use crate::page::{DialogAnswer, FrameTab, PageSession};
@@ -249,7 +250,43 @@ struct Inner {
     _ending: DropGuard,
 }
 
+/// What admitted one call ([`Inner::admit`]): its share of the in-flight caps, and the claim of
+/// a call that ends calls in flight.
+struct Admission {
+    share: Option<Admitted>,
+    ending: Option<Ending<FrameCursor>>,
+    resolving: Option<Resolving>,
+}
+
 impl Inner {
+    /// Admits `route`: a share of the in-flight caps, or none for a call that ends calls in
+    /// flight, with its claim. A navigation's release, a running locator handler's completion
+    /// (which frees the action waiting on it) and the run's disconnection: the cap never refuses
+    /// them, or a full run could not let go.
+    fn admit(
+        &self,
+        route: &ObjectCall,
+        target: Option<&(Arc<PageEntry>, FrameScope)>,
+        bytes: usize,
+    ) -> Result<Admission, PlaywrightError> {
+        let ending = ending_cursor(route).and_then(|id| self.cursors.begin_ending(id));
+        let resolving = completed_handler(route).and_then(|uid| {
+            let page = target?.0.attached_session()?;
+            locator_handlers::begin_resolving(&page, uid)
+        });
+        let releases = ending.is_some() || resolving.is_some() || disconnects(route);
+        let share = if releases {
+            None
+        } else {
+            Some(self.in_flight.admit(bytes)?)
+        };
+        Ok(Admission {
+            share,
+            ending,
+            resolving,
+        })
+    }
+
     /// A `setContent` call takes its place in its frame's write order as it arrives.
     fn ordered(&self, guid: &str, mut call: ObjectCall) -> ObjectCall {
         if let ObjectCall::Frame(Route::FrameSetContent(_, turn)) = &mut call {
@@ -498,8 +535,11 @@ impl Dispatcher {
             input: meta.is_some_and(|meta| meta.has(MethodFlag::Input)),
         }));
         inner.trace.push(Arc::clone(&entry));
-        let (route, share, ending) = match route.and_then(|route| self.admit(route, message.len()))
-        {
+        let admitted = route.and_then(|route| {
+            let admission = inner.admit(&route, target.as_ref(), message.len())?;
+            Ok((route, admission))
+        });
+        let (route, admission) = match admitted {
             Ok(admitted) => admitted,
             Err(error) => {
                 entry.finish(error.to_result());
@@ -532,8 +572,9 @@ impl Dispatcher {
             id,
             reply,
             events: inner.tabs.events().clone(),
-            share,
-            ending,
+            share: admission.share,
+            ending: admission.ending,
+            resolving: admission.resolving,
             abortable,
         };
         let timeout = metadata.timeout.unwrap_or(0.0);
@@ -558,19 +599,6 @@ impl Dispatcher {
             serve_call(tabs, cursors, target, route, progress, call_reply).await;
         });
         PendingReply(PendingInner::Waiting(receiver))
-    }
-
-    /// Takes a routed call's share of the run's in-flight caps. A navigation's release and the
-    /// run's disconnection end calls in flight: the cap never refuses them, or a full run could
-    /// not let go.
-    fn admit(&self, route: ObjectCall, bytes: usize) -> Result<Admission, PlaywrightError> {
-        let ending = ending_cursor(&route).and_then(|id| self.0.cursors.begin_ending(id));
-        let share = if ending.is_some() || disconnects(&route) {
-            None
-        } else {
-            Some(self.0.in_flight.admit(bytes)?)
-        };
-        Ok((route, share, ending))
     }
 
     /// What a call settles in call order, before its task starts, however the call tasks
@@ -1265,7 +1293,6 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
 }
 
 /// An admitted call: its route, its share of the in-flight caps, and the wait it ends.
-type Admission = (ObjectCall, Option<Admitted>, Option<Ending<FrameCursor>>);
 
 struct CallReply {
     entry: Arc<CallEntry>,
@@ -1278,6 +1305,9 @@ struct CallReply {
     share: Option<Admitted>,
     /// A wait's finish or release: its claim on the wait it ends (`Cursors::begin_ending`).
     ending: Option<Ending<FrameCursor>>,
+    /// A running locator handler's completion: its claim on that handler
+    /// (`locator_handlers::begin_resolving`).
+    resolving: Option<Resolving>,
     /// The call's place in the abort registry; `None` for an id that is not an integer.
     abortable: Option<Registration>,
 }
@@ -1701,6 +1731,7 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
         events,
         share,
         ending,
+        resolving,
         abortable,
     } = target;
     // The outcome is decided: an abort from now on is ignored, as Playwright drops a call's
@@ -1718,7 +1749,7 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
     events.barrier().await;
     // Given back before the reply leaves, so a script that awaited this call can start another
     // at once. A call that never replies gives them back as its task ends.
-    drop((share, ending));
+    drop((share, ending, resolving));
     // The script may have stopped waiting (the realm is gone); the record already holds the
     // outcome.
     let _sent = reply.send((text, events.seq()));
@@ -1877,6 +1908,14 @@ fn route_frame_element(method: &str) -> Option<Routed> {
 /// The cursor a URL-predicate wait's finish or release names. Each skips the in-flight caps for
 /// the one call that claims its open cursor (`Cursors::begin_ending`): the wait it ends may hold
 /// that capacity, and the claim counts against the cursor cap instead.
+/// The locator handler a `Page.resolveLocatorHandlerNoReply` completes.
+fn completed_handler(call: &ObjectCall) -> Option<i64> {
+    match call {
+        ObjectCall::Page(PageCall::ResolveLocatorHandlerNoReply(params)) => Some(params.uid),
+        _ => None,
+    }
+}
+
 fn ending_cursor(call: &ObjectCall) -> Option<u64> {
     match call {
         ObjectCall::Frame(Route::FrameFinishNavigation(options)) => Some(options.cursor),
@@ -2008,6 +2047,7 @@ mod tests {
     use crate::run::Delivery;
     use crate::run::PageId;
     use crate::screenshot::TabScreenshots;
+    use crate::session_state::Permissions;
     use crate::switch::Switches;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
@@ -2024,6 +2064,7 @@ mod tests {
             TabInputs::default(),
             TabScreenshots::default(),
             Switches::default(),
+            Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -2062,6 +2103,7 @@ mod tests {
                 events: EventHub::default(),
                 share: None,
                 ending: None,
+                resolving: None,
                 abortable: None,
             },
         );
@@ -2102,6 +2144,7 @@ mod tests {
             TabInputs::default(),
             TabScreenshots::default(),
             Switches::default(),
+            Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -3146,6 +3189,7 @@ mod tests {
                 events: EventHub::default(),
                 share: Some(in_flight.admit(10).expect("under the caps")),
                 ending: None,
+                resolving: None,
                 abortable: None,
             },
         ));
@@ -3424,6 +3468,7 @@ mod review_abort_priority {
     use crate::page::TabInputs;
     use crate::run::PageId;
     use crate::screenshot::TabScreenshots;
+    use crate::session_state::Permissions;
     use crate::switch::Switches;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
@@ -3442,6 +3487,7 @@ mod review_abort_priority {
             TabInputs::default(),
             TabScreenshots::default(),
             Switches::default(),
+            Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -3484,6 +3530,7 @@ mod review_abort_priority {
                 events: EventHub::default(),
                 share: None,
                 ending: None,
+                resolving: None,
                 abortable: None,
             },
         );

@@ -35,6 +35,7 @@ and NOTICE.
 | `packages/playwright-core/src/client/input.ts` | `a5a6b242849fa4cb4635a205f5c398a2291b0b6bd7db7c48e1ec27704520b795` |
 | `packages/playwright-core/src/client/jsHandle.ts` | `9f26d49fe91b8c9963f9da8272eeeff7515f18916ece89075d104e20409f41d4` |
 | `packages/playwright-core/src/client/locator.ts` | `c1db3374b461c7065b58c426a8bb70ff622388781f3942be6aa46d616e3b7a09` |
+| `packages/playwright-core/src/client/network.ts` | `4980d01829fb7dd08554e66892af5805405ed2dca8ce8d8e6fd846a9f15d6689` |
 | `packages/playwright-core/src/client/page.ts` | `7bea585eda246c5f6fbdf8fe0b21af24b88b49e11d0f701e553e7099d36b2c9b` |
 | `packages/playwright-core/src/client/playwright.ts` | `5722ca620042b074ca4f9fe4c0b30af39d93d5c7356e5b48ad011b006ff79379` |
 | `packages/playwright-core/src/client/selectors.ts` | `3c347555ec097cc8739be8323f0f86fc983c0d3087637d18869e5a5ca1f9426d` |

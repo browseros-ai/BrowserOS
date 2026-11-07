@@ -6,15 +6,16 @@ use std::time::Duration;
 
 use browseros_cdp::CdpError;
 use neo_runtime_spec::serve::{
-    BrowserContextCall, BrowserContextNewPageResult, ConsoleMessagesFilter, PageCall, PageChannel,
-    PageClearConsoleMessagesParams, PageClearConsoleMessagesResult, PageClearPageErrorsParams,
-    PageClearPageErrorsResult, PageConsoleMessagesParams, PageConsoleMessagesResult,
-    PageGoBackParams, PageGoBackResult, PageGoForwardParams, PageGoForwardResult,
-    PagePageErrorsParams, PagePageErrorsResult, PageRegisterLocatorHandlerParams,
-    PageRegisterLocatorHandlerResult, PageReloadParams, PageReloadResult, PageRequestsParams,
-    PageRequestsResult, PageResolveLocatorHandlerNoReplyParams,
-    PageResolveLocatorHandlerNoReplyResult, PageUnregisterLocatorHandlerParams,
-    PageUnregisterLocatorHandlerResult, ResponseChannel,
+    BrowserContextCall, BrowserContextCookiesParams, BrowserContextCookiesResult,
+    BrowserContextNewPageResult, BrowserContextStorageStateParams, ConsoleMessagesFilter,
+    NameValue, PageCall, PageChannel, PageClearConsoleMessagesParams,
+    PageClearConsoleMessagesResult, PageClearPageErrorsParams, PageClearPageErrorsResult,
+    PageConsoleMessagesParams, PageConsoleMessagesResult, PageGoBackParams, PageGoBackResult,
+    PageGoForwardParams, PageGoForwardResult, PagePageErrorsParams, PagePageErrorsResult,
+    PageRegisterLocatorHandlerParams, PageRegisterLocatorHandlerResult, PageReloadParams,
+    PageReloadResult, PageRequestsParams, PageRequestsResult,
+    PageResolveLocatorHandlerNoReplyParams, PageResolveLocatorHandlerNoReplyResult,
+    PageUnregisterLocatorHandlerParams, PageUnregisterLocatorHandlerResult, ResponseChannel,
 };
 use serde_json::{Value, json};
 use tracing::debug;
@@ -29,6 +30,7 @@ use crate::highlight;
 use crate::history::{self, HistoryOptions};
 use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
+use crate::session_state;
 use crate::tabs::{self, PageEntry, Tabs};
 
 pub(crate) async fn context(
@@ -82,7 +84,80 @@ pub(crate) async fn context(
         // Playwright: `server/dispatchers/browserContextDispatcher.ts` `BrowserContextDispatcher.pause`: `// Debugger will take care of this.`
         // `setTestIdAttributeName`: `Dispatcher::call` applied it before this call started.
         BrowserContextCall::Pause(_) | BrowserContextCall::SetTestIdAttributeName(_) => Ok(None),
+        BrowserContextCall::Cookies(params) => {
+            let cookies = session_state::cookies(tabs, &params.urls, progress).await?;
+            encode_result::<BrowserContextCookiesParams>(&BrowserContextCookiesResult { cookies })
+        }
+        BrowserContextCall::AddCookies(params) => {
+            session_state::add_cookies(tabs, params.cookies, progress).await?;
+            Ok(None)
+        }
+        BrowserContextCall::SetExtraHTTPHeaders(params) => {
+            tabs.overrides()
+                .set_context_headers(tabs, params.headers, progress)
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::SetOffline(params) => {
+            tabs.overrides()
+                .set_offline(tabs, params.offline, progress)
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::SetGeolocation(params) => {
+            tabs.overrides()
+                .set_geolocation(tabs, params.geolocation, progress)
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::GrantPermissions(params) => {
+            tabs.permissions()
+                .grant(
+                    tabs,
+                    tabs.run_id(),
+                    params.origin.as_deref(),
+                    &params.permissions,
+                    progress,
+                )
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::ClearPermissions(_) => {
+            tabs.permissions()
+                .clear(tabs, tabs.run_id(), progress)
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::SetHTTPCredentials(_) => {
+            session_state::set_http_credentials()?;
+            Ok(None)
+        }
+        BrowserContextCall::StorageState(params) => {
+            let state = session_state::storage_state(tabs, &params, progress).await?;
+            encode_result::<BrowserContextStorageStateParams>(&state)
+        }
+        BrowserContextCall::SetStorageState(params) => {
+            session_state::set_storage_state(tabs, params.storage_state, progress).await?;
+            Ok(None)
+        }
     }
+}
+
+/// `page.setExtraHTTPHeaders`: the page's own, over the context's (`session_state.rs`).
+async fn set_page_headers(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    headers: Vec<NameValue>,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    // (platform) The page's own headers go over its context's: the run's own context's.
+    if entry.context.get().is_some() {
+        return Err(browser_calls::created_state("setExtraHTTPHeaders"));
+    }
+    let page = progress.race(tabs.session(entry)).await??;
+    tabs.overrides()
+        .set_page_headers(&page, &entry.id, headers, progress)
+        .await
 }
 
 /// Neo: `dispatch::route` hands every `Page.screenshot` and `Page.pdf` to `capture.rs`, so one
@@ -168,6 +243,9 @@ pub(crate) async fn page(
         call @ (PageCall::SetViewportSize(_)
         | PageCall::EmulateMedia(_)
         | PageCall::RequestGC(_)) => emulated(tabs, entry, call, progress).await?,
+        PageCall::SetExtraHTTPHeaders(params) => {
+            set_page_headers(tabs, entry, params.headers, progress).await?;
+        }
         PageCall::RunBeforeUnload(_) => run_before_unload(tabs, entry, progress).await?,
         PageCall::Screenshot(_) | PageCall::Pdf(_) => return Err(misrouted_capture()),
         // The dispatcher serves these over the tab's input devices (`devices.rs`).

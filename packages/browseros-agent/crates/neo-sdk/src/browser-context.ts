@@ -20,11 +20,17 @@
 
 import type {
   BrowserContextCloseParams,
+  BrowserContextSetStorageStateParams,
+  BrowserContextStorageStateParams,
+  BrowserContextStorageStateResult,
   DialogInitializer,
+  HttpCredentials,
+  NetworkCookie,
   PageChannel,
   RequestInitializer,
   ResponseInitializer,
   SerializedError,
+  SetNetworkCookie,
 } from '@browseros/neo-runtime-spec/serve'
 import type { Browser } from './browser'
 import type { Connection } from './connection'
@@ -34,6 +40,7 @@ import { Dialog } from './dialog'
 import { Download } from './download'
 import { parseSerializedError, targetClosedError } from './errors'
 import { ChannelOwner, type EventPipe, type EventTable } from './events'
+import { type Headers, headersObjectToArray, validateHeaders } from './headers'
 import { Disposable, evaluationScript, type InitScript } from './init-script'
 import { assertEvaluateOptions, type EvaluateOptions } from './js-handle'
 import { type Created, requestFromRecord, responseFromRecord } from './network'
@@ -70,6 +77,69 @@ const CONTEXT_EVENTS: EventTable = {
   local: ['close'],
   quiet: ['backgroundpage'],
   unserved: ['serviceworker'],
+}
+
+/** Neo: why `storageState({ path })` throws: the run has no artifact directory to write it in. */
+const STORAGE_STATE_PATH =
+  'path: this run has no artifact directory, so Neo cannot write the storage state; the host sets one per run'
+
+/** Neo: why `setStorageState(path)` throws: the run has no artifact directory to read it from. */
+const STATE_FILE_PATH =
+  'storageState: this run has no artifact directory, so Neo cannot read a state file; the host sets one per run'
+
+/** Neo: why `clearCookies()` without a filter throws. */
+const CLEAR_ALL_COOKIES_REFUSED =
+  "Neo does not clear every cookie of the user's browser, which would sign the user out of every site: pass clearCookies a name, domain or path"
+
+/** Playwright's `clearCookies` options (`client/network.ts` `ClearNetworkCookieOptions`). */
+export interface ClearCookieOptions {
+  name?: string | RegExp
+  domain?: string | RegExp
+  path?: string | RegExp
+}
+
+/** Playwright: `client/network.ts` `toClearCookiesParams`: `name: isString(options.name) ? options.name : undefined,`
+ * The filters Playwright's client sends: a string or a `RegExp` each, anything else dropped. */
+function clearCookieFilter(options: ClearCookieOptions): ClearCookieOptions {
+  const kept = (value: unknown) =>
+    typeof value === 'string' || value instanceof RegExp ? value : undefined
+  return {
+    name: kept(options.name),
+    domain: kept(options.domain),
+    path: kept(options.path),
+  }
+}
+
+/** Playwright: `server/network.ts` `hasClearCookiesFilter`: `return options.name !== undefined || options.domain !== undefined || options.path !== undefined;` */
+function hasClearCookieFilter(filter: ClearCookieOptions): boolean {
+  return (
+    filter.name !== undefined ||
+    filter.domain !== undefined ||
+    filter.path !== undefined
+  )
+}
+
+/** Playwright: `server/network.ts` `cookieMatchesClearFilter`: `return matches('name', options.name) && matches('domain', options.domain) && matches('path', options.path);` */
+function clearCookieMatches(
+  cookie: NetworkCookie,
+  filter: ClearCookieOptions,
+): boolean {
+  const matches = (
+    property: 'name' | 'domain' | 'path',
+    value: string | RegExp | undefined,
+  ) => {
+    if (value === undefined) return true
+    if (value instanceof RegExp) {
+      value.lastIndex = 0
+      return value.test(cookie[property])
+    }
+    return cookie[property] === value
+  }
+  return (
+    matches('name', filter.name) &&
+    matches('domain', filter.domain) &&
+    matches('path', filter.path)
+  )
 }
 
 /** A dialog record Rust sends: Playwright's `{guid, initializer}`. */
@@ -455,6 +525,214 @@ export class BrowserContext extends ChannelOwner {
       0,
     )
     return this.#pageFor(page.guid)
+  }
+
+  /** Playwright: `client/browserContext.ts` `BrowserContext.cookies`: `if (urls && typeof urls === 'string')`
+   * Every cookie of the user's browser profile, which is the run's context, or those a request
+   * to one of `urls` would send. */
+  async cookies(urls?: string | string[]): Promise<NetworkCookie[]> {
+    const list = !urls ? [] : typeof urls === 'string' ? [urls] : urls
+    const { cookies } = await this.#connection.sendContext(
+      'browserContext.cookies',
+      this.#guid,
+      'cookies',
+      { urls: list },
+      0,
+    )
+    return cookies
+  }
+
+  /** Playwright: `client/browserContext.ts` `BrowserContext.addCookies`: `await this._channel.addCookies({ cookies }, kNoTimeout);`
+   * The cookies stay in the user's profile after the run, as a site's would. */
+  async addCookies(cookies: SetNetworkCookie[]): Promise<void> {
+    await this.#connection.sendContext(
+      'browserContext.addCookies',
+      this.#guid,
+      'addCookies',
+      { cookies },
+      0,
+    )
+  }
+
+  /**
+   * Playwright: `server/browserContext.ts` `BrowserContext.clearCookies`: `const cookiesToExpire = currentCookies.filter(cookie => network.cookieMatchesClearFilter(cookie, options));`
+   * The cookies matching every filter given expire, the user's others untouched: Playwright's
+   * server logic, run here, where a `RegExp` filter is the script's own.
+   *
+   * Deviation: `server/browserContext.ts` `BrowserContext.clearCookies`: `await this.doClearCookies();`
+   * With no filter Playwright clears every cookie of its context. Neo's context is the user's
+   * own browser, where that would sign the user out of every site, so Neo refuses the call
+   * without a `name`, `domain` or `path`.
+   */
+  async clearCookies(options: ClearCookieOptions = {}): Promise<void> {
+    const filter = clearCookieFilter(options)
+    if (!hasClearCookieFilter(filter))
+      throw new Error(CLEAR_ALL_COOKIES_REFUSED)
+    const { cookies } = await this.#connection.sendContext(
+      'browserContext.clearCookies',
+      this.#guid,
+      'cookies',
+      { urls: [] },
+      0,
+    )
+    const expired = cookies
+      .filter((cookie) => clearCookieMatches(cookie, filter))
+      // Playwright: `server/browserContext.ts` `BrowserContext.clearCookies`: `// Keep the original value: browsers reject or ignore cookies with both empty name and value.`
+      .map((cookie) => ({ ...cookie, expires: 0 }))
+    if (!expired.length) return
+    await this.#connection.sendContext(
+      'browserContext.clearCookies',
+      this.#guid,
+      'addCookies',
+      { cookies: expired },
+      0,
+    )
+  }
+
+  /** Playwright: `client/browserContext.ts` `BrowserContext.setExtraHTTPHeaders`: `network.validateHeaders(headers);`
+   * Sent with every request of the run's tabs, each page's own over them, until the run ends. */
+  async setExtraHTTPHeaders(headers: Headers): Promise<void> {
+    validateHeaders(headers)
+    await this.#connection.sendContext(
+      'browserContext.setExtraHTTPHeaders',
+      this.#guid,
+      'setExtraHTTPHeaders',
+      { headers: headersObjectToArray(headers) },
+      0,
+    )
+  }
+
+  /** Playwright: `client/browserContext.ts` `BrowserContext.setOffline`: `await this._channel.setOffline({ offline }, kNoTimeout);`
+   * The run's tabs, until the run ends. */
+  async setOffline(offline: boolean): Promise<void> {
+    await this.#connection.sendContext(
+      'browserContext.setOffline',
+      this.#guid,
+      'setOffline',
+      { offline },
+      0,
+    )
+  }
+
+  /** Playwright: `client/browserContext.ts` `BrowserContext.setGeolocation`: `await this._channel.setGeolocation({ geolocation: geolocation || undefined }, kNoTimeout);`
+   * The run's tabs, until the run ends; `null` clears it. */
+  async setGeolocation(
+    geolocation: {
+      longitude: number
+      latitude: number
+      accuracy?: number
+    } | null,
+  ): Promise<void> {
+    await this.#connection.sendContext(
+      'browserContext.setGeolocation',
+      this.#guid,
+      'setGeolocation',
+      geolocation ? { geolocation } : {},
+      0,
+    )
+  }
+
+  /** Playwright: `client/browserContext.ts` `BrowserContext.grantPermissions`: `await this._channel.grantPermissions({ permissions, ...options }, kNoTimeout);`
+   * The run's own grant, on `origin` or every origin, over the user's settings until the run
+   * clears it or ends (neo-runtime `session_state.rs` `Permissions`). */
+  async grantPermissions(
+    permissions: string[],
+    options?: { origin?: string },
+  ): Promise<void> {
+    await this.#connection.sendContext(
+      'browserContext.grantPermissions',
+      this.#guid,
+      'grantPermissions',
+      { permissions, ...options },
+      0,
+    )
+  }
+
+  /** Playwright: `client/browserContext.ts` `BrowserContext.clearPermissions`: `await this._channel.clearPermissions({}, kNoTimeout);`
+   * The run's grants go; another run's, or the user's own settings, stay. */
+  async clearPermissions(): Promise<void> {
+    await this.#connection.sendContext(
+      'browserContext.clearPermissions',
+      this.#guid,
+      'clearPermissions',
+      {},
+      0,
+    )
+  }
+
+  /** Playwright: `client/browserContext.ts` `BrowserContext.setHTTPCredentials`: `await this._channel.setHTTPCredentials({ httpCredentials: toHttpCredentialsProtocol(httpCredentials || undefined) }, kNoTimeout);`
+   * Neo refuses it for now (neo-runtime `session_state.rs`): its routes do not yet answer a
+   * server's credentials challenge. */
+  async setHTTPCredentials(
+    httpCredentials: HttpCredentials | HttpCredentials[] | null,
+  ): Promise<void> {
+    const list = !httpCredentials
+      ? []
+      : Array.isArray(httpCredentials)
+        ? httpCredentials
+        : [httpCredentials]
+    await this.#connection.sendContext(
+      'browserContext.setHTTPCredentials',
+      this.#guid,
+      'setHTTPCredentials',
+      list.length ? { httpCredentials: list } : {},
+      0,
+    )
+  }
+
+  /**
+   * Playwright: `client/browserContext.ts` `BrowserContext.storageState`: `const state = await this._channel.storageState({ indexedDB: options.indexedDB, opfs: options.opfs, credentials: options.credentials }, kNoTimeout);`
+   * Every cookie of the user's browser, and the `localStorage` of the origins the run's pages
+   * visited and still have open (neo-runtime `session_state.rs`).
+   *
+   * Deviation: `client/browserContext.ts` `BrowserContext.storageState`: `await fs.promises.writeFile(options.path, JSON.stringify(state, undefined, 2), 'utf8');`
+   * Playwright writes `path` anywhere on its host. Neo writes a script's files only inside the
+   * run's artifact directory, which the host gives the run; without one, `path` throws.
+   */
+  async storageState(
+    options: {
+      path?: string
+      indexedDB?: boolean
+      opfs?: boolean
+      credentials?: boolean
+    } = {},
+  ): Promise<BrowserContextStorageStateResult> {
+    if (options.path !== undefined) throw new Error(STORAGE_STATE_PATH)
+    const params: BrowserContextStorageStateParams = {}
+    if (options.indexedDB !== undefined) params.indexedDB = options.indexedDB
+    if (options.opfs !== undefined) params.opfs = options.opfs
+    if (options.credentials !== undefined)
+      params.credentials = options.credentials
+    return await this.#connection.sendContext(
+      'browserContext.storageState',
+      this.#guid,
+      'storageState',
+      params,
+      0,
+    )
+  }
+
+  /**
+   * Playwright: `client/browserContext.ts` `BrowserContext.setStorageState`: `await this._channel.setStorageState({ storageState: state }, kNoTimeout);`
+   * Adds the state's cookies and replaces each listed origin's `localStorage` through the run's
+   * open page on it; nothing else of the user's browser is cleared (neo-runtime
+   * `session_state.rs`, Deviation).
+   *
+   * Deviation: `client/browserContext.ts` `prepareStorageState`: `return JSON.parse(await fs.promises.readFile(storageState, 'utf8'));`
+   * Playwright reads a state file anywhere on its host. Neo reads a script's files only inside
+   * the run's artifact directory, which the host gives the run; without one, a path throws.
+   */
+  async setStorageState(
+    storageState: string | BrowserContextSetStorageStateParams['storageState'],
+  ): Promise<void> {
+    if (typeof storageState === 'string') throw new Error(STATE_FILE_PATH)
+    await this.#connection.sendContext(
+      'browserContext.setStorageState',
+      this.#guid,
+      'setStorageState',
+      storageState ? { storageState } : {},
+      0,
+    )
   }
 
   setDefaultTimeout(timeout: number | undefined): void {

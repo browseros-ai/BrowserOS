@@ -23,6 +23,20 @@ interfaces:
     # (platform) `selectors.setTestIdAttribute`'s page half: the attribute every page world of the
     # run hands its injected script (neo-runtime `world.rs` `TestIdAttribute`).
     - setTestIdAttributeName
+    # Session state (neo-runtime `session_state.rs`): cookies and storage are the user's browser
+    # data; headers, offline, geolocation and credentials live on the run's sessions;
+    # permission overrides are reset when the last run that granted lets go. `clearCookies` is
+    # the SDK's: it matches its filter, `RegExp` included, and expires the matches by `addCookies`.
+    - addCookies
+    - cookies
+    - storageState
+    - setStorageState
+    - setExtraHTTPHeaders
+    - setGeolocation
+    - setOffline
+    - setHTTPCredentials
+    - grantPermissions
+    - clearPermissions
   # (platform) The BrowserOS the run is attached to, `browser@default`: contexts the run creates
   # and its connected-browser `close` (`browser_calls.rs`). Its initializer is never sent.
   Browser:
@@ -47,6 +61,8 @@ interfaces:
     - setViewportSize
     - emulateMedia
     - requestGC
+    # The page's own extra HTTP headers, over the context's (neo-runtime `session_state.rs`).
+    - setExtraHTTPHeaders
     # Element operations (element_ops.rs, highlight.rs): every highlight of the page.
     - hideHighlight
     # `page.keyboard`, `page.mouse` and `page.touchscreen` (neo-runtime `devices.rs`).

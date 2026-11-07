@@ -266,7 +266,29 @@ pub(crate) async fn context(
         // Playwright: `server/dispatchers/browserContextDispatcher.ts` `BrowserContextDispatcher.pause`: `// Debugger will take care of this.`
         // `setTestIdAttributeName`: applied for the run before the call started (`Dispatcher::call`).
         BrowserContextCall::Pause(_) | BrowserContextCall::SetTestIdAttributeName(_) => Ok(None),
+        // Session state (`session_state.rs`) is the run's own context's.
+        call @ (BrowserContextCall::AddCookies(_)
+        | BrowserContextCall::Cookies(_)
+        | BrowserContextCall::StorageState(_)
+        | BrowserContextCall::SetStorageState(_)
+        | BrowserContextCall::SetExtraHTTPHeaders(_)
+        | BrowserContextCall::SetGeolocation(_)
+        | BrowserContextCall::SetOffline(_)
+        | BrowserContextCall::SetHTTPCredentials(_)
+        | BrowserContextCall::GrantPermissions(_)
+        | BrowserContextCall::ClearPermissions(_)) => Err(created_state(call.meta().method)),
     }
+}
+
+/// Neo: session state on a context the run created, which Neo does not serve yet: the run's own
+/// context's cookies, storage, headers, offline mode, geolocation and permissions never reach
+/// a created context's pages, and the call fails instead of answering with them.
+pub(crate) fn created_state(method: &str) -> CallError {
+    PlaywrightError::error(format!(
+        "neo-runtime: {method} is not served yet for a context browser.newContext created, \
+         only for the run's own context"
+    ))
+    .into()
 }
 
 /// Playwright's `Browser.newContext`: validates the options, creates the context and answers
