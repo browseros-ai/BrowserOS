@@ -86,7 +86,7 @@ impl FrameMetadata {
 
     fn drain(&mut self) -> Result<(), PlaywrightError> {
         if !self.closing {
-            self.collect_events()?;
+            self.collect_events(&[])?;
         }
         if self.lost_events {
             return Err(PlaywrightError::error("Frame metadata events were lost"));
@@ -94,7 +94,9 @@ impl FrameMetadata {
         Ok(())
     }
 
-    fn collect_events(&mut self) -> Result<(), PlaywrightError> {
+    /// Neo: Post-read events also cover frames first seen in the candidate tree. An
+    /// unrelated unknown frame's commit does not require the candidate to be retried.
+    fn collect_events(&mut self, candidate: &[FrameInfo]) -> Result<(), PlaywrightError> {
         loop {
             match self.events.try_recv() {
                 Ok(event)
@@ -109,7 +111,11 @@ impl FrameMetadata {
                     let Some(session) = &event.session_id else {
                         continue;
                     };
-                    let observed = self.known.iter().any(|frame| frame.id == id);
+                    let observed = self
+                        .known
+                        .iter()
+                        .chain(candidate)
+                        .any(|frame| frame.id == id);
                     let applied = page::apply(&mut PageState::default(), &event, session, id);
                     let removed =
                         event.method == "Page.frameDetached" && event.params["reason"] == "remove";
@@ -178,7 +184,7 @@ impl FrameMetadata {
                 closing_events: Some(self.events.resubscribe()),
             };
         }
-        let _collected = self.collect_events();
+        let _collected = self.collect_events(&[]);
         if self.lost_events {
             self.events = cdp.events();
         }
@@ -215,7 +221,7 @@ impl FrameMetadata {
     }
 
     fn publish_snapshot(&mut self, tree: &[FrameInfo], revision: u64) -> bool {
-        if self.collect_events().is_err() || revision != self.revision {
+        if self.collect_events(tree).is_err() || revision != self.revision {
             return false;
         }
         for frame in tree {
@@ -900,6 +906,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tests_that_a_commit_during_the_first_snapshot_cannot_keep_old_children() {
+        let (_browser, tabs, page) = frame_fixture().await;
+        frame(&tabs, &page, &FrameScope::Main, FrameField::Name)
+            .await
+            .unwrap();
+        let old_tree = page.frame_metadata.lock().unwrap().known.clone();
+        let (sender, session) = metadata_events(&page);
+        let mut fresh = super::FrameMetadata::new(tabs.cdp());
+        fresh.events = sender.subscribe();
+        fresh.watched.insert(session.clone());
+        let snapshot = fresh.begin_snapshot(tabs.cdp());
+        sender.send(commit(&session, PAGE)).unwrap();
+        if !fresh.finish_snapshot(&old_tree, snapshot) {
+            let snapshot = fresh.begin_snapshot(tabs.cdp());
+            assert!(fresh.finish_snapshot(&[old_tree[0].clone()], snapshot));
+        }
+        fresh.closing();
+        assert_eq!(
+            fresh
+                .value(
+                    &page.id,
+                    &FrameScope::Frame("local".to_string()),
+                    FrameField::IsDetached
+                )
+                .unwrap(),
+            true
+        );
+    }
+
+    #[tokio::test]
     async fn tests_that_initial_commit_replay_cannot_detach_a_fresh_snapshot() {
         let (_browser, tabs, page) = frame_fixture().await;
         frame(&tabs, &page, &FrameScope::Main, FrameField::Name)
@@ -1041,9 +1077,10 @@ mod tests {
             .send(CdpEvent {
                 method: "Runtime.consoleAPICalled".to_string(),
                 params: json!({}),
-                session_id: Some(session),
+                session_id: Some(session.clone()),
             })
             .unwrap();
+        sender.send(commit(&session, "unobserved-churn")).unwrap();
         assert!(metadata.finish_snapshot(&tree, revision));
         assert_eq!(
             metadata
