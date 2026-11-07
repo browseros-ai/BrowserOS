@@ -16,6 +16,7 @@
 //! coverage the script never stops ends with the session's last reference.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Display;
 use std::sync::{Arc, Mutex};
 
 use browseros_cdp::{CdpClient, CdpEvent, SessionId};
@@ -181,7 +182,7 @@ async fn collect<S>(
             Ok(event) if mine(&event) => apply(&feed, &seen, &event),
             Ok(_) => {}
             Err(RecvError::Lagged(skipped)) => {
-                debug!(skipped, "a coverage collector missed events")
+                debug!(skipped, "a coverage collector missed events");
             }
             Err(RecvError::Closed) => return,
         }
@@ -509,7 +510,7 @@ pub(crate) async fn stop_css(
 }
 
 /// Neo: an answer of Chromium's Neo cannot read, or a collector a panic left behind.
-fn internal(what: impl std::fmt::Display) -> PlaywrightError {
+fn internal(what: impl Display) -> PlaywrightError {
     PlaywrightError::error(format!("neo-runtime: {what}"))
 }
 

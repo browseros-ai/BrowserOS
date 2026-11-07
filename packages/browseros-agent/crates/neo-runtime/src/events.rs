@@ -42,6 +42,8 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use crate::cdp_session;
+
 /// Neo: the guid of the run's one context, where Playwright's server sends console, dialog and
 /// page error events, each naming its page.
 pub(crate) const CONTEXT_GUID: &str = "context@default";
@@ -115,6 +117,12 @@ const CONTEXT_EVENTS: [(&str, Needs); 15] = [
     ("requestfinished", Needs::NETWORK),
     ("requestfailed", Needs::NETWORK),
 ];
+
+/// Neo: the channel events of a script's CDP session (`cdp_session.rs`): each of its session's
+/// CDP events as `event`, and `close` once it detached. Its forwarder produces both, nothing to
+/// switch on in a page.
+const CDP_SESSION_EVENTS: [(&str, Needs); 2] =
+    [("event", Needs::NOTHING), ("close", Needs::NOTHING)];
 
 /// What a subscription switches on in a page's session before that page's next call runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -207,6 +215,8 @@ pub(crate) fn needs(guid: &str, event: &str) -> Option<Needs> {
         &CONTEXT_EVENTS
     } else if guid.starts_with("page@") {
         &PAGE_EVENTS
+    } else if guid.starts_with(cdp_session::CDP_SESSION_PREFIX) {
+        &CDP_SESSION_EVENTS
     } else {
         return None;
     };

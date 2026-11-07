@@ -6,17 +6,19 @@ use std::time::Duration;
 
 use browseros_cdp::CdpError;
 use neo_runtime_spec::serve::{
-    BrowserContextCall, BrowserContextNewPageResult, ConsoleMessagesFilter, PageCall, PageChannel,
-    PageClearConsoleMessagesParams, PageClearConsoleMessagesResult, PageClearPageErrorsParams,
-    PageClearPageErrorsResult, PageConsoleMessagesParams, PageConsoleMessagesResult,
-    PageGoBackParams, PageGoBackResult, PageGoForwardParams, PageGoForwardResult,
-    PagePageErrorsParams, PagePageErrorsResult, PageRegisterLocatorHandlerParams,
-    PageRegisterLocatorHandlerResult, PageReloadParams, PageReloadResult, PageRequestsParams,
-    PageRequestsResult, PageResolveLocatorHandlerNoReplyParams,
-    PageResolveLocatorHandlerNoReplyResult, PageStartCSSCoverageParams, PageStartCSSCoverageResult,
-    PageStartJSCoverageParams, PageStartJSCoverageResult, PageStopCSSCoverageParams,
-    PageStopJSCoverageParams, PageUnregisterLocatorHandlerParams,
-    PageUnregisterLocatorHandlerResult, ResponseChannel,
+    BrowserContextCall, BrowserContextNewCDPSessionParams, BrowserContextNewCDPSessionResult,
+    BrowserContextNewPageResult, CDPSessionCall, CDPSessionChannel, CDPSessionDetachParams,
+    CDPSessionDetachResult, CDPSessionSendParams, CDPSessionSendResult, ConsoleMessagesFilter,
+    PageCall, PageChannel, PageClearConsoleMessagesParams, PageClearConsoleMessagesResult,
+    PageClearPageErrorsParams, PageClearPageErrorsResult, PageConsoleMessagesParams,
+    PageConsoleMessagesResult, PageGoBackParams, PageGoBackResult, PageGoForwardParams,
+    PageGoForwardResult, PagePageErrorsParams, PagePageErrorsResult,
+    PageRegisterLocatorHandlerParams, PageRegisterLocatorHandlerResult, PageReloadParams,
+    PageReloadResult, PageRequestsParams, PageRequestsResult,
+    PageResolveLocatorHandlerNoReplyParams, PageResolveLocatorHandlerNoReplyResult,
+    PageStartCSSCoverageParams, PageStartCSSCoverageResult, PageStartJSCoverageParams,
+    PageStartJSCoverageResult, PageStopCSSCoverageParams, PageStopJSCoverageParams,
+    PageUnregisterLocatorHandlerParams, PageUnregisterLocatorHandlerResult, ResponseChannel,
 };
 use serde_json::{Value, json};
 use tracing::debug;
@@ -69,6 +71,108 @@ pub(crate) async fn context(
         BrowserContextCall::Close(_) => {
             close_context(tabs, progress).await?;
             Ok(None)
+        }
+        // (G) A CDP session of the script's own on the page's target (`cdp_session.rs`).
+        BrowserContextCall::NewCDPSession(params) => {
+            let target = cdp_session_target(tabs, &params, progress).await?;
+            let guid = tabs
+                .cdp_sessions()
+                .open(tabs.cdp(), tabs.events(), &target, progress)
+                .await?;
+            encode_result::<BrowserContextNewCDPSessionParams>(&BrowserContextNewCDPSessionResult {
+                session: CDPSessionChannel { guid },
+            })
+        }
+    }
+}
+
+/// `page.coverage`'s calls on `entry`'s session (`coverage.rs`).
+async fn coverage_call(
+    tabs: &Tabs,
+    entry: &PageEntry,
+    call: PageCall,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    match call {
+        PageCall::StartJSCoverage(params) => {
+            coverage::start_js(&page, params, progress).await?;
+            encode_result::<PageStartJSCoverageParams>(&PageStartJSCoverageResult {})
+        }
+        PageCall::StopJSCoverage(_) => {
+            let result = coverage::stop_js(&page, progress).await?;
+            encode_result::<PageStopJSCoverageParams>(&result)
+        }
+        PageCall::StartCSSCoverage(params) => {
+            coverage::start_css(&page, params, progress).await?;
+            encode_result::<PageStartCSSCoverageParams>(&PageStartCSSCoverageResult {})
+        }
+        PageCall::StopCSSCoverage(_) => {
+            let result = coverage::stop_css(&page, progress).await?;
+            encode_result::<PageStopCSSCoverageParams>(&result)
+        }
+        _ => Err(PlaywrightError::error("neo-runtime: not a coverage call").into()),
+    }
+}
+
+/// Playwright: `server/chromium/crBrowser.ts` `CRBrowserContext.newCDPSession`
+///
+/// The target a new CDP session attaches to: the page's, or for a frame its own target, which
+/// only an out-of-process frame has.
+async fn cdp_session_target(
+    tabs: &Tabs,
+    params: &BrowserContextNewCDPSessionParams,
+    progress: &Progress,
+) -> Result<String, CallError> {
+    let guid = match (&params.page, &params.frame) {
+        (Some(page), _) => &page.guid,
+        (None, Some(frame)) => &frame.guid,
+        // Playwright: `server/chromium/crBrowser.ts` `CRBrowserContext.newCDPSession`: `throw new Error('page: expected Page or Frame');`
+        (None, None) => return Err(PlaywrightError::error("page: expected Page or Frame").into()),
+    };
+    let (entry, scope) = tabs
+        .resolve(guid)
+        .ok_or_else(PlaywrightError::target_closed)?;
+    if matches!(scope, FrameScope::Main) {
+        return Ok(entry.id.as_str().to_string());
+    }
+    let page = progress.race(tabs.session(&entry)).await??;
+    let frame = FrameTab { page, scope };
+    let context = progress
+        .race(frame.context())
+        .await?
+        .map_err(|_| PlaywrightError::target_closed())?;
+    context.host.target_id().map(str::to_string).ok_or_else(|| {
+        // Playwright: `server/chromium/crBrowser.ts` `CRBrowserContext.newCDPSession`: `This frame does not have a separate CDP session, it is a part of the parent frame's session`
+        PlaywrightError::error(
+            "This frame does not have a separate CDP session, it is a part of the parent frame's session",
+        )
+        .into()
+    })
+}
+
+/// Playwright: `server/dispatchers/cdpSessionDispatcher.ts` `CDPSessionDispatcher`
+///
+/// A call on a script's CDP session: `send`, guarded, and `detach`.
+pub(crate) async fn cdp_session(
+    tabs: &Tabs,
+    guid: &str,
+    call: CDPSessionCall,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    match call {
+        CDPSessionCall::Send(params) => {
+            let result = tabs
+                .cdp_sessions()
+                .send(tabs.cdp(), guid, &params.method, params.params, progress)
+                .await?;
+            encode_result::<CDPSessionSendParams>(&CDPSessionSendResult { result })
+        }
+        CDPSessionCall::Detach(_) => {
+            tabs.cdp_sessions()
+                .detach(tabs.cdp(), guid, progress)
+                .await?;
+            encode_result::<CDPSessionDetachParams>(&CDPSessionDetachResult {})
         }
     }
 }
@@ -169,26 +273,10 @@ pub(crate) async fn page(
         // listener, or this read, as Chromium replays no earlier request.
         PageCall::Requests(_) => return requests(tabs, entry, progress).await,
         // (G) `page.coverage` on the tab's own session (`coverage.rs`).
-        PageCall::StartJSCoverage(params) => {
-            let page = progress.race(tabs.session(entry)).await??;
-            coverage::start_js(&page, params, progress).await?;
-            return encode_result::<PageStartJSCoverageParams>(&PageStartJSCoverageResult {});
-        }
-        PageCall::StopJSCoverage(_) => {
-            let page = progress.race(tabs.session(entry)).await??;
-            let result = coverage::stop_js(&page, progress).await?;
-            return encode_result::<PageStopJSCoverageParams>(&result);
-        }
-        PageCall::StartCSSCoverage(params) => {
-            let page = progress.race(tabs.session(entry)).await??;
-            coverage::start_css(&page, params, progress).await?;
-            return encode_result::<PageStartCSSCoverageParams>(&PageStartCSSCoverageResult {});
-        }
-        PageCall::StopCSSCoverage(_) => {
-            let page = progress.race(tabs.session(entry)).await??;
-            let result = coverage::stop_css(&page, progress).await?;
-            return encode_result::<PageStopCSSCoverageParams>(&result);
-        }
+        call @ (PageCall::StartJSCoverage(_)
+        | PageCall::StopJSCoverage(_)
+        | PageCall::StartCSSCoverage(_)
+        | PageCall::StopCSSCoverage(_)) => return coverage_call(tabs, entry, call, progress).await,
         PageCall::Close(_) => close(tabs, entry, progress).await?,
         PageCall::RunBeforeUnload(_) => run_before_unload(tabs, entry, progress).await?,
         // The dispatcher serves these over the tab's input devices (`devices.rs`).

@@ -42,7 +42,7 @@ use std::time::Duration;
 use futures_util::future;
 use neo_runtime_spec::injected::ReadableElementState;
 use neo_runtime_spec::serve::{
-    ArtifactCall, BrowserContextCall, DialogCall, FrameAriaSnapshotJSONParams,
+    ArtifactCall, BrowserContextCall, CDPSessionCall, DialogCall, FrameAriaSnapshotJSONParams,
     FrameAriaSnapshotParams, FrameCall, FrameCheckParams, FrameCheckResult, FrameClickParams,
     FrameContentParams, FrameDblclickParams, FrameDragAndDropParams, FrameDragAndDropResult,
     FrameFillParams, FrameFillResult, FrameGetAttributeParams, FrameGotoParams, FrameHoverParams,
@@ -68,6 +68,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
 use crate::abort::{Aborts, Registration};
+use crate::cdp_session;
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::content::{self, SetContentOptions, WriteOrder, WriteTurn};
@@ -326,6 +327,8 @@ enum ObjectKind {
     /// A download the run's `download` event handed out, by the browser's guid
     /// (`downloads.rs`). It belongs to the run, not to its tab, which may close first.
     Download(String),
+    /// (G) A CDP session the run's script opened (`cdp_session.rs`), by guid.
+    CdpSession(String),
     Unknown,
 }
 
@@ -338,6 +341,8 @@ enum ObjectCall {
     Network(NetworkCall),
     Dialog(u64, DialogCall),
     Download(String, ArtifactCall),
+    /// (G) A call on a script's CDP session (`cdp_session.rs`).
+    CdpSession(String, CDPSessionCall),
 }
 
 /// What a message asks for. One variant per served (object, method).
@@ -559,6 +564,12 @@ impl Dispatcher {
         // drain below waits for it and `Runtime::drain` for what the budget leaves running:
         // no budget cuts a release off, and no other cleanup goes before one.
         self.0.tabs.release_input();
+        // (G) The script's CDP sessions go with the run (`cdp_session.rs`).
+        let _detached = time::timeout_at(
+            deadline,
+            self.0.tabs.cdp_sessions().close(self.0.tabs.cdp()),
+        )
+        .await;
         let _created = time::timeout_at(deadline, self.0.tabs.finish_creations()).await;
         run.tasks.close();
         let _waited = time::timeout_at(deadline, run.tasks.wait()).await;
@@ -627,6 +638,8 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
         ObjectKind::Download(guid) => ArtifactCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Download(guid, call)))),
+        ObjectKind::CdpSession(guid) => CDPSessionCall::decode(method, params)
+            .map(|call| (call.meta(), Ok(ObjectCall::CdpSession(guid, call)))),
         ObjectKind::Unknown => {
             return Routed {
                 meta: None,
@@ -965,6 +978,9 @@ async fn serve_call(
     }
     let result = match (route, target) {
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
+        (ObjectCall::CdpSession(guid, call), _) => {
+            tab_calls::cdp_session(&tabs, &guid, call, &progress).await
+        }
         (ObjectCall::Page(call), Some((page, _))) => {
             tab_calls::page(&tabs, &page, call, &progress).await
         }
@@ -1443,6 +1459,8 @@ fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
         ObjectKind::Context
     } else if let Some(download) = guid.strip_prefix(downloads::DOWNLOAD_PREFIX) {
         ObjectKind::Download(download.to_owned())
+    } else if guid.starts_with(cdp_session::CDP_SESSION_PREFIX) {
+        ObjectKind::CdpSession(guid.to_owned())
     } else if !resolved {
         ObjectKind::Unknown
     } else if guid.starts_with(evaluate::HANDLE_PREFIX) {
@@ -1765,7 +1783,8 @@ mod tests {
             | ObjectCall::Device(_)
             | ObjectCall::Network(_)
             | ObjectCall::Dialog(..)
-            | ObjectCall::Download(..) => {
+            | ObjectCall::Download(..)
+            | ObjectCall::CdpSession(..) => {
                 panic!("a Frame message routed to another object")
             }
         })

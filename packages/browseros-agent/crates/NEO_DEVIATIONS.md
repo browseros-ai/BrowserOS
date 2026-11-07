@@ -3,11 +3,12 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (60)
+## Deviations (61)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
 | neo-runtime/src/abort.rs | `REALM_GLOBALS` | `client/connection.ts` `Connection.sendMessageToServer` | Node's signal is an `EventTarget` whose listeners get an `Event`; the realm has neither class, so a listener gets a plain object with the `Event` fields a listener reads (`type`, `target`, `currentTarget`, `isTrusted`, `stopImmediatePropagation`), and `dispatchEvent` is not served. |
+| neo-runtime/src/cdp_session.rs | `REFUSED` | `server/chromium/crConnection.ts` `CDPSession._send` | Playwright forwards any method; Neo refuses what would run or freeze page JavaScript outside its two world doors (the page JavaScript guard's list, document writes, a `javascript:` navigation, every `Debugger` method but its enable, disable and script reads), reach another target or the browser, or send input outside the tab's input turns. |
 | neo-runtime/src/click.rs | `MAX_CLICK_COUNT` | `server/input.ts` `Mouse.click` | Playwright has no cap; every click is two events Neo plans before writing, so a script's `clickCount: 1e9` must not take the server's memory with it. |
 | neo-runtime/src/click.rs | `MAX_STEPS` | `server/input.ts` `Mouse.move` | Playwright has no cap; every step is one event Neo plans before writing, so `steps: 1e9` must not take the server's memory with it. |
 | neo-runtime/src/click.rs | `PointerOptions::from_tap` | `server/frames.ts` `Frame.tap` | Neo's run attaches to the user's BrowserOS context, which has no hasTouch option, and its tab answers Input.dispatchTouchEvent with the events of a hasTouch context, so Neo taps where Playwright refuses. |

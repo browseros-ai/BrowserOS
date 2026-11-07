@@ -643,6 +643,9 @@ class Connection {
   async sendResponse(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
+  async sendCDPSession(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
   async sendDialog(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
@@ -1996,6 +1999,76 @@ function encodeBase64(bytes) {
   return out;
 }
 
+// src/cdp-session.ts
+var CDP_SESSION_EVENTS = {
+  receiver: "CDPSession",
+  served: ["close"],
+  quiet: [],
+  unserved: []
+};
+
+class CDPSession extends ChannelOwner {
+  #connection;
+  #listening = false;
+  constructor(guid, connection, pipe) {
+    super(guid, pipe, CDP_SESSION_EVENTS);
+    this.#connection = connection;
+  }
+  _onEvent(method, params) {
+    if (method === "event") {
+      const event = params;
+      this.emit(event.method, event.params);
+      this.emit("event", event);
+    } else if (method === "close") {
+      this.emit("close", this);
+    }
+  }
+  #update() {
+    const listening = this.eventNames().some((name) => name !== "close" && this.listenerCount(name) > 0);
+    if (listening === this.#listening)
+      return;
+    this.#listening = listening;
+    this._subscribeChannelEvent("event", listening);
+  }
+  on(event, listener) {
+    super.on(event, listener);
+    this.#update();
+    return this;
+  }
+  addListener(event, listener) {
+    super.addListener(event, listener);
+    this.#update();
+    return this;
+  }
+  prependListener(event, listener) {
+    super.prependListener(event, listener);
+    this.#update();
+    return this;
+  }
+  off(event, listener) {
+    super.off(event, listener);
+    this.#update();
+    return this;
+  }
+  removeListener(event, listener) {
+    super.removeListener(event, listener);
+    this.#update();
+    return this;
+  }
+  removeAllListeners(type, options) {
+    const result = options ? super.removeAllListeners(type, options) : super.removeAllListeners(type);
+    this.#update();
+    return result;
+  }
+  async send(method, params, options = {}) {
+    const result = await this.#connection.sendCDPSession("cdpSession.send", this._guid, "send", params === undefined ? { method } : { method, params }, { signal: options.signal, timeout: options.timeout ?? 0 });
+    return result.result;
+  }
+  async detach() {
+    await this.#connection.sendCDPSession("cdpSession.detach", this._guid, "detach", {}, 0);
+  }
+}
+
 // vendor/playwright/isomorphic/stringUtils.ts
 function escapeWithQuotes(text, char = "'") {
   const stringified = JSON.stringify(text);
@@ -2047,241 +2120,6 @@ function trimStringWithEllipsis(input, cap) {
   return trimString(input, cap, "…");
 }
 var ansiRegex = new RegExp("([\\u001B\\u009B][[\\]()#?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]*)*)?\\u0007)|(?:(?:\\d{0,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-ntqry=><~])))", "g");
-
-// src/protocol.ts
-var FRAME_GOTO_KEYS = ["url", "waitUntil", "referer"];
-var FRAME_TEXT_CONTENT_KEYS = ["selector", "strict"];
-var FRAME_INNER_TEXT_KEYS = ["selector", "strict"];
-var FRAME_GET_ATTRIBUTE_KEYS = ["selector", "strict", "name"];
-var FRAME_QUERY_COUNT_KEYS = ["selector"];
-var FRAME_CONTENT_KEYS = ["includeShadow"];
-var FRAME_SET_CONTENT_KEYS = ["html", "waitUntil"];
-var FRAME_WAIT_FOR_TIMEOUT_KEYS = ["waitTimeout"];
-var FRAME_RESOLVE_SELECTOR_KEYS = ["selector", "sdkLanguage"];
-var FRAME_ARIA_SNAPSHOT_JSON_KEYS = [
-  "mode",
-  "selector",
-  "depth",
-  "boxes"
-];
-var FRAME_ARIA_SNAPSHOT_KEYS = [
-  "mode",
-  "selector",
-  "depth",
-  "boxes"
-];
-var FRAME_CLICK_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "noWaitAfter",
-  "modifiers",
-  "position",
-  "delay",
-  "button",
-  "clickCount",
-  "trial",
-  "steps"
-];
-var FRAME_DBLCLICK_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "modifiers",
-  "position",
-  "delay",
-  "button",
-  "trial",
-  "steps"
-];
-var FRAME_HOVER_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "modifiers",
-  "position",
-  "trial"
-];
-var FRAME_TAP_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "modifiers",
-  "position",
-  "trial"
-];
-var PAGE_KEYBOARD_DOWN_KEYS = ["key"];
-var PAGE_KEYBOARD_UP_KEYS = ["key"];
-var PAGE_KEYBOARD_INSERT_TEXT_KEYS = ["text"];
-var PAGE_KEYBOARD_TYPE_KEYS = ["text", "delay"];
-var PAGE_KEYBOARD_PRESS_KEYS = ["key", "delay"];
-var PAGE_MOUSE_MOVE_KEYS = ["x", "y", "steps"];
-var PAGE_MOUSE_DOWN_KEYS = ["button", "clickCount"];
-var PAGE_MOUSE_UP_KEYS = ["button", "clickCount"];
-var PAGE_MOUSE_CLICK_KEYS = [
-  "x",
-  "y",
-  "delay",
-  "button",
-  "clickCount"
-];
-var PAGE_MOUSE_WHEEL_KEYS = ["deltaX", "deltaY"];
-var PAGE_TOUCHSCREEN_TAP_KEYS = ["x", "y"];
-var FRAME_FILL_KEYS = ["selector", "strict", "value", "force"];
-var FRAME_PRESS_KEYS = [
-  "selector",
-  "strict",
-  "key",
-  "delay",
-  "noWaitAfter"
-];
-var FRAME_TYPE_KEYS = ["selector", "strict", "text", "delay"];
-var FRAME_DRAG_AND_DROP_KEYS = [
-  "source",
-  "target",
-  "force",
-  "scroll",
-  "trial",
-  "sourcePosition",
-  "targetPosition",
-  "strict",
-  "steps"
-];
-var FRAME_INPUT_VALUE_KEYS = ["selector", "strict"];
-var FRAME_IS_CHECKED_KEYS = ["selector", "strict"];
-var FRAME_IS_VISIBLE_KEYS = ["selector", "strict"];
-var FRAME_IS_HIDDEN_KEYS = ["selector", "strict"];
-var FRAME_IS_ENABLED_KEYS = ["selector", "strict"];
-var FRAME_IS_DISABLED_KEYS = ["selector", "strict"];
-var FRAME_IS_EDITABLE_KEYS = ["selector", "strict"];
-var FRAME_INNER_HTML_KEYS = ["selector", "strict"];
-var FRAME_CHECK_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "position",
-  "trial"
-];
-var FRAME_UNCHECK_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "position",
-  "trial"
-];
-var FRAME_SELECT_OPTION_KEYS = [
-  "selector",
-  "strict",
-  "elements",
-  "options",
-  "force"
-];
-var FRAME_WAIT_FOR_SELECTOR_KEYS = [
-  "selector",
-  "strict",
-  "state",
-  "omitReturnValue"
-];
-var FRAME_FOCUS_KEYS = ["selector", "strict"];
-var FRAME_BLUR_KEYS = ["selector", "strict"];
-var FRAME_DISPATCH_EVENT_KEYS = [
-  "selector",
-  "strict",
-  "type",
-  "eventInit"
-];
-var FRAME_HIGHLIGHT_KEYS = ["selector", "style"];
-var FRAME_HIDE_HIGHLIGHT_KEYS = ["selector"];
-var BROWSER_CONTEXT_CLOSE_KEYS = ["reason"];
-var PAGE_CLOSE_KEYS = ["reason"];
-var PAGE_REGISTER_LOCATOR_HANDLER_KEYS = [
-  "selector",
-  "noWaitAfter"
-];
-var PAGE_RESOLVE_LOCATOR_HANDLER_KEYS = ["uid", "remove"];
-var PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS = ["uid"];
-var PAGE_RELOAD_KEYS = ["waitUntil"];
-var PAGE_GO_BACK_KEYS = ["waitUntil"];
-var PAGE_GO_FORWARD_KEYS = ["waitUntil"];
-var PAGE_CONSOLE_MESSAGES_KEYS = ["filter"];
-var PAGE_START_JS_COVERAGE_KEYS = [
-  "resetOnNavigation",
-  "reportAnonymousScripts"
-];
-var PAGE_START_CSS_COVERAGE_KEYS = ["resetOnNavigation"];
-var PAGE_PAGE_ERRORS_KEYS = ["filter"];
-function pickParams(keys, options) {
-  const params = {};
-  for (const key of keys) {
-    const value = options[key];
-    if (value === null)
-      throw new Error(`${key}: expected a value, got null`);
-    if (value !== undefined)
-      params[key] = value;
-  }
-  return params;
-}
-
-// src/coverage.ts
-class Coverage {
-  #connection;
-  #guid;
-  constructor(connection, guid) {
-    this.#connection = connection;
-    this.#guid = guid;
-  }
-  async startJSCoverage(options = {}) {
-    await this.#connection.sendPage("coverage.startJSCoverage", this.#guid, "startJSCoverage", pickParams(PAGE_START_JS_COVERAGE_KEYS, options), 0);
-  }
-  async stopJSCoverage() {
-    const { entries } = await this.#connection.sendPage("coverage.stopJSCoverage", this.#guid, "stopJSCoverage", {}, 0);
-    return entries;
-  }
-  async startCSSCoverage(options = {}) {
-    await this.#connection.sendPage("coverage.startCSSCoverage", this.#guid, "startCSSCoverage", pickParams(PAGE_START_CSS_COVERAGE_KEYS, options), 0);
-  }
-  async stopCSSCoverage() {
-    const { entries } = await this.#connection.sendPage("coverage.stopCSSCoverage", this.#guid, "stopCSSCoverage", {}, 0);
-    return entries;
-  }
-}
-
-// src/file-chooser.ts
-var SET_FILES_UNSERVED = "Neo does not serve FileChooser.setFiles yet: it sets the input through setInputFiles, which Neo does not serve yet";
-
-class FileChooser {
-  #page;
-  #chooser;
-  #isMultiple;
-  #connection;
-  #element;
-  constructor(page, chooser, isMultiple, connection) {
-    this.#page = page;
-    this.#chooser = chooser;
-    this.#isMultiple = isMultiple;
-    this.#connection = connection;
-  }
-  element() {
-    if (!this.#element)
-      this.#element = handleFrom(this.#connection, get(this.#chooser, "element"));
-    return this.#element;
-  }
-  isMultiple() {
-    return this.#isMultiple;
-  }
-  page() {
-    return this.#page;
-  }
-  async setFiles(files, options) {
-    throw new Error(SET_FILES_UNSERVED);
-  }
-}
 
 // vendor/playwright/isomorphic/locatorUtils.ts
 function getByAttributeTextSelector(attrName, text, options) {
@@ -5024,6 +4862,186 @@ function accessChainToDisplayString2(accessChain) {
   return chainString.length > 0 ? ` at position "${chainString}"` : "";
 }
 
+// src/protocol.ts
+var FRAME_GOTO_KEYS = ["url", "waitUntil", "referer"];
+var FRAME_TEXT_CONTENT_KEYS = ["selector", "strict"];
+var FRAME_INNER_TEXT_KEYS = ["selector", "strict"];
+var FRAME_GET_ATTRIBUTE_KEYS = ["selector", "strict", "name"];
+var FRAME_QUERY_COUNT_KEYS = ["selector"];
+var FRAME_CONTENT_KEYS = ["includeShadow"];
+var FRAME_SET_CONTENT_KEYS = ["html", "waitUntil"];
+var FRAME_WAIT_FOR_TIMEOUT_KEYS = ["waitTimeout"];
+var FRAME_RESOLVE_SELECTOR_KEYS = ["selector", "sdkLanguage"];
+var FRAME_ARIA_SNAPSHOT_JSON_KEYS = [
+  "mode",
+  "selector",
+  "depth",
+  "boxes"
+];
+var FRAME_ARIA_SNAPSHOT_KEYS = [
+  "mode",
+  "selector",
+  "depth",
+  "boxes"
+];
+var FRAME_CLICK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "noWaitAfter",
+  "modifiers",
+  "position",
+  "delay",
+  "button",
+  "clickCount",
+  "trial",
+  "steps"
+];
+var FRAME_DBLCLICK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "modifiers",
+  "position",
+  "delay",
+  "button",
+  "trial",
+  "steps"
+];
+var FRAME_HOVER_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "modifiers",
+  "position",
+  "trial"
+];
+var FRAME_TAP_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "modifiers",
+  "position",
+  "trial"
+];
+var PAGE_KEYBOARD_DOWN_KEYS = ["key"];
+var PAGE_KEYBOARD_UP_KEYS = ["key"];
+var PAGE_KEYBOARD_INSERT_TEXT_KEYS = ["text"];
+var PAGE_KEYBOARD_TYPE_KEYS = ["text", "delay"];
+var PAGE_KEYBOARD_PRESS_KEYS = ["key", "delay"];
+var PAGE_MOUSE_MOVE_KEYS = ["x", "y", "steps"];
+var PAGE_MOUSE_DOWN_KEYS = ["button", "clickCount"];
+var PAGE_MOUSE_UP_KEYS = ["button", "clickCount"];
+var PAGE_MOUSE_CLICK_KEYS = [
+  "x",
+  "y",
+  "delay",
+  "button",
+  "clickCount"
+];
+var PAGE_MOUSE_WHEEL_KEYS = ["deltaX", "deltaY"];
+var PAGE_TOUCHSCREEN_TAP_KEYS = ["x", "y"];
+var FRAME_FILL_KEYS = ["selector", "strict", "value", "force"];
+var FRAME_PRESS_KEYS = [
+  "selector",
+  "strict",
+  "key",
+  "delay",
+  "noWaitAfter"
+];
+var FRAME_TYPE_KEYS = ["selector", "strict", "text", "delay"];
+var FRAME_DRAG_AND_DROP_KEYS = [
+  "source",
+  "target",
+  "force",
+  "scroll",
+  "trial",
+  "sourcePosition",
+  "targetPosition",
+  "strict",
+  "steps"
+];
+var FRAME_INPUT_VALUE_KEYS = ["selector", "strict"];
+var FRAME_IS_CHECKED_KEYS = ["selector", "strict"];
+var FRAME_IS_VISIBLE_KEYS = ["selector", "strict"];
+var FRAME_IS_HIDDEN_KEYS = ["selector", "strict"];
+var FRAME_IS_ENABLED_KEYS = ["selector", "strict"];
+var FRAME_IS_DISABLED_KEYS = ["selector", "strict"];
+var FRAME_IS_EDITABLE_KEYS = ["selector", "strict"];
+var FRAME_INNER_HTML_KEYS = ["selector", "strict"];
+var FRAME_CHECK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "position",
+  "trial"
+];
+var FRAME_UNCHECK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "position",
+  "trial"
+];
+var FRAME_SELECT_OPTION_KEYS = [
+  "selector",
+  "strict",
+  "elements",
+  "options",
+  "force"
+];
+var FRAME_WAIT_FOR_SELECTOR_KEYS = [
+  "selector",
+  "strict",
+  "state",
+  "omitReturnValue"
+];
+var FRAME_FOCUS_KEYS = ["selector", "strict"];
+var FRAME_BLUR_KEYS = ["selector", "strict"];
+var FRAME_DISPATCH_EVENT_KEYS = [
+  "selector",
+  "strict",
+  "type",
+  "eventInit"
+];
+var FRAME_HIGHLIGHT_KEYS = ["selector", "style"];
+var FRAME_HIDE_HIGHLIGHT_KEYS = ["selector"];
+var BROWSER_CONTEXT_CLOSE_KEYS = ["reason"];
+var PAGE_CLOSE_KEYS = ["reason"];
+var PAGE_REGISTER_LOCATOR_HANDLER_KEYS = [
+  "selector",
+  "noWaitAfter"
+];
+var PAGE_RESOLVE_LOCATOR_HANDLER_KEYS = ["uid", "remove"];
+var PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS = ["uid"];
+var PAGE_RELOAD_KEYS = ["waitUntil"];
+var PAGE_GO_BACK_KEYS = ["waitUntil"];
+var PAGE_GO_FORWARD_KEYS = ["waitUntil"];
+var PAGE_CONSOLE_MESSAGES_KEYS = ["filter"];
+var PAGE_START_JS_COVERAGE_KEYS = [
+  "resetOnNavigation",
+  "reportAnonymousScripts"
+];
+var PAGE_START_CSS_COVERAGE_KEYS = ["resetOnNavigation"];
+var PAGE_PAGE_ERRORS_KEYS = ["filter"];
+function pickParams(keys, options) {
+  const params = {};
+  for (const key of keys) {
+    const value = options[key];
+    if (value === null)
+      throw new Error(`${key}: expected a value, got null`);
+    if (value !== undefined)
+      params[key] = value;
+  }
+  return params;
+}
+
 // src/select-option.ts
 function convertSelectOptionValues(values) {
   if (values === null)
@@ -5983,6 +6001,61 @@ function prefixed2(apiName, error) {
 }
 function isPromiseLike(value) {
   return (typeof value === "object" || typeof value === "function") && value !== null && typeof value.then === "function";
+}
+
+// src/coverage.ts
+class Coverage {
+  #connection;
+  #guid;
+  constructor(connection, guid) {
+    this.#connection = connection;
+    this.#guid = guid;
+  }
+  async startJSCoverage(options = {}) {
+    await this.#connection.sendPage("coverage.startJSCoverage", this.#guid, "startJSCoverage", pickParams(PAGE_START_JS_COVERAGE_KEYS, options), 0);
+  }
+  async stopJSCoverage() {
+    const { entries } = await this.#connection.sendPage("coverage.stopJSCoverage", this.#guid, "stopJSCoverage", {}, 0);
+    return entries;
+  }
+  async startCSSCoverage(options = {}) {
+    await this.#connection.sendPage("coverage.startCSSCoverage", this.#guid, "startCSSCoverage", pickParams(PAGE_START_CSS_COVERAGE_KEYS, options), 0);
+  }
+  async stopCSSCoverage() {
+    const { entries } = await this.#connection.sendPage("coverage.stopCSSCoverage", this.#guid, "stopCSSCoverage", {}, 0);
+    return entries;
+  }
+}
+
+// src/file-chooser.ts
+var SET_FILES_UNSERVED = "Neo does not serve FileChooser.setFiles yet: it sets the input through setInputFiles, which Neo does not serve yet";
+
+class FileChooser {
+  #page;
+  #chooser;
+  #isMultiple;
+  #connection;
+  #element;
+  constructor(page, chooser, isMultiple, connection) {
+    this.#page = page;
+    this.#chooser = chooser;
+    this.#isMultiple = isMultiple;
+    this.#connection = connection;
+  }
+  element() {
+    if (!this.#element)
+      this.#element = handleFrom(this.#connection, get(this.#chooser, "element"));
+    return this.#element;
+  }
+  isMultiple() {
+    return this.#isMultiple;
+  }
+  page() {
+    return this.#page;
+  }
+  async setFiles(files, options) {
+    throw new Error(SET_FILES_UNSERVED);
+  }
 }
 
 // src/input.ts
@@ -6998,6 +7071,12 @@ class BrowserContext extends ChannelOwner {
   async newPage() {
     const { page } = await this.#connection.sendContext("browserContext.newPage", this.#guid, "newPage", {}, 0);
     return this.#pageFor(page.guid);
+  }
+  async newCDPSession(page) {
+    if (!(page instanceof Page) && !(page instanceof Frame))
+      throw new Error("page: expected Page or Frame");
+    const { session } = await this.#connection.sendContext("browserContext.newCDPSession", this.#guid, "newCDPSession", page instanceof Page ? { page: { guid: page._guid } } : { frame: { guid: page._guid } }, 0);
+    return new CDPSession(session.guid, this.#connection, this._pipe);
   }
   setDefaultTimeout(timeout) {
     this._timeoutSettings.setDefaultTimeout(timeout);

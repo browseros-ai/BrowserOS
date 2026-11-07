@@ -23,6 +23,7 @@
 import type {
   ArtifactCommands,
   BrowserContextCommands,
+  CDPSessionCommands,
   DialogCommands,
   FrameCommands,
   Metadata,
@@ -50,6 +51,9 @@ export type ApiName =
   | 'coverage.stopJSCoverage'
   | 'coverage.startCSSCoverage'
   | 'coverage.stopCSSCoverage'
+  | 'browserContext.newCDPSession'
+  | 'cdpSession.send'
+  | 'cdpSession.detach'
   | 'keyboard.down'
   | 'keyboard.up'
   | 'keyboard.insertText'
@@ -386,6 +390,23 @@ export class Connection {
       params,
       timeout,
     )) as ResponseCommands[M]['result']
+  }
+
+  /** {@link Connection.send} for a `CDPSession` command, to a `cdpsession@…` guid. */
+  async sendCDPSession<M extends keyof CDPSessionCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: CDPSessionCommands[M]['params'],
+    timeout: number | TimeoutOptions,
+  ): Promise<Resolved<CDPSessionCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<CDPSessionCommands[M]['result']>
   }
 
   /** {@link Connection.send} for a `Dialog` command, to a `dialog@…` guid. */

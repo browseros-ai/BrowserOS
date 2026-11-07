@@ -58,6 +58,11 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("neo-runtime/src/main_world.rs", &["Runtime.callFunctionOn"]),
 ];
 
+/// (G) The script's CDP session forwarder (`cdp_session.rs`) and its refusal table: the table may
+/// name every guarded method, as what the forwarder never sends; nothing else in the file may.
+const REFUSAL_FILE: &str = "neo-runtime/src/cdp_session.rs";
+const REFUSAL_TABLE: &str = "REFUSED";
+
 /// Where a built artifact lives: the only source a `functionDeclaration` may have.
 const BUILT_PREFIX: &str = "/../neo-runtime-injected/dist/";
 
@@ -105,6 +110,49 @@ fn tests_that_only_the_two_world_doors_reach_page_javascript() {
          (the page's world, Runtime.callFunctionOn of built artifacts only); ask med-pw-eval for \
          an ALLOWED row rather than adding a raw send:\n{}",
         problems.join("\n")
+    );
+}
+
+#[test]
+fn tests_that_the_cdp_session_forwarder_refuses_every_guarded_method() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join(REFUSAL_FILE);
+    let source = fs::read_to_string(&path).expect("the forwarder's source reads");
+    let tokens = without_test_modules(&lex(&source).expect("the forwarder tokenizes"));
+    let (start, end) = refusal_table(&tokens).expect("the forwarder keeps its refusal table");
+    let refused: Vec<&str> = tokens[start..=end]
+        .iter()
+        .filter_map(|token| match token {
+            Token::Str { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    for method in GUARDED {
+        assert!(
+            refused.contains(method),
+            "{REFUSAL_FILE}'s {REFUSAL_TABLE} must refuse {method}, which the guard keeps to its \
+             doors: a script's CDP session would otherwise reach page JavaScript around them"
+        );
+    }
+    assert!(
+        check(REFUSAL_FILE, &source).is_empty(),
+        "{REFUSAL_FILE} names a guarded method outside its {REFUSAL_TABLE}"
+    );
+}
+
+#[test]
+fn tests_that_the_forwarder_names_a_guarded_method_only_in_its_refusal_table() {
+    let table =
+        "pub(crate) const REFUSED: &[Refusal] = &[Refusal::Method(\"Runtime.evaluate\")];\n";
+    assert!(check(REFUSAL_FILE, table).is_empty());
+    let send = format!("{table}fn send() {{ cdp.send(\"Runtime.evaluate\", json!({{}})); }}\n");
+    let problems = check(REFUSAL_FILE, &send);
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].contains("Runtime.evaluate"), "{problems:?}");
+    assert!(
+        !check("neo-runtime/src/dispatch.rs", table).is_empty(),
+        "only the forwarder's file has a refusal table"
     );
 }
 
@@ -234,7 +282,12 @@ fn check(relative: &str, source: &str) -> Vec<String> {
             "{relative}: does not tokenize as Rust, so the guard cannot read it"
         )];
     };
-    let tokens = without_test_modules(&all);
+    let mut tokens = without_test_modules(&all);
+    if relative == REFUSAL_FILE
+        && let Some((start, end)) = refusal_table(&tokens)
+    {
+        tokens.drain(start..=end);
+    }
     let mut problems = Vec::new();
     for token in &tokens {
         let Token::Str { text, line } = token else {
@@ -265,6 +318,24 @@ fn check(relative: &str, source: &str) -> Vec<String> {
     let built = built_consts(source, &tokens);
     problems.extend(declarations(relative, &tokens, !allowed.is_empty(), &built));
     problems
+}
+
+/// The tokens of `const REFUSED … ;` in the forwarder's file, first and last.
+fn refusal_table(tokens: &[Token]) -> Option<(usize, usize)> {
+    let start = tokens
+        .windows(2)
+        .position(|pair| pair[0].is("const") && pair[1].is(REFUSAL_TABLE))?;
+    let mut depth = 0usize;
+    for (offset, token) in tokens[start..].iter().enumerate() {
+        if token.is("(") || token.is("[") || token.is("{") {
+            depth += 1;
+        } else if token.is(")") || token.is("]") || token.is("}") {
+            depth = depth.saturating_sub(1);
+        } else if token.is(";") && depth == 0 {
+            return Some((start, start + offset));
+        }
+    }
+    None
 }
 
 /// The literals of every `concat!(…)`, joined as the macro joins them, with its line.

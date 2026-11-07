@@ -52,6 +52,7 @@ mod fake_browser;
 mod abort;
 mod aria_yaml;
 mod bridge;
+mod cdp_session;
 mod check;
 mod click;
 mod console;

@@ -41,6 +41,7 @@ use serde_json::{Value, json};
 use tokio::runtime::Handle;
 use tokio::task;
 
+use crate::cdp_session;
 use crate::deadline::{Deadline, Stop};
 use crate::dispatch::Dispatcher;
 use crate::evaluate::Handles;
@@ -183,6 +184,11 @@ fn subscribe(tabs: &Tabs, request: &str) -> Result<(), String> {
         .ok_or_else(|| format!("Neo does not produce {event:?} events on {guid:?}"))?;
     // A closed context listens to nothing more, and must not attach to its still-open tabs.
     if tabs.events().subscriptions_ended() {
+        return Ok(());
+    }
+    // (G) A script's CDP session: its forwarder reads the subscription as each event comes.
+    if guid.starts_with(cdp_session::CDP_SESSION_PREFIX) {
+        tabs.events().subscribe(&guid, &event, enabled);
         return Ok(());
     }
     let pages = if guid == CONTEXT_GUID {

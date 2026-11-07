@@ -14,6 +14,12 @@ interfaces:
   BrowserContext:
     - newPage
     - close
+    # (G) A CDP session of the script's own on a page's target (neo-runtime `cdp_session.rs`).
+    - newCDPSession
+  # (G) What a script's CDP session forwards, guarded (neo-runtime `cdp_session.rs` `REFUSED`).
+  CDPSession:
+    - send
+    - detach
   # A BrowserContext initializer requires these three. Neo never sends one (a run receives its
   # context at start) and serves no command on them; listing them keeps the type constructible.
   APIRequestContext: []

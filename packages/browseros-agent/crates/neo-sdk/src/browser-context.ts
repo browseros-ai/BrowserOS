@@ -26,12 +26,14 @@ import type {
   ResponseInitializer,
   SerializedError,
 } from '@browseros/neo-runtime-spec/serve'
+import { CDPSession } from './cdp-session'
 import type { Connection } from './connection'
 import { ConsoleMessage, type ConsoleMessagePayload } from './console-message'
 import { Dialog } from './dialog'
 import { Download } from './download'
 import { parseSerializedError, targetClosedError } from './errors'
 import { ChannelOwner, type EventPipe, type EventTable } from './events'
+import { Frame } from './frame'
 import { type Created, requestFromRecord, responseFromRecord } from './network'
 import { Page } from './page'
 import { BROWSER_CONTEXT_CLOSE_KEYS, pickParams } from './protocol'
@@ -381,6 +383,25 @@ export class BrowserContext extends ChannelOwner {
       0,
     )
     return this.#pageFor(page.guid)
+  }
+
+  /** Playwright's `browserContext.newCDPSession`: a CDP session of the script's own on `page`'s
+   * target, or a frame's own (an out-of-process frame's), guarded in neo-runtime
+   * (`cdp_session.rs`). */
+  async newCDPSession(page: Page | Frame): Promise<CDPSession> {
+    // Playwright: `client/browserContext.ts` `BrowserContext.newCDPSession`: `throw new Error('page: expected Page or Frame');`
+    if (!(page instanceof Page) && !(page instanceof Frame))
+      throw new Error('page: expected Page or Frame')
+    const { session } = await this.#connection.sendContext(
+      'browserContext.newCDPSession',
+      this.#guid,
+      'newCDPSession',
+      page instanceof Page
+        ? { page: { guid: page._guid } }
+        : { frame: { guid: page._guid } },
+      0,
+    )
+    return new CDPSession(session.guid, this.#connection, this._pipe)
   }
 
   setDefaultTimeout(timeout: number | undefined): void {

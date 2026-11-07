@@ -21,6 +21,7 @@ use tokio_util::task::TaskTracker;
 use tracing::debug;
 
 use crate::bridge;
+use crate::cdp_session::CdpSessions;
 use crate::click::PageError;
 use crate::dialogs;
 use crate::discovery::{self, TargetInfo};
@@ -55,6 +56,8 @@ struct Inner {
     pages: Mutex<Vec<Arc<PageEntry>>>,
     /// The run's event queue and subscriptions, shared with every page session it attaches.
     events: EventHub,
+    /// The CDP sessions the run's script opened (`cdp_session.rs`), detached at run end.
+    cdp_sessions: CdpSessions,
     /// The `Runtime`'s shared switches: target discovery, which this run holds while it listens
     /// for new pages ([`Tabs::discover`]), and download reports ([`Tabs::watch_downloads`]).
     switches: Switches,
@@ -186,6 +189,7 @@ impl Tabs {
             run_page: page.clone(),
             pages: Mutex::new(Vec::new()),
             events: EventHub::default(),
+            cdp_sessions: CdpSessions::default(),
             switches,
             discovering: OnceLock::new(),
             discovery_enabling: Mutex::new(None),
@@ -218,6 +222,11 @@ impl Tabs {
 
     pub(crate) fn events(&self) -> &EventHub {
         &self.0.events
+    }
+
+    /// The CDP sessions the run's script opened (`cdp_session.rs`).
+    pub(crate) fn cdp_sessions(&self) -> &CdpSessions {
+        &self.0.cdp_sessions
     }
 
     /// Runs `task` on the run's tracker, so `Dispatcher::finish` waits for it.
