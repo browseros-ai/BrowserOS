@@ -18,7 +18,7 @@ Results contain `status`, `value`, `logs`, `error`, `pages`, and a browser-call 
 
 ## Tabs
 
-Omit `page` to start in a new background tab. To continue in a tab, pass its `id` from a previous result's `pages` as `page`. `pages` lists every tab the run started in, opened, or closed, with its `id`, `url`, `created`, and `closed`.
+Omit `page` to start in a new background tab. To continue in a tab, pass its `id` from a previous result's `pages` as `page`. `pages` lists every tab the run used (the tab it started in and any tab it listed, opened, or closed) with its `id`, `url`, `created`, and `closed`.
 
 Clicking a link navigates the tab it is in. To keep the current page and read others, open them in background tabs in the same run:
 
@@ -37,7 +37,7 @@ return opened;
 
 `getAttribute('href')` returns the link as written; make relative links absolute before `goto`. In a later run, pass a tab's `id` as `page` to read it, or close it with `await page.close()`.
 
-`context.pages()` lists the open tabs of the window, `page.context()` returns the context, `tab.bringToFront()` makes a tab the active one, and `tab.close()` closes it.
+`context.pages()` lists the open tabs of the browser profile, `page.context()` returns the context, `tab.bringToFront()` makes a tab the active one, and `tab.close()` closes it.
 
 ## Navigation
 
