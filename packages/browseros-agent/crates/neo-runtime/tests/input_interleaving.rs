@@ -773,3 +773,49 @@ async fn review_finishing_first_holder_preserves_the_second_holder() {
         "the second run is still holding Shift: {events}"
     );
 }
+
+/// Cancelling the new Frame.type route after its first key still releases that key.
+#[tokio::test(flavor = "multi_thread")]
+async fn review_a3a_cancelled_type_releases_its_key_and_stays_unknown() {
+    let Some(tab) = open().await else { return };
+    let runtime = runtime(&tab).await;
+    review_record(&tab).await;
+    tab.evaluate(
+        "window.__a3Held = new Set(); addEventListener('keydown', e => __a3Held.add(e.code)); addEventListener('keyup', e => __a3Held.delete(e.code)); true",
+    )
+    .await;
+    let cancel = CancellationToken::new();
+    let stopper = async {
+        review_wait_for(
+            &tab,
+            "__review.some(e => e.type === 'keydown' && e.key === 'a')",
+        )
+        .await;
+        cancel.cancel();
+    };
+    let (cut, ()) = tokio::join!(
+        runtime.run(request(
+            &tab,
+            "await page.locator('#p').pressSequentially('abc', {delay:30000})",
+            Duration::from_mins(1),
+            cancel.clone(),
+        )),
+        stopper
+    );
+    let released = tab
+        .evaluate("__review.filter(e => e.key === 'a').map(e => e.type)")
+        .await;
+    let held = tab.evaluate("Array.from(__a3Held)").await;
+    let partial = tab.evaluate("document.querySelector('#p').value").await;
+    tab.close().await;
+    assert_eq!(cut.status, RunStatus::Cancelled, "{cut:#?}");
+    let call = cut
+        .calls
+        .iter()
+        .find(|call| call.method == "type")
+        .expect("Frame.type call");
+    assert_eq!(call.delivery, Some(Delivery::Unknown), "{call:#?}");
+    assert_eq!(released, json!(["keydown", "keyup"]));
+    assert_eq!(held, json!([]));
+    assert_eq!(partial, json!("a"));
+}
