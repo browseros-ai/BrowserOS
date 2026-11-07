@@ -9,7 +9,7 @@
 # A reference to an interface that is not a key here gets an uninhabited type, so Rust cannot
 # produce one. `Frame.goto` returns `response: Response?`: the main frame's navigation response,
 # as Playwright's server finds it, or `{}` where Playwright's has none (`page.goto` resolves to
-# `null`). A `Request`'s `serviceWorker: Worker?` stays uninhabited: Neo has no workers.
+# `null`). A `Request`'s `serviceWorker: Worker?` is never set: Neo records no worker's requests.
 interfaces:
   BrowserContext:
     - newPage
