@@ -1,45 +1,19 @@
 //! Playwright: `server/cookieStore.ts` `CookieStore`
 //! Playwright: `server/cookieStore.ts` `parseRawCookie`
 //! Playwright: `server/fetch.ts` `APIRequestContext._parseSetCookieHeader`
-//! Playwright: `server/network.ts` `filterCookies`
 //!
-//! The cookies of API requests (`api_request.rs`): what a response's `Set-Cookie` sets, which
-//! cookies a URL is sent, and the jar of a `playwright.request.newContext()` context, which keeps
-//! its own (a browser context's `request` uses the browser's cookies instead).
+//! The cookies of API requests (`api_request.rs`): what a response's `Set-Cookie` sets, and the
+//! jar of a `playwright.request.newContext()` context, which keeps its own (a browser context's
+//! `request` uses the browser's cookies instead). Which cookies a URL is sent is
+//! `session_state.rs`'s `matches_url`, the port of Playwright's `filterCookies` both use.
 
-#![expect(
-    dead_code,
-    reason = "the request contexts (api_request.rs) call it once their wiring lands"
-)]
-
+use neo_runtime_spec::serve::{NetworkCookie, NetworkCookieSameSite};
 use url::Url;
 
-/// Playwright: `server/network.ts` `kMaxCookieExpiresDateInSeconds`: `export const kMaxCookieExpiresDateInSeconds = 253402300799;`
-pub(crate) const MAX_COOKIE_EXPIRES_SECONDS: f64 = 253_402_300_799.0;
+use crate::session_state::{MAX_COOKIE_EXPIRES_SECONDS, domain_matches};
 
-/// Playwright: `server/channels.ts` `NetworkCookie`: a cookie as a context stores it. `expires`
-/// is in seconds since the epoch, -1 for a session cookie.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NetworkCookie {
-    pub(crate) name: String,
-    pub(crate) value: String,
-    pub(crate) domain: String,
-    pub(crate) path: String,
-    pub(crate) expires: f64,
-    pub(crate) http_only: bool,
-    pub(crate) secure: bool,
-    pub(crate) same_site: SameSite,
-}
-
-/// Playwright: `server/channels.ts` `NetworkCookie`: `sameSite: 'Strict' | 'Lax' | 'None'`
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SameSite {
-    Strict,
-    Lax,
-    None,
-}
-
-/// Playwright: `server/cookieStore.ts` `RawCookie`: what one `Set-Cookie` header says.
+/// Playwright: `server/cookieStore.ts` `RawCookie`
+/// What one `Set-Cookie` header says.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RawCookie {
     pub(crate) name: String,
@@ -49,7 +23,7 @@ pub(crate) struct RawCookie {
     pub(crate) expires: Option<f64>,
     pub(crate) http_only: bool,
     pub(crate) secure: bool,
-    pub(crate) same_site: Option<SameSite>,
+    pub(crate) same_site: Option<NetworkCookieSameSite>,
 }
 
 /// Playwright: `server/cookieStore.ts` `parseCookieNameValue`
@@ -60,7 +34,7 @@ pub(crate) fn parse_cookie_name_value(pair: &str) -> (String, String) {
     }
 }
 
-/// Playwright: `server/cookieStore.ts` `serializeCookieNameValue`: `return cookie.name ? `${cookie.name}=${cookie.value}` : cookie.value;`
+/// Playwright: `server/cookieStore.ts` `serializeCookieNameValue`: `${cookie.name}=${cookie.value}`
 pub(crate) fn serialize_cookie_name_value(name: &str, value: &str) -> String {
     if name.is_empty() {
         value.to_string()
@@ -121,9 +95,9 @@ pub(crate) fn parse_raw_cookie(header: &str, now: f64) -> Option<RawCookie> {
             "secure" => cookie.secure = true,
             "httponly" => cookie.http_only = true,
             "samesite" => match value.to_lowercase().as_str() {
-                "none" => cookie.same_site = Some(SameSite::None),
-                "lax" => cookie.same_site = Some(SameSite::Lax),
-                "strict" => cookie.same_site = Some(SameSite::Strict),
+                "none" => cookie.same_site = Some(NetworkCookieSameSite::None),
+                "lax" => cookie.same_site = Some(NetworkCookieSameSite::Lax),
+                "strict" => cookie.same_site = Some(NetworkCookieSameSite::Strict),
                 _ => {}
             },
             _ => {}
@@ -136,7 +110,8 @@ pub(crate) fn parse_raw_cookie(header: &str, now: f64) -> Option<RawCookie> {
     Some(cookie)
 }
 
-/// Playwright: `server/fetch.ts` `APIRequestContext._parseSetCookieHeader`: the cookies one
+/// Playwright: `server/fetch.ts` `APIRequestContext._parseSetCookieHeader`
+/// The cookies one
 /// response's `Set-Cookie` headers set for `response_url`, each defaulted as Playwright's
 /// `parseCookie` does (`sameSite: 'Lax'`). A cookie for a domain the URL does not match is
 /// dropped.
@@ -172,7 +147,9 @@ pub(crate) fn parse_set_cookie_headers(
             expires: raw.expires.unwrap_or(-1.0),
             http_only: raw.http_only,
             secure: raw.secure,
-            same_site: raw.same_site.unwrap_or(SameSite::Lax),
+            same_site: raw.same_site.unwrap_or(NetworkCookieSameSite::Lax),
+            partition_key: None,
+            cr_has_cross_site_ancestor: None,
         });
     }
     cookies
@@ -185,55 +162,8 @@ fn default_path(pathname: &str) -> String {
     format!("/{}", parts[..parts.len().saturating_sub(1)].join("/"))
 }
 
-/// Playwright: `server/network.ts` `filterCookies`: the cookies sent with a request to any of
-/// `urls` (all of them for none).
-pub(crate) fn filter_cookies<'a>(
-    cookies: &'a [NetworkCookie],
-    urls: &[Url],
-) -> Vec<&'a NetworkCookie> {
-    cookies
-        .iter()
-        .filter(|cookie| urls.is_empty() || urls.iter().any(|url| cookie_matches_url(cookie, url)))
-        .collect()
-}
-
-/// Playwright: `server/network.ts` `cookieMatchesURL`
-fn cookie_matches_url(cookie: &NetworkCookie, url: &Url) -> bool {
-    let hostname = url.host_str().unwrap_or_default();
-    domain_matches(hostname, &cookie.domain)
-        && path_matches(url.path(), &cookie.path)
-        && !(cookie.secure && url.scheme() != "https" && !is_local_hostname(hostname))
-}
-
-/// Playwright: `server/network.ts` `domainMatches`: a domain without a leading dot is host-only.
-pub(crate) fn domain_matches(hostname: &str, cookie_domain: &str) -> bool {
-    hostname == cookie_domain
-        || (cookie_domain.starts_with('.') && format!(".{hostname}").ends_with(cookie_domain))
-}
-
-/// Playwright: `server/network.ts` `pathMatches`
-fn path_matches(request_path: &str, cookie_path: &str) -> bool {
-    request_path == cookie_path
-        || (request_path.starts_with(cookie_path)
-            && (cookie_path.ends_with('/')
-                || request_path.as_bytes().get(cookie_path.len()) == Some(&b'/')))
-}
-
-/// Playwright: `server/network.ts` `isLocalHostname`: `return hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '[::1]' || /^127\.\d+\.\d+\.\d+$/.test(hostname);`
-pub(crate) fn is_local_hostname(hostname: &str) -> bool {
-    hostname == "localhost"
-        || hostname.ends_with(".localhost")
-        || hostname == "[::1]"
-        || hostname.strip_prefix("127.").is_some_and(|rest| {
-            let octets: Vec<&str> = rest.split('.').collect();
-            octets.len() == 3
-                && octets.iter().all(|octet| {
-                    !octet.is_empty() && octet.bytes().all(|byte| byte.is_ascii_digit())
-                })
-        })
-}
-
-/// Playwright: `server/cookieStore.ts` `CookieStore`: cookies by name, in the order the names
+/// Playwright: `server/cookieStore.ts` `CookieStore`
+/// Cookies by name, in the order the names
 /// came, each name's cookies in the order they were set. A cookie replaces the one of the same
 /// name, domain and path; expired cookies go whenever their name is read or written.
 #[derive(Debug, Default)]
@@ -241,6 +171,7 @@ pub(crate) struct CookieStore {
     names: Vec<(String, Vec<NetworkCookie>)>,
 }
 
+/// Playwright: `server/cookieStore.ts` `CookieStore`
 impl CookieStore {
     /// Playwright: `server/cookieStore.ts` `CookieStore.addCookies`
     pub(crate) fn add_cookies(&mut self, cookies: Vec<NetworkCookie>, now: f64) {
@@ -258,14 +189,6 @@ impl CookieStore {
         }
         self.names.retain(|(_, cookies)| !cookies.is_empty());
         all
-    }
-
-    /// Playwright: `server/cookieStore.ts` `CookieStore.removeCookies`
-    pub(crate) fn remove_cookies(&mut self, remove: impl Fn(&NetworkCookie) -> bool) {
-        for (_, cookies) in &mut self.names {
-            cookies.retain(|cookie| !remove(cookie));
-        }
-        self.names.retain(|(_, cookies)| !cookies.is_empty());
     }
 
     /// Playwright: `server/cookieStore.ts` `CookieStore._addCookie`
@@ -383,6 +306,7 @@ fn digits_token(token: &[u8], min: usize, max: usize) -> Option<u32> {
 
 /// Neo: a month's first three letters, any case.
 fn month_token(token: &[u8]) -> Option<u32> {
+    /// Neo: RFC 6265's month names, by their first three letters.
     const MONTHS: [&[u8]; 12] = [
         b"jan", b"feb", b"mar", b"apr", b"may", b"jun", b"jul", b"aug", b"sep", b"oct", b"nov",
         b"dec",
@@ -436,6 +360,7 @@ fn number(field: &str, width: usize) -> Option<u32> {
         .then(|| ascii_number(field.as_bytes()))
 }
 
+/// Neo: the number some ASCII digits write, saturating.
 fn ascii_number(digits: &[u8]) -> u32 {
     digits.iter().fold(0u32, |total, digit| {
         total
@@ -512,7 +437,9 @@ mod tests {
             expires,
             http_only: false,
             secure: false,
-            same_site: SameSite::Lax,
+            same_site: NetworkCookieSameSite::Lax,
+            partition_key: None,
+            cr_has_cross_site_ancestor: None,
         }
     }
 
@@ -528,7 +455,7 @@ mod tests {
         assert_eq!(raw.domain.as_deref(), Some(".example.com"));
         assert_eq!(raw.path.as_deref(), Some("/p"));
         assert!(raw.secure && raw.http_only);
-        assert_eq!(raw.same_site, Some(SameSite::Strict));
+        assert_eq!(raw.same_site, Some(NetworkCookieSameSite::Strict));
         assert_eq!(raw.expires, Some(NOW + 60.0));
         // A nameless cookie, and Max-Age over Expires whatever their order.
         let nameless = parse_raw_cookie(
@@ -611,7 +538,7 @@ mod tests {
             ],
             NOW,
         );
-        let summary: Vec<(&str, &str, &str, f64, SameSite)> = cookies
+        let summary: Vec<(&str, &str, &str, f64, NetworkCookieSameSite)> = cookies
             .iter()
             .map(|cookie| {
                 (
@@ -626,59 +553,32 @@ mod tests {
         assert_eq!(
             summary,
             [
-                ("one", "www.example.com", "/a/b", -1.0, SameSite::Lax),
-                ("two", "www.example.com", "/a/b", -1.0, SameSite::Lax),
-                ("three", ".example.com", "/x", -1.0, SameSite::Lax),
+                (
+                    "one",
+                    "www.example.com",
+                    "/a/b",
+                    -1.0,
+                    NetworkCookieSameSite::Lax
+                ),
+                (
+                    "two",
+                    "www.example.com",
+                    "/a/b",
+                    -1.0,
+                    NetworkCookieSameSite::Lax
+                ),
+                (
+                    "three",
+                    ".example.com",
+                    "/x",
+                    -1.0,
+                    NetworkCookieSameSite::Lax
+                ),
             ],
             "another site's domain is dropped"
         );
         assert_eq!(default_path("/"), "/");
         assert_eq!(default_path("/a"), "/");
-    }
-
-    #[test]
-    fn tests_that_a_url_gets_the_cookies_rfc_6265_sends_it() {
-        let cookies = [
-            cookie("host", "example.com", "/", -1.0),
-            cookie("dot", ".example.com", "/", -1.0),
-            cookie("deep", "example.com", "/a/b", -1.0),
-            NetworkCookie {
-                secure: true,
-                ..cookie("secure", "example.com", "/", -1.0)
-            },
-            NetworkCookie {
-                secure: true,
-                ..cookie("local", "localhost", "/", -1.0)
-            },
-        ];
-        let names = |target: &str| -> Vec<String> {
-            filter_cookies(&cookies, &[url(target)])
-                .into_iter()
-                .map(|cookie| cookie.name.clone())
-                .collect()
-        };
-        assert_eq!(names("http://example.com/"), ["host", "dot"]);
-        assert_eq!(
-            names("https://example.com/a/b/c"),
-            ["host", "dot", "deep", "secure"]
-        );
-        assert_eq!(
-            names("http://sub.example.com/a/bc"),
-            ["dot"],
-            "/a/b does not match /a/bc"
-        );
-        assert_eq!(
-            names("http://localhost:8080/"),
-            ["local"],
-            "secure is sent to a local host"
-        );
-        assert_eq!(
-            filter_cookies(&cookies, &[]).len(),
-            cookies.len(),
-            "no URL: every cookie"
-        );
-        assert!(is_local_hostname("127.0.0.1") && is_local_hostname("a.localhost"));
-        assert!(!is_local_hostname("127.0.0") && !is_local_hostname("127.0.0.x"));
     }
 
     #[test]
@@ -724,7 +624,5 @@ mod tests {
             [("a".into(), "/".into())],
             "c expired"
         );
-        jar.remove_cookies(|cookie| cookie.name == "a");
-        assert!(jar.all_cookies(NOW).is_empty());
     }
 }

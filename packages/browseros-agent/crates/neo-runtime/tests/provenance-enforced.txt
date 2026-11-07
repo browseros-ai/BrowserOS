@@ -19,10 +19,12 @@ neo-runtime-injected/src/wait-for-function.ts
 neo-runtime-injected/src/wait-result.ts
 neo-runtime-spec/src/binary.rs
 neo-runtime/src/abort.rs
+neo-runtime/src/api_request.rs
 neo-runtime/src/artifacts.rs
 neo-runtime/src/capture.rs
 neo-runtime/src/console.rs
 neo-runtime/src/content.rs
+neo-runtime/src/cookie_store.rs
 neo-runtime/src/devices.rs
 neo-runtime/src/dialogs.rs
 neo-runtime/src/discovery.rs
@@ -43,6 +45,7 @@ neo-runtime/src/network_events.rs
 neo-runtime/src/network_idle.rs
 neo-runtime/src/page_events.rs
 neo-runtime/src/pdf.rs
+neo-runtime/src/request_contexts.rs
 neo-runtime/src/routes.rs
 neo-runtime/src/screenshot.rs
 neo-runtime/src/session_state.rs

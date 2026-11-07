@@ -10,17 +10,11 @@
 //! Basic-auth resend and its retries on a reset connection. The caller races the call's
 //! deadline and the context's disposal around [`fetch`].
 
-#![expect(
-    dead_code,
-    reason = "the request contexts' wiring (dispatch, the SDK) calls it in C2 stage 3"
-)]
-
 use std::collections::hash_map::RandomState;
 use std::error::Error as _;
 use std::hash::BuildHasher;
 use std::io::{self, ErrorKind, Read};
 use std::net::SocketAddr;
-use std::slice;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -28,12 +22,18 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use flate2::read::{GzDecoder, ZlibDecoder};
 use futures_util::future::BoxFuture;
+use neo_runtime_spec::serve::{
+    NetworkCookie, NetworkCookieSameSite, SetNetworkCookie, SetNetworkCookieSameSite,
+};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::redirect::Policy;
 use tokio::time;
 use url::Url;
 
-use crate::cookie_store::{self, CookieStore, NetworkCookie};
+use crate::cookie_store::{self, CookieStore};
+use crate::progress::Progress;
+use crate::session_state;
+use crate::tabs::Tabs;
 
 /// Playwright: `server/fetch.ts` `redirectStatus`: `const redirectStatus = [301, 302, 303, 307, 308];`
 const REDIRECT_STATUS: [u16; 5] = [301, 302, 303, 307, 308];
@@ -43,12 +43,6 @@ const DEFAULT_MAX_REDIRECTS: i64 = 20;
 
 /// Playwright: `server/fetch.ts` `APIRequestContext._sendRequest`: `reject(new Error('Max redirect count exceeded'));`
 const MAX_REDIRECTS: &str = "Max redirect count exceeded";
-
-/// Playwright: `server/fetch.ts` `serializePostData`: `assert((params.postData ? 1 : 0) + (params.jsonData ? 1 : 0) + (params.formData ? 1 : 0) + (params.multipartData ? 1 : 0) <= 1, `Only one of 'data', 'form' or 'multipart' can be specified`);`
-const ONLY_ONE_BODY: &str = "Only one of 'data', 'form' or 'multipart' can be specified";
-
-/// Playwright: `server/fetch.ts` `APIRequestContext._sendRequest`: `reject(new Error(`uri requested responds with an invalid redirect URL: ${locationHeaderValue}`));`
-const INVALID_REDIRECT: &str = "uri requested responds with an invalid redirect URL: ";
 
 /// Deviation: `server/fetch.ts` `APIRequestContext.fetch`: `'accept-encoding': 'gzip,deflate,br',`
 /// Neo decodes gzip and deflate (`flate2`), and has no brotli decoder: it does not offer `br`.
@@ -60,7 +54,8 @@ const FIRST_BACKOFF: Duration = Duration::from_millis(250);
 /// Playwright: `server/fetch.ts` `APIRequestContext.fetch`: `if (text.length > 1000)`
 const RESPONSE_TEXT_LIMIT: usize = 1000;
 
-/// Playwright: `server/fetch.ts` `HeadersObject`: headers by name in the order they were first
+/// Playwright: `server/fetch.ts` `HeadersObject`
+/// Headers by name in the order they were first
 /// set; a name matches in any case and keeps the casing it was first set with.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Headers(pub(crate) Vec<(String, String)>);
@@ -95,7 +90,7 @@ impl Headers {
     }
 }
 
-/// Playwright: `server/channels.ts` `HttpCredentials`
+/// Neo: the protocol's `HttpCredentials`
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct HttpCredentials {
     pub(crate) username: String,
@@ -105,20 +100,21 @@ pub(crate) struct HttpCredentials {
     pub(crate) send_always: bool,
 }
 
-/// Playwright: `server/fetch.ts` `FetchRequestOptions`: what a request context gives each of
+/// Playwright: `server/fetch.ts` `FetchRequestOptions`
+/// What a request context gives each of
 /// its requests (`_defaultOptions`).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Defaults {
     pub(crate) user_agent: String,
     pub(crate) extra_http_headers: Vec<(String, String)>,
     pub(crate) base_url: Option<String>,
-    pub(crate) http_credentials: Option<HttpCredentials>,
+    pub(crate) http_credentials: Vec<HttpCredentials>,
     pub(crate) ignore_https_errors: bool,
     pub(crate) max_redirects: Option<i64>,
     pub(crate) fail_on_status_code: bool,
 }
 
-/// Playwright: `server/channels.ts` `FormField`
+/// Neo: the protocol's `FormField`
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FormField {
     Value {
@@ -133,7 +129,7 @@ pub(crate) enum FormField {
     },
 }
 
-/// Playwright: `server/channels.ts` `APIRequestContextFetchParams`: `postData` (`raw`),
+/// Neo: the protocol's `APIRequestContextFetchParams`: `postData` (`raw`),
 /// `jsonData`, `formData` and `multipartData`, of which a request has at most one.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Body {
@@ -143,7 +139,7 @@ pub(crate) struct Body {
     pub(crate) multipart: Option<Vec<FormField>>,
 }
 
-/// Playwright: `server/channels.ts` `APIRequestContextFetchParams`
+/// Neo: the protocol's `APIRequestContextFetchParams`
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FetchParams {
     pub(crate) url: String,
@@ -158,7 +154,7 @@ pub(crate) struct FetchParams {
     pub(crate) max_retries: Option<u32>,
 }
 
-/// Playwright: `server/channels.ts` `APIResponse`: the last hop's response, with its body
+/// Neo: the protocol's `APIResponse`: the last hop's response, with its body
 /// decoded, the log the call made (`fetchLog`), and when it came.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Fetched {
@@ -175,7 +171,7 @@ pub(crate) struct Fetched {
     pub(crate) log: Vec<String>,
 }
 
-/// Playwright: `server/channels.ts` `ResourceTiming`: milliseconds, `start_time` since the epoch
+/// Neo: the protocol's `ResourceTiming`: milliseconds, `start_time` since the epoch
 /// and the others since it; what reqwest does not tell stays -1 (Playwright's missing value).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Timing {
@@ -191,37 +187,127 @@ impl Eq for Timing {}
 /// context's (`context.request`).
 pub(crate) trait Jar: Send + Sync {
     /// The cookies a request to `url` is sent, in jar order.
-    fn cookies<'a>(&'a self, url: &'a Url) -> BoxFuture<'a, Vec<NetworkCookie>>;
+    fn cookies<'a>(
+        &'a self,
+        url: &'a Url,
+        progress: &'a Progress,
+    ) -> BoxFuture<'a, Vec<NetworkCookie>>;
 
     /// Stores a response's cookies; a cookie the jar refuses is dropped, as Playwright's
     /// `addCookies` retry swallows it.
-    fn add(&self, cookies: Vec<NetworkCookie>) -> BoxFuture<'_, ()>;
+    fn add<'a>(&'a self, cookies: Vec<NetworkCookie>, progress: &'a Progress) -> BoxFuture<'a, ()>;
 }
 
-/// Playwright: `server/fetch.ts` `GlobalAPIRequestContext`: `this._cookieStore = new CookieStore();`
+/// Playwright: `server/fetch.ts` `GlobalAPIRequestContext`: `private readonly _cookieStore: CookieStore = new CookieStore();`
 #[derive(Debug, Default)]
 pub(crate) struct OwnJar(Mutex<CookieStore>);
 
+/// Neo: the jar as a context's `cookies`, `addCookies` and `storageState` read and write it.
+impl OwnJar {
+    /// Every cookie the jar holds, in jar order (`CookieStore.allCookies`).
+    pub(crate) fn all(&self) -> Vec<NetworkCookie> {
+        self.0
+            .lock()
+            .map(|mut jar| jar.all_cookies(now_seconds()))
+            .unwrap_or_default()
+    }
+
+    /// Adds `cookies` as they are (`CookieStore.addCookies`).
+    pub(crate) fn add_all(&self, cookies: Vec<NetworkCookie>) {
+        if let Ok(mut jar) = self.0.lock() {
+            jar.add_cookies(cookies, now_seconds());
+        }
+    }
+}
+
 /// Playwright: `server/fetch.ts` `GlobalAPIRequestContext.cookies`
 impl Jar for OwnJar {
-    fn cookies<'a>(&'a self, url: &'a Url) -> BoxFuture<'a, Vec<NetworkCookie>> {
-        let all = self
+    fn cookies<'a>(
+        &'a self,
+        url: &'a Url,
+        _progress: &'a Progress,
+    ) -> BoxFuture<'a, Vec<NetworkCookie>> {
+        let matching = self
             .0
             .lock()
             .map(|mut jar| jar.all_cookies(now_seconds()))
-            .unwrap_or_default();
-        let matching = cookie_store::filter_cookies(&all, slice::from_ref(url))
+            .unwrap_or_default()
             .into_iter()
-            .cloned()
+            .filter(|cookie| session_state::matches_url(cookie, url))
             .collect();
         Box::pin(async move { matching })
     }
 
-    fn add(&self, cookies: Vec<NetworkCookie>) -> BoxFuture<'_, ()> {
+    fn add<'a>(
+        &'a self,
+        cookies: Vec<NetworkCookie>,
+        _progress: &'a Progress,
+    ) -> BoxFuture<'a, ()> {
         if let Ok(mut jar) = self.0.lock() {
             jar.add_cookies(cookies, now_seconds());
         }
         Box::pin(async {})
+    }
+}
+
+/// Playwright: `server/fetch.ts` `BrowserContextAPIRequestContext`
+/// The browser context's
+/// cookies, read and written over CDP (`session_state.rs`), so a response's cookies reach the
+/// page at once.
+pub(crate) struct BrowserJar<'t> {
+    pub(crate) tabs: &'t Tabs,
+}
+
+/// Playwright: `server/fetch.ts` `BrowserContextAPIRequestContext.cookies`
+impl Jar for BrowserJar<'_> {
+    fn cookies<'a>(
+        &'a self,
+        url: &'a Url,
+        progress: &'a Progress,
+    ) -> BoxFuture<'a, Vec<NetworkCookie>> {
+        Box::pin(async move {
+            session_state::cookies(self.tabs, &[url.to_string()], progress)
+                .await
+                .unwrap_or_default()
+        })
+    }
+
+    fn add<'a>(&'a self, cookies: Vec<NetworkCookie>, progress: &'a Progress) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            let cookies: Vec<SetNetworkCookie> =
+                cookies.into_iter().map(set_network_cookie).collect();
+            // Playwright: `server/fetch.ts` `APIRequestContext._sendRequest`: `await Promise.all(cookies.map(c => this.addCookies([c]).catch(() => {})));`
+            if session_state::add_cookies(self.tabs, cookies.clone(), progress)
+                .await
+                .is_err()
+            {
+                for cookie in cookies {
+                    let _refused =
+                        session_state::add_cookies(self.tabs, vec![cookie], progress).await;
+                }
+            }
+        })
+    }
+}
+
+/// Neo: a stored cookie as `addCookies` takes it.
+fn set_network_cookie(cookie: NetworkCookie) -> SetNetworkCookie {
+    SetNetworkCookie {
+        name: cookie.name,
+        value: cookie.value,
+        url: None,
+        domain: Some(cookie.domain),
+        path: Some(cookie.path),
+        expires: Some(cookie.expires),
+        http_only: Some(cookie.http_only),
+        secure: Some(cookie.secure),
+        same_site: Some(match cookie.same_site {
+            NetworkCookieSameSite::Strict => SetNetworkCookieSameSite::Strict,
+            NetworkCookieSameSite::Lax => SetNetworkCookieSameSite::Lax,
+            NetworkCookieSameSite::None => SetNetworkCookieSameSite::None,
+        }),
+        partition_key: cookie.partition_key,
+        cr_has_cross_site_ancestor: cookie.cr_has_cross_site_ancestor,
     }
 }
 
@@ -233,6 +319,7 @@ pub(crate) struct Clients {
     insecure: OnceLock<reqwest::Client>,
 }
 
+/// Neo: the client a hop goes through.
 impl Clients {
     fn get(&self, insecure: bool) -> Result<&reqwest::Client, String> {
         let slot = if insecure {
@@ -252,6 +339,15 @@ impl Clients {
             .map_err(|error| error.to_string())?;
         Ok(slot.get_or_init(|| client))
     }
+}
+
+/// Neo: what every hop of one call goes with: the context's clients, jar and defaults, and the
+/// call's progress.
+struct Sender<'a> {
+    clients: &'a Clients,
+    jar: &'a dyn Jar,
+    defaults: &'a Defaults,
+    progress: &'a Progress,
 }
 
 /// Neo: one hop's method, headers, redirect budget and certificate check.
@@ -279,6 +375,7 @@ struct SendError {
     reset: bool,
 }
 
+/// Neo: a failure Neo words itself, never a reset.
 impl From<String> for SendError {
     fn from(message: String) -> Self {
         Self {
@@ -288,7 +385,8 @@ impl From<String> for SendError {
     }
 }
 
-/// Playwright: `server/fetch.ts` `APIRequestContext.fetch`: the request `params` asks for, with
+/// Playwright: `server/fetch.ts` `APIRequestContext.fetch`
+/// The request `params` asks for, with
 /// the context's `defaults`, its cookies in `jar`, through `clients`.
 ///
 /// # Errors
@@ -300,6 +398,7 @@ pub(crate) async fn fetch(
     jar: &dyn Jar,
     defaults: &Defaults,
     params: FetchParams,
+    progress: &Progress,
 ) -> Result<Fetched, String> {
     let mut headers = Headers::default();
     headers.set("user-agent", &defaults.user_agent, false);
@@ -312,7 +411,7 @@ pub(crate) async fn fetch(
         headers.set(name, value, false);
     }
     let url = request_url(defaults.base_url.as_deref(), &params)?;
-    let credentials = credentials_for(defaults.http_credentials.as_ref(), &url);
+    let credentials = credentials_for(&defaults.http_credentials, &url);
     if let Some(credentials) = credentials.filter(|credentials| credentials.send_always) {
         set_basic_authorization(&mut headers, credentials);
     }
@@ -343,10 +442,14 @@ pub(crate) async fn fetch(
             .headers
             .set("content-length", &post_data.len().to_string(), false);
     }
-    let fetched = send_with_retries(
+    let sender = Sender {
         clients,
         jar,
         defaults,
+        progress,
+    };
+    let fetched = send_with_retries(
+        &sender,
         url,
         options,
         post_data,
@@ -362,7 +465,7 @@ pub(crate) async fn fetch(
     Ok(fetched)
 }
 
-/// Playwright: `server/fetch.ts` `APIRequestContext.fetch`: `throw new Error(`${response.status} ${response.statusText}${responseText}`);`
+/// Playwright: `server/fetch.ts` `APIRequestContext.fetch`: `${response.status} ${response.statusText}${responseText}`
 fn status_failure(fetched: &Fetched) -> String {
     let mut message = format!("{} {}", fetched.status, fetched.status_text);
     if !fetched.body.is_empty() {
@@ -385,13 +488,15 @@ fn status_failure(fetched: &Fetched) -> String {
 
 /// Playwright: `server/fetch.ts` `APIRequestContext.fetch`: `const requestUrl = new URL(constructURLBasedOnBaseURL(defaults.baseURL, params.url));`
 fn request_url(base_url: Option<&str>, params: &FetchParams) -> Result<Url, String> {
-    // Playwright: `isomorphic/urlMatch.ts` `constructURLBasedOnBaseURL`: a base that does not
+    // Playwright: `isomorphic/urlMatch.ts` `constructURLBasedOnBaseURL`
+    // A base that does not
     // parse, or a URL that does not resolve against it, leaves the URL as given.
     let given = base_url
         .and_then(|base| Url::parse(base).ok())
         .and_then(|base| base.join(&params.url).ok())
         .map_or_else(|| params.url.clone(), |url| url.to_string());
-    // Playwright: `server/fetch.ts` `APIRequestContext.fetch`: Node's `new URL` throws `Invalid URL`.
+    // Playwright: `server/fetch.ts` `APIRequestContext.fetch`
+    // Node's `new URL` throws `Invalid URL`.
     let mut url = Url::parse(&given).map_err(|_| "Invalid URL".to_string())?;
     if let Some(encoded) = &params.encoded_params {
         let encoded = encoded.strip_prefix('?').unwrap_or(encoded);
@@ -411,26 +516,30 @@ fn request_url(base_url: Option<&str>, params: &FetchParams) -> Result<Url, Stri
     Ok(url)
 }
 
-/// Playwright: `server/browserContext.ts` `BrowserContext._getHttpCredentials`: the credentials
+/// Playwright: `server/fetch.ts` `APIRequestContext._getHttpCredentials`
+/// The credentials
 /// for `url`, if the context's have no origin or this one.
 fn credentials_for<'a>(
-    credentials: Option<&'a HttpCredentials>,
+    credentials: &'a [HttpCredentials],
     url: &Url,
 ) -> Option<&'a HttpCredentials> {
-    credentials.filter(|credentials| {
-        credentials.origin.as_ref().is_none_or(|origin| {
-            origin.to_lowercase() == url.origin().ascii_serialization().to_lowercase()
-        })
+    let origin = url.origin().ascii_serialization().to_lowercase();
+    credentials.iter().find(|credentials| {
+        credentials
+            .origin
+            .as_ref()
+            .is_none_or(|wanted| wanted.to_lowercase() == origin)
     })
 }
 
-/// Playwright: `server/fetch.ts` `setBasicAuthorizationHeader`: `setHeader(headers, 'authorization', `Basic ${encoded}`);`
+/// Playwright: `server/fetch.ts` `setBasicAuthorizationHeader`: `Basic ${encoded}`
 fn set_basic_authorization(headers: &mut Headers, credentials: &HttpCredentials) {
     let encoded = STANDARD.encode(format!("{}:{}", credentials.username, credentials.password));
     headers.set("authorization", &format!("Basic {encoded}"), false);
 }
 
-/// Playwright: `server/fetch.ts` `serializePostData`: the body bytes, with the content type the
+/// Playwright: `server/fetch.ts` `serializePostData`
+/// The body bytes, with the content type the
 /// headers lack.
 fn serialize_post_data(body: &Body, headers: &mut Headers) -> Result<Option<Vec<u8>>, String> {
     let bodies = usize::from(body.raw.is_some())
@@ -438,7 +547,7 @@ fn serialize_post_data(body: &Body, headers: &mut Headers) -> Result<Option<Vec<
         + usize::from(body.form.is_some())
         + usize::from(body.multipart.is_some());
     if bodies > 1 {
-        return Err(ONLY_ONE_BODY.to_string());
+        return Err("Only one of 'data', 'form' or 'multipart' can be specified".to_string());
     }
     if let Some(json) = &body.json {
         headers.set("content-type", "application/json", true);
@@ -484,6 +593,7 @@ struct MultipartFormData {
 impl MultipartFormData {
     /// `generateUniqueBoundaryString`: `return '----WebKitFormBoundary' + String.fromCharCode(...charCodes);`
     fn new() -> Self {
+        /// Neo: the 64 characters a WebKit form boundary picks its 16 from.
         const ALPHABET: &[u8; 64] =
             b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB";
         let seed = RandomState::new().hash_one(SystemTime::now());
@@ -560,7 +670,7 @@ fn normalize_line_endings(name: &str) -> String {
         .replace('\n', "\r\n")
 }
 
-/// Deviation: `server/formData.ts` `MultipartFormData.addFileField`: `this._chunks.push(Buffer.from(`\r\ncontent-type: ${value.mimeType || mime.getType(value.name) || 'application/octet-stream'}`));`
+/// Deviation: `server/formData.ts` `MultipartFormData.addFileField`: `\r\ncontent-type: ${value.mimeType || mime.getType(value.name) || 'application/octet-stream'}`
 /// Neo knows the common extensions' types, where Playwright's `mime` package knows them all.
 fn mime_type_of(file_name: &str) -> &'static str {
     let extension = file_name
@@ -586,12 +696,11 @@ fn mime_type_of(file_name: &str) -> &'static str {
     }
 }
 
-/// Playwright: `server/fetch.ts` `APIRequestContext._sendRequestWithRetries`: only a reset
+/// Playwright: `server/fetch.ts` `APIRequestContext._sendRequestWithRetries`
+/// Only a reset
 /// connection is retried, `max_retries` times, waiting 250 ms and twice as long each time.
 async fn send_with_retries(
-    clients: &Clients,
-    jar: &dyn Jar,
-    defaults: &Defaults,
+    sender: &Sender<'_>,
     url: Url,
     options: SendOptions,
     post_data: Option<Vec<u8>>,
@@ -602,9 +711,7 @@ async fn send_with_retries(
     let mut attempt = 0;
     loop {
         match send(
-            clients,
-            jar,
-            defaults,
+            sender,
             url.clone(),
             options.clone(),
             post_data.clone(),
@@ -617,7 +724,7 @@ async fn send_with_retries(
                 return Ok(fetched);
             }
             Err(error) if max_retries == 0 => return Err(error.message),
-            // Playwright: `server/fetch.ts` `APIRequestContext._sendRequestWithRetries`: `throw new Error(`Failed after ${i + 1} attempt(s): ${e}`);`
+            // Playwright: `server/fetch.ts` `APIRequestContext._sendRequestWithRetries`: `Failed after ${i + 1} attempt(s): ${e}`
             Err(error) if attempt == max_retries => {
                 return Err(format!(
                     "Failed after {} attempt(s): Error: {}",
@@ -627,7 +734,7 @@ async fn send_with_retries(
             }
             Err(error) if !error.reset => return Err(error.message),
             Err(_) => {
-                // Playwright: `server/fetch.ts` `APIRequestContext._sendRequestWithRetries`: `const message = `  Received ECONNRESET, will retry after ${backoff}ms.`;`
+                // Playwright: `server/fetch.ts` `APIRequestContext._sendRequestWithRetries`: `Received ECONNRESET, will retry after ${backoff}ms.`
                 log.push(format!(
                     "  Received ECONNRESET, will retry after {}ms.",
                     backoff.as_millis()
@@ -640,12 +747,11 @@ async fn send_with_retries(
     }
 }
 
-/// Playwright: `server/fetch.ts` `APIRequestContext._sendRequest`: one request and the hops
+/// Playwright: `server/fetch.ts` `APIRequestContext._sendRequest`
+/// One request and the hops
 /// its redirects and Basic-auth challenge lead to.
 async fn send(
-    clients: &Clients,
-    jar: &dyn Jar,
-    defaults: &Defaults,
+    sender: &Sender<'_>,
     mut url: Url,
     mut options: SendOptions,
     mut post_data: Option<Vec<u8>>,
@@ -653,7 +759,7 @@ async fn send(
 ) -> Result<Fetched, SendError> {
     loop {
         if options.headers.get("cookie").is_none() {
-            let cookies = jar.cookies(&url).await;
+            let cookies = sender.jar.cookies(&url, sender.progress).await;
             if !cookies.is_empty() {
                 let values: Vec<String> = cookies
                     .iter()
@@ -664,13 +770,13 @@ async fn send(
                 options.headers.set("cookie", &values.join("; "), false);
             }
         }
-        // Playwright: `server/fetch.ts` `APIRequestContext._sendRequest`: `fetchLog(`→ ${options.method} ${url.toString()}`);`
+        // Playwright: `server/fetch.ts` `APIRequestContext._sendRequest`: `→ ${options.method} ${url.toString()}`
         log.push(format!("→ {} {url}", options.method));
         for (name, value) in &options.headers.0 {
             log.push(format!("  {name}: {value}"));
         }
         let started = now_millis();
-        let response = request(clients, &url, &options, post_data.as_deref()).await?;
+        let response = request(sender.clients, &url, &options, post_data.as_deref()).await?;
         let response_start = now_millis() - started;
         let status = response.status().as_u16();
         let status_text = response
@@ -690,7 +796,7 @@ async fn send(
             .collect();
         let cookies = cookie_store::parse_set_cookie_headers(&url, &set_cookies, now_seconds());
         if !cookies.is_empty() {
-            jar.add(cookies).await;
+            sender.jar.add(cookies, sender.progress).await;
         }
         if REDIRECT_STATUS.contains(&status) && options.max_redirects >= 0 {
             if options.max_redirects == 0 {
@@ -706,7 +812,7 @@ async fn send(
         // Playwright: `server/fetch.ts` `APIRequestContext._sendRequest`: `if (auth?.trim().startsWith('Basic') && credentials) {`
         if status == 401
             && options.headers.get("authorization").is_none()
-            && let Some(credentials) = credentials_for(defaults.http_credentials.as_ref(), &url)
+            && let Some(credentials) = credentials_for(&sender.defaults.http_credentials, &url)
             && header(&headers, "www-authenticate")
                 .is_some_and(|auth| auth.trim().starts_with("Basic"))
         {
@@ -734,7 +840,8 @@ async fn send(
     }
 }
 
-/// Playwright: `server/fetch.ts` `APIRequestContext._sendRequest`: where a redirect leads, with
+/// Playwright: `server/fetch.ts` `APIRequestContext._sendRequest`
+/// Where a redirect leads, with
 /// the method, body and headers the next hop goes with; `None` for one with no `Location`, which
 /// is the response.
 fn redirect(
@@ -768,9 +875,11 @@ fn redirect(
     };
     // Playwright: `server/fetch.ts` `APIRequestContext._sendRequest`: `const locationHeaderValue = Buffer.from(response.headers.location ?? '', 'latin1').toString('utf8');`
     let location = latin1_as_utf8(location);
-    let next = url
-        .join(&location)
-        .map_err(|_| SendError::from(format!("{INVALID_REDIRECT}{location}")))?;
+    let next = url.join(&location).map_err(|_| {
+        SendError::from(format!(
+            "uri requested responds with an invalid redirect URL: {location}"
+        ))
+    })?;
     let host = match next.port() {
         Some(port) => format!("{}:{port}", next.host_str().unwrap_or_default()),
         None => next.host_str().unwrap_or_default().to_string(),
@@ -807,7 +916,7 @@ async fn request(
     for (name, value) in &options.headers.0 {
         let header_name = HeaderName::from_bytes(name.as_bytes())
             .map_err(|_| SendError::from(format!("Invalid header name: \"{name}\"")))?;
-        // Playwright: Node's `ERR_INVALID_CHAR`, for a header value it cannot send as Latin-1.
+        // Node's `ERR_INVALID_CHAR`, Playwright's for a header value it cannot send as Latin-1.
         let header_value = latin1_bytes(value)
             .and_then(|bytes| HeaderValue::from_bytes(&bytes).ok())
             .ok_or_else(|| {
@@ -920,12 +1029,14 @@ fn latin1_as_utf8(value: &str) -> String {
     }
 }
 
+/// Neo: the wall clock in milliseconds, as Playwright's timings and cookies count.
 fn now_millis() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0.0, |elapsed| elapsed.as_secs_f64() * 1000.0)
 }
 
+/// Neo: the wall clock in seconds, as cookie expiries count.
 fn now_seconds() -> f64 {
     now_millis() / 1000.0
 }
@@ -940,7 +1051,30 @@ mod tests {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio::net::{TcpListener, TcpStream};
 
+    use serde_json::json;
+    use tokio_util::sync::CancellationToken;
+    use tokio_util::task::TaskTracker;
+
     use super::*;
+    use crate::deadline::Deadline;
+    use crate::progress::{CallEntry, CallStart, RunScope};
+
+    fn call_progress() -> Progress {
+        let entry = Arc::new(CallEntry::new(CallStart {
+            call_id: 1,
+            guid: "request-context@test".to_string(),
+            method: "fetch".to_string(),
+            title: None,
+            params: json!({}),
+            location: None,
+            input: false,
+        }));
+        let run = RunScope::new(
+            Deadline::new(Duration::from_mins(1), CancellationToken::new()),
+            TaskTracker::new(),
+        );
+        Progress::new(entry, 0.0, run, CancellationToken::new())
+    }
 
     /// One request the scripted server saw.
     #[derive(Clone, Debug, Default)]
@@ -1068,7 +1202,14 @@ mod tests {
     }
 
     async fn run(params: FetchParams) -> Result<Fetched, String> {
-        fetch(&Clients::default(), &OwnJar::default(), &defaults(), params).await
+        fetch(
+            &Clients::default(),
+            &OwnJar::default(),
+            &defaults(),
+            params,
+            &call_progress(),
+        )
+        .await
     }
 
     fn seen(log: &Arc<Mutex<Vec<Seen>>>) -> Vec<Seen> {
@@ -1217,7 +1358,7 @@ mod tests {
         );
         assert_eq!(
             run(params(&format!("{origin}/bad"))).await.err(),
-            Some(format!("{INVALID_REDIRECT}http://["))
+            Some("uri requested responds with an invalid redirect URL: http://[".to_string())
         );
     }
 
@@ -1238,6 +1379,7 @@ mod tests {
             &jar,
             &defaults(),
             params(&format!("{origin}/login")),
+            &call_progress(),
         )
         .await
         .unwrap_or_else(|error| panic!("{error}"));
@@ -1250,7 +1392,7 @@ mod tests {
         );
         let base = Url::parse(&origin).unwrap_or_else(|error| panic!("{error}"));
         let names: Vec<String> = jar
-            .cookies(&base)
+            .cookies(&base, &call_progress())
             .await
             .into_iter()
             .map(|cookie| cookie.name)
@@ -1265,6 +1407,7 @@ mod tests {
                 headers: vec![("Cookie".into(), "mine=1".into())],
                 ..params(&format!("{origin}/login"))
             },
+            &call_progress(),
         )
         .await
         .unwrap_or_else(|error| panic!("{error}"));
@@ -1379,19 +1522,25 @@ mod tests {
         })
         .await;
         let with = |origin_filter: Option<String>, send_always: bool| Defaults {
-            http_credentials: Some(HttpCredentials {
+            http_credentials: vec![HttpCredentials {
                 username: "user".into(),
                 password: "pass".into(),
                 origin: origin_filter,
                 send_always,
-            }),
+            }],
             ..defaults()
         };
         let clients = Clients::default();
         let jar = OwnJar::default();
-        let fetched = fetch(&clients, &jar, &with(None, false), params(&origin))
-            .await
-            .unwrap_or_else(|error| panic!("{error}"));
+        let fetched = fetch(
+            &clients,
+            &jar,
+            &with(None, false),
+            params(&origin),
+            &call_progress(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(
             (fetched.status, fetched.body.as_slice()),
             (200, b"in".as_slice())
@@ -1402,6 +1551,7 @@ mod tests {
             &jar,
             &with(Some("http://other.test".into()), false),
             params(&origin),
+            &call_progress(),
         )
         .await
         .unwrap_or_else(|error| panic!("{error}"));
@@ -1410,9 +1560,15 @@ mod tests {
             "credentials for another origin are not sent"
         );
         let before = seen(&log).len();
-        let upfront = fetch(&clients, &jar, &with(None, true), params(&origin))
-            .await
-            .unwrap_or_else(|error| panic!("{error}"));
+        let upfront = fetch(
+            &clients,
+            &jar,
+            &with(None, true),
+            params(&origin),
+            &call_progress(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(
             (upfront.status, seen(&log).len() - before),
             (200, 1),
@@ -1550,7 +1706,7 @@ mod tests {
             .await
             .err()
             .as_deref(),
-            Some(ONLY_ONE_BODY)
+            Some("Only one of 'data', 'form' or 'multipart' can be specified")
         );
     }
 

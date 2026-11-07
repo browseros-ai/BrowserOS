@@ -915,7 +915,7 @@ fn doc(out: &mut Vec<String>, indent: &str, lines: &[String]) {
         if line.is_empty() {
             out.push(format!("{indent}///"));
         }
-        let line = angle_urls(line);
+        let line = code_calls(&angle_urls(line));
         for part in output::wrap(&line, width)
             .iter()
             .filter(|part| !part.is_empty())
@@ -932,6 +932,23 @@ fn angle_urls(line: &str) -> String {
         .map(|word| {
             if word.starts_with("http://") || word.starts_with("https://") {
                 format!("<{word}>")
+            } else {
+                word.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `line` with each word that names a call (`BrowserType.connect()`) in backticks, as clippy's
+/// `doc_markdown` asks: Playwright's spec comments name methods bare. A word already in
+/// backticks stays; trailing punctuation stays outside them.
+pub(crate) fn code_calls(line: &str) -> String {
+    line.split(' ')
+        .map(|word| {
+            if word.contains("()") && !word.contains('`') {
+                let call = word.trim_end_matches([',', '.', ';', ':']);
+                format!("`{call}`{}", &word[call.len()..])
             } else {
                 word.to_owned()
             }

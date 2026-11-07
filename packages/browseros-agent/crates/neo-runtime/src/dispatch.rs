@@ -42,20 +42,21 @@ use std::time::Duration;
 use futures_util::future;
 use neo_runtime_spec::injected::ReadableElementState;
 use neo_runtime_spec::serve::{
-    ArtifactCall, BrowserContextCall, DialogCall, FrameAriaSnapshotJSONParams,
-    FrameAriaSnapshotParams, FrameCall, FrameCheckParams, FrameCheckResult, FrameClickParams,
-    FrameContentParams, FrameDblclickParams, FrameDragAndDropParams, FrameDragAndDropResult,
-    FrameFillParams, FrameFillResult, FrameGetAttributeParams, FrameGotoParams, FrameHoverParams,
-    FrameInnerHTMLParams, FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult,
-    FrameIsCheckedParams, FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult,
-    FrameIsEditableParams, FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult,
-    FrameIsHiddenParams, FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult,
-    FramePressParams, FramePressResult, FrameQueryCountParams, FrameResolveSelectorParams,
-    FrameSelectOptionParams, FrameSelectOptionResult, FrameSetContentParams, FrameSetContentResult,
-    FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameTypeParams, FrameTypeResult,
-    FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
-    FrameWaitForTimeoutParams, FrameWaitForTimeoutResult, Metadata, PageCall, RequestCall,
-    ResponseCall, RouteCall,
+    APIRequestContextCall, ArtifactCall, BrowserContextCall, DialogCall,
+    FrameAriaSnapshotJSONParams, FrameAriaSnapshotParams, FrameCall, FrameCheckParams,
+    FrameCheckResult, FrameClickParams, FrameContentParams, FrameDblclickParams,
+    FrameDragAndDropParams, FrameDragAndDropResult, FrameFillParams, FrameFillResult,
+    FrameGetAttributeParams, FrameGotoParams, FrameHoverParams, FrameInnerHTMLParams,
+    FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams,
+    FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult, FrameIsEditableParams,
+    FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult, FrameIsHiddenParams,
+    FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams,
+    FramePressResult, FrameQueryCountParams, FrameResolveSelectorParams, FrameSelectOptionParams,
+    FrameSelectOptionResult, FrameSetContentParams, FrameSetContentResult, FrameTapParams,
+    FrameTextContentParams, FrameTitleParams, FrameTypeParams, FrameTypeResult, FrameUncheckParams,
+    FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
+    FrameWaitForTimeoutParams, FrameWaitForTimeoutResult, Metadata, PageCall, PlaywrightCall,
+    RequestCall, ResponseCall, RouteCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -107,6 +108,7 @@ use crate::progress::{
     CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
 };
 use crate::reads::{self, AttributeOptions, ReadOptions, SnapshotOptions};
+use crate::request_contexts;
 use crate::responses::{self, NetworkCall};
 use crate::routes;
 use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
@@ -380,6 +382,10 @@ enum ObjectKind {
     /// A download the run's `download` event handed out, by the browser's guid
     /// (`downloads.rs`). It belongs to the run, not to its tab, which may close first.
     Download(String),
+    /// An API request context, by its id (`request_contexts.rs`): the run's, like a download.
+    RequestContext(String),
+    /// The script's `playwright` object, the receiver of `request.newContext()`.
+    Playwright,
     Unknown,
 }
 
@@ -398,6 +404,8 @@ enum ObjectCall {
     /// A paused request's answer or `route.fetch` (`routes.rs`).
     Intercepted(u64, routes::InterceptedCall),
     Download(String, ArtifactCall),
+    RequestContext(String, APIRequestContextCall),
+    Playwright(PlaywrightCall),
 }
 
 /// What a message asks for. One variant per served (object, method).
@@ -607,6 +615,9 @@ impl Dispatcher {
         // themselves, and a dialog a listener left open gets the default answer before the
         // sessions detach (`Dialogs::left_open`).
         self.0.tabs.events().close();
+        // Every API request context goes with the run: what is in flight aborts, and its
+        // connections close (`request_contexts.rs`).
+        self.0.tabs.request_contexts().close_all();
         let _answered = time::timeout_at(deadline, answer_left_open(&self.0.tabs)).await;
         // Every request a route handler left paused goes on, and no tab keeps pausing requests
         // for a run that is over (`routes.rs`).
@@ -787,6 +798,10 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         }),
         ObjectKind::Download(guid) => ArtifactCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Download(guid, call)))),
+        ObjectKind::RequestContext(id) => APIRequestContextCall::decode(method, params)
+            .map(|call| (call.meta(), Ok(ObjectCall::RequestContext(id, call)))),
+        ObjectKind::Playwright => PlaywrightCall::decode(method, params)
+            .map(|call| (call.meta(), Ok(ObjectCall::Playwright(call)))),
         // `route_init` answers every Disposable message.
         ObjectKind::Disposable(_) | ObjectKind::Unknown => {
             return Routed {
@@ -1147,6 +1162,24 @@ struct CallReply {
 
 /// Attachment can block or be cancelled independently of a frame handler. Once attached,
 /// `serve` retains its original contract: the `PageSession` always belongs to this call's tab.
+/// Neo: a call on an object the run owns rather than a tab: a download (`downloads.rs`), an
+/// API request context or the `playwright` object (`request_contexts.rs`). It starts nothing in
+/// a page, so no page's enables hold it, and its tab may be gone.
+async fn serve_run_owned(
+    tabs: &Tabs,
+    route: ObjectCall,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    match route {
+        ObjectCall::Download(guid, call) => downloads::serve(tabs, &guid, call, progress).await,
+        ObjectCall::RequestContext(id, call) => {
+            request_contexts::serve(tabs, &id, call, progress).await
+        }
+        ObjectCall::Playwright(call) => request_contexts::new_request(tabs, call),
+        _ => Err(PlaywrightError::target_closed().into()),
+    }
+}
+
 async fn serve_call(
     tabs: Tabs,
     cursors: Arc<Cursors<FrameCursor>>,
@@ -1162,17 +1195,22 @@ async fn serve_call(
         finish_reply(Err(error), reply).await;
         return;
     }
+    if matches!(
+        route,
+        ObjectCall::Download(..) | ObjectCall::RequestContext(..) | ObjectCall::Playwright(..)
+    ) {
+        finish_reply(serve_run_owned(&tabs, route, &progress).await, reply).await;
+        return;
+    }
     // A page's call waits for what the run's subscriptions switched on there (console messages,
     // the dialog watcher), so the call cannot cause an event before its producer listens; a
     // context call (`newPage`) waits for target discovery's baseline. A dialog's answer never
     // waits: an open dialog can hold that very enable, and only the answer frees the page.
     let gate = match (&route, &target) {
         // A route's answer never waits either: the paused request may be what the page's
-        // enable, or the script's goto, waits for. A download's calls start nothing in a page;
-        // `cancel` must not wait for a page's enables.
-        (ObjectCall::Dialog(..) | ObjectCall::Download(..) | ObjectCall::Intercepted(..), _) => {
-            None
-        }
+        // enable, or the script's goto, waits for. (The run's own objects, a download's
+        // `cancel` among them, never reach the gate: `serve_run_owned`.)
+        (ObjectCall::Dialog(..) | ObjectCall::Intercepted(..), _) => None,
         (ObjectCall::Context(_), _) => Some(ALL_PAGES),
         (_, Some((page, _))) => Some(page.id.as_str()),
         (_, None) => None,
@@ -1261,9 +1299,6 @@ async fn serve_call(
             Some(session) => routes::serve_intercepted(&session, index, call, &progress).await,
             None => Err(PlaywrightError::target_closed().into()),
         },
-        (ObjectCall::Download(guid, call), _) => {
-            downloads::serve(&tabs, &guid, call, &progress).await
-        }
         _ => Err(PlaywrightError::target_closed().into()),
     };
     finish_reply(result, reply).await;
@@ -1685,6 +1720,10 @@ fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
         ObjectKind::Disposable(guid.to_owned())
     } else if let Some(download) = guid.strip_prefix(downloads::DOWNLOAD_PREFIX) {
         ObjectKind::Download(download.to_owned())
+    } else if let Some(id) = guid.strip_prefix(request_contexts::REQUEST_CONTEXT_PREFIX) {
+        ObjectKind::RequestContext(id.to_owned())
+    } else if guid == request_contexts::PLAYWRIGHT_GUID {
+        ObjectKind::Playwright
     } else if !resolved {
         ObjectKind::Unknown
     } else if guid.starts_with(evaluate::HANDLE_PREFIX) {
@@ -2027,7 +2066,9 @@ mod tests {
             | ObjectCall::Capture(_)
             | ObjectCall::Dialog(..)
             | ObjectCall::Intercepted(..)
-            | ObjectCall::Download(..) => {
+            | ObjectCall::Download(..)
+            | ObjectCall::RequestContext(..)
+            | ObjectCall::Playwright(..) => {
                 panic!("a Frame message routed to another object")
             }
         })

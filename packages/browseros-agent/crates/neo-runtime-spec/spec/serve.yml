@@ -32,9 +32,11 @@ interfaces:
     - setNetworkInterceptionPatterns
   # A BrowserContext initializer requires these three. Neo never sends one (a run receives its
   # context at start) and serves no command on them; listing them keeps the type constructible.
-  # API request contexts (neo-runtime `api_request.rs`): `page.request`, `context.request` and
-  # `playwright.request.newContext()`. Neo sends their requests from Rust as Playwright's server
-  # does from Node; a response's body stays there by `fetchUid` until it is disposed.
+  # API request contexts (neo-runtime `request_contexts.rs`, `api_request.rs`): `page.request`,
+  # `context.request` and `playwright.request.newContext()`. Neo sends their requests from Rust
+  # as Playwright's server does from Node; a response's body stays there by `fetchUid` until it
+  # is disposed. `clearCookies` is the SDK's, as `BrowserContext`'s: it matches its filter,
+  # `RegExp` included, and expires the matches by `addCookies`.
   APIRequestContext:
     - fetch
     - fetchResponseBody
@@ -44,7 +46,6 @@ interfaces:
     - storageState
     - cookies
     - addCookies
-    - clearCookies
   # The top-level object's `request.newContext()`: the one Playwright command Neo serves on it.
   Playwright:
     - newRequest

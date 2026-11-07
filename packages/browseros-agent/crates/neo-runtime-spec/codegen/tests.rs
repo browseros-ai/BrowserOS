@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use crate::contract::{field_ident, title_case, variant_ident};
 use crate::dialect::{DefKind, DialectFile, Grammar, Prop, Protocol, Type};
 use crate::output::{Mode, REGENERATE, Rendered};
+use crate::rust::code_calls;
 use crate::spec_files::{self, SpecFile};
 use crate::{Outcome, UPSTREAM, check_upstream, generate, translate, upstream_text, yaml};
 
@@ -845,4 +846,12 @@ fn a_void_command_replies_without_a_result() {
     };
     assert!(void("PagePingParams"), "ping declares no returns");
     assert!(!void("PageTitleParams"), "title returns its value");
+}
+
+#[test]
+fn tests_that_a_call_named_in_a_spec_comment_gets_backticks() {
+    assert_eq!(
+        code_calls("via BrowserType.connect() method, or `page.goto()`, or x()."),
+        "via `BrowserType.connect()` method, or `page.goto()`, or `x()`."
+    );
 }

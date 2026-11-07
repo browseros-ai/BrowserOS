@@ -33,6 +33,7 @@ use crate::network::HopId;
 use crate::page::{FrameTab, PageSession, Session, TabInputs};
 use crate::page_events::{self, Kept, MAX_KEPT_ARGS, MAX_KEPT_CHOOSERS};
 use crate::progress::PlaywrightError;
+use crate::request_contexts::RequestContexts;
 use crate::routes::{self, ContextRoutes};
 use crate::run::{PageId, RunPage};
 use crate::screenshot::TabScreenshots;
@@ -75,6 +76,8 @@ struct Inner {
     downloads_enabling: Mutex<Option<Enabling>>,
     /// The downloads the run's `download` events handed out.
     downloads: Downloads,
+    /// The run's API request contexts (`request_contexts.rs`).
+    request_contexts: RequestContexts,
     /// The run's session-scoped state, which each session it attaches gets (`session_state.rs`).
     overrides: Arc<Overrides>,
     /// The `Runtime`'s permission grants, and this run's id among them.
@@ -212,6 +215,7 @@ impl Tabs {
             watching_downloads: OnceLock::new(),
             downloads_enabling: Mutex::new(None),
             downloads: Downloads::default(),
+            request_contexts: RequestContexts::default(),
             overrides: Arc::default(),
             permissions,
             run_id: session_state::next_run(),
@@ -741,6 +745,11 @@ impl Tabs {
     }
 
     /// The downloads the run's `download` events handed out.
+    /// The run's API request contexts.
+    pub(crate) fn request_contexts(&self) -> &RequestContexts {
+        &self.0.request_contexts
+    }
+
     pub(crate) fn downloads(&self) -> &Downloads {
         &self.0.downloads
     }
