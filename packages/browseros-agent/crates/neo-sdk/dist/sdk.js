@@ -6431,6 +6431,7 @@ var CONTEXT_EVENTS = {
   ]
 };
 var STORAGE_STATE_PATH = "path: this run has no artifact directory, so Neo cannot write the storage state; the host sets one per run";
+var STATE_FILE_PATH = "storageState: this run has no artifact directory, so Neo cannot read a state file; the host sets one per run";
 var CLEAR_ALL_COOKIES_REFUSED = "Neo does not clear every cookie of the user's browser, which would sign the user out of every site: pass clearCookies a name, domain or path";
 function clearCookieFilter(options) {
   const kept = (value) => typeof value === "string" || value instanceof RegExp ? value : undefined;
@@ -6635,7 +6636,9 @@ class BrowserContext extends ChannelOwner {
     return await this.#connection.sendContext("browserContext.storageState", this.#guid, "storageState", params, 0);
   }
   async setStorageState(storageState) {
-    await this.#connection.sendContext("browserContext.setStorageState", this.#guid, "setStorageState", typeof storageState === "string" || !storageState ? {} : { storageState }, 0);
+    if (typeof storageState === "string")
+      throw new Error(STATE_FILE_PATH);
+    await this.#connection.sendContext("browserContext.setStorageState", this.#guid, "setStorageState", storageState ? { storageState } : {}, 0);
   }
   setDefaultTimeout(timeout) {
     this._timeoutSettings.setDefaultTimeout(timeout);

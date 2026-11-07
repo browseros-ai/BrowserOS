@@ -76,6 +76,10 @@ const CONTEXT_EVENTS: EventTable = {
 const STORAGE_STATE_PATH =
   'path: this run has no artifact directory, so Neo cannot write the storage state; the host sets one per run'
 
+/** Neo: why `setStorageState(path)` throws: the run has no artifact directory to read it from. */
+const STATE_FILE_PATH =
+  'storageState: this run has no artifact directory, so Neo cannot read a state file; the host sets one per run'
+
 /** Neo: why `clearCookies()` without a filter throws. */
 const CLEAR_ALL_COOKIES_REFUSED =
   "Neo does not clear every cookie of the user's browser, which would sign the user out of every site: pass clearCookies a name, domain or path"
@@ -548,17 +552,25 @@ export class BrowserContext extends ChannelOwner {
     )
   }
 
-  /** Playwright: `client/browserContext.ts` `BrowserContext.setStorageState`: `await this._channel.setStorageState({ storageState: state }, kNoTimeout);`
-   * Neo refuses it on the user's browser (neo-runtime `session_state.rs`, Deviation): it would
-   * clear every cookie first. */
+  /**
+   * Playwright: `client/browserContext.ts` `BrowserContext.setStorageState`: `await this._channel.setStorageState({ storageState: state }, kNoTimeout);`
+   * Adds the state's cookies and replaces each listed origin's `localStorage` through the run's
+   * open page on it; nothing else of the user's browser is cleared (neo-runtime
+   * `session_state.rs`, Deviation).
+   *
+   * Deviation: `client/browserContext.ts` `prepareStorageState`: `return JSON.parse(await fs.promises.readFile(storageState, 'utf8'));`
+   * Playwright reads a state file anywhere on its host. Neo reads a script's files only inside
+   * the run's artifact directory, which the host gives the run; without one, a path throws.
+   */
   async setStorageState(
     storageState: string | BrowserContextSetStorageStateParams['storageState'],
   ): Promise<void> {
+    if (typeof storageState === 'string') throw new Error(STATE_FILE_PATH)
     await this.#connection.sendContext(
       'browserContext.setStorageState',
       this.#guid,
       'setStorageState',
-      typeof storageState === 'string' || !storageState ? {} : { storageState },
+      storageState ? { storageState } : {},
       0,
     )
   }

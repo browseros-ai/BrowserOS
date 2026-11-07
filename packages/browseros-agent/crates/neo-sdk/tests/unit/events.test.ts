@@ -244,6 +244,43 @@ test('tests that a dialog nobody listens to by then gets the default answer', as
   expect(sent).toEqual([{ guid: 'dialog@T:1', method: 'dismiss' }])
 })
 
+test('tests that dialog.accept refuses a promptText that is no string, null included', async () => {
+  // DeepScan 240332173 reports `promptText === null` as always true in dialog.ts's check; both
+  // values below reach that branch, so it is not.
+  const sent: string[] = []
+  const { page } = run()
+  const native = (
+    globalThis as unknown as Record<string, { callWithEvents: unknown }>
+  ).__neo_runtime
+  native.callWithEvents = async (message: string) => {
+    const parsed = JSON.parse(message)
+    sent.push(parsed.method)
+    return { reply: JSON.stringify({ id: parsed.id }), events: 0 }
+  }
+  const dialogs: { accept(promptText?: unknown): Promise<void> }[] = []
+  page.on('dialog', (dialog) => dialogs.push(dialog))
+  queueEvent('context@default', 'dialog', {
+    dialog: {
+      guid: 'dialog@T:2',
+      initializer: {
+        page: { guid: 'page@T' },
+        type: 'prompt',
+        message: 'Name?',
+        defaultValue: '',
+      },
+    },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  const [dialog] = dialogs
+  await expect(dialog?.accept(5)).rejects.toThrow(
+    'promptText: expected string, got number',
+  )
+  await expect(dialog?.accept(null)).rejects.toThrow(
+    'promptText: expected string, got object',
+  )
+  expect(sent).toEqual([])
+})
+
 test('tests that a listener error nobody handles ends the run, sync or async', async () => {
   const sync = run()
   sync.page.on('console', () => {

@@ -22,9 +22,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use browseros_cdp::{CdpClient, SessionId};
 use neo_runtime_spec::serve::{
-    BrowserContextSetGeolocationParamsGeolocation, BrowserContextStorageStateParams,
-    BrowserContextStorageStateResult, NameValue, NetworkCookie, NetworkCookieSameSite,
-    OriginStorage, SetNetworkCookie,
+    BrowserContextSetGeolocationParamsGeolocation, BrowserContextSetStorageStateParamsStorageState,
+    BrowserContextStorageStateParams, BrowserContextStorageStateResult, NameValue, NetworkCookie,
+    NetworkCookieSameSite, OriginStorage, SetNetworkCookie, SetOriginStorage,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -507,11 +507,11 @@ impl Overrides {
         let checked = geolocation.as_ref().map(verify_geolocation).transpose()?;
         let mut state = self.0.lock().await;
         state.geolocation = geolocation;
+        // The tab's own session only: its frames, out-of-process ones too, see the tab's
+        // override, and a frame session that detaches would take the tab's with it (measured).
         for (_, page) in tabs.attached() {
-            for target in targets_of(&page) {
-                progress
-                    .race(target.geolocation(checked.as_ref()))
-                    .await??;
+            if let Some(own) = targets_of(&page).into_iter().next() {
+                progress.race(own.geolocation(checked.as_ref())).await??;
             }
         }
         Ok(())
@@ -519,16 +519,24 @@ impl Overrides {
 
     /// Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager._setOfflineForSession`: `if (initial && !this._offline)`
     ///
-    /// A session the run attached just now, a tab's or an out-of-process frame's of tab `page`:
-    /// it gets what the run set so far, before the call that attached it goes on. A failure is
-    /// logged; that session's later requests go without it.
-    pub(crate) async fn apply_to_new(&self, cdp: &CdpClient, session: SessionId, page: &PageId) {
+    /// A session the run attached just now, a tab's or (`frame`) an out-of-process frame's of tab
+    /// `page`: it gets what the run set so far, before the call that attached it goes on, a
+    /// frame's session all but the geolocation, which the tab's own carries for every frame. A
+    /// failure is logged; that session's later requests go without it.
+    pub(crate) async fn apply_to_new(
+        &self,
+        cdp: &CdpClient,
+        session: SessionId,
+        page: &PageId,
+        frame: bool,
+    ) {
         let state = self.0.lock().await;
         let target = Target { cdp, session };
         let headers = state.headers_of(page);
         let geolocation = state
             .geolocation
             .as_ref()
+            .filter(|_| !frame)
             .and_then(|geolocation| verify_geolocation(geolocation).ok());
         let applied = async {
             if !headers.is_empty() {
@@ -564,15 +572,132 @@ pub(crate) fn set_http_credentials() -> Result<(), CallError> {
 /// credentials.
 const STORAGE_OPTION_PENDING: &str = "Neo reads cookies and localStorage only: storageState({ indexedDB, opfs, credentials }) is not served yet";
 
-/// Deviation: `server/browserContext.ts` `BrowserContext.setStorageState`: `await progress.race(this.doClearCookies());`
-/// Playwright first clears the browser's whole HTTP cache and every cookie, and the storage of
-/// each origin it saw, then writes the state. Neo's context is the user's browser, where that
-/// would sign the user out of every site and lose their sites' data, so Neo refuses it.
-const SET_STORAGE_STATE_REFUSED: &str = "Neo does not set a storage state on the user's browser: it clears every cookie and each visited origin's storage first, which would sign the user out of every site";
+/// Neo: what `setStorageState` throws for an origin the run has no page open on: Neo writes an
+/// origin's storage only through such a page.
+const NO_PAGE_FOR_ORIGIN: &str = "Neo writes an origin's storage only through a page of the run open on it: open one first. No page is open on";
 
-/// `setStorageState`: refused on the user's browser ([`SET_STORAGE_STATE_REFUSED`]).
-pub(crate) fn set_storage_state() -> Result<(), CallError> {
-    Err(PlaywrightError::error(SET_STORAGE_STATE_REFUSED).into())
+/// Neo: what `setStorageState` throws for what Neo does not write yet: `IndexedDB`, OPFS and
+/// `WebAuthn` credentials.
+const SET_STORAGE_PENDING: &str = "Neo writes cookies and localStorage only: a state with indexedDB, opfs or credentials is not served yet";
+
+/// Deviation: `server/browserContext.ts` `BrowserContext.setStorageState`: `await progress.race(this.doClearCookies());`
+/// Playwright first clears the browser's whole HTTP cache, every cookie and the storage of each
+/// origin it saw, then writes the state through a page of its own. Neo's context is the user's
+/// browser, where that would sign the user out of every site, so Neo only adds the state's cookies
+/// and replaces the listed origins' `localStorage`, each through the run's open page on it.
+///
+/// Checks the whole state before it writes anything: an origin with no open page, or storage Neo
+/// does not write yet, refuses the call unchanged.
+pub(crate) async fn set_storage_state(
+    tabs: &Tabs,
+    state: Option<BrowserContextSetStorageStateParamsStorageState>,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let Some(state) = state else {
+        return Ok(());
+    };
+    let origins = state.origins.unwrap_or_default();
+    let unwritable = |origin: &SetOriginStorage| {
+        origin
+            .indexed_db
+            .as_ref()
+            .is_some_and(|databases| !databases.is_empty())
+            || origin
+                .opfs
+                .as_ref()
+                .is_some_and(|entries| !entries.is_empty())
+    };
+    if origins.iter().any(unwritable)
+        || state
+            .credentials
+            .as_ref()
+            .is_some_and(|credentials| !credentials.is_empty())
+    {
+        return Err(PlaywrightError::error(SET_STORAGE_PENDING).into());
+    }
+    let mut pages = Vec::with_capacity(origins.len());
+    for origin in &origins {
+        let Some(page) = progress.race(open_page_of(tabs, &origin.origin)).await?? else {
+            return Err(
+                PlaywrightError::error(format!("{NO_PAGE_FOR_ORIGIN} {}", origin.origin)).into(),
+            );
+        };
+        pages.push(page);
+    }
+    if let Some(cookies) = state.cookies.filter(|cookies| !cookies.is_empty()) {
+        add_cookies(tabs, cookies, progress).await?;
+    }
+    for (origin, page) in origins.iter().zip(&pages) {
+        progress
+            .race(replace_local_storage(
+                page,
+                &origin.origin,
+                &origin.local_storage,
+            ))
+            .await??;
+    }
+    Ok(())
+}
+
+/// The run's open page whose main frame is on `origin`, if it has one.
+async fn open_page_of(
+    tabs: &Tabs,
+    origin: &str,
+) -> Result<Option<Arc<PageSession>>, PlaywrightError> {
+    for (entry, page) in tabs.attached() {
+        if entry.closed.is_cancelled() {
+            continue;
+        }
+        let Some(url) = tabs.url(&entry).await? else {
+            continue;
+        };
+        if origin_of(&url).as_deref() == Some(origin) {
+            return Ok(Some(page));
+        }
+    }
+    Ok(None)
+}
+
+/// `url`'s origin, `None` for an opaque one (`about:blank`, `data:`).
+fn origin_of(url: &str) -> Option<String> {
+    Url::parse(url)
+        .ok()
+        .map(|url| url.origin())
+        .filter(Origin::is_tuple)
+        .map(|origin| origin.ascii_serialization())
+}
+
+/// Playwright: `server/browserContext.ts` `BrowserContext.setStorageState`: `return script.restore(${JSON.stringify(newOrigins.get(origin))});`
+///
+/// `origin`'s `localStorage` becomes `items`, its earlier items gone, over the session of the
+/// page open on it.
+async fn replace_local_storage(
+    page: &PageSession,
+    origin: &str,
+    items: &[NameValue],
+) -> Result<(), PlaywrightError> {
+    let cdp = page.events.cdp();
+    let session = page.events.sessions().into_iter().next();
+    let storage = json!({ "securityOrigin": origin, "isLocalStorage": true });
+    let send = |method: &'static str, params: Value| {
+        let session = session.clone();
+        async move {
+            cdp.send(method, params, session.as_ref())
+                .await
+                .map(|_| ())
+                .map_err(|error| tabs::cdp_error(&error))
+        }
+    };
+    send("DOMStorage.enable", json!({})).await?;
+    send("DOMStorage.clear", json!({ "storageId": storage })).await?;
+    for item in items {
+        send(
+            "DOMStorage.setDOMStorageItem",
+            json!({ "storageId": storage, "key": item.name, "value": item.value }),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// Deviation: `server/browserContext.ts` `BrowserContext.storageState`: `// If there are still origins to save, create a blank page to iterate over origins.`

@@ -396,12 +396,12 @@ impl Tabs {
             let overrides = Arc::clone(&overrides);
             let cdp = cdp.clone();
             let id = id.clone();
-            Box::pin(async move { overrides.apply_to_new(&cdp, session, &id).await })
+            Box::pin(async move { overrides.apply_to_new(&cdp, session, &id, true).await })
         }));
         if let Some(own) = page.events.sessions().into_iter().next() {
             self.0
                 .overrides
-                .apply_to_new(page.events.cdp(), own, &entry.id)
+                .apply_to_new(page.events.cdp(), own, &entry.id, false)
                 .await;
         }
         Ok(page)

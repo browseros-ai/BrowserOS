@@ -118,8 +118,8 @@ pub(crate) async fn context(
             let state = session_state::storage_state(tabs, &params, progress).await?;
             encode_result::<BrowserContextStorageStateParams>(&state)
         }
-        BrowserContextCall::SetStorageState(_) => {
-            session_state::set_storage_state()?;
+        BrowserContextCall::SetStorageState(params) => {
+            session_state::set_storage_state(tabs, params.storage_state, progress).await?;
             Ok(None)
         }
     }
