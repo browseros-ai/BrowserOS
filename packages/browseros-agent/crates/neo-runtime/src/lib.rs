@@ -80,6 +80,7 @@ mod frames;
 mod getters;
 mod highlight;
 mod history;
+mod init_scripts;
 mod input_devices;
 mod keyboard;
 mod lists;

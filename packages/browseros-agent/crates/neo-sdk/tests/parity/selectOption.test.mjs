@@ -50,11 +50,11 @@ test('selectOption returns selected values for every receiver', {
   assert.ok(delivered.every((c) => c.delivery === 'done'))
 })
 
-/** ElementHandle values: Playwright sends them as `elements` and selects the very option nodes
- * they name; Neo refuses them before anything is sent (Deviation `ELEMENT_VALUES_UNSUPPORTED`),
- * where they once travelled as empty option objects that matched the first option. A handle after
- * a string fails Playwright's validator, and Neo's refusal alike. */
-test('an ElementHandle value: Playwright selects that option, Neo refuses before any effect', {
+/** ElementHandle values: both engines send them as `elements` and select the very option nodes
+ * they name, by identity: one handle, an array, two handles of a multiple select. A handle after
+ * a string fails Playwright's validator in both, before anything is sent. A handle of another
+ * select's option matches nothing in this one, so the call waits for options and times out. */
+test('an ElementHandle value selects that very option, as Playwright does', {
   skip,
   timeout: 120_000,
 }, async (t) => {
@@ -75,6 +75,7 @@ test('an ElementHandle value: Playwright selects that option, Neo refuses before
         frame: await settle(() => page.mainFrame().selectOption('#single', [second])),
         locator: await settle(() => page.locator('#multiple').selectOption([two, three])),
         mixed: await settle(() => page.locator('#single').selectOption(['one', second])),
+        otherSelect: await settle(() => page.locator('#single').selectOption(two, { timeout: 500 })),
         single: await page.inputValue('#single'),
         multiple: await page.$eval('#multiple', (s) => [...s.selectedOptions].map((o) => o.value)),
       }
@@ -86,26 +87,11 @@ test('an ElementHandle value: Playwright selects that option, Neo refuses before
         frame: { value: ['two'] },
         locator: { value: ['two', 'three'] },
         mixed: { error: 'Error' },
+        otherSelect: { error: 'TimeoutError' },
         single: 'two',
         multiple: ['two', 'three'],
       })
-      assert.deepEqual(neo, {
-        page: { error: 'Error' },
-        frame: { error: 'Error' },
-        locator: { error: 'Error' },
-        mixed: { error: 'Error' },
-        single: 'one',
-        multiple: [],
-      })
-    },
-    effects: ({ playwright, neo }) => {
-      assert.ok(
-        playwright.events.some((event) => event.type === 'change'),
-        'Playwright selected options',
-      )
-      assert.deepEqual(neo.events, [], 'Neo sent nothing to the page')
-      assert.deepEqual(neo.selected, [])
-      assert.equal(neo.values.single, 'one')
+      assert.deepEqual(neo, playwright, 'public return values and types')
     },
   })
 })

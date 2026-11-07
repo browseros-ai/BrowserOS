@@ -1,22 +1,21 @@
-/** Playwright's `client/elementHandle.ts` value conversion, without element handles: Playwright
- * sends ElementHandle values as `elements`, and its injected script matches options by node
- * identity, which Neo cannot pass to its injected script yet. Such a value is refused here,
- * before anything is sent; Rust refuses `elements` on the wire too (`dispatch.rs`). */
+/** Playwright's `client/elementHandle.ts` value conversion: ElementHandle values travel as
+ * `elements`, which neo-runtime adopts into the select's world and Playwright's injected script
+ * matches by node identity (`dispatch.rs`, `forms.rs`); any other value as option objects. */
 import type { FrameSelectOptionParams } from '@browseros/neo-runtime-spec/serve'
 import { isString } from '../vendor/playwright/isomorphic/stringUtils'
-import { JSHandle } from './js-handle'
-
-/** Deviation: `client/elementHandle.ts` `convertSelectOptionValues`: `return { elements: (values as ElementHandle[]).map((v: ElementHandle) => v._elementChannel) };` Playwright selects the very option nodes ElementHandle values name; Neo refuses an ElementHandle (or any JSHandle) value before anything is sent, where it would otherwise travel as an option object matching the first option. */
-export const ELEMENT_VALUES_UNSUPPORTED =
-  'Neo does not support ElementHandle values in selectOption yet'
+import { ElementHandle } from './element-handle'
 
 export type SelectOption = NonNullable<
   FrameSelectOptionParams['options']
 >[number]
+/** Playwright's `selectOption` values: strings, option objects or ElementHandles, alone or in
+ * an array. */
 export type SelectOptionValues =
   | string
+  | ElementHandle
   | SelectOption
   | string[]
+  | ElementHandle[]
   | SelectOption[]
   | null
 
@@ -28,7 +27,7 @@ export type SelectOptionValues =
  */
 export function convertSelectOptionValues(
   values: SelectOptionValues,
-): Pick<FrameSelectOptionParams, 'options'> {
+): Pick<FrameSelectOptionParams, 'options' | 'elements'> {
   if (values === null) return {}
   const list = snapshot(values)
   if (!list.length) return {}
@@ -36,15 +35,34 @@ export function convertSelectOptionValues(
     if (list[i] === null)
       throw new Error(`options[${i}]: expected object, got null`)
   }
-  for (let i = 0; i < list.length; i++) {
-    if (list[i] instanceof JSHandle) throw new Error(ELEMENT_VALUES_UNSUPPORTED)
-  }
+  if (list[0] instanceof ElementHandle) return { elements: elementsOf(list) }
   const strings = isString(list[0])
   const options: SelectOption[] = []
   for (let i = 0; i < list.length; i++) {
     options[i] = copyOption(strings ? { valueOrLabel: list[i] } : list[i], i)
   }
   return { options }
+}
+
+/** Playwright: `client/elementHandle.ts` `convertSelectOptionValues`: `return { elements: (values as ElementHandle[]).map((v: ElementHandle) => v._elementChannel) };`
+ *
+ * Each value's channel, read once: a value that is no ElementHandle has none, and Playwright's
+ * client fails with a TypeError before sending. A disposed handle still names its guid, which
+ * neo-runtime then refuses, as Playwright's dispatcher does. */
+function elementsOf(list: unknown[]): FrameSelectOptionParams['elements'] {
+  const elements: { guid: string }[] = []
+  for (let i = 0; i < list.length; i++) {
+    const value = list[i]
+    // Playwright's client reads `v._elementChannel` of each value and its serializer then reads
+    // that channel's `_object`, which throws a TypeError for a value that has none.
+    if (!(value instanceof ElementHandle))
+      throw new TypeError(
+        `elements[${i}]: expected channel ElementHandle, got ${typeof value}`,
+      )
+    elements[i] = { guid: value._guid }
+  }
+  // The generated `ElementHandleChannel` has no values in neo-runtime-spec; the wire is the guid.
+  return elements as unknown as FrameSelectOptionParams['elements']
 }
 
 /** Neo: the caller's value as an array the SDK owns, each element read once by index. */
