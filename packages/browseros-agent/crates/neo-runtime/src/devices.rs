@@ -86,6 +86,10 @@ impl DeviceCall {
     /// # Errors
     ///
     /// `Ok(Err(_))`: the refusal; `Err(call)`: not a device call.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the Err hands the generated PageCall back unchanged, once per Page call; its largest params are the screenshot's and the PDF's"
+    )]
     pub(crate) fn from_page_call(
         call: PageCall,
     ) -> Result<Result<Self, PlaywrightError>, PageCall> {
@@ -363,6 +367,10 @@ mod tests {
         tab.devices.lock().expect("devices").clone()
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "returns `DeviceCall::from_page_call`'s answer as it is"
+    )]
     fn decode(
         method: &str,
         params: serde_json::Value,

@@ -9,7 +9,8 @@ generators with the selector and CSS parsers they import, at their paths under P
 `packages/`, plus its LICENSE and NOTICE. `src/locator.ts` and `src/frame.ts` build every
 locator's selector with them, which is what keeps Neo's selectors byte-identical to Playwright's
 (`tests/goldens/selector-goldens.json`); `Locator.toString` and `Locator.description` read a
-selector back with the generators, as Playwright's client does.
+selector back with the generators, as Playwright's client does. `isomorphic/mimeType.ts` gives
+`src/screenshot.ts` the image type a screenshot `path` names, as Playwright's client reads it.
 
 `protocol/src/serializers.ts` and `isomorphic/utilityScriptSerializers.ts` are Playwright's
 client/server and page value serializers, which `src/js-handle.ts` chains for every evaluation's
@@ -21,6 +22,7 @@ argument and result; `protocol/src/structs.d.ts` holds the types the first impor
 | `isomorphic/cssTokenizer.ts` | `beffbe943b63c10af3cfa325e163e7593f91f0824e18a5f7f77062b119e386bc` |
 | `isomorphic/locatorGenerators.ts` | `0d1e1d20c4ce2154cb1980574b4b53c0059c7936c6157d2c6165c2fbcef86306` |
 | `isomorphic/locatorUtils.ts` | `95355975e13ca8185df9b9ad97ed2b982981ca50d455b7ed974bcf08fba2f506` |
+| `isomorphic/mimeType.ts` | `466f8df3b7914048858443fbadd21a2289dc460d8292e7495808dc6a04cc2b21` |
 | `isomorphic/selectorParser.ts` | `f8f7f8b97d0c4d40c54cf2101f273490171a05a569d292196e56e02d11a0acc1` |
 | `isomorphic/stringUtils.ts` | `4ef81deedff640b6b12d55ae496252fb8b5825fc0925738096bd164c787e75f9` |
 | `isomorphic/utilityScriptSerializers.ts` | `d62c7199f28aed43b1fdde4a8b315ca799c81102c7e59b9e6d2ae6899e28e2ff` |

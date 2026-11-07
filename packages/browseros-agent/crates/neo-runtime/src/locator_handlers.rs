@@ -26,7 +26,7 @@ use tokio::sync::watch;
 use crate::click::{SelectorFacts, Tab};
 use crate::evaluate::CreatedHandle;
 use crate::frames::FrameScope;
-use crate::page::FrameTab;
+use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::states::{self, StateOptions};
 use crate::waits::{self, WaitForSelectorOptions};
@@ -51,6 +51,9 @@ struct Handler {
     selector: String,
     no_wait_after: bool,
     resolved: Option<watch::Sender<bool>>,
+    /// A `resolveLocatorHandlerNoReply` call holds the handler's completion, admitted outside
+    /// the dispatcher's in-flight cap ([`begin_resolving`]).
+    claimed: bool,
 }
 
 impl LocatorHandlers {
@@ -67,6 +70,7 @@ impl LocatorHandlers {
                     selector,
                     no_wait_after,
                     resolved: None,
+                    claimed: false,
                 },
             );
             uid
@@ -104,6 +108,28 @@ impl LocatorHandlers {
         })
     }
 
+    /// Neo: claims running handler `uid`'s completion ([`begin_resolving`]): `false` unless the
+    /// realm was told to run it, has not resolved it yet, and no other call holds the claim.
+    fn claim(&self, uid: i64) -> bool {
+        self.update(|registry| {
+            registry.handlers.get_mut(&uid).is_some_and(|handler| {
+                let claim = handler.resolved.is_some() && !handler.claimed;
+                handler.claimed |= claim;
+                claim
+            })
+        })
+        .unwrap_or(false)
+    }
+
+    /// Neo: gives handler `uid`'s completion claim back.
+    fn unclaim(&self, uid: i64) {
+        let _unclaimed = self.update(|registry| {
+            if let Some(handler) = registry.handlers.get_mut(&uid) {
+                handler.claimed = false;
+            }
+        });
+    }
+
     fn update<R>(&self, change: impl FnOnce(&mut Registry) -> R) -> Result<R, CallError> {
         let mut registry = self.registry.lock().map_err(|_| {
             CallError::from(PlaywrightError::error(
@@ -111,6 +137,32 @@ impl LocatorHandlers {
             ))
         })?;
         Ok(change(&mut registry))
+    }
+}
+
+/// Neo: a `resolveLocatorHandlerNoReply` call's claim on the running handler it completes, held
+/// until the call replies or its task ends ([`begin_resolving`]).
+pub(crate) struct Resolving {
+    page: Arc<PageSession>,
+    uid: i64,
+}
+
+/// Neo: claims the completion of `page`'s handler `uid`, for the dispatcher to admit outside its
+/// in-flight cap, as it admits a wait's release (`Cursors::begin_ending`): completing a handler
+/// frees the action waiting on it and adds no work. `None` unless the handler is running (the
+/// realm was told to run it and has not resolved it) and no other call holds the claim, so such
+/// calls never outnumber the handlers running.
+pub(crate) fn begin_resolving(page: &Arc<PageSession>, uid: i64) -> Option<Resolving> {
+    page.locator_handlers.claim(uid).then(|| Resolving {
+        page: Arc::clone(page),
+        uid,
+    })
+}
+
+/// Neo: gives the claim back.
+impl Drop for Resolving {
+    fn drop(&mut self) {
+        self.page.locator_handlers.unclaim(self.uid);
     }
 }
 
@@ -301,5 +353,32 @@ mod tests {
                 .update(|registry| registry.handlers.is_empty())
                 .expect("read")
         );
+    }
+
+    #[test]
+    fn tests_that_only_a_running_handler_lends_its_completion_one_claim() {
+        let handlers = LocatorHandlers::default();
+        let uid = handlers.register("#a".to_string(), true).expect("register");
+        assert!(
+            !handlers.claim(uid),
+            "a handler not running has nothing to complete"
+        );
+        let (sender, _receiver) = watch::channel(false);
+        handlers
+            .update(|registry| {
+                registry.handlers.get_mut(&uid).expect("uid").resolved = Some(sender);
+            })
+            .expect("set");
+        assert!(
+            handlers.claim(uid),
+            "a running handler's completion is claimed"
+        );
+        assert!(!handlers.claim(uid), "one claim at a time");
+        handlers.unclaim(uid);
+        assert!(handlers.claim(uid), "a claim given back can be taken again");
+        handlers.resolve(uid, false).expect("resolve");
+        handlers.unclaim(uid);
+        assert!(!handlers.claim(uid), "a resolved handler is not running");
+        assert!(!handlers.claim(uid + 1), "an unknown handler");
     }
 }

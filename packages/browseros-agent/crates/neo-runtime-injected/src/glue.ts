@@ -42,9 +42,17 @@ type NamedElement = Element & { _ariaRef?: { ref: string } }
  */
 const namedOwners = new Map<string, WeakRef<Element>>()
 
+/**
+ * What `prepareForScreenshot` leaves in a document, as the one function that undoes it.
+ * Playwright stores that function as `window.__pwCleanupScreenshot` in the utility world;
+ * Neo hands it to Rust as a handle instead (NEO_STYLE "Page objects").
+ */
+type ScreenshotCleanup = { restore: () => void }
+
 /** The Playwright page types behind the spec's named handle kinds. */
 type Handles = {
   HitTargetInterceptor: HitTargetInterceptionResult
+  ScreenshotCleanup: ScreenshotCleanup
   ElementList: Record<string, Element>
 }
 
@@ -585,6 +593,187 @@ export const glue = {
   queryCount: (injected, { selector }) => ({
     value: query(injected, selector, false).length,
   }),
+
+  /**
+   * Playwright's page function for screenshots, for one document. Chromium never syncs
+   * animations by toggling a style sheet, so the WebKit-only first step is not here.
+   * Playwright: `server/screenshotter.ts` `inPagePrepareForScreenshots`: `if (!screenshotStyle && !hideCaret && !disableAnimations)`
+   * Playwright: `server/chromium/crPage.ts` `CRPage.shouldToggleStyleSheetToSyncAnimations`: `return false;`
+   */
+  prepareForScreenshot: (
+    _injected,
+    { style, hideCaret, disableAnimations },
+  ) => {
+    if (!style && !hideCaret && !disableAnimations) return {}
+
+    const collectRoots = (
+      root: Document | ShadowRoot,
+      roots: (Document | ShadowRoot)[] = [],
+    ): (Document | ShadowRoot)[] => {
+      roots.push(root)
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT)
+      do {
+        const node = walker.currentNode
+        const shadowRoot = node instanceof Element ? node.shadowRoot : null
+        if (shadowRoot) collectRoots(shadowRoot, roots)
+      } while (walker.nextNode())
+      return roots
+    }
+
+    const roots = collectRoots(document)
+    const cleanupCallbacks: (() => void)[] = []
+
+    if (style) {
+      for (const root of roots) {
+        const styleTag = document.createElement('style')
+        styleTag.textContent = style
+        if (root === document) document.documentElement.append(styleTag)
+        else root.append(styleTag)
+        cleanupCallbacks.push(() => {
+          styleTag.remove()
+        })
+      }
+    }
+
+    if (hideCaret) {
+      const elements = new Map<
+        HTMLElement,
+        { value: string; priority: string }
+      >()
+      for (const root of roots) {
+        root
+          .querySelectorAll('input,textarea,[contenteditable]')
+          .forEach((element) => {
+            elements.set(element as HTMLElement, {
+              value: (element as HTMLElement).style.getPropertyValue(
+                'caret-color',
+              ),
+              priority: (element as HTMLElement).style.getPropertyPriority(
+                'caret-color',
+              ),
+            })
+            ;(element as HTMLElement).style.setProperty(
+              'caret-color',
+              'transparent',
+              'important',
+            )
+          })
+      }
+      cleanupCallbacks.push(() => {
+        for (const [element, value] of elements)
+          element.style.setProperty('caret-color', value.value, value.priority)
+      })
+    }
+
+    if (disableAnimations) {
+      const infiniteAnimationsToResume: Set<Animation> = new Set()
+      const handleAnimations = (root: Document | ShadowRoot): void => {
+        for (const animation of root.getAnimations()) {
+          if (
+            !animation.effect ||
+            animation.playbackRate === 0 ||
+            infiniteAnimationsToResume.has(animation)
+          )
+            continue
+          const endTime = animation.effect.getComputedTiming().endTime
+          if (Number.isFinite(endTime)) {
+            try {
+              animation.finish()
+            } catch {
+              // Playwright's own guard: finish() should not throw for a finite animation.
+            }
+          } else {
+            try {
+              animation.cancel()
+              infiniteAnimationsToResume.add(animation)
+            } catch {
+              // Playwright's own guard: cancel() should not throw for an infinite animation.
+            }
+          }
+        }
+      }
+      for (const root of roots) {
+        const handleRootAnimations: () => void = handleAnimations.bind(
+          null,
+          root,
+        )
+        handleRootAnimations()
+        root.addEventListener('transitionrun', handleRootAnimations)
+        root.addEventListener('animationstart', handleRootAnimations)
+        cleanupCallbacks.push(() => {
+          root.removeEventListener('transitionrun', handleRootAnimations)
+          root.removeEventListener('animationstart', handleRootAnimations)
+        })
+      }
+      cleanupCallbacks.push(() => {
+        for (const animation of infiniteAnimationsToResume) {
+          try {
+            animation.play()
+          } catch {
+            // Playwright's own guard: play() should never throw.
+          }
+        }
+      })
+    }
+
+    return {
+      cleanup: {
+        restore: () => {
+          for (const cleanupCallback of cleanupCallbacks) cleanupCallback()
+        },
+      },
+    }
+  },
+
+  // Playwright: `server/screenshotter.ts` `Screenshotter._restorePageAfterScreenshot`: `window.__pwCleanupScreenshot && window.__pwCleanupScreenshot()`
+  restoreAfterScreenshot: (_injected, _params, cleanup) => {
+    cleanup.restore()
+    return {}
+  },
+
+  // Playwright: `server/screenshotter.ts` `Screenshotter._preparePageForScreenshot`: `frame.nonStallingEvaluateInExistingContext('document.fonts.ready', 'utility')`
+  fontsReady: async () => {
+    await document.fonts.ready
+    return {}
+  },
+
+  // Playwright: `server/screenshotter.ts` `Screenshotter._fullPageSize`: `if (!document.body || !document.documentElement)`
+  fullPageSize: () => {
+    if (!document.body || !document.documentElement) return {}
+    return {
+      size: {
+        width: Math.max(
+          document.body.scrollWidth,
+          document.documentElement.scrollWidth,
+          document.body.offsetWidth,
+          document.documentElement.offsetWidth,
+          document.body.clientWidth,
+          document.documentElement.clientWidth,
+        ),
+        height: Math.max(
+          document.body.scrollHeight,
+          document.documentElement.scrollHeight,
+          document.body.offsetHeight,
+          document.documentElement.offsetHeight,
+          document.body.clientHeight,
+          document.documentElement.clientHeight,
+        ),
+      },
+    }
+  },
+
+  // Playwright: `server/screenshotter.ts` `Screenshotter.screenshotElement`: `({ x: window.scrollX, y: window.scrollY })`
+  scrollOffset: () => ({ x: window.scrollX, y: window.scrollY }),
+
+  /**
+   * One mask entry, as `callOnSelector` runs its callback: only when something matched.
+   * Playwright: `server/screenshotter.ts` `Screenshotter._maskElements`: `injected.addMaskedElements(elements, color);`
+   */
+  maskElements: (injected, { selector, color }) => {
+    const elements = query(injected, selector, false)
+    if (elements.length) injected.addMaskedElements(elements, color)
+    return {}
+  },
 } satisfies InjectedApi<InjectedScript, Handles>
 
 // Playwright's AriaNodeJSON reaches Rust unchanged, but TypeScript lets a structurally wider

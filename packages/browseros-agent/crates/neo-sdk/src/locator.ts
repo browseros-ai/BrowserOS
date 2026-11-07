@@ -43,6 +43,7 @@ import {
   escapeForTextSelector,
   isString,
 } from '../vendor/playwright/isomorphic/stringUtils'
+import type { Buffer } from './buffer'
 import { DisposableStub } from './disposable'
 import type { ElementHandle } from './element-handle'
 import type {
@@ -85,6 +86,11 @@ import type {
   PageFunctionOn,
 } from './js-handle'
 import type { Page } from './page'
+import {
+  locatorScreenshotParams,
+  resultBuffer,
+  type ScreenshotOptions,
+} from './screenshot'
 import type { SelectOptionValues } from './select-option'
 import type { SignalLike, TimeoutInput } from './timeout-settings'
 
@@ -471,6 +477,22 @@ export class Locator {
       values,
       { strict: true, ...options },
     )
+  }
+
+  /**
+   * Playwright's `Locator.screenshot`: the one element this locator strictly matches, once
+   * attached, scrolled into view, visible and stable, as image bytes. One `neo:screenshot` call
+   * (`screenshot.ts`, `neo-commands.ts`).
+   */
+  async screenshot(options: ScreenshotOptions = {}): Promise<Buffer> {
+    const result = await this._frame._connection.sendNeo(
+      'locator.screenshot',
+      this._frame._guid,
+      'neo:screenshot',
+      locatorScreenshotParams('locator.screenshot', this._selector, options),
+      this._frame._page._timeoutSettings.timeout(options, 'locator.screenshot'),
+    )
+    return resultBuffer(result.binary)
   }
 
   /**
