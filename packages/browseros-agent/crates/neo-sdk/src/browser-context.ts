@@ -239,9 +239,8 @@ export class BrowserContext extends ChannelOwner {
     return await wrapApiCall('browserContext.waitForEvent', async () => {
       const options =
         typeof optionsOrPredicate === 'function' ? {} : optionsOrPredicate
-      // Refuses a signal first (TimeoutSettings), inside `wrapApiCall`, which prefixes the
-      // api name.
-      const timeout = this._timeoutSettings.timeout(options, null)
+      // Inside `wrapApiCall`, which prefixes the api name.
+      const timeoutOptions = this._timeoutSettings.timeout(options, null)
       this._refuseUnserved(event)
       const predicate =
         typeof optionsOrPredicate === 'function'
@@ -249,8 +248,8 @@ export class BrowserContext extends ChannelOwner {
           : optionsOrPredicate.predicate
       const waiter = Waiter.createForEvent()
       waiter.rejectOnTimeout(
-        timeout,
-        `Timeout ${timeout}ms exceeded while waiting for event "${event}"`,
+        timeoutOptions,
+        `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`,
       )
       if (event !== 'close')
         waiter.rejectOnEvent(this, 'close', () =>

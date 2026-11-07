@@ -11,12 +11,17 @@
 import type {
   BrowserContextCloseParams,
   FrameAriaSnapshotParams,
+  FrameBlurParams,
   FrameCheckParams,
   FrameClickParams,
   FrameDblclickParams,
+  FrameDispatchEventParams,
   FrameFillParams,
+  FrameFocusParams,
   FrameGetAttributeParams,
   FrameGotoParams,
+  FrameHideHighlightParams,
+  FrameHighlightParams,
   FrameHoverParams,
   FrameInnerHTMLParams,
   FrameInnerTextParams,
@@ -32,16 +37,28 @@ import type {
   FrameSelectOptionParams,
   FrameTapParams,
   FrameTextContentParams,
+  FrameTypeParams,
   FrameUncheckParams,
   FrameWaitForSelectorParams,
   PageCloseParams,
   PageConsoleMessagesParams,
   PageGoBackParams,
   PageGoForwardParams,
+  PageKeyboardDownParams,
+  PageKeyboardInsertTextParams,
+  PageKeyboardPressParams,
+  PageKeyboardTypeParams,
+  PageKeyboardUpParams,
+  PageMouseClickParams,
+  PageMouseDownParams,
+  PageMouseMoveParams,
+  PageMouseUpParams,
+  PageMouseWheelParams,
   PagePageErrorsParams,
   PageRegisterLocatorHandlerParams,
   PageReloadParams,
   PageResolveLocatorHandlerNoReplyParams,
+  PageTouchscreenTapParams,
   PageUnregisterLocatorHandlerParams,
 } from '@browseros/neo-runtime-spec/serve'
 
@@ -120,6 +137,45 @@ export const FRAME_TAP_KEYS = [
   'trial',
 ] as const
 
+/** `Page.keyboardDown` in Playwright schema order (`spec/playwright/page.yml`). */
+export const PAGE_KEYBOARD_DOWN_KEYS = ['key'] as const
+
+/** `Page.keyboardUp` in Playwright schema order. */
+export const PAGE_KEYBOARD_UP_KEYS = ['key'] as const
+
+/** `Page.keyboardInsertText` in Playwright schema order. */
+export const PAGE_KEYBOARD_INSERT_TEXT_KEYS = ['text'] as const
+
+/** `Page.keyboardType` in Playwright schema order. */
+export const PAGE_KEYBOARD_TYPE_KEYS = ['text', 'delay'] as const
+
+/** `Page.keyboardPress` in Playwright schema order. */
+export const PAGE_KEYBOARD_PRESS_KEYS = ['key', 'delay'] as const
+
+/** `Page.mouseMove` in Playwright schema order. */
+export const PAGE_MOUSE_MOVE_KEYS = ['x', 'y', 'steps'] as const
+
+/** `Page.mouseDown` in Playwright schema order. */
+export const PAGE_MOUSE_DOWN_KEYS = ['button', 'clickCount'] as const
+
+/** `Page.mouseUp` in Playwright schema order. */
+export const PAGE_MOUSE_UP_KEYS = ['button', 'clickCount'] as const
+
+/** `Page.mouseClick` in Playwright schema order: no `steps`. */
+export const PAGE_MOUSE_CLICK_KEYS = [
+  'x',
+  'y',
+  'delay',
+  'button',
+  'clickCount',
+] as const
+
+/** `Page.mouseWheel` in Playwright schema order. */
+export const PAGE_MOUSE_WHEEL_KEYS = ['deltaX', 'deltaY'] as const
+
+/** `Page.touchscreenTap` in Playwright schema order. */
+export const PAGE_TOUCHSCREEN_TAP_KEYS = ['x', 'y'] as const
+
 /** `Frame.fill` in Playwright schema order. */
 export const FRAME_FILL_KEYS = ['selector', 'strict', 'value', 'force'] as const
 
@@ -131,6 +187,9 @@ export const FRAME_PRESS_KEYS = [
   'delay',
   'noWaitAfter',
 ] as const
+
+/** `Frame.type` in Playwright schema order. */
+export const FRAME_TYPE_KEYS = ['selector', 'strict', 'text', 'delay'] as const
 
 /** `Frame.inputValue` in Playwright schema order. */
 export const FRAME_INPUT_VALUE_KEYS = ['selector', 'strict'] as const
@@ -208,6 +267,72 @@ type _FrameClickKeysMatchSpec = Assert<
     Required<FrameClickParams>
   >
 >
+type _PageKeyboardDownKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_KEYBOARD_DOWN_KEYS)[number], true>,
+    Required<PageKeyboardDownParams>
+  >
+>
+type _PageKeyboardUpKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_KEYBOARD_UP_KEYS)[number], true>,
+    Required<PageKeyboardUpParams>
+  >
+>
+type _PageKeyboardInsertTextKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_KEYBOARD_INSERT_TEXT_KEYS)[number], true>,
+    Required<PageKeyboardInsertTextParams>
+  >
+>
+type _PageKeyboardTypeKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_KEYBOARD_TYPE_KEYS)[number], true>,
+    Required<PageKeyboardTypeParams>
+  >
+>
+type _PageKeyboardPressKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_KEYBOARD_PRESS_KEYS)[number], true>,
+    Required<PageKeyboardPressParams>
+  >
+>
+type _PageMouseMoveKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_MOUSE_MOVE_KEYS)[number], true>,
+    Required<PageMouseMoveParams>
+  >
+>
+type _PageMouseDownKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_MOUSE_DOWN_KEYS)[number], true>,
+    Required<PageMouseDownParams>
+  >
+>
+type _PageMouseUpKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_MOUSE_UP_KEYS)[number], true>,
+    Required<PageMouseUpParams>
+  >
+>
+type _PageMouseClickKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_MOUSE_CLICK_KEYS)[number], true>,
+    Required<PageMouseClickParams>
+  >
+>
+type _PageMouseWheelKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_MOUSE_WHEEL_KEYS)[number], true>,
+    Required<PageMouseWheelParams>
+  >
+>
+type _PageTouchscreenTapKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_TOUCHSCREEN_TAP_KEYS)[number], true>,
+    Required<PageTouchscreenTapParams>
+  >
+>
 type _FrameDblclickKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_DBLCLICK_KEYS)[number], true>,
@@ -274,6 +399,12 @@ type _FramePressKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_PRESS_KEYS)[number], true>,
     Required<FramePressParams>
+  >
+>
+type _FrameTypeKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_TYPE_KEYS)[number], true>,
+    Required<FrameTypeParams>
   >
 >
 type _FrameInputValueKeysMatchSpec = Assert<
@@ -346,6 +477,57 @@ type _FrameWaitForSelectorKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_WAIT_FOR_SELECTOR_KEYS)[number], true>,
     Required<FrameWaitForSelectorParams>
+  >
+>
+
+/** `Frame.focus` in Playwright schema order. */
+export const FRAME_FOCUS_KEYS = ['selector', 'strict'] as const
+
+/** `Frame.blur` in Playwright schema order. */
+export const FRAME_BLUR_KEYS = ['selector', 'strict'] as const
+
+/** `Frame.dispatchEvent` in Playwright schema order. */
+export const FRAME_DISPATCH_EVENT_KEYS = [
+  'selector',
+  'strict',
+  'type',
+  'eventInit',
+] as const
+
+/** `Frame.highlight` in Playwright schema order. */
+export const FRAME_HIGHLIGHT_KEYS = ['selector', 'style'] as const
+
+/** `Frame.hideHighlight` in Playwright schema order. */
+export const FRAME_HIDE_HIGHLIGHT_KEYS = ['selector'] as const
+
+type _FrameFocusKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_FOCUS_KEYS)[number], true>,
+    Required<FrameFocusParams>
+  >
+>
+type _FrameBlurKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_BLUR_KEYS)[number], true>,
+    Required<FrameBlurParams>
+  >
+>
+type _FrameDispatchEventKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_DISPATCH_EVENT_KEYS)[number], true>,
+    Required<FrameDispatchEventParams>
+  >
+>
+type _FrameHighlightKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_HIGHLIGHT_KEYS)[number], true>,
+    Required<FrameHighlightParams>
+  >
+>
+type _FrameHideHighlightKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_HIDE_HIGHLIGHT_KEYS)[number], true>,
+    Required<FrameHideHighlightParams>
   >
 >
 

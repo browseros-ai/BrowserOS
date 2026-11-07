@@ -1,0 +1,51 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Element focus</title>
+<!-- Tests select by id or class only: BrowserOS neo's takeover bar adds shadow-root buttons to
+     every page, and Playwright's CSS pierces open shadow roots. -->
+<button id="later" type="button">Add later</button>
+<main id="content">
+<input id="text" aria-label="Text">
+<button class="dup" id="dup-one" type="button">Twin</button>
+<button class="dup" id="dup-two" type="button">Twin</button>
+<script>
+// The focusable divs of Playwright's FO-001..FO-003 and FO-010 (tests/page/page-focus.spec.ts at
+// 26137face), built here so the markup stays lint-clean.
+for (const [id, text, tabIndex] of [['d1', 'DIV1', 0], ['d2', 'DIV2', 0], ['non-focusable', 'not focusable', null]]) {
+  const div = document.createElement('div')
+  div.id = id
+  div.textContent = text
+  if (tabIndex !== null) div.tabIndex = tabIndex
+  document.currentScript.before(div)
+}
+</script>
+</main>
+<script>
+// BrowserOS neo's takeover bar is not the page's (frame-top.html): removed on sight.
+new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.remove()).observe(
+  document.documentElement,
+  { childList: true, subtree: true },
+)
+// Every focus change the page sees, in order, without timing.
+window.__events = []
+for (const type of ['focus', 'blur', 'focusin', 'focusout']) {
+  document.addEventListener(type, (event) => {
+    window.__events.push({
+      type,
+      target: event.target.id || event.target.nodeName?.toLowerCase() || 'window',
+      isTrusted: event.isTrusted,
+    })
+  }, true)
+}
+// The click starts the timer, never page load: Neo's half starts seconds after its page loads.
+document.querySelector('#later').addEventListener('click', () => setTimeout(() => {
+  const late = document.createElement('input')
+  late.id = 'late'
+  late.setAttribute('aria-label', 'Late')
+  document.body.append(late)
+}, 500))
+window.__facts = () => ({
+  active: document.activeElement?.id || document.activeElement?.nodeName.toLowerCase() || null,
+  events: window.__events,
+})
+</script>
