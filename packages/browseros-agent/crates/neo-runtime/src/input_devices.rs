@@ -38,6 +38,7 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 use crate::click::{MouseButton, MouseClick, PageError, PressReport};
+use crate::keyboard::TextTail;
 use crate::progress::InputTicket;
 use crate::world;
 
@@ -58,7 +59,8 @@ pub(crate) struct InputDevices {
 pub(crate) struct KeyboardState {
     /// `_pressedModifiers`, as CDP's modifiers mask (`keyboard.rs` `ALT` … `SHIFT`).
     pub(crate) modifiers: u8,
-    /// `_pressedKeys`: every held key's code, oldest first, with the run that pressed it.
+    /// `_pressedKeys`: every held key's code, oldest first, once for each run that holds it,
+    /// so a run's end releases a key only when no other live run holds it too.
     pub(crate) pressed: Vec<(&'static str, Owner)>,
 }
 
@@ -69,7 +71,7 @@ pub(crate) struct MouseState {
     pub(crate) y: f64,
     /// `_lastButton`; `None` is Playwright's `'none'`.
     pub(crate) last_button: Option<MouseButton>,
-    /// `_buttons`, oldest first, each with the run that pressed it.
+    /// `_buttons`, oldest first, once for each run that holds the button.
     pub(crate) buttons: Vec<(MouseButton, Owner)>,
 }
 
@@ -83,9 +85,21 @@ pub(crate) enum Effect {
         modifier: u8,
         owner: Owner,
     },
+    /// The key went up: no run holds it any more.
     KeyUp {
         code: &'static str,
         modifier: u8,
+    },
+    /// One more run holds an already held key (a modifier's restore for every run that held
+    /// it). Writes nothing.
+    KeyHolder {
+        code: &'static str,
+        owner: Owner,
+    },
+    /// A run's end lets go of a key another live run still holds. Writes nothing.
+    KeyLetGo {
+        code: &'static str,
+        owner: Owner,
     },
     Moved {
         x: f64,
@@ -98,6 +112,11 @@ pub(crate) enum Effect {
     ButtonUp {
         button: MouseButton,
     },
+    /// A run's end lets go of a button another live run still holds. Writes nothing.
+    ButtonLetGo {
+        button: MouseButton,
+        owner: Owner,
+    },
 }
 
 /// Neo: the effect of each written command on the tab's state, which no script reads directly.
@@ -105,7 +124,8 @@ impl InputDevices {
     /// Applies a command's effect. A press counts from its write, answered or not, since it may
     /// have reached the browser; a release and a move count only once answered, so a key whose
     /// release failed stays held and the run's end releases it again. Pressing a held key again
-    /// keeps its first owner, as Playwright's `_pressedKeys` set keeps it once.
+    /// adds its run as one more holder: the key is down once (Playwright's `_pressedKeys` is a
+    /// set), and a release lets every holder go.
     pub(crate) fn apply(&mut self, effect: &Effect, answered: bool) {
         match effect {
             Effect::None => {}
@@ -115,15 +135,19 @@ impl InputDevices {
                 owner,
             } => {
                 self.keyboard.modifiers |= modifier;
-                if !self.keyboard.pressed.iter().any(|(held, _)| held == code) {
-                    self.keyboard.pressed.push((code, owner.clone()));
-                }
+                self.hold_key(code, owner);
             }
             Effect::KeyUp { code, modifier } => {
                 if answered {
                     self.keyboard.modifiers &= !modifier;
                     self.keyboard.pressed.retain(|(held, _)| held != code);
                 }
+            }
+            Effect::KeyHolder { code, owner } => self.hold_key(code, owner),
+            Effect::KeyLetGo { code, owner } => {
+                self.keyboard
+                    .pressed
+                    .retain(|(held, holder)| (held, holder) != (code, owner));
             }
             Effect::Moved { x, y } => {
                 if answered {
@@ -133,7 +157,12 @@ impl InputDevices {
             }
             Effect::ButtonDown { button, owner } => {
                 self.mouse.last_button = Some(*button);
-                if !self.mouse.buttons.iter().any(|(held, _)| held == button) {
+                if !self
+                    .mouse
+                    .buttons
+                    .iter()
+                    .any(|(held, holder)| (held, holder) == (button, owner))
+                {
                     self.mouse.buttons.push((*button, owner.clone()));
                 }
             }
@@ -143,16 +172,32 @@ impl InputDevices {
                     self.mouse.buttons.retain(|(held, _)| held != button);
                 }
             }
+            Effect::ButtonLetGo { button, owner } => {
+                self.mouse
+                    .buttons
+                    .retain(|(held, holder)| (held, holder) != (button, owner));
+            }
         }
     }
 
-    /// `toButtonsMask` of the held buttons.
-    fn buttons_mask(&self) -> i64 {
+    /// `code` held by `owner` too, once.
+    fn hold_key(&mut self, code: &'static str, owner: &Owner) {
+        if !self
+            .keyboard
+            .pressed
+            .iter()
+            .any(|(held, holder)| *held == code && holder == owner)
+        {
+            self.keyboard.pressed.push((code, owner.clone()));
+        }
+    }
+
+    /// `toButtonsMask` of the held buttons, each once whatever runs hold it.
+    pub(crate) fn buttons_mask(&self) -> i64 {
         self.mouse
             .buttons
             .iter()
-            .map(|(button, _)| button_mask(*button))
-            .sum()
+            .fold(0, |mask, (button, _)| mask | button_mask(*button))
     }
 }
 
@@ -175,6 +220,9 @@ pub(crate) struct Planned {
     /// Slept before this command, unless the writer stopped (Playwright's `delay`). Only on the
     /// first command of a batch.
     pub(crate) pause: Option<Duration>,
+    /// Written even after the writer stopped: a run's end releases every key and button it can,
+    /// each independent of the others.
+    pub(crate) always: bool,
 }
 
 /// Neo: building a plan, which no script sees.
@@ -188,11 +236,12 @@ impl Planned {
             undoes: None,
             with_next: false,
             pause: None,
+            always: false,
         }
     }
 
     /// A change of state that writes nothing.
-    fn state_only(effect: Effect) -> Self {
+    pub(crate) fn state_only(effect: Effect) -> Self {
         Self {
             method: None,
             ..Self::command("", String::new(), effect)
@@ -204,6 +253,10 @@ impl Planned {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct Plan {
     pub(crate) commands: Vec<Planned>,
+    /// The text `keyboard.type` has still to type, planned a chunk at a time as the writer
+    /// reaches it (`keyboard.rs` `TextTail`), so a long text never holds a command per
+    /// character in memory.
+    pub(crate) tail: Option<TextTail>,
 }
 
 /// Neo: building a plan, which no script sees.
@@ -223,7 +276,7 @@ impl Plan {
         }
     }
 
-    /// The number of commands that write something.
+    /// The number of commands that write something, before any tail.
     pub(crate) fn writes(&self) -> usize {
         self.commands
             .iter()
@@ -461,11 +514,28 @@ pub(crate) fn plan_button_releases(plan: &mut Plan, simulated: &mut InputDevices
         .mouse
         .buttons
         .iter()
-        .filter(|(_, pressed_by)| pressed_by == owner)
+        .filter(|(_, holder)| holder == owner)
         .map(|(button, _)| *button)
         .collect();
     for button in held {
-        plan_up(plan, simulated, button, 1, None);
+        // A button another live run still holds stays down; this run only lets go of it.
+        let shared = simulated
+            .mouse
+            .buttons
+            .iter()
+            .any(|(held, holder)| *held == button && holder != owner);
+        let at = if shared {
+            plan.push(
+                simulated,
+                Planned::state_only(Effect::ButtonLetGo {
+                    button,
+                    owner: owner.clone(),
+                }),
+            )
+        } else {
+            plan_up(plan, simulated, button, 1, None)
+        };
+        plan.commands[at].always = true;
     }
 }
 
@@ -489,6 +559,10 @@ pub(crate) trait InputSender: Send + Sync + 'static {
 pub(crate) trait EffectSink: Send + Sync {
     /// Applies `effect` (`InputDevices::apply`); `answered` when the command was acknowledged.
     fn apply(&self, effect: &Effect, answered: bool);
+
+    /// The devices as the writes so far left them, for a release written after a stop, whose
+    /// planned masks assumed every earlier command went out.
+    fn devices(&self) -> InputDevices;
 }
 
 /// Neo: what a turn at a tab's input gives a call, the tab's devices to plan from and to record
@@ -514,86 +588,170 @@ pub(crate) struct Written {
 }
 
 /// Neo: the writer, which writes a plan in order, a batch at a time (a command and every next
-/// one it is written with), applying each written command's effect to `sink`. After `cut_short`
-/// (the call stopped) or a failed write, it writes only the releases it owes: those whose
-/// command may have been written. A refused write (`ConnectionEpochChanged`, raised before
-/// writing) ends everything: the socket that carried the session is gone. A `pause` is cut
-/// short too.
+/// one it is written with), applying each written command's effect to `sink`, then the plan's
+/// text tail a chunk at a time. After `cut_short` (the call stopped) or a failed write, it
+/// writes only what it owes: releases whose command may have been written, and a run end's
+/// releases, each independent of the others; each with the modifiers and buttons the tab
+/// actually holds, since the plan assumed every earlier command went out. A refused write
+/// (`ConnectionEpochChanged`, raised before writing) ends everything: the socket that carried
+/// the session is gone. A `pause` is cut short too.
 pub(crate) async fn write_plan(
     sender: &impl InputSender,
     sink: &impl EffectSink,
     plan: &Plan,
     cut_short: &CancellationToken,
 ) -> Written {
-    let commands = &plan.commands;
-    let mut written = vec![false; commands.len()];
-    let mut outcomes = Vec::with_capacity(commands.len());
-    let mut stopped = false;
-    let mut refused = false;
-    let mut index = 0;
-    while index < commands.len() && !refused {
-        let mut end = index;
-        while commands[end].with_next && end + 1 < commands.len() {
-            end += 1;
-        }
-        let mut batch = Vec::with_capacity(end + 1 - index);
-        for (at, command) in commands.iter().enumerate().take(end + 1).skip(index) {
-            // What it undoes went out before, or goes out in this very batch (a pipelined
-            // click's release, a tap's end).
-            let owed = command
-                .undoes
-                .is_some_and(|undone| written[undone] || batch.contains(&undone));
-            if command.undoes.is_some() && !owed {
-                // It releases a command that never went out.
-                continue;
-            }
-            if let Some(delay) = command.pause
-                && !stopped
-            {
-                pause(delay, cut_short).await;
-            }
+    let mut writer = Writer::default();
+    writer.write(sender, sink, &plan.commands, cut_short).await;
+    let mut planned = plan.writes();
+    let mut typed = true;
+    if let Some(tail) = &plan.tail {
+        let mut tail = tail.clone();
+        loop {
             if cut_short.is_cancelled() {
-                stopped = true;
+                writer.stopped = true;
             }
-            if stopped && !owed {
-                continue;
+            if writer.stopped || writer.refused {
+                // The rest of the text never goes out.
+                typed = tail.is_empty();
+                break;
             }
-            batch.push(at);
-        }
-        let sends = batch.iter().map(|&at| {
-            let command = &commands[at];
-            let send = command
-                .method
-                .map(|method| sender.send_input(method, command.params.clone()));
-            async move {
-                match send {
-                    Some(send) => (at, Some(send.await)),
-                    None => (at, None),
-                }
-            }
-        });
-        for (at, result) in future::join_all(sends).await {
-            let command = &commands[at];
-            let Some(result) = result else {
-                // A change of state alone, never refused or failed.
-                sink.apply(&command.effect, true);
-                continue;
+            let Some(chunk) = tail.next_chunk() else {
+                break;
             };
-            if matches!(result, Err(CdpError::ConnectionEpochChanged { .. })) {
-                refused = true;
-            } else {
-                written[at] = true;
-                sink.apply(&command.effect, result.is_ok());
-            }
-            if result.is_err() {
-                stopped = true;
-            }
-            outcomes.push(result);
+            planned += chunk.writes();
+            writer.write(sender, sink, &chunk.commands, cut_short).await;
         }
-        index = end + 1;
     }
-    let complete = !refused && outcomes.len() == plan.writes();
-    Written { outcomes, complete }
+    let complete = !writer.refused && typed && writer.outcomes.len() == planned;
+    Written {
+        outcomes: writer.outcomes,
+        complete,
+    }
+}
+
+/// Neo: one writer's progress across a plan and its tail's chunks.
+#[derive(Default)]
+struct Writer {
+    outcomes: Vec<Result<(), CdpError>>,
+    stopped: bool,
+    refused: bool,
+}
+
+/// Neo: writing a plan's commands and its tail's chunks, each chunk's `undoes` its own.
+impl Writer {
+    /// Writes `commands`, whose `undoes` indices are their own.
+    async fn write(
+        &mut self,
+        sender: &impl InputSender,
+        sink: &impl EffectSink,
+        commands: &[Planned],
+        cut_short: &CancellationToken,
+    ) {
+        let mut written = vec![false; commands.len()];
+        let mut index = 0;
+        while index < commands.len() && !self.refused {
+            let mut end = index;
+            while commands[end].with_next && end + 1 < commands.len() {
+                end += 1;
+            }
+            let mut batch: Vec<(usize, Option<String>)> = Vec::with_capacity(end + 1 - index);
+            // What the tab holds after the batch so far, for releases after a stop.
+            let mut actual = None;
+            for (at, command) in commands.iter().enumerate().take(end + 1).skip(index) {
+                // What it undoes went out before, or goes out in this very batch (a pipelined
+                // click's release, a tap's end).
+                let undone = command.undoes.is_some_and(|undone| {
+                    written[undone] || batch.iter().any(|(sent, _)| *sent == undone)
+                });
+                if command.undoes.is_some() && !undone {
+                    // It releases a command that never went out.
+                    continue;
+                }
+                let owed = command.always || undone;
+                if let Some(delay) = command.pause
+                    && !self.stopped
+                {
+                    pause(delay, cut_short).await;
+                }
+                if cut_short.is_cancelled() {
+                    self.stopped = true;
+                }
+                if self.stopped && !owed {
+                    continue;
+                }
+                let params = if self.stopped {
+                    let devices = actual.get_or_insert_with(|| sink.devices());
+                    devices.apply(&command.effect, true);
+                    actual_params(command, devices)
+                } else {
+                    None
+                };
+                batch.push((at, params));
+            }
+            let sends = batch.into_iter().map(|(at, params)| {
+                let command = &commands[at];
+                let send = command.method.map(|method| {
+                    sender.send_input(method, params.unwrap_or_else(|| command.params.clone()))
+                });
+                async move {
+                    match send {
+                        Some(send) => (at, Some(send.await)),
+                        None => (at, None),
+                    }
+                }
+            });
+            for (at, result) in future::join_all(sends).await {
+                let command = &commands[at];
+                let Some(result) = result else {
+                    // A change of state alone, never refused or failed.
+                    sink.apply(&command.effect, true);
+                    continue;
+                };
+                if matches!(result, Err(CdpError::ConnectionEpochChanged { .. })) {
+                    self.refused = true;
+                } else {
+                    written[at] = true;
+                    sink.apply(&command.effect, result.is_ok());
+                }
+                if result.is_err() {
+                    self.stopped = true;
+                }
+                self.outcomes.push(result);
+            }
+            index = end + 1;
+        }
+    }
+}
+
+/// Neo: `command`'s params with the modifiers (and, for a mouse event, the buttons) that
+/// `after`, the tab once this command is applied, holds; `None` for any other command. Only
+/// the numbers change, in place, so the params keep Playwright's field order.
+fn actual_params(command: &Planned, after: &InputDevices) -> Option<String> {
+    let modifiers = i64::from(after.keyboard.modifiers);
+    match command.method? {
+        "Input.dispatchKeyEvent" | "Input.dispatchTouchEvent" => {
+            Some(with_number(&command.params, "modifiers", modifiers))
+        }
+        "Input.dispatchMouseEvent" => {
+            let params = with_number(&command.params, "modifiers", modifiers);
+            Some(with_number(&params, "buttons", after.buttons_mask()))
+        }
+        _ => None,
+    }
+}
+
+/// Neo: `params` with the number its `name` field holds replaced by `value`; unchanged when
+/// it has no such field.
+fn with_number(params: &str, name: &str, value: i64) -> String {
+    let key = format!("\"{name}\":");
+    let Some(start) = params.find(&key).map(|at| at + key.len()) else {
+        return params.to_string();
+    };
+    let end = params[start..]
+        .find(|character: char| !(character.is_ascii_digit() || character == '-'))
+        .map_or(params.len(), |length| start + length);
+    format!("{}{value}{}", &params[..start], &params[end..])
 }
 
 /// Neo: what every writer reports. The whole plan written and every command acknowledged →
@@ -707,6 +865,144 @@ mod tests {
     use crate::progress::DeliveryCell;
     use crate::run::Delivery;
 
+    /// Known review issue: `keyboard.type` plans a long text a chunk at a time, so its plan
+    /// never holds a command per character; the writer types all of it, and a stop mid-text
+    /// writes nothing past the key it was releasing.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_long_text_is_typed_a_chunk_at_a_time() {
+        let text = "ab".repeat(500);
+        let mut plan = Plan::default();
+        keyboard::plan_type(
+            &mut plan,
+            &mut InputDevices::default(),
+            &text,
+            Platform::Linux,
+            &run("A"),
+            None,
+        );
+        assert_eq!(plan.commands.len(), 2 * 64, "the first chunk only");
+        assert!(plan.tail.is_some());
+        let turn = Turn::of(InputDevices::default(), "A");
+        let sender = Sender::answering([]);
+        let written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        assert!(written.complete);
+        assert_eq!(written.outcomes.len(), 2 * 1000);
+        let sent = sender.sent();
+        assert_eq!(sent.len(), 2000);
+        assert!(
+            sent.chunks(2).all(|pair| pair == ["keyDown", "keyUp"]),
+            "every character pressed and released in order"
+        );
+        assert_eq!(turn.devices(), InputDevices::default(), "nothing left held");
+
+        let cut_short = CancellationToken::new();
+        let sender = Sender::answering([]);
+        let turn = Turn::of(InputDevices::default(), "A");
+        let stopper = async {
+            time::sleep(ROUND_TRIP * 301).await;
+            cut_short.cancel();
+        };
+        let (written, ()) = tokio::join!(write_plan(&sender, &turn, &plan, &cut_short), stopper);
+        assert!(!written.complete, "the rest of the text never went out");
+        let sent = sender.sent();
+        assert!(
+            sent.len() < 2000 && sent.len().is_multiple_of(2),
+            "{}",
+            sent.len()
+        );
+        assert_eq!(
+            turn.devices(),
+            InputDevices::default(),
+            "the last key released"
+        );
+    }
+
+    /// Review P2: a key and a button two live runs hold stay down when one of them ends; that
+    /// run only lets go of them, and the other's end releases them.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_run_end_keeps_what_another_live_run_holds() {
+        let mut simulated = InputDevices::default();
+        let mut setup = Plan::default();
+        for holder in ["A", "B"] {
+            keyboard::plan_key_down(
+                &mut setup,
+                &mut simulated,
+                "Shift",
+                Platform::Linux,
+                &run(holder),
+            )
+            .expect("key");
+            plan_down(
+                &mut setup,
+                &mut simulated,
+                MouseButton::Left,
+                1,
+                &run(holder),
+            );
+        }
+        assert_eq!(
+            simulated.keyboard.pressed,
+            [("ShiftLeft", run("A")), ("ShiftLeft", run("B"))]
+        );
+        let turn = Turn::of(simulated.clone(), "A");
+        let mut release = Plan::default();
+        keyboard::plan_key_releases(&mut release, &mut simulated, &run("A"));
+        plan_button_releases(&mut release, &mut simulated, &run("A"));
+        assert_eq!(release.writes(), 0, "A's end writes nothing B still holds");
+        let sender = Sender::answering([]);
+        let _written = write_plan(&sender, &turn, &release, &CancellationToken::new()).await;
+        assert!(sender.sent().is_empty());
+        let held = turn.devices();
+        assert_eq!(held.keyboard.pressed, [("ShiftLeft", run("B"))]);
+        assert_eq!(
+            held.keyboard.modifiers,
+            keyboard::SHIFT,
+            "Shift still down for B"
+        );
+        assert_eq!(held.mouse.buttons, [(MouseButton::Left, run("B"))]);
+
+        let mut simulated = held;
+        let mut release = Plan::default();
+        keyboard::plan_key_releases(&mut release, &mut simulated, &run("B"));
+        plan_button_releases(&mut release, &mut simulated, &run("B"));
+        let _written = write_plan(&sender, &turn, &release, &CancellationToken::new()).await;
+        assert_eq!(
+            sender.sent(),
+            ["keyUp", "mouseReleased"],
+            "the last holder releases"
+        );
+        assert_eq!(turn.devices().keyboard, KeyboardState::default());
+        assert!(turn.devices().mouse.buttons.is_empty());
+    }
+
+    /// Known review issue: one failed run-end release must not prevent independent releases.
+    #[tokio::test(start_paused = true)]
+    async fn review_run_end_keeps_releasing_after_a_cdp_error() {
+        let mut simulated = InputDevices::default();
+        let mut setup = Plan::default();
+        for key in ["Shift", "Control"] {
+            keyboard::plan_key_down(&mut setup, &mut simulated, key, Platform::Linux, &run("A"))
+                .expect("key");
+        }
+        plan_down(&mut setup, &mut simulated, MouseButton::Left, 1, &run("A"));
+        let turn = Turn::of(simulated.clone(), "A");
+        let mut release = Plan::default();
+        keyboard::plan_key_releases(&mut release, &mut simulated, &run("A"));
+        plan_button_releases(&mut release, &mut simulated, &run("A"));
+        let sender = Sender::answering([Answer::Fail, Answer::Ok, Answer::Ok]);
+        let _written = write_plan(&sender, &turn, &release, &CancellationToken::new()).await;
+        let actual = turn.devices();
+        assert_eq!(
+            actual.keyboard.pressed,
+            [("ControlLeft", run("A"))],
+            "only the key whose release failed should remain held"
+        );
+        assert!(
+            actual.mouse.buttons.is_empty(),
+            "the mouse release is independent"
+        );
+    }
+
     const ROUND_TRIP: Duration = Duration::from_millis(1);
 
     fn run(name: &str) -> Owner {
@@ -806,6 +1102,10 @@ mod tests {
                 .lock()
                 .expect("devices")
                 .apply(effect, answered);
+        }
+
+        fn devices(&self) -> InputDevices {
+            self.devices.lock().expect("devices").clone()
         }
     }
 

@@ -287,11 +287,85 @@ pub(crate) fn plan_key_up(
     Ok(plan.push(simulated, command))
 }
 
+/// Neo: how many characters of a `keyboard.type` are planned at once. The text arrives whole
+/// (bounded by the call's request size), but its commands, a few per character, are planned a
+/// chunk at a time as the writer reaches them, so typing a long text holds a bounded number of
+/// them.
+const TYPE_CHUNK: usize = 64;
+
+/// Neo: the text a `keyboard.type` has still to type, with the devices its commands so far
+/// leave, planned [`TYPE_CHUNK`] characters at a time by the writer (`Plan::tail`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TextTail {
+    text: String,
+    platform: Platform,
+    owner: Owner,
+    delay: Option<Duration>,
+    simulated: InputDevices,
+}
+
+/// Neo: planning a long text a chunk at a time.
+impl TextTail {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    /// The next chunk's commands, or `None` once the whole text is planned.
+    pub(crate) fn next_chunk(&mut self) -> Option<Plan> {
+        if self.text.is_empty() {
+            return None;
+        }
+        let rest = self.text.split_off(chunk_end(&self.text));
+        let chunk = mem::replace(&mut self.text, rest);
+        let mut plan = Plan::default();
+        plan_characters(
+            &mut plan,
+            &mut self.simulated,
+            &chunk,
+            self.platform,
+            &self.owner,
+            self.delay,
+        );
+        Some(plan)
+    }
+}
+
+/// Neo: the byte offset that ends the text's first [`TYPE_CHUNK`] characters.
+fn chunk_end(text: &str) -> usize {
+    text.char_indices()
+        .nth(TYPE_CHUNK)
+        .map_or(text.len(), |(at, _)| at)
+}
+
+/// Playwright: `server/input.ts` `Keyboard.type`: `for (const char of text) {`
+///
+/// The first [`TYPE_CHUNK`] characters now, the rest as the plan's tail.
+pub(crate) fn plan_type(
+    plan: &mut Plan,
+    simulated: &mut InputDevices,
+    text: &str,
+    platform: Platform,
+    owner: &Owner,
+    delay: Option<Duration>,
+) {
+    let end = chunk_end(text);
+    plan_characters(plan, simulated, &text[..end], platform, owner, delay);
+    if end < text.len() {
+        plan.tail = Some(TextTail {
+            text: text[end..].to_string(),
+            platform,
+            owner: owner.clone(),
+            delay,
+            simulated: simulated.clone(),
+        });
+    }
+}
+
 /// Playwright: `server/input.ts` `Keyboard.type`: `if (usKeyboardLayout.has(char)) {`
 ///
 /// Each character a press when the US layout knows it, else an `Input.insertText` of it after
 /// `delay`.
-pub(crate) fn plan_type(
+fn plan_characters(
     plan: &mut Plan,
     simulated: &mut InputDevices,
     text: &str,
@@ -328,8 +402,8 @@ pub(crate) struct ModifierChange {
     pressed: bool,
     /// The change's index in the plan.
     at: usize,
-    /// For a released key, the run that held it, which gets it back on the restore.
-    held_by: Option<Owner>,
+    /// For a released key, every run that held it, which gets it back on the restore.
+    held_by: Vec<Owner>,
 }
 
 /// Playwright: `server/input.ts` `Keyboard.ensureModifiers`: `const restore: types.KeyboardModifier[] = Array.from(this._pressedModifiers);`
@@ -350,7 +424,7 @@ pub(crate) fn plan_ensure_modifiers(
         if need_down == is_down {
             continue;
         }
-        let held_by = holder_of(&simulated.keyboard, key);
+        let held_by = holders_of(&simulated.keyboard, key);
         let planned = if need_down {
             plan_key_down(plan, simulated, key, platform, owner)
         } else {
@@ -385,9 +459,25 @@ pub(crate) fn plan_restore_modifiers(
         let planned = if change.pressed {
             plan_key_up(plan, simulated, change.key, platform, Some(change.at))
         } else {
-            let held_by = change.held_by.as_ref().unwrap_or(owner);
-            plan_key_down(plan, simulated, change.key, platform, held_by).inspect(|&at| {
+            let (first, others) = change
+                .held_by
+                .split_first()
+                .map_or((owner, &[][..]), |(first, others)| (first, others));
+            plan_key_down(plan, simulated, change.key, platform, first).inspect(|&at| {
                 plan.commands[at].undoes = Some(change.at);
+                // Every other run that held the key holds it again, as written as the keyDown.
+                if let Effect::KeyDown { code, .. } = plan.commands[at].effect {
+                    for holder in others {
+                        let held = plan.push(
+                            simulated,
+                            Planned::state_only(Effect::KeyHolder {
+                                code,
+                                owner: holder.clone(),
+                            }),
+                        );
+                        plan.commands[held].undoes = Some(change.at);
+                    }
+                }
             })
         };
         debug_assert!(
@@ -404,12 +494,32 @@ pub(crate) fn plan_key_releases(plan: &mut Plan, simulated: &mut InputDevices, o
         .pressed
         .iter()
         .rev()
-        .filter(|(_, pressed_by)| pressed_by == owner)
+        .filter(|(_, holder)| holder == owner)
         .map(|(code, _)| *code)
         .collect();
     for code in held {
-        // A code is always in the layout; the platform only decides `ControlOrMeta`.
-        let _released = plan_key_up(plan, simulated, code, Platform::Linux, None);
+        // A key another live run still holds stays down; this run only lets go of it.
+        let shared = simulated
+            .keyboard
+            .pressed
+            .iter()
+            .any(|(held, holder)| *held == code && holder != owner);
+        let at = if shared {
+            Some(plan.push(
+                simulated,
+                Planned::state_only(Effect::KeyLetGo {
+                    code,
+                    owner: owner.clone(),
+                }),
+            ))
+        } else {
+            // A code is always in the layout; the platform only decides `ControlOrMeta`.
+            plan_key_up(plan, simulated, code, Platform::Linux, None).ok()
+        };
+        // Each release is independent: one that fails does not keep the others held.
+        if let Some(at) = at {
+            plan.commands[at].always = true;
+        }
     }
 }
 
@@ -437,15 +547,21 @@ pub(crate) fn modifiers_mask(modifiers: &[KeyboardModifier], platform: Platform)
         .fold(0, |mask, bit| mask | bit)
 }
 
-/// The run that holds the modifier `key` (`Shift`, …): the first held code the layout names
-/// that key, as Playwright's modifier set holds a key by name, whichever side pressed it.
-fn holder_of(state: &KeyboardState, key: &str) -> Option<Owner> {
-    state.pressed.iter().find_map(|(code, owner)| {
-        LAYOUT
+/// The runs that hold the modifier `key` (`Shift`, …), oldest first: every holder of a held
+/// code the layout names that key, as Playwright's modifier set holds a key by name, whichever
+/// side pressed it.
+fn holders_of(state: &KeyboardState, key: &str) -> Vec<Owner> {
+    let mut holders: Vec<Owner> = Vec::new();
+    for (code, owner) in &state.pressed {
+        if LAYOUT
             .get(code)
-            .filter(|entry| entry.description.key == key)
-            .map(|_| owner.clone())
-    })
+            .is_some_and(|entry| entry.description.key == key)
+            && !holders.contains(owner)
+        {
+            holders.push(owner.clone());
+        }
+    }
+    holders
 }
 
 /// Neo: one key event as a plan command, with what it does to the tab's keyboard.
@@ -520,11 +636,18 @@ struct Keyboard {
 }
 
 impl Keyboard {
-    /// The tab's keyboard, as the planning copy starts from it.
+    /// The tab's keyboard, as the planning copy starts from it: each held code once, whatever
+    /// runs hold it.
     fn from_state(state: &KeyboardState) -> Self {
+        let mut pressed: Vec<&'static str> = Vec::new();
+        for (code, _) in &state.pressed {
+            if !pressed.contains(code) {
+                pressed.push(code);
+            }
+        }
         Self {
             modifiers: state.modifiers,
-            pressed: state.pressed.iter().map(|(code, _)| *code).collect(),
+            pressed,
         }
     }
 
@@ -1692,6 +1815,10 @@ mod tests {
                 .lock()
                 .expect("devices")
                 .apply(effect, answered);
+        }
+
+        fn devices(&self) -> InputDevices {
+            self.devices.lock().expect("devices").clone()
         }
     }
 
