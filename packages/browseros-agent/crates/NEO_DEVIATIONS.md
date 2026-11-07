@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (6)
+## Deviations (7)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -13,6 +13,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/click.rs | `attempt` | `server/dom.ts` `ElementHandle._performPointerAction` | Playwright's trial still performs the input into an interceptor that blocks every event it judges, which the page's earlier listeners and the hover state still see; Neo's trial ends at its checks and sends no input. Dropping the interceptor disarms it, and the tab's input comes back once that stop has answered. |
 | neo-runtime/src/click.rs | `refuse_unserved` | `server/dom.ts` `ElementHandle._performPointerAction` | Neo's tab keeps no keyboard state yet to press and restore them with, so it refuses them before any work. |
 | neo-runtime/src/click.rs | `refuse_unserved` | `server/dom.ts` `ElementHandle._performPointerAction` | Playwright moves in `steps` from the page's last mouse position, which Neo's tab does not keep yet, so it refuses other steps before any work. |
+| neo-runtime/src/reads.rs | `CHILD_AI_SNAPSHOT_UNSERVED` | `server/frames.ts` `Frame.ariaSnapshotJSON` | Child-frame scoped AI refs cannot be main-frame paths; use the page snapshot until frame-id-prefixed refs are served. |
 
 ## Unexplained: owner questions (0)
 

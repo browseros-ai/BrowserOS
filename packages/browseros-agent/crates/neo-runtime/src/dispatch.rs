@@ -1734,15 +1734,14 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_locator_snapshots_and_frame_reads_route() {
+    fn tests_that_locator_snapshots_route_and_unserved_frame_reads_reject() {
         assert!(
             route_frame(
                 "textContent",
                 json!({ "selector": "iframe >> internal:control=enter-frame >> li" }),
             )
             .route
-            .is_ok(),
-            "a read inside a frame is served"
+            .is_ok()
         );
         let routed = route_frame("ariaSnapshot", json!({ "selector": "#list", "mode": "ai" }));
         assert_eq!(

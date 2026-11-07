@@ -15,9 +15,13 @@ use serde_json::{Value, json};
 use tokio::time;
 
 const ROOT: &str = r#"<!doctype html><title>Frame getters</title>
-<iframe name="same" src="/same"></iframe><iframe name="remote" id="remote"></iframe>
+<iframe name="same" id="same" src="/same"></iframe><iframe name="remote" id="remote"></iframe>
 <button id="remove" onclick="document.querySelector('#remote').remove()">Remove</button>
-<script>document.querySelector('#remote').src = location.origin.replace('127.0.0.1', 'localhost') + '/remote'</script>"#;
+<button id="navigate-same" onclick="document.querySelector('#same').src='/same-next'">Navigate same</button><p id="nav-status">waiting</p>
+<script>
+addEventListener('message', event => { if (event.data === 'same-ready') document.querySelector('#nav-status').textContent = 'same-ready'; });
+document.querySelector('#remote').src = location.origin.replace('127.0.0.1', 'localhost') + '/remote';
+</script>"#;
 
 const SCRIPT: &str = r"
 const deadline = Date.now() + 10000;
@@ -206,6 +210,83 @@ return observed.endsWith('/new-root') && main.url() === observed;
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn tests_that_main_document_commit_detaches_retained_children_before_close() {
+    let Some((value, _)) = after_close(
+        r"
+await page.goto(page.url().slice(0, page.url().lastIndexOf('/')) + '/new-root');
+await page.close();
+return {
+  detached: retained.slice(1).every(frame => frame.isDetached()),
+  kept: same.name() === 'same' && same.url().endsWith('/same') &&
+    nested.name() === 'nested' && nested.url().endsWith('/nested'),
+  parents: same.parentFrame() === main && nested.parentFrame() === same,
+  children: retained.every(frame => frame.childFrames().length === 0),
+  main: !main.isDetached() && main.url().endsWith('/new-root'),
+};
+",
+    )
+    .await
+    else {
+        return;
+    };
+    assert_eq!(
+        value,
+        json!({"detached":true,"kept":true,"parents":true,"children":true,"main":true})
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_same_document_navigation_preserves_retained_children_after_close() {
+    let Some((value, _)) = after_close(
+        r"
+await page.goto(page.url() + '#same-doc');
+await page.close();
+return {
+  attached: retained.every(frame => !frame.isDetached()),
+  parents: same.parentFrame() === main && nested.parentFrame() === same,
+  children: main.childFrames().length === 2 && same.childFrames()[0] === nested,
+  main: main.url().endsWith('#same-doc'),
+};
+",
+    )
+    .await
+    else {
+        return;
+    };
+    assert_eq!(
+        value,
+        json!({"attached":true,"parents":true,"children":true,"main":true})
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_child_document_commit_detaches_its_descendants_before_close() {
+    let Some((value, _)) = after_close(
+        r"
+await page.click('#navigate-same');
+await page.getByText('same-ready', {exact:true}).waitFor();
+await page.close();
+return {
+  detached: nested.isDetached(),
+  kept: nested.name() === 'nested' && nested.url().endsWith('/nested'),
+  parent: nested.parentFrame() === same,
+  children: same.childFrames().length === 0 && main.childFrames().includes(same),
+  other: !remote.isDetached() && remote.childFrames()[0] === remoteNested,
+  same: !same.isDetached() && same.name() === 'same' && same.url().endsWith('/same-next'),
+};
+",
+    )
+    .await
+    else {
+        return;
+    };
+    assert_eq!(
+        value,
+        json!({"detached":true,"kept":true,"parent":true,"children":true,"other":true,"same":true})
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn tests_that_page_close_does_not_detach_retained_frames() {
     let Some((value, _)) =
         after_close("await page.close(); return retained.map(frame => frame.isDetached());").await
@@ -319,6 +400,11 @@ fn fixture() -> Fixture {
             (
                 "/same".to_string(),
                 "<iframe name='nested' src='/nested'></iframe>".to_string(),
+            ),
+            (
+                "/same-next".to_string(),
+                "<p>New document</p><script>parent.postMessage('same-ready','*')</script>"
+                    .to_string(),
             ),
             (
                 "/remote".to_string(),

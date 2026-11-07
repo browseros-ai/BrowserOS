@@ -441,7 +441,7 @@ fn feeds_error() -> PageError {
 }
 
 /// The frame a `Page` event is about: `frame.id` of a commit, `frameId` of the others.
-fn event_frame(event: &CdpEvent) -> Option<&str> {
+pub(crate) fn event_frame(event: &CdpEvent) -> Option<&str> {
     match event.method.as_str() {
         "Page.frameNavigated" => event.params["frame"]["id"].as_str(),
         "Page.frameRequestedNavigation"
