@@ -83,6 +83,8 @@ export interface GetterReplies {
   parentFrame: CreatedFrame | null
   childFrames: CreatedFrame[]
   isDetached: boolean
+  /** On a page: the open tab of the run's context that opened it, `null` for none. */
+  opener: CreatedPage | null
 }
 
 export function get<Field extends keyof GetterReplies>(
