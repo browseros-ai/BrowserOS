@@ -1096,7 +1096,8 @@ export class OwnedBrowser {
             session.id,
           )
         } catch (error) {
-          if (!session.closed) throw error
+          if (!session.closed)
+            this.#gap('target-observer-release', session.page, error)
         }
       }
     }

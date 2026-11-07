@@ -1,0 +1,68 @@
+/** Wire values must preserve distinctions JavaScript and UTF-8 JSON normally erase. */
+
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { codecFactory } from './codec.mjs'
+
+const codec = codecFactory({
+  identify: () => undefined,
+  resolve: () => {
+    throw new Error('foreign reference')
+  },
+})
+const roundtrip = (value) =>
+  codec.decode(JSON.parse(JSON.stringify(codec.encode(value))))
+
+test('special values, UTF-16 keys and regexp state survive ASCII-safe frames', () => {
+  const regexp = /a\ud800/gi
+  regexp.lastIndex = 3
+  const record = {
+    '\ud800': '\udc00',
+    replacement: '\ufffd',
+    regexp,
+    big: 999999999999999999999999n,
+    nan: NaN,
+    negativeZero: -0,
+    positive: Infinity,
+    negative: -Infinity,
+    missing: undefined,
+    empty: null,
+  }
+  const result = roundtrip(record)
+  assert.deepEqual(result, record)
+  assert.equal(result.regexp.lastIndex, 3)
+  assert.equal(result['\ud800'].charCodeAt(0), 0xdc00)
+  assert.notDeepEqual(codec.encode('\ud800'), codec.encode('\ufffd'))
+  assert.notDeepEqual(codec.encode(undefined), codec.encode(null))
+})
+
+test('holes, undefined entries and own __proto__ cannot collapse or mutate the decoder', () => {
+  const array = new Array(3)
+  array[1] = undefined
+  array[2] = null
+  const result = roundtrip(array)
+  assert.equal(0 in result, false)
+  assert.equal(1 in result, true)
+  assert.equal(result[1], undefined)
+  const record = JSON.parse('{"__proto__":{"polluted":true}}')
+  const decoded = roundtrip(record)
+  assert.equal(Object.getPrototypeOf(decoded), Object.prototype)
+  assert.equal(Object.hasOwn(decoded, '__proto__'), true)
+  assert.equal({}.polluted, undefined)
+})
+
+test('functions, cycles, custom objects and foreign refs fail visibly', () => {
+  const cycle = {}
+  cycle.self = cycle
+  for (const value of [() => {}, Symbol('x'), cycle, new Date()])
+    assert.throws(() => codec.encode(value))
+  assert.throws(
+    () =>
+      codec.decode({
+        tag: 'object',
+        ref: { epoch: 'other', id: 1, family: 'Page' },
+      }),
+    /foreign/,
+  )
+  assert.throws(() => codec.decode({ tag: 'string', units: [65536] }), /UTF-16/)
+})

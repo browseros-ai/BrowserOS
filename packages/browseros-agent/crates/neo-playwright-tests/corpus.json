@@ -1,0 +1,841 @@
+{
+  "revision": "26137face0500cacddf90c767dc1364da7262559",
+  "version": "1.66.0-next",
+  "suites": [
+    {
+      "file": "tests/page/elementhandle-bounding-box.spec.ts",
+      "include": false,
+      "reason": "ElementHandle object family not served; Page/Locator equivalents are inventoried separately.",
+      "sha256": "39818703f0870a6710928af897ec5e21dd9c17167883d29ea2fc654dca0a6164"
+    },
+    {
+      "file": "tests/page/elementhandle-click.spec.ts",
+      "include": false,
+      "reason": "ElementHandle object family not served; Page/Locator equivalents are inventoried separately.",
+      "sha256": "397b89a9c33d0c09c124051a3adc67a873fddfaa0d8c62d2b5e59443ad89a1cf"
+    },
+    {
+      "file": "tests/page/elementhandle-content-frame.spec.ts",
+      "include": false,
+      "reason": "ElementHandle object family not served; Page/Locator equivalents are inventoried separately.",
+      "sha256": "097233095c201fd7dc27c5a2260164d71bb09106c25e000f8f81270735810848"
+    },
+    {
+      "file": "tests/page/elementhandle-convenience.spec.ts",
+      "include": false,
+      "reason": "ElementHandle object family not served; Page/Locator equivalents are inventoried separately.",
+      "sha256": "df363c7472349abb987c93dffcaf15c48e2a4310061e54109af9f463b8eb60c8"
+    },
+    {
+      "file": "tests/page/elementhandle-eval-on-selector.spec.ts",
+      "include": false,
+      "reason": "ElementHandle object family not served; Page/Locator equivalents are inventoried separately.",
+      "sha256": "ee1051c90f6e2e89860ac3d7e4882965e0428865d42cbd472c9c9edb91669fb7"
+    },
+    {
+      "file": "tests/page/elementhandle-misc.spec.ts",
+      "include": false,
+      "reason": "ElementHandle object family not served; Page/Locator equivalents are inventoried separately.",
+      "sha256": "661b343ad803585bc2c8c8df4b448fdcf0ba932e7b14fd9b6c3f4b56b3651113"
+    },
+    {
+      "file": "tests/page/elementhandle-owner-frame.spec.ts",
+      "include": false,
+      "reason": "ElementHandle object family not served; Page/Locator equivalents are inventoried separately.",
+      "sha256": "6e7d009b83d71b5401ae315968e5941d645603e4a3c6259b23a8022b482f0f1a"
+    },
+    {
+      "file": "tests/page/elementhandle-press.spec.ts",
+      "include": false,
+      "reason": "ElementHandle object family not served; Page/Locator equivalents are inventoried separately.",
+      "sha256": "3ddfb5815093d5473d8125410c67f7530f0fe0ca13252e38df672ea6973982b1"
+    },
+    {
+      "file": "tests/page/elementhandle-query-selector.spec.ts",
+      "include": false,
+      "reason": "ElementHandle object family not served; Page/Locator equivalents are inventoried separately.",
+      "sha256": "406af0758e8dc24ea4bd3039349ee7cd75e9f9ab0077292fc77cfcc74b255749"
+    },
+    {
+      "file": "tests/page/elementhandle-screenshot.spec.ts",
+      "include": false,
+      "reason": "ElementHandle object family not served; Page/Locator equivalents are inventoried separately.",
+      "sha256": "9bfb9b681b46e1a7c2f9a7d4daff0730ea13ec044d8dd84d84781d8703e16472"
+    },
+    {
+      "file": "tests/page/elementhandle-scroll-into-view.spec.ts",
+      "include": false,
+      "reason": "ElementHandle object family not served; Page/Locator equivalents are inventoried separately.",
+      "sha256": "0f36382fc9d7da3dd7bdf0f6c5aa28da0dcc275ca665aaa1ecb49304fc880f20"
+    },
+    {
+      "file": "tests/page/elementhandle-select-text.spec.ts",
+      "include": false,
+      "reason": "ElementHandle object family not served; Page/Locator equivalents are inventoried separately.",
+      "sha256": "ab11e2bf17c3db69c6b1e1b5017a5f8e4cf2ba0bed0b94213eb9f006d3f7d7ee"
+    },
+    {
+      "file": "tests/page/elementhandle-type.spec.ts",
+      "include": false,
+      "reason": "ElementHandle object family not served; Page/Locator equivalents are inventoried separately.",
+      "sha256": "f6630b2eac63ac1d96ef49f9b2a61eb6152197efba4e16935a5d51c228e482e0"
+    },
+    {
+      "file": "tests/page/elementhandle-wait-for-element-state.spec.ts",
+      "include": false,
+      "reason": "ElementHandle object family not served; Page/Locator equivalents are inventoried separately.",
+      "sha256": "ae5eea37d3e58cbf3b8891c2da0b13ea7adc6318a84a26fa96c2f7c81f8ae7c0"
+    },
+    {
+      "file": "tests/page/eval-on-selector-all.spec.ts",
+      "include": false,
+      "reason": "Evaluation/handle API not served; neo-evaluate scope.",
+      "sha256": "6e1b9ad4aa77b32355ea4bb260a19715b29e8912395e52c673e208a878b768f2"
+    },
+    {
+      "file": "tests/page/eval-on-selector.spec.ts",
+      "include": false,
+      "reason": "Evaluation/handle API not served; neo-evaluate scope.",
+      "sha256": "5a8cc9584c86ff8d161384249566f9d71f279f9a634dc9ab44713b01851285c5"
+    },
+    {
+      "file": "tests/page/expect-boolean.spec.ts",
+      "include": false,
+      "reason": "Browser-aware expect/matcher API not served; selected suites retain those requirements as unsupported.",
+      "sha256": "4cbf161a6a0bbb540be8c628391e5b48b7ac7b37aed7b542420ee62494335e61"
+    },
+    {
+      "file": "tests/page/expect-builtins.spec.ts",
+      "include": false,
+      "reason": "Browser-aware expect/matcher API not served; selected suites retain those requirements as unsupported.",
+      "sha256": "ccd28fb692a71a49cf258813de3345fc2a860442a4b59add8341796ac032a1b2"
+    },
+    {
+      "file": "tests/page/expect-matcher-result.spec.ts",
+      "include": false,
+      "reason": "Browser-aware expect/matcher API not served; selected suites retain those requirements as unsupported.",
+      "sha256": "d36b028b2e8e69bff25dc201e1c1626714ccb9ae754865089c842eb01642b125"
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
+      "include": false,
+      "reason": "Browser-aware expect/matcher API not served; selected suites retain those requirements as unsupported.",
+      "sha256": "c05eee8cab5c94fd49ef8ad3f36ee1cba76029cefb9ab62034b1a1e0deb31947"
+    },
+    {
+      "file": "tests/page/expect-timeout.spec.ts",
+      "include": false,
+      "reason": "Browser-aware expect/matcher API not served; selected suites retain those requirements as unsupported.",
+      "sha256": "7e6e622e3bc00fa44914a269304f25aa73477d2c3ee05092f730efe12d6d7197"
+    },
+    {
+      "file": "tests/page/expect-to-have-accessible.spec.ts",
+      "include": false,
+      "reason": "Browser-aware expect/matcher API not served; selected suites retain those requirements as unsupported.",
+      "sha256": "5ccdad5cffb207f13ce6958b880ea3c0eb07081d7a9bb93a15d6fd02c3c05dbe"
+    },
+    {
+      "file": "tests/page/expect-to-have-text.spec.ts",
+      "include": false,
+      "reason": "Browser-aware expect/matcher API not served; selected suites retain those requirements as unsupported.",
+      "sha256": "b1c6aafeb2145834757d2192ffd1ca7134e3193ffa25d3dd074f4cc06c76a4ab"
+    },
+    {
+      "file": "tests/page/expect-to-have-value.spec.ts",
+      "include": false,
+      "reason": "Browser-aware expect/matcher API not served; selected suites retain those requirements as unsupported.",
+      "sha256": "c59d93017526eeb6c40e33fd8f105bf8ce58dfab4afdfd214e2f31a7d6893571"
+    },
+    {
+      "file": "tests/page/expect-with-snapshot.spec.ts",
+      "include": false,
+      "reason": "Browser-aware expect/matcher API not served; selected suites retain those requirements as unsupported.",
+      "sha256": "a0b4afc7cbbe35428f9f94d1dbc6d76f36fcbbe1349f4b37996723059d934b95"
+    },
+    {
+      "file": "tests/page/firefox-network-response.spec.ts",
+      "include": false,
+      "reason": "Firefox-only network surface outside Chromium/served methods.",
+      "sha256": "a8d34a366a2571ae3869849b9c6b5f6bbb141ec87b5de5743ae50473bfff8a98"
+    },
+    {
+      "file": "tests/page/frame-evaluate.spec.ts",
+      "include": false,
+      "reason": "Evaluation/handle API not served; neo-evaluate scope.",
+      "sha256": "2002e4cea0149055bbcc52f3479d7fd47af4275f951e7324964ca73b401d6fda"
+    },
+    {
+      "file": "tests/page/frame-frame-element.spec.ts",
+      "include": false,
+      "reason": "Child-frame tree/element APIs not served; neo-frames scope.",
+      "sha256": "a8677c62203aaf191ac3396f3f7d1fed409f1dc803d9c967941b8c30b8ac1170"
+    },
+    {
+      "file": "tests/page/frame-goto.spec.ts",
+      "include": true,
+      "reason": "Frame.goto surface; child-frame requirements remain unsupported.",
+      "sha256": "cea56e5b0965242c47ba3b7d03d48f7da3b797688583f14ef2d80bf020e588b7"
+    },
+    {
+      "file": "tests/page/frame-hierarchy.spec.ts",
+      "include": false,
+      "reason": "Child-frame tree/element APIs not served; neo-frames scope.",
+      "sha256": "64a42da47ccf36922f1c782976c0d41980a553b0382cc8802b4e460b0eea6609"
+    },
+    {
+      "file": "tests/page/interception.spec.ts",
+      "include": false,
+      "reason": "Network routing/interception is outside V1 and not served.",
+      "sha256": "87dcde217b7362dad536d22c91dc188bd84196fb8c4c712e13120a2cfebc39d2"
+    },
+    {
+      "file": "tests/page/jshandle-as-element.spec.ts",
+      "include": false,
+      "reason": "JSHandle object family not served.",
+      "sha256": "3c973b6a4ea7e24a28cae33914ea75ed4caffeebaa82f08e5bd79aae2409dcfe"
+    },
+    {
+      "file": "tests/page/jshandle-evaluate.spec.ts",
+      "include": false,
+      "reason": "JSHandle object family not served.",
+      "sha256": "26295d7b3d49a4b2b844b8b382e27eac55653e6ed93b2b378b8a575a0366ed8e"
+    },
+    {
+      "file": "tests/page/jshandle-json-value.spec.ts",
+      "include": false,
+      "reason": "JSHandle object family not served.",
+      "sha256": "440a43289728ff01d4492d462b7ec6a62e4136266baf60966035a3e03c22540d"
+    },
+    {
+      "file": "tests/page/jshandle-properties.spec.ts",
+      "include": false,
+      "reason": "JSHandle object family not served.",
+      "sha256": "feeb1220b6467b738f9be60fe0a99973a45ce3004494e9550ba73c033375fa43"
+    },
+    {
+      "file": "tests/page/jshandle-to-string.spec.ts",
+      "include": false,
+      "reason": "JSHandle object family not served.",
+      "sha256": "d09ca3ea29c76e73701170962d34b87205618333f6a4d8c75e7245fe61149ace"
+    },
+    {
+      "file": "tests/page/locator-any-frame.spec.ts",
+      "include": true,
+      "reason": "Full locator suite; missing reads, evaluation, handles, frames, waits and highlight remain explicit unsupported.",
+      "sha256": "3dd3440b78a9563bac7110128740d1630dcd63c5830a72d3e535021f76ba6e5a"
+    },
+    {
+      "file": "tests/page/locator-click.spec.ts",
+      "include": true,
+      "reason": "Full locator suite; missing reads, evaluation, handles, frames, waits and highlight remain explicit unsupported.",
+      "sha256": "917c2b33ac776412ee7f992953704302d04ccc4305bbd0ced38bae97b107122b"
+    },
+    {
+      "file": "tests/page/locator-convenience.spec.ts",
+      "include": true,
+      "reason": "Full locator suite; missing reads, evaluation, handles, frames, waits and highlight remain explicit unsupported.",
+      "sha256": "7ceccb2d0c223a233daf7135333d3765b3494e833bdb61474e23337e200a156d"
+    },
+    {
+      "file": "tests/page/locator-element-handle.spec.ts",
+      "include": true,
+      "reason": "Full locator suite; missing reads, evaluation, handles, frames, waits and highlight remain explicit unsupported.",
+      "sha256": "5812861a32aebbbc1e073c2bb94558e7b716d7e3cd0f59a04e3d77c23517bf6b"
+    },
+    {
+      "file": "tests/page/locator-evaluate.spec.ts",
+      "include": true,
+      "reason": "Full locator suite; missing reads, evaluation, handles, frames, waits and highlight remain explicit unsupported.",
+      "sha256": "b234ee721b0e818b710932633deff9183facf13254d8ed2ad84aaecd73998dc8"
+    },
+    {
+      "file": "tests/page/locator-frame.spec.ts",
+      "include": true,
+      "reason": "Full locator suite; missing reads, evaluation, handles, frames, waits and highlight remain explicit unsupported.",
+      "sha256": "d10cb1fe40bcc20e55335ec2ba7191e4c29449258ec003f0a9224098ec7a1eca"
+    },
+    {
+      "file": "tests/page/locator-highlight.spec.ts",
+      "include": true,
+      "reason": "Full locator suite; missing reads, evaluation, handles, frames, waits and highlight remain explicit unsupported.",
+      "sha256": "2ce519bf04b0e7e03a3bd4ab40f0e8a6ed95d067db24b9e9ab15801ac504c16a"
+    },
+    {
+      "file": "tests/page/locator-is-visible.spec.ts",
+      "include": true,
+      "reason": "Full locator suite; missing reads, evaluation, handles, frames, waits and highlight remain explicit unsupported.",
+      "sha256": "b2d3ae5a66e7ecce65731aa192f2362adb0dda6204e589682f6ccd8668bd4aa6"
+    },
+    {
+      "file": "tests/page/locator-list.spec.ts",
+      "include": true,
+      "reason": "Full locator suite; missing reads, evaluation, handles, frames, waits and highlight remain explicit unsupported.",
+      "sha256": "39246c2d7d62967a06bed3c37760357c41644cede9dd5a9914b9b8b3301edde8"
+    },
+    {
+      "file": "tests/page/locator-misc-1.spec.ts",
+      "include": true,
+      "reason": "Full locator suite; missing reads, evaluation, handles, frames, waits and highlight remain explicit unsupported.",
+      "sha256": "5edd49b661e963e70e46b0b6f4e5c6c1aeca4ff5622673f5a74ffb7d58372644"
+    },
+    {
+      "file": "tests/page/locator-misc-2.spec.ts",
+      "include": true,
+      "reason": "Full locator suite; missing reads, evaluation, handles, frames, waits and highlight remain explicit unsupported.",
+      "sha256": "df7dc6cf4821d5ae9d983d77917c03d8bc448c03419c497e3a4e1c3662c5f792"
+    },
+    {
+      "file": "tests/page/locator-query.spec.ts",
+      "include": true,
+      "reason": "Full locator suite; missing reads, evaluation, handles, frames, waits and highlight remain explicit unsupported.",
+      "sha256": "1e77a879eb321986694109dd6beff325643c8f920b0cc44aaa508c05a3be1429"
+    },
+    {
+      "file": "tests/page/locator-wait-for-function.spec.ts",
+      "include": true,
+      "reason": "Full locator suite; missing reads, evaluation, handles, frames, waits and highlight remain explicit unsupported.",
+      "sha256": "937159c5204960b7a64560e8463b5391e0f7cd17bd5739a45b28cb4b0cfea095"
+    },
+    {
+      "file": "tests/page/matchers.misc.spec.ts",
+      "include": false,
+      "reason": "Neo expect matcher implementation not served; primitive expect remains test infrastructure.",
+      "sha256": "0ba9ba1e04a753d94b8ba434b2fcb190533ffcc6ad72939587b33612baa17506"
+    },
+    {
+      "file": "tests/page/network-post-data.spec.ts",
+      "include": false,
+      "reason": "Request/Response/routing API family not served and outside this wave.",
+      "sha256": "47e0379a9abeebfbf4865fc1f01b315477a077b895a144dec6ce48f683c20542"
+    },
+    {
+      "file": "tests/page/page-add-init-script-callback.spec.ts",
+      "include": false,
+      "reason": "Script/style/init/locator-handler or callback-registration API not served.",
+      "sha256": "e4f6d330ccfd197d9eec5b967053503419318cbae6deb96ec231abccd2e3e024"
+    },
+    {
+      "file": "tests/page/page-add-init-script.spec.ts",
+      "include": false,
+      "reason": "Script/style/init/locator-handler or callback-registration API not served.",
+      "sha256": "d2f6b861a68fbe8083d21f5ccf93b411ee4b65e44616c8081571347c065ecc0d"
+    },
+    {
+      "file": "tests/page/page-add-locator-handler.spec.ts",
+      "include": false,
+      "reason": "Script/style/init/locator-handler or callback-registration API not served.",
+      "sha256": "2a7d55287ed5662e21ada2d4a6bd717bb3dbfdada373c4168936b510b9da3c52"
+    },
+    {
+      "file": "tests/page/page-add-script-tag.spec.ts",
+      "include": false,
+      "reason": "Script/style/init/locator-handler or callback-registration API not served.",
+      "sha256": "2c91d8f7d92476e600f005df7aa1b1fb720b5e3229223e77312e4e5b4507aad9"
+    },
+    {
+      "file": "tests/page/page-add-style-tag.spec.ts",
+      "include": false,
+      "reason": "Script/style/init/locator-handler or callback-registration API not served.",
+      "sha256": "d8e35d32ce1d701df646fa49720c3019d1f8d996f28b7323a31662e144f29ac6"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot-ai.spec.ts",
+      "include": true,
+      "reason": "Required AI snapshot suite; getByRef/locator/frame requirements remain visible.",
+      "sha256": "f0125995d644ba4276f43686a8b6cd79b631d96a4c2bdf15c3cea4f1366ca2ff"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot-json.spec.ts",
+      "include": false,
+      "reason": "ariaSnapshotJSON is a separate public method, not served; AI/YAML suites selected.",
+      "sha256": "968d92bc3b00c5428bc233b0529756a091aa32a911ccdee92f06a076357f988d"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "include": true,
+      "reason": "YAML snapshot neighborhood; Locator.ariaSnapshot and matcher currently unsupported.",
+      "sha256": "cf1689bf5194e55a0077c5bf00cc34f6f43ee029a307b6998c63a8ab2b29d77b"
+    },
+    {
+      "file": "tests/page/page-autowaiting-basic.spec.ts",
+      "include": true,
+      "reason": "Actionability and navigation waits around click.",
+      "sha256": "29d7850933b34a505421a5116cf4b5ffc348cde5331125fbdec774110e4e39f5"
+    },
+    {
+      "file": "tests/page/page-autowaiting-no-hang.spec.ts",
+      "include": true,
+      "reason": "Navigation and click completion edge cases.",
+      "sha256": "cd5fd9af5e56d3b7914db5197a8a05247def0a5f6d3a3d7cab9de504106d5f3b"
+    },
+    {
+      "file": "tests/page/page-basic.spec.ts",
+      "include": true,
+      "reason": "Full mixed suite; url/title/press/close; other APIs unsupported.",
+      "sha256": "3497beb44b0bf5f5918e69313363f35b614fb2390a357700b0eaa27704cf476e"
+    },
+    {
+      "file": "tests/page/page-cache-storage.spec.ts",
+      "include": false,
+      "reason": "Storage/evaluation API not served as a target; isolated fixture state is harness-owned.",
+      "sha256": "981b5b2bc9c961187c266f93b74e39a60f4628fa3e0e53d12b1a1c616c4ec3a8"
+    },
+    {
+      "file": "tests/page/page-check.spec.ts",
+      "include": true,
+      "reason": "Full suite; check/uncheck/setChecked.",
+      "sha256": "0a570d92a3927ffc266d17619306c8d8824bcb8691d6e088e7a1ada4b94067b3"
+    },
+    {
+      "file": "tests/page/page-click-during-navigation.spec.ts",
+      "include": true,
+      "reason": "Full upstream click suite including scroll, timeout, navigation and framework cases.",
+      "sha256": "c76101d23f9e5e948928e85f383f361832f9397eb63a110e59bdc436a1efeef1"
+    },
+    {
+      "file": "tests/page/page-click-react.spec.ts",
+      "include": true,
+      "reason": "Full upstream click suite including scroll, timeout, navigation and framework cases.",
+      "sha256": "da73621387c020c822ed384a124fa203c86f8081a73c0f2354604a314d70ef44"
+    },
+    {
+      "file": "tests/page/page-click-scroll.spec.ts",
+      "include": true,
+      "reason": "Full upstream click suite including scroll, timeout, navigation and framework cases.",
+      "sha256": "f8b9600c26b51d6f0461404aa9be90d54f5e1af87d12e5cfb9dbd8f8f511c9e0"
+    },
+    {
+      "file": "tests/page/page-click-timeout-1.spec.ts",
+      "include": true,
+      "reason": "Full upstream click suite including scroll, timeout, navigation and framework cases.",
+      "sha256": "a98eda5bb490d5f9a6bf563284f5e66c536e74387296b8df59aeb06d44000c6e"
+    },
+    {
+      "file": "tests/page/page-click-timeout-2.spec.ts",
+      "include": true,
+      "reason": "Full upstream click suite including scroll, timeout, navigation and framework cases.",
+      "sha256": "bd87ca86dfc9a37805395c40c5c06c2ab436b5c73566bb2330e3083e17e34aa0"
+    },
+    {
+      "file": "tests/page/page-click-timeout-3.spec.ts",
+      "include": true,
+      "reason": "Full upstream click suite including scroll, timeout, navigation and framework cases.",
+      "sha256": "ff98bad1d3cba3221424371f32e8741589d3f57f78ee62d7bd06453ff9eb0c1c"
+    },
+    {
+      "file": "tests/page/page-click-timeout-4.spec.ts",
+      "include": true,
+      "reason": "Full upstream click suite including scroll, timeout, navigation and framework cases.",
+      "sha256": "00915d99f9da6a4cb9500286f5a0b91bfb13a9cc63310cc827d360f0bb24c8e7"
+    },
+    {
+      "file": "tests/page/page-click.spec.ts",
+      "include": true,
+      "reason": "Full upstream click suite including scroll, timeout, navigation and framework cases.",
+      "sha256": "ceb837481e6e5c96b6ddf2b38a78255647366e9e7f332ffa145dceee41e4c577"
+    },
+    {
+      "file": "tests/page/page-dialog.spec.ts",
+      "include": false,
+      "reason": "Event/listener/dialog API not served; neo-events scope.",
+      "sha256": "51e2fec65bc69284bb2e5eb4de133de73b0e22055077ee25bb3fdf3705e6d2a1"
+    },
+    {
+      "file": "tests/page/page-dispatchevent.spec.ts",
+      "include": false,
+      "reason": "dispatchEvent not served; actions workstream and V1 owner decision.",
+      "sha256": "b820ac4633168235aad33310799b049cc6d2cf6267f5ca9d775b4c92045fca77"
+    },
+    {
+      "file": "tests/page/page-drag.spec.ts",
+      "include": false,
+      "reason": "Drag APIs not served; neo-actions scope.",
+      "sha256": "6d0aefd78c0e964970d1fe0303137d190cef313361147960a15722232db79864"
+    },
+    {
+      "file": "tests/page/page-drop.spec.ts",
+      "include": false,
+      "reason": "Drop/drag APIs not served; neo-actions scope.",
+      "sha256": "c655323347208c90b0507b100c7fa5fc0a629deff0b89c6799fc47a26d27c6fd"
+    },
+    {
+      "file": "tests/page/page-emulate-media.spec.ts",
+      "include": false,
+      "reason": "Media-emulation API not served.",
+      "sha256": "0e6d4c4f4beb3270d675daa1025eb3506be425b84f5294934882c3d1800966cb"
+    },
+    {
+      "file": "tests/page/page-evaluate-callback.spec.ts",
+      "include": false,
+      "reason": "Evaluation/handle API not served; neo-evaluate scope.",
+      "sha256": "be17e4d207a4376c4a72511b6f6b4ebb841206a00caca227281d0ccf68546bc3"
+    },
+    {
+      "file": "tests/page/page-evaluate-handle.spec.ts",
+      "include": false,
+      "reason": "Evaluation/handle API not served; neo-evaluate scope.",
+      "sha256": "f037987c712ece502744867361e2c08f51f6a7d487bd10bcfcc8f0057580c4f2"
+    },
+    {
+      "file": "tests/page/page-evaluate-no-stall.spec.ts",
+      "include": false,
+      "reason": "Evaluation/handle API not served; neo-evaluate scope.",
+      "sha256": "bcdaae7d3c0ce676283d6cec5825187a6810d26a61f9bafbb44682c7e32e53ca"
+    },
+    {
+      "file": "tests/page/page-evaluate.spec.ts",
+      "include": false,
+      "reason": "Evaluation/handle API not served; neo-evaluate scope.",
+      "sha256": "0d39b5fe6fa3b2d173125927d74cc2a6d5faad2ff6bcd4b0d38eee090f1abc94"
+    },
+    {
+      "file": "tests/page/page-event-console.spec.ts",
+      "include": false,
+      "reason": "Event/listener/dialog API not served; neo-events scope.",
+      "sha256": "af46689de20235b0ead3f138b3138d9fe169ff0066cce5e67ff688a0919258b3"
+    },
+    {
+      "file": "tests/page/page-event-load.spec.ts",
+      "include": false,
+      "reason": "Event/listener/dialog API not served; neo-events scope.",
+      "sha256": "86b2515353302696ade1fc183f6cc9ba77f2721933e014f46e42770590ae096a"
+    },
+    {
+      "file": "tests/page/page-event-network.spec.ts",
+      "include": false,
+      "reason": "Event/listener/dialog API not served; neo-events scope.",
+      "sha256": "f48d1c9b90945050232e3d07bdf334a1c017130a357966be133b6696cb3103a8"
+    },
+    {
+      "file": "tests/page/page-event-pageerror.spec.ts",
+      "include": false,
+      "reason": "Event/listener/dialog API not served; neo-events scope.",
+      "sha256": "b0192d07e5760470ff30e3601446eaef9eca751b8aec1ef590df27e4145dd8f5"
+    },
+    {
+      "file": "tests/page/page-event-popup.spec.ts",
+      "include": false,
+      "reason": "Event/listener/dialog API not served; neo-events scope.",
+      "sha256": "15a3c4b811b987dbf79ac25f0c09ceddaa57807fc1e370649e41009ae3a61428"
+    },
+    {
+      "file": "tests/page/page-event-request.spec.ts",
+      "include": false,
+      "reason": "Event/listener/dialog API not served; neo-events scope.",
+      "sha256": "490aeb2642e3fd7f9074280e09627bedf200c42886a7459580724bc154ab2978"
+    },
+    {
+      "file": "tests/page/page-expose-function.spec.ts",
+      "include": false,
+      "reason": "Script/style/init/locator-handler or callback-registration API not served.",
+      "sha256": "019fd590b8d849648fceb02b16545e262d935b759afd597b70904753d371d9cf"
+    },
+    {
+      "file": "tests/page/page-filechooser.spec.ts",
+      "include": false,
+      "reason": "File chooser events and upload APIs not served.",
+      "sha256": "29962bdc2b827b65d0ad7d976293cf1f4b18bea28ae54512e0601a62870b24a1"
+    },
+    {
+      "file": "tests/page/page-fill.spec.ts",
+      "include": true,
+      "reason": "Full suite; fill/clear and argument cases.",
+      "sha256": "26fccf811e0881248fa7c8f3bad7d0c5312befbb86d18560b8b056dac4316e5a"
+    },
+    {
+      "file": "tests/page/page-focus.spec.ts",
+      "include": false,
+      "reason": "Public focus/blur not served at the design base; owned by neo-actions.",
+      "sha256": "fd2c6cda7e3973806fa5eced9c1547f589c19c540db8eb518f0d70e0ae9c4807"
+    },
+    {
+      "file": "tests/page/page-goto.spec.ts",
+      "include": true,
+      "reason": "Full suite; Response and networkidle gaps stay visible.",
+      "sha256": "e29628f1be11e326254443b5baaecfeefd0fb300da3d00a0bda1cd62cee9ec8b"
+    },
+    {
+      "file": "tests/page/page-history.spec.ts",
+      "include": false,
+      "reason": "goBack/goForward/reload not served; neo-nav-history scope.",
+      "sha256": "fd0243d8993dee5f0e6d27b23029cee35d3034f9f53e0f7d4c974b615f29430d"
+    },
+    {
+      "file": "tests/page/page-keyboard.spec.ts",
+      "include": true,
+      "reason": "Full suite explicitly requested; public page.keyboard absent at design base.",
+      "sha256": "ad04b6b34084d2169a78021d762052e4109748eba1405462397bbbad1dbd8454"
+    },
+    {
+      "file": "tests/page/page-leaks.spec.ts",
+      "include": false,
+      "reason": "Browser/handle resource measurements outside the selected method behavior contract.",
+      "sha256": "832687e320c78a2649381fccb0bfa599f8b5e968e75a9b0244b84831c8dbb99c"
+    },
+    {
+      "file": "tests/page/page-listeners.spec.ts",
+      "include": false,
+      "reason": "Event/listener/dialog API not served; neo-events scope.",
+      "sha256": "41a99ce7165b7acc1e89c095a8ce28d9bc1802ea62849501f79aa52139c2ebcd"
+    },
+    {
+      "file": "tests/page/page-localstorage.spec.ts",
+      "include": false,
+      "reason": "Storage/evaluation API not served as a target; isolated fixture state is harness-owned.",
+      "sha256": "fb90df6d238832a143069f29c2b93d9b59af4e757030c4af40a83509f45a17c0"
+    },
+    {
+      "file": "tests/page/page-mouse.spec.ts",
+      "include": false,
+      "reason": "Public page.mouse not served; internal mouse writer is not a public mouse API.",
+      "sha256": "c4756258edbf99982a87be52907de2db2cae1f85bcdee63eacf327dafe16efa7"
+    },
+    {
+      "file": "tests/page/page-navigation.spec.ts",
+      "include": true,
+      "reason": "Related navigation outcomes; missing events/waits/response APIs unsupported.",
+      "sha256": "87d5d94cf8c56395683578f7db1fb446101d8ecbffc9113fd9f4ed1f095b8ae8"
+    },
+    {
+      "file": "tests/page/page-network-idle.spec.ts",
+      "include": false,
+      "reason": "networkidle not served; goto tests still expose this missing option.",
+      "sha256": "a0947a60dc437abe57b17be6cb2d1db0ec10923ef39cf10da882efa340318a5d"
+    },
+    {
+      "file": "tests/page/page-network-request.spec.ts",
+      "include": false,
+      "reason": "Request/Response/routing API family not served and outside this wave.",
+      "sha256": "6b8d557a09ee56b8151a59e4747609de65a7b6792a4197d321822b109b93289f"
+    },
+    {
+      "file": "tests/page/page-network-response.spec.ts",
+      "include": false,
+      "reason": "Request/Response/routing API family not served and outside this wave.",
+      "sha256": "6f81f766d399d2ee6beedf81cdf1c7a09c15901f27fc320c96fc5cd42b418392"
+    },
+    {
+      "file": "tests/page/page-network-sizes.spec.ts",
+      "include": false,
+      "reason": "Request/Response/routing API family not served and outside this wave.",
+      "sha256": "365d141869702bc3280958ec9b6e978222954fcfba4ad6a8d01cc509678e8a84"
+    },
+    {
+      "file": "tests/page/page-request-continue.spec.ts",
+      "include": false,
+      "reason": "Request/Response/routing API family not served and outside this wave.",
+      "sha256": "d1bb8bcb76b282ff9887a4f6ae6a739ccc533ea77a50aa65e85a21830e581ff9"
+    },
+    {
+      "file": "tests/page/page-request-fallback.spec.ts",
+      "include": false,
+      "reason": "Request/Response/routing API family not served and outside this wave.",
+      "sha256": "6766c40232aa7c4c8bd878098d3c3e42d4bf6431902f835f422010f8ce6dd5b1"
+    },
+    {
+      "file": "tests/page/page-request-fulfill.spec.ts",
+      "include": false,
+      "reason": "Request/Response/routing API family not served and outside this wave.",
+      "sha256": "4a2313364277e93d05c521c89261c2dc49e68df5fe0fb5b0456cc8c05e22b84c"
+    },
+    {
+      "file": "tests/page/page-request-gc.spec.ts",
+      "include": false,
+      "reason": "Request/Response/routing API family not served and outside this wave.",
+      "sha256": "1689c70bc70632d358849e75c59d4031bdc63b05f2d9d13473ab7a1d6c6844e0"
+    },
+    {
+      "file": "tests/page/page-request-intercept.spec.ts",
+      "include": false,
+      "reason": "Request/Response/routing API family not served and outside this wave.",
+      "sha256": "3adcbd8cdcb4995b9ca08ee0b9844f0de0366f66954ba9f897d0cdedb720ee66"
+    },
+    {
+      "file": "tests/page/page-route.spec.ts",
+      "include": false,
+      "reason": "Request/Response/routing API family not served and outside this wave.",
+      "sha256": "37d4c54f817a7eccebcd54bcdee72c0413d61fcf18a1f6938857f089dde5fb88"
+    },
+    {
+      "file": "tests/page/page-screenshot.spec.ts",
+      "include": false,
+      "reason": "Screenshots are outside this workstream and not a served SDK target.",
+      "sha256": "dcdfa3709e18bbc428581609d89b2a7cd488fbcd25804dee2fa4ec810466860b"
+    },
+    {
+      "file": "tests/page/page-select-option.spec.ts",
+      "include": true,
+      "reason": "Full suite; unsupported handles/options stay visible.",
+      "sha256": "12630cd171a1e1693d1d07c72398aae2f9d736536968ad2853fdabf51b926ff2"
+    },
+    {
+      "file": "tests/page/page-set-content.spec.ts",
+      "include": false,
+      "reason": "setContent is not a served target API; any setup use must be explicit fixture support.",
+      "sha256": "ca3b8168a23bd83ee01432cadd62004a5845aa8a808d53ceb82891b061d4656e"
+    },
+    {
+      "file": "tests/page/page-set-extra-http-headers.spec.ts",
+      "include": false,
+      "reason": "HTTP header/context configuration API not served.",
+      "sha256": "e636597c4e21e70015993b67bb87a4204340ccb377e7848a69c18a0464cb4c89"
+    },
+    {
+      "file": "tests/page/page-set-input-files.spec.ts",
+      "include": false,
+      "reason": "File upload not served; neo-actions scope.",
+      "sha256": "f645a590c5bb7d197efa4584b44a43c1d1b854938ae7ec8c23b5fa2fe1ae0c78"
+    },
+    {
+      "file": "tests/page/page-strict.spec.ts",
+      "include": true,
+      "reason": "Strictness across served and missing terminal methods.",
+      "sha256": "8eba7de9f6034339c34800b2a99967bbafcab8585a79bf56c418791816a7809b"
+    },
+    {
+      "file": "tests/page/page-transition.spec.ts",
+      "include": false,
+      "reason": "View-transition/evaluation and related APIs not served as targets.",
+      "sha256": "059f14de3efa9cf540f4f5655eb93155b5417df5f6c0e8c56f076d326b23f980"
+    },
+    {
+      "file": "tests/page/page-wait-for-function.spec.ts",
+      "include": false,
+      "reason": "Wait API not served; neo-reads-waits/neo-nav-history/events scope.",
+      "sha256": "dcbfeaaecab758c8523efe89ef67461d6542e76f361c0408521fc1df86280301"
+    },
+    {
+      "file": "tests/page/page-wait-for-load-state.spec.ts",
+      "include": true,
+      "reason": "Waits served by #3170; handle-returning and other missing APIs remain unsupported.",
+      "sha256": "43f24d7e547dd5ac095eeb620619f22a4fca0ec15c970404f90e07bb68c1b66c"
+    },
+    {
+      "file": "tests/page/page-wait-for-navigation.spec.ts",
+      "include": false,
+      "reason": "Wait API not served; neo-reads-waits/neo-nav-history/events scope.",
+      "sha256": "5a9a56f0927f8a3fdfe4abaea67be4343c9cb4b3eefdce76ac849e2446f631d7"
+    },
+    {
+      "file": "tests/page/page-wait-for-request.spec.ts",
+      "include": false,
+      "reason": "Wait API not served; neo-reads-waits/neo-nav-history/events scope.",
+      "sha256": "f0a26ab50528d1ab39ae9a1252ab86737b5c967b8e02ded296d506b500a05a79"
+    },
+    {
+      "file": "tests/page/page-wait-for-response.spec.ts",
+      "include": false,
+      "reason": "Wait API not served; neo-reads-waits/neo-nav-history/events scope.",
+      "sha256": "6b48f04b0cd8516df61cb315a4717c51f520ab83a762bf22f150242b509afecf"
+    },
+    {
+      "file": "tests/page/page-wait-for-selector-1.spec.ts",
+      "include": true,
+      "reason": "Waits served by #3170; handle-returning and other missing APIs remain unsupported.",
+      "sha256": "86a84f1f4ce96ec6fa95eca820c74059dc2c0053ecd986be1448673a2d2a6af0"
+    },
+    {
+      "file": "tests/page/page-wait-for-selector-2.spec.ts",
+      "include": true,
+      "reason": "Waits served by #3170; handle-returning and other missing APIs remain unsupported.",
+      "sha256": "bc157fc626618966283de3768fbe24fc637029d85fc43f7f1da21117e861b055"
+    },
+    {
+      "file": "tests/page/page-wait-for-url.spec.ts",
+      "include": true,
+      "reason": "Waits served by #3170; handle-returning and other missing APIs remain unsupported.",
+      "sha256": "b2c4a13de497d08543a3405b634142525837d47f2cb8437cf918479e59bbc114"
+    },
+    {
+      "file": "tests/page/queryselector.spec.ts",
+      "include": false,
+      "reason": "$ and $$ return ElementHandle, an unserved object family.",
+      "sha256": "9fea3e92fd16071a9a9e1b41da309c03796385a2f42f97407a3946fefbe7a609"
+    },
+    {
+      "file": "tests/page/retarget.spec.ts",
+      "include": true,
+      "reason": "Label/control retargeting for served actions and reads.",
+      "sha256": "7b56eff6674168dd91dbf20ab37af02b8c2ecc56c401e583f28210cb0bb691fb"
+    },
+    {
+      "file": "tests/page/selectors-css.spec.ts",
+      "include": true,
+      "reason": "CSS engine consumed by served Locator/Page actions.",
+      "sha256": "a55560aa61447a9b5dca20a1b5e0d86610b7efc3d069907ddd50ba1b202b972c"
+    },
+    {
+      "file": "tests/page/selectors-frame.spec.ts",
+      "include": true,
+      "reason": "Frame-locator requirements are explicit unsupported, not hidden suite omission.",
+      "sha256": "c4342953f658095cabbc0703e1ed9dffdcf52ece6f8d6e524348d719745a7c95"
+    },
+    {
+      "file": "tests/page/selectors-get-by.spec.ts",
+      "include": true,
+      "reason": "Required getBy builders; _expect/evaluate must use Neo or classify unsupported.",
+      "sha256": "1d79d98f9e69d098dcdfedf6c42e8b70848b156c786af1c55dab8d7c1de15659"
+    },
+    {
+      "file": "tests/page/selectors-misc.spec.ts",
+      "include": true,
+      "reason": "Selector composition and strictness; no real-PW fallback.",
+      "sha256": "4cafcfd420edc1a2861c5445ae382f2f8a480ae9f18baa8140055c2087d0683e"
+    },
+    {
+      "file": "tests/page/selectors-register.spec.ts",
+      "include": false,
+      "reason": "Custom selector engine registration not served.",
+      "sha256": "8502bdea667e07c6b136236d09c553f8ad25d02d4d7b8b72fa589a9ec4233b60"
+    },
+    {
+      "file": "tests/page/selectors-role.spec.ts",
+      "include": true,
+      "reason": "Required role selector suite; missing terminal APIs unsupported.",
+      "sha256": "92fbd8b9ecbed7ca6e721c12aa17bbd4fb0214906cc915ef278a68170ca2ad05"
+    },
+    {
+      "file": "tests/page/selectors-text.spec.ts",
+      "include": true,
+      "reason": "Text selector semantics used by getByText and filters.",
+      "sha256": "048065679a2b7b1478f33acb7d679411525912f7ab50ccbaa408687b49da8de9"
+    },
+    {
+      "file": "tests/page/to-match-aria-snapshot.spec.ts",
+      "include": false,
+      "reason": "Browser-aware expect/matcher API not served; selected suites retain those requirements as unsupported.",
+      "sha256": "ba4afd68ac6e081bb7eb1105992c84b00e0e0d7f8d0d567267755330b706bcdc"
+    },
+    {
+      "file": "tests/page/wheel.spec.ts",
+      "include": false,
+      "reason": "Public wheel/mouse API not served.",
+      "sha256": "572c63f70b54a423c6a186af9458b958822725fae39a3f89660308994b0896c7"
+    },
+    {
+      "file": "tests/page/workers.spec.ts",
+      "include": false,
+      "reason": "Worker objects/events are not served.",
+      "sha256": "4d425c9d192b6ba7668d85476cf9ee065f7f1e1c09debff3bb425efbd7bf9367"
+    },
+    {
+      "file": "tests/library/browsercontext-pages.spec.ts",
+      "include": true,
+      "reason": "Tab lifecycle and bringToFront. Other headed cases excluded.",
+      "sha256": "d662595c47fcbc546e79db285cfba0ada67f32b15e9cf366a226d69b9425b7dd"
+    },
+    {
+      "file": "tests/library/page-close.spec.ts",
+      "include": true,
+      "reason": "Tab lifecycle and bringToFront. Other headed cases excluded.",
+      "sha256": "fde55b64d96158a4f3086c971412016c1db4afed70bad688ba6d1607daf4d226"
+    },
+    {
+      "file": "tests/library/headful.spec.ts",
+      "include": true,
+      "reason": "Tab lifecycle and bringToFront. Other headed cases excluded.",
+      "sha256": "49e9e42e5bba4d5958852c063b3f1d22d7ff5d7de480cea567db1abf40f7d75e",
+      "title": "HE-012 Page.bringToFront should work"
+    }
+  ]
+}
