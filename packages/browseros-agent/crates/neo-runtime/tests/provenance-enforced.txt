@@ -45,8 +45,10 @@ neo-runtime/src/locator_handlers.rs
 neo-runtime/src/main_world.rs
 neo-runtime/src/network_events.rs
 neo-runtime/src/network_idle.rs
+neo-runtime/src/overlay.rs
 neo-runtime/src/page_events.rs
 neo-runtime/src/pdf.rs
+neo-runtime/src/screencast.rs
 neo-runtime/src/screenshot.rs
 neo-runtime/src/session_state.rs
 neo-runtime/src/switch.rs

@@ -619,6 +619,7 @@ mod tests {
     use crate::page::TabInputs;
     use crate::progress::{CallEntry, CallStart, RunScope};
     use crate::run::PageId;
+    use crate::screencast::ScreencastFrames;
     use crate::screenshot::TabScreenshots;
     use crate::session_state::Permissions;
 
@@ -858,6 +859,7 @@ mod tests {
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
+            ScreencastFrames::default(),
             Switches::default(),
             Permissions::default(),
             TaskTracker::new(),

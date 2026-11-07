@@ -1075,6 +1075,7 @@ mod tests {
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::page::TabInputs;
     use crate::progress::{CallEntry, CallStart, RunScope};
+    use crate::screencast::ScreencastFrames;
     use crate::screenshot::TabScreenshots;
     use crate::switch::Switches;
 
@@ -1121,6 +1122,7 @@ mod tests {
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
+            ScreencastFrames::default(),
             Switches::default(),
             Permissions::default(),
             TaskTracker::new(),
@@ -1195,6 +1197,7 @@ mod tests {
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
+            ScreencastFrames::default(),
             Switches::default(),
             Permissions::new(cleanup.clone()),
             TaskTracker::new(),

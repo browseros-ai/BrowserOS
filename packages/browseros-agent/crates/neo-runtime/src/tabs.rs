@@ -34,6 +34,7 @@ use crate::page::{FrameTab, PageSession, Session, TabInputs};
 use crate::page_events::{self, Kept, MAX_KEPT_ARGS, MAX_KEPT_CHOOSERS};
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunPage};
+use crate::screencast::ScreencastFrames;
 use crate::screenshot::TabScreenshots;
 use crate::session_state::{self, Overrides, Permissions};
 use crate::switch::Switches;
@@ -52,6 +53,8 @@ struct Inner {
     inputs: TabInputs,
     /// The `Runtime`'s screenshot turns, one per tab, across runs.
     screenshots: TabScreenshots,
+    /// The `Runtime`'s screencast frames, routed to each tab session's screencast.
+    screencasts: ScreencastFrames,
     tasks: TaskTracker,
     creations: TaskTracker,
     scope: Scope,
@@ -173,13 +176,14 @@ struct CreatedFrame {
 impl Tabs {
     #[expect(
         clippy::too_many_arguments,
-        reason = "each per-tab share the Runtime keeps (inputs, screenshots, switches, permissions) is one argument"
+        reason = "each share the Runtime keeps (inputs, screenshots, screencasts, switches, permissions) is one argument"
     )]
     pub(crate) async fn open(
         cdp: CdpClient,
         tokio: Handle,
         inputs: TabInputs,
         screenshots: TabScreenshots,
+        screencasts: ScreencastFrames,
         switches: Switches,
         permissions: Permissions,
         tasks: TaskTracker,
@@ -193,6 +197,7 @@ impl Tabs {
             tokio,
             inputs,
             screenshots,
+            screencasts,
             tasks,
             creations: TaskTracker::new(),
             scope: Scope {
@@ -228,6 +233,11 @@ impl Tabs {
 
     pub(crate) fn cdp(&self) -> &CdpClient {
         &self.0.cdp
+    }
+
+    /// The `Runtime`'s screencast frames (`screencast.rs`).
+    pub(crate) fn screencast_frames(&self) -> &ScreencastFrames {
+        &self.0.screencasts
     }
 
     /// The page the run started from.
@@ -1264,6 +1274,7 @@ mod tests {
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
+            ScreencastFrames::default(),
             Switches::default(),
             Permissions::default(),
             TaskTracker::new(),

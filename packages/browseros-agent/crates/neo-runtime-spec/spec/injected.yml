@@ -610,6 +610,33 @@ Injected:
     hideHighlight:
       internal: true
 
+    # `InjectedScript.addUserOverlay`: shows `html` as this document's user overlay `id` (its
+    # scripts and `on*` attributes stripped), in the same overlay as the highlights.
+    addUserOverlay:
+      internal: true
+      parameters:
+        id: string
+        html: string
+
+    # `InjectedScript.removeUserOverlay`: removes this document's user overlay `id`.
+    removeUserOverlay:
+      internal: true
+      parameters:
+        id: string
+
+    # `InjectedScript.setUserOverlaysVisible`: shows or hides this document's user overlays.
+    setUserOverlaysVisible:
+      internal: true
+      parameters:
+        visible: boolean
+
+    # A chapter's fade-out: adds `fade-out` to the `#background` of this document's user overlay
+    # `id`, whose stylesheet then fades it.
+    fadeOutUserOverlay:
+      internal: true
+      parameters:
+        id: string
+
     # `frames.ts` `inputValue`: resolve and mark the first match, then follow its label.
     inputValue:
       internal: true

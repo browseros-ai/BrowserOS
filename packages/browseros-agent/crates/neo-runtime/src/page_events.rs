@@ -136,6 +136,13 @@ struct DialogOpening {
 }
 
 impl PageEvents {
+    /// `screencastFrame` on the page while the realm listens (`screencast.rs`): whether the
+    /// realm will see it, and so acknowledge it.
+    pub(crate) fn screencast_frame(&self, frame: &Value) -> bool {
+        self.hub.subscribed(&self.page_guid, "screencastFrame")
+            && self.hub.emit(&self.page_guid, "screencastFrame", frame) == Emitted::Queued
+    }
+
     /// `locatorHandlerTriggered` on the page while the realm listens (`locator_handlers.rs`):
     /// whether it went out.
     pub(crate) fn locator_handler_triggered(&self, uid: i64) -> bool {

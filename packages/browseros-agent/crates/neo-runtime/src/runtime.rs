@@ -30,6 +30,7 @@ use crate::progress::{ErrorName, RunScope};
 use crate::realm;
 use crate::realm::Script;
 use crate::run::{RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
+use crate::screencast::ScreencastFrames;
 use crate::screenshot::TabScreenshots;
 use crate::session_state::Permissions;
 use crate::switch::Switches;
@@ -49,12 +50,16 @@ const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
 /// pages (`discovery.rs`), and its download reports, on while any listens for downloads
 /// (`downloads.rs`), which the `Runtime` counts (`switch.rs`). Give a `CdpClient` one `Runtime`
 /// (clones are fine): a second `Runtime` on the same client would count its own runs, and the
-/// first to let go would turn either off for the other's.
+/// first to let go would turn either off for the other's. The first screencast a run starts
+/// takes the client's `Page.screencastFrame` events for the `Runtime`'s runs, so the client's
+/// other users must not take them (`screencast.rs` `ScreencastFrames`).
 #[derive(Clone)]
 pub struct Runtime {
     cdp: CdpClient,
     inputs: TabInputs,
     screenshots: TabScreenshots,
+    /// The client's screencast frames, which every run's screencast shares (`screencast.rs`).
+    screencasts: ScreencastFrames,
     /// Target discovery and download reports on `cdp`, each on while any run listens for them.
     switches: Switches,
     /// The runs' permission grants on `cdp`, reset once no run holds one (`session_state.rs`).
@@ -110,6 +115,7 @@ impl Runtime {
                     cdp,
                     inputs: TabInputs::default(),
                     screenshots: TabScreenshots::default(),
+                    screencasts: ScreencastFrames::default(),
                     switches: Switches::new(cleanup.clone()),
                     permissions: Permissions::new(cleanup.clone()),
                     cleanup,
@@ -169,7 +175,7 @@ impl Runtime {
             stop = deadline.reached() => {
                 return RunOutcome::stopped(stop, deadline.timeout(), Vec::new());
             }
-            opened = Tabs::open(self.cdp.clone(), tokio.clone(), self.inputs.clone(), self.screenshots.clone(), self.switches.clone(), self.permissions.clone(), tasks.clone(), &page) => opened,
+            opened = Tabs::open(self.cdp.clone(), tokio.clone(), self.inputs.clone(), self.screenshots.clone(), self.screencasts.clone(), self.switches.clone(), self.permissions.clone(), tasks.clone(), &page) => opened,
         };
         let (tabs, url) = match opened {
             Ok(opened) => opened,

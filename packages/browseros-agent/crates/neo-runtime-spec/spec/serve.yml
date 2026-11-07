@@ -74,6 +74,18 @@ interfaces:
     - registerLocatorHandler
     - resolveLocatorHandlerNoReply
     - unregisterLocatorHandler
+    # Screencast (screencast.rs, overlay.rs): JPEG frames from CDP `Page.startScreencast`, each
+    # acknowledged once the realm's `onFrame` resolved; overlays through the injected Highlight.
+    # `screencastShowActions` is the SDK's refusal (FU-T-1), so it is not served, and
+    # `screencastHideActions` answers at once.
+    - screencastStart
+    - screencastStop
+    - screencastFrameAck
+    - screencastShowOverlay
+    - screencastRemoveOverlay
+    - screencastChapter
+    - screencastSetOverlayVisible
+    - screencastHideActions
   # A JavaScript dialog the run's `dialog` event handed out.
   Dialog:
     - accept

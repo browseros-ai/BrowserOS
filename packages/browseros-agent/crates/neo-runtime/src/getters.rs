@@ -577,6 +577,7 @@ mod tests {
     use crate::page::TabInputs;
     use crate::progress::ErrorName;
     use crate::run::PageId;
+    use crate::screencast::ScreencastFrames;
     use crate::screenshot::TabScreenshots;
     use crate::session_state::Permissions;
     use crate::switch::Switches;
@@ -634,6 +635,7 @@ mod tests {
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
+            ScreencastFrames::default(),
             Switches::default(),
             Permissions::default(),
             TaskTracker::new(),
@@ -818,6 +820,7 @@ mod tests {
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
+            ScreencastFrames::default(),
             Switches::default(),
             Permissions::default(),
             TaskTracker::new(),
