@@ -212,21 +212,19 @@ impl MainWorld {
         return_by_value: bool,
         group: Option<&ObjectGroup>,
     ) -> Result<Called, PageError> {
-        let declaration = match function {
-            MainFunction::Evaluate => EVALUATE,
-            MainFunction::JsonValue => JSON_VALUE,
-        };
         let mut all = Vec::with_capacity(arguments.len() + 1);
         all.push(json!({ "objectId": installed.utility.object_id() }));
         all.extend(arguments);
-        let mut request = json!({
-            "functionDeclaration": declaration,
-            "objectId": installed.utility.object_id(),
-            "arguments": all,
-            "returnByValue": return_by_value,
-            "awaitPromise": true,
-            "userGesture": true,
-        });
+        // Each declaration is named at its key, so the page JS guard can see it is built.
+        let mut request = match function {
+            MainFunction::Evaluate => json!({ "functionDeclaration": EVALUATE }),
+            MainFunction::JsonValue => json!({ "functionDeclaration": JSON_VALUE }),
+        };
+        request["objectId"] = json!(installed.utility.object_id());
+        request["arguments"] = json!(all);
+        request["returnByValue"] = json!(return_by_value);
+        request["awaitPromise"] = json!(true);
+        request["userGesture"] = json!(true);
         if let Some(ObjectGroup(group)) = group {
             request["objectGroup"] = json!(group);
         }
@@ -240,11 +238,11 @@ impl MainWorld {
                 });
             }
             Err(error) => {
-                return Err(match frame.host.classify(&error) {
+                return match frame.host.classify(&error) {
                     // A request timeout or a vanished OOPIF: the document is gone for this call.
-                    PageError::NotConnected => return Ok(Called::Protocol(error.to_string())),
-                    other => other,
-                });
+                    PageError::NotConnected => Ok(Called::Protocol(error.to_string())),
+                    other => Err(other),
+                };
             }
         };
         let answer: CallFunctionOnResult = serde_json::from_value(reply).map_err(|error| {

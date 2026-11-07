@@ -3,10 +3,14 @@
 //! in. A raw send anywhere else would run in the page's own world whatever the caller intended.
 //!
 //! Neo is the one other runtime with its own path. Its crates never depend on browseros-core
-//! (`crates/NEO_STYLE.md`), and `neo-runtime/src/world.rs` is the only Neo file that calls into the
-//! page: `Runtime.callFunctionOn` on an object of Neo's own isolated world, or on the context
-//! `Page.createIsolatedWorld` returned for it. It may send nothing else, so a `Runtime.evaluate`
-//! (whose default target is the page's own world) still fails here, in Neo as everywhere.
+//! (`crates/NEO_STYLE.md`), and two Neo files call into the page, with `Runtime.callFunctionOn`
+//! only: `neo-runtime/src/world.rs`, on an object of Neo's own isolated world or on the context
+//! `Page.createIsolatedWorld` returned for it, and `neo-runtime/src/main_world.rs`, the one door to
+//! the page's own world that Playwright's evaluations need (`page.evaluate`, `JSHandle.evaluate`),
+//! on the `UtilityScript` object it built there from a bundled artifact. Neither may send anything
+//! else, so a `Runtime.evaluate` still fails here, in Neo as everywhere. Neo's own guard
+//! (`neo-runtime/tests/page_js_guard.rs`) is stricter: it also refuses the other script-running
+//! methods and requires every Neo `functionDeclaration` to be a built artifact.
 //!
 //! A send is recognised by the method literal in argument position (followed by a comma), which
 //! leaves the CDP policy tables and error labels that merely name the methods alone.
@@ -23,6 +27,7 @@ const METHODS: &[&str] = &[EVALUATE, CALL_FUNCTION_ON];
 const ALLOWED: &[(&str, &[&str])] = &[
     ("crates/browseros-core/src/page_js.rs", METHODS),
     ("crates/neo-runtime/src/world.rs", &[CALL_FUNCTION_ON]),
+    ("crates/neo-runtime/src/main_world.rs", &[CALL_FUNCTION_ON]),
 ];
 const SKIPPED_DIRS: &[&str] = &[
     "target",
@@ -98,6 +103,35 @@ fn tests_that_neo_world_may_call_functions_but_never_evaluate() {
         ),
         "page_js.rs sends both"
     );
+}
+
+#[test]
+fn tests_that_neo_main_world_may_call_functions_but_never_evaluate() {
+    let main_world = allowed_methods("crates/neo-runtime/src/main_world.rs");
+    assert!(
+        !sends_page_script(
+            r#"frame.host.send("Runtime.callFunctionOn", request)"#,
+            main_world
+        ),
+        "main_world.rs calls the UtilityScript it built in the page's own world"
+    );
+    assert!(
+        sends_page_script(
+            r#"frame.host.send("Runtime.evaluate", request)"#,
+            main_world
+        ),
+        "main_world.rs may not evaluate"
+    );
+    let policy = allowed_methods("crates/neo-runtime/src/evaluate.rs");
+    for line in [
+        r#"frame.host.send("Runtime.callFunctionOn", request)"#,
+        r#"frame.host.send("Runtime.evaluate", request)"#,
+    ] {
+        assert!(
+            sends_page_script(line, policy),
+            "evaluate.rs is policy and reaches the page only through main_world.rs: {line}"
+        );
+    }
 }
 
 /// The methods `relative` may send: none unless [`ALLOWED`] names the file.
