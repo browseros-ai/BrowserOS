@@ -91,7 +91,6 @@ interfaces:
     - innerText
     - getAttribute
     - queryCount
-    - evalOnSelectorAll
     # Element reads and states (states.rs, reads.rs): Playwright's `_elementState`,
     # `isHidden` (`!isVisible`, one read) and `innerHTML`.
     - isEnabled

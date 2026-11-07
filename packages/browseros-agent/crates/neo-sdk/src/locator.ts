@@ -18,10 +18,7 @@
  * - `waitFor` sends Playwright's own `Frame.waitForSelector` through `Frame._waitForSelector`,
  *   as Playwright's goes straight to the frame's channel.
  * - `ariaSnapshot` shares `Frame._ariaSnapshot` with page snapshots, sending this selector.
- * - `allTextContents` and `allInnerTexts` send `client/locator.ts` source text (the latter
- *   without its TypeScript cast); compiled clients may format it differently. They read in Neo's
- *   isolated world, so page-defined `textContent` and `innerText` overrides (prototype patches,
- *   custom element classes or per-instance properties) can differ.
+ * - `allTextContents` and `allInnerTexts` run as `$$eval` in the page's main world.
  *
  * Frame identity is load-bearing: `has`, `hasNot`, `and`, `or` and `locator(Locator)` throw
  * unless both locators hold the same `Frame` object, which is why a page interns every frame
@@ -46,6 +43,7 @@ import {
   escapeForTextSelector,
   isString,
 } from '../vendor/playwright/isomorphic/stringUtils'
+import type { ElementHandle } from './element-handle'
 import type {
   AriaSnapshotOptions,
   CheckOptions,
@@ -74,7 +72,12 @@ import type {
   WaitForSelectorOptions,
 } from './frame'
 import { FrameLocator } from './frame-locator'
-import type { EvaluateOptions, PageElement, PageFunctionOn } from './js-handle'
+import type {
+  EvaluateOptions,
+  JSHandle,
+  PageElement,
+  PageFunctionOn,
+} from './js-handle'
 import type { Page } from './page'
 import type { SelectOptionValues } from './select-option'
 
@@ -390,6 +393,63 @@ export class Locator {
       (handle) =>
         handle._evaluate<R>('locator.evaluate', pageFunction, arg, options),
       { timeout: options?.timeout, signal: options?.signal },
+    )
+  }
+
+  /** Playwright's `locator.evaluateHandle`: as `evaluate`, resolving a handle to the result. */
+  async evaluateHandle<R, Arg>(
+    pageFunction: PageFunctionOn<PageElement, Arg, R>,
+    arg?: Arg,
+    options?: EvaluateOptions & { timeout?: number; signal?: unknown },
+  ): Promise<JSHandle<R>> {
+    return await this._frame._withElement(
+      'locator.evaluateHandle',
+      this._selector,
+      (handle) =>
+        handle._evaluateHandle<R>(
+          'locator.evaluateHandle',
+          pageFunction,
+          arg,
+          options,
+        ),
+      { timeout: options?.timeout, signal: options?.signal },
+    )
+  }
+
+  /** Playwright's `locator.evaluateAll`: `pageFunction` on the array of every match, without
+   * waiting (`frame.$$eval`). */
+  async evaluateAll<R, Arg>(
+    pageFunction: PageFunctionOn<PageElement[], Arg, R>,
+    arg?: Arg,
+  ): Promise<R> {
+    return await this._frame._evalOnSelectorAll(
+      'locator.evaluateAll',
+      this._selector,
+      pageFunction,
+      arg,
+    )
+  }
+
+  /** Playwright's `locator.elementHandle`: the one element, once attached, as a handle. */
+  async elementHandle(options?: {
+    timeout?: number
+    signal?: unknown
+  }): Promise<ElementHandle> {
+    const handle = await this._frame._waitForSelectorElement(
+      'locator.elementHandle',
+      this._selector,
+      { strict: true, state: 'attached', ...options },
+    )
+    if (!handle)
+      throw new Error(`Could not resolve ${this._selector} to DOM Element`)
+    return handle
+  }
+
+  /** Playwright's `locator.elementHandles`: every match, as handles, without waiting. */
+  async elementHandles(): Promise<ElementHandle[]> {
+    return await this._frame._querySelectorAll(
+      'locator.elementHandles',
+      this._selector,
     )
   }
 

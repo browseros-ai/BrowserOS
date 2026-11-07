@@ -6,7 +6,8 @@
 //! - `src/world.rs`, Neo's isolated (utility) world: `Page.createIsolatedWorld` and
 //!   `Runtime.callFunctionOn`, for every read and action.
 //! - `src/main_world.rs`, the page's own world, for Playwright's evaluations: `Runtime.callFunctionOn`
-//!   only, on the `UtilityScript` it builds there.
+//!   only, on the `UtilityScript` it builds there, and on a page object an event named (the
+//!   built `(object) => object`, which keeps it in a run's handle group).
 //!
 //! In both, every `functionDeclaration` is a `const` whose initializer is exactly
 //! `include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/<name>.js"))`
