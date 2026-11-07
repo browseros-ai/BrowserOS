@@ -108,6 +108,16 @@ function createLMStudioModel(config: ResolvedLLMConfig): LanguageModel {
   })(config.model)
 }
 
+function createAntigravityModel(config: ResolvedLLMConfig): LanguageModel {
+  if (!config.baseUrl) throw new Error('Antigravity provider requires baseUrl')
+  return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
+    name: 'antigravity',
+    baseURL: config.baseUrl,
+    ...(config.apiKey && { apiKey: config.apiKey }),
+  })(config.model)
+}
+
 function createBedrockModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.accessKeyId || !config.secretAccessKey || !config.region) {
     throw new Error(
@@ -190,6 +200,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.CHATGPT_PRO]: createChatGPTProModel,
   [LLM_PROVIDERS.GITHUB_COPILOT]: createGitHubCopilotModel,
   [LLM_PROVIDERS.QWEN_CODE]: createQwenCodeModel,
+  [LLM_PROVIDERS.ANTIGRAVITY]: createAntigravityModel,
 }
 
 export function createLLMProvider(config: ResolvedLLMConfig): LanguageModel {

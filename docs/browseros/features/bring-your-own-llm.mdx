@@ -259,6 +259,54 @@ Connect to powerful AI models using your API keys. Your keys stay on your machin
 
 ---
 
+## Antigravity
+
+BrowserOS can use [Google Antigravity](https://github.com/google-antigravity/antigravity-sdk-python) models through a small local bridge. The Antigravity SDK is Python-only, so the bridge (`packages/browseros-agent/tools/antigravity-bridge`) wraps it in an OpenAI-compatible endpoint that the **Antigravity** provider talks to.
+
+<Steps>
+  <Step title="Install and authenticate the SDK">
+    ```bash
+    pip install google-antigravity
+    export GEMINI_API_KEY="your_api_key_here"
+    ```
+    For Vertex AI, set `GOOGLE_GENAI_USE_VERTEXAI=True`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` and run `gcloud auth application-default login` instead.
+  </Step>
+  <Step title="Start the bridge">
+    From the repo root, in the same shell where `GEMINI_API_KEY` is set:
+    ```bash
+    pip install -r packages/browseros-agent/tools/antigravity-bridge/requirements.txt
+    python packages/browseros-agent/tools/antigravity-bridge/antigravity_bridge.py --port 8765
+    ```
+    Check it is up with `curl http://127.0.0.1:8765/v1/models`. You should see `gemini-3.8-flash` in the list.
+  </Step>
+  <Step title="Add the provider">
+    Open **Settings → AI & Agents**. Under **Runs on this machine**, click **Add** next to **Antigravity (local bridge)**.
+
+    ![Antigravity in the provider list](/images/byollm--antigravity-provider-list.png)
+
+    The dialog opens with Provider Type **Antigravity** and Base URL `http://127.0.0.1:8765/v1` already filled in.
+
+    ![Antigravity add-provider dialog](/images/byollm--antigravity-add-dialog.png)
+  </Step>
+  <Step title="Configure and save">
+    - **Provider Name**: e.g. `Antigravity`
+    - **Model**: `gemini-3.8-flash` (or any model the SDK accepts)
+    - **API Key**: leave empty unless you started the bridge with `ANTIGRAVITY_BRIDGE_TOKEN`
+
+    ![Configured Antigravity provider](/images/byollm--antigravity-provider-config.png)
+
+    <Note>
+    **Test** and **Save** go through the BrowserOS server, so run them inside BrowserOS. This screenshot comes from the extension loaded in plain Chromium, where no server is available, so it shows "Server URL not available". That message does not come from the bridge.
+    </Note>
+  </Step>
+</Steps>
+
+<Warning>
+The bridge is text-only and stateless: OpenAI tool/function calling and image inputs are not supported, so BrowserOS agent actions that need tool calls will not work with this provider. See the [bridge README](https://github.com/browseros-ai/BrowserOS/tree/main/packages/browseros-agent/tools/antigravity-bridge) for details.
+</Warning>
+
+---
+
 ## Local Models
 
 <Card title="Local Model Guide" icon="server" href="/browseros/features/local-models">

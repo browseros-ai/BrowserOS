@@ -11,6 +11,7 @@ const USER_LOADED_MODEL_PROVIDERS: ReadonlySet<ProviderType> = new Set([
   'lmstudio',
   'ollama',
   'openai-compatible',
+  'antigravity',
 ])
 
 export function servesUserLoadedModels(providerType: ProviderType): boolean {
