@@ -140,12 +140,46 @@ struct Script {
     source: String,
     /// The page's target id for `page.addInitScript`; `None` for the context's.
     page: Option<String>,
+    rank: Rank,
 }
 
 impl Script {
     fn reaches(&self, target: &str) -> bool {
         self.page.as_deref().is_none_or(|page| page == target)
     }
+}
+
+/// Where a script runs in a session that starts with every script in: Playwright's order. A
+/// session that is already showing a page gets each script after the ones it has, in call order.
+/// Playwright: `server/page.ts` `Page.allInitScripts`: `return [...bindings, ...this.browserContext.initScripts, ...this.initScripts];`
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "bindings.rs adds the binding ranks (C2), after the EventHub merge"
+    )
+)]
+pub(crate) enum Rank {
+    /// Playwright's `BindingsController` (`bindings.rs`).
+    Controller,
+    /// A context's binding, then a page's (`bindings.rs`).
+    ContextBinding,
+    PageBinding,
+    /// `browserContext.addInitScript`, then `page.addInitScript`.
+    Context,
+    Page,
+}
+
+/// The scripts a session that starts showing `target` gets, in [`Rank`] order, each rank's in
+/// the order the run added them.
+fn for_new_session<'a>(scripts: &'a [Script], target: &str) -> Vec<&'a Script> {
+    let mut reaching: Vec<&Script> = scripts
+        .iter()
+        .filter(|script| script.reaches(target))
+        .collect();
+    reaching.sort_by_key(|script| script.rank);
+    reaching
 }
 
 /// A page the run touched, with every session that shows it: the tab's own first, then each
@@ -205,6 +239,26 @@ impl InitScripts {
         page: Option<&Arc<PageSession>>,
         source: &str,
     ) -> Result<String, PlaywrightError> {
+        let rank = if page.is_some() {
+            Rank::Page
+        } else {
+            Rank::Context
+        };
+        self.add_ranked(cdp, page, source, rank).await
+    }
+
+    /// [`Self::add`] for a script of `rank`, as `bindings.rs` adds its own.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::add`].
+    pub(crate) async fn add_ranked(
+        self: &Arc<Self>,
+        cdp: &CdpClient,
+        page: Option<&Arc<PageSession>>,
+        source: &str,
+        rank: Rank,
+    ) -> Result<String, PlaywrightError> {
         if let Some(page) = page {
             self.show(cdp, page, true).await?;
         }
@@ -217,6 +271,7 @@ impl InitScripts {
             guid: guid.clone(),
             source: wrap(source),
             page: page.map(|page| target_of(page)),
+            rank,
         };
         let mut state = self.state.lock().await;
         if state.closed {
@@ -280,11 +335,7 @@ impl InitScripts {
             },
             identifiers: Vec::new(),
         };
-        for script in state
-            .scripts
-            .iter()
-            .filter(|script| script.reaches(&target))
-        {
+        for script in for_new_session(&state.scripts, &target) {
             if let Some(identifier) = add_script(cdp, &shown.link, &script.source, false).await {
                 shown.identifiers.push((script.guid.clone(), identifier));
             }
@@ -404,7 +455,7 @@ impl InitScripts {
                     link: link.clone(),
                     identifiers: Vec::new(),
                 };
-                for script in scripts.iter().filter(|script| script.reaches(&target)) {
+                for script in for_new_session(scripts, &target) {
                     if let Some(identifier) = add_script(&cdp, &link, &script.source, held).await {
                         shown.identifiers.push((script.guid.clone(), identifier));
                     }
@@ -647,17 +698,48 @@ mod tests {
 
     #[test]
     fn a_page_script_reaches_its_page_and_a_context_script_every_page() {
-        let page = Script {
-            guid: "a".into(),
-            source: String::new(),
-            page: Some("T1".into()),
-        };
-        let context = Script {
-            guid: "b".into(),
-            source: String::new(),
-            page: None,
-        };
+        let page = script("a", Some("T1"), Rank::Page);
+        let context = script("b", None, Rank::Context);
         assert!(page.reaches("T1") && !page.reaches("T2"));
         assert!(context.reaches("T1") && context.reaches("T2"));
+    }
+
+    fn script(guid: &str, page: Option<&str>, rank: Rank) -> Script {
+        Script {
+            guid: guid.into(),
+            source: String::new(),
+            page: page.map(Into::into),
+            rank,
+        }
+    }
+
+    #[test]
+    fn a_new_session_gets_bindings_first_then_context_then_page_scripts_each_in_call_order() {
+        let scripts = [
+            script("page-1", Some("T1"), Rank::Page),
+            script("context-1", None, Rank::Context),
+            script("controller", None, Rank::Controller),
+            script("page-binding", Some("T1"), Rank::PageBinding),
+            script("other-page", Some("T2"), Rank::Page),
+            script("context-binding", None, Rank::ContextBinding),
+            script("page-2", Some("T1"), Rank::Page),
+            script("context-2", None, Rank::Context),
+        ];
+        let order: Vec<&str> = for_new_session(&scripts, "T1")
+            .into_iter()
+            .map(|script| script.guid.as_str())
+            .collect();
+        assert_eq!(
+            order,
+            [
+                "controller",
+                "context-binding",
+                "page-binding",
+                "context-1",
+                "context-2",
+                "page-1",
+                "page-2"
+            ]
+        );
     }
 }
