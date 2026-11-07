@@ -1758,40 +1758,8 @@ mod tests {
                     }]
                 );
             }
-            Route::FramePointer(_) => panic!("a form is not a pointer action"),
-            Route::FrameGoto(_)
-            | Route::FrameTitle
-            | Route::FrameTextContent(_)
-            | Route::FrameInnerText(_)
-            | Route::FrameGetAttribute(_)
-            | Route::FrameQueryCount(_)
-            | Route::FrameInnerHtml(_)
-            | Route::FrameIsVisible(_)
-            | Route::FrameIsHidden(_)
-            | Route::FrameIsChecked(_)
-            | Route::FrameIsEnabled(_)
-            | Route::FrameIsDisabled(_)
-            | Route::FrameIsEditable(_)
-            | Route::FrameAriaSnapshot(_)
-            | Route::FrameWaitForSelector(_)
-            | Route::FrameFrameElement
-            | Route::FrameWaitForUrl(_)
-            | Route::FrameWaitForLoadState(_)
-            | Route::FrameFocus(_)
-            | Route::FrameBlur(_)
-            | Route::FrameDispatchEvent(_)
-            | Route::FrameScrollIntoViewIfNeeded(_)
-            | Route::FrameSelectText(..)
-            | Route::FrameBoundingBox(_)
-            | Route::FrameHighlight(_)
-            | Route::FrameHideHighlight(_)
-            | Route::FrameWaitForNavigation(_)
-            | Route::FrameNextNavigation(_)
-            | Route::FrameFinishNavigation(_)
-            | Route::FrameReleaseNavigation(_)
-            | Route::FrameEval(_) => {
-                panic!("a form is not a navigation, read or wait")
-            }
+            // Every other route is no form; naming each would only grow this match.
+            other => panic!("{method} is a form, not {other:?}"),
         }
     }
 
