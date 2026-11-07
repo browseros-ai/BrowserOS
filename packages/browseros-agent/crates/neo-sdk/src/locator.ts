@@ -18,10 +18,7 @@
  * - `waitFor` sends Playwright's own `Frame.waitForSelector` through `Frame._waitForSelector`,
  *   as Playwright's goes straight to the frame's channel.
  * - `ariaSnapshot` shares `Frame._ariaSnapshot` with page snapshots, sending this selector.
- * - `allTextContents` and `allInnerTexts` send `client/locator.ts` source text (the latter
- *   without its TypeScript cast); compiled clients may format it differently. They read in Neo's
- *   isolated world, so page-defined `textContent` and `innerText` overrides (prototype patches,
- *   custom element classes or per-instance properties) can differ.
+ * - `allTextContents` and `allInnerTexts` run as `$$eval` in the page's main world.
  *
  * Frame identity is load-bearing: `has`, `hasNot`, `and`, `or` and `locator(Locator)` throw
  * unless both locators hold the same `Frame` object, which is why a page interns every frame
@@ -47,6 +44,7 @@ import {
   isString,
 } from '../vendor/playwright/isomorphic/stringUtils'
 import type { Buffer } from './buffer'
+import type { ElementHandle } from './element-handle'
 import type {
   AriaSnapshotOptions,
   CheckOptions,
@@ -73,6 +71,12 @@ import type {
   WaitForSelectorOptions,
 } from './frame'
 import { FrameLocator } from './frame-locator'
+import type {
+  EvaluateOptions,
+  JSHandle,
+  PageElement,
+  PageFunctionOn,
+} from './js-handle'
 import type { Page } from './page'
 import {
   locatorScreenshotParams,
@@ -199,11 +203,13 @@ export class Locator {
   /**
    * Playwright: `client/locator.ts` `Locator.ariaSnapshot`: `selector: this._selector,`
    * The matched subtree as YAML in the selected frame. Default mode waits for a match,
-   * omits refs and leaves iframe contents unstitched. Main-frame `mode: 'ai'` snapshots stitch
-   * iframe content with refs rooted in the main frame. AI does not auto-wait: use `waitFor()`
-   * first if needed. Child-frame AI snapshots are refused; use `page.ariaSnapshot({ mode: 'ai' })`.
-   * `depth` limits tree levels (0 means unlimited). AI refs work with `page.locator('aria-ref=…')`
-   * until the next snapshot or navigation replaces them. Every mode requires one match.
+   * omits refs and leaves iframe contents unstitched. `mode: 'ai'` snapshots stitch iframe
+   * content with refs rooted in the main frame, in a child frame too (its refs take the path
+   * of iframes from the main frame); behind an iframe that gets no ref (hidden, no pointer
+   * events) an AI snapshot that would hold refs throws. AI does not auto-wait: use `waitFor()`
+   * first if needed. `depth` limits tree levels (0 means unlimited). AI refs work with
+   * `page.locator('aria-ref=…')` until the next snapshot of their document or a navigation
+   * replaces them. Every mode requires one match.
    */
   async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
     return await this._frame._ariaSnapshot(
@@ -341,7 +347,7 @@ export class Locator {
       this._frame._guid,
       'neo:screenshot',
       locatorScreenshotParams('locator.screenshot', this._selector, options),
-      this._frame._page._timeoutSettings.timeout(options),
+      this._frame._page._timeoutSettings.timeout(options, 'locator.screenshot'),
     )
     return resultBuffer(result.binary)
   }
@@ -356,6 +362,82 @@ export class Locator {
    * selectors resolve inside their selected frames. Runs under the action timeout and polls
    * the page. It never takes the tab's input, so a click or typing in the same run can satisfy it.
    */
+  /**
+   * Playwright's `locator.evaluate`: `pageFunction` on the one element this locator matches, in
+   * the main world, after waiting under the action timeout for it to be attached
+   * (`_withElement`). More than one match is a strict mode violation.
+   */
+  async evaluate<R, Arg>(
+    pageFunction: PageFunctionOn<PageElement, Arg, R>,
+    arg?: Arg,
+    options?: EvaluateOptions & { timeout?: number; signal?: unknown },
+  ): Promise<R> {
+    return await this._frame._withElement(
+      'locator.evaluate',
+      this._selector,
+      (handle) =>
+        handle._evaluate<R>('locator.evaluate', pageFunction, arg, options),
+      { timeout: options?.timeout, signal: options?.signal },
+    )
+  }
+
+  /** Playwright's `locator.evaluateHandle`: as `evaluate`, resolving a handle to the result. */
+  async evaluateHandle<R, Arg>(
+    pageFunction: PageFunctionOn<PageElement, Arg, R>,
+    arg?: Arg,
+    options?: EvaluateOptions & { timeout?: number; signal?: unknown },
+  ): Promise<JSHandle<R>> {
+    return await this._frame._withElement(
+      'locator.evaluateHandle',
+      this._selector,
+      (handle) =>
+        handle._evaluateHandle<R>(
+          'locator.evaluateHandle',
+          pageFunction,
+          arg,
+          options,
+        ),
+      { timeout: options?.timeout, signal: options?.signal },
+    )
+  }
+
+  /** Playwright's `locator.evaluateAll`: `pageFunction` on the array of every match, without
+   * waiting (`frame.$$eval`). */
+  async evaluateAll<R, Arg>(
+    pageFunction: PageFunctionOn<PageElement[], Arg, R>,
+    arg?: Arg,
+  ): Promise<R> {
+    return await this._frame._evalOnSelectorAll(
+      'locator.evaluateAll',
+      this._selector,
+      pageFunction,
+      arg,
+    )
+  }
+
+  /** Playwright's `locator.elementHandle`: the one element, once attached, as a handle. */
+  async elementHandle(options?: {
+    timeout?: number
+    signal?: unknown
+  }): Promise<ElementHandle> {
+    const handle = await this._frame._waitForSelectorElement(
+      'locator.elementHandle',
+      this._selector,
+      { strict: true, state: 'attached', ...options },
+    )
+    if (!handle)
+      throw new Error(`Could not resolve ${this._selector} to DOM Element`)
+    return handle
+  }
+
+  /** Playwright's `locator.elementHandles`: every match, as handles, without waiting. */
+  async elementHandles(): Promise<ElementHandle[]> {
+    return await this._frame._querySelectorAll(
+      'locator.elementHandles',
+      this._selector,
+    )
+  }
+
   async waitFor(options?: WaitForSelectorOptions): Promise<void> {
     await this._frame._waitForSelector('locator.waitFor', this._selector, {
       strict: true,

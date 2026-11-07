@@ -22,6 +22,11 @@ interfaces:
     - close
     - runBeforeUnload
     - bringToFront
+    # History navigations answer the new document's `Response` as `Frame.goto` does, or `{}`
+    # where Playwright's has none: no history entry, a same-document entry, a restored document.
+    - reload
+    - goBack
+    - goForward
     # `binary` results: neo-runtime answers `neo_runtime_spec::Binary`, the SDK a `Buffer`.
     - screenshot
     - pdf
@@ -71,7 +76,6 @@ interfaces:
     - innerText
     - getAttribute
     - queryCount
-    - evalOnSelectorAll
     # Element reads and states (states.rs, reads.rs): Playwright's `_elementState`,
     # `isHidden` (`!isVisible`, one read) and `innerHTML`.
     - isEnabled

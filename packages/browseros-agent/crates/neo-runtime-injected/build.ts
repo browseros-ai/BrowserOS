@@ -5,6 +5,14 @@
  *   dist/install.js     `(key, specSha256, initializer) => glue`   InjectedScript + glue
  *   dist/attach.js      `(key) => glue | undefined`                a few hundred bytes
  *   dist/call.js        `function (name, params, ...handles)`      the page-call convention
+ *   dist/utility.js     `() => UtilityScript`                      Playwright's main-world helper
+ *   dist/evaluate.js    `(utilityScript, ...args) => evaluate`     Playwright's evaluate convention
+ *   dist/json-value.js  `(utilityScript, ...args) => jsonValue`    Playwright's jsonValue convention
+ *   dist/get-property.js, wait-for-function.js, wait-result.js, wait-abort.js
+ *                       Playwright's server page functions, run as `UtilityScript.evaluate`
+ *                       expressions (`JSHandle.getProperty`, `page.waitForFunction`)
+ *   dist/retain.js      `(object) => object`                       an event's object, kept
+ *                       in a run's handle group
  *   dist/spec-sha256    neo-runtime-spec's SPEC_SHA256, no trailing newline, which neo-runtime
  *                       const-asserts against the Rust crate's own hash
  *
@@ -27,9 +35,11 @@
  * in a real page.
  *
  * Also enforced here, because Biome cannot tell a type import from a value import by path: no
- * file under `src/` except `install.ts` may value-import vendored code (Playwright's DEPS.list
- * rule: glue sees injected types, never injected code). A violation fails the build, and so
- * neo-check.
+ * file under `src/` except `install.ts` and `utility.ts` may value-import vendored code
+ * (Playwright's DEPS.list rule: glue sees injected types, never injected code). `install.ts`
+ * constructs `InjectedScript` for the utility world, `utility.ts` constructs `UtilityScript` for
+ * the main world, and nothing else may build page code from the vendored tree. A violation fails
+ * the build, and so neo-check.
  *
  * `scripts/neo-check.sh` runs this and fails when `dist/` differs from the committed files.
  */
@@ -39,8 +49,20 @@ import { dirname, join, relative, resolve } from 'node:path'
 import { SPEC_SHA256 } from '@browseros/neo-runtime-spec/spec-hash'
 import type { BunPlugin } from 'bun'
 
-const ENTRIES = ['install', 'attach', 'call'] as const
-const VALUE_IMPORTER = 'install.ts'
+const ENTRIES = [
+  'install',
+  'attach',
+  'call',
+  'utility',
+  'evaluate',
+  'json-value',
+  'get-property',
+  'wait-for-function',
+  'wait-result',
+  'wait-abort',
+  'retain',
+] as const
+const VALUE_IMPORTERS = ['install.ts', 'utility.ts']
 const VENDOR_ALIASES = ['@injected/', '@isomorphic/', '@protocol/']
 
 const packageDir = import.meta.dir
@@ -52,7 +74,7 @@ const srcDir = join(packageDir, 'src')
 const vendorDir = join(packageDir, 'vendor')
 const distDir = join(packageDir, 'dist')
 
-/** Throws when a `src/` file other than `install.ts` value-imports vendored code. */
+/** Throws when a `src/` file other than `VALUE_IMPORTERS` value-imports vendored code. */
 async function checkVendorImports(): Promise<void> {
   // scanImports drops `import type` and `export type`, and keeps an import whose names are used
   // only as types, so a vendored type must be imported with `import type` here.
@@ -61,7 +83,7 @@ async function checkVendorImports(): Promise<void> {
   const files = readdirSync(srcDir, { recursive: true, encoding: 'utf8' })
   for (const file of files) {
     if (!file.endsWith('.ts') || file.endsWith('.d.ts')) continue
-    if (file === VALUE_IMPORTER) continue
+    if (VALUE_IMPORTERS.includes(file)) continue
     const path = join(srcDir, file)
     const imports = transpiler.scanImports(await Bun.file(path).text())
     for (const { path: specifier } of imports) {
@@ -76,7 +98,7 @@ async function checkVendorImports(): Promise<void> {
   }
   if (violations.length > 0) {
     throw new Error(
-      `only src/${VALUE_IMPORTER} may value-import vendored code; use \`import type\`:\n  ${violations.join('\n  ')}`,
+      `only ${VALUE_IMPORTERS.map((file) => `src/${file}`).join(' and ')} may value-import vendored code; use \`import type\`:\n  ${violations.join('\n  ')}`,
     )
   }
 }

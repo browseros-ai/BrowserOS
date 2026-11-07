@@ -20,6 +20,7 @@ type Handles = {
     stop: () => 'done' | { hitTargetDescription: string }
   }
   ScreenshotCleanup: { restore: () => void }
+  ElementList: Element[]
 }
 type Api = InjectedApi<InjectedScript, Handles>
 
@@ -27,6 +28,17 @@ type Api = InjectedApi<InjectedScript, Handles>
 const valid = {
   title: () => ({ value: document.title }),
   selectorState: () => ({}),
+  selectorElement: () => ({ count: 0, visible: false }),
+  scopedSelectorElement: () => ({ count: 0, visible: false }),
+  queryAll: () => ({ elements: [] }),
+  scopedQueryAll: (_injected, _params, root) => ({
+    elements: [...root.children],
+  }),
+  listPreviews: (_injected, _params, list) => ({
+    previews: list.map((element) => element.tagName),
+  }),
+  document: () => ({ node: document.documentElement }),
+  previewNode: (_injected, _params, node) => ({ preview: node.tagName }),
   textContent: () => ({}),
   innerText: () => ({}),
   getAttribute: () => ({}),
@@ -35,6 +47,8 @@ const valid = {
   innerHTML: () => ({}),
   ariaSnapshot: () => ({}),
   frameOwner: () => ({ visible: false }),
+  frameOwnerByRef: () => ({ visible: false }),
+  frameOwnerRef: () => ({}),
   describeSelector: (_injected, { selector }) => ({ locator: selector }),
   resolve: () => ({ count: 0 }),
   checkElementStates: () => ({}),
@@ -53,7 +67,6 @@ const valid = {
   focusElement: () => ({ outcome: 'done' }),
   inputValue: () => ({}),
   queryCount: () => ({ value: 0 }),
-  allTextContents: () => ({ values: [] }),
   prepareForScreenshot: () => ({}),
   restoreAfterScreenshot: (_injected, _params, cleanup) => {
     cleanup.restore()
@@ -64,7 +77,6 @@ const valid = {
   scrollOffset: () => ({ x: 0, y: 0 }),
   maskElements: () => ({}),
   hideHighlight: () => ({}),
-  allInnerTexts: () => ({ values: [] }),
 } satisfies Api
 
 export const screenshotCleanupIsNotAnElement = {

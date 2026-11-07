@@ -12,10 +12,10 @@
  *   A Neo script has no file system: `path` travels with the call and neo-runtime writes the
  *   bytes into the run's artifact directory (`artifacts.rs`), relative paths only. A run
  *   without one refuses `path` with an Error naming the option.
- * - Deviation: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };`
- *   Neo takes no `signal` yet (the realm has no `AbortController`), so any `signal` other than
- *   `undefined` or `null` is refused before anything reaches the page, never ignored; `page.pdf`,
- *   which Playwright calls with no timeout, refuses it the same way.
+ * - Deviation: `client/page.ts` `Page.pdf`: `const result = await this._channel.pdf(transportOptions, kNoTimeout);`
+ *   Neo takes no `signal` yet: the screenshots refuse one through `TimeoutSettings` (med-pw-dom
+ *   S1), and `page.pdf`, which resolves no timeout, refuses one itself, before anything reaches
+ *   the page, never ignored. `undefined` and `null` are no signal.
  */
 
 import type {
@@ -145,9 +145,8 @@ export function locatorScreenshotParams(
  */
 function screenshotFields(
   apiName: ApiName,
-  options: ScreenshotOptions & { signal?: unknown },
+  options: ScreenshotOptions,
 ): Record<string, unknown> {
-  refuseSignal(apiName, options)
   const fields: Record<string, unknown> = { ...options, mask: undefined }
   if (!fields.type) {
     try {
@@ -167,9 +166,10 @@ function screenshotFields(
 }
 
 /**
- * Refuses a supplied `signal` before any option is mapped or sent. `undefined` and `null` are no
- * signal, as Playwright's client acts only on a truthy one.
- * Deviation: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };` until Neo can abort a call, a signal is refused rather than ignored.
+ * `page.pdf`'s refusal of a supplied `signal`, before any option is mapped or sent: it resolves
+ * no timeout, so S1's central refusal in `TimeoutSettings` never sees it. `undefined` and `null`
+ * are no signal, as Playwright's client acts only on a truthy one.
+ * Deviation: `client/page.ts` `Page.pdf`: `const result = await this._channel.pdf(transportOptions, kNoTimeout);` until Neo can abort a call, a signal is refused rather than ignored.
  */
 function refuseSignal(apiName: ApiName, options: { signal?: unknown }): void {
   if (options.signal !== undefined && options.signal !== null)

@@ -40,16 +40,16 @@ use futures_util::future;
 use neo_runtime_spec::injected::ReadableElementState;
 use neo_runtime_spec::serve::{
     BrowserContextCall, DialogCall, FrameAriaSnapshotParams, FrameCall, FrameCheckParams,
-    FrameCheckResult, FrameClickParams, FrameDblclickParams, FrameEvalOnSelectorAllParams,
-    FrameFillParams, FrameFillResult, FrameGetAttributeParams, FrameGotoParams, FrameHoverParams,
-    FrameInnerHTMLParams, FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult,
-    FrameIsCheckedParams, FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult,
-    FrameIsEditableParams, FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult,
-    FrameIsHiddenParams, FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult,
-    FramePressParams, FramePressResult, FrameQueryCountParams, FrameSelectOptionParams,
-    FrameSelectOptionResult, FrameTapParams, FrameTextContentParams, FrameTitleParams,
-    FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
-    Metadata, PageCall, RequestCall, ResponseCall,
+    FrameCheckResult, FrameClickParams, FrameDblclickParams, FrameFillParams, FrameFillResult,
+    FrameGetAttributeParams, FrameGotoParams, FrameHoverParams, FrameInnerHTMLParams,
+    FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams,
+    FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult, FrameIsEditableParams,
+    FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult, FrameIsHiddenParams,
+    FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams,
+    FramePressResult, FrameQueryCountParams, FrameSelectOptionParams, FrameSelectOptionResult,
+    FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameUncheckParams,
+    FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult, Metadata, PageCall,
+    RequestCall, ResponseCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -65,10 +65,16 @@ use crate::capture::{self, Capture, NEO_SCREENSHOT_META, NeoScreenshotParams};
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::dialogs;
+use crate::evaluate::{self, EvalCall};
 use crate::events::EventHub;
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
 use crate::frames::FrameScope;
+use crate::history::{
+    self, Cursors, Ending, FinishNavigationOptions, FrameCursor, NeoFinishNavigationParams,
+    NeoNavigationResult, NeoNextNavigationParams, NeoReleaseNavigationParams,
+    NeoWaitForNavigationParams, WaitForNavigationOptions,
+};
 use crate::keyboard::KeyboardTab;
 use crate::lists;
 use crate::navigate::{self, GotoOptions};
@@ -98,7 +104,8 @@ const RECORDS_WAIT: Duration = Duration::from_secs(1);
 /// log and a task in Rust, outside the realm's memory limit, and a script can start calls without
 /// awaiting them, so without a cap one run could hold any amount of the server's memory.
 /// Playwright has no such cap; a script that awaits its calls, or a `Promise.all` over a page's
-/// worth of locators, stays far below it.
+/// worth of locators, stays far below it. A URL-predicate wait's finish and release skip it
+/// (`ending_cursor`): the wait they end may hold some of it, and the cursor cap bounds them.
 const MAX_CALLS_IN_FLIGHT: usize = 64;
 
 /// The most request bytes (each call's message as the SDK sent it) one run's unfinished calls
@@ -131,10 +138,49 @@ static WAIT_FOR_LOAD_STATE_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[],
 };
-/// Arbitrary page JS remains outside Neo's typed glue boundary.
-const EVAL_ON_SELECTOR_ALL_UNSERVED: &str =
-    "Neo serves Frame.evalOnSelectorAll only for locator.allTextContents";
-
+// Playwright's client `waitForNavigation` (`@apiCall({ title: 'Wait for navigation' })`). A
+// glob or RegExp `url` is one call; a predicate is a cursor the realm steps through
+// (`history.rs`), one navigation per `neo:nextNavigation`, closed by `neo:finishNavigation`.
+static WAIT_FOR_NAVIGATION_META: MethodMeta = MethodMeta {
+    interface: "Frame",
+    method: "neo:waitForNavigation",
+    title: Some("Wait for navigation"),
+    subtitle: None,
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[],
+};
+static NEXT_NAVIGATION_META: MethodMeta = MethodMeta {
+    interface: "Frame",
+    method: "neo:nextNavigation",
+    title: Some("Wait for navigation"),
+    subtitle: None,
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[],
+};
+static FINISH_NAVIGATION_META: MethodMeta = MethodMeta {
+    interface: "Frame",
+    method: "neo:finishNavigation",
+    title: Some("Wait for navigation"),
+    subtitle: None,
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[],
+};
+static RELEASE_NAVIGATION_META: MethodMeta = MethodMeta {
+    interface: "Frame",
+    method: "neo:releaseNavigation",
+    title: Some("Wait for navigation"),
+    subtitle: None,
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[],
+};
 // `serve` replies to a pointer action with `{id}` and no `result`, which is right only while
 // Playwright's spec declares no `returns` for `Frame.click`, `dblclick`, `hover` and `tap`. A
 // spec that gives one a result stops this compiling.
@@ -160,6 +206,8 @@ struct Inner {
     trace: Trace,
     /// What the run's unfinished calls hold, bounded at admission.
     in_flight: Arc<InFlight>,
+    /// The URL-predicate navigation waits open between their calls.
+    cursors: Arc<Cursors<FrameCursor>>,
     next_call_id: AtomicU64,
     /// Cancels `run.ended` when the last `Dispatcher` drops. A reason `finish` recorded first
     /// wins; otherwise calls read [`RunEnd::Cancelled`].
@@ -238,6 +286,8 @@ enum ObjectKind {
     Frame,
     /// A hop's `Request` or `Response`, behind `goto`'s answer.
     Network(NetworkObject, HopId),
+    /// A run's `JSHandle` or `ElementHandle` (`evaluate.rs`), by guid.
+    Handle(String),
     /// A JavaScript dialog the run's `dialog` event handed out, by its index on the tab.
     Dialog(u64),
     Unknown,
@@ -268,8 +318,6 @@ enum Route {
     FrameInnerText(ReadOptions),
     FrameGetAttribute(AttributeOptions),
     FrameQueryCount(String),
-    FrameAllTextContents(String),
-    FrameAllInnerTexts(String),
     FrameInnerHtml(ReadOptions),
     FrameAriaSnapshot(SnapshotOptions),
     FrameFill(FillOptions),
@@ -286,6 +334,12 @@ enum Route {
     FrameWaitForSelector(WaitForSelectorOptions),
     FrameWaitForUrl(WaitForUrlOptions),
     FrameWaitForLoadState(WaitForLoadStateOptions),
+    FrameWaitForNavigation(WaitForNavigationOptions),
+    FrameNextNavigation(NeoNextNavigationParams),
+    FrameFinishNavigation(FinishNavigationOptions),
+    FrameReleaseNavigation(NeoReleaseNavigationParams),
+    /// Page evaluation and the `JSHandle` commands (on a handle's frame), served by `evaluate.rs`.
+    FrameEval(EvalCall),
 }
 
 impl Dispatcher {
@@ -296,6 +350,7 @@ impl Dispatcher {
             run,
             trace: Trace::default(),
             in_flight: Arc::default(),
+            cursors: Arc::default(),
             next_call_id: AtomicU64::new(1),
         }))
     }
@@ -317,20 +372,15 @@ impl Dispatcher {
                 return PendingReply::ready(Err(BridgeError::BadMessage(error.to_string())));
             }
         };
-        let target = inner.tabs.resolve(&guid);
-        let object = if guid == "context@default" {
-            ObjectKind::Context
-        } else if target.is_none() {
-            ObjectKind::Unknown
-        } else if guid.starts_with("frame@") {
-            ObjectKind::Frame
-        } else if let Some((kind, _, hop)) = HopId::parse(&guid) {
-            ObjectKind::Network(kind, hop)
-        } else if let Some((_, index)) = dialogs::parse(&guid) {
-            ObjectKind::Dialog(index)
-        } else {
-            ObjectKind::Page
-        };
+        // A handle's calls run on the frame it belongs to.
+        let target = inner.tabs.resolve(&guid).or_else(|| {
+            inner
+                .run
+                .handles
+                .frame_guid(&guid)
+                .and_then(|frame| inner.tabs.resolve(&frame))
+        });
+        let object = object_kind(&guid, target.is_some());
         let Routed { meta, route } = route(object, &method, params.clone());
         let metadata = metadata.unwrap_or(Metadata {
             location: None,
@@ -349,10 +399,15 @@ impl Dispatcher {
         }));
         inner.trace.push(Arc::clone(&entry));
         let admitted = route.and_then(|route| {
-            let admitted = inner.in_flight.admit(message.len())?;
-            Ok((route, admitted))
+            let ending = ending_cursor(&route).and_then(|id| inner.cursors.begin_ending(id));
+            let share = if ending.is_some() {
+                None
+            } else {
+                Some(inner.in_flight.admit(message.len())?)
+            };
+            Ok((route, share, ending))
         });
-        let (route, admitted) = match admitted {
+        let (route, share, ending) = match admitted {
             Ok(admitted) => admitted,
             Err(error) => {
                 entry.finish(error.to_result());
@@ -379,6 +434,7 @@ impl Dispatcher {
         let (reply, receiver) = oneshot::channel();
         let served = serve_call(
             inner.tabs.clone(),
+            Arc::clone(&inner.cursors),
             target,
             route,
             progress,
@@ -388,13 +444,11 @@ impl Dispatcher {
                 id,
                 reply,
                 events: inner.tabs.events().clone(),
+                share,
+                ending,
             },
         );
-        inner.run.tasks.spawn(async move {
-            // The call's share of the in-flight caps, given back however the task ends.
-            let _admitted = admitted;
-            served.await;
-        });
+        inner.run.tasks.spawn(served);
         PendingReply(PendingInner::Waiting(receiver))
     }
 
@@ -413,6 +467,9 @@ impl Dispatcher {
         let _created = time::timeout_at(deadline, self.0.tabs.finish_creations()).await;
         run.tasks.close();
         let _waited = time::timeout_at(deadline, run.tasks.wait()).await;
+        // Releases each session's handle group on its page's tracked task, before the sessions
+        // detach; a run whose future is dropped releases them as `RunScope` drops.
+        run.handles.close();
         let _refreshed = time::timeout_at(deadline, self.0.tabs.refresh_closing()).await;
         self.0.trace.take(reason)
     }
@@ -428,12 +485,8 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             PageCall::decode(method, params).map(|call| (call.meta(), page_call(call, path)))
         }
         ObjectKind::Frame => {
-            if method == NEO_SCREENSHOT_META.method {
-                return Routed {
-                    meta: Some(&NEO_SCREENSHOT_META),
-                    route: decode_neo_params::<NeoScreenshotParams>(params, &NEO_SCREENSHOT_META)
-                        .map(|params| ObjectCall::Capture(Capture::Locator(Box::new(params)))),
-                };
+            if let Some(routed) = route_neo_screenshot(method, params.as_ref()) {
+                return routed;
             }
             if method == WAIT_FOR_URL_META.method {
                 return Routed {
@@ -441,6 +494,15 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
                     route: decode_neo_params::<NeoWaitForUrlParams>(params, &WAIT_FOR_URL_META)
                         .and_then(|params| WaitForUrlOptions::from_params(&params))
                         .map(|options| ObjectCall::Frame(Route::FrameWaitForUrl(options))),
+                };
+            }
+            if let Some(routed) = route_navigation_wait(method, params.as_ref()) {
+                return routed;
+            }
+            if let Some((meta, call)) = evaluate::route_frame(method, params.as_ref()) {
+                return Routed {
+                    meta: Some(meta),
+                    route: call.map(|call| ObjectCall::Frame(Route::FrameEval(call))),
                 };
             }
             if method == WAIT_FOR_LOAD_STATE_META.method {
@@ -487,6 +549,13 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
                     Ok(ObjectCall::Network(NetworkCall::Response(hop, call))),
                 )
             }),
+        ObjectKind::Handle(guid) => {
+            let (meta, call) = evaluate::route_handle(&guid, method, params.as_ref());
+            return Routed {
+                meta,
+                route: call.map(|call| ObjectCall::Frame(Route::FrameEval(call))),
+            };
+        }
         ObjectKind::Dialog(index) => DialogCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
         ObjectKind::Unknown => {
@@ -509,6 +578,16 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             route: Err(PlaywrightError::error(error.to_string())),
         },
     }
+}
+
+/// Neo's `neo:screenshot` on a Frame guid (`locator.screenshot`, `capture.rs`), or `None` for
+/// another method.
+fn route_neo_screenshot(method: &str, params: Option<&Value>) -> Option<Routed> {
+    (method == NEO_SCREENSHOT_META.method).then(|| Routed {
+        meta: Some(&NEO_SCREENSHOT_META),
+        route: decode_neo_params::<NeoScreenshotParams>(params.cloned(), &NEO_SCREENSHOT_META)
+            .map(|params| ObjectCall::Capture(Capture::Locator(Box::new(params)))),
+    })
 }
 
 /// Neo's `path` beside Playwright's params of a page call (`capture.rs`); Playwright's own
@@ -551,6 +630,38 @@ fn page_call(
             path: path?,
         }),
         call => ObjectCall::Page(call),
+    })
+}
+
+/// Neo's navigation-wait commands on a Frame guid (`history.rs`), or `None` for another method.
+fn route_navigation_wait(method: &str, params: Option<&Value>) -> Option<Routed> {
+    let params = params.cloned();
+    let (meta, route) = if method == WAIT_FOR_NAVIGATION_META.method {
+        let route =
+            decode_neo_params::<NeoWaitForNavigationParams>(params, &WAIT_FOR_NAVIGATION_META)
+                .and_then(|params| WaitForNavigationOptions::from_params(&params))
+                .map(Route::FrameWaitForNavigation);
+        (&WAIT_FOR_NAVIGATION_META, route)
+    } else if method == NEXT_NAVIGATION_META.method {
+        let route = decode_neo_params::<NeoNextNavigationParams>(params, &NEXT_NAVIGATION_META)
+            .map(Route::FrameNextNavigation);
+        (&NEXT_NAVIGATION_META, route)
+    } else if method == FINISH_NAVIGATION_META.method {
+        let route = decode_neo_params::<NeoFinishNavigationParams>(params, &FINISH_NAVIGATION_META)
+            .and_then(|params| FinishNavigationOptions::from_params(&params))
+            .map(Route::FrameFinishNavigation);
+        (&FINISH_NAVIGATION_META, route)
+    } else if method == RELEASE_NAVIGATION_META.method {
+        let route =
+            decode_neo_params::<NeoReleaseNavigationParams>(params, &RELEASE_NAVIGATION_META)
+                .map(Route::FrameReleaseNavigation);
+        (&RELEASE_NAVIGATION_META, route)
+    } else {
+        return None;
+    };
+    Some(Routed {
+        meta: Some(meta),
+        route: route.map(ObjectCall::Frame),
     })
 }
 
@@ -615,21 +726,6 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
             AttributeOptions::from_params(params),
         )),
         FrameCall::QueryCount(params) => Ok(Route::FrameQueryCount(params.selector)),
-        FrameCall::EvalOnSelectorAll(params)
-            if params.expression == lists::ALL_TEXT_CONTENTS_EXPRESSION
-                && params.is_function == Some(true) =>
-        {
-            Ok(Route::FrameAllTextContents(params.selector))
-        }
-        FrameCall::EvalOnSelectorAll(params)
-            if params.expression == lists::ALL_INNER_TEXTS_EXPRESSION
-                && params.is_function == Some(true) =>
-        {
-            Ok(Route::FrameAllInnerTexts(params.selector))
-        }
-        FrameCall::EvalOnSelectorAll(_) => {
-            Err(PlaywrightError::error(EVAL_ON_SELECTOR_ALL_UNSERVED))
-        }
         FrameCall::AriaSnapshot(params) => Ok(Route::FrameAriaSnapshot(
             SnapshotOptions::from_params(params),
         )),
@@ -645,9 +741,9 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::SelectOption(params) => {
             Ok(Route::FrameSelectOption(SelectOptions::from_params(params)))
         }
-        FrameCall::WaitForSelector(params) => {
-            WaitForSelectorOptions::from_params(params).map(Route::FrameWaitForSelector)
-        }
+        FrameCall::WaitForSelector(params) => Ok(Route::FrameWaitForSelector(
+            WaitForSelectorOptions::from_params(params),
+        )),
     }
 }
 
@@ -658,12 +754,17 @@ struct CallReply {
     reply: oneshot::Sender<Reply>,
     /// The run's events, whose barrier the reply waits for.
     events: EventHub,
+    /// The call's share of the in-flight caps; none for a wait's finish or release.
+    share: Option<Admitted>,
+    /// A wait's finish or release: its claim on the wait it ends (`Cursors::begin_ending`).
+    ending: Option<Ending<FrameCursor>>,
 }
 
 /// Attachment can block or be cancelled independently of a frame handler. Once attached,
 /// `serve` retains its original contract: the `PageSession` always belongs to this call's tab.
 async fn serve_call(
     tabs: Tabs,
+    cursors: Arc<Cursors<FrameCursor>>,
     target: Option<(Arc<PageEntry>, FrameScope)>,
     route: ObjectCall,
     progress: Progress,
@@ -707,7 +808,7 @@ async fn serve_call(
                         finish_reply(Err(error), reply).await;
                         return;
                     }
-                    serve(FrameTab { page, scope }, route, progress, reply).await;
+                    serve(FrameTab { page, scope }, &cursors, route, progress, reply).await;
                     return;
                 }
                 Err(error) => Err(error),
@@ -754,7 +855,13 @@ async fn answer_left_open(tabs: &Tabs) {
 /// One call's task: serves the route, ends the trace entry and sends the reply. A call the run
 /// ended leaves its entry open, so its record reads `Unfinished`, and sends nothing: nobody
 /// waits for it. The task holds the page, so the session stays attached while it runs.
-async fn serve(page: FrameTab, route: Route, progress: Progress, reply: CallReply) {
+async fn serve(
+    page: FrameTab,
+    cursors: &Cursors<FrameCursor>,
+    route: Route,
+    progress: Progress,
+    reply: CallReply,
+) {
     // Navigation and page reads need the real page's navigation/read seams, which the
     // forms tests' fake does not implement, so they are answered here; every other route goes
     // through `serve_route`.
@@ -781,14 +888,6 @@ async fn serve(page: FrameTab, route: Route, progress: Progress, reply: CallRepl
         Route::FrameQueryCount(selector) => lists::query_count(&page, &selector, &progress)
             .await
             .and_then(|result| encode_result::<FrameQueryCountParams>(&result)),
-        Route::FrameAllTextContents(selector) => {
-            lists::all_text_contents(&page, &selector, &progress)
-                .await
-                .and_then(|result| encode_result::<FrameEvalOnSelectorAllParams>(&result))
-        }
-        Route::FrameAllInnerTexts(selector) => lists::all_inner_texts(&page, &selector, &progress)
-            .await
-            .and_then(|result| encode_result::<FrameEvalOnSelectorAllParams>(&result)),
         Route::FrameInnerHtml(options) => reads::inner_html(&page, &options, &progress)
             .await
             .and_then(|result| encode_result::<FrameInnerHTMLParams>(&result)),
@@ -796,14 +895,11 @@ async fn serve(page: FrameTab, route: Route, progress: Progress, reply: CallRepl
             .await
             .and_then(|result| encode_result::<FrameAriaSnapshotParams>(&result)),
         Route::FrameWaitForSelector(options) => {
-            waits::wait_for_selector(&page, &options, &progress)
+            waits::wait_for_selector_element(&page, &options, &progress)
                 .await
-                .and_then(|()| {
-                    encode_result::<FrameWaitForSelectorParams>(&FrameWaitForSelectorResult {
-                        element: None,
-                    })
-                })
+                .and_then(wait_for_selector_reply)
         }
+        Route::FrameEval(call) => evaluate::serve(&page, call, &progress).await,
         // Neo extensions answer an empty result.
         Route::FrameWaitForUrl(options) => waits::wait_for_url(&page, &options, &progress)
             .await
@@ -812,6 +908,24 @@ async fn serve(page: FrameTab, route: Route, progress: Progress, reply: CallRepl
             waits::wait_for_load_state(&page, &options, &progress)
                 .await
                 .map(|()| Some(json!({})))
+        }
+        Route::FrameWaitForNavigation(options) => {
+            history::wait_for_navigation(&page, &options, &progress)
+                .await
+                .and_then(|response| encode_neo(&NeoNavigationResult { response }))
+        }
+        Route::FrameNextNavigation(params) => {
+            history::next_frame_navigation(cursors, page, &params, &progress)
+                .await
+                .and_then(|result| encode_neo(&result))
+        }
+        Route::FrameFinishNavigation(options) => {
+            history::finish_frame_navigation(cursors, &options, &progress)
+                .await
+                .and_then(|result| encode_neo(&result))
+        }
+        Route::FrameReleaseNavigation(params) => {
+            encode_neo(&history::release_frame_navigation(cursors, &params))
         }
         route @ (Route::FrameIsVisible(_)
         | Route::FrameIsHidden(_)
@@ -880,6 +994,11 @@ fn unsupported_child_call(scope: &FrameScope, route: &Route) -> Option<Playwrigh
     }
     let method = match route {
         Route::FrameGoto(_) => "goto",
+        // Deviation: `client/frame.ts` `Frame.waitForNavigation` Playwright answers a child
+        // frame's navigation Response; the network log records only the main frame's requests,
+        // so Neo refuses the wait. A predicate wait that answers none (`waitForURL`) is served.
+        Route::FrameWaitForNavigation(_) => "waitForNavigation",
+        Route::FrameNextNavigation(params) if params.response => "waitForNavigation",
         _ => return None,
     };
     Some(PlaywrightError::error(format!(
@@ -896,6 +1015,8 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
         id,
         reply,
         events,
+        share,
+        ending,
     } = target;
     let (record, answer) = match result {
         Err(CallError::RunEnded(_)) => return,
@@ -907,6 +1028,9 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
     let answer = answer.as_ref().map(Option::as_ref);
     let text = encode_reply(&id, answer, Some(&log));
     events.barrier().await;
+    // Given back before the reply leaves, so a script that awaited this call can start another
+    // at once. A call that never replies gives them back as its task ends.
+    drop((share, ending));
     // The script may have stopped waiting (the realm is gone); the record already holds the
     // outcome.
     let _sent = reply.send((text, events.seq()));
@@ -957,8 +1081,6 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameInnerText(_)
         | Route::FrameGetAttribute(_)
         | Route::FrameQueryCount(_)
-        | Route::FrameAllTextContents(_)
-        | Route::FrameAllInnerTexts(_)
         | Route::FrameInnerHtml(_)
         | Route::FrameIsVisible(_)
         | Route::FrameIsHidden(_)
@@ -969,10 +1091,55 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameAriaSnapshot(_)
         | Route::FrameWaitForSelector(_)
         | Route::FrameWaitForUrl(_)
-        | Route::FrameWaitForLoadState(_) => Err(PlaywrightError::error(
+        | Route::FrameWaitForLoadState(_)
+        | Route::FrameWaitForNavigation(_)
+        | Route::FrameNextNavigation(_)
+        | Route::FrameFinishNavigation(_)
+        | Route::FrameReleaseNavigation(_)
+        | Route::FrameEval(_) => Err(PlaywrightError::error(
             "neo-runtime: navigation and page reads are served by `serve`",
         )
         .into()),
+    }
+}
+
+/// What a message's `guid` names: the context, an object of a resolved tab (a JS handle, a frame,
+/// a network hop, a dialog, or the page itself), or nothing Neo knows.
+fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
+    if guid == "context@default" {
+        ObjectKind::Context
+    } else if !resolved {
+        ObjectKind::Unknown
+    } else if guid.starts_with(evaluate::HANDLE_PREFIX) {
+        ObjectKind::Handle(guid.to_owned())
+    } else if guid.starts_with("frame@") {
+        ObjectKind::Frame
+    } else if let Some((kind, _, hop)) = HopId::parse(guid) {
+        ObjectKind::Network(kind, hop)
+    } else if let Some((_, index)) = dialogs::parse(guid) {
+        ObjectKind::Dialog(index)
+    } else {
+        ObjectKind::Page
+    }
+}
+
+/// A Neo extension's result as its reply's `result`.
+fn encode_neo(result: &impl serde::Serialize) -> Result<Option<Value>, CallError> {
+    serde_json::to_value(result)
+        .map(Some)
+        .map_err(|error| PlaywrightError::error(format!("encoding a Neo result: {error}")).into())
+}
+
+/// `Frame.waitForSelector`'s reply. `ElementHandle` is no interface of the generated spec, so a
+/// returned element travels as the record the SDK builds it from (`evaluate.rs`).
+fn wait_for_selector_reply(
+    element: Option<evaluate::CreatedHandle>,
+) -> Result<Option<Value>, CallError> {
+    match element {
+        Some(created) => Ok(Some(json!({ "element": created }))),
+        None => encode_result::<FrameWaitForSelectorParams>(&FrameWaitForSelectorResult {
+            element: None,
+        }),
     }
 }
 
@@ -984,6 +1151,17 @@ pub(crate) fn encode_result<C: Command>(result: &C::Result) -> Result<Option<Val
     serde_json::to_value(result).map(Some).map_err(|error| {
         PlaywrightError::error(format!("encoding {} result: {error}", C::META.method)).into()
     })
+}
+
+/// The cursor a URL-predicate wait's finish or release names. Each skips the in-flight caps for
+/// the one call that claims its open cursor (`Cursors::begin_ending`): the wait it ends may hold
+/// that capacity, and the claim counts against the cursor cap instead.
+fn ending_cursor(call: &ObjectCall) -> Option<u64> {
+    match call {
+        ObjectCall::Frame(Route::FrameFinishNavigation(options)) => Some(options.cursor),
+        ObjectCall::Frame(Route::FrameReleaseNavigation(params)) => Some(params.cursor),
+        _ => None,
+    }
 }
 
 /// What a run's unfinished calls hold now, against [`MAX_CALLS_IN_FLIGHT`] and
@@ -998,8 +1176,9 @@ struct Load {
     bytes: usize,
 }
 
-/// One admitted call's share of [`InFlight`], given back when it drops: when the call's task
-/// ends, whether it replied, the run ended under it, or the runtime dropped it.
+/// One admitted call's share of [`InFlight`], given back when it drops: just before the call's
+/// reply is sent ([`finish_reply`]), or when its task ends without one (the run ended under
+/// it, or the runtime dropped it).
 struct Admitted {
     in_flight: Arc<InFlight>,
     bytes: usize,
@@ -1145,6 +1324,7 @@ mod tests {
         // interleaving can let the call start early and hide the regression.
         let call = serve_call(
             tabs,
+            Arc::default(),
             Some((page, scope)),
             route,
             progress,
@@ -1154,6 +1334,8 @@ mod tests {
                 id: json!(1),
                 reply,
                 events: EventHub::default(),
+                share: None,
+                ending: None,
             },
         );
         run.end(RunEnd::Settled);
@@ -1376,8 +1558,6 @@ mod tests {
                 | Route::FrameInnerText(_)
                 | Route::FrameGetAttribute(_)
                 | Route::FrameQueryCount(_)
-                | Route::FrameAllTextContents(_)
-                | Route::FrameAllInnerTexts(_)
                 | Route::FrameInnerHtml(_)
                 | Route::FrameIsVisible(_)
                 | Route::FrameIsHidden(_)
@@ -1388,7 +1568,12 @@ mod tests {
                 | Route::FrameAriaSnapshot(_)
                 | Route::FrameWaitForSelector(_)
                 | Route::FrameWaitForUrl(_)
-                | Route::FrameWaitForLoadState(_) => {
+                | Route::FrameWaitForLoadState(_)
+                | Route::FrameWaitForNavigation(_)
+                | Route::FrameNextNavigation(_)
+                | Route::FrameFinishNavigation(_)
+                | Route::FrameReleaseNavigation(_)
+                | Route::FrameEval(_) => {
                     panic!("a form is not a navigation, read or wait")
                 }
             }
@@ -1572,16 +1757,23 @@ mod tests {
 
     #[test]
     fn tests_that_wait_refusals_happen_during_routing() {
-        for omit in [json!({}), json!({"omitReturnValue":false})] {
+        // A wait that returns its element (`locator.evaluate`'s `_withElement`) is served too.
+        for (omit, returns) in [
+            (json!({}), true),
+            (json!({"omitReturnValue":false}), true),
+            (json!({"omitReturnValue":true}), false),
+        ] {
             let mut params = json!({"selector":"#item"});
             params
                 .as_object_mut()
                 .expect("object")
                 .extend(omit.as_object().expect("object").clone());
-            assert_eq!(
-                error_of(route_frame("waitForSelector", params)).name,
-                ErrorName::Error
-            );
+            match frame_route(route_frame("waitForSelector", params).route) {
+                Ok(Route::FrameWaitForSelector(options)) => {
+                    assert_eq!(options.return_element, returns, "{omit}");
+                }
+                other => panic!("waitForSelector routed to {other:?}"),
+            }
         }
         assert!(route_frame("waitForSelector", json!({"selector":"iframe >> internal:control=enter-frame >> button", "omitReturnValue": true})).route.is_ok());
         for (method, params) in [
@@ -1618,6 +1810,85 @@ mod tests {
                     .route
                     .is_err()
             );
+        }
+    }
+
+    #[test]
+    fn tests_that_the_navigation_wait_messages_decode_and_refuse() {
+        // The SDK's wire for these commands, which neo-sdk's tests/unit/history.test.ts pins.
+        for (method, params) in [
+            (
+                "neo:waitForNavigation",
+                json!({"url":{"glob":""},"waitUntil":"load"}),
+            ),
+            (
+                "neo:waitForNavigation",
+                json!({"url":{"regexSource":"done$","regexFlags":"i"},"waitUntil":"commit"}),
+            ),
+            ("neo:nextNavigation", json!({"response":true})),
+            ("neo:nextNavigation", json!({"cursor":4,"response":false})),
+            (
+                "neo:finishNavigation",
+                json!({"cursor":4,"index":2,"waitUntil":"domcontentloaded"}),
+            ),
+            ("neo:releaseNavigation", json!({"cursor":4})),
+        ] {
+            let routed = route_frame(method, params);
+            let meta = routed.meta.expect("navigation wait metadata");
+            assert_eq!(
+                (meta.title, meta.interface),
+                (Some("Wait for navigation"), "Frame")
+            );
+            assert!(!meta.has(MethodFlag::Input));
+            assert!(routed.route.is_ok(), "{method}");
+        }
+        for (method, params) in [
+            (
+                "neo:waitForNavigation",
+                json!({"url":{"glob":""},"waitUntil":"networkidle"}),
+            ),
+            ("neo:waitForNavigation", json!({"url":{}})),
+            ("neo:waitForNavigation", json!({"url":{"glob":"**/{a"}})),
+            ("neo:nextNavigation", json!({})),
+            ("neo:nextNavigation", json!({"response":true,"extra":1})),
+            (
+                "neo:finishNavigation",
+                json!({"cursor":1,"index":0,"waitUntil":"networkidle"}),
+            ),
+            (
+                "neo:finishNavigation",
+                json!({"index":0,"waitUntil":"load"}),
+            ),
+            (
+                "neo:finishNavigation",
+                json!({"cursor":1,"waitUntil":"load"}),
+            ),
+            ("neo:releaseNavigation", json!({})),
+        ] {
+            assert_eq!(
+                error_of(route_frame(method, params)).name,
+                ErrorName::Error,
+                "{method}"
+            );
+        }
+        // A child frame's Response is unknown, so a wait that answers one is refused before it
+        // starts; a URL-only cursor (`waitForURL`) is served there.
+        let child = FrameScope::Frame("child".to_string());
+        for (method, params, refused) in [
+            ("neo:waitForNavigation", json!({"url":{"glob":""}}), true),
+            ("neo:nextNavigation", json!({"response":true}), true),
+            ("neo:nextNavigation", json!({"response":false}), false),
+            ("neo:releaseNavigation", json!({"cursor":1}), false),
+        ] {
+            let Ok(ObjectCall::Frame(route)) = route_frame(method, params).route else {
+                panic!("{method} routes");
+            };
+            assert_eq!(
+                unsupported_child_call(&child, &route).is_some(),
+                refused,
+                "{method}"
+            );
+            assert!(unsupported_child_call(&FrameScope::Main, &route).is_none());
         }
     }
 
@@ -2020,6 +2291,72 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_only_a_waits_finish_and_release_skip_the_in_flight_caps() {
+        let ends = |method: &str, params: Value| {
+            let route = route_frame(method, params)
+                .route
+                .unwrap_or_else(|error| panic!("{method}: {error:?}"));
+            ending_cursor(&route)
+        };
+        assert_eq!(
+            ends(
+                "neo:finishNavigation",
+                json!({"cursor":4,"index":2,"waitUntil":"load"})
+            ),
+            Some(4)
+        );
+        assert_eq!(ends("neo:releaseNavigation", json!({"cursor":5})), Some(5));
+        assert_eq!(
+            ends("neo:nextNavigation", json!({"cursor":4,"response":false})),
+            None,
+            "a next waits like any call"
+        );
+        assert_eq!(ends("click", json!({"selector":"#nothing"})), None);
+        let cursors = Arc::new(Cursors::<FrameCursor>::default());
+        assert!(
+            cursors.begin_ending(4).is_none(),
+            "a cursor that is not open claims nothing, so its call is admitted as any other"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_a_call_gives_its_share_back_before_its_reply_is_sent() {
+        let in_flight = Arc::new(InFlight::default());
+        let entry = Arc::new(CallEntry::new(CallStart {
+            call_id: 1,
+            guid: format!("frame@{PAGE}"),
+            method: "neo:nextNavigation".to_string(),
+            title: Some("Wait for navigation"),
+            params: json!({"response":false}),
+            location: None,
+            input: false,
+        }));
+        let trace = Trace::default();
+        trace.push(Arc::clone(&entry));
+        let (reply, receiver) = oneshot::channel();
+        let replied = tokio::spawn(finish_reply(
+            Ok(None),
+            CallReply {
+                entry,
+                trace,
+                id: json!(1),
+                reply,
+                events: EventHub::default(),
+                share: Some(in_flight.admit(10).expect("under the caps")),
+                ending: None,
+            },
+        ));
+        let _reply = receiver.await.expect("the call replied");
+        let held = in_flight.0.lock().map(|load| load.calls).ok();
+        assert_eq!(
+            held,
+            Some(0),
+            "a script that awaited the reply finds its capacity free"
+        );
+        replied.await.expect("finish_reply");
+    }
+
+    #[test]
     fn calls_past_the_in_flight_caps_are_refused_until_one_ends() {
         let in_flight = Arc::new(InFlight::default());
         let mut admitted: Vec<Admitted> = (0..MAX_CALLS_IN_FLIGHT)
@@ -2140,7 +2477,7 @@ mod tests {
     fn all_text_contents_params(selector: &str) -> Value {
         json!({
             "selector": selector,
-            "expression": lists::ALL_TEXT_CONTENTS_EXPRESSION,
+            "expression": "ee => ee.map(e => e.textContent || '')",
             "isFunction": true,
             "arg": {"value": {"v": "undefined"}, "handles": []},
         })
@@ -2154,16 +2491,24 @@ mod tests {
             panic!("queryCount routes");
         };
         assert_eq!(selector, ".item");
-        let Ok(ObjectCall::Frame(Route::FrameAllTextContents(selector))) =
-            route_frame("evalOnSelectorAll", all_text_contents_params(".item")).route
+        // `allTextContents` is Playwright's `$$eval`: the evaluation route serves it in the main
+        // world.
+        let Ok(ObjectCall::Frame(Route::FrameEval(EvalCall::EvalOnSelectorAll {
+            selector,
+            scope: None,
+            ..
+        }))) = route_frame("evalOnSelectorAll", all_text_contents_params(".item")).route
         else {
-            panic!("allTextContents routes");
+            panic!("allTextContents routes to the evaluation route");
         };
         assert_eq!(selector, ".item");
         let mut inner_texts = all_text_contents_params(".fruit");
-        inner_texts["expression"] = json!(lists::ALL_INNER_TEXTS_EXPRESSION);
-        let Ok(ObjectCall::Frame(Route::FrameAllInnerTexts(selector))) =
-            route_frame("evalOnSelectorAll", inner_texts).route
+        inner_texts["expression"] = json!("ee => ee.map(e => e.innerText)");
+        let Ok(ObjectCall::Frame(Route::FrameEval(EvalCall::EvalOnSelectorAll {
+            selector,
+            scope: None,
+            ..
+        }))) = route_frame("evalOnSelectorAll", inner_texts).route
         else {
             panic!("allInnerTexts routes");
         };
@@ -2193,7 +2538,7 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_collection_eval_refuses_other_expressions_and_non_functions() {
+    fn tests_that_collection_eval_serves_any_expression_as_playwrights_eval_on_selector_all() {
         let mut other_expression = all_text_contents_params(".item");
         other_expression["expression"] = json!("ee => ee.length");
         let mut not_a_function = all_text_contents_params(".item");
@@ -2203,24 +2548,23 @@ mod tests {
             .as_object_mut()
             .expect("params")
             .remove("isFunction");
-        let mut inner_texts_not_a_function = all_text_contents_params(".item");
-        inner_texts_not_a_function["expression"] = json!(lists::ALL_INNER_TEXTS_EXPRESSION);
-        inner_texts_not_a_function["isFunction"] = json!(false);
-        // Playwright's TypeScript body, which is not JavaScript, is not Neo's served expression.
-        let mut typescript_body = all_text_contents_params(".item");
-        typescript_body["expression"] = json!("ee => ee.map(e => (e as HTMLElement).innerText)");
-        for params in [
-            other_expression,
-            not_a_function,
-            absent_function,
-            inner_texts_not_a_function,
-            typescript_body,
-        ] {
-            assert_eq!(
-                error_of(route_frame("evalOnSelectorAll", params)),
-                PlaywrightError::error(EVAL_ON_SELECTOR_ALL_UNSERVED)
+        for params in [other_expression, not_a_function, absent_function] {
+            assert!(
+                matches!(
+                    route_frame("evalOnSelectorAll", params).route,
+                    Ok(ObjectCall::Frame(Route::FrameEval(
+                        EvalCall::EvalOnSelectorAll { .. }
+                    )))
+                ),
+                "every $$eval is served"
             );
         }
+        let mut missing_arg = all_text_contents_params(".item");
+        missing_arg.as_object_mut().expect("params").remove("arg");
+        assert_eq!(
+            error_of(route_frame("evalOnSelectorAll", missing_arg)).name,
+            ErrorName::Error
+        );
     }
 
     #[test]
@@ -2238,46 +2582,33 @@ mod tests {
         );
         let mut params = all_text_contents_params(selector);
         params["expression"] = json!("ee => ee.length");
-        assert_eq!(
-            error_of(route_frame("evalOnSelectorAll", params)),
-            PlaywrightError::error(EVAL_ON_SELECTOR_ALL_UNSERVED)
+        assert!(
+            route_frame("evalOnSelectorAll", params).route.is_ok(),
+            "a frame-crossing $$eval is served"
         );
     }
 
     #[test]
-    fn tests_that_serialized_arguments_accept_no_handles() {
-        assert!(
-            FrameCall::decode("evalOnSelectorAll", Some(all_text_contents_params(".item"))).is_ok()
-        );
-        for handle in [json!({"guid": "handle@1"}), json!("handle@1"), json!(null)] {
+    fn tests_that_collection_evaluation_accepts_handle_guids() {
+        let mut params = all_text_contents_params(".item");
+        params["arg"]["handles"] = json!(["handle@1"]);
+        assert!(route_frame("evalOnSelectorAll", params).route.is_ok());
+        for handle in [json!({"guid": "handle@1"}), json!(null)] {
             let mut params = all_text_contents_params(".item");
             params["arg"]["handles"] = json!([handle]);
-            assert!(FrameCall::decode("evalOnSelectorAll", Some(params)).is_err());
+            assert!(route_frame("evalOnSelectorAll", params).route.is_err());
         }
     }
 
     #[test]
-    fn tests_that_collection_replies_have_playwrights_generated_shapes() {
-        use neo_runtime_spec::serve::{FrameEvalOnSelectorAllResult, FrameQueryCountResult};
+    fn tests_that_count_replies_have_playwrights_generated_shape() {
+        use neo_runtime_spec::serve::FrameQueryCountResult;
 
-        for (result, expected) in [
-            (
-                encode_result::<FrameQueryCountParams>(&FrameQueryCountResult { value: 3 })
-                    .expect("count encodes"),
-                json!({"id": 7, "result": {"value": 3}}),
-            ),
-            (
-                encode_result::<FrameEvalOnSelectorAllParams>(&FrameEvalOnSelectorAllResult {
-                    value: lists::serialize_strings(vec!["x".to_string()]),
-                })
-                .expect("texts encode"),
-                json!({"id": 7, "result": {"value": {"a": [{"s": "x"}], "id": 1}}}),
-            ),
-        ] {
-            let reply: Value =
-                serde_json::from_str(&encode_reply(&json!(7), Ok(result.as_ref()), None))
-                    .expect("reply");
-            assert_eq!(reply, expected);
-        }
+        let result = encode_result::<FrameQueryCountParams>(&FrameQueryCountResult { value: 3 })
+            .expect("count encodes");
+        let reply: Value =
+            serde_json::from_str(&encode_reply(&json!(7), Ok(result.as_ref()), None))
+                .expect("reply");
+        assert_eq!(reply, json!({"id": 7, "result": {"value": 3}}));
     }
 }

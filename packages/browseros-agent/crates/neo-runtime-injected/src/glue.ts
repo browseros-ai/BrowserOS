@@ -31,6 +31,17 @@ import type {
 } from '../vendor/playwright/injected/src/injectedScript'
 import type { AriaNodeJSON } from '../vendor/playwright/isomorphic/ariaSnapshot'
 
+/** An element with the aria ref Playwright's snapshots keep on it (`ariaSnapshot.ts`
+ * `computeAriaRef`: `(element as any)._ariaRef = ariaRef;`). */
+type NamedElement = Element & { _ariaRef?: { ref: string } }
+
+/**
+ * Neo: every owner `frameOwnerRef` named, by its ref, kept weakly. `frameOwnerByRef` finds an
+ * owner here first: CDP hands `frameOwnerRef` owners a selector cannot reach (inside a closed
+ * shadow root), and a ref Neo answers must route. One table per document, as the glue is.
+ */
+const namedOwners = new Map<string, WeakRef<Element>>()
+
 /**
  * What `prepareForScreenshot` leaves in a document, as the one function that undoes it.
  * Playwright stores that function as `window.__pwCleanupScreenshot` in the utility world;
@@ -42,6 +53,7 @@ type ScreenshotCleanup = { restore: () => void }
 type Handles = {
   HitTargetInterceptor: HitTargetInterceptionResult
   ScreenshotCleanup: ScreenshotCleanup
+  ElementList: Record<string, Element>
 }
 
 /**
@@ -58,10 +70,13 @@ function query(
   injected: InjectedScript,
   selector: string,
   strict: boolean,
-  { markTargets = 'none' }: { markTargets?: 'all' | 'first' | 'none' } = {},
+  {
+    markTargets = 'none',
+    root = document,
+  }: { markTargets?: 'all' | 'first' | 'none'; root?: Node } = {},
 ): Element[] {
   const parsed = injected.parseSelector(selector)
-  const elements = injected.querySelectorAll(parsed, document)
+  const elements = injected.querySelectorAll(parsed, root)
   // Before the checks, as in Playwright: the page's own listeners see the matches marked even
   // when strict mode then fails the call.
   if (markTargets === 'all') injected.markTargetElements(new Set(elements))
@@ -72,6 +87,13 @@ function query(
   if (strict && elements.length > 1)
     throw injected.strictModeViolationError(parsed, elements)
   return elements
+}
+
+/** Neo: elements as a null-prototype object's own properties `0`, `1`, …, which CDP reports
+ * as a plain object (an array would carry the subtype `array`), so Rust lists them with
+ * `Runtime.getProperties` as handles of the matches. */
+function elementList(elements: Element[]): Record<string, Element> {
+  return Object.assign(Object.create(null), elements)
 }
 
 export const glue = {
@@ -90,6 +112,63 @@ export const glue = {
       },
     }
   },
+
+  /** `selectorState` plus the first match as a handle, for a wait that returns its element. */
+  // Playwright: `server/frames.ts` `Frame.waitForSelector`: `return { log, element, visible, attached: !!element };`
+  selectorElement: (injected, { selector, strict }) => {
+    const elements = query(injected, selector, strict)
+    const [element] = elements
+    if (!element) return { count: 0, visible: false }
+    return {
+      element,
+      count: elements.length,
+      visible: injected.elementState(element, 'visible', true).matches,
+      preview: injected.previewNode(element),
+    }
+  },
+
+  /** `selectorElement` within an adopted element handle, for `ElementHandle.$` and `$eval`. */
+  // Playwright: `server/frameSelectors.ts` `FrameSelectors._callOnSelectorInternal`: `const elements = injected.querySelectorAll(params.info.parsed, params.scope || document);`
+  scopedSelectorElement: (injected, { selector, strict }, root) => {
+    const elements = query(injected, selector, strict, { root })
+    const [element] = elements
+    if (!element) return { count: 0, visible: false }
+    return {
+      element,
+      count: elements.length,
+      visible: injected.elementState(element, 'visible', true).matches,
+      preview: injected.previewNode(element),
+    }
+  },
+
+  /** Every match, as Playwright's `queryAll` resolves it: the elements, by index. */
+  // Playwright: `server/frameSelectors.ts` `FrameSelectors.queryAll`: `const resolved = await this.callOnSelectorHandle({ selector, strict: false, scope }, ({ elements }) => elements, {});`
+  queryAll: (injected, { selector }) => ({
+    elements: elementList(query(injected, selector, false)),
+  }),
+
+  // Playwright: `server/frameSelectors.ts` `FrameSelectors.queryAll`: `const resolved = await this.callOnSelectorHandle({ selector, strict: false, scope }, ({ elements }) => elements, {});`
+  scopedQueryAll: (injected, { selector }, root) => ({
+    elements: elementList(query(injected, selector, false, { root })),
+  }),
+
+  // Playwright: `server/dom.ts` `ElementHandle._initializePreview`: `this._setPreview(await utility.evaluate((injected, e) => 'JSHandle@' + injected.previewNode(e), this));`
+  listPreviews: (injected, _params, list) => ({
+    previews: Object.values(list).map((element) =>
+      injected.previewNode(element),
+    ),
+  }),
+
+  // Neo: the anchor `main_world.rs` resolves into the page's own world; Playwright's server
+  // finds that world by its execution context, which Neo does not watch.
+  // Rust only reads the node's `backendNodeId` (`DOM.describeNode`), which a `Document` has like
+  // any node; the cast is what lets the spec's one node handle kind carry it.
+  document: () => ({ node: document as unknown as Element }),
+
+  // Playwright: `server/dom.ts` `ElementHandle._initializePreview`: `this._setPreview(await utility.evaluate((injected, e) => 'JSHandle@' + injected.previewNode(e), this));`
+  previewNode: (injected, _params, node) => ({
+    preview: injected.previewNode(node),
+  }),
 
   textContent: (injected, { selector, strict }) => {
     const [element] = query(injected, selector, strict, {
@@ -215,6 +294,37 @@ export const glue = {
       element,
       visible: !!element && injected.utils.isElementVisible(element),
     }
+  },
+
+  /** Neo: one hop of a main-rooted path ref, by the owner's kept aria ref rather than the
+   * document's last snapshot, so a later snapshot of another part of the document leaves it. */
+  frameOwnerByRef: (injected, { ref }) => {
+    const named = namedOwners.get(ref)?.deref()
+    // Only an owner still connected in this document: one moved into another document (a
+    // sibling frame's) carries its ref along, but this document's path no longer leads to it.
+    const element =
+      named?.isConnected &&
+      named.ownerDocument === document &&
+      (named as NamedElement)._ariaRef?.ref === ref
+        ? named
+        : injected
+            .querySelectorAll(injected.parseSelector('iframe, frame'), document)
+            .find((owner) => (owner as NamedElement)._ariaRef?.ref === ref)
+    return {
+      element,
+      visible: !!element && injected.utils.isElementVisible(element),
+    }
+  },
+
+  /** Neo: the owner's aria ref, from a snapshot of the owner alone through the one
+   * `InjectedScript` snapshot that leaves the document's last snapshot (and so its `aria-ref`
+   * selectors) as it was. */
+  frameOwnerRef: (injected, _params, element) => {
+    injected.ariaSnapshotForExpectFailure(element, { mode: 'ai' })
+    const ref = (element as NamedElement)._ariaRef?.ref
+    if (ref === undefined) return {}
+    namedOwners.set(ref, new WeakRef(element))
+    return { ref }
   },
 
   describeSelector: (injected, { selector }) => {
@@ -348,13 +458,6 @@ export const glue = {
   },
   queryCount: (injected, { selector }) => ({
     value: query(injected, selector, false).length,
-  }),
-
-  /**
-   * Deviation: `client/locator.ts` `Locator.allTextContents`: `ee => ee.map(e => e.textContent || '')` runs in Neo's isolated world, where Playwright's `$$eval` runs in the page's main world, so a page's own `textContent` override (a prototype patch, a custom element class or a per-instance property) is not seen.
-   */
-  allTextContents: (injected, { selector }) => ({
-    values: query(injected, selector, false).map((e) => e.textContent || ''),
   }),
 
   /**
@@ -543,17 +646,6 @@ export const glue = {
     injected.hideHighlight()
     return {}
   },
-
-  /**
-   * Deviation: `client/locator.ts` `Locator.allInnerTexts`: `ee => ee.map(e => (e as HTMLElement).innerText)` runs in Neo's isolated world, where Playwright's `$$eval` runs in the page's main world, so a page's own `innerText` override (a prototype patch or a per-instance property) is not seen.
-   */
-  allInnerTexts: (injected, { selector }) => ({
-    values: query(injected, selector, false).map((e) => {
-      // Only HTML elements have `innerText`; the page function reads `undefined` for the rest.
-      const value = (e as Partial<HTMLElement>).innerText
-      return value === undefined ? {} : { value }
-    }),
-  }),
 } satisfies InjectedApi<InjectedScript, Handles>
 
 // Playwright's AriaNodeJSON reaches Rust unchanged, but TypeScript lets a structurally wider

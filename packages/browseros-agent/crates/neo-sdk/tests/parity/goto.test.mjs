@@ -27,6 +27,7 @@ import {
   sleep,
   startNeo,
 } from './harness.mjs'
+import { compareCases } from './history.mjs'
 
 const routes = {
   '/ok': (response) => {
@@ -407,4 +408,29 @@ test('a response whose page closes before its body finished rejects body() and f
   } finally {
     await runCleanups(cleanups)
   }
+})
+
+// The `referer` option reaches the page (Playwright's tests/page/page-goto.spec.ts "NA-052 should send
+// referer"), compared as the navigated document's `document.referrer` on tabs of history.html.
+test('goto sends the referer it is given', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  await compareCases(
+    t,
+    [
+      {
+        name: 'the new document sees the referer',
+        path: '/history.html',
+        source: `const response = await page.goto(origin + '/next.html', { referer: 'http://referer.test/from' })
+    return { response: describe(response), path: path() }`,
+        expected: {
+          response: { status: 200, ok: true, path: '/next.html' },
+          path: '/next.html',
+        },
+        probe: 'document.referrer',
+      },
+    ],
+    { pages: { '/history.html': '<!doctype html><title>history</title>' } },
+  )
 })
