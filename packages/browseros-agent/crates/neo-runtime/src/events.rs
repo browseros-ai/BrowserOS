@@ -171,7 +171,8 @@ struct Inner {
     state: Mutex<State>,
     /// Wakes the realm's pending `nextEvents()` when an event is queued.
     arrived: Notify,
-    /// Cancelled by [`EventHub::close`]: producers that run on their own (target discovery) end.
+    /// Cancelled by [`EventHub::close`] and [`EventHub::end_subscriptions`]: producers that run
+    /// on their own (target discovery) end.
     ended: CancellationToken,
 }
 
@@ -179,6 +180,9 @@ struct Inner {
 struct State {
     /// Set when the run ends: nothing is subscribed, queued or delivered after that.
     closed: bool,
+    /// Set when the run's context closes ([`EventHub::end_subscriptions`]): nothing is
+    /// subscribed after that, while what is queued still drains.
+    subscriptions_ended: bool,
     /// The seq of the newest queued event, 0 before the first.
     seq: u64,
     queue: VecDeque<Queued>,
@@ -238,7 +242,7 @@ impl EventHub {
     /// event a producer applies; what it needs switched on is the caller's ([`needs`]).
     pub(crate) fn subscribe(&self, guid: &str, event: &str, enabled: bool) {
         self.with(|state| {
-            if state.closed {
+            if state.closed || state.subscriptions_ended {
                 return;
             }
             let key = (guid.to_string(), event.to_string());
@@ -464,6 +468,24 @@ impl EventHub {
         }
     }
 
+    /// The run's context closed: drops every subscription, so producers give their
+    /// no-listener defaults from now on and target discovery ends, and refuses later ones.
+    /// Events already queued still drain, in order, before the close's reply continues.
+    pub(crate) fn end_subscriptions(&self) {
+        self.with(|state| {
+            state.subscriptions_ended = true;
+            state.subscriptions.clear();
+            state.enables.clear();
+        });
+        self.0.ended.cancel();
+    }
+
+    /// Whether the run's context closed ([`Self::end_subscriptions`]) or the run ended.
+    pub(crate) fn subscriptions_ended(&self) -> bool {
+        self.with(|state| state.closed || state.subscriptions_ended)
+            .unwrap_or(true)
+    }
+
     /// Ends the run's events: drops every subscription and queued event, so producers give
     /// their no-listener defaults from now on, and refuses further emits.
     pub(crate) fn close(&self) {
@@ -481,7 +503,8 @@ impl EventHub {
         self.0.arrived.notify_waiters();
     }
 
-    /// Cancelled once the run's events end ([`Self::close`]).
+    /// Cancelled once the run's events end ([`Self::close`]) or its context closes
+    /// ([`Self::end_subscriptions`]).
     pub(crate) fn ended(&self) -> CancellationToken {
         self.0.ended.clone()
     }

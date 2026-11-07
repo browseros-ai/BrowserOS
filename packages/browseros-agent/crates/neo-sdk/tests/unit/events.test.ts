@@ -416,3 +416,97 @@ test("tests that a closing page runs its close listeners, then the context's pag
   await page.bringToFront()
   expect(order).toEqual(['close true', 'pageclose true'])
 })
+
+test("tests that a context's close closes its pages as the script sees them, in Playwright's order", async () => {
+  const { page, context } = run()
+  const sent: string[] = []
+  const native = (
+    globalThis as unknown as Record<
+      string,
+      { callWithEvents: unknown; get: unknown }
+    >
+  ).__neo_runtime
+  native.get = (request: string) => {
+    const { field } = JSON.parse(request)
+    if (field === 'pages')
+      return JSON.stringify([pageRecord('T', 'https://run.test/')])
+    if (field === 'isClosed') return 'false'
+    return JSON.stringify(null)
+  }
+  let release: (() => void) | undefined
+  native.callWithEvents = async (message: string) => {
+    const { id, method } = JSON.parse(message)
+    sent.push(method)
+    if (method === 'click')
+      await new Promise<void>((resolve) => (release = resolve))
+    return { reply: JSON.stringify({ id }), events: 0 }
+  }
+  const order: string[] = []
+  page.on('close', () => order.push(`close ${page.isClosed()}`))
+  context.on('pageclose', (closed) =>
+    order.push(`pageclose ${closed === page} ${context.pages().length}`),
+  )
+  context.on('close', (closed) =>
+    order.push(`context close ${closed === context}`),
+  )
+  const waiting = page.waitForEvent('console').catch((e: Error) => e.message)
+  const contextWaiting = context
+    .waitForEvent('page')
+    .catch((e: Error) => e.message)
+  const inFlight = page.click('#never').catch((e: Error) => e.message)
+  const closing = context.close({ reason: 'all done' })
+  expect([context.isClosed(), page.isClosed()]).toEqual([true, false])
+  await closing
+  order.push('resolved')
+  expect(order).toEqual([
+    'close true',
+    'pageclose true 0',
+    'context close true',
+    'resolved',
+  ])
+  expect(await waiting).toStartWith('page.waitForEvent: all done\n')
+  // Playwright's context wait logs no line, so its message is the reason alone.
+  expect(await contextWaiting).toBe('browserContext.waitForEvent: all done')
+  expect(await inFlight).toBe('page.click: all done')
+  release?.()
+  expect([context.pages(), page.isClosed(), page.url()]).toEqual([
+    [],
+    true,
+    'https://run.test/',
+  ])
+  await expect(page.title()).rejects.toThrow(
+    'page.title: Target page, context or browser has been closed',
+  )
+  await context.close()
+  expect(sent).toEqual(['click', 'close'])
+})
+
+test("tests that a page's close reason reaches its waits and the calls it interrupted, not later ones", async () => {
+  const { page } = run()
+  const native = (
+    globalThis as unknown as Record<string, { callWithEvents: unknown }>
+  ).__neo_runtime
+  native.callWithEvents = async (message: string) => {
+    const { id, method } = JSON.parse(message)
+    if (method === 'close') {
+      queueEvent('page@T', 'close', {})
+      return { reply: JSON.stringify({ id }), events: seq }
+    }
+    const closed = {
+      error: {
+        error: {
+          name: 'TargetClosedError',
+          message: 'Target page, context or browser has been closed',
+        },
+      },
+    }
+    return { reply: JSON.stringify({ id, ...closed }), events: 0 }
+  }
+  const waiting = page.waitForEvent('console').catch((e: Error) => e.message)
+  await page.close({ reason: 'bye' })
+  expect(await waiting).toStartWith('page.waitForEvent: bye\n')
+  // A call made once the page reads closed keeps the default message, as in Playwright.
+  await expect(page.title()).rejects.toThrow(
+    'page.title: Target page, context or browser has been closed',
+  )
+})

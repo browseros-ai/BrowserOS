@@ -166,6 +166,10 @@ fn subscribe(tabs: &Tabs, request: &str) -> Result<(), String> {
     } = serde_json::from_str(request).map_err(|error| format!("bad subscribe request: {error}"))?;
     let needs = events::needs(&guid, &event)
         .ok_or_else(|| format!("Neo does not produce {event:?} events on {guid:?}"))?;
+    // A closed context listens to nothing more, and must not attach to its still-open tabs.
+    if tabs.events().subscriptions_ended() {
+        return Ok(());
+    }
     let pages = if guid == CONTEXT_GUID {
         tabs.attached()
             .into_iter()

@@ -55,7 +55,34 @@ pub(crate) async fn context(
             created.keep();
             Ok(Some(value))
         }
+        BrowserContextCall::Close(_) => {
+            close_context(tabs, progress).await?;
+            Ok(None)
+        }
     }
+}
+
+/// Playwright's close of a connectOverCDP default context, which only disconnects: every tab
+/// stays open (measured on BrowserOS neo, a2-mapping-evidence.md §2). The run lets go of what it
+/// holds in the browser for its script's listeners: a `beforeunload` dialog a listener holds is
+/// dismissed, so its tab stays, and every subscription ends with target discovery. The SDK
+/// closes the run's pages and context as the script sees them; the reason stays there.
+async fn close_context(tabs: &Tabs, progress: &Progress) -> Result<(), CallError> {
+    for (_, session) in tabs.attached() {
+        if session.events.dialogs.take_open_beforeunload() {
+            let dismissed = progress
+                .race(session.send(
+                    "Page.handleJavaScriptDialog",
+                    json!({ "accept": false }),
+                ))
+                .await?;
+            if let Err(error) = dismissed {
+                debug!(%error, "dismissing a beforeunload dialog at the context's close failed");
+            }
+        }
+    }
+    tabs.events().end_subscriptions();
+    Ok(())
 }
 
 pub(crate) async fn page(

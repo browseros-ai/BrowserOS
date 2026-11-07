@@ -144,6 +144,10 @@ export class Page extends ChannelOwner {
   /** Stable identity, including detached frames a script may still hold. */
   readonly #frames = new Map<string, Frame>()
   readonly _timeoutSettings: TimeoutSettings
+  /** Set when this page's `close` ran (`_onClose`): what Playwright's client flips then. */
+  #closedLocally = false
+  /** Playwright's `_closeReason`: what `close({ reason })` was given. */
+  #closeReason: string | undefined
 
   /** `guid` and `mainFrameGuid` come from one record Rust minted (`page@T`, `frame@T`), so a
    * page's calls and its frame's calls reach the same tab. */
@@ -168,6 +172,7 @@ export class Page extends ChannelOwner {
   }
 
   url(): string {
+    if (this.#closedLocally) return this.#lastUrl
     const url = get(this.#guid, 'url')
     if (url !== null) this.#lastUrl = url
     return this.#lastUrl
@@ -196,6 +201,7 @@ export class Page extends ChannelOwner {
   async close(
     options: { runBeforeUnload?: boolean; reason?: string } = {},
   ): Promise<void> {
+    this.#closeReason = options.reason
     try {
       if (options.runBeforeUnload)
         await this.#connection.sendPage(
@@ -222,7 +228,17 @@ export class Page extends ChannelOwner {
   }
 
   isClosed(): boolean {
-    return get(this.#guid, 'isClosed')
+    return this.#closedLocally || get(this.#guid, 'isClosed')
+  }
+
+  /** Whether this page's `close` ran, from its tab's close or its context's. */
+  _isClosedLocally(): boolean {
+    return this.#closedLocally
+  }
+
+  /** Playwright's `_closeErrorWithReason` reason: the page's own, else its context's. */
+  _closeReason(): string | undefined {
+    return this.#closeReason ?? this.#context._closeReason()
   }
 
   /** Playwright's page channel handlers (`client/page.ts` constructor), and its main frame's
@@ -300,12 +316,17 @@ export class Page extends ChannelOwner {
    * tab's opener when asked, so the run page and a `pages()` page name theirs too.
    */
   async opener(): Promise<Page | null> {
+    // A closed context's tabs stay open; its pages, the opener too, read closed.
+    if (this.#context.isClosed()) return null
     const record = get(this.#guid, 'opener')
     return record ? this.#context._pageFrom(record) : null
   }
 
-  /** Playwright's `Page._onClose`: the page's `close`, then the context's `pageclose`. */
+  /** Playwright's `Page._onClose`: the page reads closed, then its `close` and the context's
+   * `pageclose` run. Once: a context's close and its tab's close can both report it. */
   _onClose(): void {
+    if (this.#closedLocally) return
+    this.#closedLocally = true
     this.emit('close', this)
     this.#context.emit('pageclose', this)
   }
@@ -352,7 +373,9 @@ export class Page extends ChannelOwner {
     if (event !== 'crash')
       waiter.rejectOnEvent(this, 'crash', new Error('Page crashed'))
     if (event !== 'close')
-      waiter.rejectOnEvent(this, 'close', () => targetClosedError())
+      waiter.rejectOnEvent(this, 'close', () =>
+        targetClosedError(this._closeReason()),
+      )
     const result = await waiter.waitForEvent(this, event, predicate)
     waiter.dispose()
     return result

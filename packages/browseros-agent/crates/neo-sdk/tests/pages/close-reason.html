@@ -1,0 +1,10 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>close reason</title>
+<script>
+// contextClose.test.mjs and pageCloseReason.test.mjs serve this page. #count counts its clicks
+// in window.__clicks, so a test reads after a close that the tab kept its document; #hidden is
+// never visible, so a click on it waits until its page or context closes. Nothing here logs.
+window.__clicks = 0;
+</script></head><body>
+<button type="button" id="count" onclick="__clicks++">Count</button>
+<button type="button" id="hidden" hidden>Hidden</button>
+</body></html>
