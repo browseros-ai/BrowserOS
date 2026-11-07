@@ -18,7 +18,7 @@ Results contain `status`, `value`, `logs`, `error`, `pages`, and a browser-call 
 
 ## Tabs
 
-Omit `page` to start in a new background tab. To continue in a tab, pass its `id` from a previous result's `pages` as `page`. `pages` lists every tab the run used (the tab it started in and any tab it listed, opened, or closed) with its `id`, `url`, `created`, and `closed`.
+Omit `page` to start in a new background tab. To continue in a tab, pass its `id` from a previous result's `pages` as `page`. `pages` lists every tab the run used (the tab it started in and any tab it listed, opened, or closed) with its `id`, `created`, and `closed`, plus its `url` when available.
 
 Clicking a link navigates the tab it is in. To keep the current page and read others, open them in background tabs in the same run:
 
@@ -62,7 +62,7 @@ Or close it with `await page.close()`.
 
 ## Connecting
 
-Call `run` through the configured BrowserOS neo MCP server. If that server is not connected, tell the user instead of guessing another endpoint.
+Call `run` through the configured BrowserOS neo MCP server; if it is not connected, tell the user instead of guessing another endpoint. Reuse the MCP client's session; if the server forgets it, reconnect and initialize once before continuing. Keep the client's request timeout longer than the run's `timeout`, allowing time for cleanup and the reply. A client timeout or cancelled request may deliver no result or tab ID; use `context.pages()` to find open tabs by URL before opening replacements.
 
 ## Supported API
 

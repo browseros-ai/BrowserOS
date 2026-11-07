@@ -31,11 +31,11 @@ const MAX_TIMEOUT: u64 = 120_000;
 /// Claude Code truncates each at about 4096 characters, so keep this compact.
 const INSTRUCTIONS: &str = concat!(
     "Write Playwright JavaScript. `page` and `context` are provided; await browser calls and return a value. Send an async function body without imports or a wrapper. Variables do not survive between runs; tabs, cookies and logins do.\n\n",
-    "Tabs: omit `page` to start in a new background tab; pass a returned `pages[].id` to continue in that tab. Every result's `pages` lists the tabs the run used, including ones it opened or closed (`id`, `url`, `created`, `closed`), also when the run failed or timed out, so a later run can resume or close them.\n",
+    "Tabs: omit `page` to start in a new background tab; pass a returned `pages[].id` to continue in that tab. Every result's `pages` lists the tabs the run used, including ones it opened or closed (`id`, `created`, `closed`, plus `url` when available), also when the run failed or timed out, so a later run can resume or close them.\n",
     "Clicking a link navigates the tab it is in. To keep the current page, open links in background tabs in the same run: `const tab = await context.newPage(); await tab.goto(href, { waitUntil: 'domcontentloaded' });`. `context.pages()` lists the profile's open tabs, `page.context()` returns the context, `tab.bringToFront()` activates a tab, `tab.close()` closes it.\n\n",
     "Navigation: `goto` waits for `load` by default, which slow pages can miss within the run. To read a page, prefer `goto(url, { waitUntil: 'domcontentloaded' })`, then wait for the content you need, e.g. `await page.getByRole('heading').first().waitFor()`.\n\n",
     "Supported, a Playwright subset: context.pages/newPage/setDefaultTimeout/setDefaultNavigationTimeout; page.goto/url/title/context/bringToFront/close/isClosed/waitForURL/waitForLoadState/ariaSnapshot/locator/getBy* and the selector forms of the locator methods; locator.click/fill/clear/press/check/uncheck/setChecked/selectOption/textContent/innerText/getAttribute/inputValue/isVisible/isChecked/count/allTextContents/waitFor/first/last/nth/filter/locator/getBy*/and/or.\n\n",
-    "`timeout` is milliseconds (default 30000, maximum 120000).",
+    "`timeout` is milliseconds (default 30000, maximum 120000). Reuse your MCP session and set its request timeout longer than the run timeout. If the client times out without a result, use `context.pages()` to find open tabs before opening replacements.",
 );
 
 struct Browser {
@@ -284,12 +284,12 @@ fn close_late_page(
     creation: tokio::task::JoinHandle<Result<Value, browseros_cdp::CdpError>>,
 ) {
     tasks.spawn(async move {
-        if let Ok(Ok(reply)) = creation.await {
-            if let Some(id) = page_id(&reply) {
-                let _ = cdp
-                    .send("Target.closeTarget", json!({"targetId":id}), None)
-                    .await;
-            }
+        if let Ok(Ok(reply)) = creation.await
+            && let Some(id) = page_id(&reply)
+        {
+            let _ = cdp
+                .send("Target.closeTarget", json!({"targetId":id}), None)
+                .await;
         }
     });
 }
@@ -325,7 +325,7 @@ fn tool() -> Tool {
             "page":{"type":"string","minLength":1,"description":"A pages[].id from an earlier result. Omit to open a background tab."},
             "timeout":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT,"default":DEFAULT_TIMEOUT,"description":"Whole-run timeout in milliseconds."}
         }
-    })).expect("static input schema is an object")))
+    })).unwrap_or_default()))
     .with_title("Run Playwright code")
     .with_annotations(ToolAnnotations::new().read_only(false).destructive(true).open_world(true))
 }
