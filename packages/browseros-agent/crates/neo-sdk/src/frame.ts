@@ -44,6 +44,7 @@ import type {
   FrameClickParams,
   FrameDblclickParams,
   FrameDispatchEventParams,
+  FrameDragAndDropParams,
   FrameFillParams,
   FrameFocusParams,
   FrameGetAttributeParams,
@@ -123,6 +124,7 @@ import {
   FRAME_CLICK_KEYS,
   FRAME_DBLCLICK_KEYS,
   FRAME_DISPATCH_EVENT_KEYS,
+  FRAME_DRAG_AND_DROP_KEYS,
   FRAME_FILL_KEYS,
   FRAME_FOCUS_KEYS,
   FRAME_GET_ATTRIBUTE_KEYS,
@@ -302,6 +304,13 @@ export type FillOptions = Omit<FrameFillParams, 'selector' | 'value'> & {
   noWaitAfter?: boolean
 }
 export type PressOptions = Omit<FramePressParams, 'selector' | 'key'> & {
+  timeout?: number
+}
+/** `Locator.dragTo`'s and `Page/Frame.dragAndDrop`'s options. */
+export type DragAndDropOptions = Omit<
+  FrameDragAndDropParams,
+  'source' | 'target'
+> & {
   timeout?: number
 }
 /** `Locator.pressSequentially`'s and the deprecated `type`s' options. */
@@ -1467,6 +1476,35 @@ export class Frame {
         key,
         ...options,
       }) as FramePressParams,
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
+    )
+  }
+
+  /** A move and press on `source`, then a move and release on `target`, in one timeout. */
+  async dragAndDrop(
+    source: string,
+    target: string,
+    options: DragAndDropOptions = {},
+  ): Promise<void> {
+    return await this._dragAndDrop('frame.dragAndDrop', source, target, options)
+  }
+
+  /** Synchronously reaches `send` so it captures the script's call site. */
+  async _dragAndDrop(
+    apiName: ApiName,
+    source: string,
+    target: string,
+    options: DragAndDropOptions,
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'dragAndDrop',
+      pickParams(FRAME_DRAG_AND_DROP_KEYS, {
+        source,
+        target,
+        ...options,
+      }) as FrameDragAndDropParams,
       this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
   }

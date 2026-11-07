@@ -81,6 +81,9 @@ interfaces:
     # `Locator.pressSequentially` and the deprecated `type`s: focus, then `Keyboard.type`
     # (neo-runtime `press.rs`).
     - type
+    # `Locator.dragTo` and `Page/Frame.dragAndDrop`: a move and down on the source, then a move
+    # and up on the target, over Chromium's drag manager (neo-runtime `drag.rs`).
+    - dragAndDrop
     - inputValue
     - isChecked
     - isVisible

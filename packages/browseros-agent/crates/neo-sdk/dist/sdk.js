@@ -4361,6 +4361,9 @@ class Locator {
       ...options
     });
   }
+  async dragTo(target, options = {}) {
+    return await this._frame._dragAndDrop("locator.dragTo", this._selector, target._selector, { strict: true, ...options });
+  }
   async pressSequentially(text, options = {}) {
     return await this._frame._type("locator.pressSequentially", this._selector, text, { strict: true, ...options });
   }
@@ -4793,6 +4796,17 @@ var FRAME_PRESS_KEYS = [
   "noWaitAfter"
 ];
 var FRAME_TYPE_KEYS = ["selector", "strict", "text", "delay"];
+var FRAME_DRAG_AND_DROP_KEYS = [
+  "source",
+  "target",
+  "force",
+  "scroll",
+  "trial",
+  "sourcePosition",
+  "targetPosition",
+  "strict",
+  "steps"
+];
 var FRAME_INPUT_VALUE_KEYS = ["selector", "strict"];
 var FRAME_IS_CHECKED_KEYS = ["selector", "strict"];
 var FRAME_IS_VISIBLE_KEYS = ["selector", "strict"];
@@ -5509,6 +5523,16 @@ class Frame {
     await this._connection.send(apiName, this._guid, "press", pickParams(FRAME_PRESS_KEYS, {
       selector,
       key,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async dragAndDrop(source, target, options = {}) {
+    return await this._dragAndDrop("frame.dragAndDrop", source, target, options);
+  }
+  async _dragAndDrop(apiName, source, target, options) {
+    await this._connection.send(apiName, this._guid, "dragAndDrop", pickParams(FRAME_DRAG_AND_DROP_KEYS, {
+      source,
+      target,
       ...options
     }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
@@ -6375,6 +6399,9 @@ class Page extends ChannelOwner {
   }
   async press(selector, key, options = {}) {
     return await this.#mainFrame._press("page.press", selector, key, options);
+  }
+  async dragAndDrop(source, target, options = {}) {
+    return await this.#mainFrame._dragAndDrop("page.dragAndDrop", source, target, options);
   }
   async type(selector, text2, options = {}) {
     return await this.#mainFrame._type("page.type", selector, text2, options);

@@ -60,6 +60,7 @@ mod devices;
 mod dialogs;
 mod discovery;
 mod dispatch;
+mod drag;
 mod element_ops;
 mod evaluate;
 mod events;

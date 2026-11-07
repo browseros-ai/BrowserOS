@@ -16,6 +16,7 @@ import type {
   FrameClickParams,
   FrameDblclickParams,
   FrameDispatchEventParams,
+  FrameDragAndDropParams,
   FrameFillParams,
   FrameFocusParams,
   FrameGetAttributeParams,
@@ -187,6 +188,19 @@ export const FRAME_PRESS_KEYS = [
 
 /** `Frame.type` in Playwright schema order. */
 export const FRAME_TYPE_KEYS = ['selector', 'strict', 'text', 'delay'] as const
+
+/** `Frame.dragAndDrop` in Playwright schema order. */
+export const FRAME_DRAG_AND_DROP_KEYS = [
+  'source',
+  'target',
+  'force',
+  'scroll',
+  'trial',
+  'sourcePosition',
+  'targetPosition',
+  'strict',
+  'steps',
+] as const
 
 /** `Frame.inputValue` in Playwright schema order. */
 export const FRAME_INPUT_VALUE_KEYS = ['selector', 'strict'] as const
@@ -396,6 +410,12 @@ type _FramePressKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_PRESS_KEYS)[number], true>,
     Required<FramePressParams>
+  >
+>
+type _FrameDragAndDropKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_DRAG_AND_DROP_KEYS)[number], true>,
+    Required<FrameDragAndDropParams>
   >
 >
 type _FrameTypeKeysMatchSpec = Assert<

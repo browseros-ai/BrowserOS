@@ -30,6 +30,7 @@ import {
   type ClickOptions,
   type DblclickOptions,
   type DispatchEventOptions,
+  type DragAndDropOptions,
   type FillOptions,
   type FocusOptions,
   Frame,
@@ -989,6 +990,19 @@ export class Page extends ChannelOwner {
     options: PressOptions = {},
   ): Promise<void> {
     return await this.#mainFrame._press('page.press', selector, key, options)
+  }
+
+  async dragAndDrop(
+    source: string,
+    target: string,
+    options: DragAndDropOptions = {},
+  ): Promise<void> {
+    return await this.#mainFrame._dragAndDrop(
+      'page.dragAndDrop',
+      source,
+      target,
+      options,
+    )
   }
 
   /** Deprecated in Playwright for `Locator.pressSequentially`, and served the same way. */

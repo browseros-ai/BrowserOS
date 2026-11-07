@@ -43,16 +43,17 @@ use futures_util::future;
 use neo_runtime_spec::injected::ReadableElementState;
 use neo_runtime_spec::serve::{
     BrowserContextCall, DialogCall, FrameAriaSnapshotParams, FrameCall, FrameCheckParams,
-    FrameCheckResult, FrameClickParams, FrameDblclickParams, FrameFillParams, FrameFillResult,
-    FrameGetAttributeParams, FrameGotoParams, FrameHoverParams, FrameInnerHTMLParams,
-    FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams,
-    FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult, FrameIsEditableParams,
-    FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult, FrameIsHiddenParams,
-    FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams,
-    FramePressResult, FrameQueryCountParams, FrameSelectOptionParams, FrameSelectOptionResult,
-    FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameTypeParams, FrameTypeResult,
-    FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
-    Metadata, PageCall, RequestCall, ResponseCall,
+    FrameCheckResult, FrameClickParams, FrameDblclickParams, FrameDragAndDropParams,
+    FrameDragAndDropResult, FrameFillParams, FrameFillResult, FrameGetAttributeParams,
+    FrameGotoParams, FrameHoverParams, FrameInnerHTMLParams, FrameInnerTextParams,
+    FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams, FrameIsCheckedResult,
+    FrameIsDisabledParams, FrameIsDisabledResult, FrameIsEditableParams, FrameIsEditableResult,
+    FrameIsEnabledParams, FrameIsEnabledResult, FrameIsHiddenParams, FrameIsHiddenResult,
+    FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams, FramePressResult,
+    FrameQueryCountParams, FrameSelectOptionParams, FrameSelectOptionResult, FrameTapParams,
+    FrameTextContentParams, FrameTitleParams, FrameTypeParams, FrameTypeResult, FrameUncheckParams,
+    FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult, Metadata, PageCall,
+    RequestCall, ResponseCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -69,6 +70,7 @@ use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::devices::{self, DeviceCall};
 use crate::dialogs;
+use crate::drag::{self, DragOptions};
 use crate::element_ops::{
     self, BOUNDING_BOX_META, DispatchOptions, ElementTarget, NeoElementParams, NeoSelectTextParams,
     SCROLL_INTO_VIEW_META, SELECT_TEXT_META,
@@ -343,6 +345,8 @@ enum Route {
     FramePress(PressOptions),
     /// `Frame.type`, served by press's policy.
     FrameType(PressOptions),
+    /// `Frame.dragAndDrop`: two pointer actions over Chromium's drag manager.
+    FrameDragAndDrop(DragOptions),
     FrameInputValue(InputValueOptions),
     FrameIsVisible(StateOptions),
     FrameIsHidden(StateOptions),
@@ -796,6 +800,9 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::Fill(params) => Ok(Route::FrameFill(FillOptions::from_params(params))),
         FrameCall::Press(params) => Ok(Route::FramePress(PressOptions::from_params(params))),
         FrameCall::Type(params) => Ok(Route::FrameType(PressOptions::from_type(params))),
+        FrameCall::DragAndDrop(params) => {
+            DragOptions::from_params(params).map(Route::FrameDragAndDrop)
+        }
         FrameCall::InputValue(params) => Ok(Route::FrameInputValue(
             InputValueOptions::from_params(params),
         )),
@@ -1224,6 +1231,9 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         Route::FrameType(options) => press::press(tab, &options, progress)
             .await
             .and_then(|()| encode_result::<FrameTypeParams>(&FrameTypeResult {})),
+        Route::FrameDragAndDrop(options) => drag::drag_and_drop(tab, &options, progress)
+            .await
+            .and_then(|()| encode_result::<FrameDragAndDropParams>(&FrameDragAndDropResult {})),
         Route::FrameSetChecked(options) => {
             let checked = options.checked;
             check::set_checked(tab, &options, progress)
@@ -1760,7 +1770,7 @@ mod tests {
                     }]
                 );
             }
-            Route::FramePointer(_) => panic!("a form is not a pointer action"),
+            Route::FramePointer(_) | Route::FrameDragAndDrop(_) => panic!("not a form"),
             Route::FrameGoto(_)
             | Route::FrameTitle
             | Route::FrameTextContent(_)

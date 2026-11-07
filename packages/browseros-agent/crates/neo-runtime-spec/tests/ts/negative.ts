@@ -60,6 +60,8 @@ const valid = {
   stopHitTargetInterceptor: (_injected, _params, interceptor) => ({
     outcome: interceptor.stop(),
   }),
+  setupDragListeners: () => ({ armed: false }),
+  cleanupDrag: () => ({ started: false }),
   fill: () => ({ outcome: 'done' }),
   selectOptions: () => ({ values: [] }),
   elementState: () => ({ matches: false }),
