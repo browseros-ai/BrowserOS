@@ -199,9 +199,21 @@ const frameCases = [
   {
     name: 'waits on a frame end when its iframe is removed',
     source: `const login = page.frameLocator('#login-iframe')
+    // Both frame chains are resolved and warm before the waits start.
+    await login.locator('#who').waitFor({ state: 'attached' })
+    await login.frameLocator('#grandchild').locator('#send').waitFor()
     const detached = settle(() => login.locator('#who').waitFor({ state: 'detached', timeout: 5000 }))
     const hidden = settle(() => login.frameLocator('#grandchild').locator('#send').waitFor({ state: 'hidden', timeout: 5000 }))
-    await page.click('#remove-cross')
+    // The removal ends one task of the top page. Every poll of either wait starts in the top page,
+    // where it finds #login-iframe, so while the task runs no poll can start into the
+    // out-of-process frame, and one already in it has the task's second to finish; after it, the
+    // owner is gone. A removal between a poll's two steps (a page.click lands anywhere) sends that
+    // poll's next step into the closed session, and Playwright's wait rejects ("has been closed").
+    await page.evaluate(() => {
+      const end = Date.now() + 1000
+      while (Date.now() < end) {}
+      document.getElementById('remove-cross').click()
+    })
     return { detached: await detached, hidden: await hidden }`,
     expected: { detached: RESOLVED, hidden: RESOLVED },
     effect: (effect) => {
