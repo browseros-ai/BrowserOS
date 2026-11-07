@@ -792,7 +792,8 @@ function handleFrom(connection, created) {
   return new JSHandle(connection, created.guid, created.initializer);
 }
 function evaluateParams(apiName, pageFunction, arg, options) {
-  if (options?.signal !== undefined) {
+  const signal = options?.signal;
+  if (signal !== undefined && signal !== null) {
     throw new Error(`${apiName}: Neo does not support signal yet`);
   }
   if (options?.exposeFunctions) {
@@ -1849,7 +1850,7 @@ class Frame {
     return handleFrom(this._connection, result.handle);
   }
   async _withElement(apiName, selector, task, options) {
-    if (options.signal !== undefined)
+    if (options.signal !== undefined && options.signal !== null)
       throw new Error(`${apiName}: Neo does not support signal yet`);
     const result = await this._connection.send(apiName, this._guid, "waitForSelector", { selector, strict: true, state: "attached" }, this._page._timeoutSettings.timeout(options));
     const handle = ElementHandle.fromNullable(this._connection, result?.element);
