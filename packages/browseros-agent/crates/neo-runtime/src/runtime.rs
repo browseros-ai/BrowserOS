@@ -40,6 +40,17 @@ const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
 pub struct Runtime {
     cdp: CdpClient,
     inputs: TabInputs,
+    cleanup: TaskTracker,
+}
+
+/// Close the run's tracker on every exit, including a dropped future or failed tab open.
+/// The runtime's cleanup waiter must be able to finish on those paths too.
+struct CloseRunTasks(TaskTracker);
+
+impl Drop for CloseRunTasks {
+    fn drop(&mut self) {
+        self.0.close();
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -78,6 +89,7 @@ impl Runtime {
                 Ok(Self {
                     cdp,
                     inputs: TabInputs::default(),
+                    cleanup: TaskTracker::new(),
                 })
             }
             Err(CdpError::Protocol { message, .. }) => {
@@ -86,6 +98,14 @@ impl Runtime {
             Err(error) => Err(RuntimeError::Cdp(error)),
             Ok(reply) => Err(RuntimeError::UnsupportedBrowser(reply.to_string())),
         }
+    }
+
+    /// Waits for every run's remaining browser work, including late creation replies and
+    /// their tab cleanup. Hosts must stop admitting runs and cancel/await active runs first,
+    /// then drain before disconnecting CDP; a returned outcome alone does not settle writes.
+    pub async fn drain(&self) {
+        self.cleanup.close();
+        self.cleanup.wait().await;
     }
 
     /// Runs `request.code` against `request.page` and reports how it ended. Every failure,
@@ -115,6 +135,11 @@ impl Runtime {
         };
 
         let tasks = TaskTracker::new();
+        let _close_tasks = CloseRunTasks(tasks.clone());
+        let remaining = tasks.clone();
+        // Run outcomes have a bounded drain so callers get a timely report. Keep a
+        // separate lifetime for hosts shutting down the shared browser connection.
+        self.cleanup.spawn(async move { remaining.wait().await });
         let opened = tokio::select! {
             stop = deadline.reached() => {
                 return RunOutcome::stopped(stop, deadline.timeout(), Vec::new());

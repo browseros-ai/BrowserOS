@@ -52,6 +52,23 @@ Production build and upload scripts read `.env.production` plus exported process
 
 Default local ports are `9100` for the server, `9000` for CDP, and `9300` for the extension. The dev supervisor may pick others; see the contributing guide.
 
+### Playwright prototype
+
+Set `BROWSERCLAW_PLAYWRIGHT_RUN=1` in the **browser process's environment** to try the new runtime with the existing sidecar binary. Launch the browser executable directly from that shell, using a separate profile and `--disable-browseros-server-updater` so a downloaded sidecar cannot replace the prototype. The browser build must contain this version of `claw-server`; the flag is read when the sidecar starts. Unset or `0` follows the existing startup path.
+
+Flag on selects a minimal server before the legacy app boots. MCP offers only `run({code, page?, timeout?})`: write an async function body using the provided `page` and `context`, await Playwright calls, and return a value. Omit `page` to open a background tab; pass a returned `pages[].id` to continue. Results include `status`, `value`, `logs`, `error`, `pages` and the runtime call trace. The default deadline is 30,000 ms; the maximum is 120,000 ms.
+
+Legacy sessions, grouping, recording, audit/analytics, background tab cleanup and cockpit/host APIs are disabled in this mode. Health/readiness, shutdown, system info and Docker's disable-human-help handshake remain. Normal installed-app boot replaces the managed `browseros-neo` skill with the short embedded Playwright guide; restarting with the flag off restores the old guide. Dev mode keeps automatic harness writes off.
+
+Build the same Cargo package or use the resource builder below; no Chromium source or launcher change is needed. Run the isolated real-browser acceptance check from this directory:
+
+```sh
+NEO_E2E_BROWSER="/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo" \
+  CARGO_BUILD_BUILD_DIR="$PWD/target/build-private" \
+  CARGO_TARGET_DIR="$PWD/target/private" \
+  cargo test -p claw-server --test playwright_prototype -- --nocapture
+```
+
 ## Typecheck: a gotcha worth knowing
 
 `bun run typecheck` uses the native TypeScript 7 compiler, the Go-native build. Unlike an editor's bundled classic TypeScript, it does **not** implicitly include every `@types/*` package it finds. Each tsconfig has to list its ambient type packages in `compilerOptions.types`; the root defaults to `["node", "bun"]`.

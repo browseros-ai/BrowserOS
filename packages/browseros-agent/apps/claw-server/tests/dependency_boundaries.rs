@@ -445,7 +445,12 @@ fn classify(relative: &Path) -> Result<Layer, String> {
         [analytics, ..] if analytics == "analytics" => Ok(Layer::Support),
         // `config.rs`'s submodules, such as the behaviour file reader.
         [config, ..] if config == "config" => Ok(Layer::Support),
-        [file] if matches!(file.as_str(), "app.rs" | "runtime.rs" | "main.rs") => {
+        [file]
+            if matches!(
+                file.as_str(),
+                "app.rs" | "runtime.rs" | "main.rs" | "prototype.rs"
+            ) =>
+        {
             Ok(Layer::Composition)
         }
         [api, file] if api == "api" && file == "mod.rs" => Ok(Layer::Support),

@@ -7,6 +7,7 @@ pub mod db;
 pub mod error;
 pub mod identity;
 pub mod ids;
+pub mod prototype;
 pub mod runtime;
 pub mod services;
 pub mod storage;

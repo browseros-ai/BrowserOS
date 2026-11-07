@@ -1,0 +1,197 @@
+//! Minimal boot path inside the shipped sidecar binary. The flag is checked before
+//! AppState/AppRuntime exist, so legacy sessions, effects, recorders, cleanup jobs and
+//! analytics cannot observe or change the prototype's tabs. Only skill installation is reused.
+
+use std::{future::Future, net::SocketAddr, sync::Arc};
+
+use anyhow::Context;
+use axum::{
+    Json, Router,
+    extract::State,
+    http::StatusCode,
+    middleware,
+    routing::{get, post},
+};
+use claw_api::models::{
+    AgentSettings, BrowserLink, HealthResponse, ShutdownResponse, SystemInfo,
+    UpdateAgentSettingsRequest,
+};
+use rmcp::{serve_server, transport::stdio};
+use serde_json::{Value, json};
+use tokio::net::TcpListener;
+use tokio_util::sync::CancellationToken;
+
+use crate::{
+    VERSION,
+    analytics::NoopAnalyticsSink,
+    api::{http::mcp_request_hygiene, mcp::playwright::PlaywrightService},
+    config::Config,
+    services::{harness::HarnessService, harness_skills::load_playwright_skill, runtime_file},
+};
+
+pub const FLAG: &str = "BROWSERCLAW_PLAYWRIGHT_RUN";
+
+/// Exact `1`, matching the hosted-mode switch. Read only at process boot; all work after
+/// selection receives the selected service rather than consulting mutable environment.
+#[must_use]
+pub fn enabled() -> bool {
+    std::env::var(FLAG).is_ok_and(|value| value == "1")
+}
+
+#[derive(Clone)]
+struct StateData {
+    config: Arc<Config>,
+    service: PlaywrightService,
+    shutdown: CancellationToken,
+}
+
+/// Runs the prototype without constructing the legacy app. The caller owns OS signals and
+/// port-conflict exit semantics; this function owns its MCP requests and browser connection.
+pub async fn serve(
+    config: Arc<Config>,
+    stdio_mode: bool,
+    signal: impl Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    let shutdown = CancellationToken::new();
+    let service = PlaywrightService::new(config.cdp_port, shutdown.clone());
+    if stdio_mode {
+        let running = serve_server(service.clone(), stdio()).await?;
+        let cancellation = running.cancellation_token();
+        tokio::select! {
+            result = running.waiting() => { result?; }
+            () = signal => { cancellation.cancel(); }
+        }
+        shutdown.cancel();
+        service.disconnect().await;
+        return Ok(());
+    }
+
+    // Claim the port before any skill writes, preserving the installed sidecar's singleton
+    // rule. A losing launch must not replace the live process's instructions.
+    let address = SocketAddr::from(([127, 0, 0, 1], config.server_port));
+    let listener = TcpListener::bind(address).await?;
+    let bound = listener.local_addr()?;
+    let state = StateData {
+        config: config.clone(),
+        service: service.clone(),
+        shutdown: shutdown.clone(),
+    };
+    let app = Router::new()
+        .route("/system/health", get(health))
+        .route("/system/ready", get(ready))
+        .route("/system/shutdown", post(stop))
+        .route("/api/v1/system", get(info))
+        // Docker's entrypoint disables human help after checking readiness. Keep that
+        // handshake honest: effects stay disabled and enabling one is refused.
+        .route("/api/v1/settings/agent", get(settings).put(update_settings))
+        .nest_service(
+            "/mcp",
+            Router::new()
+                .fallback_service(service.http_service())
+                .layer(middleware::from_fn(mcp_request_hygiene)),
+        )
+        .with_state(state);
+    let runtime_url = config.proxy_port.map_or_else(
+        || format!("http://{bound}"),
+        |port| format!("http://127.0.0.1:{port}"),
+    );
+    runtime_file::write(&config.browserclaw_dir, &runtime_url).await;
+    let skill_config = config.clone();
+    let skill_task = tokio::spawn(async move {
+        if !skill_config.dev_mode {
+            if let Err(error) = install_skill(&skill_config).await {
+                tracing::warn!(%error, "prototype Playwright skill installation failed");
+            }
+        }
+    });
+    tracing::info!(%bound, "Playwright prototype listening; legacy effects and background jobs are disabled");
+    let stop_token = shutdown.clone();
+    let result = axum::serve(listener, app.into_make_service())
+        .with_graceful_shutdown(async move {
+            tokio::select! {
+                () = signal => {}
+                () = stop_token.cancelled() => {}
+            }
+            stop_token.cancel();
+        })
+        .await;
+    shutdown.cancel();
+    service.disconnect().await;
+    skill_task
+        .await
+        .context("prototype skill installer task failed")?;
+    result.context("prototype HTTP listener failed")
+}
+
+async fn install_skill(config: &Config) -> anyhow::Result<()> {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .context("HOME or USERPROFILE is required for skill installation")?;
+    let harness = HarnessService::new_with_managed_skill(
+        config.browserclaw_dir.join("mcp-manager"),
+        config.browserclaw_dir.join("harness-integrations"),
+        home.into(),
+        load_playwright_skill()?,
+        Arc::new(NoopAnalyticsSink),
+    );
+    // Same managed skill identity and ownership checks as legacy boot. Restarting with
+    // the flag off lets the normal reconciler restore the old guide.
+    harness.run_skill_reconciliation().await?;
+    Ok(())
+}
+
+fn health_report(connected: bool) -> HealthResponse {
+    HealthResponse {
+        browser: Some(Box::new(BrowserLink {
+            connected,
+            down_for_ms: None,
+            last_error: None,
+        })),
+        ..HealthResponse::default()
+    }
+}
+
+async fn health(State(state): State<StateData>) -> Json<HealthResponse> {
+    Json(health_report(state.service.connected()))
+}
+
+async fn ready(State(state): State<StateData>) -> (StatusCode, Json<HealthResponse>) {
+    let connected = state.service.ready().await;
+    (
+        if connected {
+            StatusCode::OK
+        } else {
+            StatusCode::SERVICE_UNAVAILABLE
+        },
+        Json(health_report(connected)),
+    )
+}
+
+async fn stop(State(state): State<StateData>) -> Json<ShutdownResponse> {
+    state.shutdown.cancel();
+    Json(ShutdownResponse::default())
+}
+
+async fn info(State(state): State<StateData>) -> Json<SystemInfo> {
+    Json(SystemInfo::new(
+        "BrowserOS neo (Playwright prototype)".to_string(),
+        VERSION.to_string(),
+        state.config.local_server_url(),
+    ))
+}
+
+async fn settings() -> Json<AgentSettings> {
+    Json(AgentSettings::new(false, false))
+}
+
+async fn update_settings(
+    Json(request): Json<UpdateAgentSettingsRequest>,
+) -> Result<Json<AgentSettings>, (StatusCode, Json<Value>)> {
+    if request.human_help_enabled == Some(true) || request.task_cleanup_tip_enabled == Some(true) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"Legacy effects are disabled in Playwright prototype mode"})),
+        ));
+    }
+    Ok(settings().await)
+}
