@@ -74,12 +74,13 @@ const cases = [
     expected: { response: null, title: 'data' },
   },
   {
+    // Chromium commits its error page after goto has rejected; reloading before that commit
+    // would race it, so the script waits for it. The reload then retries the unreachable URL.
     name: 'a reload that fails rejects',
     path: '/history.html',
-    source: `return {
-      goto: await settle(page.goto('http://127.0.0.1:1/unsafe')),
-      reload: await settle(page.reload()),
-    }`,
+    source: `const goto = await settle(page.goto('http://127.0.0.1:1/unsafe'))
+    await page.waitForURL(/^chrome-error:/)
+    return { goto, reload: await settle(page.reload()) }`,
     expected: { goto: { error: 'Error' }, reload: { error: 'Error' } },
   },
   {
