@@ -1464,6 +1464,75 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_the_navigation_wait_messages_decode_and_refuse() {
+        // The SDK's wire for these commands, which neo-sdk's tests/unit/history.test.ts pins.
+        for (method, params) in [
+            (
+                "neo:waitForNavigation",
+                json!({"url":{"glob":""},"waitUntil":"load"}),
+            ),
+            (
+                "neo:waitForNavigation",
+                json!({"url":{"regexSource":"done$","regexFlags":"i"},"waitUntil":"commit"}),
+            ),
+            ("neo:nextNavigation", json!({"response":true})),
+            ("neo:nextNavigation", json!({"cursor":4,"response":false})),
+            (
+                "neo:finishNavigation",
+                json!({"cursor":4,"waitUntil":"domcontentloaded"}),
+            ),
+        ] {
+            let routed = route_frame(method, params);
+            let meta = routed.meta.expect("navigation wait metadata");
+            assert_eq!(
+                (meta.title, meta.interface),
+                (Some("Wait for navigation"), "Frame")
+            );
+            assert!(!meta.has(MethodFlag::Input));
+            assert!(routed.route.is_ok(), "{method}");
+        }
+        for (method, params) in [
+            (
+                "neo:waitForNavigation",
+                json!({"url":{"glob":""},"waitUntil":"networkidle"}),
+            ),
+            ("neo:waitForNavigation", json!({"url":{}})),
+            ("neo:waitForNavigation", json!({"url":{"glob":"**/{a"}})),
+            ("neo:nextNavigation", json!({})),
+            ("neo:nextNavigation", json!({"response":true,"extra":1})),
+            (
+                "neo:finishNavigation",
+                json!({"cursor":1,"waitUntil":"networkidle"}),
+            ),
+            ("neo:finishNavigation", json!({"waitUntil":"load"})),
+        ] {
+            assert_eq!(
+                error_of(route_frame(method, params)).name,
+                ErrorName::Error,
+                "{method}"
+            );
+        }
+        // A child frame's Response is unknown, so a wait that answers one is refused before it
+        // starts; a URL-only cursor (`waitForURL`) is served there.
+        let child = FrameScope::Frame("child".to_string());
+        for (method, params, refused) in [
+            ("neo:waitForNavigation", json!({"url":{"glob":""}}), true),
+            ("neo:nextNavigation", json!({"response":true}), true),
+            ("neo:nextNavigation", json!({"response":false}), false),
+        ] {
+            let Ok(ObjectCall::Frame(route)) = route_frame(method, params).route else {
+                panic!("{method} routes");
+            };
+            assert_eq!(
+                unsupported_child_call(&child, &route).is_some(),
+                refused,
+                "{method}"
+            );
+            assert!(unsupported_child_call(&FrameScope::Main, &route).is_none());
+        }
+    }
+
+    #[test]
     fn tests_that_wait_success_encodes_an_empty_result() {
         let result = encode_result::<FrameWaitForSelectorParams>(&FrameWaitForSelectorResult {
             element: None,
