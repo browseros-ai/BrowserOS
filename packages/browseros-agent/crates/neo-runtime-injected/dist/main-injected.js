@@ -8926,13 +8926,15 @@ var SKIPPED_SETUPS = [
 
 class MainWorldInjectedScript extends InjectedScript {
 }
-for (const setup of SKIPPED_SETUPS) {
-  if (typeof InjectedScript.prototype[setup] !== "function")
-    throw new Error(`neo-runtime-injected: InjectedScript has no ${setup}`);
-  Object.defineProperty(MainWorldInjectedScript.prototype, setup, {
-    value: () => {}
-  });
+function skipSetups(prototype) {
+  for (const setup of SKIPPED_SETUPS) {
+    const own = InjectedScript.prototype[setup];
+    if (typeof own !== "function")
+      throw new Error(`neo-runtime-injected: InjectedScript has no ${setup}`);
+    Object.defineProperty(prototype, setup, { value: () => {} });
+  }
 }
+skipSetups(MainWorldInjectedScript.prototype);
 function mainInjected(initializer) {
   const fromSpec = initializer;
   return new MainWorldInjectedScript(window, {

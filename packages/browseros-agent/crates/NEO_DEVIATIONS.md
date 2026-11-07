@@ -3,11 +3,12 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (17)
+## Deviations (18)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
 | neo-runtime-injected/src/add-tag.ts | (file) | `server/frames.ts` `Frame._raceWithCSPError` | Playwright rejects a tag the page's Content Security Policy blocked by watching the console; Neo watches no console, so it waits for the document's `securitypolicyviolation` event instead, one task after the tag (Chromium reports an inline script's violation in a later task), and rejects with an Error naming the policy. |
+| neo-runtime-injected/src/main-injected.ts | `MainWorldInjectedScript` | `injected/src/injectedScript.ts` `InjectedScript.constructor` | Neo's main-world instance adds no window listener or document observer. |
 | neo-runtime/src/evaluate.rs | `created_handle` | `server/dom.ts` `ElementHandle._initializePreview` | Playwright starts at `JSHandle@node` and updates the preview by event; Neo has no events, so the handle starts with the final preview. |
 | neo-runtime/src/evaluate.rs | `utility_root` | `server/frameSelectors.ts` `FrameSelectors._resolveChainedSelector` | Playwright resolves frame hops from a scope too; Neo serves a scoped query within the element's own document only. |
 | neo-runtime/src/init_scripts.rs | `InitScripts::close` | `server/page.ts` `Page._addInitScript` | Playwright's scripts live as long as their page or context; Neo's live as long as the run. |

@@ -15,7 +15,7 @@ import {
   type InjectedScriptOptions,
 } from '../vendor/playwright/injected/src/injectedScript'
 
-/** The constructor's two setups that add window listeners and a document observer. */
+/** Neo: the constructor's two setups that add window listeners and a document observer. */
 const SKIPPED_SETUPS = [
   '_setupGlobalListenersRemovalDetection',
   '_setupHitTargetInterceptors',
@@ -30,18 +30,23 @@ const SKIPPED_SETUPS = [
  * Deviation: `injected/src/injectedScript.ts` `InjectedScript.constructor`: `this._setupHitTargetInterceptors();` Neo's main-world instance adds no window listener or document observer.
  */
 class MainWorldInjectedScript extends InjectedScript {}
-for (const setup of SKIPPED_SETUPS) {
-  // A vendored Playwright that renamed one fails every main-world call here, not by leaking.
-  if (
-    typeof (InjectedScript.prototype as unknown as Record<string, unknown>)[
-      setup
-    ] !== 'function'
-  )
-    throw new Error(`neo-runtime-injected: InjectedScript has no ${setup}`)
-  Object.defineProperty(MainWorldInjectedScript.prototype, setup, {
-    value: () => {},
-  })
+
+/**
+ * Neo: makes each of {@link SKIPPED_SETUPS} do nothing on `prototype`. A vendored Playwright
+ * that renamed one fails every main-world call here, where the override would quietly stop
+ * applying and the listeners come back.
+ */
+function skipSetups(prototype: object): void {
+  for (const setup of SKIPPED_SETUPS) {
+    const own = (
+      InjectedScript.prototype as unknown as Record<string, unknown>
+    )[setup]
+    if (typeof own !== 'function')
+      throw new Error(`neo-runtime-injected: InjectedScript has no ${setup}`)
+    Object.defineProperty(prototype, setup, { value: () => {} })
+  }
 }
+skipSetups(MainWorldInjectedScript.prototype)
 
 export default function mainInjected(
   initializer: InjectedInitializer,
