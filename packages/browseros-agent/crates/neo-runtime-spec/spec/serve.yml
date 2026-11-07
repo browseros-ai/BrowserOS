@@ -22,6 +22,11 @@ interfaces:
     - close
     - runBeforeUnload
     - bringToFront
+    # History navigations answer the new document's `Response` as `Frame.goto` does, or `{}`
+    # where Playwright's has none: no history entry, a same-document entry, a restored document.
+    - reload
+    - goBack
+    - goForward
   # The objects behind `goto`'s answer: its request, every redirect hop, and their responses.
   Request:
     - response

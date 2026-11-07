@@ -395,6 +395,9 @@ function get(guid, field) {
 function matchesURL(url, matcher) {
   return JSON.parse(__neo_runtime.get(JSON.stringify({ field: "matchesURL", url, matcher })));
 }
+function parseURL(url) {
+  return JSON.parse(__neo_runtime.get(JSON.stringify({ field: "parseURL", url })));
+}
 function call(message) {
   return __neo_runtime.call(message);
 }
@@ -925,6 +928,9 @@ var FRAME_WAIT_FOR_SELECTOR_KEYS = [
   "omitReturnValue"
 ];
 var PAGE_CLOSE_KEYS = ["reason"];
+var PAGE_RELOAD_KEYS = ["waitUntil"];
+var PAGE_GO_BACK_KEYS = ["waitUntil"];
+var PAGE_GO_FORWARD_KEYS = ["waitUntil"];
 function pickParams(keys, options) {
   const params = {};
   for (const key of keys) {
@@ -961,6 +967,150 @@ function convertSelectOptionValues(values) {
       throw new Error(`options[${index}].index: expected integer`);
   }
   return { options };
+}
+
+// src/url.ts
+var READ_ONLY = "Neo's URL is read-only: build a new URL string instead";
+
+class URL {
+  #parts;
+  #searchParams;
+  constructor(parts) {
+    this.#parts = parts;
+  }
+  get href() {
+    return this.#parts.href;
+  }
+  get origin() {
+    return this.#parts.origin;
+  }
+  get protocol() {
+    return this.#parts.protocol;
+  }
+  get username() {
+    return this.#parts.username;
+  }
+  get password() {
+    return this.#parts.password;
+  }
+  get host() {
+    return this.#parts.host;
+  }
+  get hostname() {
+    return this.#parts.hostname;
+  }
+  get port() {
+    return this.#parts.port;
+  }
+  get pathname() {
+    return this.#parts.pathname;
+  }
+  get search() {
+    return this.#parts.search;
+  }
+  get hash() {
+    return this.#parts.hash;
+  }
+  get searchParams() {
+    this.#searchParams ??= new URLSearchParams(this.#parts.searchParams);
+    return this.#searchParams;
+  }
+  set href(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  set protocol(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  set username(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  set password(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  set host(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  set hostname(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  set port(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  set pathname(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  set search(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  set hash(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  toString() {
+    return this.#parts.href;
+  }
+  toJSON() {
+    return this.#parts.href;
+  }
+}
+
+class URLSearchParams {
+  #pairs;
+  constructor(pairs) {
+    this.#pairs = pairs.map(([name, value]) => [name, value]);
+  }
+  get size() {
+    return this.#pairs.length;
+  }
+  get(name) {
+    return this.#pairs.find(([key]) => key === name)?.[1] ?? null;
+  }
+  getAll(name) {
+    return this.#pairs.filter(([key]) => key === name).map(([, value]) => value);
+  }
+  has(name, value) {
+    return this.#pairs.some(([key, entry]) => key === name && (value === undefined || entry === value));
+  }
+  forEach(callback, thisArg) {
+    for (const [name, value] of this.#pairs)
+      callback.call(thisArg, value, name, this);
+  }
+  *entries() {
+    for (const [name, value] of this.#pairs)
+      yield [name, value];
+  }
+  *keys() {
+    for (const [name] of this.#pairs)
+      yield name;
+  }
+  *values() {
+    for (const [, value] of this.#pairs)
+      yield value;
+  }
+  [Symbol.iterator]() {
+    return this.entries();
+  }
+  toString() {
+    return this.#pairs.map(([name, value]) => `${formEncode(name)}=${formEncode(value)}`).join("&");
+  }
+  append() {
+    throw new TypeError(READ_ONLY);
+  }
+  delete() {
+    throw new TypeError(READ_ONLY);
+  }
+  set() {
+    throw new TypeError(READ_ONLY);
+  }
+  sort() {
+    throw new TypeError(READ_ONLY);
+  }
+}
+function urlFor(url) {
+  const parts = parseURL(url);
+  return parts ? new URL(parts) : null;
+}
+function formEncode(text) {
+  return encodeURIComponent(text).replace(/%20/g, "+").replace(/[!'()~]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 // src/frame.ts
@@ -1047,9 +1197,60 @@ class Frame {
   }
   async _waitForURL(apiName, url, options) {
     const waitOptions = options ?? {};
+    if (typeof url === "function") {
+      const current = urlFor(this.url());
+      if (current && url(current))
+        return await this._waitForLoadState(apiName, waitOptions.waitUntil, waitOptions);
+      const waitUntil2 = verifyWaitState(apiName, "waitUntil", waitOptions.waitUntil === undefined ? "load" : waitOptions.waitUntil);
+      await this._navigationMatching(apiName, url, waitUntil2, this._page._timeoutSettings.navigationTimeout(waitOptions), false);
+      return;
+    }
     const serialized = serializeUrlMatch(apiName, url);
     const waitUntil = verifyWaitState(apiName, "waitUntil", waitOptions.waitUntil === undefined ? "load" : waitOptions.waitUntil);
     await this._connection.sendNeo(apiName, this._guid, "neo:waitForURL", { url: serialized, waitUntil }, this._page._timeoutSettings.navigationTimeout(waitOptions));
+  }
+  async waitForNavigation(options = {}) {
+    return await this._waitForNavigation("frame.waitForNavigation", options);
+  }
+  async _waitForNavigation(apiName, options) {
+    const waitUntil = verifyWaitState(apiName, "waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
+    const timeout = this._page._timeoutSettings.navigationTimeout(options);
+    const result = typeof options.url === "function" ? await this._navigationMatching(apiName, options.url, waitUntil, timeout, true) : await this._connection.sendNeo(apiName, this._guid, "neo:waitForNavigation", { url: serializeUrlMatch(apiName, options.url), waitUntil }, timeout);
+    const guid = result?.response?.guid;
+    return guid ? responseFor(this._connection, guid, this) : null;
+  }
+  async _navigationMatching(apiName, predicate, waitUntil, timeout, respond) {
+    const deadline = timeout ? Date.now() + timeout : 0;
+    const left = () => {
+      if (!deadline)
+        return 0;
+      const ms = deadline - Date.now();
+      if (ms <= 0)
+        throw navigationTimeout(apiName, timeout);
+      return ms;
+    };
+    try {
+      let cursor;
+      for (;; ) {
+        const next = await this._connection.sendNeo(apiName, this._guid, "neo:nextNavigation", cursor === undefined ? { response: respond } : { cursor, response: respond }, left());
+        cursor = next.cursor;
+        const url = urlFor(next.url);
+        let accepted;
+        try {
+          accepted = !!url && !!await predicate(url);
+        } catch (error) {
+          if (error instanceof Error)
+            error.message = `${apiName}: ${error.message}`;
+          throw error;
+        }
+        if (accepted)
+          return await this._connection.sendNeo(apiName, this._guid, "neo:finishNavigation", { cursor, waitUntil }, left());
+      }
+    } catch (error) {
+      if (error instanceof TimeoutError && deadline)
+        error.message = error.message.replace(/Timeout [\d.]+ms exceeded\./, `Timeout ${timeout}ms exceeded.`);
+      throw error;
+    }
   }
   async waitForLoadState(state, options) {
     return await this._waitForLoadState("frame.waitForLoadState", state, options);
@@ -1266,6 +1467,9 @@ class Frame {
     return { _type: "Frame", _guid: this._guid };
   }
 }
+function navigationTimeout(apiName, timeout) {
+  return new TimeoutError(`${apiName}: Timeout ${timeout}ms exceeded.`);
+}
 
 // src/timeout-settings.ts
 var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
@@ -1392,6 +1596,36 @@ class Page {
   }
   async title() {
     return await this.#mainFrame._title("page.title");
+  }
+  async reload(options = {}) {
+    const waitUntil = verifyLoadState("waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
+    const result = await this.#connection.sendPage("page.reload", this.#guid, "reload", pickParams(PAGE_RELOAD_KEYS, {
+      ...options,
+      waitUntil
+    }), this._timeoutSettings.navigationTimeout(options));
+    return this.#response(result?.response);
+  }
+  async goBack(options = {}) {
+    const waitUntil = verifyLoadState("waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
+    const result = await this.#connection.sendPage("page.goBack", this.#guid, "goBack", pickParams(PAGE_GO_BACK_KEYS, {
+      ...options,
+      waitUntil
+    }), this._timeoutSettings.navigationTimeout(options));
+    return this.#response(result?.response);
+  }
+  async goForward(options = {}) {
+    const waitUntil = verifyLoadState("waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
+    const result = await this.#connection.sendPage("page.goForward", this.#guid, "goForward", pickParams(PAGE_GO_FORWARD_KEYS, {
+      ...options,
+      waitUntil
+    }), this._timeoutSettings.navigationTimeout(options));
+    return this.#response(result?.response);
+  }
+  #response(response) {
+    return response ? responseFor(this.#connection, response.guid, this.#mainFrame) : null;
+  }
+  async waitForNavigation(options = {}) {
+    return await this.#mainFrame._waitForNavigation("page.waitForNavigation", options);
   }
   async waitForURL(url, options) {
     return await this.#mainFrame._waitForURL("page.waitForURL", url, options);

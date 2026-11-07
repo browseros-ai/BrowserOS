@@ -89,6 +89,33 @@ export function matchesURL(
   )
 }
 
+/** The parts of a WHATWG URL, as Rust's parser reads them (`url_match.rs` `ParsedUrl`). */
+export interface ParsedURL {
+  href: string
+  origin: string
+  protocol: string
+  username: string
+  password: string
+  host: string
+  hostname: string
+  port: string
+  pathname: string
+  search: string
+  hash: string
+  /** The query's `application/x-www-form-urlencoded` pairs, in order. */
+  searchParams: [string, string][]
+}
+
+/**
+ * A synchronous parse by Rust's WHATWG URL parser, which QuickJS lacks: `null` where
+ * `new URL(url)` would throw.
+ */
+export function parseURL(url: string): ParsedURL | null {
+  return JSON.parse(
+    __neo_runtime.get(JSON.stringify({ field: 'parseURL', url })),
+  )
+}
+
 /** One browser call: message JSON in, reply JSON out. Only `connection.ts` calls it. */
 export function call(message: string): Promise<string> {
   return __neo_runtime.call(message)

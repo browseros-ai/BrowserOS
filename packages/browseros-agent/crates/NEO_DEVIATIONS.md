@@ -3,10 +3,19 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (0)
+## Deviations (9)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
+| neo-runtime/src/dispatch.rs | `unsupported_child_call` | `client/frame.ts` `Frame.waitForNavigation` | Playwright answers a child frame's navigation Response; the network log records only the main frame's requests, so Neo refuses the wait. A predicate wait that answers none (`waitForURL`) is served. |
+| neo-runtime/src/history.rs | `HistoryOptions::new` | `server/page.ts` `Page.reload` | Neo refuses `waitUntil: 'networkidle'`, as its goto does: it records no subresource requests to tell network idleness by. |
+| neo-runtime/src/history.rs | `MAX_CURSORS` | `client/frame.ts` `Frame.waitForNavigation` | the most URL-predicate waits one run may hold open between their calls; Playwright's waiter has no cap. A wait whose predicate threw never finishes, so past the cap the oldest idle cursor is dropped, and its next call rejects. |
+| neo-runtime/src/history.rs | `NeoNextNavigationParams` | `client/frame.ts` `Frame.waitForNavigation` | Playwright tests a URL predicate inside one API call, on its client's `navigated` events; Neo makes one call per navigation the predicate tests, each in the run's call records. |
+| neo-runtime/src/history.rs | `response_of` | `server/frames.ts` `Frame.waitForNavigation` | Playwright records every request; Neo starts recording a session's requests with its first navigation wait or goto, so a document whose request started before that answers `null`. |
+| neo-runtime/src/page.rs | `apply_frame` | `server/chromium/chromiumSwitches.ts` `chromiumSwitches` | Playwright's Chromium never restores a cached document, and one it met would never fire `load`, so its history navigation would time out. Neo runs in the user's browser, where Chromium caches only a document that finished loading and restores it without lifecycle events, reporting `frameStoppedLoading` before this commit (measured on BrowserOS neo): it counts as loaded at once. |
+| neo-sdk/src/frame.ts | `Frame._navigationMatching` | `client/frame.ts` `Frame._setupNavigationWaiter` | the timeout is checked between calls, so an async predicate still running when it passes delays the rejection; Playwright's waiter rejects at the deadline. |
+| neo-sdk/src/url.ts | (file) | `isomorphic/urlMatch.ts` `urlMatches` | Playwright passes a URL predicate a WHATWG `URL`. The realm has no `URL`, so Neo passes this read-only one, built from Rust's WHATWG parser: every getter and `toString`/`toJSON` read as `URL`'s do, and `searchParams` reads as `URLSearchParams`; setters and `searchParams`' mutators throw, and `instanceof URL` cannot hold. |
+| neo-sdk/src/url.ts | `READ_ONLY` | `isomorphic/urlMatch.ts` `urlMatches` | the error a write to Neo's read-only `URL` throws, where Playwright's predicate gets a writable WHATWG `URL`. |
 
 ## Unexplained: owner questions (0)
 

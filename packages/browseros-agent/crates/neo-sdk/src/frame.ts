@@ -10,18 +10,21 @@
  * `apiName`. Each runs synchronously into `Connection.send`, so the location it captures is the
  * script's call site.
  *
- * `goto` resolves the navigation's `Response` (`network.ts`), or `null` where Playwright's does:
- * a same-document change, or a document without a network request (`about:blank`, `data:`).
+ * `goto` and `waitForNavigation` resolve the navigation's `Response` (`network.ts`), or `null`
+ * where Playwright's does: a same-document change, or a document without a network request
+ * (`about:blank`, `data:`).
  *
  * What differs from Playwright:
  * - Detached frames retain the last URL and name read by a getter or frame record, as Page
  *   retains its last URL after closure; without frame events, unseen changes are not retained.
- * - `waitForURL` and `waitForLoadState` are one `neo:` call each, which Rust waits out
+ * - `waitForURL`, `waitForLoadState` and `waitForNavigation` are `neo:` calls that Rust waits out
  *   (`neo-commands.ts`), where Playwright's client waits on `navigated` and `loadstate` events.
- *   `waitForURL` takes a glob or a `RegExp`, not a predicate function, and neither takes
- *   `networkidle`. A failed navigation does not reject `waitForURL`, which waits on to its timeout.
- *   An unknown `waitUntil` is reported as `waitUntil`, where Playwright names it `state` when the
- *   URL already matches.
+ *   A predicate `url` steps a cursor, one call per navigation, and receives Neo's read-only `URL`
+ *   (`url.ts`). None takes `networkidle`. A failed navigation rejects a main-frame wait, as in
+ *   Playwright, once Neo has seen its request start; a child frame's never does.
+ *   `waitForNavigation` on a child frame rejects: Neo does not record a child frame's requests.
+ *   An unknown `waitUntil` is reported as `waitUntil`, where Playwright names it `state` when a
+ *   glob or `RegExp` URL already matches.
  * - `allTextContents` sends `client/locator.ts` source text; compiled Playwright clients may
  *   format it differently. It reads in Neo's isolated world, so page-defined `textContent`
  *   overrides (prototype patches, custom element classes or per-instance properties) can differ.
@@ -63,9 +66,10 @@ import {
   getByTitleSelector,
 } from '../vendor/playwright/isomorphic/locatorUtils'
 import type { ApiName, Connection } from './connection'
+import { TimeoutError } from './errors'
 import { FrameLocator, kAnyFrameSelector } from './frame-locator'
 import { Locator, type LocatorOptions, testIdAttributeName } from './locator'
-import { serializeUrlMatch } from './neo-commands'
+import { type NeoNavigationResult, serializeUrlMatch } from './neo-commands'
 import { type Response, responseFor } from './network'
 import type { Page } from './page'
 import {
@@ -92,6 +96,7 @@ import {
   convertSelectOptionValues,
   type SelectOptionValues,
 } from './select-option'
+import { type URLPredicate, urlFor } from './url'
 
 /** `click`'s options as a script passes them: the wire params plus `timeout`. */
 export type ClickOptions = Omit<FrameClickParams, 'selector'> & {
@@ -135,12 +140,21 @@ export type WaitForSelectorOptions = Omit<
   'selector'
 > & { timeout?: number }
 
-/** What `waitForURL` matches: a glob string or a `RegExp`, two of Playwright's four `URLMatch`
- * forms. A predicate function is refused (`neo-commands.ts`); QuickJS has no `URLPattern`. */
-export type URLMatch = string | RegExp
+/** Playwright's `URLMatch` without `URLPattern`, which QuickJS lacks: a glob string, a `RegExp`,
+ * or a predicate on the navigated `URL` (Neo's read-only one, `url.ts`). `waitForURL` and
+ * `waitForNavigation` take all three; `page.frame({ url })` refuses a predicate. */
+export type URLMatch = string | RegExp | URLPredicate
 
 /** `waitForURL`'s options, as Playwright's. */
 export type WaitForURLOptions = { waitUntil?: LifecycleEvent; timeout?: number }
+
+/** Playwright's `WaitForNavigationOptions` (`client/frame.ts`), without `signal`: Neo takes no
+ * `AbortSignal` (`errors.ts`). */
+export type WaitForNavigationOptions = {
+  url?: URLMatch
+  waitUntil?: LifecycleEvent
+  timeout?: number
+}
 
 /** `waitForLoadState`'s options, as Playwright's `TimeoutOptions`. */
 export type WaitForLoadStateOptions = { timeout?: number }
@@ -312,9 +326,10 @@ export class Frame {
    * `history.pushState`) included. Runs under the navigation timeout.
    *
    * `url` is a glob string, where `**` crosses `/` and `{a,b}` alternates (`''` matches every
-   * URL), or a `RegExp`, flags included, tested as Playwright tests it. `waitUntil` is `load`,
-   * `domcontentloaded` or `commit`. Neo limits: a predicate function and `networkidle` throw an
-   * `Error`, and a failed navigation does not reject the wait.
+   * URL), a `RegExp`, flags included, tested as Playwright tests it, or a predicate that receives
+   * the URL as a read-only `URL` and may be async. `waitUntil` is `load`, `domcontentloaded` or
+   * `commit`. A navigation that fails before the URL matched rejects the wait. Neo limit:
+   * `networkidle` throws an `Error`.
    */
   async waitForURL(
     url: URLMatch,
@@ -324,8 +339,9 @@ export class Frame {
   }
 
   /**
-   * Sends `neo:waitForURL` under the navigation timeout. The url is checked first, then
-   * `waitUntil`, and either throws before anything is sent, as Playwright's client does.
+   * Sends `neo:waitForURL` under the navigation timeout, or for a predicate checks the current
+   * URL and then steps a navigation cursor (`_navigationMatching`). The url is checked first,
+   * then `waitUntil`, and either throws before anything is sent, as Playwright's client does.
    */
   async _waitForURL(
     apiName: ApiName,
@@ -333,6 +349,31 @@ export class Frame {
     options: WaitForURLOptions | undefined,
   ): Promise<void> {
     const waitOptions = options ?? {}
+    if (typeof url === 'function') {
+      // Playwright's client `waitForURL`: a current URL the predicate accepts (truthy, not
+      // awaited, as `urlMatches` answers) waits for the load state; otherwise the next
+      // navigation it accepts does, as `waitForNavigation({ url })`.
+      const current = urlFor(this.url())
+      if (current && url(current))
+        return await this._waitForLoadState(
+          apiName,
+          waitOptions.waitUntil,
+          waitOptions,
+        )
+      const waitUntil = verifyWaitState(
+        apiName,
+        'waitUntil',
+        waitOptions.waitUntil === undefined ? 'load' : waitOptions.waitUntil,
+      )
+      await this._navigationMatching(
+        apiName,
+        url,
+        waitUntil,
+        this._page._timeoutSettings.navigationTimeout(waitOptions),
+        false,
+      )
+      return
+    }
     const serialized = serializeUrlMatch(apiName, url)
     const waitUntil = verifyWaitState(
       apiName,
@@ -346,6 +387,122 @@ export class Frame {
       { url: serialized, waitUntil },
       this._page._timeoutSettings.navigationTimeout(waitOptions),
     )
+  }
+
+  /**
+   * Playwright's deprecated `waitForNavigation`: waits for the frame's next navigation after the
+   * call whose URL matches `url` (any, by default; a glob, a `RegExp` or a predicate on its `URL`),
+   * a same-document one (a hash change, `history.pushState`) included, then for `waitUntil`
+   * (default `load`), and resolves the new document's `Response`, or `null` for a same-document
+   * navigation or a document without a request. A navigation that fails first rejects with its
+   * error. Start it before the action that navigates:
+   * `await Promise.all([page.waitForNavigation(), page.click('a')])`. Runs under the navigation
+   * timeout. Neo limits: `networkidle` throws, and a child frame's wait rejects, because Neo does
+   * not record a child frame's navigation requests.
+   */
+  async waitForNavigation(
+    options: WaitForNavigationOptions = {},
+  ): Promise<Response | null> {
+    return await this._waitForNavigation('frame.waitForNavigation', options)
+  }
+
+  /** Sends `neo:waitForNavigation` (glob, `RegExp` or no `url`) or steps a predicate's cursor,
+   * under the navigation timeout. `waitUntil` and `url` are checked before anything is sent. */
+  async _waitForNavigation(
+    apiName: ApiName,
+    options: WaitForNavigationOptions,
+  ): Promise<Response | null> {
+    const waitUntil = verifyWaitState(
+      apiName,
+      'waitUntil',
+      options.waitUntil === undefined ? 'load' : options.waitUntil,
+    )
+    const timeout = this._page._timeoutSettings.navigationTimeout(options)
+    const result =
+      typeof options.url === 'function'
+        ? await this._navigationMatching(
+            apiName,
+            options.url,
+            waitUntil,
+            timeout,
+            true,
+          )
+        : await this._connection.sendNeo(
+            apiName,
+            this._guid,
+            'neo:waitForNavigation',
+            { url: serializeUrlMatch(apiName, options.url), waitUntil },
+            timeout,
+          )
+    const guid = result?.response?.guid
+    return guid ? responseFor(this._connection, guid, this) : null
+  }
+
+  /**
+   * A URL predicate's wait (`neo-commands.ts`, DECIDED 3): Rust answers each navigation of this
+   * frame in order, from a cursor subscribed by the first call; the predicate tests its `URL`,
+   * awaited as Playwright's waiter awaits it (a URL the parser rejects is never accepted); the first
+   * it accepts is settled for `waitUntil`. `respond` asks for that navigation's `Response`.
+   * `timeout` (0 for none) bounds the whole loop: each call gets what is left.
+   */
+  async _navigationMatching(
+    apiName: ApiName,
+    predicate: URLPredicate,
+    waitUntil: LifecycleEvent,
+    timeout: number,
+    respond: boolean,
+  ): Promise<NeoNavigationResult> {
+    // Deviation: `client/frame.ts` `Frame._setupNavigationWaiter` the timeout is checked between
+    // calls, so an async predicate still running when it passes delays the rejection; Playwright's
+    // waiter rejects at the deadline.
+    const deadline = timeout ? Date.now() + timeout : 0
+    const left = () => {
+      if (!deadline) return 0
+      const ms = deadline - Date.now()
+      if (ms <= 0) throw navigationTimeout(apiName, timeout)
+      return ms
+    }
+    try {
+      let cursor: number | undefined
+      for (;;) {
+        const next = await this._connection.sendNeo(
+          apiName,
+          this._guid,
+          'neo:nextNavigation',
+          cursor === undefined
+            ? { response: respond }
+            : { cursor, response: respond },
+          left(),
+        )
+        cursor = next.cursor
+        const url = urlFor(next.url)
+        let accepted: boolean
+        try {
+          accepted = !!url && !!(await predicate(url))
+        } catch (error) {
+          // Playwright's `_wrapApiCall` prefixes every error thrown inside an API call.
+          if (error instanceof Error)
+            error.message = `${apiName}: ${error.message}`
+          throw error
+        }
+        if (accepted)
+          return await this._connection.sendNeo(
+            apiName,
+            this._guid,
+            'neo:finishNavigation',
+            { cursor, waitUntil },
+            left(),
+          )
+      }
+    } catch (error) {
+      // Each step ran under what was left of `timeout`; its message names the whole timeout.
+      if (error instanceof TimeoutError && deadline)
+        error.message = error.message.replace(
+          /Timeout [\d.]+ms exceeded\./,
+          `Timeout ${timeout}ms exceeded.`,
+        )
+      throw error
+    }
   }
 
   /**
@@ -892,4 +1049,10 @@ export class Frame {
   toJSON(): { _type: 'Frame'; _guid: string } {
     return { _type: 'Frame', _guid: this._guid }
   }
+}
+
+/** Playwright's waiter timeout (`client/frame.ts` `_setupNavigationWaiter`): a `TimeoutError`
+ * naming the whole timeout, with the API call's prefix. */
+function navigationTimeout(apiName: ApiName, timeout: number): TimeoutError {
+  return new TimeoutError(`${apiName}: Timeout ${timeout}ms exceeded.`)
 }

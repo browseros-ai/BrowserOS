@@ -6,12 +6,18 @@ use std::time::Duration;
 
 use browseros_cdp::CdpError;
 use neo_runtime_spec::serve::{
-    BrowserContextCall, BrowserContextNewPageResult, PageCall, PageChannel,
+    BrowserContextCall, BrowserContextNewPageResult, PageCall, PageChannel, PageGoBackParams,
+    PageGoBackResult, PageGoForwardParams, PageGoForwardResult, PageReloadParams, PageReloadResult,
+    ResponseChannel,
 };
 use serde_json::{Value, json};
 use tracing::debug;
 
 use crate::bridge;
+use crate::dispatch;
+use crate::frames::FrameScope;
+use crate::history::{self, HistoryOptions};
+use crate::page::FrameTab;
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::tabs::{self, PageEntry, Tabs};
 
@@ -60,6 +66,24 @@ pub(crate) async fn page(
     progress: &Progress,
 ) -> Result<Option<Value>, CallError> {
     match call {
+        PageCall::Reload(params) => {
+            let response = history_step(tabs, entry, HistoryOptions::reload(&params), progress);
+            return dispatch::encode_result::<PageReloadParams>(&PageReloadResult {
+                response: response.await?,
+            });
+        }
+        PageCall::GoBack(params) => {
+            let response = history_step(tabs, entry, HistoryOptions::back(&params), progress);
+            return dispatch::encode_result::<PageGoBackParams>(&PageGoBackResult {
+                response: response.await?,
+            });
+        }
+        PageCall::GoForward(params) => {
+            let response = history_step(tabs, entry, HistoryOptions::forward(&params), progress);
+            return dispatch::encode_result::<PageGoForwardParams>(&PageGoForwardResult {
+                response: response.await?,
+            });
+        }
         PageCall::Close(_) => close(tabs, entry, progress).await?,
         PageCall::RunBeforeUnload(_) => {
             // Playwright 26137face server/page.ts:852-861 and chromium/crPage.ts:264-270:
@@ -104,6 +128,24 @@ pub(crate) async fn page(
         }
     }
     Ok(None)
+}
+
+/// `Page.reload`, `goBack` or `goForward` on the main frame of `entry`'s session: the new
+/// document's response, or `None` where Playwright's answer is `null`. An option Neo refuses
+/// (`networkidle`) fails before the session is touched.
+async fn history_step(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    options: Result<HistoryOptions, PlaywrightError>,
+    progress: &Progress,
+) -> Result<Option<ResponseChannel>, CallError> {
+    let options = options?;
+    let page = progress.race(tabs.session(entry)).await??;
+    let main = FrameTab {
+        page,
+        scope: FrameScope::Main,
+    };
+    history::navigate(&main, &options, progress).await
 }
 
 /// A session without enabled domains has no watcher yet. If it disappeared, ask the

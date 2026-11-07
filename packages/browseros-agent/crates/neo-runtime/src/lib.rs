@@ -57,6 +57,7 @@ mod forms;
 mod frame_selector;
 mod frames;
 mod getters;
+mod history;
 mod keyboard;
 mod lists;
 mod navigate;

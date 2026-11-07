@@ -57,6 +57,11 @@ use crate::click::{self, ClickOptions};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
 use crate::frames::FrameScope;
+use crate::history::{
+    self, Cursors, FinishNavigationOptions, FrameCursor, NeoFinishNavigationParams,
+    NeoNavigationResult, NeoNextNavigationParams, NeoWaitForNavigationParams,
+    WaitForNavigationOptions,
+};
 use crate::keyboard::KeyboardTab;
 use crate::lists;
 use crate::navigate::{self, GotoOptions};
@@ -119,6 +124,39 @@ static WAIT_FOR_LOAD_STATE_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[],
 };
+// Playwright's client `waitForNavigation` (`@apiCall({ title: 'Wait for navigation' })`). A
+// glob or RegExp `url` is one call; a predicate is a cursor the realm steps through
+// (`history.rs`), one navigation per `neo:nextNavigation`, closed by `neo:finishNavigation`.
+static WAIT_FOR_NAVIGATION_META: MethodMeta = MethodMeta {
+    interface: "Frame",
+    method: "neo:waitForNavigation",
+    title: Some("Wait for navigation"),
+    subtitle: None,
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[],
+};
+static NEXT_NAVIGATION_META: MethodMeta = MethodMeta {
+    interface: "Frame",
+    method: "neo:nextNavigation",
+    title: Some("Wait for navigation"),
+    subtitle: None,
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[],
+};
+static FINISH_NAVIGATION_META: MethodMeta = MethodMeta {
+    interface: "Frame",
+    method: "neo:finishNavigation",
+    title: Some("Wait for navigation"),
+    subtitle: None,
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[],
+};
 /// Arbitrary page JS remains outside Neo's typed glue boundary.
 const EVAL_ON_SELECTOR_ALL_UNSERVED: &str =
     "Neo serves Frame.evalOnSelectorAll only for locator.allTextContents";
@@ -145,6 +183,8 @@ struct Inner {
     trace: Trace,
     /// What the run's unfinished calls hold, bounded at admission.
     in_flight: Arc<InFlight>,
+    /// The URL-predicate navigation waits open between their calls.
+    cursors: Arc<Cursors<FrameCursor>>,
     next_call_id: AtomicU64,
     /// Cancels `run.ended` when the last `Dispatcher` drops. A reason `finish` recorded first
     /// wins; otherwise calls read [`RunEnd::Cancelled`].
@@ -255,6 +295,9 @@ enum Route {
     FrameWaitForSelector(WaitForSelectorOptions),
     FrameWaitForUrl(WaitForUrlOptions),
     FrameWaitForLoadState(WaitForLoadStateOptions),
+    FrameWaitForNavigation(WaitForNavigationOptions),
+    FrameNextNavigation(NeoNextNavigationParams),
+    FrameFinishNavigation(FinishNavigationOptions),
 }
 
 impl Dispatcher {
@@ -265,6 +308,7 @@ impl Dispatcher {
             run,
             trace: Trace::default(),
             in_flight: Arc::default(),
+            cursors: Arc::default(),
             next_call_id: AtomicU64::new(1),
         }))
     }
@@ -345,6 +389,7 @@ impl Dispatcher {
         let (reply, receiver) = oneshot::channel();
         let served = serve_call(
             inner.tabs.clone(),
+            Arc::clone(&inner.cursors),
             target,
             route,
             progress,
@@ -394,6 +439,9 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
                         .and_then(|params| WaitForUrlOptions::from_params(&params))
                         .map(|options| ObjectCall::Frame(Route::FrameWaitForUrl(options))),
                 };
+            }
+            if let Some(routed) = route_navigation_wait(method, params.as_ref()) {
+                return routed;
             }
             if method == WAIT_FOR_LOAD_STATE_META.method {
                 return Routed {
@@ -459,6 +507,33 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             route: Err(PlaywrightError::error(error.to_string())),
         },
     }
+}
+
+/// Neo's navigation-wait commands on a Frame guid (`history.rs`), or `None` for another method.
+fn route_navigation_wait(method: &str, params: Option<&Value>) -> Option<Routed> {
+    let params = params.cloned();
+    let (meta, route) = if method == WAIT_FOR_NAVIGATION_META.method {
+        let route =
+            decode_neo_params::<NeoWaitForNavigationParams>(params, &WAIT_FOR_NAVIGATION_META)
+                .and_then(|params| WaitForNavigationOptions::from_params(&params))
+                .map(Route::FrameWaitForNavigation);
+        (&WAIT_FOR_NAVIGATION_META, route)
+    } else if method == NEXT_NAVIGATION_META.method {
+        let route = decode_neo_params::<NeoNextNavigationParams>(params, &NEXT_NAVIGATION_META)
+            .map(Route::FrameNextNavigation);
+        (&NEXT_NAVIGATION_META, route)
+    } else if method == FINISH_NAVIGATION_META.method {
+        let route = decode_neo_params::<NeoFinishNavigationParams>(params, &FINISH_NAVIGATION_META)
+            .and_then(|params| FinishNavigationOptions::from_params(&params))
+            .map(Route::FrameFinishNavigation);
+        (&FINISH_NAVIGATION_META, route)
+    } else {
+        return None;
+    };
+    Some(Routed {
+        meta: Some(meta),
+        route: route.map(ObjectCall::Frame),
+    })
 }
 
 fn decode_neo_params<T: DeserializeOwned>(
@@ -537,6 +612,7 @@ struct CallReply {
 /// `serve` retains its original contract: the `PageSession` always belongs to this call's tab.
 async fn serve_call(
     tabs: Tabs,
+    cursors: Arc<Cursors<FrameCursor>>,
     target: Option<(Arc<PageEntry>, FrameScope)>,
     route: ObjectCall,
     progress: Progress,
@@ -557,16 +633,7 @@ async fn serve_call(
             };
             match session {
                 Ok(page) => {
-                    serve(
-                        FrameTab { page, scope },
-                        route,
-                        progress,
-                        reply.entry,
-                        reply.trace,
-                        reply.id,
-                        reply.reply,
-                    )
-                    .await;
+                    serve(FrameTab { page, scope }, &cursors, route, progress, reply).await;
                     return;
                 }
                 Err(error) => Err(error),
@@ -588,26 +655,16 @@ async fn serve_call(
 /// waits for it. The task holds the page, so the session stays attached while it runs.
 async fn serve(
     page: FrameTab,
+    cursors: &Cursors<FrameCursor>,
     route: Route,
     progress: Progress,
-    entry: Arc<CallEntry>,
-    trace: Trace,
-    id: Value,
-    reply: oneshot::Sender<String>,
+    reply: CallReply,
 ) {
     // Navigation and page reads need the real page's navigation/read seams, which the
     // forms tests' fake does not implement, so they are answered here; every other route goes
     // through `serve_route`.
     if let Some(error) = unsupported_child_call(&page.scope, &route) {
-        finish_reply(
-            Err(error.into()),
-            CallReply {
-                entry,
-                trace,
-                id,
-                reply,
-            },
-        );
+        finish_reply(Err(error.into()), reply);
         return;
     }
     let result = match route {
@@ -655,6 +712,21 @@ async fn serve(
                 .await
                 .map(|()| Some(json!({})))
         }
+        Route::FrameWaitForNavigation(options) => {
+            history::wait_for_navigation(&page, &options, &progress)
+                .await
+                .and_then(|response| encode_neo(&NeoNavigationResult { response }))
+        }
+        Route::FrameNextNavigation(params) => {
+            history::next_frame_navigation(cursors, page, &params, &progress)
+                .await
+                .and_then(|result| encode_neo(&result))
+        }
+        Route::FrameFinishNavigation(options) => {
+            history::finish_frame_navigation(cursors, &options, &progress)
+                .await
+                .and_then(|result| encode_neo(&result))
+        }
         Route::FrameIsVisible(options) => states::is_visible(&page, &options, &progress)
             .await
             .and_then(|value| {
@@ -667,15 +739,7 @@ async fn serve(
             }),
         route => serve_route(&page, route, &progress).await,
     };
-    finish_reply(
-        result,
-        CallReply {
-            entry,
-            trace,
-            id,
-            reply,
-        },
-    );
+    finish_reply(result, reply);
 }
 
 fn unsupported_child_call(scope: &FrameScope, route: &Route) -> Option<PlaywrightError> {
@@ -684,6 +748,11 @@ fn unsupported_child_call(scope: &FrameScope, route: &Route) -> Option<Playwrigh
     }
     let method = match route {
         Route::FrameGoto(_) => "goto",
+        // Deviation: `client/frame.ts` `Frame.waitForNavigation` Playwright answers a child
+        // frame's navigation Response; the network log records only the main frame's requests,
+        // so Neo refuses the wait. A predicate wait that answers none (`waitForURL`) is served.
+        Route::FrameWaitForNavigation(_) => "waitForNavigation",
+        Route::FrameNextNavigation(params) if params.response => "waitForNavigation",
         _ => return None,
     };
     Some(PlaywrightError::error(format!(
@@ -760,11 +829,21 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameAriaSnapshot(_)
         | Route::FrameWaitForSelector(_)
         | Route::FrameWaitForUrl(_)
-        | Route::FrameWaitForLoadState(_) => Err(PlaywrightError::error(
+        | Route::FrameWaitForLoadState(_)
+        | Route::FrameWaitForNavigation(_)
+        | Route::FrameNextNavigation(_)
+        | Route::FrameFinishNavigation(_) => Err(PlaywrightError::error(
             "neo-runtime: navigation and page reads are served by `serve`",
         )
         .into()),
     }
+}
+
+/// A Neo extension's result as its reply's `result`.
+fn encode_neo(result: &impl serde::Serialize) -> Result<Option<Value>, CallError> {
+    serde_json::to_value(result)
+        .map(Some)
+        .map_err(|error| PlaywrightError::error(format!("encoding a Neo result: {error}")).into())
 }
 
 /// Like `Command::reply`, without retaining the raw params once their options are decoded.
@@ -936,6 +1015,7 @@ mod tests {
         // interleaving can let the call start early and hide the regression.
         let call = serve_call(
             tabs,
+            Arc::default(),
             Some((page, scope)),
             route,
             progress,
@@ -1168,7 +1248,10 @@ mod tests {
                 | Route::FrameAriaSnapshot(_)
                 | Route::FrameWaitForSelector(_)
                 | Route::FrameWaitForUrl(_)
-                | Route::FrameWaitForLoadState(_) => {
+                | Route::FrameWaitForLoadState(_)
+                | Route::FrameWaitForNavigation(_)
+                | Route::FrameNextNavigation(_)
+                | Route::FrameFinishNavigation(_) => {
                     panic!("a form is not a navigation, read or wait")
                 }
             }

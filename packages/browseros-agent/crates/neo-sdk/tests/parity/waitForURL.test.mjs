@@ -6,10 +6,11 @@
 // Compared: what each call settled to (`undefined` or its error's kind, `waits.mjs` `settle`),
 // the URL and title the script read afterwards. Never wording, call logs or timing.
 //
-// Known, intended differences, asserted per engine and not counted as parity: Neo refuses a
-// predicate function and `waitUntil: 'networkidle'` with an `Error` (neo-sdk `neo-commands.ts`,
-// neo-runtime `waits.rs`), where Playwright resolves. Neo also does not reject on a failed
-// navigation (it tracks no network), which no case here exercises.
+// A predicate function sees the current URL, then each navigation's, as a `URL`; a navigation
+// that fails before the URL matched rejects the wait.
+//
+// Known, intended difference, asserted per engine and not counted as parity: Neo refuses
+// `waitUntil: 'networkidle'` with an `Error` (neo-runtime `waits.rs`), where Playwright resolves.
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs, waits.mjs).
 
@@ -135,17 +136,39 @@ const cases = [
     expected: { notAUrlMatch: ERROR, invalidGlob: ERROR, waitUntil: ERROR },
   },
   {
-    name: 'Neo limits: a predicate function and networkidle',
+    name: 'a predicate function sees the current URL, then each navigation',
+    source: `const seen = []
+    const current = await settle(page.waitForURL((url) => url.pathname.endsWith('/wait-for-url.html')))
+    const waited = settle(page.waitForURL((url) => {
+      seen.push(url.pathname + url.hash)
+      return url.pathname === '/done.html'
+    }))
+    await page.click('#push')
+    await page.click('#to-done')
+    return { current, waited: await waited, seen, path: ${PATH} }`,
+    expected: {
+      current: RESOLVED,
+      waited: RESOLVED,
+      seen: ['/wait-for-url.html', '/pushed', '/done.html'],
+      path: '/done.html',
+    },
+  },
+  {
+    name: 'a navigation that fails before the URL matched rejects the wait',
+    source: `const waited = settle(page.waitForURL('**/never.html', { timeout: 10000 }))
+    await page.click('#to-unsafe')
+    return { waited: await waited }`,
+    expected: { waited: ERROR },
+  },
+  {
+    name: 'Neo limit: networkidle',
     source: `return {
-      predicate: await settle(
-        page.waitForURL((url) => url.pathname.endsWith('/wait-for-url.html'), { timeout: 5000 }),
-      ),
       networkidle: await settle(
         page.waitForURL('**/wait-for-url.html', { waitUntil: 'networkidle', timeout: 5000 }),
       ),
     }`,
-    expected: { predicate: RESOLVED, networkidle: RESOLVED },
-    neoExpected: { predicate: ERROR, networkidle: ERROR },
+    expected: { networkidle: RESOLVED },
+    neoExpected: { networkidle: ERROR },
   },
 ]
 
