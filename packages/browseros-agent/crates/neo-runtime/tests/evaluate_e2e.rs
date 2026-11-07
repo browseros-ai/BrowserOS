@@ -9,6 +9,10 @@
 //! each test passes as a skip.
 
 #[path = "support/browser.rs"]
+#[expect(
+    dead_code,
+    reason = "the shared browser fixture also drives tabs and pages these tests do not"
+)]
 mod browser;
 
 use std::time::{Duration, Instant};
@@ -16,6 +20,7 @@ use std::time::{Duration, Instant};
 use browser::{Fixture, Tab};
 use neo_runtime::{RunOutcome, RunStatus};
 use serde_json::{Value, json};
+use tokio::task::JoinHandle;
 
 const PAGE: &str = r#"<!doctype html><html><head><title>Evaluate</title></head><body>
 <p id="p">text</p>
@@ -37,7 +42,7 @@ async fn open() -> Option<Tab> {
     Some(Tab::open(binary, fixture, "/evaluate").await)
 }
 
-async fn finish(run: tokio::task::JoinHandle<RunOutcome>) -> RunOutcome {
+async fn finish(run: JoinHandle<RunOutcome>) -> RunOutcome {
     run.await
         .unwrap_or_else(|error| panic!("the run's task: {error}"))
 }
