@@ -65,6 +65,7 @@ mod keyboard;
 mod lists;
 mod navigate;
 mod network;
+mod network_events;
 mod page;
 mod page_events;
 mod press;

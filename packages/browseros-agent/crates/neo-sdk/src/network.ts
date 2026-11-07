@@ -1,19 +1,25 @@
 /**
  * Playwright's client `Request`, `Response` and `RawHeaders` (`client/network.ts` at 26137face),
- * for the objects behind `page.goto`'s answer: the navigation's request, one per redirect, and
- * each one's response. Rust records them from the tab's Network events (neo-runtime
- * `network.rs`) and mints their guids; `responseFor` builds the whole chain from Rust's `chain`
- * getter, once per guid, through the connection's object map, so a guid is always one object.
+ * for every request of a page the run recorded: the objects behind `page.goto`'s answer (the
+ * navigation's request, one per redirect, and each one's response), the run's `request`,
+ * `response`, `requestfinished` and `requestfailed` events, `waitForRequest`/`waitForResponse`
+ * and `page.requests()`. Rust records them from the tab's Network events (neo-runtime
+ * `network.rs`) and mints their guids; `networkObject` builds a hop with every hop before it from
+ * Rust's `chain` getter, and an event's own record builds its object directly, once per guid,
+ * through the connection's object map, so a guid is always one object, whichever way the script
+ * met it first. Each hop's `frame()` is the page's frame its record names.
  *
  * Playwright's client keeps some of this state current from events (`requestFinished`,
- * `requestFailed`): `timing().responseEnd`, `failure()` and `finished()`. Neo's bridge has no
- * events, so those read Rust's record live, through getters.
+ * `requestFailed`, `response`, a redirect's `request`): `timing().responseEnd`, `failure()`,
+ * `finished()`, `existingResponse()` and `redirectedTo()`. Neo produces an event only while the
+ * script listens, so those read Rust's record live, through getters, and can be a step ahead of
+ * the events the script has been handed.
  *
  * What differs from Playwright:
  * - `body()` resolves a `Uint8Array` subclass named `Buffer` with Node's `toString(encoding)`,
  *   `toJSON()` and `equals()`; QuickJS has no `Buffer`, and the SDK defines no globals.
  * - `finished()` polls Rust's record (every few to 100 ms) instead of waiting for an event.
- * - `serviceWorker()` is always `null`: Neo answers only main-frame navigations.
+ * - `serviceWorker()` is always `null`: Neo records no worker's requests.
  */
 
 import type {
@@ -28,6 +34,7 @@ import type {
 import type { ApiName, Connection } from './connection'
 import { targetClosedError } from './errors'
 import type { Frame } from './frame'
+import type { Page } from './page'
 import { get } from './runtime-bridge'
 
 /** Playwright's `Headers`: lower-cased names to joined values. */
@@ -177,8 +184,13 @@ export class Request {
     return await this.#response('request.response')
   }
 
+  /** The response once it arrived, as Rust's record has it now. */
   existingResponse(): Response | null {
-    return this._response
+    if (this._response) return this._response
+    const guid = get(this._guid, 'existingResponse')
+    return guid
+      ? (networkObject(this.#connection, guid, this.#frame._page) as Response)
+      : null
   }
 
   frame(): Frame {
@@ -197,8 +209,13 @@ export class Request {
     return this.#redirectedFrom
   }
 
+  /** The request a redirect made of this one, once it started, as Rust's record has it now. */
   redirectedTo(): Request | null {
-    return this._redirectedTo
+    if (this._redirectedTo) return this._redirectedTo
+    const guid = get(this._guid, 'redirectedTo')
+    return guid
+      ? (networkObject(this.#connection, guid, this.#frame._page) as Request)
+      : null
   }
 
   /** Playwright's `_failureText = failureText || null`: an empty text reads as no failure. */
@@ -230,7 +247,11 @@ export class Request {
       0,
     )
     return response
-      ? responseFor(this.#connection, response.guid, this.#frame)
+      ? (networkObject(
+          this.#connection,
+          response.guid,
+          this.#frame._page,
+        ) as Response)
       : null
   }
 
@@ -411,16 +432,31 @@ export class Response {
 }
 
 /**
- * The `Response` for a guid Rust handed out, built with every hop before it the first time:
- * Playwright's client has received a `__create__` for each by the time `goto` replies.
+ * The `Response` for a guid Rust handed out (`goto`'s and the navigation waits' answers), built
+ * with every hop before it the first time, as {@link networkObject}. `frame`'s page owns it.
  */
 export function responseFor(
   connection: Connection,
   guid: string,
   frame: Frame,
 ): Response {
+  const built = networkObject(connection, guid, frame._page)
+  if (!(built instanceof Response))
+    throw new Error(`neo-sdk: Rust's chain for ${guid} has no such response`)
+  return built
+}
+
+/**
+ * The `Request` or `Response` for a guid Rust handed out, built with every hop before it the
+ * first time: Playwright's client has received a `__create__` for each by the time it sees one.
+ */
+export function networkObject(
+  connection: Connection,
+  guid: string,
+  page: Page,
+): Request | Response {
   const known = connection._objects.get(guid)
-  if (known instanceof Response) return known
+  if (known) return known
   const chain = get(guid, 'chain')
   let previous: Request | null = null
   for (const [index, created] of chain.requests.entries()) {
@@ -429,7 +465,7 @@ export function responseFor(
       request = new Request(
         created.guid,
         created.initializer,
-        frame,
+        page._frameForGuid(created.initializer.frame?.guid),
         previous,
         connection,
       )
@@ -444,9 +480,69 @@ export function responseFor(
     previous = request
   }
   const built = connection._objects.get(guid)
-  if (!(built instanceof Response))
-    throw new Error(`neo-sdk: Rust's chain for ${guid} has no such response`)
+  if (!built)
+    throw new Error(`neo-sdk: Rust's chain for ${guid} has no such object`)
   return built
+}
+
+/**
+ * The `Request` an event's record names: the known object, else one built from the record, its
+ * earlier hops first when the script never met them. An earlier hop Rust no longer holds (past
+ * its retention cap) leaves `redirectedFrom()` `null` rather than failing the event.
+ */
+export function requestFromRecord(
+  connection: Connection,
+  record: Created<RequestInitializer>,
+  page: Page,
+): Request {
+  const known = connection._objects.get(record.guid)
+  if (known instanceof Request) return known
+  const from = record.initializer.redirectedFrom?.guid
+  let redirectedFrom: Request | null = null
+  if (from) {
+    try {
+      const earlier = networkObject(connection, from, page)
+      if (earlier instanceof Request) redirectedFrom = earlier
+    } catch {
+      redirectedFrom = null
+    }
+  }
+  const request = new Request(
+    record.guid,
+    record.initializer,
+    page._frameForGuid(record.initializer.frame?.guid),
+    redirectedFrom,
+    connection,
+  )
+  connection._objects.set(record.guid, request)
+  return request
+}
+
+/** The `Response` a `response` event's record names, its request built first if need be. */
+export function responseFromRecord(
+  connection: Connection,
+  record: Created<ResponseInitializer>,
+  page: Page,
+): Response {
+  const known = connection._objects.get(record.guid)
+  if (known instanceof Response) return known
+  const request = networkObject(
+    connection,
+    record.initializer.request.guid,
+    page,
+  )
+  if (!(request instanceof Request))
+    throw new Error(`neo-sdk: ${record.guid} names no request`)
+  const existing = connection._objects.get(record.guid)
+  if (existing instanceof Response) return existing
+  const response = new Response(
+    record.guid,
+    record.initializer,
+    request,
+    connection,
+  )
+  connection._objects.set(record.guid, response)
+  return response
 }
 
 /** `URLSearchParams` entries, which QuickJS lacks, for `postDataJSON`'s form bodies. */

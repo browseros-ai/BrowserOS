@@ -68,22 +68,30 @@ const REPLAY_WAIT: Duration = Duration::from_secs(5);
 
 /// Neo: the listener events Neo produces on a `Page`, under the names Playwright's client gives
 /// them (`Events.Page`), and what each needs switched on in the page's session.
-const PAGE_EVENTS: [(&str, Needs); 6] = [
+const PAGE_EVENTS: [(&str, Needs); 10] = [
     ("console", Needs::RUNTIME),
     ("pageerror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
     ("dialogclosed", Needs::WATCHER),
     ("close", Needs::WATCHER),
     ("crash", Needs::WATCHER),
+    ("request", Needs::NETWORK),
+    ("response", Needs::NETWORK),
+    ("requestfinished", Needs::NETWORK),
+    ("requestfailed", Needs::NETWORK),
 ];
 
 /// Neo: the listener events Neo produces on the run's `BrowserContext` (`Events.BrowserContext`),
 /// for every page the run has a session on.
-const CONTEXT_EVENTS: [(&str, Needs); 4] = [
+const CONTEXT_EVENTS: [(&str, Needs); 8] = [
     ("console", Needs::RUNTIME),
     ("weberror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
     ("dialogclosed", Needs::WATCHER),
+    ("request", Needs::NETWORK),
+    ("response", Needs::NETWORK),
+    ("requestfinished", Needs::NETWORK),
+    ("requestfailed", Needs::NETWORK),
 ];
 
 /// What a subscription switches on in a page's session before that page's next call runs.
@@ -93,6 +101,8 @@ pub(crate) struct Needs {
     pub(crate) watcher: bool,
     /// `Runtime.enable` and `Log.enable`, which report console messages and page errors.
     pub(crate) runtime: bool,
+    /// `Network.enable` (`PageSession::enable_network`), which reports the tab's requests.
+    pub(crate) network: bool,
 }
 
 impl Needs {
@@ -100,11 +110,19 @@ impl Needs {
     const WATCHER: Self = Self {
         watcher: true,
         runtime: false,
+        network: false,
     };
     /// Neo: an event only `Runtime.enable` and `Log.enable` report.
     const RUNTIME: Self = Self {
         watcher: true,
         runtime: true,
+        network: false,
+    };
+    /// Neo: an event only `Network.enable` reports: a request's.
+    const NETWORK: Self = Self {
+        watcher: true,
+        runtime: false,
+        network: true,
     };
 }
 
@@ -240,6 +258,7 @@ impl EventHub {
                 .reduce(|left, right| Needs {
                     watcher: left.watcher || right.watcher,
                     runtime: left.runtime || right.runtime,
+                    network: left.network || right.network,
                 })
         })
         .flatten()
@@ -547,7 +566,9 @@ mod tests {
         assert_eq!(needs("page@T", "dialog"), Some(Needs::WATCHER));
         assert_eq!(needs(CONTEXT_GUID, "weberror"), Some(Needs::RUNTIME));
         assert_eq!(needs(CONTEXT_GUID, "pageerror"), None);
-        assert_eq!(needs("page@T", "request"), None);
+        assert_eq!(needs("page@T", "request"), Some(Needs::NETWORK));
+        assert_eq!(needs(CONTEXT_GUID, "requestfailed"), Some(Needs::NETWORK));
+        assert_eq!(needs("page@T", "popup"), None);
         assert_eq!(needs("frame@T", "console"), None);
     }
 

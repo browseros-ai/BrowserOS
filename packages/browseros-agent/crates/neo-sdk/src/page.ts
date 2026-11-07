@@ -9,7 +9,10 @@ import type {
   ResponseChannel,
 } from '@browseros/neo-runtime-spec/serve'
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
-import { isString } from '../vendor/playwright/isomorphic/stringUtils'
+import {
+  isString,
+  trimStringWithEllipsis,
+} from '../vendor/playwright/isomorphic/stringUtils'
 import type { BrowserContext } from './browser-context'
 import type { Connection } from './connection'
 import { ConsoleMessage } from './console-message'
@@ -52,8 +55,13 @@ import {
 } from './frame'
 import type { FrameLocator } from './frame-locator'
 import type { Locator, LocatorOptions } from './locator'
-import { serializeUrlMatch } from './neo-commands'
-import { type Response, responseFor } from './network'
+import { isRegExp, serializeUrlMatch } from './neo-commands'
+import {
+  networkObject,
+  type Request,
+  type Response,
+  responseFor,
+} from './network'
 import {
   PAGE_CLOSE_KEYS,
   PAGE_CONSOLE_MESSAGES_KEYS,
@@ -79,16 +87,23 @@ import {
  */
 const PAGE_EVENTS: EventTable = {
   receiver: 'Page',
-  served: ['console', 'pageerror', 'dialog', 'dialogclosed', 'close', 'crash'],
+  served: [
+    'console',
+    'pageerror',
+    'dialog',
+    'dialogclosed',
+    'close',
+    'crash',
+    'request',
+    'response',
+    'requestfailed',
+    'requestfinished',
+  ],
   quiet: [],
   unserved: [
     'download',
     'filechooser',
     'domcontentloaded',
-    'request',
-    'response',
-    'requestfailed',
-    'requestfinished',
     'frameattached',
     'framedetached',
     'framenavigated',
@@ -97,6 +112,17 @@ const PAGE_EVENTS: EventTable = {
     'websocket',
     'worker',
   ],
+}
+
+/** `waitForRequest` and `waitForResponse`'s options: Playwright's `TimeoutOptions`. */
+export type WaitForNetworkOptions = { timeout?: number; signal?: unknown }
+
+/** Playwright: `client/page.ts` `trimUrl` */
+function trimUrl(param: unknown): string | undefined {
+  if (isRegExp(param))
+    return `/${trimStringWithEllipsis(param.source, 50)}/${param.flags}`
+  if (isString(param)) return `"${trimStringWithEllipsis(param, 50)}"`
+  return undefined
 }
 
 /** `consoleMessages` and `pageErrors`' options: Playwright's `ConsoleMessagesFilter`. */
@@ -254,6 +280,92 @@ export class Page extends ChannelOwner {
     )
   }
 
+  /**
+   * Playwright's `Page.waitForRequest`: resolves with the first request of the page whose URL
+   * matches `urlOrPredicate` (a glob string, a `RegExp`), or that a predicate (sync or async)
+   * accepts, from the call on. It rejects at the timeout (the page's default, 30 s unless set)
+   * and when the page closes or crashes first. A glob or `RegExp` matches as `page.waitForURL`'s
+   * does (neo-runtime `url_match.rs`); Neo has no `baseURL`, so a relative glob matches as
+   * written.
+   */
+  async waitForRequest(
+    urlOrPredicate:
+      | URLMatch
+      | ((request: Request) => boolean | Promise<boolean>),
+    options: WaitForNetworkOptions = {},
+  ): Promise<Request> {
+    return await wrapApiCall('page.waitForRequest', async () => {
+      const predicate = async (request: Request) => {
+        if (isString(urlOrPredicate) || isRegExp(urlOrPredicate))
+          return matchesURL(
+            request.url(),
+            serializeUrlMatch('page.waitForRequest', urlOrPredicate),
+          )
+        return await urlOrPredicate(request)
+      }
+      const trimmedUrl = trimUrl(urlOrPredicate)
+      const logLine = trimmedUrl
+        ? `waiting for request ${trimmedUrl}`
+        : undefined
+      return (await this._waitForEvent(
+        'request',
+        { predicate, timeout: options.timeout, signal: options.signal },
+        logLine,
+      )) as Request
+    })
+  }
+
+  /** Playwright's `Page.waitForResponse`: {@link Page.waitForRequest} for responses. */
+  async waitForResponse(
+    urlOrPredicate:
+      | URLMatch
+      | ((response: Response) => boolean | Promise<boolean>),
+    options: WaitForNetworkOptions = {},
+  ): Promise<Response> {
+    return await wrapApiCall('page.waitForResponse', async () => {
+      const predicate = async (response: Response) => {
+        if (isString(urlOrPredicate) || isRegExp(urlOrPredicate))
+          return matchesURL(
+            response.url(),
+            serializeUrlMatch('page.waitForResponse', urlOrPredicate),
+          )
+        return await urlOrPredicate(response)
+      }
+      const trimmedUrl = trimUrl(urlOrPredicate)
+      const logLine = trimmedUrl
+        ? `waiting for response ${trimmedUrl}`
+        : undefined
+      return (await this._waitForEvent(
+        'response',
+        { predicate, timeout: options.timeout, signal: options.signal },
+        logLine,
+      )) as Response
+    })
+  }
+
+  /**
+   * Playwright's `Page.requests`: the page's most recent requests (about the last 100, each
+   * redirect hop one), oldest first, as the same objects its events hand out.
+   *
+   * Deviation: `server/page.ts` `Page.addNetworkRequest`: `this._networkRequests.push(request);`
+   * Playwright's server records a page's requests from the page's first moment; Neo records them
+   * from the run's first look at the page's network (a goto, a history step or navigation wait, a
+   * network listener, or this call), as Chromium replays no earlier request.
+   */
+  async requests(): Promise<Request[]> {
+    const { requests } = await this.#connection.sendPage(
+      'page.requests',
+      this.#guid,
+      'requests',
+      {},
+      0,
+    )
+    return requests.map(
+      (request) =>
+        networkObject(this.#connection, request.guid, this) as Request,
+    )
+  }
+
   /** Playwright's `Page._waitForEvent`, which its `waitFor*` helpers share. */
   async _waitForEvent(
     event: string,
@@ -347,6 +459,20 @@ export class Page extends ChannelOwner {
 
   mainFrame(): Frame {
     return this.#mainFrame
+  }
+
+  /**
+   * The frame a request's record names, by guid: the object this page handed out for it, or a
+   * new one, which reads its url and name live like any other.
+   */
+  _frameForGuid(guid: string | undefined): Frame {
+    if (!guid) return this.#mainFrame
+    let frame = this.#frames.get(guid)
+    if (!frame) {
+      frame = new Frame(guid, this, this.#connection)
+      this.#frames.set(guid, frame)
+    }
+    return frame
   }
 
   /** Interns records from every getter so frame comparisons remain valid across reads. */

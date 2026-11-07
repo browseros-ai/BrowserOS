@@ -58,7 +58,7 @@ export interface CreatedFrame {
 /**
  * What each getter returns, keyed by the field name Rust dispatches on. Rust answers only for
  * guids it handed the run (the run page, every `pages` record, every `newPage` result, every
- * request and response of a `goto` answer) and throws `Error` for any other.
+ * request and response it recorded) and throws `Error` for any other.
  */
 export interface GetterReplies {
   /** `null` once the page is closed or the frame is detached. */
@@ -68,8 +68,12 @@ export interface GetterReplies {
   pages: CreatedPage[]
   /** On a page: its creation record, which `newPage` builds its `Page` from. */
   initializer: CreatedPage
-  /** On a response: its request and every hop before it, oldest first. */
+  /** On a request or response: its hop and every hop before it, oldest first. */
   chain: CreatedChain
+  /** On a request: the guid of the request a redirect made of it, once it started. */
+  redirectedTo: string | null
+  /** On a request: the guid of its response, once it arrived. */
+  existingResponse: string | null
   /** On a request: `timing()` now, `responseEnd` included once the request ended. */
   timing: Timing
   /** On a request: its failure text, `null` (or empty) while it has not failed. */

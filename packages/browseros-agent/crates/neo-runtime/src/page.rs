@@ -509,6 +509,8 @@ impl PageSession {
     ) -> Self {
         let events = PageEvents::new(hub, page.as_str(), session.cdp.clone(), session.id.clone());
         let child_events = events.clone();
+        let network = Arc::new(NetworkLog::new(page.as_str().to_string()));
+        let child_network = Arc::clone(&network);
         let world = World::new(
             session.cdp.clone(),
             session.id.clone(),
@@ -522,11 +524,17 @@ impl PageSession {
             Arc::clone(&world),
             tasks.clone(),
         ));
-        // An out-of-process frame's console is this tab's: it turns on when the frame's session
-        // is attached, if the run wants the tab's console by then.
+        // An out-of-process frame's console and requests are this tab's: each turns on when the
+        // frame's session is attached, if the run wants the tab's by then.
         frames.on_child_host(Arc::new(move |host| {
             let events = child_events.clone();
-            Box::pin(async move { events.child_attached(&host).await })
+            let network = Arc::clone(&child_network);
+            Box::pin(async move {
+                events.child_attached(&host).await;
+                if network.enabled() {
+                    enable_child_network(&network, &host).await;
+                }
+            })
         }));
         let (state_updates, state) = watch::channel(PageState::default());
         let (navigations, _) = broadcast::channel(4096);
@@ -545,7 +553,7 @@ impl PageSession {
             host_watchers: SyncMutex::default(),
             next_group: AtomicU64::new(1),
             input,
-            network: Arc::new(NetworkLog::new(page.as_str().to_string())),
+            network,
             network_enabled: OnceCell::new(),
             events,
             runtime_enabled: OnceCell::new(),
@@ -659,11 +667,47 @@ impl PageSession {
             .copied()
     }
 
+    /// `Network.enable`, once per session and after [`Self::prepare`]: from then on the watcher
+    /// records every request of the tab in [`NetworkLog`], and each out-of-process frame session
+    /// this run has attached (or attaches later) reports its own requests there too. Sent by the
+    /// first goto, history step or navigation wait, a network event listener, or
+    /// `page.requests()`, and kept for the run: the session's detach at the run's end disables it.
+    ///
+    /// # Errors
+    ///
+    /// The CDP error of `Page.enable` or of `Network.enable` on the tab's session.
+    pub(crate) async fn enable_network(&self) -> Result<(), CdpError> {
+        self.prepare().await?;
+        self.network_enabled
+            .get_or_try_init(|| async {
+                self.send("Network.enable", json!({})).await?;
+                self.network.mark_enabled();
+                for host in self.frames.child_hosts() {
+                    enable_child_network(&self.network, &host).await;
+                }
+                Ok::<(), CdpError>(())
+            })
+            .await
+            .copied()
+    }
+
     pub(crate) async fn send(&self, method: &str, params: Value) -> Result<Value, CdpError> {
         self.session
             .cdp
             .send(method, params, Some(&self.session.id))
             .await
+    }
+
+    /// Sends on `session`, one of this tab's out-of-process frame sessions, or on the tab's own
+    /// for `None`: where a request the network log recorded is read (`responses.rs`).
+    pub(crate) async fn send_to(
+        &self,
+        session: Option<&SessionId>,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, CdpError> {
+        let session = session.unwrap_or(&self.session.id);
+        self.session.cdp.send(method, params, Some(session)).await
     }
 
     /// Runs a cleanup or writer task on the run's tracker. Spawned on the session's runtime
@@ -824,8 +868,7 @@ impl NavigationTab for FrameTab {
     }
 
     async fn track_network(&self) -> Result<u64, PageError> {
-        self.network_enabled
-            .get_or_try_init(|| async { self.send("Network.enable", json!({})).await.map(|_| ()) })
+        self.enable_network()
             .await
             .map_err(|error| match world::classify(&error) {
                 PageError::Closed => PageError::Closed,
@@ -1105,10 +1148,20 @@ impl Watcher {
         match event {
             Ok(event) => {
                 // Before the Page events that follow it, so a commit never outruns its request.
-                if event.method.starts_with("Network.")
-                    && event.session_id.as_ref() == Some(session)
-                {
-                    self.network.apply(&event.method, &event.params);
+                // An out-of-process frame session's requests are the tab's once the page enabled
+                // its Network domain (`enable_child_network`).
+                if event.method.starts_with("Network.") {
+                    let from = match event.session_id.as_ref() {
+                        Some(from) if from == session => Some(None),
+                        Some(from) if self.network.has_child(from) => Some(Some(from)),
+                        _ => None,
+                    };
+                    if let Some(from) = from {
+                        let happenings = self.network.apply(from, &event.method, &event.params);
+                        if let Some(producer) = &self.producer {
+                            producer.network(&self.network, &happenings);
+                        }
+                    }
                 }
                 if event.method == "Page.frameNavigated"
                     && event.session_id.as_ref() == Some(session)
@@ -1174,6 +1227,26 @@ impl Watcher {
             }
         }
         true
+    }
+}
+
+/// Neo: how long an out-of-process frame's first call waits for that frame's `Network.enable`. A
+/// frame frozen by its page's dialog may never answer; the call then goes on without it.
+const CHILD_NETWORK_WAIT: Duration = Duration::from_secs(5);
+
+/// `Network.enable` on an out-of-process frame's session, whose requests are the tab's from then
+/// on: the session is registered first, so no event the enable triggers is dropped. Bounded by
+/// [`CHILD_NETWORK_WAIT`]; a failure is logged, and the frame's requests stay unseen.
+async fn enable_child_network(network: &NetworkLog, host: &Arc<Host>) {
+    let session = host.session_id().clone();
+    if network.has_child(&session) {
+        return;
+    }
+    network.add_child(&session);
+    match time::timeout(CHILD_NETWORK_WAIT, host.send("Network.enable", json!({}))).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => debug!(%session, %error, "a frame's network did not turn on"),
+        Err(_) => debug!(%session, "a frame's network did not turn on in time"),
     }
 }
 

@@ -11,7 +11,7 @@ use neo_runtime_spec::serve::{
     PageClearPageErrorsResult, PageConsoleMessagesParams, PageConsoleMessagesResult,
     PageGoBackParams, PageGoBackResult, PageGoForwardParams, PageGoForwardResult,
     PagePageErrorsParams, PagePageErrorsResult, PageReloadParams, PageReloadResult,
-    ResponseChannel,
+    PageRequestsParams, PageRequestsResult, ResponseChannel,
 };
 use serde_json::{Value, json};
 use tracing::debug;
@@ -122,6 +122,20 @@ pub(crate) async fn page(
                 .console
                 .clear_errors();
             return encode_result::<PageClearPageErrorsParams>(&PageClearPageErrorsResult {});
+        }
+        // Playwright's server keeps a page's last requests from its first moment; Neo keeps
+        // what the run's network log recorded, which starts with the session's
+        // `Network.enable`: the first goto, history step or navigation wait, a network event
+        // listener, or this read, as Chromium replays no earlier request.
+        PageCall::Requests(_) => {
+            let page = progress.race(tabs.session(entry)).await??;
+            let enabled = progress.race(page.enable_network()).await?;
+            checked(tabs, entry, progress, enabled).await?;
+            let requests = page
+                .network
+                .requests()
+                .map_err(|error| PlaywrightError::error(error.to_string()))?;
+            return encode_result::<PageRequestsParams>(&PageRequestsResult { requests });
         }
         PageCall::Close(_) => close(tabs, entry, progress).await?,
         PageCall::RunBeforeUnload(_) => {

@@ -163,7 +163,7 @@ export function serializeUrlMatch(
 }
 
 /** Playwright's `isRegExp` (`isomorphic/urlMatch.ts`), which that module does not export. */
-function isRegExp(value: unknown): value is RegExp {
+export function isRegExp(value: unknown): value is RegExp {
   return (
     value instanceof RegExp ||
     Object.prototype.toString.call(value) === '[object RegExp]'
