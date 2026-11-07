@@ -3,7 +3,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use neo_runtime_spec::injected::InjectedFrameOwnerParams;
+use neo_runtime_spec::injected::{InjectedFrameOwnerByRefParams, InjectedFrameOwnerParams};
 use neo_runtime_spec::{Element, Handle};
 use serde_json::{Value, json};
 
@@ -258,9 +258,21 @@ fn capture_before_frame() -> String {
 /// A selector's document-local chunks. Path references always start at the main frame.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Chunks {
-    pub(crate) hops: Vec<String>,
+    pub(crate) hops: Vec<Hop>,
     pub(crate) last: String,
     pub(crate) from_main: bool,
+}
+
+/// One step into a child frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Hop {
+    /// A frame chunk: the selector of the `<iframe>` in the current document.
+    Chunk(String),
+    /// One owner of a main-rooted path ref, by the aria ref its document's snapshots keep on it
+    /// (`e7` for `aria-ref=f7…`), found whatever the document's last snapshot holds.
+    ///
+    /// Deviation: `server/frameSelectors.ts` `FrameSelectors._jumpToAriaRefFrameIfNeeded`: `const jumptToFrame = this.frame._page.frameManager.frames().find(frame => frame.seq === frameSeq);` Playwright names a frame's refs by the frame's number; Neo names them by the path of iframe refs from the main frame (`f7f2e1`), which a later run can still follow. Such a ref stops routing when an iframe on its path is replaced, or its accessible role or name changes (its snapshots then give it a new ref), where Playwright's frame number stays.
+    Owner(String),
 }
 
 pub(crate) fn split(selector: &str) -> Result<Chunks, String> {
@@ -291,18 +303,15 @@ pub(crate) fn split(selector: &str) -> Result<Chunks, String> {
             if chunk.trim().is_empty() {
                 return Err("Selector cannot start with entering frame".to_string());
             }
-            hops.push(chunk);
+            hops.push(Hop::Chunk(chunk));
             current.clear();
         } else if index == 0
             && name == "aria-ref"
-            && let Some(mut path) = path_ref(body)
+            && let Some((path, element)) = path_ref(body)
         {
             from_main = true;
-            let last = path
-                .pop()
-                .ok_or_else(|| "Empty frame reference".to_string())?;
             hops.extend(path);
-            current.push(last);
+            current.push(element);
         } else {
             current.push(part.trim_matches(progress::is_js_whitespace).to_string());
         }
@@ -318,8 +327,9 @@ pub(crate) fn split(selector: &str) -> Result<Chunks, String> {
     })
 }
 
-/// Path refs encode iframe owner refs, followed by the final document's element ref.
-fn path_ref(body: &str) -> Option<Vec<String>> {
+/// Path refs encode iframe owner refs, followed by the final document's element ref: the owner
+/// hops, then the element's local `aria-ref=eN` selector.
+fn path_ref(body: &str) -> Option<(Vec<Hop>, String)> {
     let mut rest = body;
     let mut path = Vec::new();
     while let Some(after_f) = rest.strip_prefix('f') {
@@ -327,15 +337,14 @@ fn path_ref(body: &str) -> Option<Vec<String>> {
         if digits == 0 {
             return None;
         }
-        path.push(format!("aria-ref=e{}", &after_f[..digits]));
+        path.push(Hop::Owner(format!("e{}", &after_f[..digits])));
         rest = &after_f[digits..];
     }
     let element = rest.strip_prefix('e')?;
     if path.is_empty() || element.is_empty() || !element.bytes().all(|c| c.is_ascii_digit()) {
         return None;
     }
-    path.push(format!("aria-ref={rest}"));
-    Some(path)
+    Some((path, format!("aria-ref={rest}")))
 }
 
 /// One attempt's destination and the visibility of its iframe owners. Visibility belongs to
@@ -410,7 +419,7 @@ trait Hops {
     fn enter(
         &mut self,
         context: Self::Context,
-        selector: &str,
+        hop: &Hop,
         strict: bool,
     ) -> impl Future<Output = Result<Option<(Self::Context, bool)>, PageError>> + Send;
 }
@@ -448,20 +457,36 @@ impl Hops for Resolver<'_> {
     async fn enter(
         &mut self,
         frame: Arc<FrameContext>,
-        selector: &str,
+        hop: &Hop,
         strict: bool,
     ) -> Result<Option<(Arc<FrameContext>, bool)>, PageError> {
         let group = self.tab.group(&frame, "frame-hop");
-        let owner = frame
-            .call(
-                Some(group.group()),
-                &InjectedFrameOwnerParams {
-                    selector: selector.to_string(),
-                    strict,
-                },
-            )
-            .await?;
-        let Some(element) = owner.element else {
+        let (element, visible) = match hop {
+            Hop::Chunk(selector) => {
+                let owner = frame
+                    .call(
+                        Some(group.group()),
+                        &InjectedFrameOwnerParams {
+                            selector: selector.clone(),
+                            strict,
+                        },
+                    )
+                    .await?;
+                (owner.element, owner.visible)
+            }
+            Hop::Owner(aria_ref) => {
+                let owner = frame
+                    .call(
+                        Some(group.group()),
+                        &InjectedFrameOwnerByRefParams {
+                            r#ref: aria_ref.clone(),
+                        },
+                    )
+                    .await?;
+                (owner.element, owner.visible)
+            }
+        };
+        let Some(element) = element else {
             return Ok(None);
         };
         let described = frame
@@ -487,7 +512,7 @@ impl Hops for Resolver<'_> {
             element,
             _group: Arc::new(group),
         });
-        Ok(Some((child, owner.visible)))
+        Ok(Some((child, visible)))
     }
 }
 
@@ -506,7 +531,7 @@ mod tests {
         fn enter(
             &mut self,
             _context: u32,
-            _selector: &str,
+            _hop: &Hop,
             _strict: bool,
         ) -> impl Future<Output = Result<Option<(u32, bool)>, PageError>> + Send {
             future::ready(self.0.pop_front().expect("scripted frame outcome"))
@@ -610,7 +635,10 @@ mod tests {
             assert_eq!(
                 split(selector).unwrap(),
                 Chunks {
-                    hops: hops.into_iter().map(str::to_string).collect(),
+                    hops: hops
+                        .into_iter()
+                        .map(|hop| Hop::Chunk(hop.to_string()))
+                        .collect(),
                     last: last.to_string(),
                     from_main: false
                 },
@@ -725,7 +753,7 @@ mod tests {
             let found = split(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
             assert_eq!(
                 found.hops,
-                [outer],
+                [Hop::Chunk(outer.to_string())],
                 "the outer owner is unchanged: {source}"
             );
             assert_eq!(
@@ -812,15 +840,10 @@ mod tests {
     #[test]
     fn rewrites_path_refs_from_main_and_keeps_ordinary_refs() {
         for (selector, hops, last, from_main) in [
-            (
-                "aria-ref=f7f2e1",
-                vec!["aria-ref=e7", "aria-ref=e2"],
-                "aria-ref=e1",
-                true,
-            ),
+            ("aria-ref=f7f2e1", vec!["e7", "e2"], "aria-ref=e1", true),
             (
                 "aria-ref=f7e8 >> button",
-                vec!["aria-ref=e7"],
+                vec!["e7"],
                 "aria-ref=e8 >> button",
                 true,
             ),
@@ -831,7 +854,10 @@ mod tests {
             assert_eq!(
                 split(selector).unwrap(),
                 Chunks {
-                    hops: hops.into_iter().map(str::to_string).collect(),
+                    hops: hops
+                        .into_iter()
+                        .map(|hop| Hop::Owner(hop.to_string()))
+                        .collect(),
                     last: last.to_string(),
                     from_main
                 },
