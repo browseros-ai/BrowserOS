@@ -29,7 +29,7 @@ const HOP: &str = " >> internal:control=enter-frame >> ";
 async fn open() -> Option<Tab> {
     let binary = browser::e2e_browser()?;
     let top = format!(
-        r"{CONTROLS}<iframe id=same name=same src=/same.html></iframe><iframe id=sibling src=/leaf.html></iframe><iframe id=cross name=cross></iframe>
+        r"{CONTROLS}<input id=phase><iframe id=same name=same src=/same.html></iframe><iframe id=sibling src=/leaf.html></iframe><iframe id=cross name=cross></iframe>
 <script>document.getElementById('cross').src = 'http://localhost:' + location.port + '/cross.html'</script>"
     );
     let same = format!("{CONTROLS}<iframe id=nested src=/leaf.html></iframe>");
@@ -52,12 +52,13 @@ async fn open() -> Option<Tab> {
     )
     .await;
     time::timeout(Duration::from_secs(10), async {
-        while tab.evaluate("document.readyState").await != "complete" {
+        // Let Neo wait for child documents itself, including the initial about:blank swap.
+        while tab.evaluate("document.readyState").await == "loading" {
             time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await
-    .unwrap_or_else(|error| panic!("fixture did not finish loading: {error}"));
+    .unwrap_or_else(|error| panic!("parent fixture did not finish parsing: {error}"));
     Some(tab)
 }
 
@@ -75,10 +76,12 @@ fn assert_ok(outcome: &RunOutcome) {
 async fn exercise(tab: &Tab, scope: &str) {
     let prefix = serde_json::to_string(&format!("{scope}{HOP}"))
         .unwrap_or_else(|error| panic!("selector: {error}"));
+    let entered = format!("value for {scope}");
+    let value_js = serde_json::to_string(&entered).unwrap_or_else(|error| panic!("value: {error}"));
     let outcome = run(tab, &format!(r#"
         const inFrame = selector => page.locator({prefix} + selector);
         const email = inFrame('internal:label="Email"i');
-        await email.fill('alice@example.com', {{timeout:3000}});
+        await email.fill({value_js}, {{timeout:3000}});
         await email.press('End');
         await email.press('!');
         const value = await email.inputValue();
@@ -98,7 +101,7 @@ async fn exercise(tab: &Tab, scope: &str) {
     assert_eq!(
         outcome.value,
         Some(
-            json!({"value":"alice@example.com!", "text":"clicked", "inner":"clicked", "attr":"email", "checked":true, "options":["two"], "visible":true,"count":2,"texts":["Alpha","Beta"]})
+            json!({"value":format!("{entered}!"), "text":"clicked", "inner":"clicked", "attr":"email", "checked":true, "options":["two"], "visible":true,"count":2,"texts":["Alpha","Beta"]})
         ),
         "{outcome:#?}"
     );
@@ -110,7 +113,12 @@ async fn same_origin_and_nested_local_frames_use_every_existing_operation() {
     exercise(&tab, "#same").await;
     exercise(&tab, &format!("#same{HOP}#nested")).await;
     let untouched = tab.evaluate("[document.querySelector('#email').value, document.querySelector('#sibling').contentDocument.querySelector('#email').value]").await;
+    let edited = tab.evaluate("[document.querySelector('#same').contentDocument.querySelector('#email').value, document.querySelector('#same').contentDocument.querySelector('#nested').contentDocument.querySelector('#email').value]").await;
     tab.close().await;
+    assert_eq!(
+        edited,
+        json!(["value for #same!", format!("value for #same{HOP}#nested!")])
+    );
     assert_eq!(untouched, json!(["seed", "seed"]));
 }
 
@@ -219,8 +227,28 @@ async fn oopifs_and_nested_mixed_hosts_use_every_existing_operation() {
         )
         .await
         .expect("read OOPIF edit");
+    let local = evaluate_child(
+        &tab,
+        &driver,
+        "document.querySelector('#local').contentDocument.querySelector('#email').value",
+    )
+    .await;
+    let nested = iframe_targets(&tab)
+        .await
+        .into_iter()
+        .find(|child| child["parentFrameId"] == target["targetId"])
+        .expect("nested OOPIF proof");
+    let nested_driver = child_driver(&tab, &nested).await;
+    let nested_value = evaluate_child(
+        &tab,
+        &nested_driver,
+        "document.querySelector('#email').value",
+    )
+    .await;
     tab.close().await;
-    assert_eq!(edited["result"]["value"], "alice@example.com!");
+    assert_eq!(edited["result"]["value"], "value for #cross!");
+    assert_eq!(local, format!("value for #cross{HOP}#local!"));
+    assert_eq!(nested_value, format!("value for #cross{HOP}#nested!"));
     assert_eq!(untouched, json!(["seed", "seed", "seed"]));
 }
 
@@ -333,6 +361,8 @@ async fn direct_frame_guids_serve_local_remote_and_nested_documents() {
         ("cross-local", remote_local),
     ] {
         let guid = serde_json::to_string(&format!("frame@{}/{id}", tab.target_id)).expect("guid");
+        let expected = format!("direct {scope_name}");
+        let value_js = serde_json::to_string(&expected).expect("direct value");
         let outcome = run(&tab,&format!(r"
             let next = 0;
             const call = async (method, params={{}}) => {{
@@ -340,7 +370,7 @@ async fn direct_frame_guids_serve_local_remote_and_nested_documents() {
                 if (reply.error) throw new Error(reply.error.error.message);
                 return reply.result;
             }};
-            await call('fill', {{selector:'#email',strict:true,value:'direct'}});
+            await call('fill', {{selector:'#email',strict:true,value:{value_js}}});
             await call('click', {{selector:'#go',strict:true}});
             return {{input:(await call('inputValue',{{selector:'#email',strict:true}})).value,
                 text:(await call('textContent',{{selector:'#result',strict:true}})).value,
@@ -350,9 +380,34 @@ async fn direct_frame_guids_serve_local_remote_and_nested_documents() {
         assert_ok(&outcome);
         assert_eq!(
             outcome.value,
-            Some(json!({"input":"direct","text":"clicked","title":"Frame form","visible":true})),
+            Some(json!({"input":expected,"text":"clicked","title":"Frame form","visible":true})),
             "scope={scope_name}: {outcome:#?}"
         );
+        let actual = match scope_name {
+            "same" => {
+                tab.evaluate(
+                    "document.querySelector('#same').contentDocument.querySelector('#email').value",
+                )
+                .await
+            }
+            "cross-local" => evaluate_child(
+                &tab,
+                &driver,
+                "document.querySelector('#local').contentDocument.querySelector('#email').value",
+            )
+            .await,
+            _ => {
+                let target = json!({"targetId":id});
+                let target_driver = child_driver(&tab, &target).await;
+                evaluate_child(
+                    &tab,
+                    &target_driver,
+                    "document.querySelector('#email').value",
+                )
+                .await
+            }
+        };
+        assert_eq!(actual, expected, "scope={scope_name}");
     }
     let main = tab.evaluate("document.querySelector('#email').value").await;
     tab.close().await;
@@ -385,5 +440,244 @@ async fn direct_child_navigation_is_explicitly_unserved_and_missing_scopes_are_d
     assert_eq!(
         outcome.value,
         Some(json!(["Error", "Error", "Error", "Error"]))
+    );
+}
+
+async fn wait_main(tab: &Tab, expression: &str, expected: &Value) {
+    time::timeout(Duration::from_secs(10), async {
+        while tab.evaluate(expression).await != *expected {
+            time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|error| {
+        panic!("fixture condition {expression} did not become {expected}: {error}")
+    });
+}
+
+async fn fill_value(tab: &Tab, owner: &str, value: &str) -> RunOutcome {
+    let selector = serde_json::to_string(&format!("{owner}{HOP}internal:label=\"Email\"i"))
+        .unwrap_or_else(|error| panic!("selector: {error}"));
+    let value = serde_json::to_string(value).unwrap_or_else(|error| panic!("value: {error}"));
+    run(tab,&format!("const field=page.locator({selector}); await field.fill({value}, {{timeout:5000}}); return await field.inputValue();")).await
+}
+
+async fn owner_frame_id(tab: &Tab, selector: &str) -> String {
+    let selector =
+        serde_json::to_string(selector).unwrap_or_else(|error| panic!("selector: {error}"));
+    let owner = tab
+        .cdp
+        .send(
+            "Runtime.evaluate",
+            json!({"expression":format!("document.querySelector({selector})")}),
+            Some(&tab.driver),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("iframe owner: {error}"));
+    let node = tab
+        .cdp
+        .send(
+            "DOM.describeNode",
+            json!({"objectId":owner["result"]["objectId"]}),
+            Some(&tab.driver),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("iframe id: {error}"));
+    node["node"]["frameId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("iframe id: {node}"))
+        .to_string()
+}
+
+async fn change_frame(tab: &Tab, selector: &str, replace: bool, url: Option<&str>) {
+    let selector =
+        serde_json::to_string(selector).unwrap_or_else(|error| panic!("selector: {error}"));
+    let url = serde_json::to_string(&url).unwrap_or_else(|error| panic!("URL: {error}"));
+    tab.evaluate(&format!(
+        r"
+        {{
+            window.__neoLoaded=false;
+            const previous=document.querySelector({selector});
+            const frame={replace} ? previous.cloneNode(false) : previous;
+            frame.addEventListener('load',()=>window.__neoLoaded=true,{{once:true}});
+            if ({replace}) previous.replaceWith(frame);
+            else frame.src={url} ?? frame.src;
+        }}
+    "
+    ))
+    .await;
+    wait_main(tab, "window.__neoLoaded", &json!(true)).await;
+}
+
+async fn direct_title_reply(tab: &Tab, id: &str) -> RunOutcome {
+    let guid = format!("frame@{}/{id}", tab.target_id);
+    let message =
+        json!({"id":1,"guid":guid,"method":"title","params":{},"metadata":{"timeout":500}})
+            .to_string();
+    let message =
+        serde_json::to_string(&message).unwrap_or_else(|error| panic!("message: {error}"));
+    run(
+        tab,
+        &format!("return JSON.parse(await __neo_runtime.call({message}));"),
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_runs_rebuild_the_frame_path_and_preserve_same_label_decoys() {
+    let Some(tab) = open().await else { return };
+    let first = fill_value(&tab, "#cross", "saved across runs").await;
+    let second = run(&tab,r#"
+        const field=page.locator('#cross >> internal:control=enter-frame >> internal:label="Email"i');
+        const saved=await field.inputValue();
+        await page.locator('#cross >> internal:control=enter-frame >> #go').click();
+        return {saved, text:await page.locator('#cross >> internal:control=enter-frame >> #result').textContent(),
+            parent:await page.getByLabel('Email').inputValue(),
+            sibling:await page.locator('#same >> internal:control=enter-frame >> internal:label="Email"i').inputValue()};
+    "#).await;
+    tab.close().await;
+    assert_ok(&first);
+    assert_eq!(first.value, Some(json!("saved across runs")));
+    assert_ok(&second);
+    assert_eq!(
+        second.value,
+        Some(
+            json!({"saved":"saved across runs","text":"clicked","parent":"seed","sibling":"seed"})
+        )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reload_replace_and_remove_never_edit_another_document() {
+    let Some(tab) = open().await else { return };
+    for owner in ["#same", "#cross"] {
+        let original = fill_value(&tab, owner, "original").await;
+        assert_ok(&original);
+        let old_id = owner_frame_id(&tab, owner).await;
+        change_frame(&tab, owner, false, None).await;
+        let reloaded = fill_value(&tab, owner, "after reload").await;
+        assert_ok(&reloaded);
+        assert_eq!(reloaded.value, Some(json!("after reload")));
+        assert_eq!(owner_frame_id(&tab, owner).await, old_id);
+        change_frame(&tab, owner, true, None).await;
+        let replaced = fill_value(&tab, owner, "after replacement").await;
+        assert_ok(&replaced);
+        assert_eq!(replaced.value, Some(json!("after replacement")));
+        let new_id = owner_frame_id(&tab, owner).await;
+        assert_ne!(new_id, old_id);
+        let detached = direct_title_reply(&tab, &old_id).await;
+        assert_ok(&detached);
+        assert_eq!(
+            detached.value.as_ref().unwrap()["error"]["error"]["name"],
+            "Error"
+        );
+        tab.evaluate(&format!("document.querySelector('{owner}').remove()"))
+            .await;
+        let removed = run(&tab,&format!("try {{ await page.locator('{owner}{HOP}#email').fill('wrong',{{timeout:200}}); }} catch(error) {{ return error.name; }}")).await;
+        assert_ok(&removed);
+        assert_eq!(removed.value, Some(json!("TimeoutError")));
+        let detached = direct_title_reply(&tab, &new_id).await;
+        assert_ok(&detached);
+        assert_eq!(
+            detached.value.as_ref().unwrap()["error"]["error"]["name"],
+            "Error"
+        );
+    }
+    let decoys = tab.evaluate("[document.querySelector('#email').value,document.querySelector('#sibling').contentDocument.querySelector('#email').value]").await;
+    tab.close().await;
+    assert_eq!(decoys, json!(["seed", "seed"]));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_run_rediscovers_both_directions_of_a_process_swap() {
+    let Some(tab) = open().await else { return };
+    let id = owner_frame_id(&tab, "#same").await;
+    let pending = tab
+        .start_run(
+            r"
+        const field=page.locator('#same >> internal:control=enter-frame >> #email');
+        await field.fill('local');
+        const local=await field.inputValue();
+        await page.locator('#phase').fill('local');
+        await page.locator('#resume-remote').waitFor({state:'attached',timeout:10000});
+        await field.fill('remote');
+        const remote=await field.inputValue();
+        await page.locator('#phase').fill('remote');
+        await page.locator('#resume-local').waitFor({state:'attached',timeout:10000});
+        await field.fill('local again');
+        return {local,remote,returned:await field.inputValue()};
+    "
+            .into(),
+        )
+        .await;
+    wait_main(
+        &tab,
+        "document.querySelector('#phase').value",
+        &json!("local"),
+    )
+    .await;
+    let remote = format!("{}/leaf.html", tab.origin.replace("127.0.0.1", "localhost"));
+    change_frame(&tab, "#same", false, Some(&remote)).await;
+    assert_eq!(owner_frame_id(&tab, "#same").await, id);
+    tab.evaluate("document.body.insertAdjacentHTML('beforeend','<span id=resume-remote></span>')")
+        .await;
+    wait_main(
+        &tab,
+        "document.querySelector('#phase').value",
+        &json!("remote"),
+    )
+    .await;
+    let local = format!("{}/same.html", tab.origin);
+    change_frame(&tab, "#same", false, Some(&local)).await;
+    assert_eq!(owner_frame_id(&tab, "#same").await, id);
+    tab.evaluate("document.body.insertAdjacentHTML('beforeend','<span id=resume-local></span>')")
+        .await;
+    let outcome = pending.await.expect("swap run");
+    let parent = tab.evaluate("document.querySelector('#email').value").await;
+    tab.close().await;
+    assert_ok(&outcome);
+    assert_eq!(
+        outcome.value,
+        Some(json!({"local":"local","remote":"remote","returned":"local again"}))
+    );
+    assert_eq!(parent, "seed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_missing_iframe_can_appear_during_the_call() {
+    let Some(tab) = open().await else { return };
+    let pending = tab.start_run(r"
+        await page.locator('#phase').fill('waiting');
+        await page.locator('#late >> internal:control=enter-frame >> #email').fill('late frame',{timeout:5000});
+        return await page.locator('#late >> internal:control=enter-frame >> #email').inputValue();
+    ".into()).await;
+    wait_main(
+        &tab,
+        "document.querySelector('#phase').value",
+        &json!("waiting"),
+    )
+    .await;
+    tab.evaluate("{ const frame=document.createElement('iframe'); frame.id='late'; frame.src='http://localhost:'+location.port+'/leaf.html'; document.body.append(frame); }").await;
+    let outcome = pending.await.expect("late frame run");
+    let parent = tab.evaluate("document.querySelector('#email').value").await;
+    tab.close().await;
+    assert_ok(&outcome);
+    assert_eq!(outcome.value, Some(json!("late frame")));
+    assert_eq!(parent, "seed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn top_level_fill_and_click_keep_their_existing_path() {
+    let Some(tab) = open().await else { return };
+    let outcome = run(&tab,r"
+        await page.getByLabel('Email').fill('main frame');
+        await page.locator('#go').click();
+        return {value:await page.getByLabel('Email').inputValue(),text:await page.locator('#result').textContent()};
+    ").await;
+    tab.close().await;
+    assert_ok(&outcome);
+    assert_eq!(
+        outcome.value,
+        Some(json!({"value":"main frame","text":"clicked"}))
     );
 }
