@@ -31,8 +31,22 @@ import type {
 } from '../vendor/playwright/injected/src/injectedScript'
 import type { AriaNodeJSON } from '../vendor/playwright/isomorphic/ariaSnapshot'
 
+/** An element with the aria ref Playwright's snapshots keep on it (`ariaSnapshot.ts`
+ * `computeAriaRef`: `(element as any)._ariaRef = ariaRef;`). */
+type NamedElement = Element & { _ariaRef?: { ref: string } }
+
+/**
+ * Neo: every owner `frameOwnerRef` named, by its ref, kept weakly. `frameOwnerByRef` finds an
+ * owner here first: CDP hands `frameOwnerRef` owners a selector cannot reach (inside a closed
+ * shadow root), and a ref Neo answers must route. One table per document, as the glue is.
+ */
+const namedOwners = new Map<string, WeakRef<Element>>()
+
 /** The Playwright page types behind the spec's named handle kinds. */
-type Handles = { HitTargetInterceptor: HitTargetInterceptionResult }
+type Handles = {
+  HitTargetInterceptor: HitTargetInterceptionResult
+  ElementList: Record<string, Element>
+}
 
 /**
  * Parses one frame chunk, queries the document, and applies Playwright's checks in Playwright's
@@ -48,10 +62,13 @@ function query(
   injected: InjectedScript,
   selector: string,
   strict: boolean,
-  { markTargets = 'none' }: { markTargets?: 'all' | 'first' | 'none' } = {},
+  {
+    markTargets = 'none',
+    root = document,
+  }: { markTargets?: 'all' | 'first' | 'none'; root?: Node } = {},
 ): Element[] {
   const parsed = injected.parseSelector(selector)
-  const elements = injected.querySelectorAll(parsed, document)
+  const elements = injected.querySelectorAll(parsed, root)
   // Before the checks, as in Playwright: the page's own listeners see the matches marked even
   // when strict mode then fails the call.
   if (markTargets === 'all') injected.markTargetElements(new Set(elements))
@@ -62,6 +79,17 @@ function query(
   if (strict && elements.length > 1)
     throw injected.strictModeViolationError(parsed, elements)
   return elements
+}
+
+/** The listeners `setupDragListeners` armed in this document, until `cleanupDrag` reads them.
+ * Playwright keeps it as `window.__cleanupDrag`; the glue's own scope keeps it from the page. */
+let cleanupDrag: (() => Promise<boolean>) | undefined
+
+/** Neo: elements as a null-prototype object's own properties `0`, `1`, …, which CDP reports
+ * as a plain object (an array would carry the subtype `array`), so Rust lists them with
+ * `Runtime.getProperties` as handles of the matches. */
+function elementList(elements: Element[]): Record<string, Element> {
+  return Object.assign(Object.create(null), elements)
 }
 
 export const glue = {
@@ -80,6 +108,63 @@ export const glue = {
       },
     }
   },
+
+  /** `selectorState` plus the first match as a handle, for a wait that returns its element. */
+  // Playwright: `server/frames.ts` `Frame.waitForSelector`: `return { log, element, visible, attached: !!element };`
+  selectorElement: (injected, { selector, strict }) => {
+    const elements = query(injected, selector, strict)
+    const [element] = elements
+    if (!element) return { count: 0, visible: false }
+    return {
+      element,
+      count: elements.length,
+      visible: injected.elementState(element, 'visible', true).matches,
+      preview: injected.previewNode(element),
+    }
+  },
+
+  /** `selectorElement` within an adopted element handle, for `ElementHandle.$` and `$eval`. */
+  // Playwright: `server/frameSelectors.ts` `FrameSelectors._callOnSelectorInternal`: `const elements = injected.querySelectorAll(params.info.parsed, params.scope || document);`
+  scopedSelectorElement: (injected, { selector, strict }, root) => {
+    const elements = query(injected, selector, strict, { root })
+    const [element] = elements
+    if (!element) return { count: 0, visible: false }
+    return {
+      element,
+      count: elements.length,
+      visible: injected.elementState(element, 'visible', true).matches,
+      preview: injected.previewNode(element),
+    }
+  },
+
+  /** Every match, as Playwright's `queryAll` resolves it: the elements, by index. */
+  // Playwright: `server/frameSelectors.ts` `FrameSelectors.queryAll`: `const resolved = await this.callOnSelectorHandle({ selector, strict: false, scope }, ({ elements }) => elements, {});`
+  queryAll: (injected, { selector }) => ({
+    elements: elementList(query(injected, selector, false)),
+  }),
+
+  // Playwright: `server/frameSelectors.ts` `FrameSelectors.queryAll`: `const resolved = await this.callOnSelectorHandle({ selector, strict: false, scope }, ({ elements }) => elements, {});`
+  scopedQueryAll: (injected, { selector }, root) => ({
+    elements: elementList(query(injected, selector, false, { root })),
+  }),
+
+  // Playwright: `server/dom.ts` `ElementHandle._initializePreview`: `this._setPreview(await utility.evaluate((injected, e) => 'JSHandle@' + injected.previewNode(e), this));`
+  listPreviews: (injected, _params, list) => ({
+    previews: Object.values(list).map((element) =>
+      injected.previewNode(element),
+    ),
+  }),
+
+  // Neo: the anchor `main_world.rs` resolves into the page's own world; Playwright's server
+  // finds that world by its execution context, which Neo does not watch.
+  // Rust only reads the node's `backendNodeId` (`DOM.describeNode`), which a `Document` has like
+  // any node; the cast is what lets the spec's one node handle kind carry it.
+  document: () => ({ node: document as unknown as Element }),
+
+  // Playwright: `server/dom.ts` `ElementHandle._initializePreview`: `this._setPreview(await utility.evaluate((injected, e) => 'JSHandle@' + injected.previewNode(e), this));`
+  previewNode: (injected, _params, node) => ({
+    preview: injected.previewNode(node),
+  }),
 
   textContent: (injected, { selector, strict }) => {
     const [element] = query(injected, selector, strict, {
@@ -123,25 +208,46 @@ export const glue = {
     }
   },
 
-  isVisible: (injected, { selector, strict }) => {
+  isVisible: (injected, { selector, strict, frameVisible }) => {
     const [element] = query(injected, selector, strict)
     return {
-      value: element
-        ? injected.elementState(element, 'visible', true).matches
-        : false,
+      value:
+        !!element &&
+        frameVisible &&
+        injected.elementState(element, 'visible', true).matches,
     }
   },
 
-  isChecked: (injected, { selector, strict }) => {
+  /**
+   * Every `Frame.is*` read that waits for its match: one state of the first match, labels
+   * followed. `elementState` throws for a state the element cannot have.
+   *
+   * Playwright: `server/frames.ts` `Frame._elementState`: `return { result: injected.elementState(element, data.state) };`
+   */
+  elementStateOnSelector: (injected, { selector, strict, state }) => {
     const [element] = query(injected, selector, strict, {
       markTargets: 'first',
     })
     if (!element) return {}
-    const { matches, received } = injected.elementState(element, 'checked')
+    const { matches, received } = injected.elementState(element, state)
     return {
       matched: {
-        checked: matches,
+        matches,
         received,
+        preview: injected.previewNode(element),
+      },
+    }
+  },
+
+  /** Playwright: `server/frames.ts` `Frame.innerHTML`: `(injected, element) => ({ result: element.innerHTML })` */
+  innerHTML: (injected, { selector, strict }) => {
+    const [element] = query(injected, selector, strict, {
+      markTargets: 'first',
+    })
+    if (!element) return {}
+    return {
+      matched: {
+        value: element.innerHTML,
         preview: injected.previewNode(element),
       },
     }
@@ -179,8 +285,70 @@ export const glue = {
           `Selector "${selector}" resolved to ${injected.previewNode(element)}, <iframe> was expected`,
         )
     }
-    return { element: elements[0] }
+    const element = elements[0]
+    return {
+      element,
+      visible: !!element && injected.utils.isElementVisible(element),
+    }
   },
+
+  /** Neo: one hop of a main-rooted path ref, by the owner's kept aria ref rather than the
+   * document's last snapshot, so a later snapshot of another part of the document leaves it. */
+  frameOwnerByRef: (injected, { ref }) => {
+    const named = namedOwners.get(ref)?.deref()
+    // Only an owner still connected in this document: one moved into another document (a
+    // sibling frame's) carries its ref along, but this document's path no longer leads to it.
+    const element =
+      named?.isConnected &&
+      named.ownerDocument === document &&
+      (named as NamedElement)._ariaRef?.ref === ref
+        ? named
+        : injected
+            .querySelectorAll(injected.parseSelector('iframe, frame'), document)
+            .find((owner) => (owner as NamedElement)._ariaRef?.ref === ref)
+    return {
+      element,
+      visible: !!element && injected.utils.isElementVisible(element),
+    }
+  },
+
+  /** Neo: the owner's aria ref, from a snapshot of the owner alone through the one
+   * `InjectedScript` snapshot that leaves the document's last snapshot (and so its `aria-ref`
+   * selectors) as it was. */
+  frameOwnerRef: (injected, _params, element) => {
+    injected.ariaSnapshotForExpectFailure(element, { mode: 'ai' })
+    const ref = (element as NamedElement)._ariaRef?.ref
+    if (ref === undefined) return {}
+    namedOwners.set(ref, new WeakRef(element))
+    return { ref }
+  },
+
+  /** Playwright: `server/frames.ts` `Frame._content`: `return await injected.evaluate((injected, includeShadow) => injected.documentContent(includeShadow), !!options.includeShadow);` */
+  documentContent: (injected, { includeShadow }) => ({
+    value: injected.documentContent(includeShadow),
+  }),
+
+  /** Playwright: `server/frames.ts` `Frame.setContent`: `document.write(html);` */
+  writeContent: (_injected, { html }) => {
+    // No console tag marks the open: neo-runtime waits for the reopened document's lifecycle
+    // events, from its `init`, on the frame's own session.
+    document.open()
+    document.write(html)
+    document.close()
+    return {}
+  },
+
+  /** Playwright: `server/frames.ts` `Frame.resolveSelector`: `return injected.generateSelectorSimple(node as unknown as Element);` */
+  generateSelector: (injected, { selector }) => {
+    const [element] = query(injected, selector, false)
+    if (!element) return {}
+    return { generated: injected.generateSelectorSimple(element) }
+  },
+
+  /** Playwright: `server/frames.ts` `Frame.resolveSelector`: `return injected.generateSelectorSimple(node as unknown as Element);` */
+  generateOwnerSelector: (injected, _params, element) => ({
+    generated: injected.generateSelectorSimple(element),
+  }),
 
   describeSelector: (injected, { selector }) => {
     const locator = injected.utils.asLocator('javascript', selector)
@@ -219,22 +387,70 @@ export const glue = {
     return {}
   },
 
+  // Playwright: `server/dom.ts` `ElementHandle._clickablePoint`: `({ width: innerWidth, height: innerHeight })`
   viewportSize: () => ({ width: innerWidth, height: innerHeight }),
 
   getElementBorderWidth: (injected, _params, element) =>
     injected.getElementBorderWidth(element),
 
+  describeIFrameStyle: (injected, _params, element) => ({
+    style: injected.describeIFrameStyle(element),
+  }),
+
+  expectHitTarget: (injected, { point }, element) => ({
+    outcome: injected.expectHitTarget(point, element),
+  }),
+
+  /** Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `injected.setupHitTargetInterceptor(node, actionType, hitPoint, trial)` */
   setupHitTargetInterceptor: (
     injected,
-    { hitPoint, blockAllEvents },
+    { action, hitPoint, blockAllEvents },
     element,
   ) => ({
     outcome: injected.setupHitTargetInterceptor(
       element,
-      'mouse',
+      action,
       hitPoint,
       blockAllEvents,
     ),
+  }),
+
+  // Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `window.addEventListener('mousemove', mouseListener, { once: true, capture: true });`
+  setupDragListeners: () => {
+    let didStartDrag = Promise.resolve(false)
+    let dragEvent: Event | null = null
+    const dragListener = (event: Event) => {
+      dragEvent = event
+    }
+    const mouseListener = () => {
+      didStartDrag = new Promise<boolean>((callback) => {
+        window.addEventListener('dragstart', dragListener, {
+          once: true,
+          capture: true,
+        })
+        setTimeout(
+          () => callback(dragEvent ? !dragEvent.defaultPrevented : false),
+          0,
+        )
+      })
+    }
+    window.addEventListener('mousemove', mouseListener, {
+      once: true,
+      capture: true,
+    })
+    cleanupDrag = async () => {
+      const started = await didStartDrag
+      window.removeEventListener('mousemove', mouseListener, { capture: true })
+      window.removeEventListener('dragstart', dragListener, { capture: true })
+      cleanupDrag = undefined
+      return started
+    }
+    return { armed: true }
+  },
+
+  // Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `const val = await didStartDrag;`
+  cleanupDrag: async () => ({
+    started: cleanupDrag ? await cleanupDrag() : false,
   }),
 
   stopHitTargetInterceptor: (_injected, _params, interceptor) => ({
@@ -242,12 +458,12 @@ export const glue = {
   }),
 
   /** `dom.ts` `_fill`'s single page evaluation, without its server-side retry loop. */
-  fill: async (injected, { value, force }, element) => {
+  fill: async (injected, { value, force, frameVisible }, element) => {
     if (!force) {
       const outcome = await injected.checkElementStates(
         element,
         ['visible', 'enabled', 'editable', 'non-inert'],
-        true,
+        frameVisible,
       )
       if (outcome) return { outcome }
     }
@@ -255,12 +471,16 @@ export const glue = {
   },
 
   /** `dom.ts` `_selectOption`'s single page evaluation. */
-  selectOptions: async (injected, { options, force }, element) => {
+  selectOptions: async (
+    injected,
+    { options, force, frameVisible },
+    element,
+  ) => {
     if (!force) {
       const outcome = await injected.checkElementStates(
         element,
         ['visible', 'enabled', 'non-inert'],
-        true,
+        frameVisible,
       )
       if (outcome) return { outcome }
     }
@@ -268,12 +488,87 @@ export const glue = {
     return Array.isArray(outcome) ? { values: outcome } : { outcome }
   },
 
+  /** `dom.ts` `_selectOption` with `ElementHandle` values: `[...elements, ...values]`. */
+  selectOptionsWithElements: async (
+    injected,
+    { options, force, frameVisible },
+    element,
+    elements,
+  ) => {
+    if (!force) {
+      const outcome = await injected.checkElementStates(
+        element,
+        ['visible', 'enabled', 'non-inert'],
+        frameVisible,
+      )
+      if (outcome) return { outcome }
+    }
+    const outcome = injected.selectOptions(element, [
+      ...Object.values(elements),
+      ...options,
+    ])
+    return Array.isArray(outcome) ? { values: outcome } : { outcome }
+  },
+
+  elementListOf: (_injected, _params, element) => ({
+    list: elementList([element]),
+  }),
+
+  elementListWith: (_injected, _params, list, element) => ({
+    list: elementList([...Object.values(list), element]),
+  }),
+
   elementState: (injected, { state }, element) =>
     injected.elementState(element, state),
 
   focusElement: (injected, { resetSelectionIfNotFocused }, element) => ({
     outcome: injected.focusNode(element, resetSelectionIfNotFocused),
   }),
+
+  /** Playwright: `server/dom.ts` `ElementHandle._blur`: `injected.blurNode(node)` */
+  blurElement: (injected, _params, element) => ({
+    outcome: injected.blurNode(element),
+  }),
+
+  /** Playwright: `server/dom.ts` `ElementHandle.selectText`: `return injected.selectText(node);` */
+  selectText: async (injected, { force, frameVisible }, element) => {
+    if (!force) {
+      const outcome = await injected.checkElementStates(
+        element,
+        ['visible'],
+        frameVisible,
+      )
+      if (outcome) return { outcome }
+    }
+    return { outcome: injected.selectText(element) }
+  },
+
+  /** Playwright: `server/frames.ts` `Frame.dispatchEvent`: `injectedScript.dispatchEvent(element, data.type, data.eventInit);` */
+  dispatchEvent: (injected, { selector, strict, type, eventInit }) => {
+    const [element] = query(injected, selector, strict, {
+      markTargets: 'first',
+    })
+    if (!element) return {}
+    injected.dispatchEvent(element, type, JSON.parse(eventInit))
+    return { preview: injected.previewNode(element) }
+  },
+
+  /** Playwright: `server/highlightController.ts` `HighlightController._resolve`: `await injectedScript.evaluate((injected, highlights) => injected.setHighlights(highlights), highlights);` */
+  setHighlights: (injected, { highlights }) => {
+    injected.setHighlights(
+      highlights.map(({ selector, cssStyle }) => ({
+        selector: injected.parseSelector(selector),
+        cssStyle,
+      })),
+    )
+    return {}
+  },
+
+  /** Playwright: `server/highlightController.ts` `HighlightController.hideHighlights`: `await injectedScript?.evaluate(injected => injected.hideHighlight());` */
+  hideHighlight: (injected) => {
+    injected.hideHighlight()
+    return {}
+  },
 
   inputValue: (injected, { selector, strict }) => {
     const [node] = query(injected, selector, strict, { markTargets: 'first' })
@@ -299,10 +594,6 @@ export const glue = {
   },
   queryCount: (injected, { selector }) => ({
     value: query(injected, selector, false).length,
-  }),
-
-  allTextContents: (injected, { selector }) => ({
-    values: query(injected, selector, false).map((e) => e.textContent || ''),
   }),
 } satisfies InjectedApi<InjectedScript, Handles>
 

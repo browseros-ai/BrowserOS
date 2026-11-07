@@ -1,5 +1,7 @@
-//! Submits the saved Hacker News script through one Rust controller. Independent CDP reads
-//! verify the live listing and the five comment tabs; a later run resumes on a returned tab ID.
+//! Submits the saved Hacker News script through one Rust controller. The script is the one
+//! written for and run against real Playwright, unchanged: it checks each goto's `response.ok()`
+//! and waits with `locator.waitFor()`. Independent CDP reads verify the live listing and the five
+//! comment tabs; a later run resumes on a returned tab ID.
 //! Requires live Hacker News and a temporary BrowserOS profile. From packages/browseros-agent:
 //!
 //! ```sh

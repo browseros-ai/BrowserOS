@@ -12,7 +12,7 @@ use neo_runtime_spec::serve::{
     FrameCall, FrameClickParams, FrameClickParamsButton, FrameClickParamsModifiersItem,
     FrameClickParamsScroll, FrameClickResult, FrameGotoParams, FrameGotoResult,
     FrameTextContentParams, FrameTextContentResult, FrameTitleResult, LifecycleEvent, Metadata,
-    Point,
+    Point, RequestInitializer,
 };
 use neo_runtime_spec::{
     CallDecodeError, Command, MethodFlag, MethodGroup, PageResult, SPEC_SHA256, is_current,
@@ -53,9 +53,9 @@ fn served_calls_decode_by_method_name() {
     assert!(matches!(title, FrameCall::Title(_)), "{title:?}");
     assert_eq!(title.meta().group, Some(MethodGroup::Getter));
 
-    let unknown = FrameCall::decode("dblclick", Some(json!({"selector": "#a"}))).unwrap_err();
+    let unknown = FrameCall::decode("expect", Some(json!({"selector": "#a"}))).unwrap_err();
     assert!(
-        matches!(&unknown, CallDecodeError::UnknownMethod { interface: "Frame", method } if method == "dblclick"),
+        matches!(&unknown, CallDecodeError::UnknownMethod { interface: "Frame", method } if method == "expect"),
         "{unknown:?}"
     );
     let invalid = FrameCall::decode("goto", Some(json!({"url": "x", "waitUntil": "later"})));
@@ -175,16 +175,21 @@ fn a_void_command_replies_without_a_result() {
 }
 
 #[test]
-fn goto_answers_without_a_response_until_neo_implements_one() {
-    // `ResponseChannel` is uninhabited: `None` is the only value, and no wire value decodes.
+fn goto_answers_a_response_reference_or_none() {
     let decoded: FrameGotoResult = serde_json::from_value(json!({})).unwrap();
     assert_eq!(decoded, FrameGotoResult { response: None });
-    let with_response =
-        serde_json::from_value::<FrameGotoResult>(json!({"response": {"guid": "r1"}}));
-    assert!(
-        with_response.is_err(),
-        "a Response reference decoded: {with_response:?}"
+    let with_response: FrameGotoResult =
+        serde_json::from_value(json!({"response": {"guid": "response@T:L:0"}})).unwrap();
+    assert_eq!(
+        with_response.response.map(|response| response.guid),
+        Some("response@T:L:0".to_string())
     );
+    // `Worker` is not served: a request can name no service worker.
+    let worker = serde_json::from_value::<RequestInitializer>(json!({
+        "serviceWorker": {"guid": "w"}, "url": "u", "resourceType": "document", "method": "GET",
+        "headers": [], "isNavigationRequest": true,
+    }));
+    assert!(worker.is_err(), "a Worker reference decoded: {worker:?}");
 }
 
 #[test]

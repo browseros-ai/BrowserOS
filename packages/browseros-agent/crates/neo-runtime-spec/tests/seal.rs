@@ -4,13 +4,13 @@
 //! `neo-runtime` reaches them, and that each result decodes the way its spec says it crosses.
 
 use neo_runtime_spec::injected::{
-    ElementState, ElementStatesOutcome, HitTargetBlocked, HitTargetOutcome, HitTargetSetup,
-    InjectedAriaSnapshotParams, InjectedCheckElementStatesParams, InjectedCheckElementStatesResult,
-    InjectedFrameOwnerParams, InjectedFrameOwnerResult, InjectedResolveResult,
-    InjectedSetupHitTargetInterceptorParams, InjectedSetupHitTargetInterceptorResult,
-    InjectedStopHitTargetInterceptorParams, InjectedStopHitTargetInterceptorResult,
-    InjectedTextContentParams, InjectedTitleParams, InjectedTitleResult, MissingState,
-    NotConnected, Point,
+    ElementState, ElementStatesOutcome, HitTargetAction, HitTargetBlocked, HitTargetOutcome,
+    HitTargetSetup, InjectedAriaSnapshotParams, InjectedCheckElementStatesParams,
+    InjectedCheckElementStatesResult, InjectedFrameOwnerParams, InjectedFrameOwnerResult,
+    InjectedResolveResult, InjectedSetupHitTargetInterceptorParams,
+    InjectedSetupHitTargetInterceptorResult, InjectedStopHitTargetInterceptorParams,
+    InjectedStopHitTargetInterceptorResult, InjectedTextContentParams, InjectedTitleParams,
+    InjectedTitleResult, MissingState, NotConnected, Point,
 };
 use neo_runtime_spec::serve::FrameTitleParams;
 use neo_runtime_spec::{
@@ -99,7 +99,7 @@ fn generated_calls_are_usable_through_the_sealed_traits() {
 #[test]
 fn a_handle_result_decodes_from_its_properties() {
     let found = frame_owner(properties(
-        json!({}),
+        json!({"visible": true}),
         &[("element", "-9083572.1.4", Some("node"))],
     ))
     .unwrap();
@@ -109,12 +109,18 @@ fn a_handle_result_decodes_from_its_properties() {
     // The page returns `{element: undefined}` when nothing matched, and `neo-runtime` leaves
     // `undefined` out.
     assert_eq!(
-        frame_owner(Properties::default()).unwrap(),
-        InjectedFrameOwnerResult { element: None }
+        frame_owner(properties(json!({"visible": false}), &[])).unwrap(),
+        InjectedFrameOwnerResult {
+            element: None,
+            visible: false
+        }
     );
     assert_eq!(
-        frame_owner(properties(json!({"element": null}), &[])).unwrap(),
-        InjectedFrameOwnerResult { element: None },
+        frame_owner(properties(json!({"element": null, "visible": false}), &[])).unwrap(),
+        InjectedFrameOwnerResult {
+            element: None,
+            visible: false
+        },
         "null reads as absent, as it does for an Option field decoded from JSON"
     );
 }
@@ -136,7 +142,7 @@ fn a_handle_result_rejects_what_its_spec_does_not_declare() {
         "page call frameOwner returned `element` as the value \"iframe#main\", not a page object"
     );
     let extra = frame_owner(properties(
-        json!({"count": 1}),
+        json!({"count": 1, "visible": true}),
         &[("element", "-1.1.1", Some("node"))],
     ));
     assert_eq!(
@@ -253,6 +259,7 @@ fn a_click_resolves_one_element_and_passes_it_by_handle() {
 fn an_armed_interceptor_is_the_handle_its_stop_consumes() {
     let setup = InjectedSetupHitTargetInterceptorParams {
         element: element("-7.1.9").unwrap(),
+        action: HitTargetAction::Hover,
         hit_point: Some(Point { x: 40.5, y: 18.0 }),
         block_all_events: false,
     };
@@ -260,7 +267,7 @@ fn an_armed_interceptor_is_the_handle_its_stop_consumes() {
         page_call(&setup).unwrap(),
         (
             "setupHitTargetInterceptor",
-            json!({"hitPoint": {"x": 40.5, "y": 18.0}, "blockAllEvents": false}),
+            json!({"action": "hover", "hitPoint": {"x": 40.5, "y": 18.0}, "blockAllEvents": false}),
             vec!["-7.1.9".to_owned()],
             false
         )

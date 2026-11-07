@@ -8,9 +8,11 @@ use std::sync::Arc;
 
 use neo_runtime_spec::injected::{
     ElementState, FormFillOutcome, FormFillOutcomeStatus, FormSelectOutcome,
-    FormSelectOutcomeError, InjectedElementStateParams, InjectedElementStateParamsState,
-    InjectedFillParams, InjectedFillResult, InjectedFocusElementParams, InjectedInputValueParams,
+    FormSelectOutcomeError, InjectedElementListOfParams, InjectedElementListWithParams,
+    InjectedElementStateParams, InjectedElementStateParamsState, InjectedFillParams,
+    InjectedFillResult, InjectedFocusElementParams, InjectedInputValueParams,
     InjectedSelectOptionsParams, InjectedSelectOptionsResult,
+    InjectedSelectOptionsWithElementsParams,
 };
 use tokio::sync::oneshot;
 
@@ -20,7 +22,9 @@ pub(crate) use neo_runtime_spec::injected::{
 };
 
 use crate::click::{PageError, Tab};
-use crate::page::{InputPermit, PageSession, ResolvedElement};
+use crate::evaluate::{self, HandleEntry};
+use crate::frame_selector;
+use crate::page::{FrameTab, GroupGuard, InputPermit, PageSession, ResolvedElement};
 use crate::progress::InputTicket;
 
 /// The result of the one fill evaluation. `NeedsInput` retains the original ticket for the
@@ -41,6 +45,9 @@ pub(crate) enum SelectOutcome {
     OptionsNotFound,
     OptionNotEnabled,
     Missing(ElementState),
+    /// An `ElementHandle` value of another frame or of a document its frame has left, which
+    /// Playwright's adoption into the select's world refuses. Nothing was written.
+    Unadoptable,
 }
 
 /// One method per forms page evaluation. Returned futures are cancel-safe, as in `click::Tab`.
@@ -56,10 +63,12 @@ pub(crate) trait FormTab: Tab {
         ticket: InputTicket,
     ) -> impl Future<Output = Result<FillOutcome, PageError>> + Send;
 
+    /// `elements` are `ElementHandle` values, matched by node identity before `options`.
     fn select_options(
         &self,
         element: &Self::Element,
         options: &[SelectOption],
+        elements: &[Arc<HandleEntry>],
         force: bool,
         input: Self::Input,
         ticket: InputTicket,
@@ -84,7 +93,7 @@ pub(crate) trait FormTab: Tab {
     ) -> impl Future<Output = Result<Option<InputValueMatch>, PageError>> + Send;
 }
 
-impl FormTab for Arc<PageSession> {
+impl FormTab for FrameTab {
     fn fill(
         &self,
         element: &ResolvedElement,
@@ -93,20 +102,20 @@ impl FormTab for Arc<PageSession> {
         input: InputPermit,
         ticket: InputTicket,
     ) -> impl Future<Output = Result<FillOutcome, PageError>> + Send {
-        let page = Arc::clone(self);
         let element = element.clone();
         let value = value.to_string();
         let (sender, receiver) = oneshot::channel();
         self.spawn(async move {
             let _input = input;
-            let result = page
-                .world()
+            let result = element
+                .frame
                 .call(
                     None,
                     &InjectedFillParams {
                         element: element.handle().clone(),
                         value,
                         force,
+                        frame_visible: element.frame_visible,
                     },
                 )
                 .await;
@@ -121,33 +130,54 @@ impl FormTab for Arc<PageSession> {
         &self,
         element: &ResolvedElement,
         options: &[SelectOption],
+        elements: &[Arc<HandleEntry>],
         force: bool,
         input: InputPermit,
         ticket: InputTicket,
     ) -> impl Future<Output = Result<SelectOutcome, PageError>> + Send {
-        let page = Arc::clone(self);
         let element = element.clone();
         let options = options.to_vec();
+        let elements = elements.to_vec();
+        // Adopted for this attempt alone, as Playwright adopts them for each evaluation.
+        let group = (!elements.is_empty()).then(|| self.group(&element.frame, "select"));
         page_step(self, async move {
             let _input = input;
-            let result = page
-                .world()
-                .call(
-                    None,
-                    &InjectedSelectOptionsParams {
-                        element: element.handle().clone(),
-                        options,
-                        force,
-                    },
-                )
-                .await;
+            let result = match &group {
+                None => {
+                    element
+                        .frame
+                        .call(
+                            None,
+                            &InjectedSelectOptionsParams {
+                                element: element.handle().clone(),
+                                options,
+                                force,
+                                frame_visible: element.frame_visible,
+                            },
+                        )
+                        .await
+                }
+                Some(group) => {
+                    match select_with_elements(&element, &elements, options, force, group).await {
+                        Ok(Some(result)) => Ok(result),
+                        Ok(None) => {
+                            ticket.unsent();
+                            return Ok(SelectOutcome::Unadoptable);
+                        }
+                        Err(error) => Err(error),
+                    }
+                }
+            };
+            // Keep the elements' group until the page has answered.
             drop(element);
+            drop(group);
             finish_select(result, ticket)
         })
     }
 
     async fn checked_state(&self, element: &ResolvedElement) -> Result<CheckedState, PageError> {
-        self.world()
+        element
+            .frame
             .call(
                 None,
                 &InjectedElementStateParams {
@@ -164,12 +194,11 @@ impl FormTab for Arc<PageSession> {
         reset_selection_if_not_focused: bool,
         input: InputPermit,
     ) -> impl Future<Output = Result<FocusOutcome, PageError>> + Send {
-        let page = Arc::clone(self);
         let element = element.clone();
         page_step(self, async move {
             let _input = input;
-            let result = page
-                .world()
+            let result = element
+                .frame
                 .call(
                     None,
                     &InjectedFocusElementParams {
@@ -188,11 +217,15 @@ impl FormTab for Arc<PageSession> {
         selector: &str,
         strict: bool,
     ) -> Result<Option<InputValueMatch>, PageError> {
-        self.world()
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok(None);
+        };
+        located
+            .frame
             .call(
                 None,
                 &InjectedInputValueParams {
-                    selector: selector.to_string(),
+                    selector: located.selector,
                     strict,
                 },
             )
@@ -259,6 +292,68 @@ fn finish_fill(
             Err(error)
         }
     }
+}
+
+/// Neo: `selectOption` with `ElementHandle` values in one attempt: each adopted into the select's
+/// utility world in `group`, gathered in one list a page call at a time (a handle crosses by
+/// position), then Playwright's one page evaluation over `[...elements, ...options]`. `None`
+/// when a value cannot be adopted.
+async fn select_with_elements(
+    element: &ResolvedElement,
+    elements: &[Arc<HandleEntry>],
+    options: Vec<SelectOption>,
+    force: bool,
+    group: &GroupGuard,
+) -> Result<Option<InjectedSelectOptionsResult>, PageError> {
+    let frame = &element.frame;
+    let mut adopted = Vec::with_capacity(elements.len());
+    for entry in elements {
+        match evaluate::adopt_element(entry, frame, group.group()).await? {
+            Some(node) => adopted.push(node),
+            None => return Ok(None),
+        }
+    }
+    let mut nodes = adopted.into_iter();
+    let Some(first) = nodes.next() else {
+        return Err(PageError::Contract(
+            "selectOptionsWithElements needs an element value".to_string(),
+        ));
+    };
+    let mut list = frame
+        .call(
+            Some(group.group()),
+            &InjectedElementListOfParams { element: first },
+        )
+        .await?
+        .list;
+    for node in nodes {
+        list = frame
+            .call(
+                Some(group.group()),
+                &InjectedElementListWithParams {
+                    list,
+                    element: node,
+                },
+            )
+            .await?
+            .list;
+    }
+    let result = frame
+        .call(
+            Some(group.group()),
+            &InjectedSelectOptionsWithElementsParams {
+                element: element.handle().clone(),
+                elements: list,
+                options,
+                force,
+                frame_visible: element.frame_visible,
+            },
+        )
+        .await?;
+    Ok(Some(InjectedSelectOptionsResult {
+        values: result.values,
+        outcome: result.outcome,
+    }))
 }
 
 fn finish_select(
@@ -390,11 +485,15 @@ pub(crate) mod tests {
             &self,
             _element: &u32,
             options: &[SelectOption],
+            elements: &[Arc<HandleEntry>],
             force: bool,
             input: Self::Input,
             ticket: InputTicket,
         ) -> impl Future<Output = Result<SelectOutcome, PageError>> + Send {
             self.record("select_options");
+            if !elements.is_empty() {
+                self.record(format!("select elements={}", elements.len()));
+            }
             self.record(format!("select {options:?} force={force}"));
             let result = self.forms.select.next();
             let duration = self.forms.select.duration;

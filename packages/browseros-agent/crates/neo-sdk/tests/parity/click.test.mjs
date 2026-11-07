@@ -5,6 +5,12 @@
 // listeners saw (which events reached which element). It never compares an error's wording, the
 // call log, click coordinates or retry timing.
 //
+// Two differences are deliberate (neo-runtime src/click.rs) and asserted, not hidden: Neo's
+// trial sends no input, where Playwright's presses into an interceptor whose blocked events the
+// page's own window listeners still see; and under noWaitAfter Neo still reads the press's
+// hit-target verdict and presses again after a block, where Playwright resolves on the blocked
+// press.
+//
 // The pages are tests/pages/; neo-runtime's click_e2e.rs runs them on Neo alone.
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs).
@@ -15,6 +21,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { assertDecoysUntouched, compareFrameCases, failed } from './frames.mjs'
 import {
   browserBinary,
   buildNeoRun,
@@ -40,7 +47,9 @@ const EVENTS =
 
 /**
  * Each case's page, script, what to read from the page after the run (`probe`), and the delivery
- * Neo's one record must report. `closeAfterMs` closes the tab while the script runs.
+ * Neo's one record must report. `closeAfterMs` closes the tab while the script runs. A deliberate
+ * difference names what each engine's page must show (`pages`) and what both scripts return
+ * (`returns`).
  */
 const cases = [
   {
@@ -93,13 +102,41 @@ const cases = [
     delivery: 'done',
   },
   {
-    // Only the hash: Playwright's trial presses into an interceptor that blocks the click, and
-    // listeners the page added first still see its events. Neo's trial sends none (click_e2e.rs
-    // checks that). On both, neither button's handler runs.
+    // Both resolve. Playwright skips the verdict under noWaitAfter, so the press the overlay
+    // caught counts as its click; Neo reads it, presses again, and the button's handler runs.
+    name: 'blocked-once-no-wait-after',
+    html: page('blocked-once.html'),
+    source: `await ${SUBMIT}.click({ noWaitAfter: true })\nreturn 'clicked'`,
+    probe: 'window.__clicks',
+    returns: { value: 'clicked' },
+    pages: { playwright: 0, neo: 1 },
+    delivery: 'done',
+  },
+  {
+    // Both resolve and neither button's handler runs (the hash stays empty). Playwright's
+    // interceptor blocks the press only after the page's window listeners saw it; Neo sends none.
     name: 'trial',
     html: page('ok.html'),
     source: `await ${SUBMIT}.click({ trial: true })\nreturn page.url()`,
-    probe: 'location.hash',
+    probe: `[location.hash, ${EVENTS}]`,
+    pages: {
+      playwright: [
+        '',
+        [
+          ['pointermove', -1, 0],
+          ['pointerdown', 0, 0],
+          ['pointerup', 0, 0],
+          ['click', 0, 1],
+        ].map(([type, button, detail]) => ({
+          type,
+          target: 'button',
+          isTrusted: true,
+          button,
+          detail,
+        })),
+      ],
+      neo: ['', []],
+    },
     delivery: 'notSent',
   },
   {
@@ -124,7 +161,18 @@ test('clicks read the same through Neo and Playwright', {
           kind(playwright.result),
           'what the script saw',
         )
-        assert.deepEqual(neo.probe, playwright.probe, 'what the page saw')
+        if (c.returns)
+          assert.deepEqual(kind(playwright.result), c.returns, 'the value')
+        if (c.pages) {
+          assert.deepEqual(
+            playwright.probe,
+            c.pages.playwright,
+            "what Playwright's page saw",
+          )
+          assert.deepEqual(neo.probe, c.pages.neo, "what Neo's page saw")
+        } else {
+          assert.deepEqual(neo.probe, playwright.probe, 'what the page saw')
+        }
         assert.deepEqual(
           neo.outcome.calls.map((call) => call.delivery),
           [c.delivery],
@@ -245,3 +293,102 @@ async function viaNeo(cdp, port, neoRun, scripts, url, c) {
     if (!c.closeAfterMs) await cdp.send('Target.closeTarget', { targetId })
   }
 }
+
+/**
+ * Clicks inside frames, on tabs of frame-top.html (frames.mjs): each frame's own Send button,
+ * never a decoy (the parent's, a sibling's or an ancestor frame's Send); and buttons no click
+ * may reach: inside a hidden iframe, or inside an iframe a layer covers.
+ */
+const frameCases = [
+  {
+    name: 'a click reaches the Send button of each frame and no decoy',
+    source: `const login = page.frameLocator('#login-iframe')
+    return {
+      same: await settle(() => page.frameLocator('#same').getByRole('button', { name: 'Send' }).click()),
+      cross: await settle(() => login.getByRole('button', { name: 'Send' }).click()),
+      grandchild: await settle(() => login.frameLocator('#grandchild').locator('#send').click()),
+      frame: await settle(() => page.frame('chain-inner').click('#send')),
+    }`,
+    expected: {
+      same: 'undefined',
+      cross: 'undefined',
+      grandchild: 'undefined',
+      frame: 'undefined',
+    },
+    effect: (effect) => {
+      const touched = assertDecoysUntouched(effect, [
+        'same',
+        'cross',
+        'grandchild',
+        'chain-inner',
+      ])
+      for (const [who, facts] of Object.entries(touched))
+        assert.deepEqual(
+          facts.events.filter((event) => event.type === 'click'),
+          [{ type: 'click', target: 'send', trusted: true }],
+          `${who}'s clicks`,
+        )
+    },
+    deliveries: { click: ['done', 'done', 'done', 'done'] },
+  },
+  {
+    name: 'a button in a hidden or covered iframe is never clicked',
+    source: `const send = (frame) => page.frameLocator(frame).locator('#send')
+    const visibilityHidden = await settle(() => send('#hidden-same').click({ timeout: 1000 }))
+    const displayNone = await settle(() => send('#hidden-cross').click({ timeout: 1000 }))
+    await page.click('#cover-same')
+    const covered = await settle(() => send('#same').click({ timeout: 1000 }))
+    return { visibilityHidden, displayNone, covered }`,
+    expected: {
+      visibilityHidden: failed('timeout'),
+      displayNone: failed('timeout'),
+      covered: failed('timeout'),
+    },
+    effect: (effect) => {
+      const { top } = assertDecoysUntouched(effect, ['top'])
+      assert.deepEqual(
+        top.events
+          .filter((event) => event.type === 'click')
+          .map((event) => event.target),
+        ['cover-same'],
+        'only the control was clicked',
+      )
+    },
+    deliveries: { click: ['notSent', 'notSent', 'done', 'notSent'] },
+  },
+]
+
+test('clicks inside frames reach the same element through Neo and Playwright', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases)
+})
+
+test('tests that scroll none leaves an offscreen iframe owner and button untouched', {
+  skip,
+  timeout: 180_000,
+}, async () => {
+  const c = {
+    name: 'no-scroll-frame',
+    html: `<!doctype html><style>
+      body{margin:0}iframe{display:block;margin-top:3000px;width:400px;height:200px}
+      </style><script>window.__clicks=0</script>
+      <iframe id="frame" srcdoc="<button onclick='parent.__clicks++'>Inside</button>"></iframe>`,
+    source: `await page.frameLocator('#frame').getByRole('button', {name:'Inside'}).click({scroll:'none',timeout:1000})`,
+    probe: '({scrolled:scrollX!==0||scrollY!==0,clicks:window.__clicks})',
+  }
+  await withBoth([c], async (run) => {
+    const { playwright, neo } = await run(c.name)
+    assert.deepEqual(kind(playwright.result), {
+      error: { name: 'TimeoutError', strict: false },
+    })
+    assert.deepEqual(playwright.probe, { scrolled: false, clicks: 0 })
+    assert.deepEqual(kind(neo.result), kind(playwright.result))
+    assert.deepEqual(neo.probe, playwright.probe)
+    assert.deepEqual(
+      neo.outcome.calls.map((call) => call.delivery),
+      ['notSent'],
+    )
+  })
+})

@@ -8,6 +8,7 @@
 import type { WireError } from '../../src/connection'
 import { createRun } from '../../src/index'
 import type { CreatedPage } from '../../src/runtime-bridge'
+import { eventless } from './bridge-stub'
 
 export type Message = {
   id: number
@@ -42,6 +43,32 @@ export function failure(name: string, message: string): Reply {
   return { error: { error: { name, message } }, log: [] }
 }
 
+/** Rust's `parseURL` answer, with Bun's WHATWG parser standing in for Rust's. */
+function parsed(text: string): string {
+  let url: URL
+  try {
+    url = new URL(text)
+  } catch {
+    return JSON.stringify(null)
+  }
+  const { href, origin, protocol, username, password, host } = url
+  const { hostname, port, pathname, search, hash } = url
+  return JSON.stringify({
+    href,
+    origin,
+    protocol,
+    username,
+    password,
+    host,
+    hostname,
+    port,
+    pathname,
+    search,
+    hash,
+    searchParams: [...url.searchParams],
+  })
+}
+
 const pageGuid = (tab: Tab) => `page@${tab.id}`
 const frameGuid = (tab: Tab) => `frame@${tab.id}`
 
@@ -68,6 +95,13 @@ export class FakeRuntime {
   active: string | undefined
   /** Answers a call in place of the model when it returns a reply. */
   answer: ((message: Message) => Reply | undefined) | undefined
+  /** When set (for every call, or those the predicate picks), a call waits for its abort and
+   * then replies as neo-runtime replies an aborted call (`AbortError` with the reason, the log
+   * line `progress.rs` writes). */
+  hold: boolean | ((message: Message) => boolean) = false
+  /** Every `abort(id, reason)` the SDK sent, in order. */
+  readonly aborts: { id: number; reason: string }[] = []
+  readonly #held = new Map<number, (reply: Reply) => void>()
   #nextTab = 1
 
   constructor(tabs: Tab[]) {
@@ -75,8 +109,9 @@ export class FakeRuntime {
   }
 
   get(request: string): string {
-    const { guid, field } = JSON.parse(request)
+    const { guid, field, url } = JSON.parse(request)
     this.gets.push({ guid, field })
+    if (field === 'parseURL') return parsed(url)
     if (guid === 'context@default' && field === 'pages') {
       for (const tab of this.tabs) this.handed.add(pageGuid(tab))
       return JSON.stringify(this.tabs.map(created))
@@ -95,8 +130,25 @@ export class FakeRuntime {
   async call(text: string): Promise<string> {
     const message: Message = JSON.parse(text)
     this.messages.push(message)
+    if (this.hold === true || (this.hold && this.hold(message))) {
+      const held = await new Promise<Reply>((resolve) =>
+        this.#held.set(message.id, resolve),
+      )
+      return JSON.stringify({ id: message.id, ...held })
+    }
     const reply = this.answer?.(message) ?? this.#serve(message)
     return JSON.stringify({ id: message.id, ...reply })
+  }
+
+  /** neo-runtime's `abort`: ends a held call with `AbortError`; any other id is ignored. */
+  abort(id: number, reason: string): void {
+    this.aborts.push({ id, reason })
+    const held = this.#held.get(id)
+    this.#held.delete(id)
+    held?.({
+      error: { error: { name: 'AbortError', message: reason } },
+      log: [`  - operation was aborted: ${reason}`],
+    })
   }
 
   #serve({ guid, method }: Message): Reply {
@@ -136,7 +188,13 @@ export function start(tabs: Tab[] = [RUN_TAB]) {
   const [runTab = RUN_TAB] = tabs
   const fake = new FakeRuntime(tabs)
   fake.handed.add(pageGuid(runTab))
-  Object.assign(globalThis, { __neo_runtime: fake })
+  Object.assign(globalThis, {
+    __neo_runtime: eventless({
+      get: fake.get.bind(fake),
+      call: fake.call.bind(fake),
+      abort: fake.abort.bind(fake),
+    }),
+  })
   const run = createRun({
     page: pageGuid(runTab),
     mainFrame: frameGuid(runTab),

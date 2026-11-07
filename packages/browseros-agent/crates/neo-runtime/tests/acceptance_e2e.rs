@@ -65,8 +65,9 @@ async fn one_run_navigates_reads_clicks_and_reads_the_change() {
 
     assert_eq!(
         field("navigated"),
-        Value::Null,
-        "goto resolves null: {value:#}"
+        json!({"url":"/start","status":200,"ok":true,
+               "contentType":"text/html; charset=utf-8","bodyHasTitle":true}),
+        "goto resolves the document's response: {value:#}"
     );
     assert_eq!(text("title"), "Neo acceptance", "{value:#}");
     let reference = text("ref");

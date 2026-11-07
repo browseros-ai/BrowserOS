@@ -77,6 +77,85 @@ Injected:
         # Absent when nothing matches; hidden and detached waits succeed in that case.
         matched: SelectorMatch?
 
+    # `selectorState` for a `Frame.waitForSelector` whose caller wants the element back, such as
+    # `locator.evaluate`: the same probe, plus the first match in the caller's object group, which
+    # neo-runtime adopts into the frame's main world once the wait is met.
+    selectorElement:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+      returns:
+        # The first match. Absent when nothing matches.
+        element: Element?
+        count: int
+        visible: boolean
+        # `InjectedScript.previewNode` of the first match, absent when nothing matches.
+        preview: string?
+
+    # `selectorElement` within `root` (`ElementHandle.$`, `$eval`): Playwright's scoped
+    # `querySelectorAll(parsed, root)`, for an element handle adopted into this world.
+    scopedSelectorElement:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+        root: Element
+      returns:
+        element: Element?
+        count: int
+        visible: boolean
+        preview: string?
+
+    # Every match of one frame chunk, in document order, for `Frame.querySelectorAll` and
+    # `evalOnSelectorAll` (Playwright's `queryAll` and `queryArrayInMainWorld`): one object whose
+    # own properties `0`, `1`, … are the elements, which neo-runtime reads with
+    # `Runtime.getProperties` and adopts into the main world.
+    queryAll:
+      internal: true
+      parameters:
+        selector: string
+      returns:
+        elements: ElementList
+
+    # `queryAll` within `root`, for `ElementHandle.$$` and `$$eval`.
+    scopedQueryAll:
+      internal: true
+      parameters:
+        selector: string
+        root: Element
+      returns:
+        elements: ElementList
+
+    # `InjectedScript.previewNode` of each element of a `queryAll` list, in order: the previews of
+    # the `ElementHandle`s `Frame.querySelectorAll` answers, read in one page call.
+    listPreviews:
+      internal: true
+      parameters:
+        list: ElementList
+      returns:
+        previews:
+          type: array
+          items: string
+
+    # The document node of this world's frame, for neo-runtime's main-world door
+    # (`main_world.rs`), which reads its `backendNodeId` with `DOM.describeNode` and resolves the
+    # same node in the frame's main world. A `Document`, carried as the built-in `Element` handle
+    # because CDP gives every DOM node the subtype `node`.
+    document:
+      internal: true
+      returns:
+        node: Element
+
+    # `InjectedScript.previewNode` of a node adopted into this world, for an `ElementHandle`'s
+    # preview (`dom.ts` `ElementHandle._initializePreview`).
+    previewNode:
+      internal: true
+      parameters:
+        node: Element
+      returns:
+        preview: string
+
     # Resolves one frame chunk and reads the first match's `textContent`, for
     # `Frame.textContent`. neo-runtime owns waiting: it polls this call with Playwright's backoff
     # until something matches or the call's deadline passes.
@@ -119,19 +198,34 @@ Injected:
       parameters:
         selector: string
         strict: boolean
+        frameVisible: boolean
       returns:
         value: boolean
 
-    # Resolves and marks the first match, then reads its checked state following labels,
-    # for `Frame.isChecked`. Throws for anything other than a checkbox or radio control.
-    isChecked:
+    # `frames.ts` `_elementState`: resolves and marks the first match, then reads one state with
+    # `InjectedScript.elementState`, following labels, for `Frame.isChecked`, `Frame.isEnabled`,
+    # `Frame.isDisabled` and `Frame.isEditable`. Throws, as Playwright's page code does, for a
+    # state the element cannot have: `checked` on anything but a checkbox or radio control,
+    # `editable` on an element that is not a text control and has no role allowing
+    # `aria-readonly`.
+    elementStateOnSelector:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+        state: ReadableElementState
+      returns:
+        # Absent while nothing matches; neo-runtime keeps polling until the deadline.
+        matched: ElementStateMatch?
+
+    # `frames.ts` `innerHTML`: resolve and mark the first match, read its `innerHTML`.
+    innerHTML:
       internal: true
       parameters:
         selector: string
         strict: boolean
       returns:
-        # Absent while nothing matches; neo-runtime keeps polling until the deadline.
-        matched: CheckedStateMatch?
+        matched: TextMatch?
 
     # Resolves one frame chunk and snapshots its first match with
     # `InjectedScript.ariaSnapshotJSON`, for `Frame.ariaSnapshot`, which also records the tree
@@ -171,6 +265,71 @@ Injected:
         # The first match, which stays in the page in the caller's object group. Absent when
         # nothing matched yet.
         element: Element?
+        # Visibility of the first iframe owner, false when nothing matched.
+        visible: boolean
+
+    # Finds the `<iframe>` or `<frame>` whose aria ref is `ref`, for one hop of a main-rooted
+    # path ref (`aria-ref=f7e2` enters the frame of the owner named `e7`). The ref is the one
+    # Playwright's snapshots keep on the element (`_ariaRef`), so the hop does not depend on the
+    # document's last snapshot: a later snapshot of another part of that document leaves the
+    # path routable, as a Playwright frame-numbered ref stays. An owner `frameOwnerRef` named is
+    # found even where no selector reaches (inside a closed shadow root).
+    frameOwnerByRef:
+      internal: true
+      parameters:
+        ref: string
+      returns:
+        # The owner, in the caller's object group. Absent when no owner has that ref.
+        element: Element?
+        # Visibility of the owner, false when none matched.
+        visible: boolean
+
+    # The aria ref of one iframe owner, for the path in front of a child frame's AI snapshot
+    # refs: the ref its document's snapshots give it (kept on the element, or given now by
+    # building the aria tree of the owner alone). The document's last snapshot is left as it
+    # was, so no ref of the caller's own snapshots changes lifetime.
+    frameOwnerRef:
+      internal: true
+      parameters:
+        element: Element
+      returns:
+        # Absent when Playwright's AI snapshots give the owner no ref: it is not visible or
+        # receives no pointer events.
+        ref: string?
+
+    # `frames.ts` `Frame._content`: the document's markup, its doctype first.
+    documentContent:
+      internal: true
+      parameters:
+        # Serialize open shadow roots too (`<template shadowrootmode>`).
+        includeShadow: boolean
+      returns:
+        value: string
+
+    # `frames.ts` `Frame.setContent`'s page function: `document.open()`, `write`, `close()`.
+    # neo-runtime waits for the lifecycle events of the reopened document on the frame's session.
+    writeContent:
+      internal: true
+      parameters:
+        html: string
+
+    # `frames.ts` `Frame.resolveSelector`: the first match of one frame chunk (not strict), and
+    # `InjectedScript.generateSelectorSimple` for it.
+    generateSelector:
+      internal: true
+      parameters:
+        selector: string
+      returns:
+        # Absent when nothing matches; empty when no selector could be generated.
+        generated: string?
+
+    # `generateSelectorSimple` for one iframe owner, the frame hop in front of the element's.
+    generateOwnerSelector:
+      internal: true
+      parameters:
+        element: Element
+      returns:
+        generated: string
 
     # Names a selector the way Playwright's call log does, for a click's first log line
     # `waiting for <locator>`, and reports a selector the page cannot parse. Playwright computes
@@ -217,7 +376,7 @@ Injected:
         states:
           type: array
           items: ElementState
-        # Neo resolves in the main frame only, so neo-runtime always sends `true`.
+        # True when every iframe owner crossed by the selector is visible; true without hops.
         frameVisible: boolean
       returns:
         # Absent when every state holds.
@@ -251,13 +410,33 @@ Injected:
         left: float
         top: float
 
-    # `InjectedScript.setupHitTargetInterceptor(element, 'mouse', hitPoint, blockAllEvents)`.
+    # Playwright's iframe transform check and border/padding insets (`dom.ts`
+    # `_checkFrameIsHitTarget`). Transformed ancestors use only the event interceptor.
+    describeIFrameStyle:
+      internal: true
+      parameters:
+        element: Element
+      returns:
+        style: FrameStyle
+
+    # Checks the iframe owner in its parent document before arming in the child.
+    expectHitTarget:
+      internal: true
+      parameters:
+        element: Element
+        point: Point
+      returns:
+        outcome: HitTargetOutcome
+
+    # `InjectedScript.setupHitTargetInterceptor(element, action, hitPoint, blockAllEvents)`.
     # It retargets to the closest button or link, checks the hit point once, and arms the
-    # injected script's single hit-target slot for the coming mouse events.
+    # injected script's single hit-target slot for the coming input of `action`.
     setupHitTargetInterceptor:
       internal: true
       parameters:
         element: Element
+        # Which events the interceptor judges: Playwright's `actionType` (`dom.ts`).
+        action: HitTargetAction
         # The click point; absent skips the preliminary hit check.
         hitPoint: Point?
         # Playwright's `trial`: block every intercepted event, hit or not.
@@ -274,6 +453,21 @@ Injected:
       returns:
         outcome: HitTargetOutcome
 
+    # `crDragDrop.ts` `DragManager.interceptDragCausedByMove`'s `setupDragListeners`, run in every
+    # frame's utility world before a move that may start a drag: the next `mousemove` arms a
+    # once-only `dragstart` listener, which `cleanupDrag` reads.
+    setupDragListeners:
+      internal: true
+      returns:
+        armed: boolean
+
+    # `window.__cleanupDrag`: removes the listeners and answers whether the move started a drag
+    # the page did not prevent; `false` where nothing was armed.
+    cleanupDrag:
+      internal: true
+      returns:
+        started: boolean
+
     # One page evaluation of `dom.ts` `_fill`, including its state checks unless forced.
     fill:
       internal: true
@@ -281,6 +475,7 @@ Injected:
         element: Element
         value: string
         force: boolean
+        frameVisible: boolean
       returns:
         outcome: FormFillOutcome
 
@@ -293,6 +488,7 @@ Injected:
           type: array
           items: FormSelectOption
         force: boolean
+        frameVisible: boolean
       returns:
         # Present on success, including an empty selection.
         values:
@@ -300,6 +496,44 @@ Injected:
           items: string
         # Present when no selection was made.
         outcome: FormSelectOutcome?
+
+    # `selectOptions` with `ElementHandle` values: `dom.ts` `_selectOption` passes
+    # `[...elements, ...values]`, and `InjectedScript.selectOptions` matches an element value by
+    # node identity. `elements` are the handles' nodes adopted into this world, in order
+    # (`elementListOf`, `elementListWith`).
+    selectOptionsWithElements:
+      internal: true
+      parameters:
+        element: Element
+        elements: ElementList
+        options:
+          type: array
+          items: FormSelectOption
+        force: boolean
+        frameVisible: boolean
+      returns:
+        values:
+          type: array?
+          items: string
+        outcome: FormSelectOutcome?
+
+    # A list of one element (`selectOptionsWithElements`'s `elements`): a handle argument is
+    # passed by position, so a list of handles is built one page call per element.
+    elementListOf:
+      internal: true
+      parameters:
+        element: Element
+      returns:
+        list: ElementList
+
+    # `list` with `element` after its elements, as a new list.
+    elementListWith:
+      internal: true
+      parameters:
+        list: ElementList
+        element: Element
+      returns:
+        list: ElementList
 
     # Playwright's `ElementStateQueryResult` for a checkbox or radio button.
     elementState:
@@ -325,6 +559,56 @@ Injected:
       returns:
         outcome: FormFocusOutcome
 
+    # `InjectedScript.blurNode`, for `Frame.blur`.
+    blurElement:
+      internal: true
+      parameters:
+        element: Element
+      returns:
+        outcome: FormFocusOutcome
+
+    # `dom.ts` `selectText`'s page evaluation: unless `force`, `checkElementStates(['visible'])`,
+    # then `InjectedScript.selectText`, which selects an input's or textarea's value, or the
+    # element's contents, and focuses it.
+    selectText:
+      internal: true
+      parameters:
+        element: Element
+        force: boolean
+        frameVisible: boolean
+      returns:
+        outcome: SelectTextOutcome
+
+    # `frames.ts` `dispatchEvent`: resolves and marks the first match, then
+    # `InjectedScript.dispatchEvent(element, type, eventInit)`, in Neo's isolated world.
+    dispatchEvent:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+        type: string
+        # The event's init dictionary as JSON text: plain values, which neo-runtime decodes from
+        # the call's serialized argument.
+        eventInit: string
+      returns:
+        # `InjectedScript.previewNode` of the element the event went to; absent while nothing
+        # matches.
+        preview: string?
+
+    # `InjectedScript.setHighlights` for this document: each highlight is a frame chunk the page
+    # parses, and its CSS. An empty list clears them; the overlay follows its elements on every
+    # animation frame.
+    setHighlights:
+      internal: true
+      parameters:
+        highlights:
+          type: array
+          items: HighlightSpec
+
+    # `InjectedScript.hideHighlight`: removes this document's overlay.
+    hideHighlight:
+      internal: true
+
     # `frames.ts` `inputValue`: resolve and mark the first match, then follow its label.
     inputValue:
       internal: true
@@ -342,16 +626,6 @@ Injected:
       returns:
         value: int
 
-    # `locator.ts` `allTextContents`: one snapshot of every match's text in document order.
-    allTextContents:
-      internal: true
-      parameters:
-        selector: string
-      returns:
-        values:
-          type: array
-          items: string
-
 # `_fill` returns a string or the first missing state, without mutating when not ready.
 FormFillOutcome:
   type: union
@@ -363,6 +637,24 @@ FormFillOutcome:
       - done
       - error:notconnected
     missing: MissingState
+
+# `selectText`'s answer: done or detached, or the visibility it is missing.
+SelectTextOutcome:
+  type: union
+  members:
+    status:
+      type: enum
+      literals:
+      - done
+      - error:notconnected
+    missing: MissingState
+
+# One highlight of a document: a selector chunk of that document and the overlay's CSS.
+HighlightSpec:
+  type: object
+  properties:
+    selector: string
+    cssStyle: string?
 
 # The option selector fields of Playwright's `selectOptions` page helper.
 FormSelectOption:
@@ -404,6 +696,30 @@ FormInputValueMatch:
 # `HitTargetInterceptionResult`, bound in the glue's `satisfies` clause.
 HitTargetInterceptor:
   type: handle
+
+# A null-prototype object holding a query's elements as its own properties `0`, `1`, …
+ElementList:
+  type: handle
+
+# Unchanged `InjectedScript.describeIFrameStyle` result.
+FrameStyle:
+  type: union
+  members:
+    status: FrameStyleStatus
+    insets: FrameInsets
+
+FrameStyleStatus:
+  type: enum
+  literals:
+  - error:notconnected
+  - transformed
+
+# The iframe content origin relative to its border box.
+FrameInsets:
+  type: object
+  properties:
+    left: float
+    top: float
 
 # Playwright's `ElementState` (`injectedScript.ts`), every value, so the glue's `missingState`
 # result type-checks against Playwright's own union.
@@ -450,6 +766,17 @@ ScrollAlignment:
   - end
   - nearest
 
+# The input a hit-target interceptor judges, as `InjectedScript.setupHitTargetInterceptor` takes
+# it: `hover` judges `mousemove`, `tap` the pointer and touch events, `mouse` the presses and
+# clicks, and `drag` arms nothing.
+HitTargetAction:
+  type: enum
+  literals:
+  - hover
+  - tap
+  - mouse
+  - drag
+
 # Not armed, or armed. Not armed is a string: `error:notconnected`, or the `previewNode` of the
 # element covering the point (`<div id="overlay"></div>`), exactly as Playwright's
 # `setupHitTargetInterceptor` returns it; Playwright's `dom.ts` compares the same literal.
@@ -487,12 +814,22 @@ SelectorMatch:
     visible: boolean
     preview: string
 
-# The first match's checked state and preview, for `isChecked`.
-CheckedStateMatch:
+# The states `frames.ts` `_elementState` reads, one per `Frame.is*` command that waits for a
+# match.
+ReadableElementState:
+  type: enum
+  literals:
+  - checked
+  - enabled
+  - disabled
+  - editable
+
+# The first match's `ElementStateQueryResult` for one state, and its preview.
+ElementStateMatch:
   type: object
   properties:
-    # `ElementStateQueryResult.matches` for `checked`.
-    checked: boolean
+    # Whether the element is in the state asked for.
+    matches: boolean
     # `error:notconnected` ends the call as Playwright's `throwElementIsNotAttached` does.
     received: string?
     preview: string

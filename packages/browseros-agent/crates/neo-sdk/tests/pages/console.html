@@ -1,0 +1,24 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>console</title>
+<script>
+// The console, waitForEvent, consoleMessages and eventEmitter parity tests serve this page. It
+// logs twice and throws once while it loads, naming its query (`?second`) or `first`; each
+// button logs when clicked, and #throw throws. window.__logged counts the page's console calls,
+// so a test can tell each handler ran once.
+window.__logged = 2;
+window.__clicks = 0;
+console.log('loaded', location.search.slice(1) || 'first');
+console.warn('load warning');
+</script>
+<script>throw new Error(`load error ${location.search.slice(1) || 'first'}`);</script>
+</head><body>
+<button type="button" id="log" onclick="__logged++; console.log('click', ++__clicks)">Log</button>
+<button type="button" id="later" onclick="setTimeout(() => { __logged++; console.info('later') }, 50)">Later</button>
+<button type="button" id="types" onclick="__logged += 4; console.debug('debug'); console.info('info'); console.warn('warn'); console.error('error')">Types</button>
+<button type="button" id="pick" onclick="__logged += 2; console.log('skip me'); console.log('pick me')">Pick</button>
+<button type="button" id="format" onclick="__logged++; console.log('a', 1, { x: 1 }, [1, 2])">Format</button>
+<button type="button" id="previews" onclick="__logged++; console.log('%s is %d', { a: { b: 1 } }, [[1]], null, undefined, true, window)">Previews</button>
+<button type="button" id="empty" onclick="__logged++; console.log('')">Empty</button>
+<button type="button" id="element" onclick="__logged++; console.log('body', document.body)">Element</button>
+<button type="button" id="throw" onclick="throw new Error('click error')">Throw</button>
+<button type="button" id="broken" onclick="const image = new Image(); image.src = 'http://127.0.0.1:1/missing.png'; document.body.append(image)">Broken image</button>
+</body></html>

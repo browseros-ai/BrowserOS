@@ -7,13 +7,13 @@
 # then every type they reference, with Playwright's exact wire shapes.
 #
 # A reference to an interface that is not a key here gets an uninhabited type, so Rust cannot
-# produce one. `Frame.goto` returns `response: Response?`; Neo creates no `Response` objects
-# yet, so its result is always `{}`, which Playwright's client reads as a navigation without a
-# response (`page.goto` resolves to `null`). To serve responses, add `Response: []` (and
-# `Request: []`, which its initializer requires) and regenerate.
+# produce one. `Frame.goto` returns `response: Response?`: the main frame's navigation response,
+# as Playwright's server finds it, or `{}` where Playwright's has none (`page.goto` resolves to
+# `null`). A `Request`'s `serviceWorker: Worker?` stays uninhabited: Neo has no workers.
 interfaces:
   BrowserContext:
     - newPage
+    - close
   # A BrowserContext initializer requires these three. Neo never sends one (a run receives its
   # context at start) and serves no command on them; listing them keeps the type constructible.
   APIRequestContext: []
@@ -23,28 +23,119 @@ interfaces:
     - close
     - runBeforeUnload
     - bringToFront
+    # Element operations (element_ops.rs, highlight.rs): every highlight of the page.
+    - hideHighlight
+    # `page.keyboard`, `page.mouse` and `page.touchscreen` (neo-runtime `devices.rs`).
+    - keyboardDown
+    - keyboardUp
+    - keyboardInsertText
+    - keyboardType
+    - keyboardPress
+    - mouseMove
+    - mouseDown
+    - mouseUp
+    - mouseClick
+    - mouseWheel
+    - touchscreenTap
+    # History navigations answer the new document's `Response` as `Frame.goto` does, or `{}`
+    # where Playwright's has none: no history entry, a same-document entry, a restored document.
+    - reload
+    - goBack
+    - goForward
+    # The page's console and page-error history (`page.consoleMessages()`, `page.pageErrors()`).
+    # A message's `args` are JSHandles, which are not a key here, so they always travel empty.
+    - consoleMessages
+    - pageErrors
+    - clearConsoleMessages
+    - clearPageErrors
+    # The page's recent requests (`page.requests()`), as the run's network log recorded them.
+    - requests
+    # Locator handlers (locator_handlers.rs): the registry every action attempt checks before
+    # its input; `locatorHandlerTriggered` goes out through the run's event hub.
+    - registerLocatorHandler
+    - resolveLocatorHandlerNoReply
+    - unregisterLocatorHandler
+  # A JavaScript dialog the run's `dialog` event handed out.
+  Dialog:
+    - accept
+    - dismiss
+  # A download the run's `download` event handed out (neo-runtime `downloads.rs`). `stream` and
+  # `saveAsStream` stay unserved: they answer with a `Stream`, and QuickJS has none.
+  Artifact:
+    - pathAfterFinished
+    - saveAs
+    - failure
+    - cancel
+    - delete
+  # The objects behind `goto`'s answer and the run's network events: every request of the tab,
+  # each redirect hop, and their responses.
+  Request:
+    - response
+    - rawRequestHeaders
+  Response:
+    - body
+    - securityDetails
+    - serverAddr
+    - rawResponseHeaders
+    - httpVersion
+    - sizes
   Frame:
     - goto
     - title
     - textContent
     - ariaSnapshot
     - click
+    # Pointer actions over click's policy (neo-runtime `click.rs`), each with its own name.
+    - dblclick
+    - hover
+    - tap
     - fill
     - press
+    # `Locator.pressSequentially` and the deprecated `type`s: focus, then `Keyboard.type`
+    # (neo-runtime `press.rs`).
+    - type
+    # `Locator.dragTo` and `Page/Frame.dragAndDrop`: a move and down on the source, then a move
+    # and up on the target, over Chromium's drag manager (neo-runtime `drag.rs`).
+    - dragAndDrop
     - inputValue
     - isChecked
     - isVisible
     - check
     - uncheck
     - selectOption
-    # `locator.waitFor` sends it with `omitReturnValue: true`. `element` is an `ElementHandle`, which
-    # is not a key here, so its result is always `{}`; neo-runtime refuses any other
-    # `omitReturnValue` rather than answer "no element".
+    # `element` is an `ElementHandle`, which is not a key here: the generated result is always
+    # `{}`, and neo-runtime answers a found element as the record the SDK builds its
+    # `ElementHandle` from (`dispatch.rs` `wait_for_selector_reply`). `locator.waitFor` sends
+    # `omitReturnValue: true`. Every attempt first runs the page's action pre-checks (the locator
+    # handlers included), as Playwright's dispatcher asks.
     - waitForSelector
     - innerText
     - getAttribute
     - queryCount
-    - evalOnSelectorAll
+    # Element reads and states (states.rs, reads.rs): Playwright's `_elementState`,
+    # `isHidden` (`!isVisible`, one read) and `innerHTML`.
+    - isEnabled
+    - isDisabled
+    - isEditable
+    - isHidden
+    - innerHTML
+    # Document content and timing (content.rs): `content`, `setContent` (`document.open`,
+    # `write` and `close` in the utility world, then a lifecycle event of the new content),
+    # `waitForTimeout`, `resolveSelector` (`locator.normalize`), and `ariaSnapshotJSON`
+    # (reads.rs: the tree the YAML snapshot renders, as Playwright's JSON).
+    - content
+    - setContent
+    - waitForTimeout
+    - resolveSelector
+    - ariaSnapshotJSON
+    # Element operations (element_ops.rs, highlight.rs). `scrollIntoViewIfNeeded`, `selectText`
+    # and `boundingBox` are Neo commands (`neo:`), as Playwright's client reaches them only
+    # through an `ElementHandle`.
+    - focus
+    - blur
+    - dispatchEvent
+    - highlight
+    - hideHighlight
 
 # Named Playwright types the call bridge needs outside any command. `Metadata` is the `metadata`
 # of every protocol call; it carries the call's timeout, which is never a command parameter.

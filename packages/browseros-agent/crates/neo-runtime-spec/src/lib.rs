@@ -73,8 +73,9 @@
 //!   Decode page results with a raised limit, or cap `depth`.
 //! - `int` fields are `i64`. Decoding relies on CDP writing an integral double as a JSON
 //!   integer, `-0` included, because `serde_json` rejects a literal `-0` for an integer.
-//! - `Frame.goto` answers `response: None` until `spec/serve.yml` implements `Response`, so the
-//!   agent's client sees a `null` response.
+//! - `Frame.goto` answers `response` as a reference to a `Response` object, or `None` where
+//!   Playwright's client reads `null`. A `Request` initializer's `serviceWorker` stays `None`:
+//!   `Worker` is not served, so its reference type has no values.
 //! - An `Option` field decodes a JSON `null` as absent, which Playwright's validator would
 //!   reject. Encoding never writes `null`.
 
@@ -89,7 +90,7 @@ pub mod injected;
 #[rustfmt::skip]
 #[expect(
     clippy::large_enum_variant,
-    reason = "Frame.evalOnSelectorAll carries Playwright's full SerializedArgument wire value"
+    reason = "Frame.dispatchEvent carries Playwright's full SerializedArgument wire value"
 )]
 pub mod serve;
 #[rustfmt::skip]

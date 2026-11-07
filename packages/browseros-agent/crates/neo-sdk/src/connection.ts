@@ -2,16 +2,17 @@
  * The client half of Playwright's wire inside the realm (Playwright's `client/connection.ts`
  * and `channelOwner.ts` `_wrapApiCall` at 26137face, cut to what a run needs). Every browser
  * call goes through a `Connection` method typed by the interface its guid names (`send` for a
- * `Frame`, `sendPage`, `sendContext`, and `sendNeo` for Neo's own `neo:` frame commands,
- * `neo-commands.ts`): it captures the caller's location synchronously, builds Playwright's
- * `{id, guid, method, params, metadata}`, hands it to `runtime-bridge.ts`, and turns the reply
- * into a value or a Playwright-shaped error.
+ * `Frame`, `sendPage`, `sendContext`, `sendRequest`, `sendResponse`, and `sendNeo` for Neo's own
+ * `neo:` frame commands, `neo-commands.ts`): it captures the caller's location synchronously,
+ * builds Playwright's `{id, guid, method, params, metadata}`, hands it to `runtime-bridge.ts`,
+ * and turns the reply into a value or a Playwright-shaped error.
  *
  * ```text
  *  locator.click() → frame._click('locator.click', …) → send(): location, message
  *    → __neo_runtime.call(json)  ── Rust: dispatch.rs serves it on its own task ──▶
  *    ◀ '{"id":1}'  |  '{"error":{"error":{"message","name"}},"id":1,"log":[…]}'
  *    → undefined   |  throw rebuildError(apiName, error, log)
+ *  signal aborts meanwhile → __neo_runtime.abort(1, reason) → the reply is AbortError(reason)
  * ```
  *
  * Each public method passes its `apiName` (the `locator.click: ` prefix of an error)
@@ -20,20 +21,53 @@
  */
 
 import type {
+  ArtifactCommands,
   BrowserContextCommands,
+  DialogCommands,
   FrameCommands,
   Metadata,
   PageCommands,
+  RequestCommands,
+  ResponseCommands,
 } from '@browseros/neo-runtime-spec/serve'
-import { type PlaywrightError, parseError } from './errors'
+import {
+  AbortError,
+  isTargetClosedError,
+  type PlaywrightError,
+  parseError,
+  targetClosedError,
+} from './errors'
+import type { InitScriptCommands } from './init-script'
+import type { EvalFrameCommands, JSHandleCommands } from './js-handle'
 import type { NeoFrameCommands } from './neo-commands'
-import { call } from './runtime-bridge'
+import type { Request, Response } from './network'
+import { abort, call } from './runtime-bridge'
+import type { SignalLike, TimeoutOptions } from './timeout-settings'
 
 /** The public methods that send a browser call, named as Playwright's client names them. */
 export type ApiName =
+  | 'page.frame'
+  | 'keyboard.down'
+  | 'keyboard.up'
+  | 'keyboard.insertText'
+  | 'keyboard.type'
+  | 'keyboard.press'
+  | 'mouse.move'
+  | 'mouse.down'
+  | 'mouse.up'
+  | 'mouse.click'
+  | 'mouse.dblclick'
+  | 'mouse.wheel'
+  | 'touchscreen.tap'
   | 'locator.click'
+  | 'locator.dblclick'
+  | 'locator.hover'
+  | 'locator.tap'
   | 'locator.fill'
   | 'locator.press'
+  | 'locator.pressSequentially'
+  | 'locator.dragTo'
+  | 'locator.type'
   | 'locator.inputValue'
   | 'locator.isChecked'
   | 'locator.isVisible'
@@ -43,8 +77,13 @@ export type ApiName =
   | 'locator.selectOption'
   | 'locator.clear'
   | 'page.click'
+  | 'page.dblclick'
+  | 'page.hover'
+  | 'page.tap'
   | 'page.fill'
   | 'page.press'
+  | 'page.type'
+  | 'page.dragAndDrop'
   | 'page.inputValue'
   | 'page.isChecked'
   | 'page.isVisible'
@@ -53,6 +92,9 @@ export type ApiName =
   | 'page.setChecked'
   | 'page.selectOption'
   | 'frame.click'
+  | 'frame.dblclick'
+  | 'frame.hover'
+  | 'frame.tap'
   | 'page.goto'
   | 'frame.goto'
   | 'page.title'
@@ -70,8 +112,20 @@ export type ApiName =
   | 'locator.allTextContents'
   | 'page.ariaSnapshot'
   | 'locator.ariaSnapshot'
+  // Document content and timing (B3).
+  | 'frame.content'
+  | 'page.content'
+  | 'frame.setContent'
+  | 'page.setContent'
+  | 'frame.waitForTimeout'
+  | 'page.waitForTimeout'
+  | 'locator.normalize'
+  | 'locator.ariaSnapshotJSON'
+  | 'page.ariaSnapshotJSON'
   | 'frame.fill'
   | 'frame.press'
+  | 'frame.type'
+  | 'frame.dragAndDrop'
   | 'frame.inputValue'
   | 'frame.isChecked'
   | 'frame.isVisible'
@@ -80,13 +134,130 @@ export type ApiName =
   | 'frame.setChecked'
   | 'frame.selectOption'
   | 'browserContext.newPage'
+  | 'browserContext.close'
   | 'page.close'
   | 'page.bringToFront'
+  | 'page.addLocatorHandler'
+  | 'page.waitForSelector'
+  | 'frame.waitForSelector'
+  | 'frame.frameElement'
+  | 'page.removeLocatorHandler'
   | 'locator.waitFor'
   | 'page.waitForURL'
   | 'frame.waitForURL'
   | 'page.waitForLoadState'
   | 'frame.waitForLoadState'
+  | 'page.waitForNavigation'
+  | 'frame.waitForNavigation'
+  | 'page.reload'
+  | 'page.goBack'
+  | 'page.goForward'
+  | 'request.response'
+  | 'request.allHeaders'
+  | 'request.headersArray'
+  | 'request.headerValue'
+  | 'request.sizes'
+  | 'response.allHeaders'
+  | 'response.headersArray'
+  | 'response.headerValue'
+  | 'response.headerValues'
+  | 'response.body'
+  | 'response.text'
+  | 'response.json'
+  | 'response.serverAddr'
+  | 'response.securityDetails'
+  | 'response.httpVersion'
+  | 'page.evaluate'
+  | 'page.evaluateHandle'
+  | 'frame.evaluate'
+  | 'frame.evaluateHandle'
+  | 'locator.evaluate'
+  | 'jsHandle.evaluate'
+  | 'jsHandle.evaluateHandle'
+  | 'jsHandle.jsonValue'
+  | 'jsHandle.dispose'
+  | 'elementHandle.evaluate'
+  | 'elementHandle.evaluateHandle'
+  | 'elementHandle.jsonValue'
+  | 'elementHandle.dispose'
+  | 'jsHandle.getProperty'
+  | 'jsHandle.getProperties'
+  | 'elementHandle.getProperty'
+  | 'elementHandle.getProperties'
+  | 'elementHandle.$'
+  | 'elementHandle.$$'
+  | 'elementHandle.$eval'
+  | 'elementHandle.$$eval'
+  | 'elementHandle.dispatchEvent'
+  | 'page.addInitScript'
+  | 'browserContext.addInitScript'
+  | 'disposable.dispose'
+  | 'page.addScriptTag'
+  | 'page.addStyleTag'
+  | 'frame.addScriptTag'
+  | 'frame.addStyleTag'
+  | 'page.$'
+  | 'page.$$'
+  | 'page.$eval'
+  | 'page.$$eval'
+  | 'frame.$'
+  | 'frame.$$'
+  | 'frame.$eval'
+  | 'frame.$$eval'
+  | 'page.waitForFunction'
+  | 'frame.waitForFunction'
+  | 'locator.evaluateHandle'
+  | 'locator.evaluateAll'
+  | 'locator.elementHandle'
+  | 'locator.elementHandles'
+  | 'page.waitForEvent'
+  | 'browserContext.waitForEvent'
+  | 'page.consoleMessages'
+  | 'page.waitForRequest'
+  | 'page.waitForResponse'
+  | 'page.requests'
+  | 'page.pageErrors'
+  | 'page.clearConsoleMessages'
+  | 'page.clearPageErrors'
+  | 'dialog.accept'
+  | 'dialog.dismiss'
+  | 'download.path'
+  | 'download.saveAs'
+  | 'download.failure'
+  | 'download.cancel'
+  | 'download.delete'
+  // Element reads and states (B1).
+  | 'locator.isEnabled'
+  | 'page.isEnabled'
+  | 'frame.isEnabled'
+  | 'locator.isDisabled'
+  | 'page.isDisabled'
+  | 'frame.isDisabled'
+  | 'locator.isEditable'
+  | 'page.isEditable'
+  | 'frame.isEditable'
+  | 'locator.isHidden'
+  | 'page.isHidden'
+  | 'frame.isHidden'
+  | 'locator.innerHTML'
+  | 'page.innerHTML'
+  | 'frame.innerHTML'
+  | 'locator.allInnerTexts'
+  | 'locator.all'
+  // Element operations (B2).
+  | 'locator.focus'
+  | 'page.focus'
+  | 'frame.focus'
+  | 'locator.blur'
+  | 'locator.dispatchEvent'
+  | 'page.dispatchEvent'
+  | 'frame.dispatchEvent'
+  | 'locator.scrollIntoViewIfNeeded'
+  | 'locator.selectText'
+  | 'locator.boundingBox'
+  | 'locator.highlight'
+  | 'locator.hideHighlight'
+  | 'page.hideHighlight'
 
 /** Playwright's wire error, `{error: {name, message}}`'s inner object. */
 export type WireError = { name: string; message: string }
@@ -118,6 +289,18 @@ const AGENT_FRAME = /^ {4}at .* \(<input>:(\d+):(\d+)\)$/
 export class Connection {
   #nextId = 1
   readonly #lineOffset: number
+  /** Set once the run's context closed (`BrowserContext.close`): every later call fails as
+   * closed before it reaches Rust. */
+  #closed = false
+  /** What rejects each call still waiting for its reply, with the context's close reason. */
+  readonly #inFlight = new Set<(reason: string | undefined) => void>()
+  /** The close reason a call's page gave (`page.close({ reason })`), by the call's guid, and
+   * whether that page already reads closed: only the calls its close interrupted get the reason. */
+  _closeReasonFor: (guid: string) => string | undefined = () => undefined
+  _closedFor: (guid: string) => boolean = () => false
+  /** Every `Request` and `Response` built so far, by guid, as Playwright's connection keeps its
+   * objects: one guid is always one object (`network.ts` `responseFor`). */
+  readonly _objects = new Map<string, Request | Response>()
 
   /** `lineOffset`: lines the realm's `AsyncFunction` wrapper puts before the agent's line 1. */
   constructor(lineOffset: number) {
@@ -126,15 +309,16 @@ export class Connection {
 
   /**
    * Sends one `Frame` call and resolves with its result, `undefined` for a void method such
-   * as `click`, whose reply has no `result`. `timeout` is the resolved action timeout in ms,
-   * `0` for none; it travels in `metadata`, never in params.
+   * as `click`, whose reply has no `result`. `timeout` is what `TimeoutSettings` resolved, the
+   * timeout in ms (`0` for none) and the `signal` that aborts the call, or a bare number for a
+   * call Playwright sends without a signal (`kNoTimeout`). Neither travels in params.
    */
   async send<M extends keyof FrameCommands>(
     apiName: ApiName,
     guid: string,
     method: M,
     params: FrameCommands[M]['params'],
-    timeout: number,
+    timeout: number | TimeoutOptions,
   ): Promise<FrameCommands[M]['result'] | undefined> {
     return (await this.#send(apiName, guid, method, params, timeout)) as
       | FrameCommands[M]['result']
@@ -147,7 +331,7 @@ export class Connection {
     guid: string,
     method: M,
     params: PageCommands[M]['params'],
-    timeout: number,
+    timeout: number | TimeoutOptions,
   ): Promise<Resolved<PageCommands[M]['result']>> {
     return (await this.#send(
       apiName,
@@ -164,7 +348,7 @@ export class Connection {
     guid: string,
     method: M,
     params: BrowserContextCommands[M]['params'],
-    timeout: number,
+    timeout: number | TimeoutOptions,
   ): Promise<Resolved<BrowserContextCommands[M]['result']>> {
     return (await this.#send(
       apiName,
@@ -173,6 +357,74 @@ export class Connection {
       params,
       timeout,
     )) as Resolved<BrowserContextCommands[M]['result']>
+  }
+
+  /** {@link Connection.send} for a `Request` command, to a hop's `request@…` guid. */
+  async sendRequest<M extends keyof RequestCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: RequestCommands[M]['params'],
+    timeout: number | TimeoutOptions,
+  ): Promise<RequestCommands[M]['result']> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as RequestCommands[M]['result']
+  }
+
+  /** {@link Connection.send} for a `Response` command, to a hop's `response@…` guid. */
+  async sendResponse<M extends keyof ResponseCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: ResponseCommands[M]['params'],
+    timeout: number | TimeoutOptions,
+  ): Promise<ResponseCommands[M]['result']> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as ResponseCommands[M]['result']
+  }
+
+  /** {@link Connection.send} for a `Dialog` command, to a `dialog@…` guid. */
+  async sendDialog<M extends keyof DialogCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: DialogCommands[M]['params'],
+    timeout: number | TimeoutOptions,
+  ): Promise<Resolved<DialogCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<DialogCommands[M]['result']>
+  }
+
+  /** {@link Connection.send} for an `Artifact` command, to a `download@…` guid. */
+  async sendArtifact<M extends keyof ArtifactCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: ArtifactCommands[M]['params'],
+    timeout: number,
+  ): Promise<Resolved<ArtifactCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<ArtifactCommands[M]['result']>
   }
 
   /**
@@ -185,7 +437,7 @@ export class Connection {
     guid: string,
     method: M,
     params: NeoFrameCommands[M]['params'],
-    timeout: number,
+    timeout: number | TimeoutOptions,
   ): Promise<Resolved<NeoFrameCommands[M]['result']>> {
     return (await this.#send(
       apiName,
@@ -194,6 +446,50 @@ export class Connection {
       params,
       timeout,
     )) as Resolved<NeoFrameCommands[M]['result']>
+  }
+
+  /** {@link Connection.send} for an evaluation on a frame guid (`js-handle.ts`): Playwright's
+   * `Frame.evaluateExpression(Handle)`, whose `arg` is already in the page's format. */
+  async sendEval<M extends keyof EvalFrameCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: EvalFrameCommands[M]['params'],
+    timeout: number | TimeoutOptions,
+  ): Promise<EvalFrameCommands[M]['result']> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as EvalFrameCommands[M]['result']
+  }
+
+  /** {@link Connection.send} for an init script command (`init-script.ts`): `addInitScript` on a
+   * page or the context, `dispose` on a script's `disposable@` guid. */
+  async sendInit<M extends keyof InitScriptCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: InitScriptCommands[M]['params'],
+    timeout: number,
+  ): Promise<InitScriptCommands[M]['result']> {
+    return ((await this.#send(apiName, guid, method, params, timeout)) ??
+      {}) as InitScriptCommands[M]['result']
+  }
+
+  /** {@link Connection.send} for a `JSHandle` command, to a handle's `handle@<n>` guid. A void
+   * command (`dispose`) resolves `undefined`. */
+  async sendHandle<M extends keyof JSHandleCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: JSHandleCommands[M]['params'],
+    timeout: number | TimeoutOptions,
+  ): Promise<JSHandleCommands[M]['result']> {
+    return ((await this.#send(apiName, guid, method, params, timeout)) ??
+      {}) as JSHandleCommands[M]['result']
   }
 
   /**
@@ -208,17 +504,120 @@ export class Connection {
     guid: string,
     method: string,
     params: unknown,
-    timeout: number,
+    options: number | TimeoutOptions,
   ): Promise<unknown> {
+    const { timeout, signal } =
+      typeof options === 'number'
+        ? { timeout: options, signal: undefined }
+        : options
+    if (this.#closed) throw closedError(apiName)
+    // Playwright's client checks before it sends anything, so the browser sees nothing.
+    if (signal?.aborted)
+      throw prefixed(
+        apiName,
+        new AbortError(undefined, { cause: signal.reason }),
+      )
+    // Playwright's server validates every call's metadata (`dispatcher.ts`, `tOptional(tFloat)`):
+    // `setDefaultTimeout(null)` resolves a timeout to `null`, which rejects the call before it
+    // runs. Rust's serde would read it as no timeout and run the call.
+    if (typeof timeout !== 'number')
+      throw new Error(
+        `timeout: expected float, got ${timeout === null ? 'object' : typeof timeout}`,
+      )
     const metadata: Metadata = {
       location: captureLocation(this.#lineOffset),
       timeout,
     }
-    const message = { id: this.#nextId++, guid, method, params, metadata }
-    const reply: Reply = JSON.parse(await call(JSON.stringify(message)))
-    if (reply.error) throw rebuildError(apiName, reply.error.error, reply.log)
+    const closedBefore = this._closedFor(guid)
+    const id = this.#nextId++
+    const message = { id, guid, method, params, metadata }
+    const pending = new Promise<string>((resolve, reject) => {
+      const abandon = (reason: string | undefined) =>
+        reject(closedError(apiName, reason))
+      this.#inFlight.add(abandon)
+      call(JSON.stringify(message))
+        .then(resolve, reject)
+        .finally(() => this.#inFlight.delete(abandon))
+    })
+    // Rust has registered the call by the time `call` returns, so an abort from now on reaches it.
+    let listener: (() => void) | undefined
+    try {
+      listener = signal ? listenForAbort(apiName, id, signal) : undefined
+    } catch (error) {
+      pending.catch(() => {})
+      throw error
+    }
+    let text: string
+    try {
+      text = await pending
+    } finally {
+      if (signal && listener) signal.removeEventListener('abort', listener)
+    }
+    const reply: Reply = JSON.parse(text)
+    if (reply.error) {
+      const error = rebuildError(apiName, reply.error.error, reply.log, signal)
+      // As in Playwright, whose server closes a page's open calls with its close reason, the
+      // reason a page's close gave reaches the calls it interrupted.
+      const reason =
+        isTargetClosedError(error) && !closedBefore
+          ? this._closeReasonFor(guid)
+          : undefined
+      if (reason)
+        error.message = `${apiName}: ${reason}${formatCallLog(reply.log)}`
+      throw error
+    }
     return reply.result
   }
+
+  /**
+   * The run's context closed: calls still waiting for a reply reject at once, with `reason`
+   * when the close gave one, and every later call fails as closed. A call Rust was serving
+   * finishes there on its own; its record in the run's outcome says what it did.
+   */
+  _close(reason: string | undefined): void {
+    this.#closed = true
+    for (const abandon of this.#inFlight) abandon(reason)
+    this.#inFlight.clear()
+  }
+}
+
+/** Playwright's `TargetClosedError` for a call on a closed context, `<apiName>: ` first. */
+function closedError(apiName: ApiName, reason?: string): PlaywrightError {
+  const error = targetClosedError(reason)
+  error.message = `${apiName}: ${error.message}`
+  return error
+}
+
+/**
+ * Playwright's `sendMessageToServer` abort listener, added after the call is sent: once `signal`
+ * aborts, Rust aborts the call (`__abort__ {id, reason}`). A reason that is an `Error` sends its
+ * message, anything else its `String(…)`. A `signal` without `addEventListener` throws its
+ * `TypeError` here, after the call went out, as Playwright's does; the call still runs.
+ */
+function listenForAbort(
+  apiName: ApiName,
+  id: number,
+  signal: SignalLike,
+): () => void {
+  const listener = () => {
+    const reason =
+      signal.reason instanceof Error
+        ? signal.reason.message
+        : String(signal.reason)
+    abort(id, reason)
+  }
+  try {
+    signal.addEventListener('abort', listener, { once: true })
+  } catch (error) {
+    throw prefixed(apiName, error)
+  }
+  return listener
+}
+
+/** Playwright's `_wrapApiCall` prefix on an error raised inside the call. */
+function prefixed(apiName: ApiName, error: unknown): unknown {
+  if (error instanceof Error) error.message = `${apiName}: ${error.message}`
+  return error
 }
 
 /**
@@ -261,8 +660,12 @@ export function rebuildError(
   apiName: ApiName,
   error: WireError,
   log: string[] | undefined,
+  signal?: SignalLike | null,
 ): PlaywrightError {
   const rebuilt = parseError(error)
+  // An aborted call's error carries what the script aborted with, as Playwright's `dispatch` sets.
+  if (signal?.aborted && rebuilt instanceof AbortError)
+    rebuilt.cause = signal.reason
   rebuilt.log = log || []
   rebuilt.message = `${apiName}: ${rebuilt.message}${formatCallLog(log)}`
   return rebuilt

@@ -7,18 +7,26 @@
 //!   ├─ Tabs::open                        tabs.rs: context scope, ordered page registry
 //!   └─ realm::run                        realm.rs: fresh QuickJS and embedded neo-sdk
 //!        └─ __neo_runtime                bridge.rs: JS/Rust boundary
-//!             ├─ get → Tabs              live pages, URL, initializer and closed state
+//!             ├─ get → Tabs              live pages, URL, initializer, opener and closed state
+//!             ├─ subscribe → EventHub    events.rs: the run's event queue; producers:
+//!             │                          page_events.rs (one tab's watcher), frame_events.rs
+//!             │                          (its frame tree), discovery.rs (new tabs, popups)
 //!             └─ Dispatcher::call        dispatch.rs: target routing, task, trace, reply
 //!                  ├─ tab_calls          context/page lifecycle; tracked creation and cleanup
 //!                  └─ Tabs::session      one lazy session for the call's page
 //!                       ├─ click::click  click.rs: policy over the Tab seam
-//!                       ├─ navigate      navigate.rs: goto (commits, lifecycle) and live title
+//!                       ├─ navigate      navigate.rs: goto (commits, lifecycle, response) and title
+//!                       ├─ responses     responses.rs: Request/Response commands on goto's answer
 //!                       ├─ reads         reads.rs: textContent, innerText, getAttribute,
 //!                       │                ariaSnapshot;
 //!                       │                aria_yaml.rs renders the snapshot as Playwright's YAML
 //!                       ├─ waits         waits.rs: selector, URL and lifecycle waits; no input lock
-//!                       └─ PageSession   page.rs: domains, watcher, document state, input
-//!                            └─ World    world.rs: per-document injected glue
+//!                       └─ FrameTab      one frame scope over PageSession
+//!                            ├─ PageSession: shared input, watcher and navigation
+//!                            │    └─ NetworkLog  network.rs: the main frame's navigation requests
+//!                            └─ frame_selector::locate → Frames → FrameContext
+//!                                 ├─ Host: tab or child target CDP session
+//!                                 └─ World: per-document injected glue
 //! ```
 //!
 //! The registry and session writers share each `PageSession`. Its last owner detaches the
@@ -41,26 +49,53 @@ extern crate self as neo_runtime;
 )]
 mod fake_browser;
 
+mod abort;
 mod aria_yaml;
 mod bridge;
 mod check;
 mod click;
+mod console;
+mod content;
 mod deadline;
+mod devices;
+mod dialogs;
+mod discovery;
 mod dispatch;
+mod downloads;
+mod drag;
+mod element_ops;
+mod evaluate;
+mod events;
 mod fill;
 mod forms;
+mod frame_element;
+mod frame_events;
+mod frame_selector;
+mod frames;
 mod getters;
+mod highlight;
+mod history;
+mod init_scripts;
+mod input_devices;
 mod keyboard;
 mod lists;
+mod locator_handlers;
+mod main_world;
 mod navigate;
+mod network;
+mod network_events;
+mod network_idle;
 mod page;
+mod page_events;
 mod press;
 mod progress;
 mod reads;
 mod realm;
+mod responses;
 mod run;
 mod runtime;
 mod states;
+mod switch;
 mod tab_calls;
 mod tabs;
 mod url_match;

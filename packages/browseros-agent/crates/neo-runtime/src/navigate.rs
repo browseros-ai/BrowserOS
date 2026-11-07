@@ -1,7 +1,10 @@
-//! Main-frame navigation and title policy. CDP lives in `page.rs`; this seam keeps event
-//! ordering, lifecycle waits and cancellation testable without a browser or input turns.
+//! Main-frame navigation and title policy. CDP lives in `page.rs` and the navigation's network
+//! record in `network.rs`; this seam keeps event ordering, lifecycle waits, the response lookup
+//! and cancellation testable without a browser or input turns.
 
-use neo_runtime_spec::serve::{FrameGotoParams, FrameGotoResult, FrameTitleResult, LifecycleEvent};
+use neo_runtime_spec::serve::{
+    FrameGotoParams, FrameGotoResult, FrameTitleResult, LifecycleEvent, ResponseChannel,
+};
 use url::Url;
 
 use crate::click::PageError;
@@ -16,26 +19,31 @@ pub(crate) struct GotoOptions {
 }
 
 impl GotoOptions {
-    pub(crate) fn from_params(params: FrameGotoParams) -> Result<Self, PlaywrightError> {
-        if params.wait_until == Some(LifecycleEvent::Networkidle) {
-            return Err(PlaywrightError::error(
-                "Neo does not support waitUntil: \"networkidle\" yet",
-            ));
-        }
-        Ok(Self {
+    pub(crate) fn from_params(params: FrameGotoParams) -> Self {
+        Self {
             url: params.url,
             wait_until: params.wait_until.unwrap_or(LifecycleEvent::Load),
             referer: params.referer,
-        })
+        }
     }
 }
 
-/// One committed main-frame navigation; `None` identifies a same-document commit.
+/// One navigation event of a frame, Playwright's `NavigationEvent`: a commit, where `document`
+/// `None` identifies a same-document one, or, with `error`, the frame's pending navigation
+/// failing before it committed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Navigation {
     pub(crate) document: Option<String>,
     pub(crate) url: String,
     pub(crate) lifecycle: Lifecycle,
+    /// Playwright's `newDocument.request` is set: the watcher saw this document's navigation
+    /// request start before it committed, so the network log holds its response. A document
+    /// restored from the back-forward cache, or one whose request started before `Network.enable`,
+    /// has none, and a navigation wait answers `null` for it.
+    pub(crate) request: bool,
+    /// The failure text of the pending navigation's request; `url` is then the frame's current
+    /// URL and `document` the navigation that failed.
+    pub(crate) error: Option<String>,
 }
 
 /// Flags for the current document, and counts across every document since the watcher started.
@@ -46,6 +54,10 @@ pub(crate) struct Lifecycle {
     pub(crate) load: bool,
     pub(crate) dom_content_loaded_count: u64,
     pub(crate) load_count: u64,
+    /// `networkidle`, which Playwright computes itself (`network_idle.rs`); unlike the others it
+    /// can also be removed again before the next commit.
+    pub(crate) network_idle: bool,
+    pub(crate) network_idle_count: u64,
 }
 
 /// The current URL and lifecycle, sampled without consuming buffered commits.
@@ -68,6 +80,16 @@ pub(crate) trait NavigationTab: Sync {
     type Observation: Observation;
 
     async fn prepare(&self) -> Result<(), PageError>;
+    /// Starts recording the page's navigation requests, once per session, and answers how many
+    /// times the recording has lagged so far.
+    async fn track_network(&self) -> Result<u64, PageError>;
+    /// The committed `document`'s navigation response, once known: `None` where Playwright's
+    /// goto answers `null`. A lag since `lags` that may have lost it is an error.
+    async fn navigation_response(
+        &self,
+        document: &str,
+        lags: u64,
+    ) -> Result<Option<ResponseChannel>, PlaywrightError>;
     fn observe(&self) -> Result<Self::Observation, PageError>;
     async fn navigate(
         &self,
@@ -98,12 +120,7 @@ pub(crate) async fn goto(
         LifecycleEvent::Commit => "commit",
         LifecycleEvent::Domcontentloaded => "domcontentloaded",
         LifecycleEvent::Load => "load",
-        LifecycleEvent::Networkidle => {
-            return Err(PlaywrightError::error(
-                "Neo does not support waitUntil: \"networkidle\" yet",
-            )
-            .into());
-        }
+        LifecycleEvent::Networkidle => "networkidle",
     };
     progress.log(format!(
         "navigating to \"{url}\", waiting until \"{wait_until}\""
@@ -114,6 +131,11 @@ pub(crate) async fn goto(
         url
     };
     progress.race(tab.prepare()).await?.map_err(page_error)?;
+    // Before `Page.navigate`: the navigation's request events come first and are never replayed.
+    let lags = progress
+        .race(tab.track_network())
+        .await?
+        .map_err(page_error)?;
     let mut events = tab.observe().map_err(page_error)?;
     // The subscription outlives the request: commits can arrive before its acknowledgement.
     let reply = progress
@@ -130,6 +152,13 @@ pub(crate) async fn goto(
         let Some(navigation) = progress.race(events.next()).await?.map_err(page_error)? else {
             continue;
         };
+        // server/frames.ts gotoImpl: another document's failure is not this navigation's.
+        if let Some(error) = navigation.error {
+            if document.is_some() && navigation.document == document {
+                return Err(PlaywrightError::error(error).into());
+            }
+            continue;
+        }
         match (&document, &navigation.document) {
             (Some(expected), Some(actual)) if expected != actual => {
                 return Err(PlaywrightError::error(format!(
@@ -148,10 +177,20 @@ pub(crate) async fn goto(
             LifecycleEvent::Commit => true,
             LifecycleEvent::Domcontentloaded => state.lifecycle.dom_content_loaded,
             LifecycleEvent::Load => state.lifecycle.load,
-            LifecycleEvent::Networkidle => false,
+            LifecycleEvent::Networkidle => state.lifecycle.network_idle,
         };
         if done {
-            return Ok(FrameGotoResult { response: None });
+            // server/frames.ts:750: the new document's request, after its redirects, and that
+            // request's response; a same-document navigation has neither.
+            let response = match &document {
+                Some(document) => {
+                    progress
+                        .race(tab.navigation_response(document, lags))
+                        .await??
+                }
+                None => None,
+            };
+            return Ok(FrameGotoResult { response });
         }
         progress.race(events.next()).await?.map_err(page_error)?;
     }
@@ -200,7 +239,7 @@ async fn pending_url(events: &mut impl Observation) -> Result<String, PageError>
     }
 }
 
-fn page_error(error: PageError) -> PlaywrightError {
+pub(crate) fn page_error(error: PageError) -> PlaywrightError {
     match error {
         PageError::Closed => PlaywrightError::target_closed(),
         PageError::Threw(message) | PageError::Contract(message) => PlaywrightError::error(message),
@@ -266,6 +305,11 @@ mod tests {
         title_pending: bool,
         document: Mutex<Option<(String, Option<String>)>>,
         observed: Arc<Mutex<NavigationState>>,
+        /// What the page did, in order, for the calls whose order matters.
+        calls: Mutex<Vec<String>>,
+        /// The navigation response the page's network log answers, after `response_after` ms.
+        response: Result<Option<ResponseChannel>, PlaywrightError>,
+        response_after: u64,
     }
 
     impl FakeTab {
@@ -282,7 +326,16 @@ mod tests {
                 title_pending: false,
                 document: Mutex::new(None),
                 observed: Arc::default(),
+                calls: Mutex::default(),
+                response: Ok(Some(ResponseChannel {
+                    guid: "response@T:new:0".to_string(),
+                })),
+                response_after: 0,
             }
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().expect("calls").clone()
         }
     }
 
@@ -307,11 +360,36 @@ mod tests {
             })
         }
 
+        fn track_network(&self) -> impl Future<Output = Result<u64, PageError>> {
+            self.calls
+                .lock()
+                .expect("calls")
+                .push("track network".to_string());
+            future::ready(Ok(7))
+        }
+
+        async fn navigation_response(
+            &self,
+            document: &str,
+            lags: u64,
+        ) -> Result<Option<ResponseChannel>, PlaywrightError> {
+            self.calls
+                .lock()
+                .expect("calls")
+                .push(format!("response of {document} since {lags} lags"));
+            time::sleep(Duration::from_millis(self.response_after)).await;
+            self.response.clone()
+        }
+
         async fn navigate(
             &self,
             url: &str,
             referer: Option<&str>,
         ) -> Result<NavigateReply, PlaywrightError> {
+            self.calls
+                .lock()
+                .expect("calls")
+                .push("navigate".to_string());
             *self.document.lock().expect("page document") =
                 Some((url.to_string(), referer.map(str::to_string)));
             time::sleep(Duration::from_millis(self.reply_after)).await;
@@ -337,6 +415,8 @@ mod tests {
                 document: document.map(str::to_string),
                 url: "https://other.test/".to_string(),
                 lifecycle: Lifecycle::default(),
+                request: document.is_some(),
+                error: None,
             }),
             state: NavigationState::default(),
         }
@@ -399,9 +479,87 @@ mod tests {
             let (progress, _) = progress(100.0);
             assert_eq!(
                 goto(&tab, &options(LifecycleEvent::Commit), &progress).await,
-                Ok(FrameGotoResult { response: None })
+                Ok(FrameGotoResult {
+                    response: Some(ResponseChannel {
+                        guid: "response@T:new:0".to_string()
+                    })
+                })
             );
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_goto_answers_the_committed_documents_response() {
+        let tab = FakeTab::new([commit(1, Some("new")), lifecycle(10, true, true)]);
+        let (progress, _) = progress(100.0);
+        let result = goto(&tab, &options(LifecycleEvent::Load), &progress).await;
+        assert_eq!(
+            result.map(|result| result.response),
+            Ok(Some(ResponseChannel {
+                guid: "response@T:new:0".to_string()
+            }))
+        );
+        assert_eq!(
+            tab.calls(),
+            ["track network", "navigate", "response of new since 7 lags"],
+            "the network is tracked before the navigation starts, and the response looked up \
+             for the document the navigation committed"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_goto_answers_null_where_the_navigation_has_no_response() {
+        let mut tab = FakeTab::new([commit(1, Some("new")), lifecycle(10, true, true)]);
+        tab.response = Ok(None);
+        let (progress, _) = progress(100.0);
+        let result = goto(&tab, &options(LifecycleEvent::Load), &progress).await;
+        assert_eq!(result, Ok(FrameGotoResult { response: None }));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_same_document_navigation_answers_null_without_a_lookup() {
+        let mut step = commit(1, None);
+        step.state = NavigationState {
+            lifecycle: Lifecycle {
+                dom_content_loaded: true,
+                load: true,
+                ..Lifecycle::default()
+            },
+            ..NavigationState::default()
+        };
+        let mut tab = FakeTab::new([step]);
+        tab.reply = Ok(NavigateReply::default());
+        let (progress, _) = progress(100.0);
+        let result = goto(&tab, &options(LifecycleEvent::Load), &progress).await;
+        assert_eq!(result, Ok(FrameGotoResult { response: None }));
+        assert!(
+            !tab.calls()
+                .iter()
+                .any(|call| call.starts_with("response of")),
+            "{:?}",
+            tab.calls()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_the_response_wait_shares_the_navigation_timeout() {
+        let mut tab = FakeTab::new([commit(1, Some("new")), lifecycle(10, true, true)]);
+        tab.response_after = 1_000;
+        let (progress, _) = progress(100.0);
+        let error = failure(goto(&tab, &options(LifecycleEvent::Load), &progress).await);
+        assert_eq!(error.name, ErrorName::TimeoutError);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_lost_network_events_reject_instead_of_guessing() {
+        let mut tab = FakeTab::new([commit(1, Some("new")), lifecycle(10, true, true)]);
+        tab.response = Err(PlaywrightError::error("lost"));
+        let (progress, _) = progress(100.0);
+        let error = failure(goto(&tab, &options(LifecycleEvent::Load), &progress).await);
+        assert_eq!(
+            (error.name, error.message.as_str()),
+            (ErrorName::Error, "lost")
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -524,15 +682,13 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_networkidle_is_refused_before_any_work() {
-        let error = GotoOptions::from_params(FrameGotoParams {
+    fn tests_that_networkidle_is_a_wait_like_the_others() {
+        let options = GotoOptions::from_params(FrameGotoParams {
             url: "x".to_string(),
             wait_until: Some(LifecycleEvent::Networkidle),
             referer: None,
-        })
-        .unwrap_err();
-        assert_eq!(error.name, ErrorName::Error);
-        assert!(error.message.contains("networkidle"));
+        });
+        assert_eq!(options.wait_until, LifecycleEvent::Networkidle);
     }
 
     #[tokio::test(start_paused = true)]

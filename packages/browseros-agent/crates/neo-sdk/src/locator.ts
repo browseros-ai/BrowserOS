@@ -3,7 +3,8 @@
  * built by Playwright's own code: the method bodies here are Playwright's, over the vendored,
  * unchanged `locatorUtils.ts` and `stringUtils.ts`. That is what makes Neo's selectors
  * byte-identical to Playwright's, inside QuickJS too (`neo-runtime/tests/selector_goldens.rs`
- * runs the 94 goldens in `tests/goldens/selector-goldens.json` through the realm).
+ * runs `tests/goldens/*selector-goldens.json` through the realm). `toString` and `description`
+ * read a selector back with Playwright's vendored, unchanged `locatorGenerators.ts`.
  *
  * What differs from Playwright, all listed here:
  * - Imports point at the vendored copies; `isString` comes straight from `stringUtils.ts`,
@@ -11,22 +12,23 @@
  * - The constructor drops Playwright's `inspect.custom` hook (Node's `util`, absent in QuickJS).
  * - Browser calls pass their public `apiName` to the corresponding `Frame` helper: Playwright reads
  *   it off V8 stack frames, and QuickJS frames carry no class names (`connection.ts`).
- * - Absent: `frameLocator`, `contentFrame` (frames come later; calling one is a `TypeError`),
- *   `toString` and `description` (they need Playwright's ~2,500-line locator generators), and
- *   actions and reads Neo does not serve. Explicit names preserve the outer `clear` and
- *   `setChecked` API names through their delegated calls (`_wrapApiCall` in Playwright).
+ * - Absent: actions and reads Neo does not serve. Explicit names preserve the outer `clear`,
+ *   `setChecked` and `all` API names through their delegated calls (`_wrapApiCall` in
+ *   Playwright).
  * - `waitFor` sends Playwright's own `Frame.waitForSelector` through `Frame._waitForSelector`,
  *   as Playwright's goes straight to the frame's channel.
  * - `ariaSnapshot` shares `Frame._ariaSnapshot` with page snapshots, sending this selector.
- * - `allTextContents` sends `client/locator.ts` source text; compiled clients may format it
- *   differently. It reads in Neo's isolated world, so page-defined `textContent` overrides
- *   (prototype patches, custom element classes or per-instance properties) can differ.
+ * - `allTextContents` and `allInnerTexts` run as `$$eval` in the page's main world.
  *
  * Frame identity is load-bearing: `has`, `hasNot`, `and`, `or` and `locator(Locator)` throw
- * unless both locators hold the same `Frame` object, which is why a page builds its main frame
- * once (`Page.mainFrame`).
+ * unless both locators hold the same `Frame` object, which is why a page interns every frame
+ * by its Rust-minted guid.
  */
 
+import {
+  asLocatorDescription,
+  locatorCustomDescription,
+} from '../vendor/playwright/isomorphic/locatorGenerators'
 import {
   type ByRoleOptions,
   getByAltTextSelector,
@@ -41,25 +43,50 @@ import {
   escapeForTextSelector,
   isString,
 } from '../vendor/playwright/isomorphic/stringUtils'
+import { DisposableStub } from './disposable'
+import type { ElementHandle } from './element-handle'
 import type {
+  AriaSnapshotJSON,
   AriaSnapshotOptions,
   CheckOptions,
   ClickOptions,
+  DblclickOptions,
+  DispatchEventOptions,
+  DragAndDropOptions,
+  ElementTimeoutOptions,
   FillOptions,
+  FocusOptions,
   Frame,
   GetAttributeOptions,
+  HoverOptions,
+  InnerHTMLOptions,
   InnerTextOptions,
   InputValueOptions,
   IsCheckedOptions,
+  IsDisabledOptions,
+  IsEditableOptions,
+  IsEnabledOptions,
+  IsHiddenOptions,
   IsVisibleOptions,
   PressOptions,
   SelectOptionOptions,
+  SelectTextOptions,
+  TapOptions,
   TextContentOptions,
+  TypeOptions,
   UncheckOptions,
   WaitForSelectorOptions,
 } from './frame'
+import { FrameLocator } from './frame-locator'
+import type {
+  EvaluateOptions,
+  JSHandle,
+  PageElement,
+  PageFunctionOn,
+} from './js-handle'
 import type { Page } from './page'
 import type { SelectOptionValues } from './select-option'
+import type { SignalLike, TimeoutInput } from './timeout-settings'
 
 export type LocatorOptions = {
   hasText?: string | RegExp
@@ -72,6 +99,8 @@ export type LocatorOptions = {
 export class Locator {
   _frame: Frame
   _selector: string
+  /** Playwright's type tag, which its test matchers read; it also shows in `JSON.stringify`. */
+  _apiName = 'Locator'
 
   constructor(frame: Frame, selector: string, options?: LocatorOptions) {
     this._frame = frame
@@ -112,8 +141,107 @@ export class Locator {
     return this._frame.page()
   }
 
+  /** The element's border box in the main frame's CSS pixels, or `null` when it has none. */
+  async boundingBox(
+    options?: ElementTimeoutOptions,
+  ): Promise<{ x: number; y: number; width: number; height: number } | null> {
+    return await this._frame._boundingBox(
+      'locator.boundingBox',
+      this._selector,
+      options ?? {},
+    )
+  }
+
+  async dispatchEvent(
+    type: string,
+    eventInit: object = {},
+    options?: DispatchEventOptions,
+  ): Promise<void> {
+    return await this._frame._dispatchEvent(
+      'locator.dispatchEvent',
+      this._selector,
+      type,
+      eventInit,
+      { strict: true, ...options },
+    )
+  }
+
+  async focus(options?: FocusOptions): Promise<void> {
+    return await this._frame._focus('locator.focus', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async blur(options?: FocusOptions): Promise<void> {
+    await this._frame._blur('locator.blur', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  /** As Playwright's, reads `options.timeout` first: a `null` options object throws its
+   * TypeError. The rest of the options reach the timeout settings, as every method's do. */
+  async scrollIntoViewIfNeeded(
+    options: ElementTimeoutOptions = {},
+  ): Promise<void> {
+    return await this._frame._scrollIntoViewIfNeeded(
+      'locator.scrollIntoViewIfNeeded',
+      this._selector,
+      { ...options, timeout: options.timeout },
+    )
+  }
+
+  /** As Playwright's, reads `options.timeout` first: a `null` options object throws its
+   * TypeError. */
+  async selectText(options: SelectTextOptions = {}): Promise<void> {
+    const timeout = options.timeout
+    return await this._frame._selectText('locator.selectText', this._selector, {
+      ...options,
+      timeout,
+    })
+  }
+
+  /** Highlights the matching elements until `hideHighlight()`, the returned stub's
+   * `dispose()`, or the end of the run, whichever comes first. */
+  async highlight(
+    options: { style?: string | Record<string, string | number> } = {},
+  ): Promise<DisposableStub> {
+    const style =
+      typeof options.style === 'object'
+        ? cssObjectToString(options.style)
+        : options.style
+    await this._frame._highlight('locator.highlight', this._selector, style)
+    return new DisposableStub(() => this.hideHighlight())
+  }
+
+  async hideHighlight(): Promise<void> {
+    await this._frame._hideHighlight('locator.hideHighlight', this._selector)
+  }
+
   async click(options: ClickOptions = {}): Promise<void> {
     return await this._frame._click('locator.click', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async dblclick(options: DblclickOptions = {}): Promise<void> {
+    await this._frame._dblclick('locator.dblclick', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async hover(options: HoverOptions = {}): Promise<void> {
+    return await this._frame._hover('locator.hover', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async tap(options: TapOptions = {}): Promise<void> {
+    return await this._frame._tap('locator.tap', this._selector, {
       strict: true,
       ...options,
     })
@@ -134,6 +262,13 @@ export class Locator {
     })
   }
 
+  async innerHTML(options?: InnerHTMLOptions): Promise<string> {
+    return await this._frame._innerHTML('locator.innerHTML', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
   async getAttribute(
     name: string,
     options?: GetAttributeOptions,
@@ -148,10 +283,14 @@ export class Locator {
 
   /**
    * Playwright: `client/locator.ts` `Locator.ariaSnapshot`: `selector: this._selector,`
-   * The matched subtree as YAML, in the main frame only. Default mode waits for a match;
-   * `mode: 'ai'` adds refs and does not auto-wait: use `waitFor()` first if needed.
-   * `depth` limits tree levels (0 means unlimited). AI refs work with `page.locator('aria-ref=…')`
-   * until the next snapshot or navigation replaces them. Every mode requires one match.
+   * The matched subtree as YAML in the selected frame. Default mode waits for a match,
+   * omits refs and leaves iframe contents unstitched. `mode: 'ai'` snapshots stitch iframe
+   * content with refs rooted in the main frame, in a child frame too (its refs take the path
+   * of iframes from the main frame); behind an iframe that gets no ref (hidden, no pointer
+   * events) an AI snapshot that would hold refs throws. AI does not auto-wait: use `waitFor()`
+   * first if needed. `depth` limits tree levels (0 means unlimited). AI refs work with
+   * `page.locator('aria-ref=…')` until the next snapshot of their document or a navigation
+   * replaces them. Every mode requires one match.
    */
   async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
     return await this._frame._ariaSnapshot(
@@ -159,6 +298,27 @@ export class Locator {
       options,
       this._selector,
     )
+  }
+
+  /** The tree `ariaSnapshot` renders, as Playwright's `AriaSnapshotJSON`. */
+  async ariaSnapshotJSON(
+    options: AriaSnapshotOptions = {},
+  ): Promise<AriaSnapshotJSON> {
+    return await this._frame._ariaSnapshotJSON(
+      'locator.ariaSnapshotJSON',
+      options,
+      this._selector,
+    )
+  }
+
+  /** A locator of Playwright's simple selector for the first match (not strict), behind the
+   * selectors of the iframes on the way from the main frame, on this locator's frame. */
+  async normalize(): Promise<Locator> {
+    const resolved = await this._frame._resolveSelector(
+      'locator.normalize',
+      this._selector,
+    )
+    return new Locator(this._frame, resolved)
   }
 
   async count(): Promise<number> {
@@ -172,6 +332,22 @@ export class Locator {
     )
   }
 
+  async allInnerTexts(): Promise<string[]> {
+    return await this._frame._allInnerTexts(
+      'locator.allInnerTexts',
+      this._selector,
+    )
+  }
+
+  /** One locator per match when it is called: `nth(i)` locators, which resolve again on use. */
+  async all(): Promise<Locator[]> {
+    return new Array(
+      await this._frame._queryCount('locator.all', this._selector),
+    )
+      .fill(0)
+      .map((e, i) => this.nth(i))
+  }
+
   async fill(value: string, options: FillOptions = {}): Promise<void> {
     return await this._frame._fill('locator.fill', this._selector, value, {
       strict: true,
@@ -181,6 +357,41 @@ export class Locator {
 
   async press(key: string, options: PressOptions = {}): Promise<void> {
     return await this._frame._press('locator.press', this._selector, key, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  /** Playwright's `dragTo`: `target`'s selector, resolved in this locator's frame, as
+   * Playwright's client passes it (`this._frame.dragAndDrop(this._selector, target._selector`). */
+  async dragTo(
+    target: Locator,
+    options: DragAndDropOptions = {},
+  ): Promise<void> {
+    return await this._frame._dragAndDrop(
+      'locator.dragTo',
+      this._selector,
+      target._selector,
+      { strict: true, ...options },
+    )
+  }
+
+  /** Playwright's `pressSequentially`: focus, then each character typed as `keyboard.type`. */
+  async pressSequentially(
+    text: string,
+    options: TypeOptions = {},
+  ): Promise<void> {
+    return await this._frame._type(
+      'locator.pressSequentially',
+      this._selector,
+      text,
+      { strict: true, ...options },
+    )
+  }
+
+  /** Deprecated in Playwright for {@link pressSequentially}, and served the same way. */
+  async type(text: string, options: TypeOptions = {}): Promise<void> {
+    return await this._frame._type('locator.type', this._selector, text, {
       strict: true,
       ...options,
     })
@@ -202,6 +413,35 @@ export class Locator {
 
   async isChecked(options?: IsCheckedOptions): Promise<boolean> {
     return await this._frame._isChecked('locator.isChecked', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  /** Reads once, without waiting, as `isVisible`; `timeout` is ignored. */
+  async isHidden(options?: IsHiddenOptions): Promise<boolean> {
+    return await this._frame._isHidden('locator.isHidden', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async isEnabled(options?: IsEnabledOptions): Promise<boolean> {
+    return await this._frame._isEnabled('locator.isEnabled', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async isDisabled(options?: IsDisabledOptions): Promise<boolean> {
+    return await this._frame._isDisabled('locator.isDisabled', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async isEditable(options?: IsEditableOptions): Promise<boolean> {
+    return await this._frame._isEditable('locator.isEditable', this._selector, {
       strict: true,
       ...options,
     })
@@ -239,11 +479,86 @@ export class Locator {
    * - `visible` (the default): the matching element is visible; `hidden`: no element matches,
    *   or the one that does is hidden.
    *
-   * Strict: a selector that matches more than one element throws an `Error` at once, as does an
-   * invalid one or one that enters a frame (Neo serves the main frame only). Runs under the action
-   * timeout and polls the page. It never takes the tab's input, so a click or typing in the same
-   * run can be what satisfies it.
+   * Strict: multiple matches or an invalid selector throw an `Error` at once. Frame-entering
+   * selectors resolve inside their selected frames. Runs under the action timeout and polls
+   * the page. It never takes the tab's input, so a click or typing in the same run can satisfy it.
    */
+  /**
+   * Playwright's `locator.evaluate`: `pageFunction` on the one element this locator matches, in
+   * the main world, after waiting under the action timeout for it to be attached
+   * (`_withElement`). More than one match is a strict mode violation.
+   */
+  async evaluate<R, Arg>(
+    pageFunction: PageFunctionOn<PageElement, Arg, R>,
+    arg?: Arg,
+    options?: EvaluateOptions & TimeoutInput,
+  ): Promise<R> {
+    return await this._frame._withElement(
+      'locator.evaluate',
+      this._selector,
+      (handle) =>
+        handle._evaluate<R>('locator.evaluate', pageFunction, arg, options),
+      { timeout: options?.timeout, signal: options?.signal },
+    )
+  }
+
+  /** Playwright's `locator.evaluateHandle`: as `evaluate`, resolving a handle to the result. */
+  async evaluateHandle<R, Arg>(
+    pageFunction: PageFunctionOn<PageElement, Arg, R>,
+    arg?: Arg,
+    options?: EvaluateOptions & TimeoutInput,
+  ): Promise<JSHandle<R>> {
+    return await this._frame._withElement(
+      'locator.evaluateHandle',
+      this._selector,
+      (handle) =>
+        handle._evaluateHandle<R>(
+          'locator.evaluateHandle',
+          pageFunction,
+          arg,
+          options,
+        ),
+      { timeout: options?.timeout, signal: options?.signal },
+    )
+  }
+
+  /** Playwright's `locator.evaluateAll`: `pageFunction` on the array of every match, without
+   * waiting (`frame.$$eval`). */
+  async evaluateAll<R, Arg>(
+    pageFunction: PageFunctionOn<PageElement[], Arg, R>,
+    arg?: Arg,
+  ): Promise<R> {
+    return await this._frame._evalOnSelectorAll(
+      'locator.evaluateAll',
+      this._selector,
+      pageFunction,
+      arg,
+    )
+  }
+
+  /** Playwright's `locator.elementHandle`: the one element, once attached, as a handle. */
+  async elementHandle(options?: {
+    timeout?: number
+    signal?: SignalLike | null
+  }): Promise<ElementHandle> {
+    const handle = await this._frame._waitForSelectorElement(
+      'locator.elementHandle',
+      this._selector,
+      { strict: true, state: 'attached', ...options },
+    )
+    if (!handle)
+      throw new Error(`Could not resolve ${this._selector} to DOM Element`)
+    return handle
+  }
+
+  /** Playwright's `locator.elementHandles`: every match, as handles, without waiting. */
+  async elementHandles(): Promise<ElementHandle[]> {
+    return await this._frame._querySelectorAll(
+      'locator.elementHandles',
+      this._selector,
+    )
+  }
+
   async waitFor(options?: WaitForSelectorOptions): Promise<void> {
     await this._frame._waitForSelector('locator.waitFor', this._selector, {
       strict: true,
@@ -300,6 +615,14 @@ export class Locator {
     return locator.locator(this)
   }
 
+  frameLocator(selector: string): FrameLocator {
+    return new FrameLocator(this._frame, this._selector + ' >> ' + selector)
+  }
+
+  contentFrame(): FrameLocator {
+    return new FrameLocator(this._frame, this._selector)
+  }
+
   getByTestId(testId: string | RegExp): Locator {
     return this.locator(getByTestIdSelector(testIdAttributeName(), testId))
   }
@@ -346,6 +669,11 @@ export class Locator {
     )
   }
 
+  /** The last `describe()` text, or `null`: no page call. */
+  description(): string | null {
+    return locatorCustomDescription(this._selector) || null
+  }
+
   first(): Locator {
     return new Locator(this._frame, this._selector + ' >> nth=0')
   }
@@ -375,6 +703,12 @@ export class Locator {
       this._selector + ` >> internal:or=` + JSON.stringify(locator._selector),
     )
   }
+
+  /** The locator as Playwright's JavaScript builder text (`getByRole('button')`), or its
+   * description when it has one; a selector the generator cannot read comes back as is. */
+  toString() {
+    return asLocatorDescription('javascript', this._selector)
+  }
 }
 
 // Playwright's module-level test id attribute. `createRun` sets it from neo-runtime's
@@ -388,4 +722,16 @@ export function testIdAttributeName(): string {
 
 export function setTestIdAttribute(attributeName: string) {
   _testIdAttributeName = attributeName
+}
+
+/** Playwright: `client/locator.ts` `cssObjectToString` */
+function cssObjectToString(style: Record<string, string | number>): string {
+  return Object.entries(style)
+    .map(([key, value]) => {
+      const property = key.startsWith('--')
+        ? key
+        : key.replace(/[A-Z]/g, (m) => '-' + m.toLowerCase())
+      return `${property}: ${value}`
+    })
+    .join('; ')
 }

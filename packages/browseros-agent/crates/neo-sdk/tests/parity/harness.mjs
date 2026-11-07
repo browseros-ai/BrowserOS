@@ -10,10 +10,17 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import http from 'node:http'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // Playwright dims the call log in error messages whenever the environment suggests colour
@@ -121,15 +128,25 @@ export function startNeo(neoRun, port, targetId, scriptPath) {
   return { connected, outcome }
 }
 
-/** Shared inside each script, so both engines compare failure categories in the same way. */
-function errorCategory(error) {
-  if (error.name === 'TimeoutError') return 'timeout'
-  if (/strict mode violation/.test(error.message)) return 'strict'
-  return 'error'
+/**
+ * A rejection's kind: the error's name, with `:strict` for a strict mode violation (a plain
+ * `Error` in Playwright), never its wording. Shared inside each script, so both engines report
+ * their rejections in the same way and a `TypeError` never passes for an `Error`.
+ */
+export function errorCategory(error) {
+  const strict = /strict mode violation/.test(error.message)
+  return strict ? `${error.name}:strict` : error.name
 }
 
-/** Runs one method's public script on fresh pages and compares its result and browser effect. */
-export async function compareMethod(t, { html, source, probe }) {
+/**
+ * Runs one method's public script on fresh pages and compares its result and browser effect.
+ * `effects({ playwright, neo })`, for a deliberate difference, asserts both effects itself in
+ * place of the equality check; `values({ playwright, neo })` does the same for the values.
+ */
+export async function compareMethod(
+  t,
+  { html, source, probe, effects, values, slowMs = 0 },
+) {
   t.diagnostic(
     `Playwright ${playwrightVersion}; ${playwrightDir ?? 'npm playwright-core'}`,
   )
@@ -139,6 +156,7 @@ export async function compareMethod(t, { html, source, probe }) {
   try {
     const origin = await serveFixture(cleanups, {
       pages: { '/method.html': html },
+      slowMs,
     })
     const browser = await launchBrowser(cleanups, browserBinary)
     const playwright = await chromium.connectOverCDP(
@@ -168,8 +186,11 @@ export async function compareMethod(t, { html, source, probe }) {
     const actualEffect = await page.evaluate(probe)
     await page.close()
     assert.equal(outcome.status, 'ok', JSON.stringify(outcome))
-    assert.deepEqual(outcome.value, value, 'public return values and types')
-    assert.deepEqual(actualEffect, effect, 'browser effect')
+    if (values) values({ playwright: value, neo: outcome.value })
+    else
+      assert.deepEqual(outcome.value, value, 'public return values and types')
+    if (effects) effects({ playwright: effect, neo: actualEffect })
+    else assert.deepEqual(actualEffect, effect, 'browser effect')
     return outcome
   } finally {
     await runCleanups(cleanups)
@@ -259,17 +280,34 @@ export async function eventually(check, what, timeoutMs = 15_000) {
 }
 
 /**
- * Serves `pages[path]` for a path it names, and a small page titled with the path otherwise.
- * `/slow` answers after `slowMs`, so a navigation to it stays in flight before it commits.
+ * Serves `pages[path]` for a path it names (with or without a query, so one frame page serves
+ * every `?who=`), and a small page titled with the path otherwise. `/slow` answers after
+ * `slowMs`, so a navigation to it stays in flight before it commits. It listens on 127.0.0.1;
+ * the frame tests also load it as `localhost`, a different site, which BrowserOS neo reaches on
+ * the same address.
+ *
+ * A page is its HTML, or `{ body, headers, status }` for a response with headers of its own (an
+ * attachment), or a function `(request, response)` that answers by itself (a body sent slowly).
  */
 export async function serveFixture(cleanups, { pages = {}, slowMs = 0 } = {}) {
   const server = http.createServer(async (request, response) => {
     if (request.url === '/slow') await sleep(slowMs)
+    const page = pages[request.url] ??
+      pages[request.url.split('?')[0]] ?? {
+        body: `<title>${request.url}</title><h1>${request.url}</h1>`,
+      }
+    if (typeof page === 'function') return page(request, response)
+    const {
+      body,
+      headers = {},
+      status = 200,
+    } = typeof page === 'string' ? { body: page } : page
+    response.statusCode = status
     response.setHeader('content-type', 'text/html; charset=utf-8')
-    response.end(
-      pages[request.url] ??
-        `<title>${request.url}</title><h1>${request.url}</h1>`,
-    )
+    for (const [name, value] of Object.entries(headers)) {
+      response.setHeader(name, value)
+    }
+    response.end(body)
   })
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
@@ -281,12 +319,53 @@ export async function serveFixture(cleanups, { pages = {}, slowMs = 0 } = {}) {
 }
 
 /**
+ * A serveFixture page answering with the file at `?path=`, such as a download's `path()`, so a
+ * script reads the file back through its page: no engine's script reads files. 404 when there is
+ * none, and 403 for a file outside the temporary directory, which holds Playwright's artifacts
+ * and every test profile: a download saved anywhere else, as in the user's ~/Downloads, reads as
+ * refused.
+ */
+export function fileContent(request, response) {
+  const file = new URL(request.url, 'http://fixture').searchParams.get('path')
+  let status = 404
+  let body = ''
+  try {
+    const real = realpathSync(file)
+    status = real.startsWith(realpathSync(tmpdir()) + sep) ? 200 : 403
+    if (status === 200) body = readFileSync(real)
+  } catch {}
+  response.statusCode = status
+  response.setHeader('content-type', 'text/plain; charset=utf-8')
+  response.end(body)
+}
+
+/**
  * Launches a headless BrowserOS neo on a throwaway profile, leading a process group of its own.
  * Every helper it starts (GPU, utility, renderers) joins that group (`ps -o pid,pgid` on
  * 155.0.8318.26), so one signal to the group reaches them all. Its cleanup is `closeBrowser`.
+ * `args` go before the first URL, such as Playwright's own `--disable-back-forward-cache`.
+ *
+ * The profile's download folder is its own `downloads` directory, returned as `downloads`: a
+ * download the browser saves itself (Neo's `behavior: 'default'`) goes to the profile's default
+ * folder, which a fresh profile puts at the user's ~/Downloads. "Ask where to save each file" is
+ * off, as a headless browser cancels a download that asks.
  */
-export async function launchBrowser(cleanups, binary) {
+export async function launchBrowser(cleanups, binary, args = []) {
   const profile = mkdtempSync(join(tmpdir(), 'neo-parity-'))
+  const downloads = join(profile, 'downloads')
+  mkdirSync(downloads)
+  mkdirSync(join(profile, 'Default'))
+  writeFileSync(
+    join(profile, 'Default', 'Preferences'),
+    JSON.stringify({
+      download: {
+        default_directory: downloads,
+        prompt_for_download: false,
+        directory_upgrade: true,
+      },
+      savefile: { default_directory: downloads },
+    }),
+  )
   const child = spawn(
     binary,
     [
@@ -297,6 +376,7 @@ export async function launchBrowser(cleanups, binary) {
       '--remote-debugging-port=0',
       `--user-data-dir=${profile}`,
       '--no-first-run',
+      ...args,
       'about:blank',
     ],
     // `detached` makes it a group leader, as Playwright's launcher does, so one SIGKILL to the
@@ -328,7 +408,7 @@ export async function launchBrowser(cleanups, binary) {
       ).split('\n')
       if (Number(port) > 0 && path) {
         browser.endpoint = `ws://127.0.0.1:${port}${path}`
-        return { port: Number(port) }
+        return { port: Number(port), downloads }
       }
     } catch {}
     assert.ok(Date.now() < deadline, 'the browser never opened its CDP port')

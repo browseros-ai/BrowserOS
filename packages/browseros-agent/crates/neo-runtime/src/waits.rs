@@ -1,7 +1,8 @@
-//! Main-frame selector, URL and lifecycle waits behind one loop and an input-free tab seam.
+//! Selector, URL and lifecycle waits behind one loop and an input-free tab seam, in the main
+//! frame or a child frame.
 //!
 //! ```text
-//! wait_for_selector ── SelectorCondition ── check: prepare, pre-check, selectorState
+//! wait_for_selector ── SelectorCondition ── check: prepare, pre-checks, selectorState
 //!                      │                   changed: loop A's backoff timer
 //! wait_for_url ─────┐   │
 //! wait_for_load_state ─ NavigationCondition ─ check: URL/flags/lifecycle counts
@@ -14,22 +15,34 @@
 //! All awaits use the call's existing [`Progress`], so its deadline never restarts. Dropping
 //! the condition drops every subscription and timer; waits spawn no tasks. Commit queues
 //! retain intermediate URLs, and lifecycle counters retain events across watch coalescing.
+//!
+//! A child frame's URL and lifecycle waits run the same [`NavigationCondition`] over a
+//! [`FrameObservation`]: the frame's feed (`page.rs` `FrameFeeds`), which the tab's watcher and
+//! the watcher of the OOPIF session hosting the frame write. The observation finds that host on
+//! its first `next`, and again after the frame's document moves to another process or its host
+//! session goes; a removed frame ends the wait with `Frame was detached`.
 
 use std::future::{self, Future};
 use std::sync::Arc;
 
 use neo_runtime_spec::injected::{
-    InjectedDescribeSelectorParams, InjectedSelectorStateParams, SelectorMatch,
+    InjectedSelectorElementParams, InjectedSelectorStateParams, SelectorMatch,
 };
 use neo_runtime_spec::serve::{
     FrameWaitForSelectorParams, FrameWaitForSelectorParamsState as SelectorState, LifecycleEvent,
 };
 use serde::Deserialize;
+use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{broadcast, watch};
 use tokio::time;
 
-use crate::click::{LoopAWaits, PageError, SelectorFacts};
-use crate::navigate::{Lifecycle, Navigation, Observation};
-use crate::page::{NavigationObservation, PageSession};
+use crate::click::{LoopAWaits, PageError, SelectorFacts, Tab};
+use crate::evaluate::{self, CreatedHandle, Handles};
+use crate::frame_selector;
+use crate::frames::{FrameScope, Host};
+use crate::locator_handlers;
+use crate::navigate::{Lifecycle, Navigation, NavigationState, NavigationTab, Observation};
+use crate::page::{FrameState, FrameTab, NavigationObservation, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::url_match::{SerializedUrlMatch, UrlMatcher};
 use crate::world;
@@ -45,6 +58,9 @@ pub(crate) trait WaitTab: Send + Sync {
         selector: &str,
     ) -> impl Future<Output = Result<SelectorFacts, PageError>> + Send;
     fn observe(&self) -> Result<Self::Observation, PageError>;
+    /// Starts recording the page's navigation requests (`Network.enable`), once per session, so
+    /// a navigation whose request fails rejects a URL wait, as in Playwright.
+    fn track_network(&self) -> impl Future<Output = Result<(), PageError>> + Send;
     fn pending_navigation(&self) -> Option<String>;
     fn navigation_settled(&self) -> impl Future<Output = Result<(), PageError>> + Send;
     fn selector_state(
@@ -52,28 +68,65 @@ pub(crate) trait WaitTab: Send + Sync {
         selector: &str,
         strict: bool,
     ) -> impl Future<Output = Result<Option<SelectorMatch>, PageError>> + Send;
+
+    /// `selector_state` for a wait that returns its element: when the first match meets `state`
+    /// (attached, or visible), also that element adopted into the frame's main world as a new
+    /// handle of the run (Playwright's `element._adoptTo(mainContext)`). An element that could
+    /// not be adopted reads as none, so the wait keeps polling. Only the real tab can adopt.
+    fn selector_element(
+        &self,
+        selector: &str,
+        strict: bool,
+        state: SelectorState,
+        handles: &Handles,
+    ) -> impl Future<Output = Result<(Option<SelectorMatch>, Option<CreatedHandle>), PageError>> + Send
+    {
+        let _ = (selector, strict, state, handles);
+        future::ready(Err(PageError::Contract(
+            "this tab cannot return a selector wait's element".to_string(),
+        )))
+    }
+
+    /// The tab's locator-handler checkpoint (`locator_handlers.rs`), between the two navigation
+    /// checks of Playwright's `performActionPreChecks`; none on a tab without handlers.
+    fn locator_handlers_checkpoint(
+        &self,
+        progress: &Progress,
+    ) -> impl Future<Output = Result<(), CallError>> + Send {
+        let _ = progress;
+        future::ready(Ok(()))
+    }
 }
 
-/// Decoded once by the route. Neo cannot return the `ElementHandle` of a selector wait.
+/// Decoded once by the route.
 #[derive(Debug)]
 pub(crate) struct WaitForSelectorOptions {
     pub(crate) selector: String,
     pub(crate) strict: bool,
     pub(crate) state: SelectorState,
+    /// Playwright's `!omitReturnValue`: an attached or visible wait answers its element, adopted
+    /// into the main world (`frames.ts` `waitForSelector`), as `locator.evaluate` needs.
+    pub(crate) return_element: bool,
+    /// Playwright's `performActionPreChecksAndLog`: each attempt first runs the page's action
+    /// pre-checks (a pending navigation, the locator handlers, a navigation again). Every served
+    /// wait does, as Playwright's dispatcher passes `true`; the locator-handler checkpoint's own
+    /// wait for its selector to hide does not.
+    pub(crate) pre_checks: bool,
 }
 
 impl WaitForSelectorOptions {
-    pub(crate) fn from_params(params: FrameWaitForSelectorParams) -> Result<Self, PlaywrightError> {
-        if params.omit_return_value != Some(true) {
-            return Err(PlaywrightError::error(
-                "Neo does not return ElementHandles yet: waitForSelector needs omitReturnValue: true",
-            ));
-        }
-        Ok(Self {
+    /// A served wait, which Playwright's dispatcher sends with `performActionPreChecksAndLog`
+    /// set, so its attempts run the pre-checks.
+    ///
+    /// Playwright: `server/frames.ts` `Frame.waitForSelector`: `if (performActionPreChecksAndLog)`
+    pub(crate) fn from_params(params: FrameWaitForSelectorParams) -> Self {
+        Self {
             selector: params.selector,
             strict: params.strict.unwrap_or(false),
             state: params.state.unwrap_or(SelectorState::Visible),
-        })
+            return_element: params.omit_return_value != Some(true),
+            pre_checks: true,
+        }
     }
 }
 
@@ -100,7 +153,7 @@ pub(crate) struct WaitForUrlOptions {
 
 impl WaitForUrlOptions {
     pub(crate) fn from_params(params: &NeoWaitForUrlParams) -> Result<Self, PlaywrightError> {
-        let wait_until = supported_lifecycle(params.wait_until, "waitUntil")?;
+        let wait_until = params.wait_until.unwrap_or(LifecycleEvent::Load);
         Ok(Self {
             matcher: UrlMatcher::new(&params.url)?,
             wait_until,
@@ -114,23 +167,12 @@ pub(crate) struct WaitForLoadStateOptions {
 }
 
 impl WaitForLoadStateOptions {
-    pub(crate) fn from_params(params: NeoWaitForLoadStateParams) -> Result<Self, PlaywrightError> {
-        Ok(Self {
-            state: supported_lifecycle(params.state, "state")?,
-        })
+    /// Every lifecycle event Playwright waits for is served, `load` when absent.
+    pub(crate) fn from_params(params: NeoWaitForLoadStateParams) -> Self {
+        Self {
+            state: params.state.unwrap_or(LifecycleEvent::Load),
+        }
     }
-}
-
-fn supported_lifecycle(
-    state: Option<LifecycleEvent>,
-    name: &str,
-) -> Result<LifecycleEvent, PlaywrightError> {
-    if state == Some(LifecycleEvent::Networkidle) {
-        return Err(PlaywrightError::error(format!(
-            "Neo does not support {name}: \"networkidle\" yet"
-        )));
-    }
-    Ok(state.unwrap_or(LifecycleEvent::Load))
 }
 
 /// The three public waits share deadline, cancellation and disposal here. A condition's
@@ -147,13 +189,13 @@ async fn wait_until(condition: &mut impl Condition, progress: &Progress) -> Resu
 }
 
 trait Condition {
-    async fn check(&mut self, progress: &Progress) -> Result<bool, PlaywrightError>;
+    async fn check(&mut self, progress: &Progress) -> Result<bool, CallError>;
     async fn changed(&mut self) -> Result<(), PlaywrightError>;
 }
 
 /// Preparation can lose its execution context to a commit. Retry through the same loop and
 /// deadline as a DOM probe, before subscribing to navigation events.
-async fn prepare_tab<T: WaitTab>(tab: &T, progress: &Progress) -> Result<(), CallError> {
+pub(crate) async fn prepare_tab<T: WaitTab>(tab: &T, progress: &Progress) -> Result<(), CallError> {
     let mut backoff = LoopAWaits::new(progress.timeout_ms());
     let _ = backoff.next_wait();
     wait_until(&mut PrepareCondition { tab, backoff }, progress).await
@@ -165,11 +207,10 @@ struct PrepareCondition<'a, T> {
 }
 
 impl<T: WaitTab> Condition for PrepareCondition<'_, T> {
-    async fn check(&mut self, _progress: &Progress) -> Result<bool, PlaywrightError> {
+    async fn check(&mut self, _progress: &Progress) -> Result<bool, CallError> {
         match self.tab.prepare().await {
             Ok(()) => Ok(true),
-            Err(PageError::NotConnected) => Ok(false),
-            Err(error) => Err(page_error(error)),
+            Err(error) => polled(error),
         }
     }
 
@@ -179,25 +220,39 @@ impl<T: WaitTab> Condition for PrepareCondition<'_, T> {
     }
 }
 
+/// [`wait_for_selector_element`] without the element, as the policy tests drive it.
+#[cfg(test)]
 pub(crate) async fn wait_for_selector<T: WaitTab>(
     tab: &T,
     options: &WaitForSelectorOptions,
     progress: &Progress,
 ) -> Result<(), CallError> {
+    wait_for_selector_element(tab, options, progress)
+        .await
+        .map(|_| ())
+}
+
+/// Playwright's `Frame.waitForSelector`: waits for `options.state`, answering the element, adopted
+/// into the main world, when `options.return_element` asks for it and the state is attached or
+/// visible.
+pub(crate) async fn wait_for_selector_element<T: WaitTab>(
+    tab: &T,
+    options: &WaitForSelectorOptions,
+    progress: &Progress,
+) -> Result<Option<CreatedHandle>, CallError> {
     name_selector(progress, &options.selector, options.state);
     let mut backoff = LoopAWaits::new(progress.timeout_ms());
     // wait_until checks immediately; consume loop A's initial zero before parking.
     let _ = backoff.next_wait();
-    wait_until(
-        &mut SelectorCondition {
-            tab,
-            options,
-            named: false,
-            backoff,
-        },
-        progress,
-    )
-    .await
+    let mut condition = SelectorCondition {
+        tab,
+        options,
+        named: false,
+        backoff,
+        element: None,
+    };
+    wait_until(&mut condition, progress).await?;
+    Ok(condition.element)
 }
 
 struct SelectorCondition<'a, T> {
@@ -205,17 +260,39 @@ struct SelectorCondition<'a, T> {
     options: &'a WaitForSelectorOptions,
     named: bool,
     backoff: LoopAWaits,
+    /// The adopted element of the probe that met the wait, when the caller wants it.
+    element: Option<CreatedHandle>,
 }
 
 impl<T: WaitTab> SelectorCondition<'_, T> {
-    async fn probe(&mut self, progress: &Progress) -> Result<bool, PageError> {
-        self.tab.prepare().await?;
-        // Playwright server/page.ts:547-569: settle navigation before resolving the selector,
-        // including the first description/validity check.
+    /// Playwright's `performActionPreChecks` for one attempt, after the tab is prepared (its
+    /// watcher knows of pending navigations): settle a pending navigation, run the locator
+    /// handlers, then settle any navigation a handler started, all before resolving the selector
+    /// (its first description and validity check included).
+    ///
+    /// Playwright: `server/page.ts` `Page.performActionPreChecks`: `await this._performLocatorHandlersCheckpoint(progress);`
+    async fn pre_checks(&mut self, progress: &Progress) -> Result<bool, CallError> {
+        if let Err(error) = self.settle_navigation(progress).await {
+            return polled(error);
+        }
+        self.tab.locator_handlers_checkpoint(progress).await?;
+        match self.settle_navigation(progress).await {
+            Ok(()) => Ok(true),
+            Err(error) => polled(error),
+        }
+    }
+
+    /// `performActionPreChecks`' navigation half (`page.ts` `_performWaitForNavigationCheck`):
+    /// a requested main-frame navigation that has not settled is logged and waited for.
+    async fn settle_navigation(&self, progress: &Progress) -> Result<(), PageError> {
         if let Some(url) = self.tab.pending_navigation() {
             progress.log(format!("  waiting for \"{url}\" navigation to finish..."));
             self.tab.navigation_settled().await?;
         }
+        Ok(())
+    }
+
+    async fn probe(&mut self, progress: &Progress) -> Result<bool, PageError> {
         if !self.named {
             let facts = self.tab.describe(&self.options.selector).await?;
             name_selector(progress, &facts.locator, self.options.state);
@@ -224,10 +301,29 @@ impl<T: WaitTab> SelectorCondition<'_, T> {
             }
             self.named = true;
         }
-        let matched = self
-            .tab
-            .selector_state(&self.options.selector, self.options.strict)
-            .await?;
+        // Hidden and detached waits answer no element (`frames.ts`: `state === 'attached' ||
+        // state === 'visible' ? … : null`).
+        let wants_element = self.options.return_element
+            && matches!(
+                self.options.state,
+                SelectorState::Attached | SelectorState::Visible
+            );
+        let (matched, element) = if wants_element {
+            self.tab
+                .selector_element(
+                    &self.options.selector,
+                    self.options.strict,
+                    self.options.state,
+                    progress.handles(),
+                )
+                .await?
+        } else {
+            let matched = self
+                .tab
+                .selector_state(&self.options.selector, self.options.strict)
+                .await?;
+            (matched, None)
+        };
         let visible = matched.as_ref().is_some_and(|matched| matched.visible);
         if let Some(matched) = &matched {
             let log = if matched.count > 1 {
@@ -244,27 +340,49 @@ impl<T: WaitTab> SelectorCondition<'_, T> {
             };
             progress.log(log);
         }
-        Ok(match self.options.state {
+        let met = match self.options.state {
             SelectorState::Attached => matched.is_some(),
             SelectorState::Detached => matched.is_none(),
             SelectorState::Visible => visible,
             SelectorState::Hidden => !visible,
-        })
+        };
+        if met && wants_element {
+            // An element that could not be adopted keeps the wait polling.
+            // Playwright: `server/frames.ts` `Frame.waitForSelector`: `return await progress.race(element._adoptTo(mainContext));`
+            self.element = element;
+            return Ok(self.element.is_some());
+        }
+        Ok(met)
     }
 }
 
 impl<T: WaitTab> Condition for SelectorCondition<'_, T> {
-    async fn check(&mut self, progress: &Progress) -> Result<bool, PlaywrightError> {
+    async fn check(&mut self, progress: &Progress) -> Result<bool, CallError> {
+        if let Err(error) = self.tab.prepare().await {
+            return polled(error);
+        }
+        // Playwright: `server/frames.ts` `Frame.waitForSelector`: `await this._page.performActionPreChecks(progress);`
+        if self.options.pre_checks && !self.pre_checks(progress).await? {
+            return Ok(false);
+        }
         match self.probe(progress).await {
             Ok(ready) => Ok(ready),
-            Err(PageError::NotConnected) => Ok(false),
-            Err(error) => Err(page_error(error)),
+            Err(error) => polled(error),
         }
     }
 
     async fn changed(&mut self) -> Result<(), PlaywrightError> {
         time::sleep(self.backoff.next_wait()).await;
         Ok(())
+    }
+}
+
+/// Neo: a page step's error within a wait's attempt: a document that went away polls again, as
+/// Playwright retries a context destroyed under it; anything else ends the wait.
+fn polled(error: PageError) -> Result<bool, CallError> {
+    match error {
+        PageError::NotConnected => Ok(false),
+        error => Err(page_error(error).into()),
     }
 }
 
@@ -289,6 +407,13 @@ pub(crate) async fn wait_for_load_state<T: WaitTab>(
         progress.log("  not waiting, \"commit\" event already fired");
         return Ok(());
     }
+    // `networkidle` is told from the page's requests, which Neo sees once Network is enabled.
+    if options.state == LifecycleEvent::Networkidle {
+        progress
+            .race(tab.track_network())
+            .await?
+            .map_err(page_error)?;
+    }
     let events = tab.observe().map_err(page_error)?;
     let since = events.state().lifecycle;
     wait_until(
@@ -306,6 +431,44 @@ pub(crate) async fn wait_for_load_state<T: WaitTab>(
     .await
 }
 
+/// Neo: the delay Node's `setTimeout` waits for Playwright's `waitForTimeout(ms)`: none for a
+/// negative or NaN delay, and [`OVERFLOWED_TIMER`] past the 32-bit timer range, as Node sets
+/// an overflowing delay to 1 ms.
+pub(crate) fn timer_delay(ms: f64) -> time::Duration {
+    if ms > MAX_TIMER_MS {
+        return OVERFLOWED_TIMER;
+    }
+    time::Duration::try_from_secs_f64(ms.max(0.0) / 1000.0).unwrap_or_default()
+}
+
+/// Neo: Node's largest timer delay, `2 ** 31 - 1` ms.
+const MAX_TIMER_MS: f64 = 2_147_483_647.0;
+
+/// Neo: what Node waits instead of a delay past [`MAX_TIMER_MS`].
+const OVERFLOWED_TIMER: time::Duration = time::Duration::from_millis(1);
+
+/// Serves `Frame.waitForTimeout`: the wait, ended early when the frame goes or the page closes.
+///
+/// Playwright: `server/frames.ts` `Frame.waitForTimeout`: `// Make sure we react to page close or frame detach.`
+pub(crate) async fn wait_for_timeout<T: WaitTab>(
+    tab: &T,
+    wait: time::Duration,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let mut events = tab.observe().map_err(page_error)?;
+    let gone = async {
+        loop {
+            if let Err(error) = events.next().await {
+                return error;
+            }
+        }
+    };
+    tokio::select! {
+        waited = progress.wait(wait) => waited,
+        error = gone => Err(page_error(error).into()),
+    }
+}
+
 pub(crate) async fn wait_for_url<T: WaitTab>(
     tab: &T,
     options: &WaitForUrlOptions,
@@ -314,6 +477,10 @@ pub(crate) async fn wait_for_url<T: WaitTab>(
     // Preparation can itself observe commits; keep them queued before it starts.
     let events = tab.observe().map_err(page_error)?;
     prepare_tab(tab, progress).await?;
+    progress
+        .race(tab.track_network())
+        .await?
+        .map_err(page_error)?;
     wait_until(
         &mut NavigationCondition {
             events,
@@ -349,6 +516,17 @@ impl<O: Observation> NavigationCondition<'_, O> {
     fn satisfied(&mut self, progress: &Progress) -> Result<bool, PlaywrightError> {
         let state = self.events.state();
         let navigation = self.navigation.take();
+        // client/frame.ts waitForNavigation, which waitForURL runs: a navigation that fails
+        // before the URL matched rejects the wait.
+        if matches!(self.phase, Phase::Matching)
+            && self.matcher.is_some()
+            && let Some(error) = navigation
+                .as_ref()
+                .and_then(|navigation| navigation.error.clone())
+        {
+            return Err(PlaywrightError::error(error));
+        }
+        let navigation = navigation.filter(|navigation| navigation.error.is_none());
         if self.matcher.is_some()
             && let Some(navigation) = &navigation
         {
@@ -399,12 +577,9 @@ impl<O: Observation> NavigationCondition<'_, O> {
 }
 
 impl<O: Observation> Condition for NavigationCondition<'_, O> {
-    fn check(
-        &mut self,
-        progress: &Progress,
-    ) -> impl Future<Output = Result<bool, PlaywrightError>> {
+    fn check(&mut self, progress: &Progress) -> impl Future<Output = Result<bool, CallError>> {
         // Matching runs synchronously inside check, bounded by the matcher's evaluation budget.
-        future::ready(self.satisfied(progress))
+        future::ready(self.satisfied(progress).map_err(CallError::from))
     }
 
     async fn changed(&mut self) -> Result<(), PlaywrightError> {
@@ -414,7 +589,7 @@ impl<O: Observation> Condition for NavigationCondition<'_, O> {
     }
 }
 
-fn lifecycle_name(state: LifecycleEvent) -> &'static str {
+pub(crate) fn lifecycle_name(state: LifecycleEvent) -> &'static str {
     match state {
         LifecycleEvent::Commit => "commit",
         LifecycleEvent::Domcontentloaded => "domcontentloaded",
@@ -428,11 +603,15 @@ fn lifecycle_fired(lifecycle: Lifecycle, state: LifecycleEvent) -> bool {
         LifecycleEvent::Commit => true,
         LifecycleEvent::Domcontentloaded => lifecycle.dom_content_loaded,
         LifecycleEvent::Load => lifecycle.load,
-        LifecycleEvent::Networkidle => false,
+        LifecycleEvent::Networkidle => lifecycle.network_idle,
     }
 }
 
-fn lifecycle_reached(since: Lifecycle, current: Lifecycle, state: LifecycleEvent) -> bool {
+pub(crate) fn lifecycle_reached(
+    since: Lifecycle,
+    current: Lifecycle,
+    state: LifecycleEvent,
+) -> bool {
     match state {
         LifecycleEvent::Commit => true,
         LifecycleEvent::Domcontentloaded => {
@@ -440,7 +619,10 @@ fn lifecycle_reached(since: Lifecycle, current: Lifecycle, state: LifecycleEvent
                 || current.dom_content_loaded_count > since.dom_content_loaded_count
         }
         LifecycleEvent::Load => since.load || current.load_count > since.load_count,
-        LifecycleEvent::Networkidle => false,
+        // Playwright: `server/frames.ts` `Frame.waitForLoadState`: `if (!this._firedLifecycleEvents.has(waitUntil))`
+        LifecycleEvent::Networkidle => {
+            since.network_idle || current.network_idle_count > since.network_idle_count
+        }
     }
 }
 
@@ -454,8 +636,152 @@ fn page_error(error: PageError) -> PlaywrightError {
     }
 }
 
-impl WaitTab for Arc<PageSession> {
-    type Observation = NavigationObservation;
+/// What one wait observes: the main frame's commits and state, or one child frame's.
+pub(crate) enum WaitObservation {
+    Main(NavigationObservation),
+    Frame(FrameObservation),
+}
+
+impl Observation for WaitObservation {
+    fn state(&self) -> NavigationState {
+        match self {
+            Self::Main(main) => main.state(),
+            Self::Frame(frame) => frame.state(),
+        }
+    }
+
+    async fn next(&mut self) -> Result<Option<Navigation>, PageError> {
+        match self {
+            Self::Main(main) => main.next().await,
+            Self::Frame(frame) => frame.next().await,
+        }
+    }
+}
+
+/// A child frame's navigation for one wait: the frame's feed, subscribed when the wait starts so
+/// no later commit is lost, and the host session whose events reach it. `next` finds that host
+/// first (and waits for an OOPIF host's watcher to seed the feed), then reports the frame's
+/// commits and state changes; after the frame's document moves to another process, or its host
+/// session goes, the next `next` finds the host again. Each `next` is raced by the wait's
+/// `Progress`, so finding a host never outlives the call.
+pub(crate) struct FrameObservation {
+    tab: FrameTab,
+    frame: String,
+    state: watch::Receiver<FrameState>,
+    navigations: broadcast::Receiver<Navigation>,
+    /// The host found last; `None` until the first `next`.
+    host: Option<Arc<Host>>,
+    /// The feed's swap count when `host` was found.
+    swaps: u64,
+}
+
+/// Why [`FrameObservation::next`] woke.
+enum Woke {
+    Navigation(Result<Navigation, RecvError>),
+    Changed(bool),
+    HostGone,
+}
+
+impl FrameObservation {
+    fn new(tab: FrameTab, frame: &str) -> Result<Self, PageError> {
+        let (state, navigations) = tab.subscribe_frame(frame)?;
+        Ok(Self {
+            tab,
+            frame: frame.to_string(),
+            state,
+            navigations,
+            host: None,
+            swaps: 0,
+        })
+    }
+
+    /// The host found last, while it still reports this frame.
+    fn current_host(&self) -> Option<Arc<Host>> {
+        let swaps = self.state.borrow().swaps;
+        self.host
+            .as_ref()
+            .filter(|host| !host.gone().is_cancelled() && swaps == self.swaps)
+            .cloned()
+    }
+
+    /// Finds the frame in the tab's live tree, watches its host and seeds its URL from the tree,
+    /// retrying with loop A's backoff while the tree or a host is mid-change.
+    async fn locate(&mut self) -> Result<(), PageError> {
+        let mut backoff = LoopAWaits::new(0.0);
+        let _ = backoff.next_wait();
+        loop {
+            match self.try_locate().await {
+                Err(PageError::NotConnected) => time::sleep(backoff.next_wait()).await,
+                result => return result,
+            }
+        }
+    }
+
+    async fn try_locate(&mut self) -> Result<(), PageError> {
+        let swaps = self.state.borrow().swaps;
+        let tree = self.tab.frames.tree().await?;
+        let Some(info) = tree.iter().find(|info| info.id == self.frame) else {
+            return Err(detached());
+        };
+        let context = self
+            .tab
+            .frames
+            .cached(&self.frame)
+            .ok_or(PageError::NotConnected)?;
+        self.tab.watch_host(&context.host).await?;
+        self.tab.seed_frame(&self.frame, &info.url);
+        self.host = Some(Arc::clone(&context.host));
+        self.swaps = swaps;
+        Ok(())
+    }
+}
+
+impl Observation for FrameObservation {
+    fn state(&self) -> NavigationState {
+        let state = self.state.borrow();
+        NavigationState {
+            pending_url: state.page.pending_url.clone(),
+            url: state.page.committed_url.clone(),
+            lifecycle: state.page.lifecycle(),
+        }
+    }
+
+    async fn next(&mut self) -> Result<Option<Navigation>, PageError> {
+        if self.state.borrow().detached {
+            return Err(detached());
+        }
+        let Some(host) = self.current_host() else {
+            self.locate().await?;
+            // The host's seed may have changed the state: the wait checks it again.
+            return Ok(None);
+        };
+        let woke = tokio::select! {
+            biased;
+            navigation = self.navigations.recv() => Woke::Navigation(navigation),
+            changed = self.state.changed() => Woke::Changed(changed.is_ok()),
+            () = host.gone().cancelled() => Woke::HostGone,
+        };
+        match woke {
+            Woke::Navigation(Ok(navigation)) => Ok(Some(navigation)),
+            // The feed only closes when its frame is removed.
+            Woke::Navigation(Err(RecvError::Closed)) | Woke::Changed(false) => Err(detached()),
+            Woke::Changed(true) if self.state.borrow().detached => Err(detached()),
+            // A lagging queue, a state change or a lost host: the wait rechecks the state, and
+            // the next `next` finds the host again if it went.
+            Woke::Navigation(Err(RecvError::Lagged(_))) | Woke::Changed(true) | Woke::HostGone => {
+                Ok(None)
+            }
+        }
+    }
+}
+
+/// Neo's error for a frame that is gone, as a direct scope reports it (`frames.rs`).
+fn detached() -> PageError {
+    PageError::Threw("Frame was detached".to_string())
+}
+
+impl WaitTab for FrameTab {
+    type Observation = WaitObservation;
 
     async fn prepare(&self) -> Result<(), PageError> {
         PageSession::prepare(self)
@@ -464,23 +790,20 @@ impl WaitTab for Arc<PageSession> {
     }
 
     async fn describe(&self, selector: &str) -> Result<SelectorFacts, PageError> {
-        let facts = self
-            .world
-            .call(
-                None,
-                &InjectedDescribeSelectorParams {
-                    selector: selector.to_string(),
-                },
-            )
-            .await?;
-        Ok(SelectorFacts {
-            locator: facts.locator,
-            invalid: facts.invalid_selector,
-        })
+        Tab::describe(self, selector).await
     }
 
     fn observe(&self) -> Result<Self::Observation, PageError> {
-        Ok(self.observe_waits())
+        match &self.scope {
+            FrameScope::Frame(frame) if *frame != self.frames.main().id => Ok(
+                WaitObservation::Frame(FrameObservation::new(self.clone(), frame)?),
+            ),
+            _ => Ok(WaitObservation::Main(self.observe_waits())),
+        }
+    }
+
+    async fn track_network(&self) -> Result<(), PageError> {
+        NavigationTab::track_network(self).await.map(|_| ())
     }
     fn pending_navigation(&self) -> Option<String> {
         PageSession::pending_navigation(self)
@@ -490,22 +813,81 @@ impl WaitTab for Arc<PageSession> {
         PageSession::navigation_settled(self).await.map(|_| ())
     }
 
+    async fn locator_handlers_checkpoint(&self, progress: &Progress) -> Result<(), CallError> {
+        locator_handlers::checkpoint(self, progress).await
+    }
+
+    async fn selector_element(
+        &self,
+        selector: &str,
+        strict: bool,
+        state: SelectorState,
+        handles: &Handles,
+    ) -> Result<(Option<SelectorMatch>, Option<CreatedHandle>), PageError> {
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok((None, None));
+        };
+        let group = self.group(&located.frame, "wait-element");
+        let found = located
+            .frame
+            .call(
+                Some(group.group()),
+                &InjectedSelectorElementParams {
+                    selector: located.selector,
+                    strict,
+                },
+            )
+            .await?;
+        let (Some(element), Some(preview)) = (found.element, found.preview) else {
+            return Ok((None, None));
+        };
+        let matched = SelectorMatch {
+            count: found.count,
+            visible: found.visible && located.frame_visible,
+            preview,
+        };
+        if state == SelectorState::Visible && !matched.visible {
+            return Ok((Some(matched), None));
+        }
+        let created = match evaluate::element_handle_for(
+            self,
+            &located.frame,
+            &element,
+            &matched.preview,
+            handles,
+        )
+        .await
+        {
+            Ok(created) => Some(created),
+            Err(PageError::NotConnected) => None,
+            Err(error) => return Err(error),
+        };
+        Ok((Some(matched), created))
+    }
+
     async fn selector_state(
         &self,
         selector: &str,
         strict: bool,
     ) -> Result<Option<SelectorMatch>, PageError> {
-        Ok(self
-            .world
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok(None);
+        };
+        let mut matched = located
+            .frame
             .call(
                 None,
                 &InjectedSelectorStateParams {
-                    selector: selector.to_string(),
+                    selector: located.selector,
                     strict,
                 },
             )
             .await?
-            .matched)
+            .matched;
+        if let Some(matched) = &mut matched {
+            matched.visible &= located.frame_visible;
+        }
+        Ok(matched)
     }
 }
 
@@ -653,6 +1035,8 @@ mod tests {
                         document: matches!(event, Event::Commit(_)).then(|| url.to_string()),
                         url: url.to_string(),
                         lifecycle: state.lifecycle,
+                        request: matches!(event, Event::Commit(_)),
+                        error: None,
                     });
                 }
                 Event::Load => {
@@ -692,6 +1076,9 @@ mod tests {
         async fn describe(&self, _: &str) -> Result<SelectorFacts, PageError> {
             self.descriptions.fetch_add(1, Ordering::Relaxed);
             self.describe.answer().await
+        }
+        fn track_network(&self) -> impl Future<Output = Result<(), PageError>> {
+            future::ready(Ok(()))
         }
         fn observe(&self) -> Result<Events, PageError> {
             let observation = Events {
@@ -741,6 +1128,8 @@ mod tests {
             selector: "#item".to_string(),
             strict: true,
             state,
+            return_element: false,
+            pre_checks: true,
         }
     }
 
@@ -757,7 +1146,6 @@ mod tests {
 
     fn load(state: LifecycleEvent) -> WaitForLoadStateOptions {
         WaitForLoadStateOptions::from_params(NeoWaitForLoadStateParams { state: Some(state) })
-            .expect("load options")
     }
 
     struct Run {
@@ -1427,6 +1815,8 @@ mod tests {
                             document: Some(MATCH.to_string()),
                             url: MATCH.to_string(),
                             lifecycle: state.lifecycle,
+                            request: true,
+                            error: None,
                         });
                     });
                     time::sleep(Duration::from_millis(20)).await;

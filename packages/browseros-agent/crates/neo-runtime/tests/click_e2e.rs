@@ -718,40 +718,24 @@ async fn the_injected_install_is_reused_per_document_and_redone_after_navigation
     );
 }
 
-/// `page.click` with a selector that enters an iframe: refused before any page call with Neo's
-/// frames message, no call log, nothing delivered.
+/// A missing iframe uses the action's normal timeout and delivers no input.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_frame_selector_is_refused_up_front() {
+async fn a_missing_frame_selector_polls_until_the_call_timeout() {
     let Some(tab) = open_page("/ok.html", OK_PAGE).await else {
         return;
     };
     let outcome = run(
         &tab,
-        "await page.click('iframe >> internal:control=enter-frame >> button')",
+        "await page.click('iframe >> internal:control=enter-frame >> button', {timeout:200})",
     )
     .await;
     tab.close().await;
-
-    let refusal = "Neo does not support frames yet: the selector enters a frame";
     assert_eq!(outcome.status, RunStatus::Error, "{outcome:#?}");
-    let error = outcome.error.as_ref().expect("a failed run says why");
     assert_eq!(
-        (error.name.as_str(), error.message.as_str()),
-        ("Error", format!("page.click: {refusal}").as_str())
+        outcome.error.as_ref().expect("timeout").name,
+        "TimeoutError"
     );
-    let call = only_record(&outcome);
-    assert_eq!(
-        (&call.result, call.delivery, call.log.as_slice()),
-        (
-            &CallResult::Error {
-                name: "Error".to_string(),
-                message: refusal.to_string(),
-            },
-            Some(Delivery::NotSent),
-            [].as_slice()
-        ),
-        "{call:#?}"
-    );
+    assert_eq!(only_record(&outcome).delivery, Some(Delivery::NotSent));
 }
 
 /// The run's tab in the background: another tab took the foreground, so the page reports itself

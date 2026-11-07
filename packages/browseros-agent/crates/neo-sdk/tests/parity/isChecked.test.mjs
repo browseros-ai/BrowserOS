@@ -40,7 +40,7 @@ test('isChecked returns booleans, waits for a match and rejects wrong or ambiguo
     late: true,
     flipped: [true, false],
     types: Array(8).fill('boolean'),
-    errors: ['error', 'strict', 'timeout'],
+    errors: ['Error', 'Error:strict', 'TimeoutError'],
   })
   const reads = outcome.calls.filter((c) => c.method === 'isChecked')
   assert.equal(reads.length, 11)

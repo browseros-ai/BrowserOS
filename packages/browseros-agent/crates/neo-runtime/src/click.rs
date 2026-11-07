@@ -1,12 +1,16 @@
-//! `Frame.click`, in the structure of Playwright's server: `frames.ts`
-//! `_retryWithProgressIfNotConnected` (loop A, re-resolve), `dom.ts` `_retryAction` and
-//! `_performPointerAction` (loop B, same element), the `SignalBarrier` around the input, and
-//! `input.ts` `Mouse.click`. The call log keeps Playwright's wording, so a failed click tells the
-//! agent why in words it knows; nothing depends on it matching Playwright's byte for byte. Leading
-//! spaces are nesting for `progress::compress_call_log`.
+//! Playwright's pointer actions, `Frame.click`, `Frame.dblclick`, `Frame.hover` and `Frame.tap`,
+//! as one policy in the structure of Playwright's server: `frames.ts`
+//! `_retryWithProgressIfNotConnected` (loop A, re-resolve), `dom.ts` `_retryAction`,
+//! `_retryPointerAction` and `_performPointerAction` (loop B, same element), the `SignalBarrier`
+//! around the input, and `input.ts` `Mouse.click`, `Mouse.move` and `Touchscreen.tap`. A
+//! [`PointerAction`] is Playwright's `PointerAction`: its name in the call log, the states it
+//! waits for, what its hit-target interceptor judges, and the input it writes. The call log keeps
+//! Playwright's wording, so a failed action tells the agent why in words it knows; nothing
+//! depends on it matching Playwright's byte for byte. Leading spaces are nesting for
+//! `progress::compress_call_log`.
 //!
 //! ```text
-//!  click(tab, options, progress)                         log: waiting for <locator>
+//!  pointer_action(tab, options, progress)                log: waiting for <locator>
 //!   loop A  waits 0,20,50,100,100,500…  (entries > timeout/5 dropped; the last repeats)
 //!   │ prepare the tab (this page's first click enables its domains; then a no-op)
 //!   │ unless force: wait out a pending main-frame navigation
@@ -14,11 +18,13 @@
 //!   │ resolve(selector, strict) → element? │ throws strict violation → Error, at once
 //!   │ loop B  waits 0,0,20,100,100,500… on the same element (uncapped)
 //!   │ │ unless force: the navigation pre-check again
-//!   │ │ states → scroll (mode = retry % 4) → geometry → point
-//!   │ │ wait for the tab's input turn → arm the hit-target interceptor
+//!   │ │ states (hover: visible, stable; the others: + enabled, non-inert) → scroll
+//!   │ │   (mode = retry % 4) → geometry → point
+//!   │ │ wait for the tab's input turn → arm the hit-target interceptor for the action's input
 //!   │ │   not ready (not visible, outside viewport, missing state, intercepted) → log, retry B
 //!   │ │   not connected → "element was detached from the DOM, retrying", next loop A
-//!   │ └ input: begin ticket → press (detached writer) → verdict, turn over → navigation barrier
+//!   │ └ input: begin ticket → move, click or tap (detached writer) → verdict, turn over →
+//!   │     navigation barrier (click without noWaitAfter only)
 //!   │     a verified block (verdict names another element) → ticket back to NotSent, retry B
 //!   │     anything else after the press is success or a terminal error, never a retry
 //! ```
@@ -32,14 +38,17 @@
 //! - `trial` ends at its checks, the hit check included, and sends no input. Playwright presses
 //!   into an interceptor that blocks every event, which listeners the page added to `window`
 //!   first still see, and under `force` it arms none and delivers a real click.
+//! - `tap` needs no `hasTouch`: Neo's context is the user's attached BrowserOS context, which has
+//!   no context options, and its tab answers `Input.dispatchTouchEvent` with the events of a
+//!   `hasTouch` context. Playwright's `Frame.tap` refuses without `hasTouch`.
 //! - The verdict is read after every press. Playwright skips it under `noWaitAfter`, and so
 //!   reports a press its interceptor blocked as a click; here `noWaitAfter` skips only the
 //!   navigation barrier.
 //! - A CDP failure after a press was written ends the call with `Error` and delivery `Unknown`;
 //!   Playwright's loop A would retry it and might press again.
-//! - `modifiers`, `steps` other than 1 and a `clickCount` above [`MAX_CLICK_COUNT`] are refused
+//! - A `clickCount` above [`MAX_CLICK_COUNT`] and `steps` above [`MAX_STEPS`] are refused
 //!   before any work, with no call log.
-//! - Clicks on one tab take turns at its input ([`Tab::input`]), across every run of the
+//! - Pointer actions on one tab take turns at its input ([`Tab::input`]), across every run of the
 //!   `Runtime`. Playwright lets a second click's setup replace the first one's interceptor
 //!   (`setupHitTargetInterceptor`'s own comment), so overlapping clicks judge each other's events.
 
@@ -47,9 +56,17 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use neo_runtime_spec::injected::{ElementState, Point};
-use neo_runtime_spec::serve::{FrameClickParams, FrameClickParamsButton, FrameClickParamsScroll};
+use neo_runtime_spec::injected::{ElementState, HitTargetAction, Point};
+use neo_runtime_spec::serve::{
+    FrameClickParams, FrameClickParamsButton, FrameClickParamsModifiersItem,
+    FrameClickParamsScroll, FrameDblclickParams, FrameDblclickParamsButton,
+    FrameDblclickParamsModifiersItem, FrameDblclickParamsScroll, FrameHoverParams,
+    FrameHoverParamsModifiersItem, FrameHoverParamsScroll, FrameTapParams,
+    FrameTapParamsModifiersItem, FrameTapParamsScroll, Point as WirePoint,
+};
 
+use crate::input_devices::{self, Devices, EffectSink, Plan};
+use crate::keyboard::{self, KeyboardModifier, KeyboardTab, Platform};
 use crate::progress::{
     AckedInput, CallError, DeliveryCell, InputTicket, PlaywrightError, Progress,
 };
@@ -81,7 +98,7 @@ pub(crate) trait Tab: Send + Sync {
     /// click's input: the interceptor's setup and the interceptor it arms, and the writer. The
     /// next click's turn starts only once the last copy drops, so a call that stops early never
     /// frees the tab under its own writer or its interceptor's stop.
-    type Input: Clone + Send + Sync;
+    type Input: Devices;
     /// Navigation requests recorded from the moment [`Tab::watch_navigations`] returns.
     type Navigations: Send;
 
@@ -105,11 +122,15 @@ pub(crate) trait Tab: Send + Sync {
         strict: bool,
     ) -> impl Future<Output = Result<Option<Resolved<Self::Element>>, PageError>> + Send;
 
-    /// `checkElementStates` with `frameVisible: true` (Neo resolves in the main frame only).
+    /// `checkElementStates` with `frameVisible` inherited from the selector's iframe hop
+    /// owners (`true` when the selector has no frame hops). With `scroll` (not Playwright's
+    /// `scroll: 'none'`), an element in a child frame first has its frames' owners scrolled
+    /// into view, so an offscreen frame paints and `stable` can resolve.
     fn check_states(
         &self,
         element: &Self::Element,
         states: &[ElementState],
+        scroll: bool,
     ) -> impl Future<Output = Result<StatesCheck, PageError>> + Send;
 
     /// [`Scroll::Protocol`]: CDP `DOM.scrollIntoViewIfNeeded` (`position` as a zero rect); the
@@ -127,6 +148,7 @@ pub(crate) trait Tab: Send + Sync {
         &self,
         element: &Self::Element,
         position: Option<&Point>,
+        force: bool,
     ) -> impl Future<Output = Result<Geometry, PageError>> + Send;
 
     /// Waits for a turn at the tab's input: its one mouse and its document's one hit-target
@@ -137,8 +159,9 @@ pub(crate) trait Tab: Send + Sync {
     /// its turn holds nothing.
     fn input(&self) -> impl Future<Output = Self::Input> + Send;
 
-    /// `setupHitTargetInterceptor(element, 'mouse', hit_point, false)`: the hit check at
-    /// `hit_point`, then the interceptor armed for the coming press. The page installs the
+    /// `setupHitTargetInterceptor(element, action, hit_point, false)`: the hit check at
+    /// `hit_point`, then the interceptor armed for the coming input, judging the events of
+    /// `action` (a hover's `mousemove`, a tap's touches, a click's presses). The page installs the
     /// interceptor before it answers, so once the setup is sent its answer is always read, on a
     /// task of its own: a caller that stopped waiting leaves an `Armed` nobody takes, which
     /// disarms as it drops. A future dropped before its first poll sends nothing. `input` is
@@ -147,16 +170,18 @@ pub(crate) trait Tab: Send + Sync {
         &self,
         element: &Self::Element,
         hit_point: Point,
+        action: HitTargetAction,
         input: Self::Input,
     ) -> impl Future<Output = Result<Arming<Self::Armed>, PageError>> + Send;
 
-    /// Starts writing the click's mouse events on a detached writer task *before it returns*,
-    /// and gives back a future of the writer's report. The ticket moves into the writer, which
-    /// marks it as it goes, so delivery stays true however the caller ends: dropping the
-    /// returned future (the call stopped) stops the wait, never the writes. A press is always
-    /// followed by its release, and a `delay` is cut short. Starting eagerly matters: a future
-    /// that started the writer only when first polled could be dropped unpolled by a
-    /// [`Progress::race`] that had already lost, leaving a begun ticket nobody marks.
+    /// Starts writing the action's input (a move, a click's mouse events, or a tap's touches) on a
+    /// detached writer task *before it returns*, and gives back a future of the writer's report.
+    /// The ticket moves into the writer, which marks it as it goes, so delivery stays true however
+    /// the caller ends: dropping the returned future (the call stopped) stops the wait, never the
+    /// writes. A press is always followed by its release, a touch start by its end, and a `delay`
+    /// is cut short. Starting eagerly matters: a future that started the writer only when first
+    /// polled could be dropped unpolled by a [`Progress::race`] that had already lost, leaving a
+    /// begun ticket nobody marks.
     ///
     /// The armed interceptor moves into the writer too, and comes back with the report once
     /// every event is acknowledged. A caller that stopped waiting never gets it back, and the
@@ -166,8 +191,7 @@ pub(crate) trait Tab: Send + Sync {
     /// is all that keeps the next click from pressing at once.
     fn press(
         &self,
-        point: Point,
-        click: MouseClick,
+        plan: Plan,
         ticket: InputTicket,
         armed: Option<Self::Armed>,
         input: Self::Input,
@@ -185,6 +209,16 @@ pub(crate) trait Tab: Send + Sync {
 
     /// Resolves when no navigation is pending, with the URL it committed to, if any.
     fn navigation_settled(&self) -> impl Future<Output = Result<Option<String>, PageError>> + Send;
+
+    /// Playwright's `performActionPreChecks` locator-handler checkpoint (`page.ts`
+    /// `_performLocatorHandlersCheckpoint`), between its two navigation checks and before the
+    /// attempt takes the input turn. A tab without handlers has none to run.
+    fn locator_handlers_checkpoint(
+        &self,
+        _progress: &Progress,
+    ) -> impl Future<Output = Result<(), Stop>> + Send {
+        async { Ok(()) }
+    }
 
     /// Starts recording navigation requests. Called before `press`, so none of the input's own
     /// requests can be missed.
@@ -303,7 +337,7 @@ pub(crate) enum PageError {
     Contract(String),
 }
 
-/// The click's mouse events, decided before any is sent.
+/// A click's mouse events, decided before any is sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MouseClick {
     pub(crate) button: MouseButton,
@@ -318,6 +352,90 @@ pub(crate) enum MouseButton {
     Left,
     Right,
     Middle,
+}
+
+/// What a pointer action writes at its point, decided before anything is sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PointerInput {
+    /// Playwright: `server/dom.ts` `ElementHandle._hover`: `perform: (progress, point) => this._page.mouse.move(progress, point.x, point.y),`
+    Move,
+    /// Playwright: `server/dom.ts` `ElementHandle._click`: `perform: (progress, point) => this._page.mouse.click(progress, point.x, point.y, options),`
+    Click(MouseClick),
+    /// Playwright: `server/dom.ts` `ElementHandle._tap`: `perform: (progress, point) => this._page.touchscreen.tap(progress, point.x, point.y),`
+    Tap,
+    /// Playwright: `server/frames.ts` `Frame.dragAndDrop`: `await this._page.mouse.down(progress);`
+    MoveAndDown,
+    /// Playwright: `server/frames.ts` `Frame.dragAndDrop`: `await this._page.mouse.up(progress);`
+    MoveAndUp,
+}
+
+/// Playwright's `PointerAction` (`dom.ts`): the action loop B performs once the element is
+/// ready. Its name goes into the call log; [`PointerAction::states`] are what it waits for,
+/// [`PointerAction::hit_target`] what its interceptor judges, and [`PointerAction::input`] what
+/// its writer sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PointerAction {
+    Click(MouseClick),
+    /// A click of `clickCount: 2` under its own name; its [`MouseClick`] always counts two.
+    Dblclick(MouseClick),
+    Hover,
+    Tap,
+    /// `dragAndDrop`'s first half, on the source: a move, then a left press.
+    MoveAndDown,
+    /// `dragAndDrop`'s second half, on the target: a move in `steps`, then the release, which
+    /// drops when the press started a drag.
+    MoveAndUp,
+}
+
+impl PointerAction {
+    /// `action.name`, as the call log says it (`attempting hover action`).
+    /// Playwright: `server/dom.ts` `ElementHandle._retryPointerAction`: `return await this._retryAction(progress, action.name, async (progress, retry) => {`
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Click(_) => "click",
+            Self::Dblclick(_) => "dblclick",
+            Self::Hover => "hover",
+            Self::Tap => "tap",
+            Self::MoveAndDown => "move and down",
+            Self::MoveAndUp => "move and up",
+        }
+    }
+
+    /// Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `const elementStates: ElementState[] = action.waitForEnabled ? ['visible', 'enabled', 'stable', 'non-inert'] : ['visible', 'stable'];`
+    fn states(self) -> &'static [ElementState] {
+        match self {
+            Self::Hover | Self::MoveAndDown | Self::MoveAndUp => &HOVER_STATES,
+            Self::Click(_) | Self::Dblclick(_) | Self::Tap => &CLICK_STATES,
+        }
+    }
+
+    /// Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `action.waitForEnabled ? 'visible, enabled and stable' : 'visible and stable'`
+    fn states_text(self) -> &'static str {
+        match self {
+            Self::Hover | Self::MoveAndDown | Self::MoveAndUp => "visible and stable",
+            Self::Click(_) | Self::Dblclick(_) | Self::Tap => "visible, enabled and stable",
+        }
+    }
+
+    /// Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `const actionType = action.name === 'move and up' ? 'drag' : ((action.name === 'hover' || action.name === 'tap') ? action.name : 'mouse');`
+    pub(crate) fn hit_target(self) -> HitTargetAction {
+        match self {
+            Self::Hover => HitTargetAction::Hover,
+            Self::Tap => HitTargetAction::Tap,
+            Self::MoveAndUp => HitTargetAction::Drag,
+            Self::Click(_) | Self::Dblclick(_) | Self::MoveAndDown => HitTargetAction::Mouse,
+        }
+    }
+
+    pub(crate) fn input(self) -> PointerInput {
+        match self {
+            Self::Click(click) | Self::Dblclick(click) => PointerInput::Click(click),
+            Self::Hover => PointerInput::Move,
+            Self::Tap => PointerInput::Tap,
+            Self::MoveAndDown => PointerInput::MoveAndDown,
+            Self::MoveAndUp => PointerInput::MoveAndUp,
+        }
+    }
 }
 
 /// The scroll of one loop-B attempt, by retry index (`dom.ts` `_retryPointerAction`): CDP
@@ -337,49 +455,82 @@ const SCROLLS: [Scroll; 4] = [Scroll::Protocol, Scroll::End, Scroll::Center, Scr
 const LOOP_A_BACKOFF_MS: [u32; 5] = [20, 50, 100, 100, 500];
 /// Loop B's waits by retry index, the last repeating, never capped (`dom.ts` `_retryAction`).
 const LOOP_B_WAITS_MS: [u64; 5] = [0, 20, 100, 100, 500];
-/// A click's required states, in Playwright's order (`dom.ts` `_performPointerAction`).
+/// The states every pointer action but hover waits for, in Playwright's order.
+/// Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `['visible', 'enabled', 'stable', 'non-inert']`
 const CLICK_STATES: [ElementState; 4] = [
     ElementState::Visible,
     ElementState::Enabled,
     ElementState::Stable,
     ElementState::NonInert,
 ];
+/// Hover's states: it never waits for an enabled element (`waitForEnabled: false`).
+/// Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `['visible', 'stable']`
+const HOVER_STATES: [ElementState; 2] = [ElementState::Visible, ElementState::Stable];
 /// The longest URL Playwright's navigation pre-check prints.
 const LOGGED_URL_CHARS: usize = 200;
-/// The most clicks one call may ask for. Playwright has no cap, but every click is two events
-/// built up front, and a script's `clickCount: 1e9` must not take the server's memory with it.
+/// Deviation: `server/input.ts` `Mouse.click`: `for (let cc = 1; cc <= clickCount; ++cc) {` Playwright has no cap; every click is two events Neo plans before writing, so a script's `clickCount: 1e9` must not take the server's memory with it.
 const MAX_CLICK_COUNT: u32 = 1000;
+/// Deviation: `server/input.ts` `Mouse.move`: `for (let i = 1; i <= steps; i++) {` Playwright has no cap; every step is one event Neo plans before writing, so `steps: 1e9` must not take the server's memory with it.
+const MAX_STEPS: u32 = 1000;
 
 // ---------------------------------------------------------------------------------------------
 // The algorithm.
 // ---------------------------------------------------------------------------------------------
 
-/// One click's options, decoded once from Playwright's params by the dispatcher's route.
+/// One pointer action's options, decoded once from Playwright's params by the dispatcher's
+/// route.
 #[derive(Debug, Clone, PartialEq)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "each is one of Playwright's independent click options"
+    reason = "each is one of Playwright's independent pointer-action options"
 )]
-pub(crate) struct ClickOptions {
+pub(crate) struct PointerOptions {
     pub(crate) selector: String,
-    /// `strict: true` from `locator.click`; absent (non-strict) from `page.click`/`frame.click`.
+    /// `strict: true` from a locator; absent (non-strict) from the `page`/`frame` forms.
     pub(crate) strict: bool,
     pub(crate) force: bool,
     /// `scroll: 'none'` skips scrolling (the log lines stay, as in Playwright).
     pub(crate) scroll: bool,
-    /// `!noWaitAfter`: wait for the navigations the input requested. The verdict is read either
-    /// way.
+    /// Playwright's `waitAfter: true`: wait for the navigations the input requested. Only a
+    /// click without `noWaitAfter` has it; `dblclick`, `hover` and `tap` are `'disabled'`, as are
+    /// check and uncheck. The verdict is read either way.
     pub(crate) wait_after: bool,
     pub(crate) position: Option<Point>,
-    pub(crate) mouse: MouseClick,
+    pub(crate) action: PointerAction,
     pub(crate) trial: bool,
+    /// Playwright's `modifiers`: the modifiers held during the input, pressed and released
+    /// around it and restored after (`ensureModifiers`); `None` keeps the keyboard's, and an
+    /// empty list releases every held one for the input.
+    pub(crate) modifiers: Option<Vec<KeyboardModifier>>,
+    /// Playwright's `steps`: the pointer moves in this many steps from its last position.
+    pub(crate) steps: u32,
+    /// The browser's platform, read by [`pointer_action`] when `modifiers` are given: it decides
+    /// `ControlOrMeta` and the mac editing commands of the modifier keys.
+    pub(crate) platform: Option<Platform>,
 }
 
-impl ClickOptions {
-    /// Reads Playwright's params. Refuses what Neo does not serve before any work, so the
-    /// reply has no log: non-empty `modifiers` (needs keyboard state), `steps` other than 1
-    /// (needs the page's last mouse position), and more than [`MAX_CLICK_COUNT`] clicks.
-    pub(crate) fn from_params(params: FrameClickParams) -> Result<Self, PlaywrightError> {
+/// Each command's own modifiers enum, as Playwright's `KeyboardModifier`.
+macro_rules! keyboard_modifiers {
+    ($modifiers:expr, $item:ident) => {
+        $modifiers.map(|modifiers| {
+            modifiers
+                .into_iter()
+                .map(|modifier| match modifier {
+                    $item::Alt => KeyboardModifier::Alt,
+                    $item::Control => KeyboardModifier::Control,
+                    $item::ControlOrMeta => KeyboardModifier::ControlOrMeta,
+                    $item::Meta => KeyboardModifier::Meta,
+                    $item::Shift => KeyboardModifier::Shift,
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+}
+
+impl PointerOptions {
+    /// Reads `Frame.click`'s params. Refuses before any work, so the reply has no log, more than
+    /// [`MAX_CLICK_COUNT`] clicks and more than [`MAX_STEPS`] steps.
+    pub(crate) fn from_click(params: FrameClickParams) -> Result<Self, PlaywrightError> {
         let FrameClickParams {
             selector,
             strict,
@@ -394,54 +545,174 @@ impl ClickOptions {
             trial,
             steps,
         } = params;
-        if modifiers.is_some_and(|modifiers| !modifiers.is_empty()) {
-            return Err(PlaywrightError::error(
-                "Neo does not support click modifiers yet",
-            ));
-        }
-        if steps.is_some_and(|steps| steps != 1) {
-            return Err(PlaywrightError::error(
-                "Neo does not support click steps other than 1 yet",
-            ));
-        }
-        // JS's `Math.max(0, n)` loop bound: zero or fewer clicks write only the move.
-        let click_count = u32::try_from(click_count.unwrap_or(1).max(0)).unwrap_or(u32::MAX);
-        if click_count > MAX_CLICK_COUNT {
-            return Err(PlaywrightError::error(format!(
-                "Neo does not support a clickCount above {MAX_CLICK_COUNT}"
-            )));
-        }
+        let steps = steps_of(steps)?;
+        let click_count = click_count_of(click_count)?;
         let button = match button.unwrap_or(FrameClickParamsButton::Left) {
             FrameClickParamsButton::Left => MouseButton::Left,
             FrameClickParamsButton::Right => MouseButton::Right,
             FrameClickParamsButton::Middle => MouseButton::Middle,
         };
-        // `if (delay)`: zero takes the pipelined path; any other number the sequential one.
-        let delay = delay.filter(|delay| *delay != 0.0).map(|delay| {
-            Duration::try_from_secs_f64(delay.max(0.0) / 1000.0).unwrap_or(Duration::MAX)
-        });
         Ok(Self {
             selector,
             strict: strict.unwrap_or(false),
             force: force.unwrap_or(false),
             scroll: scroll != Some(FrameClickParamsScroll::None),
             wait_after: !no_wait_after.unwrap_or(false),
-            // The wire's `Point` and the page call's are two generated types of one shape.
-            position: position.map(|position| Point {
-                x: position.x,
-                y: position.y,
-            }),
-            mouse: MouseClick {
+            position: position.as_ref().map(point),
+            action: PointerAction::Click(MouseClick {
                 button,
                 click_count,
-                delay,
-            },
+                delay: click_delay(delay),
+            }),
             trial: trial.unwrap_or(false),
+            modifiers: keyboard_modifiers!(modifiers, FrameClickParamsModifiersItem),
+            steps,
+            platform: None,
         })
+    }
+
+    /// Reads `Frame.dblclick`'s params: a click of two with its `button` and `delay`. The
+    /// protocol has no `noWaitAfter` for it (the client drops the option), and Playwright never
+    /// waits for its navigations. Refuses `steps` as [`Self::from_click`] does.
+    pub(crate) fn from_dblclick(params: FrameDblclickParams) -> Result<Self, PlaywrightError> {
+        let FrameDblclickParams {
+            selector,
+            strict,
+            force,
+            scroll,
+            modifiers,
+            position,
+            delay,
+            button,
+            trial,
+            steps,
+        } = params;
+        let steps = steps_of(steps)?;
+        let button = match button.unwrap_or(FrameDblclickParamsButton::Left) {
+            FrameDblclickParamsButton::Left => MouseButton::Left,
+            FrameDblclickParamsButton::Right => MouseButton::Right,
+            FrameDblclickParamsButton::Middle => MouseButton::Middle,
+        };
+        Ok(Self {
+            selector,
+            strict: strict.unwrap_or(false),
+            force: force.unwrap_or(false),
+            scroll: scroll != Some(FrameDblclickParamsScroll::None),
+            wait_after: false,
+            position: position.as_ref().map(point),
+            // Playwright: `server/dom.ts` `ElementHandle._dblclick`: `{ ...options, clickCount: 2 }`
+            action: PointerAction::Dblclick(MouseClick {
+                button,
+                click_count: 2,
+                delay: click_delay(delay),
+            }),
+            trial: trial.unwrap_or(false),
+            modifiers: keyboard_modifiers!(modifiers, FrameDblclickParamsModifiersItem),
+            steps,
+            platform: None,
+        })
+    }
+
+    /// Reads `Frame.hover`'s params: one move, waiting for a visible and stable element only.
+    pub(crate) fn from_hover(params: FrameHoverParams) -> Self {
+        let FrameHoverParams {
+            selector,
+            strict,
+            force,
+            scroll,
+            modifiers,
+            position,
+            trial,
+        } = params;
+        Self {
+            selector,
+            strict: strict.unwrap_or(false),
+            force: force.unwrap_or(false),
+            scroll: scroll != Some(FrameHoverParamsScroll::None),
+            wait_after: false,
+            position: position.as_ref().map(point),
+            action: PointerAction::Hover,
+            trial: trial.unwrap_or(false),
+            modifiers: keyboard_modifiers!(modifiers, FrameHoverParamsModifiersItem),
+            // Playwright: `server/input.ts` `Mouse.move`: `const { steps = 1 } = options;`
+            steps: 1,
+            platform: None,
+        }
+    }
+
+    /// Reads `Frame.tap`'s params: a touch start and end at the point.
+    pub(crate) fn from_tap(params: FrameTapParams) -> Self {
+        let FrameTapParams {
+            selector,
+            strict,
+            force,
+            scroll,
+            modifiers,
+            position,
+            trial,
+        } = params;
+        // Deviation: `server/frames.ts` `Frame.tap`: `if (!this._page.browserContext._options.hasTouch)` Neo's run attaches to the user's BrowserOS context, which has no hasTouch option, and its tab answers Input.dispatchTouchEvent with the events of a hasTouch context, so Neo taps where Playwright refuses.
+        Self {
+            selector,
+            strict: strict.unwrap_or(false),
+            force: force.unwrap_or(false),
+            scroll: scroll != Some(FrameTapParamsScroll::None),
+            wait_after: false,
+            position: position.as_ref().map(point),
+            action: PointerAction::Tap,
+            trial: trial.unwrap_or(false),
+            modifiers: keyboard_modifiers!(modifiers, FrameTapParamsModifiersItem),
+            steps: 1,
+            platform: None,
+        }
     }
 }
 
-/// Why one loop-A iteration ended without a click.
+/// Playwright's `steps`, default 1: no steps or fewer moves the pointer without an event, as
+/// Playwright's loop does; more than [`MAX_STEPS`] is refused before any work.
+pub(crate) fn steps_of(steps: Option<i64>) -> Result<u32, PlaywrightError> {
+    // Playwright: `server/input.ts` `Mouse.move`: `const { steps = 1 } = options;`
+    let steps = u32::try_from(steps.unwrap_or(1).max(0)).unwrap_or(u32::MAX);
+    if steps > MAX_STEPS {
+        return Err(PlaywrightError::error(format!(
+            "Neo does not support steps above {MAX_STEPS}"
+        )));
+    }
+    Ok(steps)
+}
+
+/// A click's `clickCount`, default 1: JS's `Math.max(0, n)` loop bound, so zero or fewer clicks
+/// write only the move; more than [`MAX_CLICK_COUNT`] is refused before any work.
+/// Playwright: `server/input.ts` `Mouse.click`: `const { delay = null, clickCount = 1, steps } = options;`
+pub(crate) fn click_count_of(click_count: Option<i64>) -> Result<u32, PlaywrightError> {
+    let click_count = u32::try_from(click_count.unwrap_or(1).max(0)).unwrap_or(u32::MAX);
+    if click_count > MAX_CLICK_COUNT {
+        return Err(PlaywrightError::error(format!(
+            "Neo does not support a clickCount above {MAX_CLICK_COUNT}"
+        )));
+    }
+    Ok(click_count)
+}
+
+/// `if (delay)`: zero takes the pipelined path; any other number the sequential one, sleeping
+/// zero for a negative delay, as `setTimeout` treats it.
+/// Playwright: `server/input.ts` `Mouse.click`: `if (delay) {`
+pub(crate) fn click_delay(delay: Option<f64>) -> Option<Duration> {
+    delay
+        .filter(|delay| *delay != 0.0)
+        .map(|delay| Duration::try_from_secs_f64(delay.max(0.0) / 1000.0).unwrap_or(Duration::MAX))
+}
+
+/// The wire's `Point` and the page call's are two generated types of one shape.
+/// Neo: a copy between two generated types, which no script can see.
+pub(crate) fn point(position: &WirePoint) -> Point {
+    Point {
+        x: position.x,
+        y: position.y,
+    }
+}
+
+/// Why one loop-A iteration ended without its action.
 #[derive(Debug)]
 pub(crate) enum Stop {
     /// A page step answered [`PageError::NotConnected`]: resolve again, as Playwright retries
@@ -475,16 +746,36 @@ impl From<PageError> for Stop {
     }
 }
 
-/// Serves `Frame.click`. `Ok(())` is Playwright's `{id}` reply; the call log and delivery are
-/// in `progress`.
-pub(crate) async fn click<T: Tab>(
+/// Serves `Frame.click`, `Frame.dblclick`, `Frame.hover` and `Frame.tap` (`frames.ts`: loop A
+/// around `dom.ts` `_click`, `_dblclick`, `_hover`, `_tap`). `Ok(())` is Playwright's `{id}`
+/// reply; the call log and delivery are in `progress`.
+pub(crate) async fn pointer_action<T: KeyboardTab>(
     tab: &T,
-    options: &ClickOptions,
+    options: &PointerOptions,
     progress: &Progress,
 ) -> Result<(), CallError> {
-    // Click is an input method in the spec, so dispatch always gives it a cell.
+    // Every pointer action is an input method in the spec, so dispatch always gives it a cell.
     let Some(delivery) = progress.delivery() else {
-        return Err(PlaywrightError::error("neo-runtime: Frame.click has no delivery cell").into());
+        return Err(PlaywrightError::error(format!(
+            "neo-runtime: Frame.{} has no delivery cell",
+            options.action.name()
+        ))
+        .into());
+    };
+    // `modifiers` name `ControlOrMeta` by the browser's platform, read once per call.
+    let with_platform;
+    let options = if options.modifiers.is_some() {
+        let platform = progress
+            .race(tab.platform())
+            .await?
+            .map_err(platform_error)?;
+        with_platform = PointerOptions {
+            platform: Some(platform),
+            ..options.clone()
+        };
+        &with_platform
+    } else {
+        options
     };
     retry_with_progress_if_not_connected(
         tab,
@@ -492,7 +783,7 @@ pub(crate) async fn click<T: Tab>(
         options.strict,
         options.force,
         progress,
-        &ClickAction { options, delivery },
+        &PointerElementAction { options, delivery },
     )
     .await
 }
@@ -517,12 +808,12 @@ pub(crate) enum ActionResult<R> {
     NotConnected,
 }
 
-struct ClickAction<'a> {
-    options: &'a ClickOptions,
+struct PointerElementAction<'a> {
+    options: &'a PointerOptions,
     delivery: &'a Arc<DeliveryCell>,
 }
 
-impl<T: Tab> ElementAction<T> for ClickAction<'_> {
+impl<T: Tab> ElementAction<T> for PointerElementAction<'_> {
     type Output = ();
 
     async fn act(
@@ -548,7 +839,7 @@ impl<T: Tab> ElementAction<T> for ClickAction<'_> {
     }
 }
 
-/// Playwright's `_retryWithProgressIfNotConnected`, shared by click and form actions. Naming,
+/// Playwright's `_retryWithProgressIfNotConnected`, shared by pointer and form actions. Naming,
 /// backoff, preparation, pre-checks, description and resolution stay in exactly that order.
 /// The element and its object group drop after each iteration, as Playwright disposes its handle.
 pub(crate) async fn retry_with_progress_if_not_connected<T: Tab, A: ElementAction<T>>(
@@ -621,24 +912,25 @@ enum Attempt {
     NotReady(NotReady),
 }
 
-/// Loop B (`_retryAction` with `_retryPointerAction`): the same element until it is clicked,
-/// detached, or the call stops. Under `force`, `NotVisible` and `NotInViewport` end the call
-/// (Playwright's `NonRecoverableDOMError`).
+/// Loop B (`_retryAction` with `_retryPointerAction`): the same element until its action is
+/// done, it is detached, or the call stops. Under `force`, `NotVisible` and `NotInViewport` end
+/// the call (Playwright's `NonRecoverableDOMError`).
 pub(crate) async fn retry_pointer_action<T: Tab>(
     tab: &T,
     element: &T::Element,
-    options: &ClickOptions,
+    options: &PointerOptions,
     wait_after: WaitAfter,
     progress: &Progress,
     delivery: &Arc<DeliveryCell>,
 ) -> Result<ActionResult<()>, Stop> {
     let trial = if options.trial { " (trial run)" } else { "" };
+    let name = options.action.name();
     let mut retry = 0;
     loop {
         if retry == 0 {
-            progress.log(format!("attempting click action{trial}"));
+            progress.log(format!("attempting {name} action{trial}"));
         } else {
-            progress.log(format!("retrying click action{trial}"));
+            progress.log(format!("retrying {name} action{trial}"));
             let wait = loop_b_wait(retry);
             if !wait.is_zero() {
                 progress.log(format!("  waiting {}ms", wait.as_millis()));
@@ -679,15 +971,19 @@ async fn attempt<T: Tab>(
     tab: &T,
     element: &T::Element,
     retry: usize,
-    options: &ClickOptions,
+    options: &PointerOptions,
     wait_after: WaitAfter,
     progress: &Progress,
     delivery: &Arc<DeliveryCell>,
 ) -> Result<Attempt, Stop> {
+    let action = options.action;
     if !options.force {
-        progress.log("  waiting for element to be visible, enabled and stable");
+        progress.log(format!(
+            "  waiting for element to be {}",
+            action.states_text()
+        ));
         match progress
-            .race(tab.check_states(element, &CLICK_STATES))
+            .race(tab.check_states(element, action.states(), options.scroll))
             .await??
         {
             StatesCheck::Ready => {}
@@ -696,7 +992,7 @@ async fn attempt<T: Tab>(
                 return Ok(Attempt::NotReady(NotReady::Missing(state)));
             }
         }
-        progress.log("  element is visible, enabled and stable");
+        progress.log(format!("  element is {}", action.states_text()));
     }
 
     progress.log("  scrolling into view if needed");
@@ -712,7 +1008,7 @@ async fn attempt<T: Tab>(
     progress.log("  done scrolling");
 
     let geometry = progress
-        .race(tab.geometry(element, options.position.as_ref()))
+        .race(tab.geometry(element, options.position.as_ref(), options.force))
         .await??;
     let point = match click_point(&geometry, options.position.as_ref()) {
         Ok(point) => round_point(&point),
@@ -723,13 +1019,14 @@ async fn attempt<T: Tab>(
         progress.log("  forcing action");
     }
     // The input phase runs from here, after every wait for the element, to the verdict. Inside
-    // it the preliminary hit check, the press and the stop all see this click's own interceptor.
+    // it the preliminary hit check, the input and the stop all see this action's own
+    // interceptor.
     let input = progress.race(tab.input()).await?;
     let armed = if options.force {
         None
     } else {
         match progress
-            .race(tab.arm(element, point.clone(), input.clone()))
+            .race(tab.arm(element, point.clone(), action.hit_target(), input.clone()))
             .await??
         {
             Arming::Armed(armed) => Some(armed),
@@ -740,10 +1037,11 @@ async fn attempt<T: Tab>(
         }
     };
     if options.trial {
-        // Neo-only: a trial ends at its checks and sends no input. Dropping the interceptor
-        // disarms it, and the tab's input comes back once that stop has answered.
+        // Deviation: `server/dom.ts` `ElementHandle._performPointerAction`: `await action.perform(progress, point);` Playwright's trial still performs the input into an interceptor that blocks every event it judges, which the page's earlier listeners and the hover state still see; Neo's trial ends at its checks and sends no input.
+        // Dropping the interceptor disarms it, and the tab's input comes back once that stop has
+        // answered.
         drop(armed);
-        progress.log("  trial click action done");
+        progress.log(format!("  trial {} action done", action.name()));
         return Ok(Attempt::Done);
     }
     act(
@@ -772,35 +1070,56 @@ async fn act<T: Tab>(
     point: Point,
     armed: Option<T::Armed>,
     input: T::Input,
-    options: &ClickOptions,
+    options: &PointerOptions,
     wait_after: WaitAfter,
     progress: &Progress,
     delivery: &Arc<DeliveryCell>,
 ) -> Result<Attempt, Stop> {
+    let name = options.action.name();
+    // Planned under the turn, from the tab's devices as they are now: the held modifiers and
+    // buttons, and the pointer where the last input left it.
+    let plan = plan_pointer_input(&input, &point, options)?;
     let watched = (wait_after == WaitAfter::Enabled).then(|| tab.watch_navigations());
     // The last chance to stop before an irreversible step.
     progress.check()?;
-    let Ok(ticket) = delivery.begin() else {
-        return Err(PlaywrightError::error(
-            "neo-runtime: a click tried to press again after input",
-        )
-        .into());
-    };
-    progress.log("  performing click action");
-    let (report, armed) = progress
-        .race(tab.press(point, options.mouse, ticket, armed, input.clone()))
-        .await?;
-    let acked = match report {
-        PressReport::Acked(acked) => acked,
-        // Nothing was written because the session's socket was replaced, or the session went
-        // mid-press: either way the tab is gone for this run.
-        PressReport::NothingWritten | PressReport::Failed { closed: true, .. } => {
-            return Err(PlaywrightError::target_closed().into());
+    let (acked, armed) = if plan.writes() == 0 {
+        // `clickCount: 0` with `steps: 0`: Playwright's action writes no event and succeeds,
+        // and its pointer still moves. Nothing was sent: the cell stays `NotSent`.
+        progress.log(format!("  performing {name} action"));
+        for command in &plan.commands {
+            input.apply(&command.effect, true);
         }
-        PressReport::Failed {
-            closed: false,
-            message,
-        } => return Err(PlaywrightError::error(message).into()),
+        (None, armed)
+    } else {
+        // A drag's second half writes after its first: its ticket keeps the cell `Unknown`.
+        let ticket = if options.action == PointerAction::MoveAndUp {
+            delivery.begin_more()
+        } else {
+            delivery.begin()
+        };
+        let Ok(ticket) = ticket else {
+            return Err(PlaywrightError::error(format!(
+                "neo-runtime: a {name} tried to write its input again"
+            ))
+            .into());
+        };
+        progress.log(format!("  performing {name} action"));
+        let (report, armed) = progress
+            .race(tab.press(plan, ticket, armed, input.clone()))
+            .await?;
+        let acked = match report {
+            PressReport::Acked(acked) => acked,
+            // Nothing was written because the session's socket was replaced, or the session
+            // went mid-press: either way the tab is gone for this run.
+            PressReport::NothingWritten | PressReport::Failed { closed: true, .. } => {
+                return Err(PlaywrightError::target_closed().into());
+            }
+            PressReport::Failed {
+                closed: false,
+                message,
+            } => return Err(PlaywrightError::error(message).into()),
+        };
+        (Some(acked), armed)
     };
 
     // Read after every press, `noWaitAfter` too: it cannot stall, because it races a dialog
@@ -815,14 +1134,14 @@ async fn act<T: Tab>(
     // Not held through the navigation barrier, which only waits: an interceptor not yet stopped
     // keeps its own copy until it is.
     drop(input);
-    if blocked.is_some() {
-        acked.blocked();
-    } else {
-        acked.delivered();
+    match (acked, blocked.is_some()) {
+        (Some(acked), true) => acked.blocked(),
+        (Some(acked), false) => acked.delivered(),
+        (None, _) => {}
     }
 
     if blocked.is_none() {
-        progress.log("  click action done");
+        progress.log(format!("  {name} action done"));
         progress.log("  waiting for scheduled navigations to finish");
     }
     // Playwright's barrier runs after its action returns, blocked or not.
@@ -845,13 +1164,91 @@ async fn act<T: Tab>(
     Ok(Attempt::Done)
 }
 
-/// `performActionPreChecks`' navigation half (`page.ts` `_performWaitForNavigationCheck`):
-/// when a requested main-frame navigation has not settled, log, wait for it, and log where it
-/// went.
+/// Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `if (options && options.modifiers)`
+///
+/// The action's input as one plan, from the tab's devices under the turn: Playwright's
+/// `ensureModifiers` for `modifiers`, the action's own input at `point` (a hover's move and a
+/// click's in `steps` from the pointer's last position, with the held modifiers and buttons),
+/// then the modifiers' restore, each restore owed so a stopped call still restores.
+fn plan_pointer_input<D: Devices>(
+    input: &D,
+    point: &Point,
+    options: &PointerOptions,
+) -> Result<Plan, Stop> {
+    let mut simulated = input.snapshot()?;
+    let owner = input.owner();
+    let mut plan = Plan::default();
+    let target = match (&options.modifiers, options.platform) {
+        (Some(modifiers), Some(platform)) => {
+            Some((keyboard::modifiers_mask(modifiers, platform), platform))
+        }
+        (Some(_), None) => {
+            return Err(PlaywrightError::error(
+                "neo-runtime: a pointer action's modifiers came without the platform",
+            )
+            .into());
+        }
+        (None, _) => None,
+    };
+    let changes = target.map(|(mask, platform)| {
+        keyboard::plan_ensure_modifiers(&mut plan, &mut simulated, mask, platform, &owner)
+    });
+    let to = (point.x, point.y);
+    match options.action.input() {
+        PointerInput::Move => {
+            input_devices::plan_free_move(&mut plan, &mut simulated, to, options.steps);
+        }
+        PointerInput::MoveAndDown => {
+            // Playwright: `server/frames.ts` `Frame.dragAndDrop`: `await this._page.mouse.move(progress, point.x, point.y);`
+            input_devices::plan_free_move(&mut plan, &mut simulated, to, 1);
+            input_devices::plan_down(&mut plan, &mut simulated, MouseButton::Left, 1, &owner);
+        }
+        PointerInput::MoveAndUp => {
+            // Playwright: `server/frames.ts` `Frame.dragAndDrop`: `await this._page.mouse.move(progress, point.x, point.y, { steps: options.steps });`
+            input_devices::plan_free_move(&mut plan, &mut simulated, to, options.steps);
+            input_devices::plan_up(&mut plan, &mut simulated, MouseButton::Left, 1, None);
+        }
+        PointerInput::Click(click) => {
+            input_devices::plan_click(&mut plan, &mut simulated, to, &click, options.steps, &owner);
+        }
+        PointerInput::Tap => input_devices::plan_tap(&mut plan, &mut simulated, to),
+    }
+    if let (Some((_, platform)), Some(changes)) = (target, changes) {
+        keyboard::plan_restore_modifiers(&mut plan, &mut simulated, &changes, platform, &owner);
+    }
+    Ok(plan)
+}
+
+/// The platform read failing ends the call as any page step's terminal error does.
+fn platform_error(error: PageError) -> CallError {
+    match error {
+        PageError::Closed => PlaywrightError::target_closed().into(),
+        PageError::NotConnected => {
+            PlaywrightError::error("neo-runtime: the browser's platform could not be read").into()
+        }
+        PageError::Threw(message) | PageError::Contract(message) => {
+            PlaywrightError::error(message).into()
+        }
+    }
+}
+
+/// Playwright's `performActionPreChecks` (`page.ts`): waits out a pending main-frame
+/// navigation, runs the locator handlers' checkpoint, then waits once more, in case a handler
+/// navigated. Every caller runs it before the attempt takes the input turn, so a handler's own
+/// actions can take it.
 pub(crate) async fn wait_out_pending_navigation<T: Tab>(
     tab: &T,
     progress: &Progress,
 ) -> Result<(), Stop> {
+    navigation_check(tab, progress).await?;
+    tab.locator_handlers_checkpoint(progress).await?;
+    navigation_check(tab, progress).await
+}
+
+/// `performActionPreChecks`' navigation half (`page.ts` `_performWaitForNavigationCheck`):
+/// when a requested main-frame navigation has not settled, log, wait for it, and log where it
+/// went.
+async fn navigation_check<T: Tab>(tab: &T, progress: &Progress) -> Result<(), Stop> {
     let Some(url) = tab.pending_navigation() else {
         return Ok(());
     };
@@ -1072,9 +1469,12 @@ pub(crate) mod tests {
     use tokio::time;
     use tokio::time::Instant;
 
+    use browseros_cdp::SessionId;
+    use serde_json::Value;
+
     use super::*;
     use crate::forms::tests::FormSteps;
-    use crate::keyboard::Platform;
+    use crate::input_devices::{Effect, EffectSink, InputDevices, Owner};
     use crate::progress::ErrorName;
     use crate::run::Delivery;
 
@@ -1158,6 +1558,72 @@ pub(crate) mod tests {
     #[derive(Clone)]
     pub(crate) struct FakeInput {
         _turn: Arc<FakeTurn>,
+        /// The fake tab's devices, which the turn reaches as the real one reaches its tab's.
+        devices: Arc<Mutex<InputDevices>>,
+    }
+
+    /// The run that holds every fake turn.
+    pub(crate) fn fake_owner() -> Owner {
+        SessionId("RUN".to_string())
+    }
+
+    impl EffectSink for FakeInput {
+        fn apply(&self, effect: &Effect, answered: bool) {
+            // Each write is its own turn here.
+            let mut devices = self.devices.lock().expect("devices");
+            devices.apply(effect, answered);
+            devices.forget_ended();
+        }
+
+        fn devices(&self) -> InputDevices {
+            self.devices.lock().expect("devices").clone()
+        }
+    }
+
+    impl Devices for FakeInput {
+        fn snapshot(&self) -> Result<InputDevices, PageError> {
+            Ok(self.devices.lock().expect("devices").clone())
+        }
+
+        fn owner(&self) -> Owner {
+            fake_owner()
+        }
+    }
+
+    /// What a plan writes, as the fake tab records it: `tap (x, y)`, `press (x, y)`, `press twice
+    /// (x, y)` or `move (x, y)`, at the plan's last pointer point.
+    pub(crate) fn plan_summary(plan: &Plan) -> String {
+        let events: Vec<Value> = plan
+            .commands
+            .iter()
+            .filter(|command| command.method.is_some())
+            .map(|command| serde_json::from_str(&command.params).expect("params are JSON"))
+            .collect();
+        let kind = |event: &Value| event["type"].as_str().unwrap_or_default().to_string();
+        if let Some(start) = events.iter().find(|event| kind(event) == "touchStart") {
+            let at = &start["touchPoints"][0];
+            return format!("tap ({}, {})", at["x"], at["y"]);
+        }
+        let presses = events
+            .iter()
+            .filter(|event| kind(event) == "mousePressed")
+            .count();
+        let verb = match presses {
+            0 => "move",
+            2 => "press twice",
+            _ => "press",
+        };
+        let last = events
+            .iter()
+            .rev()
+            .find(|event| kind(event).starts_with("mouse"))
+            .map_or((0.0, 0.0), |event| {
+                (
+                    event["x"].as_f64().unwrap_or_default(),
+                    event["y"].as_f64().unwrap_or_default(),
+                )
+            });
+        format!("{verb} ({}, {})", last.0, last.1)
     }
 
     struct FakeTurn(Arc<Mutex<Vec<String>>>);
@@ -1188,6 +1654,12 @@ pub(crate) mod tests {
         pub(crate) settle: Step<Result<Vec<String>, PageError>>,
         pub(crate) pending: Mutex<Option<String>>,
         pub(crate) calls: Arc<Mutex<Vec<String>>>,
+        /// The states each `check_states` asked for, in call order.
+        pub(crate) states: Mutex<Vec<Vec<ElementState>>>,
+        /// The tab's devices, shared with every turn it grants.
+        pub(crate) devices: Arc<Mutex<InputDevices>>,
+        /// Every plan `press` was given, in call order.
+        pub(crate) plans: Mutex<Vec<Plan>>,
     }
 
     impl FakeTab {
@@ -1220,6 +1692,9 @@ pub(crate) mod tests {
                 settle: Step::always(ROUND_TRIP, Ok(Vec::new())),
                 pending: Mutex::new(None),
                 calls: Arc::default(),
+                states: Mutex::default(),
+                devices: Arc::default(),
+                plans: Mutex::default(),
             }
         }
 
@@ -1269,12 +1744,14 @@ pub(crate) mod tests {
             &self,
             _element: &u32,
             states: &[ElementState],
+            scroll: bool,
         ) -> Result<StatesCheck, PageError> {
-            assert_eq!(
-                states, CLICK_STATES,
-                "Playwright's click states, in its order"
-            );
-            self.record("check_states");
+            self.states.lock().expect("states").push(states.to_vec());
+            self.record(if scroll {
+                "check_states"
+            } else {
+                "check_states without scrolling"
+            });
             self.check_states.answer().await
         }
 
@@ -1292,6 +1769,7 @@ pub(crate) mod tests {
             &self,
             _element: &u32,
             _position: Option<&Point>,
+            _force: bool,
         ) -> Result<Geometry, PageError> {
             self.record("geometry");
             self.geometry.answer().await
@@ -1305,6 +1783,7 @@ pub(crate) mod tests {
             self.record("input");
             FakeInput {
                 _turn: Arc::new(FakeTurn(Arc::clone(&self.calls))),
+                devices: Arc::clone(&self.devices),
             }
         }
 
@@ -1312,9 +1791,10 @@ pub(crate) mod tests {
             &self,
             _element: &u32,
             hit_point: Point,
+            action: HitTargetAction,
             input: FakeInput,
         ) -> Result<Arming<FakeArmed>, PageError> {
-            self.record(format!("arm {hit_point:?}"));
+            self.record(format!("arm {action:?} {hit_point:?}"));
             Ok(match self.arm.answer().await? {
                 ArmAnswer::Armed => Arming::Armed(FakeArmed {
                     calls: Arc::clone(&self.calls),
@@ -1327,13 +1807,13 @@ pub(crate) mod tests {
 
         fn press(
             &self,
-            point: Point,
-            _click: MouseClick,
+            plan: Plan,
             ticket: InputTicket,
             armed: Option<FakeArmed>,
             input: FakeInput,
         ) -> impl Future<Output = (PressReport, Option<FakeArmed>)> + Send {
-            self.record(format!("press ({}, {})", point.x, point.y));
+            self.record(plan_summary(&plan));
+            self.plans.lock().expect("plans").push(plan.clone());
             let writes = self.press.next();
             let duration = self.press.duration;
             let calls = Arc::clone(&self.calls);
@@ -1344,7 +1824,13 @@ pub(crate) mod tests {
                 time::sleep(duration).await;
                 calls.lock().expect("calls").push("released".to_string());
                 let outcome = match writes {
-                    Writes::Ack => PressReport::Acked(ticket.acked()),
+                    Writes::Ack => {
+                        // A perfect writer: every command written and answered.
+                        for command in &plan.commands {
+                            input.apply(&command.effect, true);
+                        }
+                        PressReport::Acked(ticket.acked())
+                    }
                     Writes::Nothing => {
                         ticket.unsent();
                         PressReport::NothingWritten
@@ -1399,8 +1885,8 @@ pub(crate) mod tests {
         }
     }
 
-    fn options(selector: &str) -> ClickOptions {
-        ClickOptions::from_params(
+    fn options(selector: &str) -> PointerOptions {
+        PointerOptions::from_click(
             serde_json::from_value(serde_json::json!({
                 "selector": selector,
                 "strict": true,
@@ -1410,15 +1896,15 @@ pub(crate) mod tests {
         .expect("served options")
     }
 
-    /// Runs one click against `tab` with Playwright's `timeout`, and returns its outcome, its
-    /// folded log and its delivery.
+    /// Runs one pointer action against `tab` with Playwright's `timeout`, and returns its
+    /// outcome, its folded log and its delivery.
     async fn run(
         tab: &FakeTab,
-        options: &ClickOptions,
+        options: &PointerOptions,
         timeout_ms: f64,
     ) -> (Result<(), CallError>, Vec<String>, Delivery) {
         let progress = Progress::for_test(timeout_ms);
-        let result = click(tab, options, &progress).await;
+        let result = pointer_action(tab, options, &progress).await;
         let delivery = progress.delivery().expect("an input call").delivery();
         (result, progress.folded_log(), delivery)
     }
@@ -1527,7 +2013,7 @@ pub(crate) mod tests {
                 "scroll Protocol",
                 "geometry",
                 "input",
-                "arm Point { x: 36.75, y: 18.5 }",
+                "arm Mouse Point { x: 36.75, y: 18.5 }",
                 "watch_navigations",
                 "press (36.75, 18.5)",
                 "released",
@@ -1700,7 +2186,7 @@ pub(crate) mod tests {
         let mut tab = FakeTab::ready();
         tab.press = Step::always(Duration::from_secs(2), Writes::Ack);
         let progress = Progress::for_test(500.0);
-        let result = click(&tab, &options(SELECTOR), &progress).await;
+        let result = pointer_action(&tab, &options(SELECTOR), &progress).await;
         let cell = progress.delivery().expect("an input call");
 
         assert_eq!(result, timeout_error(500.0));
@@ -1955,18 +2441,12 @@ pub(crate) mod tests {
     #[test]
     fn options_refuse_what_neo_does_not_serve() {
         let decode = |params: serde_json::Value| {
-            ClickOptions::from_params(serde_json::from_value(params).expect("click params"))
+            PointerOptions::from_click(serde_json::from_value(params).expect("click params"))
         };
         assert_eq!(
-            decode(serde_json::json!({ "selector": "a", "modifiers": ["Shift"] })),
+            decode(serde_json::json!({ "selector": "a", "steps": 1001 })),
             Err(PlaywrightError::error(
-                "Neo does not support click modifiers yet"
-            ))
-        );
-        assert_eq!(
-            decode(serde_json::json!({ "selector": "a", "steps": 3 })),
-            Err(PlaywrightError::error(
-                "Neo does not support click steps other than 1 yet"
+                "Neo does not support steps above 1000"
             ))
         );
         assert_eq!(
@@ -1981,19 +2461,379 @@ pub(crate) mod tests {
         }))
         .expect("served");
         assert_eq!(
-            served.mouse,
-            MouseClick {
+            served.action,
+            PointerAction::Click(MouseClick {
                 button: MouseButton::Right,
                 click_count: 2,
                 delay: Some(Duration::ZERO),
-            },
+            }),
             "a negative delay is truthy in JS and sleeps 0"
         );
         assert!(!served.wait_after && !served.scroll && !served.strict);
         let default = decode(serde_json::json!({ "selector": "a", "delay": 0 })).expect("served");
         assert_eq!(
-            default.mouse.delay, None,
+            default.action.input(),
+            PointerInput::Click(MouseClick {
+                button: MouseButton::Left,
+                click_count: 1,
+                delay: None,
+            }),
             "a zero delay takes the pipelined path"
+        );
+    }
+
+    fn decoded(method: &str, params: serde_json::Value) -> Result<PointerOptions, PlaywrightError> {
+        match method {
+            "dblclick" => {
+                PointerOptions::from_dblclick(serde_json::from_value(params).expect("params"))
+            }
+            "hover" => Ok(PointerOptions::from_hover(
+                serde_json::from_value(params).expect("params"),
+            )),
+            "tap" => Ok(PointerOptions::from_tap(
+                serde_json::from_value(params).expect("params"),
+            )),
+            _ => PointerOptions::from_click(serde_json::from_value(params).expect("params")),
+        }
+    }
+
+    /// Each action's calls after the shared start (`describe`, `resolve`), so the three can be
+    /// read side by side: what it waited for, what its interceptor judged, what it wrote, and
+    /// that none of them waits for navigations.
+    async fn served(method: &str) -> (Vec<String>, Vec<Vec<ElementState>>, Delivery) {
+        let tab = FakeTab::ready();
+        let options = decoded(
+            method,
+            serde_json::json!({ "selector": SELECTOR, "strict": true }),
+        )
+        .expect("served");
+        let (result, _, delivery) = run(&tab, &options, 30_000.0).await;
+        assert_eq!(result, Ok(()), "{method}");
+        let states = tab.states.lock().expect("states").clone();
+        (tab.calls()[2..].to_vec(), states, delivery)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_hover_waits_for_visible_and_stable_and_writes_one_move() {
+        let (calls, states, delivery) = served("hover").await;
+        assert_eq!(states, [HOVER_STATES.to_vec()], "never waits for enabled");
+        assert_eq!(
+            calls,
+            [
+                "check_states",
+                "scroll Protocol",
+                "geometry",
+                "input",
+                "arm Hover Point { x: 36.75, y: 18.5 }",
+                "move (36.75, 18.5)",
+                "released",
+                "verdict",
+                "disarmed",
+                "input released",
+            ],
+            "hover's interceptor judges its move; no navigation barrier"
+        );
+        assert_eq!(delivery, Delivery::Done);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_dblclick_presses_twice_without_a_navigation_barrier() {
+        let (calls, states, delivery) = served("dblclick").await;
+        assert_eq!(states, [CLICK_STATES.to_vec()]);
+        assert!(calls.contains(&"arm Mouse Point { x: 36.75, y: 18.5 }".to_string()));
+        assert!(
+            calls.contains(&"press twice (36.75, 18.5)".to_string()),
+            "{calls:?}"
+        );
+        assert!(
+            !calls.contains(&"watch_navigations".to_string())
+                && !calls.contains(&"settle".to_string()),
+            "Playwright's dblclick waits for no navigation: {calls:?}"
+        );
+        assert_eq!(delivery, Delivery::Done);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_tap_arms_for_touches_and_writes_a_tap() {
+        let (calls, states, delivery) = served("tap").await;
+        assert_eq!(states, [CLICK_STATES.to_vec()], "tap waits for enabled");
+        assert!(
+            calls.contains(&"arm Tap Point { x: 36.75, y: 18.5 }".to_string()),
+            "{calls:?}"
+        );
+        assert!(
+            calls.contains(&"tap (36.75, 18.5)".to_string()),
+            "{calls:?}"
+        );
+        assert!(!calls.contains(&"settle".to_string()));
+        assert_eq!(delivery, Delivery::Done);
+    }
+
+    /// A hover whose move the interceptor blocked (the element was covered by then) moves again,
+    /// as a blocked click presses again; a forced hover arms nothing.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_blocked_hover_moves_again_and_a_forced_one_arms_nothing() {
+        let mut tab = FakeTab::ready();
+        tab.verdict = Step::new(
+            ROUND_TRIP,
+            [Verdict::Blocked(OVERLAY.to_string()), Verdict::Done],
+        );
+        let hover = decoded("hover", serde_json::json!({ "selector": SELECTOR })).expect("served");
+        let (result, _, delivery) = run(&tab, &hover, 30_000.0).await;
+        assert_eq!(result, Ok(()));
+        assert_eq!(delivery, Delivery::Done);
+        assert_eq!(tab.count("move (36.75, 18.5)"), 2, "{:?}", tab.calls());
+
+        let tab = FakeTab::ready();
+        let forced = decoded(
+            "hover",
+            serde_json::json!({ "selector": SELECTOR, "force": true }),
+        )
+        .expect("served");
+        let (result, _, _) = run(&tab, &forced, 30_000.0).await;
+        assert_eq!(result, Ok(()));
+        assert!(
+            !tab.calls().iter().any(|call| call.starts_with("arm ")),
+            "{:?}",
+            tab.calls()
+        );
+    }
+
+    /// `scroll: 'none'` reaches the states check, so an element in an offscreen frame is not
+    /// scrolled into view there either; Playwright scrolls nothing under it.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_scroll_none_checks_states_without_scrolling_frames() {
+        for method in ["click", "dblclick", "hover", "tap"] {
+            let tab = FakeTab::ready();
+            let options = decoded(
+                method,
+                serde_json::json!({ "selector": SELECTOR, "scroll": "none" }),
+            )
+            .expect("served");
+            let (result, _, _) = run(&tab, &options, 30_000.0).await;
+            assert_eq!(result, Ok(()), "{method}");
+            let calls = tab.calls();
+            assert!(
+                calls.contains(&"check_states without scrolling".to_string())
+                    && !calls.iter().any(|call| call.starts_with("scroll ")),
+                "{method}: {calls:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tests_that_every_pointer_action_serves_modifiers_and_steps() {
+        for method in ["click", "dblclick", "hover", "tap"] {
+            let options = decoded(
+                method,
+                serde_json::json!({ "selector": "a", "modifiers": ["Shift", "ControlOrMeta"] }),
+            )
+            .expect("served");
+            assert_eq!(
+                options.modifiers,
+                Some(vec![
+                    KeyboardModifier::Shift,
+                    KeyboardModifier::ControlOrMeta
+                ]),
+                "{method}"
+            );
+            let empty = decoded(
+                method,
+                serde_json::json!({ "selector": "a", "modifiers": [] }),
+            )
+            .expect("served");
+            assert_eq!(
+                empty.modifiers,
+                Some(Vec::new()),
+                "{method}: [] releases them all"
+            );
+            let kept = decoded(method, serde_json::json!({ "selector": "a" })).expect("served");
+            assert_eq!(
+                kept.modifiers, None,
+                "{method}: no option keeps the keyboard's"
+            );
+        }
+        for method in ["click", "dblclick"] {
+            let options = decoded(method, serde_json::json!({ "selector": "a", "steps": 5 }))
+                .expect("served");
+            assert_eq!(options.steps, 5, "{method}");
+            let none = decoded(method, serde_json::json!({ "selector": "a", "steps": -3 }))
+                .expect("served");
+            assert_eq!(
+                none.steps, 0,
+                "{method}: fewer than one step moves without an event"
+            );
+            assert_eq!(
+                decoded(
+                    method,
+                    serde_json::json!({ "selector": "a", "steps": 1001 })
+                ),
+                Err(PlaywrightError::error(
+                    "Neo does not support steps above 1000"
+                )),
+            );
+        }
+        let dblclick = decoded(
+            "dblclick",
+            serde_json::json!({ "selector": "a", "button": "middle", "delay": 10, "steps": 1 }),
+        )
+        .expect("served");
+        assert_eq!(
+            dblclick.action.input(),
+            PointerInput::Click(MouseClick {
+                button: MouseButton::Middle,
+                click_count: 2,
+                delay: Some(Duration::from_millis(10)),
+            })
+        );
+        assert!(!dblclick.wait_after && !dblclick.strict);
+    }
+
+    /// Each planned event of `plan`: `keyUp Shift` for a key, `mousePressed modifiers=8` for a
+    /// mouse event.
+    fn plan_events(plan: &Plan) -> Vec<String> {
+        plan.commands
+            .iter()
+            .filter(|command| command.method.is_some())
+            .map(|command| {
+                let event: Value = serde_json::from_str(&command.params).expect("params are JSON");
+                let kind = event["type"].as_str().unwrap_or_default();
+                if command.method == Some("Input.dispatchKeyEvent") {
+                    format!("{kind} {}", event["key"].as_str().unwrap_or_default())
+                } else {
+                    format!("{kind} modifiers={}", event["modifiers"])
+                }
+            })
+            .collect()
+    }
+
+    /// Where each planned `mouseMoved` goes.
+    fn plan_moves(plan: &Plan) -> Vec<(f64, f64)> {
+        plan.commands
+            .iter()
+            .filter_map(|command| {
+                let event: Value = serde_json::from_str(&command.params).ok()?;
+                (event["type"] == "mouseMoved").then(|| {
+                    (
+                        event["x"].as_f64().unwrap_or_default(),
+                        event["y"].as_f64().unwrap_or_default(),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// Design section 4.3: a pointer action plans from the tab's devices. A Shift held by an
+    /// earlier `keyboard.down` reaches a click; `modifiers: []` lifts it for the click and holds
+    /// it again after; `ControlOrMeta` is the mac's Meta, swapped in and out in `kModifiers`
+    /// order; `steps` start at the pointer's last position; the platform is read only when
+    /// `modifiers` is given.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_pointer_action_plans_from_the_tabs_devices() {
+        let tab = FakeTab::ready();
+        let place_pointer = |tab: &FakeTab| {
+            let mut devices = tab.devices.lock().expect("devices");
+            devices.mouse.x = 0.75;
+            devices.mouse.y = 0.5;
+        };
+        {
+            let mut devices = tab.devices.lock().expect("devices");
+            devices.keyboard.modifiers = keyboard::SHIFT;
+            devices.keyboard.pressed = vec![("ShiftLeft", fake_owner())];
+        }
+        let click = |params: serde_json::Value| {
+            let mut all = serde_json::json!({ "selector": SELECTOR });
+            if let (Some(all), Some(params)) = (all.as_object_mut(), params.as_object()) {
+                all.extend(params.clone());
+            }
+            decoded("click", all).expect("served")
+        };
+
+        let (result, _, delivery) = run(&tab, &click(serde_json::json!({})), 30_000.0).await;
+        assert_eq!((result, delivery), (Ok(()), Delivery::Done));
+        assert_eq!(tab.count("platform"), 0, "no modifiers, no platform");
+
+        place_pointer(&tab);
+        let options = click(serde_json::json!({ "modifiers": [], "steps": 2 }));
+        let (result, _, delivery) = run(&tab, &options, 30_000.0).await;
+        assert_eq!((result, delivery), (Ok(()), Delivery::Done));
+        assert_eq!(tab.count("platform"), 1);
+
+        let (result, _, delivery) = run(
+            &tab,
+            &click(serde_json::json!({ "modifiers": ["ControlOrMeta"] })),
+            30_000.0,
+        )
+        .await;
+        assert_eq!((result, delivery), (Ok(()), Delivery::Done));
+
+        let plans = tab.plans.lock().expect("plans").clone();
+        assert_eq!(plans.len(), 3);
+        assert_eq!(
+            plan_events(&plans[0]),
+            [
+                "mouseMoved modifiers=8",
+                "mousePressed modifiers=8",
+                "mouseReleased modifiers=8"
+            ],
+            "the held Shift reaches the click"
+        );
+        assert_eq!(
+            plan_events(&plans[1]),
+            [
+                "keyUp Shift",
+                "mouseMoved modifiers=0",
+                "mouseMoved modifiers=0",
+                "mousePressed modifiers=0",
+                "mouseReleased modifiers=0",
+                "rawKeyDown Shift"
+            ],
+            "modifiers: [] lifts Shift for the click only"
+        );
+        let moves = plan_moves(&plans[1]);
+        let to = moves[1];
+        assert_eq!(
+            moves[0],
+            (f64::midpoint(0.75, to.0), f64::midpoint(0.5, to.1)),
+            "the first of two steps is halfway from the last position"
+        );
+        assert_eq!(
+            plan_events(&plans[2]),
+            [
+                "rawKeyDown Meta",
+                "keyUp Shift",
+                "mouseMoved modifiers=4",
+                "mousePressed modifiers=4",
+                "mouseReleased modifiers=4",
+                "keyUp Meta",
+                "rawKeyDown Shift"
+            ],
+            "ControlOrMeta on mac, in kModifiers order both ways"
+        );
+        let keyboard = tab.devices.lock().expect("devices").keyboard.clone();
+        assert_eq!(keyboard.modifiers, keyboard::SHIFT, "Shift is held again");
+        assert_eq!(keyboard.pressed, [("ShiftLeft", fake_owner())]);
+    }
+
+    /// Known review issue: `clickCount: 0` with `steps: 0` writes no event, as Playwright's
+    /// does, and resolves: no writer runs, the delivery stays `NotSent`, and the pointer still
+    /// moves to the click point.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_click_with_nothing_to_write_resolves_without_input() {
+        let tab = FakeTab::ready();
+        let options = decoded(
+            "click",
+            serde_json::json!({ "selector": SELECTOR, "clickCount": 0, "steps": 0 }),
+        )
+        .expect("served");
+        let (result, log, delivery) = run(&tab, &options, 30_000.0).await;
+        assert_eq!(result, Ok(()), "{log:?}");
+        assert_eq!(delivery, Delivery::NotSent);
+        assert!(tab.plans.lock().expect("plans").is_empty(), "no writer ran");
+        let mouse = tab.devices.lock().expect("devices").mouse.clone();
+        assert!(
+            (mouse.x, mouse.y) != (0.0, 0.0),
+            "the pointer moved: {mouse:?}"
         );
     }
 

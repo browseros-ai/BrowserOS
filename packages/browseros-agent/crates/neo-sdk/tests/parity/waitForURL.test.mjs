@@ -6,16 +6,23 @@
 // Compared: what each call settled to (`undefined` or its error's kind, `waits.mjs` `settle`),
 // the URL and title the script read afterwards. Never wording, call logs or timing.
 //
-// Known, intended differences, asserted per engine and not counted as parity: Neo refuses a
-// predicate function and `waitUntil: 'networkidle'` with an `Error` (neo-sdk `neo-commands.ts`,
-// neo-runtime `waits.rs`), where Playwright resolves. Neo also does not reject on a failed
-// navigation (it tracks no network), which no case here exercises.
+// A predicate function sees the current URL, then each navigation's, as a `URL`; a navigation
+// that fails before the URL matched rejects the wait.
+//
+// `waitUntil: 'networkidle'` resolves once the matched page is quiet, in both (neo-runtime
+// `network_idle.rs`).
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs, waits.mjs).
 
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import {
+  assertDecoysUntouched,
+  compareFrameCases,
+  FRAME_TREE,
+  failed,
+} from './frames.mjs'
 import { skip } from './harness.mjs'
 import { withBoth } from './waits.mjs'
 
@@ -129,17 +136,47 @@ const cases = [
     expected: { notAUrlMatch: ERROR, invalidGlob: ERROR, waitUntil: ERROR },
   },
   {
-    name: 'Neo limits: a predicate function and networkidle',
+    name: 'a predicate function sees the current URL, then each navigation',
+    source: `const seen = []
+    const current = await settle(page.waitForURL((url) => url.pathname.endsWith('/wait-for-url.html')))
+    const waited = settle(page.waitForURL((url) => {
+      seen.push(url.pathname + url.hash)
+      return url.pathname === '/done.html'
+    }))
+    await page.click('#push')
+    await page.click('#to-done')
+    return { current, waited: await waited, seen, path: ${PATH} }`,
+    expected: {
+      current: RESOLVED,
+      waited: RESOLVED,
+      seen: ['/wait-for-url.html', '/pushed', '/done.html'],
+      path: '/done.html',
+    },
+  },
+  {
+    // The independent review's regression (review-review-b1.md), after the current-URL check.
+    name: 'a later navigation the predicate accepts wins while an earlier answer is pending',
+    source: `const waited = settle(page.waitForURL((url) =>
+      url.pathname === '/first' ? new Promise(() => {}) : url.pathname === '/goal', { timeout: 1800 }))
+    await page.click('#chain')
+    return { waited: await waited, path: ${PATH} }`,
+    expected: { waited: RESOLVED, path: '/goal' },
+  },
+  {
+    name: 'a navigation that fails before the URL matched rejects the wait',
+    source: `const waited = settle(page.waitForURL('**/never.html', { timeout: 10000 }))
+    await page.click('#to-unsafe')
+    return { waited: await waited }`,
+    expected: { waited: ERROR },
+  },
+  {
+    name: 'networkidle resolves once the matched page is quiet',
     source: `return {
-      predicate: await settle(
-        page.waitForURL((url) => url.pathname.endsWith('/wait-for-url.html'), { timeout: 5000 }),
-      ),
       networkidle: await settle(
         page.waitForURL('**/wait-for-url.html', { waitUntil: 'networkidle', timeout: 5000 }),
       ),
     }`,
-    expected: { predicate: RESOLVED, networkidle: RESOLVED },
-    neoExpected: { predicate: ERROR, networkidle: ERROR },
+    expected: { networkidle: RESOLVED },
   },
 ]
 
@@ -166,4 +203,110 @@ test('page.waitForURL settles the same through Neo and Playwright', {
       })
     }
   })
+})
+
+/**
+ * waitForURL on a child Frame (page.frame, page.frames()), on tabs of frame-top.html
+ * (frames.mjs): the frame's own URL, for the same-origin frame (a glob, a predicate) and the
+ * cross-site, out-of-process one (a RegExp, a predicate): already matching, and matched by a
+ * navigation a control starts
+ * in the frame, which leaves the page's own URL alone (a page wait for it times out). A wait on
+ * a frame whose iframe is removed rejects, and it was still pending when the iframe went. The
+ * script also waits for each new document through a frame locator, so the page ends the same
+ * whether or not child-frame waits are served.
+ */
+const frameCases = [
+  {
+    name: 'a child frame waits for its own navigation',
+    source: `const where = (url) => url.replace(/^http:\\/\\/([^:/]+):\\d+/, '$1')
+    const same = page.frame('same')
+    const cross = page.frames().find((frame) => frame.name() === 'cross')
+    const already = await settle(() => same.waitForURL('**/frame-child.html?who=same'))
+    const sameNavigated = settle(() => same.waitForURL('**/frame-child.html?who=same&gen=2'))
+    const samePredicate = settle(() => same.waitForURL((url) => url.searchParams.get('gen') === '2'))
+    await page.click('#reload-same')
+    const crossNavigated = settle(() => cross.waitForURL(/who=cross.*&gen=2$/))
+    const crossPredicate = settle(() => cross.waitForURL((url) => url.searchParams.get('gen') === '2'))
+    await page.click('#reload-cross')
+    const waits = {
+      already,
+      same: await sameNavigated,
+      samePredicate: await samePredicate,
+      cross: await crossNavigated,
+      crossPredicate: await crossPredicate,
+    }
+    await page.frameLocator('#same').getByText('gen 2').waitFor()
+    await page.frameLocator('#login-iframe').getByText('gen 2').waitFor()
+    return {
+      ...waits,
+      urls: [where(same.url()), where(cross.url())],
+      pageUrl: where(page.url()),
+      pageWait: await settle(() => page.waitForURL('**/frame-child.html?who=same&gen=2', { timeout: 300 })),
+    }`,
+    expected: {
+      already: RESOLVED,
+      same: RESOLVED,
+      samePredicate: RESOLVED,
+      cross: RESOLVED,
+      crossPredicate: RESOLVED,
+      urls: [
+        '127.0.0.1/frame-child.html?who=same&gen=2',
+        'localhost/frame-child.html?who=cross&kids=grandchild%40127.0.0.1&gen=2',
+      ],
+      pageUrl: '127.0.0.1/frame-top.html',
+      pageWait: failed('timeout'),
+    },
+    effect: (effect) => {
+      const { same, cross } = assertDecoysUntouched(effect, [
+        'top',
+        'same',
+        'cross',
+      ])
+      assert.deepEqual([same.gen, cross.gen], [2, 2])
+    },
+  },
+  {
+    name: 'a URL wait on a child frame rejects when its iframe is removed',
+    source: `const removedWhileWaiting = async (frame, remove) => {
+      let settled = false
+      const waiting = settle(() => frame.waitForURL('**/never.html')).then((result) => {
+        settled = true
+        return result
+      })
+      await page.title()
+      const pendingAtRemoval = !settled
+      await page.click(remove)
+      return { pendingAtRemoval, removed: await waiting, detached: frame.isDetached() }
+    }
+    return {
+      same: await removedWhileWaiting(page.frame('same'), '#remove-same'),
+      cross: await removedWhileWaiting(page.frame('cross'), '#remove-cross'),
+    }`,
+    expected: {
+      same: {
+        pendingAtRemoval: true,
+        removed: failed('error'),
+        detached: true,
+      },
+      cross: {
+        pendingAtRemoval: true,
+        removed: failed('error'),
+        detached: true,
+      },
+    },
+    effect: (effect) => {
+      const gone = ['same', 'cross', 'grandchild']
+      const frames = Object.keys(FRAME_TREE).filter(
+        (who) => !gone.includes(who),
+      )
+      assertDecoysUntouched(effect, ['top'], frames)
+    },
+  },
+]
+
+test('waitForURL on child frames settles the same through Neo and Playwright', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases)
 })

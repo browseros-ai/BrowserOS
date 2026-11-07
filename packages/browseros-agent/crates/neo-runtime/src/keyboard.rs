@@ -1,23 +1,22 @@
-//! Playwright's keyboard for Chromium, and the writer that sends it to the run's tab:
-//! `server/input.ts` (`Keyboard`, `buildLayoutClosure`, `resolveSmartModifierString`),
-//! `usKeyboardLayout.ts`, `macEditingCommands.ts` and `chromium/crInput.ts` (`RawKeyboardImpl`),
-//! as of Playwright 26137face; none of the four changed since v1.64.1.
+//! Playwright's keyboard for Chromium: `server/input.ts` (`Keyboard`, `buildLayoutClosure`,
+//! `resolveSmartModifierString`), `usKeyboardLayout.ts`, `macEditingCommands.ts` and
+//! `chromium/crInput.ts` (`RawKeyboardImpl`), as of Playwright 26137face; none of the four changed
+//! since v1.64.1. It plans key input into a [`Plan`] from the tab's keyboard state
+//! (`input_devices.rs`), which the one input writer sends.
 //!
 //! ```text
-//!  plan_press(key, platform)         pure: Playwright's `+` split, the US layout, one press's
-//!    └─ Vec<KeyEvent>                modifier state, crInput's `Input.dispatchKeyEvent` params
-//!  KeyboardTab::write_keys(events)   detached writer on the run's tracker: one event at a time,
-//!    └─ PressReport                  `delay` before the keyUp, and a keyUp for every keyDown
-//!                                    it may have written, however the call ends
-//!  KeyboardTab::insert_text(text)    one `Input.insertText`, the same way (fill's typing)
-//!  KeyboardTab::platform()           `Browser.getVersion`'s userAgent → mac, win or linux
+//!  plan_press / plan_key_down / plan_key_up / plan_type / plan_insert_text
+//!    pure: Playwright's `+` split, the US layout, the held modifiers and keys of the tab's
+//!    keyboard, crInput's `Input.dispatchKeyEvent` params, each keyUp naming the keyDown it
+//!    releases, `delay` before a keyUp right after its keyDown
+//!  plan_ensure_modifiers / plan_restore_modifiers
+//!    Playwright's `ensureModifiers` around an action's input, and its restore
+//!  KeyboardTab::write(plan)        the detached input writer (`input_devices::start_writer`)
+//!  KeyboardTab::platform()         `Browser.getVersion`'s userAgent → mac, win or linux
 //! ```
 //!
-//! Policy (press, fill) plans the keys and decides retries; nothing here writes a call-log line
-//! or names a locator. Neo-only behaviour, each deliberate:
-//! - Every press starts and ends with no key held. Playwright keeps one keyboard per page, and a
-//!   key it pressed stays down until something releases it; Neo has no `page.keyboard` yet, so
-//!   nothing may leave a key down between calls.
+//! Policy (press, fill, the page's keyboard) plans the keys and decides retries; nothing here
+//! writes a call-log line or names a locator. Neo-only behaviour, each deliberate:
 //! - A press is planned whole before anything is written, so an unknown token writes nothing.
 //!   Playwright writes the keyDowns before the bad token, then throws and leaves them held:
 //!   `Shift+Foo` leaves Shift down in the tab, corrupting every later keystroke there.
@@ -25,70 +24,53 @@
 //!   may have been written, newest first. Playwright's press stops at the error, keys held.
 //! - `ControlOrMeta` follows the browser's platform, as the mac `commands` do; Playwright reads
 //!   its own process's platform. Neo's server runs on the browser's machine, so they agree.
-//! - `Escape` never tries to cancel a drag first: Neo has no drag manager.
+//! - `Escape` never tries to cancel a drag first: Neo has no drag manager yet.
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::mem;
-use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
-use browseros_cdp::CdpError;
 use serde::Serialize;
 use serde_json::json;
-use tokio::sync::oneshot;
-use tokio::time;
-use tokio_util::sync::CancellationToken;
 
 use crate::click::{PageError, PressReport, Tab};
-use crate::page::{InputPermit, PageSession};
+use crate::input_devices::{
+    self, DragStep, Effect, InputDevices, KeyboardState, Owner, Plan, Planned,
+};
+use crate::page::{FrameTab, InputPermit};
 use crate::progress::InputTicket;
 use crate::world;
 
 // ---------------------------------------------------------------------------------------------
-// The seam: what a press or a fill's typing needs from a tab, beyond click's.
+// The seam: what key input needs from a tab, beyond click's.
 // ---------------------------------------------------------------------------------------------
 
 /// The keyboard of the run's tab. Each method is one Playwright step; every returned future is
-/// cancel-safe, as [`Tab`]'s are. Implemented by `Arc<PageSession>` here and by click's
-/// `FakeTab` in the tests, whose writes go through the real writer.
+/// cancel-safe, as [`Tab`]'s are. Implemented by `FrameTab` here and by click's `FakeTab` in the
+/// tests, whose writes go through the real writer.
 pub(crate) trait KeyboardTab: Tab {
     /// The browser's platform: `Browser.getVersion`'s userAgent, read as Playwright's
     /// `crBrowser.ts` `_platform` reads it. It decides `ControlOrMeta` and the mac `commands`.
     fn platform(&self) -> impl Future<Output = Result<Platform, PageError>> + Send;
 
-    /// Starts writing `events` on a detached writer task *before it returns*, and gives back a
-    /// future of the writer's report: [`Tab::press`]'s contract, for keys. `events` are one
-    /// [`plan_press`], or several in a row; `delay` is slept between a keyDown and the keyUp
-    /// right after it (`Keyboard.press`'s `delay`).
-    ///
-    /// The ticket moves into the writer, which marks it however the caller ends, so dropping the
-    /// returned future (the call stopped) stops the wait, never the writes: it cuts a `delay`
-    /// short and starts no further keyDown, and every key the writer may have pressed is still
-    /// released, newest first. Starting eagerly matters: a future that started the writer only
-    /// when polled could be dropped unpolled by a `Progress::race` that had already lost, leaving
-    /// a begun ticket nobody marks. The writer holds `input` until its last event is answered,
-    /// so the tab's next input waits for the release.
-    fn write_keys(
+    /// Starts writing `plan` on a detached writer task *before it returns*, and gives back a
+    /// future of the writer's report (`input_devices::start_writer`): the ticket and the turn
+    /// move into the writer, which marks the ticket and records each event in the tab's devices
+    /// however the caller ends. Dropping the returned future (the call stopped) cuts a `delay`
+    /// short and starts no further keyDown, while every key the writer may have pressed is still
+    /// released. The writer holds `input` until its last event is answered, so the tab's next
+    /// input waits for the release.
+    fn write(
         &self,
-        events: Vec<KeyEvent>,
-        delay: Option<Duration>,
-        ticket: InputTicket,
-        input: Self::Input,
-    ) -> impl Future<Output = PressReport> + Send;
-
-    /// `Input.insertText {text}` (`crInput.ts` `sendText`), started the same way, with the same
-    /// report. A call that stopped before the writer ran writes nothing.
-    fn insert_text(
-        &self,
-        text: &str,
+        plan: Plan,
         ticket: InputTicket,
         input: Self::Input,
     ) -> impl Future<Output = PressReport> + Send;
 }
 
-impl KeyboardTab for Arc<PageSession> {
+impl KeyboardTab for FrameTab {
     async fn platform(&self) -> Result<Platform, PageError> {
         let user_agent = self
             .user_agent()
@@ -97,215 +79,26 @@ impl KeyboardTab for Arc<PageSession> {
         Ok(Platform::from_user_agent(&user_agent))
     }
 
-    fn write_keys(
+    fn write(
         &self,
-        events: Vec<KeyEvent>,
-        delay: Option<Duration>,
+        plan: Plan,
         ticket: InputTicket,
         input: InputPermit,
     ) -> impl Future<Output = PressReport> + Send {
-        let cut_short = CancellationToken::new();
-        let writer = write_keys(Arc::clone(self), events, delay, ticket, cut_short.clone());
-        detach(|task| self.spawn(task), writer, input, cut_short)
-    }
-
-    fn insert_text(
-        &self,
-        text: &str,
-        ticket: InputTicket,
-        input: InputPermit,
-    ) -> impl Future<Output = PressReport> + Send {
-        let cut_short = CancellationToken::new();
-        let writer = insert_text(
-            Arc::clone(self),
-            text.to_string(),
+        let written = input_devices::start_writer(
+            |task| self.spawn(task),
+            Arc::clone(&self.page),
+            plan,
             ticket,
-            cut_short.clone(),
+            input,
+            (),
         );
-        detach(|task| self.spawn(task), writer, input, cut_short)
-    }
-}
-
-/// Where a writer's commands go: the run's session (`page.rs` `send_input_json`, at the
-/// session's socket incarnation), or a recording fake under paused time in the tests.
-trait InputSender: Send + Sync + 'static {
-    /// Sends one `Input.*` command, its params already serialized.
-    fn send_input(
-        &self,
-        method: &'static str,
-        params: String,
-    ) -> impl Future<Output = Result<(), CdpError>> + Send;
-}
-
-impl InputSender for Arc<PageSession> {
-    async fn send_input(&self, method: &'static str, params: String) -> Result<(), CdpError> {
-        self.send_input_json(method, &params).await
+        async move { written.await.0 }
     }
 }
 
 // ---------------------------------------------------------------------------------------------
-// The writer.
-// ---------------------------------------------------------------------------------------------
-
-/// A writer, boxed so one spawning seam serves the run's tracker and the tests' runtime.
-type WriterTask = Pin<Box<dyn Future<Output = ()> + Send>>;
-
-/// Spawns `writer` now through `spawn`, holding `input` until the writer has reported, and
-/// returns a future of the report holding a drop guard on the writer's `cut_short` token.
-fn detach(
-    spawn: impl FnOnce(WriterTask),
-    writer: impl Future<Output = PressReport> + Send + 'static,
-    input: impl Send + 'static,
-    cut_short: CancellationToken,
-) -> impl Future<Output = PressReport> + Send {
-    let (report, receiver) = oneshot::channel();
-    spawn(Box::pin(async move {
-        let written = writer.await;
-        // Every event is answered: the tab's next input may start.
-        drop(input);
-        // Nobody may be waiting any more; the ticket already holds the outcome.
-        let _waiting = report.send(written);
-    }));
-    let cut_short = cut_short.drop_guard();
-    async move {
-        let written = receiver.await.unwrap_or_else(|_| PressReport::Failed {
-            closed: true,
-            message: "the key writer stopped before reporting".to_string(),
-        });
-        drop(cut_short);
-        written
-    }
-}
-
-/// The key writer. It owns its events and the ticket that records them, and holds the sender
-/// (for the real tab, the page and so the session) until its last event is answered.
-async fn write_keys(
-    sender: impl InputSender,
-    events: Vec<KeyEvent>,
-    delay: Option<Duration>,
-    ticket: InputTicket,
-    cut_short: CancellationToken,
-) -> PressReport {
-    let outcomes = send_keys(&sender, &events, delay, &cut_short).await;
-    report(&outcomes, ticket)
-}
-
-/// Playwright's sequential `Keyboard.press`: each event is answered before the next is sent,
-/// with `delay` between a keyDown and the keyUp right after it. After `cut_short` or a failed
-/// event no further keyDown is sent, but every keyUp whose key a sent keyDown may have pressed
-/// still is: a failed keyDown counts as pressed, since it may have reached the browser. A
-/// refused send (`ConnectionEpochChanged`, raised before writing) ends everything: the socket
-/// that carried the session is gone, so nothing later can be written either.
-async fn send_keys(
-    sender: &impl InputSender,
-    events: &[KeyEvent],
-    delay: Option<Duration>,
-    cut_short: &CancellationToken,
-) -> Vec<Result<(), CdpError>> {
-    let mut outcomes = Vec::with_capacity(events.len());
-    // The code of every keyDown that may have been written and has no keyUp yet, oldest first.
-    let mut held: Vec<&'static str> = Vec::new();
-    let mut pressing = true;
-    for (index, event) in events.iter().enumerate() {
-        match event {
-            KeyEvent::Down(down) => {
-                if !pressing || cut_short.is_cancelled() {
-                    pressing = false;
-                    continue;
-                }
-                let written = send_key(sender, event).await;
-                if refused(&written) {
-                    outcomes.push(written);
-                    break;
-                }
-                held.push(down.code);
-                pressing = written.is_ok();
-                outcomes.push(written);
-                if pressing
-                    && let (Some(delay), Some(KeyEvent::Up(_))) = (delay, events.get(index + 1))
-                {
-                    pause(delay, cut_short).await;
-                }
-            }
-            KeyEvent::Up(up) => {
-                // Only a key this writer may have pressed is released.
-                let Some(at) = held.iter().rposition(|code| *code == up.code) else {
-                    continue;
-                };
-                held.remove(at);
-                let written = send_key(sender, event).await;
-                let stop = refused(&written);
-                pressing &= written.is_ok();
-                outcomes.push(written);
-                if stop {
-                    break;
-                }
-            }
-        }
-    }
-    outcomes
-}
-
-/// `insertText` as a writer: nothing is written once the call has stopped.
-async fn insert_text(
-    sender: impl InputSender,
-    text: String,
-    ticket: InputTicket,
-    cut_short: CancellationToken,
-) -> PressReport {
-    let mut outcomes = Vec::with_capacity(1);
-    if !cut_short.is_cancelled() {
-        let params = json!({ "text": text }).to_string();
-        outcomes.push(sender.send_input("Input.insertText", params).await);
-    }
-    report(&outcomes, ticket)
-}
-
-/// The mouse writer's rule (`page.rs` `write_mouse`): every written event acknowledged →
-/// `ticket.acked()`; nothing sent, or every send refused with `ConnectionEpochChanged` →
-/// `ticket.unsent()`; otherwise the ticket drops (`Unknown`) and the first error is reported.
-fn report(outcomes: &[Result<(), CdpError>], ticket: InputTicket) -> PressReport {
-    match outcomes.iter().find_map(|outcome| outcome.as_ref().err()) {
-        None if outcomes.is_empty() => {
-            ticket.unsent();
-            PressReport::NothingWritten
-        }
-        None => PressReport::Acked(ticket.acked()),
-        Some(_) if outcomes.iter().all(refused) => {
-            ticket.unsent();
-            PressReport::NothingWritten
-        }
-        Some(error) => {
-            drop(ticket);
-            PressReport::Failed {
-                closed: world::classify(error) == PageError::Closed,
-                message: error.to_string(),
-            }
-        }
-    }
-}
-
-/// One key event. Serializing these plain structs cannot fail; if it ever did, the error counts
-/// as a failed event, so delivery stays `Unknown` rather than claiming nothing was written.
-async fn send_key(sender: &impl InputSender, event: &KeyEvent) -> Result<(), CdpError> {
-    let params = serde_json::to_string(event)?;
-    sender.send_input("Input.dispatchKeyEvent", params).await
-}
-
-fn refused(written: &Result<(), CdpError>) -> bool {
-    matches!(written, Err(CdpError::ConnectionEpochChanged { .. }))
-}
-
-/// A `delay` sleep that the call stopping ends early.
-async fn pause(delay: Duration, cut_short: &CancellationToken) {
-    tokio::select! {
-        () = time::sleep(delay) => {}
-        () = cut_short.cancelled() => {}
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
-// Planning: Playwright's keyboard, one press at a time.
+// Planning: Playwright's keyboard, from the tab's keyboard state.
 // ---------------------------------------------------------------------------------------------
 
 /// The browser's platform, by Playwright's `crBrowser.ts` `_platform`.
@@ -380,14 +173,31 @@ pub(crate) struct KeyUp {
     pub(crate) is_keypad: bool,
 }
 
-/// Playwright's `Keyboard.press(key)` as the events it sends: the key split on `+`, a keyDown
-/// per token in order, then a keyUp per token in reverse, with the modifier state Playwright
-/// keeps, starting from none. Every token is looked up before any event exists, so an unknown
-/// one fails the whole press and nothing is sent; the error names the first unknown token, the
-/// one at whose keyDown Playwright throws.
-pub(crate) fn plan_press(key: &str, platform: Platform) -> Result<Vec<KeyEvent>, UnknownKey> {
+/// Playwright's `KeyboardModifier`, with the smart `ControlOrMeta`: what an action's
+/// `modifiers` option names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeyboardModifier {
+    Alt,
+    Control,
+    ControlOrMeta,
+    Meta,
+    Shift,
+}
+
+/// Playwright: `server/input.ts` `Keyboard.press`
+///
+/// The key split on `+`, a keyDown per token in order, then a keyUp per token in reverse,
+/// starting from the held modifiers and keys of `state` (a token already held repeats).
+/// Every token is looked up before any event exists, so an unknown one fails the whole press
+/// and nothing is planned; the error names the first unknown token, the one at whose keyDown
+/// Playwright throws.
+pub(crate) fn press_events(
+    key: &str,
+    platform: Platform,
+    state: &KeyboardState,
+) -> Result<Vec<KeyEvent>, UnknownKey> {
     let tokens = split(key);
-    let mut keyboard = Keyboard::default();
+    let mut keyboard = Keyboard::from_state(state);
     let mut events = Vec::with_capacity(tokens.len() * 2);
     for token in &tokens {
         events.push(KeyEvent::Down(keyboard.down(token, platform)?));
@@ -396,6 +206,402 @@ pub(crate) fn plan_press(key: &str, platform: Platform) -> Result<Vec<KeyEvent>,
         events.push(KeyEvent::Up(keyboard.up(token, platform)?));
     }
     Ok(events)
+}
+
+/// Playwright: `server/input.ts` `Keyboard.press`: `if (options.delay)`
+///
+/// One press as plan commands, from the tab's keyboard: each keyUp undoes the latest keyDown of
+/// its code in this press, so it is owed once that keyDown may have gone out, and `delay` is
+/// slept before the keyUp right after the last keyDown.
+pub(crate) fn plan_press(
+    plan: &mut Plan,
+    simulated: &mut InputDevices,
+    key: &str,
+    platform: Platform,
+    owner: &Owner,
+    delay: Option<Duration>,
+) -> Result<(), UnknownKey> {
+    let events = press_events(key, platform, &simulated.keyboard)?;
+    let mut downs: Vec<(&'static str, usize)> = Vec::with_capacity(events.len() / 2);
+    let mut after_down = false;
+    for event in events {
+        match event {
+            KeyEvent::Down(down) => {
+                let code = down.code;
+                let at = plan.push(simulated, key_command(&KeyEvent::Down(down), owner));
+                downs.push((code, at));
+                after_down = true;
+            }
+            KeyEvent::Up(up) => {
+                let undoes = downs
+                    .iter()
+                    .rposition(|(code, _)| *code == up.code)
+                    .map(|found| downs.remove(found).1);
+                let pause = if after_down { delay } else { None };
+                after_down = false;
+                plan.push(
+                    simulated,
+                    Planned {
+                        undoes,
+                        pause,
+                        ..key_command(&KeyEvent::Up(up), owner)
+                    },
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Playwright: `server/input.ts` `Keyboard.down`: `this._pressedKeys.add(description.code);`
+///
+/// One keyDown from the tab's keyboard, held until a later keyUp or the run's end. Returns its
+/// index.
+pub(crate) fn plan_key_down(
+    plan: &mut Plan,
+    simulated: &mut InputDevices,
+    key: &str,
+    platform: Platform,
+    owner: &Owner,
+) -> Result<usize, UnknownKey> {
+    let down = Keyboard::from_state(&simulated.keyboard).down(key, platform)?;
+    Ok(plan.push(simulated, key_command(&KeyEvent::Down(down), owner)))
+}
+
+/// Playwright: `server/input.ts` `Keyboard.up`: `this._pressedKeys.delete(description.code);`
+///
+/// One keyUp from the tab's keyboard, whether or not the key is held (Playwright sends it
+/// either way). `undoes` is the keyDown of this plan it releases, if any.
+pub(crate) fn plan_key_up(
+    plan: &mut Plan,
+    simulated: &mut InputDevices,
+    key: &str,
+    platform: Platform,
+    undoes: Option<usize>,
+) -> Result<usize, UnknownKey> {
+    let up = Keyboard::from_state(&simulated.keyboard).up(key, platform)?;
+    // Owners matter only on keyDowns; a keyUp names none.
+    let owner = Owner::default();
+    let command = Planned {
+        undoes,
+        ..key_command(&KeyEvent::Up(up), &owner)
+    };
+    Ok(plan.push(simulated, command))
+}
+
+/// Neo: how many characters of a `keyboard.type` are planned at once. The text arrives whole
+/// (bounded by the call's request size), but its commands, a few per character, are planned a
+/// chunk at a time as the writer reaches them, so typing a long text holds a bounded number of
+/// them.
+const TYPE_CHUNK: usize = 64;
+
+/// Neo: the text a `keyboard.type` has still to type, with the devices its commands so far
+/// leave, planned [`TYPE_CHUNK`] characters at a time by the writer (`Plan::tail`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TextTail {
+    text: String,
+    platform: Platform,
+    owner: Owner,
+    delay: Option<Duration>,
+    simulated: InputDevices,
+}
+
+/// Neo: planning a long text a chunk at a time.
+impl TextTail {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    /// The next chunk's commands, or `None` once the whole text is planned.
+    pub(crate) fn next_chunk(&mut self) -> Option<Plan> {
+        if self.text.is_empty() {
+            return None;
+        }
+        let rest = self.text.split_off(chunk_end(&self.text));
+        let chunk = mem::replace(&mut self.text, rest);
+        let mut plan = Plan::default();
+        plan_characters(
+            &mut plan,
+            &mut self.simulated,
+            &chunk,
+            self.platform,
+            &self.owner,
+            self.delay,
+        );
+        Some(plan)
+    }
+}
+
+/// Neo: the byte offset that ends the text's first [`TYPE_CHUNK`] characters.
+fn chunk_end(text: &str) -> usize {
+    text.char_indices()
+        .nth(TYPE_CHUNK)
+        .map_or(text.len(), |(at, _)| at)
+}
+
+/// Playwright: `server/input.ts` `Keyboard.type`: `for (const char of text) {`
+///
+/// The first [`TYPE_CHUNK`] characters now, the rest as the plan's tail.
+pub(crate) fn plan_type(
+    plan: &mut Plan,
+    simulated: &mut InputDevices,
+    text: &str,
+    platform: Platform,
+    owner: &Owner,
+    delay: Option<Duration>,
+) {
+    let end = chunk_end(text);
+    plan_characters(plan, simulated, &text[..end], platform, owner, delay);
+    if end < text.len() {
+        plan.tail = Some(TextTail {
+            text: text[end..].to_string(),
+            platform,
+            owner: owner.clone(),
+            delay,
+            simulated: simulated.clone(),
+        });
+    }
+}
+
+/// Playwright: `server/input.ts` `Keyboard.type`: `if (usKeyboardLayout.has(char)) {`
+///
+/// Each character a press when the US layout knows it, else an `Input.insertText` of it after
+/// `delay`.
+fn plan_characters(
+    plan: &mut Plan,
+    simulated: &mut InputDevices,
+    text: &str,
+    platform: Platform,
+    owner: &Owner,
+    delay: Option<Duration>,
+) {
+    for character in text.chars() {
+        let mut buffer = [0; 4];
+        let character: &str = character.encode_utf8(&mut buffer);
+        let pressed = LAYOUT.contains_key(character)
+            && plan_press(plan, simulated, character, platform, owner, delay).is_ok();
+        if !pressed {
+            let at = plan_insert_text(plan, simulated, character);
+            plan.commands[at].pause = delay;
+        }
+    }
+}
+
+/// Playwright: `server/chromium/crInput.ts` `RawKeyboardImpl.sendText`: `await progress.race(this._client.send('Input.insertText', { text }));`
+pub(crate) fn plan_insert_text(plan: &mut Plan, simulated: &mut InputDevices, text: &str) -> usize {
+    let params = json!({ "text": text }).to_string();
+    plan.push(
+        simulated,
+        Planned::command("Input.insertText", params, Effect::None),
+    )
+}
+
+/// One modifier change `plan_ensure_modifiers` made, for its restore.
+#[derive(Debug, Clone)]
+pub(crate) struct ModifierChange {
+    key: &'static str,
+    /// The change pressed the key (and its restore releases it), or released it.
+    pressed: bool,
+    /// The change's index in the plan.
+    at: usize,
+    /// For a released key, every run that held it, which gets it back on the restore.
+    held_by: Vec<Owner>,
+}
+
+/// Playwright: `server/input.ts` `Keyboard.ensureModifiers`: `const restore: types.KeyboardModifier[] = Array.from(this._pressedModifiers);`
+///
+/// Presses each modifier of `target` not held and releases each held one it lacks, in
+/// Playwright's `kModifiers` order, and returns the changes for [`plan_restore_modifiers`].
+pub(crate) fn plan_ensure_modifiers(
+    plan: &mut Plan,
+    simulated: &mut InputDevices,
+    target: u8,
+    platform: Platform,
+    owner: &Owner,
+) -> Vec<ModifierChange> {
+    let mut changes = Vec::new();
+    for (bit, key) in K_MODIFIERS {
+        let need_down = target & bit != 0;
+        let is_down = simulated.keyboard.modifiers & bit != 0;
+        if need_down == is_down {
+            continue;
+        }
+        let held_by = holders_of(&simulated.keyboard, key);
+        let planned = if need_down {
+            plan_key_down(plan, simulated, key, platform, owner)
+        } else {
+            plan_key_up(plan, simulated, key, platform, None)
+        };
+        // Every name in `K_MODIFIERS` is in the layout.
+        if let Ok(at) = planned {
+            changes.push(ModifierChange {
+                key,
+                pressed: need_down,
+                at,
+                held_by,
+            });
+        }
+    }
+    changes
+}
+
+/// Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `await this._page.keyboard.ensureModifiers(progress, restoreModifiers);`
+///
+/// Undoes every change `plan_ensure_modifiers` made, in its order: a key it pressed is released
+/// and a key it released is pressed again for the run that held it. Each restore undoes its
+/// change, so it is written whenever the change may have been, a stopped call included.
+pub(crate) fn plan_restore_modifiers(
+    plan: &mut Plan,
+    simulated: &mut InputDevices,
+    changes: &[ModifierChange],
+    platform: Platform,
+    owner: &Owner,
+) {
+    for change in changes {
+        let planned = if change.pressed {
+            plan_key_up(plan, simulated, change.key, platform, Some(change.at))
+        } else {
+            let (first, others) = change
+                .held_by
+                .split_first()
+                .map_or((owner, &[][..]), |(first, others)| (first, others));
+            plan_key_down(plan, simulated, change.key, platform, first).inspect(|&at| {
+                plan.commands[at].undoes = Some(change.at);
+                // Every other run that held the key holds it again, as written as the keyDown.
+                if let Effect::KeyDown { code, .. } = plan.commands[at].effect {
+                    for holder in others {
+                        let held = plan.push(
+                            simulated,
+                            Planned::state_only(Effect::KeyHolder {
+                                code,
+                                owner: holder.clone(),
+                            }),
+                        );
+                        plan.commands[held].undoes = Some(change.at);
+                    }
+                }
+            })
+        };
+        debug_assert!(
+            planned.is_ok(),
+            "every name in `K_MODIFIERS` is in the layout"
+        );
+    }
+}
+
+/// Deviation: `server/input.ts` `Keyboard.up`: `this._pressedKeys.delete(description.code);` Playwright keeps a page's keys held until its script releases them; Neo releases at a run's end every key the run left held, newest first, because the tab is the user's and outlives the run. A held code is a layout name, so the release needs no platform.
+pub(crate) fn plan_key_releases(plan: &mut Plan, simulated: &mut InputDevices, owner: &Owner) {
+    // First, before any release: whatever this run still holds once its end is over (a release
+    // that is refused, fails or never goes out) is held by no live run.
+    input_devices::plan_retire(plan, simulated, owner);
+    // What this run holds, newest first, and what only ended runs hold (a release that failed
+    // at an earlier run's end).
+    let mut held: Vec<&'static str> = Vec::new();
+    for (code, holder) in simulated.keyboard.pressed.iter().rev() {
+        if simulated.releases(holder, owner) && !held.contains(code) {
+            held.push(code);
+        }
+    }
+    for code in held {
+        // A key another live run still holds stays down; this run only lets go of it.
+        let shared = simulated
+            .keyboard
+            .pressed
+            .iter()
+            .any(|(held, holder)| *held == code && simulated.live_other(holder, owner));
+        let at = if shared {
+            if !simulated
+                .keyboard
+                .pressed
+                .iter()
+                .any(|(held, holder)| *held == code && holder == owner)
+            {
+                continue;
+            }
+            Some(plan.push(
+                simulated,
+                Planned::state_only(Effect::KeyLetGo {
+                    code,
+                    owner: owner.clone(),
+                }),
+            ))
+        } else {
+            // A code is always in the layout; the platform only decides `ControlOrMeta`.
+            plan_key_up(plan, simulated, code, Platform::Linux, None).ok()
+        };
+        // Each release is independent: one that fails does not keep the others held.
+        if let Some(at) = at {
+            plan.commands[at].always = true;
+        }
+    }
+}
+
+/// Playwright: `server/input.ts` `kModifiers`: `['Alt', 'Control', 'Meta', 'Shift']`
+const K_MODIFIERS: [(u8, &str); 4] = [
+    (ALT, "Alt"),
+    (CONTROL, "Control"),
+    (META, "Meta"),
+    (SHIFT, "Shift"),
+];
+
+/// Playwright: `server/input.ts` `resolveSmartModifierString`: `return process.platform === 'darwin' ? 'Meta' : 'Control';`
+///
+/// An action's `modifiers` option as the mask `ensureModifiers` aims at.
+pub(crate) fn modifiers_mask(modifiers: &[KeyboardModifier], platform: Platform) -> u8 {
+    modifiers
+        .iter()
+        .map(|modifier| match (modifier, platform) {
+            (KeyboardModifier::Alt, _) => ALT,
+            (KeyboardModifier::Control, _)
+            | (KeyboardModifier::ControlOrMeta, Platform::Linux | Platform::Win) => CONTROL,
+            (KeyboardModifier::Meta, _) | (KeyboardModifier::ControlOrMeta, Platform::Mac) => META,
+            (KeyboardModifier::Shift, _) => SHIFT,
+        })
+        .fold(0, |mask, bit| mask | bit)
+}
+
+/// The runs that hold the modifier `key` (`Shift`, …), oldest first: every holder of a held
+/// code the layout names that key, as Playwright's modifier set holds a key by name, whichever
+/// side pressed it.
+fn holders_of(state: &KeyboardState, key: &str) -> Vec<Owner> {
+    let mut holders: Vec<Owner> = Vec::new();
+    for (code, owner) in &state.pressed {
+        if LAYOUT
+            .get(code)
+            .is_some_and(|entry| entry.description.key == key)
+            && !holders.contains(owner)
+        {
+            holders.push(owner.clone());
+        }
+    }
+    holders
+}
+
+/// Neo: one key event as a plan command, with what it does to the tab's keyboard.
+fn key_command(event: &KeyEvent, owner: &Owner) -> Planned {
+    // Serializing these plain structs cannot fail; if it ever did, Chromium would refuse the
+    // empty params, and the write counts as failed.
+    let params = serde_json::to_string(event).unwrap_or_default();
+    let effect = match event {
+        KeyEvent::Down(down) => Effect::KeyDown {
+            code: down.code,
+            modifier: modifier_bit(down.key).unwrap_or(0),
+            owner: owner.clone(),
+        },
+        KeyEvent::Up(up) => Effect::KeyUp {
+            code: up.code,
+            modifier: modifier_bit(up.key).unwrap_or(0),
+        },
+    };
+    let drag = match event {
+        // Playwright: `server/chromium/crInput.ts` `RawKeyboardImpl.keydown`: `if (code === 'Escape' && await progress.race(this._dragManger.cancelDrag()))`
+        KeyEvent::Down(down) if down.code == "Escape" => DragStep::Escape,
+        _ => DragStep::None,
+    };
+    Planned {
+        drag,
+        ..Planned::command("Input.dispatchKeyEvent", params, effect)
+    }
 }
 
 /// `Keyboard.press`'s `split`: a `+` ends a token only when the token so far is not empty, so a
@@ -425,13 +631,13 @@ fn resolve_smart_modifier(key: &str, platform: Platform) -> &str {
 }
 
 /// `toModifiersMask`'s bits (`crProtocolHelper.ts`).
-const ALT: u8 = 1;
-const CONTROL: u8 = 2;
-const META: u8 = 4;
-const SHIFT: u8 = 8;
+pub(crate) const ALT: u8 = 1;
+pub(crate) const CONTROL: u8 = 2;
+pub(crate) const META: u8 = 4;
+pub(crate) const SHIFT: u8 = 8;
 
 /// `kModifiers`: the keys that are modifiers, by their `key`.
-fn modifier_bit(key: &str) -> Option<u8> {
+pub(crate) fn modifier_bit(key: &str) -> Option<u8> {
     match key {
         "Alt" => Some(ALT),
         "Control" => Some(CONTROL),
@@ -441,8 +647,9 @@ fn modifier_bit(key: &str) -> Option<u8> {
     }
 }
 
-/// Playwright's `Keyboard` state for one press: the modifiers held (as the mask) and the codes
-/// of the keys held, which make a second keyDown of the same code an `autoRepeat`.
+/// Playwright's `Keyboard` state while a press is planned: the modifiers held (as the mask)
+/// and the codes of the keys held, which make a second keyDown of the same code an
+/// `autoRepeat`.
 #[derive(Debug, Default)]
 struct Keyboard {
     modifiers: u8,
@@ -450,6 +657,21 @@ struct Keyboard {
 }
 
 impl Keyboard {
+    /// The tab's keyboard, as the planning copy starts from it: each held code once, whatever
+    /// runs hold it.
+    fn from_state(state: &KeyboardState) -> Self {
+        let mut pressed: Vec<&'static str> = Vec::new();
+        for (code, _) in &state.pressed {
+            if !pressed.contains(code) {
+                pressed.push(code);
+            }
+        }
+        Self {
+            modifiers: state.modifiers,
+            pressed,
+        }
+    }
+
     /// `_keyDescriptionForString`: the shifted variant while Shift is held, and no text while
     /// any other modifier is.
     fn description(&self, key: &str, platform: Platform) -> Result<KeyDescription, UnknownKey> {
@@ -1027,13 +1249,17 @@ const MAC_EDITING_COMMANDS: &[(&str, &[&str])] = &[
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::iter;
     use std::sync::Mutex;
 
+    use browseros_cdp::CdpError;
     use serde_json::Value;
+    use tokio::time;
     use tokio::time::Instant;
 
     use super::*;
-    use crate::click::tests::{FakeInput, FakeTab, Step, Writes};
+    use crate::click::tests::{FakeInput, FakeTab, Step, Writes, fake_owner};
+    use crate::input_devices::{Devices, EffectSink, InputSender};
     use crate::progress::DeliveryCell;
     use crate::run::Delivery;
 
@@ -1041,11 +1267,35 @@ mod tests {
     const DELAY: Duration = Duration::from_millis(50);
 
     fn press(key: &str) -> Vec<KeyEvent> {
-        plan_press(key, Platform::Mac).expect("a known key")
+        press_on(key, Platform::Mac)
     }
 
     fn press_on(key: &str, platform: Platform) -> Vec<KeyEvent> {
-        plan_press(key, platform).expect("a known key")
+        press_events(key, platform, &KeyboardState::default()).expect("a known key")
+    }
+
+    /// The presses of `keys`, one after another, planned on mac from a keyboard with nothing held.
+    fn keys_plan(keys: &[&str], delay: Option<Duration>) -> Plan {
+        let mut simulated = InputDevices::default();
+        let mut plan = Plan::default();
+        for key in keys {
+            plan_press(
+                &mut plan,
+                &mut simulated,
+                key,
+                Platform::Mac,
+                &fake_owner(),
+                delay,
+            )
+            .expect("a known key");
+        }
+        plan
+    }
+
+    fn text_plan(text: &str) -> Plan {
+        let mut plan = Plan::default();
+        plan_insert_text(&mut plan, &mut InputDevices::default(), text);
+        plan
     }
 
     /// `(type, key, modifiers)` per event: what most planning tests pin.
@@ -1381,7 +1631,7 @@ mod tests {
             ("a+", ""),
             ("Shift+", ""),
         ] {
-            let error = plan_press(key, Platform::Mac).expect_err(key);
+            let error = press_events(key, Platform::Mac, &KeyboardState::default()).expect_err(key);
             assert_eq!(error.key, token, "{key:?}");
             assert_eq!(error.to_string(), format!("Unknown key: \"{token}\""));
         }
@@ -1505,18 +1755,39 @@ mod tests {
         fn turn(&self) -> (Turn, Arc<Mutex<Option<Duration>>>) {
             let released = Arc::default();
             let turn = Turn {
-                start: self.start,
-                released: Arc::clone(&released),
+                _release: Arc::new(TurnRelease {
+                    start: self.start,
+                    released: Arc::clone(&released),
+                }),
+                devices: Arc::default(),
             };
             (turn, released)
         }
     }
 
+    /// One sent event as the tests compare it: `keyDown a`, `insertText hi`, and for the device
+    /// tests a mouse or touch event's type with the button state and modifiers it carries
+    /// (`mousePressed button=left buttons=1 clickCount=1 modifiers=8`), never coordinates.
     fn describe(sent: &Sent) -> String {
         let params: Value = serde_json::from_str(&sent.params).expect("params are JSON");
         let field = |name: &str| params[name].as_str().unwrap_or_default().to_string();
         match sent.method {
             "Input.insertText" => format!("insertText {}", field("text")),
+            "Input.dispatchMouseEvent" | "Input.dispatchTouchEvent" => {
+                let state = ["button", "buttons", "clickCount", "modifiers"]
+                    .into_iter()
+                    .filter_map(|name| {
+                        let value = params.get(name)?;
+                        let value = value
+                            .as_str()
+                            .map_or_else(|| value.to_string(), str::to_string);
+                        Some(format!("{name}={value}"))
+                    });
+                iter::once(field("type"))
+                    .chain(state)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }
             _ => format!("{} {}", field("type"), field("key")),
         }
     }
@@ -1540,14 +1811,45 @@ mod tests {
         }
     }
 
+    /// The test's input turn: records when its last copy goes, and carries devices of its own.
+    #[derive(Clone)]
     struct Turn {
+        /// Held for its `Drop`, which records when the last copy of the turn went.
+        _release: Arc<TurnRelease>,
+        devices: Arc<Mutex<InputDevices>>,
+    }
+
+    struct TurnRelease {
         start: Instant,
         released: Arc<Mutex<Option<Duration>>>,
     }
 
-    impl Drop for Turn {
+    impl Drop for TurnRelease {
         fn drop(&mut self) {
             *self.released.lock().expect("released") = Some(self.start.elapsed());
+        }
+    }
+
+    impl EffectSink for Turn {
+        fn apply(&self, effect: &Effect, answered: bool) {
+            // Each write is its own turn here.
+            let mut devices = self.devices.lock().expect("devices");
+            devices.apply(effect, answered);
+            devices.forget_ended();
+        }
+
+        fn devices(&self) -> InputDevices {
+            self.devices.lock().expect("devices").clone()
+        }
+    }
+
+    impl Devices for Turn {
+        fn snapshot(&self) -> Result<InputDevices, PageError> {
+            Ok(self.devices.lock().expect("devices").clone())
+        }
+
+        fn owner(&self) -> Owner {
+            fake_owner()
         }
     }
 
@@ -1555,24 +1857,16 @@ mod tests {
         released.lock().expect("released").map(|at| at.as_millis())
     }
 
-    /// The real key writer over `sender`, started as `KeyboardTab::write_keys` starts it.
+    /// The real input writer over `sender` with the presses of `keys`, started as
+    /// `KeyboardTab::write` starts it.
     fn start_keys(
         sender: &FakeSender,
-        events: Vec<KeyEvent>,
+        keys: &[&str],
         delay: Option<Duration>,
         ticket: InputTicket,
         turn: Turn,
     ) -> impl Future<Output = PressReport> + Send {
-        let cut_short = CancellationToken::new();
-        let writer = write_keys(sender.clone(), events, delay, ticket, cut_short.clone());
-        detach(
-            |task| {
-                tokio::spawn(task);
-            },
-            writer,
-            turn,
-            cut_short,
-        )
+        start_plan(sender, keys_plan(keys, delay), ticket, turn)
     }
 
     fn start_text(
@@ -1581,16 +1875,26 @@ mod tests {
         ticket: InputTicket,
         turn: Turn,
     ) -> impl Future<Output = PressReport> + Send {
-        let cut_short = CancellationToken::new();
-        let writer = insert_text(sender.clone(), text.to_string(), ticket, cut_short.clone());
-        detach(
+        start_plan(sender, text_plan(text), ticket, turn)
+    }
+
+    fn start_plan(
+        sender: &FakeSender,
+        plan: Plan,
+        ticket: InputTicket,
+        turn: Turn,
+    ) -> impl Future<Output = PressReport> + Send {
+        let written = input_devices::start_writer(
             |task| {
                 tokio::spawn(task);
             },
-            writer,
+            sender.clone(),
+            plan,
+            ticket,
             turn,
-            cut_short,
-        )
+            (),
+        );
+        async move { written.await.0 }
     }
 
     fn fresh() -> (Arc<DeliveryCell>, InputTicket) {
@@ -1604,7 +1908,7 @@ mod tests {
         let sender = FakeSender::answering([]);
         let (cell, ticket) = fresh();
         let (turn, released) = sender.turn();
-        let report = start_keys(&sender, press("Shift+A"), None, ticket, turn).await;
+        let report = start_keys(&sender, &["Shift+A"], None, ticket, turn).await;
         assert!(matches!(report, PressReport::Acked(_)), "{report:?}");
         assert_eq!(
             sender.sent(),
@@ -1624,7 +1928,7 @@ mod tests {
         let sender = FakeSender::answering([]);
         let (_cell, ticket) = fresh();
         let (turn, released) = sender.turn();
-        let report = start_keys(&sender, press("Shift+a"), Some(DELAY), ticket, turn).await;
+        let report = start_keys(&sender, &["Shift+a"], Some(DELAY), ticket, turn).await;
         assert!(matches!(report, PressReport::Acked(_)), "{report:?}");
         assert_eq!(
             sender.sent(),
@@ -1643,7 +1947,7 @@ mod tests {
         let sender = FakeSender::answering([]);
         let (cell, ticket) = fresh();
         let (turn, released) = sender.turn();
-        let report = start_keys(&sender, press("Shift+a"), Some(DELAY), ticket, turn);
+        let report = start_keys(&sender, &["Shift+a"], Some(DELAY), ticket, turn);
         let stopped = time::timeout(Duration::from_millis(10), report).await;
         assert!(stopped.is_err(), "the call stops at 10 ms");
         time::sleep(Duration::from_secs(1)).await;
@@ -1666,7 +1970,7 @@ mod tests {
         let sender = FakeSender::answering([]);
         let (cell, ticket) = fresh();
         let (turn, released) = sender.turn();
-        drop(start_keys(&sender, press("Enter"), None, ticket, turn));
+        drop(start_keys(&sender, &["Enter"], None, ticket, turn));
         time::sleep(Duration::from_secs(1)).await;
         assert!(sender.sent().is_empty());
         assert_eq!(cell.delivery(), Delivery::NotSent, "the writer still ran");
@@ -1678,9 +1982,7 @@ mod tests {
         let sender = FakeSender::answering([]);
         let (cell, ticket) = fresh();
         let (turn, _released) = sender.turn();
-        let mut events = press("a");
-        events.extend(press("b"));
-        let report = start_keys(&sender, events, Some(DELAY), ticket, turn);
+        let report = start_keys(&sender, &["a", "b"], Some(DELAY), ticket, turn);
         assert!(
             time::timeout(Duration::from_millis(10), report)
                 .await
@@ -1688,7 +1990,11 @@ mod tests {
         );
         time::sleep(Duration::from_secs(1)).await;
         assert_eq!(sender.sent(), ["0 keyDown a", "10 keyUp a"]);
-        assert_eq!(cell.delivery(), Delivery::Done);
+        assert_eq!(
+            cell.delivery(),
+            Delivery::Unknown,
+            "the second press never went out: partial input (design section 4.7), not Done"
+        );
     }
 
     /// A keyDown whose send failed may still have reached the browser, so it is released too;
@@ -1698,7 +2004,7 @@ mod tests {
         let sender = FakeSender::answering([Ok(()), Err(timeout())]);
         let (cell, ticket) = fresh();
         let (turn, _released) = sender.turn();
-        let report = start_keys(&sender, press("Control+Shift+a"), None, ticket, turn).await;
+        let report = start_keys(&sender, &["Control+Shift+a"], None, ticket, turn).await;
         let PressReport::Failed { closed, message } = report else {
             panic!("{report:?}");
         };
@@ -1725,7 +2031,7 @@ mod tests {
         let sender = FakeSender::answering([Ok(()), Ok(()), Err(protocol), Ok(())]);
         let (cell, ticket) = fresh();
         let (turn, _released) = sender.turn();
-        let report = start_keys(&sender, press("Shift+A"), None, ticket, turn).await;
+        let report = start_keys(&sender, &["Shift+A"], None, ticket, turn).await;
         assert!(
             matches!(report, PressReport::Failed { closed: false, .. }),
             "{report:?}"
@@ -1739,7 +2045,7 @@ mod tests {
         let sender = FakeSender::answering([Err(epoch())]);
         let (cell, ticket) = fresh();
         let (turn, _released) = sender.turn();
-        let report = start_keys(&sender, press("Shift+A"), None, ticket, turn).await;
+        let report = start_keys(&sender, &["Shift+A"], None, ticket, turn).await;
         assert!(matches!(report, PressReport::NothingWritten), "{report:?}");
         assert_eq!(sender.sent(), ["0 rawKeyDown Shift"], "nothing after it");
         assert_eq!(cell.delivery(), Delivery::NotSent);
@@ -1750,7 +2056,7 @@ mod tests {
         let sender = FakeSender::answering([Ok(()), Err(epoch())]);
         let (cell, ticket) = fresh();
         let (turn, _released) = sender.turn();
-        let report = start_keys(&sender, press("Shift+A"), None, ticket, turn).await;
+        let report = start_keys(&sender, &["Shift+A"], None, ticket, turn).await;
         assert!(
             matches!(report, PressReport::Failed { closed: true, .. }),
             "{report:?}"
@@ -1832,43 +2138,23 @@ mod tests {
             self.platform.answer().await
         }
 
-        fn write_keys(
+        fn write(
             &self,
-            events: Vec<KeyEvent>,
-            delay: Option<Duration>,
+            plan: Plan,
             ticket: InputTicket,
             input: FakeInput,
         ) -> impl Future<Output = PressReport> + Send {
-            let cut_short = CancellationToken::new();
-            let sender = TabSender::for_tab(self);
-            let writer = write_keys(sender, events, delay, ticket, cut_short.clone());
-            detach(
+            let written = input_devices::start_writer(
                 |task| {
                     tokio::spawn(task);
                 },
-                writer,
+                TabSender::for_tab(self),
+                plan,
+                ticket,
                 input,
-                cut_short,
-            )
-        }
-
-        fn insert_text(
-            &self,
-            text: &str,
-            ticket: InputTicket,
-            input: FakeInput,
-        ) -> impl Future<Output = PressReport> + Send {
-            let cut_short = CancellationToken::new();
-            let sender = TabSender::for_tab(self);
-            let writer = insert_text(sender, text.to_string(), ticket, cut_short.clone());
-            detach(
-                |task| {
-                    tokio::spawn(task);
-                },
-                writer,
-                input,
-                cut_short,
-            )
+                (),
+            );
+            async move { written.await.0 }
         }
     }
 
@@ -1878,12 +2164,14 @@ mod tests {
         assert_eq!(tab.platform().await, Ok(Platform::Mac));
         let (cell, ticket) = fresh();
         let input = tab.input().await;
-        let report = tab.write_keys(press("Shift+A"), None, ticket, input).await;
+        let report = tab
+            .write(keys_plan(&["Shift+A"], None), ticket, input)
+            .await;
         assert!(matches!(report, PressReport::Acked(_)), "{report:?}");
         assert_eq!(cell.delivery(), Delivery::Done);
         let (_cell, ticket) = fresh();
         let input = tab.input().await;
-        let _report = tab.insert_text("hi", ticket, input).await;
+        let _report = tab.write(text_plan("hi"), ticket, input).await;
         assert_eq!(
             tab.calls(),
             [
@@ -1906,12 +2194,16 @@ mod tests {
         };
         let (cell, ticket) = fresh();
         let input = tab.input().await;
-        let report = tab.write_keys(press("Shift+A"), None, ticket, input).await;
+        let report = tab
+            .write(keys_plan(&["Shift+A"], None), ticket, input)
+            .await;
         assert!(matches!(report, PressReport::NothingWritten), "{report:?}");
         assert_eq!(cell.delivery(), Delivery::NotSent);
         let (cell, ticket) = fresh();
         let input = tab.input().await;
-        let report = tab.write_keys(press("Shift+A"), None, ticket, input).await;
+        let report = tab
+            .write(keys_plan(&["Shift+A"], None), ticket, input)
+            .await;
         assert!(matches!(report, PressReport::Failed { .. }), "{report:?}");
         assert_eq!(cell.delivery(), Delivery::Unknown);
         assert_eq!(

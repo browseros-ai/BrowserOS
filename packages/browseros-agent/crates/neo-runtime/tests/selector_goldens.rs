@@ -1,5 +1,6 @@
 //! Playwright's selectors, built inside QuickJS by the committed `neo-sdk/dist/sdk.js`. Bun
-//! cross-checked the 94 goldens against playwright-core 1.64.1; this checks the engine that
+//! cross-checked the base goldens against playwright-core 1.64.1; the frame goldens come from
+//! the real pinned 26137face build. This checks the engine that
 //! actually runs agent scripts, where `RegExp` flags and `source` escaping could differ from
 //! V8's. Building a locator does no I/O, so the fake browser in `support/fake_browser.rs` only
 //! has to let the run start, and the test checks that nothing else reached it.
@@ -28,14 +29,30 @@ use tokio_util::sync::CancellationToken;
 struct Golden {
     chain: String,
     selector: String,
+    #[serde(default)]
+    kind: GoldenKind,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum GoldenKind {
+    #[default]
+    Locator,
+    FrameLocator,
 }
 
 /// Read at run time through `CARGO_MANIFEST_DIR`, not `env!`, so a test binary from a shared
 /// build dir reads this checkout's goldens.
 fn goldens() -> Result<Vec<Golden>, Box<dyn Error>> {
     let crate_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").ok_or("cargo sets it")?);
-    let path = crate_dir.join("../neo-sdk/tests/goldens/selector-goldens.json");
-    Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
+    let directory = crate_dir.join("../neo-sdk/tests/goldens");
+    let mut goldens: Vec<Golden> = serde_json::from_str(&fs::read_to_string(
+        directory.join("selector-goldens.json"),
+    )?)?;
+    goldens.extend(serde_json::from_str::<Vec<Golden>>(&fs::read_to_string(
+        directory.join("frame-selector-goldens.json"),
+    )?)?);
+    Ok(goldens)
 }
 
 /// The CDP methods a run sends for its own setup and teardown, whatever its script does.
@@ -63,15 +80,23 @@ async fn run(code: &str) -> (RunOutcome, Vec<Exchange>) {
 #[tokio::test(flavor = "multi_thread")]
 async fn every_selector_golden_matches_inside_quickjs() {
     let goldens = goldens().expect("the selector goldens are committed");
-    assert_eq!(goldens.len(), 94, "the corpus has 94 chains");
+    assert_eq!(
+        goldens.len(),
+        139,
+        "the corpus has 94 base and 45 frame chains"
+    );
     // Each chain is built on its own, so one that throws names itself instead of failing the
     // whole run.
     let selectors: Vec<String> = goldens
         .iter()
         .map(|golden| {
+            let suffix = match golden.kind {
+                GoldenKind::Locator => "._selector",
+                GoldenKind::FrameLocator => ".owner()._selector",
+            };
             format!(
-                "  (() => {{ try {{ return {}._selector }} catch (error) {{ return `threw ${{error}}` }} }})(),",
-                golden.chain
+                "  (() => {{ try {{ return {}{suffix} }} catch (error) {{ return `threw ${{error}}` }} }})(),",
+                golden.chain,
             )
         })
         .collect();
