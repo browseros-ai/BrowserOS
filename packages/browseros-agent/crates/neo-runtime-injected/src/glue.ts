@@ -37,6 +37,16 @@ import type { AriaNodeJSON } from '../vendor/playwright/isomorphic/ariaSnapshot'
  * Neo hands it to Rust as a handle instead (NEO_STYLE "Page objects").
  */
 type ScreenshotCleanup = { restore: () => void }
+/** An element with the aria ref Playwright's snapshots keep on it (`ariaSnapshot.ts`
+ * `computeAriaRef`: `(element as any)._ariaRef = ariaRef;`). */
+type NamedElement = Element & { _ariaRef?: { ref: string } }
+
+/**
+ * Neo: every owner `frameOwnerRef` named, by its ref, kept weakly. `frameOwnerByRef` finds an
+ * owner here first: CDP hands `frameOwnerRef` owners a selector cannot reach (inside a closed
+ * shadow root), and a ref Neo answers must route. One table per document, as the glue is.
+ */
+const namedOwners = new Map<string, WeakRef<Element>>()
 
 /** The Playwright page types behind the spec's named handle kinds. */
 type Handles = {
@@ -90,6 +100,31 @@ export const glue = {
       },
     }
   },
+
+  /** `selectorState` plus the first match as a handle, for a wait that returns its element. */
+  // Playwright: `server/frames.ts` `Frame.waitForSelector`: `return { log, element, visible, attached: !!element };`
+  selectorElement: (injected, { selector, strict }) => {
+    const elements = query(injected, selector, strict)
+    const [element] = elements
+    if (!element) return { count: 0, visible: false }
+    return {
+      element,
+      count: elements.length,
+      visible: injected.elementState(element, 'visible', true).matches,
+      preview: injected.previewNode(element),
+    }
+  },
+
+  // Neo: the anchor `main_world.rs` resolves into the page's own world; Playwright's server
+  // finds that world by its execution context, which Neo does not watch.
+  // Rust only reads the node's `backendNodeId` (`DOM.describeNode`), which a `Document` has like
+  // any node; the cast is what lets the spec's one node handle kind carry it.
+  document: () => ({ node: document as unknown as Element }),
+
+  // Playwright: `server/dom.ts` `ElementHandle._initializePreview`: `this._setPreview(await utility.evaluate((injected, e) => 'JSHandle@' + injected.previewNode(e), this));`
+  previewNode: (injected, _params, node) => ({
+    preview: injected.previewNode(node),
+  }),
 
   textContent: (injected, { selector, strict }) => {
     const [element] = query(injected, selector, strict, {
@@ -215,6 +250,37 @@ export const glue = {
       element,
       visible: !!element && injected.utils.isElementVisible(element),
     }
+  },
+
+  /** Neo: one hop of a main-rooted path ref, by the owner's kept aria ref rather than the
+   * document's last snapshot, so a later snapshot of another part of the document leaves it. */
+  frameOwnerByRef: (injected, { ref }) => {
+    const named = namedOwners.get(ref)?.deref()
+    // Only an owner still connected in this document: one moved into another document (a
+    // sibling frame's) carries its ref along, but this document's path no longer leads to it.
+    const element =
+      named?.isConnected &&
+      named.ownerDocument === document &&
+      (named as NamedElement)._ariaRef?.ref === ref
+        ? named
+        : injected
+            .querySelectorAll(injected.parseSelector('iframe, frame'), document)
+            .find((owner) => (owner as NamedElement)._ariaRef?.ref === ref)
+    return {
+      element,
+      visible: !!element && injected.utils.isElementVisible(element),
+    }
+  },
+
+  /** Neo: the owner's aria ref, from a snapshot of the owner alone through the one
+   * `InjectedScript` snapshot that leaves the document's last snapshot (and so its `aria-ref`
+   * selectors) as it was. */
+  frameOwnerRef: (injected, _params, element) => {
+    injected.ariaSnapshotForExpectFailure(element, { mode: 'ai' })
+    const ref = (element as NamedElement)._ariaRef?.ref
+    if (ref === undefined) return {}
+    namedOwners.set(ref, new WeakRef(element))
+    return { ref }
   },
 
   describeSelector: (injected, { selector }) => {

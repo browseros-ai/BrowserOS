@@ -298,9 +298,10 @@ pub(crate) async fn screenshot_locator(
         selector: selector.to_string(),
         strict: true,
         state: SelectorState::Attached,
+        return_element: false,
     };
     let element = loop {
-        waits::wait_for_selector(tab, &attached, progress).await?;
+        let _element = waits::wait_for_selector_element(tab, &attached, progress).await?;
         // Deviation: `server/frames.ts` `Frame.waitForSelector`: `const element: Element | undefined  = elements[0];` is the element Playwright's wait returns; Neo resolves it again with click's `resolve`, which also marks it as a target (`markTargets: 'all'`), and waits again if it detached in between.
         match progress.race(tab.resolve(selector, true)).await? {
             Ok(Some(resolved)) => break resolved.element,

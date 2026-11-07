@@ -29,6 +29,7 @@ use tracing::info;
 
 use crate::artifacts::Artifacts;
 use crate::deadline::{Deadline, Stop};
+use crate::evaluate::Handles;
 use crate::run::{CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd};
 
 /// How a call ends early: a Playwright error the script sees, or the run ending under it.
@@ -123,6 +124,8 @@ pub(crate) struct RunScope {
     pub(crate) tasks: TaskTracker,
     /// Where the run's `path` options write, and what they wrote (`artifacts.rs`).
     pub(crate) artifacts: Arc<Artifacts>,
+    /// The run's JS handles (`evaluate.rs`); closed at run end, which releases their groups.
+    pub(crate) handles: Arc<Handles>,
 }
 
 impl RunScope {
@@ -133,6 +136,7 @@ impl RunScope {
             end_reason: Arc::default(),
             tasks,
             artifacts: Arc::default(),
+            handles: Arc::default(),
         }
     }
 
@@ -269,6 +273,11 @@ impl Progress {
 
     /// `metadata.timeout` in ms as the client sent it, `0.0` for none: Playwright caps loop A's
     /// backoff by it.
+    /// The run's JS handles, for the evaluation calls (`evaluate.rs`).
+    pub(crate) fn handles(&self) -> &Handles {
+        &self.run.handles
+    }
+
     pub(crate) fn timeout_ms(&self) -> f64 {
         self.timeout_ms
     }

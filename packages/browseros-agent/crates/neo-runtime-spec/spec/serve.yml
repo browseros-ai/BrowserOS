@@ -25,6 +25,11 @@ interfaces:
     # `binary` results: neo-runtime answers `neo_runtime_spec::Binary`, the SDK a `Buffer`.
     - screenshot
     - pdf
+    # History navigations answer the new document's `Response` as `Frame.goto` does, or `{}`
+    # where Playwright's has none: no history entry, a same-document entry, a restored document.
+    - reload
+    - goBack
+    - goForward
     # The page's console and page-error history (`page.consoleMessages()`, `page.pageErrors()`).
     # A message's `args` are JSHandles, which are not a key here, so they always travel empty.
     - consoleMessages

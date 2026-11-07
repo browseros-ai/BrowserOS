@@ -77,6 +77,40 @@ Injected:
         # Absent when nothing matches; hidden and detached waits succeed in that case.
         matched: SelectorMatch?
 
+    # `selectorState` for a `Frame.waitForSelector` whose caller wants the element back, such as
+    # `locator.evaluate`: the same probe, plus the first match in the caller's object group, which
+    # neo-runtime adopts into the frame's main world once the wait is met.
+    selectorElement:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+      returns:
+        # The first match. Absent when nothing matches.
+        element: Element?
+        count: int
+        visible: boolean
+        # `InjectedScript.previewNode` of the first match, absent when nothing matches.
+        preview: string?
+
+    # The document node of this world's frame, for neo-runtime's main-world door
+    # (`main_world.rs`), which reads its `backendNodeId` with `DOM.describeNode` and resolves the
+    # same node in the frame's main world. A `Document`, carried as the built-in `Element` handle
+    # because CDP gives every DOM node the subtype `node`.
+    document:
+      internal: true
+      returns:
+        node: Element
+
+    # `InjectedScript.previewNode` of a node adopted into this world, for an `ElementHandle`'s
+    # preview (`dom.ts` `ElementHandle._initializePreview`).
+    previewNode:
+      internal: true
+      parameters:
+        node: Element
+      returns:
+        preview: string
+
     # Resolves one frame chunk and reads the first match's `textContent`, for
     # `Frame.textContent`. neo-runtime owns waiting: it polls this call with Playwright's backoff
     # until something matches or the call's deadline passes.
@@ -188,6 +222,35 @@ Injected:
         element: Element?
         # Visibility of the first iframe owner, false when nothing matched.
         visible: boolean
+
+    # Finds the `<iframe>` or `<frame>` whose aria ref is `ref`, for one hop of a main-rooted
+    # path ref (`aria-ref=f7e2` enters the frame of the owner named `e7`). The ref is the one
+    # Playwright's snapshots keep on the element (`_ariaRef`), so the hop does not depend on the
+    # document's last snapshot: a later snapshot of another part of that document leaves the
+    # path routable, as a Playwright frame-numbered ref stays. An owner `frameOwnerRef` named is
+    # found even where no selector reaches (inside a closed shadow root).
+    frameOwnerByRef:
+      internal: true
+      parameters:
+        ref: string
+      returns:
+        # The owner, in the caller's object group. Absent when no owner has that ref.
+        element: Element?
+        # Visibility of the owner, false when none matched.
+        visible: boolean
+
+    # The aria ref of one iframe owner, for the path in front of a child frame's AI snapshot
+    # refs: the ref its document's snapshots give it (kept on the element, or given now by
+    # building the aria tree of the owner alone). The document's last snapshot is left as it
+    # was, so no ref of the caller's own snapshots changes lifetime.
+    frameOwnerRef:
+      internal: true
+      parameters:
+        element: Element
+      returns:
+        # Absent when Playwright's AI snapshots give the owner no ref: it is not visible or
+        # receives no pointer events.
+        ref: string?
 
     # Names a selector the way Playwright's call log does, for a click's first log line
     # `waiting for <locator>`, and reports a selector the page cannot parse. Playwright computes
