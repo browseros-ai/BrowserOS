@@ -20,16 +20,17 @@ use serde_json::{Value, json};
 
 const PAGE: &str = "<!doctype html><title>network</title><p>network</p>";
 
-/// A script helper that fetches `count` URLs `/data-<prefix>-<i>` in parallel batches of 100,
-/// reading every body (Chromium finishes loading a fetch only once its body is consumed).
-const BURST: &str = r"const burst = (prefix, count) => page.evaluate(async ({ prefix, count }) => {
-  for (let start = 0; start < count; start += 100) {
+/// A script helper that fetches `count` URLs `/data-<prefix>-<i>` in parallel batches of `width`
+/// (100 by default), reading every body (Chromium finishes loading a fetch only once its body is
+/// consumed).
+const BURST: &str = r"const burst = (prefix, count, width = 100) => page.evaluate(async ({ prefix, count, width }) => {
+  for (let start = 0; start < count; start += width) {
     const batch = []
-    for (let i = start; i < Math.min(count, start + 100); i++)
+    for (let i = start; i < Math.min(count, start + width); i++)
       batch.push(fetch('/data-' + prefix + '-' + i).then((response) => response.text()))
     await Promise.all(batch)
   }
-}, { prefix, count })
+}, { prefix, count, width })
 ";
 
 async fn open() -> Option<Tab> {
@@ -112,12 +113,14 @@ async fn tests_that_a_request_past_the_retention_cap_answers_neos_error() {
         &tab,
         r"const [first] = await Promise.all([page.waitForRequest('**/data-first-0'), burst('first', 1)])
 const kept = await first.response()
-await burst('more', 1100)
+// Narrow batches: on a heavily loaded machine a 100-wide burst can outrun the CDP event ring the
+// watcher reads (4096 events), and requests whose events were lost never reach the cap.
+await burst('more', 1200, 20)
 // With nothing subscribed, a reply skips the event barrier, so a call can run before the watcher
 // applied the burst's events: wait until the log holds the burst's last request.
 for (let tries = 0; tries < 100; tries++) {
   const recent = await page.requests()
-  if (recent.length && recent[recent.length - 1].url().endsWith('/data-more-1099')) break
+  if (recent.length && recent[recent.length - 1].url().endsWith('/data-more-1199')) break
   await new Promise((resolve) => setTimeout(resolve, 50))
 }
 const settle = (promise) => promise.then(() => 'resolved', (error) => [error.name, error.message])
@@ -166,11 +169,17 @@ return { seen, recent: (await page.requests()).length }",
     assert_eq!(value(&first), &json!({ "seen": 20, "recent": 20 }));
     let second = run(
         &tab,
-        r"const before = await page.requests()
+        r"const name = (request) => request.url().replace(/^.*\//, '')
+// The page fetches /data-late every 20 ms, so one may land between this run's Network.enable and
+// its first read; none of the first run's requests may.
+const before = (await page.requests()).map(name)
 await new Promise((resolve) => setTimeout(resolve, 300))
-const during = (await page.requests()).map((request) => request.url().replace(/^.*\//, ''))
+const during = (await page.requests()).map(name)
 await page.evaluate(() => clearInterval(window.__timer))
-return { before: before.length, onlyLate: during.length > 0 && during.every((url) => url === 'data-late') }",
+return {
+  carriedOver: before.filter((url) => url !== 'data-late').length,
+  onlyLate: during.length > 0 && during.every((url) => url === 'data-late'),
+}",
     )
     .await;
     tab.close().await;
@@ -178,7 +187,7 @@ return { before: before.length, onlyLate: during.length > 0 && during.every((url
     // with its session, and the second sees only what happened after its own first look.
     assert_eq!(
         value(&second),
-        &json!({ "before": 0, "onlyLate": true }),
+        &json!({ "carriedOver": 0, "onlyLate": true }),
         "{second:#?}"
     );
 }
