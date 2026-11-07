@@ -3,20 +3,26 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (11)
+## Deviations (17)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
 | neo-runtime-injected/src/add-tag.ts | (file) | `server/frames.ts` `Frame._raceWithCSPError` | Playwright rejects a tag the page's Content Security Policy blocked by watching the console; Neo watches no console, so it waits for the document's `securitypolicyviolation` event instead, one task after the tag (Chromium reports an inline script's violation in a later task), and rejects with an Error naming the policy. |
 | neo-runtime/src/evaluate.rs | `created_handle` | `server/dom.ts` `ElementHandle._initializePreview` | Playwright starts at `JSHandle@node` and updates the preview by event; Neo has no events, so the handle starts with the final preview. |
 | neo-runtime/src/evaluate.rs | `utility_root` | `server/frameSelectors.ts` `FrameSelectors._resolveChainedSelector` | Playwright resolves frame hops from a scope too; Neo serves a scoped query within the element's own document only. |
+| neo-runtime/src/init_scripts.rs | `InitScripts::close` | `server/page.ts` `Page._addInitScript` | Playwright's scripts live as long as their page or context; Neo's live as long as the run. |
+| neo-sdk/src/browser-context.ts | `BrowserContext.addInitScript` | `client/browserContext.ts` `BrowserContext.addInitScript` | Neo has no page-to-realm callback yet. |
+| neo-sdk/src/browser-context.ts | `BrowserContext.addInitScript` | `client/browserContext.ts` `BrowserContext.addInitScript` | Playwright sends no signal and ignores one; Neo refuses it. |
 | neo-sdk/src/frame.ts | `Frame._addTag` | `client/frame.ts` `Frame.addScriptTag` | Neo reads files only from the run's artifact directory. |
 | neo-sdk/src/frame.ts | `Frame._querySelector` | `client/timeoutSettings.ts` `kNoTimeout` | Playwright's `$` sends this, so it ignores a caller's signal; Neo refuses one rather than ignore it. |
 | neo-sdk/src/frame.ts | `Frame._waitForFunction` | `client/timeoutSettings.ts` `TimeoutSettings.timeout` | Neo refuses a signal rather than ignore it. |
 | neo-sdk/src/frame.ts | `Frame._waitForSelectorElement` | `client/timeoutSettings.ts` `TimeoutSettings.timeout` | Neo refuses a signal rather than ignore it. |
 | neo-sdk/src/frame.ts | `Frame._withElement` | `client/timeoutSettings.ts` `TimeoutSettings.timeout` | Neo refuses a signal rather than ignore it. |
+| neo-sdk/src/init-script.ts | `evaluationScript` | `client/clientHelper.ts` `evaluationScript` | Neo reads files only from the run's artifact directory. |
 | neo-sdk/src/js-handle.ts | `evaluateParams` | `client/jsHandle.ts` `JSHandle.evaluate` | Neo has no realm callback from the page, so it refuses the option rather than ignore it. |
 | neo-sdk/src/js-handle.ts | `evaluateParams` | `client/jsHandle.ts` `JSHandle.evaluate` | Playwright's evaluations send no signal and ignore one; Neo refuses any signal rather than ignore one. |
+| neo-sdk/src/page.ts | `Page.addInitScript` | `client/page.ts` `Page.addInitScript` | Neo has no page-to-realm callback yet. |
+| neo-sdk/src/page.ts | `Page.addInitScript` | `client/page.ts` `Page.addInitScript` | Playwright sends no signal and ignores one; Neo refuses it. |
 | neo-sdk/src/vendor-shims.ts | `URL` | `isomorphic/utilityScriptSerializers.ts` `parseEvaluationResultValue` | QuickJS has no WHATWG URL, so a `URL` the page returns (and a `URL` an agent passes back) is this object: its `href`, `toString()` and `toJSON()` as Playwright's client gives them, and no parsed parts (`host`, `pathname`, `searchParams`). |
 
 ## Unexplained: owner questions (0)

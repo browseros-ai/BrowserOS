@@ -28,6 +28,7 @@ import type {
   ResponseCommands,
 } from '@browseros/neo-runtime-spec/serve'
 import { type PlaywrightError, parseError } from './errors'
+import type { InitScriptCommands } from './init-script'
 import type { EvalFrameCommands, JSHandleCommands } from './js-handle'
 import type { NeoFrameCommands } from './neo-commands'
 import type { Request, Response } from './network'
@@ -129,6 +130,9 @@ export type ApiName =
   | 'elementHandle.$eval'
   | 'elementHandle.$$eval'
   | 'elementHandle.dispatchEvent'
+  | 'page.addInitScript'
+  | 'browserContext.addInitScript'
+  | 'disposable.dispose'
   | 'page.addScriptTag'
   | 'page.addStyleTag'
   | 'frame.addScriptTag'
@@ -309,6 +313,19 @@ export class Connection {
       params,
       timeout,
     )) as EvalFrameCommands[M]['result']
+  }
+
+  /** {@link Connection.send} for an init script command (`init-script.ts`): `addInitScript` on a
+   * page or the context, `dispose` on a script's `disposable@` guid. */
+  async sendInit<M extends keyof InitScriptCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: InitScriptCommands[M]['params'],
+    timeout: number,
+  ): Promise<InitScriptCommands[M]['result']> {
+    return ((await this.#send(apiName, guid, method, params, timeout)) ??
+      {}) as InitScriptCommands[M]['result']
   }
 
   /** {@link Connection.send} for a `JSHandle` command, to a handle's `handle@<n>` guid. A void

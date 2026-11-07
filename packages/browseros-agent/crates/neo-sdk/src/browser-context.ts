@@ -11,6 +11,8 @@
  */
 
 import type { Connection } from './connection'
+import { Disposable, evaluationScript, type InitScript } from './init-script'
+import { assertEvaluateOptions, type EvaluateOptions } from './js-handle'
 import { Page } from './page'
 import { type CreatedPage, get } from './runtime-bridge'
 import { TimeoutSettings } from './timeout-settings'
@@ -40,6 +42,37 @@ export class BrowserContext {
     return get(this.#guid, 'pages').map(
       (created) => this.#pages.get(created.guid) ?? this.#add(created),
     )
+  }
+
+  /** Playwright's `browserContext.addInitScript`: `script` (a function called with `arg`, source text, or
+   * `{ content }`) runs before the page's own scripts in every new document, in its main
+   * world, out-of-process iframes included. The answer's `dispose()` removes it again. */
+  async addInitScript(
+    script: InitScript,
+    arg?: unknown,
+    options?: EvaluateOptions,
+  ): Promise<Disposable> {
+    assertEvaluateOptions(options)
+    const signal = (options as { signal?: unknown } | undefined)?.signal
+    if (signal !== undefined && signal !== null)
+      // Deviation: `client/browserContext.ts` `BrowserContext.addInitScript`: `return DisposableObject.from((await this._channel.addInitScript({ source }, kNoTimeout)).disposable);` Playwright sends no signal and ignores one; Neo refuses it.
+      throw new Error(
+        `browserContext.addInitScript: Neo does not support signal yet`,
+      )
+    if (options?.exposeFunctions)
+      // Deviation: `client/browserContext.ts` `BrowserContext.addInitScript`: `return await addInitScriptWithExposedFunctions(this, script, arg);` Neo has no page-to-realm callback yet.
+      throw new Error(
+        `browserContext.addInitScript: Neo does not support exposeFunctions yet`,
+      )
+    const source = evaluationScript('browserContext.addInitScript', script, arg)
+    const result = await this.#connection.sendInit(
+      'browserContext.addInitScript',
+      this.#guid,
+      'addInitScript',
+      { source },
+      0,
+    )
+    return new Disposable(this.#connection, result.disposable.guid)
   }
 
   /** Opens a tab on `about:blank` and resolves with its `Page` once the tab answers that URL.

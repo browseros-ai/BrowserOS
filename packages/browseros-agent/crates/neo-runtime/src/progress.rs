@@ -29,6 +29,7 @@ use tracing::info;
 
 use crate::deadline::{Deadline, Stop};
 use crate::evaluate::Handles;
+use crate::init_scripts::InitScripts;
 use crate::run::{CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd};
 
 /// How a call ends early: a Playwright error the script sees, or the run ending under it.
@@ -123,6 +124,8 @@ pub(crate) struct RunScope {
     pub(crate) tasks: TaskTracker,
     /// The run's JS handles (`evaluate.rs`); closed at run end, which releases their groups.
     pub(crate) handles: Arc<Handles>,
+    /// The run's init scripts (`init_scripts.rs`); removed from every session at run end.
+    pub(crate) init_scripts: Arc<InitScripts>,
 }
 
 impl RunScope {
@@ -133,6 +136,7 @@ impl RunScope {
             end_reason: Arc::default(),
             tasks,
             handles: Arc::default(),
+            init_scripts: Arc::default(),
         }
     }
 
@@ -267,6 +271,11 @@ impl Progress {
     /// The run's JS handles, for the evaluation calls (`evaluate.rs`).
     pub(crate) fn handles(&self) -> &Handles {
         &self.run.handles
+    }
+
+    /// The run's init scripts (`init_scripts.rs`).
+    pub(crate) fn init_scripts(&self) -> &Arc<InitScripts> {
+        &self.run.init_scripts
     }
 
     pub(crate) fn timeout_ms(&self) -> f64 {

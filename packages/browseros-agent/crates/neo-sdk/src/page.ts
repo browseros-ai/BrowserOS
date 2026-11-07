@@ -31,7 +31,9 @@ import {
   type WaitForURLOptions,
 } from './frame'
 import type { FrameLocator } from './frame-locator'
+import { Disposable, evaluationScript, type InitScript } from './init-script'
 import {
+  assertEvaluateOptions,
   assertMaxArguments,
   type EvaluateOptions,
   type JSHandle,
@@ -210,6 +212,35 @@ export class Page {
   /** The navigation's `Response`, or `null` where Playwright's has none. */
   async goto(url: string, options: GotoOptions = {}): Promise<Response | null> {
     return await this.#mainFrame._goto('page.goto', url, options)
+  }
+
+  /** Playwright's `page.addInitScript`: `script` (a function called with `arg`, source text, or
+   * `{ content }`) runs before the page's own scripts in every new document, in its main
+   * world, out-of-process iframes included. The answer's `dispose()` removes it again. */
+  async addInitScript(
+    script: InitScript,
+    arg?: unknown,
+    options?: EvaluateOptions,
+  ): Promise<Disposable> {
+    assertEvaluateOptions(options)
+    const signal = (options as { signal?: unknown } | undefined)?.signal
+    if (signal !== undefined && signal !== null)
+      // Deviation: `client/page.ts` `Page.addInitScript`: `return DisposableObject.from((await this._channel.addInitScript({ source }, kNoTimeout)).disposable);` Playwright sends no signal and ignores one; Neo refuses it.
+      throw new Error(`page.addInitScript: Neo does not support signal yet`)
+    if (options?.exposeFunctions)
+      // Deviation: `client/page.ts` `Page.addInitScript`: `return await addInitScriptWithExposedFunctions(this, script, arg);` Neo has no page-to-realm callback yet.
+      throw new Error(
+        `page.addInitScript: Neo does not support exposeFunctions yet`,
+      )
+    const source = evaluationScript('page.addInitScript', script, arg)
+    const result = await this.#connection.sendInit(
+      'page.addInitScript',
+      this.#guid,
+      'addInitScript',
+      { source },
+      0,
+    )
+    return new Disposable(this.#connection, result.disposable.guid)
   }
 
   /** Playwright's `page.addScriptTag`: `frame.addScriptTag` in the main frame. */

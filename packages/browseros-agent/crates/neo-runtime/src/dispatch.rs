@@ -58,6 +58,10 @@ use crate::evaluate::{self, EvalCall};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
 use crate::frames::FrameScope;
+use crate::init_scripts::{
+    self, CONTEXT_ADD_INIT_SCRIPT_META, DISPOSABLE_DISPOSE_META, InitRoute,
+    PAGE_ADD_INIT_SCRIPT_META,
+};
 use crate::keyboard::KeyboardTab;
 use crate::lists;
 use crate::navigate::{self, GotoOptions};
@@ -222,6 +226,8 @@ enum ObjectKind {
     Network(NetworkObject, HopId),
     /// A run's `JSHandle` or `ElementHandle` (`evaluate.rs`), by guid.
     Handle(String),
+    /// An init script's `Disposable` (`init_scripts.rs`), by guid.
+    Disposable(String),
     Unknown,
 }
 
@@ -230,6 +236,8 @@ enum ObjectCall {
     Page(PageCall),
     Frame(Route),
     Network(NetworkCall),
+    /// An init script command (`init_scripts.rs`).
+    Init(InitRoute),
 }
 
 /// What a message asks for. One variant per served (object, method).
@@ -301,6 +309,8 @@ impl Dispatcher {
         });
         let object = if guid == "context@default" {
             ObjectKind::Context
+        } else if guid.starts_with(init_scripts::DISPOSABLE_PREFIX) {
+            ObjectKind::Disposable(guid.clone())
         } else if target.is_none() {
             ObjectKind::Unknown
         } else if guid.starts_with(evaluate::HANDLE_PREFIX) {
@@ -390,13 +400,83 @@ impl Dispatcher {
         // Releases each session's handle group on its page's tracked task, before the sessions
         // detach; a run whose future is dropped releases them as `RunScope` drops.
         run.handles.close();
+        let _removed = time::timeout_at(deadline, run.init_scripts.close()).await;
         let _refreshed = time::timeout_at(deadline, self.0.tabs.refresh_closing()).await;
         self.0.trace.take(reason)
     }
 }
 
+/// An init script command: `addInitScript` answers its `Disposable`, as Playwright's
+/// `{ disposable }`; `dispose` answers nothing.
+async fn init_call(
+    tabs: &Tabs,
+    target: Option<(Arc<PageEntry>, FrameScope)>,
+    route: InitRoute,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let scripts = progress.init_scripts();
+    let guid = match route {
+        InitRoute::Page(source) => {
+            let (page, _) = target.ok_or_else(PlaywrightError::target_closed)?;
+            let session = progress.race(tabs.session(&page)).await??;
+            progress
+                .race(scripts.add(tabs.cdp(), Some(&session), &source))
+                .await??
+        }
+        InitRoute::Context(source) => {
+            progress
+                .race(scripts.add(tabs.cdp(), None, &source))
+                .await??
+        }
+        InitRoute::Dispose(guid) => {
+            progress.race(scripts.dispose(&guid)).await??;
+            return Ok(Some(json!({})));
+        }
+    };
+    Ok(Some(json!({ "disposable": { "guid": guid } })))
+}
+
+/// The init script commands (`init_scripts.rs`), served by name ahead of the spec's own; the
+/// object and params back when the message is another command.
+fn route_init(
+    object: ObjectKind,
+    method: &str,
+    params: Option<Value>,
+) -> Result<Routed, (ObjectKind, Option<Value>)> {
+    match object {
+        ObjectKind::Context if method == CONTEXT_ADD_INIT_SCRIPT_META.method => Ok(Routed {
+            meta: Some(&CONTEXT_ADD_INIT_SCRIPT_META),
+            route: init_scripts::source_of(&CONTEXT_ADD_INIT_SCRIPT_META, params)
+                .map(|source| ObjectCall::Init(InitRoute::Context(source))),
+        }),
+        ObjectKind::Page if method == PAGE_ADD_INIT_SCRIPT_META.method => Ok(Routed {
+            meta: Some(&PAGE_ADD_INIT_SCRIPT_META),
+            route: init_scripts::source_of(&PAGE_ADD_INIT_SCRIPT_META, params)
+                .map(|source| ObjectCall::Init(InitRoute::Page(source))),
+        }),
+        ObjectKind::Disposable(guid) => {
+            Ok(Routed {
+                meta: Some(&DISPOSABLE_DISPOSE_META),
+                route: if method == DISPOSABLE_DISPOSE_META.method {
+                    Ok(ObjectCall::Init(InitRoute::Dispose(guid)))
+                } else {
+                    // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection.dispatch`: `Mismatching dispatcher: "${dispatcher._type}" does not implement "${method}"`
+                    Err(PlaywrightError::error(format!(
+                        "Mismatching dispatcher: \"Disposable\" does not implement \"{method}\""
+                    )))
+                },
+            })
+        }
+        object => Err((object, params)),
+    }
+}
+
 /// Names a message's target and decodes its params. Pure.
 fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
+    let (object, params) = match route_init(object, method, params) {
+        Ok(routed) => return routed,
+        Err(unrouted) => unrouted,
+    };
     let decoded = match object {
         ObjectKind::Context => BrowserContextCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Context(call)))),
@@ -471,7 +551,8 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
                 route: call.map(|call| ObjectCall::Frame(Route::FrameEval(call))),
             };
         }
-        ObjectKind::Unknown => {
+        // `route_init` answers every Disposable message.
+        ObjectKind::Disposable(_) | ObjectKind::Unknown => {
             return Routed {
                 meta: None,
                 route: Err(PlaywrightError::target_closed()),
@@ -576,6 +657,7 @@ async fn serve_call(
 ) {
     let result = match (route, target) {
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
+        (ObjectCall::Init(route), target) => init_call(&tabs, target, route, &progress).await,
         (ObjectCall::Page(call), Some((page, _))) => {
             tab_calls::page(&tabs, &page, call, &progress).await
         }
@@ -589,6 +671,8 @@ async fn serve_call(
             };
             match session {
                 Ok(page) => {
+                    // A page the run's init scripts have not reached yet gets them first.
+                    progress.init_scripts().ensure(tabs.cdp(), &page).await;
                     serve(
                         FrameTab { page, scope },
                         route,
@@ -1062,7 +1146,10 @@ mod tests {
     fn frame_route(route: Result<ObjectCall, PlaywrightError>) -> Result<Route, PlaywrightError> {
         route.map(|call| match call {
             ObjectCall::Frame(route) => route,
-            ObjectCall::Context(_) | ObjectCall::Page(_) | ObjectCall::Network(_) => {
+            ObjectCall::Context(_)
+            | ObjectCall::Page(_)
+            | ObjectCall::Network(_)
+            | ObjectCall::Init(_) => {
                 panic!("a Frame message routed to another object")
             }
         })

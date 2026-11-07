@@ -58,6 +58,7 @@ mod forms;
 mod frame_selector;
 mod frames;
 mod getters;
+mod init_scripts;
 mod keyboard;
 mod lists;
 mod main_world;
