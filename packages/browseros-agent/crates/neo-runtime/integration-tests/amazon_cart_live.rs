@@ -64,6 +64,7 @@ async fn run(runtime: &Runtime, page: &PageId, code: &str, timeout: Duration) ->
             page: page.clone(),
             timeout,
             cancel: CancellationToken::new(),
+            session: None,
             artifacts: None,
         })
         .await

@@ -193,6 +193,7 @@ impl Tab {
                     page,
                     timeout,
                     cancel,
+                    session: None,
                     artifacts: None,
                 })
                 .await

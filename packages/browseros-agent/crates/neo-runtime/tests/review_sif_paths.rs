@@ -43,6 +43,7 @@ async fn directory_upload_never_reads_through_an_outside_symlink() {
         page: PageId::new(tab.target_id.clone()),
         timeout: Duration::from_secs(15),
         cancel: CancellationToken::new(),
+        session: None,
         artifacts: Some(artifacts),
     }).await;
     runtime.drain().await;

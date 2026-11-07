@@ -49,6 +49,7 @@ fn cancellable(tab: &Tab, code: &str, cancel: &CancellationToken) -> RunRequest 
         page: PageId::new(tab.target_id.clone()),
         timeout: Duration::from_secs(30),
         cancel: cancel.clone(),
+        session: None,
         artifacts: None,
     }
 }

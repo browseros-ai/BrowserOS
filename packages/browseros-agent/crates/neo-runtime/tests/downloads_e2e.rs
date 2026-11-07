@@ -55,6 +55,7 @@ fn request(target: &str, code: &str) -> RunRequest {
         page: PageId::new(target.to_string()),
         timeout: Duration::from_secs(30),
         cancel: CancellationToken::new(),
+        session: None,
         artifacts: None,
     }
 }

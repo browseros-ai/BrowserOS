@@ -26,7 +26,7 @@ use crate::events::EventHub;
 use crate::method_router::Dispatcher;
 use crate::playwright_methods::browser_methods;
 use crate::quickjs_bridge::{Getters, Logs};
-use crate::run::{RunBinary, RunError, RunOutcome};
+use crate::run::{RunBinary, RunError, RunId, RunOutcome};
 use crate::{abort, quickjs_bridge};
 
 const MEMORY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
@@ -171,10 +171,12 @@ pub(crate) struct Script {
     pub(crate) url: String,
 }
 
-/// Runs `script` to completion, failure, its deadline or cancellation. Browser calls go to
-/// `dispatcher`, whose tasks may outlive the realm; this returns with the realm dropped and
-/// leaves ending those calls to the caller (`Dispatcher::finish`).
+/// Runs `script` to completion, failure, its deadline or cancellation, and reports it as run
+/// `run_id`'s outcome. Browser calls go to `dispatcher`, whose tasks may outlive the realm; this
+/// returns with the realm dropped and leaves ending those calls to the caller
+/// (`Dispatcher::finish`).
 pub(crate) async fn run(
+    run_id: RunId,
     script: Script,
     getters: Getters,
     dispatcher: Dispatcher,
@@ -197,18 +199,20 @@ pub(crate) async fn run(
     }
     let result = match ended {
         Ok(result) => result,
-        Err(stop) => return RunOutcome::stopped(stop, deadline.timeout(), logs.take()),
+        Err(stop) => return RunOutcome::stopped(run_id, stop, deadline.timeout(), logs.take()),
     };
     // A stop that fired during evaluation decides the outcome, however the script ended. It
     // reaches the script as a JS error from the interrupt handler or from a getter waiting on
     // CDP, and a getter's `TimeoutError` or cancellation error is catchable, so a script can
     // swallow it and return normally. Only the deadline knows the run did not finish in time.
     if let Some(stop) = deadline.stop() {
-        return RunOutcome::stopped(stop, deadline.timeout(), logs.take());
+        return RunOutcome::stopped(run_id, stop, deadline.timeout(), logs.take());
     }
     match result {
-        Ok((value, binaries)) => RunOutcome::returned(value, logs.take()).with_binaries(binaries),
-        Err(error) => RunOutcome::failed(error, logs.take()),
+        Ok((value, binaries)) => {
+            RunOutcome::returned(run_id, value, logs.take()).with_binaries(binaries)
+        }
+        Err(error) => RunOutcome::failed(run_id, error, logs.take()),
     }
 }
 

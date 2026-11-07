@@ -179,6 +179,7 @@ async fn tests_that_a_listed_page_forced_click_waits_for_another_runs_trial() {
             page: neo_runtime::PageId::new("other".to_string()),
             timeout: Duration::from_secs(10),
             cancel: CancellationToken::new(),
+            session: None,
             artifacts: None,
         })
         .await;

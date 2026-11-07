@@ -33,7 +33,7 @@ use crate::quickjs;
 use crate::quickjs::Script;
 use crate::quickjs_bridge;
 use crate::quickjs_bridge::Getters;
-use crate::run::{RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
+use crate::run::{RunEnd, RunError, RunId, RunOutcome, RunRequest, RunStatus};
 
 /// A target id no tab can have, used to see how the browser reports a missing tab.
 const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
@@ -158,19 +158,21 @@ impl Runtime {
     /// current-thread runtime does not support; on it the run ends with an error before any
     /// script runs.
     pub async fn run(&self, request: RunRequest) -> RunOutcome {
+        let run_id = RunId::mint();
         let RunRequest {
             code,
             page,
             timeout,
             cancel,
             artifacts,
+            session: _,
         } = request;
         let deadline = Deadline::new(timeout, cancel);
         let tokio = match Handle::try_current() {
             Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => handle,
             _ => {
                 let message = "neo-runtime runs need tokio's multi-threaded runtime".to_string();
-                return RunOutcome::failed(RunError::new("Error", message), Vec::new());
+                return RunOutcome::failed(run_id, RunError::new("Error", message), Vec::new());
             }
         };
 
@@ -182,7 +184,7 @@ impl Runtime {
         self.cleanup.spawn(async move { remaining.wait().await });
         let opened = tokio::select! {
             stop = deadline.reached() => {
-                return RunOutcome::stopped(stop, deadline.timeout(), Vec::new());
+                return RunOutcome::stopped(run_id, stop, deadline.timeout(), Vec::new());
             }
             opened = Tabs::open(self.cdp.clone(), tokio.clone(), self.inputs.clone(), self.screenshots.clone(), self.switches.clone(), self.permissions.clone(), tasks.clone(), &page) => opened,
         };
@@ -194,7 +196,7 @@ impl Runtime {
                 } else {
                     RunError::new(error.name.as_str(), error.message)
                 };
-                return RunOutcome::failed(error, Vec::new());
+                return RunOutcome::failed(run_id, error, Vec::new());
             }
         };
 
@@ -224,7 +226,15 @@ impl Runtime {
             run: tabs.run_id(),
             released: false,
         };
-        let outcome = quickjs::run(script, getters, dispatcher.clone(), deadline, events).await;
+        let outcome = quickjs::run(
+            run_id,
+            script,
+            getters,
+            dispatcher.clone(),
+            deadline,
+            events,
+        )
+        .await;
         let (calls, dropped) = dispatcher.finish(run_end_of(&outcome)).await;
         // `Dispatcher::finish` let go of the grants (`Tabs::release_run_scoped`).
         grants.disarm();
@@ -269,5 +279,40 @@ fn run_end_of(outcome: &RunOutcome) -> RunEnd {
         RunStatus::Timeout => RunEnd::Timeout,
         RunStatus::Cancelled => RunEnd::Cancelled,
         RunStatus::Ok | RunStatus::Error => RunEnd::Settled,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tokio_util::sync::CancellationToken;
+    use ulid::Ulid;
+
+    use crate::fake_browser::{self, FakeBrowser, Replies};
+    use crate::run::{PageId, RunStatus};
+
+    /// A run that never reaches its tab is a run too: it gets an id of its own, and the outcome's
+    /// JSON carries the id as `runId`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn each_run_is_named_by_a_fresh_ulid() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let runtime = browser.runtime().await;
+        let request = || {
+            fake_browser::run_request("return 1", Duration::from_secs(5), CancellationToken::new())
+        };
+        let ran = runtime.run(request()).await;
+        let mut closed = request();
+        closed.page = PageId::new("closed-tab".to_string());
+        let refused = runtime.run(closed).await;
+
+        assert_eq!(ran.status, RunStatus::Ok, "{ran:?}");
+        assert_eq!(refused.status, RunStatus::Error, "{refused:?}");
+        assert_ne!(ran.run_id, refused.run_id);
+        for outcome in [&ran, &refused] {
+            let id = outcome.run_id.as_str();
+            assert!(Ulid::from_string(id).is_ok(), "{id} is a ULID");
+            assert_eq!(serde_json::to_value(outcome).unwrap()["runId"], id);
+        }
     }
 }

@@ -56,6 +56,7 @@ await new Promise(() => {});"
         page: PageId::new(tab.target_id.clone()),
         timeout: Duration::from_secs(30),
         cancel: cancel.clone(),
+        session: None,
         artifacts: None,
     };
     let worker = runtime.clone();

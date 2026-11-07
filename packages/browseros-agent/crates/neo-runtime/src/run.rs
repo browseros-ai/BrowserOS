@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::artifacts::RunArtifact;
 use crate::deadline::Stop;
+use crate::host::SessionKey;
 
 /// The CDP target id of a tab. In the script's realm the page is `page@<id>` and its main
 /// frame is `frame@<id>`, because Chromium gives a page's main frame its target's id.
@@ -38,10 +39,6 @@ impl PageId {
 pub struct RunId(Arc<str>);
 
 impl RunId {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "scaffold: Runtime::run mints one per run")
-    )]
     pub(crate) fn mint() -> Self {
         Self(ulid::Ulid::new().to_string().into())
     }
@@ -85,6 +82,10 @@ pub struct RunRequest {
     /// option; the bytes a script asked for are still returned. Files written are listed in
     /// [`RunOutcome::artifacts`].
     pub artifacts: Option<PathBuf>,
+    /// The host session the run belongs to: the key its `RunPass` names. The runtime copies it
+    /// onto the run's host events and reads nothing else from it. `None` for a run no host
+    /// tracks; ignored by a runtime without a host side.
+    pub session: Option<SessionKey>,
 }
 
 /// How a run ended.
@@ -130,7 +131,8 @@ impl RunError {
     }
 }
 
-/// The result of a run. `value` is set only for [`RunStatus::Ok`] when the script returned
+/// The result of a run. `run_id` is the id `Runtime::run` minted for it, the one its host events
+/// carry (see [`RunId`]). `value` is set only for [`RunStatus::Ok`] when the script returned
 /// something other than `undefined`; `error` is set for [`RunStatus::Error`] and
 /// [`RunStatus::Timeout`]. `logs` holds the script's `console` lines, including those written
 /// before a failure, up to 1000 lines and 1 MiB of text; past that, the run keeps no more lines
@@ -147,6 +149,7 @@ impl RunError {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunOutcome {
+    pub run_id: RunId,
     pub status: RunStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<Value>,
@@ -175,8 +178,9 @@ pub struct RunOutcome {
 }
 
 impl RunOutcome {
-    pub(crate) fn returned(value: Option<Value>, logs: Vec<String>) -> Self {
+    pub(crate) fn returned(run_id: RunId, value: Option<Value>, logs: Vec<String>) -> Self {
         Self {
+            run_id,
             status: RunStatus::Ok,
             value,
             logs,
@@ -189,8 +193,9 @@ impl RunOutcome {
         }
     }
 
-    pub(crate) fn failed(error: RunError, logs: Vec<String>) -> Self {
+    pub(crate) fn failed(run_id: RunId, error: RunError, logs: Vec<String>) -> Self {
         Self {
+            run_id,
             status: RunStatus::Error,
             value: None,
             logs,
@@ -203,12 +208,13 @@ impl RunOutcome {
         }
     }
 
-    pub(crate) fn stopped(stop: Stop, timeout: Duration, logs: Vec<String>) -> Self {
+    pub(crate) fn stopped(run_id: RunId, stop: Stop, timeout: Duration, logs: Vec<String>) -> Self {
         let (status, error) = match stop {
             Stop::Timeout => (RunStatus::Timeout, Some(RunError::timeout(timeout))),
             Stop::Cancelled => (RunStatus::Cancelled, None),
         };
         Self {
+            run_id,
             status,
             value: None,
             logs,

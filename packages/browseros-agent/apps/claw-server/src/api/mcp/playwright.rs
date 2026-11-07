@@ -280,6 +280,7 @@ impl PlaywrightService {
                 page: PageId::new(page.clone()),
                 timeout: deadline.saturating_duration_since(Instant::now()),
                 cancel,
+                session: None,
                 artifacts: Some(self.artifact_dir()),
             })
             .await;

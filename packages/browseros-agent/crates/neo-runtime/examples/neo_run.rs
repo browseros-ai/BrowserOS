@@ -91,6 +91,7 @@ async fn run(args: Args) -> Result<RunStatus, String> {
             page: PageId::new(args.page),
             timeout: Duration::from_millis(args.timeout_ms),
             cancel: CancellationToken::new(),
+            session: None,
             artifacts: args.artifacts,
         })
         .await;
