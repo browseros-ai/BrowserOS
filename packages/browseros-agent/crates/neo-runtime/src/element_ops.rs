@@ -8,9 +8,10 @@
 //!  focus / blur           loop A (`click::retry_with_progress_if_not_connected`)
 //!    resolve → the tab's input turn → focusElement / blurElement glue
 //!      detached → resolve again
-//!  dispatchEvent          `reads::wait_for_function_on_selector`, no input turn
-//!    eventInit decoded here to plain JSON (anything else refused before any page call)
-//!    → glue dispatchEvent {selector, strict, type, eventInit}, the first match marked
+//!  dispatchEvent          eval's main-world element callback (`evaluate::call_on_element_main`)
+//!    eventInit as neo-sdk's `serializeArgument` left it, handles included; polls until the
+//!    selector matches, then `InjectedScript.dispatchEvent` on the first match, in the page's
+//!    own world, as Playwright's `mainWorld: true`
 //!  scrollIntoViewIfNeeded / selectText / boundingBox
 //!    wait until the selector matches (strict) → one element, then on that element only:
 //!      scroll   retry_action: stable → DOM.scrollIntoViewIfNeeded; not visible → retry
@@ -22,32 +23,28 @@
 //! None of these writes `Input.*`, so none has a delivery cell; focus, blur and selectText still
 //! take the tab's input turn, so they never land between another call's focus and its keys.
 
-use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::time::Duration;
 
 use neo_runtime_spec::injected::{
-    ElementState, InjectedBlurElementParams, InjectedDispatchEventParams, InjectedSelectTextParams,
-    SelectTextOutcome, SelectTextOutcomeStatus,
+    ElementState, InjectedBlurElementParams, InjectedSelectTextParams, SelectTextOutcome,
+    SelectTextOutcomeStatus,
 };
-use neo_runtime_spec::serve::{
-    FrameBlurParams, FrameDispatchEventParams, FrameFocusParams, SerializedArgument,
-    SerializedValue, SerializedValueV,
-};
+use neo_runtime_spec::serve::{FrameBlurParams, FrameFocusParams};
 use neo_runtime_spec::{MethodFlag, MethodMeta};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Number, Value, json};
+use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
 use crate::click::{
     self, ActionResult, ElementAction, NotReady, PageError, Resolved, Scroll, StatesCheck, Stop,
     Tab,
 };
+use crate::evaluate::{self, MainCallback, SerializedArgument};
 use crate::forms::{FocusOutcome, FormTab};
-use crate::frame_selector;
 use crate::page::{FrameTab, InputPermit, ResolvedElement};
 use crate::progress::{CallError, PlaywrightError, Progress};
-use crate::reads::{self, Matched, SelectorTab};
+use crate::reads::SelectorTab;
 
 // ---------------------------------------------------------------------------------------------
 // The Neo commands.
@@ -155,16 +152,6 @@ pub(crate) trait ElementOpsTab: FormTab + SelectorTab {
         &self,
         element: &Self::Element,
     ) -> impl Future<Output = Result<Option<Rect>, PageError>> + Send;
-
-    /// The `dispatchEvent` glue: resolves and marks the first match and dispatches to it. `None`
-    /// while nothing matches; otherwise the element's preview.
-    fn dispatch_event(
-        &self,
-        selector: &str,
-        strict: bool,
-        event_type: &str,
-        event_init: &str,
-    ) -> impl Future<Output = Result<Option<String>, PageError>> + Send;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -275,197 +262,63 @@ impl<T: ElementOpsTab> ElementAction<T> for Focus {
 // dispatchEvent.
 // ---------------------------------------------------------------------------------------------
 
-/// Neo: one `Frame.dispatchEvent`, its `eventInit` already decoded to plain JSON.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Neo: `Frame.dispatchEvent`'s params as neo-sdk sends them: Playwright's, with `eventInit`
+/// already in the page's format and its handles named by guid (`neo-sdk/src/js-handle.ts`
+/// `serializeArgument`). The generated `FrameDispatchEventParams` types `eventInit` in the
+/// protocol's format, so the frame route decodes these instead (`dispatch.rs`
+/// `route_frame_extension`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct DispatchEventParams {
+    selector: String,
+    #[serde(default)]
+    strict: Option<bool>,
+    r#type: String,
+    event_init: SerializedArgument,
+}
+
+/// Neo: one `Frame.dispatchEvent`.
+#[derive(Debug)]
 pub(crate) struct DispatchOptions {
     pub(crate) selector: String,
     pub(crate) strict: bool,
     pub(crate) event_type: String,
-    /// JSON text of the init dictionary.
-    pub(crate) event_init: String,
+    /// The event's init dictionary as Playwright's server hands it to the page.
+    pub(crate) event_init: SerializedArgument,
 }
 
-/// Neo: decodes `Frame.dispatchEvent`'s params, refusing an `eventInit` Neo cannot pass before
-/// any page call.
-impl DispatchOptions {
-    pub(crate) fn from_params(params: FrameDispatchEventParams) -> Result<Self, PlaywrightError> {
-        let event_init = plain_event_init(&params.event_init)?;
-        Ok(Self {
+impl From<DispatchEventParams> for DispatchOptions {
+    fn from(params: DispatchEventParams) -> Self {
+        Self {
             selector: params.selector,
             strict: params.strict.unwrap_or(false),
             event_type: params.r#type,
-            event_init: event_init.to_string(),
-        })
-    }
-}
-
-/// Deviation: `server/frames.ts` `Frame.dispatchEvent`: `{ mainWorld: true }` Playwright builds and dispatches the event in the page's main world from any serialized value, handles included; Neo dispatches from its isolated world, so `eventInit` takes plain values only (strings, finite numbers, booleans, null, arrays and plain objects) and anything else is refused before any page call.
-const EVENT_INIT_UNSERVED: &str = "Neo's dispatchEvent takes plain eventInit values (strings, finite numbers, booleans, null, arrays and plain objects); this one holds";
-
-/// Neo: the plain JSON of a serialized `eventInit`, or the refusal naming what it holds.
-fn plain_event_init(argument: &SerializedArgument) -> Result<Value, PlaywrightError> {
-    // The wire's handle channels decode to nothing until the evaluation seam serves handles;
-    // from then on, a handle in `eventInit` is refused here.
-    if !argument.handles.is_empty() {
-        return Err(PlaywrightError::error(format!(
-            "{EVENT_INIT_UNSERVED} a JSHandle"
-        )));
-    }
-    plain_value(&argument.value, &mut Refs::default())
-        .map(|value| value.unwrap_or(Value::Null))
-        .map_err(|kind| PlaywrightError::error(format!("{EVENT_INIT_UNSERVED} {kind}")))
-}
-
-/// Deviation: `protocol/src/serializers.ts` `innerSerializeValue`: `return { ref: id };` Playwright's serializer writes a value met again as a `ref` to its first occurrence and its server hands the refs on, so any number of references to one value dispatches; Neo hands `eventInit` to its isolated world as JSON, which writes a repeated value out in full each time (a chain of values each holding the next twice doubles at every level), so one `eventInit` expands to at most this many values and a larger one is refused, naming the limit, before any page call.
-const EXPANDED_VALUES_MAX: usize = 100_000;
-
-/// Neo: the refusal of an `eventInit` past [`EXPANDED_VALUES_MAX`], which it names.
-const EXPANSION_REFUSED: &str =
-    "more than 100000 values once each repeated value is written out in full (Neo's limit)";
-
-/// Neo: the arrays and objects decoded so far, by their serialized `id`, the ones still open (an
-/// ancestor of the value being decoded), and how many values the expansion has written. A `ref`
-/// to a finished value is Playwright's shared value, written again; a `ref` to an open one is a
-/// cycle, which JSON cannot carry.
-#[derive(Default)]
-struct Refs {
-    done: HashMap<i64, Value>,
-    open: HashSet<i64>,
-    written: usize,
-}
-
-impl Refs {
-    /// Counts `values` more written values, refusing an expansion past [`EXPANDED_VALUES_MAX`].
-    fn write(&mut self, values: usize) -> Result<(), &'static str> {
-        self.written = self.written.saturating_add(values);
-        if self.written > EXPANDED_VALUES_MAX {
-            return Err(EXPANSION_REFUSED);
-        }
-        Ok(())
-    }
-}
-
-/// Neo: a decoded array or object, closed and kept under its `id` for later `ref`s.
-fn finish(value: Value, id: Option<i64>, refs: &mut Refs) -> Value {
-    if let Some(id) = id {
-        refs.open.remove(&id);
-        refs.done.insert(id, value.clone());
-    }
-    value
-}
-
-/// Neo: how many JSON values `value` holds, itself included.
-fn size_of_value(value: &Value) -> usize {
-    let mut size = 0usize;
-    let mut stack = vec![value];
-    while let Some(value) = stack.pop() {
-        size = size.saturating_add(1);
-        match value {
-            Value::Array(items) => stack.extend(items),
-            Value::Object(members) => stack.extend(members.values()),
-            _ => {}
+            event_init: params.event_init,
         }
     }
-    size
 }
 
-/// Neo: one serialized value as plain JSON: `None` for `undefined` (an object drops that key, as
-/// an init dictionary reads a missing member; JSON has no `undefined` array item, so an array
-/// holding one is refused), or what it holds that JSON cannot carry.
-fn plain_value(value: &SerializedValue, refs: &mut Refs) -> Result<Option<Value>, &'static str> {
-    refs.write(1)?;
-    if let Some(number) = value.n {
-        return Number::from_f64(number)
-            .map(|number| Some(Value::Number(number)))
-            .ok_or("a number that is not finite");
-    }
-    if let Some(flag) = value.b {
-        return Ok(Some(Value::Bool(flag)));
-    }
-    if let Some(text) = &value.s {
-        return Ok(Some(Value::String(text.clone())));
-    }
-    if let Some(special) = &value.v {
-        return match special {
-            SerializedValueV::Undefined => Ok(None),
-            SerializedValueV::Null => Ok(Some(Value::Null)),
-            SerializedValueV::Minus0 => Ok(Number::from_f64(-0.0).map(Value::Number)),
-            SerializedValueV::NaN
-            | SerializedValueV::Infinity
-            | SerializedValueV::MinusInfinity => Err("a number that is not finite"),
-        };
-    }
-    if let Some(items) = &value.a {
-        refs.open.extend(value.id);
-        let mut array = Vec::with_capacity(items.len());
-        for item in items {
-            array.push(plain_value(item, refs)?.ok_or("an array holding undefined")?);
-        }
-        return Ok(Some(finish(Value::Array(array), value.id, refs)));
-    }
-    if let Some(members) = &value.o {
-        refs.open.extend(value.id);
-        let mut object = Map::new();
-        for member in members {
-            if let Some(item) = plain_value(&member.v, refs)? {
-                object.insert(member.k.clone(), item);
-            }
-        }
-        return Ok(Some(finish(Value::Object(object), value.id, refs)));
-    }
-    if let Some(id) = value.r#ref {
-        if refs.open.contains(&id) {
-            return Err("a circular reference");
-        }
-        let shared = refs
-            .done
-            .get(&id)
-            .cloned()
-            .ok_or("a reference to a value it does not hold")?;
-        // The `ref` itself was counted above, as the root of the value it writes out again.
-        refs.write(size_of_value(&shared).saturating_sub(1))?;
-        return Ok(Some(shared));
-    }
-    Err(if value.d.is_some() {
-        "a Date"
-    } else if value.u.is_some() {
-        "a URL"
-    } else if value.bi.is_some() {
-        "a BigInt"
-    } else if value.r.is_some() {
-        "a RegExp"
-    } else if value.e.is_some() {
-        "an Error"
-    } else if value.ta.is_some() {
-        "a typed array"
-    } else if value.h.is_some() {
-        "a JSHandle"
-    } else if value.r#fn.is_some() {
-        "a function"
-    } else {
-        "a value of an unknown kind"
-    })
-}
-
-/// Serves `Frame.dispatchEvent`: waits for the first match, then dispatches once.
+/// Playwright: `server/frames.ts` `Frame.dispatchEvent`: `}, { type, eventInit }, { mainWorld: true });`
 ///
-/// Playwright: `server/frames.ts` `Frame.dispatchEvent`: `injectedScript.dispatchEvent(element, data.type, data.eventInit);`
-pub(crate) async fn dispatch_event<T: ElementOpsTab>(
-    tab: &T,
+/// Serves `Frame.dispatchEvent`: waits until the selector matches, then dispatches once on the
+/// first match, built and sent in the page's own world by eval's element callback, with any
+/// handles `eventInit` holds.
+pub(crate) async fn dispatch_event(
+    page: &FrameTab,
     options: &DispatchOptions,
     progress: &Progress,
 ) -> Result<(), CallError> {
-    reads::wait_for_function_on_selector(tab, &options.selector, progress, || async {
-        let preview = tab
-            .dispatch_event(
-                &options.selector,
-                options.strict,
-                &options.event_type,
-                &options.event_init,
-            )
-            .await?;
-        Ok(preview.map(|preview| Matched { value: (), preview }))
-    })
+    evaluate::call_on_element_main(
+        page,
+        None,
+        &options.selector,
+        options.strict,
+        MainCallback::DispatchEvent,
+        &[json!(options.event_type)],
+        &options.event_init,
+        progress.handles(),
+        progress,
+    )
     .await
 }
 
@@ -786,25 +639,6 @@ impl ElementOpsTab for FrameTab {
             ..border
         }))
     }
-
-    async fn dispatch_event(
-        &self,
-        selector: &str,
-        strict: bool,
-        event_type: &str,
-        event_init: &str,
-    ) -> Result<Option<String>, PageError> {
-        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
-            return Ok(None);
-        };
-        let params = InjectedDispatchEventParams {
-            selector: located.selector,
-            strict,
-            r#type: event_type.to_string(),
-            event_init: event_init.to_string(),
-        };
-        Ok(located.frame.call(None, &params).await?.preview)
-    }
 }
 
 /// Neo: starts `work` before returning, as the forms' page steps do, so the turn and the element
@@ -846,155 +680,10 @@ fn border_rect(quad: &Value) -> Option<Rect> {
 
 #[cfg(test)]
 mod tests {
-    //! The pure steps: `eventInit` decoding and the border box. The retries and the page side
-    //! are covered by the real-browser tests (`tests/element_ops_e2e.rs`, neo-sdk's parity).
+    //! The pure step: the border box. The retries and the page side are covered by the
+    //! real-browser tests (`tests/element_ops_e2e.rs`, neo-sdk's parity).
 
     use super::*;
-
-    fn argument(value: serde_json::Value) -> SerializedArgument {
-        SerializedArgument {
-            value: serde_json::from_value(value).expect("a serialized value"),
-            handles: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn tests_that_plain_event_init_values_become_json() {
-        let init = argument(json!({ "o": [
-            { "k": "bubbles", "v": { "b": false } },
-            { "k": "clientX", "v": { "n": 12.5 } },
-            { "k": "detail", "v": { "o": [{ "k": "list", "v": { "a": [{ "s": "x" }, { "v": "null" }], "id": 2 } }], "id": 3 } },
-            { "k": "skipped", "v": { "v": "undefined" } },
-        ], "id": 1 }));
-        assert_eq!(
-            plain_event_init(&init).expect("plain"),
-            json!({ "bubbles": false, "clientX": 12.5, "detail": { "list": ["x", null] } })
-        );
-    }
-
-    #[test]
-    fn tests_that_values_json_cannot_carry_are_refused_by_kind() {
-        for (wire, kind) in [
-            (json!({ "d": "2020-01-01T00:00:00.000Z" }), "a Date"),
-            (json!({ "v": "NaN" }), "a number that is not finite"),
-            (json!({ "bi": "1" }), "a BigInt"),
-            (json!({ "h": 0 }), "a JSHandle"),
-        ] {
-            let init = argument(json!({ "o": [{ "k": "detail", "v": wire }], "id": 1 }));
-            let error = plain_event_init(&init).expect_err("refused");
-            assert!(error.message.ends_with(kind), "{}", error.message);
-        }
-    }
-
-    #[test]
-    fn tests_that_a_shared_value_is_written_again_and_only_a_cycle_is_refused() {
-        // Playwright's ids in visit order: the init 1, `touches` 2, the touch 3, then the two
-        // other lists, whose only item is the touch already met.
-        let shared = argument(json!({ "o": [
-            { "k": "touches", "v": { "a": [{ "o": [{ "k": "identifier", "v": { "n": 7 } }], "id": 3 }], "id": 2 } },
-            { "k": "targetTouches", "v": { "a": [{ "ref": 3 }], "id": 4 } },
-            { "k": "changedTouches", "v": { "a": [{ "ref": 3 }], "id": 5 } },
-        ], "id": 1 }));
-        let touch = json!([{ "identifier": 7.0 }]);
-        assert_eq!(
-            plain_event_init(&shared).expect("a shared touch"),
-            json!({ "touches": touch, "targetTouches": touch, "changedTouches": touch })
-        );
-        for (wire, kind) in [
-            (
-                json!({ "o": [{ "k": "detail", "v": { "ref": 1 } }], "id": 1 }),
-                "a circular reference",
-            ),
-            (
-                json!({ "o": [{ "k": "detail", "v": { "ref": 9 } }], "id": 1 }),
-                "a reference to a value it does not hold",
-            ),
-        ] {
-            let error = plain_event_init(&argument(wire)).expect_err("refused");
-            assert!(error.message.ends_with(kind), "{}", error.message);
-        }
-    }
-
-    #[test]
-    fn tests_that_an_expansion_past_neos_bound_is_refused() {
-        // Each level holds the one below twice, the second time as a `ref`: 2^20 values.
-        let mut level = json!({ "o": [], "id": 1 });
-        for id in 2..=21 {
-            level = json!({ "o": [
-                { "k": "x", "v": level },
-                { "k": "y", "v": { "ref": id - 1 } },
-            ], "id": id });
-        }
-        let error = plain_event_init(&argument(level)).expect_err("too large");
-        assert!(
-            error.message.ends_with(EXPANSION_REFUSED),
-            "{}",
-            error.message
-        );
-        assert!(EXPANSION_REFUSED.contains(&EXPANDED_VALUES_MAX.to_string()));
-    }
-
-    #[test]
-    fn tests_that_many_references_to_one_value_expand_up_to_the_limit() {
-        // Playwright's `Array(n).fill(shared)`: the first item in full, every other a `ref`.
-        let shallow = |n: usize| {
-            let mut items = vec![json!({ "o": [{ "k": "leaf", "v": { "b": true } }], "id": 2 })];
-            items.extend((1..n).map(|_| json!({ "ref": 2 })));
-            argument(json!({ "a": items, "id": 1 }))
-        };
-        let expanded = plain_event_init(&shallow(10_000)).expect("within the limit");
-        let items = expanded.as_array().expect("an array");
-        assert_eq!(items.len(), 10_000);
-        assert!(items.iter().all(|item| item == &json!({ "leaf": true })));
-        // The review's 60,000 references expand past 100,000 values; Playwright dispatches them.
-        let error = plain_event_init(&shallow(60_000)).expect_err("past the limit");
-        assert!(
-            error.message.ends_with(EXPANSION_REFUSED),
-            "{}",
-            error.message
-        );
-    }
-
-    #[test]
-    fn tests_that_each_expanded_value_counts_once_against_the_limit() {
-        // `{ detail: Array(n).fill(shared) }` writes 2 + 2n values: the init object, the array,
-        // and each copy's object and boolean.
-        let detail = |n: usize| {
-            let mut items = vec![json!({ "o": [{ "k": "leaf", "v": { "b": true } }], "id": 3 })];
-            items.extend((1..n).map(|_| json!({ "ref": 3 })));
-            argument(json!({ "o": [{ "k": "detail", "v": { "a": items, "id": 2 } }], "id": 1 }))
-        };
-        // The second review's 40,000 references: 80,002 values.
-        let expanded = plain_event_init(&detail(40_000)).expect("80,002 values");
-        assert_eq!(expanded["detail"].as_array().map(Vec::len), Some(40_000));
-        // Exactly at the limit, and one copy past it.
-        assert!(plain_event_init(&detail(49_999)).is_ok(), "100,000 values");
-        let error = plain_event_init(&detail(50_000)).expect_err("100,002 values");
-        assert!(
-            error.message.ends_with(EXPANSION_REFUSED),
-            "{}",
-            error.message
-        );
-    }
-
-    #[test]
-    fn tests_that_minus_zero_keeps_its_sign_and_undefined_array_items_are_refused() {
-        let init = argument(json!({ "o": [{ "k": "detail", "v": { "v": "-0" } }], "id": 1 }));
-        let detail = plain_event_init(&init).expect("plain")["detail"].as_f64();
-        assert!(detail.is_some_and(|zero| zero == 0.0 && zero.is_sign_negative()));
-        let holes = argument(json!({ "o": [{ "k": "detail", "v": {
-            "a": [{ "n": 1 }, { "v": "undefined" }], "id": 2 } }], "id": 1 }));
-        assert!(
-            plain_event_init(&holes)
-                .expect_err("an undefined item")
-                .message
-                .ends_with("an array holding undefined")
-        );
-        assert_eq!(
-            plain_event_init(&argument(json!({ "v": "undefined" }))).expect("undefined"),
-            Value::Null
-        );
-    }
 
     #[test]
     fn tests_that_a_border_quad_becomes_its_bounding_rect() {

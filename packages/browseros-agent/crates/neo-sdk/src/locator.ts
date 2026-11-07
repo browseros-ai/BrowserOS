@@ -559,6 +559,22 @@ export class Locator {
     )
   }
 
+  /** Playwright's `Locator.waitForFunction`: resolves `undefined` once `pageFunction`, called with
+   * this locator's one element and `arg` in the page's own world, returns a truthy value. */
+  async waitForFunction<R, Arg>(
+    pageFunction: PageFunctionOn<PageElement, Arg, R>,
+    arg?: Arg,
+    options?: TimeoutInput,
+  ): Promise<void> {
+    return await this._frame._waitForFunctionOnSelector(
+      'locator.waitForFunction',
+      this._selector,
+      pageFunction,
+      arg,
+      options,
+    )
+  }
+
   async waitFor(options?: WaitForSelectorOptions): Promise<void> {
     await this._frame._waitForSelector('locator.waitFor', this._selector, {
       strict: true,

@@ -579,22 +579,6 @@ Injected:
       returns:
         outcome: SelectTextOutcome
 
-    # `frames.ts` `dispatchEvent`: resolves and marks the first match, then
-    # `InjectedScript.dispatchEvent(element, type, eventInit)`, in Neo's isolated world.
-    dispatchEvent:
-      internal: true
-      parameters:
-        selector: string
-        strict: boolean
-        type: string
-        # The event's init dictionary as JSON text: plain values, which neo-runtime decodes from
-        # the call's serialized argument.
-        eventInit: string
-      returns:
-        # `InjectedScript.previewNode` of the element the event went to; absent while nothing
-        # matches.
-        preview: string?
-
     # `InjectedScript.setHighlights` for this document: each highlight is a frame chunk the page
     # parses, and its CSS. An empty list clears them; the overlay follows its elements on every
     # animation frame.

@@ -10,8 +10,11 @@
 // 'DE-001 should dispatch click event @smoke', 'DE-002 should dispatch click event properties',
 // 'DE-003 should dispatch click svg', 'DE-004 should dispatch click on a span with an inline
 // element inside', 'DE-005 should dispatch click after navigation' and 'DE-013 should dispatch
-// wheel event'. Values Neo refuses in eventInit (a Date, NaN, a function, a typed array) are
-// Neo-only: neo-runtime's tests/element_ops_e2e.rs.
+// wheel event'. The event is built and dispatched in the page's own world, as Playwright's
+// `mainWorld: true`, from `eventInit` as Playwright's serializer sends it: handles (a
+// DataTransfer, a relatedTarget) reach main-world listeners, and values JSON cannot carry (a
+// Date, NaN, a BigInt) arrive as Playwright's do ('DE-010 should dispatch drag drop events',
+// 'DE-017 should throw if argument is from different frame').
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
@@ -125,9 +128,109 @@ test('dispatchEvent dispatches the event Playwright builds, on the element it na
   })
 })
 
+const MAIN_WORLD = `<title>dispatch-main</title>
+<button id="button">Button</button><div id="circle">Circle</div>
+<script>
+// BrowserOS neo's takeover bar is not the page's (frame-top.html explains); remove it on sight.
+new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.remove()).observe(
+  document.documentElement,
+  { childList: true, subtree: true },
+)
+// Main-world listeners: what each event carries when the page's own code reads it.
+window.__seen = []
+for (const type of ['click', 'focus', 'drop', 'ping', 'wheel'])
+  document.getElementById('button').addEventListener(type, (event) =>
+    window.__seen.push({
+      type: event.type,
+      kind: event.constructor.name,
+      detail: event.detail === undefined ? 'undefined' : event.detail,
+      related: event.relatedTarget ? event.relatedTarget.id : null,
+      transfer: event.dataTransfer ? event.dataTransfer.getData('text/plain') : null,
+      deltaY: 'deltaY' in event ? String(event.deltaY) : null,
+    }))
+window.__facts = () => ({ seen: window.__seen })
+</script>`
+
+test('dispatchEvent builds eventInit in the page world, handles included, as Playwright does', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  const outcome = await compareMethod(t, {
+    html: MAIN_WORLD,
+    source: `
+      const settle = async (act) => {
+        try { await act(); return 'resolved' } catch (error) { return errorCategory(error) }
+      }
+      const circle = await page.$('#circle')
+      // DE-010: a DataTransfer made in the page, its data set there.
+      const transfer = await page.evaluateHandle(() => {
+        const data = new DataTransfer()
+        data.setData('text/plain', 'moved')
+        return data
+      })
+      const results = {
+        relatedTarget: await settle(() => page.locator('#button').dispatchEvent('focus', { relatedTarget: circle })),
+        dataTransfer: await settle(() => page.dispatchEvent('#button', 'drop', { dataTransfer: transfer })),
+        // An unknown type is a plain Event, which keeps no detail: Playwright builds no CustomEvent.
+        detailObject: await settle(() => page.locator('#button').dispatchEvent('ping', { detail: { nested: [1, 'a'], when: new Date(0) } })),
+        dateDetail: await settle(() => page.mainFrame().dispatchEvent('#button', 'click', { detail: new Date(5) })),
+        // WheelEvent's deltaY is a finite double: the page's constructor throws, in both engines.
+        nanDelta: await settle(() => page.locator('#button').dispatchEvent('wheel', { deltaY: NaN })),
+        bigintDetail: await settle(() => page.locator('#button').dispatchEvent('click', { detail: 1n })),
+        functionDetail: await settle(() => page.locator('#button').dispatchEvent('click', { detail: () => 1 })),
+      }
+      await transfer.dispose()
+      results.disposed = await settle(() => page.dispatchEvent('#button', 'drop', { dataTransfer: transfer }, { timeout: 1000 }))
+      return results
+    `,
+    probe: 'window.__facts()',
+    effects: ({ playwright, neo }) => {
+      assert.deepEqual(neo, playwright, 'what the page saw')
+      assert.deepEqual(
+        playwright.seen.map((event) => [
+          event.type,
+          event.kind,
+          event.related,
+          event.transfer,
+        ]),
+        [
+          ['focus', 'FocusEvent', 'circle', null],
+          ['drop', 'DragEvent', null, 'moved'],
+          ['ping', 'Event', null, null],
+          ['click', 'MouseEvent', null, null],
+        ],
+      )
+    },
+  })
+  assert.deepEqual(outcome.value, {
+    relatedTarget: 'resolved',
+    dataTransfer: 'resolved',
+    detailObject: 'resolved',
+    dateDetail: 'resolved',
+    nanDelta: 'Error',
+    bigintDetail: 'Error',
+    functionDetail: 'Error',
+    disposed: 'Error',
+  })
+})
+
 /** dispatchEvent inside frames, on tabs of frame-top.html (frames.mjs): the button of the frame
  * a locator names, same-site and cross-site, and a missing iframe at its timeout. */
 const frameCases = [
+  {
+    name: 'dispatchEvent takes a handle of the frame it dispatches in, not of another (DE-017)',
+    source: `const child = page.frames().find((frame) => frame.name() === 'same')
+    const own = await child.evaluateHandle(() => new DataTransfer())
+    const foreign = await page.evaluateHandle(() => new DataTransfer())
+    return {
+      own: await settle(() => page.frameLocator('#same').locator('#send').dispatchEvent('drop', { dataTransfer: own })),
+      foreign: await settle(() => page.frameLocator('#same').locator('#send').dispatchEvent('drop', { dataTransfer: foreign })),
+    }`,
+    expected: {
+      own: 'undefined',
+      foreign: { error: 'error', name: 'Error' },
+    },
+  },
   {
     name: 'dispatchEvent reaches the button of the frame it names',
     source: `return {

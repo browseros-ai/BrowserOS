@@ -77,7 +77,6 @@ const valid = {
   queryCount: () => ({ value: 0 }),
   blurElement: () => ({ outcome: 'done' }),
   selectText: () => ({ outcome: 'done' }),
-  dispatchEvent: () => ({}),
   setHighlights: () => ({}),
   hideHighlight: () => ({}),
 } satisfies Api

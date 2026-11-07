@@ -4,7 +4,7 @@
 // src/vendor-shims.ts
 var DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-class URL2 {
+class URL {
   href;
   constructor(href) {
     this.href = String(href);
@@ -77,7 +77,7 @@ function isDate(obj) {
 }
 function isURL(obj) {
   try {
-    return obj instanceof URL2 || Object.prototype.toString.call(obj) === "[object URL]";
+    return obj instanceof URL || Object.prototype.toString.call(obj) === "[object URL]";
   } catch (error) {
     return false;
   }
@@ -168,7 +168,7 @@ function parseEvaluationResultValue(value, handles = [], refs = new Map) {
       return new Date(value.d);
     }
     if ("u" in value)
-      return new URL2(value.u);
+      return new URL(value.u);
     if ("bi" in value)
       return BigInt(value.bi);
     if ("e" in value) {
@@ -387,7 +387,7 @@ function innerParseSerializedValue(value, handles, refs, accessChain) {
   if (value.d !== undefined)
     return new Date(value.d);
   if (value.u !== undefined)
-    return new URL2(value.u);
+    return new URL(value.u);
   if (value.bi !== undefined)
     return BigInt(value.bi);
   if (value.e !== undefined) {
@@ -506,7 +506,7 @@ function isDate2(obj) {
   return obj instanceof Date || Object.prototype.toString.call(obj) === "[object Date]";
 }
 function isURL2(obj) {
-  return obj instanceof URL2 || Object.prototype.toString.call(obj) === "[object URL]";
+  return obj instanceof URL || Object.prototype.toString.call(obj) === "[object URL]";
 }
 function isError2(obj) {
   const proto = obj ? Object.getPrototypeOf(obj) : null;
@@ -4596,6 +4596,9 @@ class Locator {
   async elementHandles() {
     return await this._frame._querySelectorAll("locator.elementHandles", this._selector);
   }
+  async waitForFunction(pageFunction, arg, options) {
+    return await this._frame._waitForFunctionOnSelector("locator.waitForFunction", this._selector, pageFunction, arg, options);
+  }
   async waitFor(options) {
     await this._frame._waitForSelector("locator.waitFor", this._selector, {
       strict: true,
@@ -4787,79 +4790,6 @@ function serializeUrlMatch(apiName, url) {
 }
 function isRegExp4(value) {
   return value instanceof RegExp || Object.prototype.toString.call(value) === "[object RegExp]";
-}
-
-// src/plain-argument.ts
-function serializePlainArgument(value) {
-  return {
-    value: serialize2(value, { lastId: 0, visited: new Map }, []),
-    handles: []
-  };
-}
-function serialize2(value, visitorInfo, accessChain) {
-  if (typeof value === "symbol")
-    return { v: "undefined" };
-  if (Object.is(value, undefined))
-    return { v: "undefined" };
-  if (Object.is(value, null))
-    return { v: "null" };
-  if (Object.is(value, Number.NaN))
-    return { v: "NaN" };
-  if (Object.is(value, Number.POSITIVE_INFINITY))
-    return { v: "Infinity" };
-  if (Object.is(value, Number.NEGATIVE_INFINITY))
-    return { v: "-Infinity" };
-  if (Object.is(value, -0))
-    return { v: "-0" };
-  if (typeof value === "boolean")
-    return { b: value };
-  if (typeof value === "number")
-    return { n: value };
-  if (typeof value === "string")
-    return { s: value };
-  if (typeof value === "bigint")
-    return { bi: value.toString() };
-  if (value instanceof Error)
-    return { e: { n: value.name, m: value.message, s: value.stack || "" } };
-  if (value instanceof Date)
-    return { d: value.toJSON() };
-  if (typeof URL !== "undefined" && value instanceof URL)
-    return { u: value.toJSON() };
-  if (value instanceof RegExp)
-    return { r: { p: value.source, f: value.flags } };
-  if (ArrayBuffer.isView(value))
-    refuseTypedArray();
-  if (typeof value === "object") {
-    const object = value;
-    const seen = visitorInfo.visited.get(object);
-    if (seen)
-      return { ref: seen };
-    if (Array.isArray(object)) {
-      const id2 = ++visitorInfo.lastId;
-      visitorInfo.visited.set(object, id2);
-      const a = object.map((item, i) => serialize2(item, visitorInfo, [...accessChain, i]));
-      return { a, id: id2 };
-    }
-    const id = ++visitorInfo.lastId;
-    visitorInfo.visited.set(object, id);
-    const o = Object.keys(object).map((name) => ({
-      k: name,
-      v: serialize2(object[name], visitorInfo, [...accessChain, name])
-    }));
-    return { o, id };
-  }
-  throw new Error(`Attempting to serialize unexpected value${accessChainToDisplayString2(accessChain)}: ${String(value)}`);
-}
-function refuseTypedArray() {
-  throw new Error("Neo's dispatchEvent takes plain eventInit values (strings, finite numbers, booleans, null, arrays and plain objects); this one holds a typed array");
-}
-function accessChainToDisplayString2(accessChain) {
-  const chainString = accessChain.map((accessor, i) => {
-    if (typeof accessor === "string")
-      return i ? `.${accessor}` : accessor;
-    return `[${accessor}]`;
-  }).join("");
-  return chainString.length > 0 ? ` at position "${chainString}"` : "";
 }
 
 // src/protocol.ts
@@ -5109,7 +5039,7 @@ function text(value, index, field) {
 // src/url.ts
 var READ_ONLY = "Neo's URL is read-only: build a new URL string instead";
 
-class URL3 {
+class URL2 {
   #parts;
   #searchParams;
   constructor(parts) {
@@ -5244,7 +5174,7 @@ class URLSearchParams {
 }
 function urlFor(url) {
   const parts = parseURL(url);
-  return parts ? new URL3(parts) : null;
+  return parts ? new URL2(parts) : null;
 }
 function formEncode(text2) {
   return encodeURIComponent(text2).replace(/%20/g, "+").replace(/[!'()~]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
@@ -5655,7 +5585,13 @@ class Frame {
       pollingInterval: options.polling === "raf" ? undefined : options.polling
     });
     const result = await this._connection.sendEval(apiName, this._guid, "waitForFunction", pollingInterval === undefined ? params : { ...params, pollingInterval }, this._page._timeoutSettings.timeout(options, apiName));
+    if (!("handle" in result))
+      throw new Error("neo-sdk: Frame.waitForFunction contract error: missing handle");
     return handleFrom(this._connection, result.handle);
+  }
+  async _waitForFunctionOnSelector(apiName, selector, pageFunction, arg, options) {
+    const params = evaluateParams(apiName, pageFunction, arg, undefined);
+    await this._connection.sendEval(apiName, this._guid, "waitForFunction", { selector, strict: true, ...params }, this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async waitForSelector(selector, options) {
     return await this._waitForSelectorPublic("frame.waitForSelector", selector, options);
@@ -5951,7 +5887,7 @@ class Frame {
     await this._connection.send(apiName, this._guid, "dispatchEvent", pickParams(FRAME_DISPATCH_EVENT_KEYS, {
       selector,
       type,
-      eventInit: serializePlainArgument(eventInit),
+      eventInit: serializeArgument(eventInit),
       ...options
     }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }

@@ -543,16 +543,6 @@ export const glue = {
     return { outcome: injected.selectText(element) }
   },
 
-  /** Playwright: `server/frames.ts` `Frame.dispatchEvent`: `injectedScript.dispatchEvent(element, data.type, data.eventInit);` */
-  dispatchEvent: (injected, { selector, strict, type, eventInit }) => {
-    const [element] = query(injected, selector, strict, {
-      markTargets: 'first',
-    })
-    if (!element) return {}
-    injected.dispatchEvent(element, type, JSON.parse(eventInit))
-    return { preview: injected.previewNode(element) }
-  },
-
   /** Playwright: `server/highlightController.ts` `HighlightController._resolve`: `await injectedScript.evaluate((injected, highlights) => injected.setHighlights(highlights), highlights);` */
   setHighlights: (injected, { highlights }) => {
     injected.setHighlights(

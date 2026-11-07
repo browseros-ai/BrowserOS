@@ -143,6 +143,7 @@ export type ApiName =
   | 'frame.frameElement'
   | 'page.removeLocatorHandler'
   | 'locator.waitFor'
+  | 'locator.waitForFunction'
   | 'page.waitForURL'
   | 'frame.waitForURL'
   | 'page.waitForLoadState'

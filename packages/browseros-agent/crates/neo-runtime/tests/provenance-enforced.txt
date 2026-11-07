@@ -50,7 +50,6 @@ neo-sdk/src/file-chooser.ts
 neo-sdk/src/init-script.ts
 neo-sdk/src/input.ts
 neo-sdk/src/js-handle.ts
-neo-sdk/src/plain-argument.ts
 neo-sdk/src/url.ts
 neo-sdk/src/vendor-globals.d.ts
 neo-sdk/src/vendor-shims.ts
