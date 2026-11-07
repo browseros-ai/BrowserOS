@@ -80,6 +80,34 @@ const cases = [
     },
   },
   {
+    // B2 review (review-review-b2.md, P2 2): more requests loading at once than Neo keeps of
+    // finished ones (1000). Every failure is still reported, and networkidle resolves once they
+    // and the image holding the page ended.
+    name: 'networkidle recovers after more than 1000 loading requests are aborted',
+    source: `let started = 0
+    let failed = 0
+    page.on('request', (request) => { if (request.url().includes('id=flood-')) started++ })
+    page.on('requestfailed', (request) => { if (request.url().includes('id=flood-')) failed++ })
+    await page.goto(ORIGIN + '/net/busy.html', { waitUntil: 'commit' })
+    await page.evaluate(() => { window.ctrl = new AbortController() })
+    for (let i = 0; i < 1005; i += 25) {
+      const end = Math.min(i + 25, 1005)
+      const last = page.waitForRequest('**/net/hold?id=flood-' + (end - 1))
+      await page.evaluate(([start, end]) => {
+        for (let j = start; j < end; j++)
+          fetch('/net/hold?id=flood-' + j, { signal: window.ctrl.signal }).catch(() => {})
+      }, [i, end])
+      await last
+    }
+    await page.evaluate(() => {
+      window.ctrl.abort()
+      document.querySelector('img').src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>'
+    })
+    const idle = await settle(page.waitForLoadState('networkidle', { timeout: 5000 }))
+    return { started, failed, idle }`,
+    expected: { started: 1005, failed: 1005, idle: 'undefined' },
+  },
+  {
     // page-network-idle.spec.ts "NE-082 should not wait for an open EventSource connection".
     name: 'an open EventSource does not hold networkidle',
     source: `const response = await page.goto(ORIGIN + '/net/event-source.html', { waitUntil: 'networkidle', timeout: 10000 })

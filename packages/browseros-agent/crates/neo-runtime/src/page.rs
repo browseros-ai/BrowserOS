@@ -1298,7 +1298,9 @@ impl Watcher {
                                 idle.started(hop.clone(), &frame, event_stream);
                             }
                         }
-                        Happening::Finished(hop) | Happening::Failed(hop) => idle.ended(hop, now),
+                        Happening::Finished(hop)
+                        | Happening::Failed(hop)
+                        | Happening::Forgotten(hop) => idle.ended(hop, now),
                         Happening::Response(_) => {}
                     }
                 }
@@ -1343,6 +1345,30 @@ impl Watcher {
             })
             .unwrap_or_default();
         self.apply_idle(changes);
+    }
+
+    /// `Frame._failInflightRequests` for a frame the tab's session reports removed
+    /// (`Page.frameDetached`, reason `remove`), and for every request of an out-of-process frame
+    /// session that detached (`Target.detachedFromTarget`).
+    fn detached_requests(&self, event: &CdpEvent) -> Vec<Happening> {
+        match event.method.as_str() {
+            "Page.frameDetached"
+                if event.session_id.as_ref() == Some(&self.session)
+                    && event.params["reason"] == "remove" =>
+            {
+                event.params["frameId"]
+                    .as_str()
+                    .map(|frame| self.network.detach_frame(frame))
+                    .unwrap_or_default()
+            }
+            "Target.detachedFromTarget" => event.params["sessionId"]
+                .as_str()
+                .map(SessionId::from)
+                .filter(|child| self.network.has_child(child))
+                .map(|child| self.network.detach_session(&child))
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
     }
 
     /// A child frame's navigation request starting or failing, routed to that frame's feed: the
@@ -1406,6 +1432,15 @@ impl Watcher {
                             producer.network(&self.network, &happenings);
                         }
                     }
+                }
+                // A frame removed from the page, or an out-of-process frame session gone, ends
+                // its requests still loading: no later event of theirs can arrive.
+                let detached = self.detached_requests(&event);
+                if !detached.is_empty() {
+                    if let Some(producer) = &self.producer {
+                        producer.network(&self.network, &detached);
+                    }
+                    happenings.extend(detached);
                 }
                 if event.method == "Page.frameNavigated"
                     && event.session_id.as_ref() == Some(session)

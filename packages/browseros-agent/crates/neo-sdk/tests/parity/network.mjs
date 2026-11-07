@@ -73,6 +73,8 @@ setTimeout(() => fetch('/net/slow?ms=700').then((r) => r.text()).then(() => { do
   '/net/late-child.html': `<title>late child</title><script>
 setTimeout(() => fetch('/net/slow?ms=700').then((r) => r.text()).then(() => { parent.document.title = 'done' }), 300)
 </script>`,
+  // An image whose response never completes holds networkidle until the page replaces it.
+  '/net/busy.html': '<title>busy</title><img src="/net/hold?id=blocker">',
   // A frame from localhost, another site, so Chromium runs it in its own process.
   '/net/oopif-top.html': `<title>oopif top</title><body><script>
 const frame = document.createElement('iframe')
@@ -94,14 +96,31 @@ sessionStorage.setItem('loads', String(Number(sessionStorage.getItem('loads')) +
  * The fixture server: `PAGES`, JSON at `*.json`, a PNG at `/net/img.png`, a 302 at
  * `/net/redirect` (to `/net/data.json`), a 204 at `/net/204`, a 404 at `/net/404`, a connection
  * dropped before any response at `/net/hangup`, `/net/slow?ms=N` after N ms, an event stream
- * that never ends at `/net/sse`, and `/net/echo` answering a POST's body. Each answer forbids
+ * that never ends at `/net/sse`, `/net/echo` answering a POST's body, and `/net/hold?id=X`, which
+ * sends `first` and holds the response open until `/net/release?id=X` ends it with `last`. Each
+ * answer forbids
  * caching, so a second engine's turn makes the same requests, except `/net/cached.json`, which
  * a script fetches under a query of its own.
  */
 export async function serveNetwork(cleanups) {
+  /** Responses `/net/hold?id=` keeps open after their first chunk, by id. */
+  const held = new Map()
   const server = http.createServer(async (request, response) => {
     const [pathname, query = ''] = request.url.split('?')
     response.setHeader('cache-control', 'no-store')
+    if (pathname === '/net/hold') {
+      response.writeHead(200, { 'content-type': 'text/plain' })
+      response.write('first')
+      held.set(new URLSearchParams(query).get('id'), response)
+      return
+    }
+    if (pathname === '/net/release') {
+      const id = new URLSearchParams(query).get('id')
+      held.get(id)?.end('last')
+      held.delete(id)
+      response.end('released')
+      return
+    }
     if (pathname === '/net/hangup') {
       request.socket.destroy()
       return

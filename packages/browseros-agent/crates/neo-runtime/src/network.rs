@@ -64,8 +64,19 @@ pub(crate) const MAX_CHAINS: usize = 256;
 /// How many other requests' chains (subresources, a frame's non-navigation fetches) one session
 /// keeps. Playwright's objects live as long as their page; Neo's records live in Rust outside the
 /// realm's memory limit for the run, so a busy page (a news site makes hundreds of requests per
-/// load) is bounded here, the oldest finished request dropped first.
+/// load) is bounded here, the oldest finished request dropped first. A request still loading is
+/// kept past this count, up to [`MAX_LIVE_REQUESTS`], so its end is still reported.
 pub(crate) const MAX_REQUESTS: usize = 1000;
+
+/// Deviation: `server/network.ts` `Request.frame`: `return this._frame;`
+/// How many requests still loading one session keeps before it drops the oldest of them too,
+/// the last bound on the log's memory for a page that opens requests without end. A request
+/// dropped while loading reports no end, and stops holding `networkidle` (`Happening::Forgotten`).
+pub(crate) const MAX_LIVE_REQUESTS: usize = 10_000;
+
+/// Playwright: `server/network.ts` `Request._failFromDetachedDocument`: `'net::ERR_ABORTED');`
+/// Chromium's branch: Firefox and WebKit name the failure their own way.
+const DETACHED_FAILURE: &str = "net::ERR_ABORTED";
 
 /// Playwright: `server/page.ts` `Page.addNetworkRequest`: `ensureArrayLimit(this._networkRequests, 100);`
 const MAX_PAGE_REQUESTS: usize = 100;
@@ -264,6 +275,9 @@ pub(crate) enum Happening {
     /// The hop finished loading, redirected, or was a subresource 204 Chromium aborted.
     Finished(HopId),
     Failed(HopId),
+    /// Neo dropped the hop while it was still loading ([`MAX_LIVE_REQUESTS`]): no event, but it
+    /// no longer holds its frame's `networkidle`.
+    Forgotten(HopId),
 }
 
 /// The session's record, shared by its watcher (the only writer) and every call and getter.
@@ -553,6 +567,69 @@ impl NetworkLog {
         }
         self.changes
             .send_modify(|version| *version = version.wrapping_add(1));
+    }
+
+    /// `Frame._failInflightRequests` for `frame`, removed from its page: each of its requests still
+    /// loading fails as a detached document's (`Request._failFromDetachedDocument`), its response
+    /// finished first, so a body read goes on to its session and fails there as Playwright's does.
+    ///
+    /// Deviation: `server/frames.ts` `Frame._failInflightRequests`: `for (const request of [...this._inflightRequests]) {`
+    /// A navigation request is left to Chromium's own `loadingFailed`: an out-of-process frame's
+    /// document request ends on that frame's session, which Neo may have attached only after it
+    /// ended, so Neo cannot tell a loading one from one that finished unseen.
+    pub(crate) fn detach_frame(&self, frame: &str) -> Vec<Happening> {
+        self.fail_loading(|chain| {
+            !chain.navigation && chain.hops.last().is_some_and(|hop| hop.frame == frame)
+        })
+    }
+
+    /// The same for every request still loading on `session`, an out-of-process frame session
+    /// that went away (its frame removed, or moved back into its parent's process): no later
+    /// event can end them.
+    pub(crate) fn detach_session(&self, session: &SessionId) -> Vec<Happening> {
+        if let Ok(mut children) = self.children.lock() {
+            children.remove(session);
+        }
+        self.fail_loading(|chain| chain.session.as_ref() == Some(session))
+    }
+
+    fn fail_loading(&self, whose: impl Fn(&Chain) -> bool) -> Vec<Happening> {
+        let Ok(mut log) = self.log.lock() else {
+            return Vec::new();
+        };
+        let mut happenings = Vec::new();
+        for chain in log
+            .chains
+            .iter_mut()
+            .filter(|chain| !chain.ended && whose(chain))
+        {
+            chain.ended = true;
+            let Some(index) = chain.hops.len().checked_sub(1) else {
+                continue;
+            };
+            let id = chain.hop_id(index);
+            let Some(hop) = chain.hops.get_mut(index) else {
+                continue;
+            };
+            if let Some(response) = &mut hop.response {
+                response.body_size = BodySize::Unknown;
+                // Playwright: `server/network.ts` `Request._failFromDetachedDocument`: `this._response._requestFinished(-1);`
+                hop.request_finished(-1.0);
+            } else {
+                hop.raw_request_headers
+                    .get_or_insert_with(|| hop.headers.clone());
+            }
+            hop.failure = Some(DETACHED_FAILURE.to_string());
+            if !hop.favicon {
+                happenings.push(Happening::Failed(id));
+            }
+        }
+        drop(log);
+        if !happenings.is_empty() {
+            self.changes
+                .send_modify(|version| *version = version.wrapping_add(1));
+        }
+        happenings
     }
 
     /// The lags counted so far; `goto` takes this before it navigates.
@@ -887,8 +964,8 @@ impl Log {
                 chain.hops.push(hop);
                 started
             });
-        let started =
-            continued.unwrap_or_else(|| self.start_chain(session, event, frame, navigation));
+        let started = continued
+            .unwrap_or_else(|| self.start_chain(session, event, frame, navigation, happenings));
         if let Some(id) = started {
             self.record_start(id.clone());
             happenings.push(Happening::Request(id));
@@ -904,6 +981,7 @@ impl Log {
         event: &RequestWillBeSent,
         frame: &str,
         navigation: bool,
+        happenings: &mut Vec<Happening>,
     ) -> Option<HopId> {
         let mut chain = Chain::new(event.request_id.clone(), navigation, session.cloned());
         if event.redirect_response.is_some() {
@@ -919,41 +997,49 @@ impl Log {
         self.chains
             .retain(|existing| existing.request != chain.request);
         self.chains.push_back(chain);
-        self.evict(navigation);
+        self.evict(navigation, happenings);
         started
     }
 
-    /// Drops the oldest chain past its kind's cap: navigations past [`MAX_CHAINS`], oldest
-    /// first, as ever; other requests past [`MAX_REQUESTS`], the oldest that has ended first, so
-    /// a request still loading keeps its record while finished ones can go.
-    fn evict(&mut self, navigation: bool) {
-        let (cap, ended_first) = if navigation {
-            (MAX_CHAINS, false)
-        } else {
-            (MAX_REQUESTS, true)
-        };
-        let count = self
-            .chains
-            .iter()
-            .filter(|chain| chain.navigation == navigation)
-            .count();
-        if count <= cap {
-            return;
-        }
-        let index = ended_first
-            .then(|| {
-                self.chains
+    /// Drops the oldest chains past their kind's cap: navigations past [`MAX_CHAINS`], oldest
+    /// first, as ever; other requests past [`MAX_REQUESTS`], only ended ones, so a request still
+    /// loading keeps its record (and its later end is reported) until [`MAX_LIVE_REQUESTS`],
+    /// past which the oldest loading one goes too. A chain dropped while loading is
+    /// [`Happening::Forgotten`].
+    fn evict(&mut self, navigation: bool, happenings: &mut Vec<Happening>) {
+        loop {
+            let count = self
+                .chains
+                .iter()
+                .filter(|chain| chain.navigation == navigation)
+                .count();
+            let index = if navigation {
+                if count <= MAX_CHAINS {
+                    return;
+                }
+                self.chains.iter().position(|chain| chain.navigation)
+            } else {
+                if count <= MAX_REQUESTS {
+                    return;
+                }
+                let ended = self
+                    .chains
                     .iter()
-                    .position(|chain| chain.navigation == navigation && chain.ended)
-            })
-            .flatten()
-            .or_else(|| {
-                self.chains
-                    .iter()
-                    .position(|chain| chain.navigation == navigation)
-            });
-        if let Some(index) = index {
-            self.chains.remove(index);
+                    .position(|chain| !chain.navigation && chain.ended);
+                ended.or_else(|| {
+                    (count > MAX_LIVE_REQUESTS)
+                        .then(|| self.chains.iter().position(|chain| !chain.navigation))
+                        .flatten()
+                })
+            };
+            let Some(chain) = index.and_then(|index| self.chains.remove(index)) else {
+                return;
+            };
+            if !chain.ended
+                && let Some(index) = chain.hops.len().checked_sub(1)
+            {
+                happenings.push(Happening::Forgotten(chain.hop_id(index)));
+            }
         }
     }
 
@@ -2585,6 +2671,137 @@ mod tests {
                 .to_string()
                 .contains("its last 1000 other requests")
         );
+    }
+
+    #[test]
+    fn tests_that_a_removed_frame_fails_its_loading_requests_once() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let mut in_child = sub("C1", "https://a.test/stream", "Fetch");
+        in_child.1["frameId"] = json!("CHILD");
+        let mut done_in_child = sub("C2", "https://a.test/done", "Fetch");
+        done_in_child.1["frameId"] = json!("CHILD");
+        apply_all(
+            &log,
+            &[
+                in_child,
+                response("C1", false),
+                done_in_child,
+                event(
+                    "Network.loadingFinished",
+                    json!({"requestId": "C2", "timestamp": 2.0, "encodedDataLength": 1.0}),
+                ),
+                sub("M1", "https://a.test/main", "Fetch"),
+            ],
+        );
+        log.apply(
+            None,
+            &navigation("DOC2", "CHILD", "Document", "https://b.test/").0,
+            &navigation("DOC2", "CHILD", "Document", "https://b.test/").1,
+        );
+        assert_eq!(
+            log.detach_frame("CHILD"),
+            [Happening::Failed(at("C1", 0))],
+            "its navigation request is Chromium's to end"
+        );
+        assert_eq!(
+            log.failure(&at("C1", 0)),
+            Ok(Some("net::ERR_ABORTED".to_string()))
+        );
+        assert!(
+            log.body(&at("C1", 0)).expect("a body").is_some(),
+            "its response finished, so a body read goes on to its session"
+        );
+        assert!(
+            !log.finished(&at("C1", 0)).expect("hop"),
+            "no requestFinished"
+        );
+        assert_eq!(
+            log.failure(&at("M1", 0)),
+            Ok(None),
+            "another frame's request"
+        );
+        let late = event(
+            "Network.loadingFailed",
+            json!({"requestId": "C1", "timestamp": 3.0, "errorText": "net::ERR_FAILED"}),
+        );
+        assert!(
+            log.apply(None, &late.0, &late.1).is_empty(),
+            "Chromium's own failure after it reports nothing twice"
+        );
+    }
+
+    #[test]
+    fn tests_that_a_gone_frame_session_fails_its_loading_requests() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let child = SessionId::from("OOPIF");
+        log.add_child(&child);
+        let mut start = sub("O1", "https://b.test/stream", "Fetch");
+        start.1["frameId"] = json!("REMOTE");
+        log.apply(Some(&child), &start.0, &start.1);
+        assert_eq!(log.detach_session(&child), [Happening::Failed(at("O1", 0))]);
+        assert!(!log.has_child(&child), "its events are no longer the tab's");
+    }
+
+    #[test]
+    fn tests_that_loading_requests_outlive_the_cap_until_the_live_bound() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let mut happenings = Vec::new();
+        for i in 0..=MAX_REQUESTS {
+            let start = sub(&format!("L{i}"), "https://a.test/l", "Fetch");
+            happenings.extend(log.apply(None, &start.0, &start.1));
+        }
+        assert!(
+            log.created_request(&at("L0", 0)).is_ok(),
+            "a loading request is kept past the cap"
+        );
+        assert!(
+            !happenings
+                .iter()
+                .any(|happening| matches!(happening, Happening::Forgotten(_))),
+            "nothing forgotten below the live bound"
+        );
+        let mut more = Vec::new();
+        for i in MAX_REQUESTS + 1..=MAX_LIVE_REQUESTS {
+            let start = sub(&format!("L{i}"), "https://a.test/l", "Fetch");
+            more.extend(log.apply(None, &start.0, &start.1));
+        }
+        assert!(
+            more.contains(&Happening::Forgotten(at("L0", 0))),
+            "past the live bound the oldest loading request goes, and says so"
+        );
+        assert_eq!(
+            log.created_request(&at("L0", 0)).map(|_| ()),
+            Err(LogError::Dropped("request"))
+        );
+    }
+
+    #[test]
+    fn tests_that_ended_requests_are_evicted_down_to_the_cap() {
+        let log = NetworkLog::new("MAIN".to_string());
+        for i in 0..MAX_REQUESTS + 5 {
+            let start = sub(&format!("A{i}"), "https://a.test/a", "Fetch");
+            log.apply(None, &start.0, &start.1);
+        }
+        for i in 0..MAX_REQUESTS + 5 {
+            let failed = event(
+                "Network.loadingFailed",
+                json!({"requestId": format!("A{i}"), "timestamp": 2.0, "errorText": "net::ERR_ABORTED"}),
+            );
+            assert_eq!(
+                log.apply(None, &failed.0, &failed.1),
+                [Happening::Failed(at(&format!("A{i}"), 0))],
+                "every loading request's failure is reported"
+            );
+        }
+        let next = sub("NEXT", "https://a.test/n", "Fetch");
+        log.apply(None, &next.0, &next.1);
+        for i in 0..6 {
+            assert!(
+                log.created_request(&at(&format!("A{i}"), 0)).is_err(),
+                "A{i} went to bring the log back to its cap"
+            );
+        }
+        assert!(log.created_request(&at("A6", 0)).is_ok());
     }
 
     #[test]

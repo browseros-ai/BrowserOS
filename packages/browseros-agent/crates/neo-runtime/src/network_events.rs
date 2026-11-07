@@ -29,6 +29,8 @@ pub(crate) fn emit(hub: &EventHub, page_guid: &str, log: &NetworkLog, happenings
             Happening::Response(id) => ("response", "response", id),
             Happening::Finished(id) => ("requestfinished", "requestFinished", id),
             Happening::Failed(id) => ("requestfailed", "requestFailed", id),
+            // Dropped past Neo's cap: Playwright's server has no such step to report.
+            Happening::Forgotten(_) => continue,
         };
         if !hub.wants(page_guid, listener, listener) {
             continue;

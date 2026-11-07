@@ -187,6 +187,41 @@ const cases = [
     },
   },
   {
+    // B2 review (review-review-b2.md, P2 1): removing an out-of-process frame whose response is
+    // still streaming. Playwright fails the frame's in-flight requests (server/frames.ts
+    // `Frame._failInflightRequests`, `Request._failFromDetachedDocument`): the body read rejects,
+    // `requestfailed` fires with `net::ERR_ABORTED`, `finished()` never settles in either engine,
+    // and the page reaches networkidle.
+    name: 'removing an out-of-process frame fails its loading request and its body read',
+    source: `await page.goto(ORIGIN + '/net/oopif-top.html')
+    let cross
+    for (let tries = 0; !cross && tries < 150; tries++) {
+      cross = page.frames().find((frame) => frame.url().endsWith('/net/oopif-child.html'))
+      if (!cross) await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    await cross.waitForLoadState('load')
+    const failures = []
+    page.on('requestfailed', (request) => failures.push([path(request.url()), request.failure()?.errorText, request.frame() === cross]))
+    const waiting = page.waitForResponse('**/net/hold?id=detach')
+    await cross.evaluate(() => { fetch('/net/hold?id=detach').then((r) => r.text()).catch(() => {}) })
+    const response = await waiting
+    const within = (promise) => Promise.race([
+      promise.then((value) => ({ value: value === null ? null : typeof value }), (error) => ({ error: errorCategory(error) })),
+      new Promise((resolve) => setTimeout(() => resolve('pending'), 2000)),
+    ])
+    const body = within(response.text())
+    const finished = within(response.finished())
+    await page.evaluate(() => document.querySelector('iframe').remove())
+    const idle = await settle(page.waitForLoadState('networkidle', { timeout: 5000 }))
+    return { body: await body, finished: await finished, idle, failures }`,
+    expected: {
+      body: { error: 'Error' },
+      finished: 'pending',
+      idle: 'undefined',
+      failures: [['/net/hold?id=detach', 'net::ERR_ABORTED', true]],
+    },
+  },
+  {
     // tests/page/page-event-network.spec.ts "NE-084 Page.Events.Request @smoke" for a response
     // the browser serves from its cache: the second fetch of a cacheable URL is still a request,
     // a response and a finish, with the cached status and body.
