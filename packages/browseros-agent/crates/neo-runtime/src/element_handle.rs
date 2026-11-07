@@ -569,8 +569,10 @@ async fn input_value(scoped: &Scoped<'_>, progress: &Progress) -> Result<String,
 }
 
 /// The record of the frame that owns the node, `None` when its document has no element or no
-/// frame of the run has it: the handle's page first, then the run's other pages, as Playwright
-/// looks through the context's pages for an adopted node.
+/// page of the context has that frame: the handle's page first, then every other live page of
+/// the context, as Playwright looks through the context's pages for an adopted node. A page the
+/// run holds no session on yet gets one, as the getters attach one: Playwright's context knows
+/// every page, the run only the pages it reached.
 ///
 /// Playwright: `server/dom.ts` `ElementHandle._ownerFrame`: `for (const page of this._page.browserContext.pages()) {`
 async fn owner_frame(
@@ -597,17 +599,27 @@ async fn owner_frame(
     else {
         return Ok(None);
     };
-    let attached = tabs.attached();
-    let own = attached
-        .iter()
-        .filter(|(_, page)| Arc::ptr_eq(page, &tab.page));
-    let others = attached
-        .iter()
-        .filter(|(_, page)| !Arc::ptr_eq(page, &tab.page));
-    for (entry, _) in own.chain(others) {
-        if let Some(record) = progress
+    let own = tabs
+        .attached()
+        .into_iter()
+        .find(|(_, page)| Arc::ptr_eq(page, &tab.page))
+        .map(|(entry, _)| entry);
+    if let Some(entry) = &own
+        && let Some(record) = progress
             .race(getters::frame_by_id(tabs, entry, &frame_id))
             .await??
+    {
+        return Ok(Some(record));
+    }
+    for entry in progress.race(tabs.live_entries()).await?? {
+        if own.as_ref().is_some_and(|own| Arc::ptr_eq(own, &entry)) {
+            continue;
+        }
+        // A page that closed, or cannot be read, since the listing has no frame to give, as a
+        // page gone from Playwright's context is no longer among its pages.
+        if let Ok(Some(record)) = progress
+            .race(getters::frame_by_id(tabs, &entry, &frame_id))
+            .await?
         {
             return Ok(Some(record));
         }
