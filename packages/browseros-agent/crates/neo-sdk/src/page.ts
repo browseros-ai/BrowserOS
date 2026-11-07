@@ -307,4 +307,10 @@ export class Page {
   getByRole(role: string, options: ByRoleOptions = {}): Locator {
     return this.mainFrame().getByRole(role, options)
   }
+
+  /** Playwright's `ChannelOwner.toJSON`: `JSON.stringify(page)`, and a script that returns its
+   * page, give its type and guid only, never this object's internals. */
+  toJSON(): { _type: 'Page'; _guid: string } {
+    return { _type: 'Page', _guid: this.#guid }
+  }
 }

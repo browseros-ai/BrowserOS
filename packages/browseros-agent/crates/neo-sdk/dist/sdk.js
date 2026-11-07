@@ -1061,6 +1061,9 @@ class Frame {
   getByRole(role, options = {}) {
     return this.locator(getByRoleSelector(role, options));
   }
+  toJSON() {
+    return { _type: "Frame", _guid: this._guid };
+  }
 }
 
 // src/timeout-settings.ts
@@ -1230,6 +1233,9 @@ class Page {
   getByRole(role, options = {}) {
     return this.mainFrame().getByRole(role, options);
   }
+  toJSON() {
+    return { _type: "Page", _guid: this.#guid };
+  }
 }
 
 // src/browser-context.ts
@@ -1254,6 +1260,9 @@ class BrowserContext {
   }
   setDefaultNavigationTimeout(timeout) {
     this._timeoutSettings.setDefaultNavigationTimeout(timeout);
+  }
+  toJSON() {
+    return { _type: "BrowserContext", _guid: this.#guid };
   }
   _addRunPage(guid, mainFrameGuid, url) {
     const page = new Page(guid, mainFrameGuid, url, this, this.#connection);

@@ -675,4 +675,10 @@ export class Frame {
   getByRole(role: string, options: ByRoleOptions = {}): Locator {
     return this.locator(getByRoleSelector(role, options))
   }
+
+  /** Playwright's `ChannelOwner.toJSON`: the frame's type and guid only, also inside a
+   * serialized locator. */
+  toJSON(): { _type: 'Frame'; _guid: string } {
+    return { _type: 'Frame', _guid: this._guid }
+  }
 }
