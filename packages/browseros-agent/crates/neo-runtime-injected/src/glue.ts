@@ -107,7 +107,8 @@ export const glue = {
     }
   },
 
-  /** `selectorElement` under an adopted element handle (`frameSelectors.ts` with a scope). */
+  /** `selectorElement` within an adopted element handle, for `ElementHandle.$` and `$eval`. */
+  // Playwright: `server/frameSelectors.ts` `FrameSelectors._callOnSelectorInternal`: `const elements = injected.querySelectorAll(params.info.parsed, params.scope || document);`
   scopedSelectorElement: (injected, { selector, strict }, root) => {
     const elements = query(injected, selector, strict, { root })
     const [element] = elements
@@ -121,14 +122,17 @@ export const glue = {
   },
 
   /** Every match, as Playwright's `queryAll` resolves it: the elements, by index. */
+  // Playwright: `server/frameSelectors.ts` `FrameSelectors.queryAll`: `const resolved = await this.callOnSelectorHandle({ selector, strict: false, scope }, ({ elements }) => elements, {});`
   queryAll: (injected, { selector }) => ({
     elements: elementList(query(injected, selector, false)),
   }),
 
+  // Playwright: `server/frameSelectors.ts` `FrameSelectors.queryAll`: `const resolved = await this.callOnSelectorHandle({ selector, strict: false, scope }, ({ elements }) => elements, {});`
   scopedQueryAll: (injected, { selector }, root) => ({
     elements: elementList(query(injected, selector, false, { root })),
   }),
 
+  // Playwright: `server/dom.ts` `ElementHandle._initializePreview`: `this._setPreview(await utility.evaluate((injected, e) => 'JSHandle@' + injected.previewNode(e), this));`
   listPreviews: (injected, _params, list) => ({
     previews: Object.values(list).map((element) =>
       injected.previewNode(element),

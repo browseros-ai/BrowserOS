@@ -1016,7 +1016,7 @@ class Locator {
     return await this._frame._withElement("locator.evaluate", this._selector, (handle) => handle._evaluate("locator.evaluate", pageFunction, arg, options), { timeout: options?.timeout, signal: options?.signal });
   }
   async evaluateHandle(pageFunction, arg, options) {
-    return await this._frame._withElement("locator.evaluateHandle", this._selector, (handle) => handle._evaluateHandle("locator.evaluateHandle", pageFunction, arg, options), { timeout: options?.timeout });
+    return await this._frame._withElement("locator.evaluateHandle", this._selector, (handle) => handle._evaluateHandle("locator.evaluateHandle", pageFunction, arg, options), { timeout: options?.timeout, signal: options?.signal });
   }
   async evaluateAll(pageFunction, arg) {
     return await this._frame._evalOnSelectorAll("locator.evaluateAll", this._selector, pageFunction, arg);
@@ -1968,6 +1968,8 @@ class Frame {
     return await this._querySelector("frame.$", selector, options);
   }
   async _querySelector(apiName, selector, options) {
+    if (options?.signal !== undefined)
+      throw new Error(`${apiName}: Neo does not support signal yet`);
     const params = { selector };
     if (options?.strict !== undefined)
       params.strict = options.strict;
@@ -2005,12 +2007,16 @@ class Frame {
   async _waitForFunction(apiName, pageFunction, arg, options = {}) {
     if (typeof options.polling === "string" && options.polling !== "raf")
       throw new Error(`Unknown polling option: ${options.polling}`);
+    if (options.signal !== undefined)
+      throw new Error(`${apiName}: Neo does not support signal yet`);
     const params = evaluateParams(apiName, pageFunction, arg, undefined);
     const pollingInterval = options.polling === "raf" ? undefined : options.polling;
     const result = await this._connection.sendEval(apiName, this._guid, "waitForFunction", pollingInterval === undefined ? params : { ...params, pollingInterval }, this._page._timeoutSettings.timeout(options));
     return handleFrom(this._connection, result.handle);
   }
   async _waitForSelectorElement(apiName, selector, options) {
+    if (options.signal !== undefined)
+      throw new Error(`${apiName}: Neo does not support signal yet`);
     const result = await this._connection.send(apiName, this._guid, "waitForSelector", pickParams(FRAME_WAIT_FOR_SELECTOR_KEYS, {
       selector,
       ...options

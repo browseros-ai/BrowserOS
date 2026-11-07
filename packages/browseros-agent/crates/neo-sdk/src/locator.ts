@@ -275,7 +275,7 @@ export class Locator {
   async evaluateHandle<R, Arg>(
     pageFunction: PageFunctionOn<PageElement, Arg, R>,
     arg?: Arg,
-    options?: EvaluateOptions & { timeout?: number },
+    options?: EvaluateOptions & { timeout?: number; signal?: unknown },
   ): Promise<JSHandle<R>> {
     return await this._frame._withElement(
       'locator.evaluateHandle',
@@ -287,7 +287,7 @@ export class Locator {
           arg,
           options,
         ),
-      { timeout: options?.timeout },
+      { timeout: options?.timeout, signal: options?.signal },
     )
   }
 
@@ -306,7 +306,10 @@ export class Locator {
   }
 
   /** Playwright's `locator.elementHandle`: the one element, once attached, as a handle. */
-  async elementHandle(options?: { timeout?: number }): Promise<ElementHandle> {
+  async elementHandle(options?: {
+    timeout?: number
+    signal?: unknown
+  }): Promise<ElementHandle> {
     const handle = await this._frame._waitForSelectorElement(
       'locator.elementHandle',
       this._selector,

@@ -10,8 +10,8 @@
 //   via already-aborted signal", with `AbortError`); Neo rejects with an Error. Compared directly:
 //   both reject, the counter stays 0.
 // - Where Playwright reads no signal (`EvaluateOptions` = `{ exposeFunctions }`: the page, frame
-//   and handle evaluations), it ignores one and runs the function; Neo refuses it (`Deviation:`
-//   in js-handle.ts). Each engine's side is asserted.
+//   and handle evaluations; `$`, which sends `kNoTimeout`), it ignores one and runs the call; Neo
+//   refuses it (`Deviation:` in js-handle.ts and frame.ts). Each engine's side is asserted.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { compareMethod, skip } from './harness.mjs'
@@ -39,13 +39,25 @@ test('methods that take a signal refuse an aborted one before the page sees the 
   const outcome = await compareMethod(t, {
     html,
     source: `${SIGNAL}
+      const frame = page.mainFrame()
+      const locator = page.locator('#p')
       return {
-        locatorEvaluate: await attempt(() => page.locator('#p').evaluate(bump, undefined, { signal })),
+        locatorEvaluate: await attempt(() => locator.evaluate(bump, undefined, { signal })),
+        locatorEvaluateHandle: await attempt(() => locator.evaluateHandle(bump, undefined, { signal })),
+        locatorElementHandle: await attempt(() => locator.elementHandle({ signal })),
+        pageWaitForFunction: await attempt(() => page.waitForFunction(bump, undefined, { signal })),
+        frameWaitForFunction: await attempt(() => frame.waitForFunction(bump, undefined, { signal })),
       }
     `,
     probe: 'window.__count',
   })
-  assert.deepEqual(outcome.value, { locatorEvaluate: 'rejected' })
+  assert.deepEqual(outcome.value, {
+    locatorEvaluate: 'rejected',
+    locatorEvaluateHandle: 'rejected',
+    locatorElementHandle: 'rejected',
+    pageWaitForFunction: 'rejected',
+    frameWaitForFunction: 'rejected',
+  })
 })
 
 test('evaluations Playwright reads no signal on: Neo refuses one, Playwright runs', {
@@ -64,6 +76,8 @@ test('evaluations Playwright reads no signal on: Neo refuses one, Playwright run
         frameEvaluateHandle: await attempt(() => frame.evaluateHandle(bump, undefined, { signal })),
         handleEvaluate: await attempt(() => handle.evaluate(bump, undefined, { signal })),
         handleEvaluateHandle: await attempt(() => handle.evaluateHandle(bump, undefined, { signal })),
+        pageQuery: await attempt(() => page.$('#p', { signal })),
+        frameQuery: await attempt(() => frame.$('#p', { signal })),
       }
       await page.evaluate((recorded) => { window.__outcomes = recorded }, outcomes)
       return null
@@ -79,6 +93,8 @@ test('evaluations Playwright reads no signal on: Neo refuses one, Playwright run
             'frameEvaluateHandle',
             'handleEvaluate',
             'handleEvaluateHandle',
+            'pageQuery',
+            'frameQuery',
           ].map((key) => [key, value]),
         )
       assert.deepEqual(
