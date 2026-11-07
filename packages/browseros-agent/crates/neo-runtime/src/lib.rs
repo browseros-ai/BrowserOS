@@ -42,6 +42,10 @@
 //!
 //! Locator construction does no I/O. The SDK uses Playwright's selector code, with the test
 //! id attribute shared with the page through `playwright_injected_methods.rs`.
+//!
+//! The default-off `test-host` feature adds an opaque transport owned by one explicitly
+//! hosted run. `quickjs_bridge.rs` installs its receive/reply callbacks; page operations still
+//! use the same SDK and dispatcher. Ordinary runs never receive that additional global.
 
 #[cfg(test)]
 extern crate self as neo_runtime;
@@ -69,6 +73,8 @@ mod quickjs;
 mod quickjs_bridge;
 mod run;
 mod runtime;
+#[cfg(feature = "test-host")]
+mod test_host;
 mod url_match;
 
 pub use artifacts::{AbsolutePaths, RunArtifact};
@@ -77,3 +83,5 @@ pub use run::{
     RunError, RunOutcome, RunPage, RunRequest, RunStatus,
 };
 pub use runtime::{Runtime, RuntimeError};
+#[cfg(feature = "test-host")]
+pub use test_host::{TestHost, TestHostError};

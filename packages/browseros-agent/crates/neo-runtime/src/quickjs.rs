@@ -27,6 +27,8 @@ use crate::method_router::Dispatcher;
 use crate::playwright_methods::browser_methods;
 use crate::quickjs_bridge::{Getters, Logs};
 use crate::run::{RunBinary, RunError, RunOutcome};
+#[cfg(feature = "test-host")]
+use crate::test_host::TestHost;
 use crate::{abort, quickjs_bridge};
 
 const MEMORY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
@@ -162,6 +164,9 @@ const AGENT_LINE_OFFSET: u32 = 2;
 
 /// What the realm needs to know about the run's page.
 pub(crate) struct Script {
+    /// The optional opaque host belongs to this realm alone, never to the runtime.
+    #[cfg(feature = "test-host")]
+    pub test_host: Option<Box<dyn TestHost>>,
     pub(crate) code: String,
     pub(crate) page_guid: String,
     /// The page's main frame, built once by neo-quickjs-injected so `page.mainFrame()` is one
@@ -257,7 +262,14 @@ fn start<'js>(
     dispatcher: Dispatcher,
     deadline: Deadline,
 ) -> rquickjs::Result<(Promise<'js>, Function<'js>)> {
-    quickjs_bridge::install(ctx, getters, logs, dispatcher)?;
+    quickjs_bridge::install(
+        ctx,
+        getters,
+        logs,
+        dispatcher,
+        #[cfg(feature = "test-host")]
+        script.test_host,
+    )?;
     let sleep = Func::from(Async(move |delay_ms: f64| {
         let deadline = deadline.clone();
         async move { deadline.sleep(delay_from_millis(delay_ms)).await }
