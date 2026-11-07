@@ -47,7 +47,7 @@ use crate::page_events;
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunError};
 use crate::tabs::Tabs;
-use crate::url_match::SerializedUrlMatch;
+use crate::url_match::{self, SerializedUrlMatch};
 
 /// The guid the realm gives a run's page, in the `<type>@<id>` form Playwright's protocol uses.
 pub(crate) fn page_guid(page: &PageId) -> String {
@@ -348,10 +348,26 @@ struct MatchRequest {
 }
 
 #[derive(Deserialize)]
+enum ParseField {
+    #[serde(rename = "parseURL")]
+    ParseUrl,
+}
+
+/// A URL predicate's argument: the parts of `new URL(url)`, or `null` where it would throw.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ParseRequest {
+    #[serde(rename = "field")]
+    _field: ParseField,
+    url: String,
+}
+
+#[derive(Deserialize)]
 #[serde(untagged)]
 enum GetRequest {
     Object(ObjectRequest),
     Match(MatchRequest),
+    Parse(ParseRequest),
 }
 
 /// Why a getter threw. Each maps to the JS error the script sees.
@@ -387,6 +403,10 @@ impl Getters {
                 return self.wait(async {
                     getters::matches_url(&request.url, &request.matcher).map(|value| json!(value))
                 });
+            }
+            GetRequest::Parse(request) => {
+                return serde_json::to_value(url_match::parse_url(&request.url))
+                    .map_err(|error| GetError::BadRequest(format!("encoding a URL: {error}")));
             }
         };
         if request.guid == "context@default" && matches!(request.field, GetterField::Pages) {
