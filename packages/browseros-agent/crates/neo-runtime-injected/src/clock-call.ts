@@ -9,6 +9,7 @@
  */
 
 import type { ClockController } from '../vendor/playwright/injected/src/clock'
+import type { Installed, Replaced } from './clock-install'
 
 /** Neo: the controller's calls Playwright's server `Clock` makes, by name. */
 const OPS = [
@@ -21,11 +22,6 @@ const OPS = [
   'setSystemTime',
   'log',
 ] as const
-
-type Installed = {
-  controller: ClockController
-  builtins: { Date: DateConstructor }
-}
 
 /** Neo: calls `op` on the page's clock controller; a document without a clock has nothing to do.
  * `parse` reads a time as Playwright's server reads it, with the page's own `Date`: the time,
@@ -42,7 +38,7 @@ export default function clockCall(op: string, ...args: unknown[]): unknown {
   }
   if (!clock) return undefined
   if (op === 'end') {
-    endRun(clock.controller, global)
+    endRun(clock, global)
     return undefined
   }
   if (!(OPS as readonly string[]).includes(op))
@@ -60,15 +56,50 @@ export default function clockCall(op: string, ...args: unknown[]): unknown {
 /**
  * Deviation: `server/clock.ts` `Clock.uninstall`: `await progress.race(Promise.all(this._initScripts.map(script => script.dispose())));` Playwright's clock lives as long as its context; Neo's ends with the run, and each document gets its own timers back.
  *
- * The controller puts back every global it faked, and the clock's global goes: a timer set on
- * the fake clock and still waiting does not fire.
+ * Nothing of the clock outlives the run, however it ended: no timer still waiting on the fake
+ * clock fires, its real time stops for good, and every property the install replaced is back as
+ * it was before (`clock-install.ts`), including the two the controller's own `uninstall` leaves.
  */
-function endRun(
-  controller: ClockController,
-  global: Record<string, unknown>,
-): void {
-  controller.uninstall()
-  delete global.__pwClock
+function endRun(clock: Installed, global: Record<string, unknown>): void {
+  stop(clock.controller)
+  try {
+    clock.controller.uninstall()
+  } finally {
+    for (const replaced of clock.replaced) restore(replaced)
+    delete global.__pwClock
+  }
+}
+
+/** Neo: the controller's state that none of its methods stops. TypeScript-private, these are
+ * plain properties when the page runs it. */
+type Running = {
+  _timers: Map<number, unknown>
+  _realTime: unknown
+  _currentRealTimeTimer: { cancel(): void } | undefined
+  _embedder: { setTimeout(task: () => void, timeout?: number): () => void }
+}
+
+/**
+ * Neo: stops the controller for good. Its timers go, so none still waiting fires, not even the
+ * next one a tick in flight would reach; its real time stops; and its embedder's `setTimeout`,
+ * the only way it schedules real time, schedules nothing. That tick, or a `runFor` or
+ * `fastForward` the run left running, which resumes real time on its way out, cannot start the
+ * clock again.
+ */
+function stop(controller: ClockController): void {
+  const running = controller as unknown as Running
+  running._timers.clear()
+  running._realTime = undefined
+  running._currentRealTimeTimer?.cancel()
+  running._currentRealTimeTimer = undefined
+  running._embedder = { ...running._embedder, setTimeout: () => () => {} }
+}
+
+/** Neo: puts one property back as it was. One the page made unchangeable during the run keeps
+ * what the page left there. */
+function restore({ owner, key, descriptor }: Replaced): void {
+  if (descriptor) Reflect.defineProperty(owner, key, descriptor)
+  else Reflect.deleteProperty(owner, key)
 }
 
 /** Playwright: `server/clock.ts` `parseTime`: `return typeof epoch === 'number' ? epoch : parsed.getTime();` */

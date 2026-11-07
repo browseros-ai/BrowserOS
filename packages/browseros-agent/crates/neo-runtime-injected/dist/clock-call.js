@@ -24,7 +24,7 @@ function clockCall(op, ...args) {
   if (!clock)
     return;
   if (op === "end") {
-    endRun(clock.controller, global);
+    endRun(clock, global);
     return;
   }
   if (!OPS.includes(op))
@@ -32,9 +32,29 @@ function clockCall(op, ...args) {
   const call = clock.controller[op];
   return call.apply(clock.controller, args);
 }
-function endRun(controller, global) {
-  controller.uninstall();
-  delete global.__pwClock;
+function endRun(clock, global) {
+  stop(clock.controller);
+  try {
+    clock.controller.uninstall();
+  } finally {
+    for (const replaced of clock.replaced)
+      restore(replaced);
+    delete global.__pwClock;
+  }
+}
+function stop(controller) {
+  const running = controller;
+  running._timers.clear();
+  running._realTime = undefined;
+  running._currentRealTimeTimer?.cancel();
+  running._currentRealTimeTimer = undefined;
+  running._embedder = { ...running._embedder, setTimeout: () => () => {} };
+}
+function restore({ owner, key, descriptor }) {
+  if (descriptor)
+    Reflect.defineProperty(owner, key, descriptor);
+  else
+    Reflect.deleteProperty(owner, key);
 }
 function parseTime(NativeDate, epoch) {
   if (!epoch)

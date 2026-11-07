@@ -666,10 +666,45 @@ function shiftTicks(ticks, ms) {
 }
 
 // src/clock-install.ts
+var GLOBALS = [
+  "setTimeout",
+  "clearTimeout",
+  "setInterval",
+  "clearInterval",
+  "requestAnimationFrame",
+  "cancelAnimationFrame",
+  "requestIdleCallback",
+  "cancelIdleCallback",
+  "Date",
+  "performance",
+  "Intl",
+  "AbortSignal",
+  "Temporal"
+];
 function clockInstall(browserName) {
   const global = globalThis;
-  if (!global.__pwClock)
-    global.__pwClock = inject(globalThis, browserName);
+  if (global.__pwClock)
+    return;
+  const replaced = replacedBy(global);
+  const installed = {
+    ...inject(globalThis, browserName),
+    replaced
+  };
+  global.__pwClock = installed;
+}
+function replacedBy(global) {
+  const owners = GLOBALS.map((key) => [global, key]);
+  const signal = global.AbortSignal;
+  if (typeof signal === "function")
+    owners.push([signal, "timeout"]);
+  const event = global.Event;
+  if (typeof event === "function")
+    owners.push([event.prototype, "timeStamp"]);
+  return owners.map(([owner, key]) => ({
+    owner,
+    key,
+    descriptor: Object.getOwnPropertyDescriptor(owner, key)
+  }));
 }
 return clockInstall.apply(this, args);
 })
