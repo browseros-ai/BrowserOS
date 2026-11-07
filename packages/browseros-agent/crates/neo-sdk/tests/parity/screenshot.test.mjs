@@ -51,6 +51,10 @@ const prepared = `<!doctype html><title>prepared</title><style>
   document.getElementById('spinner').addEventListener('animationcancel', () => window.__cancelled++)
 </script>`
 
+// A frame whose document records the mask overlay Playwright's injected script adds to it.
+const framed = `<!doctype html><title>framed</title><script>window.__frameMutations = []</script>
+<iframe srcdoc="<style>body{margin:0}</style><div id=inner style='width:80px;height:40px;background:purple'></div><script>new MutationObserver((records) => { for (const record of records) { for (const node of record.addedNodes) if (node.nodeName === 'X-PW-GLASS') parent.__frameMutations.push('+glass'); for (const node of record.removedNodes) if (node.nodeName === 'X-PW-GLASS') parent.__frameMutations.push('-glass') } }).observe(document.documentElement, { childList: true })</script>"></iframe>`
+
 // The body removes itself while it parses, so the document has none once loaded.
 const bodiless = `<!doctype html><title>no body</title><body><p>gone</p><script>document.body.remove()</script></body>`
 
@@ -84,9 +88,10 @@ const cases = [
       'return describeImage(await page.screenshot({ clip: { x: 50, y: 100, width: 150, height: 100 } }))',
   },
   {
-    name: 'SS-011 should take fullPage screenshots',
+    name: 'SS-011/SS-013 fullPage screenshots leave the viewport as it was',
     path: '/grid.html',
     source: 'return describeImage(await page.screenshot({ fullPage: true }))',
+    probe: '`${innerWidth}x${innerHeight}`',
   },
   {
     name: 'SS-006 should clip rect with fullPage',
@@ -140,6 +145,15 @@ const cases = [
     const initial = await page.screenshot({ caret: 'initial' })
     return { shot: describeImage(shot), initial: describeImage(initial) }`,
     probe: RESTORED,
+  },
+  {
+    name: 'SS-044 should mask inside iframe, and remove the mask after',
+    path: '/framed.html',
+    source: `const inner = page.frameLocator('iframe').locator('#inner')
+    await inner.waitFor()
+    return describeImage(await page.screenshot({ mask: [inner] }))`,
+    probe: 'window.__frameMutations',
+    expectProbe: ['+glass', '-glass'],
   },
   {
     name: 'SS-008 should throw on clip outside the viewport, writing nothing',
@@ -221,6 +235,7 @@ test('page.screenshot reads the same through Neo and Playwright', {
     '/transparent.html': transparent,
     '/prepared.html': prepared,
     '/bodiless.html': bodiless,
+    '/framed.html': framed,
   }
   await withEngines(t, { pages }, async (run) => {
     for (const c of cases) {
@@ -232,6 +247,12 @@ test('page.screenshot reads the same through Neo and Playwright', {
         assert.deepEqual(seen(neo), seen(playwright), 'what the script saw')
         if (c.expect)
           assert.deepEqual(neo.value, c.expect, 'the case is the one it names')
+        if (c.expectProbe)
+          assert.deepEqual(
+            neo.probe,
+            c.expectProbe,
+            'the page saw what the case names',
+          )
         if (c.file) {
           assertWritten('Playwright', c.file, playwright)
           assertWritten('Neo', c.file, neo)

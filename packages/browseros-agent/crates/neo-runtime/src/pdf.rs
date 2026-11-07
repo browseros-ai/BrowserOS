@@ -478,7 +478,11 @@ mod tests {
         let mut formats = 0;
         let mut units = 0;
         for line in source.lines().map(str::trim) {
-            if let Some((name, size)) = line.split_once(": { width: ") {
+            // The table's rows, not its type annotation: `letter: { width: 8.5, height: 11 },`.
+            if let Some((name, size)) = line
+                .split_once(": { width: ")
+                .filter(|(name, _)| name.chars().all(|c| c.is_ascii_alphanumeric()))
+            {
                 let (width, height) = size
                     .trim_end_matches(" },")
                     .split_once(", height: ")
