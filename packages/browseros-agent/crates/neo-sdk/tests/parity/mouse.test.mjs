@@ -38,6 +38,8 @@ test('mouse methods send the same events with the state they keep', {
       voids.push(await page.click('#target'))
       await page.keyboard.up('Shift')
       voids.push(await mouse.wheel(0, 100))
+      // The browser answers a wheel before the page's listener runs: compare once it did.
+      await page.waitForFunction(() => window.__wheels.length > 0)
       return voids.every((value) => value === undefined)
     `,
     probe: 'window.__facts()',

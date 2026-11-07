@@ -76,6 +76,7 @@ use crate::click::{
 use crate::events::{EventHub, Flushes};
 use crate::frame_selector::{self, FrameOwner};
 use crate::frames::{FrameContext, FrameScope, Frames, Host, local_tree};
+use crate::highlight::Highlights;
 use crate::input_devices::{
     self, Devices, Effect, EffectSink, InputDevices, InputSender, Owner, Plan,
 };
@@ -205,6 +206,8 @@ pub(crate) struct PageSession {
     pub(crate) network: Arc<NetworkLog>,
     /// `Network.enable`, sent on this session's first goto and kept for the run.
     network_enabled: OnceCell<()>,
+    /// The run's highlights on this tab, hidden when the run ends (`highlight.rs`).
+    pub(crate) highlights: Highlights,
     /// What the watcher turns into the run's events, and the tab's console history and dialogs.
     pub(crate) events: PageEvents,
     /// `Runtime.enable` and `Log.enable`, sent once a run listens to console messages or page
@@ -593,6 +596,7 @@ impl PageSession {
             input,
             network: Arc::new(NetworkLog::new(page.as_str().to_string())),
             network_enabled: OnceCell::new(),
+            highlights: Highlights::default(),
             events,
             runtime_enabled: OnceCell::new(),
         }

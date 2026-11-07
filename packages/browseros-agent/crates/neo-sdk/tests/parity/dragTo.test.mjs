@@ -93,3 +93,38 @@ test('a trial dragTo sends nothing; strict and missing targets reject', {
   })
   assert.deepEqual(outcome.value, ['resolved', 'Error:strict', 'TimeoutError'])
 })
+
+// Playwright's `signal` (slice S) on the Locator receiver: an already-aborted one rejects with
+// `AbortError` before anything is sent; a live one that never aborts runs the drag.
+test('dragTo honours its signal', { skip, timeout: 120_000 }, async (t) => {
+  await compareMethod(t, {
+    html,
+    source: `
+      const results = []
+      try {
+        await page.locator('#source').dragTo(page.locator('#left'), {
+          signal: { aborted: true, reason: new Error('stop') },
+        })
+        results.push('resolved')
+      } catch (error) { results.push(errorCategory(error)) }
+      await page.locator('#source').dragTo(page.locator('#left'), {
+        signal: { aborted: false, addEventListener() {}, removeEventListener() {} },
+      })
+      results.push('resolved')
+      return results
+    `,
+    probe: PROBE,
+    values: ({ playwright, neo }) => {
+      assert.deepEqual(playwright, ['AbortError', 'resolved'])
+      assert.deepEqual(neo, playwright)
+    },
+    effects: ({ playwright, neo }) => {
+      assert.equal(
+        playwright.events.filter((event) => event.type === 'drop').length,
+        1,
+        'only the live signal dropped',
+      )
+      assert.deepEqual(neo, playwright, 'browser effect')
+    },
+  })
+})

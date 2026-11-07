@@ -78,3 +78,42 @@ test('a drag made with page.mouse drops, and Escape cancels one', {
     },
   })
 })
+
+// Playwright's `signal` (slice S): an already-aborted one rejects with `AbortError` before
+// anything is sent, on both receivers; a live one that never aborts runs the drag.
+test('dragAndDrop honours its signal on the page and frame receivers', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  await compareMethod(t, {
+    html,
+    source: `
+      const results = []
+      const aborted = { aborted: true, reason: new Error('stop') }
+      for (const call of [
+        () => page.dragAndDrop('#source', '#left', { signal: aborted }),
+        () => page.mainFrame().dragAndDrop('#source', '#left', { signal: aborted }),
+      ]) {
+        try { await call(); results.push('resolved') }
+        catch (error) { results.push(errorCategory(error)) }
+      }
+      const live = { aborted: false, addEventListener() {}, removeEventListener() {} }
+      await page.dragAndDrop('#source', '#left', { signal: live })
+      results.push('resolved')
+      return results
+    `,
+    probe: PROBE,
+    values: ({ playwright, neo }) => {
+      assert.deepEqual(playwright, ['AbortError', 'AbortError', 'resolved'])
+      assert.deepEqual(neo, playwright)
+    },
+    effects: ({ playwright, neo }) => {
+      assert.equal(
+        playwright.events.filter((event) => event.type === 'drop').length,
+        1,
+        'only the live signal dropped',
+      )
+      assert.deepEqual(neo, playwright, 'browser effect')
+    },
+  })
+})

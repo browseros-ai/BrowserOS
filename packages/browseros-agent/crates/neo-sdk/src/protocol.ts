@@ -11,13 +11,18 @@
 import type {
   BrowserContextCloseParams,
   FrameAriaSnapshotParams,
+  FrameBlurParams,
   FrameCheckParams,
   FrameClickParams,
   FrameDblclickParams,
+  FrameDispatchEventParams,
   FrameDragAndDropParams,
   FrameFillParams,
+  FrameFocusParams,
   FrameGetAttributeParams,
   FrameGotoParams,
+  FrameHideHighlightParams,
+  FrameHighlightParams,
   FrameHoverParams,
   FrameInnerHTMLParams,
   FrameInnerTextParams,
@@ -489,6 +494,57 @@ type _FrameWaitForSelectorKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_WAIT_FOR_SELECTOR_KEYS)[number], true>,
     Required<FrameWaitForSelectorParams>
+  >
+>
+
+/** `Frame.focus` in Playwright schema order. */
+export const FRAME_FOCUS_KEYS = ['selector', 'strict'] as const
+
+/** `Frame.blur` in Playwright schema order. */
+export const FRAME_BLUR_KEYS = ['selector', 'strict'] as const
+
+/** `Frame.dispatchEvent` in Playwright schema order. */
+export const FRAME_DISPATCH_EVENT_KEYS = [
+  'selector',
+  'strict',
+  'type',
+  'eventInit',
+] as const
+
+/** `Frame.highlight` in Playwright schema order. */
+export const FRAME_HIGHLIGHT_KEYS = ['selector', 'style'] as const
+
+/** `Frame.hideHighlight` in Playwright schema order. */
+export const FRAME_HIDE_HIGHLIGHT_KEYS = ['selector'] as const
+
+type _FrameFocusKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_FOCUS_KEYS)[number], true>,
+    Required<FrameFocusParams>
+  >
+>
+type _FrameBlurKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_BLUR_KEYS)[number], true>,
+    Required<FrameBlurParams>
+  >
+>
+type _FrameDispatchEventKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_DISPATCH_EVENT_KEYS)[number], true>,
+    Required<FrameDispatchEventParams>
+  >
+>
+type _FrameHighlightKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_HIGHLIGHT_KEYS)[number], true>,
+    Required<FrameHighlightParams>
+  >
+>
+type _FrameHideHighlightKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_HIDE_HIGHLIGHT_KEYS)[number], true>,
+    Required<FrameHideHighlightParams>
   >
 >
 

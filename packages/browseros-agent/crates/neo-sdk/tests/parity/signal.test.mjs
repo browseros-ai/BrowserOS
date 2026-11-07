@@ -2,11 +2,11 @@
 // clicks, once per receiver family (`locator.click`, `page.click`, `page.mainFrame().click`), a
 // read (`page.textContent`) and a navigation (`page.goto`).
 //
-// An already-aborted signal: both engines reject before anything is sent, so the page sees no
-// click and stays where it was; Playwright's error is `AbortError`, Neo's an `Error` (Neo refuses
-// every signal, DECIDED S1-1). A live signal: Playwright runs each call; Neo still refuses each
-// and the page sees nothing. `null` is no signal in either engine: both run every call. Each engine's results are asserted against its own contract, and the
-// browser effects compared where both promise the same. Never the error's wording.
+// An already-aborted signal: both engines reject with `AbortError` before anything is sent, so
+// the page sees no click and stays where it was. A live signal that never aborts and `null` (no
+// signal) both run every call. Since slice S Neo honours the signal as Playwright does, so the
+// two engines' results and browser effects are compared directly. Never the error's wording.
+// Aborts during a call: abort.test.mjs.
 //
 // The scripts build the second URL with a string replace: Neo's realm has no global `URL`.
 //
@@ -65,7 +65,7 @@ const NAMES = ['locator.click', 'page.click', 'frame.click', 'page.textContent']
 const EVERY = (kind, names = [...NAMES, 'page.goto']) =>
   Object.fromEntries(names.map((name) => [name, kind]))
 
-test('a signal is refused before any browser effect', {
+test('a signal is honoured on every receiver family', {
   skip,
   timeout: 180_000,
 }, async (t) => {
@@ -120,13 +120,13 @@ test('a signal is refused before any browser effect', {
     }
 
     await t.test(
-      'an aborted signal: both reject, the page is untouched',
+      'an aborted signal: both reject with AbortError, the page is untouched',
       async () => {
         const reference = await viaPlaywright(script(ABORTED))
         assert.deepEqual(reference.value, EVERY('AbortError'))
         assert.deepEqual(reference.effect, { clicks: 0, path: '/signal.html' })
         const neo = await viaNeo('aborted', script(ABORTED))
-        assert.deepEqual(neo.value, EVERY('Error'))
+        assert.deepEqual(neo.value, reference.value)
         assert.deepEqual(neo.effect, reference.effect, 'what the page saw')
         assert.deepEqual(neo.outcome.calls, [], 'Neo sent no call')
       },
@@ -143,16 +143,15 @@ test('a signal is refused before any browser effect', {
     })
 
     await t.test(
-      'a live signal: Playwright runs the calls, Neo refuses them',
+      'a live signal that never aborts: both engines run the calls',
       async () => {
         const live = script(LIVE, { goto: false })
         const reference = await viaPlaywright(live)
         assert.deepEqual(reference.value, EVERY('resolved', NAMES))
         assert.deepEqual(reference.effect, { clicks: 3, path: '/signal.html' })
         const neo = await viaNeo('live', live)
-        assert.deepEqual(neo.value, EVERY('Error', NAMES))
-        assert.deepEqual(neo.effect, { clicks: 0, path: '/signal.html' })
-        assert.deepEqual(neo.outcome.calls, [], 'Neo sent no call')
+        assert.deepEqual(neo.value, reference.value)
+        assert.deepEqual(neo.effect, reference.effect, 'what the page saw')
       },
     )
   } finally {

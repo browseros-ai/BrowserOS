@@ -26,8 +26,10 @@ import {
   type CheckOptions,
   type ClickOptions,
   type DblclickOptions,
+  type DispatchEventOptions,
   type DragAndDropOptions,
   type FillOptions,
+  type FocusOptions,
   Frame,
   type GetAttributeOptions,
   type GotoOptions,
@@ -402,9 +404,8 @@ export class Page extends ChannelOwner {
   ): Promise<unknown> {
     const options =
       typeof optionsOrPredicate === 'function' ? {} : optionsOrPredicate
-    // Refuses a signal first (TimeoutSettings), inside its callers' `wrapApiCall`, which
-    // prefixes the api name.
-    const timeout = this._timeoutSettings.timeout(options, null)
+    // Inside its callers' `wrapApiCall`, which prefixes the api name.
+    const timeoutOptions = this._timeoutSettings.timeout(options, null)
     this._refuseUnserved(event)
     const predicate =
       typeof optionsOrPredicate === 'function'
@@ -413,8 +414,8 @@ export class Page extends ChannelOwner {
     const waiter = Waiter.createForEvent()
     if (logLine) waiter.log(logLine)
     waiter.rejectOnTimeout(
-      timeout,
-      `Timeout ${timeout}ms exceeded while waiting for event "${event}"`,
+      timeoutOptions,
+      `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`,
     )
     if (event !== 'crash')
       waiter.rejectOnEvent(this, 'crash', new Error('Page crashed'))
@@ -808,6 +809,39 @@ export class Page extends ChannelOwner {
   /** Not strict, as Playwright's `page.click`, which forwards to the main frame. */
   async click(selector: string, options: ClickOptions = {}): Promise<void> {
     return await this.#mainFrame._click('page.click', selector, options)
+  }
+
+  /** Not strict, as Playwright's `page.focus`, which forwards to the main frame. */
+  async focus(selector: string, options: FocusOptions = {}): Promise<void> {
+    return await this.#mainFrame._focus('page.focus', selector, options)
+  }
+
+  /** Not strict, as Playwright's `page.dispatchEvent`, which forwards to the main frame. */
+  async dispatchEvent(
+    selector: string,
+    type: string,
+    eventInit?: unknown,
+    options: DispatchEventOptions = {},
+  ): Promise<void> {
+    return await this.#mainFrame._dispatchEvent(
+      'page.dispatchEvent',
+      selector,
+      type,
+      eventInit,
+      options,
+    )
+  }
+
+  /** Hides every highlight of this page, in every frame. Sent with no timeout, as Playwright's
+   * (`kNoTimeout`). */
+  async hideHighlight(): Promise<void> {
+    await this.#connection.sendPage(
+      'page.hideHighlight',
+      this.#guid,
+      'hideHighlight',
+      {},
+      0,
+    )
   }
 
   /** Not strict, as Playwright's `page.dblclick`, which forwards to the main frame. */
