@@ -1,14 +1,16 @@
+#
+# One path per line, relative to crates/, sorted. Add a file in the commit that makes it pass;
 # The neo sources whose provenance coverage `cargo test -p neo-runtime --test provenance`
+# any file are checked whether or not it is listed.
 # checks (crates/NEO_STYLE.md, Provenance): every constant tagged, a header that says what the
 # file is, every item of a port of several tagged, no Playwright path in prose, no `Duration`
 # literal outside a constant, and Playwright's wording in call logs and errors. Lines written in
-# any file are checked whether or not it is listed.
-#
-# One path per line, relative to crates/, sorted. Add a file in the commit that makes it pass;
 # the list grows until it holds every neo source.
 neo-runtime/src/console.rs
 neo-runtime/src/dialogs.rs
+neo-runtime/src/discovery.rs
 neo-runtime/src/events.rs
+neo-runtime/src/frame_events.rs
 neo-runtime/src/page_events.rs
 neo-sdk/src/console-message.ts
 neo-sdk/src/dialog.ts

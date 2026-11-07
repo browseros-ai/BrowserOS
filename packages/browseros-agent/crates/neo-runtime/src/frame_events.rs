@@ -180,7 +180,7 @@ impl FrameModel {
         changes
     }
 
-    /// Playwright: `server/frames.ts` `FrameManager._removeFramesRecursively`: `for (const child of frame.childFrames())`
+    /// Playwright: `server/frames.ts` `FrameManager.removeChildFramesRecursively`: `for (const child of frame.childFrames())`
     /// Drops `frame`'s subtree, children first, and `frame` itself when `itself`.
     fn detach(&mut self, frame: &str, itself: bool, changes: &mut Vec<FrameChange>) {
         let mut children: Vec<String> = self
@@ -199,7 +199,8 @@ impl FrameModel {
         }
     }
 
-    /// Playwright: `server/dispatchers/frameDispatcher.ts` `FrameDispatcher.constructor`: `const params = { url: event.url, name: event.name, error: event.error ? event.error.message : undefined } as channels.FrameNavigatedEvent;`
+    /// Playwright: `server/frames.ts` `FrameManager.frameCommittedSameDocumentNavigation`: `const navigationEvent: NavigationEvent = { url, name: frame._name, isPublic: true };`
+    /// A navigation names the frame's URL and name, within the document too.
     fn navigated(&self, frame: &str) -> FrameChange {
         let mut change = self.change("frameNavigated", "framenavigated", frame);
         let known = self.frames.get(frame).cloned().unwrap_or_default();

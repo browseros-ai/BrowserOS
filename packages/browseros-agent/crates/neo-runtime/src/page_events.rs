@@ -227,7 +227,7 @@ impl PageEvents {
         }
     }
 
-    /// Client: `client/frame.ts` `Frame.constructor`: `if (!this._parentFrame && event.add === 'load' && this._page) {`
+    /// Playwright: `client/frame.ts` `Frame.constructor`: `if (!this._parentFrame && event.add === 'load' && this._page) {`
     /// The main frame's `domcontentloaded` and `load`; the context's `pageload` comes with `load`.
     fn lifecycle(&self, applied: &Applied) {
         if !self.lifecycle_live.load(Ordering::Acquire) {

@@ -183,9 +183,8 @@ struct TargetInfos {
     target_infos: Vec<TargetInfo>,
 }
 
-/// Playwright: `server/chromium/crPage.ts` `FrameSession._initialize`: `const isInitialEmptyPage = this._isMainFrame() && this._page.mainFrame().url() === ':';`
-/// A target's url is `""` until its first document commits (measured); `":"` is Playwright's
-/// form of the same empty URL.
+/// Playwright: `server/chromium/crPage.ts` `FrameSession._initialize`: `const isInitialEmptyPage = this._isMainFrame() && (this._page.mainFrame().url() === ':' || this._page.mainFrame().url() === '');`
+/// A target's url is `""` until its first document commits (measured).
 fn is_initial_empty(url: &str) -> bool {
     url.is_empty() || url == ":"
 }
