@@ -444,6 +444,12 @@ impl Routes {
         let Some(network_id) = params["networkId"].as_str().filter(|id| !id.is_empty()) else {
             return Pause::Answer(go_on(session, request_id, Map::new()));
         };
+        // Before the request's record: Chromium reports a preflight with no frame, which the log
+        // keeps no record of, as Playwright answers it before its own frame check.
+        if is_preflight(params) {
+            let headers = headers_array(&params["request"]["headers"]);
+            return Pause::Answer(preflight(session, request_id, &headers));
+        }
         let redirected = params["redirectedRequestId"]
             .as_str()
             .is_some_and(|id| !id.is_empty());
@@ -534,9 +540,6 @@ impl Routes {
         let request = &params["request"];
         let url = request["url"].as_str().unwrap_or_default().to_string();
         let headers = headers_array(&request["headers"]);
-        if is_preflight(params) {
-            return Pause::Answer(preflight(session, request_id, &headers));
-        }
         let page = self.with(|state| state.page.clone()).ok().flatten();
         let channel = if page.is_some_and(|patterns| patterns.matches(&url)) {
             Channel::Page
@@ -844,10 +847,18 @@ fn redirect_hop(
 }
 
 /// Deviation: `server/chromium/crNetworkManager.ts` `CRNetworkManager._onRequest`: `const isInterceptedOptionsPreflight = !!requestPausedEvent && requestPausedEvent.request.method === 'OPTIONS' && requestWillBeSentEvent.initiator.type === 'preflight';`
-/// Neo reads the preflight from the pause's resource type (`Preflight`), which Chromium gives
-/// exactly the CORS preflights; the network log keeps no initiator.
+/// Neo knows a preflight by its `Access-Control-Request-Method` header, which only the
+/// browser's CORS preflight carries (scripts may not set it): Chromium pauses a preflight
+/// before its `requestWillBeSent`, with the resource type of the request it precedes
+/// (measured on BrowserOS), and the log keeps no record of it (it has no frame).
 fn is_preflight(params: &Value) -> bool {
-    params["request"]["method"] == "OPTIONS" && params["resourceType"] == "Preflight"
+    let request = &params["request"];
+    request["method"] == "OPTIONS"
+        && request["headers"].as_object().is_some_and(|headers| {
+            headers
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case("access-control-request-method"))
+        })
 }
 
 /// Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager._onRequest`: `{ name: 'Access-Control-Allow-Credentials', value: 'true' }`
@@ -1321,6 +1332,26 @@ mod tests {
             routes.left_open().len(),
             1,
             "the pause stays for the run's end to release"
+        );
+    }
+
+    #[test]
+    fn tests_that_only_a_browser_preflight_is_answered_as_one() {
+        let preflight = json!({ "request": { "method": "OPTIONS", "headers": { "Access-Control-Request-Method": "POST", "Origin": "https://page.test" } }, "resourceType": "XHR" });
+        assert!(
+            is_preflight(&preflight),
+            "Chromium gives it the resource type of the request it precedes"
+        );
+        let options = json!({ "request": { "method": "OPTIONS", "headers": {} } });
+        assert!(
+            !is_preflight(&options),
+            "a script's own OPTIONS request is routed"
+        );
+        let answer = preflight(None, "i", &headers_array(&preflight["request"]["headers"]));
+        assert_eq!(answer.params["responseCode"], 204);
+        assert_eq!(
+            answer.params["responseHeaders"][0],
+            json!({ "name": "Access-Control-Allow-Origin", "value": "https://page.test" })
         );
     }
 
