@@ -195,7 +195,7 @@ pub(crate) async fn serve<T: KeyboardTab>(
     // Every device call is an input method in the spec, so dispatch always gives it a cell.
     let Some(delivery) = progress.delivery() else {
         return Err(PlaywrightError::error(format!(
-            "neo-runtime: Page.{} has no delivery cell",
+            "neo-runtime: the device call {} has no delivery cell",
             call.method()
         ))
         .into());
@@ -221,7 +221,7 @@ pub(crate) async fn serve<T: KeyboardTab>(
     progress.check()?;
     let ticket = delivery.begin().map_err(|_| {
         PlaywrightError::error(format!(
-            "neo-runtime: Page.{} tried to write its input again",
+            "neo-runtime: the device call {} tried to write its input again",
             call.method()
         ))
     })?;
