@@ -7,10 +7,9 @@
 //!                no match / NotConnected: poll; detached result: Error
 //! ```
 //!
-//! Both reads use the main frame's utility world without an input turn or delivery ticket.
+//! Both reads use the selected frame's utility world without an input turn or delivery ticket.
 
 use std::future::Future;
-use std::sync::Arc;
 
 use neo_runtime_spec::injected::{
     CheckedStateMatch, InjectedIsCheckedParams, InjectedIsVisibleParams,
@@ -18,7 +17,8 @@ use neo_runtime_spec::injected::{
 use neo_runtime_spec::serve::{FrameIsCheckedParams, FrameIsVisibleParams};
 
 use crate::click::{LoopAWaits, PageError, SelectorFacts, Stop};
-use crate::page::PageSession;
+use crate::frame_selector;
+use crate::page::FrameTab;
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::reads::{self, Matched, SelectorTab};
 
@@ -135,15 +135,19 @@ pub(crate) async fn is_checked<T: StateTab>(
 }
 
 /// By-value reads: neither result retains a page object or needs an object group.
-impl StateTab for Arc<PageSession> {
+impl StateTab for FrameTab {
     async fn is_visible(&self, selector: &str, strict: bool) -> Result<bool, PageError> {
-        Ok(self
-            .world()
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok(false);
+        };
+        Ok(located
+            .frame
             .call(
                 None,
                 &InjectedIsVisibleParams {
-                    selector: selector.to_string(),
+                    selector: located.selector,
                     strict,
+                    frame_visible: located.frame_visible,
                 },
             )
             .await?
@@ -155,12 +159,15 @@ impl StateTab for Arc<PageSession> {
         selector: &str,
         strict: bool,
     ) -> Result<Option<CheckedStateMatch>, PageError> {
-        Ok(self
-            .world()
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok(None);
+        };
+        Ok(located
+            .frame
             .call(
                 None,
                 &InjectedIsCheckedParams {
-                    selector: selector.to_string(),
+                    selector: located.selector,
                     strict,
                 },
             )

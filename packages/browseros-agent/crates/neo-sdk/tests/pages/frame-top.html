@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Frame top</title>
+<style>
+body { margin: 8px; font: 12px sans-serif }
+iframe { width: 460px; height: 290px; border: 1px solid #888 }
+</style>
+</head>
+<body>
+<!-- The parent of the frame parity tests, served on 127.0.0.1. Its tree:
+       #same            /frame-child.html, same origin
+       #login-iframe    http://localhost:<port>, cross-site: an out-of-process iframe (OOPIF)
+         #grandchild    http://127.0.0.1:<port> inside the OOPIF: its own target (mixed tree)
+       #chain           same origin
+         #chain-inner   same origin, two levels deep
+       #hidden-same     same origin, visibility: hidden
+       #hidden-cross    cross-site, display: none
+     It carries the same widgets as every frame (frame-child.html), so each one is a decoy, and
+     buttons that reload (a new document in the same frame), replace (a new iframe element with
+     the same id), load slowly (a new document whose load waits on the server's /slow) or remove
+     #same and #login-iframe, or cover #same with a layer. -->
+<p><b id="who">top</b> <span id="gen">gen 1</span></p>
+<label for="email">Email</label> <input id="email" value="top@seed.test">
+<input id="search" placeholder="Search">
+<button id="send" type="button">Send</button>
+<input id="agree" type="checkbox"> <label for="agree">Agree</label>
+<select id="size" aria-label="Size"><option value="s">Small</option><option value="m">Medium</option><option value="l">Large</option></select>
+<img alt="Logo" width="8" height="8" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">
+<span id="tip" title="Tip">tip top</span>
+<span id="card" data-testid="card">card top</span>
+<ul><li class="item">top one</li><li class="item">top two</li><li class="item" hidden>top hidden</li></ul>
+<div id="not-a-frame">Not a frame</div>
+<p>
+<button id="arm" type="button">Arm</button>
+<button id="reload-same" type="button" data-action="reload" data-frame="same">Reload same</button>
+<button id="reload-cross" type="button" data-action="reload" data-frame="login-iframe">Reload cross</button>
+<button id="replace-same" type="button" data-action="replace" data-frame="same">Replace same</button>
+<button id="replace-cross" type="button" data-action="replace" data-frame="login-iframe">Replace cross</button>
+<button id="remove-same" type="button" data-action="remove" data-frame="same">Remove same</button>
+<button id="remove-cross" type="button" data-action="remove" data-frame="login-iframe">Remove cross</button>
+<button id="cover-same" type="button" data-action="cover" data-frame="same">Cover same</button>
+<button id="slow-same" type="button" data-action="slow" data-frame="same">Slow same</button>
+<button id="slow-cross" type="button" data-action="slow" data-frame="login-iframe">Slow cross</button>
+</p>
+<iframe id="same" class="slot" name="same" title="Same frame" src="/frame-child.html?who=same"></iframe>
+<section id="cross-wrap"></section>
+<iframe id="chain" class="slot" name="chain" title="Chain" src="/frame-child.html?who=chain&amp;kids=chain-inner"></iframe>
+<iframe id="hidden-same" name="hidden-same" title="Hidden same" style="visibility: hidden" src="/frame-child.html?who=hidden-same"></iframe>
+<script>
+// Cross-site frames are built here: their origin needs this server's port. Parsing waits for
+// this script, so they still hold up the load event like the static ones.
+const port = location.port
+const cross = document.createElement('iframe')
+cross.id = 'login-iframe'
+cross.className = 'slot'
+cross.name = 'cross'
+cross.title = 'Login'
+cross.src = `http://localhost:${port}/frame-child.html?who=cross&kids=grandchild@127.0.0.1`
+document.querySelector('#cross-wrap').append(cross)
+const hiddenCross = document.createElement('iframe')
+hiddenCross.id = 'hidden-cross'
+hiddenCross.name = 'hidden-cross'
+hiddenCross.title = 'Hidden cross'
+hiddenCross.style.display = 'none'
+hiddenCross.src = `http://localhost:${port}/frame-child.html?who=hidden-cross`
+document.body.append(hiddenCross)
+
+// BrowserOS neo's takeover bar (<browseros-neo-takeover>, which claw-app's content script adds
+// to pages once the extension has started, so to some tabs and not others) shows in
+// accessibility snapshots in a shape that depends on how far it has set itself up, and its own
+// styles win over the page's. It is not the page's, so the page removes it on sight.
+new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.remove()).observe(
+  document.documentElement,
+  { childList: true, subtree: true },
+)
+window.__who = 'top'
+window.__events = []
+for (const type of ['click', 'focus', 'keydown', 'input', 'change']) {
+  document.addEventListener(type, (event) => {
+    const key = type === 'keydown' ? { key: event.key } : {}
+    window.__events.push({ type, target: event.target.id || event.target.tagName?.toLowerCase(), trusted: event.isTrusted, ...key })
+  }, true)
+}
+/** The URL `frame` loads next: its own, with `gen` one higher. */
+const nextGen = (frame) => {
+  const url = new URL(frame.src)
+  url.searchParams.set('gen', String(Number(url.searchParams.get('gen') ?? 1) + 1))
+  return url.href
+}
+const controls = {
+  reload: (frame) => {
+    frame.src = nextGen(frame)
+  },
+  replace: (frame) => {
+    const replacement = frame.cloneNode()
+    replacement.src = nextGen(frame)
+    frame.replaceWith(replacement)
+  },
+  remove: (frame) => frame.remove(),
+  // The next document, whose image answers late (the server's /slow), so its load trails its
+  // commit and domcontentloaded.
+  slow: (frame) => {
+    const url = new URL(nextGen(frame))
+    url.searchParams.set('slow', '1')
+    frame.src = url.href
+  },
+  // A transparent layer over the iframe, in document coordinates, so it stays over the frame
+  // when a click scrolls: a click inside the frame must not land on it.
+  cover: (frame) => {
+    const box = frame.getBoundingClientRect()
+    const cover = document.createElement('div')
+    cover.id = 'cover'
+    cover.style.cssText = `position: absolute; left: ${box.left + scrollX}px; top: ${box.top + scrollY}px; width: ${box.width}px; height: ${box.height}px`
+    document.body.append(cover)
+  },
+}
+document.addEventListener('click', ({ target }) => {
+  const control = controls[target.dataset?.action]
+  if (control) control(document.getElementById(target.dataset.frame))
+})
+// #arm: every frame adds #late 500 ms later (frame-child.html), and so do this page and a new
+// iframe, #late-frame, so a wait sees an element appear inside a frame that did not exist.
+document.querySelector('#arm').addEventListener('click', () => {
+  for (const frame of document.querySelectorAll('iframe')) frame.contentWindow?.postMessage('arm', '*')
+  setTimeout(() => {
+    const late = document.createElement('p')
+    late.id = 'late'
+    late.textContent = 'late top'
+    document.body.append(late)
+    const lateFrame = document.createElement('iframe')
+    lateFrame.id = 'late-frame'
+    lateFrame.name = 'late'
+    lateFrame.title = 'Late'
+    lateFrame.src = '/frame-child.html?who=late'
+    document.body.append(lateFrame)
+  }, 500)
+})
+window.__facts = () => ({
+  who: 'top',
+  gen: 1,
+  email: document.querySelector('#email').value,
+  search: document.querySelector('#search').value,
+  agree: document.querySelector('#agree').checked,
+  size: document.querySelector('#size').value,
+  late: document.querySelector('#late') !== null,
+  events: window.__events,
+  iframes: [...document.querySelectorAll('iframe')].map((frame) => frame.id),
+})
+</script>
+</body>
+</html>

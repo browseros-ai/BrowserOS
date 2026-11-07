@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { assertDecoysUntouched, compareFrameCases, failed } from './frames.mjs'
 import {
   browserBinary,
   buildNeoRun,
@@ -245,3 +246,102 @@ async function viaNeo(cdp, port, neoRun, scripts, url, c) {
     if (!c.closeAfterMs) await cdp.send('Target.closeTarget', { targetId })
   }
 }
+
+/**
+ * Clicks inside frames, on tabs of frame-top.html (frames.mjs): each frame's own Send button,
+ * never a decoy (the parent's, a sibling's or an ancestor frame's Send); and buttons no click
+ * may reach: inside a hidden iframe, or inside an iframe a layer covers.
+ */
+const frameCases = [
+  {
+    name: 'a click reaches the Send button of each frame and no decoy',
+    source: `const login = page.frameLocator('#login-iframe')
+    return {
+      same: await settle(() => page.frameLocator('#same').getByRole('button', { name: 'Send' }).click()),
+      cross: await settle(() => login.getByRole('button', { name: 'Send' }).click()),
+      grandchild: await settle(() => login.frameLocator('#grandchild').locator('#send').click()),
+      frame: await settle(() => page.frame('chain-inner').click('#send')),
+    }`,
+    expected: {
+      same: 'undefined',
+      cross: 'undefined',
+      grandchild: 'undefined',
+      frame: 'undefined',
+    },
+    effect: (effect) => {
+      const touched = assertDecoysUntouched(effect, [
+        'same',
+        'cross',
+        'grandchild',
+        'chain-inner',
+      ])
+      for (const [who, facts] of Object.entries(touched))
+        assert.deepEqual(
+          facts.events.filter((event) => event.type === 'click'),
+          [{ type: 'click', target: 'send', trusted: true }],
+          `${who}'s clicks`,
+        )
+    },
+    deliveries: { click: ['done', 'done', 'done', 'done'] },
+  },
+  {
+    name: 'a button in a hidden or covered iframe is never clicked',
+    source: `const send = (frame) => page.frameLocator(frame).locator('#send')
+    const visibilityHidden = await settle(() => send('#hidden-same').click({ timeout: 1000 }))
+    const displayNone = await settle(() => send('#hidden-cross').click({ timeout: 1000 }))
+    await page.click('#cover-same')
+    const covered = await settle(() => send('#same').click({ timeout: 1000 }))
+    return { visibilityHidden, displayNone, covered }`,
+    expected: {
+      visibilityHidden: failed('timeout'),
+      displayNone: failed('timeout'),
+      covered: failed('timeout'),
+    },
+    effect: (effect) => {
+      const { top } = assertDecoysUntouched(effect, ['top'])
+      assert.deepEqual(
+        top.events
+          .filter((event) => event.type === 'click')
+          .map((event) => event.target),
+        ['cover-same'],
+        'only the control was clicked',
+      )
+    },
+    deliveries: { click: ['notSent', 'notSent', 'done', 'notSent'] },
+  },
+]
+
+test('clicks inside frames reach the same element through Neo and Playwright', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases)
+})
+
+test('tests that scroll none leaves an offscreen iframe owner and button untouched', {
+  skip,
+  timeout: 180_000,
+}, async () => {
+  const c = {
+    name: 'no-scroll-frame',
+    html: `<!doctype html><style>
+      body{margin:0}iframe{display:block;margin-top:3000px;width:400px;height:200px}
+      </style><script>window.__clicks=0</script>
+      <iframe id="frame" srcdoc="<button onclick='parent.__clicks++'>Inside</button>"></iframe>`,
+    source: `await page.frameLocator('#frame').getByRole('button', {name:'Inside'}).click({scroll:'none',timeout:1000})`,
+    probe: '({scrolled:scrollX!==0||scrollY!==0,clicks:window.__clicks})',
+  }
+  await withBoth([c], async (run) => {
+    const { playwright, neo } = await run(c.name)
+    assert.deepEqual(kind(playwright.result), {
+      error: { name: 'TimeoutError', strict: false },
+    })
+    assert.deepEqual(playwright.probe, { scrolled: false, clicks: 0 })
+    assert.deepEqual(kind(neo.result), kind(playwright.result))
+    assert.deepEqual(neo.probe, playwright.probe)
+    assert.deepEqual(
+      neo.outcome.calls.map((call) => call.delivery),
+      ['notSent'],
+    )
+  })
+})

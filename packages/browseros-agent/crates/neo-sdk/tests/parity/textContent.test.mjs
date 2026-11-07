@@ -13,6 +13,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import {
+  assertDecoysUntouched,
+  compareFrameCases,
+  failed,
+  value,
+} from './frames.mjs'
+import {
   browserBinary,
   buildNeoRun,
   chromium,
@@ -106,4 +112,34 @@ test('textContent returns the same values and rejects the same calls', {
   } finally {
     await runCleanups(cleanups)
   }
+})
+
+/** textContent inside frames, on tabs of frame-top.html (frames.mjs): each frame names itself
+ * in its text, so a read routed to another frame returns the wrong name. */
+const frameCases = [
+  {
+    name: 'textContent reads the frame it names, hidden text included',
+    source: `return {
+      same: await settle(() => page.frameLocator('#same').locator('#who').textContent()),
+      cross: await settle(() => page.frameLocator('#login-iframe').getByTestId('card').textContent()),
+      frame: await settle(() => page.frame('grandchild').textContent('#tip')),
+      hiddenFrame: await settle(() => page.frameLocator('#hidden-cross').locator('li[hidden]').textContent()),
+      missing: await settle(() => page.frameLocator('#login-iframe').locator('#nope').textContent({ timeout: 500 })),
+    }`,
+    expected: {
+      same: value('same'),
+      cross: value('card cross'),
+      frame: value('tip grandchild'),
+      hiddenFrame: value('hidden-cross hidden'),
+      missing: failed('timeout'),
+    },
+    effect: (effect) => assertDecoysUntouched(effect, []),
+  },
+]
+
+test('textContent inside frames reads the same text through Neo and Playwright', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases)
 })

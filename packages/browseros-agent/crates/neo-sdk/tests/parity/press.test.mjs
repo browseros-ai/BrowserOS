@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import { assertDecoysUntouched, compareFrameCases } from './frames.mjs'
 import { compareMethod, skip } from './harness.mjs'
 
 test('press returns undefined and types through ordinary key events', {
@@ -53,4 +54,66 @@ test('press returns undefined and types through ordinary key events', {
     ['Foo', 'notSent'],
     ['', 'notSent'],
   ])
+})
+
+/**
+ * Press inside frames, on tabs of frame-top.html (frames.mjs): keys into the Email of the
+ * cross-site, out-of-process frame, into the Search of the same-origin frame (Enter, then a
+ * letter) and, through a child Frame, into the 127.0.0.1 frame inside the cross-site one. The
+ * parent and every other frame keep their values and see no key, the pressed frames' other
+ * inputs included.
+ */
+const frameCases = [
+  {
+    name: 'press types into one frame and no decoy',
+    source: `const email = page.frameLocator('#login-iframe').getByLabel('Email')
+    const search = page.frameLocator('#same').getByPlaceholder('Search')
+    return {
+      end: await settle(() => email.press('End')),
+      typed: await settle(() => email.press('x')),
+      enter: await settle(() => search.press('Enter')),
+      sameTyped: await settle(() => search.press('a')),
+      frame: await settle(() => page.frame('grandchild').press('#search', 'b')),
+    }`,
+    expected: {
+      end: 'undefined',
+      typed: 'undefined',
+      enter: 'undefined',
+      sameTyped: 'undefined',
+      frame: 'undefined',
+    },
+    effect: (effect) => {
+      const { cross, same, grandchild } = assertDecoysUntouched(effect, [
+        'cross',
+        'same',
+        'grandchild',
+      ])
+      assert.deepEqual(
+        {
+          cross: [cross.email, cross.search],
+          same: [same.email, same.search],
+          grandchild: [grandchild.email, grandchild.search],
+        },
+        {
+          cross: ['cross@seed.testx', ''],
+          same: ['same@seed.test', 'a'],
+          grandchild: ['grandchild@seed.test', 'b'],
+        },
+      )
+      assert.deepEqual(
+        same.events
+          .filter((event) => event.type === 'keydown')
+          .map((event) => event.key),
+        ['Enter', 'a'],
+      )
+    },
+    deliveries: { press: ['done', 'done', 'done', 'done', 'done'] },
+  },
+]
+
+test('press inside frames types into the same input through Neo and Playwright', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases)
 })

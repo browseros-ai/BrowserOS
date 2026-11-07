@@ -11,6 +11,13 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import {
+  assertDecoysUntouched,
+  compareFrameCases,
+  FRAME_TREE,
+  failed,
+  pristine,
+} from './frames.mjs'
 import { skip } from './harness.mjs'
 import { withBoth } from './waits.mjs'
 
@@ -115,4 +122,106 @@ test('locator.waitFor settles the same through Neo and Playwright', {
       })
     }
   })
+})
+
+/**
+ * locator.waitFor inside frames, on tabs of frame-top.html (frames.mjs, its `settle`): #arm makes
+ * every frame add #late 500 ms later and the page add a new iframe, so each wait sees an element
+ * appear inside a frame, or inside a frame that did not exist when it started. Where the iframe
+ * is missing, `hidden` and `detached` hold at once and `attached` and `visible` time out; inside
+ * a hidden iframe nothing is ever visible; and waits on a frame that is removed end when it goes.
+ */
+const frameCases = [
+  {
+    name: 'an element appears later inside each frame, and in a frame added later',
+    source: `await page.click('#arm')
+    const late = (frame, state) => settle(() => frame.locator('#late').waitFor({ state }))
+    const login = page.frameLocator('#login-iframe')
+    const chain = page.frameLocator('#chain')
+    const [top, same, cross, grandchild, chainFrame, chainInner, hiddenSame, hiddenCross, lateFrame] =
+      await Promise.all([
+        late(page),
+        late(page.frameLocator('#same')),
+        late(login),
+        late(login.frameLocator('#grandchild')),
+        late(chain),
+        late(chain.frameLocator('#chain-inner')),
+        late(page.frameLocator('#hidden-same'), 'attached'),
+        late(page.frameLocator('#hidden-cross'), 'attached'),
+        settle(() => page.frameLocator('#late-frame').locator('#who').waitFor()),
+      ])
+    return { top, same, cross, grandchild, chainFrame, chainInner, hiddenSame, hiddenCross, lateFrame }`,
+    expected: {
+      top: RESOLVED,
+      same: RESOLVED,
+      cross: RESOLVED,
+      grandchild: RESOLVED,
+      chainFrame: RESOLVED,
+      chainInner: RESOLVED,
+      hiddenSame: RESOLVED,
+      hiddenCross: RESOLVED,
+      lateFrame: RESOLVED,
+    },
+    effect: (effect) => {
+      const armed = Object.keys(FRAME_TREE)
+      const touched = assertDecoysUntouched(effect, armed, [...armed, 'late'])
+      for (const [who, facts] of Object.entries(touched))
+        assert.equal(facts.late, true, `${who} added #late`)
+      assert.deepEqual(touched.top.iframes, [
+        ...pristine('top').iframes,
+        'late-frame',
+      ])
+    },
+  },
+  {
+    // The 5 s timeouts only bound a regression: each of these settles before its first poll.
+    name: 'a missing iframe is hidden and detached at once; a hidden one shows nothing',
+    source: `const missing = page.frameLocator('#nope').locator('#who')
+    const inHidden = page.frameLocator('#hidden-same').locator('#send')
+    return {
+      hidden: await settle(() => missing.waitFor({ state: 'hidden', timeout: 5000 })),
+      detached: await settle(() => missing.waitFor({ state: 'detached', timeout: 5000 })),
+      attached: await settle(() => missing.waitFor({ state: 'attached', timeout: 300 })),
+      visible: await settle(() => missing.waitFor({ timeout: 300 })),
+      hiddenInHiddenFrame: await settle(() => inHidden.waitFor({ state: 'hidden', timeout: 5000 })),
+      visibleInHiddenFrame: await settle(() => inHidden.waitFor({ timeout: 300 })),
+    }`,
+    expected: {
+      hidden: RESOLVED,
+      detached: RESOLVED,
+      attached: failed('timeout'),
+      visible: failed('timeout'),
+      hiddenInHiddenFrame: RESOLVED,
+      visibleInHiddenFrame: failed('timeout'),
+    },
+    effect: (effect) => assertDecoysUntouched(effect, []),
+  },
+  {
+    name: 'waits on a frame end when its iframe is removed',
+    source: `const login = page.frameLocator('#login-iframe')
+    const detached = settle(() => login.locator('#who').waitFor({ state: 'detached', timeout: 5000 }))
+    const hidden = settle(() => login.frameLocator('#grandchild').locator('#send').waitFor({ state: 'hidden', timeout: 5000 }))
+    await page.click('#remove-cross')
+    return { detached: await detached, hidden: await hidden }`,
+    expected: { detached: RESOLVED, hidden: RESOLVED },
+    effect: (effect) => {
+      const frames = Object.keys(FRAME_TREE).filter(
+        (who) => who !== 'cross' && who !== 'grandchild',
+      )
+      const { top } = assertDecoysUntouched(effect, ['top'], frames)
+      assert.deepEqual(top.iframes, [
+        'same',
+        'chain',
+        'hidden-same',
+        'hidden-cross',
+      ])
+    },
+  },
+]
+
+test('locator.waitFor inside frames settles the same through Neo and Playwright', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases)
 })

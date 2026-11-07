@@ -1,0 +1,190 @@
+[
+  {
+    "chain": "page.frameLocator('#login').locator('input')",
+    "selector": "#login >> internal:control=enter-frame >> input"
+  },
+  {
+    "chain": "page.frameLocator('#login').locator(page.getByLabel('Email'))",
+    "selector": "#login >> internal:control=enter-frame >> internal:label=\"Email\"i"
+  },
+  {
+    "chain": "page.frameLocator('#login').locator('li', { has: page.getByText('Item'), hasNot: page.getByText('Gone'), hasText: 'a', hasNotText: /b/i, visible: true })",
+    "selector": "#login >> internal:control=enter-frame >> li >> internal:has-text=\"a\"i >> internal:has-not-text=/b/i >> internal:has=\"internal:text=\\\"Item\\\"i\" >> internal:has-not=\"internal:text=\\\"Gone\\\"i\" >> visible=true"
+  },
+  {
+    "chain": "page.frameLocator('#login').getByTestId('submit')",
+    "selector": "#login >> internal:control=enter-frame >> internal:testid=[data-testid=\"submit\"s]"
+  },
+  {
+    "chain": "page.frameLocator('#login').getByTestId(/submit-\\d+/)",
+    "selector": "#login >> internal:control=enter-frame >> internal:testid=[data-testid=/submit-\\d+/]"
+  },
+  {
+    "chain": "page.frameLocator('#login').getByAltText('Logo', { exact: true })",
+    "selector": "#login >> internal:control=enter-frame >> internal:attr=[alt=\"Logo\"s]"
+  },
+  {
+    "chain": "page.frameLocator('#login').getByAltText(/logo/i)",
+    "selector": "#login >> internal:control=enter-frame >> internal:attr=[alt=/logo/i]"
+  },
+  {
+    "chain": "page.frameLocator('#login').getByLabel('Email')",
+    "selector": "#login >> internal:control=enter-frame >> internal:label=\"Email\"i"
+  },
+  {
+    "chain": "page.frameLocator('#login').getByLabel(/e-?mail/i, { exact: true })",
+    "selector": "#login >> internal:control=enter-frame >> internal:label=/e-?mail/i"
+  },
+  {
+    "chain": "page.frameLocator('#login').getByPlaceholder('Search', { exact: true })",
+    "selector": "#login >> internal:control=enter-frame >> internal:attr=[placeholder=\"Search\"s]"
+  },
+  {
+    "chain": "page.frameLocator('#login').getByPlaceholder(/search/i)",
+    "selector": "#login >> internal:control=enter-frame >> internal:attr=[placeholder=/search/i]"
+  },
+  {
+    "chain": "page.frameLocator('#login').getByText('Welcome', { exact: true })",
+    "selector": "#login >> internal:control=enter-frame >> internal:text=\"Welcome\"s"
+  },
+  {
+    "chain": "page.frameLocator('#login').getByText(/a >> b/)",
+    "selector": "#login >> internal:control=enter-frame >> internal:text=/a \\>\\> b/"
+  },
+  {
+    "chain": "page.frameLocator('#login').getByTitle('Close', { exact: true })",
+    "selector": "#login >> internal:control=enter-frame >> internal:attr=[title=\"Close\"s]"
+  },
+  {
+    "chain": "page.frameLocator('#login').getByTitle(/clo\"se/u)",
+    "selector": "#login >> internal:control=enter-frame >> internal:attr=[title=/clo\"se/u]"
+  },
+  {
+    "chain": "page.frameLocator('#login').getByRole('button', { name: 'Submit', exact: true })",
+    "selector": "#login >> internal:control=enter-frame >> internal:role=button[name=\"Submit\"s]"
+  },
+  {
+    "chain": "page.frameLocator('#login').getByRole('checkbox', { checked: true, name: /agree/i })",
+    "selector": "#login >> internal:control=enter-frame >> internal:role=checkbox[checked=true][name=/agree/i]"
+  },
+  {
+    "chain": "page.frameLocator('#outer').frameLocator('#inner').getByLabel('Email')",
+    "selector": "#outer >> internal:control=enter-frame >> #inner >> internal:control=enter-frame >> internal:label=\"Email\"i"
+  },
+  {
+    "chain": "page.frameLocator('#outer').frameLocator('#inner').first().getByText('Pay')",
+    "selector": "#outer >> internal:control=enter-frame >> #inner >> nth=0 >> internal:control=enter-frame >> internal:text=\"Pay\"i"
+  },
+  {
+    "chain": "page.frameLocator('iframe').first().getByText('First')",
+    "selector": "iframe >> nth=0 >> internal:control=enter-frame >> internal:text=\"First\"i"
+  },
+  {
+    "chain": "page.frameLocator('iframe').last().getByText('Last')",
+    "selector": "iframe >> nth=-1 >> internal:control=enter-frame >> internal:text=\"Last\"i"
+  },
+  {
+    "chain": "page.frameLocator('iframe').nth(2).getByText('Third')",
+    "selector": "iframe >> nth=2 >> internal:control=enter-frame >> internal:text=\"Third\"i"
+  },
+  {
+    "chain": "page.frameLocator('iframe').nth(-1).owner()",
+    "selector": "iframe >> nth=-1"
+  },
+  {
+    "chain": "page.frameLocator('#outer').frameLocator('#inner').owner()",
+    "selector": "#outer >> internal:control=enter-frame >> #inner"
+  },
+  {
+    "chain": "page.locator('#outer').frameLocator('#inner').getByLabel('Email')",
+    "selector": "#outer >> #inner >> internal:control=enter-frame >> internal:label=\"Email\"i"
+  },
+  {
+    "chain": "page.locator('#outer').contentFrame().getByRole('button')",
+    "selector": "#outer >> internal:control=enter-frame >> internal:role=button"
+  },
+  {
+    "chain": "page.locator('#outer').contentFrame().frameLocator('#inner').getByRole('button')",
+    "selector": "#outer >> internal:control=enter-frame >> #inner >> internal:control=enter-frame >> internal:role=button"
+  },
+  {
+    "chain": "page.locator('iframe').nth(1).contentFrame().getByText('Pay')",
+    "selector": "iframe >> nth=1 >> internal:control=enter-frame >> internal:text=\"Pay\"i"
+  },
+  {
+    "chain": "page.locator('iframe').contentFrame().owner()",
+    "selector": "iframe"
+  },
+  {
+    "chain": "page.mainFrame().frameLocator('#login').getByLabel('Email')",
+    "selector": "#login >> internal:control=enter-frame >> internal:label=\"Email\"i"
+  },
+  {
+    "chain": "page.frameLocator().getByLabel('Email')",
+    "selector": "internal:control=any-frame >> internal:label=\"Email\"i"
+  },
+  {
+    "chain": "page.mainFrame().frameLocator().getByRole('button')",
+    "selector": "internal:control=any-frame >> internal:role=button"
+  },
+  {
+    "chain": "page.frameLocator().locator(page.getByText('Pay'))",
+    "selector": "internal:control=any-frame >> internal:text=\"Pay\"i"
+  },
+  {
+    "chain": "page.frameLocator().frameLocator('#inner').getByText('Pay')",
+    "selector": "internal:control=any-frame >> #inner >> internal:control=enter-frame >> internal:text=\"Pay\"i"
+  },
+  {
+    "chain": "page.frameLocator().owner()",
+    "selector": "internal:control=any-frame"
+  },
+  {
+    "chain": "page.frameLocator('#login').getByText('Pay').filter({ hasText: /Pay/ }).nth(1)",
+    "selector": "#login >> internal:control=enter-frame >> internal:text=\"Pay\"i >> internal:has-text=/Pay/ >> nth=1"
+  },
+  {
+    "chain": "page.frameLocator('#login').getByText('Pay').and(page.frameLocator('#login').getByRole('button'))",
+    "selector": "#login >> internal:control=enter-frame >> internal:text=\"Pay\"i >> internal:and=\"#login >> internal:control=enter-frame >> internal:role=button\""
+  },
+  {
+    "chain": "page.frameLocator('#login')",
+    "kind": "frameLocator",
+    "selector": "#login"
+  },
+  {
+    "chain": "page.frameLocator('#outer').frameLocator('#inner')",
+    "kind": "frameLocator",
+    "selector": "#outer >> internal:control=enter-frame >> #inner"
+  },
+  {
+    "chain": "page.frameLocator('iframe').first()",
+    "kind": "frameLocator",
+    "selector": "iframe >> nth=0"
+  },
+  {
+    "chain": "page.frameLocator('iframe').last()",
+    "kind": "frameLocator",
+    "selector": "iframe >> nth=-1"
+  },
+  {
+    "chain": "page.frameLocator('iframe').nth(2)",
+    "kind": "frameLocator",
+    "selector": "iframe >> nth=2"
+  },
+  {
+    "chain": "page.locator('#outer').frameLocator('#inner')",
+    "kind": "frameLocator",
+    "selector": "#outer >> #inner"
+  },
+  {
+    "chain": "page.locator('#outer').contentFrame()",
+    "kind": "frameLocator",
+    "selector": "#outer"
+  },
+  {
+    "chain": "page.frameLocator()",
+    "kind": "frameLocator",
+    "selector": "internal:control=any-frame"
+  }
+]

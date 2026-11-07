@@ -14,6 +14,12 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import {
+  assertDecoysUntouched,
+  compareFrameCases,
+  FRAME_TREE,
+  failed,
+} from './frames.mjs'
 import { skip } from './harness.mjs'
 import { withBoth } from './waits.mjs'
 
@@ -133,4 +139,103 @@ test('page.waitForLoadState settles the same through Neo and Playwright', {
       })
     }
   })
+})
+
+/**
+ * waitForLoadState on a child Frame (page.frame, page.frames()), on tabs of frame-top.html
+ * (frames.mjs): the frame's own document, for the same-origin frame and the cross-site,
+ * out-of-process one. A control loads a new document into the frame whose image answers
+ * SLOW_MS late, so a short wait on its load times out while domcontentloaded resolves, and load
+ * resolves later. A wait on a frame whose iframe is removed rejects, and it was still pending
+ * when the iframe went (a wait refused at once would have settled before). The scripts wait for
+ * each new document through a frame locator too, so the page ends the same whether or not
+ * child-frame waits are served.
+ */
+const frameCases = [
+  {
+    name: "a child frame waits for its own new document's load states",
+    source: `const states = async (frame, control, iframe) => {
+      const before = await settle(() => frame.waitForLoadState())
+      await page.click(control)
+      await page.frameLocator(iframe).getByText('gen 2').waitFor()
+      return {
+        before,
+        early: await settle(() => frame.waitForLoadState('load', { timeout: 300 })),
+        domcontentloaded: await settle(() => frame.waitForLoadState('domcontentloaded')),
+        load: await settle(() => frame.waitForLoadState()),
+      }
+    }
+    return {
+      same: await states(page.frame('same'), '#slow-same', '#same'),
+      cross: await states(page.frames().find((frame) => frame.name() === 'cross'), '#slow-cross', '#login-iframe'),
+    }`,
+    expected: {
+      same: {
+        before: RESOLVED,
+        early: failed('timeout'),
+        domcontentloaded: RESOLVED,
+        load: RESOLVED,
+      },
+      cross: {
+        before: RESOLVED,
+        early: failed('timeout'),
+        domcontentloaded: RESOLVED,
+        load: RESOLVED,
+      },
+    },
+    effect: (effect) => {
+      const { same, cross } = assertDecoysUntouched(effect, [
+        'top',
+        'same',
+        'cross',
+      ])
+      assert.deepEqual([same.gen, cross.gen], [2, 2])
+    },
+  },
+  {
+    name: 'a load wait on a child frame rejects when its iframe is removed',
+    source: `const removedWhileWaiting = async (frame, control, iframe, remove) => {
+      await page.click(control)
+      await page.frameLocator(iframe).getByText('gen 2').waitFor()
+      let settled = false
+      const waiting = settle(() => frame.waitForLoadState()).then((result) => {
+        settled = true
+        return result
+      })
+      await page.title()
+      const pendingAtRemoval = !settled
+      await page.click(remove)
+      return { pendingAtRemoval, removed: await waiting, detached: frame.isDetached() }
+    }
+    return {
+      same: await removedWhileWaiting(page.frame('same'), '#slow-same', '#same', '#remove-same'),
+      cross: await removedWhileWaiting(page.frame('cross'), '#slow-cross', '#login-iframe', '#remove-cross'),
+    }`,
+    expected: {
+      same: {
+        pendingAtRemoval: true,
+        removed: failed('error'),
+        detached: true,
+      },
+      cross: {
+        pendingAtRemoval: true,
+        removed: failed('error'),
+        detached: true,
+      },
+    },
+    effect: (effect) => {
+      const gone = ['same', 'cross', 'grandchild']
+      const frames = Object.keys(FRAME_TREE).filter(
+        (who) => !gone.includes(who),
+      )
+      assertDecoysUntouched(effect, ['top'], frames)
+    },
+  },
+]
+
+test('waitForLoadState on child frames settles the same through Neo and Playwright', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases, { slowMs: SLOW_MS })
 })

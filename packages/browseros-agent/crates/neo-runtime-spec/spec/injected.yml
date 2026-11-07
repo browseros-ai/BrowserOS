@@ -119,6 +119,7 @@ Injected:
       parameters:
         selector: string
         strict: boolean
+        frameVisible: boolean
       returns:
         value: boolean
 
@@ -171,6 +172,8 @@ Injected:
         # The first match, which stays in the page in the caller's object group. Absent when
         # nothing matched yet.
         element: Element?
+        # Visibility of the first iframe owner, false when nothing matched.
+        visible: boolean
 
     # Names a selector the way Playwright's call log does, for a click's first log line
     # `waiting for <locator>`, and reports a selector the page cannot parse. Playwright computes
@@ -217,7 +220,7 @@ Injected:
         states:
           type: array
           items: ElementState
-        # Neo resolves in the main frame only, so neo-runtime always sends `true`.
+        # True when every iframe owner crossed by the selector is visible; true without hops.
         frameVisible: boolean
       returns:
         # Absent when every state holds.
@@ -251,6 +254,24 @@ Injected:
         left: float
         top: float
 
+    # Playwright's iframe transform check and border/padding insets (`dom.ts`
+    # `_checkFrameIsHitTarget`). Transformed ancestors use only the event interceptor.
+    describeIFrameStyle:
+      internal: true
+      parameters:
+        element: Element
+      returns:
+        style: FrameStyle
+
+    # Checks the iframe owner in its parent document before arming in the child.
+    expectHitTarget:
+      internal: true
+      parameters:
+        element: Element
+        point: Point
+      returns:
+        outcome: HitTargetOutcome
+
     # `InjectedScript.setupHitTargetInterceptor(element, 'mouse', hitPoint, blockAllEvents)`.
     # It retargets to the closest button or link, checks the hit point once, and arms the
     # injected script's single hit-target slot for the coming mouse events.
@@ -281,6 +302,7 @@ Injected:
         element: Element
         value: string
         force: boolean
+        frameVisible: boolean
       returns:
         outcome: FormFillOutcome
 
@@ -293,6 +315,7 @@ Injected:
           type: array
           items: FormSelectOption
         force: boolean
+        frameVisible: boolean
       returns:
         # Present on success, including an empty selection.
         values:
@@ -404,6 +427,26 @@ FormInputValueMatch:
 # `HitTargetInterceptionResult`, bound in the glue's `satisfies` clause.
 HitTargetInterceptor:
   type: handle
+
+# Unchanged `InjectedScript.describeIFrameStyle` result.
+FrameStyle:
+  type: union
+  members:
+    status: FrameStyleStatus
+    insets: FrameInsets
+
+FrameStyleStatus:
+  type: enum
+  literals:
+  - error:notconnected
+  - transformed
+
+# The iframe content origin relative to its border box.
+FrameInsets:
+  type: object
+  properties:
+    left: float
+    top: float
 
 # Playwright's `ElementState` (`injectedScript.ts`), every value, so the glue's `missingState`
 # result type-checks against Playwright's own union.

@@ -105,11 +105,13 @@ pub(crate) trait Tab: Send + Sync {
         strict: bool,
     ) -> impl Future<Output = Result<Option<Resolved<Self::Element>>, PageError>> + Send;
 
-    /// `checkElementStates` with `frameVisible: true` (Neo resolves in the main frame only).
+    /// `checkElementStates` with `frameVisible` inherited from the selector's iframe hop
+    /// owners (`true` when the selector has no frame hops). Owner preparation honors `scroll`.
     fn check_states(
         &self,
         element: &Self::Element,
         states: &[ElementState],
+        scroll: bool,
     ) -> impl Future<Output = Result<StatesCheck, PageError>> + Send;
 
     /// [`Scroll::Protocol`]: CDP `DOM.scrollIntoViewIfNeeded` (`position` as a zero rect); the
@@ -127,6 +129,7 @@ pub(crate) trait Tab: Send + Sync {
         &self,
         element: &Self::Element,
         position: Option<&Point>,
+        force: bool,
     ) -> impl Future<Output = Result<Geometry, PageError>> + Send;
 
     /// Waits for a turn at the tab's input: its one mouse and its document's one hit-target
@@ -687,7 +690,7 @@ async fn attempt<T: Tab>(
     if !options.force {
         progress.log("  waiting for element to be visible, enabled and stable");
         match progress
-            .race(tab.check_states(element, &CLICK_STATES))
+            .race(tab.check_states(element, &CLICK_STATES, options.scroll))
             .await??
         {
             StatesCheck::Ready => {}
@@ -712,7 +715,7 @@ async fn attempt<T: Tab>(
     progress.log("  done scrolling");
 
     let geometry = progress
-        .race(tab.geometry(element, options.position.as_ref()))
+        .race(tab.geometry(element, options.position.as_ref(), options.force))
         .await??;
     let point = match click_point(&geometry, options.position.as_ref()) {
         Ok(point) => round_point(&point),
@@ -1269,6 +1272,7 @@ pub(crate) mod tests {
             &self,
             _element: &u32,
             states: &[ElementState],
+            _scroll: bool,
         ) -> Result<StatesCheck, PageError> {
             assert_eq!(
                 states, CLICK_STATES,
@@ -1292,6 +1296,7 @@ pub(crate) mod tests {
             &self,
             _element: &u32,
             _position: Option<&Point>,
+            _force: bool,
         ) -> Result<Geometry, PageError> {
             self.record("geometry");
             self.geometry.answer().await
