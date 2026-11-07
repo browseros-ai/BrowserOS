@@ -710,7 +710,10 @@ async fn case(code: &str, replies: Replies, timeout: Duration) -> (RunOutcome, V
             } if *call == record.call_id => Some(emitted.as_ref()),
             _ => None,
         });
-        assert_eq!(emitted, Some(record), "outcome and event agree");
+        let mut snapshot = record.clone();
+        // Only delivery may advance between publication and the outcome's drain.
+        snapshot.delivery = emitted.and_then(|record| record.delivery);
+        assert_eq!(emitted, Some(&snapshot), "the sealed record agrees");
     }
     (outcome, events)
 }
@@ -928,7 +931,7 @@ async fn late_delivery_corrects_unknown_after_after_call() {
         "try { await page.click('#go', {timeout:100}) } catch(e) { return e.name }",
         Replies {
             mouse: Reply {
-                delay: Duration::from_millis(700),
+                delay: Duration::from_millis(1500),
                 ..Reply::default()
             },
             ..Replies::default()
@@ -946,6 +949,37 @@ async fn late_delivery_corrects_unknown_after_after_call() {
             ..
         }
     )));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn writer_acknowledged_during_drain_refreshes_outcome_but_not_after_call() {
+    let (outcome, events) = case(
+        "try { await page.click('#go', {timeout:100}) } catch(e) { return e.name }",
+        Replies {
+            mouse: Reply {
+                delay: Duration::from_millis(700),
+                ..Reply::default()
+            },
+            ..Replies::default()
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+    assert_eq!(outcome.value, Some(json!("TimeoutError")));
+    assert_eq!(outcome.calls[0].delivery, Some(Delivery::Done));
+    let deliveries: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            RunEvent::AfterCall {
+                call: 1, record, ..
+            } => record.delivery,
+            RunEvent::DeliverySettled {
+                call: 1, delivery, ..
+            } => Some(*delivery),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deliveries, [Delivery::Unknown, Delivery::Done]);
 }
 
 #[tokio::test(flavor = "multi_thread")]

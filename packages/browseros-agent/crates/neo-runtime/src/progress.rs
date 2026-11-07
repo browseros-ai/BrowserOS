@@ -6,7 +6,8 @@
 //! its record: the run deadline drops the realm, the script returning drops it too, and the
 //! end-of-run wait can leave a task running past the run. So the record is derived from the
 //! entry by its gated publication, never assembled by whoever ended the call. The outcome
-//! reads the same snapshot, so late replies cannot rewrite a sealed call.
+//! reads the same sealed result with the delivery known after the drain; late replies cannot
+//! rewrite a sealed call, but acknowledged writes must still reach its outcome.
 //!
 //! ```text
 //!   dispatch ──creates──▶ CallEntry ◀──holds── Trace (run)          read once, after `finish`'s wait
@@ -878,8 +879,9 @@ impl CallEntry {
         }
     }
 
-    /// One snapshot feeds both sinks and `RunOutcome`. No sink is called while initializing it:
-    /// concurrent finish/seal/publish paths can safely wait for that initialization.
+    /// Freezes the event's record and the outcome's result. The outcome refreshes delivery at
+    /// take time; sinks learn of later delivery through `DeliverySettled`. No sink is called
+    /// while initializing this snapshot, so concurrent finish/seal/publish paths can wait safely.
     fn snapshot(&self) -> &(Arc<CallRecord>, bool) {
         self.snapshot.get_or_init(|| {
             self.seal(self.reason());
@@ -1123,9 +1125,9 @@ impl Trace {
     }
 
     /// The run's records, in arrival order, and the dropped calls. A call with no end is
-    /// `Unfinished { reason }`. Entries already published keep that snapshot; open entries are
-    /// sealed here with their current delivery. Records are built after the lock is released, and one
-    /// `tracing` event is logged per record.
+    /// `Unfinished { reason }`. Results keep their first published snapshot, while delivery is
+    /// read after the drain so a writer's later acknowledgement is reflected in the outcome.
+    /// Records are built after the lock is released, with one `tracing` event per record.
     pub(crate) fn take(&self, reason: RunEnd) -> (Vec<CallRecord>, Option<DroppedCalls>) {
         let mut retired = Retired::default();
         let (kept, dropped) = {
@@ -1155,7 +1157,9 @@ impl Trace {
             .iter()
             .map(|entry| {
                 entry.publish();
-                entry.snapshot().0.as_ref().clone()
+                let mut record = entry.snapshot().0.as_ref().clone();
+                record.delivery = entry.delivery.as_ref().map(|cell| cell.delivery());
+                record
             })
             .collect();
         for record in &records {
