@@ -903,7 +903,7 @@ export class Frame {
       params,
       0,
     )
-    return handleFrom(this._connection, result.handle) as JSHandle<R>
+    return handleFrom(this._connection, result.handle, this) as JSHandle<R>
   }
 
   /**
@@ -924,7 +924,11 @@ export class Frame {
       { selector, strict: true, state: 'attached' },
       this._page._timeoutSettings.timeout(options, apiName),
     )) as { element?: CreatedHandle } | undefined
-    const handle = ElementHandle.fromNullable(this._connection, result?.element)
+    const handle = ElementHandle.fromNullable(
+      this._connection,
+      result?.element,
+      this,
+    )
     if (!handle) throw new Error(`Could not resolve ${selector} to DOM Element`)
     try {
       return await task(handle)
@@ -1142,7 +1146,7 @@ export class Frame {
       params,
       0,
     )
-    return ElementHandle.fromNullable(this._connection, result?.element)
+    return ElementHandle.fromNullable(this._connection, result?.element, this)
   }
 
   /** Playwright's `frame.$$`: every match, as `ElementHandle`s. */
@@ -1161,7 +1165,7 @@ export class Frame {
       { selector },
       0,
     )
-    return elementsFrom(this._connection, result?.elements ?? [])
+    return elementsFrom(this._connection, result?.elements ?? [], this)
   }
 
   /** Playwright's `frame.$eval`: `pageFunction` on the first match, by value. */
@@ -1269,7 +1273,7 @@ export class Frame {
       pollingInterval === undefined ? params : { ...params, pollingInterval },
       this._page._timeoutSettings.timeout(options, apiName),
     )
-    return handleFrom(this._connection, result.handle) as JSHandle<R>
+    return handleFrom(this._connection, result.handle, this) as JSHandle<R>
   }
 
   /**
@@ -1294,7 +1298,7 @@ export class Frame {
       }) as FrameWaitForSelectorParams,
       this._page._timeoutSettings.timeout(options, apiName),
     )) as { element?: CreatedHandle } | undefined
-    return ElementHandle.fromNullable(this._connection, result?.element)
+    return ElementHandle.fromNullable(this._connection, result?.element, this)
   }
 
   /** Playwright: `client/locator.ts` `Locator.ariaSnapshot`: `selector: this._selector,` */

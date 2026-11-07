@@ -1826,6 +1826,24 @@ pub(crate) struct ResolvedElement {
 }
 
 impl ResolvedElement {
+    /// Neo: an element a call already holds, adopted into `frame`'s utility world in `group`
+    /// (an `ElementHandle`'s node, `screenshot.rs` `screenshot_handle`), with the iframe owners
+    /// above that frame, as `FrameTab::resolve` builds one from a selector.
+    pub(crate) fn adopted(
+        handle: Handle<Element>,
+        group: Arc<GroupGuard>,
+        frame: Arc<FrameContext>,
+        owners: Vec<FrameOwner>,
+    ) -> Self {
+        Self {
+            handle,
+            _group: group,
+            frame,
+            frame_visible: true,
+            owners,
+        }
+    }
+
     /// A typed handle; this element's shared group keeps it alive through a detached page step.
     pub(crate) fn handle(&self) -> &Handle<Element> {
         &self.handle

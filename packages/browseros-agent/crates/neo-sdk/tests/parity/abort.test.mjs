@@ -11,6 +11,11 @@
 // - tests/page/page-filechooser.spec.ts FC-015 "should abort with signal", on `console`: a
 //   client-side `waitForEvent` rejects with `AbortError` when its signal aborts.
 //
+// - The capture rows (slice B2): an already-aborted signal on `page.screenshot`,
+//   `locator.screenshot` and `elementHandle.screenshot` rejects with `AbortError` before the page
+//   is touched; an abort mid-capture rejects and the page is restored. `page.pdf` is not here:
+//   Playwright sends it with no signal, and Neo refuses one (capture-options-review).
+//
 // Plus the realm's `AbortController`/`AbortSignal` against Node's, `waitForURL` aborted mid-wait,
 // `AbortSignal.timeout`, a duck-typed signal, and an abort after the call settled. Errors are
 // compared by category (`name`, whether `cause` is the reason), never by wording.
@@ -227,6 +232,59 @@ const settled = await pending
 await pause(300)
 return { settled, prepared: during > before, restored: (await styles()) === before }`
 
+// The page's style elements as they come: a capture prepares each document with a <style> for
+// `style`, so a count of 0 after the call means the page was never touched.
+const WATCH_STYLES = `await page.evaluate(() => {
+  window.__styles = 0
+  new MutationObserver((records) => {
+    for (const record of records)
+      for (const node of record.addedNodes) if (node.nodeName === 'STYLE') window.__styles++
+  }).observe(document, { childList: true, subtree: true })
+})`
+
+/** A capture on `receiver` with an already-aborted signal: it rejects before any page work. */
+const preAbortedCapture = (receiver) => `${WATCH_STYLES}
+const controller = new AbortController()
+controller.abort('already')
+const receiver = ${receiver}
+const settled = await settle(receiver.screenshot({ signal: controller.signal, style: 'body { color: red }' }), 'already')
+await pause(300)
+return { settled, styles: await page.evaluate(() => window.__styles) }`
+
+// page.screenshot aborted mid-capture: a font the server never finishes holds
+// `document.fonts.ready`, so the capture prepares the page and waits for fonts until the abort.
+const PAGE_SCREENSHOT = `
+await page.evaluate(() => {
+  const face = new FontFace('held', 'url(/slow)')
+  document.fonts.add(face)
+  face.load().catch(() => {})
+})
+const styles = () => page.evaluate(() => document.querySelectorAll('style').length)
+const before = await styles()
+const controller = new AbortController()
+const pending = settle(page.screenshot({ signal: controller.signal, timeout: 0, style: 'body { color: red }' }), 'stop capture')
+await pause(500)
+const during = await styles()
+controller.abort('stop capture')
+const settled = await pending
+await pause(300)
+return { settled, fonts: await page.evaluate(() => document.fonts.status), prepared: during > before, restored: (await styles()) === before }`
+
+// elementHandle.screenshot aborted mid-capture: its element is attached but hidden, so the
+// capture prepares the page and waits for it to show, as the locator case above.
+const HANDLE_SCREENSHOT = `
+const handle = await page.$('#hidden')
+const styles = () => page.evaluate(() => document.querySelectorAll('style').length)
+const before = await styles()
+const controller = new AbortController()
+const pending = settle(handle.screenshot({ signal: controller.signal, timeout: 0, style: 'body { color: red }' }), 'stop capture')
+await pause(500)
+const during = await styles()
+controller.abort('stop capture')
+const settled = await pending
+await pause(300)
+return { settled, prepared: during > before, restored: (await styles()) === before }`
+
 // waitForFunction aborted while it polls (tests/page/locator-wait-for-function.spec.ts LO-191
 // "should abort via signal", on the page): it rejects with the reason as cause, and the page
 // still answers afterwards.
@@ -249,13 +307,15 @@ return { aborted: (await pending).name, handle: await handle.evaluate((element) 
 
 test('signal aborts calls as Playwright does', {
   skip,
-  timeout: 400_000,
+  timeout: 600_000,
 }, async (t) => {
   t.diagnostic(`Playwright ${playwrightVersion}`)
   const neoRun = buildNeoRun()
   const cleanups = []
   try {
     const origin = await serveFixture(cleanups, {
+      // `/slow` answers after the run ends: the font PAGE_SCREENSHOT holds.
+      slowMs: 20_000,
       pages: {
         '/abort.html': html,
         '/elsewhere': '<title>elsewhere</title>',
@@ -452,6 +512,60 @@ test('signal aborts calls as Playwright does', {
       'a screenshot aborted mid-capture rejects and restores the page',
       async () => {
         const { reference } = await both('screenshot', SCREENSHOT)
+        assert.deepEqual(reference.value, {
+          settled: {
+            name: 'AbortError',
+            isError: true,
+            causeIsReason: true,
+            namesReason: true,
+          },
+          prepared: true,
+          restored: true,
+        })
+      },
+    )
+
+    for (const [receiver, source] of [
+      ['page.screenshot', 'page'],
+      ['locator.screenshot', "page.locator('#target')"],
+      ['elementHandle.screenshot', "await page.$('#target')"],
+    ])
+      await t.test(
+        `${receiver} with an already-aborted signal rejects before touching the page`,
+        async () => {
+          const { reference } = await both(
+            `pre-aborted ${receiver}`,
+            preAbortedCapture(source),
+          )
+          assert.equal(reference.value.settled.name, 'AbortError')
+          assert.equal(reference.value.settled.causeIsReason, true)
+          assert.equal(reference.value.styles, 0, 'no style ever went in')
+          assert.deepEqual(reference.effect, UNTOUCHED)
+        },
+      )
+
+    await t.test(
+      'page.screenshot aborted while it waits for fonts rejects and restores the page',
+      async () => {
+        const { reference } = await both('page screenshot', PAGE_SCREENSHOT)
+        assert.deepEqual(reference.value, {
+          settled: {
+            name: 'AbortError',
+            isError: true,
+            causeIsReason: true,
+            namesReason: true,
+          },
+          fonts: 'loading',
+          prepared: true,
+          restored: true,
+        })
+      },
+    )
+
+    await t.test(
+      'elementHandle.screenshot aborted mid-capture rejects and restores the page',
+      async () => {
+        const { reference } = await both('handle screenshot', HANDLE_SCREENSHOT)
         assert.deepEqual(reference.value, {
           settled: {
             name: 'AbortError',

@@ -37,6 +37,8 @@ import {
 } from '../vendor/playwright/protocol/src/serializers'
 import { type ApiName, type Connection, rebuildError } from './connection'
 import { isTargetClosedError } from './errors'
+import type { Frame } from './frame'
+import type { ElementScreenshotParams } from './neo-commands'
 
 /**
  * An evaluation argument after Playwright's client and server steps (`serializeArgument`
@@ -102,9 +104,10 @@ export type EvalFrameCommands = SelectorCommands & {
   }
 }
 
-/** The `JSHandle` commands on a handle guid (`handle@<n>`); the selector ones are an
- * `ElementHandle`'s. */
+/** The `JSHandle` commands on a handle guid (`handle@<n>`); the selector ones and `screenshot`
+ * are an `ElementHandle`'s. */
 export type JSHandleCommands = EvalFrameCommands & {
+  screenshot: { params: ElementScreenshotParams; result: { binary: string } }
   jsonValue: { params: Record<string, never>; result: EvaluateResult }
   dispose: { params: Record<string, never>; result: Record<string, never> }
   getProperty: { params: { name: string }; result: { handle: CreatedHandle } }
@@ -151,6 +154,12 @@ export class JSHandle<T = unknown> {
   readonly _connection: Connection
   /** `jsHandle` or `elementHandle`: the prefix of this handle's errors. */
   readonly _apiPrefix: 'jsHandle' | 'elementHandle'
+  /**
+   * Playwright's `ElementHandle._frame`: the frame that made the handle, its channel parent,
+   * whose page's `TimeoutSettings` time an element's calls. `undefined` only for a handle built
+   * without one, as unit tests build them.
+   */
+  readonly _frame: Frame | undefined
   _preview: string
   /** Phantom: the page value's type, as Playwright's `JSHandle<T>`. */
   declare readonly __type: T
@@ -160,10 +169,12 @@ export class JSHandle<T = unknown> {
     guid: string,
     initializer: JSHandleInitializer,
     apiPrefix: 'jsHandle' | 'elementHandle' = 'jsHandle',
+    frame?: Frame,
   ) {
     this._connection = connection
     this._guid = guid
     this._apiPrefix = apiPrefix
+    this._frame = frame
     this._preview = initializer.preview
   }
 
@@ -228,7 +239,11 @@ export class JSHandle<T = unknown> {
       params,
       0,
     )
-    return handleFrom(this._connection, result.handle) as JSHandle<R>
+    return handleFrom(
+      this._connection,
+      result.handle,
+      this._frame,
+    ) as JSHandle<R>
   }
 
   async jsonValue(): Promise<T> {
@@ -250,7 +265,7 @@ export class JSHandle<T = unknown> {
       { name: propertyName },
       0,
     )
-    return handleFrom(this._connection, result.handle)
+    return handleFrom(this._connection, result.handle, this._frame)
   }
 
   async getProperties(): Promise<Map<string, JSHandle>> {
@@ -263,7 +278,7 @@ export class JSHandle<T = unknown> {
       0,
     )
     for (const { name, value } of result.properties)
-      map.set(name, handleFrom(this._connection, value))
+      map.set(name, handleFrom(this._connection, value, this._frame))
     return map
   }
 
@@ -297,6 +312,7 @@ export const handleFactory: {
     connection: Connection,
     guid: string,
     initializer: JSHandleInitializer,
+    frame: Frame | undefined,
   ) => JSHandle
 } = {}
 
@@ -305,10 +321,22 @@ export const handleFactory: {
 export function handleFrom(
   connection: Connection,
   created: CreatedHandle,
+  frame: Frame | undefined,
 ): JSHandle {
   if (created.type === 'ElementHandle' && handleFactory.element)
-    return handleFactory.element(connection, created.guid, created.initializer)
-  return new JSHandle(connection, created.guid, created.initializer)
+    return handleFactory.element(
+      connection,
+      created.guid,
+      created.initializer,
+      frame,
+    )
+  return new JSHandle(
+    connection,
+    created.guid,
+    created.initializer,
+    'jsHandle',
+    frame,
+  )
 }
 
 /**

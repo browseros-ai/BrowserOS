@@ -185,6 +185,7 @@ export type ApiName =
   | 'page.screenshot'
   | 'page.pdf'
   | 'locator.screenshot'
+  | 'elementHandle.screenshot'
   | 'page.waitForEvent'
   | 'browserContext.waitForEvent'
   | 'page.consoleMessages'

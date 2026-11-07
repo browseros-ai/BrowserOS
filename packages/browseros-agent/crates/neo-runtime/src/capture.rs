@@ -24,7 +24,7 @@ use neo_runtime_spec::serve::{
     PageScreenshotParamsCaret, PageScreenshotParamsMaskItem, PageScreenshotParamsScale,
     PageScreenshotParamsType, PageScreenshotResult,
 };
-use neo_runtime_spec::{Binary, MethodMeta};
+use neo_runtime_spec::{Binary, MethodFlag, MethodMeta};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -40,8 +40,8 @@ use crate::tabs::{PageEntry, Tabs};
 use crate::world;
 
 /// `locator.screenshot`'s call, with Playwright's `ElementHandle.screenshot` title.
-/// Neo: one call stands for Playwright's `waitForSelector` and `ElementHandle.screenshot` until
-/// Neo has element handles; its record names the method `neo:screenshot`.
+/// Neo: one call stands for Playwright's `waitForSelector` and `ElementHandle.screenshot`, under
+/// one deadline and without minting a handle; its record names the method `neo:screenshot`.
 pub(crate) static NEO_SCREENSHOT_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "neo:screenshot",
@@ -51,6 +51,20 @@ pub(crate) static NEO_SCREENSHOT_META: MethodMeta = MethodMeta {
     render_params: &["type"],
     internal: false,
     flags: &[],
+};
+
+/// Neo: `ElementHandle.screenshot`'s trace metadata, as `neo-runtime-spec/spec/playwright/handles.yml`
+/// declares it. Handle calls are routed by hand (`evaluate.rs` `route_handle`), not by the
+/// generated serve spec.
+pub(crate) static ELEMENT_HANDLE_SCREENSHOT_META: MethodMeta = MethodMeta {
+    interface: "ElementHandle",
+    method: "screenshot",
+    title: Some("Screenshot"),
+    subtitle: None,
+    group: None,
+    render_params: &["type"],
+    internal: false,
+    flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
 };
 
 /// The calls this module serves, routed by `dispatch::route`.
@@ -65,17 +79,31 @@ pub(crate) enum Capture {
         path: Option<String>,
     },
     Locator(Box<NeoScreenshotParams>),
+    /// `ElementHandle.screenshot` on the handle `guid`.
+    Element {
+        guid: String,
+        params: Box<ElementScreenshotParams>,
+    },
 }
 
 /// `neo:screenshot`: Playwright's `Locator.screenshot`, which its client serves as a strict
-/// `waitForSelector` for an attached element and then `ElementHandle.screenshot` on it. Neo has
-/// no element handles yet, so one call carries the selector and `ElementHandle.screenshot`'s
-/// params (`spec/playwright/handles.yml`) plus Neo's `path`. Keep this shape in sync with
-/// neo-sdk's `NeoFrameCommands`.
+/// `waitForSelector` for an attached element and then `ElementHandle.screenshot` on it. One call
+/// carries the selector beside `ElementHandle.screenshot`'s params and Neo's `path`
+/// ([`ElementScreenshotParams`]). Keep this shape in sync with neo-sdk's `NeoFrameCommands`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NeoScreenshotParams {
     pub(crate) selector: String,
+    #[serde(flatten)]
+    pub(crate) screenshot: ElementScreenshotParams,
+}
+
+/// `ElementHandle.screenshot`'s params (`spec/playwright/handles.yml`) and Neo's `path`: what
+/// `elementHandle.screenshot` sends, and what `neo:screenshot` carries beside its selector. Keep
+/// this shape in sync with neo-sdk's `ElementScreenshotParams`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ElementScreenshotParams {
     #[serde(rename = "type")]
     pub(crate) format: Option<PageScreenshotParamsType>,
     pub(crate) quality: Option<i64>,
@@ -87,6 +115,28 @@ pub(crate) struct NeoScreenshotParams {
     pub(crate) mask_color: Option<String>,
     pub(crate) style: Option<String>,
     pub(crate) path: Option<String>,
+}
+
+/// Playwright: `server/screenshotter.ts` `Screenshotter.screenshotElement`
+impl ElementScreenshotParams {
+    /// The element capture's options: `ElementHandle.screenshot` has no `fullPage` or `clip`.
+    fn options(&self, masks: Vec<Mask>) -> Result<ScreenshotOptions, PlaywrightError> {
+        ScreenshotOptions::new(
+            ScreenshotParams {
+                format: self.format,
+                quality: self.quality,
+                full_page: None,
+                clip: None,
+                omit_background: self.omit_background,
+                caret: self.caret,
+                animations: self.animations,
+                scale: self.scale,
+                mask_color: self.mask_color.clone(),
+                style: self.style.clone(),
+            },
+            masks,
+        )
+    }
 }
 
 /// Serves one capture call on the tab `entry`, from `scope` for a locator.
@@ -120,23 +170,9 @@ pub(crate) async fn serve(
             encode_result::<PagePdfParams>(&PagePdfResult { pdf })
         }
         Capture::Locator(params) => {
-            let path = check_path(artifacts, params.path.as_deref())?;
-            let masks = masks(tabs, entry, params.mask.as_deref());
-            let options = ScreenshotOptions::new(
-                ScreenshotParams {
-                    format: params.format,
-                    quality: params.quality,
-                    full_page: None,
-                    clip: None,
-                    omit_background: params.omit_background,
-                    caret: params.caret,
-                    animations: params.animations,
-                    scale: params.scale,
-                    mask_color: params.mask_color.clone(),
-                    style: params.style.clone(),
-                },
-                masks,
-            )?;
+            let path = check_path(artifacts, params.screenshot.path.as_deref())?;
+            let masks = masks(tabs, entry, params.screenshot.mask.as_deref());
+            let options = params.screenshot.options(masks)?;
             let tab = FrameTab {
                 page: session(tabs, entry, progress).await?,
                 scope,
@@ -144,11 +180,31 @@ pub(crate) async fn serve(
             let bytes =
                 screenshot::screenshot_locator(&tab, &params.selector, &options, progress).await?;
             let binary = saved("screenshot", bytes, path.as_ref(), artifacts).await?;
-            serde_json::to_value(PageScreenshotResult { binary })
-                .map(Some)
-                .map_err(|error| PlaywrightError::error(error.to_string()).into())
+            screenshot_result(binary)
+        }
+        Capture::Element { guid, params } => {
+            let path = check_path(artifacts, params.path.as_deref())?;
+            let masks = masks(tabs, entry, params.mask.as_deref());
+            let options = params.options(masks)?;
+            let handle = progress
+                .handles()
+                .element(&guid, ELEMENT_HANDLE_SCREENSHOT_META.method)?;
+            let tab = FrameTab {
+                page: session(tabs, entry, progress).await?,
+                scope,
+            };
+            let bytes = screenshot::screenshot_handle(&tab, &handle, &options, progress).await?;
+            let binary = saved("screenshot", bytes, path.as_ref(), artifacts).await?;
+            screenshot_result(binary)
         }
     }
+}
+
+/// An element capture's `{binary}` answer.
+fn screenshot_result(binary: Binary) -> Result<Option<Value>, CallError> {
+    serde_json::to_value(PageScreenshotResult { binary })
+        .map(Some)
+        .map_err(|error| PlaywrightError::error(error.to_string()).into())
 }
 
 /// `path` checked against the run's artifact directory before any page work.

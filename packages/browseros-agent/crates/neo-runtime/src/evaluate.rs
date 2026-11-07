@@ -719,6 +719,34 @@ pub(crate) struct HandleEntry {
     element: bool,
 }
 
+impl HandleEntry {
+    /// The frame document the handle was created in.
+    pub(crate) fn frame(&self) -> &Arc<FrameContext> {
+        &self.frame
+    }
+
+    /// The handle's node adopted into its frame's utility world, in `group`.
+    /// Playwright: `server/dom.ts` `ElementHandle.evaluateInUtility`
+    ///
+    /// # Errors
+    ///
+    /// `NotConnected` when the node or its document is gone, or the handle holds no object.
+    pub(crate) async fn utility_element(
+        &self,
+        group: &GroupGuard,
+    ) -> Result<Handle<Element>, PageError> {
+        let Remote::Object(id) = &self.remote else {
+            return Err(PageError::NotConnected);
+        };
+        let backend = self
+            .frame
+            .main
+            .backend_of(&self.frame, id.object_id())
+            .await?;
+        self.frame.element(group.group(), backend).await
+    }
+}
+
 /// The page object, or for a primitive the value itself, as Playwright keeps `JSHandle._value`
 /// for a result without an `objectId`.
 #[derive(Debug, Clone)]
@@ -743,6 +771,14 @@ impl Default for Handles {
 }
 
 impl Handles {
+    /// The element handle `guid` for a call that acts on its node (`ElementHandle.screenshot`),
+    /// refused for a `JSHandle` as Playwright's dispatcher refuses `method` on one, and closed
+    /// when the run has no such handle.
+    pub(crate) fn element(&self, guid: &str, method: &str) -> Result<Arc<HandleEntry>, CallError> {
+        element_scope(self, Some(guid), method)?
+            .ok_or_else(|| PlaywrightError::target_closed().into())
+    }
+
     /// The frame guid that routes calls on `guid`, `None` when the run has no such handle.
     pub(crate) fn frame_guid(&self, guid: &str) -> Option<String> {
         self.entry(guid).map(|entry| entry.frame_guid.clone())
@@ -1224,17 +1260,10 @@ async fn utility_root(
         )
         .into());
     }
-    let Remote::Object(id) = &root.remote else {
+    if !matches!(root.remote, Remote::Object(_)) {
         return Err(PlaywrightError::error(CONTEXT_DESTROYED).into());
-    };
-    let frame = &root.frame;
-    let backend = frame
-        .main
-        .backend_of(frame, id.object_id())
-        .await
-        .map_err(page_error)?;
-    frame
-        .element(group.group(), backend)
+    }
+    root.utility_element(group)
         .await
         .map_err(|error| page_error(error).into())
 }
