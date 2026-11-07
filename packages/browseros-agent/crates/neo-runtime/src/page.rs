@@ -2566,6 +2566,29 @@ mod tests {
         }
     }
 
+    /// A hover's one move is a click's first event, and a tap is Playwright's two touch events:
+    /// the start with one touch point at the point, the end with none, both without modifiers.
+    #[test]
+    fn tests_that_a_hover_moves_like_a_click_and_a_tap_starts_and_ends_one_touch() {
+        let point = Point { x: 10.5, y: 20.25 };
+        let click = MouseClick {
+            button: MouseButton::Left,
+            click_count: 1,
+            delay: None,
+        };
+        assert_eq!(move_event(&point), mouse_events(&point, &click)[0]);
+        let [start, end] = tap_events(&point)
+            .map(|event| serde_json::from_str::<Value>(&event).expect("touch params are JSON"));
+        assert_eq!(
+            start,
+            json!({ "type": "touchStart", "modifiers": 0, "touchPoints": [{ "x": 10.5, "y": 20.25 }] })
+        );
+        assert_eq!(
+            end,
+            json!({ "type": "touchEnd", "modifiers": 0, "touchPoints": [] })
+        );
+    }
+
     #[test]
     fn requested_main_frame_navigations_in_this_tab_are_pending_until_they_commit() {
         let mut state = PageState::default();
