@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (56)
+## Deviations (57)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -60,6 +60,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-sdk/src/screenshot.ts | (file) | `client/page.ts` `Page.pdf` | `page.screenshot` and `locator.screenshot` resolve their timeout through `TimeoutSettings`, so their `signal` aborts the capture as Playwright's does (slice S). `page.pdf`, which Playwright sends with no signal, refuses one before anything reaches the page instead of ignoring it (med-pw-eval DECIDED). `undefined` and `null` are no signal. |
 | neo-sdk/src/screenshot.ts | (file) | `client/page.ts` `Page.screenshot` | A Neo script has no file system: `path` travels with the call and neo-runtime writes the bytes into the run's artifact directory (`artifacts.rs`), relative paths only. A run without one refuses `path` with an Error naming the option. |
 | neo-sdk/src/screenshot.ts | `refuseSignal` | `client/page.ts` `Page.pdf` | until Neo can abort a call, a signal is refused rather than ignored. |
+| neo-sdk/src/select-option.ts | `ELEMENT_VALUES_UNSUPPORTED` | `client/elementHandle.ts` `convertSelectOptionValues` | Playwright selects the very option nodes ElementHandle values name; Neo refuses an ElementHandle (or any JSHandle) value before anything is sent, where it would otherwise travel as an option object matching the first option. |
 | neo-sdk/src/url.ts | (file) | `isomorphic/urlMatch.ts` `urlMatches` | Playwright passes a URL predicate a WHATWG `URL`. The realm has no `URL`, so Neo passes this read-only one, built from Rust's WHATWG parser: every getter and `toString`/`toJSON` read as `URL`'s do, and `searchParams` reads as `URLSearchParams`; setters and `searchParams`' mutators throw, and `instanceof URL` cannot hold. |
 | neo-sdk/src/url.ts | `READ_ONLY` | `isomorphic/urlMatch.ts` `urlMatches` | the error a write to Neo's read-only `URL` throws, where Playwright's predicate gets a writable WHATWG `URL`. |
 | neo-sdk/src/vendor-shims.ts | `URL` | `isomorphic/utilityScriptSerializers.ts` `parseEvaluationResultValue` | QuickJS has no WHATWG URL, so a `URL` the page returns (and a `URL` an agent passes back) is this object: its `href`, `toString()` and `toJSON()` as Playwright's client gives them, and no parsed parts (`host`, `pathname`, `searchParams`). |

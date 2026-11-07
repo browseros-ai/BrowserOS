@@ -35,7 +35,8 @@ pub struct RunRequest {
     pub code: String,
     pub page: PageId,
     /// Wall-clock budget from the tab check to the script's return. Finish adds one bounded
-    /// drain; cleanup tasks still pending then continue in the background.
+    /// drain, and one more bounded wait to remove the run's highlights; cleanup tasks still
+    /// pending then continue in the background, the run's input releases among them.
     pub timeout: Duration,
     /// Cancelling ends the run with [`RunStatus::Cancelled`] at the script's next instruction,
     /// timer or getter.

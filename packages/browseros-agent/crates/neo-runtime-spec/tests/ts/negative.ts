@@ -19,6 +19,7 @@ type Handles = {
   HitTargetInterceptor: {
     stop: () => 'done' | { hitTargetDescription: string }
   }
+  ScreenshotCleanup: { restore: () => void }
   ElementList: Element[]
 }
 type Api = InjectedApi<InjectedScript, Handles>

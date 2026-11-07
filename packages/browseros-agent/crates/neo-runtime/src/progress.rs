@@ -136,8 +136,9 @@ pub(crate) struct RunScope {
     /// Set once, before `ended` is cancelled, so every call reports the same reason. Unset when
     /// `ended` fired because the dispatcher dropped: read as [`RunEnd::Cancelled`].
     end_reason: Arc<OnceLock<RunEnd>>,
-    /// The run's call tasks, and every task they start. `Dispatcher::finish` waits on it,
-    /// bounded, so records read final deliveries.
+    /// The run's call tasks, every task they start, and the run-end input releases
+    /// (`Tabs::release_input`). `Dispatcher::finish` waits on it, bounded, so records read
+    /// final deliveries; `Runtime::drain` waits for what is left.
     pub(crate) tasks: TaskTracker,
     /// The run's JS handles (`evaluate.rs`); closed at run end, which releases their groups.
     pub(crate) handles: Arc<Handles>,
