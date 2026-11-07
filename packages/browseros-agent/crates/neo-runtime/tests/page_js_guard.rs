@@ -276,16 +276,26 @@ fn check(relative: &str, source: &str) -> Vec<String> {
         }
     }
     if relative == INIT_SCRIPTS {
+        // A literal, an identifier or a `concat!` of literals that names a world, read as the
+        // compiler reads them, so a computed key (`concat!("world", "Name")`) is one too.
+        let names_world = |text: &str| text.to_ascii_lowercase().contains("world");
         for token in &tokens {
-            let names_world = match token {
-                Token::Str { text, .. } => text.contains("worldName"),
+            let named = match token {
+                Token::Str { text, .. } => names_world(text),
                 Token::Ident { text, .. } => text == "world_name" || text == "worldName",
                 Token::Punct { .. } => false,
             };
-            if names_world {
+            if named {
                 problems.push(format!(
                     "{relative}:{}: names a world; init scripts run in the page's own world only",
                     token.line()
+                ));
+            }
+        }
+        for (text, line) in concatenations(&tokens) {
+            if names_world(&text) {
+                problems.push(format!(
+                    "{relative}:{line}: a concat! of literals names a world; init scripts run in the page's own world only"
                 ));
             }
         }
