@@ -712,3 +712,25 @@ fn collect(dir: &Path, files: &mut Vec<PathBuf>) {
         }
     }
 }
+
+// Independent review regressions: these fail on the A1 implementation.
+#[test]
+fn review_hex_escape_is_a_guarded_method() {
+    let source = r#"const EVAL: &str = "\x52untime.evaluate";"#;
+    assert!(
+        !check("neo-runtime/src/probe.rs", source).is_empty(),
+        "the Rust literal evaluates to Runtime.evaluate"
+    );
+}
+#[test]
+fn review_nonartifact_const_is_not_a_built_function() {
+    let source = r#"const GLUE: &str = {
+        let _ = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/evaluate.js"));
+        "function () { return globalThis.secret; }"
+    };
+    fn probe() { json!({"functionDeclaration": GLUE}); }"#;
+    assert!(
+        !check("neo-runtime/src/main_world.rs", source).is_empty(),
+        "the const mentions an include_str but evaluates to another string"
+    );
+}
