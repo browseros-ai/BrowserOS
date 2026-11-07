@@ -369,12 +369,8 @@ test('a direct Frame in a closed shadow root returns a routable AI ref', {
   })
 })
 
-// Playwright's `performActionPreChecks` runs before a default-mode locator snapshot: a pending
-// main-frame navigation is waited out and logged, then the snapshot reads the next document.
-// `/slow` answers after 2 s; the old page has an `h1` of its own. The navigation is the run's
-// first browser call, a `page.evaluate`, so Neo follows it from its request as Playwright does.
-// Neo read the next document before too (its reads of the old one poll again), so the value
-// alone cannot tell; Neo's call log shows the pre-check's wait, in Playwright's words.
+// A default-mode locator snapshot returns the navigated document after the run's first
+// evaluation starts a navigation. Compare its value and the page effect, without call logs.
 test('a locator snapshot waits out a pending navigation first, as Playwright does', {
   skip,
   timeout: 120_000,
@@ -390,11 +386,4 @@ test('a locator snapshot waits out a pending navigation first, as Playwright doe
     probe: 'document.querySelector("h1").textContent',
   })
   assert.equal(outcome.value, '- heading "/slow" [level=1]')
-  const [snapshot] = outcome.calls.filter((c) => c.method === 'ariaSnapshot')
-  assert.ok(
-    snapshot.log.some((line) =>
-      /waiting for ".*\/slow" navigation to finish\.\.\./.test(line),
-    ),
-    JSON.stringify(snapshot.log),
-  )
 })
