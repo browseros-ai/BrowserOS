@@ -43,6 +43,14 @@ mod ids;
     not(test),
     expect(
         dead_code,
+        reason = "the host link opens once Runtime is built with host options"
+    )
+)]
+mod link;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
         reason = "pure core: tests drive it until the host task does"
     )
 )]

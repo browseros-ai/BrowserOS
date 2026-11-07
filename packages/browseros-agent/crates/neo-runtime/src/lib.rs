@@ -54,6 +54,14 @@ extern crate self as neo_runtime;
 )]
 mod fake_browser;
 
+#[cfg(test)]
+#[path = "../tests/support/fake_host_cdp.rs"]
+#[expect(
+    dead_code,
+    reason = "the recording and attach-delay controls serve the capture suite"
+)]
+mod fake_host_cdp;
+
 mod abort;
 mod artifacts;
 mod browser_representations;
