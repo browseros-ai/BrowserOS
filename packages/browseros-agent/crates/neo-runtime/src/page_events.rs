@@ -484,3 +484,66 @@ pub(crate) fn enable(tabs: &Tabs, entry: Arc<PageEntry>, needs: Needs) {
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use neo_runtime_spec::serve::PageConsoleMessagesResultMessagesItemLocation;
+
+    use super::*;
+
+    fn record(text: &str) -> ConsoleRecord {
+        ConsoleRecord {
+            r#type: "log".to_string(),
+            text: text.to_string(),
+            args: Vec::new(),
+            location: PageConsoleMessagesResultMessagesItemLocation {
+                url: String::new(),
+                line_number: 0,
+                column_number: 0,
+            },
+            timestamp: 0.0,
+        }
+    }
+
+    #[test]
+    fn tests_that_a_replay_is_history_until_its_session_goes_live() {
+        let log = ConsoleLog::default();
+        let tab = SessionId::from("tab");
+        let frame = SessionId::from("frame");
+        assert!(
+            !log.push_message(record("never enabled"), 1.0, &tab),
+            "no enable: history only"
+        );
+        log.request(&tab);
+        let requested_at = log
+            .0
+            .lock()
+            .map(|state| state.replays[&tab].requested_at)
+            .unwrap();
+        assert!(
+            !log.push_message(record("before"), requested_at - 1.0, &tab),
+            "logged before the request: a replay"
+        );
+        assert!(
+            log.push_message(record("after"), requested_at, &tab),
+            "logged after the request, replayed or not: live"
+        );
+        assert!(
+            !log.push_message(record("frame"), requested_at + 1.0, &frame),
+            "another session has its own replay"
+        );
+        log.go_live(&tab);
+        assert!(
+            log.push_message(record("late stamp"), 0.0, &tab),
+            "after the replay barrier everything is live, whatever its stamp"
+        );
+        assert_eq!(
+            log.messages(true)
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>(),
+            ["never enabled", "before", "after", "frame", "late stamp"],
+            "the history keeps every message, live or not"
+        );
+    }
+}
