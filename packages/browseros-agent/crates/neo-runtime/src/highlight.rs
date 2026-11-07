@@ -13,8 +13,11 @@
 //!  run end (`Dispatcher::finish`)      as Page.hideHighlight, on every tab the run touched
 //! ```
 
+use std::collections::HashMap;
 use std::mem;
 use std::sync::{Arc, Mutex};
+
+use tokio::sync::Mutex as WriteTurn;
 
 use neo_runtime_spec::injected::{
     HighlightSpec, InjectedHideHighlightParams, InjectedSetHighlightsParams,
@@ -52,15 +55,25 @@ impl HighlightOptions {
     }
 }
 
-/// Neo: the run's highlights on one tab, in the order they were added, and every document the
-/// run installed an overlay in. Playwright's `hideHighlights` removes the overlay of every
-/// frame; Neo reaches the documents it put one in.
+/// Neo: the run's highlights on one tab, in the order they were added, every document the run
+/// installed an overlay in, and each frame's write turn. Playwright's `hideHighlights` removes
+/// the overlay of every frame; Neo reaches the documents it put one in.
+///
+/// Playwright resolves every highlight on one chain (`_resolutionChain`), so no older list
+/// lands after a newer one. Neo writes each document under that frame's turn and reads its list
+/// from the registry within the turn, so a write always carries the latest list, and a document
+/// whose write is in flight holds up no other document.
 #[derive(Default)]
-pub(crate) struct Highlights(Mutex<Registry>);
+pub(crate) struct Highlights {
+    registry: Mutex<Registry>,
+    turns: Mutex<HashMap<String, Arc<WriteTurn<()>>>>,
+}
 
 #[derive(Default)]
 struct Registry {
     entries: Vec<Entry>,
+    /// Each document context that received an overlay: a frame that changed process has a new
+    /// context under the same frame id, and both may hold one.
     overlays: Vec<Arc<FrameContext>>,
 }
 
@@ -106,7 +119,7 @@ pub(crate) async fn highlight(
         if !registry
             .overlays
             .iter()
-            .any(|overlay| overlay.id == frame.id)
+            .any(|overlay| Arc::ptr_eq(overlay, &frame))
         {
             registry.overlays.push(Arc::clone(&frame));
         }
@@ -129,9 +142,9 @@ pub(crate) async fn highlight(
                 css_style: options.style.clone(),
             },
         });
-        with_specs(entries, documents)
+        documents
     })?;
-    show_each(documents, progress).await
+    show_each(&tab.highlights, documents, progress).await
 }
 
 /// Serves `Frame.hideHighlight`: that selector's highlight goes, the rest of its document stays.
@@ -152,9 +165,9 @@ pub(crate) async fn hide_highlight(
             }
             !named
         });
-        with_specs(entries, removed)
+        removed
     })?;
-    show_each(documents, progress).await
+    show_each(&tab.highlights, documents, progress).await
 }
 
 /// Serves `Page.hideHighlight`: every highlight of the tab goes, and the overlay of the main
@@ -164,6 +177,9 @@ pub(crate) async fn hide_highlight(
 /// Playwright: `server/highlightController.ts` `HighlightController.hideHighlights`: `await injectedScript?.evaluate(injected => injected.hideHighlight());`
 pub(crate) async fn hide_all(page: &PageSession, progress: &Progress) -> Result<(), CallError> {
     for frame in page.highlights.take_documents(page)? {
+        let _turn = progress
+            .race(page.highlights.turn(&frame.id)?.lock_owned())
+            .await?;
         // Playwright: `server/highlightController.ts` `HighlightController.hideHighlights`: `}).catch(() => {})));`
         let _hidden = progress
             .race(frame.call(None, &InjectedHideHighlightParams {}))
@@ -183,6 +199,10 @@ pub(crate) async fn hide_at_run_end(page: &PageSession) {
         return;
     };
     for frame in frames {
+        let Ok(turn) = page.highlights.turn(&frame.id) else {
+            return;
+        };
+        let _turn = turn.lock_owned().await;
         let hidden = frame.call(None, &InjectedHideHighlightParams {}).await;
         if matches!(hidden, Err(PageError::Closed)) {
             return;
@@ -195,39 +215,36 @@ pub(crate) async fn hide_at_run_end(page: &PageSession) {
 ///
 /// Playwright: `server/highlightController.ts` `HighlightController._resolve`: `await injectedScript.evaluate((injected, highlights) => injected.setHighlights(highlights), highlights);`
 async fn show_each(
-    documents: Vec<(Arc<FrameContext>, Vec<HighlightSpec>)>,
+    highlights: &Highlights,
+    documents: Vec<Arc<FrameContext>>,
     progress: &Progress,
 ) -> Result<(), CallError> {
-    for (frame, highlights) in documents {
+    let mut written: Vec<Arc<FrameContext>> = Vec::new();
+    for frame in documents {
+        if written.iter().any(|seen| Arc::ptr_eq(seen, &frame)) {
+            continue;
+        }
+        let _turn = progress
+            .race(highlights.turn(&frame.id)?.lock_owned())
+            .await?;
+        // The list as the registry holds it now, within the turn: never an older one.
+        let specs = highlights.update(|registry| specs_of(&registry.entries, &frame))?;
         let shown = progress
-            .race(frame.call(None, &InjectedSetHighlightsParams { highlights }))
+            .race(frame.call(None, &InjectedSetHighlightsParams { highlights: specs }))
             .await?;
         quiet(shown)?;
+        written.push(frame);
     }
     Ok(())
 }
 
-/// Neo: the documents to set, each with every highlight it shows now.
-fn with_specs(
-    entries: &[Entry],
-    documents: Vec<Arc<FrameContext>>,
-) -> Vec<(Arc<FrameContext>, Vec<HighlightSpec>)> {
-    let mut unique: Vec<Arc<FrameContext>> = Vec::new();
-    for frame in documents {
-        if !unique.iter().any(|seen| seen.id == frame.id) {
-            unique.push(frame);
-        }
-    }
-    unique
-        .into_iter()
-        .map(|frame| {
-            let specs = entries
-                .iter()
-                .filter(|entry| entry.frame.id == frame.id)
-                .map(|entry| entry.spec.clone())
-                .collect();
-            (frame, specs)
-        })
+/// Neo: every highlight shown in `frame`'s frame: entries placed in an earlier document of the
+/// same frame are re-resolved in this one, as Playwright's `_resolve` resolves each entry again.
+fn specs_of(entries: &[Entry], frame: &FrameContext) -> Vec<HighlightSpec> {
+    entries
+        .iter()
+        .filter(|entry| entry.frame.id == frame.id)
+        .map(|entry| entry.spec.clone())
         .collect()
 }
 
@@ -262,20 +279,23 @@ impl Entry {
     }
 }
 
-/// Neo: the registry's one lock, never held across an await.
+/// Neo: the registry's lock is never held across an await; a frame's write turn is held across
+/// that frame's write only.
 impl Highlights {
     fn update<R>(&self, change: impl FnOnce(&mut Registry) -> R) -> Result<R, CallError> {
-        let mut registry = self.0.lock().map_err(|_| {
-            CallError::from(PlaywrightError::error(
-                "neo-runtime: the run's highlights cannot be read",
-            ))
-        })?;
+        let mut registry = self.registry.lock().map_err(|_| unreadable())?;
         Ok(change(&mut registry))
+    }
+
+    /// The write turn of the frame `frame`, one for all its documents.
+    fn turn(&self, frame: &str) -> Result<Arc<WriteTurn<()>>, CallError> {
+        let mut turns = self.turns.lock().map_err(|_| unreadable())?;
+        Ok(Arc::clone(turns.entry(frame.to_string()).or_default()))
     }
 
     /// Whether the run left an overlay on this tab, shown or emptied.
     fn any(&self) -> bool {
-        self.0
+        self.registry
             .lock()
             .is_ok_and(|registry| !registry.overlays.is_empty())
     }
@@ -286,10 +306,15 @@ impl Highlights {
         let registry = self.update(mem::take)?;
         let mut frames = vec![page.frames.main()];
         for overlay in registry.overlays {
-            if !frames.iter().any(|frame| frame.id == overlay.id) {
+            if !frames.iter().any(|frame| Arc::ptr_eq(frame, &overlay)) {
                 frames.push(overlay);
             }
         }
         Ok(frames)
     }
+}
+
+/// Neo: a poisoned registry lock, which only a panic while holding it leaves.
+fn unreadable() -> CallError {
+    PlaywrightError::error("neo-runtime: the run's highlights cannot be read").into()
 }
