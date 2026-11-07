@@ -152,6 +152,18 @@ impl Tab {
         code: String,
         timeout: Duration,
     ) -> JoinHandle<RunOutcome> {
+        self.start_run_cancellable(code, timeout, CancellationToken::new())
+            .await
+    }
+
+    /// [`Tab::start_run_within`] that `cancel` cancels, as a host cancels a run: for a test that
+    /// watches the tab while the run is still live, then ends it.
+    pub async fn start_run_cancellable(
+        &self,
+        code: String,
+        timeout: Duration,
+        cancel: CancellationToken,
+    ) -> JoinHandle<RunOutcome> {
         let runtime = Runtime::connect(self.cdp.clone())
             .await
             .unwrap_or_else(|error| panic!("Runtime::connect: {error}"));
@@ -162,7 +174,7 @@ impl Tab {
                     code,
                     page,
                     timeout,
-                    cancel: CancellationToken::new(),
+                    cancel,
                     artifacts: None,
                 })
                 .await
