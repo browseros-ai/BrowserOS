@@ -8326,25 +8326,25 @@ class APIRequest {
     this.#connection = connection;
   }
   async newContext(options = {}) {
-    return await wrapApiCall("apiRequest.newContext", async () => {
+    await wrapApiCall("apiRequest.newContext", async () => {
       if (typeof options.storageState === "string")
         throw new Error(STATE_FILE);
-      const credentials = options.httpCredentials;
-      const { request } = await this.#connection.sendPlaywright("apiRequest.newContext", this.#guid, "newRequest", {
-        baseURL: options.baseURL,
-        userAgent: options.userAgent,
-        ignoreHTTPSErrors: options.ignoreHTTPSErrors,
-        extraHTTPHeaders: options.extraHTTPHeaders ? headersArray(options.extraHTTPHeaders) : undefined,
-        failOnStatusCode: options.failOnStatusCode,
-        maxRedirects: options.maxRedirects,
-        httpCredentials: credentials ? [credentials] : undefined,
-        proxy: options.proxy,
-        storageState: options.storageState
-      }, 0);
-      const context = new APIRequestContext(request.guid, this.#connection, new TimeoutSettings, true);
-      context._timeoutSettings.setDefaultTimeout(options.timeout ?? DEFAULT_TIMEOUT);
-      return context;
     });
+    const credentials = options.httpCredentials;
+    const { request } = await this.#connection.sendPlaywright("apiRequest.newContext", this.#guid, "newRequest", {
+      baseURL: options.baseURL,
+      userAgent: options.userAgent,
+      ignoreHTTPSErrors: options.ignoreHTTPSErrors,
+      extraHTTPHeaders: options.extraHTTPHeaders ? headersArray(options.extraHTTPHeaders) : undefined,
+      failOnStatusCode: options.failOnStatusCode,
+      maxRedirects: options.maxRedirects,
+      httpCredentials: credentials ? [credentials] : undefined,
+      proxy: options.proxy,
+      storageState: options.storageState
+    }, 0);
+    const context = new APIRequestContext(request.guid, this.#connection, new TimeoutSettings, true);
+    context._timeoutSettings.setDefaultTimeout(options.timeout ?? DEFAULT_TIMEOUT);
+    return context;
   }
 }
 
@@ -8394,12 +8394,29 @@ class APIRequestContext {
   async fetch(urlOrRequest, options = {}) {
     const url = typeof urlOrRequest === "string" ? urlOrRequest : undefined;
     const request = typeof urlOrRequest === "string" ? undefined : urlOrRequest;
-    return await wrapApiCall("apiRequestContext.fetch", () => this._innerFetch("apiRequestContext.fetch", { url, request, ...options }));
+    return await this._innerFetch("apiRequestContext.fetch", {
+      url,
+      request,
+      ...options
+    });
   }
   async#method(apiName, method, url, options) {
-    return await wrapApiCall(apiName, () => this._innerFetch(apiName, { url, ...options, method }));
+    return await this._innerFetch(apiName, { url, ...options, method });
   }
   async _innerFetch(apiName, options) {
+    const params = await wrapApiCall(apiName, async () => this.#fetchParams(options));
+    const { response } = await this.#connection.sendRequestContext(apiName, this.#guid, "fetch", params, this._timeoutSettings.timeout(options, apiName));
+    return new APIResponse(response, {
+      read: async () => {
+        const { binary } = await this.#connection.sendRequestContext("apiResponse.body", this.#guid, "fetchResponseBody", { fetchUid: response.fetchUid }, 0);
+        return binary === undefined ? undefined : Buffer.fromBinary(binary);
+      },
+      dispose: async () => {
+        await this.#connection.sendRequestContext("apiResponse.dispose", this.#guid, "disposeAPIResponse", { fetchUid: response.fetchUid }, 0);
+      }
+    });
+  }
+  #fetchParams(options) {
     if (this.#closeReason)
       throw targetClosedError(this.#closeReason);
     if (!options.request && typeof options.url !== "string")
@@ -8440,7 +8457,7 @@ class APIRequestContext {
     }
     if (postData === undefined && jsonData === undefined && formData === undefined && multipartData === undefined)
       postData = options.request?.postDataBuffer() ?? undefined;
-    const { response } = await this.#connection.sendRequestContext(apiName, this.#guid, "fetch", {
+    return {
       url,
       params: typeof options.params === "object" ? objectToArray(options.params) : undefined,
       encodedParams,
@@ -8454,47 +8471,34 @@ class APIRequestContext {
       ignoreHTTPSErrors: options.ignoreHTTPSErrors,
       maxRedirects: options.maxRedirects,
       maxRetries: options.maxRetries
-    }, this._timeoutSettings.timeout(options, apiName));
-    return new APIResponse(response, {
-      read: async () => {
-        const { binary } = await this.#connection.sendRequestContext("apiResponse.body", this.#guid, "fetchResponseBody", { fetchUid: response.fetchUid }, 0);
-        return binary === undefined ? undefined : Buffer.fromBinary(binary);
-      },
-      dispose: async () => {
-        await this.#connection.sendRequestContext("apiResponse.dispose", this.#guid, "disposeAPIResponse", { fetchUid: response.fetchUid }, 0);
-      }
-    });
+    };
   }
   async storageState(options = {}) {
-    return await wrapApiCall("apiRequestContext.storageState", async () => {
+    await wrapApiCall("apiRequestContext.storageState", async () => {
       if (options.path)
         throw new Error(STATE_PATH);
-      return await this.#connection.sendRequestContext("apiRequestContext.storageState", this.#guid, "storageState", { indexedDB: options.indexedDB, opfs: options.opfs }, 0);
     });
+    return await this.#connection.sendRequestContext("apiRequestContext.storageState", this.#guid, "storageState", { indexedDB: options.indexedDB, opfs: options.opfs }, 0);
   }
   async cookies(urls) {
-    return await wrapApiCall("apiRequestContext.cookies", async () => {
-      const list = urls === undefined ? [] : Array.isArray(urls) ? urls : [urls];
-      const { cookies } = await this.#connection.sendRequestContext("apiRequestContext.cookies", this.#guid, "cookies", { urls: list }, 0);
-      return cookies;
-    });
+    const list = urls === undefined ? [] : Array.isArray(urls) ? urls : [urls];
+    const { cookies } = await this.#connection.sendRequestContext("apiRequestContext.cookies", this.#guid, "cookies", { urls: list }, 0);
+    return cookies;
   }
   async addCookies(cookies) {
-    await wrapApiCall("apiRequestContext.addCookies", async () => {
-      await this.#connection.sendRequestContext("apiRequestContext.addCookies", this.#guid, "addCookies", { cookies }, 0);
-    });
+    await this.#connection.sendRequestContext("apiRequestContext.addCookies", this.#guid, "addCookies", { cookies }, 0);
   }
   async clearCookies(options = {}) {
+    const filter = clearCookieFilter(options);
     await wrapApiCall("apiRequestContext.clearCookies", async () => {
-      const filter = clearCookieFilter(options);
       if (!this.#ownJar && !hasClearCookieFilter(filter))
         throw new Error(CLEAR_ALL_COOKIES_REFUSED);
-      const { cookies } = await this.#connection.sendRequestContext("apiRequestContext.clearCookies", this.#guid, "cookies", { urls: [] }, 0);
-      const expired = cookies.filter((cookie) => clearCookieMatches(cookie, filter)).map((cookie) => ({ ...cookie, expires: 0 }));
-      if (!expired.length)
-        return;
-      await this.#connection.sendRequestContext("apiRequestContext.clearCookies", this.#guid, "addCookies", { cookies: expired }, 0);
     });
+    const { cookies } = await this.#connection.sendRequestContext("apiRequestContext.clearCookies", this.#guid, "cookies", { urls: [] }, 0);
+    const expired = cookies.filter((cookie) => clearCookieMatches(cookie, filter)).map((cookie) => ({ ...cookie, expires: 0 }));
+    if (!expired.length)
+      return;
+    await this.#connection.sendRequestContext("apiRequestContext.clearCookies", this.#guid, "addCookies", { cookies: expired }, 0);
   }
 }
 function objectToArray(map) {

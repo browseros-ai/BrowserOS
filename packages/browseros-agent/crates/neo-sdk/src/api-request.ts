@@ -8,6 +8,7 @@
  * `request_contexts.rs`, `api_request.rs`); a response's body stays there until it is disposed.
  */
 import type {
+  APIRequestContextCommands,
   FormField,
   NameValue,
   NetworkCookie,
@@ -125,40 +126,42 @@ export class APIRequest {
   async newContext(
     options: NewContextOptions = {},
   ): Promise<APIRequestContext> {
-    return await wrapApiCall('apiRequest.newContext', async () => {
+    // A refusal of the client's own carries the method's name; the call's errors come back
+    // named from the connection.
+    await wrapApiCall('apiRequest.newContext', async () => {
       if (typeof options.storageState === 'string') throw new Error(STATE_FILE)
-      const credentials = options.httpCredentials
-      const { request } = await this.#connection.sendPlaywright(
-        'apiRequest.newContext',
-        this.#guid,
-        'newRequest',
-        {
-          baseURL: options.baseURL,
-          userAgent: options.userAgent,
-          ignoreHTTPSErrors: options.ignoreHTTPSErrors,
-          extraHTTPHeaders: options.extraHTTPHeaders
-            ? headersArray(options.extraHTTPHeaders)
-            : undefined,
-          failOnStatusCode: options.failOnStatusCode,
-          maxRedirects: options.maxRedirects,
-          // Playwright: `client/browserContext.ts` `toHttpCredentialsProtocol`
-          httpCredentials: credentials ? [credentials] : undefined,
-          proxy: options.proxy,
-          storageState: options.storageState as never,
-        },
-        0,
-      )
-      const context = new APIRequestContext(
-        request.guid,
-        this.#connection,
-        new TimeoutSettings(),
-        true,
-      )
-      context._timeoutSettings.setDefaultTimeout(
-        options.timeout ?? DEFAULT_TIMEOUT,
-      )
-      return context
     })
+    const credentials = options.httpCredentials
+    const { request } = await this.#connection.sendPlaywright(
+      'apiRequest.newContext',
+      this.#guid,
+      'newRequest',
+      {
+        baseURL: options.baseURL,
+        userAgent: options.userAgent,
+        ignoreHTTPSErrors: options.ignoreHTTPSErrors,
+        extraHTTPHeaders: options.extraHTTPHeaders
+          ? headersArray(options.extraHTTPHeaders)
+          : undefined,
+        failOnStatusCode: options.failOnStatusCode,
+        maxRedirects: options.maxRedirects,
+        // Playwright: `client/browserContext.ts` `toHttpCredentialsProtocol`
+        httpCredentials: credentials ? [credentials] : undefined,
+        proxy: options.proxy,
+        storageState: options.storageState as never,
+      },
+      0,
+    )
+    const context = new APIRequestContext(
+      request.guid,
+      this.#connection,
+      new TimeoutSettings(),
+      true,
+    )
+    context._timeoutSettings.setDefaultTimeout(
+      options.timeout ?? DEFAULT_TIMEOUT,
+    )
+    return context
   }
 }
 
@@ -242,9 +245,11 @@ export class APIRequestContext {
   ): Promise<APIResponse> {
     const url = typeof urlOrRequest === 'string' ? urlOrRequest : undefined
     const request = typeof urlOrRequest === 'string' ? undefined : urlOrRequest
-    return await wrapApiCall('apiRequestContext.fetch', () =>
-      this._innerFetch('apiRequestContext.fetch', { url, request, ...options }),
-    )
+    return await this._innerFetch('apiRequestContext.fetch', {
+      url,
+      request,
+      ...options,
+    })
   }
 
   /** Playwright: `client/fetch.ts` `APIRequestContext.get`: `return await this.fetch(url, { ...options, method: 'GET' });` */
@@ -254,9 +259,7 @@ export class APIRequestContext {
     url: string,
     options: FetchOptions,
   ): Promise<APIResponse> {
-    return await wrapApiCall(apiName, () =>
-      this._innerFetch(apiName, { url, ...options, method }),
-    )
+    return await this._innerFetch(apiName, { url, ...options, method })
   }
 
   /** Playwright: `client/fetch.ts` `APIRequestContext._innerFetch` */
@@ -264,6 +267,45 @@ export class APIRequestContext {
     apiName: ApiName,
     options: FetchOptions & { url?: string; request?: Request },
   ): Promise<APIResponse> {
+    // The client's checks carry the method's name; the call's errors come back named.
+    const params = await wrapApiCall(apiName, async () =>
+      this.#fetchParams(options),
+    )
+    const { response } = await this.#connection.sendRequestContext(
+      apiName,
+      this.#guid,
+      'fetch',
+      params,
+      this._timeoutSettings.timeout(options, apiName),
+    )
+    return new APIResponse(response, {
+      read: async () => {
+        const { binary } = await this.#connection.sendRequestContext(
+          'apiResponse.body',
+          this.#guid,
+          'fetchResponseBody',
+          { fetchUid: response.fetchUid },
+          0,
+        )
+        return binary === undefined ? undefined : Buffer.fromBinary(binary)
+      },
+      dispose: async () => {
+        await this.#connection.sendRequestContext(
+          'apiResponse.dispose',
+          this.#guid,
+          'disposeAPIResponse',
+          { fetchUid: response.fetchUid },
+          0,
+        )
+      },
+    })
+  }
+
+  /** Playwright: `client/fetch.ts` `APIRequestContext._innerFetch`: the fetch's params, after the
+   * client's checks. */
+  #fetchParams(
+    options: FetchOptions & { url?: string; request?: Request },
+  ): APIRequestContextCommands['fetch']['params'] {
     if (this.#closeReason) throw targetClosedError(this.#closeReason)
     if (!options.request && typeof options.url !== 'string')
       throw new Error(URL_OR_REQUEST)
@@ -318,95 +360,64 @@ export class APIRequestContext {
       multipartData === undefined
     )
       postData = options.request?.postDataBuffer() ?? undefined
-    const { response } = await this.#connection.sendRequestContext(
-      apiName,
-      this.#guid,
-      'fetch',
-      {
-        url,
-        params:
-          typeof options.params === 'object'
-            ? objectToArray(options.params)
-            : undefined,
-        encodedParams,
-        method,
-        headers,
-        postData: postData ? toBinary(postData) : undefined,
-        jsonData,
-        formData,
-        multipartData,
-        failOnStatusCode: options.failOnStatusCode,
-        ignoreHTTPSErrors: options.ignoreHTTPSErrors,
-        maxRedirects: options.maxRedirects,
-        maxRetries: options.maxRetries,
-      },
-      this._timeoutSettings.timeout(options, apiName),
-    )
-    return new APIResponse(response, {
-      read: async () => {
-        const { binary } = await this.#connection.sendRequestContext(
-          'apiResponse.body',
-          this.#guid,
-          'fetchResponseBody',
-          { fetchUid: response.fetchUid },
-          0,
-        )
-        return binary === undefined ? undefined : Buffer.fromBinary(binary)
-      },
-      dispose: async () => {
-        await this.#connection.sendRequestContext(
-          'apiResponse.dispose',
-          this.#guid,
-          'disposeAPIResponse',
-          { fetchUid: response.fetchUid },
-          0,
-        )
-      },
-    })
+    return {
+      url,
+      params:
+        typeof options.params === 'object'
+          ? objectToArray(options.params)
+          : undefined,
+      encodedParams,
+      method,
+      headers,
+      postData: postData ? toBinary(postData) : undefined,
+      jsonData,
+      formData,
+      multipartData,
+      failOnStatusCode: options.failOnStatusCode,
+      ignoreHTTPSErrors: options.ignoreHTTPSErrors,
+      maxRedirects: options.maxRedirects,
+      maxRetries: options.maxRetries,
+    }
   }
 
   /** Playwright: `client/fetch.ts` `APIRequestContext.storageState` */
   async storageState(
     options: { path?: string; indexedDB?: boolean; opfs?: boolean } = {},
   ): Promise<unknown> {
-    return await wrapApiCall('apiRequestContext.storageState', async () => {
+    await wrapApiCall('apiRequestContext.storageState', async () => {
       if (options.path) throw new Error(STATE_PATH)
-      return await this.#connection.sendRequestContext(
-        'apiRequestContext.storageState',
-        this.#guid,
-        'storageState',
-        { indexedDB: options.indexedDB, opfs: options.opfs },
-        0,
-      )
     })
+    return await this.#connection.sendRequestContext(
+      'apiRequestContext.storageState',
+      this.#guid,
+      'storageState',
+      { indexedDB: options.indexedDB, opfs: options.opfs },
+      0,
+    )
   }
 
   /** Playwright: `client/fetch.ts` `APIRequestContext.cookies` */
   async cookies(urls?: string | string[]): Promise<NetworkCookie[]> {
-    return await wrapApiCall('apiRequestContext.cookies', async () => {
-      const list = urls === undefined ? [] : Array.isArray(urls) ? urls : [urls]
-      const { cookies } = await this.#connection.sendRequestContext(
-        'apiRequestContext.cookies',
-        this.#guid,
-        'cookies',
-        { urls: list },
-        0,
-      )
-      return cookies
-    })
+    const list = urls === undefined ? [] : Array.isArray(urls) ? urls : [urls]
+    const { cookies } = await this.#connection.sendRequestContext(
+      'apiRequestContext.cookies',
+      this.#guid,
+      'cookies',
+      { urls: list },
+      0,
+    )
+    return cookies
   }
 
   /** Playwright: `client/fetch.ts` `APIRequestContext.addCookies` */
   async addCookies(cookies: SetNetworkCookie[]): Promise<void> {
-    await wrapApiCall('apiRequestContext.addCookies', async () => {
-      await this.#connection.sendRequestContext(
-        'apiRequestContext.addCookies',
-        this.#guid,
-        'addCookies',
-        { cookies },
-        0,
-      )
-    })
+    await this.#connection.sendRequestContext(
+      'apiRequestContext.addCookies',
+      this.#guid,
+      'addCookies',
+      { cookies },
+      0,
+    )
   }
 
   /**
@@ -417,29 +428,29 @@ export class APIRequestContext {
    * user's browser, as its context does.
    */
   async clearCookies(options: ClearCookieOptions = {}): Promise<void> {
+    const filter = clearCookieFilter(options)
     await wrapApiCall('apiRequestContext.clearCookies', async () => {
-      const filter = clearCookieFilter(options)
       if (!this.#ownJar && !hasClearCookieFilter(filter))
         throw new Error(CLEAR_ALL_COOKIES_REFUSED)
-      const { cookies } = await this.#connection.sendRequestContext(
-        'apiRequestContext.clearCookies',
-        this.#guid,
-        'cookies',
-        { urls: [] },
-        0,
-      )
-      const expired = cookies
-        .filter((cookie) => clearCookieMatches(cookie, filter))
-        .map((cookie) => ({ ...cookie, expires: 0 }))
-      if (!expired.length) return
-      await this.#connection.sendRequestContext(
-        'apiRequestContext.clearCookies',
-        this.#guid,
-        'addCookies',
-        { cookies: expired },
-        0,
-      )
     })
+    const { cookies } = await this.#connection.sendRequestContext(
+      'apiRequestContext.clearCookies',
+      this.#guid,
+      'cookies',
+      { urls: [] },
+      0,
+    )
+    const expired = cookies
+      .filter((cookie) => clearCookieMatches(cookie, filter))
+      .map((cookie) => ({ ...cookie, expires: 0 }))
+    if (!expired.length) return
+    await this.#connection.sendRequestContext(
+      'apiRequestContext.clearCookies',
+      this.#guid,
+      'addCookies',
+      { cookies: expired },
+      0,
+    )
   }
 }
 

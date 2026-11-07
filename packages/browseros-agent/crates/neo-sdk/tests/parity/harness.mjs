@@ -37,7 +37,7 @@ process.env.FORCE_COLOR = '0'
  */
 const playwrightDir = process.env.NEO_PARITY_PLAYWRIGHT
 // Two literal imports, so dependency checks still see `playwright-core` used.
-export const { chromium } = playwrightDir
+export const { chromium, request } = playwrightDir
   ? await import(pathToFileURL(join(playwrightDir, 'index.mjs')).href)
   : await import('playwright-core')
 export const playwrightVersion = JSON.parse(
