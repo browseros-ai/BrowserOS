@@ -606,6 +606,7 @@ export class EventPipe {
   readonly #subscriptions = new Set<string>()
   #waking = false
   #failed = false
+  #disconnected = false
   #reject: (error: unknown) => void = () => {}
   /** Rejects with the first listener error nobody handled; never resolves. */
   readonly uncaught: Promise<never>
@@ -622,7 +623,19 @@ export class EventPipe {
     this.#targets.set(target._guid, target)
   }
 
+  /** Neo: the run's browser closed (`Browser.close`): Rust stops producing, and nothing queued
+   * or later is delivered, as Playwright's closed connection delivers nothing. */
+  _disconnect(): void {
+    for (const key of this.#subscriptions) {
+      const [guid = '', event = ''] = key.split('\n')
+      subscribe(guid, event, false)
+    }
+    this.#subscriptions.clear()
+    this.#disconnected = true
+  }
+
   _subscribe(guid: string, event: string, enabled: boolean): void {
+    if (this.#disconnected) return
     subscribe(guid, event, enabled)
     const key = `${guid}\n${event}`
     if (enabled) this.#subscriptions.add(key)
@@ -632,7 +645,9 @@ export class EventPipe {
 
   /** Runs the listeners of every queued event up to seq `until` (all of them for -1). */
   deliver(until: number): void {
-    for (const event of drain(until)) {
+    const events = drain(until)
+    if (this.#disconnected) return
+    for (const event of events) {
       const target = this.#targets.get(event.guid)
       if (!target) continue
       try {

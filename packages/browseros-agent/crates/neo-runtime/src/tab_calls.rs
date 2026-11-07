@@ -23,9 +23,12 @@ use serde_json::{Value, json};
 use tracing::debug;
 
 use crate::bridge;
+use crate::browser_calls;
 use crate::click::PageError;
 use crate::content::WriteTurn;
+use crate::debugger::DEFAULT_CONTEXT;
 use crate::dispatch::encode_result;
+use crate::emulation::{self, Size};
 use crate::frames::FrameScope;
 use crate::highlight;
 use crate::history::{self, HistoryOptions};
@@ -68,7 +71,7 @@ pub(crate) async fn context(
             if scripts.has_scripts() {
                 let session = progress.race(tabs.session(entry)).await??;
                 progress
-                    .race(scripts.show_new(tabs.cdp(), &session))
+                    .race(scripts.show_new(tabs.cdp(), &session, DEFAULT_CONTEXT))
                     .await?;
             }
             let result = BrowserContextNewPageResult {
@@ -82,9 +85,12 @@ pub(crate) async fn context(
             Ok(Some(value))
         }
         BrowserContextCall::Close(_) => {
-            close_context(tabs, progress).await?;
+            browser_calls::disconnect(tabs, progress).await?;
             Ok(None)
         }
+        // Playwright: `server/dispatchers/browserContextDispatcher.ts` `BrowserContextDispatcher.pause`: `// Debugger will take care of this.`
+        // `setTestIdAttributeName`: `Dispatcher::call` applied it before this call started.
+        BrowserContextCall::Pause(_) | BrowserContextCall::SetTestIdAttributeName(_) => Ok(None),
         BrowserContextCall::SetNetworkInterceptionPatterns(params) => {
             context_patterns(tabs, params, progress).await
         }
@@ -188,37 +194,14 @@ async fn set_page_headers(
     headers: Vec<NameValue>,
     progress: &Progress,
 ) -> Result<(), CallError> {
+    // (platform) The page's own headers go over its context's: the run's own context's.
+    if entry.context.get().is_some() {
+        return Err(browser_calls::created_state("setExtraHTTPHeaders").into());
+    }
     let page = progress.race(tabs.session(entry)).await??;
     tabs.overrides()
         .set_page_headers(&page, &entry.id, headers, progress)
         .await
-}
-
-/// Playwright's close of a connectOverCDP default context, which only disconnects: every tab
-/// stays open (measured on BrowserOS neo, a2-mapping-evidence.md §2). The run lets go of what it
-/// holds in the browser: a `beforeunload` dialog a listener holds is dismissed, so its tab stays,
-/// every subscription ends with target discovery, and every other call of the run stops, as
-/// Playwright's calls stop with its connection. The SDK closes the run's pages and context as the
-/// script sees them; the reason stays there.
-async fn close_context(tabs: &Tabs, progress: &Progress) -> Result<(), CallError> {
-    for (_, session) in tabs.attached() {
-        if session.events.dialogs.take_open_beforeunload() {
-            let dismissed = progress
-                .race(session.send("Page.handleJavaScriptDialog", json!({ "accept": false })))
-                .await?;
-            if let Err(error) = dismissed {
-                debug!(%error, "dismissing a beforeunload dialog at the context's close failed");
-            }
-        }
-    }
-    tabs.events().end_subscriptions();
-    // The script's promises for them have rejected (the SDK); this stops the calls themselves
-    // before the close resolves, so none writes input to a tab the run let go of.
-    progress.stop_the_runs_calls();
-    // Then what the run set on the tabs it leaves open goes, before the close resolves, as
-    // Playwright's overrides go with its connection (`Tabs::release_run_scoped`).
-    tabs.release_run_scoped(progress.run_scope()).await;
-    Ok(())
 }
 
 /// Neo: `dispatch::route` hands every `Page.screenshot` and `Page.pdf` to `capture.rs`, so one
@@ -313,6 +296,9 @@ pub(crate) async fn page(
             return Err(PlaywrightError::error(STORAGE_MISROUTED).into());
         }
         PageCall::Close(_) => close(tabs, entry, progress).await?,
+        call @ (PageCall::SetViewportSize(_)
+        | PageCall::EmulateMedia(_)
+        | PageCall::RequestGC(_)) => emulated(tabs, entry, call, progress).await?,
         PageCall::SetExtraHTTPHeaders(params) => {
             set_page_headers(tabs, entry, params.headers, progress).await?;
         }
@@ -427,6 +413,32 @@ async fn history_step(
         scope: FrameScope::Main,
     };
     history::navigate(&main, &options, progress).await
+}
+
+/// The page's emulation calls and `requestGC`, on its run session (`emulation.rs`).
+async fn emulated(
+    tabs: &Tabs,
+    entry: &PageEntry,
+    call: PageCall,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    match call {
+        PageCall::SetViewportSize(params) => {
+            let size = Size {
+                width: params.viewport_size.width,
+                height: params.viewport_size.height,
+            };
+            page.emulation
+                .set_viewport_size(&page, size, progress)
+                .await
+        }
+        PageCall::EmulateMedia(params) => {
+            page.emulation.emulate_media(&page, &params, progress).await
+        }
+        PageCall::RequestGC(_) => emulation::request_gc(&page, progress).await,
+        _ => Err(PlaywrightError::error("neo-runtime: not an emulation call").into()),
+    }
 }
 
 /// Neo: `page.route`'s patterns (`setNetworkInterceptionPatterns`): which of the page's requests

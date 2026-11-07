@@ -56,6 +56,7 @@ use tracing::debug;
 
 use crate::bridge;
 use crate::contexts::ContextFrames;
+use crate::debugger::DEFAULT_CONTEXT;
 use crate::evaluate::{self, Handles, SerializedArgument};
 use crate::events::{CONTEXT_GUID, Emitted, Flushes};
 use crate::frames::{FrameContext, FrameScope};
@@ -573,7 +574,13 @@ impl Bindings {
             // Subscribed before any session gets the binding, so no call is missed.
             tokio::spawn(watch(Arc::downgrade(self), tabs.clone(), cdp.events()));
             scripts
-                .add_ranked(cdp, None, &controller_source(), Rank::Controller)
+                .add_ranked(
+                    cdp,
+                    None,
+                    DEFAULT_CONTEXT,
+                    &controller_source(),
+                    Rank::Controller,
+                )
                 .await?;
             self.state.lock().await.started = true;
         }
@@ -583,7 +590,13 @@ impl Bindings {
             Rank::ContextBinding
         };
         let script = scripts
-            .add_ranked(cdp, page, &add_source(name, no_global), rank)
+            .add_ranked(
+                cdp,
+                page,
+                DEFAULT_CONTEXT,
+                &add_source(name, no_global),
+                rank,
+            )
             .await?;
         let disposable = format!(
             "{DISPOSABLE}{}.{}",
@@ -604,14 +617,14 @@ impl Bindings {
             });
         }
         let add = add_arg(name, no_global);
-        for (_, session) in tabs.attached() {
+        for (_, session) in tabs.own_attached() {
             if self.state.lock().await.closed {
                 return Err(PlaywrightError::target_closed());
             }
             let shown = init_scripts::target_of(&session);
             // Shows the run's scripts on a page touched before it had any (its tab gets the
             // binding there, `prepare_tab`), and gives its held iframes the binding.
-            scripts.ensure(cdp, &session).await;
+            scripts.ensure(cdp, &session, DEFAULT_CONTEXT).await;
             self.prepare_tab(cdp, &session).await;
             for link in scripts.child_links(&shown).await {
                 self.prepare_child(cdp, &link, &shown).await;
@@ -934,7 +947,7 @@ impl Bindings {
         // Playwright: `server/page.ts` `Page.removeExposedBinding`: `await this.delegate.removeInitScripts([binding.initScript]);`
         let _removed = scripts.dispose(&exposed.script).await;
         let remove = page_object(1, vec![("name", json!(exposed.name))]);
-        for (_, session) in tabs.attached() {
+        for (_, session) in tabs.own_attached() {
             if exposed.reaches(&init_scripts::target_of(&session)) {
                 in_all_frames(
                     &session,
@@ -1024,7 +1037,7 @@ impl Bindings {
     /// another live run registered it on that page too; the controller and the CDP binding
     /// function go once the controller holds no name, so another run's bindings stay.
     async fn end_pages(&self, tabs: &Tabs, registered: &[Registration]) {
-        for (_, session) in tabs.attached() {
+        for (_, session) in tabs.own_attached() {
             let target = init_scripts::target_of(&session);
             let names = page_names(&self.run, registered, &target);
             let end = page_object(
@@ -1246,7 +1259,7 @@ fn frame_tab(page: &Arc<PageSession>, target: &str, frame: &str) -> FrameTab {
 }
 
 fn page_of(tabs: &Tabs, target: &str) -> Option<Arc<PageSession>> {
-    tabs.attached()
+    tabs.own_attached()
         .into_iter()
         .map(|(_, session)| session)
         .find(|session| init_scripts::target_of(session) == target)

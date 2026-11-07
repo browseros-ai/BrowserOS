@@ -20,8 +20,12 @@
 
 use std::future;
 use std::future::Future;
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+#[cfg(test)]
+use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
@@ -586,6 +590,9 @@ pub(crate) struct CallEntry {
     abort: CallAbort,
     /// Set once by whoever ends the call; absent while it runs.
     end: OnceLock<CallEnd>,
+    /// Test-only: how long `abort` holds between waking the call and logging, in ms.
+    #[cfg(test)]
+    abort_pause_ms: AtomicU64,
 }
 
 /// A call's raw log, Playwright's `metadata.log`.
@@ -642,7 +649,14 @@ impl CallEntry {
             delivery: input.then(Arc::default),
             abort: CallAbort::default(),
             end: OnceLock::new(),
+            #[cfg(test)]
+            abort_pause_ms: AtomicU64::new(0),
         }
+    }
+
+    /// The call's params as the script sent them.
+    pub(crate) fn params(&self) -> &Value {
+        &self.params
     }
 
     /// Playwright's `ProgressController.abort` for this call: logs `operation was aborted:
@@ -653,8 +667,21 @@ impl CallEntry {
             return;
         }
         let line = format!("operation was aborted: {reason}");
-        if self.abort.abort(reason) {
-            self.update_log(|log| log.push(line));
+        // The abort wakes the call while this holds its log: the call's end folds the log
+        // under the same lock, so the reply always carries the line.
+        match self.log.lock() {
+            Ok(mut log) => {
+                if self.abort.abort(reason) {
+                    #[cfg(test)]
+                    thread::sleep(Duration::from_millis(
+                        self.abort_pause_ms.load(Ordering::Relaxed),
+                    ));
+                    log.push(line);
+                }
+            }
+            Err(_) => {
+                let _aborted = self.abort.abort(reason);
+            }
         }
     }
 
@@ -1273,6 +1300,34 @@ mod tests {
             progress.folded_log(),
             vec!["  - operation was aborted: stop".to_string()],
             "one line, for the first abort only"
+        );
+    }
+
+    /// The interleaving forced: the call wakes from its abort and folds its log while `abort`
+    /// is held between waking it and logging. The fold waits for the line.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_call_that_folds_its_log_as_its_abort_wakes_it_has_the_abort_line() {
+        let run = scope(Duration::from_secs(30));
+        let entry = entry(1, true);
+        let progress = Progress::new(Arc::clone(&entry), 0.0, run, CancellationToken::new());
+        let token = progress.abort_token();
+        entry.abort_pause_ms.store(300, Ordering::Relaxed);
+        let woken = tokio::spawn({
+            let entry = Arc::clone(&entry);
+            async move {
+                token.cancelled().await;
+                entry.folded_log()
+            }
+        });
+        let aborting = thread::spawn({
+            let entry = Arc::clone(&entry);
+            move || entry.abort("stop".to_string())
+        });
+        let log = woken.await.expect("the woken call");
+        aborting.join().expect("the abort");
+        assert_eq!(
+            log.last().map(String::as_str),
+            Some("  - operation was aborted: stop")
         );
     }
 

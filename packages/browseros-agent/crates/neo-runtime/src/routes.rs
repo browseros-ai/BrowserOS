@@ -342,7 +342,7 @@ impl Patterns {
     }
 }
 
-/// Neo: the run's context routes, shared by every tab the run has a session on.
+/// Neo: the run's context routes, shared only by its own context's attached tabs.
 #[derive(Default)]
 pub(crate) struct ContextRoutes(Mutex<Option<Arc<Patterns>>>);
 
@@ -1214,8 +1214,8 @@ pub(crate) async fn set_page_patterns(
     turn(page, progress).await
 }
 
-/// Neo: `BrowserContext.setNetworkInterceptionPatterns`, for every tab the run has a session
-/// on; a tab attached later pauses at its attach (`Tabs::session`).
+/// Neo: `BrowserContext.setNetworkInterceptionPatterns`, for the run's own context's attached
+/// tabs; a tab of that context attached later pauses at its attach (`Tabs::session`).
 ///
 /// # Errors
 ///
@@ -1227,7 +1227,7 @@ pub(crate) async fn set_context_patterns(
 ) -> Result<(), CallError> {
     let emptied = patterns.is_empty();
     tabs.routes().set(patterns);
-    for (_, page) in tabs.attached() {
+    for (_, page) in tabs.own_attached() {
         if emptied {
             progress
                 .race(send_all(&page, page.routes.context_emptied()))

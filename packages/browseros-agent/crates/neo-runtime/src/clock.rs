@@ -26,6 +26,7 @@ use tokio::sync::Mutex;
 use tracing::debug;
 
 use crate::click::PageError;
+use crate::debugger::DEFAULT_CONTEXT;
 use crate::evaluate;
 use crate::frames::FrameScope;
 use crate::init_scripts::{self, InitScripts};
@@ -265,13 +266,18 @@ impl Clock {
     ) -> Result<(), PlaywrightError> {
         self.open()?;
         let cdp = tabs.cdp();
-        let pages: Vec<Arc<PageSession>> =
-            tabs.attached().into_iter().map(|(_, page)| page).collect();
+        let pages: Vec<Arc<PageSession>> = tabs
+            .own_attached()
+            .into_iter()
+            .map(|(_, page)| page)
+            .collect();
         if !self.installed.swap(true, Ordering::AcqRel) {
             // Playwright: `server/clock.ts` `Clock._installIfNeeded`: `const initScript = await this._browserContext.addInitScript(nullProgress, script);`
-            scripts.add(cdp, None, &install_source()).await?;
+            scripts
+                .add(cdp, None, DEFAULT_CONTEXT, &install_source())
+                .await?;
             for page in &pages {
-                scripts.ensure(cdp, page).await;
+                scripts.ensure(cdp, page, DEFAULT_CONTEXT).await;
             }
             self.open()?;
             in_all_frames(
@@ -302,7 +308,7 @@ impl Clock {
         };
         // Playwright: `server/clock.ts` `Clock.install`: `__pwClock.controller.log('install', ${Date.now()}, ${timeMillis})`
         scripts
-            .add(cdp, None, &log_source(op, now(), param))
+            .add(cdp, None, DEFAULT_CONTEXT, &log_source(op, now(), param))
             .await?;
         self.open()?;
         let mut args = vec![json!(op)];
@@ -336,8 +342,11 @@ impl Clock {
     }
 
     async fn end(&self, tabs: &Tabs) {
-        let pages: Vec<Arc<PageSession>> =
-            tabs.attached().into_iter().map(|(_, page)| page).collect();
+        let pages: Vec<Arc<PageSession>> = tabs
+            .own_attached()
+            .into_iter()
+            .map(|(_, page)| page)
+            .collect();
         if let Err(error) =
             in_all_frames(&pages, BuiltExpression::ClockCall, &[json!("end")], None).await
         {

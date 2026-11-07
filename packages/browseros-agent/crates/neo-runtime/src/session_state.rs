@@ -668,7 +668,7 @@ impl Target<'_> {
 /// The run's attached tabs that are still open. A closed one is no page of the context any
 /// more, so a setting for every page passes it by, as Playwright's goes over `pages()`.
 fn open_tabs(tabs: &Tabs) -> impl Iterator<Item = (Arc<PageEntry>, Arc<PageSession>)> {
-    tabs.attached()
+    tabs.own_attached()
         .into_iter()
         .filter(|(entry, _)| !entry.closed.is_cancelled())
 }
@@ -1192,7 +1192,7 @@ pub(crate) async fn storage_state(
         return Err(PlaywrightError::error(STORAGE_OPTION_PENDING).into());
     }
     let cookies = cookies(tabs, &[], progress).await?;
-    let attached = tabs.attached();
+    let attached = tabs.own_attached();
     let mut visited: Vec<String> = Vec::new();
     for (_, page) in &attached {
         for origin in page.events.visited_origins() {

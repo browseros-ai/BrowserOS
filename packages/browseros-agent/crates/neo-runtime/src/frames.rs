@@ -297,13 +297,16 @@ impl Frames {
         }
         let context = Arc::new(FrameContext {
             id: frame.to_string(),
-            world: Arc::new(World::on_host(
-                host.session.cdp.clone(),
-                host.session_id().clone(),
-                frame.to_string(),
-                host.is_child(),
-                host.gone.clone(),
-            )),
+            world: Arc::new(
+                World::on_host(
+                    host.session.cdp.clone(),
+                    host.session_id().clone(),
+                    frame.to_string(),
+                    host.is_child(),
+                    host.gone.clone(),
+                )
+                .with_test_id(self.main.world.test_id()),
+            ),
             host,
             main: MainWorld::default(),
             contexts: Arc::downgrade(&self.contexts),

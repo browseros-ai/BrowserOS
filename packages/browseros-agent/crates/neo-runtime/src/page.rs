@@ -73,6 +73,7 @@ use crate::click::{
     Arming, Geometry, NotReady, PageError, PressReport, Resolved, Scroll, SelectorFacts,
     StatesCheck, Stop, Tab, Verdict,
 };
+use crate::emulation::PageEmulation;
 use crate::events::{EventHub, Flushes};
 use crate::frame_selector::{self, FrameOwner};
 use crate::frames::{FrameContext, FrameScope, Frames, Host, local_tree};
@@ -93,7 +94,7 @@ use crate::progress::InputTicket;
 use crate::progress::{PlaywrightError, Progress};
 use crate::routes::{Answer, ContextRoutes, Pause, Routes};
 use crate::run::PageId;
-use crate::world::{self, ObjectGroup, World};
+use crate::world::{self, ObjectGroup, TestIdAttribute, World};
 
 /// Detaching is best effort. It runs in the background after a run, so this bound only keeps
 /// a hung browser from piling up detach tasks.
@@ -231,6 +232,9 @@ pub(crate) struct PageSession {
     /// `Runtime.enable` and `Log.enable`, sent once a run listens to console messages or page
     /// errors (or reads their history) and kept for the run.
     runtime_enabled: OnceCell<()>,
+    /// What the page emulates for the run: its viewport and media, and its created context's
+    /// options (`emulation.rs`). Dropped with the session, as Chromium drops the overrides.
+    pub(crate) emulation: Arc<PageEmulation>,
 }
 
 /// One call's frame scope over the tab's shared input, navigation and lifetime.
@@ -652,27 +656,40 @@ impl Fired {
     }
 }
 
+/// What a page's session is made with besides its CDP session (`Tabs::attach`): what it shares
+/// with the run, and what the run knows of the page by then.
+pub(crate) struct PageSetup {
+    /// The run's tasks, which the session's watchers run on.
+    pub(crate) tasks: TaskTracker,
+    /// The tab's lock and devices from the `Runtime`'s [`TabInputs`].
+    pub(crate) input: Arc<TabInput>,
+    /// The tab's screenshot turn from the `Runtime`'s `TabScreenshots`.
+    pub(crate) screenshots: Arc<Mutex<()>>,
+    /// Cancelled when the tab closes.
+    pub(crate) closed: CancellationToken,
+    /// The run's events, which the session produces for its page.
+    pub(crate) hub: EventHub,
+    /// The test id attribute every page world of the run hands its injected script.
+    pub(crate) test_id: Arc<TestIdAttribute>,
+    /// The context route patterns shared by this page and its context.
+    pub(crate) context_routes: Arc<ContextRoutes>,
+    /// The run's discovery reported the page as new (`Tabs::report_new`), so the first
+    /// lifecycle replay is the page's own new life ([`PageEvents::new`]).
+    pub(crate) discovered: bool,
+}
+
 impl PageSession {
-    /// `input` is the tab's lock and devices from the `Runtime`'s [`TabInputs`], `screenshots` its
-    /// screenshot turn from the `Runtime`'s `TabScreenshots`.
-    /// `discovered`: the run's discovery reported the page as new (`Tabs::report_new`), so the
-    /// first lifecycle replay is the page's own new life ([`PageEvents::new`]).
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the tab's turns come from the Runtime, and the rest (its input, closure, event hub \
-                  and context routes) from the run; each is one field"
-    )]
-    pub(crate) fn new(
-        session: Session,
-        page: &PageId,
-        tasks: TaskTracker,
-        input: Arc<TabInput>,
-        screenshots: Arc<Mutex<()>>,
-        closed: CancellationToken,
-        hub: EventHub,
-        discovered: bool,
-        context_routes: Arc<ContextRoutes>,
-    ) -> Self {
+    pub(crate) fn new(session: Session, page: &PageId, setup: PageSetup) -> Self {
+        let PageSetup {
+            tasks,
+            input,
+            screenshots,
+            closed,
+            hub,
+            test_id,
+            discovered,
+            context_routes,
+        } = setup;
         let routes = Arc::new(Routes::new(page.as_str(), context_routes));
         let child_routes = Arc::clone(&routes);
         let init_children = Arc::new(InitChildren::default());
@@ -691,7 +708,8 @@ impl PageSession {
             session.cdp.clone(),
             session.id.clone(),
             page.as_str().to_string(),
-        );
+        )
+        .with_test_id(test_id);
         let session = Arc::new(session);
         let world = Arc::new(world);
         let frames = Arc::new(Frames::new(
@@ -701,14 +719,19 @@ impl PageSession {
             tasks.clone(),
         ));
         // An out-of-process frame's console and requests are this tab's: each turns on when the
-        // frame's session is attached, if the run wants the tab's by then.
+        // frame's session is attached, if the run wants the tab's by then. Its emulation is the
+        // tab's too.
+        let emulation = Arc::new(PageEmulation::default());
+        let child_emulation = Arc::clone(&emulation);
         frames.on_child_host(Arc::new(move |host| {
             let events = child_events.clone();
+            let emulation = Arc::clone(&child_emulation);
             let network = Arc::clone(&child_network);
             let routes = Arc::clone(&child_routes);
             let reported = Arc::clone(&reported);
             Box::pin(async move {
                 events.child_attached(&host).await;
+                emulation.child_attached(&host).await;
                 // A frame an init-script session reports already: no request twice.
                 if network.enabled() && !reported.reports(host.target_id()) {
                     enable_child_network(&network, &host).await;
@@ -752,11 +775,17 @@ impl PageSession {
             events,
             locator_handlers: LocatorHandlers::default(),
             runtime_enabled: OnceCell::new(),
+            emulation,
         }
     }
 
     pub(crate) fn session_id(&self) -> &SessionId {
         &self.session.id
+    }
+
+    /// The browser connection the session lives on, for commands to its child sessions.
+    pub(crate) fn cdp(&self) -> &CdpClient {
+        &self.session.cdp
     }
 
     pub(crate) fn closed(&self) -> CancellationToken {
@@ -4458,13 +4487,16 @@ mod tests {
         let page = Arc::new(PageSession::new(
             session,
             &id,
-            TaskTracker::new(),
-            Arc::default(),
-            Arc::new(Mutex::new(())),
-            CancellationToken::new(),
-            EventHub::default(),
-            false,
-            Arc::default(),
+            PageSetup {
+                tasks: TaskTracker::new(),
+                input: Arc::default(),
+                screenshots: Arc::new(Mutex::new(())),
+                closed: CancellationToken::new(),
+                hub: EventHub::default(),
+                test_id: Arc::default(),
+                context_routes: Arc::default(),
+                discovered: false,
+            },
         ));
         let tab = FrameTab {
             page: Arc::clone(&page),
@@ -4507,13 +4539,16 @@ mod tests {
         Arc::new(PageSession::new(
             session,
             &id,
-            tasks.clone(),
-            Arc::default(),
-            Arc::new(Mutex::new(())),
-            closed.clone(),
-            EventHub::default(),
-            false,
-            Arc::default(),
+            PageSetup {
+                tasks: tasks.clone(),
+                input: Arc::default(),
+                screenshots: Arc::new(Mutex::new(())),
+                closed: closed.clone(),
+                hub: EventHub::default(),
+                test_id: Arc::default(),
+                context_routes: Arc::default(),
+                discovered: false,
+            },
         ))
     }
 
