@@ -4,6 +4,7 @@
 //! ```text
 //!  TraceStore::open ── db.rs: lock file, pragmas, corrupt-file recovery,
 //!                      migration.rs on its own ledger, in one transaction
+//!  sink ── ingest: per-run atomics + byte permits ──▶ writer: apply / commit / heads
 //!  runs / run / calls / getters / session / sessions / knows
 //!                   ── query.rs over a read pool of four (query_only) ──▶ views.rs
 //! ```
@@ -20,6 +21,7 @@ use std::time::Duration;
 use neo_runtime::{CallId, RunId, SessionKey, TraceSink};
 use sea_orm::{DatabaseConnection, DbErr};
 use serde::Serialize;
+use tokio::runtime::Handle;
 use tokio::sync::{Mutex as AsyncMutex, oneshot, watch};
 use tokio::task::{self, JoinHandle};
 use tokio::time::{self, Instant};
@@ -98,6 +100,11 @@ pub struct StoreHealth {
     /// Events taken from runs and not yet written.
     pub queued_events: u64,
     pub queued_bytes: u64,
+    /// Queue entries and bytes still unflushed when the close budget expired. These remain
+    /// visible after cancellation releases the in-memory queue; restart reconciliation marks
+    /// persisted open runs incomplete.
+    pub unflushed_events: u64,
+    pub unflushed_bytes: u64,
     /// The writer's current batch has been failing since then; it keeps retrying.
     pub failing_since_ms: Option<u64>,
     pub last_error: Option<String>,
@@ -403,8 +410,18 @@ impl TraceStore {
         })
         .await
         .is_ok();
-        if !drained && let Some(worker) = &worker {
-            worker.abort();
+        if !drained {
+            self.inner.queue.state.unflushed_events.store(
+                self.inner.queue.state.queued.load(Ordering::Acquire),
+                Ordering::Release,
+            );
+            self.inner.queue.state.unflushed_bytes.store(
+                self.inner.queue.state.bytes.load(Ordering::Acquire),
+                Ordering::Release,
+            );
+            if let Some(worker) = &worker {
+                worker.abort();
+            }
         }
         let lock = self.inner.lock.lock().ok().and_then(|mut lock| lock.take());
         let writer = self.inner.shutdown_db.clone();
@@ -441,10 +458,26 @@ impl TraceStore {
 impl Drop for Inner {
     fn drop(&mut self) {
         self.queue.state.stopped.store(true, Ordering::Release);
-        if let Ok(worker) = self.worker.get_mut()
-            && let Some(worker) = worker.take()
-        {
+        let worker = self.worker.get_mut().ok().and_then(Option::take);
+        if let Some(worker) = &worker {
             worker.abort();
+        }
+        let lock = self.lock.get_mut().ok().and_then(Option::take);
+        let writer = self.shutdown_db.clone();
+        let readers = self.readers.clone();
+        if let Ok(runtime) = Handle::try_current() {
+            // SQLx can still have a SQLite operation running on its blocking worker after its
+            // caller is cancelled. Cleanup owns the lock until both pools have truly closed.
+            runtime.spawn(async move {
+                if let Some(worker) = worker {
+                    let _ = worker.await;
+                }
+                if let Some(writer) = writer {
+                    let _ = writer.close().await;
+                }
+                let _ = readers.close().await;
+                drop(lock);
+            });
         }
     }
 }

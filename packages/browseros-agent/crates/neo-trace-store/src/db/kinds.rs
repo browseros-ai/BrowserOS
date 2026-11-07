@@ -141,7 +141,6 @@ pub(crate) enum CallState {
     #[sea_orm(string_value = "unfinished")]
     Unfinished,
     /// The store's verdict: still `running` when its run settled, so its `AfterCall` was lost.
-    /// A late `AfterCall` still replaces it.
     #[sea_orm(string_value = "lost")]
     Lost,
 }

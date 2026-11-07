@@ -3,10 +3,10 @@
 //! a successful end or acknowledging input whose delivery is unknown.
 
 use neo_runtime::RunEvent;
-use sea_orm::sea_query::{Expr, OnConflict};
+use sea_orm::sea_query::{Expr, ExprTrait, OnConflict};
 use sea_orm::{
-    ColumnTrait, DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait, IntoActiveModel,
-    QueryFilter, TransactionTrait,
+    ColumnTrait, Condition, DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait,
+    IntoActiveModel, QueryFilter, TransactionTrait,
 };
 
 use super::{detail, save_run};
@@ -105,6 +105,13 @@ pub(super) async fn settle(
         run.settled_at_ms = Some(signed(now));
         run.settled_by = Some(SettledBy::Runtime);
     }
+    // Settlement without an end means the lifecycle event was shed. Do not leave a run
+    // simultaneously settled and running in feeds; a later real end can still fill its facts.
+    if run.status.is_none() {
+        run.status = Some(RunStatus::Interrupted);
+        run.ended_at_ms = Some(signed(now));
+        run.incomplete = true;
+    }
     run.events_stubbed = run.events_stubbed.max(signed(loss.0));
     run.events_dropped = run.events_dropped.max(signed(loss.1));
     lost_calls(txn, &run.run_id, false).await
@@ -199,8 +206,24 @@ pub(crate) async fn sweep(db: &DatabaseConnection, now: u64) -> Result<Vec<Strin
 async fn synthetic(db: &DatabaseConnection, now: u64, restart: bool) -> Result<Vec<String>, DbErr> {
     let mut select = trace_runs::Entity::find().filter(trace_runs::Column::SettledAtMs.is_null());
     if !restart {
-        select =
-            select.filter(trace_runs::Column::EndedAtMs.lt(signed(now.saturating_sub(120_000))));
+        let deadline = signed(now.saturating_sub(120_000));
+        // If both lifecycle events were shed, there is no ended_at_ms. A known runtime budget
+        // still bounds the run: allow the same 120 s settlement grace after that budget. Do not
+        // guess a deadline for a placeholder whose RunStarted (and timeout) never arrived.
+        select = select.filter(
+            Condition::any()
+                .add(trace_runs::Column::EndedAtMs.lt(deadline))
+                .add(
+                    Condition::all()
+                        .add(trace_runs::Column::EndedAtMs.is_null())
+                        .add(trace_runs::Column::TimeoutMs.is_not_null())
+                        .add(
+                            Expr::col(trace_runs::Column::StartedAtMs)
+                                .add(Expr::col(trace_runs::Column::TimeoutMs))
+                                .lt(deadline),
+                        ),
+                ),
+        );
     }
     let rows = select.all(db).await?;
     let txn = db.begin().await?;

@@ -41,6 +41,9 @@ impl Heads {
         for key in keys {
             self.publish(db, &key, now).await?;
         }
+        if let Ok(mut heads) = self.0.lock() {
+            heads.retain(|_, sender| sender.receiver_count() > 0 || sender.borrow().runs > 0);
+        }
         Ok(())
     }
 

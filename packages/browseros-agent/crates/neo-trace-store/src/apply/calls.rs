@@ -30,7 +30,6 @@ pub(crate) async fn call(
         let delivery = match event {
             RunEvent::AfterCall { record, .. } => record.delivery,
             RunEvent::DeliverySettled { delivery, .. } => Some(*delivery),
-            RunEvent::InputSent { .. } => Some(neo_runtime::Delivery::Unknown),
             _ => None,
         };
         run.over_cap_delivery = run
@@ -45,42 +44,7 @@ pub(crate) async fn call(
         .await?;
     let mut row = old.clone().unwrap_or_else(|| empty_call(run, no));
     match event {
-        RunEvent::BeforeCall {
-            parent,
-            object,
-            page,
-            method,
-            title,
-            selector,
-            location,
-            started_at_ms,
-            offset_us,
-            ..
-        } => {
-            if !row.object.is_empty() {
-                return Ok(());
-            }
-            row.parent_no = parent.map(signed);
-            row.object.clone_from(object);
-            row.method.clone_from(method);
-            row.page_id = page.as_ref().map(|page| page.target.as_str().to_string());
-            row.tab_id = page.as_ref().and_then(|page| page.tab_id);
-            row.started_at_ms = signed(*started_at_ms);
-            row.offset_us = signed(*offset_us);
-            row.loc_line = location.map(|location| i64::from(location.line));
-            row.loc_column = location.and_then(|location| location.column.map(i64::from));
-            if detail(
-                run,
-                title.as_ref().map_or(0, String::len) + selector.as_ref().map_or(0, String::len),
-                stub,
-            ) {
-                row.title.clone_from(title);
-                row.selector.clone_from(selector);
-            } else {
-                row.detail = Detail::Stub;
-            }
-            insert(txn, row, None).await?;
-        }
+        RunEvent::BeforeCall { .. } => begin_call(txn, run, event, row, stub).await?,
         RunEvent::AfterCall { .. } => finish_call(txn, run, event, row, stub).await?,
         RunEvent::InputSent { offset_us, .. } => {
             if row.input_offset_us.is_none() {
@@ -103,6 +67,62 @@ pub(crate) async fn call(
         _ => {}
     }
     Ok(())
+}
+
+/// Hints enrich either a running row or an end that arrived first. Charge only new detail;
+/// replaying the hint must not consume another share of the run budget or change its end.
+async fn begin_call(
+    txn: &DatabaseTransaction,
+    run: &mut trace_runs::Model,
+    event: &RunEvent,
+    mut row: trace_calls::Model,
+    stub: bool,
+) -> Result<(), DbErr> {
+    let RunEvent::BeforeCall {
+        parent,
+        object,
+        page,
+        method,
+        title,
+        selector,
+        location,
+        started_at_ms,
+        offset_us,
+        ..
+    } = event
+    else {
+        return Ok(());
+    };
+    row.parent_no = parent.map(signed);
+    row.object.clone_from(object);
+    row.method.clone_from(method);
+    row.page_id = page
+        .as_ref()
+        .map(|page| page.target.as_str().to_string())
+        .or(row.page_id);
+    row.tab_id = page.as_ref().and_then(|page| page.tab_id).or(row.tab_id);
+    row.started_at_ms = signed(*started_at_ms);
+    row.offset_us = signed(*offset_us);
+    row.loc_line = location.map(|location| i64::from(location.line));
+    row.loc_column = location.and_then(|location| location.column.map(i64::from));
+    let selector: Option<String> = selector
+        .as_ref()
+        .map(|text| text.chars().take(256).collect());
+    let bytes = title
+        .as_ref()
+        .map_or(0, String::len)
+        .saturating_sub(row.title.as_ref().map_or(0, String::len))
+        + selector
+            .as_ref()
+            .map_or(0, String::len)
+            .saturating_sub(row.selector.as_ref().map_or(0, String::len));
+    if detail(run, bytes, stub) {
+        row.title.clone_from(title);
+        row.selector = selector;
+    } else {
+        row.detail = Detail::Stub;
+    }
+    insert(txn, row, None).await
 }
 
 async fn finish_call(
@@ -133,24 +153,20 @@ async fn finish_call(
         _ => 0,
     };
     let full = detail(run, params.len() + logs.len() + message_bytes, stub);
+    let had_start = !row.object.is_empty();
     row.parent_no = parent.map(signed);
     row.object.clone_from(&record.guid);
     row.method.clone_from(&record.method);
     row.title = row.title.or_else(|| record.title.clone());
-    if full && row.selector.is_none() {
-        row.selector = record
-            .params
-            .get("selector")
-            .and_then(serde_json::Value::as_str)
-            .map(|selector| selector.chars().take(256).collect());
-    }
     row.page_id = page
         .as_ref()
         .map(|page| page.target.as_str().to_string())
         .or(row.page_id);
     row.tab_id = page.as_ref().and_then(|page| page.tab_id).or(row.tab_id);
     row.started_at_ms = signed(record.started_at_ms);
-    row.offset_us = signed(*offset_us);
+    if !had_start {
+        row.offset_us = signed(*offset_us);
+    }
     row.duration_us = Some(signed(
         u64::try_from(record.duration.as_micros()).unwrap_or(u64::MAX),
     ));

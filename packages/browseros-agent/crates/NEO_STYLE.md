@@ -8,6 +8,7 @@ Applies to every `crates/neo-*` crate and to `crates/neo-quickjs-injected`. Run 
 | --- | --- | --- |
 | `neo-runtime-spec` | Rust, generated TS | Neo's cross-language contracts, translated from Playwright's protocol |
 | `neo-runtime` | Rust | Runs an agent's Playwright-style script in a QuickJS realm against one BrowserOS tab |
+| `neo-trace-store` | Rust | Persists runtime operation traces off the run path in its own SeaORM/SQLite file; provides typed reads and committed session heads |
 | `neo-quickjs-injected` | TypeScript | The Playwright-shaped objects a script sees; `neo-runtime` embeds its `dist/sdk.js` |
 | `neo-playwright-injected` | TypeScript (page) | Playwright's injected script, vendored unchanged, behind Neo's typed glue table; `neo-runtime` embeds its `dist/*.js` and calls them over CDP in an isolated world |
 

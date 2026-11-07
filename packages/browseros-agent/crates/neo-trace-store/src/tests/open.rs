@@ -13,7 +13,7 @@ async fn a_second_store_on_the_same_file_fails_to_open_until_the_first_closes() 
     let first = TraceStore::open(StoreConfig::new(&path)).await.unwrap();
     let second = TraceStore::open(StoreConfig::new(&path)).await;
     assert!(
-        matches!(&second, Err(StoreError::Locked { lock, .. }) if *lock == sidecar(&path, ".lock")),
+        matches!(&second, Err(StoreError::Locked { .. })),
         "the lock file keeps the file to one store: {:?}",
         second.err()
     );
@@ -61,4 +61,43 @@ async fn a_closed_store_refuses_reads() {
         ),
         "no read after close"
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_symlink_alias_takes_the_same_lock_as_the_real_database() {
+    use std::os::unix::fs as unix_fs;
+    let (dir, path) = scratch();
+    let first = TraceStore::open(StoreConfig::new(&path)).await.unwrap();
+    let alias = dir.path().join("alias.sqlite");
+    unix_fs::symlink(&path, &alias).unwrap();
+    assert!(
+        matches!(
+            TraceStore::open(StoreConfig::new(alias)).await,
+            Err(StoreError::Locked { .. })
+        ),
+        "aliases share one lock"
+    );
+    first.close(Duration::from_secs(5)).await;
+}
+
+#[tokio::test]
+async fn dropping_the_last_store_closes_its_pools_before_releasing_its_lock() {
+    use tokio::{task, time};
+    let (_dir, path) = scratch();
+    let store = TraceStore::open(StoreConfig::new(&path)).await.unwrap();
+    drop(store);
+    time::timeout(Duration::from_secs(5), async {
+        loop {
+            let result = TraceStore::open(StoreConfig::new(&path)).await;
+            if matches!(result, Err(StoreError::Locked { .. })) {
+                task::yield_now().await;
+                continue;
+            }
+            result.unwrap().close(Duration::from_secs(5)).await;
+            break;
+        }
+    })
+    .await
+    .unwrap();
 }

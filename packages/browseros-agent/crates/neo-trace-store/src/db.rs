@@ -14,7 +14,7 @@
 
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions, TryLockError};
-use std::io::{ErrorKind, Write};
+use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Duration;
@@ -63,6 +63,10 @@ pub(crate) async fn open(path: &Path) -> Result<Files, StoreError> {
             .await
             .map_err(|source| StoreError::io(parent, source))?;
     }
+    // Canonicalize before choosing the lock name: symlinked data directories and file aliases
+    // must take the same OS lock, or a second opener could reconcile the first one's live runs.
+    let resolved = resolved_path(path).await?;
+    let path = resolved.as_path();
     let lock = LockFile::take(path)?;
     let (writer, schema) = match connect_and_migrate(path).await {
         Err(Refusal::Db(error)) if sqlite_code(&error).is_some_and(is_corrupt) => {
@@ -103,6 +107,26 @@ pub(crate) async fn open(path: &Path) -> Result<Files, StoreError> {
         readers,
         lock,
     })
+}
+
+async fn resolved_path(path: &Path) -> Result<PathBuf, StoreError> {
+    match fs::canonicalize(path).await {
+        Ok(path) => Ok(path),
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            let parent = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            let parent = fs::canonicalize(parent)
+                .await
+                .map_err(|error| StoreError::io(parent, error))?;
+            let name = path
+                .file_name()
+                .ok_or_else(|| StoreError::io(path, io::Error::from(ErrorKind::InvalidInput)))?;
+            Ok(parent.join(name))
+        }
+        Err(error) => Err(StoreError::io(path, error)),
+    }
 }
 
 async fn connect_and_migrate(path: &Path) -> Result<(DatabaseConnection, Schema), Refusal> {

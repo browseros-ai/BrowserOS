@@ -158,7 +158,15 @@ async fn sqlite_readonly_outage_preserves_the_queue_then_drains_after_recovery()
     capture.emit(&ended(run, 1));
     capture.emit(&RunEvent::RunSettled { run });
     time::timeout(Duration::from_secs(10), async {
-        while store.health().failing_since_ms.is_none() {
+        while store.health().failing_since_ms.is_none()
+            || store
+                .inner
+                .queue
+                .state
+                .test_failures
+                .load(Ordering::Acquire)
+                < 6
+        {
             task::yield_now().await;
         }
     })
@@ -258,6 +266,10 @@ async fn close_budget_cancels_a_stuck_writer_and_closes_admission() {
         .emit(&after(start.run.id, 1));
     let health = store.close(Duration::from_millis(20)).await;
     assert!(health.closed, "budget completion seals ingest");
+    assert!(
+        health.unflushed_events > 0 && health.unflushed_bytes > 0,
+        "budget expiry reports the undrained queue"
+    );
     assert!(
         store.sink().run(&started("late")).is_none(),
         "no admission after close"
@@ -448,5 +460,87 @@ async fn reserve_stubs_preserve_call_and_getter_outcomes_and_settlement_losses()
         store.getters(&run).await.unwrap()[0].detail,
         crate::Detail::Stub,
         "getter stub"
+    );
+}
+
+#[tokio::test]
+async fn a_late_artifact_cannot_recreate_an_erased_run() {
+    let (_dir, path) = scratch();
+    let store = TraceStore::open(StoreConfig::new(path)).await.unwrap();
+    let start = started("erased");
+    let run = start.run.id;
+    let capture = store.sink().run(&start).unwrap();
+    capture.emit(&ended(run, 0));
+    capture.emit(&RunEvent::RunSettled { run });
+    store.flushed().await;
+    store
+        .forget_session(&SessionKey::new("erased"))
+        .await
+        .unwrap();
+    store.attach_after_call(
+        CallId { run, no: 1 },
+        AfterCall {
+            tab_id: None,
+            url: None,
+            title: None,
+            jpeg: Some(vec![1]),
+            captured_at_ms: 1,
+        },
+    );
+    store.flushed().await;
+    assert!(
+        store.run(&run).await.unwrap().is_none(),
+        "late capture cannot resurrect a forgotten run"
+    );
+}
+
+#[tokio::test]
+async fn a_pre_run_privacy_tombstone_survives_retention_and_the_first_start() {
+    use super::support::inspect;
+    use crate::{Retention, retention, writer};
+    let (_dir, path) = scratch();
+    let store = TraceStore::open(StoreConfig::new(&path)).await.unwrap();
+    let key = SessionKey::new("pre-private");
+    store.withhold(&key);
+    store.flushed().await;
+    let db = inspect(&path).await;
+    // A real cleanup turn (not an empty no-op) must preserve a session tombstone with no runs.
+    let old = started("old");
+    let old_run = old.run.id;
+    let capture = store.sink().run(&old).unwrap();
+    capture.emit(&ended(old_run, 0));
+    capture.emit(&RunEvent::RunSettled { run: old_run });
+    store.flushed().await;
+    while retention::step(
+        &db,
+        Retention {
+            max_age: Duration::ZERO,
+            max_bytes: u64::MAX,
+        },
+        writer::now() + 1,
+    )
+    .await
+    .unwrap()
+    {}
+    let start = started("pre-private");
+    let run = start.run.id;
+    store.sink().run(&start).unwrap().emit(&after(run, 1));
+    store.attach_after_call(
+        CallId { run, no: 1 },
+        AfterCall {
+            tab_id: None,
+            url: None,
+            title: None,
+            jpeg: Some(vec![1]),
+            captured_at_ms: 1,
+        },
+    );
+    store.flushed().await;
+    let session = store.session(&key, Timeline::All).await.unwrap().unwrap();
+    assert!(session.session.withheld, "privacy survives the first run");
+    assert_eq!(
+        session.calls[0].after.as_ref().unwrap().jpeg,
+        None,
+        "pre-run policy denies JPEG"
     );
 }

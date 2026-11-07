@@ -35,6 +35,16 @@ pub(crate) async fn command(
     let Some(id) = ingest::run_id(command) else {
         return Ok(None);
     };
+    // A late feed capture cannot resurrect a forgotten run. Runtime facts may still create
+    // placeholders when their start was shed; artifacts only decorate a run already recorded.
+    if matches!(command, Command::Artifact(..))
+        && trace_runs::Entity::find_by_id(id.to_string())
+            .one(txn)
+            .await?
+            .is_none()
+    {
+        return Ok(None);
+    }
     let (mut run, inserted) = ensure_run(txn, id).await?;
     let old_session = run.session_key.clone();
     match command {

@@ -267,6 +267,8 @@ impl Writer {
     }
 
     fn failed(&self, _error: &DbErr) {
+        #[cfg(test)]
+        self.state.test_failures.fetch_add(1, Ordering::Relaxed);
         let _ = self.state.failing_since.compare_exchange(
             0,
             now().max(1),

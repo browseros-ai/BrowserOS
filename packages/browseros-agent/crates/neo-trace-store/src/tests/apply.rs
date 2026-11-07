@@ -6,12 +6,12 @@ use neo_runtime::{Delivery, GetterResult, RunEvent};
 use sea_orm::{EntityTrait, PaginatorTrait};
 
 use super::support::{after, apply, before, ended, event, getter, inspect, scratch, started};
-use crate::apply;
 use crate::db::entities::{trace_calls, trace_getters, trace_runs};
 use crate::db::kinds;
 use crate::db::migration::{Migrator, run_pending};
 use crate::ingest::Command;
 use crate::{CallQuery, CallState, Detail, StoreConfig, TraceStore};
+use crate::{apply, writer};
 
 #[tokio::test]
 async fn replay_and_out_of_order_ends_preserve_rows_delivery_and_absolute_losses() {
@@ -383,5 +383,104 @@ async fn settle_sweep_times_out_ended_runs_and_marks_them_incomplete() {
             .state,
         CallState::Lost,
         "running call's record was lost"
+    );
+}
+
+#[tokio::test]
+async fn late_start_metadata_is_merged_once_and_a_shed_run_end_is_not_left_running() {
+    let (_dir, path) = scratch();
+    let store = TraceStore::open(StoreConfig::new(&path)).await.unwrap();
+    let conn = inspect(&path).await;
+    let start = started("late-hint");
+    let run = start.run.id;
+    let mut hint = before(run, 1);
+    if let RunEvent::BeforeCall {
+        selector,
+        offset_us,
+        ..
+    } = &mut hint
+    {
+        *selector = Some("#hint-only".into());
+        *offset_us = 7;
+    }
+    let commands = [
+        Command::Started(start),
+        event(after(run, 1)),
+        event(hint),
+        event(RunEvent::RunSettled { run }),
+    ];
+    apply(&conn, &commands).await;
+    let first = trace_runs::Entity::find_by_id(run.to_string())
+        .one(&conn)
+        .await
+        .unwrap()
+        .unwrap();
+    apply(&conn, &commands).await;
+    let second = trace_runs::Entity::find_by_id(run.to_string())
+        .one(&conn)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        first.detail_bytes, second.detail_bytes,
+        "late metadata is charged only once"
+    );
+    let row = store
+        .calls(
+            &run,
+            CallQuery {
+                after: None,
+                limit: 10,
+            },
+        )
+        .await
+        .unwrap()
+        .items
+        .remove(0);
+    assert_eq!(
+        (row.selector.as_deref(), row.offset_us, row.state),
+        (Some("#hint-only"), 7, CallState::Ok),
+        "hint enriches end without regressing it"
+    );
+    assert_eq!(
+        store.run(&run).await.unwrap().unwrap().summary.state,
+        crate::RunState::Interrupted,
+        "a shed run end cannot remain running after settlement"
+    );
+}
+
+#[tokio::test]
+async fn a_shed_end_and_settle_use_the_known_runtime_budget_as_a_backstop() {
+    let (_dir, path) = scratch();
+    let store = TraceStore::open(StoreConfig::new(&path)).await.unwrap();
+    let conn = inspect(&path).await;
+    let mut start = started("shed-end");
+    let run = start.run.id;
+    let base = writer::now();
+    start.started_at_ms = base;
+    start.timeout_ms = 1000;
+    apply(&conn, &[Command::Started(start), event(before(run, 1))]).await;
+    apply::sweep(&conn, base + 120_999).await.unwrap();
+    assert!(
+        store
+            .run(&run)
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .settled
+            .is_none(),
+        "runtime budget plus settlement grace retained"
+    );
+    apply::sweep(&conn, base + 121_001).await.unwrap();
+    let row = store.run(&run).await.unwrap().unwrap().summary;
+    assert_eq!(
+        (row.state, row.settled.unwrap().by),
+        (crate::RunState::Interrupted, crate::SettledBy::Timeout),
+        "missing lifecycle events get a bounded incomplete end"
+    );
+    assert!(
+        row.loss.incomplete,
+        "missing terminal counts remain unknown"
     );
 }

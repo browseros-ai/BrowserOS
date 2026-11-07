@@ -50,6 +50,12 @@ pub struct Model {
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::trace_sessions::Entity",
+        from = "Column::SessionKey",
+        to = "super::trace_sessions::Column::SessionKey"
+    )]
+    Session,
     #[sea_orm(has_many = "super::trace_calls::Entity")]
     Calls,
     #[sea_orm(has_many = "super::trace_getters::Entity")]
@@ -62,6 +68,12 @@ pub enum Relation {
     Ids,
     #[sea_orm(has_many = "super::trace_call_artifacts::Entity")]
     Artifacts,
+}
+
+impl Related<super::trace_sessions::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Session.def()
+    }
 }
 
 impl Related<super::trace_calls::Entity> for Entity {

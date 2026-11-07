@@ -21,6 +21,8 @@ pub(crate) struct State {
     pub(crate) producers: AtomicUsize,
     pub(crate) queued: AtomicU64,
     pub(crate) bytes: AtomicU64,
+    pub(crate) unflushed_events: AtomicU64,
+    pub(crate) unflushed_bytes: AtomicU64,
     pub(crate) stubbed: AtomicU64,
     pub(crate) dropped: AtomicU64,
     pub(crate) settles_lost: AtomicU64,
@@ -29,6 +31,8 @@ pub(crate) struct State {
     pub(crate) failing_since: AtomicU64,
     #[cfg(test)]
     pub(crate) test_readonly: AtomicBool,
+    #[cfg(test)]
+    pub(crate) test_failures: AtomicU64,
 }
 
 impl State {
@@ -39,6 +43,8 @@ impl State {
             closed: self.stopped.load(Ordering::Acquire),
             queued_events: self.queued.load(Ordering::Relaxed),
             queued_bytes: self.bytes.load(Ordering::Relaxed),
+            unflushed_events: self.unflushed_events.load(Ordering::Relaxed),
+            unflushed_bytes: self.unflushed_bytes.load(Ordering::Relaxed),
             failing_since_ms: (failing != 0).then_some(failing),
             events_stubbed: self.stubbed.load(Ordering::Relaxed),
             events_dropped: self.dropped.load(Ordering::Relaxed),
@@ -84,6 +90,7 @@ impl Drop for Entry {
     }
 }
 
+/// Cloneable producer endpoint: owns the channel and byte budgets shared by run captures.
 #[derive(Clone)]
 pub(crate) struct Queue {
     pub(crate) tx: mpsc::UnboundedSender<Entry>,
