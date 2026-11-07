@@ -695,6 +695,11 @@ impl Routes {
         }
     }
 
+    /// The browser took pause `index`'s answer: it is no longer the run's to release.
+    pub(crate) fn settled(&self, index: u64) {
+        let _settled = self.with(|state| state.paused.remove(&index));
+    }
+
     /// A fetch that gave up waiting left its route at this pause, which the route answers now.
     fn adopt_response(
         &self,
@@ -873,8 +878,6 @@ impl Routes {
                 ("Fetch.fulfillRequest", fulfill_params(&paused, params)?)
             }
         };
-        // The browser carries it: the pause is no longer the run's to release.
-        let _released = self.with(|state| state.paused.remove(&index));
         Ok(Answer {
             session: paused.session,
             method,
@@ -899,6 +902,11 @@ pub(crate) async fn serve(
     let sent = progress
         .race(page.send_to(answer.session.as_ref(), answer.method, answer.params))
         .await?;
+    // A pause leaves the registry only once the browser took its answer: one the browser
+    // refused stays for the run's end to release.
+    if sent.is_ok() {
+        page.routes.settled(index);
+    }
     answered(answer.method, sent)?;
     Ok(None)
 }
@@ -966,6 +974,9 @@ pub(crate) async fn fetch(
             continue;
         }
         if let Some(reason) = pause["responseErrorReason"].as_str() {
+            // The request waits at this pause still: the route's next answer is for it.
+            page.routes
+                .fetched_response(index, session.clone(), &request_id);
             return Err(PlaywrightError::error(reason).into());
         }
         let status = pause["responseStatusCode"].as_i64().unwrap_or_default();
@@ -977,6 +988,9 @@ pub(crate) async fn fetch(
                 .any(|header| header.name.eq_ignore_ascii_case("location"));
         if redirect && follow {
             if redirects == 0 {
+                // The request waits at this redirect still: the route's next answer is for it.
+                page.routes
+                    .fetched_response(index, session.clone(), &request_id);
                 return Err(PlaywrightError::error(MAX_REDIRECTS).into());
             }
             redirects -= 1;
@@ -1000,25 +1014,35 @@ pub(crate) async fn fetch(
         } else {
             response_body(page, session.as_ref(), &request_id, progress).await?
         };
-        let status_text = pause["responseStatusText"]
-            .as_str()
-            .filter(|text| !text.is_empty())
-            .unwrap_or_else(|| status_text(status))
-            .to_string();
-        let fetched = Fetched {
-            url: pause["request"]["url"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
-            status,
-            status_text,
-            headers,
-            body,
-        };
-        return serde_json::to_value(fetched)
-            .map(Some)
-            .map_err(|error| PlaywrightError::error(error.to_string()).into());
+        return fetched_value(&pause, status, headers, body);
     }
+}
+
+/// Neo: what `route.fetch` answers for the response it read.
+fn fetched_value(
+    pause: &Value,
+    status: i64,
+    headers: Vec<NameValue>,
+    body: String,
+) -> Result<Option<Value>, CallError> {
+    let status_text = pause["responseStatusText"]
+        .as_str()
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| status_text(status))
+        .to_string();
+    let fetched = Fetched {
+        url: pause["request"]["url"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        status,
+        status_text,
+        headers,
+        body,
+    };
+    serde_json::to_value(fetched)
+        .map(Some)
+        .map_err(|error| PlaywrightError::error(error.to_string()).into())
 }
 
 /// Neo: a redirect's next hop of a fetch goes out too, with the first hop's header overrides,
@@ -1193,10 +1217,14 @@ fn cdp_error(error: &CdpError) -> PlaywrightError {
 
 /// Neo: the release of every pause handed out on `channel` and not answered.
 fn release(state: &mut State, channel: Channel) -> Vec<Answer> {
+    // A pause whose answer was taken is the browser's now, as Playwright's route ends its
+    // handling at the answer.
     let released: Vec<u64> = state
         .paused
         .iter()
-        .filter(|(_, paused)| paused.channel == channel && paused.emitted)
+        .filter(|(index, paused)| {
+            paused.channel == channel && paused.emitted && !state.answered.contains(index)
+        })
         .map(|(index, _)| *index)
         .collect();
     released
@@ -1848,6 +1876,39 @@ mod tests {
             (answer.method, answer.params["errorReason"].clone()),
             ("Fetch.failRequest", json!("Aborted"))
         );
+    }
+
+    #[test]
+    fn tests_that_a_pause_leaves_the_registry_once_the_browser_took_its_answer() {
+        let routes = routing_page("**/*");
+        routes
+            .with(|state| {
+                state.paused.insert(1, paused("https://a.test/x", &[]));
+            })
+            .unwrap();
+        let answer = routes
+            .answer(1, RouteCall::Abort(RouteAbortParams { error_code: None }))
+            .unwrap();
+        assert_eq!(answer.method, "Fetch.failRequest");
+        assert!(
+            routes.set_page(Patterns::default()).is_empty(),
+            "an answered pause is the browser's: emptied patterns release nothing"
+        );
+        assert_eq!(
+            routes.left_open().len(),
+            1,
+            "until the browser took the answer, the run's end still releases it"
+        );
+        routes
+            .with(|state| {
+                state.paused.insert(2, paused("https://a.test/y", &[]));
+            })
+            .unwrap();
+        let _answer = routes
+            .answer(2, RouteCall::Abort(RouteAbortParams { error_code: None }))
+            .unwrap();
+        routes.settled(2);
+        assert!(routes.left_open().is_empty(), "a settled pause is gone");
     }
 
     #[test]

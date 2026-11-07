@@ -9,6 +9,8 @@
 // - RO-144 "should not follow redirects when maxRedirects is set to 0 in route.fetch".
 // - RO-143 "should support timeout option in route.fetch": the fetch times out, and the route
 //   still answers.
+// - The B3 review's case: a fetch past a nonzero redirect limit rejects, and the route still
+//   fulfills its request.
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs, network.mjs).
 
@@ -59,6 +61,40 @@ const cases = [
     await page.goto(ORIGIN + '/net/redirect')
     return { fetched, shown: await page.evaluate(() => document.body.textContent) }`,
     expected: { fetched: [302, '/net/data.json'], shown: 'hello' },
+  },
+  {
+    // B3 review (review-review-b3.md, P2): a fetch past a nonzero redirect limit rejects, and the
+    // route still answers its request: the recovery fulfill is what the page reads.
+    name: 'a fetch past its redirect limit rejects, and the route still fulfills',
+    source: `await page.goto(ORIGIN + '/net/blank.html')
+    let done
+    const handled = new Promise((resolve) => (done = resolve))
+    await page.route(/\\/net\\/redirect\\?to=%2F/, async (route) => {
+      let fetchRejected = false
+      let fulfilled = false
+      try {
+        await route.fetch({ maxRedirects: 1, timeout: 5000 })
+      } catch {
+        fetchRejected = true
+      }
+      try {
+        await route.fulfill({ body: 'recovered' })
+        fulfilled = true
+      } catch {}
+      done({ fetchRejected, fulfilled })
+    })
+    await page.evaluate(() => {
+      // Two redirects: the first followed, the second past the limit.
+      window.redirectBody = fetch('/net/redirect?to=' + encodeURIComponent('/net/redirect?to=/net/data.json')).then((r) => r.text())
+    })
+    const recovery = await handled
+    await page.unrouteAll()
+    const body = await page.evaluate(() => window.redirectBody)
+    return { recovery, body }`,
+    expected: {
+      recovery: { fetchRejected: true, fulfilled: true },
+      body: 'recovered',
+    },
   },
   {
     name: 'a fetch past its timeout rejects, and the route still answers',
