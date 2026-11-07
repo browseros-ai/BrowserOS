@@ -19,6 +19,7 @@ type Handles = {
   HitTargetInterceptor: {
     stop: () => 'done' | { hitTargetDescription: string }
   }
+  ScreenshotCleanup: { restore: () => void }
 }
 type Api = InjectedApi<InjectedScript, Handles>
 
@@ -52,6 +53,25 @@ const valid = {
   inputValue: () => ({}),
   queryCount: () => ({ value: 0 }),
   allTextContents: () => ({ values: [] }),
+  prepareForScreenshot: () => ({}),
+  restoreAfterScreenshot: (_injected, _params, cleanup) => {
+    cleanup.restore()
+    return {}
+  },
+  fontsReady: () => ({}),
+  fullPageSize: () => ({ size: { width: 1280, height: 720 } }),
+  scrollOffset: () => ({ x: 0, y: 0 }),
+  maskElements: () => ({}),
+  hideHighlight: () => ({}),
+} satisfies Api
+
+export const screenshotCleanupIsNotAnElement = {
+  ...valid,
+  // @ts-expect-error restoreAfterScreenshot takes the cleanup prepareForScreenshot returned.
+  restoreAfterScreenshot: (_injected, _params, cleanup: Element) => {
+    cleanup.remove()
+    return {}
+  },
 } satisfies Api
 
 export const unknownFillOutcome = {
