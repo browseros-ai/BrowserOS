@@ -22,6 +22,7 @@
 //! None of these writes `Input.*`, so none has a delivery cell; focus, blur and selectText still
 //! take the tab's input turn, so they never land between another call's focus and its keys.
 
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::time::Duration;
 
@@ -310,15 +311,67 @@ fn plain_event_init(argument: &SerializedArgument) -> Result<Value, PlaywrightEr
             "{EVENT_INIT_UNSERVED} a JSHandle"
         )));
     }
-    plain_value(&argument.value)
+    plain_value(&argument.value, &mut Refs::default())
         .map(|value| value.unwrap_or(Value::Null))
         .map_err(|kind| PlaywrightError::error(format!("{EVENT_INIT_UNSERVED} {kind}")))
+}
+
+/// Neo: how many JSON values one `eventInit` may expand to. Playwright's serializer writes a
+/// value met again as a `ref` to its first occurrence; JSON repeats it instead, so a chain of
+/// values each holding the next twice would double at every level.
+const EXPANDED_VALUES_MAX: usize = 100_000;
+
+/// Neo: the arrays and objects decoded so far, by their serialized `id`, the ones still open (an
+/// ancestor of the value being decoded), and how many values the expansion has written. A `ref`
+/// to a finished value is Playwright's shared value, written again; a `ref` to an open one is a
+/// cycle, which JSON cannot carry.
+#[derive(Default)]
+struct Refs {
+    done: HashMap<i64, Value>,
+    open: HashSet<i64>,
+    written: usize,
+}
+
+impl Refs {
+    /// Counts one more written value, refusing an expansion past [`EXPANDED_VALUES_MAX`].
+    fn write(&mut self, values: usize) -> Result<(), &'static str> {
+        self.written = self.written.saturating_add(values);
+        if self.written > EXPANDED_VALUES_MAX {
+            return Err("more shared values than Neo expands");
+        }
+        Ok(())
+    }
+}
+
+/// Neo: a decoded array or object, closed and kept under its `id` for later `ref`s.
+fn finish(value: Value, id: Option<i64>, refs: &mut Refs) -> Value {
+    if let Some(id) = id {
+        refs.open.remove(&id);
+        refs.done.insert(id, value.clone());
+    }
+    value
+}
+
+/// Neo: how many JSON values `value` holds, itself included.
+fn size_of_value(value: &Value) -> usize {
+    let mut size = 0usize;
+    let mut stack = vec![value];
+    while let Some(value) = stack.pop() {
+        size = size.saturating_add(1);
+        match value {
+            Value::Array(items) => stack.extend(items),
+            Value::Object(members) => stack.extend(members.values()),
+            _ => {}
+        }
+    }
+    size
 }
 
 /// Neo: one serialized value as plain JSON: `None` for `undefined` (an object drops that key, as
 /// an init dictionary reads a missing member; JSON has no `undefined` array item, so an array
 /// holding one is refused), or what it holds that JSON cannot carry.
-fn plain_value(value: &SerializedValue) -> Result<Option<Value>, &'static str> {
+fn plain_value(value: &SerializedValue, refs: &mut Refs) -> Result<Option<Value>, &'static str> {
+    refs.write(1)?;
     if let Some(number) = value.n {
         return Number::from_f64(number)
             .map(|number| Some(Value::Number(number)))
@@ -341,20 +394,34 @@ fn plain_value(value: &SerializedValue) -> Result<Option<Value>, &'static str> {
         };
     }
     if let Some(items) = &value.a {
+        refs.open.extend(value.id);
         let mut array = Vec::with_capacity(items.len());
         for item in items {
-            array.push(plain_value(item)?.ok_or("an array holding undefined")?);
+            array.push(plain_value(item, refs)?.ok_or("an array holding undefined")?);
         }
-        return Ok(Some(Value::Array(array)));
+        return Ok(Some(finish(Value::Array(array), value.id, refs)));
     }
     if let Some(members) = &value.o {
+        refs.open.extend(value.id);
         let mut object = Map::new();
         for member in members {
-            if let Some(item) = plain_value(&member.v)? {
+            if let Some(item) = plain_value(&member.v, refs)? {
                 object.insert(member.k.clone(), item);
             }
         }
-        return Ok(Some(Value::Object(object)));
+        return Ok(Some(finish(Value::Object(object), value.id, refs)));
+    }
+    if let Some(id) = value.r#ref {
+        if refs.open.contains(&id) {
+            return Err("a circular reference");
+        }
+        let shared = refs
+            .done
+            .get(&id)
+            .cloned()
+            .ok_or("a reference to a value it does not hold")?;
+        refs.write(size_of_value(&shared))?;
+        return Ok(Some(shared));
     }
     Err(if value.d.is_some() {
         "a Date"
@@ -370,8 +437,8 @@ fn plain_value(value: &SerializedValue) -> Result<Option<Value>, &'static str> {
         "a typed array"
     } else if value.h.is_some() {
         "a JSHandle"
-    } else if value.r#ref.is_some() {
-        "a circular reference"
+    } else if value.r#fn.is_some() {
+        "a function"
     } else {
         "a value of an unknown kind"
     })
@@ -809,6 +876,55 @@ mod tests {
             let error = plain_event_init(&init).expect_err("refused");
             assert!(error.message.ends_with(kind), "{}", error.message);
         }
+    }
+
+    #[test]
+    fn tests_that_a_shared_value_is_written_again_and_only_a_cycle_is_refused() {
+        // Playwright's ids in visit order: the init 1, `touches` 2, the touch 3, then the two
+        // other lists, whose only item is the touch already met.
+        let shared = argument(json!({ "o": [
+            { "k": "touches", "v": { "a": [{ "o": [{ "k": "identifier", "v": { "n": 7 } }], "id": 3 }], "id": 2 } },
+            { "k": "targetTouches", "v": { "a": [{ "ref": 3 }], "id": 4 } },
+            { "k": "changedTouches", "v": { "a": [{ "ref": 3 }], "id": 5 } },
+        ], "id": 1 }));
+        let touch = json!([{ "identifier": 7.0 }]);
+        assert_eq!(
+            plain_event_init(&shared).expect("a shared touch"),
+            json!({ "touches": touch, "targetTouches": touch, "changedTouches": touch })
+        );
+        for (wire, kind) in [
+            (
+                json!({ "o": [{ "k": "detail", "v": { "ref": 1 } }], "id": 1 }),
+                "a circular reference",
+            ),
+            (
+                json!({ "o": [{ "k": "detail", "v": { "ref": 9 } }], "id": 1 }),
+                "a reference to a value it does not hold",
+            ),
+        ] {
+            let error = plain_event_init(&argument(wire)).expect_err("refused");
+            assert!(error.message.ends_with(kind), "{}", error.message);
+        }
+    }
+
+    #[test]
+    fn tests_that_an_expansion_past_neos_bound_is_refused() {
+        // Each level holds the one below twice, the second time as a `ref`: 2^20 values.
+        let mut level = json!({ "o": [], "id": 1 });
+        for id in 2..=21 {
+            level = json!({ "o": [
+                { "k": "x", "v": level },
+                { "k": "y", "v": { "ref": id - 1 } },
+            ], "id": id });
+        }
+        let error = plain_event_init(&argument(level)).expect_err("too large");
+        assert!(
+            error
+                .message
+                .ends_with("more shared values than Neo expands"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]
