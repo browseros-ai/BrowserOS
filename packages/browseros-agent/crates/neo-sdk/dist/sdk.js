@@ -2,8 +2,28 @@
 (() => {
 'use strict';
 // vendor/playwright/isomorphic/stringUtils.ts
+function escapeWithQuotes(text, char = "'") {
+  const stringified = JSON.stringify(text);
+  const escapedText = stringified.substring(1, stringified.length - 1).replace(/\\"/g, '"');
+  if (char === "'")
+    return char + escapedText.replace(/[']/g, "\\'") + char;
+  if (char === '"')
+    return char + escapedText.replace(/["]/g, "\\\"") + char;
+  if (char === "`")
+    return char + escapedText.replace(/[`]/g, "\\`") + char;
+  throw new Error("Invalid escape char");
+}
 function isString(obj) {
   return typeof obj === "string" || obj instanceof String;
+}
+function toTitleCase(name) {
+  return name.charAt(0).toUpperCase() + name.substring(1);
+}
+function toSnakeCase(name) {
+  return name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/([A-Z])([A-Z][a-z])/g, "$1_$2").toLowerCase();
+}
+function normalizeEscapedRegexQuotes(source) {
+  return source.replace(/(^|[^\\])(\\\\)*\\(['"`])/g, "$1$2$3");
 }
 function escapeRegexForSelector(re) {
   if (re.unicode || re.unicodeSets)
@@ -103,6 +123,2137 @@ function getByRoleSelector(role, options = {}) {
   return `internal:role=${role}${props.map(([n, v]) => `[${n}=${v}]`).join("")}`;
 }
 
+// vendor/playwright/isomorphic/cssTokenizer.ts
+var between = function(num, first, last) {
+  return num >= first && num <= last;
+};
+function digit(code) {
+  return between(code, 48, 57);
+}
+function hexdigit(code) {
+  return digit(code) || between(code, 65, 70) || between(code, 97, 102);
+}
+function uppercaseletter(code) {
+  return between(code, 65, 90);
+}
+function lowercaseletter(code) {
+  return between(code, 97, 122);
+}
+function letter(code) {
+  return uppercaseletter(code) || lowercaseletter(code);
+}
+function nonascii(code) {
+  return code >= 128;
+}
+function namestartchar(code) {
+  return letter(code) || nonascii(code) || code === 95;
+}
+function namechar(code) {
+  return namestartchar(code) || digit(code) || code === 45;
+}
+function nonprintable(code) {
+  return between(code, 0, 8) || code === 11 || between(code, 14, 31) || code === 127;
+}
+function newline(code) {
+  return code === 10;
+}
+function whitespace(code) {
+  return newline(code) || code === 9 || code === 32;
+}
+var maximumallowedcodepoint = 1114111;
+
+class InvalidCharacterError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "InvalidCharacterError";
+  }
+}
+function preprocess(str) {
+  const codepoints = [];
+  for (let i = 0;i < str.length; i++) {
+    let code = str.charCodeAt(i);
+    if (code === 13 && str.charCodeAt(i + 1) === 10) {
+      code = 10;
+      i++;
+    }
+    if (code === 13 || code === 12)
+      code = 10;
+    if (code === 0)
+      code = 65533;
+    if (between(code, 55296, 56319) && between(str.charCodeAt(i + 1), 56320, 57343)) {
+      const lead = code - 55296;
+      const trail = str.charCodeAt(i + 1) - 56320;
+      code = Math.pow(2, 16) + lead * Math.pow(2, 10) + trail;
+      i++;
+    }
+    codepoints.push(code);
+  }
+  return codepoints;
+}
+function stringFromCode(code) {
+  if (code <= 65535)
+    return String.fromCharCode(code);
+  code -= Math.pow(2, 16);
+  const lead = Math.floor(code / Math.pow(2, 10)) + 55296;
+  const trail = code % Math.pow(2, 10) + 56320;
+  return String.fromCharCode(lead) + String.fromCharCode(trail);
+}
+function tokenize(str1) {
+  const str = preprocess(str1);
+  let i = -1;
+  const tokens = [];
+  let code;
+  let line = 0;
+  let column = 0;
+  let lastLineLength = 0;
+  const incrLineno = function() {
+    line += 1;
+    lastLineLength = column;
+    column = 0;
+  };
+  const locStart = { line, column };
+  const codepoint = function(i2) {
+    if (i2 >= str.length)
+      return -1;
+    return str[i2];
+  };
+  const next = function(num) {
+    if (num === undefined)
+      num = 1;
+    if (num > 3)
+      throw "Spec Error: no more than three codepoints of lookahead.";
+    return codepoint(i + num);
+  };
+  const consume = function(num) {
+    if (num === undefined)
+      num = 1;
+    i += num;
+    code = codepoint(i);
+    if (newline(code))
+      incrLineno();
+    else
+      column += num;
+    return true;
+  };
+  const reconsume = function() {
+    i -= 1;
+    if (newline(code)) {
+      line -= 1;
+      column = lastLineLength;
+    } else {
+      column -= 1;
+    }
+    locStart.line = line;
+    locStart.column = column;
+    return true;
+  };
+  const eof = function(codepoint2) {
+    if (codepoint2 === undefined)
+      codepoint2 = code;
+    return codepoint2 === -1;
+  };
+  const donothing = function() {};
+  const parseerror = function() {};
+  const consumeAToken = function() {
+    consumeComments();
+    consume();
+    if (whitespace(code)) {
+      while (whitespace(next()))
+        consume();
+      return new WhitespaceToken;
+    } else if (code === 34) {
+      return consumeAStringToken();
+    } else if (code === 35) {
+      if (namechar(next()) || areAValidEscape(next(1), next(2))) {
+        const token = new HashToken("");
+        if (wouldStartAnIdentifier(next(1), next(2), next(3)))
+          token.type = "id";
+        token.value = consumeAName();
+        return token;
+      } else {
+        return new DelimToken(code);
+      }
+    } else if (code === 36) {
+      if (next() === 61) {
+        consume();
+        return new SuffixMatchToken;
+      } else {
+        return new DelimToken(code);
+      }
+    } else if (code === 39) {
+      return consumeAStringToken();
+    } else if (code === 40) {
+      return new OpenParenToken;
+    } else if (code === 41) {
+      return new CloseParenToken;
+    } else if (code === 42) {
+      if (next() === 61) {
+        consume();
+        return new SubstringMatchToken;
+      } else {
+        return new DelimToken(code);
+      }
+    } else if (code === 43) {
+      if (startsWithANumber()) {
+        reconsume();
+        return consumeANumericToken();
+      } else {
+        return new DelimToken(code);
+      }
+    } else if (code === 44) {
+      return new CommaToken;
+    } else if (code === 45) {
+      if (startsWithANumber()) {
+        reconsume();
+        return consumeANumericToken();
+      } else if (next(1) === 45 && next(2) === 62) {
+        consume(2);
+        return new CDCToken;
+      } else if (startsWithAnIdentifier()) {
+        reconsume();
+        return consumeAnIdentlikeToken();
+      } else {
+        return new DelimToken(code);
+      }
+    } else if (code === 46) {
+      if (startsWithANumber()) {
+        reconsume();
+        return consumeANumericToken();
+      } else {
+        return new DelimToken(code);
+      }
+    } else if (code === 58) {
+      return new ColonToken;
+    } else if (code === 59) {
+      return new SemicolonToken;
+    } else if (code === 60) {
+      if (next(1) === 33 && next(2) === 45 && next(3) === 45) {
+        consume(3);
+        return new CDOToken;
+      } else {
+        return new DelimToken(code);
+      }
+    } else if (code === 64) {
+      if (wouldStartAnIdentifier(next(1), next(2), next(3)))
+        return new AtKeywordToken(consumeAName());
+      else
+        return new DelimToken(code);
+    } else if (code === 91) {
+      return new OpenSquareToken;
+    } else if (code === 92) {
+      if (startsWithAValidEscape()) {
+        reconsume();
+        return consumeAnIdentlikeToken();
+      } else {
+        parseerror();
+        return new DelimToken(code);
+      }
+    } else if (code === 93) {
+      return new CloseSquareToken;
+    } else if (code === 94) {
+      if (next() === 61) {
+        consume();
+        return new PrefixMatchToken;
+      } else {
+        return new DelimToken(code);
+      }
+    } else if (code === 123) {
+      return new OpenCurlyToken;
+    } else if (code === 124) {
+      if (next() === 61) {
+        consume();
+        return new DashMatchToken;
+      } else if (next() === 124) {
+        consume();
+        return new ColumnToken;
+      } else {
+        return new DelimToken(code);
+      }
+    } else if (code === 125) {
+      return new CloseCurlyToken;
+    } else if (code === 126) {
+      if (next() === 61) {
+        consume();
+        return new IncludeMatchToken;
+      } else {
+        return new DelimToken(code);
+      }
+    } else if (digit(code)) {
+      reconsume();
+      return consumeANumericToken();
+    } else if (namestartchar(code)) {
+      reconsume();
+      return consumeAnIdentlikeToken();
+    } else if (eof()) {
+      return new EOFToken;
+    } else {
+      return new DelimToken(code);
+    }
+  };
+  const consumeComments = function() {
+    while (next(1) === 47 && next(2) === 42) {
+      consume(2);
+      while (true) {
+        consume();
+        if (code === 42 && next() === 47) {
+          consume();
+          break;
+        } else if (eof()) {
+          parseerror();
+          return;
+        }
+      }
+    }
+  };
+  const consumeANumericToken = function() {
+    const num = consumeANumber();
+    if (wouldStartAnIdentifier(next(1), next(2), next(3))) {
+      const token = new DimensionToken;
+      token.value = num.value;
+      token.repr = num.repr;
+      token.type = num.type;
+      token.unit = consumeAName();
+      return token;
+    } else if (next() === 37) {
+      consume();
+      const token = new PercentageToken;
+      token.value = num.value;
+      token.repr = num.repr;
+      return token;
+    } else {
+      const token = new NumberToken;
+      token.value = num.value;
+      token.repr = num.repr;
+      token.type = num.type;
+      return token;
+    }
+  };
+  const consumeAnIdentlikeToken = function() {
+    const str2 = consumeAName();
+    if (str2.toLowerCase() === "url" && next() === 40) {
+      consume();
+      while (whitespace(next(1)) && whitespace(next(2)))
+        consume();
+      if (next() === 34 || next() === 39)
+        return new FunctionToken(str2);
+      else if (whitespace(next()) && (next(2) === 34 || next(2) === 39))
+        return new FunctionToken(str2);
+      else
+        return consumeAURLToken();
+    } else if (next() === 40) {
+      consume();
+      return new FunctionToken(str2);
+    } else {
+      return new IdentToken(str2);
+    }
+  };
+  const consumeAStringToken = function(endingCodePoint) {
+    if (endingCodePoint === undefined)
+      endingCodePoint = code;
+    let string = "";
+    while (consume()) {
+      if (code === endingCodePoint || eof()) {
+        return new StringToken(string);
+      } else if (newline(code)) {
+        parseerror();
+        reconsume();
+        return new BadStringToken;
+      } else if (code === 92) {
+        if (eof(next()))
+          donothing();
+        else if (newline(next()))
+          consume();
+        else
+          string += stringFromCode(consumeEscape());
+      } else {
+        string += stringFromCode(code);
+      }
+    }
+    throw new Error("Internal error");
+  };
+  const consumeAURLToken = function() {
+    const token = new URLToken("");
+    while (whitespace(next()))
+      consume();
+    if (eof(next()))
+      return token;
+    while (consume()) {
+      if (code === 41 || eof()) {
+        return token;
+      } else if (whitespace(code)) {
+        while (whitespace(next()))
+          consume();
+        if (next() === 41 || eof(next())) {
+          consume();
+          return token;
+        } else {
+          consumeTheRemnantsOfABadURL();
+          return new BadURLToken;
+        }
+      } else if (code === 34 || code === 39 || code === 40 || nonprintable(code)) {
+        parseerror();
+        consumeTheRemnantsOfABadURL();
+        return new BadURLToken;
+      } else if (code === 92) {
+        if (startsWithAValidEscape()) {
+          token.value += stringFromCode(consumeEscape());
+        } else {
+          parseerror();
+          consumeTheRemnantsOfABadURL();
+          return new BadURLToken;
+        }
+      } else {
+        token.value += stringFromCode(code);
+      }
+    }
+    throw new Error("Internal error");
+  };
+  const consumeEscape = function() {
+    consume();
+    if (hexdigit(code)) {
+      const digits = [code];
+      for (let total = 0;total < 5; total++) {
+        if (hexdigit(next())) {
+          consume();
+          digits.push(code);
+        } else {
+          break;
+        }
+      }
+      if (whitespace(next()))
+        consume();
+      let value = parseInt(digits.map(function(x) {
+        return String.fromCharCode(x);
+      }).join(""), 16);
+      if (value > maximumallowedcodepoint)
+        value = 65533;
+      return value;
+    } else if (eof()) {
+      return 65533;
+    } else {
+      return code;
+    }
+  };
+  const areAValidEscape = function(c1, c2) {
+    if (c1 !== 92)
+      return false;
+    if (newline(c2))
+      return false;
+    return true;
+  };
+  const startsWithAValidEscape = function() {
+    return areAValidEscape(code, next());
+  };
+  const wouldStartAnIdentifier = function(c1, c2, c3) {
+    if (c1 === 45)
+      return namestartchar(c2) || c2 === 45 || areAValidEscape(c2, c3);
+    else if (namestartchar(c1))
+      return true;
+    else if (c1 === 92)
+      return areAValidEscape(c1, c2);
+    else
+      return false;
+  };
+  const startsWithAnIdentifier = function() {
+    return wouldStartAnIdentifier(code, next(1), next(2));
+  };
+  const wouldStartANumber = function(c1, c2, c3) {
+    if (c1 === 43 || c1 === 45) {
+      if (digit(c2))
+        return true;
+      if (c2 === 46 && digit(c3))
+        return true;
+      return false;
+    } else if (c1 === 46) {
+      if (digit(c2))
+        return true;
+      return false;
+    } else if (digit(c1)) {
+      return true;
+    } else {
+      return false;
+    }
+  };
+  const startsWithANumber = function() {
+    return wouldStartANumber(code, next(1), next(2));
+  };
+  const consumeAName = function() {
+    let result = "";
+    while (consume()) {
+      if (namechar(code)) {
+        result += stringFromCode(code);
+      } else if (startsWithAValidEscape()) {
+        result += stringFromCode(consumeEscape());
+      } else {
+        reconsume();
+        return result;
+      }
+    }
+    throw new Error("Internal parse error");
+  };
+  const consumeANumber = function() {
+    let repr = "";
+    let type = "integer";
+    if (next() === 43 || next() === 45) {
+      consume();
+      repr += stringFromCode(code);
+    }
+    while (digit(next())) {
+      consume();
+      repr += stringFromCode(code);
+    }
+    if (next(1) === 46 && digit(next(2))) {
+      consume();
+      repr += stringFromCode(code);
+      consume();
+      repr += stringFromCode(code);
+      type = "number";
+      while (digit(next())) {
+        consume();
+        repr += stringFromCode(code);
+      }
+    }
+    const c1 = next(1);
+    const c2 = next(2);
+    const c3 = next(3);
+    if ((c1 === 69 || c1 === 101) && digit(c2)) {
+      consume();
+      repr += stringFromCode(code);
+      consume();
+      repr += stringFromCode(code);
+      type = "number";
+      while (digit(next())) {
+        consume();
+        repr += stringFromCode(code);
+      }
+    } else if ((c1 === 69 || c1 === 101) && (c2 === 43 || c2 === 45) && digit(c3)) {
+      consume();
+      repr += stringFromCode(code);
+      consume();
+      repr += stringFromCode(code);
+      consume();
+      repr += stringFromCode(code);
+      type = "number";
+      while (digit(next())) {
+        consume();
+        repr += stringFromCode(code);
+      }
+    }
+    const value = convertAStringToANumber(repr);
+    return { type, value, repr };
+  };
+  const convertAStringToANumber = function(string) {
+    return +string;
+  };
+  const consumeTheRemnantsOfABadURL = function() {
+    while (consume()) {
+      if (code === 41 || eof()) {
+        return;
+      } else if (startsWithAValidEscape()) {
+        consumeEscape();
+        donothing();
+      } else {
+        donothing();
+      }
+    }
+  };
+  let iterationCount = 0;
+  while (!eof(next())) {
+    tokens.push(consumeAToken());
+    iterationCount++;
+    if (iterationCount > str.length * 2)
+      throw new Error("I'm infinite-looping!");
+  }
+  return tokens;
+}
+
+class CSSParserToken {
+  tokenType = "";
+  value;
+  toJSON() {
+    return { token: this.tokenType };
+  }
+  toString() {
+    return this.tokenType;
+  }
+  toSource() {
+    return "" + this;
+  }
+}
+
+class BadStringToken extends CSSParserToken {
+  tokenType = "BADSTRING";
+}
+
+class BadURLToken extends CSSParserToken {
+  tokenType = "BADURL";
+}
+
+class WhitespaceToken extends CSSParserToken {
+  tokenType = "WHITESPACE";
+  toString() {
+    return "WS";
+  }
+  toSource() {
+    return " ";
+  }
+}
+
+class CDOToken extends CSSParserToken {
+  tokenType = "CDO";
+  toSource() {
+    return "<!--";
+  }
+}
+
+class CDCToken extends CSSParserToken {
+  tokenType = "CDC";
+  toSource() {
+    return "-->";
+  }
+}
+
+class ColonToken extends CSSParserToken {
+  tokenType = ":";
+}
+
+class SemicolonToken extends CSSParserToken {
+  tokenType = ";";
+}
+
+class CommaToken extends CSSParserToken {
+  tokenType = ",";
+}
+
+class GroupingToken extends CSSParserToken {
+  value = "";
+  mirror = "";
+}
+
+class OpenCurlyToken extends GroupingToken {
+  tokenType = "{";
+  constructor() {
+    super();
+    this.value = "{";
+    this.mirror = "}";
+  }
+}
+
+class CloseCurlyToken extends GroupingToken {
+  tokenType = "}";
+  constructor() {
+    super();
+    this.value = "}";
+    this.mirror = "{";
+  }
+}
+
+class OpenSquareToken extends GroupingToken {
+  tokenType = "[";
+  constructor() {
+    super();
+    this.value = "[";
+    this.mirror = "]";
+  }
+}
+
+class CloseSquareToken extends GroupingToken {
+  tokenType = "]";
+  constructor() {
+    super();
+    this.value = "]";
+    this.mirror = "[";
+  }
+}
+
+class OpenParenToken extends GroupingToken {
+  tokenType = "(";
+  constructor() {
+    super();
+    this.value = "(";
+    this.mirror = ")";
+  }
+}
+
+class CloseParenToken extends GroupingToken {
+  tokenType = ")";
+  constructor() {
+    super();
+    this.value = ")";
+    this.mirror = "(";
+  }
+}
+
+class IncludeMatchToken extends CSSParserToken {
+  tokenType = "~=";
+}
+
+class DashMatchToken extends CSSParserToken {
+  tokenType = "|=";
+}
+
+class PrefixMatchToken extends CSSParserToken {
+  tokenType = "^=";
+}
+
+class SuffixMatchToken extends CSSParserToken {
+  tokenType = "$=";
+}
+
+class SubstringMatchToken extends CSSParserToken {
+  tokenType = "*=";
+}
+
+class ColumnToken extends CSSParserToken {
+  tokenType = "||";
+}
+
+class EOFToken extends CSSParserToken {
+  tokenType = "EOF";
+  toSource() {
+    return "";
+  }
+}
+
+class DelimToken extends CSSParserToken {
+  tokenType = "DELIM";
+  value = "";
+  constructor(code) {
+    super();
+    this.value = stringFromCode(code);
+  }
+  toString() {
+    return "DELIM(" + this.value + ")";
+  }
+  toJSON() {
+    const json = this.constructor.prototype.constructor.prototype.toJSON.call(this);
+    json.value = this.value;
+    return json;
+  }
+  toSource() {
+    if (this.value === "\\")
+      return "\\\n";
+    else
+      return this.value;
+  }
+}
+
+class StringValuedToken extends CSSParserToken {
+  value = "";
+  ASCIIMatch(str) {
+    return this.value.toLowerCase() === str.toLowerCase();
+  }
+  toJSON() {
+    const json = this.constructor.prototype.constructor.prototype.toJSON.call(this);
+    json.value = this.value;
+    return json;
+  }
+}
+
+class IdentToken extends StringValuedToken {
+  constructor(val) {
+    super();
+    this.value = val;
+  }
+  tokenType = "IDENT";
+  toString() {
+    return "IDENT(" + this.value + ")";
+  }
+  toSource() {
+    return escapeIdent(this.value);
+  }
+}
+
+class FunctionToken extends StringValuedToken {
+  tokenType = "FUNCTION";
+  mirror;
+  constructor(val) {
+    super();
+    this.value = val;
+    this.mirror = ")";
+  }
+  toString() {
+    return "FUNCTION(" + this.value + ")";
+  }
+  toSource() {
+    return escapeIdent(this.value) + "(";
+  }
+}
+
+class AtKeywordToken extends StringValuedToken {
+  tokenType = "AT-KEYWORD";
+  constructor(val) {
+    super();
+    this.value = val;
+  }
+  toString() {
+    return "AT(" + this.value + ")";
+  }
+  toSource() {
+    return "@" + escapeIdent(this.value);
+  }
+}
+
+class HashToken extends StringValuedToken {
+  tokenType = "HASH";
+  type;
+  constructor(val) {
+    super();
+    this.value = val;
+    this.type = "unrestricted";
+  }
+  toString() {
+    return "HASH(" + this.value + ")";
+  }
+  toJSON() {
+    const json = this.constructor.prototype.constructor.prototype.toJSON.call(this);
+    json.value = this.value;
+    json.type = this.type;
+    return json;
+  }
+  toSource() {
+    if (this.type === "id")
+      return "#" + escapeIdent(this.value);
+    else
+      return "#" + escapeHash(this.value);
+  }
+}
+
+class StringToken extends StringValuedToken {
+  tokenType = "STRING";
+  constructor(val) {
+    super();
+    this.value = val;
+  }
+  toString() {
+    return '"' + escapeString(this.value) + '"';
+  }
+}
+
+class URLToken extends StringValuedToken {
+  tokenType = "URL";
+  constructor(val) {
+    super();
+    this.value = val;
+  }
+  toString() {
+    return "URL(" + this.value + ")";
+  }
+  toSource() {
+    return 'url("' + escapeString(this.value) + '")';
+  }
+}
+
+class NumberToken extends CSSParserToken {
+  tokenType = "NUMBER";
+  type;
+  repr;
+  constructor() {
+    super();
+    this.type = "integer";
+    this.repr = "";
+  }
+  toString() {
+    if (this.type === "integer")
+      return "INT(" + this.value + ")";
+    return "NUMBER(" + this.value + ")";
+  }
+  toJSON() {
+    const json = super.toJSON();
+    json.value = this.value;
+    json.type = this.type;
+    json.repr = this.repr;
+    return json;
+  }
+  toSource() {
+    return this.repr;
+  }
+}
+
+class PercentageToken extends CSSParserToken {
+  tokenType = "PERCENTAGE";
+  repr;
+  constructor() {
+    super();
+    this.repr = "";
+  }
+  toString() {
+    return "PERCENTAGE(" + this.value + ")";
+  }
+  toJSON() {
+    const json = this.constructor.prototype.constructor.prototype.toJSON.call(this);
+    json.value = this.value;
+    json.repr = this.repr;
+    return json;
+  }
+  toSource() {
+    return this.repr + "%";
+  }
+}
+
+class DimensionToken extends CSSParserToken {
+  tokenType = "DIMENSION";
+  type;
+  repr;
+  unit;
+  constructor() {
+    super();
+    this.type = "integer";
+    this.repr = "";
+    this.unit = "";
+  }
+  toString() {
+    return "DIM(" + this.value + "," + this.unit + ")";
+  }
+  toJSON() {
+    const json = this.constructor.prototype.constructor.prototype.toJSON.call(this);
+    json.value = this.value;
+    json.type = this.type;
+    json.repr = this.repr;
+    json.unit = this.unit;
+    return json;
+  }
+  toSource() {
+    const source = this.repr;
+    let unit = escapeIdent(this.unit);
+    if (unit[0].toLowerCase() === "e" && (unit[1] === "-" || between(unit.charCodeAt(1), 48, 57))) {
+      unit = "\\65 " + unit.slice(1, unit.length);
+    }
+    return source + unit;
+  }
+}
+function escapeIdent(string) {
+  string = "" + string;
+  let result = "";
+  const firstcode = string.charCodeAt(0);
+  for (let i = 0;i < string.length; i++) {
+    const code = string.charCodeAt(i);
+    if (code === 0)
+      throw new InvalidCharacterError("Invalid character: the input contains U+0000.");
+    if (between(code, 1, 31) || code === 127 || i === 0 && between(code, 48, 57) || i === 1 && between(code, 48, 57) && firstcode === 45)
+      result += "\\" + code.toString(16) + " ";
+    else if (code >= 128 || code === 45 || code === 95 || between(code, 48, 57) || between(code, 65, 90) || between(code, 97, 122))
+      result += string[i];
+    else
+      result += "\\" + string[i];
+  }
+  return result;
+}
+function escapeHash(string) {
+  string = "" + string;
+  let result = "";
+  for (let i = 0;i < string.length; i++) {
+    const code = string.charCodeAt(i);
+    if (code === 0)
+      throw new InvalidCharacterError("Invalid character: the input contains U+0000.");
+    if (code >= 128 || code === 45 || code === 95 || between(code, 48, 57) || between(code, 65, 90) || between(code, 97, 122))
+      result += string[i];
+    else
+      result += "\\" + code.toString(16) + " ";
+  }
+  return result;
+}
+function escapeString(string) {
+  string = "" + string;
+  let result = "";
+  for (let i = 0;i < string.length; i++) {
+    const code = string.charCodeAt(i);
+    if (code === 0)
+      throw new InvalidCharacterError("Invalid character: the input contains U+0000.");
+    if (between(code, 1, 31) || code === 127)
+      result += "\\" + code.toString(16) + " ";
+    else if (code === 34 || code === 92)
+      result += "\\" + string[i];
+    else
+      result += string[i];
+  }
+  return result;
+}
+
+// vendor/playwright/isomorphic/cssParser.ts
+class InvalidSelectorError extends Error {
+}
+function parseCSS(selector, customNames) {
+  let tokens;
+  try {
+    tokens = tokenize(selector);
+    if (!(tokens[tokens.length - 1] instanceof EOFToken))
+      tokens.push(new EOFToken);
+  } catch (e) {
+    const newMessage = e.message + ` while parsing css selector "${selector}". Did you mean to CSS.escape it?`;
+    const index = (e.stack || "").indexOf(e.message);
+    if (index !== -1)
+      e.stack = e.stack.substring(0, index) + newMessage + e.stack.substring(index + e.message.length);
+    e.message = newMessage;
+    throw e;
+  }
+  const unsupportedToken = tokens.find((token) => {
+    return token instanceof AtKeywordToken || token instanceof BadStringToken || token instanceof BadURLToken || token instanceof ColumnToken || token instanceof CDOToken || token instanceof CDCToken || token instanceof SemicolonToken || token instanceof OpenCurlyToken || token instanceof CloseCurlyToken || token instanceof URLToken || token instanceof PercentageToken;
+  });
+  if (unsupportedToken)
+    throw new InvalidSelectorError(`Unsupported token "${unsupportedToken.toSource()}" while parsing css selector "${selector}". Did you mean to CSS.escape it?`);
+  let pos = 0;
+  const names = new Set;
+  function unexpected() {
+    return new InvalidSelectorError(`Unexpected token "${tokens[pos].toSource()}" while parsing css selector "${selector}". Did you mean to CSS.escape it?`);
+  }
+  function skipWhitespace() {
+    while (tokens[pos] instanceof WhitespaceToken)
+      pos++;
+  }
+  function isIdent(p = pos) {
+    return tokens[p] instanceof IdentToken;
+  }
+  function isString2(p = pos) {
+    return tokens[p] instanceof StringToken;
+  }
+  function isNumber(p = pos) {
+    return tokens[p] instanceof NumberToken;
+  }
+  function isComma(p = pos) {
+    return tokens[p] instanceof CommaToken;
+  }
+  function isOpenParen(p = pos) {
+    return tokens[p] instanceof OpenParenToken;
+  }
+  function isCloseParen(p = pos) {
+    return tokens[p] instanceof CloseParenToken;
+  }
+  function isFunction(p = pos) {
+    return tokens[p] instanceof FunctionToken;
+  }
+  function isStar(p = pos) {
+    return tokens[p] instanceof DelimToken && tokens[p].value === "*";
+  }
+  function isEOF(p = pos) {
+    return tokens[p] instanceof EOFToken;
+  }
+  function isClauseCombinator(p = pos) {
+    return tokens[p] instanceof DelimToken && [">", "+", "~"].includes(tokens[p].value);
+  }
+  function isSelectorClauseEnd(p = pos) {
+    return isComma(p) || isCloseParen(p) || isEOF(p) || isClauseCombinator(p) || tokens[p] instanceof WhitespaceToken;
+  }
+  function consumeFunctionArguments() {
+    const result2 = [consumeArgument()];
+    while (true) {
+      skipWhitespace();
+      if (!isComma())
+        break;
+      pos++;
+      result2.push(consumeArgument());
+    }
+    return result2;
+  }
+  function consumeArgument() {
+    skipWhitespace();
+    if (isNumber())
+      return tokens[pos++].value;
+    if (isString2())
+      return tokens[pos++].value;
+    return consumeComplexSelector();
+  }
+  function consumeComplexSelector() {
+    const result2 = { simples: [] };
+    skipWhitespace();
+    if (isClauseCombinator()) {
+      result2.simples.push({ selector: { functions: [{ name: "scope", args: [] }] }, combinator: "" });
+    } else {
+      result2.simples.push({ selector: consumeSimpleSelector(), combinator: "" });
+    }
+    while (true) {
+      skipWhitespace();
+      if (isClauseCombinator()) {
+        result2.simples[result2.simples.length - 1].combinator = tokens[pos++].value;
+        skipWhitespace();
+      } else if (isSelectorClauseEnd()) {
+        break;
+      }
+      result2.simples.push({ combinator: "", selector: consumeSimpleSelector() });
+    }
+    return result2;
+  }
+  function consumeSimpleSelector() {
+    let rawCSSString = "";
+    const functions = [];
+    while (!isSelectorClauseEnd()) {
+      if (isIdent() || isStar()) {
+        rawCSSString += tokens[pos++].toSource();
+      } else if (tokens[pos] instanceof HashToken) {
+        rawCSSString += tokens[pos++].toSource();
+      } else if (tokens[pos] instanceof DelimToken && tokens[pos].value === ".") {
+        pos++;
+        if (isIdent())
+          rawCSSString += "." + tokens[pos++].toSource();
+        else
+          throw unexpected();
+      } else if (tokens[pos] instanceof ColonToken) {
+        pos++;
+        if (isIdent()) {
+          if (!customNames.has(tokens[pos].value.toLowerCase())) {
+            rawCSSString += ":" + tokens[pos++].toSource();
+          } else {
+            const name = tokens[pos++].value.toLowerCase();
+            functions.push({ name, args: [] });
+            names.add(name);
+          }
+        } else if (isFunction()) {
+          const name = tokens[pos++].value.toLowerCase();
+          if (!customNames.has(name)) {
+            rawCSSString += `:${name}(${consumeBuiltinFunctionArguments()})`;
+          } else {
+            functions.push({ name, args: consumeFunctionArguments() });
+            names.add(name);
+          }
+          skipWhitespace();
+          if (!isCloseParen())
+            throw unexpected();
+          pos++;
+        } else {
+          throw unexpected();
+        }
+      } else if (tokens[pos] instanceof OpenSquareToken) {
+        rawCSSString += "[";
+        pos++;
+        while (!(tokens[pos] instanceof CloseSquareToken) && !isEOF())
+          rawCSSString += tokens[pos++].toSource();
+        if (!(tokens[pos] instanceof CloseSquareToken))
+          throw unexpected();
+        rawCSSString += "]";
+        pos++;
+      } else {
+        throw unexpected();
+      }
+    }
+    if (!rawCSSString && !functions.length)
+      throw unexpected();
+    return { css: rawCSSString || undefined, functions };
+  }
+  function consumeBuiltinFunctionArguments() {
+    let s = "";
+    let balance = 1;
+    while (!isEOF()) {
+      if (isOpenParen() || isFunction())
+        balance++;
+      if (isCloseParen())
+        balance--;
+      if (!balance)
+        break;
+      s += tokens[pos++].toSource();
+    }
+    return s;
+  }
+  const result = consumeFunctionArguments();
+  if (!isEOF())
+    throw unexpected();
+  if (result.some((arg) => typeof arg !== "object" || !("simples" in arg)))
+    throw new InvalidSelectorError(`Error while parsing css selector "${selector}". Did you mean to CSS.escape it?`);
+  return { selector: result, names: Array.from(names) };
+}
+
+// vendor/playwright/isomorphic/selectorParser.ts
+var kNestedSelectorNames = new Set(["internal:has", "internal:has-not", "internal:and", "internal:or", "internal:chain", "left-of", "right-of", "above", "below", "near"]);
+var kNestedSelectorNamesWithDistance = new Set(["left-of", "right-of", "above", "below", "near"]);
+var customCSSNames = new Set(["not", "is", "where", "has", "scope", "light", "visible", "text", "text-matches", "text-is", "has-text", "above", "below", "right-of", "left-of", "near", "nth-match"]);
+function parseSelector(selector) {
+  const parsedStrings = parseSelectorString(selector);
+  const parts = [];
+  for (const part of parsedStrings.parts) {
+    if (part.name === "css" || part.name === "css:light") {
+      if (part.name === "css:light")
+        part.body = ":light(" + part.body + ")";
+      const parsedCSS = parseCSS(part.body, customCSSNames);
+      parts.push({
+        name: "css",
+        body: parsedCSS.selector,
+        source: part.body
+      });
+      continue;
+    }
+    if (kNestedSelectorNames.has(part.name)) {
+      let innerSelector;
+      let distance;
+      try {
+        const unescaped = JSON.parse("[" + part.body + "]");
+        if (!Array.isArray(unescaped) || unescaped.length < 1 || unescaped.length > 2 || typeof unescaped[0] !== "string")
+          throw new InvalidSelectorError(`Malformed selector: ${part.name}=` + part.body);
+        innerSelector = unescaped[0];
+        if (unescaped.length === 2) {
+          if (typeof unescaped[1] !== "number" || !kNestedSelectorNamesWithDistance.has(part.name))
+            throw new InvalidSelectorError(`Malformed selector: ${part.name}=` + part.body);
+          distance = unescaped[1];
+        }
+      } catch (e) {
+        throw new InvalidSelectorError(`Malformed selector: ${part.name}=` + part.body);
+      }
+      const nested = { name: part.name, source: part.body, body: { parsed: parseSelector(innerSelector), distance } };
+      const lastFrame = [...nested.body.parsed.parts].reverse().find((part2) => part2.name === "internal:control" && part2.body === "enter-frame");
+      const lastFrameIndex = lastFrame ? nested.body.parsed.parts.indexOf(lastFrame) : -1;
+      const outerParts = parts[0]?.name === "internal:control" && parts[0].body === "any-frame" ? parts.slice(1) : parts;
+      if (lastFrameIndex !== -1 && selectorPartsEqual(nested.body.parsed.parts.slice(0, lastFrameIndex + 1), outerParts.slice(0, lastFrameIndex + 1))) {
+        nested.body.parsed.parts.splice(0, lastFrameIndex + 1);
+        if (nested.body.parsed.capture !== undefined) {
+          if (nested.body.parsed.capture <= lastFrameIndex)
+            throw new InvalidSelectorError(`Can not capture the selector before diving into the frame. Only use * after the last frame has been selected`);
+          nested.body.parsed.capture -= lastFrameIndex + 1;
+        }
+      }
+      parts.push(nested);
+      continue;
+    }
+    parts.push({ ...part, source: part.body });
+  }
+  if (kNestedSelectorNames.has(parts[0].name))
+    throw new InvalidSelectorError(`"${parts[0].name}" selector cannot be first`);
+  return {
+    capture: parsedStrings.capture,
+    parts
+  };
+}
+function selectorPartsEqual(list1, list2) {
+  return stringifySelector({ parts: list1 }) === stringifySelector({ parts: list2 });
+}
+function stringifySelector(selector, forceEngineName) {
+  if (typeof selector === "string")
+    return selector;
+  return selector.parts.map((p, i) => {
+    let includeEngine = true;
+    if (!forceEngineName && i !== selector.capture) {
+      if (p.name === "css")
+        includeEngine = false;
+      else if (p.name === "xpath" && (p.source.startsWith("//") || p.source.startsWith("..")))
+        includeEngine = false;
+    }
+    const prefix = includeEngine ? p.name + "=" : "";
+    return `${i === selector.capture ? "*" : ""}${prefix}${p.source}`;
+  }).join(" >> ");
+}
+function parseSelectorString(selector) {
+  let index = 0;
+  let quote;
+  let start = 0;
+  const result = { parts: [] };
+  const append = () => {
+    const part = selector.substring(start, index).trim();
+    const eqIndex = part.indexOf("=");
+    let name;
+    let body;
+    if (eqIndex !== -1 && part.substring(0, eqIndex).trim().match(/^[a-zA-Z_0-9-+:*]+$/)) {
+      name = part.substring(0, eqIndex).trim();
+      body = part.substring(eqIndex + 1);
+    } else if (part.length > 1 && part[0] === '"' && part[part.length - 1] === '"') {
+      name = "text";
+      body = part;
+    } else if (part.length > 1 && part[0] === "'" && part[part.length - 1] === "'") {
+      name = "text";
+      body = part;
+    } else if (/^\(*\/\//.test(part) || part.startsWith("..")) {
+      name = "xpath";
+      body = part;
+    } else {
+      name = "css";
+      body = part;
+    }
+    let capture = false;
+    if (name[0] === "*") {
+      capture = true;
+      name = name.substring(1);
+    }
+    result.parts.push({ name, body });
+    if (capture) {
+      if (result.capture !== undefined)
+        throw new InvalidSelectorError(`Only one of the selectors can capture using * modifier`);
+      result.capture = result.parts.length - 1;
+    }
+  };
+  if (!selector.includes(">>")) {
+    index = selector.length;
+    append();
+    return result;
+  }
+  const shouldIgnoreTextSelectorQuote = () => {
+    const prefix = selector.substring(start, index);
+    const match = prefix.match(/^\s*text\s*=(.*)$/);
+    return !!match && !!match[1];
+  };
+  while (index < selector.length) {
+    const c = selector[index];
+    if (c === "\\" && index + 1 < selector.length) {
+      index += 2;
+    } else if (c === quote) {
+      quote = undefined;
+      index++;
+    } else if (!quote && (c === '"' || c === "'" || c === "`") && !shouldIgnoreTextSelectorQuote()) {
+      quote = c;
+      index++;
+    } else if (!quote && c === ">" && selector[index + 1] === ">") {
+      append();
+      index += 2;
+      start = index;
+    } else {
+      index++;
+    }
+  }
+  append();
+  return result;
+}
+function parseAttributeSelector(selector, allowUnquotedStrings) {
+  let wp = 0;
+  let EOL = selector.length === 0;
+  const next = () => selector[wp] || "";
+  const eat1 = () => {
+    const result2 = next();
+    ++wp;
+    EOL = wp >= selector.length;
+    return result2;
+  };
+  const syntaxError = (stage) => {
+    if (EOL)
+      throw new InvalidSelectorError(`Unexpected end of selector while parsing selector \`${selector}\``);
+    throw new InvalidSelectorError(`Error while parsing selector \`${selector}\` - unexpected symbol "${next()}" at position ${wp}` + (stage ? " during " + stage : ""));
+  };
+  function skipSpaces() {
+    while (!EOL && /\s/.test(next()))
+      eat1();
+  }
+  function isCSSNameChar(char) {
+    return char >= "" || char >= "0" && char <= "9" || char >= "A" && char <= "Z" || char >= "a" && char <= "z" || char >= "0" && char <= "9" || char === "_" || char === "-";
+  }
+  function readIdentifier() {
+    let result2 = "";
+    skipSpaces();
+    while (!EOL && isCSSNameChar(next()))
+      result2 += eat1();
+    return result2;
+  }
+  function readQuotedString(quote) {
+    let result2 = eat1();
+    if (result2 !== quote)
+      syntaxError("parsing quoted string");
+    while (!EOL && next() !== quote) {
+      if (next() === "\\")
+        eat1();
+      result2 += eat1();
+    }
+    if (next() !== quote)
+      syntaxError("parsing quoted string");
+    result2 += eat1();
+    return result2;
+  }
+  function readRegularExpression() {
+    if (eat1() !== "/")
+      syntaxError("parsing regular expression");
+    let source = "";
+    let inClass = false;
+    while (!EOL) {
+      if (next() === "\\") {
+        source += eat1();
+        if (EOL)
+          syntaxError("parsing regular expression");
+      } else if (inClass && next() === "]") {
+        inClass = false;
+      } else if (!inClass && next() === "[") {
+        inClass = true;
+      } else if (!inClass && next() === "/") {
+        break;
+      }
+      source += eat1();
+    }
+    if (eat1() !== "/")
+      syntaxError("parsing regular expression");
+    let flags = "";
+    while (!EOL && next().match(/[dgimsuvy]/))
+      flags += eat1();
+    try {
+      return new RegExp(source, flags);
+    } catch (e) {
+      throw new InvalidSelectorError(`Error while parsing selector \`${selector}\`: ${e.message}`);
+    }
+  }
+  function readAttributeToken() {
+    let token = "";
+    skipSpaces();
+    if (next() === `'` || next() === `"`)
+      token = readQuotedString(next()).slice(1, -1);
+    else
+      token = readIdentifier();
+    if (!token)
+      syntaxError("parsing property path");
+    return token;
+  }
+  function readOperator() {
+    skipSpaces();
+    let op = "";
+    if (!EOL)
+      op += eat1();
+    if (!EOL && op !== "=")
+      op += eat1();
+    if (!["=", "*=", "^=", "$=", "|=", "~="].includes(op))
+      syntaxError("parsing operator");
+    return op;
+  }
+  function readAttribute() {
+    eat1();
+    const jsonPath = [];
+    jsonPath.push(readAttributeToken());
+    skipSpaces();
+    while (next() === ".") {
+      eat1();
+      jsonPath.push(readAttributeToken());
+      skipSpaces();
+    }
+    if (next() === "]") {
+      eat1();
+      return { name: jsonPath.join("."), jsonPath, op: "<truthy>", value: null, caseSensitive: false };
+    }
+    const operator = readOperator();
+    let value = undefined;
+    let caseSensitive = true;
+    skipSpaces();
+    if (next() === "/") {
+      if (operator !== "=")
+        throw new InvalidSelectorError(`Error while parsing selector \`${selector}\` - cannot use ${operator} in attribute with regular expression`);
+      value = readRegularExpression();
+    } else if (next() === `'` || next() === `"`) {
+      value = readQuotedString(next()).slice(1, -1);
+      skipSpaces();
+      if (next() === "i" || next() === "I") {
+        caseSensitive = false;
+        eat1();
+      } else if (next() === "s" || next() === "S") {
+        caseSensitive = true;
+        eat1();
+      }
+    } else {
+      value = "";
+      while (!EOL && (isCSSNameChar(next()) || next() === "+" || next() === "."))
+        value += eat1();
+      if (value === "true") {
+        value = true;
+      } else if (value === "false") {
+        value = false;
+      } else {
+        if (!allowUnquotedStrings) {
+          value = +value;
+          if (Number.isNaN(value))
+            syntaxError("parsing attribute value");
+        }
+      }
+    }
+    skipSpaces();
+    if (next() !== "]")
+      syntaxError("parsing attribute value");
+    eat1();
+    if (operator !== "=" && typeof value !== "string")
+      throw new InvalidSelectorError(`Error while parsing selector \`${selector}\` - cannot use ${operator} in attribute with non-string matching value - ${value}`);
+    return { name: jsonPath.join("."), jsonPath, op: operator, value, caseSensitive };
+  }
+  const result = {
+    name: "",
+    attributes: []
+  };
+  result.name = readIdentifier();
+  skipSpaces();
+  while (next() === "[") {
+    result.attributes.push(readAttribute());
+    skipSpaces();
+  }
+  if (!EOL)
+    syntaxError(undefined);
+  if (!result.name && !result.attributes.length)
+    throw new InvalidSelectorError(`Error while parsing selector \`${selector}\` - selector cannot be empty`);
+  return result;
+}
+
+// vendor/playwright/isomorphic/locatorGenerators.ts
+function asLocatorDescription(lang, selector) {
+  try {
+    const parsed = parseSelector(selector);
+    const customDescription = parseCustomDescription(parsed);
+    if (customDescription)
+      return customDescription;
+    return innerAsLocators(new generators[lang], parsed, false, 1)[0];
+  } catch (e) {
+    return selector;
+  }
+}
+function locatorCustomDescription(selector) {
+  try {
+    const parsed = parseSelector(selector);
+    return parseCustomDescription(parsed);
+  } catch (e) {
+    return;
+  }
+}
+function parseCustomDescription(parsed) {
+  const lastPart = parsed.parts[parsed.parts.length - 1];
+  if (lastPart?.name === "internal:describe") {
+    const description = JSON.parse(lastPart.body);
+    if (typeof description === "string")
+      return description;
+  }
+  return;
+}
+function innerAsLocators(factory, parsed, isFrameLocator = false, maxOutputSize = 20) {
+  const parts = [...parsed.parts];
+  const tokens = [];
+  let nextBase = isFrameLocator ? "frame-locator" : "page";
+  for (let index = 0;index < parts.length; index++) {
+    const part = parts[index];
+    const base = nextBase;
+    nextBase = "locator";
+    if (part.name === "internal:describe")
+      continue;
+    if (part.name === "nth") {
+      if (part.body === "0")
+        tokens.push([factory.generateLocator(base, "first", ""), factory.generateLocator(base, "nth", "0")]);
+      else if (part.body === "-1")
+        tokens.push([factory.generateLocator(base, "last", ""), factory.generateLocator(base, "nth", "-1")]);
+      else
+        tokens.push([factory.generateLocator(base, "nth", part.body)]);
+      continue;
+    }
+    if (part.name === "visible") {
+      const tokenList = [];
+      if (part.body === "true")
+        tokenList.push(factory.generateLocator(base, "visible", ""));
+      tokenList.push(factory.generateLocator(base, "filter-visible", part.body), factory.generateLocator(base, "default", `visible=${part.body}`));
+      tokens.push(tokenList);
+      continue;
+    }
+    if (part.name === "internal:text") {
+      const { exact, text } = detectExact(part.body);
+      tokens.push([factory.generateLocator(base, "text", text, { exact })]);
+      continue;
+    }
+    if (part.name === "internal:has-text") {
+      const { exact, text } = detectExact(part.body);
+      if (!exact) {
+        tokens.push([factory.generateLocator(base, "has-text", text, { exact })]);
+        continue;
+      }
+    }
+    if (part.name === "internal:has-not-text") {
+      const { exact, text } = detectExact(part.body);
+      if (!exact) {
+        tokens.push([factory.generateLocator(base, "has-not-text", text, { exact })]);
+        continue;
+      }
+    }
+    if (part.name === "internal:has") {
+      const inners = innerAsLocators(factory, part.body.parsed, false, maxOutputSize);
+      tokens.push(inners.map((inner) => factory.generateLocator(base, "has", inner)));
+      continue;
+    }
+    if (part.name === "internal:has-not") {
+      const inners = innerAsLocators(factory, part.body.parsed, false, maxOutputSize);
+      tokens.push(inners.map((inner) => factory.generateLocator(base, "hasNot", inner)));
+      continue;
+    }
+    if (part.name === "internal:and") {
+      const inners = innerAsLocators(factory, part.body.parsed, false, maxOutputSize);
+      tokens.push(inners.map((inner) => factory.generateLocator(base, "and", inner)));
+      continue;
+    }
+    if (part.name === "internal:or") {
+      const inners = innerAsLocators(factory, part.body.parsed, false, maxOutputSize);
+      tokens.push(inners.map((inner) => factory.generateLocator(base, "or", inner)));
+      continue;
+    }
+    if (part.name === "internal:chain") {
+      const inners = innerAsLocators(factory, part.body.parsed, false, maxOutputSize);
+      tokens.push(inners.map((inner) => factory.generateLocator(base, "chain", inner)));
+      continue;
+    }
+    if (part.name === "internal:label") {
+      const { exact, text } = detectExact(part.body);
+      tokens.push([factory.generateLocator(base, "label", text, { exact })]);
+      continue;
+    }
+    if (part.name === "internal:role") {
+      const attrSelector = parseAttributeSelector(part.body, true);
+      const options = { attrs: [] };
+      for (const attr of attrSelector.attributes) {
+        if (attr.name === "name" || attr.name === "description") {
+          if (typeof attr.value === "string") {
+            if (options.exact !== undefined && options.exact !== attr.caseSensitive)
+              throw new Error(`Conflicting exactness in internal:role selector: ${stringifySelector({ parts: [part] })}`);
+            options.exact = attr.caseSensitive;
+          }
+          options[attr.name] = attr.value;
+        } else {
+          if (attr.name === "level" && typeof attr.value === "string")
+            attr.value = +attr.value;
+          options.attrs.push({ name: attr.name === "include-hidden" ? "includeHidden" : attr.name, value: attr.value });
+        }
+      }
+      tokens.push([factory.generateLocator(base, "role", attrSelector.name, options)]);
+      continue;
+    }
+    if (part.name === "internal:testid") {
+      const attrSelector = parseAttributeSelector(part.body, true);
+      const { value } = attrSelector.attributes[0];
+      tokens.push([factory.generateLocator(base, "test-id", value)]);
+      continue;
+    }
+    if (part.name === "internal:attr") {
+      const attrSelector = parseAttributeSelector(part.body, true);
+      const { name, value, caseSensitive } = attrSelector.attributes[0];
+      const text = value;
+      const exact = !!caseSensitive;
+      if (name === "placeholder") {
+        tokens.push([factory.generateLocator(base, "placeholder", text, { exact })]);
+        continue;
+      }
+      if (name === "alt") {
+        tokens.push([factory.generateLocator(base, "alt", text, { exact })]);
+        continue;
+      }
+      if (name === "title") {
+        tokens.push([factory.generateLocator(base, "title", text, { exact })]);
+        continue;
+      }
+    }
+    if (part.name === "internal:control" && part.body === "any-frame") {
+      tokens.push([factory.generateLocator(base, "any-frame", "")]);
+      nextBase = "frame-locator";
+      continue;
+    }
+    if (part.name === "internal:control" && part.body === "enter-frame") {
+      const lastTokens = tokens[tokens.length - 1];
+      const lastPart = parts[index - 1];
+      const transformed = lastTokens.map((token) => factory.chainLocators([token, factory.generateLocator(base, "frame", "")]));
+      if (["xpath", "css"].includes(lastPart.name)) {
+        transformed.push(factory.generateLocator(base, "frame-locator", stringifySelector({ parts: [lastPart] })), factory.generateLocator(base, "frame-locator", stringifySelector({ parts: [lastPart] }, true)));
+      }
+      lastTokens.splice(0, lastTokens.length, ...transformed);
+      nextBase = "frame-locator";
+      continue;
+    }
+    const nextPart = parts[index + 1];
+    const selectorPart = stringifySelector({ parts: [part] });
+    const locatorPart = factory.generateLocator(base, "default", selectorPart);
+    if (nextPart && ["internal:has-text", "internal:has-not-text"].includes(nextPart.name)) {
+      const { exact, text } = detectExact(nextPart.body);
+      if (!exact) {
+        const nextLocatorPart = factory.generateLocator("locator", nextPart.name === "internal:has-text" ? "has-text" : "has-not-text", text, { exact });
+        const options = {};
+        if (nextPart.name === "internal:has-text")
+          options.hasText = text;
+        else
+          options.hasNotText = text;
+        const combinedPart = factory.generateLocator(base, "default", selectorPart, options);
+        tokens.push([factory.chainLocators([locatorPart, nextLocatorPart]), combinedPart]);
+        index++;
+        continue;
+      }
+    }
+    let locatorPartWithEngine;
+    if (["xpath", "css"].includes(part.name)) {
+      const selectorPart2 = stringifySelector({ parts: [part] }, true);
+      locatorPartWithEngine = factory.generateLocator(base, "default", selectorPart2);
+    }
+    tokens.push([locatorPart, locatorPartWithEngine].filter(Boolean));
+  }
+  return combineTokens(factory, tokens, maxOutputSize);
+}
+function combineTokens(factory, tokens, maxOutputSize) {
+  const currentTokens = tokens.map(() => "");
+  const result = [];
+  const visit = (index) => {
+    if (index === tokens.length) {
+      result.push(factory.chainLocators(currentTokens));
+      return result.length < maxOutputSize;
+    }
+    for (const taken of tokens[index]) {
+      currentTokens[index] = taken;
+      if (!visit(index + 1))
+        return false;
+    }
+    return true;
+  };
+  visit(0);
+  return result;
+}
+function detectExact(text) {
+  let exact = false;
+  const match = text.match(/^\/(.*)\/([dgimsuvy]*)$/);
+  if (match)
+    return { text: new RegExp(match[1], match[2]) };
+  if (text.endsWith('"')) {
+    text = JSON.parse(text);
+    exact = true;
+  } else if (text.endsWith('"s')) {
+    text = JSON.parse(text.substring(0, text.length - 1));
+    exact = true;
+  } else if (text.endsWith('"i')) {
+    text = JSON.parse(text.substring(0, text.length - 1));
+    exact = false;
+  }
+  return { exact, text };
+}
+
+class JavaScriptLocatorFactory {
+  preferredQuote;
+  constructor(preferredQuote) {
+    this.preferredQuote = preferredQuote;
+  }
+  generateLocator(base, kind, body, options = {}) {
+    switch (kind) {
+      case "default":
+        if (options.hasText !== undefined)
+          return `locator(${this.quote(body)}, { hasText: ${this.toHasText(options.hasText)} })`;
+        if (options.hasNotText !== undefined)
+          return `locator(${this.quote(body)}, { hasNotText: ${this.toHasText(options.hasNotText)} })`;
+        return `locator(${this.quote(body)})`;
+      case "frame-locator":
+        return `frameLocator(${this.quote(body)})`;
+      case "frame":
+        return `contentFrame()`;
+      case "any-frame":
+        return `frameLocator()`;
+      case "nth":
+        return `nth(${body})`;
+      case "first":
+        return `first()`;
+      case "last":
+        return `last()`;
+      case "visible":
+        return `visible()`;
+      case "filter-visible":
+        return `filter({ visible: ${body === "true" ? "true" : "false"} })`;
+      case "role":
+        const attrs = [];
+        if (isRegExp(options.name))
+          attrs.push(`name: ${this.regexToSourceString(options.name)}`);
+        else if (typeof options.name === "string")
+          attrs.push(`name: ${this.quote(options.name)}`);
+        if (isRegExp(options.description))
+          attrs.push(`description: ${this.regexToSourceString(options.description)}`);
+        else if (typeof options.description === "string")
+          attrs.push(`description: ${this.quote(options.description)}`);
+        if (options.exact && (typeof options.name === "string" || typeof options.description === "string"))
+          attrs.push(`exact: true`);
+        for (const { name, value } of options.attrs)
+          attrs.push(`${name}: ${typeof value === "string" ? this.quote(value) : value}`);
+        const attrString = attrs.length ? `, { ${attrs.join(", ")} }` : "";
+        return `getByRole(${this.quote(body)}${attrString})`;
+      case "has-text":
+        return `filter({ hasText: ${this.toHasText(body)} })`;
+      case "has-not-text":
+        return `filter({ hasNotText: ${this.toHasText(body)} })`;
+      case "has":
+        return `filter({ has: ${body} })`;
+      case "hasNot":
+        return `filter({ hasNot: ${body} })`;
+      case "and":
+        return `and(${body})`;
+      case "or":
+        return `or(${body})`;
+      case "chain":
+        return `locator(${body})`;
+      case "test-id":
+        return `getByTestId(${this.toTestIdValue(body)})`;
+      case "text":
+        return this.toCallWithExact("getByText", body, !!options.exact);
+      case "alt":
+        return this.toCallWithExact("getByAltText", body, !!options.exact);
+      case "placeholder":
+        return this.toCallWithExact("getByPlaceholder", body, !!options.exact);
+      case "label":
+        return this.toCallWithExact("getByLabel", body, !!options.exact);
+      case "title":
+        return this.toCallWithExact("getByTitle", body, !!options.exact);
+      default:
+        throw new Error("Unknown selector kind " + kind);
+    }
+  }
+  chainLocators(locators) {
+    return locators.join(".");
+  }
+  regexToSourceString(re) {
+    return normalizeEscapedRegexQuotes(String(re));
+  }
+  toCallWithExact(method, body, exact) {
+    if (isRegExp(body))
+      return `${method}(${this.regexToSourceString(body)})`;
+    return exact ? `${method}(${this.quote(body)}, { exact: true })` : `${method}(${this.quote(body)})`;
+  }
+  toHasText(body) {
+    if (isRegExp(body))
+      return this.regexToSourceString(body);
+    return this.quote(body);
+  }
+  toTestIdValue(value) {
+    if (isRegExp(value))
+      return this.regexToSourceString(value);
+    return this.quote(value);
+  }
+  quote(text) {
+    return escapeWithQuotes(text, this.preferredQuote ?? "'");
+  }
+}
+
+class PythonLocatorFactory {
+  generateLocator(base, kind, body, options = {}) {
+    switch (kind) {
+      case "default":
+        if (options.hasText !== undefined)
+          return `locator(${this.quote(body)}, has_text=${this.toHasText(options.hasText)})`;
+        if (options.hasNotText !== undefined)
+          return `locator(${this.quote(body)}, has_not_text=${this.toHasText(options.hasNotText)})`;
+        return `locator(${this.quote(body)})`;
+      case "frame-locator":
+        return `frame_locator(${this.quote(body)})`;
+      case "frame":
+        return `content_frame`;
+      case "any-frame":
+        return `frame_locator()`;
+      case "nth":
+        return `nth(${body})`;
+      case "first":
+        return `first`;
+      case "last":
+        return `last`;
+      case "visible":
+        return `visible`;
+      case "filter-visible":
+        return `filter(visible=${body === "true" ? "True" : "False"})`;
+      case "role":
+        const attrs = [];
+        if (isRegExp(options.name))
+          attrs.push(`name=${this.regexToString(options.name)}`);
+        else if (typeof options.name === "string")
+          attrs.push(`name=${this.quote(options.name)}`);
+        if (isRegExp(options.description))
+          attrs.push(`description=${this.regexToString(options.description)}`);
+        else if (typeof options.description === "string")
+          attrs.push(`description=${this.quote(options.description)}`);
+        if (options.exact && (typeof options.name === "string" || typeof options.description === "string"))
+          attrs.push(`exact=True`);
+        for (const { name, value } of options.attrs) {
+          let valueString = typeof value === "string" ? this.quote(value) : value;
+          if (typeof value === "boolean")
+            valueString = value ? "True" : "False";
+          attrs.push(`${toSnakeCase(name)}=${valueString}`);
+        }
+        const attrString = attrs.length ? `, ${attrs.join(", ")}` : "";
+        return `get_by_role(${this.quote(body)}${attrString})`;
+      case "has-text":
+        return `filter(has_text=${this.toHasText(body)})`;
+      case "has-not-text":
+        return `filter(has_not_text=${this.toHasText(body)})`;
+      case "has":
+        return `filter(has=${body})`;
+      case "hasNot":
+        return `filter(has_not=${body})`;
+      case "and":
+        return `and_(${body})`;
+      case "or":
+        return `or_(${body})`;
+      case "chain":
+        return `locator(${body})`;
+      case "test-id":
+        return `get_by_test_id(${this.toTestIdValue(body)})`;
+      case "text":
+        return this.toCallWithExact("get_by_text", body, !!options.exact);
+      case "alt":
+        return this.toCallWithExact("get_by_alt_text", body, !!options.exact);
+      case "placeholder":
+        return this.toCallWithExact("get_by_placeholder", body, !!options.exact);
+      case "label":
+        return this.toCallWithExact("get_by_label", body, !!options.exact);
+      case "title":
+        return this.toCallWithExact("get_by_title", body, !!options.exact);
+      default:
+        throw new Error("Unknown selector kind " + kind);
+    }
+  }
+  chainLocators(locators) {
+    return locators.join(".");
+  }
+  regexToString(body) {
+    const suffix = regexFlagsSuffix(body, "re", regexFlagNames.python);
+    return `re.compile(r"${normalizeEscapedRegexQuotes(body.source).replace(/\\\//, "/").replace(/"/g, "\\\"")}"${suffix})`;
+  }
+  toCallWithExact(method, body, exact) {
+    if (isRegExp(body))
+      return `${method}(${this.regexToString(body)})`;
+    if (exact)
+      return `${method}(${this.quote(body)}, exact=True)`;
+    return `${method}(${this.quote(body)})`;
+  }
+  toHasText(body) {
+    if (isRegExp(body))
+      return this.regexToString(body);
+    return `${this.quote(body)}`;
+  }
+  toTestIdValue(value) {
+    if (isRegExp(value))
+      return this.regexToString(value);
+    return this.quote(value);
+  }
+  quote(text) {
+    return escapeWithQuotes(text, '"');
+  }
+}
+
+class JavaLocatorFactory {
+  generateLocator(base, kind, body, options = {}) {
+    let clazz;
+    switch (base) {
+      case "page":
+        clazz = "Page";
+        break;
+      case "frame-locator":
+        clazz = "FrameLocator";
+        break;
+      case "locator":
+        clazz = "Locator";
+        break;
+    }
+    switch (kind) {
+      case "default":
+        if (options.hasText !== undefined)
+          return `locator(${this.quote(body)}, new ${clazz}.LocatorOptions().setHasText(${this.toHasText(options.hasText)}))`;
+        if (options.hasNotText !== undefined)
+          return `locator(${this.quote(body)}, new ${clazz}.LocatorOptions().setHasNotText(${this.toHasText(options.hasNotText)}))`;
+        return `locator(${this.quote(body)})`;
+      case "frame-locator":
+        return `frameLocator(${this.quote(body)})`;
+      case "frame":
+        return `contentFrame()`;
+      case "any-frame":
+        return `frameLocator()`;
+      case "nth":
+        return `nth(${body})`;
+      case "first":
+        return `first()`;
+      case "last":
+        return `last()`;
+      case "visible":
+        return `visible()`;
+      case "filter-visible":
+        return `filter(new ${clazz}.FilterOptions().setVisible(${body === "true" ? "true" : "false"}))`;
+      case "role":
+        const attrs = [];
+        if (isRegExp(options.name))
+          attrs.push(`.setName(${this.regexToString(options.name)})`);
+        else if (typeof options.name === "string")
+          attrs.push(`.setName(${this.quote(options.name)})`);
+        if (isRegExp(options.description))
+          attrs.push(`.setDescription(${this.regexToString(options.description)})`);
+        else if (typeof options.description === "string")
+          attrs.push(`.setDescription(${this.quote(options.description)})`);
+        if (options.exact && (typeof options.name === "string" || typeof options.description === "string"))
+          attrs.push(`.setExact(true)`);
+        for (const { name, value } of options.attrs)
+          attrs.push(`.set${toTitleCase(name)}(${typeof value === "string" ? this.quote(value) : value})`);
+        const attrString = attrs.length ? `, new ${clazz}.GetByRoleOptions()${attrs.join("")}` : "";
+        return `getByRole(AriaRole.${toSnakeCase(body).toUpperCase()}${attrString})`;
+      case "has-text":
+        return `filter(new ${clazz}.FilterOptions().setHasText(${this.toHasText(body)}))`;
+      case "has-not-text":
+        return `filter(new ${clazz}.FilterOptions().setHasNotText(${this.toHasText(body)}))`;
+      case "has":
+        return `filter(new ${clazz}.FilterOptions().setHas(${body}))`;
+      case "hasNot":
+        return `filter(new ${clazz}.FilterOptions().setHasNot(${body}))`;
+      case "and":
+        return `and(${body})`;
+      case "or":
+        return `or(${body})`;
+      case "chain":
+        return `locator(${body})`;
+      case "test-id":
+        return `getByTestId(${this.toTestIdValue(body)})`;
+      case "text":
+        return this.toCallWithExact(clazz, "getByText", body, !!options.exact);
+      case "alt":
+        return this.toCallWithExact(clazz, "getByAltText", body, !!options.exact);
+      case "placeholder":
+        return this.toCallWithExact(clazz, "getByPlaceholder", body, !!options.exact);
+      case "label":
+        return this.toCallWithExact(clazz, "getByLabel", body, !!options.exact);
+      case "title":
+        return this.toCallWithExact(clazz, "getByTitle", body, !!options.exact);
+      default:
+        throw new Error("Unknown selector kind " + kind);
+    }
+  }
+  chainLocators(locators) {
+    return locators.join(".");
+  }
+  regexToString(body) {
+    const suffix = regexFlagsSuffix(body, "Pattern", regexFlagNames.java);
+    return `Pattern.compile(${this.quote(normalizeEscapedRegexQuotes(body.source))}${suffix})`;
+  }
+  toCallWithExact(clazz, method, body, exact) {
+    if (isRegExp(body))
+      return `${method}(${this.regexToString(body)})`;
+    if (exact)
+      return `${method}(${this.quote(body)}, new ${clazz}.${toTitleCase(method)}Options().setExact(true))`;
+    return `${method}(${this.quote(body)})`;
+  }
+  toHasText(body) {
+    if (isRegExp(body))
+      return this.regexToString(body);
+    return this.quote(body);
+  }
+  toTestIdValue(value) {
+    if (isRegExp(value))
+      return this.regexToString(value);
+    return this.quote(value);
+  }
+  quote(text) {
+    return escapeWithQuotes(text, '"');
+  }
+}
+
+class CSharpLocatorFactory {
+  generateLocator(base, kind, body, options = {}) {
+    switch (kind) {
+      case "default":
+        if (options.hasText !== undefined)
+          return `Locator(${this.quote(body)}, new() { ${this.toHasText(options.hasText)} })`;
+        if (options.hasNotText !== undefined)
+          return `Locator(${this.quote(body)}, new() { ${this.toHasNotText(options.hasNotText)} })`;
+        return `Locator(${this.quote(body)})`;
+      case "frame-locator":
+        return `FrameLocator(${this.quote(body)})`;
+      case "frame":
+        return `ContentFrame`;
+      case "any-frame":
+        return `FrameLocator()`;
+      case "nth":
+        return `Nth(${body})`;
+      case "first":
+        return `First`;
+      case "last":
+        return `Last`;
+      case "visible":
+        return `Visible`;
+      case "filter-visible":
+        return `Filter(new() { Visible = ${body === "true" ? "true" : "false"} })`;
+      case "role":
+        const attrs = [];
+        if (isRegExp(options.name))
+          attrs.push(`NameRegex = ${this.regexToString(options.name)}`);
+        else if (typeof options.name === "string")
+          attrs.push(`Name = ${this.quote(options.name)}`);
+        if (isRegExp(options.description))
+          attrs.push(`DescriptionRegex = ${this.regexToString(options.description)}`);
+        else if (typeof options.description === "string")
+          attrs.push(`Description = ${this.quote(options.description)}`);
+        if (options.exact && (typeof options.name === "string" || typeof options.description === "string"))
+          attrs.push(`Exact = true`);
+        for (const { name, value } of options.attrs)
+          attrs.push(`${toTitleCase(name)} = ${typeof value === "string" ? this.quote(value) : value}`);
+        const attrString = attrs.length ? `, new() { ${attrs.join(", ")} }` : "";
+        return `GetByRole(AriaRole.${toTitleCase(body)}${attrString})`;
+      case "has-text":
+        return `Filter(new() { ${this.toHasText(body)} })`;
+      case "has-not-text":
+        return `Filter(new() { ${this.toHasNotText(body)} })`;
+      case "has":
+        return `Filter(new() { Has = ${body} })`;
+      case "hasNot":
+        return `Filter(new() { HasNot = ${body} })`;
+      case "and":
+        return `And(${body})`;
+      case "or":
+        return `Or(${body})`;
+      case "chain":
+        return `Locator(${body})`;
+      case "test-id":
+        return `GetByTestId(${this.toTestIdValue(body)})`;
+      case "text":
+        return this.toCallWithExact("GetByText", body, !!options.exact);
+      case "alt":
+        return this.toCallWithExact("GetByAltText", body, !!options.exact);
+      case "placeholder":
+        return this.toCallWithExact("GetByPlaceholder", body, !!options.exact);
+      case "label":
+        return this.toCallWithExact("GetByLabel", body, !!options.exact);
+      case "title":
+        return this.toCallWithExact("GetByTitle", body, !!options.exact);
+      default:
+        throw new Error("Unknown selector kind " + kind);
+    }
+  }
+  chainLocators(locators) {
+    return locators.join(".");
+  }
+  regexToString(body) {
+    const suffix = regexFlagsSuffix(body, "RegexOptions", regexFlagNames.csharp);
+    return `new Regex(${this.quote(normalizeEscapedRegexQuotes(body.source))}${suffix})`;
+  }
+  toCallWithExact(method, body, exact) {
+    if (isRegExp(body))
+      return `${method}(${this.regexToString(body)})`;
+    if (exact)
+      return `${method}(${this.quote(body)}, new() { Exact = true })`;
+    return `${method}(${this.quote(body)})`;
+  }
+  toHasText(body) {
+    if (isRegExp(body))
+      return `HasTextRegex = ${this.regexToString(body)}`;
+    return `HasText = ${this.quote(body)}`;
+  }
+  toTestIdValue(value) {
+    if (isRegExp(value))
+      return this.regexToString(value);
+    return this.quote(value);
+  }
+  toHasNotText(body) {
+    if (isRegExp(body))
+      return `HasNotTextRegex = ${this.regexToString(body)}`;
+    return `HasNotText = ${this.quote(body)}`;
+  }
+  quote(text) {
+    return escapeWithQuotes(text, '"');
+  }
+}
+
+class JsonlLocatorFactory {
+  generateLocator(base, kind, body, options = {}) {
+    return JSON.stringify({
+      kind,
+      body,
+      options
+    });
+  }
+  chainLocators(locators) {
+    const objects = locators.map((l) => JSON.parse(l));
+    for (let i = 0;i < objects.length - 1; ++i) {
+      let tail = objects[i];
+      while (tail.next)
+        tail = tail.next;
+      tail.next = objects[i + 1];
+    }
+    return JSON.stringify(objects[0]);
+  }
+}
+var generators = {
+  javascript: JavaScriptLocatorFactory,
+  python: PythonLocatorFactory,
+  java: JavaLocatorFactory,
+  csharp: CSharpLocatorFactory,
+  jsonl: JsonlLocatorFactory
+};
+var regexFlagNames = {
+  python: { i: "IGNORECASE", m: "MULTILINE", s: "DOTALL" },
+  java: { i: "CASE_INSENSITIVE", m: "MULTILINE", s: "DOTALL" },
+  csharp: { i: "IgnoreCase", m: "Multiline", s: "Singleline" }
+};
+function regexFlagsSuffix(body, flagsEnum, names) {
+  const flags = [...body.flags].filter((flag) => (flag in names)).map((flag) => `${flagsEnum}.${names[flag]}`);
+  return flags.length ? `, ${flags.join(" | ")}` : "";
+}
+function isRegExp(obj) {
+  return obj instanceof RegExp;
+}
+
 // src/locator.ts
 class Locator {
   _frame;
@@ -169,6 +2320,12 @@ class Locator {
       ...options
     });
   }
+  async innerHTML(options) {
+    return await this._frame._innerHTML("locator.innerHTML", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
   async getAttribute(name, options) {
     return await this._frame._getAttribute("locator.getAttribute", this._selector, name, { strict: true, ...options });
   }
@@ -180,6 +2337,12 @@ class Locator {
   }
   async allTextContents() {
     return await this._frame._allTextContents("locator.allTextContents", this._selector);
+  }
+  async allInnerTexts() {
+    return await this._frame._allInnerTexts("locator.allInnerTexts", this._selector);
+  }
+  async all() {
+    return new Array(await this._frame._queryCount("locator.all", this._selector)).fill(0).map((e, i) => this.nth(i));
   }
   async fill(value, options = {}) {
     return await this._frame._fill("locator.fill", this._selector, value, {
@@ -207,6 +2370,30 @@ class Locator {
   }
   async isChecked(options) {
     return await this._frame._isChecked("locator.isChecked", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
+  async isHidden(options) {
+    return await this._frame._isHidden("locator.isHidden", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
+  async isEnabled(options) {
+    return await this._frame._isEnabled("locator.isEnabled", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
+  async isDisabled(options) {
+    return await this._frame._isDisabled("locator.isDisabled", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
+  async isEditable(options) {
+    return await this._frame._isEditable("locator.isEditable", this._selector, {
       strict: true,
       ...options
     });
@@ -297,6 +2484,9 @@ class Locator {
   describe(description) {
     return new Locator(this._frame, this._selector + " >> internal:describe=" + JSON.stringify(description));
   }
+  description() {
+    return locatorCustomDescription(this._selector) || null;
+  }
   first() {
     return new Locator(this._frame, this._selector + " >> nth=0");
   }
@@ -315,6 +2505,9 @@ class Locator {
     if (locator._frame !== this._frame)
       throw new Error(`Locators must belong to the same frame.`);
     return new Locator(this._frame, this._selector + ` >> internal:or=` + JSON.stringify(locator._selector));
+  }
+  toString() {
+    return asLocatorDescription("javascript", this._selector);
   }
 }
 var _testIdAttributeName = "data-testid";
@@ -396,13 +2589,13 @@ function serializeUrlMatch(apiName, url) {
     return { glob: "" };
   if (isString(url))
     return url.length === 0 ? { regexSource: "^$", regexFlags: "" } : { glob: url };
-  if (isRegExp(url))
+  if (isRegExp2(url))
     return { regexSource: url.source, regexFlags: url.flags };
   if (typeof url === "function")
     throw new Error(`${apiName}: Neo does not support a predicate function as url yet; pass a glob string or a RegExp`);
   throw new Error("url parameter should be string, RegExp, URLPattern or function");
 }
-function isRegExp(value) {
+function isRegExp2(value) {
   return value instanceof RegExp || Object.prototype.toString.call(value) === "[object RegExp]";
 }
 
@@ -946,6 +3139,11 @@ var FRAME_PRESS_KEYS = [
 var FRAME_INPUT_VALUE_KEYS = ["selector", "strict"];
 var FRAME_IS_CHECKED_KEYS = ["selector", "strict"];
 var FRAME_IS_VISIBLE_KEYS = ["selector", "strict"];
+var FRAME_IS_HIDDEN_KEYS = ["selector", "strict"];
+var FRAME_IS_ENABLED_KEYS = ["selector", "strict"];
+var FRAME_IS_DISABLED_KEYS = ["selector", "strict"];
+var FRAME_IS_EDITABLE_KEYS = ["selector", "strict"];
+var FRAME_INNER_HTML_KEYS = ["selector", "strict"];
 var FRAME_CHECK_KEYS = [
   "selector",
   "strict",
@@ -1342,6 +3540,16 @@ class Frame {
     }), this._page._timeoutSettings.timeout(options ?? {}));
     return result.value;
   }
+  async innerHTML(selector, options = {}) {
+    return await this._innerHTML("frame.innerHTML", selector, options);
+  }
+  async _innerHTML(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "innerHTML", pickParams(FRAME_INNER_HTML_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}));
+    return result.value;
+  }
   async getAttribute(selector, name, options = {}) {
     return await this._getAttribute("frame.getAttribute", selector, name, options);
   }
@@ -1360,9 +3568,15 @@ class Frame {
     return result.value;
   }
   async _allTextContents(apiName, selector) {
+    return await this.#evalOnSelectorAllTexts(apiName, selector, "ee => ee.map(e => e.textContent || '')", false);
+  }
+  async _allInnerTexts(apiName, selector) {
+    return await this.#evalOnSelectorAllTexts(apiName, selector, "ee => ee.map(e => e.innerText)", true);
+  }
+  async#evalOnSelectorAllTexts(apiName, selector, expression, undefinedAllowed) {
     const result = await this._connection.send(apiName, this._guid, "evalOnSelectorAll", {
       selector,
-      expression: "ee => ee.map(e => e.textContent || '')",
+      expression,
       isFunction: true,
       arg: { value: { v: "undefined" }, handles: [] }
     }, 0);
@@ -1370,7 +3584,10 @@ class Frame {
     if (!value || typeof value !== "object" || Object.keys(value).length !== 2 || value.id !== 1 || !Array.isArray(value.a))
       throw new Error("neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string array");
     return value.a.map((item) => {
-      if (!item || typeof item !== "object" || Object.keys(item).length !== 1 || typeof item.s !== "string")
+      const single = !!item && typeof item === "object" && Object.keys(item).length === 1;
+      if (single && undefinedAllowed && item.v === "undefined")
+        return;
+      if (!single || typeof item.s !== "string")
         throw new Error("neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string");
       return item.s;
     });
@@ -1464,6 +3681,18 @@ class Frame {
       throw new Error("neo-sdk: Frame.isVisible contract error: missing result");
     return result.value;
   }
+  async isHidden(selector, options = {}) {
+    return await this._isHidden("frame.isHidden", selector, options);
+  }
+  async _isHidden(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "isHidden", pickParams(FRAME_IS_HIDDEN_KEYS, {
+      selector,
+      ...options
+    }), 0);
+    if (result === undefined)
+      throw new Error("neo-sdk: Frame.isHidden contract error: missing result");
+    return result.value;
+  }
   async isChecked(selector, options = {}) {
     return await this._isChecked("frame.isChecked", selector, options);
   }
@@ -1474,6 +3703,42 @@ class Frame {
     }), this._page._timeoutSettings.timeout(options ?? {}));
     if (result === undefined)
       throw new Error("neo-sdk: Frame.isChecked contract error: missing result");
+    return result.value;
+  }
+  async isEnabled(selector, options = {}) {
+    return await this._isEnabled("frame.isEnabled", selector, options);
+  }
+  async _isEnabled(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "isEnabled", pickParams(FRAME_IS_ENABLED_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}));
+    if (result === undefined)
+      throw new Error("neo-sdk: Frame.isEnabled contract error: missing result");
+    return result.value;
+  }
+  async isDisabled(selector, options = {}) {
+    return await this._isDisabled("frame.isDisabled", selector, options);
+  }
+  async _isDisabled(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "isDisabled", pickParams(FRAME_IS_DISABLED_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}));
+    if (result === undefined)
+      throw new Error("neo-sdk: Frame.isDisabled contract error: missing result");
+    return result.value;
+  }
+  async isEditable(selector, options = {}) {
+    return await this._isEditable("frame.isEditable", selector, options);
+  }
+  async _isEditable(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "isEditable", pickParams(FRAME_IS_EDITABLE_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}));
+    if (result === undefined)
+      throw new Error("neo-sdk: Frame.isEditable contract error: missing result");
     return result.value;
   }
   async check(selector, options = {}) {
@@ -1740,6 +4005,9 @@ class Page {
   async innerText(selector, options = {}) {
     return await this.#mainFrame._innerText("page.innerText", selector, options);
   }
+  async innerHTML(selector, options = {}) {
+    return await this.#mainFrame._innerHTML("page.innerHTML", selector, options);
+  }
   async getAttribute(selector, name, options = {}) {
     return await this.#mainFrame._getAttribute("page.getAttribute", selector, name, options);
   }
@@ -1773,6 +4041,18 @@ class Page {
   async isChecked(selector, options = {}) {
     return await this.#mainFrame._isChecked("page.isChecked", selector, options);
   }
+  async isHidden(selector, options = {}) {
+    return await this.#mainFrame._isHidden("page.isHidden", selector, options);
+  }
+  async isEnabled(selector, options = {}) {
+    return await this.#mainFrame._isEnabled("page.isEnabled", selector, options);
+  }
+  async isDisabled(selector, options = {}) {
+    return await this.#mainFrame._isDisabled("page.isDisabled", selector, options);
+  }
+  async isEditable(selector, options = {}) {
+    return await this.#mainFrame._isEditable("page.isEditable", selector, options);
+  }
   async check(selector, options = {}) {
     return await this.#mainFrame._check("page.check", selector, options);
   }
@@ -1790,6 +4070,9 @@ class Page {
   }
   locator(selector, options) {
     return this.mainFrame().locator(selector, options);
+  }
+  getByRef(ref) {
+    return this.locator(`aria-ref=${ref}`);
   }
   frameLocator(selector) {
     return this.mainFrame().frameLocator(selector);

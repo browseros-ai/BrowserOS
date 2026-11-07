@@ -64,6 +64,13 @@ interfaces:
     - getAttribute
     - queryCount
     - evalOnSelectorAll
+    # Element reads and states (states.rs, reads.rs): Playwright's `_elementState`,
+    # `isHidden` (`!isVisible`, one read) and `innerHTML`.
+    - isEnabled
+    - isDisabled
+    - isEditable
+    - isHidden
+    - innerHTML
 
 # Named Playwright types the call bridge needs outside any command. `Metadata` is the `metadata`
 # of every protocol call; it carries the call's timeout, which is never a command parameter.
