@@ -595,26 +595,28 @@ impl Tabs {
         self.0.creations.wait().await;
     }
 
-    /// Releases, on every tab this run attached to, the keys and buttons the run left held
-    /// (`PageSession::release_run_input`), one tab at a time, once every tab has recorded the
-    /// run's end. The caller bounds the whole batch.
-    pub(crate) async fn release_input(&self) {
-        let pages = self
-            .0
-            .pages
-            .lock()
-            .map_or_else(|_| Vec::new(), |pages| pages.clone());
-        let sessions: Vec<_> = pages
-            .iter()
-            .filter_map(|page| page.attached_session())
-            .collect();
-        // Every tab records the run's end before the first release waits for a turn: the
-        // caller's bound may cut the batch off at any tab.
+    /// Records the run's end on every tab it attached to (`PageSession::mark_input_ended`): no
+    /// wait, no write. `Dispatcher::finish` does it before any cleanup that can wait.
+    pub(crate) fn mark_input_ended(&self) {
+        for session in self.attached_sessions() {
+            session.mark_input_ended();
+        }
+    }
+
+    /// Starts releasing, on every tab this run attached to, the keys and buttons the run left
+    /// held (`PageSession::release_run_input`), once every tab has recorded the run's end.
+    /// Each tab's release is its own task of the run's tracker, so a tab whose page does not
+    /// answer holds back no other tab's releases, and no caller's bound cuts one off: one
+    /// still writing when the run's outcome is returned keeps the tab's input turn until it is
+    /// done, so the next input on the tab, whichever run sends it, lands after it, and
+    /// `Runtime::drain` waits for it.
+    pub(crate) fn release_input(&self) {
+        let sessions = self.attached_sessions();
         for session in &sessions {
             session.mark_input_ended();
         }
         for session in sessions {
-            session.release_run_input().await;
+            self.spawn(async move { session.release_run_input().await });
         }
     }
 

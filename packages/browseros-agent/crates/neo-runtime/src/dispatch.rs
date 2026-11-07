@@ -19,8 +19,10 @@
 //!              ├─ entry.finish(…)
 //!              └─ events.barrier(); reply ({id} | {id, error:{error:{message,name}}, log}, W)
 //!  run end: Dispatcher::finish(reason)
-//!    record the reason → cancel `ended` → close the events, answer dialogs left open
-//!    → wait for the run's tasks (≤ RECORDS_WAIT) → records
+//!    record the reason → cancel `ended` → mark the run's input ended on every tab
+//!    → close the events, answer dialogs left open → start each tab's input release (a task)
+//!    → wait for the run's tasks, releases included (≤ RECORDS_WAIT)
+//!    → hide the run's highlights (≤ HIGHLIGHTS_WAIT) → records
 //! ```
 //!
 //! Why a task per call and not the realm's scheduler, where `setTimeout` runs: rquickjs polls
@@ -106,6 +108,12 @@ use crate::waits::{
 /// the realm ends. Tasks still running keep their state and records read `Unfinished`.
 /// Unkept creations close their tabs when their late acknowledgements arrive.
 const RECORDS_WAIT: Duration = Duration::from_secs(1);
+
+/// Neo: the budget for removing the run's highlights at its end, after [`RECORDS_WAIT`] and
+/// apart from it, so a document that does not answer delays the outcome by at most this and
+/// never holds back an input release. An overlay it cannot remove in time stays, as one in a
+/// document that navigated away does.
+const HIGHLIGHTS_WAIT: Duration = Duration::from_secs(1);
 
 /// The most browser calls one run may have unfinished at once. Each holds its params, its call
 /// log and a task in Rust, outside the realm's memory limit, and a script can start calls without
@@ -498,35 +506,45 @@ impl Dispatcher {
     }
 
     /// Ends the run's calls after the realm is gone: records why the run ended (the first
-    /// reason wins), and shares [`RECORDS_WAIT`] across creation settlement, task draining
-    /// and closing-state reads before returning the records and dropped-calls summary.
+    /// reason wins) and that its input is over, starts releasing the input it left held,
+    /// shares [`RECORDS_WAIT`] across creation settlement, task draining (the releases
+    /// included) and closing-state reads, then gives the run's highlights
+    /// [`HIGHLIGHTS_WAIT`] of their own before returning the records and dropped-calls summary.
     pub(crate) async fn finish(&self, reason: RunEnd) -> (Vec<CallRecord>, Option<DroppedCalls>) {
         let deadline = Instant::now() + RECORDS_WAIT;
         let run = &self.0.run;
         run.end(reason);
+        // Before anything below waits: what the run holds is held by no live run from now on,
+        // however its release goes (`TabInput::mark_ended`).
+        self.0.tabs.mark_input_ended();
         // The realm is gone with its listeners: from now on the watchers answer dialogs
         // themselves, and a dialog a listener left open gets the default answer before the
         // sessions detach (`Dialogs::left_open`).
         self.0.tabs.events().close();
         let _answered = time::timeout_at(deadline, answer_left_open(&self.0.tabs)).await;
+        // Keys and buttons this run left held are released on each tab it touched, under a
+        // turn (design section 4.6), once the dialogs it left open are answered. Each tab's
+        // release is a task of the run's tracker, started before the tracker closes, so the
+        // drain below waits for it and `Runtime::drain` for what the budget leaves running:
+        // no budget cuts a release off, and no other cleanup goes before one.
+        self.0.tabs.release_input();
         let _created = time::timeout_at(deadline, self.0.tabs.finish_creations()).await;
         run.tasks.close();
         let _waited = time::timeout_at(deadline, run.tasks.wait()).await;
+        // Releases each session's handle group on its page's tracked task, before the sessions
+        // detach; a run whose future is dropped releases them as `RunScope` drops.
+        run.handles.close();
+        let _refreshed = time::timeout_at(deadline, self.0.tabs.refresh_closing()).await;
         // The run's highlights show over the user's tab; none may outlive the run that made it.
+        // They go last, on their own budget: a document that does not answer (a busy
+        // out-of-process frame) delays the outcome, never a release.
         let sessions = self.0.tabs.attached_sessions();
-        let _hidden = time::timeout_at(deadline, async {
+        let _hidden = time::timeout(HIGHLIGHTS_WAIT, async {
             for session in &sessions {
                 highlight::hide_at_run_end(session).await;
             }
         })
         .await;
-        // Keys and buttons this run left held are released on each tab it touched, under a
-        // turn, inside the same budget (design section 4.6); a closed tab is skipped.
-        let _released = time::timeout_at(deadline, self.0.tabs.release_input()).await;
-        // Releases each session's handle group on its page's tracked task, before the sessions
-        // detach; a run whose future is dropped releases them as `RunScope` drops.
-        run.handles.close();
-        let _refreshed = time::timeout_at(deadline, self.0.tabs.refresh_closing()).await;
         self.0.trace.take(reason)
     }
 }
