@@ -1,3 +1,8 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><title>dialog</title></head><body>
 <button type="button" onclick="window.__answer = confirm('x')">Submit</button>
+<script>
+// Keep the fixture independent of BrowserOS's document-idle takeover UI, as frame-top.html does.
+new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.remove()).observe(
+  document.documentElement, { childList: true, subtree: true })
+</script>
 </body></html>

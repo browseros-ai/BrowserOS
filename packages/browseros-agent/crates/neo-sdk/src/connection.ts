@@ -31,6 +31,7 @@ import type {
   ResponseCommands,
 } from '@browseros/neo-runtime-spec/serve'
 import { type PlaywrightError, parseError } from './errors'
+import type { EvalFrameCommands, JSHandleCommands } from './js-handle'
 import type { NeoFrameCommands } from './neo-commands'
 import type { Request, Response } from './network'
 import { call } from './runtime-bridge'
@@ -103,6 +104,11 @@ export type ApiName =
   | 'frame.waitForURL'
   | 'page.waitForLoadState'
   | 'frame.waitForLoadState'
+  | 'page.waitForNavigation'
+  | 'frame.waitForNavigation'
+  | 'page.reload'
+  | 'page.goBack'
+  | 'page.goForward'
   | 'request.response'
   | 'request.allHeaders'
   | 'request.headersArray'
@@ -118,6 +124,19 @@ export type ApiName =
   | 'response.serverAddr'
   | 'response.securityDetails'
   | 'response.httpVersion'
+  | 'page.evaluate'
+  | 'page.evaluateHandle'
+  | 'frame.evaluate'
+  | 'frame.evaluateHandle'
+  | 'locator.evaluate'
+  | 'jsHandle.evaluate'
+  | 'jsHandle.evaluateHandle'
+  | 'jsHandle.jsonValue'
+  | 'jsHandle.dispose'
+  | 'elementHandle.evaluate'
+  | 'elementHandle.evaluateHandle'
+  | 'elementHandle.jsonValue'
+  | 'elementHandle.dispose'
   | 'page.waitForEvent'
   | 'browserContext.waitForEvent'
   | 'page.consoleMessages'
@@ -364,6 +383,37 @@ export class Connection {
       params,
       timeout,
     )) as Resolved<NeoFrameCommands[M]['result']>
+  }
+
+  /** {@link Connection.send} for an evaluation on a frame guid (`js-handle.ts`): Playwright's
+   * `Frame.evaluateExpression(Handle)`, whose `arg` is already in the page's format. */
+  async sendEval<M extends keyof EvalFrameCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: EvalFrameCommands[M]['params'],
+    timeout: number,
+  ): Promise<EvalFrameCommands[M]['result']> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as EvalFrameCommands[M]['result']
+  }
+
+  /** {@link Connection.send} for a `JSHandle` command, to a handle's `handle@<n>` guid. A void
+   * command (`dispose`) resolves `undefined`. */
+  async sendHandle<M extends keyof JSHandleCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: JSHandleCommands[M]['params'],
+    timeout: number,
+  ): Promise<JSHandleCommands[M]['result']> {
+    return ((await this.#send(apiName, guid, method, params, timeout)) ??
+      {}) as JSHandleCommands[M]['result']
   }
 
   /**

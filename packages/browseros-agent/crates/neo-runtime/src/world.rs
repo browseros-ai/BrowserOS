@@ -234,6 +234,12 @@ impl World {
         }
     }
 
+    /// How many document commits this world has seen. `main_world.rs` keys its main-world
+    /// install on it, so a commit retires the main world's `UtilityScript` with the glue.
+    pub(crate) fn generation(&self) -> u64 {
+        self.document.load(Ordering::SeqCst)
+    }
+
     /// Bind an iframe owner returned by DOM.getFrameOwner to this parent's utility world.
     /// A direct scope has no selector for that owner; the typed handle still lives in the
     /// caller's group and follows the same document checks as a selector result.

@@ -1,0 +1,12 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>history</title></head><body>
+<a id="to-next" href="/next.html">Next</a>
+<a id="to-hash" href="#section">Section</a>
+<a id="to-unsafe" href="http://127.0.0.1:1/unsafe">Unsafe port</a>
+<a id="to-slow" href="/slow-load.html">Slow</a>
+<button id="push-first" type="button" onclick="history.pushState({}, '', '/first.html')">First</button>
+<button id="push-second" type="button" onclick="history.pushState({}, '', '/second.html')">Second</button>
+<button id="replace" type="button" onclick="history.replaceState({}, '', '/replaced.html')">Replace</button>
+<button id="chain" type="button" onclick="history.pushState({}, '', '/not-yet.html'); setTimeout(() => { location.href = '/next.html?q=a+b' }, 100)">Chain</button>
+<p id="section">Section</p>
+<script>sessionStorage.setItem('loads', String(Number(sessionStorage.getItem('loads') || 0) + 1))</script>
+</body></html>

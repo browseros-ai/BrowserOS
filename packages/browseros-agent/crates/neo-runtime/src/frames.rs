@@ -17,6 +17,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 
 use crate::click::PageError;
+use crate::main_world::MainWorld;
 use crate::page::Session;
 use crate::run::PageId;
 use crate::world::{self, ObjectGroup, World};
@@ -46,6 +47,8 @@ pub(crate) struct FrameContext {
     pub(crate) id: String,
     pub(crate) host: Arc<Host>,
     pub(crate) world: Arc<World>,
+    /// The same document's main world, for page evaluation (`main_world.rs`).
+    pub(crate) main: MainWorld,
     contexts: Weak<Contexts>,
 }
 
@@ -173,6 +176,7 @@ impl Frames {
                 contexts: Arc::downgrade(&contexts),
             }),
             world,
+            main: MainWorld::default(),
             contexts: Arc::downgrade(&contexts),
         });
         Self {
@@ -293,6 +297,7 @@ impl Frames {
                 .with_test_id(self.main.world.test_id()),
             ),
             host,
+            main: MainWorld::default(),
             contexts: Arc::downgrade(&self.contexts),
         });
         contexts.insert(frame.to_string(), Arc::clone(&context));

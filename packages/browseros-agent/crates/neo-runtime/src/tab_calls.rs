@@ -9,7 +9,9 @@ use neo_runtime_spec::serve::{
     BrowserContextCall, BrowserContextNewPageResult, ConsoleMessagesFilter, PageCall, PageChannel,
     PageClearConsoleMessagesParams, PageClearConsoleMessagesResult, PageClearPageErrorsParams,
     PageClearPageErrorsResult, PageConsoleMessagesParams, PageConsoleMessagesResult,
-    PagePageErrorsParams, PagePageErrorsResult,
+    PageGoBackParams, PageGoBackResult, PageGoForwardParams, PageGoForwardResult,
+    PagePageErrorsParams, PagePageErrorsResult, PageReloadParams, PageReloadResult,
+    ResponseChannel,
 };
 use serde_json::{Value, json};
 use tracing::debug;
@@ -17,7 +19,9 @@ use tracing::debug;
 use crate::bridge;
 use crate::dispatch::encode_result;
 use crate::emulation::{self, Size};
-use crate::page::PageSession;
+use crate::frames::FrameScope;
+use crate::history::{self, HistoryOptions};
+use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::tabs::{self, PageEntry, Tabs};
 
@@ -75,6 +79,24 @@ pub(crate) async fn page(
     progress: &Progress,
 ) -> Result<Option<Value>, CallError> {
     match call {
+        PageCall::Reload(params) => {
+            let response = history_step(tabs, entry, HistoryOptions::reload(&params), progress);
+            return encode_result::<PageReloadParams>(&PageReloadResult {
+                response: response.await?,
+            });
+        }
+        PageCall::GoBack(params) => {
+            let response = history_step(tabs, entry, HistoryOptions::back(&params), progress);
+            return encode_result::<PageGoBackParams>(&PageGoBackResult {
+                response: response.await?,
+            });
+        }
+        PageCall::GoForward(params) => {
+            let response = history_step(tabs, entry, HistoryOptions::forward(&params), progress);
+            return encode_result::<PageGoForwardParams>(&PageGoForwardResult {
+                response: response.await?,
+            });
+        }
         // Playwright's server keeps a page's console and page errors from its first moment;
         // Neo starts on the first read, with what V8 kept of the tab's live documents
         // (`page_events.rs`). A clear enables first, so that replay cannot bring back what it
@@ -112,26 +134,9 @@ pub(crate) async fn page(
             return encode_result::<PageClearPageErrorsParams>(&PageClearPageErrorsResult {});
         }
         PageCall::Close(_) => close(tabs, entry, progress).await?,
-        PageCall::SetViewportSize(params) => {
-            let page = progress.race(tabs.session(entry)).await??;
-            let size = Size {
-                width: params.viewport_size.width,
-                height: params.viewport_size.height,
-            };
-            page.emulation
-                .set_viewport_size(&page, size, progress)
-                .await?;
-        }
-        PageCall::EmulateMedia(params) => {
-            let page = progress.race(tabs.session(entry)).await??;
-            page.emulation
-                .emulate_media(&page, &params, progress)
-                .await?;
-        }
-        PageCall::RequestGC(_) => {
-            let page = progress.race(tabs.session(entry)).await??;
-            emulation::request_gc(&page, progress).await?;
-        }
+        call @ (PageCall::SetViewportSize(_)
+        | PageCall::EmulateMedia(_)
+        | PageCall::RequestGC(_)) => emulated(tabs, entry, call, progress).await?,
         PageCall::RunBeforeUnload(_) => {
             // Playwright 26137face server/page.ts:852-861 and chromium/crPage.ts:264-270:
             // Page.close runs beforeunload; errors are logged and closure is not awaited.
@@ -175,6 +180,50 @@ pub(crate) async fn page(
         }
     }
     Ok(None)
+}
+
+/// `Page.reload`, `goBack` or `goForward` on the main frame of `entry`'s session: the new
+/// document's response, or `None` where Playwright's answer is `null`. An option Neo refuses
+/// (`networkidle`) fails before the session is touched.
+async fn history_step(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    options: Result<HistoryOptions, PlaywrightError>,
+    progress: &Progress,
+) -> Result<Option<ResponseChannel>, CallError> {
+    let options = options?;
+    let page = progress.race(tabs.session(entry)).await??;
+    let main = FrameTab {
+        page,
+        scope: FrameScope::Main,
+    };
+    history::navigate(&main, &options, progress).await
+}
+
+/// The page's emulation calls and `requestGC`, on its run session (`emulation.rs`).
+async fn emulated(
+    tabs: &Tabs,
+    entry: &PageEntry,
+    call: PageCall,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    match call {
+        PageCall::SetViewportSize(params) => {
+            let size = Size {
+                width: params.viewport_size.width,
+                height: params.viewport_size.height,
+            };
+            page.emulation
+                .set_viewport_size(&page, size, progress)
+                .await
+        }
+        PageCall::EmulateMedia(params) => {
+            page.emulation.emulate_media(&page, &params, progress).await
+        }
+        PageCall::RequestGC(_) => emulation::request_gc(&page, progress).await,
+        _ => Err(PlaywrightError::error("neo-runtime: not an emulation call").into()),
+    }
 }
 
 /// `entry`'s session with console messages and page errors reported (`PageSession::enable_runtime`).
