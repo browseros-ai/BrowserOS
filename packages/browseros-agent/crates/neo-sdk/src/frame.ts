@@ -509,7 +509,8 @@ export class Frame {
     task: (handle: ElementHandle) => Promise<R>,
     options: { timeout?: number; signal?: unknown },
   ): Promise<R> {
-    if (options.signal !== undefined)
+    // `null` is no signal, as `undefined`.
+    if (options.signal !== undefined && options.signal !== null)
       // Deviation: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };` Neo refuses a signal rather than ignore it.
       throw new Error(`${apiName}: Neo does not support signal yet`)
     const result = (await this._connection.send(

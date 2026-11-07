@@ -5,6 +5,7 @@
 // JSHandle/ElementHandle. The signal is an already-aborted signal-shaped object, because Neo's
 // realm has no `AbortController`.
 //
+// - `signal: null` is no signal: the call runs exactly as without the option, in both engines.
 // - Where Playwright takes a signal (`TimeoutOptions`), it rejects an already-aborted one before
 //   the call runs (tests/page/locator-wait-for-function.spec.ts at 26137face, LO-192 "should abort
 //   via already-aborted signal", with `AbortError`); Neo rejects with an Error. Compared directly:
@@ -104,5 +105,32 @@ test('evaluations Playwright reads no signal on: Neo refuses one, Playwright run
       )
       assert.deepEqual(neo, { count: 0, outcomes: each('rejected') }, 'Neo')
     },
+  })
+})
+
+test('a null signal is no signal: the call runs as without the option', {
+  skip,
+  timeout: 180_000,
+}, async (t) => {
+  const outcome = await compareMethod(t, {
+    html,
+    source: `${SIGNAL}
+      const handle = await page.evaluateHandle(() => document.querySelector('#p'))
+      const frame = page.mainFrame()
+      const none = { signal: null }
+      return {
+        locatorEvaluate: await attempt(() => page.locator('#p').evaluate(bump, undefined, none)),
+        pageEvaluate: await attempt(() => page.evaluate(bump, undefined, none)),
+        frameEvaluate: await attempt(() => frame.evaluate(bump, undefined, none)),
+        handleEvaluate: await attempt(() => handle.evaluate(bump, undefined, none)),
+      }
+    `,
+    probe: 'window.__count',
+  })
+  assert.deepEqual(outcome.value, {
+    locatorEvaluate: 'resolved',
+    pageEvaluate: 'resolved',
+    frameEvaluate: 'resolved',
+    handleEvaluate: 'resolved',
   })
 })
