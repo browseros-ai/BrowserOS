@@ -19,6 +19,8 @@ base64.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+proc-macro2.workspace = true
+syn.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 
 [lints]

@@ -66,6 +66,7 @@ use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::devices::{self, DeviceCall};
 use crate::dialogs;
+use crate::evaluate::{self, EvalCall};
 use crate::events::EventHub;
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
@@ -290,6 +291,8 @@ enum ObjectKind {
     Frame,
     /// A hop's `Request` or `Response`, behind `goto`'s answer.
     Network(NetworkObject, HopId),
+    /// A run's `JSHandle` or `ElementHandle` (`evaluate.rs`), by guid.
+    Handle(String),
     /// A JavaScript dialog the run's `dialog` event handed out, by its index on the tab.
     Dialog(u64),
     Unknown,
@@ -344,6 +347,8 @@ enum Route {
     FrameNextNavigation(NeoNextNavigationParams),
     FrameFinishNavigation(FinishNavigationOptions),
     FrameReleaseNavigation(NeoReleaseNavigationParams),
+    /// Page evaluation and the `JSHandle` commands (on a handle's frame), served by `evaluate.rs`.
+    FrameEval(EvalCall),
 }
 
 impl Dispatcher {
@@ -376,20 +381,15 @@ impl Dispatcher {
                 return PendingReply::ready(Err(BridgeError::BadMessage(error.to_string())));
             }
         };
-        let target = inner.tabs.resolve(&guid);
-        let object = if guid == "context@default" {
-            ObjectKind::Context
-        } else if target.is_none() {
-            ObjectKind::Unknown
-        } else if guid.starts_with("frame@") {
-            ObjectKind::Frame
-        } else if let Some((kind, _, hop)) = HopId::parse(&guid) {
-            ObjectKind::Network(kind, hop)
-        } else if let Some((_, index)) = dialogs::parse(&guid) {
-            ObjectKind::Dialog(index)
-        } else {
-            ObjectKind::Page
-        };
+        // A handle's calls run on the frame it belongs to.
+        let target = inner.tabs.resolve(&guid).or_else(|| {
+            inner
+                .run
+                .handles
+                .frame_guid(&guid)
+                .and_then(|frame| inner.tabs.resolve(&frame))
+        });
+        let object = object_kind(&guid, target.is_some());
         let Routed { meta, route } = route(object, &method, params.clone());
         let metadata = metadata.unwrap_or(Metadata {
             location: None,
@@ -479,6 +479,9 @@ impl Dispatcher {
         // Keys and buttons this run left held are released on each tab it touched, under a
         // turn, inside the same budget (design section 4.6); a closed tab is skipped.
         let _released = time::timeout_at(deadline, self.0.tabs.release_input()).await;
+        // Releases each session's handle group on its page's tracked task, before the sessions
+        // detach; a run whose future is dropped releases them as `RunScope` drops.
+        run.handles.close();
         let _refreshed = time::timeout_at(deadline, self.0.tabs.refresh_closing()).await;
         self.0.trace.take(reason)
     }
@@ -508,6 +511,12 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             }
             if let Some(routed) = route_navigation_wait(method, params.as_ref()) {
                 return routed;
+            }
+            if let Some((meta, call)) = evaluate::route_frame(method, params.as_ref()) {
+                return Routed {
+                    meta: Some(meta),
+                    route: call.map(|call| ObjectCall::Frame(Route::FrameEval(call))),
+                };
             }
             if method == WAIT_FOR_LOAD_STATE_META.method {
                 return Routed {
@@ -553,6 +562,13 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
                     Ok(ObjectCall::Network(NetworkCall::Response(hop, call))),
                 )
             }),
+        ObjectKind::Handle(guid) => {
+            let (meta, call) = evaluate::route_handle(&guid, method, params.as_ref());
+            return Routed {
+                meta,
+                route: call.map(|call| ObjectCall::Frame(Route::FrameEval(call))),
+            };
+        }
         ObjectKind::Dialog(index) => DialogCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
         ObjectKind::Unknown => {
@@ -701,9 +717,9 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::SelectOption(params) => {
             Ok(Route::FrameSelectOption(SelectOptions::from_params(params)))
         }
-        FrameCall::WaitForSelector(params) => {
-            WaitForSelectorOptions::from_params(params).map(Route::FrameWaitForSelector)
-        }
+        FrameCall::WaitForSelector(params) => Ok(Route::FrameWaitForSelector(
+            WaitForSelectorOptions::from_params(params),
+        )),
     }
 }
 
@@ -879,14 +895,11 @@ async fn serve(
             .await
             .and_then(|result| encode_result::<FrameAriaSnapshotParams>(&result)),
         Route::FrameWaitForSelector(options) => {
-            waits::wait_for_selector(&page, &options, &progress)
+            waits::wait_for_selector_element(&page, &options, &progress)
                 .await
-                .and_then(|()| {
-                    encode_result::<FrameWaitForSelectorParams>(&FrameWaitForSelectorResult {
-                        element: None,
-                    })
-                })
+                .and_then(wait_for_selector_reply)
         }
+        Route::FrameEval(call) => evaluate::serve(&page, call, &progress).await,
         // Neo extensions answer an empty result.
         Route::FrameWaitForUrl(options) => waits::wait_for_url(&page, &options, &progress)
             .await
@@ -1087,10 +1100,31 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameWaitForNavigation(_)
         | Route::FrameNextNavigation(_)
         | Route::FrameFinishNavigation(_)
-        | Route::FrameReleaseNavigation(_) => Err(PlaywrightError::error(
+        | Route::FrameReleaseNavigation(_)
+        | Route::FrameEval(_) => Err(PlaywrightError::error(
             "neo-runtime: navigation and page reads are served by `serve`",
         )
         .into()),
+    }
+}
+
+/// What a message's `guid` names: the context, an object of a resolved tab (a JS handle, a frame,
+/// a network hop, a dialog, or the page itself), or nothing Neo knows.
+fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
+    if guid == "context@default" {
+        ObjectKind::Context
+    } else if !resolved {
+        ObjectKind::Unknown
+    } else if guid.starts_with(evaluate::HANDLE_PREFIX) {
+        ObjectKind::Handle(guid.to_owned())
+    } else if guid.starts_with("frame@") {
+        ObjectKind::Frame
+    } else if let Some((kind, _, hop)) = HopId::parse(guid) {
+        ObjectKind::Network(kind, hop)
+    } else if let Some((_, index)) = dialogs::parse(guid) {
+        ObjectKind::Dialog(index)
+    } else {
+        ObjectKind::Page
     }
 }
 
@@ -1099,6 +1133,19 @@ fn encode_neo(result: &impl serde::Serialize) -> Result<Option<Value>, CallError
     serde_json::to_value(result)
         .map(Some)
         .map_err(|error| PlaywrightError::error(format!("encoding a Neo result: {error}")).into())
+}
+
+/// `Frame.waitForSelector`'s reply. `ElementHandle` is no interface of the generated spec, so a
+/// returned element travels as the record the SDK builds it from (`evaluate.rs`).
+fn wait_for_selector_reply(
+    element: Option<evaluate::CreatedHandle>,
+) -> Result<Option<Value>, CallError> {
+    match element {
+        Some(created) => Ok(Some(json!({ "element": created }))),
+        None => encode_result::<FrameWaitForSelectorParams>(&FrameWaitForSelectorResult {
+            element: None,
+        }),
+    }
 }
 
 /// Like `Command::reply`, without retaining the raw params once their options are decoded.
@@ -1548,7 +1595,8 @@ mod tests {
                 | Route::FrameWaitForNavigation(_)
                 | Route::FrameNextNavigation(_)
                 | Route::FrameFinishNavigation(_)
-                | Route::FrameReleaseNavigation(_) => {
+                | Route::FrameReleaseNavigation(_)
+                | Route::FrameEval(_) => {
                     panic!("a form is not a navigation, read or wait")
                 }
             }
@@ -1792,16 +1840,23 @@ mod tests {
 
     #[test]
     fn tests_that_wait_refusals_happen_during_routing() {
-        for omit in [json!({}), json!({"omitReturnValue":false})] {
+        // A wait that returns its element (`locator.evaluate`'s `_withElement`) is served too.
+        for (omit, returns) in [
+            (json!({}), true),
+            (json!({"omitReturnValue":false}), true),
+            (json!({"omitReturnValue":true}), false),
+        ] {
             let mut params = json!({"selector":"#item"});
             params
                 .as_object_mut()
                 .expect("object")
                 .extend(omit.as_object().expect("object").clone());
-            assert_eq!(
-                error_of(route_frame("waitForSelector", params)).name,
-                ErrorName::Error
-            );
+            match frame_route(route_frame("waitForSelector", params).route) {
+                Ok(Route::FrameWaitForSelector(options)) => {
+                    assert_eq!(options.return_element, returns, "{omit}");
+                }
+                other => panic!("waitForSelector routed to {other:?}"),
+            }
         }
         assert!(route_frame("waitForSelector", json!({"selector":"iframe >> internal:control=enter-frame >> button", "omitReturnValue": true})).route.is_ok());
         for (method, params) in [

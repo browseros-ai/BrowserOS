@@ -63,6 +63,9 @@ bytes = "1"
 imagesize = "0.15"
 tokio-util = { version = "0.7", features = ["rt"] }
 regex = "1"
+# The page JavaScript guards (`tests/page_js_guard.rs`) read Rust literals as the compiler does.
+proc-macro2 = { version = "1.0.106", features = ["span-locations"] }
+syn = { version = "2.0.118", features = ["full"] }
 rand = "0.9"
 uuid = { version = "1", features = ["v4", "serde"] }
 serde_path_to_error = "0.1"
