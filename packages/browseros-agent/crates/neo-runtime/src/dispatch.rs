@@ -76,6 +76,7 @@ use crate::capture::{
 };
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
+use crate::clock::{self, ClockRoute};
 use crate::content::{self, SetContentOptions, WriteOrder, WriteTurn};
 use crate::devices::{self, DeviceCall};
 use crate::dialogs;
@@ -131,10 +132,11 @@ use crate::waits::{
 /// Unkept creations close their tabs when their late acknowledgements arrive.
 const RECORDS_WAIT: Duration = Duration::from_secs(1);
 
-/// Neo: how long run end may take removing the run's init scripts and ending its bindings in
-/// its pages (`init_scripts.rs`, `bindings.rs`), apart from [`RECORDS_WAIT`]: a session it does
-/// not reach keeps a script the next run's documents would run, or a binding whose calls never
-/// settle. Free for a run that used neither.
+/// Neo: how long run end may take removing the run's init scripts, ending its bindings and
+/// putting back its pages' timers (`init_scripts.rs`, `bindings.rs`, `clock.rs`), apart from
+/// [`RECORDS_WAIT`]: a session it does not reach keeps a script the next run's documents would
+/// run, a binding whose calls never settle, or the run's fake timers. Free for a run that used
+/// none of them.
 pub(crate) const PAGE_END_WAIT: Duration = Duration::from_secs(3);
 /// Neo: the budget for removing the run's highlights at its end, after [`RECORDS_WAIT`] and
 /// apart from it, so a document that does not answer delays the outcome by at most this and
@@ -467,6 +469,8 @@ enum ObjectCall {
     Capture(Capture),
     /// A binding command (`bindings.rs`).
     Binding(BindingRoute),
+    /// A clock command (`clock.rs`).
+    Clock(ClockRoute),
     Dialog(u64, DialogCall),
     /// A paused request's answer or `route.fetch` (`routes.rs`).
     Intercepted(u64, routes::InterceptedCall),
@@ -685,6 +689,10 @@ impl Dispatcher {
         // running, so no document loaded after the run returns runs one of its init scripts, no page keeps one of its
         // bindings, and none gets its session overrides (`Tabs::release_run_scoped`).
         self.0.tabs.release_run_scoped(run).await;
+        // Then the run's clock, on a budget of its own: no page the run leaves open keeps its
+        // fake timers (`clock.rs`). Only at run end: Playwright's `context.close()` of a
+        // connected browser leaves a page's installed clock as it is.
+        let _restored = time::timeout(PAGE_END_WAIT, run.clock.close(&self.0.tabs)).await;
         // The realm is gone with its listeners: from now on the watchers answer dialogs
         // themselves, and a dialog a listener left open gets the default answer before the
         // sessions detach (`Dialogs::left_open`).
@@ -792,6 +800,14 @@ fn route_init(
             Ok(Routed {
                 meta: Some(meta),
                 route: route.map(ObjectCall::Binding),
+            })
+        }
+        ObjectKind::Context if clock::serves(method) => {
+            let (meta, route) = clock::decode(method, params)
+                .unwrap_or_else(|| unreachable!("clock::serves names every clock command"));
+            Ok(Routed {
+                meta: Some(meta),
+                route: route.map(ObjectCall::Clock),
             })
         }
         ObjectKind::BindingCall(guid) => Ok(match bindings::decode_call(&guid, method, params) {
@@ -1403,6 +1419,11 @@ async fn serve_call(
             tab_calls::storage(&tabs, &page, call, turn, &progress).await
         }
         (ObjectCall::Binding(route), target) => binding_call(&tabs, target, route, &progress).await,
+        (ObjectCall::Clock(route), _) => progress
+            .race(progress.clock().call(&tabs, progress.init_scripts(), route))
+            .await
+            .and_then(|called| called.map_err(CallError::from))
+            .map(|()| Some(json!({}))),
         (ObjectCall::Page(call), Some((page, _))) => {
             // A page call that navigates (`reload`, `goBack`, …) shows the run's scripts first,
             // as a Frame call does.
@@ -2265,6 +2286,7 @@ mod tests {
             | ObjectCall::Init(_)
             | ObjectCall::Capture(_)
             | ObjectCall::Binding(_)
+            | ObjectCall::Clock(_)
             | ObjectCall::Dialog(..)
             | ObjectCall::Intercepted(..)
             | ObjectCall::Download(..)

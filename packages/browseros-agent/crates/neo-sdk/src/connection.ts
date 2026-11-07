@@ -32,6 +32,7 @@ import type {
   RouteCommands,
 } from '@browseros/neo-runtime-spec/serve'
 import type { BindingCommands } from './binding-call'
+import type { ClockCommands } from './clock'
 import {
   AbortError,
   isTargetClosedError,
@@ -221,6 +222,13 @@ export type ApiName =
   | 'browserContext.exposeFunction'
   | 'bindingCall.resolve'
   | 'bindingCall.reject'
+  | 'clock.install'
+  | 'clock.fastForward'
+  | 'clock.pauseAt'
+  | 'clock.resume'
+  | 'clock.runFor'
+  | 'clock.setFixedTime'
+  | 'clock.setSystemTime'
   | 'page.addScriptTag'
   | 'page.addStyleTag'
   | 'frame.addScriptTag'
@@ -547,6 +555,18 @@ export class Connection {
       params,
       timeout,
     )) as EvalFrameCommands[M]['result']
+  }
+
+  /** {@link Connection.send} for a clock command on the context (`clock.ts`). */
+  async sendClock<M extends keyof ClockCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: ClockCommands[M]['params'],
+    timeout: number,
+  ): Promise<ClockCommands[M]['result']> {
+    return ((await this.#send(apiName, guid, method, params, timeout)) ??
+      {}) as ClockCommands[M]['result']
   }
 
   /** {@link Connection.send} for a binding command (`binding-call.ts`): `exposeBinding` on a

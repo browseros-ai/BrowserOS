@@ -19,6 +19,7 @@ and NOTICE.
 | `packages/playwright-core/src/client/browserContext.ts` | `1d882f7d1e6f8bc108a19528f88f734691fad38f358adebb86e01730274fad42` |
 | `packages/playwright-core/src/client/channelOwner.ts` | `3e69df35c3f6deb444bb84fb5eff6fada175d44586d4fd4906cd986eb6b98706` |
 | `packages/playwright-core/src/client/clientHelper.ts` | `cd245a58ed9037274d409570e303b8a86cfa5da7f778af818e9808a53ade9d07` |
+| `packages/playwright-core/src/client/clock.ts` | `042ddba49818c31be75ef06cd903b4b7a1e0bd4f0873ebcab199dfc25e88e144` |
 | `packages/playwright-core/src/client/connection.ts` | `d0d7bb74eb984f3a9316f77304d24b1a2698aededfba181cfb59cfde62b189fc` |
 | `packages/playwright-core/src/client/consoleMessage.ts` | `379d334d4abfff811612837b5f701e5c6d184d1b0e09e7f9aefade7bc395b1a7` |
 | `packages/playwright-core/src/client/dialog.ts` | `493428ce8b51cef33be1d0fd5b7d8e65ad53ba3e7e357ca055d65517e87937a1` |
@@ -51,6 +52,7 @@ and NOTICE.
 | `packages/playwright-core/src/server/chromium/crPage.ts` | `918f0f9beed354c579d00f5656662e36264043b3b59c420d4369fd15b119dd99` |
 | `packages/playwright-core/src/server/chromium/crPdf.ts` | `4df42a78b50c682b19c758193a6f837364231750d07bc30430d6f86fe6c33574` |
 | `packages/playwright-core/src/server/chromium/crProtocolHelper.ts` | `9c19f033f45589fb8a6588ceeada835bfeed7016d93138a9c5d6fb2b3d7a8ba9` |
+| `packages/playwright-core/src/server/clock.ts` | `19c63882ebd8b8a1b27a6dea78759db771b2628b14966e1e7927b01e1beaa147` |
 | `packages/playwright-core/src/server/console.ts` | `e4d49ae4f9011320d1c20fe6fe928ae24f9543b14c842284828e1bb031aec520` |
 | `packages/playwright-core/src/server/dialog.ts` | `9c70719be6a8b3cbb6d83066b8375b7bd125fa988b4bd7d9a0b7bcc22c9ae7b4` |
 | `packages/playwright-core/src/server/dispatchers/artifactDispatcher.ts` | `dcdfc6d567d7893806e701aefeebc5c8529e7c9767400b48242a0cfe52f2368a` |

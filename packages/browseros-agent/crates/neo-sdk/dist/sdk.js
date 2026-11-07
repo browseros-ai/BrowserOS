@@ -661,6 +661,9 @@ class Connection {
   async sendEval(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
+  async sendClock(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout) ?? {};
+  }
   async sendBinding(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout) ?? {};
   }
@@ -963,6 +966,63 @@ function thrown(error) {
   } catch {
     return { value: { v: "undefined" } };
   }
+}
+
+// src/clock.ts
+class Clock {
+  #connection;
+  #guid;
+  constructor(connection, guid) {
+    this.#connection = connection;
+    this.#guid = guid;
+  }
+  async install(options = {}) {
+    await this.#send("clock.install", "clockInstall", options.time !== undefined ? parseTime("clock.install", options.time) : {});
+  }
+  async fastForward(ticks) {
+    await this.#send("clock.fastForward", "clockFastForward", parseTicks("clock.fastForward", ticks));
+  }
+  async pauseAt(time) {
+    await this.#send("clock.pauseAt", "clockPauseAt", parseTime("clock.pauseAt", time));
+  }
+  async resume() {
+    await this.#send("clock.resume", "clockResume", {});
+  }
+  async runFor(ticks) {
+    await this.#send("clock.runFor", "clockRunFor", parseTicks("clock.runFor", ticks));
+  }
+  async setFixedTime(time) {
+    await this.#send("clock.setFixedTime", "clockSetFixedTime", parseTime("clock.setFixedTime", time));
+  }
+  async setSystemTime(time) {
+    await this.#send("clock.setSystemTime", "clockSetSystemTime", parseTime("clock.setSystemTime", time));
+  }
+  async#send(apiName, method, params) {
+    await this.#connection.sendClock(apiName, this.#guid, method, params, 0);
+  }
+}
+function parseTime(apiName, time) {
+  if (typeof time === "number")
+    return { timeNumber: number(apiName, time) };
+  if (typeof time === "string")
+    return { timeString: time };
+  if (!Number.isFinite(time.getTime()))
+    throw new Error(`Invalid date: ${time}`);
+  return { timeNumber: time.getTime() };
+}
+function parseTicks(apiName, ticks) {
+  if (typeof ticks === "string")
+    return { ticksString: ticks };
+  if (!Number.isFinite(ticks))
+    throw new Error(`${apiName}: Invalid ticks: ${ticks}`);
+  return { ticksNumber: ticks };
+}
+function number(apiName, time) {
+  if (Number.isNaN(time))
+    return 0;
+  if (!Number.isFinite(time))
+    throw new Error(`${apiName}: Invalid date: ${time}`);
+  return time;
 }
 
 // src/console-message.ts
@@ -7430,11 +7490,13 @@ class Page extends ChannelOwner {
   #patternsSent = Promise.resolve();
   #closeReason;
   _bindings = new Map;
+  clock;
   constructor(guid, mainFrameGuid, url, context, connection) {
     super(guid, context._pipe, PAGE_EVENTS);
     this.#guid = guid;
     this.#lastUrl = url;
     this.#context = context;
+    this.clock = context.clock;
     this.#connection = connection;
     this._timeoutSettings = new TimeoutSettings(context._timeoutSettings);
     this.#mainFrame = new Frame(mainFrameGuid, this, connection, {
@@ -8132,11 +8194,13 @@ class BrowserContext extends ChannelOwner {
   #dialogs = new Map;
   _timeoutSettings = new TimeoutSettings;
   _bindings = new Map;
+  clock;
   _pipe;
   #closingStatus = "none";
   #closeReason;
   constructor(guid, connection, pipe) {
     super(guid, pipe, CONTEXT_EVENTS);
+    this.clock = new Clock(connection, guid);
     this.#guid = guid;
     this.#connection = connection;
     this._pipe = pipe;

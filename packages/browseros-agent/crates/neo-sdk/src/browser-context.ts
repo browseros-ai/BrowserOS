@@ -37,6 +37,7 @@ import {
   type BindingCallback,
   type BindingCallRecord,
 } from './binding-call'
+import { Clock } from './clock'
 import type { ApiName, Connection } from './connection'
 import { ConsoleMessage, type ConsoleMessagePayload } from './console-message'
 import { Dialog } from './dialog'
@@ -180,6 +181,8 @@ export class BrowserContext extends ChannelOwner {
   readonly _timeoutSettings = new TimeoutSettings()
   /** The context's exposed callbacks, by name (Playwright's `BrowserContext._bindings`). */
   readonly _bindings = new Map<string, BindingCallback>()
+  /** Playwright's `browserContext.clock`, which `page.clock` is too. */
+  readonly clock: Clock
   /** The run's event pipe, which this context's pages share. */
   readonly _pipe: EventPipe
   /** Playwright's `_closingStatus`: `closing` from `close()`'s call, `closed` once done. */
@@ -188,6 +191,7 @@ export class BrowserContext extends ChannelOwner {
 
   constructor(guid: string, connection: Connection, pipe: EventPipe) {
     super(guid, pipe, CONTEXT_EVENTS)
+    this.clock = new Clock(connection, guid)
     this.#guid = guid
     this.#connection = connection
     this._pipe = pipe

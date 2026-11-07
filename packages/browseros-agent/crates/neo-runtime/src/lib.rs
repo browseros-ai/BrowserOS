@@ -59,6 +59,7 @@ mod bridge;
 mod capture;
 mod check;
 mod click;
+mod clock;
 mod console;
 mod content;
 mod contexts;

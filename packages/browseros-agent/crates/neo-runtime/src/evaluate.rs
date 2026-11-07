@@ -1378,18 +1378,18 @@ fn tag_source(
 }
 
 /// Neo: runs built `expression` on page-format `leading` arguments in `tab`'s frame's main
-/// world, by value, outside any call of the run (`bindings.rs`'s installs, removals and run
-/// end, as Playwright's `safeNonStallingEvaluateInAllFrames`): a gone document or a throw is the
-/// caller's to ignore.
+/// world, by value, outside any call of the run (`bindings.rs`'s and `clock.rs`'s installs and
+/// run ends, as Playwright's `safeNonStallingEvaluateInAllFrames`): the page's answer, by value.
 ///
 /// # Errors
 ///
-/// The frame's [`PageError`]; a throw or a stale document reads `NotConnected`.
+/// The frame's [`PageError`]: `Threw` with the page's message for a throw, `NotConnected` for a
+/// stale document.
 pub(crate) async fn run_built(
     tab: &FrameTab,
     expression: BuiltExpression,
     leading: Vec<Value>,
-) -> Result<(), PageError> {
+) -> Result<Value, PageError> {
     let frame = tab.context().await?;
     run_built_on(&frame, None, expression, leading).await
 }
@@ -1406,7 +1406,7 @@ pub(crate) async fn run_built_on(
     context: Option<&ContextPin>,
     expression: BuiltExpression,
     leading: Vec<Value>,
-) -> Result<(), PageError> {
+) -> Result<Value, PageError> {
     let installed = frame.main.installed(frame).await?;
     let mut values = vec![
         json!({ "value": true }),
@@ -1428,8 +1428,10 @@ pub(crate) async fn run_built_on(
         )
         .await?
     {
-        Called::Value(_) | Called::Object(_) => Ok(()),
-        Called::Threw(_) | Called::Stale | Called::Protocol(_) => Err(PageError::NotConnected),
+        Called::Value(value) => Ok(value.unwrap_or(Value::Null)),
+        Called::Object(_) => Ok(Value::Null),
+        Called::Threw(message) => Err(PageError::Threw(message)),
+        Called::Stale | Called::Protocol(_) => Err(PageError::NotConnected),
     }
 }
 
