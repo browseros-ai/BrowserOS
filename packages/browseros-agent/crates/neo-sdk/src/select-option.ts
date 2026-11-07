@@ -47,14 +47,18 @@ export function convertSelectOptionValues(
 /** Playwright: `client/elementHandle.ts` `convertSelectOptionValues`: `return { elements: (values as ElementHandle[]).map((v: ElementHandle) => v._elementChannel) };`
  *
  * Each value's channel, read once: a value that is no ElementHandle has none, and Playwright's
- * protocol validator refuses it before sending. A disposed handle still names its guid, which
+ * client fails with a TypeError before sending. A disposed handle still names its guid, which
  * neo-runtime then refuses, as Playwright's dispatcher does. */
 function elementsOf(list: unknown[]): FrameSelectOptionParams['elements'] {
   const elements: { guid: string }[] = []
   for (let i = 0; i < list.length; i++) {
     const value = list[i]
+    // Playwright's client reads `v._elementChannel` of each value and its serializer then reads
+    // that channel's `_object`, which throws a TypeError for a value that has none.
     if (!(value instanceof ElementHandle))
-      throw new Error(`elements[${i}]: expected channel ElementHandle`)
+      throw new TypeError(
+        `elements[${i}]: expected channel ElementHandle, got ${typeof value}`,
+      )
     elements[i] = { guid: value._guid }
   }
   // The generated `ElementHandleChannel` has no values in neo-runtime-spec; the wire is the guid.

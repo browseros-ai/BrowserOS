@@ -4834,7 +4834,7 @@ function elementsOf(list) {
   for (let i = 0;i < list.length; i++) {
     const value = list[i];
     if (!(value instanceof ElementHandle))
-      throw new Error(`elements[${i}]: expected channel ElementHandle`);
+      throw new TypeError(`elements[${i}]: expected channel ElementHandle, got ${typeof value}`);
     elements[i] = { guid: value._guid };
   }
   return elements;

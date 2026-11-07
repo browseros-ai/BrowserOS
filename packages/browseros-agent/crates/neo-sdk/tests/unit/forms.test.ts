@@ -173,15 +173,20 @@ test('tests that ElementHandle and JSHandle selectOption values convert as Playw
       )
     }
   }
-  // Mixed lists fail Playwright's protocol validation before anything is sent.
-  for (const [values, message] of [
-    [['one', element], 'options[1].valueOrLabel: expected string'],
-    [[element, 'one'], 'elements[1]: expected channel ElementHandle'],
+  // Mixed lists fail before anything is sent: a handle after a string fails the protocol's
+  // validation (Error), a string after a handle Playwright's client serializer (TypeError).
+  for (const [values, kind, message] of [
+    [['one', element], Error, 'options[1].valueOrLabel: expected string'],
+    [
+      [element, 'one'],
+      TypeError,
+      'elements[1]: expected channel ElementHandle',
+    ],
   ] as const) {
     sent.length = 0
-    await expect(
-      page.locator('select').selectOption(values as never),
-    ).rejects.toThrow(message)
+    const rejection = page.locator('select').selectOption(values as never)
+    await expect(rejection).rejects.toThrow(message)
+    await expect(rejection).rejects.toBeInstanceOf(kind)
     expect(sent).toEqual([])
   }
 })

@@ -1239,13 +1239,16 @@ fn element_scope(
 /// Playwright: `server/dom.ts` `FrameExecutionContext.adoptIfNeeded`: `return this.frame._page.delegate.adoptElementHandle(handle, this);`
 ///
 /// `entry`'s element adopted into `frame`'s utility world in `group`, as Playwright adopts
-/// `selectOption`'s `ElementHandle` values into the select's utility context for each attempt.
-/// `None` when the element belongs to another frame or to a document `frame` has left, which
+/// `selectOption`'s `ElementHandle` values into the select's utility context for each attempt:
+/// the LIVE node, wherever it now is (`DOM.describeNode` where the handle's object lives, then
+/// `DOM.resolveNode` in the select's world), so an option moved into the select from another
+/// document of the same process is still the one its handle names. `None` when the node cannot
+/// be resolved there: another process's (another session's), or one whose object is gone, which
 /// Playwright's adoption refuses (`kUnableToAdoptErrorMessage`).
 ///
 /// # Errors
 ///
-/// `Closed` when the tab is gone; another page error when the frame's world cannot be reached.
+/// `Closed` when the tab is gone.
 pub(crate) async fn adopt_element(
     entry: &HandleEntry,
     frame: &Arc<FrameContext>,
@@ -1254,13 +1257,24 @@ pub(crate) async fn adopt_element(
     let Remote::Object(id) = &entry.remote else {
         return Ok(None);
     };
-    if entry.frame.id != frame.id || frame.main.installed(frame).await?.document != entry.document {
+    // A backend node id names a node in its own process only.
+    if entry.frame.host.session_id() != frame.host.session_id() {
         return Ok(None);
     }
-    match frame.main.backend_of(frame, id.object_id()).await {
-        Ok(backend) => frame.element(group, backend).await.map(Some),
-        Err(PageError::Closed) => Err(PageError::Closed),
+    let backend = match entry
+        .frame
+        .main
+        .backend_of(&entry.frame, id.object_id())
+        .await
+    {
+        Ok(backend) => backend,
+        Err(PageError::Closed) => return Err(PageError::Closed),
         // The handle's object went with its document.
+        Err(_) => return Ok(None),
+    };
+    match frame.world.element(group, backend).await {
+        Ok(node) => Ok(Some(node)),
+        Err(PageError::Closed) => Err(PageError::Closed),
         Err(_) => Ok(None),
     }
 }
