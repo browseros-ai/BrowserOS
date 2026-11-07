@@ -190,6 +190,15 @@ return {
   fresh: await settle(page.click('#target', { signal: new AbortController().signal }), undefined),
 }`
 
+// An aborted call ends only itself: a handle the run made before still works.
+const HANDLES = `
+const handle = await page.evaluateHandle(() => document.querySelector('#target'))
+const controller = new AbortController()
+const pending = settle(page.locator('#hidden').click({ signal: controller.signal, timeout: 0 }), 'stop')
+await pause(300)
+controller.abort('stop')
+return { aborted: (await pending).name, handle: await handle.evaluate((element) => element.id) }`
+
 test('signal aborts calls as Playwright does', {
   skip,
   timeout: 400_000,
@@ -385,6 +394,14 @@ test('signal aborts calls as Playwright does', {
         assert.deepEqual(reference.effect, { ...UNTOUCHED, clicks: 2 })
       },
     )
+
+    await t.test("an aborted call leaves the run's handles alone", async () => {
+      const { reference } = await both('handles', HANDLES)
+      assert.deepEqual(reference.value, {
+        aborted: 'AbortError',
+        handle: 'target',
+      })
+    })
   } finally {
     await runCleanups(cleanups)
   }
