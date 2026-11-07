@@ -1023,8 +1023,11 @@ pub(crate) async fn serve(
         EvalCall::Frame(_)
             | EvalCall::Handle { .. }
             | EvalCall::WaitForFunction { .. }
+            | EvalCall::WaitForFunctionOnElement { .. }
             | EvalCall::EvalOnSelector { .. }
             | EvalCall::EvalOnSelectorAll { .. }
+            | EvalCall::AddTag { .. }
+            | EvalCall::DispatchEvent { .. }
     ) {
         prepare_page(tab, progress).await?;
     }
@@ -2692,10 +2695,16 @@ pub(crate) async fn element_handle_for(
     )
 }
 
-/// Neo: starts the page's watcher before the caller's page JS runs, once per run, as every action
-/// and read does first (`click::Tab::prepare`), so a navigation that JS requests
+/// Neo: starts the page's watcher before page code the caller sent runs (a script, a predicate,
+/// an added script tag, the handlers of a dispatched event), once per run, as every action and
+/// read does first (`click::Tab::prepare`), so a navigation that code requests
 /// (`location.href = …`) is followed from its request on. Playwright, listening since it
 /// connected, sees it too, and the next action's `performActionPreChecks` waits it out.
+///
+/// It only arms that tracking: nothing here waits for a navigation, as Playwright's evaluation
+/// runs no action pre-checks. Page frames only: it takes the page's [`FrameTab`], so a worker,
+/// which has no page lifecycle, never reaches it. Only [`serve`] calls it, never a run-end path
+/// that reuses the main world (clock teardown, a binding's end, handle release).
 async fn prepare_page(tab: &FrameTab, progress: &Progress) -> Result<(), CallError> {
     progress
         .race(click::Tab::prepare(tab))
