@@ -735,8 +735,9 @@ impl PageSession {
         self.tasks.spawn_on(task, &self.session.tokio);
     }
 
-    /// Neo: [`Self::spawn`] for work that matters only while the tab is open (a capture's
-    /// restore or reset, an object group's release). It ends when the tab closes or crashes,
+    /// Neo: [`Self::spawn`] for page-side work that matters only while the tab is open (a
+    /// capture's restore or reset, an object group's release); browser-side cleanup such as a
+    /// PDF stream's close (`pdf.rs`) does not use it. It ends when the tab closes or crashes,
     /// and dropping it drops what it holds (a screenshot turn, an object group): a gone tab has
     /// nothing left to undo, and a crashed one does not answer what is sent to it (BrowserOS
     /// neo, the crashed case of `capture-turn-liveness-review`), so the task would otherwise

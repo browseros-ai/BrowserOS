@@ -7,6 +7,7 @@
 //! `px`) and `path` are the SDK's and `capture.rs`'s.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -14,6 +15,7 @@ use neo_runtime_spec::serve::PagePdfParams;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
+use tokio::time;
 use tracing::debug;
 
 use crate::capture;
@@ -253,6 +255,12 @@ fn is_decimal_literal(text: &str) -> bool {
     at == bytes.len()
 }
 
+/// Neo: how long an abandoned stream's `IO.close` may hold the run's tracker, and with it a
+/// host's `Runtime::drain`: the 5 s the run's other browser cleanups get (`Tabs::finish_close`,
+/// `Tabs::close_failed_creation`). The browser serves `IO` itself, so the close is answered
+/// after the tab's renderer is gone too; this bounds only a browser that stopped answering.
+const ABANDONED_STREAM_CLOSE: Duration = Duration::from_secs(5);
+
 /// `IO.read`'s answer.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -273,9 +281,13 @@ pub(crate) async fn pdf(
     let options = PdfOptions::from_params(params)?;
     // The print runs on the run's tracker, not in this call: a call that stops before the answer
     // still gets its stream closed when the answer arrives (`Stream`'s `Drop`), however late.
+    // Not only while the tab is open (`PageSession::spawn_while_open`): a stream outlives its
+    // tab's renderer while any debugger session stays on the tab (measured on BrowserOS neo,
+    // `capture-pdf-crash-review`), so an answer after a crash still has a stream to close. The
+    // wait is bounded by browseros-cdp's request timeout, as any command's.
     let (sent, printed) = oneshot::channel();
     let session = Arc::clone(page);
-    page.spawn_while_open(async move {
+    page.spawn(async move {
         let answer = session.send("Page.printToPDF", options.to_cdp()).await;
         let stream = match answer {
             Ok(answer) => match answer.get("stream").and_then(Value::as_str) {
@@ -299,8 +311,8 @@ pub(crate) async fn pdf(
 }
 
 /// An open `IO` stream. Read to its end, then closed; dropped anywhere else (the call stopped
-/// before or while reading it), it is closed on the run's tracker, because Chromium keeps a
-/// stream after the session that made it goes away.
+/// before, while or after reading it, before its close was answered), it is closed on the run's
+/// tracker, because Chromium keeps a stream after the session that made it goes away.
 struct Stream {
     page: Arc<PageSession>,
     handle: String,
@@ -331,10 +343,12 @@ impl Stream {
                 break;
             }
         }
-        self.closed = true;
+        // A call that stops before the close is answered leaves the stream to `Drop`, which
+        // sends the close again: it may never have gone out.
         let closed = progress
             .race(self.page.send("IO.close", json!({ "handle": self.handle })))
             .await?;
+        self.closed = true;
         if let Err(error) = closed {
             debug!(%error, "closing a PDF stream failed");
         }
@@ -342,7 +356,8 @@ impl Stream {
     }
 }
 
-/// Neo: a stream the call stopped reading is closed in the background.
+/// Neo: a stream the call stopped reading is closed in the background, whether or not its tab
+/// is still there, within [`ABANDONED_STREAM_CLOSE`].
 impl Drop for Stream {
     fn drop(&mut self) {
         if self.closed {
@@ -350,9 +365,12 @@ impl Drop for Stream {
         }
         let page = Arc::clone(&self.page);
         let handle = self.handle.clone();
-        self.page.spawn_while_open(async move {
-            if let Err(error) = page.send("IO.close", json!({ "handle": handle })).await {
-                debug!(%error, "closing an abandoned PDF stream failed");
+        self.page.spawn(async move {
+            let close = page.send("IO.close", json!({ "handle": handle }));
+            match time::timeout(ABANDONED_STREAM_CLOSE, close).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => debug!(%error, "closing an abandoned PDF stream failed"),
+                Err(_) => debug!("closing an abandoned PDF stream went unanswered"),
             }
         });
     }
@@ -365,8 +383,91 @@ mod tests {
     use std::path::PathBuf;
 
     use neo_runtime_spec::serve::PagePdfParamsMargin;
+    use tokio::runtime::Handle;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+    use tokio_util::task::TaskTracker;
 
     use super::*;
+    use crate::events::EventHub;
+    use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+    use crate::page::Session;
+    use crate::run::PageId;
+
+    /// A session on the fake's tab, with its own tracker and closed token.
+    async fn tracked_page(
+        browser: &FakeBrowser,
+        tasks: &TaskTracker,
+        closed: &CancellationToken,
+    ) -> Arc<PageSession> {
+        let id = PageId::new(PAGE.to_string());
+        let session = Session::attach(browser.cdp().await, id.clone(), Handle::current())
+            .await
+            .expect("attach");
+        Arc::new(PageSession::new(
+            session,
+            &id,
+            tasks.clone(),
+            Arc::default(),
+            Arc::new(Mutex::new(())),
+            closed.clone(),
+            EventHub::default(),
+            false,
+        ))
+    }
+
+    /// The handles of the `IO.close` commands the fake received.
+    fn closes(browser: &FakeBrowser) -> Vec<Value> {
+        browser
+            .exchanges()
+            .iter()
+            .filter(|exchange| exchange.method() == "IO.close")
+            .map(|exchange| exchange.command["params"]["handle"].clone())
+            .collect()
+    }
+
+    /// A stream dropped after its tab closed or crashed is still closed: the browser keeps it
+    /// while any debugger session stays on the tab, and serves `IO.close` without the renderer.
+    #[tokio::test]
+    async fn tests_that_an_abandoned_stream_is_closed_after_its_tab_went() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let closed = CancellationToken::new();
+        let page = tracked_page(&browser, &tasks, &closed).await;
+        closed.cancel();
+        drop(Stream {
+            page: Arc::clone(&page),
+            handle: "stream-1".to_string(),
+            closed: false,
+        });
+        tasks.close();
+        time::timeout(Duration::from_secs(5), tasks.wait())
+            .await
+            .expect("the close settles");
+        assert_eq!(closes(&browser), vec![json!("stream-1")]);
+    }
+
+    /// A read that fails leaves its stream to `Drop`, which closes it once.
+    #[tokio::test]
+    async fn tests_that_a_stream_whose_read_failed_is_closed() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let closed = CancellationToken::new();
+        let page = tracked_page(&browser, &tasks, &closed).await;
+        let stream = Stream {
+            page: Arc::clone(&page),
+            handle: "stream-2".to_string(),
+            closed: false,
+        };
+        // The fake knows no `IO.read`, so the first read fails.
+        let read = stream.read(&Progress::for_test(5_000.0)).await;
+        assert!(read.is_err(), "{read:?}");
+        tasks.close();
+        time::timeout(Duration::from_secs(5), tasks.wait())
+            .await
+            .expect("the close settles");
+        assert_eq!(closes(&browser), vec![json!("stream-2")]);
+    }
 
     fn params(edit: impl FnOnce(&mut PagePdfParams)) -> PagePdfParams {
         let mut params: PagePdfParams = serde_json::from_value(json!({})).expect("no options");
