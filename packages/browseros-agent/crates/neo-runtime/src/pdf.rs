@@ -275,7 +275,7 @@ pub(crate) async fn pdf(
     // still gets its stream closed when the answer arrives (`Stream`'s `Drop`), however late.
     let (sent, printed) = oneshot::channel();
     let session = Arc::clone(page);
-    capture::spawn_while_open(page, async move {
+    page.spawn_while_open(async move {
         let answer = session.send("Page.printToPDF", options.to_cdp()).await;
         let stream = match answer {
             Ok(answer) => match answer.get("stream").and_then(Value::as_str) {
@@ -350,7 +350,7 @@ impl Drop for Stream {
         }
         let page = Arc::clone(&self.page);
         let handle = self.handle.clone();
-        capture::spawn_while_open(&self.page, async move {
+        self.page.spawn_while_open(async move {
             if let Err(error) = page.send("IO.close", json!({ "handle": handle })).await {
                 debug!(%error, "closing an abandoned PDF stream failed");
             }

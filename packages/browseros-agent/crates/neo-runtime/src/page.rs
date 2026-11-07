@@ -735,6 +735,24 @@ impl PageSession {
         self.tasks.spawn_on(task, &self.session.tokio);
     }
 
+    /// Neo: [`Self::spawn`] for work that matters only while the tab is open (a capture's
+    /// restore or reset, an object group's release). It ends when the tab closes or crashes,
+    /// and dropping it drops what it holds (a screenshot turn, an object group): a gone tab has
+    /// nothing left to undo, and a crashed one does not answer what is sent to it (BrowserOS
+    /// neo, the crashed case of `capture-turn-liveness-review`), so the task would otherwise
+    /// hold those, and a host's `Runtime::drain`, until browseros-cdp's request timeout. Only a
+    /// prepared session's watcher sees the tab go ([`Self::prepare`]).
+    pub(crate) fn spawn_while_open(&self, task: impl Future<Output = ()> + Send + 'static) {
+        let closed = self.closed.clone();
+        self.spawn(async move {
+            tokio::select! {
+                biased;
+                () = closed.cancelled() => {}
+                () = task => {}
+            }
+        });
+    }
+
     fn state(&self) -> Option<watch::Receiver<PageState>> {
         self.prepared.get().map(|_| self.state.clone())
     }
@@ -1753,7 +1771,9 @@ fn apply_lifecycle(state: &mut PageState, event: &LifecycleEvent) -> bool {
 /// An object group this session holds. Dropping it releases the group
 /// (`Runtime.releaseObjectGroup`) on a tracked task holding the page, fire and forget: a
 /// renderer stuck on a dialog must not hold the dropping call. One release frees the result
-/// object and every handle `getProperties` read out of it (probe P1).
+/// object and every handle `getProperties` read out of it (probe P1). A tab that closed or
+/// crashed took its groups with it, so no release waits on it
+/// ([`PageSession::spawn_while_open`]).
 pub(crate) struct GroupGuard {
     page: Arc<PageSession>,
     frame: Arc<FrameContext>,
@@ -1770,7 +1790,7 @@ impl Drop for GroupGuard {
     fn drop(&mut self) {
         let frame = Arc::clone(&self.frame);
         let ObjectGroup(group) = self.group.clone();
-        self.page.spawn(async move {
+        self.page.spawn_while_open(async move {
             let released = frame
                 .host
                 .send(
@@ -3403,6 +3423,133 @@ mod tests {
         drop(navigation);
         assert_eq!(page.navigations.receiver_count(), 0);
         assert_eq!(page.state_updates.receiver_count(), 1);
+    }
+
+    /// A session on the fake's tab with its own tracker and closed token.
+    async fn tracked_page(
+        cdp: CdpClient,
+        tasks: &TaskTracker,
+        closed: &CancellationToken,
+    ) -> Arc<PageSession> {
+        use crate::fake_browser::PAGE;
+
+        let id = PageId::new(PAGE.to_string());
+        let session = Session::attach(cdp, id.clone(), TokioHandle::current())
+            .await
+            .expect("attach");
+        Arc::new(PageSession::new(
+            session,
+            &id,
+            tasks.clone(),
+            Arc::default(),
+            Arc::new(Mutex::new(())),
+            closed.clone(),
+            EventHub::default(),
+            false,
+        ))
+    }
+
+    /// A task waiting for an answer its gone tab will never send ends when the tab goes, and
+    /// what it held (here a sender standing in for the tab's screenshot turn) goes with it, so
+    /// the run's tracker drains.
+    #[tokio::test]
+    async fn a_background_task_ends_when_its_tab_goes() {
+        use std::future;
+
+        use crate::fake_browser::{FakeBrowser, Replies};
+
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let closed = CancellationToken::new();
+        let page = tracked_page(browser.cdp().await, &tasks, &closed).await;
+        let (held, released) = oneshot::channel::<()>();
+        page.spawn_while_open(async move {
+            future::pending::<()>().await;
+            drop(held);
+        });
+        closed.cancel();
+        assert!(
+            time::timeout(Duration::from_secs(5), released)
+                .await
+                .is_ok(),
+            "the task's hold went with the tab"
+        );
+        tasks.close();
+        assert!(
+            time::timeout(Duration::from_secs(5), tasks.wait())
+                .await
+                .is_ok()
+        );
+    }
+
+    /// While the tab stays, the task runs to its end.
+    #[tokio::test]
+    async fn a_background_task_runs_to_its_end_while_its_tab_stays() {
+        use crate::fake_browser::{FakeBrowser, Replies};
+
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let closed = CancellationToken::new();
+        let page = tracked_page(browser.cdp().await, &tasks, &closed).await;
+        let (done, finished) = oneshot::channel();
+        page.spawn_while_open(async move {
+            time::sleep(Duration::from_millis(20)).await;
+            let _sent = done.send("ran");
+        });
+        assert_eq!(
+            time::timeout(Duration::from_secs(5), finished)
+                .await
+                .ok()
+                .and_then(Result::ok),
+            Some("ran")
+        );
+    }
+
+    /// A dropped group is released while its tab is open, and not once the tab went: the tab
+    /// took the group with it, and a crashed one would never answer the release.
+    #[tokio::test]
+    async fn a_group_is_released_only_while_its_tab_is_open() {
+        use crate::fake_browser::{FakeBrowser, Replies};
+
+        fn released(browser: &FakeBrowser) -> Vec<String> {
+            browser
+                .exchanges()
+                .iter()
+                .filter(|exchange| exchange.method() == "Runtime.releaseObjectGroup")
+                .filter_map(|exchange| {
+                    exchange.command["params"]["objectGroup"]
+                        .as_str()
+                        .map(str::to_string)
+                })
+                .collect()
+        }
+
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let closed = CancellationToken::new();
+        let page = tracked_page(browser.cdp().await, &tasks, &closed).await;
+        let tab = FrameTab {
+            page: Arc::clone(&page),
+            scope: FrameScope::Main,
+        };
+        let frame = tab.context().await.expect("the main frame");
+        drop(tab.group(&frame, "open"));
+        time::timeout(Duration::from_secs(5), async {
+            while released(&browser).is_empty() {
+                time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the open tab's group is released");
+        closed.cancel();
+        drop(tab.group(&frame, "gone"));
+        tasks.close();
+        time::timeout(Duration::from_secs(5), tasks.wait())
+            .await
+            .expect("the tracker drains");
+        let groups = released(&browser);
+        assert_eq!(groups.len(), 1, "{groups:?}");
+        assert!(groups[0].starts_with("neo-open-"), "{groups:?}");
     }
 
     async fn assert_seed_keeps_watcher_open(
