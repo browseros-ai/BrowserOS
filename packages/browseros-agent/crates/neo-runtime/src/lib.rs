@@ -10,6 +10,8 @@
 //!             ├─ get → Tabs              live pages, URL, initializer and closed state
 //!             └─ Dispatcher::call        dispatch.rs: target routing, task, trace, reply
 //!                  ├─ tab_calls          context/page lifecycle; tracked creation and cleanup
+//!                  ├─ browser_calls      the run's Browser: created contexts, close, disposal
+//!                  ├─ debugger           context.debugger: holds a call before it starts
 //!                  └─ Tabs::session      one lazy session for the call's page
 //!                       ├─ click::click  click.rs: policy over the Tab seam
 //!                       ├─ navigate      navigate.rs: goto (commits, lifecycle, response) and title
@@ -18,6 +20,7 @@
 //!                       │                ariaSnapshot;
 //!                       │                aria_yaml.rs renders the snapshot as Playwright's YAML
 //!                       ├─ waits         waits.rs: selector, URL and lifecycle waits; no input lock
+//!                       ├─ emulation     emulation.rs: viewport, media, a created context's options
 //!                       └─ FrameTab      one frame scope over PageSession
 //!                            ├─ PageSession: shared input, watcher and navigation
 //!                            │    └─ NetworkLog  network.rs: the main frame's navigation requests
