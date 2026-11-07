@@ -214,6 +214,9 @@ pub(crate) async fn run(tabs: Tabs, discovery: Discovery) {
         Ok(started) => started,
         Err(error) => {
             warn!(%error, "the run's target discovery did not start; no page events");
+            hub.note(format!(
+                "neo-runtime could not watch for new pages ({error}): no page or popup events"
+            ));
             return;
         }
     };

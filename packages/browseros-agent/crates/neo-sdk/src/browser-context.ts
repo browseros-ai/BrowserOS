@@ -1,17 +1,20 @@
 /**
  * Playwright's `BrowserContext` (`client/browserContext.ts` at 26137face), cut to what a run
  * needs: its pages, `newPage`, the default timeout its pages fall back to, and the events Rust
- * sends on it (`console`, `pageError`, `dialog`, `dialogClosed`), which it fans out to the page
- * each names and to its own listeners in Playwright's order. Scripts receive it as `context`.
+ * sends on it (`page`, `console`, `pageError`, `dialog`, `dialogClosed`), which it fans out to
+ * the page each names and to its own listeners in Playwright's order. Its `pageload`,
+ * `pageclose` and frame events come from its pages. Scripts receive it as `context`.
  *
- * Its listeners cover the pages the run has a session on: Neo does not attach to the user's
- * other tabs just to listen (med-pw-net design, Decisions).
+ * Its page-level listeners cover the pages the run has a session on, which include every page a
+ * `page` event handed out: Neo does not attach to the user's other tabs just to listen
+ * (med-pw-net design, Decisions).
  *
- * Playwright keeps its page list current from the server's `page` and `close` events. Neo has
- * no events, so `pages()` reads the context's open tabs live, and this class keeps one `Page`
- * per guid across reads. That map is what makes a page the same object every time it comes
- * back (`===`, `includes`, `indexOf`), and what binds each `Page` to its own tab: a `Page` and
- * its main frame are built once, from the record Rust minted their guids in.
+ * Playwright keeps its page list current from the server's `page` and `close` events. Neo sends
+ * `page` only while the run listens for new pages, so `pages()` reads the context's open tabs
+ * live, and this class keeps one `Page` per guid across reads and events. That map is what
+ * makes a page the same object every time it comes back (`===`, `includes`, `indexOf`, the
+ * `page` event's page and the `popup` event's), and what binds each `Page` to its own tab: a
+ * `Page` and its main frame are built once, from the record Rust minted their guids in.
  */
 
 import type {

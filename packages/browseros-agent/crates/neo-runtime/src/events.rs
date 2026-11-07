@@ -4,7 +4,7 @@
 //! messages on one ordered queue here, and the realm takes them on its own thread.
 //!
 //! ```text
-//!  page watcher ──emit()──▶ EventHub queue (seq 1, 2, 3 …)              subscribed events only
+//!  page watcher, discovery ──emit()──▶ EventHub queue (seq 1, 2, 3 …)   subscribed events only
 //!  call task: handler done ─▶ barrier(): every watcher applies what preceded the reply
 //!                          ─▶ W = seq() ─▶ reply (text, W)
 //!  JS: runtime-bridge call() ─▶ drain(W) + dispatch, synchronously ─▶ the caller continues
@@ -20,8 +20,10 @@
 //! A subscription is a (guid, listener event) pair the SDK turns on when an event's listener
 //! count leaves 0. Producers emit only what is subscribed, and a run with no subscription skips
 //! the barrier, so it pays nothing. A subscription also switches on what its producer needs
-//! (`Runtime.enable` for console messages, the page watcher for dialogs); [`EventHub::ready`]
-//! holds a page's next call until that is done, so the call cannot race the enable.
+//! (`Runtime.enable` for console messages, the page watcher for dialogs, target discovery for new
+//! pages); [`EventHub::ready`] holds a page's next call until that is done, so the call cannot
+//! race the enable. Discovery holds every call of the run ([`ALL_PAGES`]): any call may open a
+//! tab.
 //!
 //! The queue lives in Rust, outside the realm's memory limit, so it is capped; past a cap,
 //! events are counted and dropped until the script drains, and the run log says so once per
@@ -482,6 +484,11 @@ impl EventHub {
     /// Cancelled once the run's events end ([`Self::close`]).
     pub(crate) fn ended(&self) -> CancellationToken {
         self.0.ended.clone()
+    }
+
+    /// Adds a line the run's log gets with the next drain: a producer that could not start.
+    pub(crate) fn note(&self, line: String) {
+        self.with(|state| state.notes.push(line));
     }
 
     /// Run-log lines the hub owes the script's log, oldest first.
