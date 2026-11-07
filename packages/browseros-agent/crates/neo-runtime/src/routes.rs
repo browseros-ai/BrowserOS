@@ -1753,6 +1753,103 @@ mod tests {
         );
     }
 
+    fn will_be_sent(id: &str, url: &str, frame: Option<&str>) -> Value {
+        let mut event = json!({
+            "requestId": id, "loaderId": "DOC", "type": "Fetch",
+            "request": {"url": url, "method": "GET", "headers": {}},
+            "timestamp": 1.0, "wallTime": 1.0,
+        });
+        if let Some(frame) = frame {
+            event["frameId"] = json!(frame);
+        }
+        event
+    }
+
+    fn pause(request_id: &str, network_id: &str, url: &str) -> Value {
+        json!({
+            "requestId": request_id, "networkId": network_id, "resourceType": "Fetch",
+            "request": {"url": url, "method": "GET", "headers": {}},
+        })
+    }
+
+    fn routing_page(url: &str) -> Routes {
+        let routes = Routes::new("T", Arc::default());
+        let _released =
+            routes.set_page(Patterns::new([(Some(url.to_string()), None, None, false)]).unwrap());
+        routes
+    }
+
+    #[test]
+    fn tests_that_a_pause_before_its_request_waits_for_it_then_routes() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let routes = routing_page("**/data.json");
+        let early = pause("interception-1", "R1", "https://a.test/data.json");
+        assert_eq!(
+            routes.paused(None, &early, &log),
+            Pause::Parked,
+            "Chromium may pause it before its requestWillBeSent (measured)"
+        );
+        log.apply(
+            None,
+            "Network.requestWillBeSent",
+            &will_be_sent("R1", "https://a.test/data.json", Some("MAIN")),
+        );
+        let Some(Pause::Route {
+            channel, params, ..
+        }) = routes.unpark("R1", &log)
+        else {
+            panic!("the parked pause routes once its request is in the log");
+        };
+        assert_eq!(channel, Channel::Page);
+        assert_eq!(params["request"]["guid"], "request@MAIN:R1:0");
+        assert_eq!(params["page"]["guid"], "page@T");
+        assert!(routes.unpark("R1", &log).is_none(), "unparked once");
+    }
+
+    #[test]
+    fn tests_that_a_parked_pause_goes_on_at_the_run_end() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let routes = routing_page("**/*");
+        let early = pause("interception-2", "R2", "https://a.test/x");
+        assert_eq!(routes.paused(None, &early, &log), Pause::Parked);
+        let released = routes.left_open();
+        assert_eq!(released.len(), 1);
+        assert_eq!(released[0].params, json!({ "requestId": "interception-2" }));
+    }
+
+    #[test]
+    fn tests_that_a_favicon_is_aborted_and_a_frameless_request_goes_on() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let routes = routing_page("**/*");
+        log.apply(
+            None,
+            "Network.requestWillBeSent",
+            &will_be_sent("W1", "https://a.test/worker.json", None),
+        );
+        let Pause::Answer(answer) = routes.paused(
+            None,
+            &pause("i-3", "W1", "https://a.test/worker.json"),
+            &log,
+        ) else {
+            panic!("a request the log keeps no record of is not routed");
+        };
+        assert_eq!(answer.method, "Fetch.continueRequest");
+        let mut favicon = will_be_sent("F1", "https://a.test/favicon.ico", Some("MAIN"));
+        favicon["type"] = json!("Other");
+        log.apply(None, "Network.requestWillBeSent", &favicon);
+        let Pause::Answer(answer) = routes.paused(
+            None,
+            &pause("i-4", "F1", "https://a.test/favicon.ico"),
+            &log,
+        ) else {
+            panic!("a favicon is answered, never routed");
+        };
+        assert_eq!(
+            (answer.method, answer.params["errorReason"].clone()),
+            ("Fetch.failRequest", json!("Aborted"))
+        );
+    }
+
     #[test]
     fn tests_that_emptied_patterns_release_what_their_handlers_held() {
         let routes = Routes::new("T", Arc::default());
