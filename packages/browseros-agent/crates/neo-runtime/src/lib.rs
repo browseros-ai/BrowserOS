@@ -55,6 +55,7 @@ mod deadline;
 mod devices;
 mod dialogs;
 mod dispatch;
+mod drag;
 mod events;
 mod fill;
 mod forms;

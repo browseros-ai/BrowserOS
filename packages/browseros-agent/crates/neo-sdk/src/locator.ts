@@ -51,6 +51,7 @@ import type {
   CheckOptions,
   ClickOptions,
   DblclickOptions,
+  DragAndDropOptions,
   FillOptions,
   Frame,
   GetAttributeOptions,
@@ -247,6 +248,20 @@ export class Locator {
       strict: true,
       ...options,
     })
+  }
+
+  /** Playwright's `dragTo`: `target`'s selector, resolved in this locator's frame, as
+   * Playwright's client passes it (`this._frame.dragAndDrop(this._selector, target._selector`). */
+  async dragTo(
+    target: Locator,
+    options: DragAndDropOptions = {},
+  ): Promise<void> {
+    return await this._frame._dragAndDrop(
+      'locator.dragTo',
+      this._selector,
+      target._selector,
+      { strict: true, ...options },
+    )
   }
 
   /** Playwright's `pressSequentially`: focus, then each character typed as `keyboard.type`. */

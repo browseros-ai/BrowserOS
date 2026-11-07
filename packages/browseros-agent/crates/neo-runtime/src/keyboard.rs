@@ -36,7 +36,9 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::click::{PageError, PressReport, Tab};
-use crate::input_devices::{DragStep, self, Effect, InputDevices, KeyboardState, Owner, Plan, Planned};
+use crate::input_devices::{
+    self, DragStep, Effect, InputDevices, KeyboardState, Owner, Plan, Planned,
+};
 use crate::page::{FrameTab, InputPermit};
 use crate::progress::InputTicket;
 use crate::world;

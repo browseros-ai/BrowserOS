@@ -52,7 +52,7 @@ pub(crate) type Owner = SessionId;
 pub(crate) struct InputDevices {
     pub(crate) keyboard: KeyboardState,
     pub(crate) mouse: MouseState,
-    /// Chromium's drag manager (`crDragDrop.ts` `DragManager`): the drag the browser handed
+    /// Chromium's drag manager (Playwright's `DragManager`): the drag the browser handed
     /// over, while one runs.
     pub(crate) drag: Option<DragState>,
 }
@@ -272,7 +272,7 @@ pub(crate) struct Planned {
     pub(crate) drag: DragStep,
 }
 
-/// Neo: how a command meets a drag, decided as it is written (`crInput.ts` `RawMouseImpl`,
+/// Neo: how a command meets a drag, decided as it is written (Playwright's `RawMouseImpl`,
 /// `RawKeyboardImpl`), since a move may start one in the middle of a plan.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum DragStep {
@@ -940,7 +940,7 @@ impl Writer {
     }
 }
 
-/// Neo: what a drag makes of a press, a release or an Escape while one runs (`crInput.ts`
+/// Neo: what a drag makes of a press, a release or an Escape while one runs (Playwright's
 /// `RawMouseImpl.down`/`up`, `RawKeyboardImpl.keydown`): the press is skipped, the release
 /// drops, a run end's release and the Escape cancel; `None` writes the command as planned.
 fn drag_outgoing(command: &Planned, devices: &InputDevices) -> Option<Outgoing> {
@@ -978,7 +978,7 @@ fn drag_outgoing(command: &Planned, devices: &InputDevices) -> Option<Outgoing> 
 /// Playwright: `server/chromium/crDragDrop.ts` `DragManager.cancelDrag`: `dragOperationsMask: 0xFFFF,`
 const DRAG_OPERATIONS_ALL: i64 = 0xFFFF;
 
-/// Neo: `Input.dispatchDragEvent`'s params, as `crDragDrop.ts` builds them: the event, its point,
+/// Neo: `Input.dispatchDragEvent`'s params, as Playwright's `DragManager` builds them: the event, its point,
 /// the intercepted drag's data and the held modifiers.
 fn drag_event(kind: &str, x: f64, y: f64, data: &Value, modifiers: i64) -> String {
     json!({ "type": kind, "x": x, "y": y, "data": data, "modifiers": modifiers }).to_string()
@@ -1235,6 +1235,136 @@ mod tests {
         assert!(turn.devices().mouse.buttons.is_empty());
     }
 
+    /// Chromium's drag manager (Playwright's `DragManager`): a move with the left button held that starts
+    /// a drag the page allows is followed by `dragEnter`, every later move is a `dragOver`, and
+    /// the release drops it; a move that starts none is a move.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_drag_starts_moves_and_drops() {
+        let data = serde_json::json!({ "items": [{ "mimeType": "text/plain", "data": "x" }], "dragOperationsMask": 1 });
+        let mut simulated = InputDevices::default();
+        let mut plan = Plan::default();
+        plan_free_move(&mut plan, &mut simulated, (10.0, 10.0), 1);
+        plan_down(&mut plan, &mut simulated, MouseButton::Left, 1, &run("A"));
+        plan_free_move(&mut plan, &mut simulated, (50.0, 50.0), 3);
+        plan_up(&mut plan, &mut simulated, MouseButton::Left, 1, None);
+        let sender = Sender::dragging([Some(data.clone())]);
+        let turn = Turn::of(InputDevices::default(), "A");
+        let written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        assert!(written.complete);
+        assert_eq!(
+            sender.sent(),
+            [
+                "mouseMoved",
+                "mousePressed",
+                "mouseMoved",
+                "intercepted",
+                "dragEnter",
+                "dragOver",
+                "dragOver",
+                "drop"
+            ],
+            "the press's first move starts the drag; the later ones drag it over; the release drops"
+        );
+        let after = turn.devices();
+        assert_eq!(after.drag, None, "the drop ended it");
+        assert!(after.mouse.buttons.is_empty());
+        assert_eq!((after.mouse.x, after.mouse.y), (50.0, 50.0));
+
+        let sender = Sender::dragging([None, None]);
+        let turn = Turn::of(InputDevices::default(), "A");
+        let written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        assert!(written.complete);
+        assert_eq!(
+            sender.sent(),
+            [
+                "mouseMoved",
+                "mousePressed",
+                "mouseMoved",
+                "not dragged",
+                "mouseMoved",
+                "not dragged",
+                "mouseMoved",
+                "not dragged",
+                "mouseReleased"
+            ],
+            "a page that starts no drag sees plain moves and the release"
+        );
+    }
+
+    /// While a drag runs, an Escape keyDown cancels it in place of the key, a click's press is
+    /// skipped and its release drops, and a run end cancels the drag it left running.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_running_drag_meets_escape_clicks_and_run_end() {
+        let running = InputDevices {
+            drag: Some(DragState {
+                data: serde_json::json!({ "items": [], "dragOperationsMask": 1 }),
+                x: 5.0,
+                y: 5.0,
+            }),
+            mouse: MouseState {
+                x: 5.0,
+                y: 5.0,
+                last_button: Some(MouseButton::Left),
+                buttons: vec![(MouseButton::Left, run("A"))],
+            },
+            ..InputDevices::default()
+        };
+        let mut simulated = running.clone();
+        let mut plan = Plan::default();
+        keyboard::plan_press(
+            &mut plan,
+            &mut simulated,
+            "Escape",
+            Platform::Linux,
+            &run("A"),
+            None,
+        )
+        .expect("Escape");
+        let sender = Sender::answering([]);
+        let turn = Turn::of(running.clone(), "A");
+        let _written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        assert_eq!(sender.sent(), ["dragCancel", "keyUp"]);
+        assert_eq!(turn.devices().drag, None);
+
+        let mut simulated = running.clone();
+        let mut plan = Plan::default();
+        plan_click(
+            &mut plan,
+            &mut simulated,
+            (9.0, 9.0),
+            &MouseClick {
+                button: MouseButton::Left,
+                click_count: 1,
+                delay: None,
+            },
+            1,
+            &run("A"),
+        );
+        let sender = Sender::answering([]);
+        let turn = Turn::of(running.clone(), "A");
+        let _written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        assert_eq!(
+            sender.sent(),
+            ["mouseMoved", "drop"],
+            "a click's move is never a drag's; its press is skipped and its release drops"
+        );
+
+        let mut simulated = running.clone();
+        let mut release = Plan::default();
+        plan_button_releases(&mut release, &mut simulated, &run("A"));
+        let sender = Sender::answering([]);
+        let turn = Turn::of(running, "A");
+        let _written = write_plan(&sender, &turn, &release, &CancellationToken::new()).await;
+        assert_eq!(
+            sender.sent(),
+            ["dragCancel"],
+            "a drag the run left running is cancelled"
+        );
+        let after = turn.devices();
+        assert_eq!(after.drag, None);
+        assert!(after.mouse.buttons.is_empty());
+    }
+
     /// Known review issue: one failed run-end release must not prevent independent releases.
     #[tokio::test(start_paused = true)]
     async fn review_run_end_keeps_releasing_after_a_cdp_error() {
@@ -1292,6 +1422,8 @@ mod tests {
     struct Sender {
         sent: Arc<Mutex<Vec<String>>>,
         answers: Arc<Mutex<VecDeque<Answer>>>,
+        /// What each move with the left button held finds: the drag the page started, or none.
+        drags: Arc<Mutex<VecDeque<Option<Value>>>>,
     }
 
     impl Sender {
@@ -1299,6 +1431,15 @@ mod tests {
             Self {
                 sent: Arc::default(),
                 answers: Arc::new(Mutex::new(answers.into_iter().collect())),
+                drags: Arc::default(),
+            }
+        }
+
+        /// A page whose next moves with the left button held start these drags, in order.
+        fn dragging(drags: impl IntoIterator<Item = Option<Value>>) -> Self {
+            Self {
+                drags: Arc::new(Mutex::new(drags.into_iter().collect())),
+                ..Self::answering([])
             }
         }
 
@@ -1333,6 +1474,20 @@ mod tests {
                 }),
                 Answer::Hang => future::pending().await,
             }
+        }
+
+        async fn move_intercepting_drag(&self, params: String) -> Result<Option<Value>, CdpError> {
+            self.send_input("Input.dispatchMouseEvent", params).await?;
+            let drag = self.drags.lock().expect("drags").pop_front().flatten();
+            self.sent.lock().expect("sent").push(
+                if drag.is_some() {
+                    "intercepted"
+                } else {
+                    "not dragged"
+                }
+                .to_string(),
+            );
+            Ok(drag)
         }
     }
 

@@ -51,11 +51,11 @@ use futures_util::future;
 use neo_runtime_spec::injected::{
     ElementState, ElementStatesOutcome, FrameStyle, FrameStyleStatus, HitTargetAction,
     HitTargetInterceptor, HitTargetOutcome, HitTargetSetup, InjectedCheckElementStatesParams,
-    InjectedDescribeIFrameStyleParams, InjectedDescribeSelectorParams,
+    InjectedCleanupDragParams, InjectedDescribeIFrameStyleParams, InjectedDescribeSelectorParams,
     InjectedExpectHitTargetParams, InjectedGetElementBorderWidthParams, InjectedResolveParams,
-    InjectedScrollIntoViewParams, InjectedSetupHitTargetInterceptorParams,
-    InjectedStopHitTargetInterceptorParams, InjectedTitleParams, InjectedViewportSizeParams, Point,
-    ScrollAlignment,
+    InjectedScrollIntoViewParams, InjectedSetupDragListenersParams,
+    InjectedSetupHitTargetInterceptorParams, InjectedStopHitTargetInterceptorParams,
+    InjectedTitleParams, InjectedViewportSizeParams, Point, ScrollAlignment,
 };
 use neo_runtime_spec::serve::ResponseChannel;
 use neo_runtime_spec::{Element, Handle};
@@ -93,6 +93,15 @@ use crate::world::{self, ObjectGroup, World};
 /// Detaching is best effort. It runs in the background after a run, so this bound only keeps
 /// a hung browser from piling up detach tasks.
 const DETACH_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Neo: how long one frame's drag-listener call may take before a move goes on without that
+/// frame. Playwright evaluates there without stalling, so a frame paused on a dialog never holds
+/// up the input; Neo bounds the call instead.
+const DRAG_FRAME_CALL_WAIT: Duration = Duration::from_secs(1);
+
+/// Neo: how long a move waits for `Input.dragIntercepted` once a frame saw its drag start.
+/// Chromium sends it while it handles the move, so this only bounds a browser that never does.
+const DRAG_INTERCEPT_WAIT: Duration = Duration::from_secs(5);
 
 /// One run's CDP session on one tab, which owns the attach: dropping it detaches. The
 /// `Runtime`'s connection outlives every run, so a session nobody detaches stays attached
@@ -2259,6 +2268,100 @@ fn pixels(value: i64) -> f64 {
 impl InputSender for Arc<PageSession> {
     async fn send_input(&self, method: &'static str, params: String) -> Result<(), CdpError> {
         self.send_input_json(method, &params).await
+    }
+
+    /// Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `await progress.race(client.send('Input.setInterceptDrags', { enabled: true }));`
+    ///
+    /// The listeners go into every frame's utility world, interception is on for the move
+    /// alone and always turned off again, and a frame that saw a drag start hands Neo the
+    /// drag Chromium intercepted.
+    async fn move_intercepting_drag(&self, params: String) -> Result<Option<Value>, CdpError> {
+        let frames = self.drag_frames().await;
+        future::join_all(frames.iter().map(|frame| {
+            time::timeout(
+                DRAG_FRAME_CALL_WAIT,
+                frame.call(None, &InjectedSetupDragListenersParams {}),
+            )
+        }))
+        .await;
+        // Subscribed before interception is on, so its event cannot slip past.
+        let mut events = self.session.cdp.events();
+        self.send_input_json("Input.setInterceptDrags", r#"{"enabled":true}"#)
+            .await?;
+        let moved = self
+            .send_input_json("Input.dispatchMouseEvent", &params)
+            .await;
+        let started = future::join_all(frames.iter().map(|frame| {
+            time::timeout(
+                DRAG_FRAME_CALL_WAIT,
+                frame.call(None, &InjectedCleanupDragParams {}),
+            )
+        }))
+        .await
+        .into_iter()
+        .any(|cleaned| cleaned.is_ok_and(|result| result.is_ok_and(|cleaned| cleaned.started)));
+        let disabled = self
+            .send_input_json("Input.setInterceptDrags", r#"{"enabled":false}"#)
+            .await;
+        moved?;
+        disabled?;
+        if !started {
+            return Ok(None);
+        }
+        let intercepted = async {
+            loop {
+                match events.recv().await {
+                    Ok(event)
+                        if event.method == "Input.dragIntercepted"
+                            && event.session_id.as_ref() == Some(&self.session.id) =>
+                    {
+                        return Ok(event.params["data"].clone());
+                    }
+                    Ok(_) | Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => return Err(CdpError::SessionGone),
+                }
+            }
+        };
+        time::timeout(DRAG_INTERCEPT_WAIT, intercepted)
+            .await
+            .map_err(|_| CdpError::Timeout {
+                method: "Input.dragIntercepted".to_string(),
+            })?
+            .map(Some)
+    }
+}
+
+// The frames a drag's listeners go to.
+impl PageSession {
+    /// Neo: every frame's context, the main one first, then the frame tree in pre-order. A
+    /// frame whose context cannot be reached is left out, as Playwright's evaluation in all
+    /// frames skips one it cannot reach.
+    async fn drag_frames(&self) -> Vec<Arc<FrameContext>> {
+        let main = self.frames.main();
+        let Ok(tree) = self.frames.tree().await else {
+            return vec![main];
+        };
+        let mut contexts: HashMap<String, Arc<FrameContext>> = HashMap::new();
+        contexts.insert(main.id.clone(), Arc::clone(&main));
+        let mut frames = vec![main];
+        for info in tree {
+            if contexts.contains_key(&info.id) {
+                continue;
+            }
+            let Some(parent) = info
+                .parent
+                .as_ref()
+                .and_then(|parent| contexts.get(parent))
+                .map(|parent| Arc::clone(&parent.host))
+            else {
+                continue;
+            };
+            if let Ok(context) = self.frames.context(&info.id, Some(&parent)).await {
+                contexts.insert(info.id.clone(), Arc::clone(&context));
+                frames.push(context);
+            }
+        }
+        frames
     }
 }
 
