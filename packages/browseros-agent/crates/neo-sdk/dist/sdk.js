@@ -90,6 +90,9 @@ function get(guid, field) {
 function matchesURL(url, matcher) {
   return JSON.parse(__neo_runtime.get(JSON.stringify({ field: "matchesURL", url, matcher })));
 }
+function parseURL(url) {
+  return JSON.parse(__neo_runtime.get(JSON.stringify({ field: "parseURL", url })));
+}
 async function call(message) {
   const { reply, events } = await __neo_runtime.callWithEvents(message);
   deliverEvents?.(events);
@@ -4537,6 +4540,9 @@ var FRAME_WAIT_FOR_SELECTOR_KEYS = [
   "omitReturnValue"
 ];
 var PAGE_CLOSE_KEYS = ["reason"];
+var PAGE_RELOAD_KEYS = ["waitUntil"];
+var PAGE_GO_BACK_KEYS = ["waitUntil"];
+var PAGE_GO_FORWARD_KEYS = ["waitUntil"];
 var PAGE_CONSOLE_MESSAGES_KEYS = ["filter"];
 var PAGE_PAGE_ERRORS_KEYS = ["filter"];
 function pickParams(keys, options) {
@@ -4577,555 +4583,9 @@ function convertSelectOptionValues(values) {
   return { options };
 }
 
-// src/frame.ts
-var LIFECYCLE_EVENTS = new Set([
-  "load",
-  "domcontentloaded",
-  "networkidle",
-  "commit"
-]);
-function verifyLoadState(name, waitUntil) {
-  if (waitUntil === "networkidle0")
-    waitUntil = "networkidle";
-  if (!LIFECYCLE_EVENTS.has(waitUntil))
-    throw new Error(`${name}: expected one of (load|domcontentloaded|networkidle|commit)`);
-  return waitUntil;
-}
-function verifyWaitState(apiName, name, state) {
-  try {
-    return verifyLoadState(name, state);
-  } catch (error) {
-    if (error instanceof Error)
-      error.message = `${apiName}: ${error.message}`;
-    throw error;
-  }
-}
-
-class Frame {
-  _guid;
-  _page;
-  _connection;
-  #lastUrl;
-  #lastName;
-  constructor(guid, page, connection, initializer = { url: "", name: "" }) {
-    this._guid = guid;
-    this._page = page;
-    this._connection = connection;
-    this.#lastUrl = initializer.url;
-    this.#lastName = initializer.name;
-  }
-  _updateInitializer(initializer) {
-    this.#lastUrl = initializer.url;
-    this.#lastName = initializer.name;
-  }
-  page() {
-    return this._page;
-  }
-  url() {
-    const url = get(this._guid, "url");
-    if (url !== null)
-      this.#lastUrl = url;
-    return this.#lastUrl;
-  }
-  name() {
-    const name = get(this._guid, "name");
-    if (name !== null)
-      this.#lastName = name;
-    return this.#lastName;
-  }
-  parentFrame() {
-    const record = get(this._guid, "parentFrame");
-    return record ? this._page._frameFrom(record) : null;
-  }
-  childFrames() {
-    return get(this._guid, "childFrames").map((record) => this._page._frameFrom(record));
-  }
-  isDetached() {
-    return get(this._guid, "isDetached");
-  }
-  async goto(url, options = {}) {
-    return await this._goto("frame.goto", url, options);
-  }
-  async _goto(apiName, url, options) {
-    const waitUntil = verifyLoadState("waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
-    const result = await this._connection.send(apiName, this._guid, "goto", pickParams(FRAME_GOTO_KEYS, {
-      url,
-      ...options,
-      waitUntil
-    }), this._page._timeoutSettings.navigationTimeout(options));
-    const guid = result?.response?.guid;
-    return guid ? responseFor(this._connection, guid, this) : null;
-  }
-  async waitForURL(url, options = {}) {
-    return await this._waitForURL("frame.waitForURL", url, options);
-  }
-  async _waitForURL(apiName, url, options) {
-    const waitOptions = options ?? {};
-    const serialized = serializeUrlMatch(apiName, url);
-    const waitUntil = verifyWaitState(apiName, "waitUntil", waitOptions.waitUntil === undefined ? "load" : waitOptions.waitUntil);
-    await this._connection.sendNeo(apiName, this._guid, "neo:waitForURL", { url: serialized, waitUntil }, this._page._timeoutSettings.navigationTimeout(waitOptions));
-  }
-  async waitForLoadState(state, options) {
-    return await this._waitForLoadState("frame.waitForLoadState", state, options);
-  }
-  async _waitForLoadState(apiName, state, options) {
-    const verified = verifyWaitState(apiName, "state", state === undefined ? "load" : state);
-    await this._connection.sendNeo(apiName, this._guid, "neo:waitForLoadState", { state: verified }, this._page._timeoutSettings.navigationTimeout(options ?? {}));
-  }
-  async _waitForSelector(apiName, selector, options) {
-    await this._connection.send(apiName, this._guid, "waitForSelector", pickParams(FRAME_WAIT_FOR_SELECTOR_KEYS, {
-      selector,
-      ...options
-    }), this._page._timeoutSettings.timeout(options));
-  }
-  async evaluate(pageFunction, arg, options) {
-    assertMaxArguments(arguments.length, 3);
-    return await this._evaluate("frame.evaluate", pageFunction, arg, options);
-  }
-  async _evaluate(apiName, pageFunction, arg, options) {
-    assertEvaluateOptions(options);
-    const params = evaluateParams(apiName, pageFunction, arg, options);
-    const result = await this._connection.sendEval(apiName, this._guid, "evaluateExpression", params, 0);
-    return parseResult(result?.value);
-  }
-  async evaluateHandle(pageFunction, arg, options) {
-    assertMaxArguments(arguments.length, 3);
-    return await this._evaluateHandle("frame.evaluateHandle", pageFunction, arg, options);
-  }
-  async _evaluateHandle(apiName, pageFunction, arg, options) {
-    assertEvaluateOptions(options);
-    const params = evaluateParams(apiName, pageFunction, arg, options);
-    const result = await this._connection.sendEval(apiName, this._guid, "evaluateExpressionHandle", params, 0);
-    return handleFrom(this._connection, result.handle);
-  }
-  async _withElement(apiName, selector, task, options) {
-    if (options.signal !== undefined && options.signal !== null)
-      throw new Error(`${apiName}: Neo does not support signal yet`);
-    const result = await this._connection.send(apiName, this._guid, "waitForSelector", { selector, strict: true, state: "attached" }, this._page._timeoutSettings.timeout(options));
-    const handle = ElementHandle.fromNullable(this._connection, result?.element);
-    if (!handle)
-      throw new Error(`Could not resolve ${selector} to DOM Element`);
-    try {
-      return await task(handle);
-    } finally {
-      await handle._dispose(apiName);
-    }
-  }
-  async title() {
-    return await this._title("frame.title");
-  }
-  async _title(apiName) {
-    const result = await this._connection.send(apiName, this._guid, "title", {}, 0);
-    return result.value;
-  }
-  async textContent(selector, options = {}) {
-    return await this._textContent("frame.textContent", selector, options);
-  }
-  async _textContent(apiName, selector, options) {
-    const result = await this._connection.send(apiName, this._guid, "textContent", pickParams(FRAME_TEXT_CONTENT_KEYS, {
-      selector,
-      ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
-    return result.value === undefined ? null : result.value;
-  }
-  async innerText(selector, options = {}) {
-    return await this._innerText("frame.innerText", selector, options);
-  }
-  async _innerText(apiName, selector, options) {
-    const result = await this._connection.send(apiName, this._guid, "innerText", pickParams(FRAME_INNER_TEXT_KEYS, {
-      selector,
-      ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
-    return result.value;
-  }
-  async innerHTML(selector, options = {}) {
-    return await this._innerHTML("frame.innerHTML", selector, options);
-  }
-  async _innerHTML(apiName, selector, options) {
-    const result = await this._connection.send(apiName, this._guid, "innerHTML", pickParams(FRAME_INNER_HTML_KEYS, {
-      selector,
-      ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
-    return result.value;
-  }
-  async getAttribute(selector, name, options = {}) {
-    return await this._getAttribute("frame.getAttribute", selector, name, options);
-  }
-  async _getAttribute(apiName, selector, name, options) {
-    const result = await this._connection.send(apiName, this._guid, "getAttribute", pickParams(FRAME_GET_ATTRIBUTE_KEYS, {
-      selector,
-      name,
-      ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
-    return result.value === undefined ? null : result.value;
-  }
-  async _queryCount(apiName, selector) {
-    const result = await this._connection.send(apiName, this._guid, "queryCount", pickParams(FRAME_QUERY_COUNT_KEYS, { selector }), 0);
-    if (result === undefined)
-      throw new Error("neo-sdk: Frame.queryCount contract error: missing result");
-    return result.value;
-  }
-  async _allTextContents(apiName, selector) {
-    const result = await this._connection.sendEval(apiName, this._guid, "evalOnSelectorAll", {
-      selector,
-      expression: "ee => ee.map(e => e.textContent || '')",
-      isFunction: true,
-      arg: serializeArgument(undefined)
-    }, 0);
-    const values = parseResult(result?.value);
-    if (!Array.isArray(values) || values.some((item) => typeof item !== "string"))
-      throw new Error("neo-sdk: Frame.evalOnSelectorAll contract error: expected a string array");
-    return values;
-  }
-  async addScriptTag(options = {}) {
-    return await this._addTag("frame.addScriptTag", "addScriptTag", options);
-  }
-  async addStyleTag(options = {}) {
-    return await this._addTag("frame.addStyleTag", "addStyleTag", options);
-  }
-  async _addTag(apiName, method, options) {
-    if (options.path)
-      throw new Error(`${apiName}: path: this run has no artifact directory, so Neo cannot read "${options.path}"`);
-    const params = {};
-    if (options.url !== undefined)
-      params.url = options.url;
-    if (options.content !== undefined)
-      params.content = options.content;
-    if (method === "addScriptTag" && options.type !== undefined)
-      params.type = options.type;
-    const result = await this._connection.sendEval(apiName, this._guid, method, params, 0);
-    const handle = ElementHandle.fromNullable(this._connection, result.element);
-    if (!handle)
-      throw new Error(`neo-sdk: Frame.${method} contract error: no element`);
-    return handle;
-  }
-  async _allInnerTexts(apiName, selector) {
-    const result = await this._connection.sendEval(apiName, this._guid, "evalOnSelectorAll", {
-      selector,
-      expression: "ee => ee.map(e => e.innerText)",
-      isFunction: true,
-      arg: serializeArgument(undefined)
-    }, 0);
-    return parseResult(result?.value);
-  }
-  async $(selector, options) {
-    return await this._querySelector("frame.$", selector, options);
-  }
-  async _querySelector(apiName, selector, options) {
-    if (options?.signal !== undefined && options.signal !== null)
-      throw new Error(`${apiName}: Neo does not support signal yet`);
-    const params = { selector };
-    if (options?.strict !== undefined)
-      params.strict = options.strict;
-    const result = await this._connection.sendEval(apiName, this._guid, "querySelector", params, 0);
-    return ElementHandle.fromNullable(this._connection, result?.element);
-  }
-  async $$(selector) {
-    return await this._querySelectorAll("frame.$$", selector);
-  }
-  async _querySelectorAll(apiName, selector) {
-    const result = await this._connection.sendEval(apiName, this._guid, "querySelectorAll", { selector }, 0);
-    return elementsFrom(this._connection, result?.elements ?? []);
-  }
-  async $eval(selector, pageFunction, arg) {
-    assertMaxArguments(arguments.length, 3);
-    return await this._evalOnSelector("frame.$eval", selector, pageFunction, arg);
-  }
-  async _evalOnSelector(apiName, selector, pageFunction, arg) {
-    const params = evaluateParams(apiName, pageFunction, arg, undefined);
-    const result = await this._connection.sendEval(apiName, this._guid, "evalOnSelector", { selector, ...params }, 0);
-    return parseResult(result?.value);
-  }
-  async $$eval(selector, pageFunction, arg) {
-    assertMaxArguments(arguments.length, 3);
-    return await this._evalOnSelectorAll("frame.$$eval", selector, pageFunction, arg);
-  }
-  async _evalOnSelectorAll(apiName, selector, pageFunction, arg) {
-    const params = evaluateParams(apiName, pageFunction, arg, undefined);
-    const result = await this._connection.sendEval(apiName, this._guid, "evalOnSelectorAll", { selector, ...params }, 0);
-    return parseResult(result?.value);
-  }
-  async waitForFunction(pageFunction, arg, options) {
-    return await this._waitForFunction("frame.waitForFunction", pageFunction, arg, options);
-  }
-  async _waitForFunction(apiName, pageFunction, arg, options = {}) {
-    if (typeof options.polling === "string" && options.polling !== "raf")
-      throw new Error(`Unknown polling option: ${options.polling}`);
-    if (options.signal !== undefined && options.signal !== null)
-      throw new Error(`${apiName}: Neo does not support signal yet`);
-    const params = evaluateParams(apiName, pageFunction, arg, undefined);
-    const pollingInterval = options.polling === "raf" ? undefined : options.polling;
-    const result = await this._connection.sendEval(apiName, this._guid, "waitForFunction", pollingInterval === undefined ? params : { ...params, pollingInterval }, this._page._timeoutSettings.timeout(options));
-    return handleFrom(this._connection, result.handle);
-  }
-  async _waitForSelectorElement(apiName, selector, options) {
-    if (options.signal !== undefined && options.signal !== null)
-      throw new Error(`${apiName}: Neo does not support signal yet`);
-    const result = await this._connection.send(apiName, this._guid, "waitForSelector", pickParams(FRAME_WAIT_FOR_SELECTOR_KEYS, {
-      selector,
-      ...options
-    }), this._page._timeoutSettings.timeout(options));
-    return ElementHandle.fromNullable(this._connection, result?.element);
-  }
-  async _ariaSnapshot(apiName, options, selector) {
-    const result = await this._connection.send(apiName, this._guid, "ariaSnapshot", pickParams(FRAME_ARIA_SNAPSHOT_KEYS, {
-      mode: options.mode,
-      selector,
-      depth: options.depth,
-      boxes: options.boxes
-    }), this._page._timeoutSettings.timeout(options));
-    return result.snapshot;
-  }
-  async click(selector, options = {}) {
-    return await this._click("frame.click", selector, options);
-  }
-  async _click(apiName, selector, options) {
-    await this._connection.send(apiName, this._guid, "click", pickParams(FRAME_CLICK_KEYS, {
-      selector,
-      ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
-  }
-  async dblclick(selector, options = {}) {
-    return await this._dblclick("frame.dblclick", selector, options);
-  }
-  async _dblclick(apiName, selector, options) {
-    await this._connection.send(apiName, this._guid, "dblclick", pickParams(FRAME_DBLCLICK_KEYS, {
-      selector,
-      ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
-  }
-  async hover(selector, options = {}) {
-    return await this._hover("frame.hover", selector, options);
-  }
-  async _hover(apiName, selector, options) {
-    await this._connection.send(apiName, this._guid, "hover", pickParams(FRAME_HOVER_KEYS, {
-      selector,
-      ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
-  }
-  async tap(selector, options = {}) {
-    return await this._tap("frame.tap", selector, options);
-  }
-  async _tap(apiName, selector, options) {
-    await this._connection.send(apiName, this._guid, "tap", pickParams(FRAME_TAP_KEYS, {
-      selector,
-      ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
-  }
-  async fill(selector, value, options = {}) {
-    return await this._fill("frame.fill", selector, value, options);
-  }
-  async _fill(apiName, selector, value, options) {
-    await this._connection.send(apiName, this._guid, "fill", pickParams(FRAME_FILL_KEYS, {
-      selector,
-      value,
-      ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
-  }
-  async press(selector, key, options = {}) {
-    return await this._press("frame.press", selector, key, options);
-  }
-  async _press(apiName, selector, key, options) {
-    await this._connection.send(apiName, this._guid, "press", pickParams(FRAME_PRESS_KEYS, {
-      selector,
-      key,
-      ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
-  }
-  async inputValue(selector, options = {}) {
-    return await this._inputValue("frame.inputValue", selector, options);
-  }
-  async _inputValue(apiName, selector, options) {
-    const result = await this._connection.send(apiName, this._guid, "inputValue", pickParams(FRAME_INPUT_VALUE_KEYS, {
-      selector,
-      ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
-    if (result === undefined)
-      throw new Error("neo-sdk: Frame.inputValue contract error: missing result");
-    return result.value;
-  }
-  async isVisible(selector, options = {}) {
-    return await this._isVisible("frame.isVisible", selector, options);
-  }
-  async _isVisible(apiName, selector, options) {
-    const result = await this._connection.send(apiName, this._guid, "isVisible", pickParams(FRAME_IS_VISIBLE_KEYS, {
-      selector,
-      ...options
-    }), 0);
-    if (result === undefined)
-      throw new Error("neo-sdk: Frame.isVisible contract error: missing result");
-    return result.value;
-  }
-  async isHidden(selector, options = {}) {
-    return await this._isHidden("frame.isHidden", selector, options);
-  }
-  async _isHidden(apiName, selector, options) {
-    const result = await this._connection.send(apiName, this._guid, "isHidden", pickParams(FRAME_IS_HIDDEN_KEYS, {
-      selector,
-      ...options
-    }), 0);
-    if (result === undefined)
-      throw new Error("neo-sdk: Frame.isHidden contract error: missing result");
-    return result.value;
-  }
-  async isChecked(selector, options = {}) {
-    return await this._isChecked("frame.isChecked", selector, options);
-  }
-  async _isChecked(apiName, selector, options) {
-    const result = await this._connection.send(apiName, this._guid, "isChecked", pickParams(FRAME_IS_CHECKED_KEYS, {
-      selector,
-      ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
-    if (result === undefined)
-      throw new Error("neo-sdk: Frame.isChecked contract error: missing result");
-    return result.value;
-  }
-  async isEnabled(selector, options = {}) {
-    return await this._isEnabled("frame.isEnabled", selector, options);
-  }
-  async _isEnabled(apiName, selector, options) {
-    const result = await this._connection.send(apiName, this._guid, "isEnabled", pickParams(FRAME_IS_ENABLED_KEYS, {
-      selector,
-      ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
-    if (result === undefined)
-      throw new Error("neo-sdk: Frame.isEnabled contract error: missing result");
-    return result.value;
-  }
-  async isDisabled(selector, options = {}) {
-    return await this._isDisabled("frame.isDisabled", selector, options);
-  }
-  async _isDisabled(apiName, selector, options) {
-    const result = await this._connection.send(apiName, this._guid, "isDisabled", pickParams(FRAME_IS_DISABLED_KEYS, {
-      selector,
-      ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
-    if (result === undefined)
-      throw new Error("neo-sdk: Frame.isDisabled contract error: missing result");
-    return result.value;
-  }
-  async isEditable(selector, options = {}) {
-    return await this._isEditable("frame.isEditable", selector, options);
-  }
-  async _isEditable(apiName, selector, options) {
-    const result = await this._connection.send(apiName, this._guid, "isEditable", pickParams(FRAME_IS_EDITABLE_KEYS, {
-      selector,
-      ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
-    if (result === undefined)
-      throw new Error("neo-sdk: Frame.isEditable contract error: missing result");
-    return result.value;
-  }
-  async check(selector, options = {}) {
-    return await this._check("frame.check", selector, options);
-  }
-  async _check(apiName, selector, options) {
-    await this._connection.send(apiName, this._guid, "check", pickParams(FRAME_CHECK_KEYS, {
-      selector,
-      ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
-  }
-  async uncheck(selector, options = {}) {
-    return await this._uncheck("frame.uncheck", selector, options);
-  }
-  async _uncheck(apiName, selector, options) {
-    await this._connection.send(apiName, this._guid, "uncheck", pickParams(FRAME_UNCHECK_KEYS, {
-      selector,
-      ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
-  }
-  async selectOption(selector, values, options = {}) {
-    return await this._selectOption("frame.selectOption", selector, values, options);
-  }
-  async _selectOption(apiName, selector, values, options) {
-    const result = await this._connection.send(apiName, this._guid, "selectOption", pickParams(FRAME_SELECT_OPTION_KEYS, {
-      selector,
-      ...convertSelectOptionValues(values),
-      ...options
-    }), this._page._timeoutSettings.timeout(options ?? {}));
-    if (result === undefined)
-      throw new Error("neo-sdk: Frame.selectOption contract error: missing result");
-    return result.values;
-  }
-  async setChecked(selector, checked, options = {}) {
-    if (checked)
-      await this._check("frame.setChecked", selector, options);
-    else
-      await this._uncheck("frame.setChecked", selector, options);
-  }
-  locator(selector, options) {
-    return new Locator(this, selector, options);
-  }
-  frameLocator(selector) {
-    return new FrameLocator(this, selector === undefined ? kAnyFrameSelector : selector);
-  }
-  getByTestId(testId) {
-    return this.locator(getByTestIdSelector(testIdAttributeName(), testId));
-  }
-  getByAltText(text, options) {
-    return this.locator(getByAltTextSelector(text, options));
-  }
-  getByLabel(text, options) {
-    return this.locator(getByLabelSelector(text, options));
-  }
-  getByPlaceholder(text, options) {
-    return this.locator(getByPlaceholderSelector(text, options));
-  }
-  getByText(text, options) {
-    return this.locator(getByTextSelector(text, options));
-  }
-  getByTitle(text, options) {
-    return this.locator(getByTitleSelector(text, options));
-  }
-  getByRole(role, options = {}) {
-    return this.locator(getByRoleSelector(role, options));
-  }
-  toJSON() {
-    return { _type: "Frame", _guid: this._guid };
-  }
-}
-
-// src/timeout-settings.ts
-var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
-
-class TimeoutSettings {
-  #parent;
-  #defaultTimeout;
-  #defaultNavigationTimeout;
-  constructor(parent) {
-    this.#parent = parent;
-  }
-  setDefaultTimeout(timeout) {
-    this.#defaultTimeout = timeout;
-  }
-  setDefaultNavigationTimeout(timeout) {
-    this.#defaultNavigationTimeout = timeout;
-  }
-  timeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.timeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
-  }
-  navigationTimeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultNavigationTimeout !== undefined)
-      return this.#defaultNavigationTimeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.navigationTimeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
-  }
-}
-
 // src/waiter.ts
 function refuseSignal(options) {
-  if (options.signal !== undefined)
+  if (options.signal !== undefined && options.signal !== null)
     throw new Error('Neo does not support the "signal" option yet');
 }
 async function wrapApiCall(apiName, body) {
@@ -5253,6 +4713,826 @@ ${lines.join(`
   return e;
 }
 
+// src/timeout-settings.ts
+var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
+function refuseSignalFor(options, apiName) {
+  try {
+    refuseSignal(options);
+  } catch (error) {
+    if (apiName !== null && error instanceof Error)
+      error.message = `${apiName}: ${error.message}`;
+    throw error;
+  }
+}
+
+class TimeoutSettings {
+  #parent;
+  #defaultTimeout;
+  #defaultNavigationTimeout;
+  constructor(parent) {
+    this.#parent = parent;
+  }
+  setDefaultTimeout(timeout) {
+    this.#defaultTimeout = timeout;
+  }
+  setDefaultNavigationTimeout(timeout) {
+    this.#defaultNavigationTimeout = timeout;
+  }
+  timeout(options, apiName) {
+    refuseSignalFor(options, apiName);
+    return this.#timeout(options);
+  }
+  navigationTimeout(options, apiName) {
+    refuseSignalFor(options, apiName);
+    return this.#navigationTimeout(options);
+  }
+  #timeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#timeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+  #navigationTimeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultNavigationTimeout !== undefined)
+      return this.#defaultNavigationTimeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#navigationTimeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+}
+
+// src/url.ts
+var READ_ONLY = "Neo's URL is read-only: build a new URL string instead";
+
+class URL2 {
+  #parts;
+  #searchParams;
+  constructor(parts) {
+    this.#parts = parts;
+  }
+  get href() {
+    return this.#parts.href;
+  }
+  get origin() {
+    return this.#parts.origin;
+  }
+  get protocol() {
+    return this.#parts.protocol;
+  }
+  get username() {
+    return this.#parts.username;
+  }
+  get password() {
+    return this.#parts.password;
+  }
+  get host() {
+    return this.#parts.host;
+  }
+  get hostname() {
+    return this.#parts.hostname;
+  }
+  get port() {
+    return this.#parts.port;
+  }
+  get pathname() {
+    return this.#parts.pathname;
+  }
+  get search() {
+    return this.#parts.search;
+  }
+  get hash() {
+    return this.#parts.hash;
+  }
+  get searchParams() {
+    this.#searchParams ??= new URLSearchParams(this.#parts.searchParams);
+    return this.#searchParams;
+  }
+  set href(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  set protocol(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  set username(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  set password(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  set host(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  set hostname(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  set port(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  set pathname(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  set search(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  set hash(_) {
+    throw new TypeError(READ_ONLY);
+  }
+  toString() {
+    return this.#parts.href;
+  }
+  toJSON() {
+    return this.#parts.href;
+  }
+}
+
+class URLSearchParams {
+  #pairs;
+  constructor(pairs) {
+    this.#pairs = pairs.map(([name, value]) => [name, value]);
+  }
+  get size() {
+    return this.#pairs.length;
+  }
+  get(name) {
+    return this.#pairs.find(([key]) => key === name)?.[1] ?? null;
+  }
+  getAll(name) {
+    return this.#pairs.filter(([key]) => key === name).map(([, value]) => value);
+  }
+  has(name, value) {
+    return this.#pairs.some(([key, entry]) => key === name && (value === undefined || entry === value));
+  }
+  forEach(callback, thisArg) {
+    for (const [name, value] of this.#pairs)
+      callback.call(thisArg, value, name, this);
+  }
+  *entries() {
+    for (const [name, value] of this.#pairs)
+      yield [name, value];
+  }
+  *keys() {
+    for (const [name] of this.#pairs)
+      yield name;
+  }
+  *values() {
+    for (const [, value] of this.#pairs)
+      yield value;
+  }
+  [Symbol.iterator]() {
+    return this.entries();
+  }
+  toString() {
+    return this.#pairs.map(([name, value]) => `${formEncode(name)}=${formEncode(value)}`).join("&");
+  }
+  append() {
+    throw new TypeError(READ_ONLY);
+  }
+  delete() {
+    throw new TypeError(READ_ONLY);
+  }
+  set() {
+    throw new TypeError(READ_ONLY);
+  }
+  sort() {
+    throw new TypeError(READ_ONLY);
+  }
+}
+function urlFor(url) {
+  const parts = parseURL(url);
+  return parts ? new URL2(parts) : null;
+}
+function formEncode(text) {
+  return encodeURIComponent(text).replace(/%20/g, "+").replace(/[!'()~]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+// src/frame.ts
+var LIFECYCLE_EVENTS = new Set([
+  "load",
+  "domcontentloaded",
+  "networkidle",
+  "commit"
+]);
+function verifyLoadState(name, waitUntil) {
+  if (waitUntil === "networkidle0")
+    waitUntil = "networkidle";
+  if (!LIFECYCLE_EVENTS.has(waitUntil))
+    throw new Error(`${name}: expected one of (load|domcontentloaded|networkidle|commit)`);
+  return waitUntil;
+}
+function verifyWaitState(apiName, name, state) {
+  try {
+    return verifyLoadState(name, state);
+  } catch (error) {
+    if (error instanceof Error)
+      error.message = `${apiName}: ${error.message}`;
+    throw error;
+  }
+}
+
+class Frame {
+  _guid;
+  _page;
+  _connection;
+  #lastUrl;
+  #lastName;
+  constructor(guid, page, connection, initializer = { url: "", name: "" }) {
+    this._guid = guid;
+    this._page = page;
+    this._connection = connection;
+    this.#lastUrl = initializer.url;
+    this.#lastName = initializer.name;
+  }
+  _updateInitializer(initializer) {
+    this.#lastUrl = initializer.url;
+    this.#lastName = initializer.name;
+  }
+  page() {
+    return this._page;
+  }
+  url() {
+    const url = get(this._guid, "url");
+    if (url !== null)
+      this.#lastUrl = url;
+    return this.#lastUrl;
+  }
+  name() {
+    const name = get(this._guid, "name");
+    if (name !== null)
+      this.#lastName = name;
+    return this.#lastName;
+  }
+  parentFrame() {
+    const record = get(this._guid, "parentFrame");
+    return record ? this._page._frameFrom(record) : null;
+  }
+  childFrames() {
+    return get(this._guid, "childFrames").map((record) => this._page._frameFrom(record));
+  }
+  isDetached() {
+    return get(this._guid, "isDetached");
+  }
+  async goto(url, options = {}) {
+    return await this._goto("frame.goto", url, options);
+  }
+  async _goto(apiName, url, options) {
+    const waitUntil = verifyLoadState("waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
+    const result = await this._connection.send(apiName, this._guid, "goto", pickParams(FRAME_GOTO_KEYS, {
+      url,
+      ...options,
+      waitUntil
+    }), this._page._timeoutSettings.navigationTimeout(options, apiName));
+    const guid = result?.response?.guid;
+    return guid ? responseFor(this._connection, guid, this) : null;
+  }
+  async waitForURL(url, options = {}) {
+    return await this._waitForURL("frame.waitForURL", url, options);
+  }
+  async _waitForURL(apiName, url, options) {
+    const waitOptions = options ?? {};
+    if (typeof url === "function") {
+      const current = urlFor(this.url());
+      if (current && url(current))
+        return await this._waitForLoadState(apiName, waitOptions.waitUntil, waitOptions);
+      const waitUntil2 = verifyWaitState(apiName, "waitUntil", waitOptions.waitUntil === undefined ? "load" : waitOptions.waitUntil);
+      await this._navigationMatching(apiName, url, waitUntil2, this._page._timeoutSettings.navigationTimeout(waitOptions, apiName), false);
+      return;
+    }
+    const serialized = serializeUrlMatch(apiName, url);
+    const waitUntil = verifyWaitState(apiName, "waitUntil", waitOptions.waitUntil === undefined ? "load" : waitOptions.waitUntil);
+    await this._connection.sendNeo(apiName, this._guid, "neo:waitForURL", { url: serialized, waitUntil }, this._page._timeoutSettings.navigationTimeout(waitOptions, apiName));
+  }
+  async waitForNavigation(options = {}) {
+    return await this._waitForNavigation("frame.waitForNavigation", options);
+  }
+  async _waitForNavigation(apiName, options) {
+    const waitUntil = verifyWaitState(apiName, "waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
+    const timeout = this._page._timeoutSettings.navigationTimeout(options, apiName);
+    const result = typeof options.url === "function" ? await this._navigationMatching(apiName, options.url, waitUntil, timeout, true) : await this._connection.sendNeo(apiName, this._guid, "neo:waitForNavigation", { url: serializeUrlMatch(apiName, options.url), waitUntil }, timeout);
+    const guid = result?.response?.guid;
+    return guid ? responseFor(this._connection, guid, this) : null;
+  }
+  async _navigationMatching(apiName, predicate, waitUntil, timeout, respond) {
+    const deadline = timeout ? Date.now() + timeout : 0;
+    const left = () => {
+      if (!deadline)
+        return 0;
+      const ms = deadline - Date.now();
+      if (ms <= 0)
+        throw navigationTimeout(apiName, timeout);
+      return ms;
+    };
+    let cursor;
+    let finished = false;
+    const finish = async (id, index) => {
+      const result = await this.#finishNavigation(apiName, id, index, waitUntil, left());
+      finished = true;
+      return result;
+    };
+    const next = () => {
+      const call2 = this._connection.sendNeo(apiName, this._guid, "neo:nextNavigation", cursor === undefined ? { response: respond } : { cursor, response: respond }, left());
+      call2.catch(() => {});
+      return call2;
+    };
+    let timer;
+    const expired = new Promise((_, reject) => {
+      if (deadline)
+        timer = setTimeout(() => reject(navigationTimeout(apiName, timeout)), Math.max(0, deadline - Date.now()));
+    });
+    expired.catch(() => {});
+    const verdicts = new Map;
+    let waiting = next();
+    try {
+      for (;; ) {
+        const step = await Promise.race([
+          waiting.then((reply) => ({ reply })),
+          ...verdicts.values(),
+          expired
+        ]);
+        if ("reply" in step) {
+          const { cursor: id, index, url } = step.reply;
+          cursor = id;
+          if (index === undefined || url === undefined)
+            throw new Error("neo-sdk: neo-runtime ended this navigation wait under it");
+          waiting = next();
+          const parsed = urlFor(url);
+          if (!parsed)
+            continue;
+          let verdict;
+          try {
+            verdict = predicate(parsed);
+          } catch (error) {
+            throw prefixed(apiName, error);
+          }
+          if (isPromiseLike(verdict)) {
+            const answer = Promise.resolve(verdict).then((value) => ({ index, accepted: !!value }), (error) => {
+              throw prefixed(apiName, error);
+            });
+            answer.catch(() => {});
+            verdicts.set(index, answer);
+            continue;
+          }
+          if (!verdict)
+            continue;
+          return await finish(id, index);
+        }
+        verdicts.delete(step.index);
+        if (!step.accepted || cursor === undefined)
+          continue;
+        return await finish(cursor, step.index);
+      }
+    } catch (error) {
+      if (error instanceof TimeoutError && deadline)
+        error.message = error.message.replace(/Timeout [\d.]+ms exceeded\./, `Timeout ${timeout}ms exceeded.`);
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      await this.#endWait(apiName, cursor, finished, waiting);
+    }
+  }
+  async#endWait(apiName, cursor, finished, waiting) {
+    let ended = finished;
+    if (cursor !== undefined && !ended)
+      ended = await this._connection.sendNeo(apiName, this._guid, "neo:releaseNavigation", { cursor }, 0).then(() => true, () => false);
+    if (ended || cursor === undefined)
+      await waiting.catch(() => {});
+  }
+  async#finishNavigation(apiName, cursor, index, waitUntil, timeout) {
+    return await this._connection.sendNeo(apiName, this._guid, "neo:finishNavigation", { cursor, index, waitUntil }, timeout);
+  }
+  async waitForLoadState(state, options) {
+    return await this._waitForLoadState("frame.waitForLoadState", state, options);
+  }
+  async _waitForLoadState(apiName, state, options) {
+    const verified = verifyWaitState(apiName, "state", state === undefined ? "load" : state);
+    await this._connection.sendNeo(apiName, this._guid, "neo:waitForLoadState", { state: verified }, this._page._timeoutSettings.navigationTimeout(options ?? {}, apiName));
+  }
+  async _waitForSelector(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "waitForSelector", pickParams(FRAME_WAIT_FOR_SELECTOR_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options, apiName));
+  }
+  async evaluate(pageFunction, arg, options) {
+    assertMaxArguments(arguments.length, 3);
+    return await this._evaluate("frame.evaluate", pageFunction, arg, options);
+  }
+  async _evaluate(apiName, pageFunction, arg, options) {
+    assertEvaluateOptions(options);
+    const params = evaluateParams(apiName, pageFunction, arg, options);
+    const result = await this._connection.sendEval(apiName, this._guid, "evaluateExpression", params, 0);
+    return parseResult(result?.value);
+  }
+  async evaluateHandle(pageFunction, arg, options) {
+    assertMaxArguments(arguments.length, 3);
+    return await this._evaluateHandle("frame.evaluateHandle", pageFunction, arg, options);
+  }
+  async _evaluateHandle(apiName, pageFunction, arg, options) {
+    assertEvaluateOptions(options);
+    const params = evaluateParams(apiName, pageFunction, arg, options);
+    const result = await this._connection.sendEval(apiName, this._guid, "evaluateExpressionHandle", params, 0);
+    return handleFrom(this._connection, result.handle);
+  }
+  async _withElement(apiName, selector, task, options) {
+    const result = await this._connection.send(apiName, this._guid, "waitForSelector", { selector, strict: true, state: "attached" }, this._page._timeoutSettings.timeout(options, apiName));
+    const handle = ElementHandle.fromNullable(this._connection, result?.element);
+    if (!handle)
+      throw new Error(`Could not resolve ${selector} to DOM Element`);
+    try {
+      return await task(handle);
+    } finally {
+      await handle._dispose(apiName);
+    }
+  }
+  async title() {
+    return await this._title("frame.title");
+  }
+  async _title(apiName) {
+    const result = await this._connection.send(apiName, this._guid, "title", {}, 0);
+    return result.value;
+  }
+  async textContent(selector, options = {}) {
+    return await this._textContent("frame.textContent", selector, options);
+  }
+  async _textContent(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "textContent", pickParams(FRAME_TEXT_CONTENT_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+    return result.value === undefined ? null : result.value;
+  }
+  async innerText(selector, options = {}) {
+    return await this._innerText("frame.innerText", selector, options);
+  }
+  async _innerText(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "innerText", pickParams(FRAME_INNER_TEXT_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+    return result.value;
+  }
+  async innerHTML(selector, options = {}) {
+    return await this._innerHTML("frame.innerHTML", selector, options);
+  }
+  async _innerHTML(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "innerHTML", pickParams(FRAME_INNER_HTML_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+    return result.value;
+  }
+  async getAttribute(selector, name, options = {}) {
+    return await this._getAttribute("frame.getAttribute", selector, name, options);
+  }
+  async _getAttribute(apiName, selector, name, options) {
+    const result = await this._connection.send(apiName, this._guid, "getAttribute", pickParams(FRAME_GET_ATTRIBUTE_KEYS, {
+      selector,
+      name,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+    return result.value === undefined ? null : result.value;
+  }
+  async _queryCount(apiName, selector) {
+    const result = await this._connection.send(apiName, this._guid, "queryCount", pickParams(FRAME_QUERY_COUNT_KEYS, { selector }), 0);
+    if (result === undefined)
+      throw new Error("neo-sdk: Frame.queryCount contract error: missing result");
+    return result.value;
+  }
+  async _allTextContents(apiName, selector) {
+    const result = await this._connection.sendEval(apiName, this._guid, "evalOnSelectorAll", {
+      selector,
+      expression: "ee => ee.map(e => e.textContent || '')",
+      isFunction: true,
+      arg: serializeArgument(undefined)
+    }, 0);
+    const values = parseResult(result?.value);
+    if (!Array.isArray(values) || values.some((item) => typeof item !== "string"))
+      throw new Error("neo-sdk: Frame.evalOnSelectorAll contract error: expected a string array");
+    return values;
+  }
+  async addScriptTag(options = {}) {
+    return await this._addTag("frame.addScriptTag", "addScriptTag", options);
+  }
+  async addStyleTag(options = {}) {
+    return await this._addTag("frame.addStyleTag", "addStyleTag", options);
+  }
+  async _addTag(apiName, method, options) {
+    if (options.path)
+      throw new Error(`${apiName}: path: this run has no artifact directory, so Neo cannot read "${options.path}"`);
+    const params = {};
+    if (options.url !== undefined)
+      params.url = options.url;
+    if (options.content !== undefined)
+      params.content = options.content;
+    if (method === "addScriptTag" && options.type !== undefined)
+      params.type = options.type;
+    const result = await this._connection.sendEval(apiName, this._guid, method, params, 0);
+    const handle = ElementHandle.fromNullable(this._connection, result.element);
+    if (!handle)
+      throw new Error(`neo-sdk: Frame.${method} contract error: no element`);
+    return handle;
+  }
+  async _allInnerTexts(apiName, selector) {
+    const result = await this._connection.sendEval(apiName, this._guid, "evalOnSelectorAll", {
+      selector,
+      expression: "ee => ee.map(e => e.innerText)",
+      isFunction: true,
+      arg: serializeArgument(undefined)
+    }, 0);
+    return parseResult(result?.value);
+  }
+  async $(selector, options) {
+    return await this._querySelector("frame.$", selector, options);
+  }
+  async _querySelector(apiName, selector, options) {
+    if (options?.signal !== undefined && options.signal !== null)
+      throw new Error(`${apiName}: Neo does not support signal yet`);
+    const params = { selector };
+    if (options?.strict !== undefined)
+      params.strict = options.strict;
+    const result = await this._connection.sendEval(apiName, this._guid, "querySelector", params, 0);
+    return ElementHandle.fromNullable(this._connection, result?.element);
+  }
+  async $$(selector) {
+    return await this._querySelectorAll("frame.$$", selector);
+  }
+  async _querySelectorAll(apiName, selector) {
+    const result = await this._connection.sendEval(apiName, this._guid, "querySelectorAll", { selector }, 0);
+    return elementsFrom(this._connection, result?.elements ?? []);
+  }
+  async $eval(selector, pageFunction, arg) {
+    assertMaxArguments(arguments.length, 3);
+    return await this._evalOnSelector("frame.$eval", selector, pageFunction, arg);
+  }
+  async _evalOnSelector(apiName, selector, pageFunction, arg) {
+    const params = evaluateParams(apiName, pageFunction, arg, undefined);
+    const result = await this._connection.sendEval(apiName, this._guid, "evalOnSelector", { selector, ...params }, 0);
+    return parseResult(result?.value);
+  }
+  async $$eval(selector, pageFunction, arg) {
+    assertMaxArguments(arguments.length, 3);
+    return await this._evalOnSelectorAll("frame.$$eval", selector, pageFunction, arg);
+  }
+  async _evalOnSelectorAll(apiName, selector, pageFunction, arg) {
+    const params = evaluateParams(apiName, pageFunction, arg, undefined);
+    const result = await this._connection.sendEval(apiName, this._guid, "evalOnSelectorAll", { selector, ...params }, 0);
+    return parseResult(result?.value);
+  }
+  async waitForFunction(pageFunction, arg, options) {
+    return await this._waitForFunction("frame.waitForFunction", pageFunction, arg, options);
+  }
+  async _waitForFunction(apiName, pageFunction, arg, options = {}) {
+    if (typeof options.polling === "string" && options.polling !== "raf")
+      throw new Error(`Unknown polling option: ${options.polling}`);
+    const params = evaluateParams(apiName, pageFunction, arg, undefined);
+    const pollingInterval = options.polling === "raf" ? undefined : options.polling;
+    const result = await this._connection.sendEval(apiName, this._guid, "waitForFunction", pollingInterval === undefined ? params : { ...params, pollingInterval }, this._page._timeoutSettings.timeout(options, apiName));
+    return handleFrom(this._connection, result.handle);
+  }
+  async _waitForSelectorElement(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "waitForSelector", pickParams(FRAME_WAIT_FOR_SELECTOR_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options, apiName));
+    return ElementHandle.fromNullable(this._connection, result?.element);
+  }
+  async _ariaSnapshot(apiName, options, selector) {
+    const result = await this._connection.send(apiName, this._guid, "ariaSnapshot", pickParams(FRAME_ARIA_SNAPSHOT_KEYS, {
+      mode: options.mode,
+      selector,
+      depth: options.depth,
+      boxes: options.boxes
+    }), this._page._timeoutSettings.timeout(options, apiName));
+    return result.snapshot;
+  }
+  async click(selector, options = {}) {
+    return await this._click("frame.click", selector, options);
+  }
+  async _click(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "click", pickParams(FRAME_CLICK_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async dblclick(selector, options = {}) {
+    return await this._dblclick("frame.dblclick", selector, options);
+  }
+  async _dblclick(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "dblclick", pickParams(FRAME_DBLCLICK_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async hover(selector, options = {}) {
+    return await this._hover("frame.hover", selector, options);
+  }
+  async _hover(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "hover", pickParams(FRAME_HOVER_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async tap(selector, options = {}) {
+    return await this._tap("frame.tap", selector, options);
+  }
+  async _tap(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "tap", pickParams(FRAME_TAP_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async fill(selector, value, options = {}) {
+    return await this._fill("frame.fill", selector, value, options);
+  }
+  async _fill(apiName, selector, value, options) {
+    await this._connection.send(apiName, this._guid, "fill", pickParams(FRAME_FILL_KEYS, {
+      selector,
+      value,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async press(selector, key, options = {}) {
+    return await this._press("frame.press", selector, key, options);
+  }
+  async _press(apiName, selector, key, options) {
+    await this._connection.send(apiName, this._guid, "press", pickParams(FRAME_PRESS_KEYS, {
+      selector,
+      key,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async inputValue(selector, options = {}) {
+    return await this._inputValue("frame.inputValue", selector, options);
+  }
+  async _inputValue(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "inputValue", pickParams(FRAME_INPUT_VALUE_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+    if (result === undefined)
+      throw new Error("neo-sdk: Frame.inputValue contract error: missing result");
+    return result.value;
+  }
+  async isVisible(selector, options = {}) {
+    return await this._isVisible("frame.isVisible", selector, options);
+  }
+  async _isVisible(apiName, selector, options) {
+    refuseSignalFor(options ?? {}, apiName);
+    const result = await this._connection.send(apiName, this._guid, "isVisible", pickParams(FRAME_IS_VISIBLE_KEYS, {
+      selector,
+      ...options
+    }), 0);
+    if (result === undefined)
+      throw new Error("neo-sdk: Frame.isVisible contract error: missing result");
+    return result.value;
+  }
+  async isHidden(selector, options = {}) {
+    return await this._isHidden("frame.isHidden", selector, options);
+  }
+  async _isHidden(apiName, selector, options) {
+    refuseSignalFor(options ?? {}, apiName);
+    const result = await this._connection.send(apiName, this._guid, "isHidden", pickParams(FRAME_IS_HIDDEN_KEYS, {
+      selector,
+      ...options
+    }), 0);
+    if (result === undefined)
+      throw new Error("neo-sdk: Frame.isHidden contract error: missing result");
+    return result.value;
+  }
+  async isChecked(selector, options = {}) {
+    return await this._isChecked("frame.isChecked", selector, options);
+  }
+  async _isChecked(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "isChecked", pickParams(FRAME_IS_CHECKED_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+    if (result === undefined)
+      throw new Error("neo-sdk: Frame.isChecked contract error: missing result");
+    return result.value;
+  }
+  async isEnabled(selector, options = {}) {
+    return await this._isEnabled("frame.isEnabled", selector, options);
+  }
+  async _isEnabled(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "isEnabled", pickParams(FRAME_IS_ENABLED_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+    if (result === undefined)
+      throw new Error("neo-sdk: Frame.isEnabled contract error: missing result");
+    return result.value;
+  }
+  async isDisabled(selector, options = {}) {
+    return await this._isDisabled("frame.isDisabled", selector, options);
+  }
+  async _isDisabled(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "isDisabled", pickParams(FRAME_IS_DISABLED_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+    if (result === undefined)
+      throw new Error("neo-sdk: Frame.isDisabled contract error: missing result");
+    return result.value;
+  }
+  async isEditable(selector, options = {}) {
+    return await this._isEditable("frame.isEditable", selector, options);
+  }
+  async _isEditable(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "isEditable", pickParams(FRAME_IS_EDITABLE_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+    if (result === undefined)
+      throw new Error("neo-sdk: Frame.isEditable contract error: missing result");
+    return result.value;
+  }
+  async check(selector, options = {}) {
+    return await this._check("frame.check", selector, options);
+  }
+  async _check(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "check", pickParams(FRAME_CHECK_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async uncheck(selector, options = {}) {
+    return await this._uncheck("frame.uncheck", selector, options);
+  }
+  async _uncheck(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "uncheck", pickParams(FRAME_UNCHECK_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async selectOption(selector, values, options = {}) {
+    return await this._selectOption("frame.selectOption", selector, values, options);
+  }
+  async _selectOption(apiName, selector, values, options) {
+    const result = await this._connection.send(apiName, this._guid, "selectOption", pickParams(FRAME_SELECT_OPTION_KEYS, {
+      selector,
+      ...convertSelectOptionValues(values),
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+    if (result === undefined)
+      throw new Error("neo-sdk: Frame.selectOption contract error: missing result");
+    return result.values;
+  }
+  async setChecked(selector, checked, options = {}) {
+    if (checked)
+      await this._check("frame.setChecked", selector, options);
+    else
+      await this._uncheck("frame.setChecked", selector, options);
+  }
+  locator(selector, options) {
+    return new Locator(this, selector, options);
+  }
+  frameLocator(selector) {
+    return new FrameLocator(this, selector === undefined ? kAnyFrameSelector : selector);
+  }
+  getByTestId(testId) {
+    return this.locator(getByTestIdSelector(testIdAttributeName(), testId));
+  }
+  getByAltText(text, options) {
+    return this.locator(getByAltTextSelector(text, options));
+  }
+  getByLabel(text, options) {
+    return this.locator(getByLabelSelector(text, options));
+  }
+  getByPlaceholder(text, options) {
+    return this.locator(getByPlaceholderSelector(text, options));
+  }
+  getByText(text, options) {
+    return this.locator(getByTextSelector(text, options));
+  }
+  getByTitle(text, options) {
+    return this.locator(getByTitleSelector(text, options));
+  }
+  getByRole(role, options = {}) {
+    return this.locator(getByRoleSelector(role, options));
+  }
+  toJSON() {
+    return { _type: "Frame", _guid: this._guid };
+  }
+}
+function navigationTimeout(apiName, timeout) {
+  return new TimeoutError(`${apiName}: Timeout ${timeout}ms exceeded.`);
+}
+function prefixed(apiName, error) {
+  if (error instanceof Error)
+    error.message = `${apiName}: ${error.message}`;
+  return error;
+}
+function isPromiseLike(value) {
+  return (typeof value === "object" || typeof value === "function") && value !== null && typeof value.then === "function";
+}
+
 // src/page.ts
 var PAGE_EVENTS = {
   receiver: "Page",
@@ -5340,7 +5620,7 @@ class Page extends ChannelOwner {
     const options = typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate;
     refuseSignal(options);
     this._refuseUnserved(event);
-    const timeout = this._timeoutSettings.timeout(options);
+    const timeout = this._timeoutSettings.timeout(options, null);
     const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : optionsOrPredicate.predicate;
     const waiter = Waiter.createForEvent();
     if (logLine)
@@ -5443,6 +5723,36 @@ class Page extends ChannelOwner {
   }
   async title() {
     return await this.#mainFrame._title("page.title");
+  }
+  async reload(options = {}) {
+    const waitUntil = verifyLoadState("waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
+    const result = await this.#connection.sendPage("page.reload", this.#guid, "reload", pickParams(PAGE_RELOAD_KEYS, {
+      ...options,
+      waitUntil
+    }), this._timeoutSettings.navigationTimeout(options, "page.reload"));
+    return this.#response(result?.response);
+  }
+  async goBack(options = {}) {
+    const waitUntil = verifyLoadState("waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
+    const result = await this.#connection.sendPage("page.goBack", this.#guid, "goBack", pickParams(PAGE_GO_BACK_KEYS, {
+      ...options,
+      waitUntil
+    }), this._timeoutSettings.navigationTimeout(options, "page.goBack"));
+    return this.#response(result?.response);
+  }
+  async goForward(options = {}) {
+    const waitUntil = verifyLoadState("waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
+    const result = await this.#connection.sendPage("page.goForward", this.#guid, "goForward", pickParams(PAGE_GO_FORWARD_KEYS, {
+      ...options,
+      waitUntil
+    }), this._timeoutSettings.navigationTimeout(options, "page.goForward"));
+    return this.#response(result?.response);
+  }
+  #response(response) {
+    return response ? responseFor(this.#connection, response.guid, this.#mainFrame) : null;
+  }
+  async waitForNavigation(options = {}) {
+    return await this.#mainFrame._waitForNavigation("page.waitForNavigation", options);
   }
   async waitForURL(url, options) {
     return await this.#mainFrame._waitForURL("page.waitForURL", url, options);
@@ -5662,7 +5972,7 @@ class BrowserContext extends ChannelOwner {
       const options = typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate;
       refuseSignal(options);
       this._refuseUnserved(event);
-      const timeout = this._timeoutSettings.timeout(options);
+      const timeout = this._timeoutSettings.timeout(options, null);
       const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : optionsOrPredicate.predicate;
       const waiter = Waiter.createForEvent();
       waiter.rejectOnTimeout(timeout, `Timeout ${timeout}ms exceeded while waiting for event "${event}"`);
