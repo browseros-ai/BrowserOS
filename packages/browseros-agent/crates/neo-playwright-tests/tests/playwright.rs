@@ -1,6 +1,5 @@
 //! Each original upstream case is one Cargo trial. The opt-in suite records expected Neo gaps.
 
-use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -51,7 +50,7 @@ fn execute(case: &Case, root: &Path, browser: &Path) -> ResultRecord {
         write_json(
             &settings,
             &json!({
-                "entry": case, "overlay": root.join("overlay"), "outputDir": directory,
+                "entry": case, "parentPid": process::id(), "overlay": root.join("overlay"), "outputDir": directory,
             "executable": browser, "worker": root.join("native-worker"),
             }),
         )?;
@@ -110,6 +109,10 @@ fn run() -> Result<(), String> {
         .arg(Path::new(CRATE).join("js/collect.mjs"))
         .arg(root.as_path())
         .env("NEO_TESTS_WORKER", WORKER)
+        .env(
+            "NEO_TESTS_PARENT_EXE",
+            env::current_exe().map_err(|error| error.to_string())?,
+        )
         .stdin(Stdio::null())
         .status()
         .map_err(|error| error.to_string())?;
@@ -138,14 +141,15 @@ fn run() -> Result<(), String> {
                 } else {
                     report::harness_error(case, "Browser unavailable".into())
                 };
+                let cli_reason = record.reason.lines().next().unwrap_or(&record.reason);
                 let completion = match record.verdict {
                     Verdict::Pass => Ok(Completion::Completed),
                     Verdict::Unsupported | Verdict::Skip | Verdict::NotApplicable => {
                         Ok(Completion::Ignored {
-                            reason: Some(format!("{:?}: {}", record.verdict, record.reason)),
+                            reason: Some(format!("{:?}: {cli_reason}", record.verdict)),
                         })
                     }
-                    _ => Err(format!("{:?}: {}", record.verdict, record.reason).into()),
+                    _ => Err(format!("{:?}: {cli_reason}", record.verdict).into()),
                 };
                 results
                     .lock()
@@ -171,14 +175,10 @@ fn run() -> Result<(), String> {
     publish(&root, &arguments, &results, catalog.len(), selected)?;
     // An empty/all-unsupported slice has no compatibility evidence. Its individual
     // Cargo trials remain honestly ignored, but the suite cannot advertise a green pass.
-    if selected == 0
-        || results.len() != selected
-        || !results
-            .iter()
-            .any(|record| matches!(record.verdict, Verdict::Pass | Verdict::Fail))
+    if selected == 0 || results.len() != selected || !results.iter().any(|record| record.comparable)
     {
         return Err(
-            "No fully served case completed; this run establishes no compatibility pass rate"
+            "No fully comparable case completed; this run establishes no complete compatibility coverage"
                 .into(),
         );
     }
@@ -197,29 +197,51 @@ fn publish(
     selected: usize,
 ) -> Result<(), String> {
     let ranking = report::missing_methods(results);
-    let mut totals = BTreeMap::<String, BTreeMap<Verdict, usize>>::new();
-    for record in results {
-        *totals
-            .entry(record.case.file.clone())
-            .or_default()
-            .entry(record.verdict)
-            .or_default() += 1;
-    }
-    let complete = selected == catalog_count && results.len() == selected;
+    let summary = report::summarize(results);
+    let complete = selected > 0 && selected == catalog_count && results.len() == selected;
+    let scope = if selected == catalog_count {
+        "full"
+    } else {
+        "filtered"
+    };
+    let status = if results.len() != selected {
+        "interrupted"
+    } else if selected == 0 {
+        "empty"
+    } else {
+        "completed"
+    };
     write_json(
         &root.join("scoreboard.json"),
         &json!({
-            "schemaVersion": 1, "catalogCount": catalog_count, "selectedCount": selected,
+            "schemaVersion": 2, "catalogCount": catalog_count, "selectedCount": selected,
             "completedCount": results.len(), "fullCorpus": complete,
+            "scope": scope, "status": status,
             "filter": arguments.filter, "skip": arguments.skip,
             "metadata": read_json::<serde_json::Value>(&root.join("metadata.json"))?,
-            "results": results,
+            "summary": summary, "missingMethods": ranking, "results": results,
         }),
     )?;
     write_json(&root.join("missing-methods.json"), &ranking)?;
-    println!("\nPer-suite results (missing methods can overlap):");
-    for (suite, counts) in totals {
-        println!("  {suite}: {counts:?}");
+    println!(
+        "\nRun {status}; {scope} selection, {}/{selected} completed, {catalog_count} catalog cases",
+        results.len()
+    );
+    print_totals("Overall", &summary.totals);
+    if summary.totals.compatibility.denominator == 0 {
+        println!("No compatibility measurements; pass/(pass+fail) has an empty denominator.");
+    }
+    println!("Per-feature results:");
+    for (feature, totals) in &summary.features {
+        print_totals(feature, totals);
+    }
+    println!("Per-suite results:");
+    for (suite, totals) in &summary.suites {
+        print_totals(suite, totals);
+    }
+    println!("Harness limitations ranked by distinct cases:");
+    for (limitation, cases) in &summary.harness_limitations {
+        println!("  {:4} {limitation}", cases.len());
     }
     println!("Missing Neo methods ranked by distinct cases:");
     for row in &ranking {
@@ -234,4 +256,35 @@ fn publish(
     }
     println!("Scoreboard: {}", root.join("scoreboard.json").display());
     Ok(())
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "The Cargo CLI prints explicit denominators and exclusions for each summary group."
+)]
+fn print_totals(label: &str, totals: &report::Totals) {
+    println!(
+        "  {label}: pass/(pass+fail) {}/{}, fully comparable/eligible coverage {}/{}",
+        totals.compatibility.numerator,
+        totals.compatibility.denominator,
+        totals.coverage.numerator,
+        totals.coverage.denominator
+    );
+    println!(
+        "    Pass {}, Fail {}; excluded: Unsupported {}, Skip {}, NotApplicable {}, ReferenceFailure {}, HarnessError {}",
+        totals.counts[&Verdict::Pass],
+        totals.counts[&Verdict::Fail],
+        totals.counts[&Verdict::Unsupported],
+        totals.counts[&Verdict::Skip],
+        totals.counts[&Verdict::NotApplicable],
+        totals.counts[&Verdict::ReferenceFailure],
+        totals.counts[&Verdict::HarnessError]
+    );
+    println!(
+        "    partial evidence {}, partial Fail {} (included in pass+fail), partial reference census {}, harness limitations {}",
+        totals.partial_evidence_count,
+        totals.partial_fail_count,
+        totals.partial_reference_count,
+        totals.harness_limitation_count
+    );
 }
