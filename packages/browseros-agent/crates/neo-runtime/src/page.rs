@@ -1575,11 +1575,13 @@ impl Tab for FrameTab {
         &self,
         element: &ResolvedElement,
         position: Option<&Point>,
+        force: bool,
     ) -> Result<Geometry, PageError> {
         // Scrolling a remote descendant also scrolls its owners. Its own local rect can
         // stay still while those parent documents are moving; wait for those rects before
         // combining coordinates from separate renderer sessions.
-        if !element.owners.is_empty() {
+        // Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `if (!force) {`
+        if !force && !element.owners.is_empty() {
             for owner in &element.owners {
                 let states = owner
                     .frame

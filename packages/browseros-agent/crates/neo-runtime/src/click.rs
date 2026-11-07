@@ -127,6 +127,7 @@ pub(crate) trait Tab: Send + Sync {
         &self,
         element: &Self::Element,
         position: Option<&Point>,
+        force: bool,
     ) -> impl Future<Output = Result<Geometry, PageError>> + Send;
 
     /// Waits for a turn at the tab's input: its one mouse and its document's one hit-target
@@ -712,7 +713,7 @@ async fn attempt<T: Tab>(
     progress.log("  done scrolling");
 
     let geometry = progress
-        .race(tab.geometry(element, options.position.as_ref()))
+        .race(tab.geometry(element, options.position.as_ref(), options.force))
         .await??;
     let point = match click_point(&geometry, options.position.as_ref()) {
         Ok(point) => round_point(&point),
@@ -1292,6 +1293,7 @@ pub(crate) mod tests {
             &self,
             _element: &u32,
             _position: Option<&Point>,
+            _force: bool,
         ) -> Result<Geometry, PageError> {
             self.record("geometry");
             self.geometry.answer().await
