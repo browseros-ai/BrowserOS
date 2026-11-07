@@ -17,7 +17,7 @@
 //! A drag stopped between its halves leaves the left button held, as Playwright's does; the
 //! run's end releases it (cancelling a drag that runs).
 
-use neo_runtime_spec::serve::{FrameDragAndDropParams, FrameDragAndDropParamsScroll};
+use neo_runtime_spec::serve::{FrameDragAndDropParams, FrameDragAndDropParamsScroll, Point};
 
 use crate::click::{self, PointerAction, PointerOptions};
 use crate::keyboard::KeyboardTab;
@@ -40,20 +40,18 @@ impl DragOptions {
     /// The refusal of `steps`.
     pub(crate) fn from_params(params: FrameDragAndDropParams) -> Result<Self, PlaywrightError> {
         let steps = click::steps_of(params.steps)?;
-        let half = |selector: String, position: Option<&neo_runtime_spec::serve::Point>, action| {
-            PointerOptions {
-                selector,
-                strict: params.strict.unwrap_or(false),
-                force: params.force.unwrap_or(false),
-                scroll: params.scroll != Some(FrameDragAndDropParamsScroll::None),
-                wait_after: false,
-                position: position.map(click::point),
-                action,
-                trial: params.trial.unwrap_or(false),
-                modifiers: None,
-                steps,
-                platform: None,
-            }
+        let half = |selector: String, position: Option<&Point>, action| PointerOptions {
+            selector,
+            strict: params.strict.unwrap_or(false),
+            force: params.force.unwrap_or(false),
+            scroll: params.scroll != Some(FrameDragAndDropParamsScroll::None),
+            wait_after: false,
+            position: position.map(click::point),
+            action,
+            trial: params.trial.unwrap_or(false),
+            modifiers: None,
+            steps,
+            platform: None,
         };
         Ok(Self {
             // Playwright: `server/frames.ts` `Frame.dragAndDrop`: `}, { ...options, position: options.sourcePosition }, frameVisible);`
@@ -61,14 +59,14 @@ impl DragOptions {
                 // Its move is Playwright's default single step.
                 steps: 1,
                 ..half(
-                    params.source.clone(),
+                    params.source,
                     params.source_position.as_ref(),
                     PointerAction::MoveAndDown,
                 )
             },
             // Playwright: `server/frames.ts` `Frame.dragAndDrop`: `}, { ...options, position: options.targetPosition }, frameVisible);`
             target: half(
-                params.target.clone(),
+                params.target,
                 params.target_position.as_ref(),
                 PointerAction::MoveAndUp,
             ),

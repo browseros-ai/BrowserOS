@@ -1581,9 +1581,7 @@ mod tests {
                         }]
                     );
                 }
-                Route::FramePointer(_) | Route::FrameDragAndDrop(_) => {
-                    panic!("a form is not a pointer action")
-                }
+                Route::FramePointer(_) | Route::FrameDragAndDrop(_) => panic!("not a form"),
                 Route::FrameGoto(_)
                 | Route::FrameTitle
                 | Route::FrameTextContent(_)

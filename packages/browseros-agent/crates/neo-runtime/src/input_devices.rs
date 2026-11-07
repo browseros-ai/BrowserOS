@@ -922,30 +922,40 @@ impl Writer {
                 }
             });
             for (at, result, ends) in future::join_all(sends).await {
-                let command = &commands[at];
-                let Some(result) = result else {
-                    // A change of state alone, or a press a drag skipped: never refused or
-                    // failed, and its release is owed as if it went out.
-                    sink.apply(&command.effect, true);
-                    written[at] = command.method.is_some();
-                    continue;
-                };
-                if matches!(result, Err(CdpError::ConnectionEpochChanged { .. })) {
-                    self.refused = true;
-                } else {
-                    written[at] = true;
-                    sink.apply(&command.effect, result.is_ok());
-                    if ends {
-                        sink.apply(&Effect::DragEnded, result.is_ok());
-                    }
-                }
-                if result.is_err() {
-                    self.stopped = true;
-                }
-                self.outcomes.push(result);
+                written[at] = self.record(sink, &commands[at], result, ends);
             }
             index = end + 1;
         }
+    }
+
+    /// One batch command's answer, `None` for one that wrote nothing (a change of state alone,
+    /// or a press a drag skipped, never refused or failed, its release owed as if it went out).
+    /// Whether it counts as written.
+    fn record(
+        &mut self,
+        sink: &impl EffectSink,
+        command: &Planned,
+        result: Option<Result<(), CdpError>>,
+        ends: bool,
+    ) -> bool {
+        let Some(result) = result else {
+            sink.apply(&command.effect, true);
+            return command.method.is_some();
+        };
+        let refused = matches!(result, Err(CdpError::ConnectionEpochChanged { .. }));
+        if refused {
+            self.refused = true;
+        } else {
+            sink.apply(&command.effect, result.is_ok());
+            if ends {
+                sink.apply(&Effect::DragEnded, result.is_ok());
+            }
+        }
+        if result.is_err() {
+            self.stopped = true;
+        }
+        self.outcomes.push(result);
+        !refused
     }
 
     /// Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `if (this._dragState) {`
