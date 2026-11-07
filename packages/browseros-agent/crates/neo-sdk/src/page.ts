@@ -3,7 +3,11 @@ import type {
   PageCloseParams,
   PageCommands,
   PageConsoleMessagesParams,
+  PageGoBackParams,
+  PageGoForwardParams,
   PagePageErrorsParams,
+  PageReloadParams,
+  ResponseChannel,
 } from '@browseros/neo-runtime-spec/serve'
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
 import { isString } from '../vendor/playwright/isomorphic/stringUtils'
@@ -35,6 +39,7 @@ import {
   type IsEnabledOptions,
   type IsHiddenOptions,
   type IsVisibleOptions,
+  type NavigationURLMatch,
   type PressOptions,
   type SelectOptionOptions,
   type TapOptions,
@@ -42,18 +47,23 @@ import {
   type TypeOptions,
   type UncheckOptions,
   type URLMatch,
+  verifyLoadState,
   type WaitForLoadStateOptions,
+  type WaitForNavigationOptions,
   type WaitForURLOptions,
 } from './frame'
 import type { FrameLocator } from './frame-locator'
 import { Keyboard, Mouse, Touchscreen } from './input'
 import type { Locator, LocatorOptions } from './locator'
 import { serializeUrlMatch } from './neo-commands'
-import type { Response } from './network'
+import { type Response, responseFor } from './network'
 import {
   PAGE_CLOSE_KEYS,
   PAGE_CONSOLE_MESSAGES_KEYS,
+  PAGE_GO_BACK_KEYS,
+  PAGE_GO_FORWARD_KEYS,
   PAGE_PAGE_ERRORS_KEYS,
+  PAGE_RELOAD_KEYS,
   pickParams,
 } from './protocol'
 import { type CreatedFrame, get, matchesURL } from './runtime-bridge'
@@ -97,12 +107,16 @@ export interface ConsoleMessagesOptions {
   filter?: 'all' | 'since-navigation'
 }
 
+/** `reload`, `goBack` and `goForward`'s options as a script passes them: the wire params plus
+ * `timeout`, as Playwright's `channels.PageReloadOptions & TimeoutOptions`. */
+export type HistoryOptions = { waitUntil?: LifecycleEvent; timeout?: number }
+
 /**
  * Playwright's `Page`, backed by live reads from its own tab, which its guid names. Its
  * selector builders, `goto`, `title`, `textContent`, `innerText`, `innerHTML`, `getAttribute`,
- * state reads, browser actions, `waitForURL` and `waitForLoadState` forward to the main frame, as
- * Playwright's do
- * (`client/page.ts`); `ariaSnapshot` snapshots the main frame's document. Only the run's
+ * state reads, browser actions, `waitForURL`, `waitForLoadState` and `waitForNavigation` forward
+ * to the main frame, as Playwright's do (`client/page.ts`); `ariaSnapshot` snapshots the main
+ * frame's document; `reload`, `goBack` and `goForward` are the page's own commands. Only the run's
  * `BrowserContext` builds one, once per guid.
  *
  * Known limitation: once the tab is closed, `url()` returns the last URL this object returned,
@@ -411,12 +425,99 @@ export class Page extends ChannelOwner {
   }
 
   /**
+   * Reloads the page and resolves the new document's main `Response` once `waitUntil` (default
+   * `load`; also `domcontentloaded` or `commit`) fires for it, as Playwright's `page.reload`.
+   * A failed reload rejects with its network error. Runs under the navigation timeout.
+   * Neo limit: `networkidle` throws an `Error`.
+   */
+  async reload(options: HistoryOptions = {}): Promise<Response | null> {
+    const waitUntil = verifyLoadState(
+      'waitUntil',
+      options.waitUntil === undefined ? 'load' : options.waitUntil,
+    )
+    const result = await this.#connection.sendPage(
+      'page.reload',
+      this.#guid,
+      'reload',
+      pickParams(PAGE_RELOAD_KEYS, {
+        ...options,
+        waitUntil,
+      }) as PageReloadParams,
+      this._timeoutSettings.navigationTimeout(options),
+    )
+    return this.#response(result?.response)
+  }
+
+  /**
+   * Navigates to the previous page in history, as Playwright's `page.goBack`: resolves `null` at
+   * once when there is none; otherwise, once `waitUntil` fires, the new document's `Response`,
+   * or `null` for a same-document entry or a document restored from the back-forward cache, which
+   * counts as loaded. A failed navigation rejects. Options and limits as `reload`'s.
+   */
+  async goBack(options: HistoryOptions = {}): Promise<Response | null> {
+    const waitUntil = verifyLoadState(
+      'waitUntil',
+      options.waitUntil === undefined ? 'load' : options.waitUntil,
+    )
+    const result = await this.#connection.sendPage(
+      'page.goBack',
+      this.#guid,
+      'goBack',
+      pickParams(PAGE_GO_BACK_KEYS, {
+        ...options,
+        waitUntil,
+      }) as PageGoBackParams,
+      this._timeoutSettings.navigationTimeout(options),
+    )
+    return this.#response(result?.response)
+  }
+
+  /** {@link Page.goBack} toward the next page in history. */
+  async goForward(options: HistoryOptions = {}): Promise<Response | null> {
+    const waitUntil = verifyLoadState(
+      'waitUntil',
+      options.waitUntil === undefined ? 'load' : options.waitUntil,
+    )
+    const result = await this.#connection.sendPage(
+      'page.goForward',
+      this.#guid,
+      'goForward',
+      pickParams(PAGE_GO_FORWARD_KEYS, {
+        ...options,
+        waitUntil,
+      }) as PageGoForwardParams,
+      this._timeoutSettings.navigationTimeout(options),
+    )
+    return this.#response(result?.response)
+  }
+
+  /** The `Response` a history command answered, built once per guid, or `null`. */
+  #response(response: ResponseChannel | undefined): Response | null {
+    return response
+      ? responseFor(this.#connection, response.guid, this.#mainFrame)
+      : null
+  }
+
+  /** The main frame's {@link Frame.waitForNavigation}. */
+  async waitForNavigation(
+    options: WaitForNavigationOptions = {},
+  ): Promise<Response | null> {
+    return await this.#mainFrame._waitForNavigation(
+      'page.waitForNavigation',
+      options,
+    )
+  }
+
+  /**
    * The main frame's {@link Frame.waitForURL}: waits until the page's URL matches `url` (a glob
-   * string or a `RegExp`; a predicate function throws), then until `waitUntil` (default `load`;
+   * string, a `RegExp` or a predicate on its `URL`), then until `waitUntil` (default `load`;
    * `networkidle` throws) fires, at once if the current document already fired it, and resolves
    * `undefined`.
    */
-  async waitForURL(url: URLMatch, options?: WaitForURLOptions): Promise<void> {
+  async waitForURL(
+    url: NavigationURLMatch,
+    options?: WaitForURLOptions,
+  ): Promise<void> {
     return await this.#mainFrame._waitForURL('page.waitForURL', url, options)
   }
 

@@ -148,9 +148,9 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for PressAction<'_> {
             *self.platform.get_or_init(|| platform)
         };
         progress.log(match &self.options.keys {
-            // Playwright: `server/dom.ts` `ElementHandle._press`: `progress.log(`elementHandle.press("${key}")`);`
+            // Playwright: `server/dom.ts` `ElementHandle._press`: `elementHandle.press("${key}")`
             KeyInput::Press(key) => format!("elementHandle.press(\"{key}\")"),
-            // Playwright: `server/dom.ts` `ElementHandle._type`: `progress.log(`elementHandle.type("${text}")`);`
+            // Playwright: `server/dom.ts` `ElementHandle._type`: `elementHandle.type("${text}")`
             KeyInput::Type(text) => format!("elementHandle.type(\"{text}\")"),
         });
         let input = progress.race(tab.input()).await?;
