@@ -140,16 +140,119 @@ fn selector_part(part: &str) -> (&str, &str) {
 /// string, followed by a number for the engines that take a distance. `None` where Playwright
 /// throws `Malformed selector`.
 fn nested_selector(name: &str, body: &str) -> Option<String> {
+    nested_body(name, body).map(|(selector, _)| selector)
+}
+
+/// Playwright: `isomorphic/selectorParser.ts` `parseSelector`: `const unescaped = JSON.parse('[' + part.body + ']');`
+fn nested_body(name: &str, body: &str) -> Option<(String, Option<Value>)> {
+    if !NESTED_SELECTORS.contains(&name) {
+        return None;
+    }
     let parsed: Vec<Value> = serde_json::from_str(&format!("[{body}]")).ok()?;
     match parsed.as_slice() {
-        [Value::String(selector)] => Some(selector.clone()),
-        [Value::String(selector), Value::Number(_)]
+        [Value::String(selector)] => Some((selector.clone(), None)),
+        [Value::String(selector), distance @ Value::Number(_)]
             if matches!(name, "left-of" | "right-of" | "above" | "below" | "near") =>
         {
-            Some(selector.clone())
+            Some((selector.clone(), Some(distance.clone())))
         }
         _ => None,
     }
+}
+
+/// Neo: Retains each original prefix spelling for comparison while nested bodies are
+/// rewritten. Capture stays attached to its part, so removing a prefix also shifts it.
+struct SelectorPart {
+    text: String,
+    comparable: String,
+    capture: bool,
+}
+
+/// Playwright: `isomorphic/selectorParser.ts` `selectorPartsEqual`: `return stringifySelector({ parts: list1 }) === stringifySelector({ parts: list2 });`
+fn comparable_part(part: &str) -> (String, bool) {
+    let (name, body) = selector_part(part);
+    let capture = !name.is_empty()
+        && part.split_once('=').is_some_and(|(name, _)| {
+            name.trim_matches(progress::is_js_whitespace)
+                .starts_with('*')
+        });
+    let name = if name.is_empty() {
+        if body.len() > 1
+            && ((body.starts_with('"') && body.ends_with('"'))
+                || (body.starts_with('\'') && body.ends_with('\'')))
+        {
+            "text"
+        } else if body.trim_start_matches('(').starts_with("//") || body.starts_with("..") {
+            "xpath"
+        } else {
+            "css"
+        }
+    } else {
+        name
+    };
+    let comparable = match name {
+        "css" => body.to_string(),
+        "css:light" => format!(":light({body})"),
+        "xpath" if body.starts_with("//") || body.starts_with("..") => body.to_string(),
+        _ => format!("{name}={body}"),
+    };
+    (comparable, capture)
+}
+
+/// Playwright: `isomorphic/selectorParser.ts` `parseSelector`: `nested.body.parsed.capture -= lastFrameIndex + 1;`
+fn normalize_composites(selector: &str) -> Result<Vec<SelectorPart>, String> {
+    let mut parts: Vec<SelectorPart> = Vec::new();
+    for part in selector_parts(selector) {
+        let part = part.trim_matches(progress::is_js_whitespace);
+        let (comparable, capture) = comparable_part(part);
+        let mut text = part.to_string();
+        let (name, body) = selector_part(part);
+        if let Some((nested, distance)) = nested_body(name, body) {
+            let mut nested = normalize_composites(&nested)?;
+            let outer = if parts
+                .first()
+                .is_some_and(|part| selector_part(&part.text) == ("internal:control", "any-frame"))
+            {
+                &parts[1..]
+            } else {
+                &parts[..]
+            };
+            if let Some(last_frame) = nested
+                .iter()
+                .rposition(|part| selector_part(&part.text) == ("internal:control", "enter-frame"))
+                && last_frame < outer.len()
+                && nested[..=last_frame]
+                    .iter()
+                    .zip(outer)
+                    .all(|(a, b)| a.comparable == b.comparable)
+            {
+                if nested[..=last_frame].iter().any(|part| part.capture) {
+                    return Err(capture_before_frame());
+                }
+                nested.drain(..=last_frame);
+            }
+            let local = nested
+                .iter()
+                .map(|part| part.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" >> ");
+            let encoded = Value::String(local).to_string();
+            let distance = distance.map_or_else(String::new, |value| format!(",{value}"));
+            let capture = if capture { "*" } else { "" };
+            text = format!("{capture}{name}={encoded}{distance}");
+        }
+        parts.push(SelectorPart {
+            text,
+            comparable,
+            capture,
+        });
+    }
+    Ok(parts)
+}
+
+/// Playwright: `isomorphic/selectorParser.ts` `parseSelector`: `if (nested.body.parsed.capture <= lastFrameIndex)`
+fn capture_before_frame() -> String {
+    "Can not capture the selector before diving into the frame. Only use * after the last frame has been selected".to_string()
 }
 
 /// A selector's document-local chunks. Path references always start at the main frame.
@@ -164,7 +267,16 @@ pub(crate) fn split(selector: &str) -> Result<Chunks, String> {
     let mut hops = Vec::new();
     let mut current = Vec::new();
     let mut from_main = false;
-    for (index, part) in selector_parts(selector).into_iter().enumerate() {
+    let parts = normalize_composites(selector)?;
+    if let Some(last_frame) = parts
+        .iter()
+        .rposition(|part| selector_part(&part.text) == ("internal:control", "enter-frame"))
+        && parts[..=last_frame].iter().any(|part| part.capture)
+    {
+        return Err(capture_before_frame());
+    }
+    for (index, part) in parts.iter().enumerate() {
+        let part = part.text.as_str();
         let (name, body) = selector_part(part);
         if NESTED_SELECTORS.contains(&name)
             && nested_selector(name, body).is_some_and(|nested| has_frame_controls(&nested))
@@ -504,6 +616,180 @@ mod tests {
                 },
                 "{selector}"
             );
+        }
+    }
+
+    #[test]
+    fn tests_that_nested_selectors_repeating_the_frame_prefix_are_local() {
+        let hop = " >> internal:control=enter-frame >> ";
+        let f = format!("#f{hop}");
+        let inner = format!("{f}#inner{hop}");
+        let nested = |engine: &str, selector: &str| {
+            format!("{engine}={}", serde_json::to_string(selector).unwrap())
+        };
+        for (outer, engine, target, local) in [
+            (f.as_str(), "internal:and", "button", "button"),
+            (f.as_str(), "internal:has", "span", "span"),
+            (f.as_str(), "internal:has-not", "span", "span"),
+            (f.as_str(), "internal:or", "button", "button"),
+            (f.as_str(), "internal:chain", "button", "button"),
+            (inner.as_str(), "internal:and", "button", "button"),
+            (inner.as_str(), "internal:has", "span", "span"),
+            (inner.as_str(), "internal:or", "button", "button"),
+            (
+                inner.as_str(),
+                "internal:and",
+                "div >> *css=button",
+                "div >> *css=button",
+            ),
+            (
+                f.as_str(),
+                "internal:and",
+                "div >> *css=button",
+                "div >> *css=button",
+            ),
+        ] {
+            let source = format!(
+                "{outer}div >> {}",
+                nested(engine, &format!("{outer}{target}"))
+            );
+            let found = split(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+            assert_eq!(
+                found.last,
+                format!("div >> {}", nested(engine, local)),
+                "{source}"
+            );
+            assert_eq!(
+                found.hops.len(),
+                outer.matches("enter-frame").count(),
+                "{source}"
+            );
+        }
+        let twice = nested(
+            "internal:has",
+            &format!(
+                "{f}div >> {}",
+                nested("internal:and", &format!("{f}button"))
+            ),
+        );
+        let local = nested(
+            "internal:has",
+            &format!("div >> {}", nested("internal:and", "button")),
+        );
+        assert_eq!(
+            split(&format!("{f}section >> {twice}")).unwrap().last,
+            format!("section >> {local}"),
+            "normalization recurses into each nested selector",
+        );
+        for engine in ["left-of", "right-of", "above", "below", "near"] {
+            let source = format!(
+                "{f}div >> {engine}={},50",
+                serde_json::to_string(&format!("{f}button")).unwrap()
+            );
+            assert_eq!(
+                split(&source).unwrap().last,
+                format!("div >> {engine}=\"button\",50"),
+                "distance is retained for {source}"
+            );
+        }
+        let source = format!(
+            "{inner}div >> {}",
+            nested("internal:and", &format!("{f}button"))
+        );
+        assert_eq!(
+            split(&source).unwrap().last,
+            "div >> internal:and=\"button\"",
+            "the nested selector's complete prefix matches the outer prefix"
+        );
+    }
+
+    #[test]
+    fn tests_that_frame_prefix_comparison_uses_playwright_serialization() {
+        let hop = " >> internal:control=enter-frame >> ";
+        for (outer, repeated) in [
+            ("css=#f", "#f"),
+            ("#f", "css=#f"),
+            ("xpath=//iframe", "//iframe"),
+            ("xpath=../iframe", "../iframe"),
+            ("xpath=(//iframe)", "(//iframe)"),
+            ("css:light=#f", ":light(#f)"),
+            ("text=\"frame\"", "\"frame\""),
+            ("text='frame'", "'frame'"),
+            ("css= #f", "css= #f"),
+        ] {
+            let repeated = format!("{repeated}{hop}css=  button");
+            let source = format!(
+                "{outer}{hop}div >> internal:and={}",
+                serde_json::to_string(&repeated).unwrap()
+            );
+            let found = split(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+            assert_eq!(
+                found.hops,
+                [outer],
+                "the outer owner is unchanged: {source}"
+            );
+            assert_eq!(
+                found.last, "div >> internal:and=\"css=  button\"",
+                "local body whitespace is preserved: {source}"
+            );
+        }
+        for (outer, repeated) in [("#f", "css= #f"), ("css= #f", "#f")] {
+            let repeated = format!("{repeated}{hop}button");
+            let source = format!(
+                "{outer}{hop}div >> internal:and={}",
+                serde_json::to_string(&repeated).unwrap()
+            );
+            assert!(
+                split(&source).is_err(),
+                "prefix body whitespace participates in equality: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn tests_that_nested_prefix_comparison_skips_the_outer_any_frame_token() {
+        let source = r##"internal:control=any-frame >> #f >> internal:control=enter-frame >> div >> internal:and="#f >> internal:control=enter-frame >> button""##;
+        let parts = normalize_composites(source).unwrap();
+        assert_eq!(
+            parts.last().unwrap().text,
+            "internal:and=\"button\"",
+            "the whole-selector any-frame token does not enter prefix comparison"
+        );
+        assert!(
+            split(source).is_err(),
+            "serving any-frame remains unsupported"
+        );
+    }
+
+    #[test]
+    fn tests_that_capture_before_a_repeated_frame_prefix_is_refused() {
+        for (outer, target) in [
+            ("#f", "*css=#f >> internal:control=enter-frame >> button"),
+            ("#f", "#f >> *internal:control=enter-frame >> button"),
+            (
+                "#f >> internal:control=enter-frame >> #inner",
+                "#f >> internal:control=enter-frame >> *css=#inner >> internal:control=enter-frame >> button",
+            ),
+        ] {
+            let source = format!(
+                "{outer} >> internal:control=enter-frame >> div >> internal:and={}",
+                serde_json::to_string(target).unwrap()
+            );
+            assert!(split(&source).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn tests_that_composite_selectors_entering_a_different_frame_stay_refused() {
+        for target in [
+            "#other >> internal:control=enter-frame >> button",
+            "#f >> internal:control=enter-frame >> #other >> internal:control=enter-frame >> button",
+        ] {
+            let source = format!(
+                "#f >> internal:control=enter-frame >> div >> internal:and={}",
+                serde_json::to_string(target).unwrap()
+            );
+            assert!(split(&source).is_err(), "{source}");
         }
     }
 

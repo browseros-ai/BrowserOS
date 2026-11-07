@@ -217,3 +217,35 @@ test('frameLocator reaches the same frames through Neo and Playwright', {
 }, async (t) => {
   await compareFrameCases(t, cases)
 })
+
+test('tests that composites sharing an OOPIF prefix match Playwright and leave decoys untouched', {
+  skip,
+  timeout: 180_000,
+}, async (t) => {
+  await compareFrameCases(t, [
+    {
+      name: 'and, has, hasNot and or in the same OOPIF',
+      source: `const f = page.frameLocator('#login-iframe')
+      await f.getByText('Send', { exact: true }).and(f.getByRole('button')).click()
+      await f.locator('body').filter({ has: f.getByRole('button') }).getByText('Send', { exact: true }).click()
+      return {
+        has: await f.locator('ul').filter({ has: f.getByText('cross one', { exact: true }) }).count(),
+        hasNot: await f.locator('ul').filter({ hasNot: f.getByText('absent', { exact: true }) }).count(),
+        or: await f.getByText('cross one', { exact: true }).or(f.getByText('cross two', { exact: true })).allTextContents(),
+      }`,
+      expected: { has: 1, hasNot: 1, or: ['cross one', 'cross two'] },
+      effect: (effect) => {
+        const { cross } = assertDecoysUntouched(effect, ['cross'])
+        assert.deepEqual(
+          cross.events.filter((event) => event.type === 'click'),
+          [
+            { type: 'click', target: 'send', trusted: true },
+            { type: 'click', target: 'send', trusted: true },
+          ],
+        )
+        assert.equal(cross.email, 'cross@seed.test')
+      },
+      deliveries: { click: ['done', 'done'] },
+    },
+  ])
+})
