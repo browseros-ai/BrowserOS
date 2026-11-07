@@ -13,6 +13,8 @@ use crate::error::{AppError, AppResult};
 // hosts that do not call `server/discover` or expose its instructions.
 const EMBEDDED_BROWSERCLAW_SKILL: &str =
     include_str!("../../../../resources/skills/browserclaw/SKILL.md");
+const EMBEDDED_PLAYWRIGHT_SKILL: &str =
+    include_str!("../../../../resources/skills/browserclaw/PLAYWRIGHT.md");
 const SKILL_FRONTMATTER_NAME: &str = "browseros-neo";
 /// On-disk directory name for the managed skill; matches the SKILL.md frontmatter
 /// `name` so agents that require `name == parent directory` accept it.
@@ -64,6 +66,12 @@ pub fn load_browserclaw_skill(
             "embedded BrowserClaw skill failed validation: {error}"
         ))
     })
+}
+
+/// Prototype boot deliberately ignores the on-disk legacy guide: its tool catalog may be
+/// from an older resource bundle. Embed the short Playwright guide with the selected code.
+pub fn load_playwright_skill() -> AppResult<SkillSpec> {
+    parse_browserclaw_skill(EMBEDDED_PLAYWRIGHT_SKILL.to_string()).map_err(AppError::Internal)
 }
 
 /// Removes the guide's group promises when the server does not group tabs itself. Automatic
@@ -123,7 +131,20 @@ mod tests {
 
     use super::{
         SKILL_GROUP_PROMISES, TabGrouping, embedded_browserclaw_skill, load_browserclaw_skill,
+        load_playwright_skill,
     };
+
+    #[test]
+    fn prototype_guide_uses_the_managed_identity_and_only_the_playwright_contract()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let guide = load_playwright_skill()?;
+        assert!(guide.content().starts_with("---\nname: browseros-neo\n"));
+        assert!(guide.content().contains("Write Playwright JavaScript"));
+        assert!(guide.content().contains("{code, page?, timeout?}"));
+        assert!(!guide.content().contains("name_session"));
+        assert!(!guide.content().contains("snapshot -> act"));
+        Ok(())
+    }
 
     /// Each promise is removed by an exact string replace, so a reword of the shipped guide
     /// would silently keep it in the explicit-grouping install.
