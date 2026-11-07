@@ -10,7 +10,8 @@
  * ```
  *
  * `Buffer` is the part of Node's `Buffer` a script reads results with, moved unchanged in
- * behaviour from `network.ts` (#3172). QuickJS has no `Buffer`, and the SDK defines no globals.
+ * behaviour from `neo-sdk/src/network.ts` (#3172). QuickJS has no `Buffer`, and the SDK defines
+ * no globals.
  *
  * Platform: this QuickJS (quickjs-ng in rquickjs 0.12) has `Uint8Array.fromBase64` and
  * `Uint8Array.prototype.toBase64` (probes-bin.md B3: a 10 MiB result decodes in 6 ms and

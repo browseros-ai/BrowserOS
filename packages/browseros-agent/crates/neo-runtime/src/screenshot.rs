@@ -331,6 +331,9 @@ pub(crate) async fn screenshot_locator(
         state: SelectorState::Attached,
         // The element is resolved again below; no main-world handle is minted for it.
         return_element: false,
+        // Playwright's dispatcher passes `true` for the client's `waitForSelector`, so the
+        // locator handlers run first, as for every served wait.
+        pre_checks: true,
     };
     let element = loop {
         waits::wait_for_selector_element(tab, &attached, progress).await?;

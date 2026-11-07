@@ -10,12 +10,15 @@
 
 import type {
   BrowserContextCloseParams,
+  FrameAriaSnapshotJSONParams,
   FrameAriaSnapshotParams,
   FrameBlurParams,
   FrameCheckParams,
   FrameClickParams,
+  FrameContentParams,
   FrameDblclickParams,
   FrameDispatchEventParams,
+  FrameDragAndDropParams,
   FrameFillParams,
   FrameFocusParams,
   FrameGetAttributeParams,
@@ -34,12 +37,15 @@ import type {
   FrameIsVisibleParams,
   FramePressParams,
   FrameQueryCountParams,
+  FrameResolveSelectorParams,
   FrameSelectOptionParams,
+  FrameSetContentParams,
   FrameTapParams,
   FrameTextContentParams,
   FrameTypeParams,
   FrameUncheckParams,
   FrameWaitForSelectorParams,
+  FrameWaitForTimeoutParams,
   PageCloseParams,
   PageConsoleMessagesParams,
   PageGoBackParams,
@@ -56,9 +62,12 @@ import type {
   PageMouseWheelParams,
   PagePageErrorsParams,
   PagePdfParams,
+  PageRegisterLocatorHandlerParams,
   PageReloadParams,
+  PageResolveLocatorHandlerNoReplyParams,
   PageScreenshotParams,
   PageTouchscreenTapParams,
+  PageUnregisterLocatorHandlerParams,
 } from '@browseros/neo-runtime-spec/serve'
 import type {
   ElementScreenshotParams,
@@ -79,6 +88,57 @@ export const FRAME_GET_ATTRIBUTE_KEYS = ['selector', 'strict', 'name'] as const
 
 /** `Frame.queryCount`'s params in Playwright's schema order. */
 export const FRAME_QUERY_COUNT_KEYS = ['selector'] as const
+
+/** `Frame.content` in Playwright schema order. */
+export const FRAME_CONTENT_KEYS = ['includeShadow'] as const
+
+/** `Frame.setContent` in Playwright schema order. */
+export const FRAME_SET_CONTENT_KEYS = ['html', 'waitUntil'] as const
+
+/** `Frame.waitForTimeout` in Playwright schema order. */
+export const FRAME_WAIT_FOR_TIMEOUT_KEYS = ['waitTimeout'] as const
+
+/** `Frame.resolveSelector` in Playwright schema order. */
+export const FRAME_RESOLVE_SELECTOR_KEYS = ['selector', 'sdkLanguage'] as const
+
+/** `Frame.ariaSnapshotJSON` in Playwright schema order. */
+export const FRAME_ARIA_SNAPSHOT_JSON_KEYS = [
+  'mode',
+  'selector',
+  'depth',
+  'boxes',
+] as const
+
+type _FrameContentKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_CONTENT_KEYS)[number], true>,
+    Required<FrameContentParams>
+  >
+>
+type _FrameSetContentKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_SET_CONTENT_KEYS)[number], true>,
+    Required<FrameSetContentParams>
+  >
+>
+type _FrameWaitForTimeoutKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_WAIT_FOR_TIMEOUT_KEYS)[number], true>,
+    Required<FrameWaitForTimeoutParams>
+  >
+>
+type _FrameResolveSelectorKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_RESOLVE_SELECTOR_KEYS)[number], true>,
+    Required<FrameResolveSelectorParams>
+  >
+>
+type _FrameAriaSnapshotJsonKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_ARIA_SNAPSHOT_JSON_KEYS)[number], true>,
+    Required<FrameAriaSnapshotJSONParams>
+  >
+>
 
 /** `Frame.ariaSnapshot`'s params in Playwright's schema order. */
 export const FRAME_ARIA_SNAPSHOT_KEYS = [
@@ -193,6 +253,19 @@ export const FRAME_PRESS_KEYS = [
 
 /** `Frame.type` in Playwright schema order. */
 export const FRAME_TYPE_KEYS = ['selector', 'strict', 'text', 'delay'] as const
+
+/** `Frame.dragAndDrop` in Playwright schema order. */
+export const FRAME_DRAG_AND_DROP_KEYS = [
+  'source',
+  'target',
+  'force',
+  'scroll',
+  'trial',
+  'sourcePosition',
+  'targetPosition',
+  'strict',
+  'steps',
+] as const
 
 /** `Frame.inputValue` in Playwright schema order. */
 export const FRAME_INPUT_VALUE_KEYS = ['selector', 'strict'] as const
@@ -404,6 +477,12 @@ type _FramePressKeysMatchSpec = Assert<
     Required<FramePressParams>
   >
 >
+type _FrameDragAndDropKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_DRAG_AND_DROP_KEYS)[number], true>,
+    Required<FrameDragAndDropParams>
+  >
+>
 type _FrameTypeKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_TYPE_KEYS)[number], true>,
@@ -600,6 +679,37 @@ export const NEO_SCREENSHOT_KEYS = [
   'selector',
   ...ELEMENT_SCREENSHOT_KEYS,
 ] as const
+
+/** `Page.registerLocatorHandler` in Playwright schema order. */
+export const PAGE_REGISTER_LOCATOR_HANDLER_KEYS = [
+  'selector',
+  'noWaitAfter',
+] as const
+
+/** `Page.resolveLocatorHandlerNoReply` in Playwright schema order. */
+export const PAGE_RESOLVE_LOCATOR_HANDLER_KEYS = ['uid', 'remove'] as const
+
+/** `Page.unregisterLocatorHandler` in Playwright schema order. */
+export const PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS = ['uid'] as const
+
+type _PageRegisterLocatorHandlerKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_REGISTER_LOCATOR_HANDLER_KEYS)[number], true>,
+    Required<PageRegisterLocatorHandlerParams>
+  >
+>
+type _PageResolveLocatorHandlerKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_RESOLVE_LOCATOR_HANDLER_KEYS)[number], true>,
+    Required<PageResolveLocatorHandlerNoReplyParams>
+  >
+>
+type _PageUnregisterLocatorHandlerKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS)[number], true>,
+    Required<PageUnregisterLocatorHandlerParams>
+  >
+>
 
 type _PageCloseKeysMatchSpec = Assert<
   SameKeys<
