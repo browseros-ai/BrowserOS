@@ -14,9 +14,9 @@ pub mod verify;
 /// saving works as it did before.
 pub const ULTRAFAST_ENABLED: bool = true;
 
-/// Write flows run without the one-time Allow writes approval while ultrafast is being tested.
-// TODO(DaniAkash): revert to `false` once the testing period ends, so write flows need approval again.
-pub const WRITES_ALLOWED_BY_DEFAULT: bool = true;
+/// Whether write flows may run live without asking the user first. Set to `false`
+/// so that write flows require a one-time Allow writes approval.
+pub const WRITES_ALLOWED_BY_DEFAULT: bool = false;
 
 /// Whether a write flow may run live without asking the user first.
 #[must_use]
