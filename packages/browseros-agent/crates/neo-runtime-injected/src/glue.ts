@@ -323,6 +323,33 @@ export const glue = {
     return { ref }
   },
 
+  /** Playwright: `server/frames.ts` `Frame._content`: `return await injected.evaluate((injected, includeShadow) => injected.documentContent(includeShadow), !!options.includeShadow);` */
+  documentContent: (injected, { includeShadow }) => ({
+    value: injected.documentContent(includeShadow),
+  }),
+
+  /** Playwright: `server/frames.ts` `Frame.setContent`: `document.write(html);` */
+  writeContent: (_injected, { html }) => {
+    // No console tag marks the open: neo-runtime waits for the reopened document's lifecycle
+    // events, from its `init`, on the frame's own session.
+    document.open()
+    document.write(html)
+    document.close()
+    return {}
+  },
+
+  /** Playwright: `server/frames.ts` `Frame.resolveSelector`: `return injected.generateSelectorSimple(node as unknown as Element);` */
+  generateSelector: (injected, { selector }) => {
+    const [element] = query(injected, selector, false)
+    if (!element) return {}
+    return { generated: injected.generateSelectorSimple(element) }
+  },
+
+  /** Playwright: `server/frames.ts` `Frame.resolveSelector`: `return injected.generateSelectorSimple(node as unknown as Element);` */
+  generateOwnerSelector: (injected, _params, element) => ({
+    generated: injected.generateSelectorSimple(element),
+  }),
+
   describeSelector: (injected, { selector }) => {
     const locator = injected.utils.asLocator('javascript', selector)
     try {

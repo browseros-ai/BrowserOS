@@ -55,6 +55,7 @@ mod bridge;
 mod check;
 mod click;
 mod console;
+mod content;
 mod deadline;
 mod devices;
 mod dialogs;

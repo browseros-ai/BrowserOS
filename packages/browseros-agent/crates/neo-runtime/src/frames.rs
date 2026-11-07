@@ -138,6 +138,12 @@ impl Host {
         &self.session.id
     }
 
+    /// Every CDP event the host's connection receives from now on; [`Host::session_id`] picks
+    /// this host's.
+    pub(crate) fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        self.session.cdp.events()
+    }
+
     pub(crate) fn classify(&self, error: &CdpError) -> PageError {
         world::classify_host(error, self.is_child())
     }

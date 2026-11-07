@@ -138,7 +138,7 @@ export function errorCategory(error) {
  */
 export async function compareMethod(
   t,
-  { html, source, probe, effects, values },
+  { html, source, probe, effects, values, slowMs = 0 },
 ) {
   t.diagnostic(
     `Playwright ${playwrightVersion}; ${playwrightDir ?? 'npm playwright-core'}`,
@@ -149,6 +149,7 @@ export async function compareMethod(
   try {
     const origin = await serveFixture(cleanups, {
       pages: { '/method.html': html },
+      slowMs,
     })
     const browser = await launchBrowser(cleanups, browserBinary)
     const playwright = await chromium.connectOverCDP(

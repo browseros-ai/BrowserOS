@@ -104,6 +104,15 @@ interfaces:
     - isEditable
     - isHidden
     - innerHTML
+    # Document content and timing (content.rs): `content`, `setContent` (`document.open`,
+    # `write` and `close` in the utility world, then a lifecycle event of the new content),
+    # `waitForTimeout`, `resolveSelector` (`locator.normalize`), and `ariaSnapshotJSON`
+    # (reads.rs: the tree the YAML snapshot renders, as Playwright's JSON).
+    - content
+    - setContent
+    - waitForTimeout
+    - resolveSelector
+    - ariaSnapshotJSON
     # Element operations (element_ops.rs, highlight.rs). `scrollIntoViewIfNeeded`, `selectText`
     # and `boundingBox` are Neo commands (`neo:`), as Playwright's client reaches them only
     # through an `ElementHandle`.

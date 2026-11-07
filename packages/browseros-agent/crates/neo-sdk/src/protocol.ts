@@ -10,10 +10,12 @@
 
 import type {
   BrowserContextCloseParams,
+  FrameAriaSnapshotJSONParams,
   FrameAriaSnapshotParams,
   FrameBlurParams,
   FrameCheckParams,
   FrameClickParams,
+  FrameContentParams,
   FrameDblclickParams,
   FrameDispatchEventParams,
   FrameDragAndDropParams,
@@ -35,12 +37,15 @@ import type {
   FrameIsVisibleParams,
   FramePressParams,
   FrameQueryCountParams,
+  FrameResolveSelectorParams,
   FrameSelectOptionParams,
+  FrameSetContentParams,
   FrameTapParams,
   FrameTextContentParams,
   FrameTypeParams,
   FrameUncheckParams,
   FrameWaitForSelectorParams,
+  FrameWaitForTimeoutParams,
   PageCloseParams,
   PageConsoleMessagesParams,
   PageGoBackParams,
@@ -74,6 +79,57 @@ export const FRAME_GET_ATTRIBUTE_KEYS = ['selector', 'strict', 'name'] as const
 
 /** `Frame.queryCount`'s params in Playwright's schema order. */
 export const FRAME_QUERY_COUNT_KEYS = ['selector'] as const
+
+/** `Frame.content` in Playwright schema order. */
+export const FRAME_CONTENT_KEYS = ['includeShadow'] as const
+
+/** `Frame.setContent` in Playwright schema order. */
+export const FRAME_SET_CONTENT_KEYS = ['html', 'waitUntil'] as const
+
+/** `Frame.waitForTimeout` in Playwright schema order. */
+export const FRAME_WAIT_FOR_TIMEOUT_KEYS = ['waitTimeout'] as const
+
+/** `Frame.resolveSelector` in Playwright schema order. */
+export const FRAME_RESOLVE_SELECTOR_KEYS = ['selector', 'sdkLanguage'] as const
+
+/** `Frame.ariaSnapshotJSON` in Playwright schema order. */
+export const FRAME_ARIA_SNAPSHOT_JSON_KEYS = [
+  'mode',
+  'selector',
+  'depth',
+  'boxes',
+] as const
+
+type _FrameContentKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_CONTENT_KEYS)[number], true>,
+    Required<FrameContentParams>
+  >
+>
+type _FrameSetContentKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_SET_CONTENT_KEYS)[number], true>,
+    Required<FrameSetContentParams>
+  >
+>
+type _FrameWaitForTimeoutKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_WAIT_FOR_TIMEOUT_KEYS)[number], true>,
+    Required<FrameWaitForTimeoutParams>
+  >
+>
+type _FrameResolveSelectorKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_RESOLVE_SELECTOR_KEYS)[number], true>,
+    Required<FrameResolveSelectorParams>
+  >
+>
+type _FrameAriaSnapshotJsonKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_ARIA_SNAPSHOT_JSON_KEYS)[number], true>,
+    Required<FrameAriaSnapshotJSONParams>
+  >
+>
 
 /** `Frame.ariaSnapshot`'s params in Playwright's schema order. */
 export const FRAME_ARIA_SNAPSHOT_KEYS = [

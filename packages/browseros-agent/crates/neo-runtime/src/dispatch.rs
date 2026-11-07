@@ -42,18 +42,20 @@ use std::time::Duration;
 use futures_util::future;
 use neo_runtime_spec::injected::ReadableElementState;
 use neo_runtime_spec::serve::{
-    BrowserContextCall, DialogCall, FrameAriaSnapshotParams, FrameCall, FrameCheckParams,
-    FrameCheckResult, FrameClickParams, FrameDblclickParams, FrameDragAndDropParams,
-    FrameDragAndDropResult, FrameFillParams, FrameFillResult, FrameGetAttributeParams,
-    FrameGotoParams, FrameHoverParams, FrameInnerHTMLParams, FrameInnerTextParams,
-    FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams, FrameIsCheckedResult,
-    FrameIsDisabledParams, FrameIsDisabledResult, FrameIsEditableParams, FrameIsEditableResult,
-    FrameIsEnabledParams, FrameIsEnabledResult, FrameIsHiddenParams, FrameIsHiddenResult,
-    FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams, FramePressResult,
-    FrameQueryCountParams, FrameSelectOptionParams, FrameSelectOptionResult, FrameTapParams,
-    FrameTextContentParams, FrameTitleParams, FrameTypeParams, FrameTypeResult, FrameUncheckParams,
-    FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult, Metadata, PageCall,
-    RequestCall, ResponseCall,
+    BrowserContextCall, DialogCall, FrameAriaSnapshotJSONParams, FrameAriaSnapshotParams,
+    FrameCall, FrameCheckParams, FrameCheckResult, FrameClickParams, FrameContentParams,
+    FrameDblclickParams, FrameDragAndDropParams, FrameDragAndDropResult, FrameFillParams,
+    FrameFillResult, FrameGetAttributeParams, FrameGotoParams, FrameHoverParams,
+    FrameInnerHTMLParams, FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult,
+    FrameIsCheckedParams, FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult,
+    FrameIsEditableParams, FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult,
+    FrameIsHiddenParams, FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult,
+    FramePressParams, FramePressResult, FrameQueryCountParams, FrameResolveSelectorParams,
+    FrameSelectOptionParams, FrameSelectOptionResult, FrameSetContentParams, FrameSetContentResult,
+    FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameTypeParams, FrameTypeResult,
+    FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
+    FrameWaitForTimeoutParams, FrameWaitForTimeoutResult, Metadata, PageCall, RequestCall,
+    ResponseCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -68,6 +70,7 @@ use tracing::debug;
 use crate::abort::{Aborts, Registration};
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
+use crate::content::{self, SetContentOptions, WriteOrder, WriteTurn};
 use crate::devices::{self, DeviceCall};
 use crate::dialogs;
 use crate::drag::{self, DragOptions};
@@ -230,9 +233,21 @@ struct Inner {
     /// The admitted calls a script's `signal` can still abort, by message id (`abort.rs`).
     aborts: Arc<Aborts>,
     next_call_id: AtomicU64,
+    /// The `setContent` writes into each frame, in arrival order (`content.rs`).
+    write_order: WriteOrder,
     /// Cancels `run.ended` when the last `Dispatcher` drops. A reason `finish` recorded first
     /// wins; otherwise calls read [`RunEnd::Cancelled`].
     _ending: DropGuard,
+}
+
+impl Inner {
+    /// A `setContent` call takes its place in its frame's write order as it arrives.
+    fn ordered(&self, guid: &str, mut call: ObjectCall) -> ObjectCall {
+        if let ObjectCall::Frame(Route::FrameSetContent(_, turn)) = &mut call {
+            *turn = Some(self.write_order.turn(guid));
+        }
+        call
+    }
 }
 
 /// Playwright's client message, `{id, guid, method, params, metadata}` (`connection.ts`).
@@ -359,6 +374,13 @@ enum Route {
     FrameWaitForSelector(WaitForSelectorOptions),
     FrameWaitForUrl(WaitForUrlOptions),
     FrameWaitForLoadState(WaitForLoadStateOptions),
+    // Document content and timing (content.rs, waits.rs, reads.rs).
+    FrameContent(bool),
+    /// The options, and the write's place in its frame's order (`Dispatcher::call` gives it).
+    FrameSetContent(SetContentOptions, Option<WriteTurn>),
+    FrameWaitForTimeout(f64),
+    FrameResolveSelector(String),
+    FrameAriaSnapshotJson(SnapshotOptions),
     // Element operations (element_ops.rs, highlight.rs).
     FrameFocus(ElementTarget),
     FrameBlur(ElementTarget),
@@ -387,6 +409,7 @@ impl Dispatcher {
             cursors: Arc::default(),
             aborts: Arc::default(),
             next_call_id: AtomicU64::new(1),
+            write_order: WriteOrder::default(),
         }))
     }
 
@@ -417,6 +440,7 @@ impl Dispatcher {
         });
         let object = object_kind(&guid, target.is_some());
         let Routed { meta, route } = route(object, &method, params.clone());
+        let route = route.map(|call| inner.ordered(&guid, call));
         let metadata = metadata.unwrap_or(Metadata {
             location: None,
             title: None,
@@ -816,6 +840,16 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::WaitForSelector(params) => Ok(Route::FrameWaitForSelector(
             WaitForSelectorOptions::from_params(params),
         )),
+        FrameCall::Content(params) => {
+            Ok(Route::FrameContent(params.include_shadow.unwrap_or(false)))
+        }
+        FrameCall::SetContent(params) => SetContentOptions::from_params(params)
+            .map(|options| Route::FrameSetContent(options, None)),
+        FrameCall::WaitForTimeout(params) => Ok(Route::FrameWaitForTimeout(params.wait_timeout)),
+        FrameCall::ResolveSelector(params) => Ok(Route::FrameResolveSelector(params.selector)),
+        FrameCall::AriaSnapshotJSON(params) => Ok(Route::FrameAriaSnapshotJson(
+            SnapshotOptions::from_json_params(params),
+        )),
         FrameCall::Focus(params) => Ok(Route::FrameFocus(ElementTarget::from_focus(params))),
         FrameCall::Blur(params) => Ok(Route::FrameBlur(ElementTarget::from_blur(params))),
         FrameCall::DispatchEvent(params) => {
@@ -1054,6 +1088,11 @@ async fn serve(
         | Route::FrameIsEnabled(_)
         | Route::FrameIsDisabled(_)
         | Route::FrameIsEditable(_)) => serve_state(&page, route, &progress).await,
+        route @ (Route::FrameContent(_)
+        | Route::FrameSetContent(..)
+        | Route::FrameWaitForTimeout(_)
+        | Route::FrameResolveSelector(_)
+        | Route::FrameAriaSnapshotJson(_)) => serve_document(&page, route, &progress).await,
         route @ (Route::FrameFocus(_)
         | Route::FrameBlur(_)
         | Route::FrameDispatchEvent(_)
@@ -1162,6 +1201,46 @@ async fn serve_state(
         _ => {
             Err(PlaywrightError::error("neo-runtime: `serve_state` serves state reads only").into())
         }
+    }
+}
+
+/// The document-wide calls `serve` answers on the call's page (`content.rs`, `waits.rs`,
+/// `reads.rs`).
+async fn serve_document(
+    page: &FrameTab,
+    route: Route,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    match route {
+        Route::FrameContent(include_shadow) => content::content(page, include_shadow, progress)
+            .await
+            .and_then(|result| encode_result::<FrameContentParams>(&result)),
+        Route::FrameSetContent(options, turn) => {
+            content::set_content(page, &options, turn, progress)
+                .await
+                .and_then(|()| encode_result::<FrameSetContentParams>(&FrameSetContentResult {}))
+        }
+        Route::FrameWaitForTimeout(wait) => {
+            waits::wait_for_timeout(page, waits::timer_delay(wait), progress)
+                .await
+                .and_then(|()| {
+                    encode_result::<FrameWaitForTimeoutParams>(&FrameWaitForTimeoutResult {})
+                })
+        }
+        Route::FrameResolveSelector(selector) => {
+            content::resolve_selector(page, &selector, progress)
+                .await
+                .and_then(|result| encode_result::<FrameResolveSelectorParams>(&result))
+        }
+        Route::FrameAriaSnapshotJson(options) => {
+            reads::aria_snapshot_json(page, &options, progress)
+                .await
+                .and_then(|result| encode_result::<FrameAriaSnapshotJSONParams>(&result))
+        }
+        _ => Err(PlaywrightError::error(
+            "neo-runtime: `serve_document` serves the document calls only",
+        )
+        .into()),
     }
 }
 
@@ -1274,6 +1353,11 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameWaitForSelector(_)
         | Route::FrameWaitForUrl(_)
         | Route::FrameWaitForLoadState(_)
+        | Route::FrameContent(_)
+        | Route::FrameSetContent(..)
+        | Route::FrameWaitForTimeout(_)
+        | Route::FrameResolveSelector(_)
+        | Route::FrameAriaSnapshotJson(_)
         | Route::FrameFocus(_)
         | Route::FrameBlur(_)
         | Route::FrameDispatchEvent(_)
@@ -1770,39 +1854,8 @@ mod tests {
                     }]
                 );
             }
-            Route::FramePointer(_) | Route::FrameDragAndDrop(_) => panic!("not a form"),
-            Route::FrameGoto(_)
-            | Route::FrameTitle
-            | Route::FrameTextContent(_)
-            | Route::FrameInnerText(_)
-            | Route::FrameGetAttribute(_)
-            | Route::FrameQueryCount(_)
-            | Route::FrameInnerHtml(_)
-            | Route::FrameIsVisible(_)
-            | Route::FrameIsHidden(_)
-            | Route::FrameIsChecked(_)
-            | Route::FrameIsEnabled(_)
-            | Route::FrameIsDisabled(_)
-            | Route::FrameIsEditable(_)
-            | Route::FrameAriaSnapshot(_)
-            | Route::FrameWaitForSelector(_)
-            | Route::FrameWaitForUrl(_)
-            | Route::FrameWaitForLoadState(_)
-            | Route::FrameFocus(_)
-            | Route::FrameBlur(_)
-            | Route::FrameDispatchEvent(_)
-            | Route::FrameScrollIntoViewIfNeeded(_)
-            | Route::FrameSelectText(..)
-            | Route::FrameBoundingBox(_)
-            | Route::FrameHighlight(_)
-            | Route::FrameHideHighlight(_)
-            | Route::FrameWaitForNavigation(_)
-            | Route::FrameNextNavigation(_)
-            | Route::FrameFinishNavigation(_)
-            | Route::FrameReleaseNavigation(_)
-            | Route::FrameEval(_) => {
-                panic!("a form is not a navigation, read or wait")
-            }
+            // Every other route is no form; naming each would only grow this match.
+            other => panic!("{method} is a form, not {other:?}"),
         }
     }
 

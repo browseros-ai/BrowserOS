@@ -4337,6 +4337,13 @@ class Locator {
   async ariaSnapshot(options = {}) {
     return await this._frame._ariaSnapshot("locator.ariaSnapshot", options, this._selector);
   }
+  async ariaSnapshotJSON(options = {}) {
+    return await this._frame._ariaSnapshotJSON("locator.ariaSnapshotJSON", options, this._selector);
+  }
+  async normalize() {
+    const resolved = await this._frame._resolveSelector("locator.normalize", this._selector);
+    return new Locator(this._frame, resolved);
+  }
   async count() {
     return await this._frame._queryCount("locator.count", this._selector);
   }
@@ -4720,6 +4727,16 @@ var FRAME_TEXT_CONTENT_KEYS = ["selector", "strict"];
 var FRAME_INNER_TEXT_KEYS = ["selector", "strict"];
 var FRAME_GET_ATTRIBUTE_KEYS = ["selector", "strict", "name"];
 var FRAME_QUERY_COUNT_KEYS = ["selector"];
+var FRAME_CONTENT_KEYS = ["includeShadow"];
+var FRAME_SET_CONTENT_KEYS = ["html", "waitUntil"];
+var FRAME_WAIT_FOR_TIMEOUT_KEYS = ["waitTimeout"];
+var FRAME_RESOLVE_SELECTOR_KEYS = ["selector", "sdkLanguage"];
+var FRAME_ARIA_SNAPSHOT_JSON_KEYS = [
+  "mode",
+  "selector",
+  "depth",
+  "boxes"
+];
 var FRAME_ARIA_SNAPSHOT_KEYS = [
   "mode",
   "selector",
@@ -5080,6 +5097,11 @@ function formEncode(text2) {
 }
 
 // src/frame.ts
+function nodeTimerDelay(timeout) {
+  if (typeof timeout !== "number")
+    return timeout;
+  return timeout >= 1 && timeout <= 2 ** 31 - 1 ? timeout : 1;
+}
 var LIFECYCLE_EVENTS = new Set([
   "load",
   "domcontentloaded",
@@ -5469,6 +5491,47 @@ class Frame {
       boxes: options.boxes
     }), this._page._timeoutSettings.timeout(options, apiName));
     return result.snapshot;
+  }
+  async _ariaSnapshotJSON(apiName, options, selector) {
+    const result = await this._connection.send(apiName, this._guid, "ariaSnapshotJSON", pickParams(FRAME_ARIA_SNAPSHOT_JSON_KEYS, {
+      mode: options.mode,
+      selector,
+      depth: options.depth,
+      boxes: options.boxes
+    }), this._page._timeoutSettings.timeout(options, apiName));
+    return result.snapshot;
+  }
+  async content(options = {}) {
+    return await this._content("frame.content", options);
+  }
+  async _content(apiName, options = {}) {
+    const result = await this._connection.send(apiName, this._guid, "content", pickParams(FRAME_CONTENT_KEYS, { ...options }), 0);
+    return result.value;
+  }
+  async setContent(html, options = {}) {
+    return await this._setContent("frame.setContent", html, options);
+  }
+  async _setContent(apiName, html, options = {}) {
+    const waitUntil = verifyLoadState("waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
+    await this._connection.send(apiName, this._guid, "setContent", pickParams(FRAME_SET_CONTENT_KEYS, {
+      html,
+      ...options,
+      waitUntil
+    }), this._page._timeoutSettings.navigationTimeout(options, apiName));
+  }
+  async waitForTimeout(timeout) {
+    return await this._waitForTimeout("frame.waitForTimeout", timeout);
+  }
+  async _waitForTimeout(apiName, timeout) {
+    await this._connection.send(apiName, this._guid, "waitForTimeout", pickParams(FRAME_WAIT_FOR_TIMEOUT_KEYS, {
+      waitTimeout: nodeTimerDelay(timeout)
+    }), 0);
+  }
+  async _resolveSelector(apiName, selector) {
+    const result = await this._connection.send(apiName, this._guid, "resolveSelector", pickParams(FRAME_RESOLVE_SELECTOR_KEYS, {
+      selector
+    }), 0);
+    return result.resolvedSelector;
   }
   async click(selector, options = {}) {
     return await this._click("frame.click", selector, options);
@@ -6372,6 +6435,18 @@ class Page extends ChannelOwner {
   }
   async ariaSnapshot(options = {}) {
     return await this.#mainFrame._ariaSnapshot("page.ariaSnapshot", options);
+  }
+  async ariaSnapshotJSON(options = {}) {
+    return await this.#mainFrame._ariaSnapshotJSON("page.ariaSnapshotJSON", options);
+  }
+  async content(options) {
+    return await this.#mainFrame._content("page.content", options);
+  }
+  async setContent(html, options) {
+    return await this.#mainFrame._setContent("page.setContent", html, options);
+  }
+  async waitForTimeout(timeout) {
+    return await this.#mainFrame._waitForTimeout("page.waitForTimeout", timeout);
   }
   async click(selector, options = {}) {
     return await this.#mainFrame._click("page.click", selector, options);
