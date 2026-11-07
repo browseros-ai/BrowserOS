@@ -1,0 +1,48 @@
+<!doctype html>
+<!-- The ElementHandle.dispatchEvent parity file's page: listeners that record each event they see
+     (its class and init fields), the handlers of Playwright's drag-n-drop.html (dragstart stores
+     the dragged id, drop moves that element into the target), a wheel target, and a same-origin
+     child frame whose drop listener records into this page. `window.__facts()` reads it all. -->
+<title>dispatch</title>
+<button id="button">button</button>
+<div id="source" draggable="true">source</div>
+<div id="target">target</div>
+<div id="wheel">wheel</div>
+<iframe name="child" srcdoc="<div id=c>child</div><script>document.querySelector('#c').addEventListener('drop', (e) => parent.__record(e, 'child'))</script>"></iframe>
+<script>
+// BrowserOS neo's takeover bar is not the page's (frame-top.html explains); remove it on sight.
+new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.remove()).observe(
+  document.documentElement,
+  { childList: true, subtree: true },
+)
+window.__seen = []
+window.__record = (e, where) =>
+  window.__seen.push({
+    where,
+    type: e.type,
+    cls: e.constructor.name,
+    bubbles: e.bubbles,
+    cancelable: e.cancelable,
+    composed: e.composed,
+    detail: e.detail ?? null,
+    deltaX: e.deltaX ?? null,
+    deltaY: e.deltaY ?? null,
+    transfer: e.dataTransfer ? e.dataTransfer.types.length : null,
+  })
+for (const type of ['click', 'custom', 'wheel'])
+  document.addEventListener(type, (e) => window.__record(e, 'top'), true)
+document.querySelector('#source').addEventListener('dragstart', (e) => {
+  e.dataTransfer.setData('text/plain', e.target.id)
+  window.__record(e, 'top')
+})
+document.querySelector('#target').addEventListener('drop', (e) => {
+  e.preventDefault()
+  const id = e.dataTransfer.getData('text/plain')
+  if (id) e.target.appendChild(document.getElementById(id))
+  window.__record(e, 'top')
+})
+window.__facts = () => ({
+  seen: window.__seen,
+  sourceIn: document.querySelector('#source').parentElement.id || 'body',
+})
+</script>

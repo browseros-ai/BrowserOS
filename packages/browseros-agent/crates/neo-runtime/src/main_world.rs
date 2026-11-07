@@ -36,15 +36,15 @@ use std::sync::Arc;
 
 use browseros_cdp::CdpError;
 use browseros_cdp::runtime::{CallFunctionOnResult, ExceptionDetails, RemoteObject};
-use neo_runtime_spec::injected::InjectedDocumentParams;
+use neo_runtime_spec::injected::{InjectedDocumentParams, InjectedInitializer};
 use neo_runtime_spec::{Element, Handle, HandleId};
 use serde_json::{Value, json};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OnceCell};
 
 use crate::click::PageError;
 use crate::evaluate::js_string;
 use crate::frames::FrameContext;
-use crate::world::ObjectGroup;
+use crate::world::{self, ObjectGroup};
 
 /// `() => new UtilityScript(globalThis, false)`.
 /// Playwright: `server/javascript.ts` `ExecutionContext._utilityScript`
@@ -94,6 +94,25 @@ const RETAIN: &str = include_str!(concat!(
     "/../neo-runtime-injected/dist/retain.js"
 ));
 
+/// `(initializer) => InjectedScript`: the main world's own (`isUtilityWorld: false`), returned to
+/// CDP and kept by id, never stored on the page's globals.
+/// Playwright: `server/dom.ts` `FrameExecutionContext.injectedScript`
+const MAIN_INJECTED: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/main-injected.js"
+));
+/// Playwright: `server/frames.ts` `Frame._waitForFunctionOnSelector`
+const CALL_ON_ELEMENT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/call-on-element.js"
+));
+
+/// Playwright: `server/frames.ts` `Frame._addScriptTag`
+const ADD_TAG: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/add-tag.js"
+));
+
 /// A page function of Playwright's server, built in neo-runtime-injected, that runs as the
 /// `expression` of `UtilityScript.evaluate` (`EVALUATE`), so its arguments arrive parsed with
 /// their handles, primitives included. Agent code never takes this path.
@@ -107,6 +126,11 @@ pub(crate) enum BuiltExpression {
     WaitResult,
     /// `(waiter) => waiter.abort()`.
     WaitAbort,
+    /// `(injected, selector, strict, scope, callback, ...data) => 0 | 1 | preview`: a
+    /// `mainWorld: true` element callback on the first match.
+    CallOnElement,
+    /// `(utilityScript, kind, value, type) => element`: `addScriptTag` / `addStyleTag`.
+    AddTag,
 }
 
 impl BuiltExpression {
@@ -117,6 +141,8 @@ impl BuiltExpression {
             Self::WaitForFunction => WAIT_FOR_FUNCTION,
             Self::WaitResult => WAIT_RESULT,
             Self::WaitAbort => WAIT_ABORT,
+            Self::CallOnElement => CALL_ON_ELEMENT,
+            Self::AddTag => ADD_TAG,
         }
     }
 }
@@ -162,6 +188,8 @@ pub(crate) struct Installed {
     pub(crate) document: DocumentId,
     /// In [`MAIN_WORLD_GROUP`].
     utility: HandleId,
+    /// The document's main-world `InjectedScript` once a call needed it, in [`MAIN_WORLD_GROUP`].
+    injected: OnceCell<HandleId>,
 }
 
 /// The built function a main-world call runs on the `UtilityScript`.
@@ -196,7 +224,60 @@ impl Installed {
     }
 }
 
+/// The main world's `InjectedScript` options: the utility world's but `isUtilityWorld: false`, as
+/// Playwright builds each world's injected script from the same settings.
+/// Playwright: `server/dom.ts` `FrameExecutionContext.injectedScript`: `isUtilityWorld: this.world === 'utility',`
+fn main_initializer() -> InjectedInitializer {
+    InjectedInitializer {
+        is_utility_world: false,
+        ..world::initializer()
+    }
+}
+
 impl MainWorld {
+    /// `installed`'s main-world `InjectedScript`, built from `MAIN_INJECTED` on the first call that
+    /// needs it and kept by CDP id with the `UtilityScript`; a new document gets a new one.
+    ///
+    /// # Errors
+    ///
+    /// `NotConnected` when the document went away meanwhile; `Closed` when the session did.
+    pub(crate) async fn injected(
+        &self,
+        frame: &FrameContext,
+        installed: &Installed,
+    ) -> Result<String, PageError> {
+        let id = installed
+            .injected
+            .get_or_try_init(|| async {
+                let reply = frame
+                    .host
+                    .send(
+                        "Runtime.callFunctionOn",
+                        json!({
+                            "functionDeclaration": MAIN_INJECTED,
+                            "objectId": installed.utility.object_id(),
+                            "arguments": [{ "value": main_initializer() }],
+                            "returnByValue": false,
+                            "objectGroup": MAIN_WORLD_GROUP,
+                        }),
+                    )
+                    .await
+                    .map_err(|error| frame.host.classify(&error))?;
+                let answer: CallFunctionOnResult =
+                    serde_json::from_value(reply).map_err(|error| {
+                        PageError::Contract(format!("Runtime.callFunctionOn answered: {error}"))
+                    })?;
+                if let Some(details) = answer.exception_details {
+                    return Err(PageError::Contract(exception_message(details)));
+                }
+                answer.result.object_id.map(HandleId::new).ok_or_else(|| {
+                    PageError::Contract("the main world's InjectedScript has no objectId".into())
+                })
+            })
+            .await?;
+        Ok(id.object_id().to_string())
+    }
+
     /// The `UtilityScript` of the frame's current document, installed on first use.
     ///
     /// # Errors
@@ -252,6 +333,7 @@ impl MainWorld {
             generation,
             document,
             utility: HandleId::new(utility),
+            injected: OnceCell::new(),
         });
         *slot = Some(Arc::clone(&installed));
         Ok(installed)

@@ -100,6 +100,14 @@ export type EvalFrameCommands = SelectorCommands & {
     params: EvaluateParams & { pollingInterval?: number }
     result: { handle: CreatedHandle }
   }
+  addScriptTag: {
+    params: { url?: string; content?: string; type?: string }
+    result: { element: CreatedHandle }
+  }
+  addStyleTag: {
+    params: { url?: string; content?: string }
+    result: { element: CreatedHandle }
+  }
 }
 
 /** The `JSHandle` commands on a handle guid (`handle@<n>`); the selector ones are an
@@ -111,6 +119,10 @@ export type JSHandleCommands = EvalFrameCommands & {
   getPropertyList: {
     params: Record<string, never>
     result: { properties: { name: string; value: CreatedHandle }[] }
+  }
+  dispatchEvent: {
+    params: { type: string; eventInit: SerializedArgument }
+    result: Record<string, never>
   }
 }
 

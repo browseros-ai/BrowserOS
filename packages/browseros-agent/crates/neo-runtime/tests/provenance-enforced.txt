@@ -6,9 +6,12 @@
 #
 # One path per line, relative to crates/, sorted. Add a file in the commit that makes it pass;
 # the list grows until it holds every neo source.
+neo-runtime-injected/src/add-tag.ts
+neo-runtime-injected/src/call-on-element.ts
 neo-runtime-injected/src/evaluate.ts
 neo-runtime-injected/src/get-property.ts
 neo-runtime-injected/src/json-value.ts
+neo-runtime-injected/src/main-injected.ts
 neo-runtime-injected/src/retain.ts
 neo-runtime-injected/src/utility.ts
 neo-runtime-injected/src/wait-abort.ts
@@ -29,6 +32,7 @@ neo-runtime/src/frame_element.rs
 neo-runtime/src/frame_events.rs
 neo-runtime/src/highlight.rs
 neo-runtime/src/history.rs
+neo-runtime/src/init_scripts.rs
 neo-runtime/src/input_devices.rs
 neo-runtime/src/locator_handlers.rs
 neo-runtime/src/main_world.rs
@@ -43,6 +47,7 @@ neo-sdk/src/download.ts
 neo-sdk/src/element-handle.ts
 neo-sdk/src/events.ts
 neo-sdk/src/file-chooser.ts
+neo-sdk/src/init-script.ts
 neo-sdk/src/input.ts
 neo-sdk/src/js-handle.ts
 neo-sdk/src/plain-argument.ts

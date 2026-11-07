@@ -53,6 +53,15 @@ pub(crate) async fn context(
                 progress.wait(backoff).await?;
                 backoff = (backoff * 2).min(Duration::from_millis(16));
             }
+            // The run's init scripts reach the page's first document before the page is handed
+            // out, as a new page's `FrameSession` runs them in Playwright.
+            let scripts = progress.init_scripts();
+            if scripts.has_scripts() {
+                let session = progress.race(tabs.session(entry)).await??;
+                progress
+                    .race(scripts.show_new(tabs.cdp(), &session))
+                    .await?;
+            }
             let result = BrowserContextNewPageResult {
                 page: PageChannel {
                     guid: bridge::page_guid(&entry.id),
