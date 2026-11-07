@@ -4,7 +4,7 @@
 //!
 //! ```text
 //!  Tabs ─▶ PageEntry ─▶ Arc<PageSession> ─┬─▶ realm::run(…, dispatcher)   the deadline decides, as before
-//!                                             ├─▶ dispatcher.finish(reason)  cancel calls, wait ≤ 1 s, records
+//!                                             ├─▶ dispatcher.finish(reason)  cancel calls, wait ≤ 1 s (highlights ≤ 1 s more), records
 //!                                             └─▶ last Arc drops ─▶ Session::drop ─▶ detach in background
 //! ```
 //!
