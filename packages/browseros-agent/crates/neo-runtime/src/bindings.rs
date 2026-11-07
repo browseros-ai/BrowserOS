@@ -415,12 +415,19 @@ impl Bindings {
             self.run,
             self.next.fetch_add(1, Ordering::Relaxed)
         );
-        self.state.lock().await.exposed.push(Exposed {
-            name: name.to_string(),
-            page: target.clone(),
-            disposable: disposable.clone(),
-            script,
-        });
+        {
+            let mut state = self.state.lock().await;
+            // The run ended while the scripts went in: its end removed them, and this name too.
+            if state.closed {
+                return Err(PlaywrightError::target_closed());
+            }
+            state.exposed.push(Exposed {
+                name: name.to_string(),
+                page: target.clone(),
+                disposable: disposable.clone(),
+                script,
+            });
+        }
         let add = add_arg(name, no_global);
         for (_, session) in tabs.attached() {
             let shown = init_scripts::target_of(&session);
@@ -680,10 +687,10 @@ impl Bindings {
 
     /// Ends the run's bindings, after `init_scripts.rs` removed every script: in every frame of
     /// the run's pages, each call still waiting on one rejects, each name goes, and the
-    /// controller with them; the tabs stop reporting calls.
+    /// controller with them; the tabs stop reporting calls. It never waits on an expose still
+    /// running, which finds the run ended at its next step.
     /// Deviation: `server/page.ts` `Page.removeExposedBinding`: `await this.delegate.removeInitScripts([binding.initScript]);` Playwright's bindings live as long as their page or context; Neo's live as long as the run.
     pub(crate) async fn close(&self, tabs: &Tabs) {
-        let _work = self.work.lock().await;
         let (exposed, sessions) = {
             let mut state = self.state.lock().await;
             state.closed = true;

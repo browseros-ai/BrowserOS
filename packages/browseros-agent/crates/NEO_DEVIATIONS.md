@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (52)
+## Deviations (57)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -27,6 +27,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/evaluate.rs | `utility_root` | `server/frameSelectors.ts` `FrameSelectors._resolveChainedSelector` | Playwright resolves frame hops from a scope too; Neo serves a scoped query within the element's own document only. |
 | neo-runtime/src/events.rs | `MAX_QUEUED_BYTES` | `client/connection.ts` `Connection.dispatch` | The same bound in bytes of queued JSON, so a few huge payloads cannot pin the server's memory. |
 | neo-runtime/src/events.rs | `MAX_QUEUED_EVENTS` | `client/connection.ts` `Connection.dispatch` | Playwright's client dispatches every event its server sends; Neo's queue lives outside the realm's memory limit, so a run holds at most this many undelivered events and counts the rest. |
+| neo-runtime/src/frame_events.rs | (file) | `server/chromium/crPage.ts` `FrameSession._initialize` | Playwright attaches every out-of-process frame as it starts, paused until attached. Neo attaches one when the run first reaches into it (a frame read, a locator in it), so that frame's own commits before then are not reported; its attach and removal, which the tab's session reports, always are. |
 | neo-runtime/src/frame_selector.rs | `Hop` | `server/frameSelectors.ts` `FrameSelectors._jumpToAriaRefFrameIfNeeded` | Playwright names a frame's refs by the frame's number; Neo names them by the path of iframe refs from the main frame (`f7f2e1`), which a later run can still follow. Such a ref stops routing when an iframe on its path is replaced, or its accessible role or name changes (its snapshots then give it a new ref), where Playwright's frame number stays. |
 | neo-runtime/src/history.rs | `HistoryOptions::new` | `server/page.ts` `Page.reload` | Neo refuses `waitUntil: 'networkidle'`, as its goto does: it records no subresource requests to tell network idleness by. |
 | neo-runtime/src/history.rs | `MAX_ANSWERED` | `client/frame.ts` `Frame.waitForNavigation` | the navigations one predicate wait keeps for its finish to name, the most recent first; Playwright's waiter keeps every event its pending predicates hold. A predicate still pending this many navigations later cannot win. |
@@ -40,6 +41,8 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-sdk/src/browser-context.ts | `BrowserContext.#expose` | `client/browserContext.ts` `BrowserContext.exposeBinding` | Playwright sets the callback after its answer; Neo before, as the answer's events, a first page call among them, run before the caller goes on. |
 | neo-sdk/src/browser-context.ts | `BrowserContext.addInitScript` | `client/browserContext.ts` `BrowserContext.addInitScript` | Neo has no page-to-realm callback yet. |
 | neo-sdk/src/browser-context.ts | `BrowserContext.addInitScript` | `client/browserContext.ts` `BrowserContext.addInitScript` | Playwright sends no signal and ignores one; Neo refuses it. |
+| neo-sdk/src/browser-context.ts | `BrowserContext.newPage` | `server/chromium/crBrowser.ts` `CRBrowserContext.doCreateNewPage` | Playwright's new page takes the window's focus. Neo opens it in the background of the run page's window, by design: the user's active tab stays active until a script calls `bringToFront`. |
+| neo-sdk/src/browser-context.ts | `BrowserContext.pages` | `client/browserContext.ts` `BrowserContext.pages` | Playwright lists the pages its client was told of, in that order. Neo lists the context's tabs as the browser reports them, the run page first. |
 | neo-sdk/src/console-message.ts | (file) | `client/consoleMessage.ts` `ConsoleMessage.args` | Neo has no `JSHandle` for a console argument yet, so a message has no `args()`; a script that calls it gets a TypeError rather than a list of stand-ins. |
 | neo-sdk/src/events.ts | `ChannelOwner.removeAllListeners` | `client/channelOwner.ts` `ChannelOwner.removeListener` | Playwright's removeAllListeners leaves its server subscriptions on; Neo turns off each one left without listeners, so Rust stops producing what nobody hears. |
 | neo-sdk/src/events.ts | `EventEmitter._addListener` | `client/eventEmitter.ts` `EventEmitter._addListener` | Neo runs are never Playwright's own tests, so the warning always goes to the run log. |
@@ -52,7 +55,9 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-sdk/src/page.ts | `Page.#expose` | `client/page.ts` `Page.exposeBinding` | Playwright sets the callback after its answer; Neo before, as the answer's events, a first page call among them, run before the caller goes on. |
 | neo-sdk/src/page.ts | `Page.addInitScript` | `client/page.ts` `Page.addInitScript` | Neo has no page-to-realm callback yet. |
 | neo-sdk/src/page.ts | `Page.addInitScript` | `client/page.ts` `Page.addInitScript` | Playwright sends no signal and ignores one; Neo refuses it. |
+| neo-sdk/src/page.ts | `Page.bringToFront` | `server/chromium/crPage.ts` `CRPage.bringToFront` | Playwright sends `Page.bringToFront` alone. Neo also activates the tab in BrowserOS's tab strip when it is not the active one, which `Page.bringToFront` leaves as it was. |
 | neo-sdk/src/page.ts | `Page.consoleMessages` | `server/page.ts` `Page.addConsoleMessage` | Playwright's server keeps a page's messages and errors from the page's first moment. Neo keeps them from the run's first look (a listener, or a read like this one), starting with what the browser kept of the current document; the browser keeps nothing of a document the page left before then, so `'all'` does not reach back past it. |
+| neo-sdk/src/page.ts | `Page.opener` | `client/page.ts` `Page.opener` | Playwright's page keeps the opener its server named when it reported the page. Neo reads the tab's opener when asked, so the run page and a `pages()` page name theirs too. |
 | neo-sdk/src/page.ts | `Page` | `client/page.ts` `Page.constructor` | Playwright's page holds a `close` and a `crash` listener of its own from its first moment, which `eventNames()` and `listenerCount` report; Neo's holds none, so a page nobody listens to costs the run nothing. |
 | neo-sdk/src/timeout-settings.ts | `refuseSignalFor` | `client/timeoutSettings.ts` `TimeoutSettings.timeout` | Playwright hands the signal to the call, which aborts when it aborts; Neo has no way to abort a sent call yet, so it refuses any signal, an aborted one included, before sending anything; null and undefined are none. |
 | neo-sdk/src/url.ts | (file) | `isomorphic/urlMatch.ts` `urlMatches` | Playwright passes a URL predicate a WHATWG `URL`. The realm has no `URL`, so Neo passes this read-only one, built from Rust's WHATWG parser: every getter and `toString`/`toJSON` read as `URL`'s do, and `searchParams` reads as `URLSearchParams`; setters and `searchParams`' mutators throw, and `instanceof URL` cannot hold. |

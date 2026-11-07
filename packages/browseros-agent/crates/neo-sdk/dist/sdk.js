@@ -544,8 +544,8 @@ class TargetClosedError extends PlaywrightError {
     super(cause || "Target page, context or browser has been closed");
   }
 }
-function targetClosedError() {
-  return new TargetClosedError;
+function targetClosedError(reason) {
+  return new TargetClosedError(reason);
 }
 function isTargetClosedError(error) {
   return error instanceof TargetClosedError;
@@ -606,6 +606,12 @@ var AGENT_FRAME = /^ {4}at .* \(<input>:(\d+):(\d+)\)$/;
 class Connection {
   #nextId = 1;
   #lineOffset;
+  #closed = false;
+  #inFlight = new Set;
+  _closeReasonFor = () => {
+    return;
+  };
+  _closedFor = () => false;
   _objects = new Map;
   constructor(lineOffset) {
     this.#lineOffset = lineOffset;
@@ -650,12 +656,36 @@ class Connection {
       location: captureLocation(this.#lineOffset),
       timeout
     };
+    if (this.#closed)
+      throw closedError(apiName);
+    const closedBefore = this._closedFor(guid);
     const message = { id: this.#nextId++, guid, method, params, metadata };
-    const reply = JSON.parse(await call(JSON.stringify(message)));
-    if (reply.error)
-      throw rebuildError(apiName, reply.error.error, reply.log);
+    const text = await new Promise((resolve, reject) => {
+      const abandon = (reason) => reject(closedError(apiName, reason));
+      this.#inFlight.add(abandon);
+      call(JSON.stringify(message)).then(resolve, reject).finally(() => this.#inFlight.delete(abandon));
+    });
+    const reply = JSON.parse(text);
+    if (reply.error) {
+      const error = rebuildError(apiName, reply.error.error, reply.log);
+      const reason = isTargetClosedError(error) && !closedBefore ? this._closeReasonFor(guid) : undefined;
+      if (reason)
+        error.message = `${apiName}: ${reason}${formatCallLog(reply.log)}`;
+      throw error;
+    }
     return reply.result;
   }
+  _close(reason) {
+    this.#closed = true;
+    for (const abandon of this.#inFlight)
+      abandon(reason);
+    this.#inFlight.clear();
+  }
+}
+function closedError(apiName, reason) {
+  const error = targetClosedError(reason);
+  error.message = `${apiName}: ${error.message}`;
+  return error;
 }
 function captureLocation(lineOffset) {
   const stackTraceLimit = Error.stackTraceLimit;
@@ -4625,6 +4655,7 @@ var FRAME_WAIT_FOR_SELECTOR_KEYS = [
   "state",
   "omitReturnValue"
 ];
+var BROWSER_CONTEXT_CLOSE_KEYS = ["reason"];
 var PAGE_CLOSE_KEYS = ["reason"];
 var PAGE_RELOAD_KEYS = ["waitUntil"];
 var PAGE_GO_BACK_KEYS = ["waitUntil"];
@@ -5032,6 +5063,7 @@ class Frame {
   _connection;
   #lastUrl;
   #lastName;
+  #during;
   constructor(guid, page, connection, initializer = { url: "", name: "" }) {
     this._guid = guid;
     this._page = page;
@@ -5046,13 +5078,26 @@ class Frame {
   page() {
     return this._page;
   }
+  _during(state, emit) {
+    const outer = this.#during;
+    this.#during = state;
+    try {
+      emit();
+    } finally {
+      this.#during = outer;
+    }
+  }
   url() {
+    if (this.#during)
+      return this.#during.url;
     const url = get(this._guid, "url");
     if (url !== null)
       this.#lastUrl = url;
     return this.#lastUrl;
   }
   name() {
+    if (this.#during)
+      return this.#during.name;
     const name = get(this._guid, "name");
     if (name !== null)
       this.#lastName = name;
@@ -5066,6 +5111,8 @@ class Frame {
     return get(this._guid, "childFrames").map((record) => this._page._frameFrom(record));
   }
   isDetached() {
+    if (this.#during)
+      return this.#during.detached;
     return get(this._guid, "isDetached");
   }
   async goto(url, options = {}) {
@@ -5627,21 +5674,28 @@ function isPromiseLike(value) {
 // src/page.ts
 var PAGE_EVENTS = {
   receiver: "Page",
-  served: ["console", "pageerror", "dialog", "dialogclosed", "close", "crash"],
+  served: [
+    "console",
+    "pageerror",
+    "dialog",
+    "dialogclosed",
+    "close",
+    "crash",
+    "load",
+    "domcontentloaded",
+    "frameattached",
+    "framedetached",
+    "framenavigated",
+    "popup"
+  ],
   quiet: [],
   unserved: [
     "download",
     "filechooser",
-    "domcontentloaded",
     "request",
     "response",
     "requestfailed",
     "requestfinished",
-    "frameattached",
-    "framedetached",
-    "framenavigated",
-    "load",
-    "popup",
     "websocket",
     "worker"
   ]
@@ -5655,6 +5709,8 @@ class Page extends ChannelOwner {
   #mainFrame;
   #frames = new Map;
   _timeoutSettings;
+  #closedLocally = false;
+  #closeReason;
   _bindings = new Map;
   constructor(guid, mainFrameGuid, url, context, connection) {
     super(guid, context._pipe, PAGE_EVENTS);
@@ -5670,6 +5726,8 @@ class Page extends ChannelOwner {
     this.#frames.set(mainFrameGuid, this.#mainFrame);
   }
   url() {
+    if (this.#closedLocally)
+      return this.#lastUrl;
     const url = get(this.#guid, "url");
     if (url !== null)
       this.#lastUrl = url;
@@ -5679,6 +5737,7 @@ class Page extends ChannelOwner {
     await this.#connection.sendPage("page.bringToFront", this.#guid, "bringToFront", {}, 0);
   }
   async close(options = {}) {
+    this.#closeReason = options.reason;
     try {
       if (options.runBeforeUnload)
         await this.#connection.sendPage("page.close", this.#guid, "runBeforeUnload", {}, 0);
@@ -5693,13 +5752,30 @@ class Page extends ChannelOwner {
     }
   }
   isClosed() {
-    return get(this.#guid, "isClosed");
+    return this.#closedLocally || get(this.#guid, "isClosed");
+  }
+  _isClosedLocally() {
+    return this.#closedLocally;
+  }
+  _closeReason() {
+    return this.#closeReason ?? this.#context._closeReason();
   }
   _onEvent(method, params) {
     if (method === "close")
       this._onClose();
     else if (method === "crash")
       this.emit("crash", this);
+    else if (method === "load") {
+      this.emit("load", this);
+      this.#context.emit("pageload", this);
+    } else if (method === "domcontentloaded")
+      this.emit("domcontentloaded", this);
+    else if (method === "frameAttached")
+      this.#onFrameAttached(params.frame);
+    else if (method === "frameDetached")
+      this.#onFrameDetached(params.frame);
+    else if (method === "frameNavigated")
+      this.#onFrameNavigated(params);
     else if (method === "bindingCall")
       this._onBinding(params.binding);
   }
@@ -5717,7 +5793,40 @@ class Page extends ChannelOwner {
       return this.#mainFrame;
     return this.frames().find((frame) => frame._guid === guid) ?? this.#mainFrame;
   }
+  #onFrameAttached(record) {
+    this.#frameEvent(record, "frameattached", false);
+  }
+  #onFrameDetached(record) {
+    this.#frameEvent(record, "framedetached", true);
+  }
+  #onFrameNavigated({ frame, url, name }) {
+    this.#frameEvent({
+      guid: frame.guid,
+      initializer: {
+        ...frame.initializer,
+        url: url ?? frame.initializer.url,
+        name: name ?? frame.initializer.name
+      }
+    }, "framenavigated", false);
+  }
+  #frameEvent(record, event, detached) {
+    const frame = this._frameFrom(record);
+    const { url, name } = record.initializer;
+    frame._during({ url, name, detached }, () => {
+      this.emit(event, frame);
+      this.#context.emit(event, frame);
+    });
+  }
+  async opener() {
+    if (this.#context.isClosed())
+      return null;
+    const record = get(this.#guid, "opener");
+    return record ? this.#context._pageFrom(record) : null;
+  }
   _onClose() {
+    if (this.#closedLocally)
+      return;
+    this.#closedLocally = true;
     this.emit("close", this);
     this.#context.emit("pageclose", this);
   }
@@ -5726,9 +5835,8 @@ class Page extends ChannelOwner {
   }
   async _waitForEvent(event, optionsOrPredicate, logLine) {
     const options = typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate;
-    refuseSignal(options);
-    this._refuseUnserved(event);
     const timeout = this._timeoutSettings.timeout(options, null);
+    this._refuseUnserved(event);
     const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : optionsOrPredicate.predicate;
     const waiter = Waiter.createForEvent();
     if (logLine)
@@ -5737,7 +5845,7 @@ class Page extends ChannelOwner {
     if (event !== "crash")
       waiter.rejectOnEvent(this, "crash", new Error("Page crashed"));
     if (event !== "close")
-      waiter.rejectOnEvent(this, "close", () => targetClosedError());
+      waiter.rejectOnEvent(this, "close", () => targetClosedError(this._closeReason()));
     const result = await waiter.waitForEvent(this, event, predicate);
     waiter.dispose();
     return result;
@@ -6028,16 +6136,22 @@ class WebError {
 // src/browser-context.ts
 var CONTEXT_EVENTS = {
   receiver: "BrowserContext",
-  served: ["console", "weberror", "dialog", "dialogclosed"],
-  quiet: ["close", "backgroundpage"],
-  unserved: [
-    "download",
-    "frameattached",
-    "framedetached",
-    "framenavigated",
+  served: [
+    "console",
+    "weberror",
+    "dialog",
+    "dialogclosed",
     "page",
     "pageclose",
     "pageload",
+    "frameattached",
+    "framedetached",
+    "framenavigated"
+  ],
+  local: ["close"],
+  quiet: ["backgroundpage"],
+  unserved: [
+    "download",
     "serviceworker",
     "request",
     "response",
@@ -6054,14 +6168,50 @@ class BrowserContext extends ChannelOwner {
   _timeoutSettings = new TimeoutSettings;
   _bindings = new Map;
   _pipe;
+  #closingStatus = "none";
+  #closeReason;
   constructor(guid, connection, pipe) {
     super(guid, pipe, CONTEXT_EVENTS);
     this.#guid = guid;
     this.#connection = connection;
     this._pipe = pipe;
+    connection._closeReasonFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._closeReason() ?? this.#closeReason;
+    connection._closedFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._isClosedLocally() ?? false;
+  }
+  isClosed() {
+    return this.#closingStatus !== "none";
+  }
+  _closeReason() {
+    return this.#closeReason;
+  }
+  async close(options = {}) {
+    if (this.isClosed())
+      return;
+    this.#closeReason = options.reason;
+    this.#closingStatus = "closing";
+    try {
+      await this.#connection.sendContext("browserContext.close", this.#guid, "close", pickParams(BROWSER_CONTEXT_CLOSE_KEYS, {
+        reason: options.reason
+      }), 0);
+    } catch (error) {
+      this.#closingStatus = "none";
+      this.#closeReason = undefined;
+      throw error;
+    }
+    this.#connection._close(options.reason);
+    const pages = this.pages();
+    for (const page of this.#pages.values())
+      if (!pages.includes(page) && !page._isClosedLocally())
+        pages.push(page);
+    for (const page of pages)
+      page._onClose();
+    this.#closingStatus = "closed";
+    this.emit("close", this);
   }
   _onEvent(method, params) {
-    if (method === "console")
+    if (method === "page")
+      this.#onPage(params.page);
+    else if (method === "console")
       this.#onConsole(params);
     else if (method === "pageError")
       this.#onPageError(params);
@@ -6082,6 +6232,13 @@ class BrowserContext extends ChannelOwner {
     if (!func)
       return;
     await call2.call(func);
+  }
+  #onPage(created) {
+    const page = this._pageFrom(created);
+    this.emit("page", page);
+    const opener = created.initializer.opener ? this.#pages.get(created.initializer.opener.guid) : undefined;
+    if (opener)
+      opener.emit("popup", page);
   }
   #onConsole(event) {
     const page = event.page ? this.#pageFor(event.page.guid) : null;
@@ -6124,21 +6281,22 @@ class BrowserContext extends ChannelOwner {
   async waitForEvent(event, optionsOrPredicate = {}) {
     return await wrapApiCall("browserContext.waitForEvent", async () => {
       const options = typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate;
-      refuseSignal(options);
-      this._refuseUnserved(event);
       const timeout = this._timeoutSettings.timeout(options, null);
+      this._refuseUnserved(event);
       const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : optionsOrPredicate.predicate;
       const waiter = Waiter.createForEvent();
       waiter.rejectOnTimeout(timeout, `Timeout ${timeout}ms exceeded while waiting for event "${event}"`);
       if (event !== "close")
-        waiter.rejectOnEvent(this, "close", () => targetClosedError());
+        waiter.rejectOnEvent(this, "close", () => targetClosedError(this.#closeReason));
       const result = await waiter.waitForEvent(this, event, predicate);
       waiter.dispose();
       return result;
     });
   }
   pages() {
-    return get(this.#guid, "pages").map((created) => this.#pages.get(created.guid) ?? this.#add(created));
+    if (this.#closingStatus === "closed")
+      return [];
+    return get(this.#guid, "pages").map((created) => this.#pages.get(created.guid) ?? this.#add(created)).filter((page) => !page._isClosedLocally());
   }
   async exposeFunction(name, callback) {
     return await this.#expose("browserContext.exposeFunction", name, (_source, ...args) => callback(...args));
@@ -6190,6 +6348,9 @@ class BrowserContext extends ChannelOwner {
     this.#pages.set(guid, page);
     return page;
   }
+  _pageFrom(created) {
+    return this.#pages.get(created.guid) ?? this.#add(created);
+  }
   #pageFor(guid) {
     return this.#pages.get(guid) ?? this.#add(get(guid, "initializer"));
   }
@@ -6198,6 +6359,10 @@ class BrowserContext extends ChannelOwner {
     this.#pages.set(created.guid, page);
     return page;
   }
+}
+function pageGuidOf(guid) {
+  const target = guid.slice(guid.indexOf("@") + 1).split(/[/:]/)[0];
+  return `page@${target}`;
 }
 
 // src/index.ts

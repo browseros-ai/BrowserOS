@@ -79,7 +79,9 @@ function endRun(
   const bindings = (controller as unknown as Internals)._bindings
   if (typeof bindings?.get !== 'function')
     throw new Error('neo-runtime-injected: BindingsController has no _bindings')
-  for (const name of names) {
+  // Every name the controller holds, the run's (`names`) and any a step of an expose cut short
+  // by the run's end added after.
+  for (const name of new Set([...names, ...bindings.keys()])) {
     for (const waiting of bindings.get(name)?.callbacks.values() ?? [])
       waiting.reject(new Error(message))
     controller.removeBinding(name)

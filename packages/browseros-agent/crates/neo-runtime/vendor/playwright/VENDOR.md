@@ -33,6 +33,7 @@ and NOTICE.
 | `packages/playwright-core/src/client/webError.ts` | `e322ebd2c4e1a7a8b036840ac50be2ed191aac6f8668911d582fd9f613fa780a` |
 | `packages/playwright-core/src/server/browserContext.ts` | `3be62c84d9b26756a31d3e9c69c62b87950fd42db238beb16f6bdb04f9c95cde` |
 | `packages/playwright-core/src/server/chromium/chromiumSwitches.ts` | `35dc159f3f27deac0de803ef55efa31713b62aa762908a26a2663e7f6fbb4bc3` |
+| `packages/playwright-core/src/server/chromium/crBrowser.ts` | `b8553078358be5326ca4905983059947a0f838111f0fde73940bf0e7792c43c9` |
 | `packages/playwright-core/src/server/chromium/crExecutionContext.ts` | `4ae617fd41123eac3946187cd55474f89049cb082ea15c1bae240004a325f996` |
 | `packages/playwright-core/src/server/chromium/crInput.ts` | `20b43d336519f9bc8da1504fb503e711466ca8471aa68af67e867d0535840221` |
 | `packages/playwright-core/src/server/chromium/crNetworkManager.ts` | `dbc7567f8231c2af493a1b88bdc36dc0232cd5e65c5710be7a933578d416413a` |

@@ -66,7 +66,7 @@ use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::dialogs;
 use crate::evaluate::{self, EvalCall};
-use crate::events::EventHub;
+use crate::events::{ALL_PAGES, EventHub};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
 use crate::frames::FrameScope;
@@ -104,10 +104,11 @@ use crate::waits::{
 /// Unkept creations close their tabs when their late acknowledgements arrive.
 const RECORDS_WAIT: Duration = Duration::from_secs(1);
 
-/// Neo: how long the end of a run's bindings may take in its pages (`bindings.rs`), apart from
-/// [`RECORDS_WAIT`]: a frame it does not reach keeps a binding whose calls never settle. Free for
-/// a run that exposed none.
-const BINDINGS_END_WAIT: Duration = Duration::from_secs(3);
+/// Neo: how long run end may take removing the run's init scripts and ending its bindings in
+/// its pages (`init_scripts.rs`, `bindings.rs`), apart from [`RECORDS_WAIT`]: a session it does
+/// not reach keeps a script the next run's documents would run, or a binding whose calls never
+/// settle. Free for a run that used neither.
+const PAGE_END_WAIT: Duration = Duration::from_secs(3);
 
 /// The most browser calls one run may have unfinished at once. Each holds its params, its call
 /// log and a task in Rust, outside the realm's memory limit, and a script can start calls without
@@ -415,7 +416,11 @@ impl Dispatcher {
         inner.trace.push(Arc::clone(&entry));
         let admitted = route.and_then(|route| {
             let ending = ending_cursor(&route).and_then(|id| inner.cursors.begin_ending(id));
-            let share = if ending.is_some() {
+            // A navigation's release, and the context's close, end calls in flight: the cap
+            // never refuses them, or a full run could not let go.
+            let releases = ending.is_some()
+                || matches!(route, ObjectCall::Context(BrowserContextCall::Close(_)));
+            let share = if releases {
                 None
             } else {
                 Some(inner.in_flight.admit(message.len())?)
@@ -446,6 +451,11 @@ impl Dispatcher {
             inner.run.clone(),
             closed,
         );
+        let progress = if matches!(route, ObjectCall::Context(BrowserContextCall::Close(_))) {
+            progress.closing_the_context()
+        } else {
+            progress
+        };
         let (reply, receiver) = oneshot::channel();
         let served = serve_call(
             inner.tabs.clone(),
@@ -474,6 +484,14 @@ impl Dispatcher {
         let deadline = Instant::now() + RECORDS_WAIT;
         let run = &self.0.run;
         run.end(reason);
+        // The run's init scripts go first, then its bindings, on a budget of their own: neither
+        // waits on a call still running, so no document loaded after the run returns runs one
+        // of its scripts, and no page keeps one of its bindings.
+        let _removed = time::timeout(PAGE_END_WAIT, async {
+            run.init_scripts.close().await;
+            run.bindings.close(&self.0.tabs).await;
+        })
+        .await;
         // The realm is gone with its listeners: from now on the watchers answer dialogs
         // themselves, and a dialog a listener left open gets the default answer before the
         // sessions detach (`Dialogs::left_open`).
@@ -482,10 +500,6 @@ impl Dispatcher {
         let _created = time::timeout_at(deadline, self.0.tabs.finish_creations()).await;
         run.tasks.close();
         let _waited = time::timeout_at(deadline, run.tasks.wait()).await;
-        // The scripts first, so no new document gets a binding; then each frame ends the run's
-        // bindings, on a budget of its own, as a binding left in a page would hang its calls.
-        let _removed = time::timeout_at(deadline, run.init_scripts.close()).await;
-        let _ended = time::timeout(BINDINGS_END_WAIT, run.bindings.close(&self.0.tabs)).await;
         // Releases each session's handle group on its page's tracked task, before the sessions
         // detach; a run whose future is dropped releases them as `RunScope` drops.
         run.handles.close();
@@ -512,9 +526,15 @@ async fn init_call(
                 .await??
         }
         InitRoute::Context(source) => {
-            progress
+            let guid = progress
                 .race(scripts.add(tabs.cdp(), None, &source))
-                .await??
+                .await??;
+            // Every page the run has a session on shows it from its next document, a reload
+            // included, not only those a later call touches.
+            for (_, session) in tabs.attached() {
+                scripts.ensure(tabs.cdp(), &session).await;
+            }
+            guid
         }
         InitRoute::Dispose(guid) if bindings::owns(&guid) => {
             progress
@@ -866,13 +886,18 @@ async fn serve_call(
     reply: CallReply,
 ) {
     // A page's call waits for what the run's subscriptions switched on there (console messages,
-    // the dialog watcher), so the call cannot cause an event before its producer listens. A
-    // dialog's answer never waits: an open dialog can hold that very enable, and only the answer
-    // frees the page.
-    if let Some((page, _)) = &target
-        && !matches!(route, ObjectCall::Context(_) | ObjectCall::Dialog(..))
-        && reply.events.enabling(page.id.as_str())
-        && let Err(error) = progress.race(reply.events.ready(page.id.as_str())).await
+    // the dialog watcher), so the call cannot cause an event before its producer listens; a
+    // context call (`newPage`) waits for target discovery's baseline. A dialog's answer never
+    // waits: an open dialog can hold that very enable, and only the answer frees the page.
+    let gate = match (&route, &target) {
+        (ObjectCall::Dialog(..), _) => None,
+        (ObjectCall::Context(_), _) => Some(ALL_PAGES),
+        (_, Some((page, _))) => Some(page.id.as_str()),
+        (_, None) => None,
+    };
+    if let Some(gate) = gate
+        && reply.events.enabling(gate)
+        && let Err(error) = progress.race(reply.events.ready(gate)).await
     {
         finish_reply(Err(error), reply).await;
         return;
@@ -882,6 +907,13 @@ async fn serve_call(
         (ObjectCall::Init(route), target) => init_call(&tabs, target, route, &progress).await,
         (ObjectCall::Binding(route), target) => binding_call(&tabs, target, route, &progress).await,
         (ObjectCall::Page(call), Some((page, _))) => {
+            // A page call that navigates (`reload`, `goBack`, …) shows the run's scripts first,
+            // as a Frame call does.
+            if progress.init_scripts().has_scripts()
+                && let Ok(Ok(session)) = progress.race(tabs.session(&page)).await
+            {
+                progress.init_scripts().ensure(tabs.cdp(), &session).await;
+            }
             tab_calls::page(&tabs, &page, call, &progress).await
         }
         (ObjectCall::Frame(route), Some((page, scope))) => {
@@ -1379,6 +1411,7 @@ mod tests {
 
     use crate::click::tests::FakeTab;
     use crate::deadline::Deadline;
+    use crate::discovery::Discovery;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::forms::SelectOption;
     use crate::page::TabInputs;
@@ -1398,6 +1431,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            Discovery::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1473,6 +1507,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            Discovery::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
