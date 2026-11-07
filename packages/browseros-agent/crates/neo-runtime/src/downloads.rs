@@ -619,6 +619,7 @@ mod tests {
     use crate::page::TabInputs;
     use crate::progress::{CallEntry, CallStart, RunScope};
     use crate::run::PageId;
+    use crate::session_state::Permissions;
 
     fn progress(guid: &str, state: &str, file_path: Option<&str>) -> DownloadProgress {
         DownloadProgress {
@@ -856,6 +857,7 @@ mod tests {
             Handle::current(),
             TabInputs::default(),
             Switches::default(),
+            Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
         )

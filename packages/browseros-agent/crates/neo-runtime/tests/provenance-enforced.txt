@@ -35,6 +35,7 @@ neo-runtime/src/main_world.rs
 neo-runtime/src/network_events.rs
 neo-runtime/src/network_idle.rs
 neo-runtime/src/page_events.rs
+neo-runtime/src/session_state.rs
 neo-runtime/src/switch.rs
 neo-sdk/src/console-message.ts
 neo-sdk/src/dialog.ts
@@ -43,6 +44,7 @@ neo-sdk/src/download.ts
 neo-sdk/src/element-handle.ts
 neo-sdk/src/events.ts
 neo-sdk/src/file-chooser.ts
+neo-sdk/src/headers.ts
 neo-sdk/src/input.ts
 neo-sdk/src/js-handle.ts
 neo-sdk/src/plain-argument.ts

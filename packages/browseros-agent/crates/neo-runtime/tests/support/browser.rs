@@ -57,7 +57,8 @@ pub fn is_headed() -> bool {
 }
 
 /// What the fixture server serves. A path in `pages` gets its HTML; any other path gets a small
-/// page titled with the path. A path starting with `/slow` answers after `slow_response`, so a
+/// page titled with the path; `/echo-headers` answers with the request's head. A path starting
+/// with `/slow` answers after `slow_response`, so a
 /// navigation to it stays in flight before it commits.
 #[derive(Clone, Default)]
 pub struct Fixture {
@@ -277,14 +278,19 @@ async fn serve_fixture(fixture: Fixture) -> String {
                     if path.starts_with("/slow") {
                         time::sleep(fixture.slow_response).await;
                     }
-                    let body = fixture
-                        .pages
-                        .iter()
-                        .find(|(page, _)| *page == path)
-                        .map_or_else(
-                            || format!("<title>{path}</title><h1>{path}</h1>"),
-                            |(_, html)| html.clone(),
-                        );
+                    // `/echo-headers` answers with the request's own head, for the headers it sent.
+                    let body = if path == "/echo-headers" {
+                        head.to_string()
+                    } else {
+                        fixture
+                            .pages
+                            .iter()
+                            .find(|(page, _)| *page == path)
+                            .map_or_else(
+                                || format!("<title>{path}</title><h1>{path}</h1>"),
+                                |(_, html)| html.clone(),
+                            )
+                    };
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                         body.len()
