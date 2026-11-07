@@ -679,3 +679,70 @@ async fn top_level_fill_and_click_keep_their_existing_path() {
         Some(json!({"value":"main frame","text":"clicked"}))
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_composite_locators_with_the_same_oopif_prefix_click_only_that_frame() {
+    let Some(tab) = open().await else { return };
+    let outcome = run(
+        &tab,
+        r"
+        const f = page.frameLocator('#cross');
+        await f.getByText('Go', {exact:true}).and(f.getByRole('button')).click({timeout:3000});
+        return await f.locator('#result').textContent();
+    ",
+    )
+    .await;
+    // Prove the OOPIF only after Neo has acted; discovery must also work cold.
+    let target = cross_target(&tab).await;
+    let driver = child_driver(&tab, &target).await;
+    let after_and = evaluate_child(
+        &tab,
+        &driver,
+        "document.querySelector('#result').textContent",
+    )
+    .await;
+    evaluate_child(
+        &tab,
+        &driver,
+        "document.querySelector('#result').textContent='idle'",
+    )
+    .await;
+    let with_has = run(&tab, r"
+        const f = page.frameLocator('#cross');
+        await f.locator('body').filter({has:f.getByRole('button', {name:'Go'})}).getByText('Go', {exact:true}).click({timeout:3000});
+        return await f.locator('#result').textContent();
+    ").await;
+    let after_has = evaluate_child(
+        &tab,
+        &driver,
+        "document.querySelector('#result').textContent",
+    )
+    .await;
+    let decoys = tab.evaluate("[document.querySelector('#result').textContent,document.querySelector('#same').contentDocument.querySelector('#result').textContent,document.querySelector('#sibling').contentDocument.querySelector('#result').textContent]").await;
+    tab.close().await;
+    assert_ok(&outcome);
+    assert_eq!(
+        outcome.value,
+        Some(json!("clicked")),
+        "and reads its own frame"
+    );
+    assert_ok(&with_has);
+    assert_eq!(
+        with_has.value,
+        Some(json!("clicked")),
+        "has reads its own frame"
+    );
+    assert_eq!(
+        after_and, "clicked",
+        "the independent driver sees the and click"
+    );
+    assert_eq!(
+        after_has, "clicked",
+        "the independent driver sees the has click after resetting the output"
+    );
+    assert_eq!(
+        decoys,
+        json!(["idle", "idle", "idle"]),
+        "parent and sibling buttons stay untouched"
+    );
+}
