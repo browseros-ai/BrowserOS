@@ -8,3 +8,4 @@
 # the list grows until it holds every neo source.
 neo-runtime/src/devices.rs
 neo-runtime/src/input_devices.rs
+neo-sdk/src/input.ts

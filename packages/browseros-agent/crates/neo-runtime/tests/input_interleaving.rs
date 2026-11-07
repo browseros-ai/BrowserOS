@@ -405,3 +405,364 @@ return [first, next === undefined];"
         "{next:?}"
     );
 }
+
+async fn review_wait_for(tab: &Tab, condition: &str) {
+    let started = Instant::now();
+    while tab.evaluate(condition).await != json!(true) {
+        assert!(started.elapsed() < Duration::from_secs(30), "{condition}");
+        time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn review_record(tab: &Tab) {
+    tab.evaluate(
+        r"(() => {
+      window.__review = [];
+      for (const type of ['keydown', 'keyup', 'mousedown', 'mouseup', 'mousemove'])
+        addEventListener(type, e => __review.push({type, key: e.key, shift: e.shiftKey,
+          buttons: e.buttons, target: e.target.id}), true);
+      return true;
+    })()",
+    )
+    .await;
+}
+
+/// One live run keeps Shift and the shared pointer state alive while other runs finish.
+/// A worker's mouse button is released at its end; temporary modifiers restore the first
+/// run's ownership; a later move starts at the previous run's position, crossing the middle
+/// target. No exact mouse coordinates or elapsed timings are compared.
+#[tokio::test(flavor = "multi_thread")]
+async fn review_run_end_keeps_other_owners_and_cross_run_pointer_state() {
+    let Some(tab) = open().await else { return };
+    let runtime = runtime(&tab).await;
+    review_record(&tab).await;
+    tab.evaluate(r"(() => {
+      for (const [id, left] of [['start',80],['middle',180],['end',280]]) {
+        const e = document.createElement('div'); e.id = id;
+        e.style = `position:absolute;left:${left}px;top:160px;width:40px;height:40px;background:red`;
+        document.body.append(e);
+      }
+      return true;
+    })()").await;
+    let scene = tab.evaluate("({size:[innerWidth,innerHeight],targets:[100,200,300].map(x => document.elementFromPoint(x,180)?.id)})").await;
+    assert_eq!(
+        scene["targets"],
+        json!(["start", "middle", "end"]),
+        "{scene}"
+    );
+    let cancel = CancellationToken::new();
+    let timeout = Duration::from_secs(60);
+    let exercise = async {
+        review_wait_for(
+            &tab,
+            "__review.some(e => e.type === 'keydown' && e.key === 'Shift')",
+        )
+        .await;
+        let first = runtime
+            .run(request(
+                &tab,
+                "await page.mouse.move(100,180); await page.mouse.down()",
+                timeout,
+                CancellationToken::new(),
+            ))
+            .await;
+        assert_ok(&first);
+        assert_eq!(
+            tab.evaluate("__review.filter(e => e.key === 'Shift').map(e => e.type)")
+                .await,
+            json!(["keydown"]),
+            "another run's end must not release Shift"
+        );
+        assert_eq!(
+            tab.evaluate("__review.filter(e => e.type === 'mouseup').map(e => e.buttons)")
+                .await,
+            json!([0]),
+            "the finishing run released its mouse button"
+        );
+        tab.evaluate("window.__review = []").await;
+        let second = runtime.run(request(&tab,
+            "await page.mouse.move(300,180,{steps:2}); await page.locator('#c').click({modifiers:[]}); await page.locator('#p').press('KeyA')",
+            timeout, CancellationToken::new())).await;
+        assert_ok(&second);
+        assert_eq!(
+            tab.evaluate(
+                "__review.filter(e => e.type === 'mousemove').slice(0,2).map(e => e.target)"
+            )
+            .await,
+            json!(["middle", "end"]),
+            "the next run starts at the retained pointer"
+        );
+        assert_eq!(
+            tab.evaluate("__review.filter(e => e.key === 'Shift').map(e => e.type)")
+                .await,
+            json!(["keyup", "keydown"]),
+            "restored Shift still belongs to the live run"
+        );
+        assert_eq!(
+            tab.evaluate("document.querySelector('#p').value").await,
+            json!("A")
+        );
+        cancel.cancel();
+    };
+    let (keeper, ()) = tokio::join!(
+        runtime.run(request(
+            &tab,
+            "await page.keyboard.down('Shift'); await new Promise(() => {})",
+            timeout,
+            cancel.clone()
+        )),
+        exercise,
+    );
+    assert_eq!(keeper.status, RunStatus::Cancelled, "{keeper:#?}");
+    let next = runtime
+        .run(request(
+            &tab,
+            "await page.locator('#p').press('KeyA'); await page.locator('#c').click()",
+            timeout,
+            CancellationToken::new(),
+        ))
+        .await;
+    let value = tab.evaluate("document.querySelector('#p').value").await;
+    let shift = tab
+        .evaluate("__review.filter(e => e.type === 'mousedown').at(-1).shift")
+        .await;
+    tab.close().await;
+    assert_ok(&next);
+    assert_eq!(
+        value,
+        json!("Aa"),
+        "run end released the owning run's Shift"
+    );
+    assert_eq!(shift, json!(false), "the later click is unmodified");
+}
+
+/// Cut a multi-event device call only after its first input reaches the page. Its owed
+/// release still lands, the partial call is Unknown, and the next run sees no held input.
+#[tokio::test(flavor = "multi_thread")]
+async fn review_partial_device_calls_release_and_remain_unknown() {
+    for (method, code, started) in [
+        (
+            "keyboardType",
+            "await page.keyboard.type('abc',{delay:30000})",
+            "__review.some(e => e.type === 'keydown' && e.key === 'a')",
+        ),
+        (
+            "mouseClick",
+            "await page.mouse.click(30,20,{delay:30000,clickCount:2})",
+            "__review.some(e => e.type === 'mousedown')",
+        ),
+    ] {
+        let Some(tab) = open().await else { return };
+        let runtime = runtime(&tab).await;
+        review_record(&tab).await;
+        tab.evaluate("document.querySelector('#p').focus(); true")
+            .await;
+        let cancel = CancellationToken::new();
+        let stopper = async {
+            review_wait_for(&tab, started).await;
+            cancel.cancel();
+        };
+        let (cut, ()) = tokio::join!(
+            runtime.run(request(&tab, code, Duration::from_secs(60), cancel.clone())),
+            stopper
+        );
+        assert_eq!(cut.status, RunStatus::Cancelled, "{cut:#?}");
+        let call = cut
+            .calls
+            .iter()
+            .find(|call| call.method == method)
+            .expect("device call");
+        assert_eq!(call.delivery, Some(Delivery::Unknown), "{call:#?}");
+        let released = if method == "keyboardType" {
+            "__review.filter(e => e.key === 'a').map(e => e.type)"
+        } else {
+            "__review.filter(e => e.type === 'mousedown' || e.type === 'mouseup').map(e => e.type)"
+        };
+        assert_eq!(
+            tab.evaluate(released).await,
+            if method == "keyboardType" {
+                json!(["keydown", "keyup"])
+            } else {
+                json!(["mousedown", "mouseup"])
+            }
+        );
+        let next = runtime
+            .run(request(
+                &tab,
+                "await page.locator('#p').press('KeyA'); await page.locator('#c').click()",
+                Duration::from_secs(30),
+                CancellationToken::new(),
+            ))
+            .await;
+        let normal = tab
+            .evaluate("__review.filter(e => e.type === 'mousedown').at(-1)")
+            .await;
+        tab.close().await;
+        assert_ok(&next);
+        assert_eq!(normal["buttons"], json!(1));
+        assert_eq!(normal["shift"], json!(false));
+    }
+}
+
+/// A cancelled pointer action restores the previous modifiers before run-end cleanup.
+#[tokio::test(flavor = "multi_thread")]
+async fn review_cancelled_pointer_restores_modifiers_before_run_end() {
+    let Some(tab) = open().await else { return };
+    let runtime = runtime(&tab).await;
+    review_record(&tab).await;
+    let cancel = CancellationToken::new();
+    let stopper = async {
+        review_wait_for(&tab, "__review.some(e => e.type === 'mousedown')").await;
+        cancel.cancel();
+    };
+    let (cut, ()) = tokio::join!(runtime.run(request(&tab,
+        "await page.keyboard.down('Shift'); await page.locator('#c').click({modifiers:[],delay:30000,clickCount:2})",
+        Duration::from_secs(60), cancel.clone())), stopper);
+    let keys = tab
+        .evaluate("__review.filter(e => e.key === 'Shift').map(e => e.type)")
+        .await;
+    let clicks = tab
+        .evaluate("__review.filter(e => e.type === 'mousedown').map(e => e.shift)")
+        .await;
+    tab.close().await;
+    assert_eq!(cut.status, RunStatus::Cancelled, "{cut:#?}");
+    assert_eq!(keys, json!(["keydown", "keyup", "keydown", "keyup"]));
+    assert_eq!(clicks, json!([false]));
+    let click = cut
+        .calls
+        .iter()
+        .find(|call| call.method == "click")
+        .expect("click");
+    assert_eq!(click.delivery, Some(Delivery::Unknown), "{click:#?}");
+}
+
+/// Known review issue: stop after Alt lands, before the planned Shift keyDown. The Alt keyUp
+/// must not claim Shift is held merely because the original plan included it.
+#[tokio::test(flavor = "multi_thread")]
+async fn review_stop_during_modifier_setup_uses_the_actual_mask() {
+    let Some(tab) = open().await else { return };
+    let runtime = runtime(&tab).await;
+    review_record(&tab).await;
+    tab.cdp
+        .send("Runtime.enable", json!({}), Some(&tab.driver))
+        .await
+        .expect("enable");
+    tab.cdp
+        .send(
+            "Runtime.addBinding",
+            json!({"name":"reviewAltLanded"}),
+            Some(&tab.driver),
+        )
+        .await
+        .expect("binding");
+    tab.evaluate(
+        r"(() => {
+      addEventListener('keydown', e => {
+        if (e.key !== 'Alt') return;
+        reviewAltLanded('down');
+        const end = performance.now() + 1000;
+        while (performance.now() < end) {}
+      }, {once:true});
+      return true;
+    })()",
+    )
+    .await;
+    let mut binding = tab.cdp.on_event("Runtime.bindingCalled");
+    let cancel = CancellationToken::new();
+    let stopper = async {
+        time::timeout(Duration::from_secs(30), async {
+            loop {
+                let event = binding.recv().await.expect("binding event");
+                if event.params["name"] == "reviewAltLanded" {
+                    cancel.cancel();
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("Alt reached the page");
+    };
+    let (cut, ()) = tokio::join!(
+        runtime.run(request(
+            &tab,
+            "await page.locator('#c').click({modifiers:['Alt','Shift']})",
+            Duration::from_secs(60),
+            cancel.clone()
+        )),
+        stopper
+    );
+    let keys = tab
+        .evaluate("__review.filter(e => e.type === 'keydown' || e.type === 'keyup')")
+        .await;
+    tab.close().await;
+    assert_eq!(cut.status, RunStatus::Cancelled, "{cut:#?}");
+    let keys = keys.as_array().expect("events");
+    assert!(
+        !keys
+            .iter()
+            .any(|event| event["key"] == "Shift" && event["type"] == "keydown"),
+        "cancellation must occur before Shift is pressed: {keys:?}"
+    );
+    assert!(
+        keys.iter().all(|event| event["shift"] == false),
+        "no event may claim Shift when it was never pressed: {keys:?}"
+    );
+}
+
+/// An explicit down by a second live run also needs the modifier to stay held when the
+/// first run finishes. Its subsequent KeyA must still carry Shift.
+#[tokio::test(flavor = "multi_thread")]
+async fn review_finishing_first_holder_preserves_the_second_holder() {
+    let Some(tab) = open().await else { return };
+    let runtime = runtime(&tab).await;
+    review_record(&tab).await;
+    let (finished, first_finished) = tokio::sync::oneshot::channel();
+    let timeout = Duration::from_secs(60);
+    let first = async {
+        let outcome = runtime.run(request(&tab,
+            "await page.keyboard.down('Shift'); await page.locator('#finishA').waitFor({state:'attached'})",
+            timeout, CancellationToken::new())).await;
+        finished.send(()).expect("first finished");
+        outcome
+    };
+    let second = async {
+        review_wait_for(
+            &tab,
+            "__review.filter(e => e.type === 'keydown' && e.key === 'Shift').length === 1",
+        )
+        .await;
+        let advance = async {
+            review_wait_for(
+                &tab,
+                "__review.filter(e => e.type === 'keydown' && e.key === 'Shift').length === 2",
+            )
+            .await;
+            tab.evaluate(
+                "document.body.insertAdjacentHTML('beforeend','<span id=finishA></span>'); true",
+            )
+            .await;
+            first_finished.await.expect("first run drained");
+            tab.evaluate(
+                "document.body.insertAdjacentHTML('beforeend','<span id=continueB></span>'); true",
+            )
+            .await;
+        };
+        let (outcome, ()) = tokio::join!(runtime.run(request(&tab,
+            "await page.keyboard.down('Shift'); await page.locator('#continueB').waitFor({state:'attached'}); await page.locator('#p').press('KeyA')",
+            timeout, CancellationToken::new())), advance);
+        outcome
+    };
+    let (first, second) = tokio::join!(first, second);
+    let value = tab.evaluate("document.querySelector('#p').value").await;
+    let events = tab
+        .evaluate("__review.filter(e => e.type === 'keydown' || e.type === 'keyup')")
+        .await;
+    tab.close().await;
+    assert_ok(&first);
+    assert_ok(&second);
+    assert_eq!(
+        value,
+        json!("A"),
+        "the second run is still holding Shift: {events}"
+    );
+}

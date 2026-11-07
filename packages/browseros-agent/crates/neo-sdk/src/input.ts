@@ -58,6 +58,7 @@ export type MouseButtonOptions = PageMouseDownParams
 /** `mouse.click`'s options, as Playwright's `PageMouseClickOptions`. */
 export type MouseClickOptions = Omit<PageMouseClickParams, 'x' | 'y'>
 
+/** Playwright: `client/input.ts` `Keyboard` */
 export class Keyboard {
   readonly #page: Page
 
@@ -114,6 +115,7 @@ export class Keyboard {
   }
 }
 
+/** Playwright: `client/input.ts` `Mouse` */
 export class Mouse {
   readonly #page: Page
 
@@ -200,6 +202,7 @@ export class Mouse {
   }
 }
 
+/** Playwright: `client/input.ts` `Touchscreen` */
 export class Touchscreen {
   readonly #page: Page
 

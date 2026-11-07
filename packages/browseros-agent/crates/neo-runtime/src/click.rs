@@ -65,7 +65,7 @@ use neo_runtime_spec::serve::{
     FrameTapParamsModifiersItem, FrameTapParamsScroll, Point as WirePoint,
 };
 
-use crate::input_devices::{self, Devices, Plan};
+use crate::input_devices::{self, Devices, EffectSink, Plan};
 use crate::keyboard::{self, KeyboardModifier, KeyboardTab, Platform};
 use crate::progress::{
     AckedInput, CallError, DeliveryCell, InputTicket, PlaywrightError, Progress,
@@ -1058,27 +1058,38 @@ async fn act<T: Tab>(
     let watched = (wait_after == WaitAfter::Enabled).then(|| tab.watch_navigations());
     // The last chance to stop before an irreversible step.
     progress.check()?;
-    let Ok(ticket) = delivery.begin() else {
-        return Err(PlaywrightError::error(format!(
-            "neo-runtime: a {name} tried to write its input again"
-        ))
-        .into());
-    };
-    progress.log(format!("  performing {name} action"));
-    let (report, armed) = progress
-        .race(tab.press(plan, ticket, armed, input.clone()))
-        .await?;
-    let acked = match report {
-        PressReport::Acked(acked) => acked,
-        // Nothing was written because the session's socket was replaced, or the session went
-        // mid-press: either way the tab is gone for this run.
-        PressReport::NothingWritten | PressReport::Failed { closed: true, .. } => {
-            return Err(PlaywrightError::target_closed().into());
+    let (acked, armed) = if plan.writes() == 0 {
+        // `clickCount: 0` with `steps: 0`: Playwright's action writes no event and succeeds,
+        // and its pointer still moves. Nothing was sent: the cell stays `NotSent`.
+        progress.log(format!("  performing {name} action"));
+        for command in &plan.commands {
+            input.apply(&command.effect, true);
         }
-        PressReport::Failed {
-            closed: false,
-            message,
-        } => return Err(PlaywrightError::error(message).into()),
+        (None, armed)
+    } else {
+        let Ok(ticket) = delivery.begin() else {
+            return Err(PlaywrightError::error(format!(
+                "neo-runtime: a {name} tried to write its input again"
+            ))
+            .into());
+        };
+        progress.log(format!("  performing {name} action"));
+        let (report, armed) = progress
+            .race(tab.press(plan, ticket, armed, input.clone()))
+            .await?;
+        let acked = match report {
+            PressReport::Acked(acked) => acked,
+            // Nothing was written because the session's socket was replaced, or the session
+            // went mid-press: either way the tab is gone for this run.
+            PressReport::NothingWritten | PressReport::Failed { closed: true, .. } => {
+                return Err(PlaywrightError::target_closed().into());
+            }
+            PressReport::Failed {
+                closed: false,
+                message,
+            } => return Err(PlaywrightError::error(message).into()),
+        };
+        (Some(acked), armed)
     };
 
     // Read after every press, `noWaitAfter` too: it cannot stall, because it races a dialog
@@ -1093,10 +1104,10 @@ async fn act<T: Tab>(
     // Not held through the navigation barrier, which only waits: an interceptor not yet stopped
     // keeps its own copy until it is.
     drop(input);
-    if blocked.is_some() {
-        acked.blocked();
-    } else {
-        acked.delivered();
+    match (acked, blocked.is_some()) {
+        (Some(acked), true) => acked.blocked(),
+        (Some(acked), false) => acked.delivered(),
+        (None, _) => {}
     }
 
     if blocked.is_none() {
@@ -1512,6 +1523,10 @@ pub(crate) mod tests {
                 .lock()
                 .expect("devices")
                 .apply(effect, answered);
+        }
+
+        fn devices(&self) -> InputDevices {
+            self.devices.lock().expect("devices").clone()
         }
     }
 
@@ -2748,6 +2763,28 @@ pub(crate) mod tests {
         let keyboard = tab.devices.lock().expect("devices").keyboard.clone();
         assert_eq!(keyboard.modifiers, keyboard::SHIFT, "Shift is held again");
         assert_eq!(keyboard.pressed, [("ShiftLeft", fake_owner())]);
+    }
+
+    /// Known review issue: `clickCount: 0` with `steps: 0` writes no event, as Playwright's
+    /// does, and resolves: no writer runs, the delivery stays `NotSent`, and the pointer still
+    /// moves to the click point.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_click_with_nothing_to_write_resolves_without_input() {
+        let tab = FakeTab::ready();
+        let options = decoded(
+            "click",
+            serde_json::json!({ "selector": SELECTOR, "clickCount": 0, "steps": 0 }),
+        )
+        .expect("served");
+        let (result, log, delivery) = run(&tab, &options, 30_000.0).await;
+        assert_eq!(result, Ok(()), "{log:?}");
+        assert_eq!(delivery, Delivery::NotSent);
+        assert!(tab.plans.lock().expect("plans").is_empty(), "no writer ran");
+        let mouse = tab.devices.lock().expect("devices").mouse.clone();
+        assert!(
+            (mouse.x, mouse.y) != (0.0, 0.0),
+            "the pointer moved: {mouse:?}"
+        );
     }
 
     #[test]

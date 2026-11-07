@@ -68,3 +68,15 @@ test('mouse methods send the same events with the state they keep', {
     JSON.stringify(outcome.calls.map((call) => [call.method, call.delivery])),
   )
 })
+
+test('review: zero click count and zero steps resolve without input', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  await compareMethod(t, {
+    html: '<button id="target">Target</button>',
+    source: `return await page.locator('#target').click({clickCount:0,steps:0})
+      .then(() => 'resolved', errorCategory)`,
+    probe: 'document.querySelector("#target").textContent',
+  })
+})

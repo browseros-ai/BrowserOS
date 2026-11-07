@@ -903,6 +903,13 @@ impl EffectSink for InputPermit {
             devices.apply(effect, answered);
         }
     }
+
+    fn devices(&self) -> InputDevices {
+        self.turn
+            .lock()
+            .map(|devices| devices.clone())
+            .unwrap_or_default()
+    }
 }
 
 impl Devices for InputPermit {
