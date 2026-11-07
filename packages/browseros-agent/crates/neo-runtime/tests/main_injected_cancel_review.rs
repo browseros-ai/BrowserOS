@@ -47,7 +47,7 @@ async fn tests_that_selector_polling_stops_when_its_run_is_cancelled() {
     let request = RunRequest {
         code: SOURCE.to_string(),
         page: PageId::new(tab.target_id.clone()),
-        timeout: Duration::from_secs(60),
+        timeout: Duration::from_mins(1),
         cancel: cancel.clone(),
     };
     let running = tokio::spawn(async move {
