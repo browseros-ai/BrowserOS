@@ -98,10 +98,10 @@ pub async fn serve(
     runtime_file::write(&config.browserclaw_dir, &runtime_url).await;
     let skill_config = config.clone();
     let skill_task = tokio::spawn(async move {
-        if !skill_config.dev_mode {
-            if let Err(error) = install_skill(&skill_config).await {
-                tracing::warn!(%error, "prototype Playwright skill installation failed");
-            }
+        if !skill_config.dev_mode
+            && let Err(error) = install_skill(&skill_config).await
+        {
+            tracing::warn!(%error, "prototype Playwright skill installation failed");
         }
     });
     tracing::info!(%bound, "Playwright prototype listening; legacy effects and background jobs are disabled");
