@@ -6,18 +6,21 @@ use std::time::Duration;
 
 use browseros_cdp::CdpError;
 use neo_runtime_spec::serve::{
-    BrowserContextCall, BrowserContextNewPageResult, PageCall, PageChannel, PageGoBackParams,
-    PageGoBackResult, PageGoForwardParams, PageGoForwardResult, PageReloadParams, PageReloadResult,
+    BrowserContextCall, BrowserContextNewPageResult, ConsoleMessagesFilter, PageCall, PageChannel,
+    PageClearConsoleMessagesParams, PageClearConsoleMessagesResult, PageClearPageErrorsParams,
+    PageClearPageErrorsResult, PageConsoleMessagesParams, PageConsoleMessagesResult,
+    PageGoBackParams, PageGoBackResult, PageGoForwardParams, PageGoForwardResult,
+    PagePageErrorsParams, PagePageErrorsResult, PageReloadParams, PageReloadResult,
     ResponseChannel,
 };
 use serde_json::{Value, json};
 use tracing::debug;
 
 use crate::bridge;
-use crate::dispatch;
+use crate::dispatch::encode_result;
 use crate::frames::FrameScope;
 use crate::history::{self, HistoryOptions};
-use crate::page::FrameTab;
+use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::tabs::{self, PageEntry, Tabs};
 
@@ -68,21 +71,57 @@ pub(crate) async fn page(
     match call {
         PageCall::Reload(params) => {
             let response = history_step(tabs, entry, HistoryOptions::reload(&params), progress);
-            return dispatch::encode_result::<PageReloadParams>(&PageReloadResult {
+            return encode_result::<PageReloadParams>(&PageReloadResult {
                 response: response.await?,
             });
         }
         PageCall::GoBack(params) => {
             let response = history_step(tabs, entry, HistoryOptions::back(&params), progress);
-            return dispatch::encode_result::<PageGoBackParams>(&PageGoBackResult {
+            return encode_result::<PageGoBackParams>(&PageGoBackResult {
                 response: response.await?,
             });
         }
         PageCall::GoForward(params) => {
             let response = history_step(tabs, entry, HistoryOptions::forward(&params), progress);
-            return dispatch::encode_result::<PageGoForwardParams>(&PageGoForwardResult {
+            return encode_result::<PageGoForwardParams>(&PageGoForwardResult {
                 response: response.await?,
             });
+        }
+        // Playwright's server keeps a page's console and page errors from its first moment;
+        // Neo starts on the first read, with what V8 kept of the tab's live documents
+        // (`page_events.rs`). A clear enables first, so that replay cannot bring back what it
+        // cleared.
+        PageCall::ConsoleMessages(params) => {
+            let page = console_page(tabs, entry, progress).await?;
+            let all = params.filter == Some(ConsoleMessagesFilter::All);
+            return encode_result::<PageConsoleMessagesParams>(&PageConsoleMessagesResult {
+                messages: page.events.console.messages(all),
+            });
+        }
+        PageCall::PageErrors(params) => {
+            let page = console_page(tabs, entry, progress).await?;
+            let all = params.filter == Some(ConsoleMessagesFilter::All);
+            return encode_result::<PagePageErrorsParams>(&PagePageErrorsResult {
+                errors: page.events.console.errors(all),
+            });
+        }
+        PageCall::ClearConsoleMessages(_) => {
+            console_page(tabs, entry, progress)
+                .await?
+                .events
+                .console
+                .clear_messages();
+            return encode_result::<PageClearConsoleMessagesParams>(
+                &PageClearConsoleMessagesResult {},
+            );
+        }
+        PageCall::ClearPageErrors(_) => {
+            console_page(tabs, entry, progress)
+                .await?
+                .events
+                .console
+                .clear_errors();
+            return encode_result::<PageClearPageErrorsParams>(&PageClearPageErrorsResult {});
         }
         PageCall::Close(_) => close(tabs, entry, progress).await?,
         PageCall::RunBeforeUnload(_) => {
@@ -146,6 +185,18 @@ async fn history_step(
         scope: FrameScope::Main,
     };
     history::navigate(&main, &options, progress).await
+}
+
+/// `entry`'s session with console messages and page errors reported (`PageSession::enable_runtime`).
+async fn console_page(
+    tabs: &Tabs,
+    entry: &PageEntry,
+    progress: &Progress,
+) -> Result<Arc<PageSession>, CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    let enabled = progress.race(page.enable_runtime()).await?;
+    checked(tabs, entry, progress, enabled).await?;
+    Ok(page)
 }
 
 /// A session without enabled domains has no watcher yet. If it disappeared, ask the

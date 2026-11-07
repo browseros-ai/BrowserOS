@@ -9,6 +9,7 @@
 
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { createRun } from '../../src/index'
+import { eventless } from './bridge-stub'
 
 type Sent = {
   guid: string
@@ -69,7 +70,7 @@ beforeEach(() => {
   sent = []
   replies = []
   currentUrl = 'http://a.test/start'
-  ;(globalThis as Record<string, unknown>).__neo_runtime = {
+  ;(globalThis as Record<string, unknown>).__neo_runtime = eventless({
     get: (request: string) => {
       const asked = JSON.parse(request)
       if (asked.field === 'parseURL') {
@@ -111,7 +112,7 @@ beforeEach(() => {
         return JSON.stringify({ id, ...reply })
       return JSON.stringify({ id, result: reply ?? {} })
     },
-  }
+  })
 })
 
 function run() {

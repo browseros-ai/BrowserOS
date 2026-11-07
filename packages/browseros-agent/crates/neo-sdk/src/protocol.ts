@@ -34,8 +34,10 @@ import type {
   FrameUncheckParams,
   FrameWaitForSelectorParams,
   PageCloseParams,
+  PageConsoleMessagesParams,
   PageGoBackParams,
   PageGoForwardParams,
+  PagePageErrorsParams,
   PageReloadParams,
 } from '@browseros/neo-runtime-spec/serve'
 
@@ -378,6 +380,26 @@ type _PageGoForwardKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof PAGE_GO_FORWARD_KEYS)[number], true>,
     Required<PageGoForwardParams>
+  >
+>
+
+/** `Page.consoleMessages`'s params (`spec/playwright/page.yml`). */
+export const PAGE_CONSOLE_MESSAGES_KEYS = ['filter'] as const
+
+type _PageConsoleMessagesKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_CONSOLE_MESSAGES_KEYS)[number], true>,
+    Required<PageConsoleMessagesParams>
+  >
+>
+
+/** `Page.pageErrors`'s params (`spec/playwright/page.yml`). */
+export const PAGE_PAGE_ERRORS_KEYS = ['filter'] as const
+
+type _PagePageErrorsKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_PAGE_ERRORS_KEYS)[number], true>,
+    Required<PagePageErrorsParams>
   >
 >
 
