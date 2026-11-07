@@ -127,6 +127,92 @@ Injected:
       returns:
         elements: ElementList
 
+    # `textContent` within `root`, for `ElementHandle.textContent`: Playwright serves each element
+    # handle read as its frame's read of `{ selector: ':scope', scope: handle }`, so this resolves
+    # `selector` from `root` as `scopedSelectorElement` does, marks the first match, and reads it.
+    scopedTextContent:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+        root: Element
+      returns:
+        matched: TextMatch?
+
+    # `innerText` within `root`, for `ElementHandle.innerText`.
+    scopedInnerText:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+        root: Element
+      returns:
+        matched: TextMatch?
+
+    # `innerHTML` within `root`, for `ElementHandle.innerHTML`.
+    scopedInnerHTML:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+        root: Element
+      returns:
+        matched: TextMatch?
+
+    # `getAttribute` within `root`, for `ElementHandle.getAttribute`.
+    scopedGetAttribute:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+        name: string
+        root: Element
+      returns:
+        matched: AttributeMatch?
+
+    # `inputValue` within `root`, for `ElementHandle.inputValue`.
+    scopedInputValue:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+        root: Element
+      returns:
+        matched: FormInputValueMatch?
+
+    # `isVisible` within `root`, for `ElementHandle.isVisible` and `isHidden`.
+    scopedIsVisible:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+        frameVisible: boolean
+        root: Element
+      returns:
+        value: boolean
+
+    # The `documentElement` of the document `node` belongs to (of `node` itself for a document),
+    # whose `DOM.describeNode` names the frame that owns `node`, for `ElementHandle.ownerFrame`.
+    # Absent when that document has no `documentElement`.
+    ownerDocumentElement:
+      internal: true
+      parameters:
+        node: Element
+      returns:
+        element: Element?
+
+    # `elementStateOnSelector` within `root`, for `ElementHandle.isChecked`, `isEnabled`,
+    # `isDisabled` and `isEditable`.
+    scopedElementStateOnSelector:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+        state: ReadableElementState
+        root: Element
+      returns:
+        matched: ElementStateMatch?
+
     # `InjectedScript.previewNode` of each element of a `queryAll` list, in order: the previews of
     # the `ElementHandle`s `Frame.querySelectorAll` answers, read in one page call.
     listPreviews:

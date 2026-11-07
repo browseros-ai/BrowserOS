@@ -1239,6 +1239,49 @@ async fn utility_root(
         .map_err(|error| page_error(error).into())
 }
 
+/// The node a run's `ElementHandle` names, adopted into its frame's utility world for one
+/// `ElementHandle` command (`element_handle.rs`). The node lives as long as `group`.
+pub(crate) struct UtilityElement {
+    /// The frame document the handle was created in.
+    pub(crate) frame: Arc<FrameContext>,
+    pub(crate) element: Handle<Element>,
+    pub(crate) group: GroupGuard,
+}
+
+/// Adopts the node of the run's element handle `guid` into its frame's utility world, as
+/// Playwright's server passes a handle to its frame's utility context
+/// (`ElementHandle.evaluateInUtility`), in a group of the call's own.
+///
+/// # Errors
+///
+/// `TargetClosedError` for a handle the run does not have, and Playwright's mismatching-dispatcher
+/// error for a `JSHandle` (`method` names the command). The inner `PageError` is the adoption's:
+/// `NotConnected` once the handle's document is gone.
+pub(crate) async fn utility_element(
+    tab: &FrameTab,
+    guid: &str,
+    method: &str,
+    handles: &Handles,
+) -> Result<Result<UtilityElement, PageError>, CallError> {
+    let entry = element_scope(handles, Some(guid), method)?
+        .ok_or_else(PlaywrightError::target_closed)?;
+    let Remote::Object(id) = &entry.remote else {
+        return Ok(Err(PageError::NotConnected));
+    };
+    let frame = Arc::clone(&entry.frame);
+    let group = tab.group(&frame, "element");
+    let adopted = async {
+        let backend = frame.main.backend_of(&frame, id.object_id()).await?;
+        frame.element(group.group(), backend).await
+    }
+    .await;
+    Ok(adopted.map(|element| UtilityElement {
+        frame,
+        element,
+        group,
+    }))
+}
+
 /// The first match of `selector` (strict when asked), in the frame the selector ends in, adopted
 /// into that frame's main world; `None` when nothing matched. With `scope`, within that element.
 /// Playwright: `server/frameSelectors.ts` `FrameSelectors.query`
