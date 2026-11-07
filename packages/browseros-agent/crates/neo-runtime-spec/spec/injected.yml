@@ -234,7 +234,7 @@ Injected:
         states:
           type: array
           items: ElementState
-        # Neo resolves in the main frame only, so neo-runtime always sends `true`.
+        # True when every iframe owner crossed by the selector is visible; true without hops.
         frameVisible: boolean
       returns:
         # Absent when every state holds.

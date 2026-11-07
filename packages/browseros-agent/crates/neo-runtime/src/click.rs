@@ -118,7 +118,8 @@ pub(crate) trait Tab: Send + Sync {
         strict: bool,
     ) -> impl Future<Output = Result<Option<Resolved<Self::Element>>, PageError>> + Send;
 
-    /// `checkElementStates` with the element's `frameVisible`. With `scroll` (not Playwright's
+    /// `checkElementStates` with `frameVisible` inherited from the selector's iframe hop
+    /// owners (`true` when the selector has no frame hops). With `scroll` (not Playwright's
     /// `scroll: 'none'`), an element in a child frame first has its frames' owners scrolled
     /// into view, so an offscreen frame paints and `stable` can resolve.
     fn check_states(
