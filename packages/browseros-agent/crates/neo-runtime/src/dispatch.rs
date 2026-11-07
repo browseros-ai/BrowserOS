@@ -503,8 +503,8 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::Dblclick(params) => {
             PointerOptions::from_dblclick(params).map(Route::FramePointer)
         }
-        FrameCall::Hover(params) => PointerOptions::from_hover(params).map(Route::FramePointer),
-        FrameCall::Tap(params) => PointerOptions::from_tap(params).map(Route::FramePointer),
+        FrameCall::Hover(params) => Ok(Route::FramePointer(PointerOptions::from_hover(params))),
+        FrameCall::Tap(params) => Ok(Route::FramePointer(PointerOptions::from_tap(params))),
         FrameCall::Goto(params) => GotoOptions::from_params(params).map(Route::FrameGoto),
         FrameCall::Title(_) => Ok(Route::FrameTitle),
         FrameCall::TextContent(params) => {
@@ -1309,6 +1309,66 @@ mod tests {
             panic!("a click on the run's frame routes to Frame.click");
         };
         assert_eq!((options.selector.as_str(), options.strict), ("#go", true));
+    }
+
+    #[test]
+    fn tests_that_page_device_commands_route_to_the_devices_with_a_delivery_cell() {
+        for (method, params, title) in [
+            (
+                "keyboardDown",
+                json!({ "key": "Shift" }),
+                "Key down \"{key}\"",
+            ),
+            (
+                "keyboardType",
+                json!({ "text": "hi", "delay": 5 }),
+                "Type \"{text}\"",
+            ),
+            (
+                "mouseMove",
+                json!({ "x": 1, "y": 2, "steps": 3 }),
+                "Mouse move",
+            ),
+            (
+                "mouseClick",
+                json!({ "x": 1, "y": 2, "clickCount": 2 }),
+                "Click",
+            ),
+            (
+                "mouseWheel",
+                json!({ "deltaX": 0, "deltaY": 9 }),
+                "Mouse wheel",
+            ),
+            ("touchscreenTap", json!({ "x": 1, "y": 2 }), "Tap"),
+        ] {
+            let routed = route(ObjectKind::Page, method, Some(params));
+            assert_eq!(
+                routed.meta.and_then(|meta| meta.title),
+                Some(title),
+                "{method}"
+            );
+            assert!(
+                routed.meta.is_some_and(|meta| meta.has(MethodFlag::Input)),
+                "{method} is an input method"
+            );
+            assert!(
+                matches!(routed.route, Ok(ObjectCall::Device(_))),
+                "{method} routes to the devices"
+            );
+        }
+        let routed = route(
+            ObjectKind::Page,
+            "mouseMove",
+            Some(json!({ "x": 1, "y": 2, "steps": 1001 })),
+        );
+        assert_eq!(
+            error_of(routed),
+            PlaywrightError::error("Neo does not support steps above 1000")
+        );
+        assert!(matches!(
+            route(ObjectKind::Page, "bringToFront", Some(json!({}))).route,
+            Ok(ObjectCall::Page(PageCall::BringToFront(_)))
+        ));
     }
 
     #[test]

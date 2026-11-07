@@ -589,7 +589,7 @@ impl PointerOptions {
     }
 
     /// Reads `Frame.hover`'s params: one move, waiting for a visible and stable element only.
-    pub(crate) fn from_hover(params: FrameHoverParams) -> Result<Self, PlaywrightError> {
+    pub(crate) fn from_hover(params: FrameHoverParams) -> Self {
         let FrameHoverParams {
             selector,
             strict,
@@ -599,7 +599,7 @@ impl PointerOptions {
             position,
             trial,
         } = params;
-        Ok(Self {
+        Self {
             selector,
             strict: strict.unwrap_or(false),
             force: force.unwrap_or(false),
@@ -612,11 +612,11 @@ impl PointerOptions {
             // Playwright: `server/input.ts` `Mouse.move`: `const { steps = 1 } = options;`
             steps: 1,
             platform: None,
-        })
+        }
     }
 
     /// Reads `Frame.tap`'s params: a touch start and end at the point.
-    pub(crate) fn from_tap(params: FrameTapParams) -> Result<Self, PlaywrightError> {
+    pub(crate) fn from_tap(params: FrameTapParams) -> Self {
         let FrameTapParams {
             selector,
             strict,
@@ -627,7 +627,7 @@ impl PointerOptions {
             trial,
         } = params;
         // Deviation: `server/frames.ts` `Frame.tap`: `if (!this._page.browserContext._options.hasTouch)` Neo's run attaches to the user's BrowserOS context, which has no hasTouch option, and its tab answers Input.dispatchTouchEvent with the events of a hasTouch context, so Neo taps where Playwright refuses.
-        Ok(Self {
+        Self {
             selector,
             strict: strict.unwrap_or(false),
             force: force.unwrap_or(false),
@@ -639,7 +639,7 @@ impl PointerOptions {
             modifiers: keyboard_modifiers!(modifiers, FrameTapParamsModifiersItem),
             steps: 1,
             platform: None,
-        })
+        }
     }
 }
 
@@ -1154,10 +1154,10 @@ fn plan_pointer_input<D: Devices>(
     let to = (point.x, point.y);
     match options.action.input() {
         PointerInput::Move => {
-            input_devices::plan_move(&mut plan, &mut simulated, to, options.steps)
+            input_devices::plan_move(&mut plan, &mut simulated, to, options.steps);
         }
         PointerInput::Click(click) => {
-            input_devices::plan_click(&mut plan, &mut simulated, to, &click, options.steps, &owner)
+            input_devices::plan_click(&mut plan, &mut simulated, to, &click, options.steps, &owner);
         }
         PointerInput::Tap => input_devices::plan_tap(&mut plan, &mut simulated, to),
     }
@@ -2421,8 +2421,12 @@ pub(crate) mod tests {
             "dblclick" => {
                 PointerOptions::from_dblclick(serde_json::from_value(params).expect("params"))
             }
-            "hover" => PointerOptions::from_hover(serde_json::from_value(params).expect("params")),
-            "tap" => PointerOptions::from_tap(serde_json::from_value(params).expect("params")),
+            "hover" => Ok(PointerOptions::from_hover(
+                serde_json::from_value(params).expect("params"),
+            )),
+            "tap" => Ok(PointerOptions::from_tap(
+                serde_json::from_value(params).expect("params"),
+            )),
             _ => PointerOptions::from_click(serde_json::from_value(params).expect("params")),
         }
     }

@@ -932,6 +932,23 @@ var FRAME_TAP_KEYS = [
   "position",
   "trial"
 ];
+var PAGE_KEYBOARD_DOWN_KEYS = ["key"];
+var PAGE_KEYBOARD_UP_KEYS = ["key"];
+var PAGE_KEYBOARD_INSERT_TEXT_KEYS = ["text"];
+var PAGE_KEYBOARD_TYPE_KEYS = ["text", "delay"];
+var PAGE_KEYBOARD_PRESS_KEYS = ["key", "delay"];
+var PAGE_MOUSE_MOVE_KEYS = ["x", "y", "steps"];
+var PAGE_MOUSE_DOWN_KEYS = ["button", "clickCount"];
+var PAGE_MOUSE_UP_KEYS = ["button", "clickCount"];
+var PAGE_MOUSE_CLICK_KEYS = [
+  "x",
+  "y",
+  "delay",
+  "button",
+  "clickCount"
+];
+var PAGE_MOUSE_WHEEL_KEYS = ["deltaX", "deltaY"];
+var PAGE_TOUCHSCREEN_TAP_KEYS = ["x", "y"];
 var FRAME_FILL_KEYS = ["selector", "strict", "value", "force"];
 var FRAME_PRESS_KEYS = [
   "selector",
@@ -1342,6 +1359,89 @@ class Frame {
   }
 }
 
+// src/input.ts
+class Keyboard {
+  #page;
+  constructor(page) {
+    this.#page = page;
+  }
+  async down(key) {
+    await this.#page._sendInput("keyboard.down", "keyboardDown", pickParams(PAGE_KEYBOARD_DOWN_KEYS, { key }));
+  }
+  async up(key) {
+    await this.#page._sendInput("keyboard.up", "keyboardUp", pickParams(PAGE_KEYBOARD_UP_KEYS, { key }));
+  }
+  async insertText(text) {
+    await this.#page._sendInput("keyboard.insertText", "keyboardInsertText", pickParams(PAGE_KEYBOARD_INSERT_TEXT_KEYS, {
+      text
+    }));
+  }
+  async type(text, options = {}) {
+    await this.#page._sendInput("keyboard.type", "keyboardType", pickParams(PAGE_KEYBOARD_TYPE_KEYS, {
+      text,
+      ...options
+    }));
+  }
+  async press(key, options = {}) {
+    await this.#page._sendInput("keyboard.press", "keyboardPress", pickParams(PAGE_KEYBOARD_PRESS_KEYS, {
+      key,
+      ...options
+    }));
+  }
+}
+
+class Mouse {
+  #page;
+  constructor(page) {
+    this.#page = page;
+  }
+  async move(x, y, options = {}) {
+    await this.#page._sendInput("mouse.move", "mouseMove", pickParams(PAGE_MOUSE_MOVE_KEYS, {
+      x,
+      y,
+      ...options
+    }));
+  }
+  async down(options = {}) {
+    await this.#page._sendInput("mouse.down", "mouseDown", pickParams(PAGE_MOUSE_DOWN_KEYS, { ...options }));
+  }
+  async up(options = {}) {
+    await this.#page._sendInput("mouse.up", "mouseUp", pickParams(PAGE_MOUSE_UP_KEYS, { ...options }));
+  }
+  async click(x, y, options = {}) {
+    await this._click("mouse.click", x, y, options);
+  }
+  async dblclick(x, y, options = {}) {
+    await this._click("mouse.dblclick", x, y, { ...options, clickCount: 2 });
+  }
+  async wheel(deltaX, deltaY) {
+    await this.#page._sendInput("mouse.wheel", "mouseWheel", pickParams(PAGE_MOUSE_WHEEL_KEYS, {
+      deltaX,
+      deltaY
+    }));
+  }
+  async _click(apiName, x, y, options) {
+    await this.#page._sendInput(apiName, "mouseClick", pickParams(PAGE_MOUSE_CLICK_KEYS, {
+      x,
+      y,
+      ...options
+    }));
+  }
+}
+
+class Touchscreen {
+  #page;
+  constructor(page) {
+    this.#page = page;
+  }
+  async tap(x, y) {
+    await this.#page._sendInput("touchscreen.tap", "touchscreenTap", pickParams(PAGE_TOUCHSCREEN_TAP_KEYS, {
+      x,
+      y
+    }));
+  }
+}
+
 // src/timeout-settings.ts
 var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
 
@@ -1389,6 +1489,9 @@ class Page {
   #mainFrame;
   #frames = new Map;
   _timeoutSettings;
+  keyboard;
+  mouse;
+  touchscreen;
   constructor(guid, mainFrameGuid, url, context, connection) {
     this.#guid = guid;
     this.#lastUrl = url;
@@ -1400,6 +1503,12 @@ class Page {
       name: ""
     });
     this.#frames.set(mainFrameGuid, this.#mainFrame);
+    this.keyboard = new Keyboard(this);
+    this.mouse = new Mouse(this);
+    this.touchscreen = new Touchscreen(this);
+  }
+  async _sendInput(apiName, method, params) {
+    await this.#connection.sendPage(apiName, this.#guid, method, params, 0);
   }
   url() {
     const url = get(this.#guid, "url");

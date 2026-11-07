@@ -1,7 +1,7 @@
 //! One handed-out tab as the server side of a browser call sees it (Playwright's `server/page.ts`
 //! with `chromium/crPage.ts` and `crInput.ts`): this tab's CDP session,
 //! the domains a browser call needs, one watcher task that answers dialogs and tracks
-//! navigations, the tab's input turns ([`TabInputs`]), the pointer writers, and the `click::Tab`
+//! navigations, the tab's input turns and devices ([`TabInputs`]), and the `click::Tab`
 //! implementation over all of it and the utility world (`world.rs`).
 //!
 //! This file is mechanism; `click.rs` and `navigate.rs` own policy. Nothing here writes a
@@ -9,7 +9,7 @@
 //!
 //! Lifetime: [`PageSession`] owns this tab's [`Session`], whose `Drop` detaches, so the session
 //! detaches when the last `Arc<PageSession>` drops. Every task that writes on the session holds
-//! one: the dispatcher's call tasks, the interceptor setups, the pointer writers, the interceptor
+//! one: the dispatcher's call tasks, the interceptor setups, the input writers, the interceptor
 //! stops and the object-group releases, all spawned on the run's `TaskTracker`. So no release
 //! can find its session gone, and no end-of-run step has to order a drain before a detach; this
 //! also covers a caller that drops the run's future. The watcher holds no `Arc<PageSession>` (it would keep
@@ -2377,9 +2377,6 @@ mod tests {
         );
     }
 
-    /// An event's type, button, buttons mask and click count.
-
-    /// One move, then a press and a release per click, every event at the click point.
     #[test]
     fn requested_main_frame_navigations_in_this_tab_are_pending_until_they_commit() {
         let mut state = PageState::default();

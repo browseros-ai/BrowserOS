@@ -3,14 +3,17 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (4)
+## Deviations (7)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
+| neo-runtime/src/click.rs | `MAX_CLICK_COUNT` | `server/input.ts` `Mouse.click` | Playwright has no cap; every click is two events Neo plans before writing, so a script's `clickCount: 1e9` must not take the server's memory with it. |
+| neo-runtime/src/click.rs | `MAX_STEPS` | `server/input.ts` `Mouse.move` | Playwright has no cap; every step is one event Neo plans before writing, so `steps: 1e9` must not take the server's memory with it. |
 | neo-runtime/src/click.rs | `PointerOptions::from_tap` | `server/frames.ts` `Frame.tap` | Neo's run attaches to the user's BrowserOS context, which has no hasTouch option, and its tab answers Input.dispatchTouchEvent with the events of a hasTouch context, so Neo taps where Playwright refuses. |
 | neo-runtime/src/click.rs | `attempt` | `server/dom.ts` `ElementHandle._performPointerAction` | Playwright's trial still performs the input into an interceptor that blocks every event it judges, which the page's earlier listeners and the hover state still see; Neo's trial ends at its checks and sends no input. Dropping the interceptor disarms it, and the tab's input comes back once that stop has answered. |
-| neo-runtime/src/click.rs | `refuse_unserved` | `server/dom.ts` `ElementHandle._performPointerAction` | Neo's tab keeps no keyboard state yet to press and restore them with, so it refuses them before any work. |
-| neo-runtime/src/click.rs | `refuse_unserved` | `server/dom.ts` `ElementHandle._performPointerAction` | Playwright moves in `steps` from the page's last mouse position, which Neo's tab does not keep yet, so it refuses other steps before any work. |
+| neo-runtime/src/devices.rs | `DeviceCall::from_page_call` | `server/input.ts` `Touchscreen.apiTap` | Neo's run attaches to the user's BrowserOS context, which has no hasTouch option, and its tab answers Input.dispatchTouchEvent with the events of a hasTouch context, so Neo taps where Playwright refuses. |
+| neo-runtime/src/input_devices.rs | `plan_button_releases` | `server/input.ts` `Mouse.up` | Playwright keeps a page's buttons held until its script releases them; Neo releases at a run's end every button the run left held, oldest first at the pointer's last position, because the tab is the user's and outlives the run. |
+| neo-runtime/src/keyboard.rs | `plan_key_releases` | `server/input.ts` `Keyboard.up` | Playwright keeps a page's keys held until its script releases them; Neo releases at a run's end every key the run left held, newest first, because the tab is the user's and outlives the run. A held code is a layout name, so the release needs no platform. |
 
 ## Unexplained: owner questions (0)
 

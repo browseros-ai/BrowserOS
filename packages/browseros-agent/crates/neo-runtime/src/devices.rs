@@ -307,7 +307,8 @@ fn plan<D: Devices>(
     Ok(plan)
 }
 
-/// A page step that could not answer ends the device call, as any terminal page error does.
+/// Neo: a page step that could not answer ends the device call, as any terminal page error
+/// does.
 fn page_error(error: PageError) -> CallError {
     match error {
         PageError::Closed => PlaywrightError::target_closed().into(),
@@ -317,5 +318,393 @@ fn page_error(error: PageError) -> CallError {
         PageError::Threw(message) | PageError::Contract(message) => {
             PlaywrightError::error(message).into()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use tokio::time;
+
+    use super::*;
+    use crate::click::tests::{FakeTab, fake_owner};
+    use crate::input_devices::{InputDevices, KeyboardState, MouseState};
+    use crate::progress::ErrorName;
+    use crate::run::Delivery;
+
+    const LEFT_CLICK: MouseClick = MouseClick {
+        button: MouseButton::Left,
+        click_count: 1,
+        delay: None,
+    };
+
+    /// Serves `call` on `tab` with Playwright's `timeout`, then lets a writer the call left
+    /// behind finish: the outcome, and the delivery the writer recorded.
+    async fn run(
+        tab: &FakeTab,
+        call: &DeviceCall,
+        timeout_ms: f64,
+    ) -> (Result<(), CallError>, Delivery) {
+        let progress = Progress::for_test(timeout_ms);
+        let result = serve(tab, call, &progress).await;
+        time::sleep(Duration::from_mins(1)).await;
+        let delivery = progress.delivery().expect("an input call").delivery();
+        (result, delivery)
+    }
+
+    fn error_of(result: Result<(), CallError>) -> PlaywrightError {
+        match result {
+            Err(CallError::Playwright(error)) => error,
+            other => panic!("expected a Playwright error, got {other:?}"),
+        }
+    }
+
+    fn devices(tab: &FakeTab) -> InputDevices {
+        tab.devices.lock().expect("devices").clone()
+    }
+
+    fn decode(
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<Result<DeviceCall, PlaywrightError>, PageCall> {
+        DeviceCall::from_page_call(PageCall::decode(method, Some(params)).expect("a Page command"))
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_key_held_by_down_reaches_later_input_until_up() {
+        let tab = FakeTab::ready();
+        for call in [
+            DeviceCall::KeyboardDown {
+                key: "Shift".to_string(),
+            },
+            DeviceCall::MouseClick {
+                x: 10.0,
+                y: 10.0,
+                click: LEFT_CLICK,
+            },
+            DeviceCall::KeyboardPress {
+                key: "a".to_string(),
+                delay: None,
+            },
+            DeviceCall::TouchscreenTap { x: 10.0, y: 10.0 },
+            DeviceCall::KeyboardUp {
+                key: "Shift".to_string(),
+            },
+            DeviceCall::MouseMove {
+                x: 20.0,
+                y: 20.0,
+                steps: 1,
+            },
+        ] {
+            let (result, delivery) = run(&tab, &call, 30_000.0).await;
+            assert!(result.is_ok(), "{call:?}: {result:?}");
+            assert_eq!(delivery, Delivery::Done, "{call:?}");
+        }
+        assert_eq!(
+            tab.calls(),
+            [
+                "platform",
+                "input",
+                "rawKeyDown Shift",
+                "input released",
+                "input",
+                "mouseMoved button=none buttons=0 modifiers=8",
+                "mousePressed button=left buttons=1 clickCount=1 modifiers=8",
+                "mouseReleased button=left buttons=0 clickCount=1 modifiers=8",
+                "input released",
+                "platform",
+                "input",
+                "keyDown a",
+                "keyUp a",
+                "input released",
+                "input",
+                "touchStart modifiers=8",
+                "touchEnd modifiers=8",
+                "input released",
+                "platform",
+                "input",
+                "keyUp Shift",
+                "input released",
+                "input",
+                "mouseMoved button=none buttons=0 modifiers=0",
+                "input released",
+            ],
+            "Shift stays held across calls until its up"
+        );
+        assert_eq!(devices(&tab).keyboard, KeyboardState::default());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_mouse_down_holds_its_button_for_later_moves_until_up() {
+        let tab = FakeTab::ready();
+        let calls = [
+            DeviceCall::MouseDown {
+                button: MouseButton::Left,
+                click_count: 1,
+            },
+            DeviceCall::MouseDown {
+                button: MouseButton::Right,
+                click_count: 2,
+            },
+            DeviceCall::MouseMove {
+                x: 5.0,
+                y: 5.0,
+                steps: 1,
+            },
+        ];
+        for call in &calls {
+            let (result, delivery) = run(&tab, call, 30_000.0).await;
+            assert!(result.is_ok(), "{call:?}: {result:?}");
+            assert_eq!(delivery, Delivery::Done, "{call:?}");
+        }
+        let held = devices(&tab).mouse;
+        assert_eq!(
+            held.buttons,
+            [
+                (MouseButton::Left, fake_owner()),
+                (MouseButton::Right, fake_owner())
+            ]
+        );
+        assert_eq!(held.last_button, Some(MouseButton::Right));
+        for call in [
+            DeviceCall::MouseUp {
+                button: MouseButton::Left,
+                click_count: 1,
+            },
+            DeviceCall::MouseUp {
+                button: MouseButton::Right,
+                click_count: 1,
+            },
+            DeviceCall::MouseMove {
+                x: 6.0,
+                y: 6.0,
+                steps: 1,
+            },
+        ] {
+            let (result, delivery) = run(&tab, &call, 30_000.0).await;
+            assert!(result.is_ok(), "{call:?}: {result:?}");
+            assert_eq!(delivery, Delivery::Done, "{call:?}");
+        }
+        let events: Vec<String> = tab
+            .calls()
+            .into_iter()
+            .filter(|call| call.starts_with("mouse"))
+            .collect();
+        assert_eq!(
+            events,
+            [
+                "mousePressed button=left buttons=1 clickCount=1 modifiers=0",
+                "mousePressed button=right buttons=3 clickCount=2 modifiers=0",
+                "mouseMoved button=right buttons=3 modifiers=0",
+                "mouseReleased button=left buttons=2 clickCount=1 modifiers=0",
+                "mouseReleased button=right buttons=0 clickCount=1 modifiers=0",
+                "mouseMoved button=none buttons=0 modifiers=0",
+            ]
+        );
+        assert_eq!(devices(&tab).mouse.buttons, []);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_call_with_nothing_to_write_changes_state_and_sends_nothing() {
+        let tab = FakeTab::ready();
+        let (result, delivery) = run(
+            &tab,
+            &DeviceCall::MouseMove {
+                x: 50.0,
+                y: 60.0,
+                steps: 0,
+            },
+            30_000.0,
+        )
+        .await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(delivery, Delivery::NotSent);
+        let mouse = devices(&tab).mouse;
+        assert_eq!(
+            (mouse.x, mouse.y),
+            (50.0, 60.0),
+            "a move of no steps still moves"
+        );
+        let (result, delivery) = run(
+            &tab,
+            &DeviceCall::KeyboardType {
+                text: String::new(),
+                delay: None,
+            },
+            30_000.0,
+        )
+        .await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(delivery, Delivery::NotSent);
+        assert_eq!(
+            tab.calls(),
+            [
+                "input",
+                "input released",
+                "platform",
+                "input",
+                "input released"
+            ]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_an_unknown_key_rejects_before_any_input() {
+        let tab = FakeTab::ready();
+        for call in [
+            DeviceCall::KeyboardDown {
+                key: "Foo".to_string(),
+            },
+            DeviceCall::KeyboardPress {
+                key: "Shift+Foo".to_string(),
+                delay: None,
+            },
+        ] {
+            let (result, delivery) = run(&tab, &call, 30_000.0).await;
+            assert_eq!(
+                error_of(result),
+                PlaywrightError::error("Unknown key: \"Foo\""),
+                "{call:?}"
+            );
+            assert_eq!(delivery, Delivery::NotSent, "{call:?}");
+        }
+        assert_eq!(
+            tab.calls(),
+            [
+                "platform",
+                "input",
+                "input released",
+                "platform",
+                "input",
+                "input released"
+            ],
+            "nothing written, not even the Shift before the unknown key"
+        );
+        assert_eq!(devices(&tab), InputDevices::default());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_stopped_device_call_releases_what_it_pressed() {
+        let tab = FakeTab::ready();
+        let (result, delivery) = run(
+            &tab,
+            &DeviceCall::KeyboardType {
+                text: "ab".to_string(),
+                delay: Some(Duration::from_secs(10)),
+            },
+            100.0,
+        )
+        .await;
+        assert_eq!(error_of(result).name, ErrorName::TimeoutError);
+        assert_eq!(delivery, Delivery::Unknown, "b was never typed");
+        let (result, delivery) = run(
+            &tab,
+            &DeviceCall::MouseClick {
+                x: 1.0,
+                y: 1.0,
+                click: MouseClick {
+                    click_count: 2,
+                    delay: Some(Duration::from_secs(10)),
+                    ..LEFT_CLICK
+                },
+            },
+            100.0,
+        )
+        .await;
+        assert_eq!(error_of(result).name, ErrorName::TimeoutError);
+        assert_eq!(
+            delivery,
+            Delivery::Unknown,
+            "the second click was never sent"
+        );
+        assert_eq!(
+            tab.calls(),
+            [
+                "platform",
+                "input",
+                "keyDown a",
+                "keyUp a",
+                "input released",
+                "input",
+                "mouseMoved button=none buttons=0 modifiers=0",
+                "mousePressed button=left buttons=1 clickCount=1 modifiers=0",
+                "mouseReleased button=left buttons=0 clickCount=1 modifiers=0",
+                "input released",
+            ],
+            "the delay is cut short, never a release"
+        );
+        assert_eq!(
+            devices(&tab),
+            InputDevices {
+                mouse: MouseState {
+                    x: 1.0,
+                    y: 1.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            "nothing left held"
+        );
+    }
+
+    #[test]
+    fn tests_that_device_commands_decode_with_playwrights_defaults() {
+        assert_eq!(
+            decode("mouseDown", json!({})),
+            Ok(Ok(DeviceCall::MouseDown {
+                button: MouseButton::Left,
+                click_count: 1
+            }))
+        );
+        assert_eq!(
+            decode("mouseUp", json!({ "button": "middle", "clickCount": 3 })),
+            Ok(Ok(DeviceCall::MouseUp {
+                button: MouseButton::Middle,
+                click_count: 3
+            }))
+        );
+        assert_eq!(
+            decode("mouseMove", json!({ "x": 1, "y": 2 })),
+            Ok(Ok(DeviceCall::MouseMove {
+                x: 1.0,
+                y: 2.0,
+                steps: 1
+            }))
+        );
+        assert_eq!(
+            decode("mouseMove", json!({ "x": 1, "y": 2, "steps": -3 })),
+            Ok(Ok(DeviceCall::MouseMove {
+                x: 1.0,
+                y: 2.0,
+                steps: 0
+            })),
+            "fewer than one step moves without an event"
+        );
+        assert_eq!(
+            decode("mouseClick", json!({ "x": 1, "y": 2, "delay": 0 })),
+            Ok(Ok(DeviceCall::MouseClick {
+                x: 1.0,
+                y: 2.0,
+                click: LEFT_CLICK
+            })),
+            "a zero delay is Playwright's pipelined click"
+        );
+        assert_eq!(
+            decode("keyboardPress", json!({ "key": "a", "delay": -5 })),
+            Ok(Ok(DeviceCall::KeyboardPress {
+                key: "a".to_string(),
+                delay: Some(Duration::ZERO),
+            }))
+        );
+        assert_eq!(
+            decode("mouseClick", json!({ "x": 1, "y": 2, "clickCount": 1001 })),
+            Ok(Err(PlaywrightError::error(
+                "Neo does not support a clickCount above 1000"
+            )))
+        );
+        assert!(matches!(
+            decode("bringToFront", json!({})),
+            Err(PageCall::BringToFront(_))
+        ));
     }
 }

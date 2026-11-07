@@ -1,11 +1,12 @@
 import type {
   LifecycleEvent,
   PageCloseParams,
+  PageCommands,
 } from '@browseros/neo-runtime-spec/serve'
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
 import { isString } from '../vendor/playwright/isomorphic/stringUtils'
 import type { BrowserContext } from './browser-context'
-import type { Connection } from './connection'
+import type { ApiName, Connection } from './connection'
 import { isTargetClosedError } from './errors'
 import {
   type AriaSnapshotOptions,
@@ -31,6 +32,7 @@ import {
   type WaitForURLOptions,
 } from './frame'
 import type { FrameLocator } from './frame-locator'
+import { Keyboard, Mouse, Touchscreen } from './input'
 import type { Locator, LocatorOptions } from './locator'
 import { serializeUrlMatch } from './neo-commands'
 import type { Response } from './network'
@@ -68,6 +70,10 @@ export class Page {
   /** Stable identity, including detached frames a script may still hold. */
   readonly #frames = new Map<string, Frame>()
   readonly _timeoutSettings: TimeoutSettings
+  /** Playwright's `page.keyboard`, `page.mouse` and `page.touchscreen`, one each per page. */
+  readonly keyboard: Keyboard
+  readonly mouse: Mouse
+  readonly touchscreen: Touchscreen
 
   /** `guid` and `mainFrameGuid` come from one record Rust minted (`page@T`, `frame@T`), so a
    * page's calls and its frame's calls reach the same tab. */
@@ -88,6 +94,18 @@ export class Page {
       name: '',
     })
     this.#frames.set(mainFrameGuid, this.#mainFrame)
+    this.keyboard = new Keyboard(this)
+    this.mouse = new Mouse(this)
+    this.touchscreen = new Touchscreen(this)
+  }
+
+  /** Sends a device command to this page's tab, with no timeout (Playwright's `kNoTimeout`). */
+  async _sendInput<M extends keyof PageCommands>(
+    apiName: ApiName,
+    method: M,
+    params: PageCommands[M]['params'],
+  ): Promise<void> {
+    await this.#connection.sendPage(apiName, this.#guid, method, params, 0)
   }
 
   url(): string {

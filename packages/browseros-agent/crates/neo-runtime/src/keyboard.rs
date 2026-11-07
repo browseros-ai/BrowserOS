@@ -390,8 +390,10 @@ pub(crate) fn plan_restore_modifiers(
                 plan.commands[at].undoes = Some(change.at);
             })
         };
-        // Every name in `K_MODIFIERS` is in the layout.
-        let _restored = planned;
+        debug_assert!(
+            planned.is_ok(),
+            "every name in `K_MODIFIERS` is in the layout"
+        );
     }
 }
 
@@ -419,7 +421,7 @@ const K_MODIFIERS: [(u8, &str); 4] = [
     (SHIFT, "Shift"),
 ];
 
-/// Playwright: `server/input.ts` `resolveSmartModifier`: `return isMac ? 'Meta' : 'Control';`
+/// Playwright: `server/input.ts` `resolveSmartModifierString`: `return process.platform === 'darwin' ? 'Meta' : 'Control';`
 ///
 /// An action's `modifiers` option as the mask `ensureModifiers` aims at.
 pub(crate) fn modifiers_mask(modifiers: &[KeyboardModifier], platform: Platform) -> u8 {
@@ -1103,6 +1105,7 @@ const MAC_EDITING_COMMANDS: &[(&str, &[&str])] = &[
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::iter;
     use std::sync::Mutex;
 
     use browseros_cdp::CdpError;
@@ -1608,7 +1611,7 @@ mod tests {
         fn turn(&self) -> (Turn, Arc<Mutex<Option<Duration>>>) {
             let released = Arc::default();
             let turn = Turn {
-                inner: Arc::new(TurnRelease {
+                _release: Arc::new(TurnRelease {
                     start: self.start,
                     released: Arc::clone(&released),
                 }),
@@ -1618,11 +1621,29 @@ mod tests {
         }
     }
 
+    /// One sent event as the tests compare it: `keyDown a`, `insertText hi`, and for the device
+    /// tests a mouse or touch event's type with the button state and modifiers it carries
+    /// (`mousePressed button=left buttons=1 clickCount=1 modifiers=8`), never coordinates.
     fn describe(sent: &Sent) -> String {
         let params: Value = serde_json::from_str(&sent.params).expect("params are JSON");
         let field = |name: &str| params[name].as_str().unwrap_or_default().to_string();
         match sent.method {
             "Input.insertText" => format!("insertText {}", field("text")),
+            "Input.dispatchMouseEvent" | "Input.dispatchTouchEvent" => {
+                let state = ["button", "buttons", "clickCount", "modifiers"]
+                    .into_iter()
+                    .filter_map(|name| {
+                        let value = params.get(name)?;
+                        let value = value
+                            .as_str()
+                            .map_or_else(|| value.to_string(), str::to_string);
+                        Some(format!("{name}={value}"))
+                    });
+                iter::once(field("type"))
+                    .chain(state)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }
             _ => format!("{} {}", field("type"), field("key")),
         }
     }
@@ -1649,7 +1670,8 @@ mod tests {
     /// The test's input turn: records when its last copy goes, and carries devices of its own.
     #[derive(Clone)]
     struct Turn {
-        inner: Arc<TurnRelease>,
+        /// Held for its `Drop`, which records when the last copy of the turn went.
+        _release: Arc<TurnRelease>,
         devices: Arc<Mutex<InputDevices>>,
     }
 

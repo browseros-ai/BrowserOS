@@ -473,7 +473,7 @@ pub(crate) fn plan_button_releases(plan: &mut Plan, simulated: &mut InputDevices
 // The seam a turn provides, and the writer.
 // ---------------------------------------------------------------------------------------------
 
-/// Where a writer's commands go: the run's session at its socket incarnation (`page.rs`
+/// Neo: where a writer's commands go, the run's session at its socket incarnation (`page.rs`
 /// `send_input_json`), or a recording fake under paused time in the tests.
 pub(crate) trait InputSender: Send + Sync + 'static {
     /// Sends one `Input.*` command, its params already serialized.
@@ -484,14 +484,14 @@ pub(crate) trait InputSender: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), CdpError>> + Send;
 }
 
-/// Where a writer records what it wrote: the tab's devices through the call's input turn, or a
-/// test's own state.
+/// Neo: where a writer records what it wrote, the tab's devices through the call's input turn,
+/// or a test's own state.
 pub(crate) trait EffectSink: Send + Sync {
     /// Applies `effect` (`InputDevices::apply`); `answered` when the command was acknowledged.
     fn apply(&self, effect: &Effect, answered: bool);
 }
 
-/// What a turn at a tab's input gives a call: the tab's devices, to plan from and to record
+/// Neo: what a turn at a tab's input gives a call, the tab's devices to plan from and to record
 /// into, and who holds the turn. Only a held turn reaches the devices.
 pub(crate) trait Devices: EffectSink + Clone + Send + Sync + 'static {
     /// A copy of the tab's devices, to plan from.
@@ -682,7 +682,7 @@ pub(crate) fn start_writer<D: Devices, C: Send + 'static>(
     }
 }
 
-/// A `delay` sleep that the call stopping ends early.
+/// Neo: a `delay` sleep that the call stopping ends early.
 async fn pause(delay: Duration, cut_short: &CancellationToken) {
     tokio::select! {
         () = time::sleep(delay) => {}
@@ -876,7 +876,11 @@ mod tests {
             plan.commands[..4].iter().all(|command| command.with_next),
             "without delay the whole click is one pipelined batch"
         );
-        assert_eq!(simulated.mouse.x, 1.0, "the pointer ends at the click");
+        assert_eq!(
+            (simulated.mouse.x, simulated.mouse.y),
+            (1.0, 2.0),
+            "the pointer ends at the click"
+        );
         assert!(simulated.mouse.buttons.is_empty());
     }
 
