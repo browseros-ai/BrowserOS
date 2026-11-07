@@ -21,27 +21,31 @@ const ABORTED = `const aborted = (promise, reason) => promise.then(
 
 const cases = [
   {
-    // tests/page/page-filechooser.spec.ts "FC-015 should abort with signal".
+    // tests/page/page-filechooser.spec.ts "FC-015 should abort with signal", five times over:
+    // each abort leaves no interception (review-review-a3.md P2 1: a stale switch could).
     name: "page.waitForEvent('filechooser') aborted mid-wait rejects and leaves no interception",
     path: '/event-abort.html',
-    source: `${ABORTED}const controller = new AbortController()
-    const waiting = page.waitForEvent('filechooser', { signal: controller.signal })
-    controller.abort('Aborted by user')
-    const settled = await aborted(waiting, 'Aborted by user')
-    await page.click('#single')
-    await page.waitForFunction(() => window.__cancels > 0, null, { timeout: 5000 })
+    source: `${ABORTED}const settled = []
+    for (let round = 1; round <= 5; round++) {
+      const controller = new AbortController()
+      const waiting = page.waitForEvent('filechooser', { signal: controller.signal })
+      controller.abort('Aborted by user')
+      settled.push(JSON.stringify(await aborted(waiting, 'Aborted by user')))
+      await page.click('#single')
+      await page.waitForFunction((round) => window.__cancels >= round, round, { timeout: 5000 })
+    }
     return {
-      settled,
+      settled: [...new Set(settled)].map((one) => JSON.parse(one)),
       listeners: page.listenerCount('filechooser'),
       cancels: await page.evaluate(() => window.__cancels),
     }`,
     expected: {
-      settled: { name: 'AbortError', causeIsReason: true },
+      settled: [{ name: 'AbortError', causeIsReason: true }],
       listeners: 0,
-      cancels: 1,
+      cancels: 5,
     },
     probe: 'window.__cancels',
-    effect: 1,
+    effect: 5,
   },
   {
     // tests/page/page-click.spec.ts "CL-092 should abort via already-aborted signal", on the

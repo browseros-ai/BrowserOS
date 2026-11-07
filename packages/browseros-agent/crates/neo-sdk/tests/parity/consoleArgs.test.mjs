@@ -2,7 +2,8 @@
 // tests/pages/console.html tabs (events.mjs): a message's arguments are handles of what
 // console.log received, in order, whose jsonValue() is each value; the same handle comes back at
 // every read; an object is a JSHandle and a node an ElementHandle; and a browser log entry has
-// none. Neo makes the handles when args() first reads them (console-message.ts, Deviation): a
+// none; a child frame's arguments live in that frame; and a received message's arguments outlive
+// its page. Neo makes the handles when args() first reads them (console-message.ts, Deviation): a
 // message read from consoleMessages() kept no arguments, which a Neo-only case pins.
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs, events.mjs).
@@ -97,6 +98,39 @@ const cases = [
     neo: (outcome) =>
       assert.deepEqual(outcome.value, { text: 'click 1', refused: 'Error' }),
   },
+  {
+    // Reviewer's case (review-review-a3.md P2 2): an argument of a same-origin child frame's
+    // message is a handle in that frame, so evaluating it runs in the child's document.
+    name: "a child frame's argument evaluates in the child's document",
+    path: '/console-host.html',
+    source: `const child = page.frame({ name: 'child' })
+    const message = page.waitForEvent('console')
+    await child.evaluate(() => console.log(17))
+    const arg = (await message).args()[0]
+    const realm = await arg.evaluate(() => {
+      document.body.setAttribute('data-edge', 'changed')
+      return window.marker
+    })
+    return {
+      value: await arg.jsonValue(),
+      realm,
+      parent: await page.getAttribute('body', 'data-edge'),
+      child: await child.getAttribute('body', 'data-edge'),
+    }`,
+    expected: { value: 17, realm: 'CHILD', parent: null, child: 'changed' },
+  },
+  {
+    // Reviewer's case (review-review-a3.md P2 3): the arguments a listener received outlive the
+    // page; using an object's handle may then fail, as Playwright's do.
+    name: "a received message's arguments outlive its page",
+    path: '/console.html',
+    source: `const message = page.waitForEvent('console')
+    await page.evaluate(() => console.log(7, { x: 1 }))
+    const held = await message
+    await page.close()
+    return { length: held.args().length, again: held.args()[1] === held.args()[1] }`,
+    expected: { length: 2, again: true },
+  },
 ]
 
 test('console arguments are the same handles through Neo and Playwright', {
@@ -104,7 +138,13 @@ test('console arguments are the same handles through Neo and Playwright', {
   timeout: 300_000,
 }, async (t) => {
   await compareEvents(t, {
-    pages: { '/console.html': fixture('console.html') },
+    pages: {
+      '/console.html': fixture('console.html'),
+      '/console-host.html':
+        '<!doctype html><title>host</title><script>window.marker = "PARENT"</script><iframe name="child" src="/console-child.html"></iframe>',
+      '/console-child.html':
+        '<!doctype html><title>child</title><script>window.marker = "CHILD"</script><body>child</body>',
+    },
     cases,
   })
 })
