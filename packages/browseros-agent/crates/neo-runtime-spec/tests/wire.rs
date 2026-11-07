@@ -15,8 +15,7 @@ use neo_runtime_spec::serve::{
     PageCall, PageScreenshotResult, Point, RequestInitializer,
 };
 use neo_runtime_spec::{
-    Binary, CallDecodeError, Command, MethodFlag, MethodGroup, PageResult, SPEC_SHA256,
-    is_current,
+    Binary, CallDecodeError, Command, MethodFlag, MethodGroup, PageResult, SPEC_SHA256, is_current,
 };
 use serde_json::json;
 
@@ -338,9 +337,15 @@ fn binary_crosses_as_standard_base64_with_padding() {
 fn binary_refuses_text_that_is_not_standard_base64() {
     for text in ["%%%", "YQ", "YQ=", "Y Q==", "-_-_"] {
         let error = serde_json::from_value::<Binary>(json!(text)).unwrap_err();
-        assert!(error.to_string().contains("invalid base64"), "{text:?}: {error}");
+        assert!(
+            error.to_string().contains("invalid base64"),
+            "{text:?}: {error}"
+        );
     }
-    assert!(serde_json::from_value::<Binary>(json!(3)).is_err(), "a number is not binary");
+    assert!(
+        serde_json::from_value::<Binary>(json!(3)).is_err(),
+        "a number is not binary"
+    );
 }
 
 #[test]

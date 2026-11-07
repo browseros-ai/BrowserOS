@@ -10,16 +10,14 @@ use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use browseros_cdp::CdpError;
 use neo_runtime_spec::serve::PagePdfParams;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::debug;
 
-use crate::click::PageError;
+use crate::capture;
 use crate::page::PageSession;
 use crate::progress::{self, CallError, PlaywrightError, Progress};
-use crate::world;
 
 /// Playwright: `server/chromium/crPdf.ts` `CRPDF.generate`: `let paperWidth = 8.5;`
 const DEFAULT_PAPER_WIDTH: f64 = 8.5;
@@ -27,6 +25,10 @@ const DEFAULT_PAPER_WIDTH: f64 = 8.5;
 const DEFAULT_PAPER_HEIGHT: f64 = 11.0;
 /// Playwright: `server/chromium/crPdf.ts` `convertPrintParameterToInches`: `return pixels / 96;`
 const CSS_PIXELS_PER_INCH: f64 = 96.0;
+/// Playwright: `server/chromium/crPdf.ts` `CRPDF.generate`: `'Unknown paper format: ' + options.format`
+const UNKNOWN_PAPER_FORMAT: &str = "Unknown paper format: ";
+/// Playwright: `server/chromium/crPdf.ts` `convertPrintParameterToInches`: `'Failed to parse parameter value: ' + text`
+const UNPARSABLE_VALUE: &str = "Failed to parse parameter value: ";
 
 /// `Page.printToPDF`'s params as Playwright's `CRPDF.generate` builds them, defaults filled.
 #[derive(Debug, Clone, PartialEq)]
@@ -53,23 +55,22 @@ pub(crate) struct PdfOptions {
     outline: bool,
 }
 
+/// Playwright: `server/chromium/crPdf.ts` `CRPDF.generate`
 impl PdfOptions {
     /// Playwright's `CRPDF.generate` up to its `Page.printToPDF`: the destructuring defaults,
     /// the paper size from `format` or `width`/`height`, the margins in inches.
     pub(crate) fn from_params(params: &PagePdfParams) -> Result<Self, PlaywrightError> {
         let (paper_width, paper_height) = match &params.format {
-            Some(format) => paper_format(&format.to_lowercase()).ok_or_else(|| {
-                PlaywrightError::error(format!("Unknown paper format: {format}"))
-            })?,
+            Some(format) => paper_format(&format.to_lowercase())
+                .ok_or_else(|| PlaywrightError::error(format!("{UNKNOWN_PAPER_FORMAT}{format}")))?,
             None => (
                 inches_or(params.width.as_deref(), DEFAULT_PAPER_WIDTH)?,
                 inches_or(params.height.as_deref(), DEFAULT_PAPER_HEIGHT)?,
             ),
         };
         let margin = params.margin.as_ref();
-        let side = |value: Option<&Option<String>>| {
-            inches_or(value.and_then(Option::as_deref), 0.0)
-        };
+        let side =
+            |value: Option<&Option<String>>| inches_or(value.and_then(Option::as_deref), 0.0);
         Ok(Self {
             landscape: params.landscape.unwrap_or(false),
             display_header_footer: params.display_header_footer.unwrap_or(false),
@@ -144,6 +145,7 @@ fn unit_to_pixels(unit: &str) -> Option<f64> {
 
 /// Playwright's `convertPrintParameterToInches(text) || fallback`: absent, and also a value of
 /// zero, take `fallback`.
+/// Playwright: `server/chromium/crPdf.ts` `CRPDF.generate`: `const marginTop = convertPrintParameterToInches(margin.top) || 0;`
 fn inches_or(text: Option<&str>, fallback: f64) -> Result<f64, PlaywrightError> {
     let Some(text) = text else {
         return Ok(fallback);
@@ -167,9 +169,7 @@ fn to_inches(text: &str) -> Result<f64, PlaywrightError> {
     };
     let value = js_number(&value_text);
     if value.is_nan() {
-        return Err(PlaywrightError::error(format!(
-            "Failed to parse parameter value: {text}"
-        )));
+        return Err(PlaywrightError::error(format!("{UNPARSABLE_VALUE}{text}")));
     }
     Ok(value * pixels_per_unit / CSS_PIXELS_PER_INCH)
 }
@@ -212,11 +212,14 @@ fn js_number(text: &str) -> f64 {
     if !is_decimal_literal(unsigned) {
         return f64::NAN;
     }
-    unsigned.parse::<f64>().map_or(f64::NAN, |value| sign * value)
+    unsigned
+        .parse::<f64>()
+        .map_or(f64::NAN, |value| sign * value)
 }
 
 /// `StrUnsignedDecimalLiteral` without `Infinity`: digits with an optional fraction, or a
 /// fraction alone, then an optional exponent.
+/// Platform: ECMA-262 `StringNumericLiteral` grammar, `StrUnsignedDecimalLiteral`.
 fn is_decimal_literal(text: &str) -> bool {
     let bytes = text.as_bytes();
     let mut at = 0;
@@ -259,6 +262,7 @@ struct IoChunk {
 }
 
 /// Serves `Page.pdf`: the document's PDF bytes.
+/// Playwright: `server/chromium/crPdf.ts` `CRPDF.generate`: `return await readProtocolStream(this._client, result.stream!);`
 pub(crate) async fn pdf(
     page: &Arc<PageSession>,
     params: &PagePdfParams,
@@ -268,9 +272,9 @@ pub(crate) async fn pdf(
     let printed = progress
         .race(page.send("Page.printToPDF", options.to_cdp()))
         .await?
-        .map_err(|error| protocol_error("Page.printToPDF", &error))?;
+        .map_err(|error| capture::protocol_error("Page.printToPDF", &error))?;
     let Some(handle) = printed.get("stream").and_then(Value::as_str) else {
-        return Err(PlaywrightError::error("Page.printToPDF answered no stream").into());
+        return Err(capture::malformed("Page.printToPDF", "no stream"));
     };
     let stream = Stream {
         page: Arc::clone(page),
@@ -288,6 +292,7 @@ struct Stream {
     closed: bool,
 }
 
+/// Playwright: `server/chromium/crProtocolHelper.ts` `readProtocolStream`
 impl Stream {
     /// Playwright: `server/chromium/crProtocolHelper.ts` `readProtocolStream`: `const buf = Buffer.from(response.data, response.base64Encoded ? 'base64' : undefined);`
     async fn read(mut self, progress: &Progress) -> Result<Vec<u8>, CallError> {
@@ -296,14 +301,13 @@ impl Stream {
             let reply = progress
                 .race(self.page.send("IO.read", json!({ "handle": self.handle })))
                 .await?
-                .map_err(|error| protocol_error("IO.read", &error))?;
-            let chunk: IoChunk = serde_json::from_value(reply).map_err(|error| {
-                PlaywrightError::error(format!("IO.read answered: {error}"))
-            })?;
+                .map_err(|error| capture::protocol_error("IO.read", &error))?;
+            let chunk: IoChunk = serde_json::from_value(reply)
+                .map_err(|error| capture::malformed("IO.read", error))?;
             if chunk.base64_encoded {
-                let decoded = STANDARD.decode(chunk.data.as_bytes()).map_err(|error| {
-                    PlaywrightError::error(format!("IO.read answered: {error}"))
-                })?;
+                let decoded = STANDARD
+                    .decode(chunk.data.as_bytes())
+                    .map_err(|error| capture::malformed("IO.read", error))?;
                 bytes.extend_from_slice(&decoded);
             } else {
                 bytes.extend_from_slice(chunk.data.as_bytes());
@@ -323,6 +327,7 @@ impl Stream {
     }
 }
 
+/// Neo: a stream the call stopped reading is closed in the background.
 impl Drop for Stream {
     fn drop(&mut self) {
         if self.closed {
@@ -335,20 +340,6 @@ impl Drop for Stream {
                 debug!(%error, "closing an abandoned PDF stream failed");
             }
         });
-    }
-}
-
-/// Playwright's wording for a failed CDP command, `Protocol error (<method>): <message>`; a
-/// closed tab is `TargetClosedError`.
-fn protocol_error(method: &str, error: &CdpError) -> CallError {
-    match error {
-        CdpError::Protocol { message, .. } => {
-            PlaywrightError::error(format!("Protocol error ({method}): {message}")).into()
-        }
-        error if world::classify(error) == PageError::Closed => {
-            PlaywrightError::target_closed().into()
-        }
-        error => PlaywrightError::error(error.to_string()).into(),
     }
 }
 
@@ -418,7 +409,10 @@ mod tests {
         }
         for text in ["abc", "10pt", "1,5in", "-0x10", "px1"] {
             let error = to_inches(text).expect_err(text);
-            assert_eq!(error.message, format!("Failed to parse parameter value: {text}"));
+            assert_eq!(
+                error.message,
+                format!("Failed to parse parameter value: {text}")
+            );
         }
     }
 
@@ -465,7 +459,10 @@ mod tests {
         ] {
             assert_eq!(js_number(text).to_bits(), value.to_bits(), "{text:?}");
         }
-        assert_eq!(js_number("-Infinity").to_bits(), f64::NEG_INFINITY.to_bits());
+        assert_eq!(
+            js_number("-Infinity").to_bits(),
+            f64::NEG_INFINITY.to_bits()
+        );
         for text in ["inf", "NaN", "1_000", ".", "e5", "1e", "0x", "12abc", "+-1"] {
             assert!(js_number(text).is_nan(), "{text:?}");
         }

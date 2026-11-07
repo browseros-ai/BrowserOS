@@ -3,10 +3,16 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (0)
+## Deviations (6)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
+| neo-runtime/src/artifacts.rs | `MAX_BINARY_RESULT_BYTES` | `client/page.ts` `Page.screenshot` | returns a buffer of any size. A binary result reaches the script as base64 JSON that the 64 MiB realm holds twice while it parses (probes-bin.md B3: 16 MiB fits, 20 MiB ends the run with `InternalError: out of memory`), so a larger one is refused with an Error naming its size. |
+| neo-runtime/src/capture.rs | `masks` | `server/screenshotter.ts` `Screenshotter._maskElements` | masks a locator of another page in that page, where nothing hides the mask again; Neo skips it, which leaves this page's screenshot the same. |
+| neo-runtime/src/screenshot.rs | `screenshot_locator` | `server/frames.ts` `Frame.waitForSelector` | is the element Playwright's wait returns; Neo resolves it again with click's `resolve`, which also marks it as a target (`markTargets: 'all'`), and waits again if it detached in between. |
+| neo-sdk/src/screenshot.ts | (file) | `client/page.ts` `Page.screenshot` | A Neo script has no file system: `path` travels with the call and neo-runtime writes the bytes into the run's artifact directory (`artifacts.rs`), relative paths only. A run without one refuses `path` with an Error naming the option. |
+| neo-sdk/src/screenshot.ts | (file) | `client/timeoutSettings.ts` `TimeoutSettings.timeout` | Neo takes no `signal` (the realm has no `AbortController`), so a `signal` option is refused rather than ignored. |
+| neo-sdk/src/screenshot.ts | `screenshotFields` | `client/timeoutSettings.ts` `TimeoutSettings.timeout` | Neo refuses a signal rather than ignore it. |
 
 ## Unexplained: owner questions (0)
 

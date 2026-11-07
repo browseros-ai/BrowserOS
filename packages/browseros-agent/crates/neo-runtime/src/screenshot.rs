@@ -26,7 +26,6 @@ use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use browseros_cdp::CdpError;
 use futures_util::future;
 use neo_runtime_spec::Handle;
 use neo_runtime_spec::injected::{
@@ -45,13 +44,13 @@ use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tracing::debug;
 
+use crate::capture;
 use crate::click::{self, NotReady, PageError, Scroll, StatesCheck, Tab};
 use crate::frame_selector;
 use crate::frames::{FrameContext, FrameScope};
 use crate::page::{FrameTab, GroupGuard, PageSession, ResolvedElement};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::waits::{self, WaitForSelectorOptions};
-use crate::world;
 
 /// Playwright: `server/screenshotter.ts` `Screenshotter._maskElements`: `options.maskColor || '#F0F'`
 const DEFAULT_MASK_COLOR: &str = "#F0F";
@@ -61,6 +60,10 @@ const DEFAULT_JPEG_QUALITY: i64 = 80;
 const DEFAULT_WEBP_QUALITY: i64 = 100;
 /// Playwright: `server/helper.ts` `Helper.enclosingIntRect`: `const x = Math.floor(rect.x + 1e-3);`
 const ENCLOSING_EPSILON: f64 = 1e-3;
+/// Playwright: `server/screenshotter.ts` `validateScreenshotOptions`: `'options.quality is unsupported for the ' + format + ' screenshots'`
+const QUALITY_UNSUPPORTED: [&str; 2] = ["options.quality is unsupported for the ", " screenshots"];
+/// Playwright: `server/screenshotter.ts` `validateScreenshotOptions`: `'Expected options.quality to be between 0 and 100 (inclusive), got ' + options.quality`
+const QUALITY_RANGE: &str = "Expected options.quality to be between 0 and 100 (inclusive), got ";
 
 /// The image formats `Page.captureScreenshot` takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +73,7 @@ pub(crate) enum Format {
     Webp,
 }
 
+/// Neo: the names `Page.captureScreenshot` takes, which are Playwright's.
 impl Format {
     fn as_str(self) -> &'static str {
         match self {
@@ -122,6 +126,7 @@ pub(crate) struct ScreenshotParams {
     pub(crate) style: Option<String>,
 }
 
+/// Neo: the page's params as the shared shape.
 impl ScreenshotParams {
     pub(crate) fn from_page(params: &PageScreenshotParams) -> Self {
         Self {
@@ -139,6 +144,7 @@ impl ScreenshotParams {
     }
 }
 
+/// Playwright: `server/screenshotter.ts` `validateScreenshotOptions`
 impl ScreenshotOptions {
     /// Playwright's `validateScreenshotOptions`, with `masks` already resolved to this tab's
     /// frames.
@@ -150,17 +156,14 @@ impl ScreenshotOptions {
         };
         if let Some(quality) = params.quality {
             if format == Format::Png {
-                // Playwright: `server/screenshotter.ts` `validateScreenshotOptions`: `'options.quality is unsupported for the ' + format + ' screenshots'`
+                let [before, after] = QUALITY_UNSUPPORTED;
                 return Err(PlaywrightError::error(format!(
-                    "options.quality is unsupported for the {} screenshots",
+                    "{before}{}{after}",
                     format.as_str()
                 )));
             }
             if !(0..=100).contains(&quality) {
-                // Playwright: `server/screenshotter.ts` `validateScreenshotOptions`: `'Expected options.quality to be between 0 and 100 (inclusive), got ' + options.quality`
-                return Err(PlaywrightError::error(format!(
-                    "Expected options.quality to be between 0 and 100 (inclusive), got {quality}"
-                )));
+                return Err(PlaywrightError::error(format!("{QUALITY_RANGE}{quality}")));
             }
         }
         if let Some(clip) = &params.clip {
@@ -204,6 +207,7 @@ struct Size {
 }
 
 /// Serves `Page.screenshot` on the tab's main frame: the image bytes.
+/// Playwright: `server/screenshotter.ts` `Screenshotter.screenshotPage`
 pub(crate) async fn screenshot_page(
     tab: &FrameTab,
     options: &ScreenshotOptions,
@@ -227,8 +231,15 @@ pub(crate) async fn screenshot_page(
             if let Some(clip) = &options.clip {
                 document_rect = trim_clip_to_size(clip, full)?;
             }
-            return capture(tab, Some(document_rect), None, fits_viewport, options, progress)
-                .await;
+            return capture(
+                tab,
+                Some(document_rect),
+                None,
+                fits_viewport,
+                options,
+                progress,
+            )
+            .await;
         }
         let viewport_rect = match &options.clip {
             Some(clip) => trim_clip_to_size(clip, viewport)?,
@@ -249,6 +260,7 @@ pub(crate) async fn screenshot_page(
 /// Serves Neo's `locator.screenshot`: Playwright's `Locator._withElement` (one strict
 /// `waitForSelector` for an attached element) then `Screenshotter.screenshotElement`, in one call
 /// with one deadline.
+/// Playwright: `client/locator.ts` `Locator._withElement`
 pub(crate) async fn screenshot_locator(
     tab: &FrameTab,
     selector: &str,
@@ -277,6 +289,7 @@ pub(crate) async fn screenshot_locator(
 
 /// Playwright's `Screenshotter.screenshotElement` with `frameVisible: true`, as
 /// `ElementHandle.screenshot` passes it.
+/// Playwright: `server/screenshotter.ts` `Screenshotter.screenshotElement`
 async fn screenshot_element(
     tab: &FrameTab,
     mut element: ResolvedElement,
@@ -297,10 +310,9 @@ async fn screenshot_element(
             .map_err(page_error)?;
         // Playwright: `server/screenshotter.ts` `Screenshotter.screenshotElement`: `assert(boundingBox, 'Node is either not visible or not an HTMLElement');`
         let Some(bounding_box) = bounding_box else {
-            return Err(PlaywrightError::error(
-                "Node is either not visible or not an HTMLElement",
-            )
-            .into());
+            return Err(
+                PlaywrightError::error("Node is either not visible or not an HTMLElement").into(),
+            );
         };
         if bounding_box.width == 0.0 {
             // Playwright: `server/screenshotter.ts` `Screenshotter.screenshotElement`: `assert(boundingBox.width !== 0, 'Node has 0 width.');`
@@ -313,11 +325,7 @@ async fn screenshot_element(
         let fits_viewport =
             bounding_box.width <= viewport.width && bounding_box.height <= viewport.height;
         let scroll = progress
-            .race(
-                tab.frames
-                    .main()
-                    .call(None, &InjectedScrollOffsetParams {}),
-            )
+            .race(tab.frames.main().call(None, &InjectedScrollOffsetParams {}))
             .await?
             .map_err(page_error)?;
         let document_rect = enclosing_int_rect(&Rect {
@@ -326,7 +334,15 @@ async fn screenshot_element(
             width: bounding_box.width,
             height: bounding_box.height,
         });
-        capture(tab, Some(document_rect), None, fits_viewport, options, progress).await
+        capture(
+            tab,
+            Some(document_rect),
+            None,
+            fits_viewport,
+            options,
+            progress,
+        )
+        .await
     }
     .await;
     prepared.restore(progress).await;
@@ -335,6 +351,7 @@ async fn screenshot_element(
 
 /// `Screenshotter._originalViewportSize` without an emulated viewport (Neo never emulates
 /// one): the main frame's `innerWidth` and `innerHeight`.
+/// Playwright: `server/screenshotter.ts` `Screenshotter._originalViewportSize`
 async fn original_viewport_size(tab: &FrameTab, progress: &Progress) -> Result<Size, CallError> {
     let size = progress
         .race(tab.frames.main().call(None, &InjectedViewportSizeParams {}))
@@ -347,7 +364,9 @@ async fn original_viewport_size(tab: &FrameTab, progress: &Progress) -> Result<S
 }
 
 /// `Screenshotter._fullPageSize`: Playwright's `waitForFunctionValueInUtility` polls until the
-/// document has a `body` and a `documentElement`; so does this, every animation frame's worth.
+/// document has a `body` and a `documentElement`; so does this.
+/// Playwright: `server/screenshotter.ts` `Screenshotter._fullPageSize`
+/// Neo: it polls on loop A's backoff rather than on animation frames.
 async fn full_page_size(tab: &FrameTab, progress: &Progress) -> Result<Size, CallError> {
     let mut backoff = click::LoopAWaits::new(progress.timeout_ms());
     loop {
@@ -373,6 +392,8 @@ async fn full_page_size(tab: &FrameTab, progress: &Progress) -> Result<Size, Cal
 
 /// Playwright's `_retryAction(progress, 'scroll into view', …)`: wait until the element is
 /// visible and stable, then `DOM.scrollIntoViewIfNeeded`, retrying with loop B's waits.
+/// Playwright: `server/dom.ts` `ElementHandle._retryAction`
+/// Playwright: `server/dom.ts` `ElementHandle._waitAndScrollIntoViewIfNeeded`
 async fn wait_and_scroll_into_view(
     tab: &FrameTab,
     element: &ResolvedElement,
@@ -428,6 +449,7 @@ async fn wait_and_scroll_into_view(
 
 /// `CRPage._getBoundingBox`: the border box from `DOM.getBoxModel`, moved by the offset of the
 /// element's out-of-process frame. `None` where Playwright's `_sendMayFail` gives `null`.
+/// Playwright: `server/chromium/crPage.ts` `FrameSession._getBoundingBox`
 async fn bounding_box(
     tab: &FrameTab,
     element: &ResolvedElement,
@@ -462,7 +484,11 @@ async fn bounding_box(
     let y = ys.iter().copied().fold(f64::INFINITY, f64::min);
     let width = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max) - x;
     let height = ys.iter().copied().fold(f64::NEG_INFINITY, f64::max) - y;
-    let offset = tab.frames.offset(&element.frame.host).await?.unwrap_or_default();
+    let offset = tab
+        .frames
+        .offset(&element.frame.host)
+        .await?
+        .unwrap_or_default();
     Ok(Some(Rect {
         x: x + offset.0,
         y: y + offset.1,
@@ -473,6 +499,7 @@ async fn bounding_box(
 
 /// `Screenshotter._screenshot`: the background override, the masks, the capture, and their
 /// cleanup in Playwright's order.
+/// Playwright: `server/screenshotter.ts` `Screenshotter._screenshot`
 async fn capture(
     tab: &FrameTab,
     document_rect: Option<Rect>,
@@ -489,7 +516,9 @@ async fn capture(
                 json!({ "color": { "r": 0, "g": 0, "b": 0, "a": 0 } }),
             ))
             .await?
-            .map_err(|error| protocol_error("Emulation.setDefaultBackgroundColorOverride", &error))?;
+            .map_err(|error| {
+                capture::protocol_error("Emulation.setDefaultBackgroundColorOverride", &error)
+            })?;
         Some(Background {
             page: Arc::clone(&tab.page),
             reset: false,
@@ -549,6 +578,7 @@ struct ContentSize {
 /// `captureBeyondViewport` when the area does not fit the viewport. Neo never emulates a
 /// device scale or touch, so the device scale is the content's ratio and no touch emulation
 /// needs restoring after a capture beyond the viewport.
+/// Playwright: `server/chromium/crPage.ts` `CRPage.takeScreenshot`
 #[expect(
     clippy::too_many_arguments,
     reason = "CRPage.takeScreenshot's own parameters, in its order"
@@ -566,14 +596,13 @@ async fn take_screenshot(
     let metrics = progress
         .race(page.send("Page.getLayoutMetrics", json!({})))
         .await?
-        .map_err(|error| protocol_error("Page.getLayoutMetrics", &error))?;
+        .map_err(|error| capture::protocol_error("Page.getLayoutMetrics", &error))?;
     let LayoutMetrics {
         visual_viewport,
         content_size,
         css_content_size,
-    } = serde_json::from_value(metrics).map_err(|error| {
-        PlaywrightError::error(format!("Page.getLayoutMetrics answered: {error}"))
-    })?;
+    } = serde_json::from_value(metrics)
+        .map_err(|error| capture::malformed("Page.getLayoutMetrics", error))?;
     let document_rect = match (document_rect, &viewport_rect) {
         (Some(rect), _) => rect,
         (None, Some(viewport)) => Rect {
@@ -583,7 +612,10 @@ async fn take_screenshot(
             height: enclosing_int(viewport.height / visual_viewport.scale),
         },
         (None, None) => {
-            return Err(PlaywrightError::error("a screenshot needs a document or viewport area").into());
+            return Err(capture::malformed(
+                "screenshot",
+                "no document or viewport area",
+            ));
         }
     };
     // When taking screenshots with documentRect (based on the page content, not viewport),
@@ -596,7 +628,11 @@ async fn take_screenshot(
     if css_scale {
         // Playwright: `server/chromium/crPage.ts` `CRPage.takeScreenshot`: `contentSize.width / cssContentSize.width || 1`
         let ratio = content_size.width / css_content_size.width;
-        let device_scale_factor = if ratio.is_nan() || ratio == 0.0 { 1.0 } else { ratio };
+        let device_scale_factor = if ratio.is_nan() || ratio == 0.0 {
+            1.0
+        } else {
+            ratio
+        };
         scale /= device_scale_factor;
     }
     let mut params = json!({
@@ -616,16 +652,17 @@ async fn take_screenshot(
     let shot = progress
         .race(page.send("Page.captureScreenshot", params))
         .await?
-        .map_err(|error| protocol_error("Page.captureScreenshot", &error))?;
+        .map_err(|error| capture::protocol_error("Page.captureScreenshot", &error))?;
     let data = shot.get("data").and_then(Value::as_str).unwrap_or_default();
     STANDARD
         .decode(data.as_bytes())
-        .map_err(|error| PlaywrightError::error(format!("Page.captureScreenshot answered: {error}")).into())
+        .map_err(|error| capture::malformed("Page.captureScreenshot", error))
 }
 
 /// The frames of this tab with a utility world Neo can reach, the main frame first. A frame
 /// the tree read cannot reach is left out, as Playwright's evaluation in all frames skips one
 /// that fails.
+/// Neo: Playwright's `this.frames()`, read from the tab's frame tree.
 async fn all_frames(tab: &FrameTab) -> Vec<Arc<FrameContext>> {
     let main = tab.frames.main();
     let mut frames = vec![Arc::clone(&main)];
@@ -656,6 +693,7 @@ struct Cleanup {
 
 /// `Screenshotter._preparePageForScreenshot`: the page function in every frame, errors ignored
 /// (Playwright's `safeNonStallingEvaluateInAllFrames`), then the fonts of `frame`.
+/// Playwright: `server/screenshotter.ts` `Screenshotter._preparePageForScreenshot`
 async fn prepare(
     tab: &FrameTab,
     frame: &Arc<FrameContext>,
@@ -696,7 +734,9 @@ async fn prepare(
                     });
                 }
             }
-            Err(error) => debug!(?error, frame = %frame.id, "preparing a frame for a screenshot failed"),
+            Err(error) => {
+                debug!(?error, frame = %frame.id, "preparing a frame for a screenshot failed")
+            }
         }
     }
     progress.log("waiting for fonts to load...");
@@ -712,6 +752,7 @@ async fn prepare(
     Ok(prepared)
 }
 
+/// Playwright: `server/screenshotter.ts` `Screenshotter._restorePageAfterScreenshot`
 impl Prepared {
     /// `Screenshotter._restorePageAfterScreenshot`, awaited unless the call has to stop; the
     /// restore itself always runs to its end on the run's tracker.
@@ -729,6 +770,7 @@ impl Prepared {
     }
 }
 
+/// Neo: a call that stopped early still restores the page, in the background.
 impl Drop for Prepared {
     fn drop(&mut self) {
         let cleanups = mem::take(&mut self.cleanups);
@@ -738,6 +780,7 @@ impl Drop for Prepared {
     }
 }
 
+/// Playwright: `server/page.ts` `Page.safeNonStallingEvaluateInAllFrames`
 async fn restore_all(cleanups: Vec<Cleanup>) {
     let restores = cleanups.iter().map(|cleanup| async {
         let params = InjectedRestoreAfterScreenshotParams {
@@ -764,6 +807,7 @@ struct Masks {
 
 /// `Screenshotter._maskElements`: hide any overlay in every frame, then mask each locator's
 /// matches in its own frame. `None` without masks.
+/// Playwright: `server/screenshotter.ts` `Screenshotter._maskElements`
 async fn mask_elements(
     tab: &FrameTab,
     options: &ScreenshotOptions,
@@ -806,6 +850,7 @@ async fn mask_elements(
     Ok(Some(masks))
 }
 
+/// Playwright: `server/screenshotter.ts` `Screenshotter._screenshot`: `await progress.race(cleanupHighlight());`
 impl Masks {
     /// Playwright's `await progress.race(cleanupHighlight())`.
     async fn hide(mut self, progress: &Progress) {
@@ -820,17 +865,20 @@ impl Masks {
     }
 }
 
+/// Playwright: `server/screenshotter.ts` `Screenshotter._screenshot`: `cleanupHighlight().catch(() => {});`
 impl Drop for Masks {
     fn drop(&mut self) {
         if self.hidden {
             return;
         }
         let frames = mem::take(&mut self.frames);
-        self.page.spawn(async move { hide_highlights(&frames).await });
+        self.page
+            .spawn(async move { hide_highlights(&frames).await });
     }
 }
 
 /// `HighlightController.hideHighlights` over `frames`, errors ignored.
+/// Playwright: `server/highlightController.ts` `HighlightController.hideHighlights`
 async fn hide_highlights(frames: &[Arc<FrameContext>]) {
     let hides = frames
         .iter()
@@ -849,6 +897,7 @@ struct Background {
     reset: bool,
 }
 
+/// Playwright: `server/screenshotter.ts` `Screenshotter._screenshot`: `await progress.race(this._page.delegate.setBackgroundColor());`
 impl Background {
     /// Playwright's `setBackgroundColor()`: `Emulation.setDefaultBackgroundColorOverride` with
     /// no color, awaited unless the call has to stop.
@@ -864,16 +913,19 @@ impl Background {
     }
 }
 
+/// Playwright: `server/screenshotter.ts` `Screenshotter._screenshot`: `this._page.delegate.setBackgroundColor().catch(() => {});`
 impl Drop for Background {
     fn drop(&mut self) {
         if self.reset {
             return;
         }
         let page = Arc::clone(&self.page);
-        self.page.spawn(async move { reset_background(&page).await });
+        self.page
+            .spawn(async move { reset_background(&page).await });
     }
 }
 
+/// Playwright: `server/chromium/crPage.ts` `CRPage.setBackgroundColor`
 async fn reset_background(page: &PageSession) {
     if let Err(error) = page
         .send("Emulation.setDefaultBackgroundColorOverride", json!({}))
@@ -924,6 +976,7 @@ fn enclosing_int(value: f64) -> f64 {
 }
 
 /// A glue size in whole pixels as a float.
+/// Neo: the glue answers whole pixels; the arithmetic is Playwright's in floats.
 #[expect(
     clippy::cast_precision_loss,
     reason = "CSS pixel sizes are far below 2^52"
@@ -932,6 +985,7 @@ fn pixels(value: i64) -> f64 {
     value as f64
 }
 
+/// Neo: a page step's failure as the call's error.
 fn page_error(error: PageError) -> CallError {
     match error {
         PageError::Closed => PlaywrightError::target_closed().into(),
@@ -947,26 +1001,13 @@ fn page_error(error: PageError) -> CallError {
 }
 
 /// An element handle's page step failing: its document is gone, so is the element.
+/// Playwright: `server/dom.ts` `throwElementIsNotAttached`
 fn element_error(error: PageError) -> CallError {
     match error {
         PageError::NotConnected => {
             PlaywrightError::error("Element is not attached to the DOM").into()
         }
         error => page_error(error),
-    }
-}
-
-/// Playwright's wording for a failed CDP command, `Protocol error (<method>): <message>`; a
-/// closed tab is `TargetClosedError`.
-fn protocol_error(method: &str, error: &CdpError) -> CallError {
-    match error {
-        CdpError::Protocol { message, .. } => {
-            PlaywrightError::error(format!("Protocol error ({method}): {message}")).into()
-        }
-        error if world::classify(error) == PageError::Closed => {
-            PlaywrightError::target_closed().into()
-        }
-        error => PlaywrightError::error(error.to_string()).into(),
     }
 }
 
@@ -1009,7 +1050,10 @@ mod tests {
             Vec::new(),
         )
         .expect_err("png has no quality");
-        assert_eq!(png.message, "options.quality is unsupported for the png screenshots");
+        assert_eq!(
+            png.message,
+            "options.quality is unsupported for the png screenshots"
+        );
         let range = ScreenshotOptions::new(
             ScreenshotParams {
                 format: Some(PageScreenshotParamsType::Jpeg),
@@ -1044,8 +1088,7 @@ mod tests {
             trim_clip_to_size(&rect(-10.0, 10.0, 50.0, 100.0), size).expect("inside"),
             rect(0.0, 10.0, 40.0, 40.0)
         );
-        let error =
-            trim_clip_to_size(&rect(200.0, 0.0, 10.0, 10.0), size).expect_err("outside");
+        let error = trim_clip_to_size(&rect(200.0, 0.0, 10.0, 10.0), size).expect_err("outside");
         assert_eq!(
             error.message,
             "Clipped area is either empty or outside the resulting image"

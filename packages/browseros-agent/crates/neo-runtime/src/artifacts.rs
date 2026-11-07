@@ -235,7 +235,10 @@ mod tests {
         for (path, why) in [
             ("/etc/passwd", "must be relative"),
             ("../escape.png", "leaves the run's artifact directory"),
-            ("shots/../../escape.png", "leaves the run's artifact directory"),
+            (
+                "shots/../../escape.png",
+                "leaves the run's artifact directory",
+            ),
             ("", "names no file"),
             (".", "names no file"),
         ] {
@@ -259,7 +262,9 @@ mod tests {
     #[tokio::test]
     async fn tests_that_writes_create_parents_and_are_listed_once_per_path() {
         let (dir, artifacts) = artifacts();
-        let path = artifacts.check("path", "shots/day/a.png").expect("relative");
+        let path = artifacts
+            .check("path", "shots/day/a.png")
+            .expect("relative");
         artifacts.write(&path, b"first").await.expect("written");
         artifacts.write(&path, b"second!").await.expect("rewritten");
         let other = artifacts.check("path", "b.pdf").expect("relative");

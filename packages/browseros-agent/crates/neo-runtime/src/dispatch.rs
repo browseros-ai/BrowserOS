@@ -1723,6 +1723,62 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_capture_calls_route_with_neos_path() {
+        let screenshot = route(
+            ObjectKind::Page,
+            "screenshot",
+            Some(json!({"type": "jpeg", "quality": 50, "path": "shots/a.jpg"})),
+        );
+        assert_eq!(screenshot.meta.map(|meta| meta.method), Some("screenshot"));
+        match screenshot.route {
+            Ok(ObjectCall::Capture(Capture::Page { params, path })) => {
+                assert_eq!(params.quality, Some(50));
+                assert_eq!(path.as_deref(), Some("shots/a.jpg"));
+            }
+            Ok(_) => panic!("expected a page screenshot"),
+            Err(error) => panic!("expected a page screenshot, got {error:?}"),
+        }
+        let pdf = route(ObjectKind::Page, "pdf", None);
+        assert_eq!(pdf.meta.map(|meta| meta.title), Some(Some("PDF")));
+        assert!(
+            matches!(
+                pdf.route,
+                Ok(ObjectCall::Capture(Capture::Pdf { path: None, .. }))
+            ),
+            "a pdf without a path writes nothing"
+        );
+        let bad_path = error_of(route(
+            ObjectKind::Page,
+            "screenshot",
+            Some(json!({"path": 5})),
+        ));
+        assert_eq!(bad_path.message, "path: expected string, got number");
+
+        let locator = route_frame(
+            "neo:screenshot",
+            json!({"selector": "#a", "strict": true, "path": "a.png", "omitBackground": true}),
+        );
+        assert_eq!(
+            locator.meta.map(|meta| (meta.method, meta.title)),
+            Some(("neo:screenshot", Some("Screenshot")))
+        );
+        match locator.route {
+            Ok(ObjectCall::Capture(Capture::Locator(params))) => {
+                assert_eq!(params.selector, "#a");
+                assert_eq!(params.path.as_deref(), Some("a.png"));
+                assert_eq!(params.omit_background, Some(true));
+            }
+            Ok(_) => panic!("expected a locator screenshot"),
+            Err(error) => panic!("expected a locator screenshot, got {error:?}"),
+        }
+        let no_selector = error_of(route_frame("neo:screenshot", json!({})));
+        assert!(
+            no_selector.message.contains("neo:screenshot"),
+            "{no_selector:?}"
+        );
+    }
+
+    #[test]
     fn unserved_methods_and_objects_reply_as_playwrights_dispatcher_would() {
         let cases = [
             (

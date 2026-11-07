@@ -15,8 +15,10 @@
 //! Playwright's client writes `path` itself and its protocol has no such field, so the SDK sends
 //! it next to Playwright's params and only this module reads it.
 
+use std::fmt::Display;
 use std::sync::Arc;
 
+use browseros_cdp::CdpError;
 use neo_runtime_spec::serve::{
     PagePdfParams, PagePdfResult, PageScreenshotParams, PageScreenshotParamsAnimations,
     PageScreenshotParamsCaret, PageScreenshotParamsMaskItem, PageScreenshotParamsScale,
@@ -27,6 +29,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::artifacts::{self, ArtifactPath, Artifacts};
+use crate::click::PageError;
 use crate::dispatch::encode_result;
 use crate::frames::FrameScope;
 use crate::page::{FrameTab, PageSession};
@@ -34,8 +37,11 @@ use crate::pdf;
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::screenshot::{self, Mask, ScreenshotOptions, ScreenshotParams};
 use crate::tabs::{PageEntry, Tabs};
+use crate::world;
 
-/// `locator.screenshot`'s call. Playwright's `ElementHandle.screenshot` title and flags.
+/// `locator.screenshot`'s call, with Playwright's `ElementHandle.screenshot` title.
+/// Neo: one call stands for Playwright's `waitForSelector` and `ElementHandle.screenshot` until
+/// Neo has element handles; its record names the method `neo:screenshot`.
 pub(crate) static NEO_SCREENSHOT_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "neo:screenshot",
@@ -84,6 +90,7 @@ pub(crate) struct NeoScreenshotParams {
 }
 
 /// Serves one capture call on the tab `entry`, from `scope` for a locator.
+/// Neo: the dispatcher's arm for the three calls.
 pub(crate) async fn serve(
     tabs: &Tabs,
     entry: &Arc<PageEntry>,
@@ -144,8 +151,8 @@ pub(crate) async fn serve(
     }
 }
 
-/// `path` checked against the run's artifact directory. Playwright's `if (options.path)`: an
-/// empty path writes nothing.
+/// `path` checked against the run's artifact directory before any page work.
+/// Playwright: `client/page.ts` `Page.screenshot`: `if (options.path) {`
 fn check_path(
     artifacts: &Artifacts,
     path: Option<&str>,
@@ -156,6 +163,7 @@ fn check_path(
 }
 
 /// The bytes written to `path`, then as the call's `binary` result if they fit the realm.
+/// Playwright: `client/page.ts` `Page.screenshot`: `await fs.promises.writeFile(options.path, result.binary);`
 async fn saved(
     what: &str,
     bytes: Vec<u8>,
@@ -168,10 +176,8 @@ async fn saved(
     Ok(artifacts::returnable(what, bytes, path)?)
 }
 
-/// The mask locators on this tab. Deviation: `server/screenshotter.ts`
-/// `Screenshotter._maskElements`: `frame.selectors.callOnSelector({ selector, strict: false }` masks
-/// a locator of another page in that page, where nothing hides it again; Neo skips it, which
-/// leaves this page's screenshot the same.
+/// The mask locators on this tab.
+/// Deviation: `server/screenshotter.ts` `Screenshotter._maskElements`: `frame.selectors.callOnSelector({ selector, strict: false }` masks a locator of another page in that page, where nothing hides the mask again; Neo skips it, which leaves this page's screenshot the same.
 fn masks(
     tabs: &Tabs,
     entry: &PageEntry,
@@ -190,6 +196,7 @@ fn masks(
 }
 
 /// The tab's session, attached once per run.
+/// Neo: the call's own lazy attach, as dispatch's frame calls do.
 async fn session(
     tabs: &Tabs,
     entry: &PageEntry,
@@ -199,4 +206,24 @@ async fn session(
         return Ok(session);
     }
     Ok(progress.race(tabs.session(entry)).await??)
+}
+
+/// Playwright's wording for a failed CDP command; a closed tab is `TargetClosedError`.
+/// Playwright: `server/protocolError.ts` `ProtocolError.setMessage`
+pub(crate) fn protocol_error(method: &str, error: &CdpError) -> CallError {
+    match error {
+        CdpError::Protocol { message, .. } => {
+            PlaywrightError::error(format!("Protocol error ({method}): {message}")).into()
+        }
+        error if world::classify(error) == PageError::Closed => {
+            PlaywrightError::target_closed().into()
+        }
+        error => PlaywrightError::error(error.to_string()).into(),
+    }
+}
+
+/// An answer outside CDP's documented shape: a broken browser or transport, never a page.
+/// Neo: Playwright's typed CDP client would reject such an answer on its own terms.
+pub(crate) fn malformed(method: &str, error: impl Display) -> CallError {
+    PlaywrightError::error(format!("{method} answered: {error}")).into()
 }

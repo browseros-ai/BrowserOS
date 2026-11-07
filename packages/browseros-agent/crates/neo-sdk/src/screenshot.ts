@@ -89,6 +89,7 @@ type WithPath<Params> = Params & { path?: string }
 /**
  * Playwright's `determineScreenshotType`: a `path`'s extension names the type, and one that is
  * not an image Chromium writes throws.
+ * Playwright: `client/elementHandle.ts` `determineScreenshotType`
  */
 export function determineScreenshotType(options: {
   path?: string
@@ -104,7 +105,10 @@ export function determineScreenshotType(options: {
   return options.type
 }
 
-/** `page.screenshot`'s params: Playwright's, in schema order, then Neo's `path`. */
+/**
+ * `page.screenshot`'s params: Playwright's, in schema order, then Neo's `path`.
+ * Playwright: `client/page.ts` `Page.screenshot`
+ */
 export function pageScreenshotParams(
   apiName: ApiName,
   options: PageScreenshotOptions,
@@ -116,8 +120,11 @@ export function pageScreenshotParams(
   return withPath(params, options.path)
 }
 
-/** `neo:screenshot`'s params for `locator.screenshot`: the selector, then
- * `ElementHandle.screenshot`'s params, then `path`. */
+/**
+ * `neo:screenshot`'s params for `locator.screenshot`: the selector, then
+ * `ElementHandle.screenshot`'s params, then `path`.
+ * Playwright: `client/locator.ts` `Locator.screenshot`
+ */
 export function locatorScreenshotParams(
   apiName: ApiName,
   selector: string,
@@ -131,14 +138,16 @@ export function locatorScreenshotParams(
 }
 
 /**
- * Playwright's `const copy = { ...options, mask: undefined }`, `copy.type` from the path when
- * unset, and each mask locator as its frame's channel and selector.
+ * Playwright's copy of the options, `copy.type` from the path when unset, and each mask
+ * locator as its frame's channel and selector.
+ * Playwright: `client/page.ts` `Page.screenshot`: `const copy: channels.PageScreenshotParams = { ...options, mask: undefined };`
  */
 function screenshotFields(
   apiName: ApiName,
   options: ScreenshotOptions & { signal?: unknown },
 ): Record<string, unknown> {
   if (options.signal !== undefined)
+    // Deviation: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };` Neo refuses a signal rather than ignore it.
     throw new Error(`${apiName}: Neo does not support signal yet`)
   const fields: Record<string, unknown> = { ...options, mask: undefined }
   if (!fields.type) {
@@ -161,6 +170,7 @@ function screenshotFields(
 /**
  * Playwright's `Page.pdf` option mapping: number sizes and margins become `px` strings, and
  * `margin` is copied so the caller's object stays as it was.
+ * Playwright: `client/page.ts` `Page.pdf`
  */
 export function pdfParams(options: PDFOptions): WithPath<PagePdfParams> {
   const transportOptions: Record<string, unknown> = { ...options }
@@ -183,7 +193,10 @@ export function pdfParams(options: PDFOptions): WithPath<PagePdfParams> {
   return withPath(params, options.path)
 }
 
-/** Playwright's `if (options.path)`: only a non-empty path is written. */
+/**
+ * Only a non-empty path is written.
+ * Playwright: `client/page.ts` `Page.screenshot`: `if (options.path) {`
+ */
 function withPath<Params extends { path?: string }>(
   params: Params,
   path: string | undefined,
@@ -192,7 +205,10 @@ function withPath<Params extends { path?: string }>(
   return params
 }
 
-/** The bytes of a `{binary}` or `{pdf}` result. */
+/**
+ * The bytes of a `{binary}` or `{pdf}` result.
+ * Neo: the realm's `Buffer` for the wire's base64 (`buffer.ts`).
+ */
 export function resultBuffer(binary: string): Buffer {
   return Buffer.fromBinary(binary)
 }
