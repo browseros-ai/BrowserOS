@@ -383,8 +383,10 @@ return count",
         .filter(|line| line.contains("neo-runtime dropped"))
         .collect();
     assert_eq!(notes.len(), 1, "{:#?}", outcome.logs);
+    let dropped = 24 - count;
+    let unit = if dropped == 1 { "event" } else { "events" };
     assert!(
-        notes[0].contains(&format!("dropped {} events", 24 - count)),
+        notes[0].contains(&format!("dropped {dropped} {unit}:")),
         "{notes:?}"
     );
 }

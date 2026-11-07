@@ -23,6 +23,7 @@ use crate::artifacts::Artifacts;
 use crate::bridge;
 use crate::bridge::Getters;
 use crate::deadline::Deadline;
+use crate::discovery::Discovery;
 use crate::dispatch::Dispatcher;
 use crate::getters::CLOSED_TAB_MESSAGE;
 use crate::page::TabInputs;
@@ -42,11 +43,18 @@ const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
 /// turns at its input, from interceptor setup to stop (`page.rs` `TabInputs`), and their
 /// screenshots at its capture, cleanup included (`screenshot.rs` `TabScreenshots`). Clones share
 /// those turns too.
+///
+/// Runs also share the connection's target discovery, on while any of them listens for new
+/// pages (`discovery.rs`), which the `Runtime` counts. Give a `CdpClient` one `Runtime` (clones
+/// are fine): a second `Runtime` on the same client would count its own runs, and the first to
+/// let go would turn discovery off for the other's.
 #[derive(Clone)]
 pub struct Runtime {
     cdp: CdpClient,
     inputs: TabInputs,
     screenshots: TabScreenshots,
+    /// Target discovery on `cdp`, on while any run listens for new pages (`discovery.rs`).
+    discovery: Discovery,
     cleanup: TaskTracker,
 }
 
@@ -93,11 +101,13 @@ impl Runtime {
             .await;
         match probe {
             Err(CdpError::Protocol { message, .. }) if message.contains(CLOSED_TAB_MESSAGE) => {
+                let cleanup = TaskTracker::new();
                 Ok(Self {
                     cdp,
                     inputs: TabInputs::default(),
                     screenshots: TabScreenshots::default(),
-                    cleanup: TaskTracker::new(),
+                    discovery: Discovery::new(cleanup.clone()),
+                    cleanup,
                 })
             }
             Err(CdpError::Protocol { message, .. }) => {
@@ -153,7 +163,7 @@ impl Runtime {
             stop = deadline.reached() => {
                 return RunOutcome::stopped(stop, deadline.timeout(), Vec::new());
             }
-            opened = Tabs::open(self.cdp.clone(), tokio.clone(), self.inputs.clone(), self.screenshots.clone(), tasks.clone(), &page) => opened,
+            opened = Tabs::open(self.cdp.clone(), tokio.clone(), self.inputs.clone(), self.screenshots.clone(), self.discovery.clone(), tasks.clone(), &page) => opened,
         };
         let (tabs, url) = match opened {
             Ok(opened) => opened,

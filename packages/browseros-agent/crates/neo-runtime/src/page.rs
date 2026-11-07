@@ -158,6 +158,12 @@ impl Drop for Session {
     }
 }
 
+/// Neo: a tab's input and screenshot turns, shared by every run on it.
+pub(crate) struct TabTurns {
+    pub(crate) input: Arc<Mutex<()>>,
+    pub(crate) screenshots: Arc<Mutex<()>>,
+}
+
 /// A handed-out tab's session, attached lazily once per run and shared by its call and writer tasks.
 pub(crate) struct PageSession {
     session: Arc<Session>,
@@ -310,6 +316,14 @@ impl PageState {
             self.dom_content_loaded = true;
             self.dom_content_loaded_count += 1;
         }
+    }
+
+    /// A document that counts as loaded the moment it commits: its lifecycle events, fired.
+    fn loaded_at_once(&mut self) -> Fired {
+        let before = (self.dom_content_loaded, self.load);
+        self.did_dom_content_load();
+        self.did_load();
+        Fired::between(before, self)
     }
 
     fn did_load(&mut self) {
@@ -500,21 +514,48 @@ pub(crate) struct Applied {
     pub(crate) closed: bool,
     pub(crate) new_document: bool,
     pub(crate) navigation: Option<Navigation>,
+    /// What the main frame's current document fired with this event.
+    pub(crate) fired: Fired,
+}
+
+/// The lifecycle events a document fired with one CDP event: at most each, once per document.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Fired {
+    pub(crate) dom_content_loaded: bool,
+    pub(crate) load: bool,
+}
+
+impl Fired {
+    fn between(before: (bool, bool), state: &PageState) -> Self {
+        Self {
+            dom_content_loaded: !before.0 && state.dom_content_loaded,
+            load: !before.1 && state.load,
+        }
+    }
 }
 
 impl PageSession {
-    /// `input` is the tab's lock from the `Runtime`'s [`TabInputs`], `screenshots` its screenshot
+    /// `turns` holds the tab's input lock from the `Runtime`'s [`TabInputs`] and its screenshot
     /// turn from the `Runtime`'s `TabScreenshots`.
+    /// `discovered`: the run's discovery reported the page as new (`Tabs::report_new`), so the
+    /// first lifecycle replay is the page's own new life ([`PageEvents::new`]).
     pub(crate) fn new(
         session: Session,
         page: &PageId,
         tasks: TaskTracker,
-        input: Arc<Mutex<()>>,
-        screenshots: Arc<Mutex<()>>,
+        turns: TabTurns,
         closed: CancellationToken,
         hub: EventHub,
+        discovered: bool,
     ) -> Self {
-        let events = PageEvents::new(hub, page.as_str(), session.cdp.clone(), session.id.clone());
+        let TabTurns { input, screenshots } = turns;
+        let events = PageEvents::new(
+            hub,
+            page.as_str(),
+            session.cdp.clone(),
+            session.id.clone(),
+            discovered,
+        );
         let child_events = events.clone();
         let world = World::new(
             session.cdp.clone(),
@@ -588,8 +629,13 @@ impl PageSession {
                 let (seed_ready, ready) = oneshot::channel();
                 let cdp = self.session.cdp.clone();
                 let session = self.session.id.clone();
+                let producer = self.events.clone();
+                // The seed's frame tree, read once the lifecycle replay has been applied (see
+                // `seed_url`), is where the run's frame and lifecycle events start.
                 let initial_url = seed_url(ready, move |method| async move {
-                    cdp.send(method, json!({}), Some(&session)).await
+                    let tree = cdp.send(method, json!({}), Some(&session)).await;
+                    producer.seeded(tree.as_ref().ok());
+                    tree
                 });
                 // Guarded before the spawn: if this setup fails or is dropped before it
                 // finishes (the call stopped), the guard stops the watcher it already started.
@@ -618,6 +664,11 @@ impl PageSession {
                 // including pages loaded before this run and restored from bfcache.
                 self.send("Page.setLifecycleEventsEnabled", json!({ "enabled": true }))
                     .await?;
+                // The replay preceded the reply: once the watcher has applied it, the main
+                // frame's lifecycle events are the run's (`PageEvents`). Free when nothing is
+                // subscribed.
+                self.events.hub().barrier().await;
+                self.events.lifecycle_replayed();
                 // The watcher reads the frame tree after Page.enable and lifecycle replay.
                 // Preparation never waits for that read: clicks must not pay for the seed.
                 let _ = seed_ready.send(());
@@ -1471,8 +1522,7 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                     // finished loading and restores it without lifecycle events, reporting
                     // `frameStoppedLoading` before this commit (measured on BrowserOS neo): it
                     // counts as loaded at once.
-                    state.did_dom_content_load();
-                    state.did_load();
+                    applied.fired = state.loaded_at_once();
                 }
                 state.pending_url = None;
                 applied.new_document = true;
@@ -1522,7 +1572,9 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
             if let Ok(event) = serde_json::from_value::<LifecycleEvent>(params)
                 && event.frame_id == main_frame
             {
+                let before = (state.dom_content_loaded, state.load);
                 applied.changed = apply_lifecycle(state, &event);
+                applied.fired = Fired::between(before, state);
             }
         }
         _ => {}
@@ -3557,10 +3609,13 @@ mod tests {
             session,
             &id,
             TaskTracker::new(),
-            Arc::new(Mutex::new(())),
-            Arc::new(Mutex::new(())),
+            TabTurns {
+                input: Arc::new(Mutex::new(())),
+                screenshots: Arc::new(Mutex::new(())),
+            },
             CancellationToken::new(),
             EventHub::default(),
+            false,
         ));
         let tab = FrameTab {
             page: Arc::clone(&page),

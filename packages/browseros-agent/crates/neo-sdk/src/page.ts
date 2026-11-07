@@ -84,12 +84,7 @@ import {
 } from './screenshot'
 import type { SelectOptionValues } from './select-option'
 import { TimeoutSettings } from './timeout-settings'
-import {
-  refuseSignal,
-  Waiter,
-  type WaitForEventOptions,
-  wrapApiCall,
-} from './waiter'
+import { Waiter, type WaitForEventOptions, wrapApiCall } from './waiter'
 
 /**
  * Neo: the page's listener events, by Playwright's names (`Events.Page`): what Neo produces,
@@ -97,24 +92,39 @@ import {
  */
 const PAGE_EVENTS: EventTable = {
   receiver: 'Page',
-  served: ['console', 'pageerror', 'dialog', 'dialogclosed', 'close', 'crash'],
+  served: [
+    'console',
+    'pageerror',
+    'dialog',
+    'dialogclosed',
+    'close',
+    'crash',
+    'load',
+    'domcontentloaded',
+    'frameattached',
+    'framedetached',
+    'framenavigated',
+    'popup',
+  ],
   quiet: [],
   unserved: [
     'download',
     'filechooser',
-    'domcontentloaded',
     'request',
     'response',
     'requestfailed',
     'requestfinished',
-    'frameattached',
-    'framedetached',
-    'framenavigated',
-    'load',
-    'popup',
     'websocket',
     'worker',
   ],
+}
+
+/** A frame event's params from Rust (`frame_events.rs`): the frame's record, and for a
+ * navigation the URL and name it committed, as Playwright's `navigated` event carries them. */
+interface FrameEventParams {
+  frame: CreatedFrame
+  url?: string
+  name?: string
 }
 
 /** `consoleMessages` and `pageErrors`' options: Playwright's `ConsoleMessagesFilter`. */
@@ -161,6 +171,10 @@ export class Page extends ChannelOwner {
   /** Stable identity, including detached frames a script may still hold. */
   readonly #frames = new Map<string, Frame>()
   readonly _timeoutSettings: TimeoutSettings
+  /** Set when this page's `close` ran (`_onClose`): what Playwright's client flips then. */
+  #closedLocally = false
+  /** Playwright's `_closeReason`: what `close({ reason })` was given. */
+  #closeReason: string | undefined
 
   /** `guid` and `mainFrameGuid` come from one record Rust minted (`page@T`, `frame@T`), so a
    * page's calls and its frame's calls reach the same tab. */
@@ -185,12 +199,19 @@ export class Page extends ChannelOwner {
   }
 
   url(): string {
+    if (this.#closedLocally) return this.#lastUrl
     const url = get(this.#guid, 'url')
     if (url !== null) this.#lastUrl = url
     return this.#lastUrl
   }
 
-  /** Makes this the active tab of its window. */
+  /**
+   * Makes this the active tab of its window.
+   *
+   * Deviation: `server/chromium/crPage.ts` `CRPage.bringToFront`: `await this._mainFrameSession._client.send('Page.bringToFront');`
+   * Playwright sends `Page.bringToFront` alone. Neo also activates the tab in BrowserOS's tab
+   * strip when it is not the active one, which `Page.bringToFront` leaves as it was.
+   */
   async bringToFront(): Promise<void> {
     await this.#connection.sendPage(
       'page.bringToFront',
@@ -213,6 +234,7 @@ export class Page extends ChannelOwner {
   async close(
     options: { runBeforeUnload?: boolean; reason?: string } = {},
   ): Promise<void> {
+    this.#closeReason = options.reason
     try {
       if (options.runBeforeUnload)
         await this.#connection.sendPage(
@@ -239,17 +261,105 @@ export class Page extends ChannelOwner {
   }
 
   isClosed(): boolean {
-    return get(this.#guid, 'isClosed')
+    return this.#closedLocally || get(this.#guid, 'isClosed')
   }
 
-  /** Playwright's page channel handlers (`client/page.ts` constructor). */
-  _onEvent(method: string): void {
+  /** Whether this page's `close` ran, from its tab's close or its context's. */
+  _isClosedLocally(): boolean {
+    return this.#closedLocally
+  }
+
+  /** Playwright's `_closeErrorWithReason` reason: the page's own, else its context's. */
+  _closeReason(): string | undefined {
+    return this.#closeReason ?? this.#context._closeReason()
+  }
+
+  /** Playwright's page channel handlers (`client/page.ts` constructor), and its main frame's
+   * `loadstate` and every frame's `navigated` (`client/frame.ts` constructor), which Neo sends
+   * on the page. */
+  _onEvent(method: string, params: unknown): void {
     if (method === 'close') this._onClose()
     else if (method === 'crash') this.emit('crash', this)
+    else if (method === 'load') {
+      this.emit('load', this)
+      this.#context.emit('pageload', this)
+    } else if (method === 'domcontentloaded')
+      this.emit('domcontentloaded', this)
+    else if (method === 'frameAttached')
+      this.#onFrameAttached((params as FrameEventParams).frame)
+    else if (method === 'frameDetached')
+      this.#onFrameDetached((params as FrameEventParams).frame)
+    else if (method === 'frameNavigated')
+      this.#onFrameNavigated(params as FrameEventParams)
   }
 
-  /** Playwright's `Page._onClose`: the page's `close`, then the context's `pageclose`. */
+  /** Playwright's `Page._onFrameAttached`: a frame attaches with no name or URL yet. */
+  #onFrameAttached(record: CreatedFrame): void {
+    this.#frameEvent(record, 'frameattached', false)
+  }
+
+  /** Playwright's `Page._onFrameDetached`. */
+  #onFrameDetached(record: CreatedFrame): void {
+    this.#frameEvent(record, 'framedetached', true)
+  }
+
+  /** Playwright's `Frame` `navigated` handler: the frame takes the committed URL and name, then
+   * the page's and the context's `framenavigated` run. */
+  #onFrameNavigated({ frame, url, name }: FrameEventParams): void {
+    this.#frameEvent(
+      {
+        guid: frame.guid,
+        initializer: {
+          ...frame.initializer,
+          url: url ?? frame.initializer.url,
+          name: name ?? frame.initializer.name,
+        },
+      },
+      'framenavigated',
+      false,
+    )
+  }
+
+  /**
+   * The page's listeners of a frame event, then the context's, with the Frame of the record,
+   * which answers as the event describes it while they run (`Frame._during`), as Playwright's
+   * client frame does: its state comes from these very events.
+   */
+  #frameEvent(
+    record: CreatedFrame,
+    event: 'frameattached' | 'framedetached' | 'framenavigated',
+    detached: boolean,
+  ): void {
+    const frame = this._frameFrom(record)
+    const { url, name } = record.initializer
+    frame._during({ url, name, detached }, () => {
+      this.emit(event, frame)
+      this.#context.emit(event, frame)
+    })
+  }
+
+  /**
+   * The tab that opened this page, if it is still open in the run's context, else `null`: a
+   * `newPage` page, a tab the user opened, and a page whose opener closed have none. A popup
+   * opened with `noopener` names its opener, as Playwright's does on Chromium, whose target
+   * reports it.
+   *
+   * Deviation: `client/page.ts` `Page.opener`: `if (!this._opener || this._opener.isClosed())`
+   * Playwright's page keeps the opener its server named when it reported the page. Neo reads the
+   * tab's opener when asked, so the run page and a `pages()` page name theirs too.
+   */
+  async opener(): Promise<Page | null> {
+    // A closed context's tabs stay open; its pages, the opener too, read closed.
+    if (this.#context.isClosed()) return null
+    const record = get(this.#guid, 'opener')
+    return record ? this.#context._pageFrom(record) : null
+  }
+
+  /** Playwright's `Page._onClose`: the page reads closed, then its `close` and the context's
+   * `pageclose` run. Once: a context's close and its tab's close can both report it. */
   _onClose(): void {
+    if (this.#closedLocally) return
+    this.#closedLocally = true
     this.emit('close', this)
     this.#context.emit('pageclose', this)
   }
@@ -280,10 +390,10 @@ export class Page extends ChannelOwner {
   ): Promise<unknown> {
     const options =
       typeof optionsOrPredicate === 'function' ? {} : optionsOrPredicate
-    refuseSignal(options)
-    this._refuseUnserved(event)
-    // Inside its callers' `wrapApiCall`, which prefixes the api name.
+    // Refuses a signal first (TimeoutSettings), inside its callers' `wrapApiCall`, which
+    // prefixes the api name.
     const timeout = this._timeoutSettings.timeout(options, null)
+    this._refuseUnserved(event)
     const predicate =
       typeof optionsOrPredicate === 'function'
         ? optionsOrPredicate
@@ -297,7 +407,9 @@ export class Page extends ChannelOwner {
     if (event !== 'crash')
       waiter.rejectOnEvent(this, 'crash', new Error('Page crashed'))
     if (event !== 'close')
-      waiter.rejectOnEvent(this, 'close', () => targetClosedError())
+      waiter.rejectOnEvent(this, 'close', () =>
+        targetClosedError(this._closeReason()),
+      )
     const result = await waiter.waitForEvent(this, event, predicate)
     waiter.dispose()
     return result
