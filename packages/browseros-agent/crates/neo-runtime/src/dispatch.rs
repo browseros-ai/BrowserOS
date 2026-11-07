@@ -21,8 +21,9 @@
 //!  run end: Dispatcher::finish(reason)
 //!    record the reason → cancel `ended` → mark the run's input ended on every tab
 //!    → close the events, answer dialogs left open → start each tab's input release (a task)
+//!    → stop the run's screencast frames and overlay re-adding, then each browser screencast
 //!    → wait for the run's tasks, releases included (≤ RECORDS_WAIT)
-//!    → hide the run's highlights (≤ HIGHLIGHTS_WAIT) → records
+//!    → hide the run's highlights and remove its overlays (≤ HIGHLIGHTS_WAIT) → records
 //! ```
 //!
 //! Why a task per call and not the realm's scheduler, where `setTimeout` runs: rquickjs polls
@@ -102,6 +103,7 @@ use crate::lists;
 use crate::locator_handlers::{self, Resolving};
 use crate::navigate::{self, GotoOptions};
 use crate::network::{HopId, ObjectKind as NetworkObject};
+use crate::overlay;
 use crate::page::{DialogAnswer, FrameTab, PageSession};
 use crate::press::{self, PressOptions};
 use crate::progress::{
@@ -110,6 +112,7 @@ use crate::progress::{
 use crate::reads::{self, AttributeOptions, ReadOptions, SnapshotOptions};
 use crate::responses::{self, NetworkCall};
 use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
+use crate::screencast;
 use crate::states::{self, StateOptions};
 use crate::tab_calls;
 use crate::tabs::{PageEntry, Tabs};
@@ -608,6 +611,20 @@ impl Dispatcher {
             run.bindings.close(&self.0.tabs).await;
         })
         .await;
+        // The run's screencasts stop sending frames, and its overlays stop following
+        // navigations, before anything below waits for the run's tasks, which their forwarders
+        // and watchers are; each tab's browser screencast then stops on a budget of its own.
+        let pages = self.0.tabs.attached_sessions();
+        let screencasts: Vec<_> = pages.iter().filter(|page| screencast::halt(page)).collect();
+        for page in &pages {
+            overlay::stop_following(page);
+        }
+        let _stopped = time::timeout(PAGE_END_WAIT, async {
+            for page in screencasts {
+                screencast::stop_browser(page).await;
+            }
+        })
+        .await;
         // The realm is gone with its listeners: from now on the watchers answer dialogs
         // themselves, and a dialog a listener left open gets the default answer before the
         // sessions detach (`Dialogs::left_open`).
@@ -626,13 +643,15 @@ impl Dispatcher {
         // detach; a run whose future is dropped releases them as `RunScope` drops.
         run.handles.close();
         let _refreshed = time::timeout_at(deadline, self.0.tabs.refresh_closing()).await;
-        // The run's highlights show over the user's tab; none may outlive the run that made it.
+        // The run's highlights and overlays show over the user's tab; none may outlive the run
+        // that made it.
         // They go last, on their own budget: a document that does not answer (a busy
         // out-of-process frame) delays the outcome, never a release.
         let sessions = self.0.tabs.attached_sessions();
         let _hidden = time::timeout(HIGHLIGHTS_WAIT, async {
             for session in &sessions {
                 highlight::hide_at_run_end(session).await;
+                overlay::remove_at_run_end(session).await;
             }
         })
         .await;
@@ -1920,6 +1939,7 @@ mod tests {
     use crate::progress::{self, ErrorName};
     use crate::run::Delivery;
     use crate::run::PageId;
+    use crate::screencast::ScreencastFrames;
     use crate::screenshot::TabScreenshots;
     use crate::session_state::Permissions;
     use crate::switch::Switches;
@@ -1937,6 +1957,7 @@ mod tests {
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
+            ScreencastFrames::default(),
             Switches::default(),
             Permissions::default(),
             tasks,
@@ -2017,6 +2038,7 @@ mod tests {
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
+            ScreencastFrames::default(),
             Switches::default(),
             Permissions::default(),
             tasks,
@@ -3339,6 +3361,7 @@ mod review_abort_priority {
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::page::TabInputs;
     use crate::run::PageId;
+    use crate::screencast::ScreencastFrames;
     use crate::screenshot::TabScreenshots;
     use crate::session_state::Permissions;
     use crate::switch::Switches;
@@ -3358,6 +3381,7 @@ mod review_abort_priority {
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
+            ScreencastFrames::default(),
             Switches::default(),
             Permissions::default(),
             tasks,

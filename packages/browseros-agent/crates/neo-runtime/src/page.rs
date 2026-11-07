@@ -82,6 +82,8 @@ use crate::input_devices::{
 };
 use crate::keyboard;
 use crate::locator_handlers::{self, LocatorHandlers};
+use crate::overlay::Overlays;
+use crate::screencast::Screencast;
 use crate::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
 };
@@ -221,6 +223,10 @@ pub(crate) struct PageSession {
     pub(crate) events: PageEvents,
     /// The run's locator handlers on this tab (`locator_handlers.rs`).
     pub(crate) locator_handlers: LocatorHandlers,
+    /// The run's screencast of this tab (`screencast.rs`), stopped when the run ends.
+    pub(crate) screencast: Screencast,
+    /// The run's user overlays on this tab (`overlay.rs`), removed when the run ends.
+    pub(crate) overlays: Overlays,
     /// `Runtime.enable` and `Log.enable`, sent once a run listens to console messages or page
     /// errors (or reads their history) and kept for the run.
     runtime_enabled: OnceCell<()>,
@@ -721,6 +727,8 @@ impl PageSession {
             highlights: Highlights::default(),
             events,
             locator_handlers: LocatorHandlers::default(),
+            screencast: Screencast::default(),
+            overlays: Overlays::default(),
             runtime_enabled: OnceCell::new(),
         }
     }

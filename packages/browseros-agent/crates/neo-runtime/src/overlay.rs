@@ -1,5 +1,5 @@
-//! Neo: `Screencast.showOverlay`, `showChapter`, `showOverlays` and `hideOverlays` (Playwright's
-//! `server/overlay.ts`): user overlays in the injected Highlight's closed-shadow popover of the
+//! Neo: `Screencast.showOverlay`, `showChapter`, `showOverlays` and `hideOverlays`, Playwright's
+//! server `Overlay`: user overlays in the injected Highlight's closed-shadow popover of the
 //! tab's main frame, the overlay `locator.highlight` draws in, so they stay out of selectors and
 //! snapshots and need no running screencast. They show over the BrowserOS user's tab, so each run
 //! removes its own when it ends.
@@ -12,7 +12,9 @@
 //!    → show(escaped card), wait duration ?? 2000, fade-out (300 ms), remove
 //!  Page.screencastSetOverlayVisible {visible}    → setUserOverlaysVisible; none shown → nothing
 //!  a main-frame navigation to a new document     → every shown overlay is added again
-//!  run end (`Dispatcher::finish`)                → every overlay the run shows goes
+//!  run end (`Dispatcher::finish`)                → the re-adding stops before the run's tasks
+//!                                                  are awaited; with the highlights, every
+//!                                                  overlay the run shows goes
 //! ```
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -27,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::navigate::Observation;
 use crate::page::PageSession;
-use crate::progress::{CallError, PlaywrightError, Progress};
+use crate::progress::{CallError, Progress};
 
 /// Playwright: `server/overlay.ts` `Overlay.chapter`: `const duration = options.duration ?? 2000;`
 const CHAPTER_MS: f64 = 2000.0;
@@ -57,9 +59,10 @@ pub(crate) async fn show(
     if let Ok(mut shown) = page.overlays.shown.lock() {
         shown.push((id.clone(), html.clone()));
     }
-    watch(page);
+    watch(page).await;
     add(page, &id, &html).await;
-    if let Some(duration) = duration.filter(|duration| *duration > 0.0) {
+    // Playwright: `server/overlay.ts` `Overlay.show`: `if (duration) {`
+    if let Some(duration) = duration.filter(|duration| *duration != 0.0) {
         progress.wait(millis(duration)).await?;
         remove(page, &id).await;
     }
@@ -117,14 +120,20 @@ pub(crate) async fn set_visible(page: &PageSession, visible: bool) {
         .await;
 }
 
-/// Neo: at the run's end, every overlay the run shows goes, and its watcher stops: none may
-/// outlive the run that showed it in the user's tab.
-pub(crate) async fn remove_at_run_end(page: &PageSession) {
+/// Neo: at the run's end, before the run's tasks are awaited (the watcher is one), overlays stop
+/// being added again on navigation.
+pub(crate) fn stop_following(page: &PageSession) {
     if let Ok(mut watcher) = page.overlays.watcher.lock()
         && let Some(watcher) = watcher.take()
     {
         watcher.cancel();
     }
+}
+
+/// Neo: at the run's end, every overlay the run shows goes: none may outlive the run that showed
+/// it in the user's tab.
+pub(crate) async fn remove_at_run_end(page: &PageSession) {
+    stop_following(page);
     let ids: Vec<String> = page
         .overlays
         .shown
@@ -154,28 +163,39 @@ async fn add(page: &PageSession, id: &str, html: &str) {
 }
 
 /// Neo: starts the tab's watcher once: after each main-frame navigation to a new document, it
-/// adds every overlay still shown again.
+/// adds every overlay still shown again. The tab's navigation watcher runs from then on
+/// (`PageSession::prepare`); a tab that cannot start it shows its overlays until it navigates.
 ///
 /// Playwright: `server/overlay.ts` `Overlay.constructor`: `for (const [id, html] of this._overlays)`
-fn watch(page: &Arc<PageSession>) {
-    let Ok(mut watcher) = page.overlays.watcher.lock() else {
-        return;
-    };
-    if watcher.is_some() {
+async fn watch(page: &Arc<PageSession>) {
+    if page.overlays.watcher.lock().map_or(true, |watcher| watcher.is_some()) {
         return;
     }
+    let _prepared = page.prepare().await;
     let stop = CancellationToken::new();
-    *watcher = Some(stop.clone());
+    {
+        let Ok(mut watcher) = page.overlays.watcher.lock() else {
+            return;
+        };
+        if watcher.is_some() {
+            return;
+        }
+        *watcher = Some(stop.clone());
+    }
     let tab = Arc::clone(page);
+    // The main frame's commits only, as Playwright skips a child frame's.
+    // Playwright: `server/overlay.ts` `Overlay.constructor`: `if (frame.parentFrame())`
     let mut navigations = page.observe_waits();
-    page.session.tokio.spawn(async move {
+    page.spawn_while_open(async move {
         loop {
             let navigation = tokio::select! {
                 () = stop.cancelled() => return,
                 navigation = navigations.next() => navigation,
             };
             match navigation {
-                Ok(Some(navigation)) if navigation.document.is_some() => {
+                Ok(Some(navigation))
+                    if navigation.document.is_some() && navigation.error.is_none() =>
+                {
                     let shown: Vec<(String, String)> =
                         tab.overlays.shown.lock().map(|shown| shown.clone()).unwrap_or_default();
                     for (id, html) in shown {
@@ -261,8 +281,6 @@ fn millis(ms: f64) -> Duration {
         Duration::ZERO
     }
 }
-
-fn _unused(_: PlaywrightError) {}
 
 #[cfg(test)]
 mod tests {

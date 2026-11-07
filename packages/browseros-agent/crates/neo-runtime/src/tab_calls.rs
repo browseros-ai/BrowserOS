@@ -27,6 +27,7 @@ use crate::highlight;
 use crate::history::{self, HistoryOptions};
 use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
+use crate::screencast;
 use crate::session_state;
 use crate::tabs::{self, PageEntry, Tabs};
 
@@ -239,6 +240,17 @@ pub(crate) async fn page(
         | PageCall::ResolveLocatorHandlerNoReply(_)
         | PageCall::UnregisterLocatorHandler(_)) => {
             return locator_handler_call(tabs, entry, call, progress).await;
+        }
+        call @ (PageCall::ScreencastStart(_)
+        | PageCall::ScreencastStop(_)
+        | PageCall::ScreencastFrameAck(_)
+        | PageCall::ScreencastShowOverlay(_)
+        | PageCall::ScreencastRemoveOverlay(_)
+        | PageCall::ScreencastChapter(_)
+        | PageCall::ScreencastSetOverlayVisible(_)
+        | PageCall::ScreencastHideActions(_)) => {
+            let page = progress.race(tabs.session(entry)).await??;
+            return screencast::serve(tabs, &page, call, progress).await;
         }
         PageCall::ClearPageErrors(_) => {
             console_page(tabs, entry, progress)
