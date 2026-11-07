@@ -16,9 +16,11 @@ use browseros_cdp::{
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::host::directory::{DirectoryInput, PageTarget, TabEntry};
 use crate::host::ids::TabId;
+use crate::host::link::Attached;
 use crate::run::PageId;
 
 // ----- the tab directory (`directory.rs`) ----------------------------------------------------
@@ -174,6 +176,20 @@ async fn send_at<P: Serialize, R: DeserializeOwned>(
         .send_at_epoch(epoch, method, serde_json::to_value(params)?, session)
         .await?;
     Ok(serde_json::from_value(reply)?)
+}
+
+// ----- presences (`presence.rs`) -------------------------------------------------------------
+
+/// `Emulation.setFocusEmulationEnabled{enabled: true}` (untyped: browseros-cdp's surface has no
+/// Emulation domain), on a tab's presence alone. Never `false`: see `presence.rs`.
+pub(crate) async fn emulate_focus(session: &Attached) -> Result<(), CdpError> {
+    session
+        .send(
+            "Emulation.setFocusEmulationEnabled",
+            json!({ "enabled": true }),
+        )
+        .await?;
+    Ok(())
 }
 
 #[cfg(test)]

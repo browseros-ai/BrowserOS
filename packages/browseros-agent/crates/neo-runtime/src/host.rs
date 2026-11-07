@@ -51,6 +51,14 @@ mod link;
     not(test),
     expect(
         dead_code,
+        reason = "presences start once Runtime is built with host options"
+    )
+)]
+mod presence;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
         reason = "pure core: tests drive it until the host task does"
     )
 )]
