@@ -774,12 +774,12 @@ impl ElementOpsTab for FrameTab {
                 "DOM.getBoxModel answered no border quad".to_string(),
             ));
         };
-        // Deviation: `server/chromium/crPage.ts` `FrameSession._framePosition`: `const box = await element.boundingBox(nullProgress);` an out-of-process frame's boxes move by its iframe's content box (the frames foundation's geometry, as a click aims), where Playwright adds the iframe's border box, so Neo's sit the iframe's border and padding further in.
-        let (dx, dy) = self
-            .frames
-            .offset(&element.frame.host)
-            .await?
-            .unwrap_or_default();
+        // Playwright: `server/chromium/crPage.ts` `FrameSession._getBoundingBox`: `const position = await this._framePosition();`
+        // Each out-of-process hop adds its iframe's border-box origin, as Playwright places
+        // the box; input keeps aiming by the content box (`Frames::offset`).
+        let Some((dx, dy)) = self.frames.border_offset(&element.frame.host).await? else {
+            return Ok(None);
+        };
         Ok(Some(Rect {
             x: border.x + dx,
             y: border.y + dy,

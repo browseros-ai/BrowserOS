@@ -488,6 +488,36 @@ export const glue = {
     return Array.isArray(outcome) ? { values: outcome } : { outcome }
   },
 
+  /** `dom.ts` `_selectOption` with `ElementHandle` values: `[...elements, ...values]`. */
+  selectOptionsWithElements: async (
+    injected,
+    { options, force, frameVisible },
+    element,
+    elements,
+  ) => {
+    if (!force) {
+      const outcome = await injected.checkElementStates(
+        element,
+        ['visible', 'enabled', 'non-inert'],
+        frameVisible,
+      )
+      if (outcome) return { outcome }
+    }
+    const outcome = injected.selectOptions(element, [
+      ...Object.values(elements),
+      ...options,
+    ])
+    return Array.isArray(outcome) ? { values: outcome } : { outcome }
+  },
+
+  elementListOf: (_injected, _params, element) => ({
+    list: elementList([element]),
+  }),
+
+  elementListWith: (_injected, _params, list, element) => ({
+    list: elementList([...Object.values(list), element]),
+  }),
+
   elementState: (injected, { state }, element) =>
     injected.elementState(element, state),
 

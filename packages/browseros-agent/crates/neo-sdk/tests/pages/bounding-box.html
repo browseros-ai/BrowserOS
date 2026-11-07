@@ -10,7 +10,7 @@
   #svg { position: absolute; left: 0; top: 120px; }
   iframe { position: absolute; }
   #same { left: 300px; top: 20px; width: 200px; height: 100px; border: 2px solid #888; padding: 3px; }
-  #cross { left: 20px; top: 440px; width: 300px; height: 120px; border: 0; padding: 0; }
+  #cross { left: 20px; top: 440px; width: 300px; height: 120px; border: 4px solid #888; padding: 6px; }
   .dup { position: absolute; top: 600px; width: 10px; height: 10px; }
 </style>
 <main id="content">
@@ -28,8 +28,8 @@ new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.rem
   document.documentElement,
   { childList: true, subtree: true },
 )
-// A cross-site, so out-of-process, frame without border or padding: there Playwright's
-// frame offset (the iframe's border box) and Neo's (its content box) are the same point.
+// A cross-site, so out-of-process, frame with a border and padding: Playwright places its
+// boxes from the iframe's border-box origin, not where its viewport starts 10px further in.
 // localhost is another site than the 127.0.0.1 page; the harness serves it a page of an <h1>.
 const cross = document.createElement('iframe')
 cross.id = 'cross'
