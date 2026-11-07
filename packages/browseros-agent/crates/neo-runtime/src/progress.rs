@@ -268,6 +268,13 @@ impl Progress {
     pub(crate) fn delivery(&self) -> Option<&Arc<DeliveryCell>> {
         self.entry.delivery.as_ref()
     }
+
+    /// When the dispatcher took the call, before it attached the tab's session. Playwright starts
+    /// `waitForTimeout`'s timer on arrival; Neo's lazy per-run attach would otherwise add its own
+    /// time to the delay.
+    pub(crate) fn started(&self) -> Instant {
+        self.entry.started
+    }
 }
 
 #[cfg(test)]

@@ -492,18 +492,23 @@ fn lifecycle_reached(since: Lifecycle, current: Lifecycle, state: LifecycleEvent
 
 /// `frames.ts:1459-1471` `waitForTimeout`, a timer raced against the page closing.
 ///
-/// The timer starts with the call. Neo learns that a tab was closed from outside only through
-/// the event watcher that `prepare` starts, so `prepare` runs first, raced against the same
-/// timer, only to arm that watch. `Closed` ends the call with `TargetClosedError`; any other
-/// error is ignored and the timer runs on; a `prepare` slower than the delay is dropped, so it
-/// never stretches the wait. The rest of the timer goes through `Progress::race`, so a close
-/// mid-wait is `TargetClosedError` and a run end is `RunEnded`. `prepare` is the only page call.
+/// The timer counts from the call's arrival at the dispatcher ([`Progress::started`]), so the
+/// tab's lazy session attach, which runs before this function, never stretches the delay. Neo
+/// learns that a tab was closed from outside only through the event watcher that `prepare`
+/// starts, so `prepare` runs first, raced against the same timer, only to arm that watch.
+/// `Closed` ends the call with `TargetClosedError`; any other error is ignored and the timer runs
+/// on; a `prepare` slower than the delay is dropped, so it never stretches the wait either. The
+/// rest of the timer goes through `Progress::race`, so a close mid-wait is `TargetClosedError` and
+/// a run end is `RunEnded`. `prepare` is the only page call.
 pub(crate) async fn wait_for_timeout<T: WaitTab>(
     tab: &T,
     options: &WaitForTimeoutOptions,
     progress: &Progress,
 ) -> Result<(), CallError> {
-    let mut timer = pin::pin!(time::sleep(options.delay));
+    let mut timer = pin::pin!(match progress.started().checked_add(options.delay) {
+        Some(due) => time::sleep_until(due),
+        None => time::sleep(options.delay),
+    });
     let prepared = progress
         .race(async {
             tokio::select! {
@@ -1729,6 +1734,28 @@ mod tests {
                 "{prepare:?}"
             );
             assert_eq!(start.elapsed(), Duration::from_millis(100), "{prepare:?}");
+        }
+    }
+
+    /// Dispatch attaches a tab's session before `serve` runs the wait; that time is part of the
+    /// delay, and a delay already spent resolves at once.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_time_before_the_wait_runs_counts_against_its_delay() {
+        for (before, resolves_at) in [(60, 100), (150, 150)] {
+            let tab = FakeTab::new();
+            let run = untimed_run();
+            let arrived = Instant::now();
+            time::sleep(Duration::from_millis(before)).await;
+            assert_eq!(
+                wait_for_timeout(&tab, &timer(100.0), &run.progress).await,
+                Ok(()),
+                "{before} ms before"
+            );
+            assert_eq!(
+                arrived.elapsed(),
+                Duration::from_millis(resolves_at),
+                "{before} ms before"
+            );
         }
     }
 
