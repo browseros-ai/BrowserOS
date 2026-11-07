@@ -47,6 +47,7 @@ pub(crate) struct PageEntry {
     closed_by_run: AtomicBool,
     close_requested: AtomicBool,
     pub(crate) closed: CancellationToken,
+    pub(crate) frame_metadata: Mutex<getters::FrameMetadata>,
     session: OnceCell<Arc<PageSession>>,
 }
 
@@ -221,6 +222,7 @@ impl Tabs {
             closed_by_run: AtomicBool::new(false),
             close_requested: AtomicBool::new(false),
             closed: CancellationToken::new(),
+            frame_metadata: Mutex::new(getters::FrameMetadata::new(&self.0.cdp)),
             session: OnceCell::new(),
         });
         pages.push(Arc::clone(&entry));
@@ -504,6 +506,9 @@ impl Tabs {
 
 impl PageEntry {
     pub(crate) fn request_close(&self) {
+        if let Ok(mut metadata) = self.frame_metadata.lock() {
+            metadata.closing();
+        }
         self.close_requested.store(true, Ordering::Release);
     }
     /// An attached frame can enter its handler without a cancellation point. The handler

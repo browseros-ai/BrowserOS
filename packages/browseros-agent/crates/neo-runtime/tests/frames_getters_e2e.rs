@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use browser::{Fixture, Tab};
 use neo_runtime::RunStatus;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::time;
 
 const ROOT: &str = r#"<!doctype html><title>Frame getters</title>
@@ -53,7 +53,7 @@ await page.click('#remove');
 while (!remote.isDetached() && Date.now() < deadline)
   await new Promise(resolve => setTimeout(resolve, 10));
 return {rows, identity, matching,
-  detachedGetters: remote.url() === rows.find(frame => frame.name === 'remote').url && remote.name() === 'remote' && remote.parentFrame() === null && remote.childFrames().length === 0,
+  detachedGetters: remote.url() === rows.find(frame => frame.name === 'remote').url && remote.name() === 'remote' && remote.parentFrame() === main && remote.childFrames().length === 0,
   detached: remote.isDetached() && remoteNested.isDetached(),
   survivors: page.frames().map(frame => frame.name()).sort(),
   sameStillAttached: !same.isDetached() && same.childFrames()[0] === nested,
@@ -65,25 +65,7 @@ async fn tests_that_frame_getters_keep_identity_and_track_oopif_removal() {
     let Some(binary) = browser::e2e_browser() else {
         return;
     };
-    let tab = Tab::open(
-        binary,
-        Fixture {
-            pages: vec![
-                ("/frame-getters".to_string(), ROOT.to_string()),
-                (
-                    "/same".to_string(),
-                    "<iframe name='nested' src='/nested'></iframe>".to_string(),
-                ),
-                (
-                    "/remote".to_string(),
-                    "<iframe name='remote-nested' src='/remote-nested'></iframe>".to_string(),
-                ),
-            ],
-            ..Fixture::default()
-        },
-        "/frame-getters",
-    )
-    .await;
+    let tab = Tab::open(binary, fixture(), "/frame-getters").await;
     let origin = tab.origin.clone();
     let remote_origin = origin.replace("127.0.0.1", "localhost");
     let remote_url = format!("{remote_origin}/remote");
@@ -136,4 +118,213 @@ async fn tests_that_frame_getters_keep_identity_and_track_oopif_removal() {
     );
     assert_eq!(second.status, RunStatus::Ok, "{second:?}");
     assert_eq!(second.value, Some(json!(["", "nested", "same"])));
+}
+
+/// Neo: The same observed frame graph is retained by each closed-page getter case.
+const RETAINED_SETUP: &str = r"
+const until = Date.now() + 10000;
+let frames;
+do {
+  frames = page.frames();
+  if (frames.length === 5 && frames.every(frame => !frame.url().endsWith('about:blank'))) break;
+  await new Promise(resolve => setTimeout(resolve, 10));
+} while (Date.now() < until);
+if (frames.length !== 5) throw new Error('Expected all five frames');
+const main = page.mainFrame();
+const same = page.frame('same');
+const nested = page.frame('nested');
+const remote = page.frame('remote');
+const remoteNested = page.frame('remote-nested');
+const retained = [main, same, nested, remote, remoteNested];
+";
+
+async fn after_close(source: &str) -> Option<(Value, String)> {
+    let binary = browser::e2e_browser()?;
+    let tab = Tab::open(binary, fixture(), "/frame-getters").await;
+    let origin = tab.origin.clone();
+    let outcome = tab
+        .start_run(format!("{RETAINED_SETUP}\n{source}"))
+        .await
+        .await
+        .unwrap_or_else(|error| panic!("getter run task failed: {error}"));
+    tab.close().await;
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    let value = outcome
+        .value
+        .unwrap_or_else(|| panic!("getter returned no value"));
+    Some((value, origin))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_retained_frame_names_survive_page_close() {
+    let Some((value, _)) =
+        after_close("await page.close(); return retained.map(frame => frame.name());").await
+    else {
+        return;
+    };
+    assert_eq!(
+        value,
+        json!(["", "same", "nested", "remote", "remote-nested"])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_retained_frame_urls_survive_page_close() {
+    let Some((value, origin)) =
+        after_close("await page.close(); return retained.map(frame => frame.url());").await
+    else {
+        return;
+    };
+    let remote = origin.replace("127.0.0.1", "localhost");
+    assert_eq!(
+        value,
+        json!([
+            format!("{origin}/frame-getters"),
+            format!("{origin}/same"),
+            format!("{origin}/nested"),
+            format!("{remote}/remote"),
+            format!("{remote}/remote-nested"),
+        ])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_the_last_observed_main_frame_url_survives_page_close() {
+    let Some((value, _)) = after_close(
+        r"
+await page.goto(page.url().slice(0, page.url().lastIndexOf('/')) + '/new-root');
+const observed = main.url();
+await page.close();
+return observed.endsWith('/new-root') && main.url() === observed;
+",
+    )
+    .await
+    else {
+        return;
+    };
+    assert_eq!(value, true);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_page_close_does_not_detach_retained_frames() {
+    let Some((value, _)) =
+        after_close("await page.close(); return retained.map(frame => frame.isDetached());").await
+    else {
+        return;
+    };
+    assert_eq!(value, json!([false, false, false, false, false]));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_retained_frame_parents_keep_identity_after_page_close() {
+    let Some((value, _)) = after_close(
+        r"
+await page.close();
+return main.parentFrame() === null && same.parentFrame() === main &&
+  nested.parentFrame() === same && remote.parentFrame() === main &&
+  remoteNested.parentFrame() === remote;
+",
+    )
+    .await
+    else {
+        return;
+    };
+    assert_eq!(value, true);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_retained_frame_children_keep_identity_after_page_close() {
+    let Some((value, _)) = after_close(
+        r"
+await page.close();
+return main.childFrames().length === 2 && main.childFrames()[0] === same &&
+  main.childFrames()[1] === remote && same.childFrames()[0] === nested &&
+  remote.childFrames()[0] === remoteNested && nested.childFrames().length === 0 &&
+  remoteNested.childFrames().length === 0;
+",
+    )
+    .await
+    else {
+        return;
+    };
+    assert_eq!(value, true);
+}
+
+async fn detach_then_close(refresh: bool) {
+    let source = format!(
+        r"
+await page.click('#remove');
+{}
+await page.close();
+return {{
+  detached: remote.isDetached() && remoteNested.isDetached(),
+  parents: remote.parentFrame() === main && remoteNested.parentFrame() === remote,
+  children: remote.childFrames().length === 0 && remoteNested.childFrames().length === 0 &&
+    main.childFrames().length === 1 && main.childFrames()[0] === same,
+  kept: remote.name() === 'remote' && remote.url().endsWith('/remote') &&
+    remoteNested.name() === 'remote-nested' && remoteNested.url().endsWith('/remote-nested'),
+  surviving: !same.isDetached() && !nested.isDetached(),
+}};
+",
+        if refresh {
+            "if (!remote.isDetached()) throw new Error('Expected real detach before close');"
+        } else {
+            ""
+        }
+    );
+    let Some((value, _)) = after_close(&source).await else {
+        return;
+    };
+    assert_eq!(
+        value,
+        json!({
+            "detached": true, "parents": true, "children": true,
+            "kept": true, "surviving": true,
+        }),
+        "real detach must preserve metadata and survive page closure"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_observed_detach_survives_page_close() {
+    detach_then_close(true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_detach_after_the_last_getter_is_not_revived_by_page_close() {
+    detach_then_close(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_retained_metadata_does_not_allow_closed_frame_actions() {
+    let Some((value, _)) = after_close(
+        r"
+await page.close();
+const name = remote.name();
+try { await remote.title(); return false; }
+catch (error) { return name === 'remote' && error.name === 'Error'; }
+",
+    )
+    .await
+    else {
+        return;
+    };
+    assert_eq!(value, true);
+}
+
+fn fixture() -> Fixture {
+    Fixture {
+        pages: vec![
+            ("/frame-getters".to_string(), ROOT.to_string()),
+            (
+                "/same".to_string(),
+                "<iframe name='nested' src='/nested'></iframe>".to_string(),
+            ),
+            (
+                "/remote".to_string(),
+                "<iframe name='remote-nested' src='/remote-nested'></iframe>".to_string(),
+            ),
+        ],
+        ..Fixture::default()
+    }
 }
