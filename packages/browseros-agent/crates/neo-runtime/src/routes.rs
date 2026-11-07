@@ -1339,7 +1339,7 @@ mod tests {
     fn tests_that_only_a_browser_preflight_is_answered_as_one() {
         let pause = json!({ "request": { "method": "OPTIONS", "headers": { "Access-Control-Request-Method": "POST", "Origin": "https://page.test" } }, "resourceType": "XHR" });
         assert!(
-            is_preflight(&preflight),
+            is_preflight(&pause),
             "Chromium gives it the resource type of the request it precedes"
         );
         let options = json!({ "request": { "method": "OPTIONS", "headers": {} } });
