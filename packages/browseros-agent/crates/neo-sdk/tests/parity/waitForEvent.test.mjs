@@ -3,7 +3,8 @@
 // the message the click logs, on the page and on the context, and takes its listener away; a
 // predicate (a function, `options.predicate`, or an async function) skips the events it
 // rejects; and a wait rejects by kind on its own timeout, on the default timeout, when its
-// predicate throws, and when its page closes, while a wait for 'close' gets the page itself.
+// predicate throws, and when its page closes, while a wait for 'close' gets the page itself; a
+// null signal is no signal, and any other is refused before the wait listens (Neo only).
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs, events.mjs).
 
