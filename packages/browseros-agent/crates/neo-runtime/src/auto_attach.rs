@@ -41,8 +41,10 @@ impl AttachKind {
 /// Neo: what is wanted of each session that set auto-attach, by session id. A CDP session id
 /// names one session of one connection, so every consumer of a session meets here without being
 /// handed anything; an entry goes once nothing is wanted of it, or with its session ([`forget`]).
-static SESSIONS: LazyLock<SyncMutex<HashMap<SessionId, Arc<Mutex<BTreeSet<AttachKind>>>>>> =
-    LazyLock::new(SyncMutex::default);
+static SESSIONS: LazyLock<SyncMutex<HashMap<SessionId, Wants>>> = LazyLock::new(SyncMutex::default);
+
+/// Neo: what one session's consumers want it to attach, held across that session's sends.
+type Wants = Arc<Mutex<BTreeSet<AttachKind>>>;
 
 /// Adds `kind` to what `session` auto-attaches, and sends the union when it changed.
 ///
@@ -93,7 +95,7 @@ pub(crate) fn forget(session: &SessionId) {
     }
 }
 
-fn wants(session: &SessionId) -> Arc<Mutex<BTreeSet<AttachKind>>> {
+fn wants(session: &SessionId) -> Wants {
     SESSIONS
         .lock()
         .map(|mut sessions| Arc::clone(sessions.entry(session.clone()).or_default()))

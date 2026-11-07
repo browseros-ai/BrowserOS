@@ -21,6 +21,7 @@
 //! Deviation: `server/chromium/crPage.ts` `FrameSession._initialize`: `this._client.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }),` Playwright's page auto-attaches its workers from its start; Neo's does from the run's first `worker` listener or `page.workers()` (med-pw-eval DECIDED), and then sees the workers already running, so a worker that started and ended before then is never seen.
 //! Deviation: `server/chromium/crPage.ts` `FrameSession._initializeWorker`: `session._sendMayFail('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });` Playwright also attaches the workers a worker or an out-of-process frame starts; Neo tracks the tab's own session's dedicated workers only.
 
+use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -105,7 +106,7 @@ impl Workers {
                 auto_attach::want(&self.cdp, &self.tab, AttachKind::Worker).await
             })
             .await
-            .map(|_| ())
+            .copied()
     }
 
     /// Applies one CDP event the tab's watcher read, from any session.
@@ -164,7 +165,7 @@ impl Workers {
         let workers = self
             .live
             .lock()
-            .map(|mut live| std::mem::take(&mut *live))
+            .map(|mut live| mem::take(&mut *live))
             .unwrap_or_default();
         for worker in workers {
             self.close(&worker);

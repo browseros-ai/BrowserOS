@@ -893,6 +893,15 @@ pub(crate) struct Handles {
     closed: AtomicBool,
 }
 
+/// Neo: what a frame's handle is as an argument of a worker's call (`worker_eval.rs`).
+pub(crate) enum FrameArgument {
+    /// A primitive's CDP `CallArgument`, which passes by value into any context, as
+    /// `serializeAsCallArgument` falls through to it.
+    Value(Value),
+    /// An object of a frame's world, which reaches no worker.
+    Object,
+}
+
 /// Neo: a handle on a dedicated worker's object (`worker_eval.rs`). A worker has no frame and
 /// no document: the handle belongs to its worker, and is closed once the worker is.
 pub(crate) struct WorkerHandle {
@@ -1017,12 +1026,11 @@ impl Handles {
         frame_guid: String,
         object: &RemoteObject,
     ) -> Result<CreatedHandle, PageError> {
-        let (remote, preview) = match object.object_id.clone() {
-            Some(id) => (Remote::Object(HandleId::new(id)), render_preview(object)),
-            None => {
-                let (argument, preview) = primitive(object);
-                (Remote::Value(argument), preview)
-            }
+        let (remote, preview) = if let Some(id) = object.object_id.clone() {
+            (Remote::Object(HandleId::new(id)), render_preview(object))
+        } else {
+            let (argument, preview) = primitive(object);
+            (Remote::Value(argument), preview)
         };
         let guid = format!(
             "{HANDLE_PREFIX}{}.{}",
@@ -1052,14 +1060,13 @@ impl Handles {
         self.entries.lock().ok()?.get(guid).cloned()
     }
 
-    /// A frame's handle `guid` as an argument of a worker's call (`worker_eval.rs`): its
-    /// primitive by value, as `serializeAsCallArgument` falls through to it, `Some(None)` for an
-    /// object of a frame's world, `None` when the run has no such handle.
-    pub(crate) fn primitive_argument(&self, guid: &str) -> Option<Option<Value>> {
+    /// A frame's handle `guid` as an argument of a worker's call (`worker_eval.rs`), `None` when
+    /// the run has no such handle.
+    pub(crate) fn frame_argument(&self, guid: &str) -> Option<FrameArgument> {
         let entry = self.entry(guid)?;
         Some(match &entry.remote {
-            Remote::Value(argument) => Some(argument.clone()),
-            Remote::Object(_) => None,
+            Remote::Value(argument) => FrameArgument::Value(argument.clone()),
+            Remote::Object(_) => FrameArgument::Object,
         })
     }
 

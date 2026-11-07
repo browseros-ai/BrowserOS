@@ -20,7 +20,8 @@ use serde_json::{Value, json};
 
 use crate::click::PageError;
 use crate::evaluate::{
-    self, EvalCall, EvalResult, Evaluation, Handles, SerializedArgument, WorkerHandle,
+    self, EvalCall, EvalResult, Evaluation, FrameArgument, Handles, SerializedArgument,
+    WorkerHandle,
 };
 use crate::main_world::{BuiltExpression, Called};
 use crate::page::PageSession;
@@ -87,7 +88,7 @@ pub(crate) fn route(
 ///
 /// # Errors
 ///
-/// TargetClosedError when the worker closed before the call, before it was ready or during it;
+/// `TargetClosedError` when the worker closed before the call, before it was ready or during it;
 /// the evaluation's own error otherwise.
 pub(crate) async fn serve(
     page: &PageSession,
@@ -119,7 +120,7 @@ pub(crate) async fn serve(
 ///
 /// # Errors
 ///
-/// TargetClosedError once the worker closes; the call's own error otherwise.
+/// `TargetClosedError` once the worker closes; the call's own error otherwise.
 pub(crate) async fn serve_handle(
     receiver: &Arc<WorkerHandle>,
     call: EvalCall,
@@ -328,9 +329,9 @@ fn argument(
         }
         return Ok(handle.call_argument());
     }
-    match handles.primitive_argument(guid) {
-        Some(Some(argument)) => Ok(argument),
-        Some(None) => Err(PlaywrightError::error(evaluate::OTHER_CONTEXT).into()),
+    match handles.frame_argument(guid) {
+        Some(FrameArgument::Value(argument)) => Ok(argument),
+        Some(FrameArgument::Object) => Err(PlaywrightError::error(evaluate::OTHER_CONTEXT).into()),
         // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection._tChannelImplFromWire`: `${path}: no object with guid ${guid}`
         None => Err(PlaywrightError::error(format!(
             "arg.handles[{index}]: no object with guid {guid}"
@@ -361,7 +362,7 @@ fn answer(
 }
 
 /// A worker call's page error once it was sent: the worker closing under it, its page's close
-/// included, is Playwright's TargetClosedError, as its server reads the worker session's close.
+/// included, is Playwright's `TargetClosedError`, as its server reads the worker session's close.
 /// Playwright: `server/errors.ts` `rewriteErrorForClosedTarget`: `return new TargetClosedError(closeReason, error.browserLogMessage());`
 fn in_flight(error: PageError) -> CallError {
     evaluate::page_error(error).into()
