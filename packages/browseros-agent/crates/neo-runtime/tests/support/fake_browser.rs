@@ -658,6 +658,7 @@ fn answer(
     let now = Some(Duration::ZERO);
     if let Some(answer) = tab_command(command, replies, page)
         .or_else(|| frame_command(command, calls, page).map(|reply| (reply, now)))
+        .or_else(|| init_script_command(command, calls).map(|reply| (reply, now)))
         .or_else(|| input_command(command, replies, calls))
     {
         return answer;
@@ -748,6 +749,20 @@ fn answer(
             json!({ "error": { "code": -32601, "message": format!("'{method}' wasn't found") } }),
             now,
         ),
+    }
+}
+
+/// The init script commands (`src/init_scripts.rs`): a real tab answers each script its own
+/// identifier, and takes its removal and the iframe auto-attach without a word.
+fn init_script_command(command: &Value, calls: &mut Calls) -> Option<Value> {
+    match command["method"].as_str()? {
+        "Page.addScriptToEvaluateOnNewDocument" => Some(json!({
+            "result": { "identifier": calls.object("script") },
+        })),
+        "Page.removeScriptToEvaluateOnNewDocument"
+        | "Target.setAutoAttach"
+        | "Runtime.runIfWaitingForDebugger" => Some(json!({ "result": {} })),
+        _ => None,
     }
 }
 
