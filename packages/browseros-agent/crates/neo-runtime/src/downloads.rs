@@ -30,6 +30,8 @@
 //! [`ALL_PAGES`]: crate::events::ALL_PAGES
 
 use std::collections::{HashMap, VecDeque};
+use std::io;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
 use browseros_cdp::CdpEvent;
@@ -92,9 +94,16 @@ const CANCELED: &str = "canceled";
 /// file (CDP marks `filePath` experimental; BrowserOS neo 155 named it every time, measured).
 const NO_FILE_PATH: &str = "the browser reported the download complete without naming its file";
 
-/// Neo: what `saveAs` throws. Neo writes a script's files only inside the artifact directory the
-/// host gives the run, and this run has none.
+/// Neo: what `saveAs` throws in a run the host gave no artifact directory: Neo writes a script's
+/// files only inside that directory.
 const NO_ARTIFACT_DIRECTORY: &str = "path: this run has no artifact directory, so Neo cannot save the download; the host sets one per run";
+
+/// Neo: what `saveAs` throws for a path that is absolute, leaves the artifact directory (`..`)
+/// or names no file.
+const OUTSIDE_ARTIFACTS: &str = "path: Neo saves a download only at a relative path inside the run's artifact directory, without `..`";
+
+/// Neo: what `saveAs` throws when its copy fails, a symbolic link on the way included.
+const SAVE_FAILED: &str = "path: saving the download failed";
 
 /// CDP's `Browser.downloadWillBegin` params.
 #[derive(Deserialize)]
@@ -464,16 +473,112 @@ pub(crate) async fn serve(
             Ok(None)
         }
         ArtifactCall::Delete(_) => delete(tabs, guid, progress).await,
-        ArtifactCall::SaveAs(_) => save_as(downloads, guid),
+        // The host gives a run its artifact directory with med-pw-eval's binary transport
+        // (#3182: `RunRequest.artifacts`, listed in `RunOutcome.artifacts`), which this base does
+        // not have yet: no run has one, so `saveAs` names the option.
+        ArtifactCall::SaveAs(params) => save_as(tabs, guid, None, &params.path, progress)
+            .await
+            .map(|_| None),
     }
+}
+
+/// A file `saveAs` wrote: relative to the artifact directory, with `/` separators, and its size,
+/// as `RunOutcome` lists a run's artifacts.
+#[derive(Debug, PartialEq, Eq)]
+struct Saved {
+    path: String,
+    bytes: u64,
 }
 
 /// Deviation: `server/dispatchers/artifactDispatcher.ts` `ArtifactDispatcher.saveAs`: `await fs.promises.copyFile(localPath, params.path);`
 /// Playwright copies the file to any path on its host. Neo writes a script's files only inside the
-/// artifact directory the host gives the run, and this run has none, so `saveAs` throws.
-fn save_as(downloads: &Downloads, guid: &str) -> Result<Option<Value>, CallError> {
+/// artifact directory the host gives the run (`artifacts`), at a relative path without `..`,
+/// refusing a symbolic link on the way, and a run without one names the option.
+///
+/// Checks the path before it waits, as the run's other `path` options do; then waits for the
+/// download to end, fails a canceled one as Playwright's does, creates the path's parents and
+/// copies the browser's file, which stays where it is.
+async fn save_as(
+    tabs: &Tabs,
+    guid: &str,
+    artifacts: Option<&Path>,
+    path: &str,
+    progress: &Progress,
+) -> Result<Saved, CallError> {
+    let downloads = tabs.downloads();
     downloads.get(guid)?;
-    Err(PlaywrightError::error(NO_ARTIFACT_DIRECTORY).into())
+    let Some(dir) = artifacts else {
+        return Err(PlaywrightError::error(NO_ARTIFACT_DIRECTORY).into());
+    };
+    let relative = artifact_path(path)?;
+    let source = match progress.race(downloads.end(guid)).await?? {
+        End::Completed(Some(source)) => source,
+        End::Completed(None) => return Err(PlaywrightError::error(NO_FILE_PATH).into()),
+        End::Canceled => return Err(PlaywrightError::error(CANCELED).into()),
+    };
+    let bytes = progress
+        .race(copy_inside(dir, &relative, Path::new(&source)))
+        .await?
+        .map_err(|error| PlaywrightError::error(format!("{SAVE_FAILED}: {error}")))?;
+    let display = relative
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
+    Ok(Saved {
+        path: display,
+        bytes,
+    })
+}
+
+/// `path` as `saveAs` takes it: relative, without `..`, naming a file; `.` parts dropped.
+fn artifact_path(path: &str) -> Result<PathBuf, PlaywrightError> {
+    let mut relative = PathBuf::new();
+    for component in Path::new(path).components() {
+        match component {
+            Component::Normal(part) => relative.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(PlaywrightError::error(format!(
+                    "{OUTSIDE_ARTIFACTS}: {path:?}"
+                )));
+            }
+        }
+    }
+    if relative.as_os_str().is_empty() {
+        return Err(PlaywrightError::error(format!(
+            "{OUTSIDE_ARTIFACTS}: {path:?}"
+        )));
+    }
+    Ok(relative)
+}
+
+/// Copies `source` to `relative` under `dir`, creating its parents one at a time and refusing any
+/// part, the file included, that is a symbolic link, so no write lands outside `dir`. Overwrites
+/// a file already there, as Playwright's copy does. Returns the bytes copied.
+async fn copy_inside(dir: &Path, relative: &Path, source: &Path) -> io::Result<u64> {
+    fs::create_dir_all(dir).await?;
+    let mut at = dir.to_path_buf();
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        at.push(component);
+        match fs::symlink_metadata(&at).await {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(io::Error::other(format!(
+                    "{} is a symbolic link",
+                    at.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if components.peek().is_some() {
+                    fs::create_dir(&at).await?;
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    fs::copy(source, &at).await
 }
 
 /// Playwright: `server/artifact.ts` `Artifact._delete`: `const fileName = await this._localPathAfterFinished();`
@@ -499,7 +604,21 @@ async fn delete(tabs: &Tabs, guid: &str, progress: &Progress) -> Result<Option<V
 
 #[cfg(test)]
 mod tests {
+    use std::fs::{create_dir, read_to_string, write};
+    use std::os::unix::fs::symlink;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use tokio::runtime::Handle;
+    use tokio_util::sync::CancellationToken;
+    use tokio_util::task::TaskTracker;
+
     use super::*;
+    use crate::deadline::Deadline;
+    use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+    use crate::page::TabInputs;
+    use crate::progress::{CallEntry, CallStart, RunScope};
+    use crate::run::PageId;
 
     fn progress(guid: &str, state: &str, file_path: Option<&str>) -> DownloadProgress {
         DownloadProgress {
@@ -649,6 +768,148 @@ mod tests {
             ));
         }
         assert!(opened.get("NEW").is_none(), "the oldest goes past the cap");
+    }
+
+    fn call_progress() -> Progress {
+        let entry = Arc::new(CallEntry::new(CallStart {
+            call_id: 1,
+            guid: "download@G".to_string(),
+            method: "saveAs".to_string(),
+            title: None,
+            params: json!({}),
+            location: None,
+            input: false,
+        }));
+        let run = RunScope::new(
+            Deadline::new(Duration::from_mins(1), CancellationToken::new()),
+            TaskTracker::new(),
+        );
+        Progress::new(entry, 0.0, run, CancellationToken::new())
+    }
+
+    fn message(error: CallError) -> String {
+        match error {
+            CallError::Playwright(error) => error.message,
+            CallError::RunEnded(end) => panic!("expected a Playwright error, got {end:?}"),
+        }
+    }
+
+    #[test]
+    fn tests_that_save_as_takes_only_a_relative_path_without_dot_dot() {
+        assert_eq!(
+            artifact_path("./saved//sub/x.txt").ok(),
+            Some(PathBuf::from("saved/sub/x.txt"))
+        );
+        for path in [
+            "/etc/passwd",
+            "../escape.txt",
+            "sub/../../escape.txt",
+            "",
+            ".",
+        ] {
+            assert!(
+                artifact_path(path)
+                    .is_err_and(|error| error.message.starts_with(OUTSIDE_ARTIFACTS)),
+                "{path:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_copy_makes_its_folders_overwrites_and_refuses_a_symbolic_link() {
+        let temp = tempfile::tempdir().unwrap_or_else(|error| panic!("temp dir: {error}"));
+        let source = temp.path().join("download.txt");
+        write(&source, "hello data").unwrap_or_else(|error| panic!("{error}"));
+        let dir = temp.path().join("artifacts");
+        let copied = copy_inside(&dir, Path::new("a/b/saved.txt"), &source).await;
+        assert_eq!(copied.ok(), Some(10));
+        write(&source, "hello again").unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(
+            copy_inside(&dir, Path::new("a/b/saved.txt"), &source)
+                .await
+                .ok(),
+            Some(11),
+            "a second save overwrites"
+        );
+        assert_eq!(
+            read_to_string(dir.join("a/b/saved.txt")).ok().as_deref(),
+            Some("hello again")
+        );
+        assert!(source.exists(), "the browser's file stays");
+        let outside = temp.path().join("outside");
+        create_dir(&outside).unwrap_or_else(|error| panic!("{error}"));
+        symlink(&outside, dir.join("link")).unwrap_or_else(|error| panic!("symlink: {error}"));
+        assert!(
+            copy_inside(&dir, Path::new("link/x.txt"), &source)
+                .await
+                .is_err(),
+            "through a symbolic link"
+        );
+        assert!(!outside.join("x.txt").exists(), "nothing landed outside");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_save_as_copies_a_finished_download_into_the_artifact_directory() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            Switches::default(),
+            TaskTracker::new(),
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("open: {error:?}"));
+        let temp = tempfile::tempdir().unwrap_or_else(|error| panic!("temp dir: {error}"));
+        let source = temp.path().join("report.csv");
+        write(&source, "a,b\n").unwrap_or_else(|error| panic!("{error}"));
+        let dir = temp.path().join("artifacts");
+        let downloads = tabs.downloads();
+        downloads.began("DONE", None);
+        downloads.progressed(DownloadProgress {
+            guid: "DONE".to_string(),
+            state: "completed".to_string(),
+            file_path: Some(source.display().to_string()),
+        });
+        let saved = save_as(
+            &tabs,
+            "DONE",
+            Some(&dir),
+            "out/report.csv",
+            &call_progress(),
+        )
+        .await;
+        assert_eq!(
+            saved.ok(),
+            Some(Saved {
+                path: "out/report.csv".to_string(),
+                bytes: 4,
+            }),
+            "listed as the outcome lists artifacts"
+        );
+        assert_eq!(
+            read_to_string(dir.join("out/report.csv")).ok().as_deref(),
+            Some("a,b\n")
+        );
+
+        let refused = save_as(&tabs, "DONE", Some(&dir), "../out.csv", &call_progress()).await;
+        assert!(refused.is_err_and(|error| message(error).starts_with(OUTSIDE_ARTIFACTS)));
+        let refused = save_as(&tabs, "DONE", None, "out.csv", &call_progress()).await;
+        assert!(
+            refused.is_err_and(|error| message(error) == NO_ARTIFACT_DIRECTORY),
+            "a run without an artifact directory names the option"
+        );
+
+        downloads.began("CANCELED", None);
+        downloads.progressed(DownloadProgress {
+            guid: "CANCELED".to_string(),
+            state: "canceled".to_string(),
+            file_path: None,
+        });
+        let refused = save_as(&tabs, "CANCELED", Some(&dir), "c.csv", &call_progress()).await;
+        assert!(refused.is_err_and(|error| message(error) == CANCELED));
+        assert!(!dir.join("c.csv").exists());
     }
 
     #[test]

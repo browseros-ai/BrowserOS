@@ -50,14 +50,14 @@ const cases = [
   },
   {
     // download.spec.ts "DO-028 should not fail explicitly to cancel a download even if that is
-    // already finished".
+    // already finished", waited for on the context.
     name: 'cancel() after a download finished resolves and leaves it finished, file and all',
     path: '/download.html',
     source: `const read = (file) => page.evaluate(async (file) => {
       const response = await fetch('/file?path=' + encodeURIComponent(file))
       return { status: response.status, text: await response.text() }
     }, file)
-    const [download] = await Promise.all([page.waitForEvent('download'), page.click('#data')])
+    const [download] = await Promise.all([page.context().waitForEvent('download'), page.click('#data')])
     const file = await download.path()
     const canceled = await settle(download.cancel())
     const failure = await download.failure()
