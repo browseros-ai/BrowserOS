@@ -341,9 +341,11 @@ export class Page extends ChannelOwner {
     if (locator._frame !== this.#mainFrame)
       throw new Error('Locator must belong to the main frame of this page')
     if (options.times === 0) return
-    // Subscribed before the handler exists, so its first trigger always reaches the realm.
-    if (!this.#locatorHandlers.size)
-      this._subscribeChannelEvent('locatorHandlerTriggered', true)
+    // Subscribed before the handler exists, so its first trigger always reaches the realm, and
+    // kept while its registration is pending, so a concurrent removal of the last other handler
+    // cannot unsubscribe it.
+    this.#pendingLocatorHandlers++
+    this.#syncLocatorHandlerSubscription()
     try {
       const { uid } = (await this.#connection.sendPage(
         'page.addLocatorHandler',
@@ -357,9 +359,21 @@ export class Page extends ChannelOwner {
       )) as PageRegisterLocatorHandlerResult
       this.#locatorHandlers.set(uid, { locator, handler, times: options.times })
     } finally {
-      if (!this.#locatorHandlers.size)
-        this._subscribeChannelEvent('locatorHandlerTriggered', false)
+      this.#pendingLocatorHandlers--
+      this.#syncLocatorHandlerSubscription()
     }
+  }
+
+  /** Registrations sent and not yet answered. */
+  #pendingLocatorHandlers = 0
+  #locatorHandlerSubscribed = false
+
+  /** Neo: the page listens for `locatorHandlerTriggered` while it holds or registers a handler. */
+  #syncLocatorHandlerSubscription(): void {
+    const wanted = this.#locatorHandlers.size + this.#pendingLocatorHandlers > 0
+    if (wanted === this.#locatorHandlerSubscribed) return
+    this.#locatorHandlerSubscribed = wanted
+    this._subscribeChannelEvent('locatorHandlerTriggered', wanted)
   }
 
   /** Playwright: `client/page.ts` `Page._onLocatorHandlerTriggered` */
@@ -411,8 +425,7 @@ export class Page extends ChannelOwner {
 
   #dropLocatorHandler(uid: number): void {
     this.#locatorHandlers.delete(uid)
-    if (!this.#locatorHandlers.size)
-      this._subscribeChannelEvent('locatorHandlerTriggered', false)
+    this.#syncLocatorHandlerSubscription()
   }
 
   /** Playwright's `Page._onFrameAttached`: a frame attaches with no name or URL yet. */

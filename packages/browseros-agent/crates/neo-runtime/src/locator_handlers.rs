@@ -15,7 +15,7 @@
 //! ```
 
 use std::collections::BTreeMap;
-use std::future::Future;
+use std::future::{self, Future};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -245,11 +245,22 @@ fn wait_hidden<'a>(
     Box::pin(waits::wait_for_selector_element(main, hidden, progress))
 }
 
-/// Neo: the handler's resolve. A handler removed while it runs ends the wait too.
+/// Neo: the handler's resolve. A handler removed while its callback runs is never resolved, as
+/// Playwright's removed handler is not found by its resolve: the action waits on until its
+/// deadline. Removal is not the callback's completion.
+///
+/// Playwright: `server/page.ts` `Page.resolveLocatorHandler`: `handler.resolved?.resolve();`
 async fn resolved(mut waiting: watch::Receiver<bool>) {
-    while !*waiting.borrow() {
-        if waiting.changed().await.is_err() {
+    loop {
+        if *waiting.borrow_and_update() {
             return;
+        }
+        if waiting.changed().await.is_err() {
+            // The handler went: resolved only if its last word was the resolve.
+            if *waiting.borrow() {
+                return;
+            }
+            future::pending::<()>().await;
         }
     }
 }

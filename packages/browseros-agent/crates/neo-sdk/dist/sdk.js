@@ -6102,8 +6102,8 @@ class Page extends ChannelOwner {
       throw new Error("Locator must belong to the main frame of this page");
     if (options.times === 0)
       return;
-    if (!this.#locatorHandlers.size)
-      this._subscribeChannelEvent("locatorHandlerTriggered", true);
+    this.#pendingLocatorHandlers++;
+    this.#syncLocatorHandlerSubscription();
     try {
       const { uid } = await this.#connection.sendPage("page.addLocatorHandler", this.#guid, "registerLocatorHandler", pickParams(PAGE_REGISTER_LOCATOR_HANDLER_KEYS, {
         selector: locator._selector,
@@ -6111,9 +6111,18 @@ class Page extends ChannelOwner {
       }), 0);
       this.#locatorHandlers.set(uid, { locator, handler, times: options.times });
     } finally {
-      if (!this.#locatorHandlers.size)
-        this._subscribeChannelEvent("locatorHandlerTriggered", false);
+      this.#pendingLocatorHandlers--;
+      this.#syncLocatorHandlerSubscription();
     }
+  }
+  #pendingLocatorHandlers = 0;
+  #locatorHandlerSubscribed = false;
+  #syncLocatorHandlerSubscription() {
+    const wanted = this.#locatorHandlers.size + this.#pendingLocatorHandlers > 0;
+    if (wanted === this.#locatorHandlerSubscribed)
+      return;
+    this.#locatorHandlerSubscribed = wanted;
+    this._subscribeChannelEvent("locatorHandlerTriggered", wanted);
   }
   async#onLocatorHandlerTriggered(uid) {
     let remove = false;
@@ -6146,8 +6155,7 @@ class Page extends ChannelOwner {
   }
   #dropLocatorHandler(uid) {
     this.#locatorHandlers.delete(uid);
-    if (!this.#locatorHandlers.size)
-      this._subscribeChannelEvent("locatorHandlerTriggered", false);
+    this.#syncLocatorHandlerSubscription();
   }
   #onFrameAttached(record) {
     this.#frameEvent(record, "frameattached", false);
