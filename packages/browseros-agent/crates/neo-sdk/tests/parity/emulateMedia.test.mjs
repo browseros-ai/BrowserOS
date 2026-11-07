@@ -7,14 +7,36 @@
 // should work", "EM-007 should change the actual colors in css", "EM-008 should emulate reduced
 // motion", "EM-010 should emulate forcedColors", "EM-011 should emulate contrast", and
 // "EM-002 should throw in case of bad media argument" (rejected, nothing changed). A later call
-// keeps what an earlier one set ("EM-009 should keep reduced motion and color emulation").
+// keeps what an earlier one set ("EM-009 should keep reduced motion and color emulation"). An
+// out-of-process iframe follows its page, whether the script reached it before the call or after.
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { skip } from './harness.mjs'
 import { fixturePage, outcomeValue, withPlatform } from './platform.mjs'
 
-const pages = { '/emulation.html': fixturePage('emulation.html') }
+const pages = {
+  '/emulation.html': fixturePage('emulation.html'),
+  // The emulation page in an iframe of the other site (127.0.0.1 and localhost are different
+  // sites, so BrowserOS runs the frame out of process).
+  '/outer.html': `<title>outer</title><script>
+const url = new URL(location.href)
+url.hostname = url.hostname === '127.0.0.1' ? 'localhost' : '127.0.0.1'
+url.pathname = '/emulation.html'
+document.write('<iframe src="' + url.href + '"></iframe>')
+</script>`,
+}
+
+/** Reads the out-of-process frame's reporter until `done`, from the outer page. */
+const FRAME_READ = `const frameState = async (done) => {
+  const until = Date.now() + 3000
+  for (;;) {
+    const s = JSON.parse(await page.frameLocator('iframe').locator('#state').textContent())
+    if (done(s) || Date.now() > until) return s
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+}
+`
 
 const cases = [
   {
@@ -66,6 +88,23 @@ return { set: features(set), color: set.color, later: features(later) }`,
     },
   },
   {
+    name: 'an out-of-process frame the script reached first',
+    path: '/outer.html',
+    source: `${FRAME_READ}const before = (await frameState(() => true)).media.print
+await page.emulateMedia({ media: 'print', colorScheme: 'dark' })
+const after = await frameState((s) => s.media.print)
+return { before, print: after.media.print, dark: after.media['(prefers-color-scheme: dark)'] }`,
+    expected: { before: false, print: true, dark: true },
+  },
+  {
+    name: 'an out-of-process frame reached after the call',
+    path: '/outer.html',
+    source: `${FRAME_READ}await page.emulateMedia({ media: 'print' })
+const after = await frameState((s) => s.media.print)
+return after.media.print`,
+    expected: true,
+  },
+  {
     name: 'a bad value is refused and nothing changes',
     source: `const before = await state()
 const errors = [
@@ -80,13 +119,11 @@ return { errors, unchanged: JSON.stringify(before.media) === JSON.stringify(afte
 
 test('emulateMedia: Neo matches Playwright', { skip }, async (t) => {
   await withPlatform(t, { pages }, async ({ playwright, neo }) => {
-    for (const { name, source, expected } of cases) {
-      const reference = outcomeValue(
-        await playwright('/emulation.html', source),
-      )
+    for (const { name, path = '/emulation.html', source, expected } of cases) {
+      const reference = outcomeValue(await playwright(path, source))
       assert.deepEqual(reference, expected, `${name}: Playwright`)
       assert.deepEqual(
-        outcomeValue(await neo('/emulation.html', source)),
+        outcomeValue(await neo(path, source)),
         reference,
         `${name}: Neo`,
       )
