@@ -1,8 +1,8 @@
-// The runner the wait parity files share (waitFor, waitForURL and waitForLoadState.test.mjs), on
-// the shared harness: one BrowserOS neo, one fixture server, the pinned Playwright over
-// connectOverCDP, and neo_run. Each case runs its script on two fresh tabs at the same URL,
-// Playwright's first, then Neo's, and returns what each script returned and what each page held
-// afterwards (the case's `probe`).
+// The runner the wait parity files share (waitFor, waitForSelector, waitForTimeout, waitForURL
+// and waitForLoadState.test.mjs), on the shared harness: one BrowserOS neo, one fixture server,
+// the pinned Playwright over connectOverCDP, and neo_run. Each case runs its script on two fresh
+// tabs at the same URL, Playwright's first, then Neo's, and returns what each script returned and
+// what each page held afterwards (the case's `probe`).
 //
 // Every script gets `settle` first, so both engines report a call the same way: `'undefined'`
 // for a call that resolved `undefined`, `{ value }` for any other value, or its error's kind,
@@ -41,8 +41,9 @@ const SETTLE = `const settle = (promise) => promise.then(
 /**
  * Serves `pages` (`/slow` answers after `slowMs`), launches the browser and connects both
  * engines, then calls `body` with `run(c)`, which runs case `c` on both engines. A case names
- * its `path`, its `source`, an optional `probe` expression, and `loaded: false` to start the
- * script once the page has committed instead of once it has loaded.
+ * its `path`, its `source`, an optional `probe` expression, `loaded: false` to start the
+ * script once the page has committed instead of once it has loaded, and `closesPage: true` when
+ * its script closes its own page, which leaves Neo's tab nothing to close afterwards.
  */
 export async function withBoth(t, { pages, slowMs = 0 }, body) {
   t.diagnostic(`Playwright ${playwrightVersion}`)
@@ -128,6 +129,6 @@ async function viaNeo(cdp, port, neoRun, scripts, index, { url, source, c }) {
     const probe = c.probe ? await evaluate(c.probe) : undefined
     return { outcome, result: { value: outcome.value }, probe }
   } finally {
-    await cdp.send('Target.closeTarget', { targetId })
+    if (!c.closesPage) await cdp.send('Target.closeTarget', { targetId })
   }
 }

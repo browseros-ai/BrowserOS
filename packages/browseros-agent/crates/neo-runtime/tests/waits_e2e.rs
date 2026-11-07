@@ -1,5 +1,5 @@
-//! `locator.waitFor`, `page.waitForURL` and `page.waitForLoadState` on a real BrowserOS neo, each
-//! test on a throwaway profile:
+//! `locator.waitFor`, `page`/`frame.waitForSelector`, `waitForTimeout`, `page.waitForURL` and
+//! `page.waitForLoadState` on a real BrowserOS neo, each test on a throwaway profile:
 //! - waits the same run meets by clicking, and by typing, which would time out if a wait held the
 //!   tab's input turn for its whole life;
 //! - waits that resolve while a key press holds the input turn, which fail if any single check
@@ -11,7 +11,12 @@
 //! - a tab closed under its waits;
 //! - a URL wait met by a hash change and by a navigating click;
 //! - `DOMContentLoaded` held back by a parser-blocking script, and long before load on a slow
-//!   page.
+//!   page;
+//! - `page`/`frame.waitForSelector` in every state, pending until a click changes the page, then
+//!   `null` (Neo has no `ElementHandle` yet); the first of two matches judged, and `strict: true`
+//!   refused;
+//! - `waitForTimeout` waiting out its delay, and a tab closed under one that was the run's first
+//!   call.
 //!
 //! Behaviour only: no call logs, and time only as generous bounds.
 
@@ -78,6 +83,28 @@ const HELD: &str = r#"<!doctype html><html lang="en"><head><meta charset="utf-8"
 <p id="after">After the script</p>
 </body></html>"#;
 
+/// `#change` adds `#late`, removes `#doomed`, hides `#fade` and shows `#reveal`, all in one task.
+/// `.pair` matches twice, the first hidden.
+const SELECTORS: &str = r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><title>selectors</title></head><body>
+<button id="change" type="button">Change</button>
+<p id="doomed">Doomed</p>
+<p id="fade">Fade</p>
+<p id="reveal" style="display: none">Reveal</p>
+<p class="pair" style="display: none">First</p>
+<p class="pair">Second</p>
+<script>
+document.querySelector('#change').addEventListener('click', () => {
+  const late = document.createElement('p')
+  late.id = 'late'
+  late.textContent = 'Late'
+  document.body.append(late)
+  document.querySelector('#doomed').remove()
+  document.querySelector('#fade').style.display = 'none'
+  document.querySelector('#reveal').style.display = ''
+})
+</script>
+</body></html>"#;
+
 /// How long a run may take to return once its deadline passed or it was cancelled: well under
 /// the 1 s its finish waits at most for the tasks it leaves (`dispatch.rs` `RECORDS_WAIT`).
 const PROMPT_RETURN: Duration = Duration::from_millis(500);
@@ -97,6 +124,7 @@ async fn open() -> Option<Tab> {
                     ("/waits".to_string(), PAGE.to_string()),
                     ("/lazy".to_string(), LAZY.to_string()),
                     ("/held".to_string(), HELD.to_string()),
+                    ("/selectors".to_string(), SELECTORS.to_string()),
                     (
                         "/slow-script.js".to_string(),
                         "document.documentElement.dataset.script = 'ran'".to_string(),
@@ -730,5 +758,212 @@ return {{ atDomContentLoaded, atLoad: await page.title() }}",
             .collect::<Vec<_>>(),
         [json!("domcontentloaded"), json!("load")],
         "{outcome:#?}"
+    );
+}
+
+/// Every state, in page and frame form, met by one click. Nothing on the page changes before the
+/// click, so a wait that settled before it settled early; after it, each resolves `null`, where
+/// Playwright resolves an `ElementHandle` for `attached` and `visible` (Neo has none yet).
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_page_and_frame_selector_waits_resolve_null_once_each_state_is_reached() {
+    let Some(tab) = open().await else { return };
+    let outcome = run(
+        &tab,
+        &format!(
+            "await page.goto({url})
+const frame = page.mainFrame()
+const waits = Promise.all([
+  page.waitForSelector('#late', {{ state: 'attached', timeout: {MET_WITHIN_MS} }}),
+  frame.waitForSelector('#late', {{ state: 'attached', timeout: {MET_WITHIN_MS} }}),
+  page.waitForSelector('#doomed', {{ state: 'detached', timeout: {MET_WITHIN_MS} }}),
+  frame.waitForSelector('#doomed', {{ state: 'detached', timeout: {MET_WITHIN_MS} }}),
+  page.waitForSelector('#reveal', {{ timeout: {MET_WITHIN_MS} }}),
+  frame.waitForSelector('#reveal', {{ state: 'visible', timeout: {MET_WITHIN_MS} }}),
+  page.waitForSelector('#fade', {{ state: 'hidden', timeout: {MET_WITHIN_MS} }}),
+  frame.waitForSelector('#fade', {{ state: 'hidden', timeout: {MET_WITHIN_MS} }}),
+])
+const before = await Promise.race([
+  waits.then(() => 'settled', (error) => error.name),
+  new Promise((resolve) => setTimeout(() => resolve('pending'), 500)),
+])
+await page.click('#change')
+return {{ before, null: (await waits).map((value) => value === null) }}",
+            url = json!(format!("{}/selectors", tab.origin))
+        ),
+    )
+    .await;
+    tab.close().await;
+
+    assert_eq!(
+        value(&outcome),
+        json!({ "before": "pending", "null": [true, true, true, true, true, true, true, true] }),
+        "{outcome:#?}"
+    );
+    let waits = records(&outcome, "waitForSelector");
+    assert_eq!(waits.len(), 8, "{outcome:#?}");
+    assert!(
+        waits
+            .iter()
+            .all(|call| call.result == CallResult::Ok && call.delivery.is_none()),
+        "{waits:#?}"
+    );
+}
+
+/// Two matches, the first hidden. The page and frame forms judge the first, so `visible` times
+/// out while `hidden` and `attached` resolve `null`, and `strict: true` refuses the pair.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_page_and_frame_selector_waits_judge_the_first_match_unless_strict() {
+    let Some(tab) = open().await else { return };
+    let outcome = run(
+        &tab,
+        &format!(
+            "await page.goto({url})
+const settled = (wait) => wait.then(
+  (value) => ({{ value }}),
+  (error) => ({{ name: error.name, strict: /strict mode violation/.test(error.message) }}),
+)
+const frame = page.mainFrame()
+return {{
+  visible: await settled(page.waitForSelector('.pair', {{ timeout: 500 }})),
+  hidden: await settled(frame.waitForSelector('.pair', {{ state: 'hidden', timeout: {MET_WITHIN_MS} }})),
+  attached: await settled(page.waitForSelector('.pair', {{ state: 'attached', timeout: {MET_WITHIN_MS} }})),
+  strict: await settled(page.waitForSelector('.pair', {{ strict: true, timeout: {MET_WITHIN_MS} }})),
+  strictHidden: await settled(
+    frame.waitForSelector('.pair', {{ strict: true, state: 'hidden', timeout: {MET_WITHIN_MS} }}),
+  ),
+}}",
+            url = json!(format!("{}/selectors", tab.origin))
+        ),
+    )
+    .await;
+    tab.close().await;
+
+    let strict = json!({ "name": "Error", "strict": true });
+    assert_eq!(
+        value(&outcome),
+        json!({
+            "visible": { "name": "TimeoutError", "strict": false },
+            "hidden": { "value": null },
+            "attached": { "value": null },
+            "strict": strict,
+            "strictHidden": strict,
+        }),
+        "{outcome:#?}"
+    );
+}
+
+/// `waitForTimeout` waits at least its delay, in page and frame form, as a call that takes no
+/// input turn.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_wait_for_timeout_waits_at_least_its_delay() {
+    let Some(tab) = open().await else { return };
+    let outcome = run(
+        &tab,
+        "const started = Date.now()
+const values = [await page.waitForTimeout(400), await page.mainFrame().waitForTimeout(200)]
+return { undefined: values.map((value) => value === undefined), elapsed: Date.now() - started }",
+    )
+    .await;
+    tab.close().await;
+
+    let value = value(&outcome);
+    assert_eq!(value["undefined"], json!([true, true]), "{value}");
+    assert!(
+        value["elapsed"]
+            .as_u64()
+            .is_some_and(|elapsed| elapsed >= 600),
+        "{value}"
+    );
+    let waits = records(&outcome, "waitForTimeout");
+    assert_eq!(waits.len(), 2, "{outcome:#?}");
+    for (call, delay) in waits.into_iter().zip([400, 200]) {
+        assert_eq!(call.result, CallResult::Ok, "{call:#?}");
+        assert_eq!(call.delivery, None, "{call:#?}");
+        assert!(
+            call.duration >= Duration::from_millis(delay),
+            "waited {:?} of {delay} ms",
+            call.duration
+        );
+    }
+}
+
+/// The run's first call is `waitForTimeout(20000)`, so only its own `prepare` can have started
+/// the event watcher that tells a run its tab closed. Once the run's session replays the
+/// document's lifecycle, that watcher runs; closing the tab then rejects the wait as closed long
+/// before its delay.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_closing_the_tab_ends_a_wait_for_timeout_that_was_the_runs_first_call() {
+    let Some(tab) = open().await else { return };
+    let mut events = tab.cdp.events();
+    let run = tab
+        .start_run(
+            "return await page.waitForTimeout(20000).then(
+  () => 'resolved',
+  (error) => ({ name: error.name, closed: /has been closed/.test(error.message) }),
+)"
+            .to_string(),
+        )
+        .await;
+    lifecycle_replayed(&mut events, &tab).await;
+    // After the replay, `prepare` has one round trip left (focus emulation). A second later the
+    // wait is on the rest of its timer, which is what the close must end.
+    time::sleep(Duration::from_secs(1)).await;
+    let closed_at = Instant::now();
+    tab.cdp
+        .send(
+            "Target.closeTarget",
+            json!({ "targetId": tab.target_id }),
+            None,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("close the run's tab: {error}"));
+    let outcome = run
+        .await
+        .unwrap_or_else(|error| panic!("the run's task: {error}"));
+    let returned_after = closed_at.elapsed();
+    tab.close().await;
+
+    assert_eq!(
+        value(&outcome),
+        json!({ "name": "Error", "closed": true }),
+        "{outcome:#?}"
+    );
+    let [record] = records(&outcome, "waitForTimeout")[..] else {
+        panic!("one waitForTimeout: {outcome:#?}");
+    };
+    assert!(
+        matches!(&record.result, CallResult::Error { name, .. } if name == "TargetClosedError"),
+        "{record:#?}"
+    );
+    assert!(
+        returned_after < Duration::from_secs(10),
+        "the run returned {returned_after:?} after the close"
+    );
+}
+
+/// Waits up to 15 s for a `Page.lifecycleEvent` on a session other than the test's driver.
+/// Chromium sends that replay to a run's session once its `prepare` enables lifecycle events.
+async fn lifecycle_replayed(events: &mut broadcast::Receiver<CdpEvent>, tab: &Tab) {
+    let replayed = time::timeout(Duration::from_secs(15), async {
+        loop {
+            match events.recv().await {
+                Ok(event)
+                    if event.method == "Page.lifecycleEvent"
+                        && event
+                            .session_id
+                            .as_ref()
+                            .is_some_and(|session| session.as_str() != tab.driver.as_str()) =>
+                {
+                    return;
+                }
+                Ok(_) | Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => panic!("the CDP connection closed"),
+            }
+        }
+    })
+    .await;
+    assert!(
+        replayed.is_ok(),
+        "no run session replayed the document's lifecycle"
     );
 }
