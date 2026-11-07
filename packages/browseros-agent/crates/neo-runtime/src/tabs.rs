@@ -567,6 +567,31 @@ impl Tabs {
         self.0.creations.wait().await;
     }
 
+    /// Records the run's end on every tab it attached to (`PageSession::mark_input_ended`): no
+    /// wait, no write. `Dispatcher::finish` does it before any cleanup that can wait.
+    pub(crate) fn mark_input_ended(&self) {
+        for session in self.attached_sessions() {
+            session.mark_input_ended();
+        }
+    }
+
+    /// Starts releasing, on every tab this run attached to, the keys and buttons the run left
+    /// held (`PageSession::release_run_input`), once every tab has recorded the run's end.
+    /// Each tab's release is its own task of the run's tracker, so a tab whose page does not
+    /// answer holds back no other tab's releases, and no caller's bound cuts one off: one
+    /// still writing when the run's outcome is returned keeps the tab's input turn until it is
+    /// done, so the next input on the tab, whichever run sends it, lands after it, and
+    /// `Runtime::drain` waits for it.
+    pub(crate) fn release_input(&self) {
+        let sessions = self.attached_sessions();
+        for session in &sessions {
+            session.mark_input_ended();
+        }
+        for session in sessions {
+            self.spawn(async move { session.release_run_input().await });
+        }
+    }
+
     pub(crate) async fn refresh_closing(&self) {
         let pages = self
             .0
@@ -579,6 +604,19 @@ impl Tabs {
                 let _checked = self.is_closed(&page).await;
             }
         }
+    }
+
+    /// Every session this run attached, for the run-end cleanup of what it left in its tabs.
+    pub(crate) fn attached_sessions(&self) -> Vec<Arc<PageSession>> {
+        self.0.pages.lock().map_or_else(
+            |_| Vec::new(),
+            |pages| {
+                pages
+                    .iter()
+                    .filter_map(|entry| entry.attached_session())
+                    .collect()
+            },
+        )
     }
 
     /// Starts the run's target discovery once (`discovery.rs`), for a `page` or `popup`

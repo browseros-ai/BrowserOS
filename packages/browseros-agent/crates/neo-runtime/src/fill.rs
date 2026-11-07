@@ -11,7 +11,8 @@ use crate::click::{
     self, ActionResult, ElementAction, LoopAWaits, NotReady, PageError, PressReport, Stop, Tab,
 };
 use crate::forms::{FillOutcome, FormTab, SelectOption, SelectOutcome};
-use crate::keyboard::{self, KeyEvent, KeyboardTab, Platform};
+use crate::input_devices::{Devices, Plan};
+use crate::keyboard::{self, KeyboardTab, Platform};
 use crate::progress::{CallError, DeliveryCell, InputTicket, PlaywrightError, Progress};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,17 +181,15 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for FillAction<'_> {
             if !options.force {
                 progress.log("  waiting for element to be visible, enabled and editable");
             }
-            let events = if options.value.is_empty() {
+            // An empty value is a press of Delete, planned under the turn from the tab's keyboard.
+            let delete = if options.value.is_empty() {
                 let platform = if let Some(platform) = self.platform.get() {
                     *platform
                 } else {
                     let platform = progress.race(tab.platform()).await??;
                     *self.platform.get_or_init(|| platform)
                 };
-                Some(
-                    keyboard::plan_press("Delete", platform)
-                        .map_err(|error| PlaywrightError::error(error.to_string()))?,
-                )
+                Some(platform)
             } else {
                 None
             };
@@ -213,7 +212,7 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for FillAction<'_> {
                 FillOutcome::NotConnected => return Ok(ActionResult::NotConnected),
                 FillOutcome::Missing(state) => log_missing(progress, state),
                 FillOutcome::NeedsInput(ticket) => {
-                    write_fill_input(tab, &options.value, events, input, ticket, progress).await?;
+                    write_fill_input(tab, &options.value, delete, input, ticket, progress).await?;
                     return Ok(ActionResult::Done(()));
                 }
             }
@@ -223,27 +222,30 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for FillAction<'_> {
 
 /// The page has focused and selected the target under this turn. The original ticket moves
 /// into the detached writer, which retains delivery truth even if this call stops waiting.
+/// `delete` (the browser's platform) presses Delete for an empty value; any other value is one
+/// `Input.insertText`. Both are planned from the tab's devices under the turn.
 async fn write_fill_input<T: KeyboardTab>(
     tab: &T,
     value: &str,
-    events: Option<Vec<KeyEvent>>,
+    delete: Option<Platform>,
     input: T::Input,
     ticket: InputTicket,
     progress: &Progress,
 ) -> Result<(), Stop> {
-    if let Err(error) = progress.check() {
-        // needsinput proves the page did not fill the value. Until a writer takes the
-        // ticket, failed preparation or cancellation proves no input was sent.
-        ticket.unsent();
-        return Err(error.into());
-    }
-    let report = if let Some(events) = events {
-        progress
-            .race(tab.write_keys(events, None, ticket, input))
-            .await?
-    } else {
-        progress.race(tab.insert_text(value, ticket, input)).await?
+    let planned = progress
+        .check()
+        .map_err(Stop::from)
+        .and_then(|()| plan_fill_input(value, delete, &input).map_err(Stop::from));
+    let plan = match planned {
+        Ok(plan) => plan,
+        Err(error) => {
+            // needsinput proves the page did not fill the value. Until a writer takes the
+            // ticket, failed preparation or cancellation proves no input was sent.
+            ticket.unsent();
+            return Err(error);
+        }
     };
+    let report = progress.race(tab.write(plan, ticket, input)).await?;
     match report {
         PressReport::Acked(acked) => acked.delivered(),
         PressReport::NothingWritten | PressReport::Failed { closed: true, .. } => {
@@ -257,6 +259,34 @@ async fn write_fill_input<T: KeyboardTab>(
         }
     }
     Ok(())
+}
+
+/// Fill's typing as a plan: Playwright's `keyboard.press('Delete')` for an empty value, else
+/// `keyboard.insertText(value)`.
+fn plan_fill_input<D: Devices>(
+    value: &str,
+    delete: Option<Platform>,
+    input: &D,
+) -> Result<Plan, PageError> {
+    let mut simulated = input.snapshot()?;
+    let mut plan = Plan::default();
+    match delete {
+        Some(platform) => {
+            keyboard::plan_press(
+                &mut plan,
+                &mut simulated,
+                "Delete",
+                platform,
+                &input.owner(),
+                None,
+            )
+            .map_err(|unknown| PageError::Contract(unknown.to_string()))?;
+        }
+        None => {
+            keyboard::plan_insert_text(&mut plan, &mut simulated, value);
+        }
+    }
+    Ok(plan)
 }
 
 struct SelectAction<'a> {

@@ -336,12 +336,8 @@ export function evaluateParams(
   arg: unknown,
   options: EvaluateOptions | undefined,
 ): EvaluateParams {
-  const signal = (options as { signal?: unknown } | undefined)?.signal
-  // `null` is no signal, as `undefined`.
-  if (signal !== undefined && signal !== null) {
-    // Deviation: `client/jsHandle.ts` `JSHandle.evaluate`: `const result = await this._channel.evaluateExpression({ expression: String(pageFunction), isFunction: typeof pageFunction === 'function', arg: serializedArg }, kNoTimeout);` Playwright's evaluations send no signal and ignore one; Neo refuses any signal rather than ignore one.
-    throw new Error(`${apiName}: Neo does not support signal yet`)
-  }
+  // Playwright sends an evaluation with `kNoTimeout`, so it reads no `signal`, and neither does
+  // Neo: one passed anyway is ignored, as Playwright ignores it.
   if (options?.exposeFunctions) {
     // Deviation: `client/jsHandle.ts` `JSHandle.evaluate`: `const serializedArg = options?.exposeFunctions ? await serializeArgumentWithCallbacks(this, this._parentOfType('Page') as Page | undefined, arg) : serializeArgument(arg);` Neo has no realm callback from the page, so it refuses the option rather than ignore it.
     throw new Error(`${apiName}: Neo does not support exposeFunctions yet`)
