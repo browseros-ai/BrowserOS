@@ -1,6 +1,10 @@
 //! Navigation, titles and document freshness on an isolated real BrowserOS neo profile.
 
 #[path = "support/browser.rs"]
+#[expect(
+    dead_code,
+    reason = "shared driver also exposes the optional host CDP port"
+)]
 mod browser;
 
 use std::time::Duration;

@@ -4,6 +4,10 @@
 //! there).
 
 #[path = "support/browser.rs"]
+#[expect(
+    dead_code,
+    reason = "the host suite alone uses the shared harness CDP port accessor"
+)]
 mod browser;
 
 use std::time::Duration;

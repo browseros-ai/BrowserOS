@@ -161,6 +161,11 @@ impl Tab {
             .unwrap_or_else(|error| panic!("harness setup: Runtime::connect: {error}"))
     }
 
+    /// The browser port for an opt-in host, which opens a CDP client of its own.
+    pub fn cdp_port(&self) -> u16 {
+        self.browser.port
+    }
+
     /// Starts `code` as a Neo run against this tab; it reads the tab while the test drives it.
     pub async fn start_run(&self, code: String) -> JoinHandle<RunOutcome> {
         self.start_run_within(code, RUN_TIMEOUT).await

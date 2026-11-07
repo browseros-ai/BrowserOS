@@ -11,6 +11,10 @@
 //! `/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo`; otherwise it passes as a skip.
 
 #[path = "support/browser.rs"]
+#[expect(
+    dead_code,
+    reason = "shared driver also exposes the optional host CDP port"
+)]
 mod browser;
 
 use std::iter;

@@ -5,6 +5,10 @@
 //! compares the same methods with Playwright on one browser.
 
 #[path = "support/browser.rs"]
+#[expect(
+    dead_code,
+    reason = "shared driver also exposes the optional host CDP port"
+)]
 mod browser;
 
 use std::time::{Duration, Instant};
