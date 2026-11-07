@@ -74,6 +74,9 @@ impl TabId {
 pub struct EpochMs(NonZeroU64);
 
 impl EpochMs {
+    /// The earliest time an `EpochMs` can hold, 1 ms after the epoch.
+    pub(crate) const MIN: Self = Self(NonZeroU64::MIN);
+
     #[must_use]
     pub fn from_millis(ms: u64) -> Option<Self> {
         NonZeroU64::new(ms).map(Self)
@@ -85,7 +88,6 @@ impl EpochMs {
         Self::from_millis(u64::try_from(ms).ok()?)
     }
 
-    #[expect(dead_code, reason = "scaffold: used by the run path's host events")]
     pub(crate) fn now() -> Option<Self> {
         Self::from_system_time(SystemTime::now())
     }

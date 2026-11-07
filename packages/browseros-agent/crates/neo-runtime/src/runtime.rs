@@ -11,6 +11,10 @@
 //! No step here detaches anything; ownership does (`page.rs`). The registry holds each page,
 //! so sessions detach once the realm, dispatcher and their writers are gone, also when a
 //! caller drops the run's future. Browser tabs themselves survive the run.
+//!
+//! Around all of it, a runtime with a host side reports the run through its `RunEmitter`
+//! (`host/emit.rs`): `RunStarted` before the tab check, `RunEnded` after the outcome, or from
+//! the emitter's guard when the run's future is dropped.
 
 use std::sync::Arc;
 
@@ -25,7 +29,7 @@ use crate::browser_representations::page::TabInputs;
 use crate::browser_representations::tabs::Tabs;
 use crate::chromium_bridge::browser_connection_settings::Switches;
 use crate::deadline::Deadline;
-use crate::host::{Host, HostOptions};
+use crate::host::{Host, HostOptions, RunEmitter};
 use crate::method_router::Dispatcher;
 use crate::playwright_methods::getters::CLOSED_TAB_MESSAGE;
 use crate::playwright_methods::screenshot::TabScreenshots;
@@ -186,8 +190,20 @@ impl Runtime {
     /// `page.url()` waits for its CDP reply with `tokio::task::block_in_place`, which the
     /// current-thread runtime does not support; on it the run ends with an error before any
     /// script runs.
+    ///
+    /// With a host side and a `request.session`, the run reports to the host as it goes:
+    /// `RunStarted` before anything else, `RunEnded` once it is over, also when the caller drops
+    /// this future, which then ends the run as `Cancelled`.
     pub async fn run(&self, request: RunRequest) -> RunOutcome {
         let run_id = RunId::mint();
+        let emitter = RunEmitter::new(self.host.as_ref(), request.session.as_ref(), &run_id);
+        let ending = emitter.run_started(&request.page);
+        let outcome = self.run_script(run_id, request).await;
+        ending.ended(outcome.status);
+        outcome
+    }
+
+    async fn run_script(&self, run_id: RunId, request: RunRequest) -> RunOutcome {
         let RunRequest {
             code,
             page,

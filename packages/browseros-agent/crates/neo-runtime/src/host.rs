@@ -41,6 +41,7 @@ mod cdp;
     )
 )]
 mod directory;
+mod emit;
 #[cfg_attr(
     not(test),
     expect(
@@ -83,6 +84,7 @@ use std::time::Duration;
 use crate::host::events::HostEvent;
 use crate::host::tap::Tap;
 
+pub(crate) use emit::RunEmitter;
 pub use ids::{EpochMs, SessionKey, TabId};
 
 /// How long a session stays live after its last run unless the server says otherwise:
@@ -137,13 +139,6 @@ impl Host {
         }))
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "scaffold: the run path's emitter pushes into the tap"
-        )
-    )]
     pub(crate) fn tap(&self) -> &Arc<Tap> {
         &self.0.tap
     }
