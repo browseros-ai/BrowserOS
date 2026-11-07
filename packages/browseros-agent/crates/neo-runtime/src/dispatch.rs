@@ -40,7 +40,7 @@ use neo_runtime_spec::serve::{
     FrameInputValueResult, FrameIsCheckedParams, FrameIsCheckedResult, FrameIsVisibleParams,
     FrameIsVisibleResult, FramePressParams, FramePressResult, FrameQueryCountParams,
     FrameSelectOptionParams, FrameSelectOptionResult, FrameTextContentParams, FrameTitleParams,
-    FrameUncheckParams, FrameUncheckResult, Metadata, PageCall,
+    FrameUncheckParams, FrameUncheckResult, Metadata, PageCall, RequestCall, ResponseCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -57,12 +57,14 @@ use crate::forms::FormTab;
 use crate::keyboard::KeyboardTab;
 use crate::lists;
 use crate::navigate::{self, GotoOptions};
+use crate::network::{HopId, ObjectKind as NetworkObject};
 use crate::page::PageSession;
 use crate::press::{self, PressOptions};
 use crate::progress::{
     self, CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
 };
 use crate::reads::{self, AttributeOptions, ReadOptions, SnapshotOptions};
+use crate::responses::{self, NetworkCall};
 use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
 use crate::states::{self, StateOptions};
 use crate::tab_calls;
@@ -186,11 +188,13 @@ struct Routed {
     route: Result<ObjectCall, PlaywrightError>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum ObjectKind {
     Context,
     Page,
     Frame,
+    /// A hop's `Request` or `Response`, behind `goto`'s answer.
+    Network(NetworkObject, HopId),
     Unknown,
 }
 
@@ -198,6 +202,7 @@ enum ObjectCall {
     Context(BrowserContextCall),
     Page(PageCall),
     Frame(Route),
+    Network(NetworkCall),
 }
 
 /// What a message asks for. One variant per served (object, method).
@@ -261,6 +266,8 @@ impl Dispatcher {
             ObjectKind::Unknown
         } else if guid.starts_with("frame@") {
             ObjectKind::Frame
+        } else if let Some((kind, _, hop)) = HopId::parse(&guid) {
+            ObjectKind::Network(kind, hop)
         } else {
             ObjectKind::Page
         };
@@ -370,6 +377,22 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             FrameCall::decode(method, params)
                 .map(|call| (call.meta(), route_frame_call(call).map(ObjectCall::Frame)))
         }
+        ObjectKind::Network(NetworkObject::Request, hop) => RequestCall::decode(method, params)
+            .map(|call| {
+                let meta = call.meta();
+                (
+                    meta,
+                    Ok(ObjectCall::Network(NetworkCall::Request(hop, call))),
+                )
+            }),
+        ObjectKind::Network(NetworkObject::Response, hop) => ResponseCall::decode(method, params)
+            .map(|call| {
+                let meta = call.meta();
+                (
+                    meta,
+                    Ok(ObjectCall::Network(NetworkCall::Response(hop, call))),
+                )
+            }),
         ObjectKind::Unknown => {
             return Routed {
                 meta: None,
@@ -530,6 +553,12 @@ async fn serve_call(
                 Err(error) => Err(error),
             }
         }
+        // A hop's objects exist only after a goto on this page's session, which stays attached
+        // for the run.
+        (ObjectCall::Network(call), Some(page)) => match page.attached_session() {
+            Some(session) => responses::serve(&session, call, &progress).await,
+            None => Err(PlaywrightError::target_closed().into()),
+        },
         _ => Err(PlaywrightError::target_closed().into()),
     };
     finish_reply(result, reply);
@@ -674,7 +703,7 @@ async fn serve_route<T: FormTab + KeyboardTab>(
 }
 
 /// Like `Command::reply`, without retaining the raw params once their options are decoded.
-fn encode_result<C: Command>(result: &C::Result) -> Result<Option<Value>, CallError> {
+pub(crate) fn encode_result<C: Command>(result: &C::Result) -> Result<Option<Value>, CallError> {
     if C::VOID_RESULT {
         return Ok(None);
     }
@@ -1061,10 +1090,52 @@ mod tests {
     fn frame_route(route: Result<ObjectCall, PlaywrightError>) -> Result<Route, PlaywrightError> {
         route.map(|call| match call {
             ObjectCall::Frame(route) => route,
-            ObjectCall::Context(_) | ObjectCall::Page(_) => {
+            ObjectCall::Context(_) | ObjectCall::Page(_) | ObjectCall::Network(_) => {
                 panic!("a Frame message routed to another object")
             }
         })
+    }
+
+    #[test]
+    fn tests_that_request_and_response_guids_route_to_their_commands() {
+        let hop = HopId {
+            request: "LOADER".to_string(),
+            hop: 1,
+        };
+        let routed = route(
+            ObjectKind::Network(NetworkObject::Response, hop.clone()),
+            "body",
+            None,
+        );
+        assert_eq!(
+            routed.meta.and_then(|meta| meta.title),
+            Some("Get response body")
+        );
+        let Ok(ObjectCall::Network(NetworkCall::Response(routed_hop, ResponseCall::Body(_)))) =
+            routed.route
+        else {
+            panic!("Response.body routes to the response's hop");
+        };
+        assert_eq!(routed_hop, hop);
+        let routed = route(
+            ObjectKind::Network(NetworkObject::Request, hop.clone()),
+            "rawRequestHeaders",
+            None,
+        );
+        assert!(matches!(
+            routed.route,
+            Ok(ObjectCall::Network(NetworkCall::Request(
+                _,
+                RequestCall::RawRequestHeaders(_)
+            )))
+        ));
+        for (kind, method) in [
+            (NetworkObject::Request, "body"),
+            (NetworkObject::Response, "response"),
+        ] {
+            let error = error_of(route(ObjectKind::Network(kind, hop.clone()), method, None));
+            assert_eq!(error.name, ErrorName::Error, "{method} is not served there");
+        }
     }
 
     fn forms_params(method: &str, selector: &str) -> Value {

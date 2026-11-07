@@ -545,6 +545,26 @@ async fn emit_navigation(
     {
         tab["url"] = url.clone();
     }
+    let send = |method: &str, params: Value| {
+        let _ =
+            outgoing.send(json!({"sessionId":session,"method":method,"params":params}).to_string());
+    };
+    if !script.same_document {
+        // The document's request and response precede its commit, as BrowserOS sends them.
+        send(
+            "Network.requestWillBeSent",
+            json!({"requestId":"new","loaderId":"new","type":"Document","frameId":PAGE,
+                   "request":{"url":url,"method":"GET","headers":{"Accept":"text/html"}},
+                   "timestamp":1.0,"wallTime":1_700_000_000.0}),
+        );
+        send(
+            "Network.responseReceived",
+            json!({"requestId":"new","type":"Document","frameId":PAGE,"hasExtraInfo":false,
+                   "response":{"url":url,"status":200,"statusText":"OK",
+                               "headers":{"Content-Type":"text/html"},"protocol":"http/1.1",
+                               "remoteIPAddress":"127.0.0.1","remotePort":443}}),
+        );
+    }
     let (method, params) = if script.same_document {
         (
             "Page.navigatedWithinDocument",
@@ -556,7 +576,7 @@ async fn emit_navigation(
             json!({"frame":{"id":PAGE,"loaderId":"new","url":url},"type":if script.restored_from_bfcache { "BackForwardCacheRestore" } else { "Navigation" }}),
         )
     };
-    let _ = outgoing.send(json!({"sessionId":session,"method":method,"params":params}).to_string());
+    send(method, params);
     if script.stop_loading {
         let _ = outgoing.send(json!({"sessionId":session,"method":"Page.frameStoppedLoading","params":{"frameId":PAGE}}).to_string());
     } else {
@@ -655,6 +675,7 @@ fn answer(
         "Browser.getVersion"
         | "Page.close"
         | "Page.enable"
+        | "Network.enable"
         | "Page.setLifecycleEventsEnabled"
         | "Emulation.setFocusEmulationEnabled"
         | "Runtime.releaseObjectGroup"

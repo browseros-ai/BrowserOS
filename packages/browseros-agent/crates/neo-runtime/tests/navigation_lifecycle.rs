@@ -65,17 +65,25 @@ async fn tests_that_cdp_commits_before_and_after_the_reply_complete_navigation()
         .await;
         let runtime = browser.runtime().await;
         let outcome = runtime.run(fake_browser::run_request(
-            "const before=await page.title(); const result=await page.goto('https://example.test/next',{referer:'https://from.test/',timeout:2000}); return {before,isNull:result===null,title:await page.title(),url:page.url()}",
+            "const before=await page.title(); const result=await page.goto('https://example.test/next',{referer:'https://from.test/',timeout:2000}); return {before,response:result && {url:result.url(),status:result.status(),ok:result.ok(),request:result.request().url(),headers:result.headers(),frame:result.frame()===page.mainFrame()},title:await page.title(),url:page.url()}",
             Duration::from_secs(10), CancellationToken::new(),
         )).await;
         assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
         assert_eq!(browser.page_clicks(), 0);
         assert_eq!(browser.armed_interceptor(), None);
+        // A cross-document navigation answers the fake's document response; a same-document one
+        // has none, as Playwright's goto answers `null` for it.
+        let response = (!same_document).then(|| {
+            json!({"url":"https://example.test/next","status":200,"ok":true,
+                   "request":"https://example.test/next","headers":{"content-type":"text/html"},
+                   "frame":true})
+        });
         assert_eq!(
             outcome.value,
             Some(
-                json!({"before":"Fake page","isNull":true,"title":"Fake page","url":"https://example.test/next"})
-            )
+                json!({"before":"Fake page","response":response,"title":"Fake page","url":"https://example.test/next"})
+            ),
+            "reply after {reply} ms, commit after {commit} ms"
         );
     }
 }
@@ -101,6 +109,10 @@ async fn tests_that_dispatch_sends_generated_goto_and_title_results() {
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
     assert_eq!(
         outcome.value,
-        Some(json!({"goto":{"id":1,"result":{}},"title":{"id":2,"result":{"value":"Fake page"}}}))
+        Some(json!({
+            "goto":{"id":1,"result":{"response":{"guid":"response@fake-page:new:0"}}},
+            "title":{"id":2,"result":{"value":"Fake page"}},
+        })),
+        "goto answers the document's response by the guid of its request id and hop"
     );
 }

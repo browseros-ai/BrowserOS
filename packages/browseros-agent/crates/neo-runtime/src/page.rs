@@ -52,6 +52,7 @@ use neo_runtime_spec::injected::{
     InjectedSetupHitTargetInterceptorParams, InjectedStopHitTargetInterceptorParams,
     InjectedTitleParams, InjectedViewportSizeParams, Point, ScrollAlignment,
 };
+use neo_runtime_spec::serve::ResponseChannel;
 use neo_runtime_spec::{Element, Handle};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -68,6 +69,7 @@ use crate::click::{
     SelectorFacts, StatesCheck, Tab, Verdict,
 };
 use crate::navigate::{NavigateReply, Navigation, NavigationState, NavigationTab, Observation};
+use crate::network::{Lookup, NetworkLog};
 use crate::progress::InputTicket;
 use crate::progress::PlaywrightError;
 use crate::run::PageId;
@@ -164,6 +166,10 @@ pub(crate) struct PageSession {
     /// The tab's input lock, shared with every other run of the `Runtime` on this tab
     /// ([`TabInputs`]). [`Tab::input`] waits for a turn at it.
     input: Arc<Mutex<()>>,
+    /// The main frame's navigation requests, fed by the watcher once Network is enabled.
+    pub(crate) network: Arc<NetworkLog>,
+    /// `Network.enable`, sent on this session's first goto and kept for the run.
+    network_enabled: OnceCell<()>,
 }
 
 /// The watcher's published state, and the guard that stops it when the page drops.
@@ -177,6 +183,7 @@ struct PageUpdates {
     state: watch::Sender<PageState>,
     navigations: broadcast::Sender<Navigation>,
     world: Arc<World>,
+    network: Arc<NetworkLog>,
 }
 
 /// What the run's session has reported since `prepare`. Counters only grow, so a caller takes
@@ -253,6 +260,8 @@ impl PageSession {
             world: Arc::new(world),
             next_group: AtomicU64::new(1),
             input,
+            network: Arc::new(NetworkLog::new(page.as_str().to_string())),
+            network_enabled: OnceCell::new(),
         }
     }
 
@@ -301,6 +310,7 @@ impl PageSession {
                         state,
                         navigations: navigations.clone(),
                         world: Arc::clone(&self.world),
+                        network: Arc::clone(&self.network),
                     },
                     self.closed.clone(),
                     stop,
@@ -410,6 +420,40 @@ impl NavigationTab for Arc<PageSession> {
         PageSession::prepare(self)
             .await
             .map_err(|error| world::classify(&error))
+    }
+
+    async fn track_network(&self) -> Result<u64, PageError> {
+        self.network_enabled
+            .get_or_try_init(|| async { self.send("Network.enable", json!({})).await.map(|_| ()) })
+            .await
+            .map_err(|error| match world::classify(&error) {
+                PageError::Closed => PageError::Closed,
+                _ => PageError::Contract(format!("Network.enable failed: {error}")),
+            })?;
+        Ok(self.network.lags())
+    }
+
+    async fn navigation_response(
+        &self,
+        document: &str,
+        lags: u64,
+    ) -> Result<Option<ResponseChannel>, PlaywrightError> {
+        let lookup = self
+            .network
+            .wait(|log| {
+                log.lookup(document, lags).map(|lookup| match lookup {
+                    Lookup::Pending => None,
+                    lookup => Some(lookup),
+                })
+            })
+            .await
+            .map_err(|error| PlaywrightError::error(error.to_string()))?;
+        Ok(match lookup {
+            Lookup::Response(hop) => Some(ResponseChannel {
+                guid: hop.response_guid(&self.main_frame),
+            }),
+            Lookup::NoRequest | Lookup::Failed | Lookup::Pending => None,
+        })
     }
 
     fn observe(&self) -> Result<NavigationObservation, PageError> {
@@ -542,6 +586,12 @@ async fn watch_events(
         };
         match event {
             Ok(event) => {
+                // Before the Page events that follow it, so a commit never outruns its request.
+                if event.method.starts_with("Network.")
+                    && event.session_id.as_ref() == Some(&session)
+                {
+                    updates.network.apply(&event.method, &event.params);
+                }
                 let mut applied = Applied::default();
                 updates.state.send_if_modified(|state| {
                     applied = apply(state, &event, &session, &main_frame);
@@ -564,6 +614,7 @@ async fn watch_events(
             }
             Err(RecvError::Lagged(skipped)) => {
                 warn!(%session, skipped, "the run's event watcher lagged; answering any dialog");
+                updates.network.lagged();
                 updates
                     .state
                     .send_if_modified(|state| state.pending_url.take().is_some());

@@ -12,11 +12,13 @@
 //!                  ├─ tab_calls          context/page lifecycle; tracked creation and cleanup
 //!                  └─ Tabs::session      one lazy session for the call's page
 //!                       ├─ click::click  click.rs: policy over the Tab seam
-//!                       ├─ navigate      navigate.rs: goto (commits, lifecycle) and live title
+//!                       ├─ navigate      navigate.rs: goto (commits, lifecycle, response) and title
+//!                       ├─ responses     responses.rs: Request/Response commands on goto's answer
 //!                       ├─ reads         reads.rs: textContent, innerText, getAttribute,
 //!                       │                ariaSnapshot;
 //!                       │                aria_yaml.rs renders the snapshot as Playwright's YAML
 //!                       └─ PageSession   page.rs: domains, watcher, document state, input
+//!                            ├─ NetworkLog  network.rs: the main frame's navigation requests
 //!                            └─ World    world.rs: per-document injected glue
 //! ```
 //!
@@ -52,11 +54,13 @@ mod getters;
 mod keyboard;
 mod lists;
 mod navigate;
+mod network;
 mod page;
 mod press;
 mod progress;
 mod reads;
 mod realm;
+mod responses;
 mod run;
 mod runtime;
 mod states;

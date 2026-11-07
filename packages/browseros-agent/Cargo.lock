@@ -1846,6 +1846,7 @@ dependencies = [
 name = "neo-runtime"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "browseros-cdp",
  "clap",
  "futures-util",

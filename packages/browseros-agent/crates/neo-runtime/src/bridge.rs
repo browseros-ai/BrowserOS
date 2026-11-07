@@ -32,6 +32,7 @@ use tokio::task;
 
 use crate::deadline::{Deadline, Stop};
 use crate::dispatch::Dispatcher;
+use crate::network::{HopId, LogError, ObjectKind as NetworkObject};
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunError};
 use crate::tabs::Tabs;
@@ -185,6 +186,14 @@ enum GetterField {
     IsClosed,
     Pages,
     Initializer,
+    /// On a response: its request and every hop before, for the SDK to build.
+    Chain,
+    /// On a request: `timing()`, which Playwright's client updates from events.
+    Timing,
+    /// On a request: `failure()`'s text, set by Playwright's `requestFailed` event.
+    Failure,
+    /// On a response: `"finished"`, `"pending"` or `"closed"`, which `finished()` waits on.
+    Finished,
 }
 
 #[derive(Deserialize)]
@@ -227,6 +236,9 @@ impl Getters {
                     .map_err(|error| PlaywrightError::error(error.to_string()))
             });
         }
+        if let Some((kind, _, hop)) = HopId::parse(&request.guid) {
+            return self.network(&request.guid, kind, &hop, request.field);
+        }
         let page = self
             .tabs
             .resolve(&request.guid)
@@ -244,7 +256,52 @@ impl Getters {
             GetterField::Pages => Err(GetError::BadRequest(
                 "pages is a context getter".to_string(),
             )),
+            GetterField::Chain
+            | GetterField::Timing
+            | GetterField::Failure
+            | GetterField::Finished => Err(GetError::BadRequest(format!(
+                "{:?} is a request or response getter",
+                request.field
+            ))),
         }
+    }
+
+    /// A hop's live client state, read from the network log of the session that recorded it.
+    /// Nothing here waits: every value is already in Rust.
+    fn network(
+        &self,
+        guid: &str,
+        kind: NetworkObject,
+        hop: &HopId,
+        field: GetterField,
+    ) -> Result<Value, GetError> {
+        let unknown = || GetError::BadRequest(format!("unknown guid {guid:?}"));
+        let page = self.tabs.resolve(guid).ok_or_else(unknown)?;
+        // A hop exists only after a goto on this session, which stays attached for the run.
+        let session = page.attached_session().ok_or_else(unknown)?;
+        let log = &session.network;
+        let value = match (kind, field) {
+            (NetworkObject::Response, GetterField::Chain) => log
+                .chain(hop)
+                .and_then(|chain| serde_json::to_value(chain).map_err(|_| LogError::Poisoned)),
+            (NetworkObject::Request, GetterField::Timing) => log
+                .timing(hop)
+                .and_then(|timing| serde_json::to_value(timing).map_err(|_| LogError::Poisoned)),
+            (NetworkObject::Request, GetterField::Failure) => {
+                log.failure(hop).map(|text| json!(text))
+            }
+            (NetworkObject::Response, GetterField::Finished) => log.finished(hop).map(|finished| {
+                json!(if finished {
+                    "finished"
+                } else if page.closed.is_cancelled() {
+                    "closed"
+                } else {
+                    "pending"
+                })
+            }),
+            (_, field) => return Err(GetError::BadRequest(format!("no {field:?} on {guid:?}"))),
+        };
+        value.map_err(|error| GetError::Page(PlaywrightError::error(error.to_string())))
     }
 
     /// Waits on the current thread for one CDP reply, so a JS getter can return a plain
