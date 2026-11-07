@@ -59,6 +59,7 @@ export function createRun(init: RunInit): {
   )
   const context = new BrowserContext(init.context, connection, pipe)
   browser._didCreateContext(context)
+  playwright.selectors._attach(connection, init.context)
   const page = context._addRunPage(init.page, init.mainFrame, init.url)
   return { page, context, playwright, uncaught: pipe.uncaught }
 }

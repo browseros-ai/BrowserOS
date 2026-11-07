@@ -19,6 +19,9 @@ interfaces:
     # (platform) `page.pause()`: Playwright's server handler does nothing itself; the context's
     # debugger holds the call once it is enabled (neo-runtime `debugger.rs`).
     - pause
+    # (platform) `selectors.setTestIdAttribute`'s page half: the attribute every page world of the
+    # run hands its injected script (neo-runtime `world.rs` `TestIdAttribute`).
+    - setTestIdAttributeName
   # (platform) The BrowserOS the run is attached to, `browser@default`: contexts the run creates
   # and its connected-browser `close` (`browser_calls.rs`). Its initializer is never sent.
   Browser:

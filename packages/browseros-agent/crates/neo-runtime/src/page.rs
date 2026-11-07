@@ -87,7 +87,7 @@ use crate::page_events::PageEvents;
 use crate::progress::InputTicket;
 use crate::progress::PlaywrightError;
 use crate::run::PageId;
-use crate::world::{self, ObjectGroup, World};
+use crate::world::{self, ObjectGroup, TestIdAttribute, World};
 
 /// Detaching is best effort. It runs in the background after a run, so this bound only keeps
 /// a hung browser from piling up detach tasks.
@@ -498,6 +498,7 @@ impl PageSession {
         input: Arc<Mutex<()>>,
         closed: CancellationToken,
         hub: EventHub,
+        test_id: Arc<TestIdAttribute>,
     ) -> Self {
         let events = PageEvents::new(hub, page.as_str(), session.cdp.clone(), session.id.clone());
         let child_events = events.clone();
@@ -505,7 +506,8 @@ impl PageSession {
             session.cdp.clone(),
             session.id.clone(),
             page.as_str().to_string(),
-        );
+        )
+        .with_test_id(test_id);
         let session = Arc::new(session);
         let world = Arc::new(world);
         let frames = Arc::new(Frames::new(
@@ -3278,6 +3280,7 @@ mod tests {
             Arc::new(Mutex::new(())),
             CancellationToken::new(),
             EventHub::default(),
+            Arc::default(),
         ));
         let tab = FrameTab {
             page: Arc::clone(&page),

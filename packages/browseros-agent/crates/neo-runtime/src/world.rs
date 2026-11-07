@@ -30,8 +30,8 @@
 //! Every byte of JavaScript sent here is a built artifact of neo-runtime-injected (`dist/*.js`);
 //! this file writes none.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 use browseros_cdp::runtime::{
     CallFunctionOnResult, GetPropertiesResult, PropertyDescriptor, RemoteObject,
@@ -101,13 +101,58 @@ pub(crate) fn initializer() -> InjectedInitializer {
     }
 }
 
+/// [`initializer`] with the run's test id attribute `test_id` (`selectors.setTestIdAttribute`).
+fn initializer_named(test_id: &str) -> InjectedInitializer {
+    InjectedInitializer {
+        test_id_attribute_name: test_id.to_string(),
+        ..initializer()
+    }
+}
+
 /// The glue's key on the world's global: `<SPEC_SHA256>/<initializer JSON>`. A glue object an
 /// older Neo build or another initializer installed in this document is never attached to, so
 /// its answers are never decoded against the wrong spec.
+#[cfg(test)]
 fn glue_key() -> Result<String, PageError> {
-    let initializer = serde_json::to_string(&initializer())
+    glue_key_named(TEST_ID_ATTRIBUTE)
+}
+
+/// [`glue_key`] for the initializer of `test_id`: a document holds one glue per test id
+/// attribute a run named, each with its own `InjectedScript`.
+fn glue_key_named(test_id: &str) -> Result<String, PageError> {
+    let initializer = serde_json::to_string(&initializer_named(test_id))
         .map_err(|error| PageError::Contract(format!("encoding the initializer: {error}")))?;
     Ok(format!("{SPEC_SHA256}/{initializer}"))
+}
+
+/// The run's test id attribute, [`TEST_ID_ATTRIBUTE`] until the script's
+/// `selectors.setTestIdAttribute` names another. Every world of the run's pages shares it, so a
+/// document the run attaches to from then on gets an injected script that names the attribute
+/// neo-sdk's `getByTestId` selects by (in the locators a strict mode violation suggests), as
+/// Playwright's injected script for a new document does.
+#[derive(Debug)]
+pub(crate) struct TestIdAttribute(RwLock<String>);
+
+impl Default for TestIdAttribute {
+    fn default() -> Self {
+        Self(RwLock::new(TEST_ID_ATTRIBUTE.to_string()))
+    }
+}
+
+impl TestIdAttribute {
+    pub(crate) fn get(&self) -> String {
+        self.0
+            .read()
+            .map_or_else(|_| TEST_ID_ATTRIBUTE.to_string(), |name| name.clone())
+    }
+
+    /// Sets the attribute for the run's next page calls. Called in the call's native send, so
+    /// every call the script makes after it sees it.
+    pub(crate) fn set(&self, name: &str) {
+        if let Ok(mut current) = self.0.write() {
+            name.clone_into(&mut current);
+        }
+    }
 }
 
 /// A CDP object group of the run's session. Every handle a page call returns lives in the group
@@ -128,6 +173,8 @@ pub(crate) struct World {
     /// concurrent first calls attach once.
     attached: Mutex<Option<Arc<Attached>>>,
     document: AtomicU64,
+    /// The run's test id attribute, which picks the glue this world attaches to.
+    test_id: Arc<TestIdAttribute>,
 }
 
 /// The glue as this session sees it in one document.
@@ -163,7 +210,19 @@ impl World {
             gone,
             attached: Mutex::new(None),
             document: AtomicU64::new(0),
+            test_id: Arc::default(),
         }
+    }
+
+    /// This world with the run's test id attribute instead of the default.
+    pub(crate) fn with_test_id(mut self, test_id: Arc<TestIdAttribute>) -> Self {
+        self.test_id = test_id;
+        self
+    }
+
+    /// The run's test id attribute, for the worlds of this page's child frames.
+    pub(crate) fn test_id(&self) -> Arc<TestIdAttribute> {
+        Arc::clone(&self.test_id)
     }
 
     /// Advance before publishing a commit: reads and attachments already in flight must
@@ -330,6 +389,9 @@ impl World {
     async fn attached(&self) -> Result<Arc<Attached>, PageError> {
         let mut slot = self.attached.lock().await;
         let document = self.document.load(Ordering::SeqCst);
+        // A document keeps the glue it was first attached to: as Playwright's injected script, it
+        // names the attribute that was current then, and a new document takes the run's current one.
+        let test_id = self.test_id.get();
         if slot
             .as_ref()
             .is_some_and(|attached| attached.document != document)
@@ -339,7 +401,7 @@ impl World {
         if let Some(attached) = slot.as_ref() {
             return Ok(Arc::clone(attached));
         }
-        let key = glue_key()?;
+        let key = glue_key_named(&test_id)?;
         let world = self
             .send(
                 "Page.createIsolatedWorld",
@@ -362,7 +424,7 @@ impl World {
             let arguments = [
                 json!({ "value": key }),
                 json!({ "value": SPEC_SHA256 }),
-                json!({ "value": initializer() }),
+                json!({ "value": initializer_named(&test_id) }),
             ];
             self.run_bundle(context, INSTALL, &arguments)
                 .await?

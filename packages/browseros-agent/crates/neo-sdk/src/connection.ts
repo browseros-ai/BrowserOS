@@ -156,6 +156,7 @@ export type ApiName =
   | 'debugger.resume'
   | 'debugger.next'
   | 'debugger.runTo'
+  | 'selectors.setTestIdAttribute'
 
 /** Playwright's wire error, `{error: {name, message}}`'s inner object. */
 export type WireError = { name: string; message: string }

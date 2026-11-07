@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (46)
+## Deviations (45)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -51,7 +51,6 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-sdk/src/page.ts | `Page` | `client/page.ts` `Page.constructor` | Playwright's page holds a `close` and a `crash` listener of its own from its first moment, which `eventNames()` and `listenerCount` report; Neo's holds none, so a page nobody listens to costs the run nothing. |
 | neo-sdk/src/playwright.ts | `APIRequest` | `client/playwright.ts` `Playwright.constructor` | Neo does not serve API request contexts yet (the network area's `APIRequestContext`); a script that asks for one gets an Error, never a stand-in. |
 | neo-sdk/src/playwright.ts | `Selectors.register` | `client/selectors.ts` `Selectors.register` | A custom engine is the script's own code run in every page, a new door into page JS that Neo's page JS guard does not open; it refuses before anything reaches a page. |
-| neo-sdk/src/playwright.ts | `Selectors.setTestIdAttribute` | `client/selectors.ts` `Selectors.setTestIdAttribute` | Matching reads the attribute from the selector, so `getByTestId` finds what Playwright's finds; the page's injected script still names `data-testid` in the locators it suggests in a strict mode violation message. |
 | neo-sdk/src/waiter.ts | `refuseSignal` | `client/waiter.ts` `Waiter.rejectOnTimeout` | QuickJS has no `AbortSignal`, so Neo takes no `signal`; one passed anyway is refused instead of being ignored. |
 
 ## Unexplained: owner questions (0)

@@ -63,7 +63,8 @@ pub(crate) async fn context(
         )
         .into()),
         // Playwright: `server/dispatchers/browserContextDispatcher.ts` `BrowserContextDispatcher.pause`: `// Debugger will take care of this.`
-        BrowserContextCall::Pause(_) => Ok(None),
+        // `setTestIdAttributeName`: `Dispatcher::call` applied it before this call started.
+        BrowserContextCall::Pause(_) | BrowserContextCall::SetTestIdAttributeName(_) => Ok(None),
     }
 }
 

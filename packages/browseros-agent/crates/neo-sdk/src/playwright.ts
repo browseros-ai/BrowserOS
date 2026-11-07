@@ -8,6 +8,7 @@
  */
 
 import { BrowserType } from './browser-type'
+import type { Connection } from './connection'
 import { TimeoutError } from './errors'
 import { setTestIdAttribute } from './locator'
 import { devices } from './runtime-bridge'
@@ -30,6 +31,15 @@ export interface DeviceDescriptor {
  * `getByTestId` selects by, in every frame, as Playwright's.
  */
 export class Selectors {
+  #connection: Connection | undefined
+  #context: string | undefined
+
+  /** Neo: where `setTestIdAttribute` sends its page half: the run's connection and context. */
+  _attach(connection: Connection, context: string): void {
+    this.#connection = connection
+    this.#context = context
+  }
+
   /**
    * Deviation: `client/selectors.ts` `Selectors.register`: `await context._channel.registerSelectorEngine({ selectorEngine }, kNoTimeout);`
    * A custom engine is the script's own code run in every page, a new door into page JS that
@@ -47,15 +57,24 @@ export class Selectors {
 
   /**
    * Playwright's `Selectors.setTestIdAttribute`: the attribute `getByTestId` builds its selector
-   * with from now on, in this run.
-   *
-   * Deviation: `client/selectors.ts` `Selectors.setTestIdAttribute`: `context._channel.setTestIdAttributeName({ testIdAttributeName: attributeName }, kNoTimeout).catch(() => {});`
-   * Matching reads the attribute from the selector, so `getByTestId` finds what Playwright's
-   * finds; the page's injected script still names `data-testid` in the locators it suggests in a
-   * strict mode violation message.
+   * with from now on, in this run, and the one the injected script of every document the run
+   * reaches afterwards names in the locators a strict mode violation suggests (a document already
+   * open keeps its own, as in Playwright). Rust takes it inside the call's native send, so every
+   * later call of the run sees it.
    */
   setTestIdAttribute(attributeName: string): void {
     setTestIdAttribute(attributeName)
+    if (!this.#connection || !this.#context) return
+    // Playwright: `client/selectors.ts` `Selectors.setTestIdAttribute`: `context._channel.setTestIdAttributeName({ testIdAttributeName: attributeName }, kNoTimeout).catch(() => {});`
+    this.#connection
+      .sendContext(
+        'selectors.setTestIdAttribute',
+        this.#context,
+        'setTestIdAttributeName',
+        { testIdAttributeName: attributeName },
+        0,
+      )
+      .catch(() => {})
   }
 }
 

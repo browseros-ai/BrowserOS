@@ -383,6 +383,14 @@ impl Dispatcher {
                 .as_ref()
                 .map_or_else(CancellationToken::new, |(page, _)| page.closed.clone())
         };
+        // In call order too: every call the script makes after `setTestIdAttribute` sees the
+        // new attribute, however the call tasks interleave.
+        if let ObjectCall::Context(BrowserContextCall::SetTestIdAttributeName(params))
+        | ObjectCall::CreatedContext(_, BrowserContextCall::SetTestIdAttributeName(params)) =
+            &route
+        {
+            inner.tabs.test_id().set(&params.test_id_attribute_name);
+        }
         // The debugger decides here, in call order, whether this call waits before it starts.
         let held = meta
             .zip(debugged)

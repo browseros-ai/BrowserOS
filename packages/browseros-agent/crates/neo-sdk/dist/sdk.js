@@ -5224,11 +5224,20 @@ class BrowserType {
 
 // src/playwright.ts
 class Selectors {
+  #connection;
+  #context;
+  _attach(connection, context) {
+    this.#connection = connection;
+    this.#context = context;
+  }
   async register(_name, _script, _options) {
     throw new Error("selectors.register: Neo does not run custom selector engines in the page");
   }
   setTestIdAttribute(attributeName) {
     setTestIdAttribute(attributeName);
+    if (!this.#connection || !this.#context)
+      return;
+    this.#connection.sendContext("selectors.setTestIdAttribute", this.#context, "setTestIdAttributeName", { testIdAttributeName: attributeName }, 0).catch(() => {});
   }
 }
 
@@ -5263,6 +5272,7 @@ function createRun(init) {
   const browser = new Browser(init.browser, connection, pipe, playwright.chromium);
   const context = new BrowserContext(init.context, connection, pipe);
   browser._didCreateContext(context);
+  playwright.selectors._attach(connection, init.context);
   const page = context._addRunPage(init.page, init.mainFrame, init.url);
   return { page, context, playwright, uncaught: pipe.uncaught };
 }

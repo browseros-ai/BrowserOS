@@ -32,6 +32,7 @@ use crate::page::{PageSession, Session, TabInputs};
 use crate::page_events;
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunPage};
+use crate::world::TestIdAttribute;
 
 /// Cheap clones share the run's registry, context boundary, and session ownership.
 #[derive(Clone)]
@@ -52,6 +53,8 @@ struct Inner {
     created: CreatedContexts,
     /// `context.debugger` of the run's own context and of each context it created.
     debuggers: Debuggers,
+    /// The test id attribute every page world of the run hands its injected script.
+    test_id: Arc<TestIdAttribute>,
 }
 
 /// A page can be known without a session. Its closure token precedes the attachment so calls,
@@ -151,6 +154,7 @@ impl Tabs {
         let tabs = Self(Arc::new(Inner {
             created: CreatedContexts::new(cdp.clone(), tokio.clone()),
             debuggers: Debuggers::default(),
+            test_id: Arc::default(),
             cdp,
             tokio,
             inputs,
@@ -194,6 +198,11 @@ impl Tabs {
     /// The run's debuggers (`debugger.rs`).
     pub(crate) fn debuggers(&self) -> &Debuggers {
         &self.0.debuggers
+    }
+
+    /// The run's test id attribute (`selectors.setTestIdAttribute`).
+    pub(crate) fn test_id(&self) -> &TestIdAttribute {
+        &self.0.test_id
     }
 
     /// Runs `task` on the run's tracker, so `Dispatcher::finish` waits for it.
@@ -418,6 +427,7 @@ impl Tabs {
             input,
             entry.closed.clone(),
             self.0.events.clone(),
+            Arc::clone(&self.0.test_id),
         )))
     }
 
