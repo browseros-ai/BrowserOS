@@ -17,11 +17,11 @@
 //! server does: the user's other cookies are never touched.
 
 use std::collections::{BTreeMap, HashMap};
-use std::mem;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
-use browseros_cdp::{CdpClient, CdpError, SessionId};
+use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId};
+use futures_util::future::join_all;
 use neo_runtime_spec::serve::{
     BrowserContextSetGeolocationParamsGeolocation, BrowserContextSetStorageStateParamsStorageState,
     BrowserContextStorageStateParams, BrowserContextStorageStateResult, NameValue, NetworkCookie,
@@ -30,6 +30,7 @@ use neo_runtime_spec::serve::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 use tokio_util::task::TaskTracker;
 use tracing::debug;
@@ -328,12 +329,226 @@ struct State {
     released: bool,
 }
 
-/// What one session was sent of the run's session state.
-#[derive(Default, Clone, Copy)]
+/// What one session was sent of the run's session state; `tab` names its tab when it is the
+/// tab's own session, the one that holds the tab's geolocation and offline state ([`Slots`]).
+#[derive(Default, Clone)]
 struct Applied {
+    tab: Option<PageId>,
     headers: bool,
     offline: bool,
     geolocation: bool,
+}
+
+impl Applied {
+    fn is_empty(&self) -> bool {
+        !self.headers && !self.offline && !self.geolocation
+    }
+}
+
+/// Each tab's one geolocation and one offline state, the `Runtime`'s: the browser keeps one of
+/// each per tab whichever session sets it, and one session's reset ends another's (measured on
+/// BrowserOS neo: B's `Emulation.clearGeolocationOverride` clears A's position, B's online
+/// `Network.emulateNetworkConditions` ends A's offline mode; extra headers stay per session). So
+/// the runs that hold either on a tab are kept here, and when one lets go, the latest other's
+/// goes back on ([`Overrides::release`]), as permission grants do ([`Permissions`]). A session
+/// that once set either also takes the tab's with it when it detaches, a page's
+/// `navigator.onLine` included, so the latest holders' state goes back on after every other
+/// session of the tab detaches ([`Slots::detached`]).
+#[derive(Clone, Default)]
+pub(crate) struct Slots {
+    state: Arc<Mutex<SlotsState>>,
+    /// Set once the watcher of the connection's detaches runs ([`watch_detaches`]).
+    watching: Arc<OnceLock<()>>,
+}
+
+#[derive(Default)]
+struct SlotsState {
+    tabs: HashMap<PageId, Vec<Held>>,
+    /// The sessions of runs that let go of a tab other runs still hold, by session: their
+    /// detach, which CDP reports by session alone, may still take the tab's state with it.
+    released: HashMap<SessionId, PageId>,
+    /// Counts the holds, so the latest goes back on first.
+    next: u64,
+}
+
+/// One run's hold on a tab's geolocation or offline state, set through its own session of it.
+struct Held {
+    run: u64,
+    session: SessionId,
+    /// The `Emulation.setGeolocationOverride` params it set, while it holds a position.
+    geolocation: Option<Value>,
+    offline: bool,
+    /// When it last set either.
+    order: u64,
+}
+
+/// What goes back on a tab once a run let go of it: the latest other run's position, through
+/// that run's session, and the session of the latest other run that holds the tab offline.
+#[derive(Default)]
+struct Restore {
+    geolocation: Option<(SessionId, Value)>,
+    offline: Option<SessionId>,
+}
+
+impl Slots {
+    /// Run `run` holds `tab` at `position` through `target`, its own session of the tab.
+    async fn hold_geolocation(&self, target: &Target<'_>, tab: &PageId, run: u64, position: Value) {
+        self.hold(target, tab, run, |held| held.geolocation = Some(position))
+            .await;
+    }
+
+    /// Run `run` holds `tab` offline (or online again) through `target`.
+    async fn hold_offline(&self, target: &Target<'_>, tab: &PageId, run: u64, offline: bool) {
+        self.hold(target, tab, run, |held| held.offline = offline)
+            .await;
+    }
+
+    async fn hold(&self, target: &Target<'_>, tab: &PageId, run: u64, set: impl FnOnce(&mut Held)) {
+        if self.watching.set(()).is_ok() {
+            tokio::spawn(watch_detaches(target.cdp.clone(), self.clone()));
+        }
+        let session = &target.session;
+        let mut state = self.state.lock().await;
+        state.next += 1;
+        let order = state.next;
+        let holders = state.tabs.entry(tab.clone()).or_default();
+        let index = if let Some(index) = holders.iter().position(|held| held.run == run) {
+            index
+        } else {
+            holders.push(Held {
+                run,
+                session: session.clone(),
+                geolocation: None,
+                offline: false,
+                order,
+            });
+            holders.len() - 1
+        };
+        let held = &mut holders[index];
+        held.session.clone_from(session);
+        held.order = order;
+        set(held);
+    }
+
+    /// Run `run` lets go of `tab`: what the latest other runs holding it set goes back on.
+    async fn let_go(&self, tab: &PageId, run: u64) -> Restore {
+        self.drop_holds(tab, |held| held.run == run, true).await
+    }
+
+    /// A session of `tab` detached: a hold through it is gone, and the latest holders' position
+    /// and offline state go back on, which that session may have taken with it (measured).
+    async fn detached(&self, cdp: &CdpClient, tab: Option<&PageId>, session: &SessionId) {
+        let tab = {
+            let mut state = self.state.lock().await;
+            let released = state.released.remove(session);
+            let holding = state
+                .tabs
+                .iter()
+                .find(|(_, holders)| holders.iter().any(|held| &held.session == session))
+                .map(|(tab, _)| tab.clone());
+            match tab.cloned().or(released).or(holding) {
+                Some(tab) => tab,
+                None => return,
+            }
+        };
+        let restore = self
+            .drop_holds(&tab, |held| &held.session == session, false)
+            .await;
+        if let Some((other, position)) = restore.geolocation {
+            let target = Target {
+                cdp,
+                session: other,
+            };
+            if let Err(error) = target
+                .send("Emulation.setGeolocationOverride", position)
+                .await
+            {
+                debug!(?error, "a run's position did not go back on");
+            }
+        }
+        if let Some(other) = restore.offline {
+            let target = Target {
+                cdp,
+                session: other,
+            };
+            if let Err(error) = target.offline(true).await {
+                debug!(?error, "a run's offline mode did not go back on");
+            }
+        }
+    }
+
+    /// Drops `tab`'s holds that `gone` names: what the latest remaining ones set. With
+    /// `remember`, the sessions of the dropped holds are kept while other runs hold the tab, so
+    /// their detach finds it ([`Slots::detached`]).
+    async fn drop_holds(
+        &self,
+        tab: &PageId,
+        gone: impl Fn(&Held) -> bool,
+        remember: bool,
+    ) -> Restore {
+        let mut state = self.state.lock().await;
+        let SlotsState { tabs, released, .. } = &mut *state;
+        let Some(holders) = tabs.get_mut(tab) else {
+            return Restore::default();
+        };
+        let dropped: Vec<SessionId> = holders
+            .iter()
+            .filter(|held| gone(held))
+            .map(|held| held.session.clone())
+            .collect();
+        holders.retain(|held| !gone(held));
+        if remember && !holders.is_empty() {
+            for session in dropped {
+                released.insert(session, tab.clone());
+            }
+        }
+        let restore = Restore {
+            geolocation: holders
+                .iter()
+                .filter(|held| held.geolocation.is_some())
+                .max_by_key(|held| held.order)
+                .and_then(|held| {
+                    held.geolocation
+                        .clone()
+                        .map(|position| (held.session.clone(), position))
+                }),
+            offline: holders
+                .iter()
+                .filter(|held| held.offline)
+                .max_by_key(|held| held.order)
+                .map(|held| held.session.clone()),
+        };
+        if holders.is_empty() {
+            tabs.remove(tab);
+            released.retain(|_, released| released != tab);
+        }
+        restore
+    }
+}
+
+/// Watches the connection's session detaches for [`Slots::detached`], until the connection's
+/// events end. Not a task of any tracker: it outlives every run, and `Runtime::drain` must not
+/// wait for it.
+async fn watch_detaches(cdp: CdpClient, slots: Slots) {
+    let mut events = cdp.events();
+    loop {
+        match events.recv().await {
+            Ok(CdpEvent { method, params, .. }) if method == "Target.detachedFromTarget" => {
+                let Some(session) = params["sessionId"].as_str() else {
+                    continue;
+                };
+                // `targetId` is deprecated: CDP may name the session alone.
+                let tab = params["targetId"]
+                    .as_str()
+                    .map(|tab| PageId::new(tab.to_string()));
+                slots
+                    .detached(&cdp, tab.as_ref(), &SessionId::from(session.to_string()))
+                    .await;
+            }
+            Ok(_) | Err(RecvError::Lagged(_)) => {}
+            Err(RecvError::Closed) => return,
+        }
+    }
 }
 
 impl State {
@@ -535,13 +750,17 @@ impl Overrides {
             return Ok(());
         }
         state.offline = offline;
-        for (_, page) in open_tabs(tabs) {
-            for target in targets_of(&page) {
-                state
-                    .applied
-                    .entry(target.session.clone())
-                    .or_default()
-                    .offline = true;
+        let slots = tabs.permissions().slots();
+        for (entry, page) in open_tabs(tabs) {
+            for (index, target) in targets_of(&page).into_iter().enumerate() {
+                let noted = state.applied.entry(target.session.clone()).or_default();
+                noted.offline = true;
+                if index == 0 {
+                    noted.tab = Some(entry.id.clone());
+                    slots
+                        .hold_offline(&target, &entry.id, tabs.run_id(), offline)
+                        .await;
+                }
                 progress.race(target.offline(offline)).await??;
             }
         }
@@ -561,15 +780,18 @@ impl Overrides {
             return Err(PlaywrightError::target_closed().into());
         }
         state.geolocation = geolocation;
+        let slots = tabs.permissions().slots();
+        let position = checked.clone().unwrap_or_else(|| json!({}));
         // The tab's own session only: its frames, out-of-process ones too, see the tab's
         // override, and a frame session that detaches would take the tab's with it (measured).
-        for (_, page) in open_tabs(tabs) {
+        for (entry, page) in open_tabs(tabs) {
             if let Some(own) = targets_of(&page).into_iter().next() {
-                state
-                    .applied
-                    .entry(own.session.clone())
-                    .or_default()
-                    .geolocation = true;
+                let noted = state.applied.entry(own.session.clone()).or_default();
+                noted.geolocation = true;
+                noted.tab = Some(entry.id.clone());
+                slots
+                    .hold_geolocation(&own, &entry.id, tabs.run_id(), position.clone())
+                    .await;
                 progress.race(own.geolocation(checked.as_ref())).await??;
             }
         }
@@ -595,7 +817,9 @@ impl Overrides {
         session: SessionId,
         page: &PageId,
         frame: bool,
+        holds: (&Slots, u64),
     ) {
+        let (slots, run) = holds;
         let mut state = self.0.lock().await;
         if state.released {
             return;
@@ -612,8 +836,21 @@ impl Overrides {
             noted.headers |= !headers.is_empty();
             noted.offline |= offline;
             noted.geolocation |= geolocation.is_some();
+            if !frame {
+                noted.tab = Some(page.clone());
+            }
         }
         let target = Target { cdp, session };
+        if !frame {
+            if offline {
+                slots.hold_offline(&target, page, run, true).await;
+            }
+            if let Some(position) = &geolocation {
+                slots
+                    .hold_geolocation(&target, page, run, position.clone())
+                    .await;
+            }
+        }
         let applied = async {
             if !headers.is_empty() {
                 target.headers(&headers).await?;
@@ -633,36 +870,118 @@ impl Overrides {
 
     /// Takes the run's session state back off every session it went to, the tabs the run
     /// leaves open included: their extra headers, offline mode and geolocation are the
-    /// browser's own again, as when Playwright's sessions detach with its connection. From then
-    /// on no session gets any of it: an attach still running sets nothing
-    /// ([`Self::apply_to_new`]), nor does a call still running. Idempotent. A session that went
-    /// away is passed by (`Target::send`); another failure is logged, and that session keeps
-    /// the state until it detaches at the run's end.
-    pub(crate) async fn release(&self, cdp: &CdpClient) {
-        let mut state = self.0.lock().await;
-        let applied = mem::take(&mut state.applied);
-        *state = State {
-            released: true,
-            ..State::default()
+    /// browser's own again, as when Playwright's sessions detach with its connection, or, on a
+    /// tab another run still holds, that run's ([`Slots`]). From then on no session gets any of
+    /// it: an attach still running sets nothing ([`Self::apply_to_new`]), nor does a call.
+    ///
+    /// Every reset goes out at once, so a reply that is slow holds back no other; each comes off
+    /// what the run still has to take back only once the browser confirmed it, so a failed one is
+    /// tried again at the next release (the run's end). Meant for a task of the run's tracker
+    /// (`Tabs::release_run_scoped`), which its caller may stop waiting for and nothing cuts
+    /// short. A session that went away counts as reset (`Target::send`).
+    pub(crate) async fn release(self: Arc<Self>, cdp: CdpClient, slots: Slots, run: u64) {
+        let pending: Vec<(SessionId, Applied)> = {
+            let mut state = self.0.lock().await;
+            state.released = true;
+            state.headers.clear();
+            state.page_headers.clear();
+            state.offline = false;
+            state.geolocation = None;
+            state
+                .applied
+                .iter()
+                .map(|(session, applied)| (session.clone(), applied.clone()))
+                .collect()
         };
-        for (session, applied) in applied {
-            let target = Target { cdp, session };
-            let reset = async {
-                if applied.headers {
-                    target.headers(&[]).await?;
+        let resets = pending.into_iter().map(|(session, applied)| {
+            let overrides = Arc::clone(&self);
+            let cdp = cdp.clone();
+            let slots = slots.clone();
+            async move {
+                let restore = match &applied.tab {
+                    Some(tab) => slots.let_go(tab, run).await,
+                    None => Restore::default(),
+                };
+                overrides.reset(&cdp, &session, &applied, restore).await;
+            }
+        });
+        join_all(resets).await;
+    }
+
+    /// The resets of one session's `applied`, sent together, each taken off what the run still
+    /// has to take back once the browser confirmed it. On a tab another run holds offline, the
+    /// tab stays offline: that run's state goes back on if this session's detach takes it
+    /// ([`Slots::detached`]). On a tab another run holds at a position, this session's goes and
+    /// that run's goes back on through its own session.
+    async fn reset(
+        &self,
+        cdp: &CdpClient,
+        session: &SessionId,
+        applied: &Applied,
+        restore: Restore,
+    ) {
+        let target = Target {
+            cdp,
+            session: session.clone(),
+        };
+        let headers = async {
+            if applied.headers
+                && target
+                    .send("Network.setExtraHTTPHeaders", json!({ "headers": {} }))
+                    .await
+                    .is_ok()
+            {
+                self.confirm(session, |left| left.headers = false).await;
+            }
+        };
+        let offline = async {
+            if applied.offline
+                && (restore.offline.is_some()
+                    || target
+                        .send(
+                            "Network.emulateNetworkConditions",
+                            network_conditions(false),
+                        )
+                        .await
+                        .is_ok())
+            {
+                self.confirm(session, |left| left.offline = false).await;
+            }
+        };
+        let geolocation = async {
+            if !applied.geolocation
+                || target
+                    .send("Emulation.clearGeolocationOverride", json!({}))
+                    .await
+                    .is_err()
+            {
+                return;
+            }
+            let back = match restore.geolocation {
+                Some((other, position)) => Target {
+                    cdp,
+                    session: other,
                 }
-                if applied.offline {
-                    target.offline(false).await?;
-                }
-                if applied.geolocation {
-                    target
-                        .send("Emulation.clearGeolocationOverride", json!({}))
-                        .await?;
-                }
-                Ok::<_, PlaywrightError>(())
+                .send("Emulation.setGeolocationOverride", position)
+                .await
+                .is_ok(),
+                None => true,
             };
-            if let Err(error) = reset.await {
-                debug!(?error, "a session kept the run's session state");
+            if back {
+                self.confirm(session, |left| left.geolocation = false).await;
+            }
+        };
+        tokio::join!(headers, offline, geolocation);
+    }
+
+    /// Takes what the browser confirmed for `session` (`done`) off what the run still has to
+    /// take back.
+    async fn confirm(&self, session: &SessionId, done: impl FnOnce(&mut Applied)) {
+        let mut state = self.0.lock().await;
+        if let Some(left) = state.applied.get_mut(session) {
+            done(left);
+            if left.is_empty() {
+                state.applied.remove(session);
             }
         }
     }
@@ -959,6 +1278,8 @@ const RESET_STOPPED: &str = "Neo's permission reset stopped before it finished";
 pub(crate) struct Permissions {
     /// By run id: the earliest run first, so the browser gets each origin's list in that order.
     grants: Arc<Mutex<BTreeMap<u64, RunGrants>>>,
+    /// Each tab's geolocation and offline state, held the same way ([`Slots`]).
+    slots: Slots,
     /// The `Runtime`'s cleanup tracker, for a run dropped before it let go.
     cleanup: TaskTracker,
 }
@@ -1061,8 +1382,14 @@ impl Permissions {
     pub(crate) fn new(cleanup: TaskTracker) -> Self {
         Self {
             grants: Arc::default(),
+            slots: Slots::default(),
             cleanup,
         }
+    }
+
+    /// Each tab's geolocation and offline state, as the runs hold them ([`Slots`]).
+    pub(crate) fn slots(&self) -> &Slots {
+        &self.slots
     }
 
     /// Playwright: `server/browserContext.ts` `BrowserContext.grantPermissions`: `permissions.forEach(p => existing.add(p));`
@@ -1164,6 +1491,7 @@ mod tests {
     use std::time::Duration;
 
     use tokio::runtime::Handle;
+    use tokio::time;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
@@ -1334,15 +1662,9 @@ mod tests {
         );
     }
 
-    /// Review delta D1: a released run's session state comes off every session it went to,
-    /// one that attached as a frame's included (headers and offline there, geolocation on the
-    /// tab's own only), and goes on no session after, however late it attaches; a second
-    /// release sends nothing.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn tests_that_released_overrides_come_off_every_session_and_go_on_no_new_one() {
-        let browser = FakeBrowser::start(Replies::default()).await;
-        let cdp = browser.cdp().await;
-        let overrides = Overrides::default();
+    /// The run's session state as a test sets it: extra headers, offline mode and a position.
+    async fn holding(latitude: f64) -> Arc<Overrides> {
+        let overrides = Arc::new(Overrides::default());
         {
             let mut state = overrides.0.lock().await;
             state.headers = vec![NameValue {
@@ -1351,29 +1673,23 @@ mod tests {
             }];
             state.offline = true;
             state.geolocation = Some(BrowserContextSetGeolocationParamsGeolocation {
-                latitude: 10.0,
+                latitude,
                 longitude: 20.0,
                 accuracy: None,
             });
         }
-        let page = PageId::new(PAGE.to_string());
-        let session = |name: &str| SessionId::from(name.to_string());
         overrides
-            .apply_to_new(&cdp, session("tab"), &page, false)
-            .await;
-        overrides
-            .apply_to_new(&cdp, session("frame"), &page, true)
-            .await;
-        let before = browser.exchanges().len();
-        overrides.release(&cdp).await;
-        let released = browser.exchanges().len();
-        overrides.release(&cdp).await;
-        overrides
-            .apply_to_new(&cdp, session("late"), &page, false)
-            .await;
-        let exchanges = browser.exchanges();
-        let mut sent: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-        for exchange in &exchanges[before..released] {
+    }
+
+    fn session(name: &str) -> SessionId {
+        SessionId::from(name.to_string())
+    }
+
+    /// The commands the browser got from `start` on, by session, each session's sorted: the
+    /// resets go out together, in no set order.
+    fn sent_by_session(browser: &FakeBrowser, start: usize) -> BTreeMap<String, Vec<String>> {
+        let mut sent: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for exchange in &browser.exchanges()[start..] {
             sent.entry(
                 exchange.command["sessionId"]
                     .as_str()
@@ -1381,43 +1697,198 @@ mod tests {
                     .to_string(),
             )
             .or_default()
-            .push(json!([exchange.method(), exchange.command["params"]]));
+            .push(format!(
+                "{} {}",
+                exchange.method(),
+                exchange.command["params"]
+            ));
         }
-        let offline = json!([
-            "Network.emulateNetworkConditions",
+        for commands in sent.values_mut() {
+            commands.sort();
+        }
+        sent
+    }
+
+    /// Review delta D1: a released run's session state comes off every session it went to,
+    /// one that attached as a frame's included (headers and offline there, geolocation on the
+    /// tab's own only), and goes on no session after, however late it attaches; a second
+    /// release sends nothing, and nothing is left to take back.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_released_overrides_come_off_every_session_and_go_on_no_new_one() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let cdp = browser.cdp().await;
+        let overrides = holding(10.0).await;
+        let slots = Slots::default();
+        let page = PageId::new(PAGE.to_string());
+        overrides
+            .apply_to_new(&cdp, session("tab"), &page, false, (&slots, 1))
+            .await;
+        overrides
+            .apply_to_new(&cdp, session("frame"), &page, true, (&slots, 1))
+            .await;
+        let before = browser.exchanges().len();
+        Arc::clone(&overrides)
+            .release(cdp.clone(), slots.clone(), 1)
+            .await;
+        let released = browser.exchanges().len();
+        Arc::clone(&overrides)
+            .release(cdp.clone(), slots.clone(), 1)
+            .await;
+        overrides
+            .apply_to_new(&cdp, session("late"), &page, false, (&slots, 1))
+            .await;
+        let offline = format!(
+            "Network.emulateNetworkConditions {}",
             network_conditions(false)
-        ]);
-        let no_headers = json!(["Network.setExtraHTTPHeaders", { "headers": {} }]);
-        let enable = json!(["Network.enable", {}]);
+        );
+        let no_headers = format!("Network.setExtraHTTPHeaders {}", json!({ "headers": {} }));
+        let mut tab = vec![
+            "Emulation.clearGeolocationOverride {}".to_string(),
+            offline.clone(),
+            no_headers.clone(),
+        ];
+        tab.sort();
+        let mut frame = vec![offline, no_headers];
+        frame.sort();
+        let mut sent = sent_by_session(&browser, before);
+        sent.retain(|_, commands| !commands.is_empty());
         assert_eq!(
             sent,
-            BTreeMap::from([
-                (
-                    "frame".to_string(),
-                    vec![
-                        enable.clone(),
-                        no_headers.clone(),
-                        enable.clone(),
-                        offline.clone()
-                    ]
-                ),
-                (
-                    "tab".to_string(),
-                    vec![
-                        enable.clone(),
-                        no_headers,
-                        enable,
-                        offline,
-                        json!(["Emulation.clearGeolocationOverride", {}]),
-                    ]
-                ),
-            ]),
+            BTreeMap::from([("frame".to_string(), frame), ("tab".to_string(), tab)]),
             "each session gets back what it was given"
         );
         assert_eq!(
-            exchanges.len(),
+            browser.exchanges().len(),
             released,
             "a second release and a late attach send nothing"
+        );
+        assert!(
+            overrides.0.lock().await.applied.is_empty(),
+            "nothing left to take back"
+        );
+    }
+
+    /// Review D1 P1: a reset whose reply never comes holds back no other. The tab goes online
+    /// at once, and the unanswered header reset stays the run's to take back, its release still
+    /// going.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_an_unanswered_reset_holds_back_no_other_and_stays_owned() {
+        let browser = FakeBrowser::start(Replies {
+            hold_header_resets: true,
+            ..Replies::default()
+        })
+        .await;
+        let cdp = browser.cdp().await;
+        let overrides = holding(10.0).await;
+        let slots = Slots::default();
+        let page = PageId::new(PAGE.to_string());
+        overrides
+            .apply_to_new(&cdp, session("tab"), &page, false, (&slots, 1))
+            .await;
+        let releasing = tokio::spawn(Arc::clone(&overrides).release(cdp.clone(), slots, 1));
+        let left = time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(left) = overrides.0.lock().await.applied.get(&session("tab"))
+                    && !left.offline
+                    && !left.geolocation
+                {
+                    return left.clone();
+                }
+                time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("the offline and geolocation resets never came back"));
+        assert!(
+            left.headers,
+            "the unanswered header reset is still the run's"
+        );
+        assert!(!releasing.is_finished(), "the release still owns it");
+        releasing.abort();
+    }
+
+    /// Review D1 P2: run 2 letting go of a tab run 1 also holds puts run 1's position back
+    /// through run 1's own session, and leaves the tab offline, as run 1 has it. When a session
+    /// of the tab detaches, which takes the tab's offline state and position with it
+    /// (measured), run 1's go back on. Once run 1 lets go too, the tab is the browser's own.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_letting_go_of_a_shared_tab_puts_the_other_runs_state_back() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let cdp = browser.cdp().await;
+        let slots = Slots::default();
+        let page = PageId::new(PAGE.to_string());
+        let one = holding(10.0).await;
+        let two = holding(30.0).await;
+        one.apply_to_new(&cdp, session("one"), &page, false, (&slots, 1))
+            .await;
+        two.apply_to_new(&cdp, session("two"), &page, false, (&slots, 2))
+            .await;
+        let position = verify_geolocation(&BrowserContextSetGeolocationParamsGeolocation {
+            latitude: 10.0,
+            longitude: 20.0,
+            accuracy: None,
+        })
+        .unwrap_or_else(|error| panic!("{error:?}"));
+        let no_headers = format!("Network.setExtraHTTPHeaders {}", json!({ "headers": {} }));
+        let before = browser.exchanges().len();
+        Arc::clone(&two)
+            .release(cdp.clone(), slots.clone(), 2)
+            .await;
+        let mut gone = vec![
+            "Emulation.clearGeolocationOverride {}".to_string(),
+            no_headers.clone(),
+        ];
+        gone.sort();
+        assert_eq!(
+            sent_by_session(&browser, before),
+            BTreeMap::from([
+                (
+                    "one".to_string(),
+                    vec![format!("Emulation.setGeolocationOverride {position}")]
+                ),
+                ("two".to_string(), gone),
+            ]),
+            "run 2's own goes; run 1's position goes back on, and the tab stays offline"
+        );
+        assert!(
+            two.0.lock().await.applied.is_empty(),
+            "run 2 has nothing left"
+        );
+
+        let before = browser.exchanges().len();
+        slots.detached(&cdp, None, &session("two")).await;
+        let mut back = vec![
+            format!("Emulation.setGeolocationOverride {position}"),
+            "Network.enable {}".to_string(),
+            format!(
+                "Network.emulateNetworkConditions {}",
+                network_conditions(true)
+            ),
+        ];
+        back.sort();
+        assert_eq!(
+            sent_by_session(&browser, before),
+            BTreeMap::from([("one".to_string(), back)]),
+            "a detach of the tab puts run 1's state back on"
+        );
+
+        let before = browser.exchanges().len();
+        Arc::clone(&one)
+            .release(cdp.clone(), slots.clone(), 1)
+            .await;
+        let mut own = vec![
+            "Emulation.clearGeolocationOverride {}".to_string(),
+            format!(
+                "Network.emulateNetworkConditions {}",
+                network_conditions(false)
+            ),
+            no_headers,
+        ];
+        own.sort();
+        assert_eq!(
+            sent_by_session(&browser, before),
+            BTreeMap::from([("one".to_string(), own)]),
+            "the last to let go leaves the browser's own"
         );
     }
 

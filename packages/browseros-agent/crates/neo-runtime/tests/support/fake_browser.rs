@@ -66,11 +66,18 @@ impl Reply {
 
 /// How the fake answers the calls a test can hold back. It answers every other call at once.
 #[derive(Debug, Clone, Copy, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is one fake-browser behavior a test switches on, independent of the others"
+)]
 pub struct Replies {
     /// Review probe: fail the acknowledgement that enables drag interception.
     pub fail_drag_enable: bool,
     /// Review probe: delay only a mouse press acknowledgement.
     pub mouse_press_delay: Option<Duration>,
+    /// Review delta D1: never answer a header reset (`Network.setExtraHTTPHeaders` with no
+    /// headers); every other command is answered as usual.
+    pub hold_header_resets: bool,
     /// `Target.attachToTarget`. The n-th attach the fake receives gets session `session-<n>`.
     pub attach: Reply,
     /// An optional schedule for attaches to tabs other than the initial run tab.
@@ -667,6 +674,7 @@ const EMPTY_RESULTS: &[&str] = &[
     "Page.close",
     "Page.enable",
     "Network.enable",
+    "Network.disable",
     "Page.setLifecycleEventsEnabled",
     "Emulation.setFocusEmulationEnabled",
     "Runtime.releaseObjectGroup",
@@ -717,6 +725,14 @@ fn answer(
                     .to_string(),
             );
             (json!({"result":{}}), now)
+        }
+        "Network.setExtraHTTPHeaders"
+            if replies.hold_header_resets
+                && command["params"]["headers"]
+                    .as_object()
+                    .is_some_and(serde_json::Map::is_empty) =>
+        {
+            (json!({ "result": {} }), None)
         }
         method if EMPTY_RESULTS.contains(&method) => (json!({ "result": {} }), now),
         "Page.navigate" => match replies.navigation {
