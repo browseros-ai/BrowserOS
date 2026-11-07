@@ -229,6 +229,14 @@ export const glue = {
   getElementBorderWidth: (injected, _params, element) =>
     injected.getElementBorderWidth(element),
 
+  describeIFrameStyle: (injected, _params, element) => ({
+    style: injected.describeIFrameStyle(element),
+  }),
+
+  expectHitTarget: (injected, { point }, element) => ({
+    outcome: injected.expectHitTarget(point, element),
+  }),
+
   setupHitTargetInterceptor: (
     injected,
     { hitPoint, blockAllEvents },

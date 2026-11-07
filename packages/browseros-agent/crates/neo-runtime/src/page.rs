@@ -48,11 +48,13 @@ use browseros_cdp::input::DispatchMouseEventParams;
 use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId, dom, target};
 use futures_util::future;
 use neo_runtime_spec::injected::{
-    ElementState, ElementStatesOutcome, HitTargetInterceptor, HitTargetOutcome, HitTargetSetup,
-    InjectedCheckElementStatesParams, InjectedDescribeSelectorParams,
-    InjectedGetElementBorderWidthParams, InjectedResolveParams, InjectedScrollIntoViewParams,
-    InjectedSetupHitTargetInterceptorParams, InjectedStopHitTargetInterceptorParams,
-    InjectedTitleParams, InjectedViewportSizeParams, Point, ScrollAlignment,
+    ElementState, ElementStatesOutcome, FrameStyle, FrameStyleStatus, HitTargetInterceptor,
+    HitTargetOutcome, HitTargetSetup, InjectedCheckElementStatesParams,
+    InjectedDescribeIFrameStyleParams, InjectedDescribeSelectorParams,
+    InjectedExpectHitTargetParams, InjectedGetElementBorderWidthParams, InjectedResolveParams,
+    InjectedScrollIntoViewParams, InjectedSetupHitTargetInterceptorParams,
+    InjectedStopHitTargetInterceptorParams, InjectedTitleParams, InjectedViewportSizeParams, Point,
+    ScrollAlignment,
 };
 use neo_runtime_spec::{Element, Handle};
 use serde::Deserialize;
@@ -1686,6 +1688,14 @@ impl Tab for FrameTab {
         let page = Arc::clone(self);
         let element = element.clone();
         async move {
+            // These reads install nothing: keep them in Progress's cancellable future. Only
+            // interceptor setup must outlive the waiter so a late handle is always disarmed.
+            let hit_point = match frame_hit_target(&page, &element, hit_point).await? {
+                FrameHitTarget::Point(point) => point,
+                FrameHitTarget::Blocked(description) => {
+                    return Ok(Arming::Intercepted(description));
+                }
+            };
             let (answer, armed) = oneshot::channel();
             let setup = arm_interceptor(Arc::clone(&page), element, hit_point, input);
             page.spawn(async move {
@@ -1833,6 +1843,98 @@ impl Tab for FrameTab {
     }
 }
 
+enum FrameHitTarget {
+    Point(Option<Point>),
+    Blocked(String),
+}
+
+/// Playwright's `_checkFrameIsHitTarget`: owner boxes are top-level, but each hit check runs
+/// in its parent's document. Gather all boundaries before checking, because any transformed
+/// ancestor disables preliminary hit checks for the whole path, leaving the event interceptor.
+async fn frame_hit_target(
+    page: &PageSession,
+    element: &ResolvedElement,
+    point: Point,
+) -> Result<FrameHitTarget, PageError> {
+    let mut boundaries = Vec::new();
+    for owner in &element.owners {
+        let model = owner
+            .frame
+            .host
+            .send(
+                "DOM.getBoxModel",
+                json!({"objectId":owner.element.id().object_id()}),
+            )
+            .await
+            .map_err(|error| match owner.frame.host.classify(&error) {
+                PageError::Closed => PageError::Closed,
+                _ => PageError::NotConnected,
+            })?;
+        let style = owner
+            .frame
+            .call(
+                None,
+                &InjectedDescribeIFrameStyleParams {
+                    element: owner.element.clone(),
+                },
+            )
+            .await?;
+        let insets = match style.style {
+            FrameStyle::Status(FrameStyleStatus::ErrorNotconnected) => {
+                return Err(PageError::NotConnected);
+            }
+            FrameStyle::Status(FrameStyleStatus::Transformed) => {
+                return Ok(FrameHitTarget::Point(None));
+            }
+            FrameStyle::Insets(insets) => insets,
+        };
+        let model: dom::GetBoxModelResult = serde_json::from_value(model)
+            .map_err(|error| PageError::Contract(error.to_string()))?;
+        let offset = page
+            .frames
+            .offset(&owner.frame.host)
+            .await?
+            .unwrap_or_default();
+        let border = translate(quad(model.model.border)?, offset);
+        let x = border
+            .iter()
+            .step_by(2)
+            .copied()
+            .fold(f64::INFINITY, f64::min);
+        let y = border
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .copied()
+            .fold(f64::INFINITY, f64::min);
+        boundaries.push((
+            owner,
+            Point {
+                x: point.x - x - insets.left,
+                y: point.y - y - insets.top,
+            },
+        ));
+    }
+    let mut point_in_parent = point;
+    for (owner, point_in_frame) in boundaries {
+        let checked = owner
+            .frame
+            .call(
+                None,
+                &InjectedExpectHitTargetParams {
+                    element: owner.element.clone(),
+                    point: point_in_parent,
+                },
+            )
+            .await?;
+        if let HitTargetOutcome::Blocked(blocked) = checked.outcome {
+            return Ok(FrameHitTarget::Blocked(blocked.hit_target_description));
+        }
+        point_in_parent = point_in_frame;
+    }
+    Ok(FrameHitTarget::Point(Some(point_in_parent)))
+}
+
 /// `setupHitTargetInterceptor` into a fresh group: `error:notconnected` is `NotConnected`, any
 /// other description `Intercepted`, the handle `Armed` with the counters taken just before the
 /// setup was sent and the click's `input` turn. Runs on the run's tracker ([`Tab::arm`] for
@@ -1840,7 +1942,7 @@ impl Tab for FrameTab {
 async fn arm_interceptor(
     page: Arc<PageSession>,
     element: ResolvedElement,
-    hit_point: Point,
+    hit_point: Option<Point>,
     input: InputPermit,
 ) -> Result<Arming<ArmedInterceptor>, PageError> {
     let mark = page.mark();
@@ -1851,7 +1953,7 @@ async fn arm_interceptor(
             Some(group.group()),
             &InjectedSetupHitTargetInterceptorParams {
                 element: element.handle.clone(),
-                hit_point: (frame.id == page.main_frame).then_some(hit_point),
+                hit_point,
                 // Only Playwright's trial blocks every event, and Neo's trial sends none.
                 block_all_events: false,
             },

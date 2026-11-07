@@ -35,6 +35,8 @@ const valid = {
   scrollIntoView: () => ({}),
   viewportSize: () => ({ width: 1280, height: 720 }),
   getElementBorderWidth: () => ({ left: 0, top: 0 }),
+  describeIFrameStyle: () => ({ style: { left: 0, top: 0 } }),
+  expectHitTarget: () => ({ outcome: 'done' }),
   setupHitTargetInterceptor: () => ({ outcome: 'error:notconnected' }),
   stopHitTargetInterceptor: (_injected, _params, interceptor) => ({
     outcome: interceptor.stop(),
