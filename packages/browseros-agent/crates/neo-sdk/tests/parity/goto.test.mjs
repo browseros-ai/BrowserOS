@@ -6,7 +6,8 @@
 //
 // The fixture answers without a Date header and with `Cache-Control: no-store`, so Neo's turn,
 // which runs after Playwright's in the same profile, meets the same responses and no cache, and
-// its cookies expire at once, so no turn sends the other's cookies.
+// its cookies expire at once, so no turn sends the other's cookies. The one cacheable answer,
+// `/moved`, is cleared from the browser's cache between the turns.
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -45,6 +46,15 @@ const routes = {
   },
   '/r2': (response) => {
     response.writeHead(301, { Location: '/ok#frag' })
+    response.end()
+  },
+  // A permanent redirect the browser caches: a second visit redirects from the disk cache, with
+  // no extra info, so its raw headers and sizes come from the provisional ones.
+  '/moved': (response) => {
+    response.writeHead(301, {
+      Location: '/ok',
+      'Cache-Control': 'max-age=3600',
+    })
     response.end()
   },
   '/404': (response) => {
@@ -96,7 +106,31 @@ const source = `
     keys: Object.keys(t),
     numbers: Object.values(t).every((value) => typeof value === 'number'),
     started: t.startTime > 0,
+    requestStarted: t.requestStart >= 0,
     ended: t.responseEnd >= t.responseStart && t.responseStart >= 0,
+  })
+  const units = (text) => Array.from({ length: text.length }, (_, i) => text.charCodeAt(i))
+  const decode = (body) => ({
+    base64: body.toString('base64'),
+    length: body.length,
+    text: body.toString(),
+    // Node's Buffer reads the range before the encoding, and the encoding in any case.
+    ranges: [
+      ['UTF-8'],
+      ['Latin1', 1, 9],
+      ['HEX', -3, 4],
+      ['base64url', 2],
+      ['utf8', 0, -1],
+      ['nope', 99],
+    ].map((args) => body.toString(...args)),
+    utf16: units(body.toString('utf-16le', 1, 9)),
+    unknown: (() => {
+      try {
+        return body.toString('nope')
+      } catch (error) {
+        return error.name
+      }
+    })(),
   })
   const caught = (error) => ({ error: error.name })
   const describeRequest = async (request) => ({
@@ -138,10 +172,7 @@ const source = `
     httpVersion: await response.httpVersion(),
     finished: await response.finished(),
     frameIsMain: response.frame() === page.mainFrame(),
-    body: await response.body().then(
-      (body) => ({ base64: body.toString('base64'), length: body.length, text: body.toString() }),
-      caught,
-    ),
+    body: await response.body().then(decode, caught),
     text: await response.text().catch(caught),
     json: await response.json().catch(caught),
     type: JSON.parse(JSON.stringify(response))._type,
@@ -176,10 +207,13 @@ test('goto answers the same Response, Request chain and nulls as Playwright', {
   const binary = buildNeoRun()
   const cleanups = []
   try {
+    let moved = 0
     const server = http.createServer((request, response) => {
       response.sendDate = false
-      noStore(response)
-      const route = routes[request.url.split('?')[0]]
+      const path = request.url.split('?')[0]
+      if (path === '/moved') moved += 1
+      else noStore(response)
+      const route = routes[path]
       if (route) return route(response)
       response.writeHead(404)
       response.end()
@@ -204,6 +238,8 @@ test('goto answers the same Response, Request chain and nulls as Playwright', {
         `${origin}/ok?dcl`,
         { waitUntil: 'domcontentloaded' },
       ],
+      ['moved', `${origin}/moved`],
+      ['movedFromCache', `${origin}/moved`],
       ['noContent', `${origin}/204`],
       ['download', `${origin}/download`],
       ['blank', 'about:blank'],
@@ -218,6 +254,11 @@ test('goto answers the same Response, Request chain and nulls as Playwright', {
     const reference = await new (async () => {}).constructor('page', script)(
       page,
     )
+    // Neo's turn meets the same empty cache, so its second visit to /moved is cached too.
+    assert.equal(moved, 1, 'the second visit redirected from the cache')
+    const session = await page.context().newCDPSession(page)
+    await session.send('Network.clearBrowserCache')
+    await session.detach()
     await page.close()
     // Expired cookies and finished loads settle before Neo's turn.
     await sleep(500)
@@ -278,6 +319,20 @@ test('goto answers the same Response, Request chain and nulls as Playwright', {
       [reference.noContent, reference.download],
       [{ error: 'Error' }, { error: 'Error' }],
     )
+    assert.equal(moved, 2, "Neo's second visit redirected from the cache")
+    assert.deepEqual(
+      reference.movedFromCache.hops.map(({ response }) => response.status),
+      [301, 200],
+    )
+    assert.deepEqual(final('ok').response.body.ranges, [
+      '<title>ok</title>héllo',
+      'title>ok',
+      '3c746974',
+      'aXRsZT5vazwvdGl0bGU-aMOpbGxv',
+      '',
+      '',
+    ])
+    assert.equal(final('ok').response.body.unknown, 'TypeError')
 
     for (const name of Object.keys(reference))
       assert.deepEqual(
