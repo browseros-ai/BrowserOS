@@ -2,6 +2,7 @@
 import { expect, test } from 'bun:test'
 import { BrowserContext } from '../../src/browser-context'
 import { Connection } from '../../src/connection'
+import { EventPipe } from '../../src/events'
 import { Page } from '../../src/page'
 import * as protocol from '../../src/protocol'
 import { convertSelectOptionValues } from '../../src/select-option'
@@ -78,7 +79,7 @@ test('tests that missing inputValue and selectOption results are contract errors
     'page@T',
     'frame@T',
     '',
-    new BrowserContext('browser-context@T', connection),
+    new BrowserContext('browser-context@T', connection, new EventPipe()),
     connection,
   )
   await expect(page.mainFrame().inputValue('input')).rejects.toThrow(
@@ -100,7 +101,7 @@ test('tests that invalid select fields reject before sending anything', async ()
     'page@T',
     'frame@T',
     '',
-    new BrowserContext('browser-context@T', connection),
+    new BrowserContext('browser-context@T', connection, new EventPipe()),
     connection,
   )
   for (const value of [
@@ -137,7 +138,7 @@ test('tests that Page and Frame forms accept null options with the default timeo
     'page@T',
     'frame@T',
     '',
-    new BrowserContext('browser-context@T', connection),
+    new BrowserContext('browser-context@T', connection, new EventPipe()),
     connection,
   )
   page.setDefaultTimeout(123)
@@ -169,7 +170,7 @@ test('tests that forms send the outer API name, strictness and timeout and unwra
     'page@T',
     'frame@T',
     '',
-    new BrowserContext('browser-context@T', connection),
+    new BrowserContext('browser-context@T', connection, new EventPipe()),
     connection,
   )
   page.setDefaultTimeout(123)

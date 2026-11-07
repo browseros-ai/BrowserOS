@@ -9,6 +9,7 @@
 
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { createRun } from '../../src/index'
+import { eventless } from './bridge-stub'
 
 type Sent = {
   id: number
@@ -25,14 +26,14 @@ let replies: Reply[] = []
 beforeEach(() => {
   sent = []
   replies = []
-  ;(globalThis as Record<string, unknown>).__neo_runtime = {
+  ;(globalThis as Record<string, unknown>).__neo_runtime = eventless({
     get: () => JSON.stringify(null),
     call: async (message: string) => {
       const parsed: Sent = JSON.parse(message)
       sent.push(parsed)
       return JSON.stringify({ id: parsed.id, result: {}, ...replies.shift() })
     },
-  }
+  })
 })
 
 function run() {

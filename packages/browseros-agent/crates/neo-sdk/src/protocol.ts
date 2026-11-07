@@ -26,6 +26,8 @@ import type {
   FrameUncheckParams,
   FrameWaitForSelectorParams,
   PageCloseParams,
+  PageConsoleMessagesParams,
+  PagePageErrorsParams,
 } from '@browseros/neo-runtime-spec/serve'
 
 /** `Frame.goto`'s params in Playwright's schema order (`spec/playwright/frame.yml`). */
@@ -240,6 +242,26 @@ type _PageCloseKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof PAGE_CLOSE_KEYS)[number], true>,
     Required<PageCloseParams>
+  >
+>
+
+/** `Page.consoleMessages`'s params (`spec/playwright/page.yml`). */
+export const PAGE_CONSOLE_MESSAGES_KEYS = ['filter'] as const
+
+type _PageConsoleMessagesKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_CONSOLE_MESSAGES_KEYS)[number], true>,
+    Required<PageConsoleMessagesParams>
+  >
+>
+
+/** `Page.pageErrors`'s params (`spec/playwright/page.yml`). */
+export const PAGE_PAGE_ERRORS_KEYS = ['filter'] as const
+
+type _PagePageErrorsKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_PAGE_ERRORS_KEYS)[number], true>,
+    Required<PagePageErrorsParams>
   >
 >
 
