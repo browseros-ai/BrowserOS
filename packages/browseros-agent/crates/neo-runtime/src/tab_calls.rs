@@ -27,6 +27,7 @@ use crate::history::{self, HistoryOptions};
 use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::tabs::{self, PageEntry, Tabs};
+use crate::web_storage;
 
 pub(crate) async fn context(
     tabs: &Tabs,
@@ -174,6 +175,14 @@ pub(crate) async fn page(
         // `Network.enable`: the first goto, history step or navigation wait, a network event
         // listener, or this read, as Chromium replays no earlier request.
         PageCall::Requests(_) => return requests(tabs, entry, progress).await,
+        call @ (PageCall::WebStorageItems(_)
+        | PageCall::WebStorageGetItem(_)
+        | PageCall::WebStorageSetItem(_)
+        | PageCall::WebStorageRemoveItem(_)
+        | PageCall::WebStorageClear(_)) => {
+            let page = prepared_page(tabs, entry, progress).await?;
+            return web_storage::serve(page, call, progress).await;
+        }
         PageCall::Close(_) => close(tabs, entry, progress).await?,
         PageCall::RunBeforeUnload(_) => run_before_unload(tabs, entry, progress).await?,
         // The dispatcher serves these over the tab's input devices (`devices.rs`).
@@ -312,6 +321,19 @@ async fn console_page(
     let page = progress.race(tabs.session(entry)).await??;
     let enabled = progress.race(page.enable_runtime()).await?;
     checked(tabs, entry, progress, enabled).await?;
+    Ok(page)
+}
+
+/// `entry`'s session with its watcher running (`PageSession::prepare`), as a call on its frames
+/// needs it.
+async fn prepared_page(
+    tabs: &Tabs,
+    entry: &PageEntry,
+    progress: &Progress,
+) -> Result<Arc<PageSession>, CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    let prepared = progress.race(page.prepare()).await?;
+    checked(tabs, entry, progress, prepared).await?;
     Ok(page)
 }
 

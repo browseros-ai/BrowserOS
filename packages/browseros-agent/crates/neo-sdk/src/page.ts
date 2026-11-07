@@ -106,6 +106,7 @@ import { type CreatedFrame, get, matchesURL } from './runtime-bridge'
 import type { SelectOptionValues } from './select-option'
 import { type TimeoutInput, TimeoutSettings } from './timeout-settings'
 import { Waiter, type WaitForEventOptions, wrapApiCall } from './waiter'
+import { WebStorage } from './web-storage'
 
 /**
  * Neo: the page's listener events, by Playwright's names (`Events.Page`): what Neo produces,
@@ -205,6 +206,9 @@ export class Page extends ChannelOwner {
   readonly keyboard: Keyboard
   readonly mouse: Mouse
   readonly touchscreen: Touchscreen
+  /** Playwright's `page.localStorage` and `page.sessionStorage`: the main frame's storage. */
+  readonly localStorage: WebStorage
+  readonly sessionStorage: WebStorage
   /** Set when this page's `close` ran (`_onClose`): what Playwright's client flips then. */
   #closedLocally = false
   /** Playwright's `_closeReason`: what `close({ reason })` was given. */
@@ -233,6 +237,8 @@ export class Page extends ChannelOwner {
     this.keyboard = new Keyboard(this)
     this.mouse = new Mouse(this)
     this.touchscreen = new Touchscreen(this)
+    this.localStorage = new WebStorage(connection, guid, 'local')
+    this.sessionStorage = new WebStorage(connection, guid, 'session')
   }
 
   /** Sends a device command to this page's tab, with no timeout (Playwright's `kNoTimeout`). */

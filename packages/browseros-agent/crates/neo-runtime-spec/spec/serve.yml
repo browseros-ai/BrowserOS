@@ -55,6 +55,13 @@ interfaces:
     - registerLocatorHandler
     - resolveLocatorHandlerNoReply
     - unregisterLocatorHandler
+    # `page.localStorage` and `page.sessionStorage` (web_storage.rs): the main frame's storage,
+    # read and written by glue in its utility world, where Playwright evaluates the same steps.
+    - webStorageItems
+    - webStorageGetItem
+    - webStorageSetItem
+    - webStorageRemoveItem
+    - webStorageClear
   # A JavaScript dialog the run's `dialog` event handed out.
   Dialog:
     - accept
