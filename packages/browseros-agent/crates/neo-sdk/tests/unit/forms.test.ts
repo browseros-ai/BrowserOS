@@ -129,7 +129,7 @@ test('tests that Page and Frame forms accept null options with the default timeo
   const connection = new Connection(0)
   const timeouts: number[] = []
   connection.send = async (...args) => {
-    timeouts.push(args[4])
+    timeouts.push(typeof args[4] === 'number' ? args[4] : args[4].timeout)
     if (args[2] === 'inputValue') return { value: 'text' }
     if (args[2] === 'selectOption') return { values: ['one'] }
     return undefined
@@ -205,7 +205,7 @@ test('tests that forms send the outer API name, strictness and timeout and unwra
         `${scope}.${method}`,
         'frame@T',
         wire,
-        77,
+        { signal: undefined, timeout: 77 },
       ])
       expect((params as { selector: string }).selector).toBe('input')
       expect((params as { strict?: boolean }).strict).toBe(
@@ -228,6 +228,6 @@ test('tests that forms send the outer API name, strictness and timeout and unwra
     'frame@T',
     'fill',
     { selector: 'input', strict: true, value: '' },
-    123,
+    { signal: undefined, timeout: 123 },
   ])
 })

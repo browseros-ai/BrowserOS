@@ -75,6 +75,7 @@ import { FrameLocator } from './frame-locator'
 import type { EvaluateOptions, PageElement, PageFunctionOn } from './js-handle'
 import type { Page } from './page'
 import type { SelectOptionValues } from './select-option'
+import type { TimeoutInput } from './timeout-settings'
 
 export type LocatorOptions = {
   hasText?: string | RegExp
@@ -343,7 +344,7 @@ export class Locator {
   async evaluate<R, Arg>(
     pageFunction: PageFunctionOn<PageElement, Arg, R>,
     arg?: Arg,
-    options?: EvaluateOptions & { timeout?: number; signal?: unknown },
+    options?: EvaluateOptions & TimeoutInput,
   ): Promise<R> {
     return await this._frame._withElement(
       'locator.evaluate',

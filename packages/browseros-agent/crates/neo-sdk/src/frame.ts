@@ -130,7 +130,7 @@ import {
   convertSelectOptionValues,
   type SelectOptionValues,
 } from './select-option'
-import { refuseSignalFor } from './timeout-settings'
+import type { TimeoutInput, TimeoutOptions } from './timeout-settings'
 import { type URLPredicate, urlFor } from './url'
 
 /** `click`'s options as a script passes them: the wire params plus `timeout`. */
@@ -211,18 +211,16 @@ export type URLMatch = string | RegExp
 export type NavigationURLMatch = URLMatch | URLPredicate
 
 /** `waitForURL`'s options, as Playwright's. */
-export type WaitForURLOptions = { waitUntil?: LifecycleEvent; timeout?: number }
+export type WaitForURLOptions = { waitUntil?: LifecycleEvent } & TimeoutInput
 
-/** Playwright's `WaitForNavigationOptions` (`client/frame.ts`), without `signal`: Neo takes no
- * `AbortSignal` (`errors.ts`). */
+/** Playwright's `WaitForNavigationOptions` (`client/frame.ts`). */
 export type WaitForNavigationOptions = {
   url?: NavigationURLMatch
   waitUntil?: LifecycleEvent
-  timeout?: number
-}
+} & TimeoutInput
 
 /** `waitForLoadState`'s options, as Playwright's `TimeoutOptions`. */
-export type WaitForLoadStateOptions = { timeout?: number }
+export type WaitForLoadStateOptions = TimeoutInput
 
 /** Playwright's `kLifecycleEvents` (`client/types.ts`). */
 const LIFECYCLE_EVENTS: ReadonlySet<string> = new Set([
@@ -495,7 +493,7 @@ export class Frame {
       'waitUntil',
       options.waitUntil === undefined ? 'load' : options.waitUntil,
     )
-    const timeout = this._page._timeoutSettings.navigationTimeout(
+    const timeoutOptions = this._page._timeoutSettings.navigationTimeout(
       options,
       apiName,
     )
@@ -505,7 +503,7 @@ export class Frame {
             apiName,
             options.url,
             waitUntil,
-            timeout,
+            timeoutOptions,
             true,
           )
         : await this._connection.sendNeo(
@@ -513,7 +511,7 @@ export class Frame {
             this._guid,
             'neo:waitForNavigation',
             { url: serializeUrlMatch(apiName, options.url), waitUntil },
-            timeout,
+            timeoutOptions,
           )
     const guid = result?.response?.guid
     return guid ? responseFor(this._connection, guid, this) : null
@@ -526,7 +524,8 @@ export class Frame {
    * `neo:nextNavigation` is always waiting, so later navigations keep arriving and the page's
    * closure or a failed navigation rejects the wait even with no timeout. `respond` asks for the
    * winning navigation's `Response`. `timeout` (0 for none) bounds the whole wait: each call gets
-   * what is left, and the deadline also rejects while only predicates are pending. However the wait
+   * what is left, and the deadline also rejects while only predicates are pending. `signal` goes
+   * with each `next` and the finish, so its abort rejects the waiting one. However the wait
    * ends, its cursor ends with it: by the finish, or by a release when the realm ended it. Rust
    * then answers the next still waiting, and the wait settles only once that answer is in, so a
    * settled wait holds none of the run's call capacity (neo-runtime `dispatch.rs`
@@ -536,7 +535,7 @@ export class Frame {
     apiName: ApiName,
     predicate: URLPredicate,
     waitUntil: LifecycleEvent,
-    timeout: number,
+    { timeout, signal }: TimeoutOptions,
     respond: boolean,
   ): Promise<NeoNavigationResult> {
     const deadline = timeout ? Date.now() + timeout : 0
@@ -555,7 +554,7 @@ export class Frame {
         id,
         index,
         waitUntil,
-        left(),
+        { timeout: left(), signal },
       )
       finished = true
       return result
@@ -568,7 +567,7 @@ export class Frame {
         cursor === undefined
           ? { response: respond }
           : { cursor, response: respond },
-        left(),
+        { timeout: left(), signal },
       )
       call.catch(() => {})
       return call
@@ -670,7 +669,7 @@ export class Frame {
     cursor: number,
     index: number,
     waitUntil: LifecycleEvent,
-    timeout: number,
+    timeout: TimeoutOptions,
   ): Promise<NeoNavigationResult> {
     return await this._connection.sendNeo(
       apiName,
@@ -819,12 +818,8 @@ export class Frame {
     apiName: ApiName,
     selector: string,
     task: (handle: ElementHandle) => Promise<R>,
-    options: { timeout?: number; signal?: unknown },
+    options: TimeoutInput,
   ): Promise<R> {
-    // `null` is no signal, as `undefined`.
-    if (options.signal !== undefined && options.signal !== null)
-      // Deviation: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };` Neo refuses a signal rather than ignore it.
-      throw new Error(`${apiName}: Neo does not support signal yet`)
     const result = (await this._connection.send(
       apiName,
       this._guid,
@@ -1263,15 +1258,13 @@ export class Frame {
     return await this._isVisible('frame.isVisible', selector, options)
   }
 
-  /** Playwright's `kNoTimeout`: visibility reads once and ignores `options.timeout`. */
+  /** Playwright's `kNoTimeout`: visibility reads once and ignores `options.timeout` and
+   * `options.signal`. */
   async _isVisible(
     apiName: ApiName,
     selector: string,
     options: IsVisibleOptions,
   ): Promise<boolean> {
-    // An immediate read: Playwright sends it with no timeout (`kNoTimeout`), so none is resolved
-    // here, but a signal is refused as every method refuses it.
-    refuseSignalFor(options ?? {}, apiName)
     const result = await this._connection.send(
       apiName,
       this._guid,
@@ -1295,14 +1288,12 @@ export class Frame {
   }
 
   /** Playwright's `kNoTimeout`: `isHidden` reads once, as `isVisible`, and ignores
-   * `options.timeout`. */
+   * `options.timeout` and `options.signal`. */
   async _isHidden(
     apiName: ApiName,
     selector: string,
     options: IsHiddenOptions,
   ): Promise<boolean> {
-    // An immediate read, as `_isVisible`: no timeout, and a signal refused.
-    refuseSignalFor(options ?? {}, apiName)
     const result = await this._connection.send(
       apiName,
       this._guid,

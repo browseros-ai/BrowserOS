@@ -1,23 +1,15 @@
 /**
- * Every method Neo serves that takes Playwright's `signal` option refuses one before sending
- * anything (`TimeoutSettings.timeout`/`navigationTimeout`, the one place a call resolves its
- * options into a timeout): an already-aborted signal and a live one alike reject with an `Error`
- * prefixed with the method's api name, and no message reaches the runtime, so the browser sees
- * nothing. Playwright aborts the call instead (`AbortError` for an aborted signal), which Neo
- * cannot do for a sent call yet. `null` and `undefined` are no signal, as Playwright reads them
- * (supermediator DECIDED 01:27): the call is sent.
+ * Every method Neo serves that takes Playwright's `signal` option honours it as Playwright's
+ * client does (`client/connection.ts` `sendMessageToServer`): an already-aborted signal rejects
+ * with `AbortError` (its `cause` the signal's reason, its message prefixed with the api name)
+ * before anything is sent, so the browser sees nothing. A live signal goes with the call, and its
+ * abort reaches the runtime as `abort(id, reason)` for that call's message; the `AbortError`
+ * reply is rebuilt with the same `cause`. `null` and `undefined` are no signal (supermediator
+ * DECIDED 01:27): the call is sent and nothing listens.
  */
 
 import { expect, test } from 'bun:test'
 import { start } from './fake-runtime'
-
-const SIGNALS: [string, unknown][] = [
-  ['an aborted signal', { aborted: true, reason: new Error('stop') }],
-  [
-    'a live signal',
-    { aborted: false, addEventListener() {}, removeEventListener() {} },
-  ],
-]
 
 type Call = [apiName: string, call: (signal: never) => Promise<unknown>]
 
@@ -154,7 +146,7 @@ function selectorCalls(
   ]
 }
 
-for (const [family, calls] of [
+const FAMILIES = [
   ['Locator', (page: ReturnType<typeof start>['page']) => locatorCalls(page)],
   [
     'Page',
@@ -171,25 +163,125 @@ for (const [family, calls] of [
     (page: ReturnType<typeof start>['page']) =>
       selectorCalls('frame', page.mainFrame()),
   ],
-] as const) {
-  test(`tests that every ${family} method refuses a signal before sending anything`, async () => {
+] as const
+
+for (const [family, calls] of FAMILIES) {
+  test(`tests that every ${family} method rejects an aborted signal with AbortError before sending anything`, async () => {
     const { page, fake } = start()
     const sent = fake.messages.length
-    for (const [label, signal] of SIGNALS) {
-      for (const [apiName, call] of calls(page)) {
-        const error = await call(signal as never).then(
-          () => null,
-          (error: Error) => error,
-        )
-        expect(error?.name, `${apiName} with ${label}`).toBe('Error')
-        expect(error?.message, `${apiName} with ${label}`).toBe(
-          `${apiName}: Neo does not support the "signal" option yet`,
-        )
-      }
+    const reason = new Error('stop')
+    for (const [apiName, call] of calls(page)) {
+      const error = await call({ aborted: true, reason } as never).then(
+        () => null,
+        (error: Error) => error,
+      )
+      expect(error?.name, apiName).toBe('AbortError')
+      expect(error?.message, apiName).toBe(
+        `${apiName}: The operation was aborted`,
+      )
+      expect(error?.cause, apiName).toBe(reason)
     }
     expect(fake.messages.slice(sent)).toEqual([])
   })
+
+  test(`tests that every ${family} method aborts its call when a live signal aborts`, async () => {
+    const { page, fake } = start()
+    fake.hold = true
+    for (const [apiName, call] of calls(page)) {
+      const controller = new AbortController()
+      const reason = new Error('stop')
+      const settled = call(controller.signal as never).then(
+        () => null,
+        (error: Error) => error,
+      )
+      const id = fake.messages.at(-1)?.id ?? -1
+      controller.abort(reason)
+      const error = await settled
+      expect(fake.aborts.at(-1), apiName).toEqual({ id, reason: 'stop' })
+      expect(error?.name, apiName).toBe('AbortError')
+      expect(error?.message.startsWith(`${apiName}: stop`), apiName).toBe(true)
+      expect(error?.cause, apiName).toBe(reason)
+    }
+  })
 }
+
+test('tests that a reason that is not an Error goes to the runtime as its string', async () => {
+  const { page, fake } = start()
+  fake.hold = true
+  const controller = new AbortController()
+  const settled = page
+    .click('#target', withSignal(controller.signal as never))
+    .catch((error: Error) => error)
+  const id = fake.messages.at(-1)?.id ?? -1
+  controller.abort(42)
+  const error = await settled
+  expect(fake.aborts).toEqual([{ id, reason: '42' }])
+  expect((error as Error).cause).toBe(42)
+})
+
+test('tests that the abort listener is removed once the call settles, so a late abort sends nothing', async () => {
+  const { page, fake } = start()
+  const listening: string[] = []
+  let listener: (() => void) | undefined
+  const signal = {
+    aborted: false,
+    reason: undefined,
+    addEventListener(type: string, added: () => void, options: unknown) {
+      listening.push(`add ${type} ${JSON.stringify(options)}`)
+      listener = added
+    },
+    removeEventListener(type: string, removed: () => void) {
+      listening.push(`remove ${type} ${removed === listener}`)
+    },
+  }
+  await page.click('#target', withSignal(signal as never))
+  expect(listening).toEqual(['add abort {"once":true}', 'remove abort true'])
+  const controller = new AbortController()
+  await page.click('#target', withSignal(controller.signal as never))
+  controller.abort()
+  expect(fake.aborts).toEqual([])
+})
+
+test('tests that a signal without addEventListener throws a TypeError after the call is sent, as Playwright', async () => {
+  const { page, fake } = start()
+  const sent = fake.messages.length
+  const error = await page
+    .click('#target', withSignal({ aborted: false } as never))
+    .then(
+      () => null,
+      (error: Error) => error,
+    )
+  expect(error).toBeInstanceOf(TypeError)
+  expect(error?.message.startsWith('page.click: ')).toBe(true)
+  expect(fake.messages.slice(sent).map(({ method }) => method)).toEqual([
+    'click',
+  ])
+})
+
+test('tests that waitForEvent rejects with AbortError for an aborted signal and when one aborts', async () => {
+  const { page } = start()
+  const reason = new Error('stop')
+  const early = await page
+    .waitForEvent('console', { signal: { aborted: true, reason } } as never)
+    .then(
+      () => null,
+      (error: Error) => error,
+    )
+  expect(early?.name).toBe('AbortError')
+  expect(early?.message.startsWith('page.waitForEvent: ')).toBe(true)
+  expect(early?.cause).toBe(reason)
+  const controller = new AbortController()
+  const waiting = page
+    .waitForEvent('console', { signal: controller.signal } as never)
+    .then(
+      () => null,
+      (error: Error) => error,
+    )
+  controller.abort(reason)
+  const late = await waiting
+  expect(late?.name).toBe('AbortError')
+  expect(late?.cause).toBe(reason)
+})
 
 test('tests that no signal, an undefined one or null still sends the call', async () => {
   const { page, fake } = start()

@@ -27,12 +27,7 @@ import { ChannelOwner, type EventPipe, type EventTable } from './events'
 import { Page } from './page'
 import { type CreatedPage, get } from './runtime-bridge'
 import { TimeoutSettings } from './timeout-settings'
-import {
-  refuseSignal,
-  Waiter,
-  type WaitForEventOptions,
-  wrapApiCall,
-} from './waiter'
+import { Waiter, type WaitForEventOptions, wrapApiCall } from './waiter'
 import { WebError, type WebErrorLocation } from './web-error'
 
 /**
@@ -161,18 +156,17 @@ export class BrowserContext extends ChannelOwner {
     return await wrapApiCall('browserContext.waitForEvent', async () => {
       const options =
         typeof optionsOrPredicate === 'function' ? {} : optionsOrPredicate
-      refuseSignal(options)
       this._refuseUnserved(event)
       // Inside `wrapApiCall`, which prefixes the api name.
-      const timeout = this._timeoutSettings.timeout(options, null)
+      const timeoutOptions = this._timeoutSettings.timeout(options, null)
       const predicate =
         typeof optionsOrPredicate === 'function'
           ? optionsOrPredicate
           : optionsOrPredicate.predicate
       const waiter = Waiter.createForEvent()
       waiter.rejectOnTimeout(
-        timeout,
-        `Timeout ${timeout}ms exceeded while waiting for event "${event}"`,
+        timeoutOptions,
+        `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`,
       )
       if (event !== 'close')
         waiter.rejectOnEvent(this, 'close', () => targetClosedError())

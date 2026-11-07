@@ -9,6 +9,7 @@
 neo-runtime-injected/src/evaluate.ts
 neo-runtime-injected/src/json-value.ts
 neo-runtime-injected/src/utility.ts
+neo-runtime/src/abort.rs
 neo-runtime/src/console.rs
 neo-runtime/src/dialogs.rs
 neo-runtime/src/evaluate.rs

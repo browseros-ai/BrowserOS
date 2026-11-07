@@ -72,12 +72,7 @@ import {
 import { type CreatedFrame, get, matchesURL } from './runtime-bridge'
 import type { SelectOptionValues } from './select-option'
 import { TimeoutSettings } from './timeout-settings'
-import {
-  refuseSignal,
-  Waiter,
-  type WaitForEventOptions,
-  wrapApiCall,
-} from './waiter'
+import { Waiter, type WaitForEventOptions, wrapApiCall } from './waiter'
 
 /**
  * Neo: the page's listener events, by Playwright's names (`Events.Page`): what Neo produces,
@@ -268,10 +263,9 @@ export class Page extends ChannelOwner {
   ): Promise<unknown> {
     const options =
       typeof optionsOrPredicate === 'function' ? {} : optionsOrPredicate
-    refuseSignal(options)
     this._refuseUnserved(event)
     // Inside its callers' `wrapApiCall`, which prefixes the api name.
-    const timeout = this._timeoutSettings.timeout(options, null)
+    const timeoutOptions = this._timeoutSettings.timeout(options, null)
     const predicate =
       typeof optionsOrPredicate === 'function'
         ? optionsOrPredicate
@@ -279,8 +273,8 @@ export class Page extends ChannelOwner {
     const waiter = Waiter.createForEvent()
     if (logLine) waiter.log(logLine)
     waiter.rejectOnTimeout(
-      timeout,
-      `Timeout ${timeout}ms exceeded while waiting for event "${event}"`,
+      timeoutOptions,
+      `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`,
     )
     if (event !== 'crash')
       waiter.rejectOnEvent(this, 'crash', new Error('Page crashed'))
