@@ -1,7 +1,7 @@
 //! `textContent`, `innerText`, `getAttribute` and `ariaSnapshot` end to end on a real BrowserOS
 //! neo, through neo-sdk's `locator.textContent`, `page.textContent`, the locator, page and frame
 //! forms of `innerText` and `getAttribute` (on `crates/neo-sdk/tests/pages/element-text.html`)
-//! and `page.ariaSnapshot`, and `aria-ref=eN` refs from an `ai` snapshot driving the existing
+//! and page/locator `ariaSnapshot`, and `aria-ref=eN` refs from an `ai` snapshot driving the existing
 //! `locator.click` and `locator.textContent`: in the run that took the snapshot, in a later run
 //! on the same document, and not after the document navigated away.
 //! `crates/neo-sdk/tests/parity/textContent.test.mjs`, `innerText.test.mjs`,
@@ -321,26 +321,25 @@ async fn tests_that_a_snapshot_waits_for_the_body_and_times_out_without_one() {
     tab.close().await;
 }
 
-/// `locator.ariaSnapshot` sends a selector, which Neo refuses before any work; neo-sdk exposes
-/// no such method, so the script sends Playwright's message itself.
+/// Neo: a scoped snapshot crosses the real SDK, runtime and page glue, retaining usable refs.
 #[tokio::test(flavor = "multi_thread")]
-async fn tests_that_a_snapshot_with_a_selector_is_refused() {
+async fn tests_that_a_locator_snapshot_reads_only_its_subtree_with_usable_refs() {
     let Some(tab) = open().await else { return };
-    let frame = format!("frame@{}", tab.target_id);
     let outcome = run(
         &tab,
-        &format!(
-            "const message = {{ id: 1, guid: {frame:?}, method: 'ariaSnapshot',
-                params: {{ selector: 'ul', mode: 'ai' }}, metadata: {{ timeout: 5000 }} }};
-             const {{ error }} = JSON.parse(await __neo_runtime.call(JSON.stringify(message)));
-             return {{ name: error.error.name, names: error.error.message.includes('locator.ariaSnapshot') }};"
-        ),
+        r"const list = page.getByRole('list');
+          const plain = await list.ariaSnapshot();
+          const ai = await list.ariaSnapshot({ mode: 'ai' });
+          const ref = ai.split('\n').find(line => line.includes('Apples')).match(/\[ref=(e\d+)\]/)[1];
+          return { plain, refText: await page.locator('aria-ref=' + ref).textContent() };",
     )
     .await;
     assert_eq!(
         value(&outcome),
-        json!({ "name": "Error", "names": true }),
-        "refused, naming what Neo does not serve"
+        json!({
+            "plain": "- list:\n  - listitem: Apples\n  - listitem: Pears",
+            "refText": "Apples",
+        })
     );
     tab.close().await;
 }

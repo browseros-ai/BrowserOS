@@ -218,10 +218,11 @@ export class Page {
   }
 
   /**
-   * The main frame's accessibility tree as Playwright's YAML. With `mode: 'ai'`, nodes carry
-   * `[ref=eN]` refs that `page.locator('aria-ref=eN')` resolves in this document until the next
-   * snapshot or navigation. Iframes appear as nodes without their content: Neo serves the main
-   * frame only.
+   * The main frame's accessibility tree as YAML. Default mode omits refs; `mode: 'ai'` adds
+   * `[ref=eN]` for `page.locator('aria-ref=eN')`. The next snapshot or navigation replaces refs.
+   * `depth` limits tree levels (0 means unlimited). Iframe contents are omitted.
+   * For a section, use `locator.ariaSnapshot()`: AI mode does not auto-wait for that locator,
+   * so use `locator.waitFor()` first if needed.
    */
   async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
     return await this.#mainFrame._ariaSnapshot('page.ariaSnapshot', options)

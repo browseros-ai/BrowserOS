@@ -147,8 +147,15 @@ export const glue = {
     }
   },
 
+  /**
+   * Playwright: `server/frames.ts` `Frame.ariaSnapshotJSON`: `injected.ariaSnapshotJSON(element, opts).json`
+   * Playwright: `server/page.ts` `ariaSnapshotJSONForFrame`: `return injected.ariaSnapshotJSON(elements[0], ariaOptions);`
+   */
   ariaSnapshot: (injected, { selector, strict, mode, depth, boxes }) => {
-    const [element] = query(injected, selector, strict)
+    // Playwright: `server/frames.ts` `Frame._retryWithProgressIfNotConnected`: `markTargets: 'all'`
+    const [element] = query(injected, selector, strict, {
+      markTargets: strict && mode === 'default' ? 'all' : 'none',
+    })
     if (!element) return {}
     const { json, iframeRefs, iframeDepths } = injected.ariaSnapshotJSON(
       element,
@@ -157,7 +164,11 @@ export const glue = {
     const iframes = iframeRefs
       .filter((ref) => ref in iframeDepths)
       .map((ref) => ({ ref, depth: iframeDepths[ref] }))
-    return { snapshot: { nodes: json, iframes } }
+    // Neo: return the preview with the tree so the wait loop logs the same matched element.
+    return {
+      snapshot: { nodes: json, iframes },
+      preview: injected.previewNode(element),
+    }
   },
 
   frameOwner: (injected, { selector, strict }) => {
