@@ -78,6 +78,13 @@ interfaces:
     - unregisterLocatorHandler
     # The page's routes (`page.route`): which URLs pause for its handlers (`routes.rs`).
     - setNetworkInterceptionPatterns
+    # `page.localStorage` and `page.sessionStorage` (web_storage.rs): the main frame's storage,
+    # read and written by glue in its utility world, where Playwright evaluates the same steps.
+    - webStorageItems
+    - webStorageGetItem
+    - webStorageSetItem
+    - webStorageRemoveItem
+    - webStorageClear
   # A paused request the run's `route` event handed out (`routes.rs`): one answer each.
   Route:
     - abort

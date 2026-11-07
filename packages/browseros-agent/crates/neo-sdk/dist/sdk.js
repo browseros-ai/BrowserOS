@@ -7368,6 +7368,35 @@ before the end of the test to ignore remaining routes in flight.`);
   }
 }
 
+// src/web-storage.ts
+class WebStorage {
+  #connection;
+  #page;
+  #kind;
+  constructor(connection, page, kind) {
+    this.#connection = connection;
+    this.#page = page;
+    this.#kind = kind;
+  }
+  async items() {
+    const { items } = await this.#connection.sendPage("webStorage.items", this.#page, "webStorageItems", { kind: this.#kind }, 0);
+    return items;
+  }
+  async getItem(name) {
+    const { value } = await this.#connection.sendPage("webStorage.getItem", this.#page, "webStorageGetItem", { kind: this.#kind, name }, 0);
+    return value ?? null;
+  }
+  async setItem(name, value) {
+    await this.#connection.sendPage("webStorage.setItem", this.#page, "webStorageSetItem", { kind: this.#kind, name, value }, 0);
+  }
+  async removeItem(name) {
+    await this.#connection.sendPage("webStorage.removeItem", this.#page, "webStorageRemoveItem", { kind: this.#kind, name }, 0);
+  }
+  async clear() {
+    await this.#connection.sendPage("webStorage.clear", this.#page, "webStorageClear", { kind: this.#kind }, 0);
+  }
+}
+
 // src/page.ts
 var PAGE_EVENTS = {
   receiver: "Page",
@@ -7413,6 +7442,8 @@ class Page extends ChannelOwner {
   keyboard;
   mouse;
   touchscreen;
+  localStorage;
+  sessionStorage;
   #closedLocally = false;
   _routes = [];
   #routeListening = false;
@@ -7434,6 +7465,8 @@ class Page extends ChannelOwner {
     this.keyboard = new Keyboard(this);
     this.mouse = new Mouse(this);
     this.touchscreen = new Touchscreen(this);
+    this.localStorage = new WebStorage(connection, guid, "local");
+    this.sessionStorage = new WebStorage(connection, guid, "session");
   }
   async _sendInput(apiName, method, params) {
     await this.#connection.sendPage(apiName, this.#guid, method, params, 0);

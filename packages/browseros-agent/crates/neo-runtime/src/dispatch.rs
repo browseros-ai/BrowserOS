@@ -252,6 +252,9 @@ struct Inner {
     next_call_id: AtomicU64,
     /// The `setContent` writes into each frame, in arrival order (`content.rs`).
     write_order: WriteOrder,
+    /// Each page's `localStorage` and `sessionStorage` calls, in arrival order (`web_storage.rs`):
+    /// Playwright's server sends them in the order the script made them.
+    storage_order: WriteOrder,
     /// Cancels `run.ended` when the last `Dispatcher` drops. A reason `finish` recorded first
     /// wins; otherwise calls read [`RunEnd::Cancelled`].
     _ending: DropGuard,
@@ -296,10 +299,15 @@ impl Inner {
         })
     }
 
-    /// A `setContent` call takes its place in its frame's write order as it arrives.
+    /// A `setContent` call takes its place in its frame's write order as it arrives, and a
+    /// storage call its place in its page's storage order.
     fn ordered(&self, guid: &str, mut call: ObjectCall) -> ObjectCall {
-        if let ObjectCall::Frame(Route::FrameSetContent(_, turn)) = &mut call {
-            *turn = Some(self.write_order.turn(guid));
+        match &mut call {
+            ObjectCall::Frame(Route::FrameSetContent(_, turn)) => {
+                *turn = Some(self.write_order.turn(guid));
+            }
+            ObjectCall::Storage(_, turn) => *turn = Some(self.storage_order.turn(guid)),
+            _ => {}
         }
         call
     }
@@ -414,6 +422,9 @@ enum ObjectCall {
     /// A paused request's answer or `route.fetch` (`routes.rs`).
     Intercepted(u64, routes::InterceptedCall),
     Download(String, ArtifactCall),
+    /// `page.localStorage` and `page.sessionStorage` (`web_storage.rs`), with the call's place
+    /// in its page's storage order, taken as it arrives ([`Inner::ordered`]).
+    Storage(PageCall, Option<WriteTurn>),
 }
 
 /// What a message asks for. One variant per served (object, method).
@@ -493,6 +504,7 @@ impl Dispatcher {
             aborts: Arc::default(),
             next_call_id: AtomicU64::new(1),
             write_order: WriteOrder::default(),
+            storage_order: WriteOrder::default(),
         }))
     }
 
@@ -799,6 +811,18 @@ async fn binding_call(
 }
 
 /// Names a message's target and decodes its params. Pure.
+/// A Page call that is not a device call: a storage call keeps its own route, ordered per page.
+fn storage_or_page(call: PageCall) -> ObjectCall {
+    match call {
+        call @ (PageCall::WebStorageItems(_)
+        | PageCall::WebStorageGetItem(_)
+        | PageCall::WebStorageSetItem(_)
+        | PageCall::WebStorageRemoveItem(_)
+        | PageCall::WebStorageClear(_)) => ObjectCall::Storage(call, None),
+        call => ObjectCall::Page(call),
+    }
+}
+
 fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
     let (object, params) = match route_init(object, method, params) {
         Ok(routed) => return routed,
@@ -983,7 +1007,7 @@ fn page_call(
             params: Box::new(params),
             path: path?,
         }),
-        call => ObjectCall::Page(call),
+        call => storage_or_page(call),
     })
 }
 
@@ -1318,6 +1342,9 @@ async fn serve_call(
             tab_calls::state_file(&tabs, file, path, &progress).await
         }
         (ObjectCall::Init(route), target) => init_call(&tabs, target, route, &progress).await,
+        (ObjectCall::Storage(call, turn), Some((page, _))) => {
+            tab_calls::storage(&tabs, &page, call, turn, &progress).await
+        }
         (ObjectCall::Binding(route), target) => binding_call(&tabs, target, route, &progress).await,
         (ObjectCall::Page(call), Some((page, _))) => {
             // A page call that navigates (`reload`, `goBack`, …) shows the run's scripts first,
@@ -2193,7 +2220,8 @@ mod tests {
             | ObjectCall::Binding(_)
             | ObjectCall::Dialog(..)
             | ObjectCall::Intercepted(..)
-            | ObjectCall::Download(..) => {
+            | ObjectCall::Download(..)
+            | ObjectCall::Storage(..) => {
                 panic!("a Frame message routed to another object")
             }
         })

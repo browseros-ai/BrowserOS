@@ -113,6 +113,7 @@ mod tab_calls;
 mod tabs;
 mod url_match;
 mod waits;
+mod web_storage;
 mod world;
 
 pub use artifacts::RunArtifact;
