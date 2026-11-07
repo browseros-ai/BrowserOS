@@ -36,6 +36,8 @@ mod mp4;
 mod presets;
 
 #[cfg(test)]
+mod e2e;
+#[cfg(test)]
 mod tests;
 
 use std::collections::VecDeque;
