@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (80)
+## Deviations (81)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -22,6 +22,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/console.rs | `from_console_api` | `server/chromium/crPage.ts` `FrameSession._onConsoleAPI` | Neo serves no JSHandle objects, so a message carries no arguments; its text still renders each one. |
 | neo-runtime/src/console.rs | `from_console_api` | `server/chromium/crPage.ts` `FrameSession._onConsoleAPI` | Playwright also drops a message from a context it holds no record of (none created in a frame it knows, or one already destroyed); Neo keeps no table of contexts and keeps it. |
 | neo-runtime/src/console.rs | `split_error_message` | `utils/stackTrace.ts` `splitErrorMessage` | Playwright cuts a character outside the BMP in half and keeps its low surrogate, which a Rust string cannot hold; Neo writes U+FFFD there, one UTF-16 unit as in JS. |
+| neo-runtime/src/content.rs | `OOPIF_NETWORKIDLE` | `server/frames.ts` `Frame.setContent` | Playwright waits for an out-of-process frame's `networkidle` as for any frame's. Neo's idle tracker follows the tab's own session only, which such a frame left (`network_idle.rs`), so the wait could only time out: it is refused before the write. |
 | neo-runtime/src/devices.rs | `DeviceCall::from_page_call` | `server/input.ts` `Touchscreen.apiTap` | Neo's run attaches to the user's BrowserOS context, which has no hasTouch option, and its tab answers Input.dispatchTouchEvent with the events of a hasTouch context, so Neo taps where Playwright refuses. |
 | neo-runtime/src/dialogs.rs | `Dialogs::left_open` | `server/dialog.ts` `DialogManager.dialogDidOpen` | Playwright answers a dialog only when nobody listens, and leaves a listener's unanswered dialog open for the page's life. Neo's tab outlives the run and must not stay frozen for its user, so the run's end gives a dialog it handed out and nobody answered the default answer, which this takes. |
 | neo-runtime/src/downloads.rs | `DOWNLOAD_EVENTS` | `server/chromium/crBrowser.ts` `CRBrowserContext.initialize` | Playwright has the browser save each download of its context into Playwright's own directory under a guid name, and removes that directory when it lets go of the browser. Neo's context is the user's browser, so Neo leaves the saving to it (`default`: where, and under which name, the user's settings say) and only turns the reports on. Off is `default` without reports: CDP has no read of the behavior to restore, and `default` is the browser's own. |
