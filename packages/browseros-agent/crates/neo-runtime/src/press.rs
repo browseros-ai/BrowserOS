@@ -326,6 +326,62 @@ mod tests {
         );
     }
 
+    fn type_options(text: &str, extra: &serde_json::Value) -> PressOptions {
+        let mut params = serde_json::json!({ "selector": "#name", "strict": true, "text": text });
+        if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
+            params.extend(extra.clone());
+        }
+        PressOptions::from_type(serde_json::from_value(params).expect("type params"))
+    }
+
+    /// `Frame.type` (`dom.ts` `_type`): the focus, then `Keyboard.type` in one turn, each
+    /// character the layout knows pressed and the rest inserted, waiting for no navigation.
+    #[tokio::test(start_paused = true)]
+    async fn a_type_focuses_and_types_its_text_inside_one_turn() {
+        let tab = FakeTab::ready();
+        let progress = Progress::for_test(1000.0);
+        let result = press(&tab, &type_options("hé", &serde_json::json!({})), &progress).await;
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            progress.delivery().expect("an input call").delivery(),
+            Delivery::Done
+        );
+        assert_eq!(
+            tab.calls(),
+            [
+                "describe",
+                "resolve",
+                "platform",
+                "input",
+                "focus true",
+                "keyDown h",
+                "keyUp h",
+                "insertText é",
+                "input released",
+            ],
+            "no watch_navigations and no settle: a type waits for no navigation"
+        );
+        assert!(
+            progress
+                .folded_log()
+                .iter()
+                .any(|line| line.contains("elementHandle.type(\"hé\")")),
+            "{:?}",
+            progress.folded_log()
+        );
+    }
+
+    /// `type('')` focuses and types nothing: it resolves with nothing written.
+    #[tokio::test(start_paused = true)]
+    async fn typing_nothing_focuses_and_writes_nothing() {
+        let tab = FakeTab::ready();
+        let (result, delivery) = run(&tab, &type_options("", &serde_json::json!({})), 1000.0).await;
+        assert_eq!(result, Ok(()));
+        assert_eq!(delivery, Delivery::NotSent);
+        assert!(tab.calls().contains(&"focus true".to_string()));
+        assert_eq!(keys(&tab), Vec::<String>::new());
+    }
+
     /// A press that waits for its turn behind other input subscribes to navigations only once
     /// it holds the turn, so the barrier never counts the earlier input's navigations.
     #[tokio::test(start_paused = true)]

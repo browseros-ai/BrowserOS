@@ -1269,6 +1269,7 @@ mod tests {
             "press" => {
                 json!({ "selector": selector, "strict": true, "key": "Shift+Enter", "delay": 25.0, "noWaitAfter": true })
             }
+            "type" => json!({ "selector": selector, "strict": true, "text": "hi", "delay": 10.0 }),
             "inputValue" => json!({ "selector": selector, "strict": true }),
             "check" | "uncheck" => {
                 json!({ "selector": selector, "strict": true, "force": true, "scroll": "none", "position": { "x": 2, "y": 3 }, "trial": true })
@@ -1280,9 +1281,10 @@ mod tests {
         }
     }
 
-    const FORMS: [&str; 6] = [
+    const FORMS: [&str; 7] = [
         "fill",
         "press",
+        "type",
         "inputValue",
         "check",
         "uncheck",
@@ -1318,6 +1320,19 @@ mod tests {
                             delay: Some(25.0),
                             wait_after: false
                         }
+                    );
+                }
+                Route::FrameType(options) => {
+                    assert_eq!(
+                        options,
+                        PressOptions {
+                            selector: "input".into(),
+                            strict: true,
+                            keys: KeyInput::Type("hi".into()),
+                            delay: Some(10.0),
+                            wait_after: false
+                        },
+                        "a type waits for no navigation"
                     );
                 }
                 Route::FrameInputValue(options) => {
