@@ -162,11 +162,11 @@ const RACE_UNCAUGHT: &str =
 /// changes the wrapper fails that test, not every recorded location.
 const AGENT_LINE_OFFSET: u32 = 2;
 
-/// What the realm needs to know about the run's page.
+/// Inputs owned by one realm, including its starting page identities and optional test host.
 pub(crate) struct Script {
     /// The optional opaque host belongs to this realm alone, never to the runtime.
     #[cfg(feature = "test-host")]
-    pub test_host: Option<Box<dyn TestHost>>,
+    pub(crate) test_host: Option<Box<dyn TestHost>>,
     pub(crate) code: String,
     pub(crate) page_guid: String,
     /// The page's main frame, built once by neo-quickjs-injected so `page.mainFrame()` is one

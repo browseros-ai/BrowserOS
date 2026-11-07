@@ -5,10 +5,6 @@
 #![cfg(feature = "test-host")]
 
 #[path = "support/fake_browser.rs"]
-#[expect(
-    dead_code,
-    reason = "other runtime tests exercise the fake browser's remaining failure modes"
-)]
 mod fake_browser;
 
 use std::time::Duration;
