@@ -97,7 +97,8 @@ sessionStorage.setItem('loads', String(Number(sessionStorage.getItem('loads')) +
  * `/net/redirect` (to `/net/data.json`), a 204 at `/net/204`, a 404 at `/net/404`, a connection
  * dropped before any response at `/net/hangup`, `/net/slow?ms=N` after N ms, an event stream
  * that never ends at `/net/sse`, `/net/echo` answering a POST's body, and `/net/hold?id=X`, which
- * sends `first` and holds the response open until `/net/release?id=X` ends it with `last`. Each
+ * sends `first` (as HTML with `&type=html`, a document a frame can stream) and holds the response
+ * open until `/net/release?id=X` ends it with `last`. Each
  * answer forbids
  * caching, so a second engine's turn makes the same requests, except `/net/cached.json`, which
  * a script fetches under a query of its own.
@@ -109,9 +110,11 @@ export async function serveNetwork(cleanups) {
     const [pathname, query = ''] = request.url.split('?')
     response.setHeader('cache-control', 'no-store')
     if (pathname === '/net/hold') {
-      response.writeHead(200, { 'content-type': 'text/plain' })
+      const params = new URLSearchParams(query)
+      const type = params.get('type') === 'html' ? 'text/html' : 'text/plain'
+      response.writeHead(200, { 'content-type': type })
       response.write('first')
-      held.set(new URLSearchParams(query).get('id'), response)
+      held.set(params.get('id'), response)
       return
     }
     if (pathname === '/net/release') {

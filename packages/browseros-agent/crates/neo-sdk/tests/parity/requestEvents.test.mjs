@@ -222,6 +222,76 @@ const cases = [
     },
   },
   {
+    // server/frames.ts `FrameManager._removeFramesRecursively`: a removed frame's in-flight
+    // requests, its document's included, fail (`Frame._failInflightRequests`) before
+    // `framedetached`; the document's body read settles and `finished()` never does.
+    name: 'removing a frame whose document still loads fails its document request before framedetached',
+    source: `await page.goto(ORIGIN + '/net/blank.html')
+    const events = []
+    page.on('requestfailed', (request) => events.push(['requestfailed', path(request.url()), request.failure()?.errorText, request.isNavigationRequest()]))
+    page.on('framedetached', () => events.push(['framedetached']))
+    const waiting = page.waitForResponse('**/net/hold?id=doc*')
+    await page.evaluate(() => {
+      const frame = document.createElement('iframe')
+      frame.src = '/net/hold?id=doc&type=html'
+      document.body.append(frame)
+    })
+    const response = await waiting
+    const within = (promise) => Promise.race([
+      promise.then((value) => ({ value: value === null ? null : typeof value }), (error) => ({ error: errorCategory(error) })),
+      new Promise((resolve) => setTimeout(() => resolve('pending'), 2000)),
+    ])
+    const body = within(response.text())
+    const finished = within(response.finished())
+    await page.evaluate(() => document.querySelector('iframe').remove())
+    const idle = await settle(page.waitForLoadState('networkidle', { timeout: 5000 }))
+    return { body: await body, finished: await finished, idle, events }`,
+    expected: {
+      body: { error: 'Error' },
+      finished: 'pending',
+      idle: 'undefined',
+      events: [
+        [
+          'requestfailed',
+          '/net/hold?id=doc&type=html',
+          'net::ERR_ABORTED',
+          true,
+        ],
+        ['framedetached'],
+      ],
+    },
+  },
+  {
+    // An out-of-process frame navigating back to its parent's site moves into the parent's
+    // process: its frame session goes away (Playwright: server/chromium/crPage.ts
+    // `FrameSession._onDetachedFromTarget` disposes it) while the new document's request goes on
+    // and finishes on the parent's session.
+    name: "an out-of-process frame moving back into its parent's process keeps its navigation request",
+    source: `await page.goto(ORIGIN + '/net/oopif-top.html')
+    let cross
+    for (let tries = 0; !cross && tries < 150; tries++) {
+      cross = page.frames().find((frame) => frame.url().endsWith('/net/oopif-child.html'))
+      if (!cross) await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    await cross.waitForLoadState('load')
+    const events = []
+    const ours = (url) => url.includes('/net/hold?id=back')
+    page.on('request', (request) => { if (ours(request.url())) events.push('request') })
+    page.on('response', (response) => { if (ours(response.url())) events.push('response') })
+    page.on('requestfinished', (request) => { if (ours(request.url())) events.push('requestfinished') })
+    page.on('requestfailed', (request) => { if (ours(request.url())) events.push('requestfailed ' + request.failure()?.errorText) })
+    const waiting = page.waitForResponse('**/net/hold?id=back*')
+    await cross.evaluate((url) => { location.href = url }, ORIGIN + '/net/hold?id=back&type=html')
+    await waiting
+    // Time for the frame's move and its old session's detach.
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    await page.evaluate(() => fetch('/net/release?id=back').then((r) => r.text()))
+    for (let tries = 0; tries < 30 && events.length < 3; tries++)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    return { events }`,
+    expected: { events: ['request', 'response', 'requestfinished'] },
+  },
+  {
     // tests/page/page-event-network.spec.ts "NE-084 Page.Events.Request @smoke" for a response
     // the browser serves from its cache: the second fetch of a cacheable URL is still a request,
     // a response and a finish, with the cached status and body.

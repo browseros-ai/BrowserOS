@@ -74,6 +74,15 @@ pub(crate) const MAX_REQUESTS: usize = 1000;
 /// dropped while loading reports no end, and stops holding `networkidle` (`Happening::Forgotten`).
 pub(crate) const MAX_LIVE_REQUESTS: usize = 10_000;
 
+/// How [`Log::end_loading`] ends a request still loading whose frame or session went away.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ending {
+    /// `Request._failFromDetachedDocument`: failed with [`DETACHED_FAILURE`], `requestfailed`.
+    Failed,
+    /// Its end may have come on a session Neo did not read: [`Happening::Forgotten`], no event.
+    Unseen,
+}
+
 /// Playwright: `server/network.ts` `Request._failFromDetachedDocument`: `'net::ERR_ABORTED');`
 /// Chromium's branch: the other browsers name the failure their own way.
 const DETACHED_FAILURE: &str = "net::ERR_ABORTED";
@@ -275,8 +284,10 @@ pub(crate) enum Happening {
     /// The hop finished loading, redirected, or was a subresource 204 Chromium aborted.
     Finished(HopId),
     Failed(HopId),
-    /// Neo dropped the hop while it was still loading ([`MAX_LIVE_REQUESTS`]): no event, but it
-    /// no longer holds its frame's `networkidle`.
+    /// Neo stopped following the hop while it may still be loading: dropped past
+    /// [`MAX_LIVE_REQUESTS`], or the document of a removed frame that had moved to another process,
+    /// whose end Neo may not have seen ([`NetworkLog::detach_frame`]). No event, but it no longer
+    /// holds its frame's `networkidle`.
     Forgotten(HopId),
 }
 
@@ -302,6 +313,9 @@ struct Log {
     /// `page.requests()`: every hop's request in the order it started, favicons left out,
     /// Playwright's last 100 or so.
     started: VecDeque<HopId>,
+    /// The frames still attached whose document moved to another process in the run
+    /// ([`NetworkLog::frame_moved`]).
+    moved: HashSet<String>,
 }
 
 /// Extra info for a request id no chain holds yet.
@@ -570,66 +584,75 @@ impl NetworkLog {
     }
 
     /// `Frame._failInflightRequests` for `frame`, removed from its page: each of its requests still
-    /// loading fails as a detached document's (`Request._failFromDetachedDocument`), its response
-    /// finished first, so a body read goes on to its session and fails there as Playwright's does.
+    /// loading, its document's too, fails as a detached document's
+    /// (`Request._failFromDetachedDocument`), its response finished first, so a body read goes on
+    /// to its session and fails there as Playwright's does. Chromium reports no end of its own for
+    /// a removed frame's document.
     ///
     /// Deviation: `server/frames.ts` `Frame._failInflightRequests`: `for (const request of [...this._inflightRequests]) {`
-    /// A navigation request is left to Chromium's own `loadingFailed`: an out-of-process frame's
-    /// document request ends on that frame's session, which Neo may have attached only after it
-    /// ended, so Neo cannot tell a loading one from one that finished unseen.
+    /// A navigation request of a frame whose document moved to another process in the run ends
+    /// without an event ([`Ending::Unseen`]): such a document's request ends on that process's
+    /// frame session, which Neo may have attached only afterwards, so Neo cannot tell a loading
+    /// one from one that finished unseen. A body read on it still goes on and settles.
     pub(crate) fn detach_frame(&self, frame: &str) -> Vec<Happening> {
-        self.fail_loading(|chain| {
-            !chain.navigation && chain.hops.last().is_some_and(|hop| hop.frame == frame)
-        })
+        let happenings = self
+            .log
+            .lock()
+            .map(|mut log| {
+                let moved = log.moved.remove(frame);
+                log.end_loading(|chain| {
+                    let ours = chain.hops.last().is_some_and(|hop| hop.frame == frame);
+                    ours.then_some(if moved && chain.navigation {
+                        Ending::Unseen
+                    } else {
+                        Ending::Failed
+                    })
+                })
+            })
+            .unwrap_or_default();
+        self.changed_if(&happenings);
+        happenings
     }
 
-    /// The same for every request still loading on `session`, an out-of-process frame session
-    /// that went away (its frame removed, or moved back into its parent's process): no later
-    /// event can end them.
+    /// The same for the requests still loading on `session`, an out-of-process frame session that
+    /// went away (its frame removed, or moved back into its parent's process), but navigation
+    /// requests: a frame moving back goes on loading its new document in its parent's session.
+    ///
+    /// Deviation: `server/chromium/crPage.ts` `FrameSession._onDetachedFromTarget`: `if (childFrameSession._swappedIn) {`
+    /// Playwright drops a frame session that moved back into its parent's process and leaves its
+    /// old document's requests open; Neo fails them, since no event of theirs can arrive, so their
+    /// body reads end.
     pub(crate) fn detach_session(&self, session: &SessionId) -> Vec<Happening> {
         if let Ok(mut children) = self.children.lock() {
             children.remove(session);
         }
-        self.fail_loading(|chain| chain.session.as_ref() == Some(session))
+        let happenings = self
+            .log
+            .lock()
+            .map(|mut log| {
+                log.end_loading(|chain| {
+                    (!chain.navigation && chain.session.as_ref() == Some(session))
+                        .then_some(Ending::Failed)
+                })
+            })
+            .unwrap_or_default();
+        self.changed_if(&happenings);
+        happenings
     }
 
-    fn fail_loading(&self, whose: impl Fn(&Chain) -> bool) -> Vec<Happening> {
-        let Ok(mut log) = self.log.lock() else {
-            return Vec::new();
-        };
-        let mut happenings = Vec::new();
-        for chain in log
-            .chains
-            .iter_mut()
-            .filter(|chain| !chain.ended && whose(chain))
-        {
-            chain.ended = true;
-            let Some(index) = chain.hops.len().checked_sub(1) else {
-                continue;
-            };
-            let id = chain.hop_id(index);
-            let Some(hop) = chain.hops.get_mut(index) else {
-                continue;
-            };
-            if let Some(response) = &mut hop.response {
-                response.body_size = BodySize::Unknown;
-                // Playwright: `server/network.ts` `Request._failFromDetachedDocument`: `this._response._requestFinished(-1);`
-                hop.request_finished(-1.0);
-            } else {
-                hop.raw_request_headers
-                    .get_or_insert_with(|| hop.headers.clone());
-            }
-            hop.failure = Some(DETACHED_FAILURE.to_string());
-            if !hop.favicon {
-                happenings.push(Happening::Failed(id));
-            }
+    /// `Page.frameDetached` reason `swap`: `frame`'s document moved to another process, so its
+    /// navigation requests may end on a session Neo does not read ([`Self::detach_frame`]).
+    pub(crate) fn frame_moved(&self, frame: &str) {
+        if let Ok(mut log) = self.log.lock() {
+            log.moved.insert(frame.to_string());
         }
-        drop(log);
+    }
+
+    fn changed_if(&self, happenings: &[Happening]) {
         if !happenings.is_empty() {
             self.changes
                 .send_modify(|version| *version = version.wrapping_add(1));
         }
-        happenings
     }
 
     /// The lags counted so far; `goto` takes this before it navigates.
@@ -868,6 +891,44 @@ impl NetworkLog {
 }
 
 impl Log {
+    /// Ends every chain still loading that `how` names, as it says.
+    fn end_loading(&mut self, how: impl Fn(&Chain) -> Option<Ending>) -> Vec<Happening> {
+        let mut happenings = Vec::new();
+        for chain in self.chains.iter_mut().filter(|chain| !chain.ended) {
+            let Some(ending) = how(chain) else {
+                continue;
+            };
+            chain.ended = true;
+            let Some(index) = chain.hops.len().checked_sub(1) else {
+                continue;
+            };
+            let id = chain.hop_id(index);
+            let Some(hop) = chain.hops.get_mut(index) else {
+                continue;
+            };
+            if ending == Ending::Unseen {
+                if hop.response.is_some() {
+                    hop.request_finished(-1.0);
+                }
+                happenings.push(Happening::Forgotten(id));
+                continue;
+            }
+            if let Some(response) = &mut hop.response {
+                response.body_size = BodySize::Unknown;
+                // Playwright: `server/network.ts` `Request._failFromDetachedDocument`: `this._response._requestFinished(-1);`
+                hop.request_finished(-1.0);
+            } else {
+                hop.raw_request_headers
+                    .get_or_insert_with(|| hop.headers.clone());
+            }
+            hop.failure = Some(DETACHED_FAILURE.to_string());
+            if !hop.favicon {
+                happenings.push(Happening::Failed(id));
+            }
+        }
+        happenings
+    }
+
     fn chain(&self, request: &str) -> Option<&Chain> {
         // From the newest: a request's events come soon after it starts.
         self.chains
@@ -2693,15 +2754,15 @@ mod tests {
                 sub("M1", "https://a.test/main", "Fetch"),
             ],
         );
-        log.apply(
-            None,
-            &navigation("DOC2", "CHILD", "Document", "https://b.test/").0,
-            &navigation("DOC2", "CHILD", "Document", "https://b.test/").1,
-        );
+        let document = navigation("DOC2", "CHILD", "Document", "https://b.test/");
+        log.apply(None, &document.0, &document.1);
         assert_eq!(
             log.detach_frame("CHILD"),
-            [Happening::Failed(at("C1", 0))],
-            "its navigation request is Chromium's to end"
+            [
+                Happening::Failed(at("C1", 0)),
+                Happening::Failed(at("DOC2", 0))
+            ],
+            "its document's request too: Chromium ends neither"
         );
         assert_eq!(
             log.failure(&at("C1", 0)),
@@ -2731,6 +2792,40 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_a_moved_frame_leaves_its_navigation_requests_alone() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let document = navigation("DOC", "REMOTE", "Document", "https://b.test/");
+        let mut fetch = sub("F1", "https://b.test/data", "Fetch");
+        fetch.1["frameId"] = json!("REMOTE");
+        apply_all(&log, &[document, response("DOC", true), fetch]);
+        log.frame_moved("REMOTE");
+        assert_eq!(
+            log.detach_frame("REMOTE"),
+            [
+                Happening::Forgotten(at("DOC", 0)),
+                Happening::Failed(at("F1", 0))
+            ],
+            "in start order; its document may have finished on a session Neo did not read"
+        );
+        assert!(
+            log.body(&at("DOC", 0)).expect("a body").is_some(),
+            "a body read on the document goes on"
+        );
+        assert_eq!(
+            log.failure(&at("DOC", 0)),
+            Ok(None),
+            "and reports no failure"
+        );
+        let again = navigation("DOC3", "REMOTE", "Document", "https://b.test/3");
+        log.apply(None, &again.0, &again.1);
+        assert_eq!(
+            log.detach_frame("REMOTE"),
+            [Happening::Failed(at("DOC3", 0))],
+            "a frame id reattached later starts out in its parent's process"
+        );
+    }
+
+    #[test]
     fn tests_that_a_gone_frame_session_fails_its_loading_requests() {
         let log = NetworkLog::new("MAIN".to_string());
         let child = SessionId::from("OOPIF");
@@ -2738,7 +2833,13 @@ mod tests {
         let mut start = sub("O1", "https://b.test/stream", "Fetch");
         start.1["frameId"] = json!("REMOTE");
         log.apply(Some(&child), &start.0, &start.1);
-        assert_eq!(log.detach_session(&child), [Happening::Failed(at("O1", 0))]);
+        let back = navigation("BACK", "REMOTE", "Document", "https://a.test/back");
+        log.apply(Some(&child), &back.0, &back.1);
+        assert_eq!(
+            log.detach_session(&child),
+            [Happening::Failed(at("O1", 0))],
+            "a navigation request goes on in the parent's session"
+        );
         assert!(!log.has_child(&child), "its events are no longer the tab's");
     }
 

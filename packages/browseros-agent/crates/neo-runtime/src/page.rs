@@ -1400,18 +1400,23 @@ impl Watcher {
     }
 
     /// `Frame._failInflightRequests` for a frame the tab's session reports removed
-    /// (`Page.frameDetached`, reason `remove`), and for every request of an out-of-process frame
-    /// session that detached (`Target.detachedFromTarget`).
+    /// (`Page.frameDetached`, reason `remove`), and for the requests of an out-of-process frame
+    /// session that detached (`Target.detachedFromTarget`). A frame whose document moved to
+    /// another process (reason `swap`) is noted for its later removal.
     fn detached_requests(&self, event: &CdpEvent) -> Vec<Happening> {
         match event.method.as_str() {
-            "Page.frameDetached"
-                if event.session_id.as_ref() == Some(&self.session)
-                    && event.params["reason"] == "remove" =>
-            {
-                event.params["frameId"]
-                    .as_str()
-                    .map(|frame| self.network.detach_frame(frame))
-                    .unwrap_or_default()
+            "Page.frameDetached" if event.session_id.as_ref() == Some(&self.session) => {
+                let Some(frame) = event.params["frameId"].as_str() else {
+                    return Vec::new();
+                };
+                match event.params["reason"].as_str() {
+                    Some("remove") => self.network.detach_frame(frame),
+                    Some("swap") => {
+                        self.network.frame_moved(frame);
+                        Vec::new()
+                    }
+                    _ => Vec::new(),
+                }
             }
             "Target.detachedFromTarget" => event.params["sessionId"]
                 .as_str()
