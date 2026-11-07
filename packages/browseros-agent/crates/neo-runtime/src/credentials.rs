@@ -1,6 +1,6 @@
 //! Playwright: `server/credentials.ts` `Credentials`
 //!
-//! (G) `context.credentials` (`install`, `create`, `get`, `delete`): the run's virtual WebAuthn
+//! (G) `context.credentials` (`install`, `create`, `get`, `delete`): the run's virtual `WebAuthn`
 //! credentials. Playwright keeps them in a registry its own `navigator.credentials` shim answers
 //! from; Neo keeps the same registry and serves it through Chromium's own virtual authenticator
 //! (the `WebAuthn` domain), one per page session the run has:
@@ -40,10 +40,12 @@ const SPKI_PREFIX: [u8; 26] = [
     0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00,
 ];
 
-/// Playwright: `server/credentials.ts` `randomBase64Url`: `return bufToB64Url(crypto.randomBytes(bytes));`
+/// Playwright: `server/credentials.ts` `Credentials.create`: `id: options.id || randomBase64Url(16),`
 const RANDOM_BYTES: usize = 16;
 
 /// The run's virtual credentials and the page sessions that serve them (`Tabs::credentials`).
+///
+/// Deviation: `server/browserContext.ts` `BrowserContext.storageState`: `result.credentials = await progress.race(this.credentials.get());` Neo's storage state carries no credentials: `storageState({ credentials: true })` is refused (`session_state.rs`), so a state never brings the run's credentials along.
 #[derive(Default)]
 pub(crate) struct Credentials {
     records: Mutex<Vec<Record>>,
@@ -143,18 +145,24 @@ impl Credentials {
             sign_count,
             is_resident: true,
         };
-        let credential = record.cdp()?;
-        for authenticator in self.authenticators() {
-            let added = progress
-                .race(cdp.send(
-                    "WebAuthn.addCredential",
-                    json!({ "authenticatorId": authenticator.id, "credential": credential }),
-                    Some(&authenticator.session),
-                ))
-                .await?;
-            if let Err(error) = added {
-                debug!(%error, "an authenticator refused a created credential");
+        // Playwright takes any id, user handle and key; an authenticator takes base64url ones
+        // only, and a record it cannot take stays in the registry alone.
+        match record.cdp() {
+            Ok(credential) => {
+                for authenticator in self.authenticators() {
+                    let added = progress
+                        .race(cdp.send(
+                            "WebAuthn.addCredential",
+                            json!({ "authenticatorId": authenticator.id, "credential": credential }),
+                            Some(&authenticator.session),
+                        ))
+                        .await?;
+                    if let Err(error) = added {
+                        debug!(%error, "an authenticator refused a created credential");
+                    }
+                }
             }
+            Err(error) => debug!(?error, "a created credential is not base64url"),
         }
         let public = record.public();
         if let Ok(mut records) = self.records.lock() {
@@ -187,14 +195,9 @@ impl Credentials {
         Ok(records
             .iter()
             // Playwright: `server/credentials.ts` `Credentials.get`: `if (filter?.rpId && c.rpId !== filter.rpId)`
-            .filter(|record| {
-                filter
-                    .rp_id
-                    .as_ref()
-                    .is_none_or(|rp_id| &record.rp_id == rp_id)
-            })
+            .filter(|record| matches(filter.rp_id.as_deref(), &record.rp_id))
             // Playwright: `server/credentials.ts` `Credentials.get`: `if (filter?.id && c.id !== filter.id)`
-            .filter(|record| filter.id.as_ref().is_none_or(|id| &record.id == id))
+            .filter(|record| matches(filter.id.as_deref(), &record.id))
             .map(Record::public)
             .collect())
     }
@@ -230,7 +233,7 @@ impl Credentials {
 
     /// Playwright: `server/credentials.ts` `Credentials.install`
     ///
-    /// Deviation: `server/credentials.ts` `Credentials.install`: `this._initScript = await this._browserContext.addInitScript(nullProgress, script);` Playwright puts its own `navigator.credentials` shim in every frame and answers in Node; Neo turns on Chromium's virtual authenticator on each page the run has a session on, so a page sees Chromium's own WebAuthn answers (its AAGUID, a page-created credential's count starting at 1, no `__pwWebAuthnInstalled`), and a tab the run never reaches keeps the browser's own authenticators.
+    /// Deviation: `server/credentials.ts` `Credentials.install`: `this._initScript = await this._browserContext.addInitScript(nullProgress, script);` Playwright puts its own `navigator.credentials` shim in every frame, marked `__pwWebAuthnInstalled`, and answers it in Node; Neo turns on Chromium's virtual authenticator on each page the run has a session on, so a page sees Chromium's own `WebAuthn` and no `__pwWebAuthnInstalled`, and a tab the run never reaches keeps the browser's own authenticators.
     ///
     /// # Errors
     ///
@@ -337,6 +340,8 @@ impl Credentials {
     }
 
     /// One authenticator's credential, as the registry keeps it.
+    ///
+    /// Deviation: `server/credentials.ts` `Credentials._handleCreate`: `signCount: 0,` Chromium's virtual authenticator counts a page's creation itself, so a credential the page creates is listed from 1.
     fn learn(&self, credential: &Value) {
         let field = |name: &str| credential[name].as_str().unwrap_or_default();
         let Some(id) = standard_to_url(field("credentialId")) else {
@@ -396,8 +401,16 @@ impl Credentials {
     }
 }
 
+/// Neo: whether `value` passes a `get` filter field, which an absent or empty filter does, as
+/// Playwright's falsy check lets it.
+fn matches(filter: Option<&str>, value: &str) -> bool {
+    filter.is_none_or(|filter| filter.is_empty() || filter == value)
+}
+
 /// Neo: the virtual authenticator Playwright's shim stands in for: a platform authenticator
 /// (CTAP 2.1) that keeps discoverable credentials, verifies its user and needs no touch.
+///
+/// Deviation: `server/credentials.ts` `Credentials._handleCreate`: `const attestedCredentialData = Buffer.concat([kAuthenticatorAAGUID, credIdLenBuf, credentialId, cosePublicKey]);` Chromium's authenticator attests its own AAGUID, where Playwright's is all zeros.
 fn authenticator_options() -> Value {
     json!({
         "protocol": "ctap2",

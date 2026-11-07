@@ -59,7 +59,7 @@ struct Inner {
     events: EventHub,
     /// The CDP sessions the run's script opened (`cdp_session.rs`), detached at run end.
     cdp_sessions: CdpSessions,
-    /// (G) The run's virtual WebAuthn credentials (`credentials.rs`), taken back at run end.
+    /// (G) The run's virtual `WebAuthn` credentials (`credentials.rs`), taken back at run end.
     credentials: Credentials,
     /// The `Runtime`'s shared switches: target discovery, which this run holds while it listens
     /// for new pages ([`Tabs::discover`]), and download reports ([`Tabs::watch_downloads`]).
@@ -233,7 +233,7 @@ impl Tabs {
         &self.0.cdp_sessions
     }
 
-    /// The run's virtual WebAuthn credentials (`credentials.rs`).
+    /// The run's virtual `WebAuthn` credentials (`credentials.rs`).
     pub(crate) fn credentials(&self) -> &Credentials {
         &self.0.credentials
     }
