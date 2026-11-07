@@ -42,6 +42,7 @@ and NOTICE.
 | `packages/playwright-core/src/server/dispatchers/jsHandleDispatcher.ts` | `a2ad5a61b1b8421d58956a2f51c0897b69fa0519a27f98f52a321ac4e52d5209` |
 | `packages/playwright-core/src/server/dom.ts` | `65cb43c91893e5cb82869d37686ad1d1500f4719711015d10eaac7c0b04cfb66` |
 | `packages/playwright-core/src/server/errors.ts` | `5dde9a10a8843f80c65f67bc2dae4b80bc1e2628ed514c2500fc7b9bbe6aadf0` |
+| `packages/playwright-core/src/server/frameSelectors.ts` | `a8f0bb4a00e0ed48a8665559083dab274bb2da386f37d0bd173b9a37a87c26fc` |
 | `packages/playwright-core/src/server/frames.ts` | `c3b72c48361de93312eba80b096304bb374c6208429f2de65944571480c74445` |
 | `packages/playwright-core/src/server/input.ts` | `dd1a2025bf3e04f52079a9ed0669f77b99a91a9746be452627de389b9539dfcc` |
 | `packages/playwright-core/src/server/javascript.ts` | `2fc52119a81b92929aa5e292e76fde967d56cfacf16aadc27b7a96e6e880c788` |

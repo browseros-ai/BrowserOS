@@ -223,6 +223,35 @@ Injected:
         # Visibility of the first iframe owner, false when nothing matched.
         visible: boolean
 
+    # Finds the `<iframe>` or `<frame>` whose aria ref is `ref`, for one hop of a main-rooted
+    # path ref (`aria-ref=f7e2` enters the frame of the owner named `e7`). The ref is the one
+    # Playwright's snapshots keep on the element (`_ariaRef`), so the hop does not depend on the
+    # document's last snapshot: a later snapshot of another part of that document leaves the
+    # path routable, as a Playwright frame-numbered ref stays. An owner `frameOwnerRef` named is
+    # found even where no selector reaches (inside a closed shadow root).
+    frameOwnerByRef:
+      internal: true
+      parameters:
+        ref: string
+      returns:
+        # The owner, in the caller's object group. Absent when no owner has that ref.
+        element: Element?
+        # Visibility of the owner, false when none matched.
+        visible: boolean
+
+    # The aria ref of one iframe owner, for the path in front of a child frame's AI snapshot
+    # refs: the ref its document's snapshots give it (kept on the element, or given now by
+    # building the aria tree of the owner alone). The document's last snapshot is left as it
+    # was, so no ref of the caller's own snapshots changes lifetime.
+    frameOwnerRef:
+      internal: true
+      parameters:
+        element: Element
+      returns:
+        # Absent when Playwright's AI snapshots give the owner no ref: it is not visible or
+        # receives no pointer events.
+        ref: string?
+
     # Names a selector the way Playwright's call log does, for a click's first log line
     # `waiting for <locator>`, and reports a selector the page cannot parse. Playwright computes
     # both in Node (`asLocator`, `Selectors.parseSelector`); Neo asks the injected script's own
