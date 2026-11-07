@@ -11,13 +11,18 @@
 
 use std::time::Duration;
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::{DecodeError, Engine as _};
 use browseros_cdp::{
-    CdpClient, CdpError, CdpEvent, ConnectOptions, ReconnectPolicy, SessionId, browser, target,
+    CdpClient, CdpError, CdpEvent, ConnectOptions, EmptyParams, ReconnectPolicy, SessionId,
+    browser, page, target,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
+use tracing::debug;
 
+use crate::host::capture::Preset;
 use crate::host::directory::{DirectoryInput, PageTarget, TabEntry};
 use crate::host::ids::TabId;
 use crate::host::link::Attached;
@@ -190,6 +195,211 @@ pub(crate) async fn emulate_focus(session: &Attached) -> Result<(), CdpError> {
         )
         .await?;
     Ok(())
+}
+
+// ----- live capture (`capture.rs`): claw-server `services/capture`, unchanged values ---------
+// The quality presets live verbatim in `capture/presets.rs`, which ports their table whole.
+
+/// How long a capture outlives its last viewer, so a reconnecting viewer or a follow switch
+/// back does not restart the browser side.
+/// `apps/claw-server/src/services/capture/tab_capture.rs:31-32` (origin/main).
+pub(crate) const STOP_GRACE: Duration = Duration::from_secs(5);
+
+/// How often a recording's IO stream is drained. Chromium writes a fragment per keyframe
+/// interval (about 2 s), so this only bounds how late a finished fragment is forwarded.
+/// `apps/claw-server/src/services/capture/tab_capture.rs:33-35` (origin/main).
+pub(crate) const RECORDING_READ_INTERVAL: Duration = Duration::from_millis(250);
+
+/// `apps/claw-server/src/services/capture/tab_capture.rs:36` (origin/main).
+pub(crate) const RECORDING_READ_SIZE: u64 = 1 << 20;
+
+/// Reads that may fail before the recording's first bytes exist: Chromium creates the stream's
+/// file on its first write and answers earlier reads with "Read failed".
+/// `apps/claw-server/src/services/capture/tab_capture.rs:37-39` (origin/main).
+pub(crate) const EARLY_READ_FAILURES: u32 = 20;
+
+/// Fragments a slow video viewer may fall behind before it skips ahead.
+/// `apps/claw-server/src/services/capture/tab_capture.rs:40-41` (origin/main).
+pub(crate) const FRAGMENT_BACKLOG: usize = 8;
+
+/// One unacknowledged frame at a time: while it is out, Chromium drops newer frames before it
+/// copies them on its UI thread, which is what makes ack pacing cheap.
+/// `apps/claw-server/src/services/capture/tab_capture.rs:298-301` (origin/main).
+pub(crate) const MAX_FRAMES_IN_FLIGHT: i64 = 1;
+
+/// How long a followed screencast waits for the browser to start capturing its new tab.
+/// `apps/claw-server/src/services/capture/mod.rs:50-52` (origin/main).
+pub(crate) const SWITCH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How soon a follower whose switch failed tries again, if nothing else changed first:
+/// claw-server's session check interval, which drove its retries
+/// (`apps/claw-server/src/services/capture/mod.rs:47-49`, origin/main).
+pub(crate) const SWITCH_RETRY: Duration = Duration::from_secs(1);
+
+/// Video fragments queued for one viewer. One that falls further behind skips whole fragments,
+/// which is safe because every fragment starts on a keyframe.
+/// `apps/claw-server/src/services/capture/mod.rs:53-55` (origin/main).
+pub(crate) const VIDEO_QUEUE: usize = 4;
+
+// ----- live capture: Neo policy --------------------------------------------------------------
+
+/// A viewer that leaves a waiting frame or fragment unread this long is dropped: its lease
+/// would otherwise keep the capture running until TCP gives up on it.
+pub(crate) const VIEWER_STALL: Duration = Duration::from_secs(30);
+
+/// The largest frame forwarded: the main host's reader rejects a part over 512 KiB (Zuzu's
+/// `cell/mirrord/internal/neo/frames.go:54-66`, per the neo-host-events design §7). The `high`
+/// preset measured 90-149 KB (probe 7).
+pub(crate) const MAX_FRAME_BYTES: usize = 512 * 1024;
+
+/// `Page.startScreencast{format: "jpeg", quality, maxWidth, maxHeight, maxFramesInFlight: 1}`
+/// (typed). Playwright allows 5 or 10 frames in flight and acknowledges each as soon as it is
+/// handed on (`packages/playwright-core/src/server/chromium/crPage.ts:321-329,993-1003` at
+/// 26137face); one in flight and a delayed ack is claw-server's measured cheaper pacing.
+pub(crate) async fn start_screencast(session: &Attached, preset: Preset) -> Result<(), CdpError> {
+    let params = page::StartScreencastParams {
+        format: Some("jpeg".to_string()),
+        quality: Some(i64::from(preset.jpeg_quality)),
+        max_width: Some(i64::from(preset.max_width)),
+        max_height: Some(i64::from(preset.max_height)),
+        max_frames_in_flight: Some(MAX_FRAMES_IN_FLIGHT),
+        ..page::StartScreencastParams::default()
+    };
+    let _: page::StartScreencastResult = send_on(session, "Page.startScreencast", params).await?;
+    Ok(())
+}
+
+/// `Page.screencastFrameAck{sessionId}` (typed). Its `sessionId` is the frame's number, not a
+/// CDP session id (`apps/claw-server/src/services/capture/tab_capture.rs:324`, origin/main).
+pub(crate) async fn ack_frame(session: &Attached, number: i64) -> Result<(), CdpError> {
+    let _: page::ScreencastFrameAckResult = send_on(
+        session,
+        "Page.screencastFrameAck",
+        page::ScreencastFrameAckParams { session_id: number },
+    )
+    .await?;
+    Ok(())
+}
+
+/// `Page.stopScreencast` (typed), best effort: the tab may be gone.
+pub(crate) async fn stop_screencast(session: &Attached) {
+    let stopped: Result<page::StopScreencastResult, _> =
+        send_on(session, "Page.stopScreencast", EmptyParams {}).await;
+    if let Err(error) = stopped {
+        debug!(session = %session.session, %error, "stopping a screencast failed");
+    }
+}
+
+/// `Page.startScreenRecording{maxWidth, maxHeight, frameRate}` (untyped) → the `IO` stream
+/// handle. Chromium encodes AV1 into a fragmented MP4 it writes as it goes, a fragment about
+/// every 2 s (probe 5).
+pub(crate) async fn start_recording(
+    session: &Attached,
+    preset: Preset,
+) -> Result<String, CdpError> {
+    #[derive(Deserialize)]
+    struct Started {
+        stream: String,
+    }
+    let reply = session
+        .send(
+            "Page.startScreenRecording",
+            json!({
+                "maxWidth": preset.max_width,
+                "maxHeight": preset.max_height,
+                "frameRate": preset.video_fps,
+            }),
+        )
+        .await?;
+    let started: Started = serde_json::from_value(reply)?;
+    Ok(started.stream)
+}
+
+/// `IO.read{handle, size}` (untyped) on a recording's stream.
+pub(crate) async fn read_recording(
+    session: &Attached,
+    handle: &str,
+) -> Result<RecordingChunk, CdpError> {
+    let reply = session
+        .send(
+            "IO.read",
+            json!({ "handle": handle, "size": RECORDING_READ_SIZE }),
+        )
+        .await?;
+    Ok(serde_json::from_value(reply)?)
+}
+
+/// `Page.stopScreenRecording`, then `IO.close{handle}` (both untyped), best effort.
+pub(crate) async fn stop_recording(session: &Attached, handle: &str) {
+    let stops = [
+        ("Page.stopScreenRecording", json!({})),
+        ("IO.close", json!({ "handle": handle })),
+    ];
+    for (method, params) in stops {
+        if let Err(error) = session.send(method, params).await {
+            debug!(session = %session.session, %error, "{method} failed");
+        }
+    }
+}
+
+/// One `IO.read` reply. While recording, an empty chunk only means "nothing more yet"; its
+/// `eof` is set then too, so it is not read.
+#[derive(Deserialize)]
+pub(crate) struct RecordingChunk {
+    data: String,
+    #[serde(rename = "base64Encoded", default)]
+    base64_encoded: bool,
+}
+
+impl RecordingChunk {
+    pub(crate) fn bytes(&self) -> Result<Vec<u8>, DecodeError> {
+        if self.base64_encoded {
+            BASE64.decode(&self.data)
+        } else {
+            Ok(self.data.as_bytes().to_vec())
+        }
+    }
+}
+
+// ----- live capture's events ----------------------------------------------------------------
+
+/// One `Page.screencastFrame`, decoded.
+pub(crate) struct ScreencastFrame {
+    /// What its acknowledgement echoes. Chromium sends nothing more until the ack, so a frame
+    /// whose event does not parse is still acknowledged when this can be read.
+    pub(crate) number: Option<i64>,
+    /// `None` when the event or its base64 data does not parse.
+    pub(crate) jpeg: Option<Vec<u8>>,
+    /// `metadata.timestamp`: the browser's frame-swap time, epoch seconds (probe 8).
+    pub(crate) timestamp: Option<f64>,
+}
+
+/// Decodes `Page.screencastFrame` params (typed).
+pub(crate) fn screencast_frame(params: &Value) -> ScreencastFrame {
+    match page::ScreencastFrameEvent::deserialize(params) {
+        Ok(event) => ScreencastFrame {
+            number: Some(event.session_id),
+            jpeg: event
+                .data
+                .as_str()
+                .and_then(|data| BASE64.decode(data).ok()),
+            timestamp: event.metadata.timestamp,
+        },
+        Err(_) => ScreencastFrame {
+            number: params.get("sessionId").and_then(Value::as_i64),
+            jpeg: None,
+            timestamp: None,
+        },
+    }
+}
+
+async fn send_on<P: Serialize, R: DeserializeOwned>(
+    session: &Attached,
+    method: &str,
+    params: P,
+) -> Result<R, CdpError> {
+    let reply = session.send(method, serde_json::to_value(params)?).await?;
+    Ok(serde_json::from_value(reply)?)
 }
 
 #[cfg(test)]

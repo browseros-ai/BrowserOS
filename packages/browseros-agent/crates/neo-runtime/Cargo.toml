@@ -10,9 +10,11 @@ description = "Runs an agent's Playwright-style script in a QuickJS realm agains
 # browseros-cdp and neo-runtime-spec are the only first-party dependencies; see
 # crates/NEO_STYLE.md. futures-util's `join_all` writes a click's pipelined mouse events in order.
 # rand's OS-seeded `ThreadRng` backs the realm's `crypto.getRandomValues` and `randomUUID`.
+# bytes and base64 carry the host side's screencast frames and recording chunks.
 [dependencies]
 base64.workspace = true
 browseros-cdp.workspace = true
+bytes.workspace = true
 futures-util.workspace = true
 neo-runtime-spec.workspace = true
 rand.workspace = true
@@ -27,11 +29,11 @@ ulid.workspace = true
 url.workspace = true
 
 # clap backs the `neo_run` example. tokio-tungstenite serves the fake browsers in
-# tests/support/fake_browser.rs and fake_host_cdp.rs, which encodes its frames with base64;
-# tempfile gives the end-to-end tests a throwaway profile. tokio's test-util lets unit tests
-# pause time, so deadline races and click attempt counts are deterministic. regex and sha2 back
-# tests/provenance.rs: it matches Playwright's definitions and message templates, and hashes the
-# vendored files against their VENDOR.md.
+# tests/support/fake_browser.rs and fake_host_cdp.rs; tempfile gives the end-to-end tests a
+# throwaway profile. tokio's test-util lets unit tests pause time, so deadline races and click
+# attempt counts are deterministic. regex and sha2 back tests/provenance.rs: it matches
+# Playwright's definitions and message templates, and hashes the vendored files against their
+# VENDOR.md.
 [dev-dependencies]
 clap.workspace = true
 proc-macro2.workspace = true

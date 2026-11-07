@@ -95,10 +95,6 @@ impl EpochMs {
     /// (`packages/playwright-core/src/server/chromium/crPage.ts:997` at 26137face). `None` when
     /// absent, not finite or not positive: the caller drops such a frame rather than stamping
     /// it with arrival time, which cannot be correlated with a browser action.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "scaffold: used by host capture")
-    )]
     pub(crate) fn from_frame_seconds(seconds: f64) -> Option<Self> {
         if !seconds.is_finite() || seconds <= 0.0 {
             return None;

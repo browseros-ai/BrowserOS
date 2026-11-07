@@ -21,6 +21,14 @@
     not(test),
     expect(
         dead_code,
+        reason = "live views open once Runtime is built with host options"
+    )
+)]
+mod capture;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
         reason = "pure core: tests drive it until the host task does"
     )
 )]
