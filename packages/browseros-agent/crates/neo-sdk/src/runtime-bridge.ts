@@ -3,7 +3,7 @@
  * realm (crates/neo-runtime/src/bridge.rs).
  *
  * - `get` blocks until Rust has read one value live from BrowserOS over CDP.
- * - `call` sends one Playwright protocol message and resolves with Rust's Playwright reply,
+ * - `callWithEvents` sends one Playwright protocol message and resolves with Rust's Playwright reply,
  *   failures included; it rejects only when Rust cannot read the envelope. The call runs on its
  *   own Rust task, so it keeps going while the script spins or blocks in a getter, and a call
  *   the script never awaits still finishes and leaves its trace record. Its reply carries the
@@ -23,7 +23,7 @@ import type { CreatedChain, Timing } from './network'
 
 declare const __neo_runtime: {
   get(request: string): string
-  call(message: string): Promise<{ reply: string; events: number }>
+  callWithEvents(message: string): Promise<{ reply: string; events: number }>
   subscribe(request: string): void
   drain(until: number): string
   nextEvents(): Promise<void>
@@ -111,7 +111,7 @@ export function matchesURL(
  * Rust's answer, before the reply text reaches the caller.
  */
 export async function call(message: string): Promise<string> {
-  const { reply, events } = await __neo_runtime.call(message)
+  const { reply, events } = await __neo_runtime.callWithEvents(message)
   deliverEvents?.(events)
   return reply
 }

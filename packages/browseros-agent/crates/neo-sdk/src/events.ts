@@ -43,6 +43,7 @@ export function onUncaughtListenerError(
   uncaughtListenerError = report
 }
 
+/** Playwright: `client/eventEmitter.ts` `EventEmitter` */
 export class EventEmitter {
   private _events: EventMap | undefined = undefined
   private _eventsCount = 0
@@ -193,7 +194,13 @@ export class EventEmitter {
         marked.warned = true
         // No error code for this since it is a Warning
         const w = new Error(
-          `Possible EventEmitter memory leak detected. ${existing.length} ${String(type)} listeners added. Use emitter.setMaxListeners() to increase limit`,
+          'Possible EventEmitter memory leak detected. ' +
+            existing.length +
+            ' ' +
+            String(type) +
+            ' listeners ' +
+            'added. Use emitter.setMaxListeners() to ' +
+            'increase limit',
         ) as Error & { emitter?: unknown; type?: EventType; count?: number }
         w.name = 'MaxListenersExceededWarning'
         w.emitter = this
@@ -466,6 +473,8 @@ export interface EventTable {
 }
 
 /**
+ * Playwright: `client/channelOwner.ts` `ChannelOwner`
+ *
  * Playwright's `ChannelOwner` subscriptions: the first listener of a served event turns its
  * subscription on, removing the last turns it off. Playwright gates eight events this way and
  * sends the rest regardless; Neo gates every event it produces, so a run that listens to

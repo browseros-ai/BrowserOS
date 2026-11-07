@@ -91,7 +91,7 @@ function matchesURL(url, matcher) {
   return JSON.parse(__neo_runtime.get(JSON.stringify({ field: "matchesURL", url, matcher })));
 }
 async function call(message) {
-  const { reply, events } = await __neo_runtime.call(message);
+  const { reply, events } = await __neo_runtime.callWithEvents(message);
   deliverEvents?.(events);
   return reply;
 }
@@ -223,7 +223,7 @@ class EventEmitter {
       const marked = existing;
       if (m > 0 && existing.length > m && !marked.warned) {
         marked.warned = true;
-        const w = new Error(`Possible EventEmitter memory leak detected. ${existing.length} ${String(type)} listeners added. Use emitter.setMaxListeners() to increase limit`);
+        const w = new Error("Possible EventEmitter memory leak detected. " + existing.length + " " + String(type) + " listeners " + "added. Use emitter.setMaxListeners() to " + "increase limit");
         w.name = "MaxListenersExceededWarning";
         w.emitter = this;
         w.type = type;

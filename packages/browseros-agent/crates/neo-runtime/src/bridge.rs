@@ -10,9 +10,10 @@
 //!         ◀─ '"https://…"'                       JSON text of the value
 //!
 //!  locator.click()                               JS, on the run's thread
-//!    └─ __neo_runtime.call('{"id":1,"guid":"frame@<id>","method":"click",…}')
+//!    └─ __neo_runtime.callWithEvents('{"id":1,"guid":"frame@<id>","method":"click",…}')
 //!         └─ Dispatcher::call: starts the call on its own tokio task, returns at once
 //!         ◀─ Promise of {reply: '{"id":1}' | '{"id":1,"error":{…},"log":[…]}', events: W}
+//!    (`call` is the same without `events`: the reply text alone, for white-box tests)
 //!
 //!  page.on('console', f)                         JS, when a listener count leaves 0
 //!    └─ __neo_runtime.subscribe('{"guid":"page@<id>","event":"console","enabled":true}')
@@ -74,8 +75,23 @@ pub(crate) fn install<'js>(
     )?;
     let log = logs.clone();
     bridge.set("log", Func::from(move |line: String| log.push(line)))?;
+    let calls = dispatcher.clone();
     bridge.set(
         "call",
+        // The reply text alone: what the realm's tests drive Rust with directly. The SDK uses
+        // `callWithEvents`, so its listeners run before the reply's caller continues.
+        Func::from(Async(move |ctx: Ctx<'js>, message: String| {
+            let reply = calls.call(&message);
+            async move {
+                reply
+                    .await
+                    .map(|(reply, _)| reply)
+                    .map_err(|error| throw_named(&ctx, "Error", &error.to_string()))
+            }
+        })),
+    )?;
+    bridge.set(
+        "callWithEvents",
         // rquickjs makes the promise now and polls this future only while the script awaits.
         // That is enough because the future only waits for the reply: `Dispatcher::call` has
         // already started the call on a tokio task. An `Err` rejects the promise with a named

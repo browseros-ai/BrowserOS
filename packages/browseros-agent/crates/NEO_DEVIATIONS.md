@@ -3,12 +3,13 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (14)
+## Deviations (16)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
 | neo-runtime/src/console.rs | `HISTORY_BYTES_LIMIT` | `server/page.ts` `Page.addConsoleMessage` | Playwright bounds the count only. Neo keeps the history in the server for the run, outside the realm's memory limit, so each list also keeps at most this many bytes of text (a message's, an error's message and stack), dropping its oldest entries first; the newest always stays. |
 | neo-runtime/src/console.rs | `arg_preview` | `server/dom.ts` `ElementHandle._initializePreview` | Playwright later swaps a node's preview for its markup (`JSHandle@<div id="a">hi</div>`), which a message's text shows when first read after the swap: a history read with no console listener (a listener, or a `debug` message, reads the text at once). Neo never swaps, so the text is always `JSHandle@node`, what a listener sees. |
+| neo-runtime/src/console.rs | `ensure_bytes_limit` | `server/page.ts` `ensureArrayLimit` | Playwright trims a list by count only; Neo also drops its oldest entries until the list's text fits [`HISTORY_BYTES_LIMIT`], keeping the newest entry whatever its size. |
 | neo-runtime/src/console.rs | `from_console_api` | `server/chromium/crPage.ts` `FrameSession._onConsoleAPI` | Neo serves no JSHandle objects, so a message carries no arguments; its text still renders each one. |
 | neo-runtime/src/console.rs | `from_console_api` | `server/chromium/crPage.ts` `FrameSession._onConsoleAPI` | Playwright also drops a message from a context it holds no record of (none created in a frame it knows, or one already destroyed); Neo keeps no table of contexts and keeps it. |
 | neo-runtime/src/console.rs | `split_error_message` | `utils/stackTrace.ts` `splitErrorMessage` | Playwright cuts a character outside the BMP in half and keeps its low surrogate, which a Rust string cannot hold; Neo writes U+FFFD there, one UTF-16 unit as in JS. |
@@ -20,6 +21,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-sdk/src/events.ts | `ChannelOwner.removeAllListeners` | `client/channelOwner.ts` `ChannelOwner.removeListener` | Playwright's removeAllListeners leaves its server subscriptions on; Neo turns off each one left without listeners, so Rust stops producing what nobody hears. |
 | neo-sdk/src/events.ts | `EventEmitter._addListener` | `client/eventEmitter.ts` `EventEmitter._addListener` | Neo runs are never Playwright's own tests, so the warning always goes to the run log. |
 | neo-sdk/src/events.ts | `EventEmitter._callHandler` | `client/eventEmitter.ts` `EventEmitter._callHandler` | There the rethrow is an unhandled rejection, and Node exits; QuickJS ignores one, so Neo hands it to the run, which ends with it. |
+| neo-sdk/src/page.ts | `Page` | `client/page.ts` `Page.constructor` | Playwright's page holds a `close` and a `crash` listener of its own from its first moment, which `eventNames()` and `listenerCount` report; Neo's holds none, so a page nobody listens to costs the run nothing. |
 | neo-sdk/src/waiter.ts | `refuseSignal` | `client/waiter.ts` `Waiter.rejectOnTimeout` | QuickJS has no `AbortSignal`, so Neo takes no `signal`; one passed anyway is refused instead of being ignored. |
 
 ## Unexplained: owner questions (0)

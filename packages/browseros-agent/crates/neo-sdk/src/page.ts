@@ -98,6 +98,11 @@ export interface ConsoleMessagesOptions {
  * script calls `url()` again, and `url()` returns `/a`; Playwright returns `/final`. No CDP
  * source answers after a close, so matching Playwright here needs event tracking, which the
  * no-cache design leaves out (sync-getters-design.md, "Known limitation").
+ *
+ * Deviation: `client/page.ts` `Page.constructor`: `this.once(Events.Page.Close, () => this._closedOrCrashedScope.close(this._closeErrorWithReason()));`
+ * Playwright's page holds a `close` and a `crash` listener of its own from its first moment,
+ * which `eventNames()` and `listenerCount` report; Neo's holds none, so a page nobody listens to
+ * costs the run nothing.
  */
 export class Page extends ChannelOwner {
   readonly #guid: string

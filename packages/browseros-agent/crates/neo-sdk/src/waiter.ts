@@ -1,5 +1,6 @@
 /**
  * Playwright: `client/waiter.ts` `Waiter`
+ * Playwright: `client/channelOwner.ts` `ChannelOwner._wrapApiCall`
  * Playwright: `utils/stackTrace.ts` `rewriteErrorMessage`
  *
  * Playwright's client-side wait for an event (`waitForEvent`), run in the realm over the
@@ -34,8 +35,10 @@ export function refuseSignal(options: { signal?: unknown }): void {
 }
 
 /**
- * Playwright's `ChannelOwner._wrapApiCall` error rewrite for a method the realm runs itself:
- * the `<apiName>: ` prefix on the message. Neo leaves the stack as QuickJS made it.
+ * Playwright: `client/channelOwner.ts` `ChannelOwner._wrapApiCall`: `e.message = apiZone.apiName + ': ' + e.message;`
+ *
+ * The error rewrite for a method the realm runs itself: the `<apiName>: ` prefix on the
+ * message. Neo leaves the stack as QuickJS made it.
  */
 export async function wrapApiCall<T>(
   apiName: ApiName,
@@ -49,6 +52,7 @@ export async function wrapApiCall<T>(
   }
 }
 
+/** Playwright: `client/waiter.ts` `Waiter` */
 export class Waiter {
   private _dispose: (() => void)[] = []
   private _failures: Promise<unknown>[] = []

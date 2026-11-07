@@ -437,8 +437,9 @@ fn ensure_array_limit<T>(array: &mut Vec<T>, limit: usize) {
     }
 }
 
-/// Drops the oldest entries until the list's text fits [`HISTORY_BYTES_LIMIT`], keeping the
-/// newest entry whatever its size.
+/// Deviation: `server/page.ts` `ensureArrayLimit`: `return array.splice(0, limit / 10);`
+/// Playwright trims a list by count only; Neo also drops its oldest entries until the list's text
+/// fits [`HISTORY_BYTES_LIMIT`], keeping the newest entry whatever its size.
 fn ensure_bytes_limit<T>(entries: &mut Vec<Entry<T>>, bytes: impl Fn(&T) -> usize) {
     let mut total: usize = entries.iter().map(|entry| bytes(&entry.value)).sum();
     let mut dropped = 0;

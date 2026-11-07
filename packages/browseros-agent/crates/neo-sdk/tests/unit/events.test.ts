@@ -46,7 +46,7 @@ beforeEach(() => {
   replyEvents = () => seq
   ;(globalThis as Record<string, unknown>).__neo_runtime = {
     get: () => JSON.stringify(null),
-    call: async (message: string) => ({
+    callWithEvents: async (message: string) => ({
       reply: JSON.stringify({ id: JSON.parse(message).id }),
       events: replyEvents(),
     }),
@@ -186,9 +186,10 @@ test('tests that waitForEvent rejects when the page closes, unless it waits for 
 test('tests that a dialog nobody listens to by then gets the default answer', async () => {
   const sent: { guid: string; method: string }[] = []
   const { page } = run()
-  const native = (globalThis as unknown as Record<string, { call: unknown }>)
-    .__neo_runtime
-  native.call = async (message: string) => {
+  const native = (
+    globalThis as unknown as Record<string, { callWithEvents: unknown }>
+  ).__neo_runtime
+  native.callWithEvents = async (message: string) => {
     const parsed = JSON.parse(message)
     sent.push({ guid: parsed.guid, method: parsed.method })
     return { reply: JSON.stringify({ id: parsed.id }), events: 0 }

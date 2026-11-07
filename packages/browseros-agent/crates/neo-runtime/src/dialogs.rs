@@ -33,6 +33,9 @@ const ACCEPT_HANDLED: &str = "Cannot accept dialog which is already handled!";
 /// Playwright: `server/dialog.ts` `Dialog._dismiss`: `assert(!this._handled, 'Cannot dismiss dialog which is already handled!');`
 const DISMISS_HANDLED: &str = "Cannot dismiss dialog which is already handled!";
 
+/// Neo: a poisoned lock (a panic elsewhere while holding it), which no script can cause.
+const DIALOGS_UNREADABLE: &str = "neo-runtime: the tab's dialogs cannot be read";
+
 /// The guid of dialog `index` on tab `target`.
 pub(crate) fn guid(target: &str, index: u64) -> String {
     format!("{DIALOG_PREFIX}{target}:{index}")
@@ -145,7 +148,7 @@ impl Dialogs {
         let mut state = self
             .0
             .lock()
-            .map_err(|_| PlaywrightError::error("neo-runtime: the tab's dialogs cannot be read"))?;
+            .map_err(|_| PlaywrightError::error(DIALOGS_UNREADABLE))?;
         if !state.handled.insert(index) {
             return Err(PlaywrightError::error(if accept {
                 ACCEPT_HANDLED
@@ -210,6 +213,7 @@ pub(crate) async fn serve(
     Ok(None)
 }
 
+/// Playwright: `server/protocolError.ts` `ProtocolError.setMessage`: `Protocol error (${this.method}): ${message}`
 fn answer_error(error: &CdpError) -> PlaywrightError {
     match error {
         CdpError::Protocol { message, .. } => PlaywrightError::error(format!(
