@@ -1,0 +1,55 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Dispatch event</title>
+<!-- Tests select by id or class only: BrowserOS neo's takeover bar adds shadow-root buttons to
+     every page, and Playwright's CSS pierces open shadow roots. -->
+<style>
+  #span::before { content: 'q'; }
+</style>
+<button id="later" type="button">Add later</button>
+<main id="content">
+<button id="button" type="button">Click target</button>
+<svg height="100" width="100" aria-hidden="true"><circle id="circle" cx="50" cy="50" r="40" stroke="black" stroke-width="3" fill="red"></circle></svg>
+<span id="span"></span>
+<button class="dup" id="dup-one" type="button">Twin</button>
+<button class="dup" id="dup-two" type="button">Twin</button>
+</main>
+<script>
+// BrowserOS neo's takeover bar is not the page's (frame-top.html): removed on sight.
+new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.remove()).observe(
+  document.documentElement,
+  { childList: true, subtree: true },
+)
+// Every event of these types the page sees, with the fields Playwright's eventInit sets. The
+// log lives in sessionStorage, so a navigation of this tab keeps what the last document saw.
+const log = () => JSON.parse(sessionStorage.getItem('events') ?? '[]')
+for (const type of ['click', 'keydown', 'wheel', 'ping']) {
+  document.addEventListener(type, (event) => {
+    const events = log()
+    events.push({
+      type,
+      kind: event.constructor.name,
+      target: event.target.id || event.target.nodeName.toLowerCase(),
+      isTrusted: event.isTrusted,
+      bubbles: event.bubbles,
+      cancelable: event.cancelable,
+      composed: event.composed,
+      detail: event.detail ?? null,
+      clientX: event.clientX ?? null,
+      button: event.button ?? null,
+      key: event.key ?? null,
+      deltaY: event.deltaY ?? null,
+    })
+    sessionStorage.setItem('events', JSON.stringify(events))
+  }, true)
+}
+// The click starts the timer, never page load: Neo's half starts seconds after its page loads.
+document.querySelector('#later').addEventListener('click', () => setTimeout(() => {
+  const late = document.createElement('button')
+  late.id = 'late'
+  late.type = 'button'
+  late.textContent = 'Late'
+  document.body.append(late)
+}, 500))
+window.__facts = () => ({ events: log() })
+</script>

@@ -600,6 +600,19 @@ impl Tabs {
         }
     }
 
+    /// Every session this run attached, for the run-end cleanup of what it left in its tabs.
+    pub(crate) fn attached_sessions(&self) -> Vec<Arc<PageSession>> {
+        self.0.pages.lock().map_or_else(
+            |_| Vec::new(),
+            |pages| {
+                pages
+                    .iter()
+                    .filter_map(|entry| entry.attached_session())
+                    .collect()
+            },
+        )
+    }
+
     /// Starts the run's target discovery once (`discovery.rs`), for a `page` or `popup`
     /// listener. Every call of the run waits until it holds its baseline, so no call can open a
     /// tab the baseline would hide.

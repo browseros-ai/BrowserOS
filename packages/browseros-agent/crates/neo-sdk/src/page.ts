@@ -26,7 +26,9 @@ import {
   type CheckOptions,
   type ClickOptions,
   type DblclickOptions,
+  type DispatchEventOptions,
   type FillOptions,
+  type FocusOptions,
   Frame,
   type GetAttributeOptions,
   type GotoOptions,
@@ -800,6 +802,39 @@ export class Page extends ChannelOwner {
   /** Not strict, as Playwright's `page.click`, which forwards to the main frame. */
   async click(selector: string, options: ClickOptions = {}): Promise<void> {
     return await this.#mainFrame._click('page.click', selector, options)
+  }
+
+  /** Not strict, as Playwright's `page.focus`, which forwards to the main frame. */
+  async focus(selector: string, options: FocusOptions = {}): Promise<void> {
+    return await this.#mainFrame._focus('page.focus', selector, options)
+  }
+
+  /** Not strict, as Playwright's `page.dispatchEvent`, which forwards to the main frame. */
+  async dispatchEvent(
+    selector: string,
+    type: string,
+    eventInit?: unknown,
+    options: DispatchEventOptions = {},
+  ): Promise<void> {
+    return await this.#mainFrame._dispatchEvent(
+      'page.dispatchEvent',
+      selector,
+      type,
+      eventInit,
+      options,
+    )
+  }
+
+  /** Hides every highlight of this page, in every frame. Sent with no timeout, as Playwright's
+   * (`kNoTimeout`). */
+  async hideHighlight(): Promise<void> {
+    await this.#connection.sendPage(
+      'page.hideHighlight',
+      this.#guid,
+      'hideHighlight',
+      {},
+      0,
+    )
   }
 
   /** Not strict, as Playwright's `page.dblclick`, which forwards to the main frame. */

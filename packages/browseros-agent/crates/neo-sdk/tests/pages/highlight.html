@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Highlight</title>
+<!-- Tests select by id or class only: BrowserOS neo's takeover bar adds shadow-root buttons to
+     every page, and Playwright's CSS pierces open shadow roots. -->
+<main id="content">
+<button id="target" type="button">Target</button>
+<button id="other" type="button">Other</button>
+<button class="dup" type="button">Twin</button>
+<button class="dup" type="button">Twin</button>
+<iframe id="child" title="Child" srcdoc="<button id='inner' type='button'>Inner</button>"></iframe>
+</main>
+<script>
+// BrowserOS neo's takeover bar is not the page's (frame-top.html): removed on sight.
+new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.remove()).observe(
+  document.documentElement,
+  { childList: true, subtree: true },
+)
+// Playwright's highlight overlay is an <x-pw-glass> on the document element, with a closed
+// shadow root in both engines (not under Playwright's own test runner). The page logs each time
+// a document gains or loses its overlay, so a re-append (the overlay moving back to the end)
+// is no change.
+window.__glass = []
+const watch = (doc, where) => {
+  let present = false
+  new MutationObserver(() => {
+    const now = doc.documentElement.querySelector(':scope > x-pw-glass') !== null
+    if (now === present) return
+    present = now
+    window.__glass.push(`${now ? '+' : '-'}${where}`)
+  }).observe(doc.documentElement, { childList: true })
+}
+watch(document, 'main')
+const child = document.querySelector('#child')
+child.addEventListener('load', () => watch(child.contentDocument, 'child'), { once: true })
+const overlays = (doc) => doc.querySelectorAll(':scope > x-pw-glass').length
+window.__facts = () => ({
+  log: window.__glass,
+  main: overlays(document.documentElement),
+  child: overlays(child.contentDocument.documentElement),
+})
+</script>
