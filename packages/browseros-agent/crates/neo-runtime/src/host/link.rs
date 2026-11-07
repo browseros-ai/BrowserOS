@@ -25,6 +25,7 @@
 //! before it is written: no stale session id ever reaches the replacement socket.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId};
@@ -48,6 +49,8 @@ pub(crate) struct HostLink {
     /// detach finds its owner.
     sessions: Mutex<HashMap<SessionId, Route>>,
     shutdown: CancellationToken,
+    directory_required: AtomicBool,
+    directory_epoch: AtomicU64,
 }
 
 struct Route {
@@ -112,11 +115,31 @@ impl HostLink {
             generation: watch::Sender::new(Arc::new(first)),
             sessions: Mutex::new(HashMap::new()),
             shutdown,
+            directory_required: AtomicBool::new(false),
+            directory_epoch: AtomicU64::new(0),
         });
         tokio::spawn(route_frames(Arc::clone(&link), frames));
         tokio::spawn(watch_detaches(Arc::clone(&link), events));
         tokio::spawn(watchdog(Arc::clone(&link)));
         link
+    }
+
+    /// The integrated host requires a seed of this socket before a follower can re-lease.
+    /// Epoch equality closes the race where capture sees the new generation before discovery
+    /// has even been scheduled. Standalone capture tests supply their directory views directly.
+    pub(crate) fn require_directory(&self) {
+        self.directory_required.store(true, Ordering::SeqCst);
+    }
+    pub(crate) fn directory_lost(&self) {
+        self.directory_epoch.store(0, Ordering::SeqCst);
+    }
+    pub(crate) fn directory_seeded(&self, epoch: u64) {
+        self.directory_epoch.store(epoch, Ordering::SeqCst);
+    }
+    pub(crate) fn capture_ready(&self) -> bool {
+        !self.directory_required.load(Ordering::SeqCst)
+            || (self.client.is_connected()
+                && self.directory_epoch.load(Ordering::SeqCst) == self.client.epoch())
     }
 
     pub(crate) fn events(&self) -> broadcast::Receiver<CdpEvent> {

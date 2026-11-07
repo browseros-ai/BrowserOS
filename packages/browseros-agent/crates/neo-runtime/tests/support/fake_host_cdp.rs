@@ -294,10 +294,6 @@ impl FakeHostCdp {
         self.emit(&json!({"method":"Target.targetDestroyed","params":{"targetId":target}}));
     }
 
-    #[expect(
-        dead_code,
-        reason = "after-call and lag tests use this scripted reply control next"
-    )]
     pub fn delay_seeds(&self, delay: Duration) {
         lock(&self.shared.state).seed_delay = delay;
     }

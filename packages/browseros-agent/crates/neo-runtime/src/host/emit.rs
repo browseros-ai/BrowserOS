@@ -28,6 +28,7 @@ use std::time::SystemTime;
 use crate::host::Host;
 use crate::host::events::HostEvent;
 use crate::host::ids::{EpochMs, SessionKey, TabId};
+use crate::host::privacy::{SessionPrivacy, Taint};
 use crate::host::tap::Tap;
 use crate::run::{CallRecord, CallResult, PageId, RunEnd, RunId, RunStatus};
 
@@ -38,6 +39,8 @@ pub(crate) struct RunEmitter(Option<Arc<Emission>>);
 
 struct Emission {
     tap: Arc<Tap>,
+    privacy: Option<Arc<SessionPrivacy>>,
+    taint: Arc<Taint>,
     session: SessionKey,
     run: RunId,
     /// Held across each push, so ending a call claims it and queues its `CallEnded` in one step,
@@ -74,6 +77,8 @@ impl RunEmitter {
         };
         Self(Some(Arc::new(Emission {
             tap: Arc::clone(host.tap()),
+            privacy: host.0.privacy.session(session),
+            taint: Arc::clone(&host.0.privacy.taint),
             session: session.clone(),
             run: run.clone(),
             state: Mutex::new(State::Running(Vec::new())),
@@ -217,7 +222,21 @@ impl Drop for RunEnding {
 
 impl Emission {
     fn push(&self, event: HostEvent) {
-        // The tap counts what it refuses; a run never waits on, or fails for, the host side.
+        // Privacy is enforced before enqueue (including refused events), not when the actor
+        // consumes the touch. Trace::push precedes spawning input, so a trusted fill that
+        // awaited withhold cannot race another session's pixel gate on this target.
+        let touched = match &event {
+            HostEvent::RunStarted { page, .. } | HostEvent::PageCreated { page, .. } => Some(page),
+            HostEvent::CallStarted { page, .. } => page.as_ref(),
+            _ => None,
+        };
+        if let Some(target) = touched {
+            if let Some(privacy) = &self.privacy {
+                privacy.touch(target);
+            } else {
+                self.taint.insert(target.clone());
+            }
+        }
         let _pushed = self.tap.try_push(event);
     }
 
@@ -1130,5 +1149,56 @@ mod tests {
             detached(&tracked_browser).await;
             assert_eq!(methods(&tracked_browser), methods(&plain));
         }
+    }
+    #[test]
+    fn withheld_touches_taint_before_even_a_refused_push_returns() {
+        let host = Host::new(HostOptions::new(9222, 1, Arc::new(MemoryStore::default())));
+        let session = SessionKey::new("private");
+        host.0
+            .privacy
+            .session(&session)
+            .unwrap()
+            .withhold()
+            .unwrap();
+        let emitter = RunEmitter::new(Some(&host), Some(&session), &RunId::mint());
+        let _ending = emitter.run_started(&PageId::new("start".to_string()));
+        assert!(
+            host.0
+                .privacy
+                .taint
+                .contains(&PageId::new("start".to_string()))
+        );
+        let filler = HostEvent::CallStarted {
+            session: SessionKey::new("filler"),
+            run: RunId::mint(),
+            call_id: 1,
+            page: None,
+            snapshot: false,
+            at: EpochMs::MIN,
+        };
+        for _ in 0..TAP_QUEUE {
+            let _ = host.tap().try_push(filler.clone());
+        }
+        emitter.call_started(
+            1,
+            Some(&PageId::new("call".to_string())),
+            true,
+            SystemTime::now(),
+        );
+        assert!(
+            host.0
+                .privacy
+                .taint
+                .contains(&PageId::new("call".to_string()))
+        );
+        assert!(host.tap().refused().calls > 0);
+        emitter.call_started(2, None, false, SystemTime::now());
+        emitter.page_created(2, &PageId::new("created".to_string()), TabId::parse(3));
+        assert!(
+            host.0
+                .privacy
+                .taint
+                .contains(&PageId::new("created".to_string()))
+        );
     }
 }

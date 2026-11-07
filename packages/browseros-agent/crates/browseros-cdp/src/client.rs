@@ -230,24 +230,34 @@ impl CdpClient {
         params: Value,
         session: Option<&SessionId>,
     ) -> Result<Value, CdpError> {
-        self.send_with_boundary(expected_epoch, method, params, session, None).await
+        self.send_with_boundary(expected_epoch, method, params, session, None)
+            .await
     }
 
     /// Sends an epoch-bound request and subscribes to events at its reply's exact socket
     /// position. Discovery consumers can discard pre-reply changes without dropping events
     /// that arrive after the fresh seed, even if their task is scheduled much later.
     pub async fn send_at_epoch_with_events(
-        &self, epoch: u64, method: &str, params: Value,
+        &self,
+        epoch: u64,
+        method: &str,
+        params: Value,
     ) -> Result<(Value, broadcast::Receiver<CdpEvent>), CdpError> {
         let (boundary, receiver) = oneshot::channel();
-        let value = self.send_with_boundary(Some(epoch), method, params, None, Some(boundary)).await?;
+        let value = self
+            .send_with_boundary(Some(epoch), method, params, None, Some(boundary))
+            .await?;
         let events = receiver.await.map_err(|_| CdpError::ConnectionLost)?;
         Ok((value, events))
     }
 
     async fn send_with_boundary(
-        &self, expected_epoch: Option<u64>, method: &str, params: Value,
-        session: Option<&SessionId>, boundary: Option<oneshot::Sender<broadcast::Receiver<CdpEvent>>>,
+        &self,
+        expected_epoch: Option<u64>,
+        method: &str,
+        params: Value,
+        session: Option<&SessionId>,
+        boundary: Option<oneshot::Sender<broadcast::Receiver<CdpEvent>>>,
     ) -> Result<Value, CdpError> {
         let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
         let mut frame = serde_json::Map::new();
@@ -327,7 +337,13 @@ impl CdpClient {
         }
         frame.push('}');
         let response = self
-            .send_frame(expected_epoch, id, method, Message::Text(frame.into()), None)
+            .send_frame(
+                expected_epoch,
+                id,
+                method,
+                Message::Text(frame.into()),
+                None,
+            )
             .await?;
         serde_json::to_string(&response).map_err(CdpError::from)
     }
@@ -365,7 +381,13 @@ impl CdpClient {
         boundary: Option<oneshot::Sender<broadcast::Receiver<CdpEvent>>>,
     ) -> Result<Value, CdpError> {
         let (tx, rx) = oneshot::channel();
-        self.inner.pending.lock().await.insert(id, PendingSender { reply: tx, boundary });
+        self.inner.pending.lock().await.insert(
+            id,
+            PendingSender {
+                reply: tx,
+                boundary,
+            },
+        );
         let _slot = PendingSlot {
             inner: Arc::clone(&self.inner),
             id,

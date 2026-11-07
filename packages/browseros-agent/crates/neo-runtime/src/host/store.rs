@@ -129,6 +129,7 @@ impl HostStore for MemoryStore {
                 .get(run)
                 .is_some_and(|key| memory.withheld.contains(key));
             let key = (run.clone(), call_id);
+            let new_image = artifacts.screenshot.is_some() && !withheld;
             if withheld {
                 artifacts.screenshot = None;
             } else if artifacts.screenshot.is_none() {
@@ -137,7 +138,7 @@ impl HostStore for MemoryStore {
                     .get(&key)
                     .and_then(|old| old.screenshot.clone());
             }
-            if artifacts.screenshot.is_some() {
+            if new_image {
                 memory.images.retain(|old| old != &key);
                 memory.images.push_back(key.clone());
             }
@@ -227,5 +228,40 @@ mod tests {
                 .all(|row| row.screenshot.is_none() && row.url == "url")
         );
         assert_eq!(store.withheld().await.unwrap(), [(session, vec![target])]);
+    }
+    #[tokio::test]
+    async fn only_new_images_change_the_newest_64_retention_order() {
+        let store = MemoryStore::default();
+        let run = RunId::mint();
+        let session = SessionKey::new("bounded-images");
+        store.record_run(&session, &run, &[]).await;
+        let value = CallArtifacts {
+            tab: TabId::parse(1).unwrap(),
+            url: "facts".to_string(),
+            title: "title".to_string(),
+            screenshot: Some(Bytes::from_static(b"jpeg")),
+        };
+        for call in 0..70 {
+            store
+                .put_artifacts(&run, Some(call), value.clone())
+                .await
+                .unwrap();
+        }
+        let mut facts = value.clone();
+        facts.screenshot = None;
+        facts.url = "late facts".to_string();
+        store.put_artifacts(&run, Some(6), facts).await.unwrap();
+        store.put_artifacts(&run, Some(70), value).await.unwrap();
+        let rows = store.artifacts(&run).await;
+        assert_eq!(
+            rows.values().filter(|row| row.screenshot.is_some()).count(),
+            64
+        );
+        assert!(
+            rows[&Some(6)].screenshot.is_none(),
+            "facts alone cannot promote an older image"
+        );
+        assert_eq!(rows[&Some(6)].url, "late facts");
+        assert!(rows[&Some(70)].screenshot.is_some());
     }
 }

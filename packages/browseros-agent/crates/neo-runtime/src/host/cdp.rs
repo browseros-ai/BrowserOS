@@ -83,13 +83,16 @@ pub(crate) fn seed(reply: browser::GetTabsResult) -> DirectoryInput {
 /// strictly after its reply. This is the freshness boundary described in design §7.
 pub(crate) async fn discover_and_seed(
     link: &HostLink,
-) -> Result<(DirectoryInput, broadcast::Receiver<CdpEvent>), LinkError> {
+) -> Result<(u64, DirectoryInput, broadcast::Receiver<CdpEvent>), LinkError> {
     let epoch = link.current()?.epoch();
     let _: target::SetDiscoverTargetsResult = send_at(
         link.client(),
         epoch,
         "Target.setDiscoverTargets",
-        json!({"discover":true}),
+        target::SetDiscoverTargetsParams {
+            discover: true,
+            ..target::SetDiscoverTargetsParams::default()
+        },
         None,
     )
     .await?;
@@ -98,6 +101,7 @@ pub(crate) async fn discover_and_seed(
         .send_at_epoch_with_events(epoch, "Browser.getTabs", json!({"includeHidden":true}))
         .await?;
     Ok((
+        epoch,
         seed(serde_json::from_value(reply).map_err(CdpError::from)?),
         events,
     ))
@@ -261,6 +265,7 @@ pub(crate) const STILL_LADDER: [StillRung; 3] = [
 
 /// One browser-level page-facts read. `None` means the tab closed; only that case may use the
 /// directory's tombstone. Other failures are permanent absence, never filled from live state.
+/// The after-call read ports `apps/claw-server/src/api/mcp/observers/audit.rs:117-121` (origin/main).
 pub(crate) async fn tab_facts(
     link: &HostLink,
     target: &PageId,

@@ -38,7 +38,7 @@ async fn harness() -> Harness {
         .await
         .expect("connect the host link");
     let presences = Arc::new(Presences::new(Arc::clone(&link)));
-    let hub = CaptureHub::new(link, presences, shutdown.clone());
+    let hub = CaptureHub::new(link, presences, Arc::default(), shutdown.clone());
     Harness {
         hub,
         browser,

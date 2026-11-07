@@ -1,7 +1,8 @@
 //! The host's single writer: tap → ledger, socket discovery → directory, jobs → persistence
 //! fences. Public snapshots are mirrored under a short lock that the run path never takes.
 //! End/privacy revocations also update that mirror synchronously; the writer imports them
-//! before publishing, so a queued event cannot briefly resurrect a revoked view.
+//! before publishing, so a queued event cannot briefly resurrect a revoked view. A damaged
+//! session that lost its release marker cannot expire; it ends only explicitly or on restart.
 
 use std::collections::{HashMap, HashSet};
 use std::future;
@@ -21,6 +22,7 @@ use crate::host::directory::{DirectoryInput, TabTable};
 use crate::host::events::HostEvent;
 use crate::host::link::HostLink;
 use crate::host::presence::Presences;
+use crate::host::privacy::Taint;
 use crate::host::sessions::{Admitted, Completion, Job, JobKind, Ledger, Phase};
 use crate::host::store::CallArtifacts;
 use crate::host::view::FollowView;
@@ -33,11 +35,7 @@ const RETAIN_SETTLED: Duration = Duration::from_hours(1);
 pub(super) const JOB_INGRESS: usize = 1024;
 
 type Durability = watch::Sender<Option<Result<(), HostError>>>;
-type WithholdReply = (
-    watch::Receiver<Option<Result<(), HostError>>>,
-    bool,
-    Vec<PageId>,
-);
+type WithholdReply = (watch::Receiver<Option<Result<(), HostError>>>, bool);
 
 pub(super) enum Command {
     Admit {
@@ -55,7 +53,7 @@ pub(super) struct Published {
     slots: HashMap<SessionKey, Slot>,
     ended: HashSet<SessionKey>,
     withholds: HashMap<SessionKey, Durability>,
-    taint: HashSet<PageId>,
+    taint: Arc<Taint>,
     gates: HashMap<PageId, CancellationToken>,
 }
 
@@ -64,6 +62,9 @@ struct Slot {
     view: FollowView,
     follow: Option<watch::Sender<FollowView>>,
     targets: Vec<PageId>,
+    /// Directory facts for all ranked tabs let a synchronous privacy read skip a newly tainted
+    /// current tab, using the same order as capture even while the actor cannot republish.
+    tabs: HashMap<PageId, TabRef>,
 }
 
 impl Slot {
@@ -82,8 +83,26 @@ impl Slot {
 }
 
 impl Published {
+    pub(super) fn new(taint: Arc<Taint>) -> Self {
+        Self {
+            taint,
+            ..Self::default()
+        }
+    }
+
     pub(super) fn view(&self, key: &SessionKey) -> Option<SessionView> {
-        Some(self.slots.get(key)?.snapshot.borrow().clone())
+        let slot = self.slots.get(key)?;
+        let mut snapshot = slot.snapshot.borrow().clone();
+        snapshot.current_tab = (slot.view.live && !slot.view.withheld)
+            .then(|| {
+                slot.view
+                    .tabs
+                    .iter()
+                    .find(|shown| !self.taint.contains(&shown.target))
+            })
+            .flatten()
+            .and_then(|shown| slot.tabs.get(&shown.target).cloned());
+        Some(snapshot)
     }
 
     pub(super) fn subscribe(&self, key: &SessionKey) -> Option<watch::Receiver<SessionView>> {
@@ -113,25 +132,20 @@ impl Published {
         }
     }
 
-    pub(super) fn withhold(&mut self, key: &SessionKey) -> WithholdReply {
+    pub(super) fn withhold(&mut self, key: &SessionKey, targets: &[PageId]) -> WithholdReply {
         if let Some(durability) = self.withholds.get(key) {
-            return (durability.subscribe(), false, Vec::new());
+            return (durability.subscribe(), false);
         }
         let durability = watch::Sender::new(None);
         let receiver = durability.subscribe();
         self.withholds.insert(key.clone(), durability);
-        let targets = self
-            .slots
-            .get(key)
-            .map(|slot| slot.targets.clone())
-            .unwrap_or_default();
-        self.revoke_targets(&targets);
+        self.revoke_targets(targets);
         if let Some(slot) = self.slots.get_mut(key) {
             slot.view.withheld = true;
             slot.snapshot.send_modify(|view| view.withheld = true);
             slot.notify();
         }
-        (receiver, true, targets)
+        (receiver, true)
     }
 
     pub(super) fn withhold_failed(&self, key: &SessionKey) {
@@ -145,7 +159,6 @@ impl Published {
             return;
         }
         for target in targets {
-            self.taint.insert(target.clone());
             self.gates.entry(target.clone()).or_default().cancel();
         }
         for slot in self.slots.values_mut() {
@@ -173,6 +186,7 @@ pub(super) struct Work {
     pub(super) fallback: Option<CallArtifacts>,
     pub(super) revoked: CancellationToken,
     pub(super) newest: CancellationToken,
+    pub(super) taint: Arc<Taint>,
     settled: mpsc::UnboundedSender<SessionKey>,
 }
 
@@ -184,8 +198,15 @@ impl Work {
             fallback: None,
             revoked: CancellationToken::new(),
             newest: CancellationToken::new(),
+            taint: Arc::default(),
             settled,
         }
+    }
+}
+
+impl Work {
+    pub(super) fn tainted(&self) -> bool {
+        self.taint.contains(&self.job.page)
     }
 }
 
@@ -215,15 +236,23 @@ pub(super) async fn start(
     shutdown: CancellationToken,
 ) -> Result<(Host, Jobs), HostError> {
     let withheld = options.store.withheld().await?;
-    let mut ledger = Ledger::new(options.idle);
+    link.require_directory();
+    let ledger = Ledger::with_taint(options.idle, Arc::clone(&hub.privacy.taint));
     let restored: Vec<_> = withheld
-        .into_iter()
-        .flat_map(|(_, targets)| targets)
+        .iter()
+        .flat_map(|(_, targets)| targets.iter().cloned())
         .collect();
-    ledger.restore_taint(restored.iter().cloned());
+    for (key, targets) in &withheld {
+        hub.privacy.restore(key, targets);
+    }
     let (host, commands) = Host::build(options, Some(hub), shutdown.clone());
     if let Ok(mut published) = host.0.published.lock() {
         published.revoke_targets(&restored);
+        for (key, _) in withheld {
+            published
+                .withholds
+                .insert(key, watch::Sender::new(Some(Ok(()))));
+        }
     }
     let (jobs, waiting) = mpsc::channel(JOB_INGRESS);
     let (results, artifacts) = mpsc::channel(JOB_INGRESS);
@@ -234,6 +263,7 @@ pub(super) async fn start(
     let task = Task {
         host: host.clone(),
         ledger,
+        link,
         tabs: TabTable::default(),
         presences,
         commands,
@@ -247,6 +277,7 @@ pub(super) async fn start(
         writes: JoinSet::new(),
         completion: HashMap::new(),
         latest: HashMap::new(),
+        refused_jobs: 0,
     };
     tokio::spawn(task.run());
     Ok((host, Jobs { waiting, results }))
@@ -260,13 +291,19 @@ enum Fence {
     Complete(Instant),
 }
 
+struct DirectoryUpdate {
+    input: DirectoryInput,
+    epoch: u64,
+}
+
 struct Task {
     host: Host,
     ledger: Ledger,
+    link: Arc<HostLink>,
     tabs: TabTable,
     presences: Arc<Presences>,
     commands: mpsc::UnboundedReceiver<Command>,
-    inputs: mpsc::Receiver<DirectoryInput>,
+    inputs: mpsc::Receiver<DirectoryUpdate>,
     jobs: mpsc::Sender<Work>,
     artifacts: mpsc::Receiver<Artifacts>,
     settled: mpsc::UnboundedSender<SessionKey>,
@@ -276,6 +313,7 @@ struct Task {
     writes: JoinSet<()>,
     completion: HashMap<SessionKey, Fence>,
     latest: HashMap<SessionKey, CancellationToken>,
+    refused_jobs: u64,
 }
 
 impl Task {
@@ -289,14 +327,18 @@ impl Task {
                     Some(event) => self.event(event),
                     None => break,
                 },
-                input = self.inputs.recv() => if let Some(input) = input {
-                    self.tabs.apply(input, Instant::now());
+                input = self.inputs.recv(), if !self.inputs.is_closed() || !self.inputs.is_empty() => if let Some(update) = input
+                    && (matches!(update.input, DirectoryInput::Lost | DirectoryInput::Destroyed(_))
+                        || update.epoch == self.link.client().epoch()) {
+                        let seeded = matches!(update.input, DirectoryInput::Seeded(_));
+                        self.tabs.apply(update.input, Instant::now());
+                        if seeded { self.link.directory_seeded(update.epoch); }
                 },
                 command = self.commands.recv() => if let Some(command) = command {
                     let shutdown = self.host.0.shutdown.clone();
                     tokio::select! { () = shutdown.cancelled() => break, () = self.command(command) => {} }
                 },
-                artifacts = self.artifacts.recv(), if self.writes.len() < 8 => if let Some(artifacts) = artifacts {
+                artifacts = self.artifacts.recv(), if self.writes.len() < 8 && (!self.artifacts.is_closed() || !self.artifacts.is_empty()) => if let Some(artifacts) = artifacts {
                     self.persist(artifacts);
                 },
                 _ = self.writes.join_next(), if !self.writes.is_empty() => {},
@@ -377,10 +419,15 @@ impl Task {
                 fallback,
                 revoked,
                 newest,
+                taint: Arc::clone(&self.host.0.privacy.taint),
                 settled: self.settled.clone(),
             };
             if self.jobs.try_send(work).is_err() {
-                warn!("host after-call ingress full; finalizing absence");
+                self.refused_jobs += 1;
+                warn!(
+                    refused = self.refused_jobs,
+                    "host after-call ingress full; finalizing absence"
+                );
             }
         }
     }
@@ -403,6 +450,10 @@ impl Task {
                         break key;
                     }
                 };
+                // A synchronous end can arrive while the store check awaits. Import it at
+                // the actual admission boundary, or a pass could join an already ended key.
+                self.controls();
+                self.ledger.expire(Instant::now());
                 let admitted =
                     self.ledger
                         .admit_with_key(label.as_ref(), known, Instant::now(), candidate);
@@ -456,7 +507,7 @@ impl Task {
         if work.job.kind == JobKind::Still
             && (work.revoked.is_cancelled()
                 || work.newest.is_cancelled()
-                || self.ledger.tainted(&work.job.page)
+                || work.tainted()
                 || self
                     .ledger
                     .view(&work.job.session, &self.tabs)
@@ -469,6 +520,11 @@ impl Task {
         };
         let store = Arc::clone(&self.host.0.options.store);
         self.writes.spawn(async move {
+            // This is the store admission decision, after scheduling too. A taint insert
+            // while the actor was blocked invalidates a completed screenshot here.
+            if work.job.kind == JobKind::Still && work.tainted() {
+                return;
+            }
             if let Err(error) = store
                 .put_artifacts(&work.job.run, work.job.call_id, value)
                 .await
@@ -538,10 +594,11 @@ impl Task {
             return;
         };
         let keys: Vec<_> = self.ledger.keys().cloned().collect();
-        let tainted: Vec<_> = keys
+        let tainted: Vec<_> = published
+            .gates
             .iter()
-            .flat_map(|key| self.ledger.touched(key))
-            .filter(|target| self.ledger.tainted(target) && !published.taint.contains(target))
+            .filter(|(target, gate)| published.taint.contains(target) && !gate.is_cancelled())
+            .map(|(target, _)| target.clone())
             .collect();
         published.revoke_targets(&tainted);
         if let Some(hub) = &self.host.0.captures {
@@ -595,7 +652,24 @@ impl Task {
                 view: view.clone(),
                 follow: None,
                 targets: Vec::new(),
+                tabs: HashMap::new(),
             });
+            slot.tabs = view
+                .tabs
+                .iter()
+                .filter_map(|shown| {
+                    let entry = self.tabs.open(&shown.target)?;
+                    Some((
+                        shown.target.clone(),
+                        TabRef {
+                            page: shown.target.clone(),
+                            tab: shown.tab,
+                            url: entry.url.clone(),
+                            title: entry.title.clone(),
+                        },
+                    ))
+                })
+                .collect();
             slot.view = view;
             slot.targets = self.ledger.touched(&key);
             slot.snapshot.send_if_modified(|old| {
@@ -633,6 +707,7 @@ impl Task {
             .collect();
         for key in doomed {
             self.ledger.forget(&key);
+            self.host.0.privacy.forget(&key);
             self.completion.remove(&key);
             self.latest.remove(&key);
             published.slots.remove(&key);
@@ -665,19 +740,25 @@ async fn sleep_until(deadline: Option<Instant>) {
 
 async fn watch_directory(
     link: Arc<HostLink>,
-    directory: mpsc::Sender<DirectoryInput>,
+    directory: mpsc::Sender<DirectoryUpdate>,
     shutdown: CancellationToken,
 ) {
     let mut generations = link.generations();
     loop {
         let mut events = link.events();
-        let _ = directory.send(DirectoryInput::Lost).await;
+        link.directory_lost();
+        let _ = directory
+            .send(DirectoryUpdate {
+                input: DirectoryInput::Lost,
+                epoch: link.client().epoch(),
+            })
+            .await;
         let seeded = tokio::select! {
             () = shutdown.cancelled() => return,
             _ = generations.changed() => continue,
             seed = cdp::discover_and_seed(&link) => seed,
         };
-        let Ok((seed, after_reply)) = seeded else {
+        let Ok((epoch, seed, after_reply)) = seeded else {
             tokio::select! { () = shutdown.cancelled() => return, () = time::sleep(cdp::WATCHDOG_INTERVAL) => {} }
             continue;
         };
@@ -690,7 +771,10 @@ async fn watch_directory(
             match events.try_recv() {
                 Ok(event) => {
                     if let Some(input @ DirectoryInput::Destroyed(_)) = cdp::directory_input(&event)
-                        && directory.send(input).await.is_err()
+                        && directory
+                            .send(DirectoryUpdate { input, epoch })
+                            .await
+                            .is_err()
                     {
                         return;
                     }
@@ -705,7 +789,11 @@ async fn watch_directory(
         if lagged {
             continue;
         }
-        if directory.send(seed).await.is_err() {
+        if directory
+            .send(DirectoryUpdate { input: seed, epoch })
+            .await
+            .is_err()
+        {
             return;
         }
         events = after_reply;
@@ -718,7 +806,10 @@ async fn watch_directory(
             match event {
                 Ok(event) => {
                     if let Some(input) = cdp::directory_input(&event)
-                        && directory.send(input).await.is_err()
+                        && directory
+                            .send(DirectoryUpdate { input, epoch })
+                            .await
+                            .is_err()
                     {
                         return;
                     }
@@ -743,9 +834,12 @@ mod tests {
     use crate::host::tap::TAP_QUEUE;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+    use bytes::Bytes;
+    use futures_util::StreamExt;
     use futures_util::future::BoxFuture;
     use serde_json::json;
     use tokio::sync::{Mutex, Notify};
+    use tokio::task;
 
     use super::*;
     use crate::fake_host_cdp::FakeHostCdp;
@@ -761,12 +855,23 @@ mod tests {
         release: Notify,
         checks: Mutex<Vec<SessionKey>>,
         collide: AtomicBool,
+        admission_blocked: AtomicBool,
+        admission_waiting: Notify,
+        admission_release: Notify,
     }
 
     impl HostStore for Store {
         fn knows<'a>(&'a self, key: &'a SessionKey) -> BoxFuture<'a, Result<bool, StoreError>> {
             Box::pin(async move {
                 self.checks.lock().await.push(key.clone());
+                if (key.as_str() == "hold-admission" || key.as_str().len() == 8)
+                    && self.admission_blocked.load(Ordering::SeqCst)
+                {
+                    self.admission_waiting.notify_one();
+                    while self.admission_blocked.load(Ordering::SeqCst) {
+                        self.admission_release.notified().await;
+                    }
+                }
                 if key.as_str().len() == 8 && self.collide.swap(false, Ordering::SeqCst) {
                     return Ok(true);
                 }
@@ -800,6 +905,7 @@ mod tests {
 
     struct Harness {
         browser: FakeHostCdp,
+        link: Arc<HostLink>,
         host: Host,
         jobs: Jobs,
         store: Arc<Store>,
@@ -817,17 +923,23 @@ mod tests {
                 .await
                 .unwrap();
             let presences = Arc::new(Presences::new(Arc::clone(&link)));
-            let hub = CaptureHub::new(Arc::clone(&link), Arc::clone(&presences), shutdown.clone());
+            let hub = CaptureHub::new(
+                Arc::clone(&link),
+                Arc::clone(&presences),
+                Arc::default(),
+                shutdown.clone(),
+            );
             let store = Arc::new(Store::default());
             let mut options =
                 HostOptions::new(browser.port(), 8, Arc::clone(&store) as Arc<dyn HostStore>);
             options.idle = idle;
-            let (host, jobs) = start(options, link, presences, hub, shutdown)
+            let (host, jobs) = start(options, Arc::clone(&link), presences, hub, shutdown)
                 .await
                 .unwrap();
             browser.wait_for("Browser.getTabs", 1).await;
             Self {
                 browser,
+                link,
                 host,
                 jobs,
                 store,
@@ -1080,7 +1192,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn startup_restores_taint_and_complete_entries_are_evicted_after_an_hour() {
+    async fn complete_entries_are_evicted_after_an_hour() {
         let mut h = Harness::new(Duration::from_mins(1)).await;
         let pass = h.host.admit_run(Some(&SessionKey::new("evict-me"))).await;
         let key = pass.session().clone();
@@ -1096,7 +1208,14 @@ mod tests {
         h.host.end_session(&key);
         drop(pass);
         until(&h.host, &key, |view| view.complete).await;
-        time::sleep(RETAIN_SETTLED + Duration::from_secs(1)).await;
+        time::advance(RETAIN_SETTLED + Duration::from_secs(1)).await;
+        time::timeout(Duration::from_secs(5), async {
+            while h.host.view(&key).is_some() {
+                task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         assert!(h.host.view(&key).is_none());
         let next = h.host.admit_run(Some(&key)).await;
         assert_ne!(next.session(), &key);
@@ -1170,5 +1289,369 @@ mod tests {
             .discovery("Target.targetInfoChanged", "one", 1, "later");
         time::sleep(Duration::from_millis(100)).await;
         assert!(!h.store.memory.artifacts(&run).await.contains_key(&Some(1)));
+    }
+    #[tokio::test(start_paused = true)]
+    async fn a_lagged_directory_ring_reseeds_on_the_same_epoch() {
+        let h = Harness::new(Duration::from_mins(1)).await;
+        let pass = h.host.admit_run(None).await;
+        let (_, _ending) = run(&h.host, pass.session(), "one");
+        until(&h.host, pass.session(), |view| view.current_tab.is_some()).await;
+        let marker = h
+            .link
+            .attach(&PageId::new("one".to_string()))
+            .await
+            .unwrap();
+        h.store.admission_blocked.store(true, Ordering::SeqCst);
+        let blocked = tokio::spawn({
+            let host = h.host.clone();
+            async move {
+                host.admit_run(Some(&SessionKey::new("hold-admission")))
+                    .await
+            }
+        });
+        h.store.admission_waiting.notified().await;
+        h.browser
+            .set_tabs(vec![FakeHostCdp::tab("one", 1, "reseeded")]);
+        for _ in 0..8192 {
+            h.browser
+                .discovery("Target.targetInfoChanged", "one", 1, "lost");
+        }
+        h.browser.detach(marker.session.as_str());
+        time::timeout(Duration::from_secs(20), marker.gone())
+            .await
+            .unwrap();
+        h.store.admission_blocked.store(false, Ordering::SeqCst);
+        h.store.admission_release.notify_one();
+        drop(blocked.await.unwrap());
+        h.browser.wait_for("Browser.getTabs", 2).await;
+        until(&h.host, pass.session(), |view| {
+            view.current_tab
+                .as_ref()
+                .is_some_and(|tab| tab.url == "reseeded")
+        })
+        .await;
+        assert!(
+            h.browser
+                .commands()
+                .iter()
+                .all(|command| command.connection == 1),
+            "lag alone triggered the reseed"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_follower_releases_only_after_the_new_epochs_seed_reply() {
+        let h = Harness::new(Duration::from_mins(1)).await;
+        let pass = h.host.admit_run(None).await;
+        let (_, _ending) = run(&h.host, pass.session(), "one");
+        until(&h.host, pass.session(), |view| view.current_tab.is_some()).await;
+        let mut frames = h
+            .host
+            .screencast(pass.session(), Quality::Low, None)
+            .await
+            .unwrap();
+        h.browser.delay_seeds(Duration::from_secs(2));
+        h.browser
+            .set_tabs(vec![FakeHostCdp::tab("one", 1, "fresh-epoch")]);
+        h.browser.drop_connection();
+        h.browser.wait_for("Browser.getTabs", 2).await;
+        assert_eq!(
+            h.browser.sent("Page.startScreencast").len(),
+            1,
+            "the new socket cannot capture before its seed reply"
+        );
+        let capture = h.browser.session_of("Page.startScreencast", 1).await;
+        h.browser.frame(&capture, b"fresh", Some(1.0));
+        let frame = time::timeout(Duration::from_secs(10), frames.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(frame.url, "fresh-epoch");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn startup_restores_withheld_flags_and_target_taint() {
+        let h = Harness::new(Duration::from_mins(1)).await;
+        let old = SessionKey::new("private-before-restart");
+        let page = PageId::new("one".to_string());
+        h.store
+            .memory
+            .record_run(&old, &RunId::mint(), slice::from_ref(&page))
+            .await;
+        h.store.memory.withhold(&old).await.unwrap();
+        h.host.shutdown();
+        h.host.stopped().await;
+        let shutdown = CancellationToken::new();
+        let link = HostLink::connect(h.browser.port(), shutdown.clone())
+            .await
+            .unwrap();
+        let presences = Arc::new(Presences::new(Arc::clone(&link)));
+        let hub = CaptureHub::new(
+            Arc::clone(&link),
+            Arc::clone(&presences),
+            Arc::default(),
+            shutdown.clone(),
+        );
+        let (host, mut jobs) = start(
+            HostOptions::new(
+                h.browser.port(),
+                1,
+                Arc::clone(&h.store) as Arc<dyn HostStore>,
+            ),
+            link,
+            presences,
+            hub,
+            shutdown,
+        )
+        .await
+        .unwrap();
+        let pass = host.admit_run(Some(&old)).await;
+        assert!(host.view(&old).unwrap().withheld);
+        assert_ne!(pass.session(), &old);
+        let (_, ending) = run(&host, pass.session(), "one");
+        ending.ended(RunStatus::Ok);
+        let facts = time::timeout(Duration::from_secs(5), jobs.waiting.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(facts.job.kind, JobKind::Facts);
+        assert!(
+            host.follow(pass.session())
+                .unwrap()
+                .borrow()
+                .tabs
+                .is_empty()
+        );
+        let key = pass.session().clone();
+        host.end_session(&key);
+        drop(pass);
+        drop(facts);
+        assert!(until(&host, &key, |view| view.complete).await.complete);
+        assert!(
+            jobs.waiting.try_recv().is_err(),
+            "a restored tainted tab gets no still job"
+        );
+        host.shutdown();
+        host.stopped().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn withholding_stops_shared_streams_and_discards_the_other_sessions_in_flight_still() {
+        let mut h = Harness::new(Duration::from_mins(1)).await;
+        let a = h.host.admit_run(None).await;
+        let b = h.host.admit_run(None).await;
+        let (_, _a_end) = run(&h.host, a.session(), "one");
+        let (other, _b_end) = run(&h.host, b.session(), "one");
+        until(&h.host, a.session(), |view| view.current_tab.is_some()).await;
+        until(&h.host, b.session(), |view| view.current_tab.is_some()).await;
+        let mut first = h
+            .host
+            .screencast(a.session(), Quality::Low, None)
+            .await
+            .unwrap();
+        let mut second = h
+            .host
+            .screencast(b.session(), Quality::Low, None)
+            .await
+            .unwrap();
+        let capture = h.browser.session_of("Page.startScreencast", 0).await;
+        other.call_started(
+            1,
+            Some(&PageId::new("one".to_string())),
+            true,
+            SystemTime::now(),
+        );
+        other.call_ended(1, &CallResult::Ok);
+        drop(h.job().await);
+        let work = h.job().await;
+        let run = work.job.run.clone();
+        let mut value = work.fallback.clone().unwrap();
+        value.screenshot = Some(Bytes::from_static(b"late screenshot"));
+        h.store.memory.record_run(b.session(), &run, &[]).await;
+        h.host.withhold(a.session()).await.unwrap();
+        h.browser.frame(&capture, b"secret", Some(1.0));
+        h.jobs
+            .results
+            .send(Artifacts {
+                work,
+                value: Some(value),
+            })
+            .await
+            .ok()
+            .unwrap();
+        assert!(
+            time::timeout(Duration::from_secs(5), first.next())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            time::timeout(Duration::from_millis(100), second.next())
+                .await
+                .is_err(),
+            "the other live session gets no frame of the tainted tab"
+        );
+        assert!(
+            h.store.memory.artifacts(&run).await.is_empty(),
+            "revoked in-flight results cannot reach persistence"
+        );
+    }
+    #[tokio::test(start_paused = true)]
+    async fn an_end_during_a_store_await_closes_admission_under_that_key() {
+        let h = Harness::new(Duration::from_mins(1)).await;
+        let label = SessionKey::new("live-label");
+        let first = h.host.admit_run(Some(&label)).await;
+        h.store.admission_blocked.store(true, Ordering::SeqCst);
+        let admitting = tokio::spawn({
+            let host = h.host.clone();
+            let label = label.clone();
+            async move { host.admit_run(Some(&label)).await }
+        });
+        h.store.admission_waiting.notified().await;
+        h.host.end_session(&label);
+        h.store.admission_blocked.store(false, Ordering::SeqCst);
+        h.store.admission_release.notify_one();
+        let next = admitting.await.unwrap();
+        assert_ne!(
+            next.session(),
+            first.session(),
+            "an end during the candidate check still forces a successor"
+        );
+        assert_eq!(next.successor_of(), Some(&label));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn privacy_before_a_first_run_revokes_its_target_before_the_tap_is_consumed() {
+        let h = Harness::new(Duration::from_mins(1)).await;
+        let watching = h.host.admit_run(None).await;
+        let (_, _watching_run) = run(&h.host, watching.session(), "one");
+        until(&h.host, watching.session(), |view| {
+            view.current_tab.is_some()
+        })
+        .await;
+        let mut frames = h
+            .host
+            .screencast(watching.session(), Quality::Low, None)
+            .await
+            .unwrap();
+        let capture = h.browser.session_of("Page.startScreencast", 0).await;
+
+        let private = h.host.admit_run(None).await;
+        h.host.withhold(private.session()).await.unwrap();
+        h.store.admission_blocked.store(true, Ordering::SeqCst);
+        let blocked = tokio::spawn({
+            let host = h.host.clone();
+            async move {
+                host.admit_run(Some(&SessionKey::new("hold-admission")))
+                    .await
+            }
+        });
+        h.store.admission_waiting.notified().await;
+
+        // A private run may emit RunStarted and execute its first input while the actor is
+        // awaiting unrelated store I/O. The emitter must taint before that queued marker is read.
+        let (_, _private_run) = run(&h.host, private.session(), "one");
+        h.browser
+            .frame(&capture, b"pixels after private input", Some(1.0));
+        let received = time::timeout(Duration::from_millis(100), frames.next()).await;
+        h.store.admission_blocked.store(false, Ordering::SeqCst);
+        h.store.admission_release.notify_one();
+        drop(blocked.await.unwrap());
+        assert!(
+            !matches!(received, Ok(Some(_))),
+            "another session must not receive pixels after a private run touches its tab"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_withheld_call_revokes_shared_pixels_before_the_tap_is_consumed() {
+        use crate::fake_browser::{self, FakeBrowser, Replies};
+        use crate::run::RunRequest;
+        use crate::runtime::Runtime;
+
+        let h = Harness::new(Duration::from_mins(1)).await;
+        let browser = FakeBrowser::start(Replies::default()).await;
+        browser.page.lock().unwrap().tabs.push(json!({
+            "targetId":"two", "tabId":2, "url":"https://two.test/", "windowId":1,
+            "liveBrowserContextId":"profile", "isActive":false,
+        }));
+        h.browser.discovery(
+            "Target.targetCreated",
+            fake_browser::PAGE,
+            41,
+            fake_browser::PAGE_URL,
+        );
+        let watching = h.host.admit_run(None).await;
+        let (watcher, _watching_run) = run(&h.host, watching.session(), "one");
+        watcher.call_started(
+            1,
+            Some(&PageId::new(fake_browser::PAGE.to_string())),
+            false,
+            SystemTime::now(),
+        );
+        until(&h.host, watching.session(), |view| {
+            view.current_tab
+                .as_ref()
+                .is_some_and(|tab| tab.page.as_str() == fake_browser::PAGE)
+        })
+        .await;
+        let mut frames = h
+            .host
+            .screencast(watching.session(), Quality::Low, None)
+            .await
+            .unwrap();
+        let capture = h.browser.session_of("Page.startScreencast", 0).await;
+        let mut video = h
+            .host
+            .video(watching.session(), Quality::Low, None)
+            .await
+            .unwrap();
+
+        let private = h.host.admit_run(None).await;
+        h.host.withhold(private.session()).await.unwrap();
+        h.store.admission_blocked.store(true, Ordering::SeqCst);
+        let blocked = tokio::spawn({
+            let host = h.host.clone();
+            async move {
+                host.admit_run(Some(&SessionKey::new("hold-admission")))
+                    .await
+            }
+        });
+        h.store.admission_waiting.notified().await;
+
+        // RunStarted touches another tab. The real dispatcher's later CallStarted, emitted
+        // before its input task, must revoke the watched tab while the host actor is blocked.
+        let runtime = Runtime::connect(browser.cdp().await)
+            .await
+            .unwrap()
+            .with_host_for_test(h.host.clone());
+        let outcome = runtime.run(RunRequest {
+            code: format!("const tabs = await context.pages(); const watched = tabs.find(p => p.url() === {}); await watched.click('#go'); return 'clicked'", json!(fake_browser::PAGE_URL)),
+            page: PageId::new("two".to_string()), timeout: Duration::from_secs(5),
+            cancel: CancellationToken::new(), session: Some(private.session().clone()), artifacts: None,
+        }).await;
+        h.browser
+            .frame(&capture, b"pixels after private click", Some(1.0));
+        let received = time::timeout(Duration::from_millis(100), frames.next()).await;
+        let video_after = time::timeout(Duration::from_secs(5), video.next()).await;
+        let shown_after = h.host.view(watching.session()).unwrap().current_tab;
+        h.store.admission_blocked.store(false, Ordering::SeqCst);
+        h.store.admission_release.notify_one();
+        drop(blocked.await.unwrap());
+        assert_eq!(outcome.status, RunStatus::Ok, "{outcome:#?}");
+        assert_eq!(outcome.value, Some(json!("clicked")));
+        assert_eq!(
+            shown_after.as_ref().map(|tab| tab.page.as_str()),
+            Some("one"),
+            "a snapshot uses the same untainted fallback as the follower while the actor is blocked"
+        );
+        assert!(
+            matches!(video_after, Ok(None)),
+            "video cannot start a fragment after the shared insert"
+        );
+        assert!(
+            !matches!(received, Ok(Some(_))),
+            "CallStarted must suppress another session's next part without waiting for the actor"
+        );
     }
 }

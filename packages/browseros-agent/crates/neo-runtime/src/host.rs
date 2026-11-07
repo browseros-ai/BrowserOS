@@ -3,9 +3,9 @@
 //! it opens nothing extra and runs scripts exactly as before.
 //!
 //! ```text
-//!  run path (dispatch / Trace / Runtime::run / NewPage::keep)
-//!    └─ HostEvent ──▶ tap (one bounded FIFO) ──▶ ledger: sessions, touched tabs, current tab,
-//!                                                 privacy, completion
+//!  run path (method_router / Trace / Runtime::run / NewPage::keep)
+//!    ├─ synchronous privacy touch ──▶ shared add-only taint ──▶ every pixel gate
+//!    └─ HostEvent ──▶ tap (one bounded FIFO) ──▶ ledger: sessions, ordered touches, completion
 //!  host's OWN CDP socket (never the runs' client: frames must not queue behind run commands)
 //!    ├─ Target.* ──▶ directory: target id ↔ BrowserOS tab id, URL, title, open
 //!    ├─ presence per touched tab: the one session that holds focus emulation, so background
@@ -26,6 +26,7 @@ mod events;
 mod ids;
 mod link;
 mod presence;
+mod privacy;
 mod sessions;
 mod store;
 mod tap;
@@ -41,6 +42,7 @@ use tokio::time::{self, Instant};
 use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::host::capture::CaptureHub;
+use crate::host::privacy::Privacy;
 use crate::host::tap::Tap;
 use crate::host::task::{Command, Published};
 use crate::host::view::FollowView;
@@ -101,6 +103,7 @@ pub struct Host(Arc<Inner>);
 
 struct Inner {
     options: HostOptions,
+    privacy: Arc<Privacy>,
     tap: Arc<Tap>,
     commands: mpsc::UnboundedSender<Command>,
     published: Arc<Mutex<Published>>,
@@ -155,7 +158,12 @@ impl Host {
             .await
             .map_err(|error| HostError::Browser(error.to_string()))?;
         let presences = Arc::new(presence::Presences::new(Arc::clone(&link)));
-        let hub = CaptureHub::new(Arc::clone(&link), Arc::clone(&presences), shutdown.clone());
+        let hub = CaptureHub::new(
+            Arc::clone(&link),
+            Arc::clone(&presences),
+            Arc::default(),
+            shutdown.clone(),
+        );
         let started = task::start(
             options,
             Arc::clone(&link),
@@ -182,12 +190,19 @@ impl Host {
         shutdown: CancellationToken,
     ) -> (Self, mpsc::UnboundedReceiver<Command>) {
         let (commands, receiver) = mpsc::unbounded_channel();
+        // Capture is constructed before the actor. Reuse its privacy context so Host, ledger
+        // and all pixel gates reference one set instead of constructing parallel taint facts.
+        let privacy = captures
+            .as_ref()
+            .map_or_else(Arc::default, |hub| Arc::clone(&hub.privacy));
+        let published = Published::new(Arc::clone(&privacy.taint));
         (
             Self(Arc::new(Inner {
                 tap: Arc::new(Tap::new(options.max_runs)),
                 options,
+                privacy,
                 commands,
-                published: Arc::new(Mutex::new(Published::default())),
+                published: Arc::new(Mutex::new(published)),
                 captures,
                 shutdown,
                 stopped: CancellationToken::new(),
@@ -234,23 +249,32 @@ impl Host {
         &self,
         session: &SessionKey,
     ) -> impl Future<Output = Result<(), HostError>> + Send + 'static {
-        let receiver = self.0.published.lock().ok().map(|mut published| {
-            let (receiver, first, targets) = published.withhold(session);
-            if let Some(hub) = &self.0.captures {
-                for target in targets {
-                    hub.end_captures(&target);
+        // Serialize the flag with the emitter's conservative touch union before publishing
+        // or starting durability. Future touches taint synchronously even if the tap is full.
+        let targets = self
+            .0
+            .privacy
+            .session(session)
+            .and_then(|privacy| privacy.withhold());
+        let receiver = targets.and_then(|targets| {
+            self.0.published.lock().ok().map(|mut published| {
+                let (receiver, first) = published.withhold(session, &targets);
+                if let Some(hub) = &self.0.captures {
+                    for target in targets {
+                        hub.end_captures(&target);
+                    }
                 }
-            }
-            if first
-                && self
-                    .0
-                    .commands
-                    .send(Command::Withhold(session.clone()))
-                    .is_err()
-            {
-                published.withhold_failed(session);
-            }
-            receiver
+                if first
+                    && self
+                        .0
+                        .commands
+                        .send(Command::Withhold(session.clone()))
+                        .is_err()
+                {
+                    published.withhold_failed(session);
+                }
+                receiver
+            })
         });
         async move {
             let mut receiver = receiver.ok_or(HostError::Stopped)?;
@@ -264,7 +288,15 @@ impl Host {
 
     #[must_use]
     pub fn view(&self, session: &SessionKey) -> Option<SessionView> {
-        self.0.published.lock().ok()?.view(session)
+        let mut view = self.0.published.lock().ok()?.view(session)?;
+        if view
+            .current_tab
+            .as_ref()
+            .is_some_and(|tab| self.0.privacy.taint.contains(&tab.page))
+        {
+            view.current_tab = None;
+        }
+        Some(view)
     }
 
     /// Registers a watch before reading completion, so a flush resolving concurrently cannot
@@ -276,8 +308,7 @@ impl Host {
     ) -> Option<SessionView> {
         let mut changed = self.0.published.lock().ok()?.subscribe(session)?;
         let _ = time::timeout_at(deadline, changed.wait_for(|view| view.complete)).await;
-        let snapshot = changed.borrow().clone();
-        Some(snapshot)
+        self.view(session)
     }
 
     fn follow(&self, session: &SessionKey) -> Result<watch::Receiver<FollowView>, LiveError> {

@@ -186,10 +186,12 @@ impl Runtime {
         self.cleanup.wait().await;
     }
 
-    /// Cancels the host side and waits for its ledger writer to stop. The run client belongs to
-    /// the caller; shutting down the optional host connection does not disconnect that client.
-    /// Stop admission, cancel and await active runs, then call [`Self::drain`] before this, so
-    /// late browser work reaches the host ledger before its consumer stops.
+    /// Cancels the host side and waits for its ledger writer to stop. For server shutdown,
+    /// first stop admission, cancel and await runs, then call [`Runtime::drain`], and finally
+    /// this method. Draining before releasing host presences prevents their detach from
+    /// clearing focus under outstanding input cleanup.
+    ///
+    /// The run client belongs to the caller; this method does not disconnect it or cancel runs.
     pub async fn shutdown(&self) {
         if let Some(host) = &self.host {
             host.shutdown();
@@ -202,6 +204,13 @@ impl Runtime {
     #[cfg(test)]
     pub(crate) fn with_undrained_host(mut self, options: HostOptions) -> Self {
         self.host = Some(Host::new(options));
+        self
+    }
+
+    /// Runs against the same integrated host actor a fake-browser test deliberately stalls.
+    #[cfg(test)]
+    pub(crate) fn with_host_for_test(mut self, host: Host) -> Self {
+        self.host = Some(host);
         self
     }
 
@@ -438,6 +447,7 @@ mod tests {
         let host = runtime.host().unwrap();
         let pass = host.admit_run(None).await;
         let key = pass.session().clone();
+        host.withhold(&key).await.unwrap();
         let running = tokio::spawn({
             let runtime = runtime.clone();
             let key = key.clone();
@@ -479,7 +489,7 @@ mod tests {
         assert!(!host_browser.sent("Browser.getTabInfo").is_empty());
         runtime.shutdown().await;
         assert!(
-            browser.cdp().await.is_connected(),
+            runtime.cdp.is_connected(),
             "host shutdown leaves the run client alone"
         );
     }

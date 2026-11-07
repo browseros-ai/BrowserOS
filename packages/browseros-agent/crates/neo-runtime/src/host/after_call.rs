@@ -9,7 +9,7 @@ use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
 use futures_util::stream::FuturesUnordered;
 use tokio::sync::{Semaphore, SemaphorePermit};
-use tokio::time;
+use tokio::time::{self, Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
@@ -53,6 +53,7 @@ struct Worker {
     pending: HashMap<SessionKey, Still>,
     stills: FuturesUnordered<BoxFuture<'static, Artifacts>>,
     shutdown: CancellationToken,
+    refused: u64,
 }
 
 pub(super) fn spawn(
@@ -71,6 +72,7 @@ pub(super) fn spawn(
             pending: HashMap::new(),
             stills: FuturesUnordered::new(),
             shutdown,
+            refused: 0,
         }
         .run(),
     );
@@ -82,7 +84,9 @@ impl Worker {
             self.start_reads();
             // A newer still or a privacy revocation finalizes old work before taking a slot.
             self.pending.retain(|_, still| {
-                !still.work.revoked.is_cancelled() && !still.work.newest.is_cancelled()
+                !still.work.revoked.is_cancelled()
+                    && !still.work.newest.is_cancelled()
+                    && !still.work.tainted()
             });
             tokio::select! {
                 () = self.shutdown.cancelled() => return,
@@ -110,18 +114,26 @@ impl Worker {
 
     fn enqueue(&mut self, work: Work) {
         if work.job.kind == JobKind::Still
-            && (work.revoked.is_cancelled() || work.newest.is_cancelled())
+            && (work.revoked.is_cancelled() || work.newest.is_cancelled() || work.tainted())
         {
             return;
         }
         if !self.targets.contains_key(&work.job.page) && self.targets.len() >= WAITING_TARGETS {
-            warn!("host after-call target bound reached; finalizing absence");
+            self.refused += 1;
+            warn!(
+                refused = self.refused,
+                "host after-call target bound reached; finalizing absence"
+            );
             return;
         }
         let target = self.targets.entry(work.job.page.clone()).or_default();
         let row = (work.job.run.clone(), work.job.call_id);
         if !target.waiting.contains_key(&row) && target.waiting.len() >= WAITING_PER_TARGET {
-            warn!("host after-call per-target bound reached; finalizing absence");
+            self.refused += 1;
+            warn!(
+                refused = self.refused,
+                "host after-call per-target bound reached; finalizing absence"
+            );
             return;
         }
         target.waiting.entry(row).or_default().push(work);
@@ -167,7 +179,9 @@ impl Worker {
             };
             match (work.job.kind, value) {
                 (JobKind::Still, Some(facts))
-                    if !work.revoked.is_cancelled() && !work.newest.is_cancelled() =>
+                    if !work.revoked.is_cancelled()
+                        && !work.newest.is_cancelled()
+                        && !work.tainted() =>
                 {
                     self.pending
                         .insert(work.job.session.clone(), Still { work, facts });
@@ -192,15 +206,21 @@ async fn screenshot(
     let stop = CancellationToken::new();
     let stopping = stop.clone();
     let page = work.job.page.clone();
+    let taint = Arc::clone(&work.taint);
     // The browser may finish a command after its caller timed out. This detached operation
     // retains the process-wide slot until that reply, preventing timeout storms from exceeding
     // two actual screenshot commands (claw-server visual.rs:305-322, origin/main).
-    let operation = tokio::spawn(async move {
+    let mut changes = work.taint.changes();
+    let mut operation = tokio::spawn(async move {
         let _permit = permit;
         let presence = presences.ensure(&page).await.ok()?;
         let viewport = cdp::screenshot_viewport(presence.session()).await.ok()?;
         for rung in cdp::STILL_LADDER {
-            if revoked.is_cancelled() || newest.is_cancelled() || stopping.is_cancelled() {
+            if revoked.is_cancelled()
+                || newest.is_cancelled()
+                || stopping.is_cancelled()
+                || taint.contains(&page)
+            {
                 return None;
             }
             let jpeg = cdp::capture_still(presence.session(), &viewport, rung)
@@ -212,17 +232,22 @@ async fn screenshot(
         }
         None
     });
-    let image = tokio::select! {
-        () = work.revoked.cancelled() => None,
-        () = work.newest.cancelled() => None,
-        result = time::timeout(cdp::SCREENSHOT_TIMEOUT, operation) => result.ok().and_then(Result::ok).flatten(),
+    let deadline = Instant::now() + cdp::SCREENSHOT_TIMEOUT;
+    let image = loop {
+        if work.tainted() {
+            break None;
+        }
+        tokio::select! {
+            () = work.revoked.cancelled() => break None,
+            () = work.newest.cancelled() => break None,
+            _ = changes.changed() => {},
+            result = time::timeout_at(deadline, &mut operation) => break result.ok().and_then(Result::ok).flatten(),
+        }
     };
     stop.cancel();
     facts.screenshot = image;
-    Artifacts {
-        work,
-        value: facts.screenshot.is_some().then_some(facts),
-    }
+    let value = (facts.screenshot.is_some() && !work.tainted()).then_some(facts);
+    Artifacts { work, value }
 }
 
 #[cfg(test)]
@@ -483,6 +508,7 @@ mod tests {
             pending: HashMap::new(),
             stills: FuturesUnordered::new(),
             shutdown: h.shutdown.clone(),
+            refused: 0,
         };
         for call in 0..=256 {
             worker.enqueue(h.work(JobKind::Facts, call, "one"));
@@ -497,6 +523,7 @@ mod tests {
             worker.enqueue(h.work(JobKind::Facts, 1, &format!("target-{target}")));
         }
         assert_eq!(worker.targets.len(), 1024);
+        assert_eq!(worker.refused, 2);
         worker.start_reads();
         assert_eq!(worker.reads.len(), 8);
         assert_eq!(
@@ -506,5 +533,29 @@ mod tests {
         );
         drop(worker);
         h.settled(1281).await;
+    }
+    #[tokio::test(start_paused = true)]
+    async fn shared_taint_discards_an_in_flight_image_without_a_task_update() {
+        let _turn = ONE_WORKER.lock().await;
+        let mut h = Harness::new().await;
+        h.browser.delay_screenshots(Duration::from_secs(1));
+        let work = h.work(JobKind::Still, 1, "one");
+        let taint = Arc::clone(&work.taint);
+        let old_gate = work.revoked.clone();
+        h.input.send(work).await.ok().unwrap();
+        h.browser.wait_for("Page.captureScreenshot", 1).await;
+        taint.insert(PageId::new("one".to_string()));
+        let result = h.result().await;
+        assert!(
+            !old_gate.is_cancelled(),
+            "no cached actor revocation was needed"
+        );
+        assert!(
+            result.value.is_none(),
+            "the worker reads the shared set before store handoff"
+        );
+        drop(result);
+        h.settled(1).await;
+        time::sleep(Duration::from_secs(2)).await;
     }
 }

@@ -57,7 +57,7 @@ async fn a_background_tab_streams_through_its_presence_and_records_av1() {
     // browser's port to itself, and nothing else on this client takes screencast frames.
     let link = HostLink::over(tab.cdp.clone(), shutdown.clone());
     let presences = Arc::new(Presences::new(Arc::clone(&link)));
-    let hub = CaptureHub::new(link, presences, shutdown.clone());
+    let hub = CaptureHub::new(link, presences, Arc::default(), shutdown.clone());
     let shown = ShownTab {
         target: PageId::new(tab.target_id.clone()),
         tab: tab_id(&tab).await,

@@ -1,7 +1,8 @@
 //! The session ledger. From the run path's events it decides which host sessions are live,
 //! which tabs each worked in, which tab is current, what is withheld, and when a session is
-//! `complete`, a promise `/v1` keeps: once true, never false. Pure: no I/O, no clock reads, no
-//! tasks. The host task owns the only [`Ledger`], applies the tap's events in FIFO order with the
+//! `complete`, a promise `/v1` keeps: once true, never false. No I/O, clock reads or tasks; taint
+//! is read from the host's shared monotonic privacy fact. The host task owns the only [`Ledger`],
+//! applies the tap's events in FIFO order with the
 //! time, and turns what it returns into work.
 //!
 //! ```text
@@ -35,6 +36,7 @@
 
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::time::Instant;
@@ -42,6 +44,7 @@ use tokio::time::Instant;
 use crate::host::directory::TabTable;
 use crate::host::events::HostEvent;
 use crate::host::ids::{EpochMs, SessionKey};
+use crate::host::privacy::Taint;
 use crate::host::view::{FollowView, ShownTab};
 use crate::run::{PageId, RunId};
 
@@ -52,8 +55,8 @@ pub(crate) struct Ledger {
     sessions: HashMap<SessionKey, Session>,
     /// Targets any withheld session touched. No session shows them or gets a screenshot of them
     /// for the rest of the tab's life, so a second session watching a shared tab cannot see the
-    /// first one's private input. Kept apart from the sessions so it outlives them.
-    taint: HashSet<PageId>,
+    /// first one's private input. A view of the Host's shared set, never a ledger-owned copy.
+    taint: Arc<Taint>,
     /// Touches so far: the arrival order that breaks ties between touches with one start time.
     arrivals: u64,
 }
@@ -68,6 +71,8 @@ struct Session {
     touches: HashMap<PageId, TouchKey>,
     /// Its runs that started and have not ended.
     runs: HashMap<RunId, Run>,
+    /// Ordered projection for views and jobs. The synchronous emitter flag lives in privacy.rs;
+    /// pixel revocation reads shared taint and never waits for this task-owned cell.
     withheld: bool,
     /// Jobs handed out and not settled yet.
     pending: usize,
@@ -178,11 +183,16 @@ pub(crate) enum Completion {
 }
 
 impl Ledger {
+    #[cfg(test)]
     pub(crate) fn new(idle: Duration) -> Self {
+        Self::with_taint(idle, Arc::default())
+    }
+
+    pub(crate) fn with_taint(idle: Duration, taint: Arc<Taint>) -> Self {
         Self {
             idle,
             sessions: HashMap::new(),
-            taint: HashSet::new(),
+            taint,
             arrivals: 0,
         }
     }
@@ -270,7 +280,8 @@ impl Ledger {
     ///   the session is withheld or the tab tainted.
     ///
     /// A touch (a run starting on a tab, a call naming one, a run creating one) moves the
-    /// session's current tab; a withheld session's touch taints the tab. A consumed
+    /// session's current tab; the emitter already tainted a withheld session's target before
+    /// queueing that touch. A consumed
     /// `PassReleased` counts its run over and restarts the idle clock at `now`.
     ///
     /// Events of a session with no outstanding pass are ignored: no admitted run can still emit
@@ -292,7 +303,7 @@ impl Ledger {
         };
         let jobs = match event {
             HostEvent::RunStarted { run, page, at, .. } => {
-                session.touch(&page, at, taint, arrivals);
+                session.touch(&page, at, arrivals);
                 session.runs.entry(run).or_insert_with(|| {
                     let targets = HashSet::from([page.clone()]);
                     Run {
@@ -312,7 +323,7 @@ impl Ledger {
                 ..
             } => {
                 if let Some(page) = &page {
-                    session.touch(page, at, taint, arrivals);
+                    session.touch(page, at, arrivals);
                 }
                 if let Some(entry) = session.runs.get_mut(&run) {
                     entry.targets.extend(page);
@@ -348,7 +359,7 @@ impl Ledger {
                 let creation = call_id
                     .and_then(|call_id| Some(session.runs.get(&run)?.calls.get(&call_id)?.at));
                 if let Some(at) = creation.or_else(|| session.newest_touch()) {
-                    session.touch(&page, at, taint, arrivals);
+                    session.touch(&page, at, arrivals);
                 }
                 if let Some(entry) = session.runs.get_mut(&run) {
                     entry.targets.insert(page);
@@ -450,11 +461,13 @@ impl Ledger {
 
     /// Taints `targets` again after a restart: the tabs withheld sessions touched, from the trace
     /// store's withheld flags and call targets, so taint outlives the process.
+    #[cfg(test)]
     pub(crate) fn restore_taint(&mut self, targets: impl IntoIterator<Item = PageId>) {
         self.taint.extend(targets);
     }
 
     /// Whether no session may show `target` or keep a screenshot of it.
+    #[cfg(test)]
     pub(crate) fn tainted(&self, target: &PageId) -> bool {
         self.taint.contains(target)
     }
@@ -605,13 +618,7 @@ impl Session {
     }
 
     /// The session worked in `target` with a run or call that started `at`.
-    fn touch(
-        &mut self,
-        target: &PageId,
-        at: EpochMs,
-        taint: &mut HashSet<PageId>,
-        arrivals: &mut u64,
-    ) {
+    fn touch(&mut self, target: &PageId, at: EpochMs, arrivals: &mut u64) {
         *arrivals += 1;
         let touch = TouchKey {
             at,
@@ -621,9 +628,6 @@ impl Session {
             .entry(target.clone())
             .and_modify(|newest| *newest = (*newest).max(touch))
             .or_insert(touch);
-        if self.withheld {
-            taint.insert(target.clone());
-        }
     }
 
     fn newest_touch(&self) -> Option<EpochMs> {
@@ -631,7 +635,7 @@ impl Session {
     }
 
     /// Whether a screenshot of `target` may be taken for this session.
-    fn visible(&self, target: &PageId, taint: &HashSet<PageId>) -> bool {
+    fn visible(&self, target: &PageId, taint: &Taint) -> bool {
         !self.withheld && !taint.contains(target)
     }
 }
@@ -644,11 +648,11 @@ impl Session {
 fn shown_tabs(
     touches: &HashMap<PageId, TouchKey>,
     tabs: &TabTable,
-    taint: &HashSet<PageId>,
+    taint: &Taint,
 ) -> Vec<ShownTab> {
     let mut shown: Vec<(TouchKey, ShownTab)> = touches
         .iter()
-        .filter(|(target, _)| !taint.contains(*target))
+        .filter(|(target, _)| !taint.contains(target))
         .filter_map(|(target, touch)| {
             let entry = tabs.open(target)?;
             let tab = ShownTab {
@@ -1431,10 +1435,12 @@ mod tests {
             Some(Vec::new()),
             "a repeat taints nothing new"
         );
+        // The emitter inserts before the event reaches this reader of the shared set.
+        ledger.taint.insert(page("t3"));
         ledger.apply(script.call(2, Some("t3"), false, 12), t0);
         assert!(
             ledger.tainted(&page("t3")),
-            "a withheld session's later touch taints too"
+            "a withheld session's emitter taint is visible to the ledger too"
         );
         let tabs = directory(&[("t1", 1), ("t2", 2), ("t3", 3)]);
         let view = ledger.view(&label, &tabs).expect("a known session");

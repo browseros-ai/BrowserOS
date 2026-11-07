@@ -24,8 +24,9 @@
 //! - The revocation boundary (the design's §9 point 2): a viewer's stream re-reads the view
 //!   right before it yields each frame or fragment, which is right before the writer starts
 //!   that part. Once the ledger publishes `withheld: true`, or drops a tab from the view, no new
-//!   part of it starts, and the follower clears what waits. The boundary holds at `withhold`'s
-//!   return only because the ledger publishes the new view before `withhold` returns.
+//!   part of it starts. Every yield also reads the shared taint set: an emitter can revoke a
+//!   newly touched tab before the task consumes its event. Taint wakeups drive capture cleanup;
+//!   suppression does not depend on that cleanup or a watch update being scheduled.
 //!
 //! Nothing on the frame path waits on a viewer: frames go Chromium → the link's route → the
 //! capture's newest-frame `watch` → each follower → that viewer's newest-frame slot, so a slow
@@ -58,6 +59,7 @@ use crate::host::cdp;
 use crate::host::ids::{EpochMs, TabId};
 use crate::host::link::HostLink;
 use crate::host::presence::Presences;
+use crate::host::privacy::{Privacy, Taint};
 use crate::host::view::{FollowView, ShownTab};
 use crate::run::PageId;
 use lease::{CaptureKey, FrameDrops, Kind, Lease, RawFrame, Registry};
@@ -112,6 +114,7 @@ pub struct VideoChunks(Pin<Box<dyn Stream<Item = Bytes> + Send>>);
 pub(crate) struct CaptureHub {
     link: Arc<HostLink>,
     presences: Arc<Presences>,
+    pub(super) privacy: Arc<Privacy>,
     captures: Registry,
     drops: Arc<FrameDrops>,
     /// Ends every open stream and capture.
@@ -122,11 +125,13 @@ impl CaptureHub {
     pub(crate) fn new(
         link: Arc<HostLink>,
         presences: Arc<Presences>,
+        privacy: Arc<Privacy>,
         shutdown: CancellationToken,
     ) -> Arc<Self> {
         Arc::new(Self {
             link,
             presences,
+            privacy,
             captures: Registry::default(),
             drops: Arc::default(),
             shutdown,
@@ -143,7 +148,8 @@ impl CaptureHub {
         quality: Quality,
         tab: Option<TabId>,
     ) -> Result<Frames, CaptureError> {
-        let shown = pick(&view.borrow(), tab)?;
+        let taint = self.privacy.taint.changes();
+        let shown = pick(&view.borrow(), tab, &self.privacy.taint)?;
         let lease = self.lease(&shown, Kind::Screencast, quality).await?;
         let viewer = Viewer::new();
         tokio::spawn(Arc::clone(self).follow(
@@ -152,8 +158,9 @@ impl CaptureHub {
             tab,
             Showing::new(shown, lease),
             Arc::clone(&viewer),
+            taint,
         ));
-        Ok(Frames::new(viewer, view))
+        Ok(Frames::new(viewer, view, Arc::clone(&self.privacy.taint)))
     }
 
     /// Streams `tab`, or the view's current tab, as fragmented AV1 MP4. The video stays on
@@ -164,11 +171,23 @@ impl CaptureHub {
         quality: Quality,
         tab: Option<TabId>,
     ) -> Result<VideoChunks, CaptureError> {
-        let shown = pick(&view.borrow(), tab)?;
+        let taint = self.privacy.taint.changes();
+        let shown = pick(&view.borrow(), tab, &self.privacy.taint)?;
         let lease = self.lease(&shown, Kind::Video, quality).await?;
         let viewer = Viewer::new();
-        tokio::spawn(Arc::clone(self).play(view.clone(), shown.tab, lease, Arc::clone(&viewer)));
-        Ok(VideoChunks::new(viewer, view, shown.tab))
+        tokio::spawn(Arc::clone(self).play(
+            view.clone(),
+            shown.tab,
+            lease,
+            Arc::clone(&viewer),
+            taint,
+        ));
+        Ok(VideoChunks::new(
+            viewer,
+            view,
+            shown.tab,
+            Arc::clone(&self.privacy.taint),
+        ))
     }
 
     /// Stops every capture of `target` at once, with no grace period. Withholding taints the
@@ -194,6 +213,14 @@ impl CaptureHub {
         kind: Kind,
         quality: Quality,
     ) -> Result<Lease, CaptureError> {
+        if self.privacy.taint.contains(&tab.target) {
+            return Err(CaptureError::NoOpenTab);
+        }
+        if !self.link.capture_ready() {
+            return Err(CaptureError::Browser(
+                "the tab directory is being reseeded".to_string(),
+            ));
+        }
         let key = CaptureKey {
             target: tab.target.clone(),
             kind,
@@ -215,6 +242,10 @@ impl CaptureHub {
             .ok_or_else(|| CaptureError::Browser("the capture registry is unusable".into()))?
         };
         lease.ready().await.map_err(CaptureError::Browser)?;
+        if self.privacy.taint.contains(&tab.target) {
+            lease.end_now();
+            return Err(CaptureError::NoOpenTab);
+        }
         Ok(lease)
     }
 
@@ -228,6 +259,7 @@ impl CaptureHub {
         pinned: Option<TabId>,
         showing: Showing,
         viewer: Arc<Viewer<Frame>>,
+        mut taint: watch::Receiver<()>,
     ) {
         let mut showing = Some(showing);
         let mut generations = self.link.generations();
@@ -245,6 +277,7 @@ impl CaptureHub {
                 changed = view.changed() => {
                     if changed.is_ok() { Event::Resolve } else { Event::End }
                 }
+                _ = taint.changed() => Event::Resolve,
                 // A new socket: re-lease what the old one ended.
                 changed = generations.changed() => {
                     if changed.is_ok() { Event::Resolve } else { Event::Stop }
@@ -275,7 +308,11 @@ impl CaptureHub {
         // Leaving gives the capture its grace period, unless the newest view ends this stream:
         // then no viewer of it can come back. Judged from the view, not from which wake-up came
         // first, because a withheld view also ends the viewer's stream, so both arrive together.
-        let over = ended || matches!(resolve(&view.borrow(), pinned), Resolved::End);
+        let over = ended
+            || matches!(
+                resolve(&view.borrow(), pinned, &self.privacy.taint),
+                Resolved::End
+            );
         if over && let Some(showing) = showing.take() {
             showing.lease.end_now();
         }
@@ -293,9 +330,15 @@ impl CaptureHub {
         viewer: &Viewer<Frame>,
     ) -> Next {
         loop {
-            let next = match resolve(&view.borrow_and_update(), pinned) {
+            let next = match resolve(&view.borrow_and_update(), pinned, &self.privacy.taint) {
                 Resolved::Show(next) => next,
                 Resolved::Wait => {
+                    if let Some(old) = showing
+                        .as_ref()
+                        .filter(|old| self.privacy.taint.contains(&old.tab.target))
+                    {
+                        self.end_captures(&old.tab.target);
+                    }
                     // The view shows no tab, so the old one will not be shown again: let its
                     // capture's grace period start. A quick return to it rejoins the capture.
                     *showing = None;
@@ -347,6 +390,7 @@ impl CaptureHub {
         tab: TabId,
         lease: Lease,
         viewer: Arc<Viewer<Bytes>>,
+        mut taint: watch::Receiver<()>,
     ) {
         let (mut init, mut fragments) = lease.video();
         let mut started = false;
@@ -356,6 +400,7 @@ impl CaptureHub {
                 () = viewer.gone.cancelled() => Play::Stop,
                 () = viewer.stalled() => Play::Stop,
                 () = lease.capture.ended.cancelled() => Play::Stop,
+                _ = taint.changed() => Play::Check,
                 changed = init.changed(), if !started => {
                     if changed.is_ok() { Play::Init } else { Play::Stop }
                 }
@@ -377,7 +422,10 @@ impl CaptureHub {
                 Play::Fragment(Err(RecvError::Lagged(_))) => {}
                 Play::Fragment(Err(RecvError::Closed)) | Play::Stop => break false,
                 Play::Check => {
-                    if matches!(resolve(&view.borrow_and_update(), Some(tab)), Resolved::End) {
+                    if matches!(
+                        resolve(&view.borrow_and_update(), Some(tab), &self.privacy.taint),
+                        Resolved::End
+                    ) {
                         break true;
                     }
                 }
@@ -385,7 +433,12 @@ impl CaptureHub {
             }
         };
         // As for a screencast: no grace period once the newest view ends this stream.
-        if ended || matches!(resolve(&view.borrow(), Some(tab)), Resolved::End) {
+        if ended
+            || matches!(
+                resolve(&view.borrow(), Some(tab), &self.privacy.taint),
+                Resolved::End
+            )
+        {
             lease.end_now();
         }
         viewer.close();
@@ -428,7 +481,7 @@ enum Resolved {
     End,
 }
 
-fn resolve(view: &FollowView, pinned: Option<TabId>) -> Resolved {
+fn resolve(view: &FollowView, pinned: Option<TabId>, taint: &Taint) -> Resolved {
     if !view.live || view.withheld {
         return Resolved::End;
     }
@@ -436,37 +489,43 @@ fn resolve(view: &FollowView, pinned: Option<TabId>) -> Resolved {
         Some(tab) => view
             .tabs
             .iter()
-            .find(|shown| shown.tab == tab)
+            .find(|shown| shown.tab == tab && !taint.contains(&shown.target))
             .cloned()
             .map_or(Resolved::End, Resolved::Show),
         // A live session between tabs: it closed one before opening the next.
         None => view
             .tabs
-            .first()
+            .iter()
+            .find(|shown| !taint.contains(&shown.target))
             .cloned()
             .map_or(Resolved::Wait, Resolved::Show),
     }
 }
 
 /// The tab a new view opens on, or why there is nothing to watch.
-fn pick(view: &FollowView, tab: Option<TabId>) -> Result<ShownTab, CaptureError> {
+fn pick(view: &FollowView, tab: Option<TabId>, taint: &Taint) -> Result<ShownTab, CaptureError> {
     if !view.live {
         return Err(CaptureError::SessionNotLive);
     }
     if view.withheld {
         return Err(CaptureError::Withheld);
     }
-    if view.tabs.is_empty() {
+    if !view.tabs.iter().any(|shown| !taint.contains(&shown.target)) {
         return Err(CaptureError::NoOpenTab);
     }
     match tab {
         Some(tab) => view
             .tabs
             .iter()
-            .find(|shown| shown.tab == tab)
+            .find(|shown| shown.tab == tab && !taint.contains(&shown.target))
             .cloned()
             .ok_or(CaptureError::TabNotFound),
-        None => view.tabs.first().cloned().ok_or(CaptureError::NoOpenTab),
+        None => view
+            .tabs
+            .iter()
+            .find(|shown| !taint.contains(&shown.target))
+            .cloned()
+            .ok_or(CaptureError::NoOpenTab),
     }
 }
 
@@ -482,10 +541,14 @@ enum Shows {
 
 /// The revocation check: every frame and fragment passes it as the viewer's stream yields it,
 /// which is right before the writer starts that part.
-fn shows(view: &FollowView, tab: TabId) -> Shows {
+fn shows(view: &FollowView, tab: TabId, taint: &Taint) -> Shows {
     if !view.live || view.withheld {
         Shows::Nothing
-    } else if view.tabs.iter().any(|shown| shown.tab == tab) {
+    } else if view
+        .tabs
+        .iter()
+        .any(|shown| shown.tab == tab && !taint.contains(&shown.target))
+    {
         Shows::Tab
     } else {
         Shows::OtherTabs
@@ -662,16 +725,20 @@ impl<T> Viewer<T> {
 }
 
 impl Frames {
-    fn new(viewer: Arc<Viewer<Frame>>, view: watch::Receiver<FollowView>) -> Self {
+    fn new(
+        viewer: Arc<Viewer<Frame>>,
+        view: watch::Receiver<FollowView>,
+        taint: Arc<Taint>,
+    ) -> Self {
         let leaving = viewer.gone.clone().drop_guard();
         Self(Box::pin(stream::unfold(
-            (viewer, view, leaving),
-            |(viewer, view, leaving)| async move {
+            (viewer, view, leaving, taint),
+            |(viewer, view, leaving, taint)| async move {
                 loop {
                     let frame = viewer.take().await?;
-                    let shows = shows(&view.borrow(), frame.tab);
+                    let shows = shows(&view.borrow(), frame.tab, &taint);
                     match shows {
-                        Shows::Tab => return Some((frame, (viewer, view, leaving))),
+                        Shows::Tab => return Some((frame, (viewer, view, leaving, taint))),
                         Shows::OtherTabs => {}
                         Shows::Nothing => return None,
                     }
@@ -690,15 +757,20 @@ impl Stream for Frames {
 }
 
 impl VideoChunks {
-    fn new(viewer: Arc<Viewer<Bytes>>, view: watch::Receiver<FollowView>, tab: TabId) -> Self {
+    fn new(
+        viewer: Arc<Viewer<Bytes>>,
+        view: watch::Receiver<FollowView>,
+        tab: TabId,
+        taint: Arc<Taint>,
+    ) -> Self {
         let leaving = viewer.gone.clone().drop_guard();
         Self(Box::pin(stream::unfold(
-            (viewer, view, leaving),
-            move |(viewer, view, leaving)| async move {
+            (viewer, view, leaving, taint),
+            move |(viewer, view, leaving, taint)| async move {
                 let chunk = viewer.take().await?;
                 // A video stays on its tab: once the view stops showing it, the stream ends.
-                let shows = shows(&view.borrow(), tab);
-                matches!(shows, Shows::Tab).then_some((chunk, (viewer, view, leaving)))
+                let shows = shows(&view.borrow(), tab, &taint);
+                matches!(shows, Shows::Tab).then_some((chunk, (viewer, view, leaving, taint)))
             },
         )))
     }
