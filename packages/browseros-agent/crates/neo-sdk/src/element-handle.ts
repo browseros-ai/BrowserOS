@@ -24,6 +24,7 @@ import {
   type PageElement,
   type PageFunctionOn,
   parseResult,
+  serializeArgument,
 } from './js-handle'
 import {
   elementScreenshotParams,
@@ -153,6 +154,19 @@ export class ElementHandle<T = unknown> extends JSHandle<T> {
     const settings =
       this._frame?._page._timeoutSettings ?? new TimeoutSettings()
     return settings.timeout(options, apiName)
+  }
+
+  /** Playwright's `elementHandle.dispatchEvent`: a `type` event on this element, built from
+   * `eventInit` as Playwright builds it, in the page's own world, so the page's listeners see
+   * the event's objects (a `CustomEvent`'s `detail`, a `DataTransfer` handle) as its own. */
+  async dispatchEvent(type: string, eventInit: object = {}): Promise<void> {
+    await this._connection.sendHandle(
+      'elementHandle.dispatchEvent',
+      this._guid,
+      'dispatchEvent',
+      { type, eventInit: serializeArgument(eventInit) },
+      0,
+    )
   }
 }
 

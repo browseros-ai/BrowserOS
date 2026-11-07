@@ -95,8 +95,13 @@ use crate::history::{
     NeoNavigationResult, NeoNextNavigationParams, NeoReleaseNavigationParams,
     NeoWaitForNavigationParams, WaitForNavigationOptions,
 };
+use crate::init_scripts::{
+    self, CONTEXT_ADD_INIT_SCRIPT_META, DISPOSABLE_DISPOSE_META, InitRoute,
+    PAGE_ADD_INIT_SCRIPT_META,
+};
 use crate::keyboard::KeyboardTab;
 use crate::lists;
+use crate::locator_handlers::{self, Resolving};
 use crate::navigate::{self, GotoOptions};
 use crate::network::{HopId, ObjectKind as NetworkObject};
 use crate::page::{DialogAnswer, FrameTab, PageSession};
@@ -120,6 +125,10 @@ use crate::waits::{
 /// Unkept creations close their tabs when their late acknowledgements arrive.
 const RECORDS_WAIT: Duration = Duration::from_secs(1);
 
+/// Neo: how long removing the run's init scripts may take at run end, apart from
+/// [`RECORDS_WAIT`]: a session it does not reach keeps a script the next run's documents would
+/// run. Free for a run that added none.
+const PAGE_END_WAIT: Duration = Duration::from_secs(3);
 /// Neo: the budget for removing the run's highlights at its end, after [`RECORDS_WAIT`] and
 /// apart from it, so a document that does not answer delays the outcome by at most this and
 /// never holds back an input release. An overlay it cannot remove in time stays, as one in a
@@ -138,11 +147,6 @@ const MAX_CALLS_IN_FLIGHT: usize = 64;
 /// may total, for the same reason: a few calls with huge selectors would otherwise hold several
 /// copies of each outside the realm.
 const MAX_REQUEST_BYTES_IN_FLIGHT: usize = 8 * 1024 * 1024;
-
-/// Neo: `selectOption`'s `elements` (Playwright's `ElementHandle` values, matched by node identity)
-/// cannot reach Neo's injected script yet; neo-sdk refuses such values before sending
-/// (`select-option.ts`), and this refuses them on the wire.
-const ELEMENTS_UNSUPPORTED: &str = "Neo does not support ElementHandle values in selectOption yet";
 
 // Playwright implements these on its eventful client. Neo has a call/reply bridge, so its
 // Frame extensions keep the whole wait in Rust. Wire shapes live in waits.rs and neo-commands.ts.
@@ -246,7 +250,45 @@ struct Inner {
     _ending: DropGuard,
 }
 
+/// What admitted one call ([`Inner::admit`]): its share of the in-flight caps, and the claim of
+/// a call that ends calls in flight.
+struct Admission {
+    share: Option<Admitted>,
+    ending: Option<Ending<FrameCursor>>,
+    resolving: Option<Resolving>,
+}
+
 impl Inner {
+    /// Admits `route`: a share of the in-flight caps, or none for a call that ends calls in
+    /// flight, with its claim. A navigation's release, a running locator handler's completion
+    /// (which frees the action waiting on it) and the context's close: the cap never refuses
+    /// them, or a full run could not let go.
+    fn admit(
+        &self,
+        route: &ObjectCall,
+        target: Option<&(Arc<PageEntry>, FrameScope)>,
+        bytes: usize,
+    ) -> Result<Admission, PlaywrightError> {
+        let ending = ending_cursor(route).and_then(|id| self.cursors.begin_ending(id));
+        let resolving = completed_handler(route).and_then(|uid| {
+            let page = target?.0.attached_session()?;
+            locator_handlers::begin_resolving(&page, uid)
+        });
+        let releases = ending.is_some()
+            || resolving.is_some()
+            || matches!(route, ObjectCall::Context(BrowserContextCall::Close(_)));
+        let share = if releases {
+            None
+        } else {
+            Some(self.in_flight.admit(bytes)?)
+        };
+        Ok(Admission {
+            share,
+            ending,
+            resolving,
+        })
+    }
+
     /// A `setContent` call takes its place in its frame's write order as it arrives.
     fn ordered(&self, guid: &str, mut call: ObjectCall) -> ObjectCall {
         if let ObjectCall::Frame(Route::FrameSetContent(_, turn)) = &mut call {
@@ -330,6 +372,8 @@ enum ObjectKind {
     Network(NetworkObject, HopId),
     /// A run's `JSHandle` or `ElementHandle` (`evaluate.rs`), by guid.
     Handle(String),
+    /// An init script's `Disposable` (`init_scripts.rs`), by guid.
+    Disposable(String),
     /// A JavaScript dialog the run's `dialog` event handed out, by its index on the tab.
     Dialog(u64),
     /// A download the run's `download` event handed out, by the browser's guid
@@ -345,6 +389,8 @@ enum ObjectCall {
     Device(DeviceCall),
     Frame(Route),
     Network(NetworkCall),
+    /// An init script command (`init_scripts.rs`).
+    Init(InitRoute),
     /// `Page.screenshot`, `Page.pdf` and `neo:screenshot`, with Neo's `path` (`capture.rs`).
     Capture(Capture),
     Dialog(u64, DialogCall),
@@ -472,19 +518,10 @@ impl Dispatcher {
         }));
         inner.trace.push(Arc::clone(&entry));
         let admitted = route.and_then(|route| {
-            let ending = ending_cursor(&route).and_then(|id| inner.cursors.begin_ending(id));
-            // A navigation's release, and the context's close, end calls in flight: the cap
-            // never refuses them, or a full run could not let go.
-            let releases = ending.is_some()
-                || matches!(route, ObjectCall::Context(BrowserContextCall::Close(_)));
-            let share = if releases {
-                None
-            } else {
-                Some(inner.in_flight.admit(message.len())?)
-            };
-            Ok((route, share, ending))
+            let admission = inner.admit(&route, target.as_ref(), message.len())?;
+            Ok((route, admission))
         });
-        let (route, share, ending) = match admitted {
+        let (route, admission) = match admitted {
             Ok(admitted) => admitted,
             Err(error) => {
                 entry.finish(error.to_result());
@@ -531,8 +568,9 @@ impl Dispatcher {
                 id,
                 reply,
                 events: inner.tabs.events().clone(),
-                share,
-                ending,
+                share: admission.share,
+                ending: admission.ending,
+                resolving: admission.resolving,
                 abortable,
             },
         );
@@ -559,6 +597,9 @@ impl Dispatcher {
         // Before anything below waits: what the run holds is held by no live run from now on,
         // however its release goes (`TabInput::mark_ended`).
         self.0.tabs.mark_input_ended();
+        // The run's init scripts go first, on a budget of their own: removal never waits on a
+        // call still running, so no document loaded after the run returns runs one.
+        let _removed = time::timeout(PAGE_END_WAIT, run.init_scripts.close()).await;
         // The realm is gone with its listeners: from now on the watchers answer dialogs
         // themselves, and a dialog a listener left open gets the default answer before the
         // sessions detach (`Dialogs::left_open`).
@@ -591,8 +632,83 @@ impl Dispatcher {
     }
 }
 
+/// An init script command: `addInitScript` answers its `Disposable`, as Playwright's
+/// `{ disposable }`; `dispose` answers nothing.
+async fn init_call(
+    tabs: &Tabs,
+    target: Option<(Arc<PageEntry>, FrameScope)>,
+    route: InitRoute,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let scripts = progress.init_scripts();
+    let guid = match route {
+        InitRoute::Page(source) => {
+            let (page, _) = target.ok_or_else(PlaywrightError::target_closed)?;
+            let session = progress.race(tabs.session(&page)).await??;
+            progress
+                .race(scripts.add(tabs.cdp(), Some(&session), &source))
+                .await??
+        }
+        InitRoute::Context(source) => {
+            let guid = progress
+                .race(scripts.add(tabs.cdp(), None, &source))
+                .await??;
+            // Every page the run has a session on shows it from its next document, a reload
+            // included, not only those a later call touches.
+            for (_, session) in tabs.attached() {
+                scripts.ensure(tabs.cdp(), &session).await;
+            }
+            guid
+        }
+        InitRoute::Dispose(guid) => {
+            progress.race(scripts.dispose(&guid)).await??;
+            return Ok(Some(json!({})));
+        }
+    };
+    Ok(Some(json!({ "disposable": { "guid": guid } })))
+}
+
+/// The init script commands (`init_scripts.rs`), served by name ahead of the spec's own; the
+/// object and params back when the message is another command.
+fn route_init(
+    object: ObjectKind,
+    method: &str,
+    params: Option<Value>,
+) -> Result<Routed, (ObjectKind, Option<Value>)> {
+    match object {
+        ObjectKind::Context if method == CONTEXT_ADD_INIT_SCRIPT_META.method => Ok(Routed {
+            meta: Some(&CONTEXT_ADD_INIT_SCRIPT_META),
+            route: init_scripts::source_of(&CONTEXT_ADD_INIT_SCRIPT_META, params)
+                .map(|source| ObjectCall::Init(InitRoute::Context(source))),
+        }),
+        ObjectKind::Page if method == PAGE_ADD_INIT_SCRIPT_META.method => Ok(Routed {
+            meta: Some(&PAGE_ADD_INIT_SCRIPT_META),
+            route: init_scripts::source_of(&PAGE_ADD_INIT_SCRIPT_META, params)
+                .map(|source| ObjectCall::Init(InitRoute::Page(source))),
+        }),
+        ObjectKind::Disposable(guid) => {
+            Ok(Routed {
+                meta: Some(&DISPOSABLE_DISPOSE_META),
+                route: if method == DISPOSABLE_DISPOSE_META.method {
+                    Ok(ObjectCall::Init(InitRoute::Dispose(guid)))
+                } else {
+                    // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection.dispatch`: `Mismatching dispatcher: "${dispatcher._type}" does not implement "${method}"`
+                    Err(PlaywrightError::error(format!(
+                        "Mismatching dispatcher: \"Disposable\" does not implement \"{method}\""
+                    )))
+                },
+            })
+        }
+        object => Err((object, params)),
+    }
+}
+
 /// Names a message's target and decodes its params. Pure.
 fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
+    let (object, params) = match route_init(object, method, params) {
+        Ok(routed) => return routed,
+        Err(unrouted) => unrouted,
+    };
     let decoded = match object {
         ObjectKind::Context => BrowserContextCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Context(call)))),
@@ -647,7 +763,8 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
         ObjectKind::Download(guid) => ArtifactCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Download(guid, call)))),
-        ObjectKind::Unknown => {
+        // `route_init` answers every Disposable message.
+        ObjectKind::Disposable(_) | ObjectKind::Unknown => {
             return Routed {
                 meta: None,
                 route: Err(PlaywrightError::target_closed()),
@@ -777,20 +894,61 @@ fn route_frame_extension(method: &str, params: Option<&Value>) -> Option<Routed>
             .map(|options| ObjectCall::Frame(Route::FrameWaitForLoadState(options))),
         });
     }
-    // ElementHandleChannel is uninhabited in Neo, so reject non-empty arrays before
-    // serde tries to decode their members. Keep the method's input flag and title.
+    // The generated `ElementHandleChannel` has no values, so `elements` (Playwright's
+    // `ElementHandle` values) leaves the wire before the generated decode, as guids. Keep the
+    // method's input flag and title.
     if method == "selectOption"
-        && params
+        && let Some(elements) = params
             .and_then(|params| params.get("elements"))
             .and_then(Value::as_array)
-            .is_some_and(|elements| !elements.is_empty())
+        && !elements.is_empty()
     {
         return Some(Routed {
             meta: Some(FrameSelectOptionParams::META),
-            route: Err(PlaywrightError::error(ELEMENTS_UNSUPPORTED)),
+            route: select_option_with_elements(params, elements),
         });
     }
     None
+}
+
+/// Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection._tChannelImplFromWire`: `expected guid for ${names.toString()}`
+///
+/// `selectOption` with `elements`: each element's guid, and the rest of its params decoded as
+/// the generated `FrameCall` decodes them. The guids name handles only once the call runs
+/// (`fill::select_option`).
+fn select_option_with_elements(
+    params: Option<&Value>,
+    elements: &[Value],
+) -> Result<ObjectCall, PlaywrightError> {
+    let guids = elements
+        .iter()
+        .enumerate()
+        .map(|(index, element)| {
+            element
+                .get("guid")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    PlaywrightError::error(format!(
+                        "elements[{index}]: expected guid for ElementHandle"
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut rest = params.cloned().unwrap_or_else(|| json!({}));
+    if let Some(object) = rest.as_object_mut() {
+        object.remove("elements");
+    }
+    let call = FrameCall::decode("selectOption", Some(rest))
+        .map_err(|error| PlaywrightError::error(error.to_string()))?;
+    match route_frame_call(call)? {
+        Route::FrameSelectOption(options) => Ok(ObjectCall::Frame(Route::FrameSelectOption(
+            options.with_elements(guids),
+        ))),
+        _ => Err(PlaywrightError::error(
+            "neo-runtime: selectOption decoded as another call",
+        )),
+    }
 }
 
 /// The Neo element commands (`element_ops.rs`), or `None` for any other method.
@@ -973,6 +1131,9 @@ struct CallReply {
     share: Option<Admitted>,
     /// A wait's finish or release: its claim on the wait it ends (`Cursors::begin_ending`).
     ending: Option<Ending<FrameCursor>>,
+    /// A running locator handler's completion: its claim on that handler
+    /// (`locator_handlers::begin_resolving`).
+    resolving: Option<Resolving>,
     /// The call's place in the abort registry; `None` for an id that is not an integer.
     abortable: Option<Registration>,
 }
@@ -1014,7 +1175,15 @@ async fn serve_call(
     }
     let result = match (route, target) {
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
+        (ObjectCall::Init(route), target) => init_call(&tabs, target, route, &progress).await,
         (ObjectCall::Page(call), Some((page, _))) => {
+            // A page call that navigates (`reload`, `goBack`, …) shows the run's scripts first,
+            // as a Frame call does.
+            if progress.init_scripts().has_scripts()
+                && let Ok(Ok(session)) = progress.race(tabs.session(&page)).await
+            {
+                progress.init_scripts().ensure(tabs.cdp(), &session).await;
+            }
             tab_calls::page(&tabs, &page, call, &progress).await
         }
         (ObjectCall::Capture(call), Some((page, scope))) => {
@@ -1030,6 +1199,8 @@ async fn serve_call(
             };
             match session {
                 Ok(page) => {
+                    // A page the run's init scripts have not reached yet gets them first.
+                    progress.init_scripts().ensure(tabs.cdp(), &page).await;
                     // A page attached just now may have started a context subscription's
                     // enable; the call waits for that too.
                     if reply.events.enabling(page_id(&page))
@@ -1378,6 +1549,7 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
         events,
         share,
         ending,
+        resolving,
         abortable,
     } = target;
     // The outcome is decided: an abort from now on is ignored, as Playwright drops a call's
@@ -1395,7 +1567,7 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
     events.barrier().await;
     // Given back before the reply leaves, so a script that awaited this call can start another
     // at once. A call that never replies gives them back as its task ends.
-    drop((share, ending));
+    drop((share, ending, resolving));
     // The script may have stopped waiting (the realm is gone); the record already holds the
     // outcome.
     let _sent = reply.send((text, events.seq()));
@@ -1493,6 +1665,8 @@ async fn serve_route<T: FormTab + KeyboardTab>(
 fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
     if guid == "context@default" {
         ObjectKind::Context
+    } else if guid.starts_with(init_scripts::DISPOSABLE_PREFIX) {
+        ObjectKind::Disposable(guid.to_owned())
     } else if let Some(download) = guid.strip_prefix(downloads::DOWNLOAD_PREFIX) {
         ObjectKind::Download(download.to_owned())
     } else if !resolved {
@@ -1552,6 +1726,14 @@ fn route_frame_element(method: &str) -> Option<Routed> {
 /// The cursor a URL-predicate wait's finish or release names. Each skips the in-flight caps for
 /// the one call that claims its open cursor (`Cursors::begin_ending`): the wait it ends may hold
 /// that capacity, and the claim counts against the cursor cap instead.
+/// The locator handler a `Page.resolveLocatorHandlerNoReply` completes.
+fn completed_handler(call: &ObjectCall) -> Option<i64> {
+    match call {
+        ObjectCall::Page(PageCall::ResolveLocatorHandlerNoReply(params)) => Some(params.uid),
+        _ => None,
+    }
+}
+
 fn ending_cursor(call: &ObjectCall) -> Option<u64> {
     match call {
         ObjectCall::Frame(Route::FrameFinishNavigation(options)) => Some(options.cursor),
@@ -1683,6 +1865,7 @@ mod tests {
     use crate::run::Delivery;
     use crate::run::PageId;
     use crate::screenshot::TabScreenshots;
+    use crate::session_state::Permissions;
     use crate::switch::Switches;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
@@ -1699,6 +1882,7 @@ mod tests {
             TabInputs::default(),
             TabScreenshots::default(),
             Switches::default(),
+            Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1737,6 +1921,7 @@ mod tests {
                 events: EventHub::default(),
                 share: None,
                 ending: None,
+                resolving: None,
                 abortable: None,
             },
         );
@@ -1777,6 +1962,7 @@ mod tests {
             TabInputs::default(),
             TabScreenshots::default(),
             Switches::default(),
+            Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1819,6 +2005,7 @@ mod tests {
             | ObjectCall::Page(_)
             | ObjectCall::Device(_)
             | ObjectCall::Network(_)
+            | ObjectCall::Init(_)
             | ObjectCall::Capture(_)
             | ObjectCall::Dialog(..)
             | ObjectCall::Download(..) => {
@@ -2004,16 +2191,28 @@ mod tests {
                 "{error:?}"
             );
         }
+        // `elements` (Playwright's ElementHandle values) leave the wire as guids, the rest
+        // decodes as usual; a member that is no channel is refused as Playwright's dispatcher
+        // refuses it.
         let mut params = forms_params("selectOption", "select");
-        params["elements"] = json!([{ "guid": "element@1" }]);
+        params["elements"] = json!([{ "guid": "handle@1" }, { "guid": "handle@2" }]);
         let routed = route_frame("selectOption", params);
         assert_eq!(
             routed.meta.and_then(|meta| meta.title),
             Some("Select option")
         );
+        match frame_route(routed.route).expect("routed") {
+            Route::FrameSelectOption(options) => {
+                assert_eq!(options.elements, ["handle@1", "handle@2"]);
+                assert_eq!(options.selector, "select");
+            }
+            _ => panic!("not a selectOption"),
+        }
+        let mut params = forms_params("selectOption", "select");
+        params["elements"] = json!([{ "guid": "handle@1" }, "two"]);
         assert_eq!(
-            error_of(routed),
-            PlaywrightError::error(ELEMENTS_UNSUPPORTED)
+            error_of(route_frame("selectOption", params)),
+            PlaywrightError::error("elements[1]: expected guid for ElementHandle")
         );
     }
 
@@ -2835,6 +3034,7 @@ mod tests {
                 events: EventHub::default(),
                 share: Some(in_flight.admit(10).expect("under the caps")),
                 ending: None,
+                resolving: None,
                 abortable: None,
             },
         ));
@@ -3113,6 +3313,7 @@ mod review_abort_priority {
     use crate::page::TabInputs;
     use crate::run::PageId;
     use crate::screenshot::TabScreenshots;
+    use crate::session_state::Permissions;
     use crate::switch::Switches;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
@@ -3131,6 +3332,7 @@ mod review_abort_priority {
             TabInputs::default(),
             TabScreenshots::default(),
             Switches::default(),
+            Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -3173,6 +3375,7 @@ mod review_abort_priority {
                 events: EventHub::default(),
                 share: None,
                 ending: None,
+                resolving: None,
                 abortable: None,
             },
         );

@@ -128,3 +128,45 @@ test('dragTo honours its signal', { skip, timeout: 120_000 }, async (t) => {
     },
   })
 })
+
+// Delta review F1 (#3200 x #3199): a locator handler must not run between a drag's halves.
+// Playwright's target half skips the action pre-checks (`server/frames.ts` `dragAndDrop`:
+// "do not perform locator handlers checkpoint to avoid moving the mouse in the middle of a drag
+// operation"), so a banner the source's pointerdown reveals runs no handler, stays up, and the
+// payload drops.
+const BANNER =
+  '<div id="banner" hidden style="position:absolute;top:300px"><button id="dismiss" onclick="banner.hidden=true">Dismiss</button></div>'
+
+test('dragTo runs no locator handler between its halves', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  await compareMethod(t, {
+    html: html + BANNER,
+    source: `
+      let handled = 0
+      await page.evaluate(() => source.addEventListener('pointerdown', () => { banner.hidden = false }, { once: true }))
+      await page.addLocatorHandler(page.locator('#banner'), async () => { handled++; await page.locator('#dismiss').click() }, { times: 1 })
+      const result = await page.locator('#source').dragTo(page.locator('#left'), { timeout: 3000 }).then(() => 'resolved', (error) => errorCategory(error))
+      return {
+        result,
+        handled,
+        banner: await page.locator('#banner').isVisible(),
+        dropped: await page.evaluate(() => __events.filter((event) => event.type === 'drop').map((event) => event.data)),
+      }
+    `,
+    probe: PROBE,
+    values: ({ playwright, neo }) => {
+      assert.deepEqual(playwright, {
+        result: 'resolved',
+        handled: 0,
+        banner: true,
+        dropped: ['payload'],
+      })
+      assert.deepEqual(neo, playwright)
+    },
+    effects: ({ playwright, neo }) => {
+      assert.deepEqual(neo, playwright, 'browser effect')
+    },
+  })
+})

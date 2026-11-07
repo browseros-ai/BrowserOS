@@ -35,6 +35,7 @@ use crate::abort::CallAbort;
 use crate::artifacts::Artifacts;
 use crate::deadline::{Deadline, Stop};
 use crate::evaluate::Handles;
+use crate::init_scripts::InitScripts;
 use crate::run::{CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd};
 
 /// How a call ends early: a Playwright error the script sees, or the run ending under it.
@@ -142,6 +143,8 @@ pub(crate) struct RunScope {
     pub(crate) tasks: TaskTracker,
     /// The run's JS handles (`evaluate.rs`); closed at run end, which releases their groups.
     pub(crate) handles: Arc<Handles>,
+    /// The run's init scripts (`init_scripts.rs`); removed from every session at run end.
+    pub(crate) init_scripts: Arc<InitScripts>,
     /// Cancelled when the script closes the run's context (`tab_calls.rs` `close_context`):
     /// every call still running stops at its next await or check, as Playwright's calls stop
     /// with its connection, and none writes input after.
@@ -158,6 +161,7 @@ impl RunScope {
             end_reason: Arc::default(),
             tasks,
             handles: Arc::default(),
+            init_scripts: Arc::default(),
             context_closed: CancellationToken::new(),
             artifacts: Arc::default(),
         }
@@ -360,6 +364,11 @@ impl Progress {
     /// The run's JS handles, for the evaluation calls (`evaluate.rs`).
     pub(crate) fn handles(&self) -> &Handles {
         &self.run.handles
+    }
+
+    /// The run's init scripts (`init_scripts.rs`).
+    pub(crate) fn init_scripts(&self) -> &Arc<InitScripts> {
+        &self.run.init_scripts
     }
 
     pub(crate) fn timeout_ms(&self) -> f64 {

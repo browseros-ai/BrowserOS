@@ -655,6 +655,9 @@ class Connection {
   async sendEval(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
+  async sendInit(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout) ?? {};
+  }
   async sendHandle(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout) ?? {};
   }
@@ -1498,6 +1501,61 @@ class Download {
   }
   async delete() {
     await this.#connection.sendArtifact("download.delete", this.#guid, "delete", {}, 0);
+  }
+}
+
+// src/headers.ts
+function validateHeaders(headers) {
+  for (const key of Object.keys(headers)) {
+    const value = headers[key];
+    if (!Object.is(value, undefined) && typeof value !== "string")
+      throw new Error(`Expected value of header "${key}" to be String, but "${typeof value}" is found.`);
+  }
+}
+function headersObjectToArray(headers) {
+  const result = [];
+  for (const name in headers) {
+    const value = headers[name];
+    if (value === undefined)
+      continue;
+    result.push({ name, value });
+  }
+  return result;
+}
+
+// src/init-script.ts
+function evaluationScript(apiName, fun, arg) {
+  if (typeof fun === "function") {
+    const source = fun.toString();
+    const argString = Object.is(arg, undefined) ? "undefined" : JSON.stringify(arg);
+    return `(${source})(${argString})`;
+  }
+  if (arg !== undefined)
+    throw new Error("Cannot evaluate a string with arguments");
+  if (typeof fun === "string")
+    return fun;
+  if (fun.content !== undefined)
+    return fun.content;
+  if (fun.path !== undefined)
+    throw new Error(`${apiName}: path: this run has no artifact directory, so Neo cannot read "${fun.path}"`);
+  throw new Error("Either path or content property must be present");
+}
+
+class Disposable {
+  #connection;
+  #guid;
+  constructor(connection, guid) {
+    this.#connection = connection;
+    this.#guid = guid;
+  }
+  async dispose() {
+    try {
+      await this.#connection.sendInit("disposable.dispose", this.#guid, "dispose", {}, 0);
+    } catch (error) {
+      if (isTargetClosedError(error))
+        return;
+      throw error;
+    }
   }
 }
 
@@ -2915,6 +2973,9 @@ class ElementHandle extends JSHandle {
   _timeout(options, apiName) {
     const settings = this._frame?._page._timeoutSettings ?? new TimeoutSettings;
     return settings.timeout(options, apiName);
+  }
+  async dispatchEvent(type, eventInit = {}) {
+    await this._connection.sendHandle("elementHandle.dispatchEvent", this._guid, "dispatchEvent", { type, eventInit: serializeArgument(eventInit) }, 0);
   }
 }
 function elementsFrom(connection, created, frame) {
@@ -5582,7 +5643,6 @@ function accessChainToDisplayString2(accessChain) {
 }
 
 // src/select-option.ts
-var ELEMENT_VALUES_UNSUPPORTED = "Neo does not support ElementHandle values in selectOption yet";
 function convertSelectOptionValues(values) {
   if (values === null)
     return {};
@@ -5593,16 +5653,24 @@ function convertSelectOptionValues(values) {
     if (list[i] === null)
       throw new Error(`options[${i}]: expected object, got null`);
   }
-  for (let i = 0;i < list.length; i++) {
-    if (list[i] instanceof JSHandle)
-      throw new Error(ELEMENT_VALUES_UNSUPPORTED);
-  }
+  if (list[0] instanceof ElementHandle)
+    return { elements: elementsOf(list) };
   const strings = isString(list[0]);
   const options = [];
   for (let i = 0;i < list.length; i++) {
     options[i] = copyOption(strings ? { valueOrLabel: list[i] } : list[i], i);
   }
   return { options };
+}
+function elementsOf(list) {
+  const elements = [];
+  for (let i = 0;i < list.length; i++) {
+    const value = list[i];
+    if (!(value instanceof ElementHandle))
+      throw new TypeError(`elements[${i}]: expected channel ElementHandle, got ${typeof value}`);
+    elements[i] = { guid: value._guid };
+  }
+  return elements;
 }
 function snapshot(values) {
   if (!Array.isArray(values))
@@ -5788,6 +5856,10 @@ function formEncode(text2) {
 }
 
 // src/frame.ts
+var TAG_KEYS = {
+  script: ["url", "content", "type"],
+  style: ["url", "content"]
+};
 function nodeTimerDelay(timeout) {
   if (typeof timeout !== "number")
     return timeout;
@@ -6108,6 +6180,29 @@ class Frame {
       arg: serializeArgument(undefined)
     }, 0);
     return parseResult(result?.value);
+  }
+  async addScriptTag(options = {}) {
+    return await this._addTag("frame.addScriptTag", "addScriptTag", options);
+  }
+  async addStyleTag(options = {}) {
+    return await this._addTag("frame.addStyleTag", "addStyleTag", options);
+  }
+  async _addTag(apiName, method, options) {
+    if (options.path)
+      throw new Error(`${apiName}: path: this run has no artifact directory, so Neo cannot read "${options.path}"`);
+    let params;
+    try {
+      params = pickParams(method === "addScriptTag" ? TAG_KEYS.script : TAG_KEYS.style, options);
+    } catch (error) {
+      if (error instanceof Error)
+        error.message = `${apiName}: ${error.message}`;
+      throw error;
+    }
+    const result = await this._connection.sendEval(apiName, this._guid, method, params, 0);
+    const handle = ElementHandle.fromNullable(this._connection, result.element, this);
+    if (!handle)
+      throw new Error(`neo-sdk: Frame.${method} contract error: no element`);
+    return handle;
   }
   async _allInnerTexts(apiName, selector) {
     const result = await this._connection.sendEval(apiName, this._guid, "evalOnSelectorAll", {
@@ -6832,6 +6927,10 @@ class Page extends ChannelOwner {
   async bringToFront() {
     await this.#connection.sendPage("page.bringToFront", this.#guid, "bringToFront", {}, 0);
   }
+  async setExtraHTTPHeaders(headers) {
+    validateHeaders(headers);
+    await this.#connection.sendPage("page.setExtraHTTPHeaders", this.#guid, "setExtraHTTPHeaders", { headers: headersObjectToArray(headers) }, 0);
+  }
   async close(options = {}) {
     this.#closeReason = options.reason;
     try {
@@ -7091,6 +7190,23 @@ class Page extends ChannelOwner {
   async goto(url, options = {}) {
     return await this.#mainFrame._goto("page.goto", url, options);
   }
+  async addInitScript(script, arg, options) {
+    assertEvaluateOptions(options);
+    const signal = options?.signal;
+    if (signal !== undefined && signal !== null)
+      throw new Error(`page.addInitScript: Neo does not support signal yet`);
+    if (options?.exposeFunctions)
+      throw new Error(`page.addInitScript: Neo does not support exposeFunctions yet`);
+    const source = evaluationScript("page.addInitScript", script, arg);
+    const result = await this.#connection.sendInit("page.addInitScript", this.#guid, "addInitScript", { source }, 0);
+    return new Disposable(this.#connection, result.disposable.guid);
+  }
+  async addScriptTag(options = {}) {
+    return await this.mainFrame()._addTag("page.addScriptTag", "addScriptTag", options);
+  }
+  async addStyleTag(options = {}) {
+    return await this.mainFrame()._addTag("page.addStyleTag", "addStyleTag", options);
+  }
   async $(selector, options) {
     return await this.mainFrame()._querySelector("page.$", selector, options);
   }
@@ -7342,6 +7458,32 @@ var CONTEXT_EVENTS = {
   quiet: ["backgroundpage"],
   unserved: ["serviceworker"]
 };
+var STORAGE_STATE_PATH = "path: this run has no artifact directory, so Neo cannot write the storage state; the host sets one per run";
+var STATE_FILE_PATH = "storageState: this run has no artifact directory, so Neo cannot read a state file; the host sets one per run";
+var CLEAR_ALL_COOKIES_REFUSED = "Neo does not clear every cookie of the user's browser, which would sign the user out of every site: pass clearCookies a name, domain or path";
+function clearCookieFilter(options) {
+  const kept = (value) => typeof value === "string" || value instanceof RegExp ? value : undefined;
+  return {
+    name: kept(options.name),
+    domain: kept(options.domain),
+    path: kept(options.path)
+  };
+}
+function hasClearCookieFilter(filter) {
+  return filter.name !== undefined || filter.domain !== undefined || filter.path !== undefined;
+}
+function clearCookieMatches(cookie, filter) {
+  const matches = (property, value) => {
+    if (value === undefined)
+      return true;
+    if (value instanceof RegExp) {
+      value.lastIndex = 0;
+      return value.test(cookie[property]);
+    }
+    return cookie[property] === value;
+  };
+  return matches("name", filter.name) && matches("domain", filter.domain) && matches("path", filter.path);
+}
 
 class BrowserContext extends ChannelOwner {
   #guid;
@@ -7507,9 +7649,75 @@ class BrowserContext extends ChannelOwner {
       return [];
     return get(this.#guid, "pages").map((created) => this.#pages.get(created.guid) ?? this.#add(created)).filter((page) => !page._isClosedLocally());
   }
+  async addInitScript(script, arg, options) {
+    assertEvaluateOptions(options);
+    const signal = options?.signal;
+    if (signal !== undefined && signal !== null)
+      throw new Error(`browserContext.addInitScript: Neo does not support signal yet`);
+    if (options?.exposeFunctions)
+      throw new Error(`browserContext.addInitScript: Neo does not support exposeFunctions yet`);
+    const source = evaluationScript("browserContext.addInitScript", script, arg);
+    const result = await this.#connection.sendInit("browserContext.addInitScript", this.#guid, "addInitScript", { source }, 0);
+    return new Disposable(this.#connection, result.disposable.guid);
+  }
   async newPage() {
     const { page } = await this.#connection.sendContext("browserContext.newPage", this.#guid, "newPage", {}, 0);
     return this.#pageFor(page.guid);
+  }
+  async cookies(urls) {
+    const list = !urls ? [] : typeof urls === "string" ? [urls] : urls;
+    const { cookies } = await this.#connection.sendContext("browserContext.cookies", this.#guid, "cookies", { urls: list }, 0);
+    return cookies;
+  }
+  async addCookies(cookies) {
+    await this.#connection.sendContext("browserContext.addCookies", this.#guid, "addCookies", { cookies }, 0);
+  }
+  async clearCookies(options = {}) {
+    const filter = clearCookieFilter(options);
+    if (!hasClearCookieFilter(filter))
+      throw new Error(CLEAR_ALL_COOKIES_REFUSED);
+    const { cookies } = await this.#connection.sendContext("browserContext.clearCookies", this.#guid, "cookies", { urls: [] }, 0);
+    const expired = cookies.filter((cookie) => clearCookieMatches(cookie, filter)).map((cookie) => ({ ...cookie, expires: 0 }));
+    if (!expired.length)
+      return;
+    await this.#connection.sendContext("browserContext.clearCookies", this.#guid, "addCookies", { cookies: expired }, 0);
+  }
+  async setExtraHTTPHeaders(headers) {
+    validateHeaders(headers);
+    await this.#connection.sendContext("browserContext.setExtraHTTPHeaders", this.#guid, "setExtraHTTPHeaders", { headers: headersObjectToArray(headers) }, 0);
+  }
+  async setOffline(offline) {
+    await this.#connection.sendContext("browserContext.setOffline", this.#guid, "setOffline", { offline }, 0);
+  }
+  async setGeolocation(geolocation) {
+    await this.#connection.sendContext("browserContext.setGeolocation", this.#guid, "setGeolocation", geolocation ? { geolocation } : {}, 0);
+  }
+  async grantPermissions(permissions, options) {
+    await this.#connection.sendContext("browserContext.grantPermissions", this.#guid, "grantPermissions", { permissions, ...options }, 0);
+  }
+  async clearPermissions() {
+    await this.#connection.sendContext("browserContext.clearPermissions", this.#guid, "clearPermissions", {}, 0);
+  }
+  async setHTTPCredentials(httpCredentials) {
+    const list = !httpCredentials ? [] : Array.isArray(httpCredentials) ? httpCredentials : [httpCredentials];
+    await this.#connection.sendContext("browserContext.setHTTPCredentials", this.#guid, "setHTTPCredentials", list.length ? { httpCredentials: list } : {}, 0);
+  }
+  async storageState(options = {}) {
+    if (options.path !== undefined)
+      throw new Error(STORAGE_STATE_PATH);
+    const params = {};
+    if (options.indexedDB !== undefined)
+      params.indexedDB = options.indexedDB;
+    if (options.opfs !== undefined)
+      params.opfs = options.opfs;
+    if (options.credentials !== undefined)
+      params.credentials = options.credentials;
+    return await this.#connection.sendContext("browserContext.storageState", this.#guid, "storageState", params, 0);
+  }
+  async setStorageState(storageState) {
+    if (typeof storageState === "string")
+      throw new Error(STATE_FILE_PATH);
+    await this.#connection.sendContext("browserContext.setStorageState", this.#guid, "setStorageState", storageState ? { storageState } : {}, 0);
   }
   setDefaultTimeout(timeout) {
     this._timeoutSettings.setDefaultTimeout(timeout);

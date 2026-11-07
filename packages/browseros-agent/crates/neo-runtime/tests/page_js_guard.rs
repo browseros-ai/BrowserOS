@@ -1,13 +1,15 @@
 //! Neo's page JavaScript guard: which Neo file may reach which page world, and with what code.
 //!
 //! The owner's constraint: page JavaScript never bypasses one narrow, deliberate path. In Neo
-//! that path is two files of `neo-runtime`:
+//! that path is three files of `neo-runtime`:
 //!
 //! - `src/world.rs`, Neo's isolated (utility) world: `Page.createIsolatedWorld` and
 //!   `Runtime.callFunctionOn`, for every read and action.
 //! - `src/main_world.rs`, the page's own world, for Playwright's evaluations: `Runtime.callFunctionOn`
 //!   only, on the `UtilityScript` it builds there, and on a page object an event named (the
 //!   built `(object) => object`, which keeps it in a run's handle group).
+//! - `src/init_scripts.rs`, the agent's init scripts: `Page.addScriptToEvaluateOnNewDocument` and
+//!   `Page.removeScriptToEvaluateOnNewDocument`, in the page's own world only (no `worldName`).
 //!
 //! In both, every `functionDeclaration` is a `const` whose initializer is exactly
 //! `include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/<name>.js"))`
@@ -44,6 +46,7 @@ const GUARDED: &[&str] = &[
     "Runtime.runScript",
     "Runtime.addBinding",
     "Page.addScriptToEvaluateOnNewDocument",
+    "Page.removeScriptToEvaluateOnNewDocument",
     "Page.createIsolatedWorld",
     "Debugger.evaluateOnCallFrame",
 ];
@@ -56,7 +59,17 @@ const ALLOWED: &[(&str, &[&str])] = &[
         &["Runtime.callFunctionOn", "Page.createIsolatedWorld"],
     ),
     ("neo-runtime/src/main_world.rs", &["Runtime.callFunctionOn"]),
+    (
+        INIT_SCRIPTS,
+        &[
+            "Page.addScriptToEvaluateOnNewDocument",
+            "Page.removeScriptToEvaluateOnNewDocument",
+        ],
+    ),
 ];
+
+/// The init scripts' file: its scripts run in the page's own world, so it never names a world.
+const INIT_SCRIPTS: &str = "neo-runtime/src/init_scripts.rs";
 
 /// Where a built artifact lives: the only source a `functionDeclaration` may have.
 const BUILT_PREFIX: &str = "/../neo-runtime-injected/dist/";
@@ -258,6 +271,31 @@ fn check(relative: &str, source: &str) -> Vec<String> {
             if names(&text, method) && !allowed.contains(method) {
                 problems.push(format!(
                     "{relative}:{line}: a concat! of literals names {method}, which only its ALLOWED file may"
+                ));
+            }
+        }
+    }
+    if relative == INIT_SCRIPTS {
+        // A literal, an identifier or a `concat!` of literals that names a world, read as the
+        // compiler reads them, so a computed key (`concat!("world", "Name")`) is one too.
+        let names_world = |text: &str| text.to_ascii_lowercase().contains("world");
+        for token in &tokens {
+            let named = match token {
+                Token::Str { text, .. } => names_world(text),
+                Token::Ident { text, .. } => text == "world_name" || text == "worldName",
+                Token::Punct { .. } => false,
+            };
+            if named {
+                problems.push(format!(
+                    "{relative}:{}: names a world; init scripts run in the page's own world only",
+                    token.line()
+                ));
+            }
+        }
+        for (text, line) in concatenations(&tokens) {
+            if names_world(&text) {
+                problems.push(format!(
+                    "{relative}:{line}: a concat! of literals names a world; init scripts run in the page's own world only"
                 ));
             }
         }
@@ -737,6 +775,41 @@ fn collect(dir: &Path, files: &mut Vec<PathBuf>) {
 }
 
 #[test]
+fn tests_that_only_init_scripts_rs_adds_init_scripts_and_never_names_a_world() {
+    for method in [
+        "Page.addScriptToEvaluateOnNewDocument",
+        "Page.removeScriptToEvaluateOnNewDocument",
+    ] {
+        let send = format!("cdp.send(\"{method}\", json!({{\"source\": source}}), Some(session))");
+        assert!(
+            check(INIT_SCRIPTS, &send).is_empty(),
+            "{method} in init_scripts.rs"
+        );
+        assert!(
+            !check("neo-runtime/src/page.rs", &send).is_empty(),
+            "{method} elsewhere"
+        );
+        assert!(
+            !check("neo-runtime/src/main_world.rs", &send).is_empty(),
+            "{method} in main_world.rs"
+        );
+    }
+    for world in [
+        "json!({\"source\": source, \"worldName\": name})",
+        "let request = Params { world_name: Some(name) };",
+    ] {
+        assert!(
+            !check(INIT_SCRIPTS, world).is_empty(),
+            "not refused: {world}"
+        );
+    }
+    assert!(
+        !check(INIT_SCRIPTS, "cdp.send(\"Runtime.evaluate\", params, None)").is_empty(),
+        "init_scripts.rs may not evaluate"
+    );
+}
+
+#[test]
 fn tests_that_an_escaped_literal_is_read_as_its_value() {
     let source = r#"const EVAL: &str = "\x52untime.evaluate";"#;
     assert!(
@@ -804,4 +877,15 @@ fn tests_that_only_an_exact_artifact_include_is_a_built_function() {
             "a re-bound name passed: {shadow}"
         );
     }
+}
+
+#[test]
+fn a_computed_init_world_name_is_refused() {
+    let source = r#"const KEY: &str = concat!("world", "Name");
+        cdp.send("Page.addScriptToEvaluateOnNewDocument", json!({"source": source, (KEY): name}), Some(session));"#;
+    let problems = check(INIT_SCRIPTS, source);
+    assert!(
+        !problems.is_empty(),
+        "init scripts must not select a world: {problems:?}"
+    );
 }

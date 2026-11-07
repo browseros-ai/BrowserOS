@@ -650,6 +650,28 @@ fn bring_to_front(command: &Value, calls: &Calls, page: &Mutex<Page>) -> Value {
 }
 
 /// The fake's answer to `command`, and when to send it.
+/// Commands the fake answers with an empty result.
+const EMPTY_RESULTS: &[&str] = &[
+    "Browser.getVersion",
+    "Target.setDiscoverTargets",
+    "Browser.setDownloadBehavior",
+    "Browser.cancelDownload",
+    "Page.setInterceptFileChooserDialog",
+    "Browser.grantPermissions",
+    "Browser.resetPermissions",
+    "Storage.setCookies",
+    "Network.setExtraHTTPHeaders",
+    "Network.emulateNetworkConditions",
+    "Emulation.setGeolocationOverride",
+    "Page.close",
+    "Page.enable",
+    "Network.enable",
+    "Page.setLifecycleEventsEnabled",
+    "Emulation.setFocusEmulationEnabled",
+    "Runtime.releaseObjectGroup",
+    "DOM.scrollIntoViewIfNeeded",
+];
+
 fn answer(
     command: &Value,
     replies: &Replies,
@@ -659,6 +681,7 @@ fn answer(
     let now = Some(Duration::ZERO);
     if let Some(answer) = tab_command(command, replies, page)
         .or_else(|| frame_command(command, calls, page).map(|reply| (reply, now)))
+        .or_else(|| init_script_command(command, calls).map(|reply| (reply, now)))
         .or_else(|| input_command(command, replies, calls))
     {
         return answer;
@@ -694,18 +717,7 @@ fn answer(
             );
             (json!({"result":{}}), now)
         }
-        "Browser.getVersion"
-        | "Target.setDiscoverTargets"
-        | "Browser.setDownloadBehavior"
-        | "Browser.cancelDownload"
-        | "Page.setInterceptFileChooserDialog"
-        | "Page.close"
-        | "Page.enable"
-        | "Network.enable"
-        | "Page.setLifecycleEventsEnabled"
-        | "Emulation.setFocusEmulationEnabled"
-        | "Runtime.releaseObjectGroup"
-        | "DOM.scrollIntoViewIfNeeded" => (json!({ "result": {} }), now),
+        method if EMPTY_RESULTS.contains(&method) => (json!({ "result": {} }), now),
         "Page.navigate" => match replies.navigation {
             Some(script) => {
                 let result = if script.same_document {
@@ -749,6 +761,20 @@ fn answer(
             json!({ "error": { "code": -32601, "message": format!("'{method}' wasn't found") } }),
             now,
         ),
+    }
+}
+
+/// The init script commands (`src/init_scripts.rs`): a real tab answers each script its own
+/// identifier, and takes its removal and the iframe auto-attach without a word.
+fn init_script_command(command: &Value, calls: &mut Calls) -> Option<Value> {
+    match command["method"].as_str()? {
+        "Page.addScriptToEvaluateOnNewDocument" => Some(json!({
+            "result": { "identifier": calls.object("script") },
+        })),
+        "Page.removeScriptToEvaluateOnNewDocument"
+        | "Target.setAutoAttach"
+        | "Runtime.runIfWaitingForDebugger" => Some(json!({ "result": {} })),
+        _ => None,
     }
 }
 
