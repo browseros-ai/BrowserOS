@@ -3,6 +3,13 @@
 // example. Each test pushes its cleanups and runs them in reverse; the browser's cleanup closes
 // it as Playwright does and fails the test if any of its processes outlives it.
 //
+// Setup is bounded and labelled. A fresh browser sometimes hangs within its first seconds on a
+// loaded machine (neo-runtime's `tests/support/browser.rs` says where: macOS's RunningBoard
+// blocks its UI thread) and never answers again, so `launchBrowser` and `launchReference` bound
+// each try by SETUP_TIMEOUT_MS and replace a browser that fails it once, on a fresh profile.
+// Every failure of this harness's own setup, and of a case's Playwright half (`referenceHalf`),
+// starts with `reference harness:`: the case never reached Neo, so it says nothing about Neo.
+//
 // Runs under Node, not Bun: Playwright's connectOverCDP hangs on Bun's WebSocket. Gated on
 // NEO_E2E_BROWSER, the path of a BrowserOS neo binary. The neo_run build honours
 // CARGO_TARGET_DIR and CARGO_BUILD_BUILD_DIR from the environment.
@@ -22,6 +29,7 @@ import http from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { inspect } from 'node:util'
 
 // Playwright dims the call log in error messages whenever the environment suggests colour
 // (`COLORTERM`, `TERM=xterm-*`, inherited from the terminal even without a TTY), and reads the
@@ -60,6 +68,18 @@ const CLOSE_TIMEOUT_MS = 30_000
  * it as a survivor and SIGKILLs it. neo-runtime's `tests/support/browser.rs` uses the same value.
  */
 const HELPER_GRACE_MS = 5_000
+/**
+ * How long one try at a browser's setup may take: its CDP port, then whatever the caller attaches
+ * (the test's own CDP client, Playwright's connectOverCDP, whose own default is the same). A live
+ * browser needs a few seconds of it even on a loaded machine; one that hung never answers again,
+ * so waiting longer only delays its replacement. neo-runtime's `tests/support/browser.rs` bounds
+ * its setup the same (`SETUP_TIMEOUT`).
+ */
+const SETUP_TIMEOUT_MS = 30_000
+/** Tries at a browser's setup, each on a fresh browser and profile: one replacement. */
+const SETUP_TRIES = 2
+/** How this harness's own failures start, so a report never reads one as Neo's result. */
+const REFERENCE_HARNESS = 'reference harness:'
 export const skip = browserBinary ? false : 'NEO_E2E_BROWSER is unset'
 const workspaceRoot = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -163,20 +183,22 @@ export async function compareMethod(
       pages: { '/method.html': html },
       slowMs,
     })
-    const browser = await launchBrowser(cleanups, browserBinary)
-    const playwright = await chromium.connectOverCDP(
-      `http://127.0.0.1:${browser.port}`,
+    const { playwright, ...browser } = await launchReference(
+      cleanups,
+      browserBinary,
     )
-    cleanups.push(() => playwright.close())
     const [context] = playwright.contexts()
     const scripts = mkdtempSync(join(tmpdir(), 'neo-method-parity-'))
     cleanups.push(() => rmSync(scripts, { recursive: true, force: true }))
-    const reference = await context.newPage()
-    await reference.goto(`${origin}/method.html`)
-    const AsyncFunction = (async () => {}).constructor
-    const value = await new AsyncFunction('page', scriptSource)(reference)
-    const effect = await reference.evaluate(probe)
-    await reference.close()
+    const { value, effect } = await referenceHalf(async () => {
+      const reference = await context.newPage()
+      await reference.goto(`${origin}/method.html`)
+      const AsyncFunction = (async () => {}).constructor
+      const value = await new AsyncFunction('page', scriptSource)(reference)
+      const effect = await reference.evaluate(probe)
+      await reference.close()
+      return { value, effect }
+    })
 
     const script = join(scripts, 'method.js')
     writeFileSync(script, scriptSource)
@@ -365,20 +387,143 @@ export function fileContent(request, response) {
 }
 
 /**
- * Launches a headless BrowserOS neo on a throwaway profile, leading a process group of its own.
- * Every helper it starts (GPU, utility, renderers) joins that group (`ps -o pid,pgid` on
- * 155.0.8318.26), so one signal to the group reaches them all. Its cleanup is `closeBrowser`.
- * `args` go before the first URL, such as Playwright's own `--disable-back-forward-cache`.
- *
- * The profile's download folder is its own `downloads` directory, returned as `downloads`: a
- * download the browser saves itself (Neo's `behavior: 'default'`) goes to the profile's default
- * folder, which a fresh profile puts at the user's ~/Downloads. "Ask where to save each file" is
- * off, as a headless browser cancels a download that asks.
+ * Launches a headless BrowserOS neo on a throwaway profile (`spawnBrowser`) and returns
+ * `{ port, downloads }` once it has published its CDP port. Its cleanup is `closeBrowser`. `args`
+ * go before the first URL, such as Playwright's own `--disable-back-forward-cache`. A browser that
+ * never publishes its port is replaced once (`openBrowser`).
  */
 export async function launchBrowser(cleanups, binary, args = []) {
+  return await openBrowser(cleanups, binary, args, async () => ({}))
+}
+
+/**
+ * `launchBrowser`, with the reference attached in the same try: returns `{ port, downloads,
+ * playwright }` (Playwright over connectOverCDP, with `connect` among its options), plus the
+ * test's own CDP client as `cdp` when asked, every cleanup among `cleanups`. A browser that hangs
+ * while either attaches is replaced before the case begins.
+ */
+export async function launchReference(
+  cleanups,
+  binary,
+  { args = [], cdp = false, connect = {} } = {},
+) {
+  return await openBrowser(
+    cleanups,
+    binary,
+    args,
+    async (port, own, deadline) => {
+      const client = cdp ? await connectCdp(own, port, deadline) : undefined
+      const playwright = await connectReference(port, deadline, connect)
+      own.push(() => playwright.close())
+      return cdp ? { playwright, cdp: client } : { playwright }
+    },
+  )
+}
+
+/**
+ * Playwright's connectOverCDP to the browser at `port` with `options`, bounded by `deadline`, its
+ * failure labelled: a case whose reference cannot attach never reaches Neo. For a browser
+ * `launchReference` did not attach, as when a test connects Playwright only for its own turn.
+ */
+export async function connectReference(
+  port,
+  deadline = Date.now() + SETUP_TIMEOUT_MS,
+  options = {},
+) {
+  try {
+    return await chromium.connectOverCDP(`http://127.0.0.1:${port}`, {
+      ...options,
+      // 0 would disable Playwright's timeout.
+      timeout: Math.max(1, deadline - Date.now()),
+    })
+  } catch (error) {
+    throw labelled("Playwright's connectOverCDP did not attach", error)
+  }
+}
+
+/**
+ * Runs `step`, a case's Playwright half, and labels what it throws: Neo runs after it, so the
+ * case never reached Neo and its failure says nothing about Neo.
+ */
+export async function referenceHalf(step) {
+  try {
+    return await step()
+  } catch (error) {
+    if (thrownMessage(error).startsWith(REFERENCE_HARNESS)) throw error
+    throw labelled("Playwright's half of the case failed before Neo ran", error)
+  }
+}
+
+/**
+ * `thrown`, whatever a step threw (a script may throw a string or a bare object), as this
+ * harness's labelled `Error` saying `what` failed; the thrown value stays its `cause`.
+ */
+function labelled(what, thrown) {
+  return new Error(`${REFERENCE_HARNESS} ${what}: ${thrownMessage(thrown)}`, {
+    cause: thrown,
+  })
+}
+
+/** What any thrown value says: an `Error`'s message, else the value as Node prints it. */
+function thrownMessage(thrown) {
+  return thrown instanceof Error ? thrown.message : inspect(thrown)
+}
+
+/**
+ * The tries behind `launchBrowser` and `launchReference`: each launches a fresh browser, waits for
+ * its CDP port and runs `attach(port, own, deadline)`, all by SETUP_TIMEOUT_MS. A try that fails
+ * is a browser that hung while it started; it gets SIGKILL with its whole group and loses its
+ * profile (`discardBrowser`), and the next try starts over on a fresh one. Returns
+ * `{ port, downloads, ...attached }`, the browser's close and the cleanups `attach` pushed to
+ * `own` among `cleanups`; two failed tries throw `reference harness:` with both reasons.
+ */
+async function openBrowser(cleanups, binary, args, attach) {
+  const failures = []
+  for (let attempt = 1; attempt <= SETUP_TRIES; attempt++) {
+    const deadline = Date.now() + SETUP_TIMEOUT_MS
+    const browser = spawnBrowser(binary, args)
+    const own = []
+    try {
+      const port = await publishedPort(browser, deadline)
+      const attached = await attach(port, own, deadline)
+      cleanups.push(() => closeBrowser(browser), ...own)
+      return { port, downloads: browser.downloads, ...attached }
+    } catch (error) {
+      await runCleanups(own).catch(() => {})
+      await discardBrowser(browser)
+      const reason = thrownMessage(error).replace(`${REFERENCE_HARNESS} `, '')
+      failures.push(reason)
+      process.stderr.write(
+        `${REFERENCE_HARNESS} try ${attempt} of ${SETUP_TRIES} failed: ${reason}\n`,
+      )
+    }
+  }
+  throw new Error(
+    `${REFERENCE_HARNESS} no browser started in ${SETUP_TRIES} tries, each on a fresh profile: ${failures.join('; ')}`,
+  )
+}
+
+/**
+ * Starts a headless BrowserOS neo on a throwaway profile, leading a process group of its own.
+ * Every helper it starts (GPU, utility, renderers) joins that group (`ps -o pid,pgid` on
+ * 155.0.8318.26), so one signal to the group reaches them all.
+ *
+ * The profile's download folder is its own `downloads` directory: a download the browser saves
+ * itself (Neo's `behavior: 'default'`) goes to the profile's default folder, which a fresh profile
+ * puts at the user's ~/Downloads. "Ask where to save each file" is off, as a headless browser
+ * cancels a download that asks.
+ *
+ * Its temporary files go in the profile's own `tmp` (`MAC_CHROMIUM_TMPDIR`, Chromium's temporary
+ * directory on macOS, and `TMPDIR` elsewhere), so the profile's removal takes them too: a browser
+ * that exits soon after it starts, or gets SIGKILL, leaves Chromium's temporary directories
+ * (`scoped_dir*`, `com.browseros.*`) behind, thousands a day in a shared temporary directory.
+ */
+function spawnBrowser(binary, args) {
   const profile = mkdtempSync(join(tmpdir(), 'neo-parity-'))
   const downloads = join(profile, 'downloads')
+  const temporary = join(profile, 'tmp')
   mkdirSync(downloads)
+  mkdirSync(temporary)
   mkdirSync(join(profile, 'Default'))
   writeFileSync(
     join(profile, 'Default', 'Preferences'),
@@ -406,7 +551,15 @@ export async function launchBrowser(cleanups, binary, args = []) {
     ],
     // `detached` makes it a group leader, as Playwright's launcher does, so one SIGKILL to the
     // group reaches every helper.
-    { stdio: 'ignore', detached: true },
+    {
+      stdio: 'ignore',
+      detached: true,
+      env: {
+        ...process.env,
+        MAC_CHROMIUM_TMPDIR: temporary,
+        TMPDIR: temporary,
+      },
+    },
   )
   // Every group signal below goes to `-pid`. Were the browser in the test runner's group, that
   // would kill `node --test` with it, so confirm it leads its own before anything relies on it.
@@ -421,10 +574,15 @@ export async function launchBrowser(cleanups, binary, args = []) {
     )
   }
   const exited = once(child, 'exit')
-  const browser = { child, exited, profile, endpoint: undefined }
-  cleanups.push(() => closeBrowser(browser))
+  return { child, exited, profile, downloads, endpoint: undefined }
+}
 
-  const deadline = Date.now() + 20_000
+/**
+ * The CDP port `browser` publishes in its profile's DevToolsActivePort, or why it never did by
+ * `deadline`; a browser that exits first fails at once.
+ */
+async function publishedPort(browser, deadline) {
+  const { child, profile } = browser
   for (;;) {
     try {
       const [port, path] = readFileSync(
@@ -433,12 +591,34 @@ export async function launchBrowser(cleanups, binary, args = []) {
       ).split('\n')
       if (Number(port) > 0 && path) {
         browser.endpoint = `ws://127.0.0.1:${port}${path}`
-        return { port: Number(port), downloads }
+        return Number(port)
       }
     } catch {}
-    assert.ok(Date.now() < deadline, 'the browser never opened its CDP port')
+    if (child.exitCode !== null || child.signalCode !== null)
+      throw new Error(
+        `the browser never opened its CDP port: it exited (${child.signalCode ?? child.exitCode})`,
+      )
+    if (Date.now() >= deadline)
+      throw new Error(
+        `the browser never opened its CDP port within ${SETUP_TIMEOUT_MS} ms`,
+      )
     await sleep(50)
   }
+}
+
+/**
+ * Ends a browser whose setup failed: SIGKILL to its group at once (one that hung never answers
+ * Browser.close), then its profile, which holds its temporary files too.
+ */
+async function discardBrowser({ child, exited, profile }) {
+  killGroup(child.pid)
+  await Promise.race([exited.catch(() => {}), sleep(5_000)])
+  const left = await killAll(child.pid, profile)
+  rmSync(profile, { recursive: true, force: true })
+  if (left.length > 0)
+    process.stderr.write(
+      `${REFERENCE_HARNESS} a discarded browser's processes outlived SIGKILL: ${left.join(' ')}\n`,
+    )
 }
 
 /**
@@ -610,12 +790,28 @@ function processType(pid) {
   }
 }
 
-/** A minimal CDP client on the browser's WebSocket, separate from Playwright's. */
-export async function connectCdp(cleanups, port) {
-  const version = await fetch(`http://127.0.0.1:${port}/json/version`)
-  const { webSocketDebuggerUrl } = await version.json()
-  const socket = new WebSocket(webSocketDebuggerUrl)
-  await once(socket, 'open')
+/**
+ * A minimal CDP client on the browser's WebSocket, separate from Playwright's. Connecting is
+ * setup, bounded by `deadline`, and a browser that never answers fails it labelled rather than
+ * holding the test until a watchdog ends it.
+ */
+export async function connectCdp(
+  cleanups,
+  port,
+  deadline = Date.now() + SETUP_TIMEOUT_MS,
+) {
+  let socket
+  try {
+    const version = await fetch(`http://127.0.0.1:${port}/json/version`, {
+      signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+    })
+    const { webSocketDebuggerUrl } = await version.json()
+    socket = new WebSocket(webSocketDebuggerUrl)
+    await opened(socket, deadline)
+  } catch (error) {
+    socket?.close()
+    throw labelled("the test's CDP client did not connect", error)
+  }
   cleanups.push(() => socket.close())
   const pending = new Map()
   let nextId = 1
@@ -639,6 +835,32 @@ export async function connectCdp(cleanups, port) {
       })
     },
   }
+}
+
+/** Settles once `socket` opens, or fails when it errors or `deadline` passes first. */
+function opened(socket, deadline) {
+  return new Promise((resolve, reject) => {
+    const late = setTimeout(
+      () => reject(new Error(`no WebSocket within ${SETUP_TIMEOUT_MS} ms`)),
+      Math.max(0, deadline - Date.now()),
+    )
+    socket.addEventListener(
+      'open',
+      () => {
+        clearTimeout(late)
+        resolve()
+      },
+      { once: true },
+    )
+    socket.addEventListener(
+      'error',
+      () => {
+        clearTimeout(late)
+        reject(new Error('the WebSocket failed'))
+      },
+      { once: true },
+    )
+  })
 }
 
 /**

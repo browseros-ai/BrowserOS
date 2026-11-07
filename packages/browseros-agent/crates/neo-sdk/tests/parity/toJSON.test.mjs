@@ -13,10 +13,8 @@ import { test } from 'node:test'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
   compareMethod,
-  connectCdp,
-  launchBrowser,
+  launchReference,
   openTab,
   playwrightVersion,
   runCleanups,
@@ -92,12 +90,11 @@ test(`a script that returns its page, frame, context and a locator returns their
     const origin = await serveFixture(cleanups, {
       pages: { '/run.html': html },
     })
-    const browser = await launchBrowser(cleanups, browserBinary)
-    const cdp = await connectCdp(cleanups, browser.port)
-    const playwright = await chromium.connectOverCDP(
-      `http://127.0.0.1:${browser.port}`,
+    const { playwright, cdp, ...browser } = await launchReference(
+      cleanups,
+      browserBinary,
+      { cdp: true },
     )
-    cleanups.push(() => playwright.close())
     const [context] = playwright.contexts()
     const scripts = mkdtempSync(join(tmpdir(), 'neo-to-json-parity-'))
     cleanups.push(() => rmSync(scripts, { recursive: true, force: true }))

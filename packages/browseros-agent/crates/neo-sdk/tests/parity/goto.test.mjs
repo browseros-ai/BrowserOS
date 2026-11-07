@@ -18,9 +18,7 @@ import { test } from 'node:test'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
-  connectCdp,
-  launchBrowser,
+  launchReference,
   playwrightVersion,
   runCleanups,
   skip,
@@ -247,10 +245,11 @@ test('goto answers the same Response, Request chain and nulls as Playwright', {
       ['data', 'data:text/html,<title>d</title>'],
     ]
     const script = `const ORIGIN = ${JSON.stringify(origin)};\nconst CASES = ${JSON.stringify(cases)};\n${source}`
-    const { port } = await launchBrowser(cleanups, browserBinary)
-    const cdp = await connectCdp(cleanups, port)
-    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
-    cleanups.push(() => browser.close())
+    const {
+      port,
+      cdp,
+      playwright: browser,
+    } = await launchReference(cleanups, browserBinary, { cdp: true })
     const page = await browser.contexts()[0].newPage()
     const reference = await new (async () => {}).constructor('page', script)(
       page,
@@ -381,10 +380,11 @@ test('a response whose page closes before its body finished rejects body() and f
       await page.close()
       return { status: response.status(), body: await body, finished: await finished }
     `
-    const { port } = await launchBrowser(cleanups, browserBinary)
-    const cdp = await connectCdp(cleanups, port)
-    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
-    cleanups.push(() => browser.close())
+    const {
+      port,
+      cdp,
+      playwright: browser,
+    } = await launchReference(cleanups, browserBinary, { cdp: true })
     const page = await browser.contexts()[0].newPage()
     const reference = await new (async () => {}).constructor('page', script)(
       page,

@@ -23,10 +23,9 @@ import { dirname, join } from 'node:path'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
-  connectCdp,
-  launchBrowser,
+  launchReference,
   playwrightVersion,
+  referenceHalf,
   runCleanups,
   serveFixture,
   startNeo,
@@ -112,16 +111,14 @@ export async function withEngines(t, { pages, browserArgs = [] }, body) {
   const cleanups = []
   try {
     const origin = await serveFixture(cleanups, { pages })
-    const browser = await launchBrowser(cleanups, browserBinary, browserArgs)
-    const cdp = await connectCdp(cleanups, browser.port)
     // `isLocal`: the browser shares this machine, as Neo's always does, so Playwright sets an
     // upload's paths as paths (`DOM.setFileInputFiles`) rather than reading them into buffers
     // for a remote browser (`fileUploadUtils.ts`); nothing else reads it.
-    const playwright = await chromium.connectOverCDP(
-      `http://127.0.0.1:${browser.port}`,
-      { isLocal: true },
+    const { playwright, cdp, ...browser } = await launchReference(
+      cleanups,
+      browserBinary,
+      { args: browserArgs, cdp: true, connect: { isLocal: true } },
     )
-    cleanups.push(() => playwright.close())
     const [context] = playwright.contexts()
     const scratch = mkdtempSync(join(tmpdir(), 'neo-capture-parity-'))
     cleanups.push(() => rmSync(scratch, { recursive: true, force: true }))
@@ -138,12 +135,8 @@ export async function withEngines(t, { pages, browserArgs = [] }, body) {
         }
       }
       return {
-        playwright: await viaPlaywright(
-          context,
-          url,
-          source,
-          probe,
-          join(dir, 'playwright'),
+        playwright: await referenceHalf(() =>
+          viaPlaywright(context, url, source, probe, join(dir, 'playwright')),
         ),
         neo: await viaNeo(cdp, browser.port, neoRun, url, source, probe, dir),
       }

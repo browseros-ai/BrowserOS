@@ -22,13 +22,14 @@ import { join } from 'node:path'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
   connectCdp,
+  connectReference,
   errorCategory,
   eventually,
   launchBrowser,
   openTab,
   playwrightVersion,
+  referenceHalf,
   runCleanups,
   runInNeo,
   serveFixture,
@@ -109,27 +110,32 @@ export async function compareEvents(t, { pages, cases }) {
   }
 }
 
-/** Runs the script as Playwright does, with `page` and `context` in scope, then disconnects. */
+/**
+ * Runs the script as Playwright does, with `page` and `context` in scope, then disconnects
+ * (`referenceHalf`).
+ */
 async function viaPlaywright(port, url, source, probe) {
-  const playwright = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
-  try {
-    const [context] = playwright.contexts()
-    const page = await context.newPage()
-    await page.goto(url)
-    const AsyncFunction = (async () => {}).constructor
-    const result = await new AsyncFunction('page', 'context', source)(
-      page,
-      context,
-    ).then(
-      (value) => ({ value }),
-      (error) => ({ error: { name: error.name, message: error.message } }),
-    )
-    const effect = probe ? await page.evaluate(probe) : undefined
-    await page.close()
-    return { result, effect }
-  } finally {
-    await playwright.close()
-  }
+  return await referenceHalf(async () => {
+    const playwright = await connectReference(port)
+    try {
+      const [context] = playwright.contexts()
+      const page = await context.newPage()
+      await page.goto(url)
+      const AsyncFunction = (async () => {}).constructor
+      const result = await new AsyncFunction('page', 'context', source)(
+        page,
+        context,
+      ).then(
+        (value) => ({ value }),
+        (error) => ({ error: { name: error.name, message: error.message } }),
+      )
+      const effect = probe ? await page.evaluate(probe) : undefined
+      await page.close()
+      return { result, effect }
+    } finally {
+      await playwright.close()
+    }
+  })
 }
 
 /** Runs the script through neo_run on a loaded tab of its own, with no other client on it. */

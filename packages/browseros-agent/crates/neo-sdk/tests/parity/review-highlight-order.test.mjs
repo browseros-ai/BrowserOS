@@ -8,8 +8,7 @@ import { test } from 'node:test'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
-  launchBrowser,
+  launchReference,
   runCleanups,
   serveFixture,
   skip,
@@ -48,9 +47,10 @@ test('an in-flight old highlight write preserves the newer highlight in another 
         '/b': '<button id="target">B target</button>',
       },
     })
-    const browser = await launchBrowser(cleanups, browserBinary)
-    const pw = await chromium.connectOverCDP(`http://127.0.0.1:${browser.port}`)
-    cleanups.push(() => pw.close())
+    const { playwright: pw, ...browser } = await launchReference(
+      cleanups,
+      browserBinary,
+    )
     const [context] = pw.contexts()
     const page = await context.newPage()
     await page.goto(origin + '/main')

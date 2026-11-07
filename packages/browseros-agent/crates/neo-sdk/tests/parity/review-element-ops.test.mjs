@@ -6,9 +6,8 @@ import { test } from 'node:test'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
   compareMethod,
-  launchBrowser,
+  launchReference,
   runCleanups,
   serveFixture,
   skip,
@@ -57,9 +56,10 @@ test('highlight cleanup reaches a frame again after its process changes', {
         '/new': `<button id="new">New</button>${removeTakeover}`,
       },
     })
-    const browser = await launchBrowser(cleanups, browserBinary)
-    const pw = await chromium.connectOverCDP(`http://127.0.0.1:${browser.port}`)
-    cleanups.push(() => pw.close())
+    const { playwright: pw, ...browser } = await launchReference(
+      cleanups,
+      browserBinary,
+    )
     const [context] = pw.contexts()
     const dir = mkdtempSync(join(tmpdir(), 'neo-b2-highlight-'))
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
