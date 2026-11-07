@@ -414,6 +414,13 @@ function convertSelectOptionValues(values) {
 }
 
 // src/frame.ts
+function verifyWaitForSelectorOptions(options) {
+  const legacy = options;
+  if (legacy.visibility)
+    throw new Error("options.visibility is not supported, did you mean options.state?");
+  if (legacy.waitFor && legacy.waitFor !== "visible")
+    throw new Error("options.waitFor is not supported, did you mean options.state?");
+}
 var LIFECYCLE_EVENTS = new Set([
   "load",
   "domcontentloaded",
@@ -477,11 +484,28 @@ class Frame {
     const verified = verifyWaitState(apiName, "state", state === undefined ? "load" : state);
     await this._connection.sendNeo(apiName, this._guid, "neo:waitForLoadState", { state: verified }, this._page._timeoutSettings.navigationTimeout(options ?? {}));
   }
+  async waitForSelector(selector, options) {
+    return await this._waitForSelectorOrNull("frame.waitForSelector", selector, options);
+  }
+  async _waitForSelectorOrNull(apiName, selector, options) {
+    const waitOptions = options ?? {};
+    verifyWaitForSelectorOptions(waitOptions);
+    await this._waitForSelector(apiName, selector, waitOptions);
+    return null;
+  }
   async _waitForSelector(apiName, selector, options) {
     await this._connection.send(apiName, this._guid, "waitForSelector", pickParams(FRAME_WAIT_FOR_SELECTOR_KEYS, {
       selector,
       ...options
     }), this._page._timeoutSettings.timeout(options));
+  }
+  async waitForTimeout(timeout) {
+    return await this._waitForTimeout("frame.waitForTimeout", timeout);
+  }
+  async _waitForTimeout(apiName, timeout) {
+    await this._connection.send(apiName, this._guid, "waitForTimeout", {
+      waitTimeout: typeof timeout === "number" && !Number.isFinite(timeout) ? 0 : timeout
+    }, 0);
   }
   async title() {
     return await this._title("frame.title");
@@ -790,6 +814,12 @@ class Page {
   }
   async waitForLoadState(state, options) {
     return await this.#mainFrame._waitForLoadState("page.waitForLoadState", state, options);
+  }
+  async waitForSelector(selector, options) {
+    return await this.#mainFrame._waitForSelectorOrNull("page.waitForSelector", selector, options);
+  }
+  async waitForTimeout(timeout) {
+    return await this.#mainFrame._waitForTimeout("page.waitForTimeout", timeout);
   }
   async textContent(selector, options = {}) {
     return await this.#mainFrame._textContent("page.textContent", selector, options);

@@ -1,9 +1,10 @@
 /**
  * Playwright's `Frame` (`client/frame.ts` at 26137face), cut to a page's main frame: its guid,
  * its page, the selector builders, whose bodies are Playwright's, `goto`, `title`,
- * `textContent`, `innerText`, `getAttribute`, browser actions, and the waits `waitForURL` and
- * `waitForLoadState` (with `_waitForSelector` behind `locator.waitFor`). A page builds exactly
- * one `Frame` per run, because `Locator` compares frames by identity.
+ * `textContent`, `innerText`, `getAttribute`, browser actions, and the waits `waitForSelector`,
+ * `waitForTimeout`, `waitForURL` and `waitForLoadState` (`_waitForSelector` also serves
+ * `locator.waitFor`). A page builds exactly one `Frame` per run, because `Locator` compares
+ * frames by identity.
  *
  * Each `_<method>` is where every public form of a browser call (`locator.textContent`,
  * `page.textContent`, `frame.textContent`) becomes a protocol message, with its caller's
@@ -23,6 +24,9 @@
  * - `allTextContents` sends `client/locator.ts` source text; compiled Playwright clients may
  *   format it differently. It reads in Neo's isolated world, so page-defined `textContent`
  *   overrides (prototype patches, custom element classes or per-instance properties) can differ.
+ * - `waitForSelector` resolves `null` for every state. Playwright resolves an `ElementHandle` for
+ *   `attached` and `visible`, and Neo has no `ElementHandle` yet. It also takes `null` options as
+ *   none, where Playwright's throws a `TypeError`.
  */
 
 import type {
@@ -121,13 +125,30 @@ export type AriaSnapshotOptions = {
   timeout?: number
 }
 
-/** `Frame.waitForSelector`'s options as `locator.waitFor` takes them (Playwright's
+/** `waitForSelector`'s options, as `page`, `frame` and `locator.waitFor` take them (Playwright's
  * `channels.FrameWaitForSelectorOptions & TimeoutOptions`): `state` and `timeout`, plus `strict`
  * and `omitReturnValue`, which Playwright's client also passes through. */
 export type WaitForSelectorOptions = Omit<
   FrameWaitForSelectorParams,
   'selector'
 > & { timeout?: number }
+
+/**
+ * Playwright's client checks for two options its `waitForSelector` no longer takes
+ * (`client/frame.ts:241-244`). They throw before any message and outside Playwright's
+ * `_wrapApiCall`, so the error has no `<apiName>: ` prefix. `locator.waitFor` runs neither.
+ */
+function verifyWaitForSelectorOptions(options: WaitForSelectorOptions): void {
+  const legacy = options as { visibility?: unknown; waitFor?: unknown }
+  if (legacy.visibility)
+    throw new Error(
+      'options.visibility is not supported, did you mean options.state?',
+    )
+  if (legacy.waitFor && legacy.waitFor !== 'visible')
+    throw new Error(
+      'options.waitFor is not supported, did you mean options.state?',
+    )
+}
 
 /** What `waitForURL` matches: a glob string or a `RegExp`, two of Playwright's four `URLMatch`
  * forms. A predicate function is refused (`neo-commands.ts`); QuickJS has no `URLPattern`. */
@@ -337,9 +358,47 @@ export class Frame {
   }
 
   /**
-   * Sends `Frame.waitForSelector` under the action timeout. Behind `locator.waitFor` only, which
-   * passes `omitReturnValue: true`: Neo has no `ElementHandle`s, so a public
-   * `frame.waitForSelector` would have nothing to return.
+   * Waits until `selector` reaches `state` and resolves `null`. `visible`, the default, waits
+   * for a visible first match; `hidden` for no match or a hidden first match; `attached` and
+   * `detached` for a match or for none. Not strict: of several matches the first decides, and
+   * `strict: true` turns several into an `Error` at once. Polls the page under the action
+   * timeout and never takes the tab's input.
+   *
+   * Playwright resolves an `ElementHandle` for `attached` and `visible`; Neo resolves `null` for
+   * every state until it has handles.
+   */
+  async waitForSelector(
+    selector: string,
+    options?: WaitForSelectorOptions,
+  ): Promise<null> {
+    return await this._waitForSelectorOrNull(
+      'frame.waitForSelector',
+      selector,
+      options,
+    )
+  }
+
+  /**
+   * Playwright's `waitForSelector` body (`client/frame.ts:240-247`), for `page` and `frame`: the
+   * legacy-option checks, then the call with the script's options. Once neo-evaluate's handles
+   * land it resolves an `ElementHandle` for `attached` and `visible`; until then, `null`. `null`
+   * options count as none, as in Neo's other methods.
+   */
+  async _waitForSelectorOrNull(
+    apiName: ApiName,
+    selector: string,
+    options: WaitForSelectorOptions | undefined,
+  ): Promise<null> {
+    const waitOptions = options ?? {}
+    verifyWaitForSelectorOptions(waitOptions)
+    await this._waitForSelector(apiName, selector, waitOptions)
+    return null
+  }
+
+  /**
+   * Sends `Frame.waitForSelector` under the action timeout with the options as given, as
+   * Playwright's channel call does. `locator.waitFor` calls it directly, strict and with
+   * `omitReturnValue: true`, so it skips the legacy-option checks as Playwright's does.
    */
   async _waitForSelector(
     apiName: ApiName,
@@ -355,6 +414,37 @@ export class Frame {
         ...options,
       }) as FrameWaitForSelectorParams,
       this._page._timeoutSettings.timeout(options),
+    )
+  }
+
+  /**
+   * Waits `timeout` ms and resolves `undefined`. It has no call timeout of its own, as in
+   * Playwright, and rejects when the page closes. Node's `setTimeout` rule, which Playwright's
+   * server follows, sets the delay: a `timeout` that is NaN, below 1 or above 2^31 − 1 waits
+   * 1 ms.
+   */
+  async waitForTimeout(timeout: number): Promise<void> {
+    return await this._waitForTimeout('frame.waitForTimeout', timeout)
+  }
+
+  /**
+   * Sends `Frame.waitForTimeout` with `0` as the call timeout, Playwright's `kNoTimeout`
+   * (`client/frame.ts:488-490`). JSON has no NaN or ±Infinity (`JSON.stringify` writes `null`),
+   * so a non-finite number goes as `0`, which Node's rule turns into the same 1 ms. A value that
+   * is not a number goes as given, for Rust to refuse.
+   */
+  async _waitForTimeout(apiName: ApiName, timeout: number): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'waitForTimeout',
+      {
+        waitTimeout:
+          typeof timeout === 'number' && !Number.isFinite(timeout)
+            ? 0
+            : timeout,
+      },
+      0,
     )
   }
 

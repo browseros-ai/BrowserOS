@@ -1,10 +1,12 @@
 /**
- * The messages `locator.waitFor`, `waitForURL` and `waitForLoadState` send, and what they make of
- * Rust's replies, against a stub `__neo_runtime`. Each expectation is Playwright's client
- * behaviour at 26137face (`client/locator.ts` `waitFor`, `client/frame.ts` `waitForURL`,
- * `waitForLoadState`, `verifyLoadState`, `isomorphic/urlMatch.ts` `serializeURLMatch`), or the
- * wire contract of Neo's own `neo:` commands (`src/neo-commands.ts`), where Playwright's client
- * waits on events instead.
+ * The messages `locator.waitFor`, `waitForSelector`, `waitForTimeout`, `waitForURL` and
+ * `waitForLoadState` send, and what they make of Rust's replies, against a stub `__neo_runtime`.
+ * Each expectation is Playwright's client behaviour at 26137face (`client/locator.ts` `waitFor`,
+ * `client/frame.ts` `waitForSelector`, `waitForTimeout`, `waitForURL`, `waitForLoadState`,
+ * `verifyLoadState`, `isomorphic/urlMatch.ts` `serializeURLMatch`), or the wire contract of Neo's
+ * own `neo:` commands (`src/neo-commands.ts`), where Playwright's client waits on events instead.
+ * One exception is Neo's own: `waitForSelector` resolves `null` where Playwright resolves an
+ * `ElementHandle`, which Neo does not have yet.
  */
 
 import { beforeEach, describe, expect, test } from 'bun:test'
@@ -127,6 +129,195 @@ describe('locator.waitFor', () => {
       .waitFor({ timeout: 5 })
       .catch((e) => e)
     expect(error.name).toBe('TimeoutError')
+  })
+})
+
+/** `page` and `page.mainFrame()`: Playwright's page forms forward to the main frame. */
+const RECEIVERS = [
+  ['page', (page: ReturnType<typeof run>['page']) => page],
+  ['frame', (page: ReturnType<typeof run>['page']) => page.mainFrame()],
+] as const
+
+/** A void command's reply, as Rust sends `{id}` with no `result`. */
+const VOID: Reply = { result: undefined }
+
+const CLOSED: Reply = {
+  error: {
+    error: {
+      name: 'TargetClosedError',
+      message: 'Target page, context or browser has been closed',
+    },
+  },
+  log: [],
+}
+
+for (const [name, receiver] of RECEIVERS) {
+  describe(`${name}.waitForSelector`, () => {
+    test('sends Frame.waitForSelector, not strict and without omitReturnValue, and resolves null', async () => {
+      const { page } = run()
+      expect(await receiver(page).waitForSelector('#x')).toBeNull()
+      expect(wire(sent[0])).toBe(
+        '{"guid":"frame@T","method":"waitForSelector","params":{"selector":"#x"},"timeout":30000}',
+      )
+    })
+
+    test("sends the script's options in schema order, without timeout or unknown keys", async () => {
+      const { page } = run()
+      await receiver(page).waitForSelector('#x', {
+        omitReturnValue: false,
+        timeout: 5,
+        state: 'hidden',
+        nope: 1,
+        strict: true,
+      } as never)
+      expect(wire(sent[0])).toBe(
+        '{"guid":"frame@T","method":"waitForSelector","params":{"selector":"#x","strict":true,"state":"hidden","omitReturnValue":false},"timeout":5}',
+      )
+    })
+
+    test('resolves null for every state', async () => {
+      const { page } = run()
+      for (const state of [
+        'attached',
+        'detached',
+        'visible',
+        'hidden',
+      ] as const)
+        expect(await receiver(page).waitForSelector('#x', { state })).toBeNull()
+      expect(sent.map(({ params }) => params.state)).toEqual([
+        'attached',
+        'detached',
+        'visible',
+        'hidden',
+      ])
+    })
+
+    test('runs under the action timeout, never the navigation timeout', async () => {
+      const { page, context } = run()
+      const timeouts: number[] = []
+      const wait = async (options?: { timeout?: number }) => {
+        await receiver(page).waitForSelector('#x', options)
+        timeouts.push(sent[sent.length - 1]?.metadata.timeout ?? -1)
+      }
+      page.setDefaultNavigationTimeout(1)
+      await wait()
+      context.setDefaultTimeout(4)
+      await wait()
+      page.setDefaultTimeout(2)
+      await wait()
+      await wait({ timeout: 7 })
+      await wait({ timeout: 0 })
+      expect(timeouts).toEqual([30_000, 4, 2, 7, 0])
+    })
+
+    test("Playwright's legacy options throw its unprefixed errors before anything is sent", async () => {
+      const { page } = run()
+      const refused = async (options: unknown) => {
+        const error = await receiver(page)
+          .waitForSelector('#x', options as never)
+          .catch((e) => e)
+        return [error.name, error.message]
+      }
+      expect(await refused({ visibility: 'visible' })).toEqual([
+        'Error',
+        'options.visibility is not supported, did you mean options.state?',
+      ])
+      expect(await refused({ waitFor: 'hidden' })).toEqual([
+        'Error',
+        'options.waitFor is not supported, did you mean options.state?',
+      ])
+      expect(sent).toEqual([])
+    })
+
+    test("a legacy option's allowed values send nothing of it", async () => {
+      const { page } = run()
+      for (const options of [{ waitFor: 'visible' }, { visibility: '' }])
+        expect(
+          await receiver(page).waitForSelector('#x', options as never),
+        ).toBeNull()
+      expect(sent.map(({ params }) => JSON.stringify(params))).toEqual([
+        '{"selector":"#x"}',
+        '{"selector":"#x"}',
+      ])
+    })
+
+    test('null options are none, under the default timeout', async () => {
+      const { page } = run()
+      page.setDefaultTimeout(123)
+      expect(
+        await receiver(page).waitForSelector('#x', null as never),
+      ).toBeNull()
+      expect(wire(sent[0])).toBe(
+        '{"guid":"frame@T","method":"waitForSelector","params":{"selector":"#x"},"timeout":123}',
+      )
+    })
+
+    test("a wait that times out rejects with a TimeoutError under the receiver's name", async () => {
+      const { page } = run()
+      replies.push(timedOut(5))
+      const error = await receiver(page)
+        .waitForSelector('#x', { timeout: 5 })
+        .catch((e) => e)
+      expect(error.name).toBe('TimeoutError')
+      expect(error.message).toStartWith(
+        `${name}.waitForSelector: Timeout 5ms exceeded.`,
+      )
+    })
+  })
+
+  describe(`${name}.waitForTimeout`, () => {
+    test('sends Frame.waitForTimeout with no call timeout, and resolves undefined', async () => {
+      const { page } = run()
+      replies.push(VOID)
+      expect(await receiver(page).waitForTimeout(250)).toBeUndefined()
+      expect(wire(sent[0])).toBe(
+        '{"guid":"frame@T","method":"waitForTimeout","params":{"waitTimeout":250},"timeout":0}',
+      )
+    })
+
+    test('never takes the action or navigation timeout', async () => {
+      const { page, context } = run()
+      context.setDefaultTimeout(6)
+      page.setDefaultTimeout(5)
+      page.setDefaultNavigationTimeout(4)
+      replies.push(VOID)
+      await receiver(page).waitForTimeout(10)
+      expect(sent[0]?.metadata.timeout).toBe(0)
+    })
+
+    test('a number JSON cannot carry is sent as 0; every other number as given', async () => {
+      const { page } = run()
+      const values = [Number.NaN, Infinity, -Infinity, 0, -5, 0.5, 3e9]
+      for (const timeout of values) {
+        replies.push(VOID)
+        await receiver(page).waitForTimeout(timeout)
+      }
+      expect(sent.map(({ params }) => params.waitTimeout)).toEqual([
+        0, 0, 0, 0, -5, 0.5, 3e9,
+      ])
+    })
+
+    test("a closed page rejects as closed, under the receiver's name", async () => {
+      const { page } = run()
+      replies.push(CLOSED)
+      const error = await receiver(page)
+        .waitForTimeout(20_000)
+        .catch((e) => e)
+      expect(error.name).toBe('Error')
+      expect(error.message).toStartWith(
+        `${name}.waitForTimeout: Target page, context or browser has been closed`,
+      )
+    })
+  })
+}
+
+describe('locator.waitFor keeps no client checks', () => {
+  test('a legacy option is neither refused nor sent', async () => {
+    const { page } = run()
+    await page.locator('#x').waitFor({ visibility: 'hidden' } as never)
+    expect(wire(sent[0])).toBe(
+      '{"guid":"frame@T","method":"waitForSelector","params":{"selector":"#x","strict":true,"omitReturnValue":true},"timeout":30000}',
+    )
   })
 })
 

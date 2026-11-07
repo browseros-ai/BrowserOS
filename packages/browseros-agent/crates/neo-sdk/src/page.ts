@@ -24,6 +24,7 @@ import {
   type UncheckOptions,
   type URLMatch,
   type WaitForLoadStateOptions,
+  type WaitForSelectorOptions,
   type WaitForURLOptions,
 } from './frame'
 import type { Locator, LocatorOptions } from './locator'
@@ -35,9 +36,9 @@ import { TimeoutSettings } from './timeout-settings'
 /**
  * Playwright's `Page`, backed by live reads from its own tab, which its guid names. Its
  * selector builders, `goto`, `title`, `textContent`, `innerText`, `getAttribute`, browser actions,
- * `waitForURL` and `waitForLoadState` forward to the main frame, as Playwright's do
- * (`client/page.ts`); `ariaSnapshot` snapshots the main frame's document. Only the run's
- * `BrowserContext` builds one, once per guid.
+ * `waitForSelector`, `waitForTimeout`, `waitForURL` and `waitForLoadState` forward to the main
+ * frame, as Playwright's do (`client/page.ts`); `ariaSnapshot` snapshots the main frame's
+ * document. Only the run's `BrowserContext` builds one, once per guid.
  *
  * Known limitation: once the tab is closed, `url()` returns the last URL this object returned,
  * not the last URL the tab committed. Navigate `/a` to `/final`, close the tab before the
@@ -183,6 +184,27 @@ export class Page {
       state,
       options,
     )
+  }
+
+  /**
+   * The main frame's {@link Frame.waitForSelector}: waits until `selector` reaches `state`
+   * (default `visible`, first match, not strict) and resolves `null`, where Playwright resolves
+   * an `ElementHandle` for `attached` and `visible`.
+   */
+  async waitForSelector(
+    selector: string,
+    options?: WaitForSelectorOptions,
+  ): Promise<null> {
+    return await this.#mainFrame._waitForSelectorOrNull(
+      'page.waitForSelector',
+      selector,
+      options,
+    )
+  }
+
+  /** The main frame's {@link Frame.waitForTimeout}: waits `timeout` ms, with no call timeout. */
+  async waitForTimeout(timeout: number): Promise<void> {
+    return await this.#mainFrame._waitForTimeout('page.waitForTimeout', timeout)
   }
 
   /** Not strict, as Playwright's `page.textContent`, which forwards to the main frame. */
