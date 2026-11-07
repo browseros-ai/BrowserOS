@@ -68,10 +68,10 @@ use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::devices::{self, DeviceCall};
 use crate::dialogs;
-    SCROLL_INTO_VIEW_META, SELECT_TEXT_META,
-    self, BOUNDING_BOX_META, DispatchOptions, ElementTarget, NeoElementParams, NeoSelectTextParams,
 use crate::drag::{self, DragOptions};
 use crate::element_ops::{
+    self, BOUNDING_BOX_META, DispatchOptions, ElementTarget, NeoElementParams, NeoSelectTextParams,
+    SCROLL_INTO_VIEW_META, SELECT_TEXT_META,
 };
 use crate::evaluate::{self, EvalCall};
 use crate::events::{ALL_PAGES, EventHub};
@@ -122,7 +122,9 @@ const MAX_CALLS_IN_FLIGHT: usize = 64;
 /// copies of each outside the realm.
 const MAX_REQUEST_BYTES_IN_FLIGHT: usize = 8 * 1024 * 1024;
 
-/// Neo has no `ElementHandle` objects to pass as `selectOption` values.
+/// Neo: `selectOption`'s `elements` (Playwright's `ElementHandle` values, matched by node identity)
+/// cannot reach Neo's injected script yet; neo-sdk refuses such values before sending
+/// (`select-option.ts`), and this refuses them on the wire.
 const ELEMENTS_UNSUPPORTED: &str = "Neo does not support ElementHandle values in selectOption yet";
 
 // Playwright implements these on its eventful client. Neo has a call/reply bridge, so its
