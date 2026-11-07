@@ -29,6 +29,7 @@ use std::sync::{Arc, Mutex};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use browseros_cdp::{CdpError, SessionId};
+use futures_util::future;
 use neo_runtime_spec::serve::{NameValue, RouteCall, RouteContinueParams, RouteFulfillParams};
 use neo_runtime_spec::{Binary, MethodMeta};
 use serde::{Deserialize, Serialize};
@@ -1248,27 +1249,34 @@ async fn turn(page: &PageSession, progress: &Progress) -> Result<(), CallError> 
     Ok(())
 }
 
-/// Neo: at the run's end, every pause it left open goes on and the tab stops pausing
-/// requests, before its session detaches ([`Routes::left_open`]).
+/// Neo: at the run's end or the context's close, every pause the run left open goes on and the
+/// tab stops pausing requests, before its session detaches ([`Routes::left_open`]). Both are
+/// taken from the routes at once and every continuation and the pausing's end go out together,
+/// none waiting on another's reply: one the browser is slow to acknowledge holds back no other,
+/// and a caller that stops waiting drops nothing still owed once this runs on a task of its own
+/// (`Tabs::release_run_scoped`).
 pub(crate) async fn finish(page: &PageSession) {
-    send_all(page, page.routes.left_open()).await;
-    if page.routes.stop_intercepting()
-        && let Err(error) = page.intercept(false).await
-    {
-        debug!(%error, "turning a tab's request pausing off at run end failed");
-    }
+    let answers = page.routes.left_open();
+    let stop = page.routes.stop_intercepting();
+    let off = async {
+        if stop && let Err(error) = page.intercept(false).await {
+            debug!(%error, "turning a tab's request pausing off failed");
+        }
+    };
+    future::join(send_all(page, answers), off).await;
 }
 
-/// Neo: sends answers whose outcome nobody waits for (released pauses).
+/// Neo: sends answers whose outcome nobody waits for (released pauses), all together.
 async fn send_all(page: &PageSession, answers: Vec<Answer>) {
-    for answer in answers {
+    future::join_all(answers.into_iter().map(|answer| async move {
         if let Err(error) = page
             .send_to(answer.session.as_ref(), answer.method, answer.params)
             .await
         {
             debug!(%error, "releasing a paused request failed");
         }
-    }
+    }))
+    .await;
 }
 
 /// Neo: a CDP error turning the pausing over, as the script sees it.

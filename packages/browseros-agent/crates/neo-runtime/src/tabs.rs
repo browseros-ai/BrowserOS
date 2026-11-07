@@ -696,12 +696,17 @@ impl Tabs {
         // Deviation: `server/dispatchers/pageDispatcher.ts` `PageDispatcher._onDispose`: `this._page.removeRequestInterceptor(this._requestInterceptor).catch(() => {});`
         // Every request the run's routes hold goes on and no tab pauses requests for the run any
         // more (`routes::finish`), as Playwright's closed context releases its client's paused
-        // requests; the page's requests after the close reach the network untouched.
-        let _routes = time::timeout(PAGE_END_WAIT, async {
-            let sessions = self.attached_sessions();
-            future::join_all(sessions.iter().map(|session| routes::finish(session))).await;
-        })
-        .await;
+        // requests; the page's requests after the close reach the network untouched. On a task
+        // of the run's tracker, as the overrides' resets: a continuation or a pausing's end the
+        // browser is slow to acknowledge still goes through after the budget.
+        let sessions = self.attached_sessions();
+        let releasing = self.0.tasks.spawn_on(
+            async move {
+                future::join_all(sessions.iter().map(|session| routes::finish(session))).await;
+            },
+            &self.0.tokio,
+        );
+        let _routes = time::timeout(PAGE_END_WAIT, releasing).await;
     }
 
     /// Records the run's end on every tab it attached to (`PageSession::mark_input_ended`): no

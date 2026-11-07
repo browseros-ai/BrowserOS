@@ -911,23 +911,36 @@ impl PageSession {
         if on {
             self.enable_network().await?;
         }
-        for (method, params) in interception(on) {
-            self.send(method, params).await?;
-        }
-        for host in self.frames.child_hosts() {
-            if self.init_children.reports(host.target_id()) {
-                continue;
-            }
-            for (method, params) in interception(on) {
-                if let Err(error) = host.send(method, params).await {
+        // Every session's commands go out together, none waiting on another's reply.
+        let tab = future::try_join_all(
+            interception(on)
+                .into_iter()
+                .map(|(method, params)| self.send(method, params)),
+        );
+        let hosts = self
+            .frames
+            .child_hosts()
+            .into_iter()
+            .filter(|host| !self.init_children.reports(host.target_id()))
+            .map(|host| async move {
+                let sent = future::join_all(
+                    interception(on)
+                        .into_iter()
+                        .map(|(method, params)| host.send(method, params)),
+                )
+                .await;
+                for error in sent.into_iter().filter_map(Result::err) {
                     debug!(%error, "turning a frame session's request pausing over failed");
                 }
-            }
-        }
-        for child in self.init_children.live() {
-            child.intercept(on).await;
-        }
-        Ok(())
+            });
+        let children = self
+            .init_children
+            .live()
+            .into_iter()
+            .map(|child| async move { child.intercept(on).await });
+        let (tab, _hosts, _children) =
+            tokio::join!(tab, future::join_all(hosts), future::join_all(children));
+        tab.map(|_| ())
     }
 
     /// Neo: the hook `init_scripts.rs` runs on each out-of-process iframe session it attached for
@@ -2059,12 +2072,16 @@ impl InitChild {
         }
     }
 
-    /// Turns the pausing of the session's requests on or off.
+    /// Turns the pausing of the session's requests on or off, its commands together.
     async fn intercept(&self, on: bool) {
-        for (method, params) in interception(on) {
-            if !self.send(method, params).await {
-                debug!(session = %self.link.session, "turning an init-script frame's request pausing over failed");
-            }
+        let sent = future::join_all(
+            interception(on)
+                .into_iter()
+                .map(|(method, params)| self.send(method, params)),
+        )
+        .await;
+        if sent.contains(&false) {
+            debug!(session = %self.link.session, "turning an init-script frame's request pausing over failed");
         }
     }
 }
