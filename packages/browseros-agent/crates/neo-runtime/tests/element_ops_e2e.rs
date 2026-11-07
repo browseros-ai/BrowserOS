@@ -1,7 +1,8 @@
-//! B2's Neo-only behavior in real Neo runs on a throwaway browser profile: the `eventInit`
-//! values Neo refuses before any event, the highlight overlays a run removes when it ends, and
-//! the content-box offset of a box inside a bordered out-of-process frame. Everything Neo
-//! shares with Playwright is compared against it in neo-sdk's parity tests.
+//! B2's behavior in real Neo runs on a throwaway browser profile: the `eventInit` values Neo
+//! refuses before any event, the highlight overlays a run removes when it ends, and the exact
+//! box of an element inside a bordered out-of-process frame (Playwright's border-box placement,
+//! pinned in numbers). Everything Neo shares with Playwright is also compared against it in
+//! neo-sdk's parity tests.
 
 #[expect(
     dead_code,
@@ -195,7 +196,7 @@ const CROSS: &str = r"<!doctype html><html><body style='margin:0'>
 </body></html>";
 
 #[tokio::test(flavor = "multi_thread")]
-async fn tests_that_a_box_in_a_bordered_out_of_process_frame_starts_at_its_content_box() {
+async fn tests_that_a_box_in_a_bordered_out_of_process_frame_is_placed_by_its_iframes_border_box() {
     let Some(binary) = browser::e2e_browser() else {
         return;
     };
@@ -235,11 +236,12 @@ async fn tests_that_a_box_in_a_bordered_out_of_process_frame_starts_at_its_conte
     });
     assert!(out_of_process, "the frame runs out of process: {targets}");
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:#?}");
-    // Deviation (element_ops.rs `bounding_box`): the frame's content box, 40 + 7 + 5 and
-    // 30 + 7 + 5, where Playwright adds the iframe's border box (51, 43).
+    // Playwright's `getBoundingBox`: the iframe's border-box origin (40, 30) plus the box's own
+    // (11, 13), not where the frame's viewport starts (40 + 7 + 5, 30 + 7 + 5), which input
+    // aims by.
     assert_eq!(
         outcome.value,
-        Some(json!({ "x": 63, "y": 55, "width": 20, "height": 10 }))
+        Some(json!({ "x": 51, "y": 43, "width": 20, "height": 10 }))
     );
 }
 

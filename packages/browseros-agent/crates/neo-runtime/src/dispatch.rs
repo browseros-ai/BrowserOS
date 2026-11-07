@@ -135,11 +135,6 @@ const MAX_CALLS_IN_FLIGHT: usize = 64;
 /// copies of each outside the realm.
 const MAX_REQUEST_BYTES_IN_FLIGHT: usize = 8 * 1024 * 1024;
 
-/// Neo: `selectOption`'s `elements` (Playwright's `ElementHandle` values, matched by node identity)
-/// cannot reach Neo's injected script yet; neo-sdk refuses such values before sending
-/// (`select-option.ts`), and this refuses them on the wire.
-const ELEMENTS_UNSUPPORTED: &str = "Neo does not support ElementHandle values in selectOption yet";
-
 // Playwright implements these on its eventful client. Neo has a call/reply bridge, so its
 // Frame extensions keep the whole wait in Rust. Wire shapes live in waits.rs and neo-commands.ts.
 static WAIT_FOR_URL_META: MethodMeta = MethodMeta {
@@ -692,20 +687,61 @@ fn route_frame_extension(method: &str, params: Option<&Value>) -> Option<Routed>
             .map(|options| ObjectCall::Frame(Route::FrameWaitForLoadState(options))),
         });
     }
-    // ElementHandleChannel is uninhabited in Neo, so reject non-empty arrays before
-    // serde tries to decode their members. Keep the method's input flag and title.
+    // The generated `ElementHandleChannel` has no values, so `elements` (Playwright's
+    // `ElementHandle` values) leaves the wire before the generated decode, as guids. Keep the
+    // method's input flag and title.
     if method == "selectOption"
-        && params
+        && let Some(elements) = params
             .and_then(|params| params.get("elements"))
             .and_then(Value::as_array)
-            .is_some_and(|elements| !elements.is_empty())
+        && !elements.is_empty()
     {
         return Some(Routed {
             meta: Some(FrameSelectOptionParams::META),
-            route: Err(PlaywrightError::error(ELEMENTS_UNSUPPORTED)),
+            route: select_option_with_elements(params, elements),
         });
     }
     None
+}
+
+/// Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection._tChannelImplFromWire`: `expected guid for ${names.toString()}`
+///
+/// `selectOption` with `elements`: each element's guid, and the rest of its params decoded as
+/// the generated `FrameCall` decodes them. The guids name handles only once the call runs
+/// (`fill::select_option`).
+fn select_option_with_elements(
+    params: Option<&Value>,
+    elements: &[Value],
+) -> Result<ObjectCall, PlaywrightError> {
+    let guids = elements
+        .iter()
+        .enumerate()
+        .map(|(index, element)| {
+            element
+                .get("guid")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    PlaywrightError::error(format!(
+                        "elements[{index}]: expected guid for ElementHandle"
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut rest = params.cloned().unwrap_or_else(|| json!({}));
+    if let Some(object) = rest.as_object_mut() {
+        object.remove("elements");
+    }
+    let call = FrameCall::decode("selectOption", Some(rest))
+        .map_err(|error| PlaywrightError::error(error.to_string()))?;
+    match route_frame_call(call)? {
+        Route::FrameSelectOption(options) => Ok(ObjectCall::Frame(Route::FrameSelectOption(
+            options.with_elements(guids),
+        ))),
+        _ => Err(PlaywrightError::error(
+            "neo-runtime: selectOption decoded as another call",
+        )),
+    }
 }
 
 /// The Neo element commands (`element_ops.rs`), or `None` for any other method.
@@ -1914,16 +1950,28 @@ mod tests {
                 "{error:?}"
             );
         }
+        // `elements` (Playwright's ElementHandle values) leave the wire as guids, the rest
+        // decodes as usual; a member that is no channel is refused as Playwright's dispatcher
+        // refuses it.
         let mut params = forms_params("selectOption", "select");
-        params["elements"] = json!([{ "guid": "element@1" }]);
+        params["elements"] = json!([{ "guid": "handle@1" }, { "guid": "handle@2" }]);
         let routed = route_frame("selectOption", params);
         assert_eq!(
             routed.meta.and_then(|meta| meta.title),
             Some("Select option")
         );
+        match frame_route(routed.route).expect("routed") {
+            Route::FrameSelectOption(options) => {
+                assert_eq!(options.elements, ["handle@1", "handle@2"]);
+                assert_eq!(options.selector, "select");
+            }
+            _ => panic!("not a selectOption"),
+        }
+        let mut params = forms_params("selectOption", "select");
+        params["elements"] = json!([{ "guid": "handle@1" }, "two"]);
         assert_eq!(
-            error_of(routed),
-            PlaywrightError::error(ELEMENTS_UNSUPPORTED)
+            error_of(route_frame("selectOption", params)),
+            PlaywrightError::error("elements[1]: expected guid for ElementHandle")
         );
     }
 

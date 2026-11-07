@@ -50,6 +50,7 @@ use crate::frames::{FrameContext, FrameScope};
 use crate::main_world::{self, BuiltExpression, Called, DocumentId, Installed, MainFunction};
 use crate::page::{FrameTab, GroupGuard};
 use crate::progress::{CallError, PlaywrightError, Progress, js_number};
+use crate::world::ObjectGroup;
 
 /// Neo: the guid prefix of a run's handles (`handle@<run>.<n>`), opaque to the SDK.
 pub(crate) const HANDLE_PREFIX: &str = "handle@";
@@ -752,6 +753,32 @@ impl Handles {
         self.entries.lock().ok()?.get(guid).cloned()
     }
 
+    /// Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection._tChannelImplFromWire`: `no object with guid ${guid}`
+    ///
+    /// `selectOption`'s `elements[index]`: the element handle `guid` names, checked as
+    /// Playwright's dispatcher checks an `ElementHandle` channel. A disposed handle's guid is
+    /// gone, so it names nothing.
+    ///
+    /// # Errors
+    ///
+    /// No handle has `guid`, or it is a `JSHandle` that is not an element.
+    pub(crate) fn select_element(
+        &self,
+        index: usize,
+        guid: &str,
+    ) -> Result<Arc<HandleEntry>, PlaywrightError> {
+        let entry = self.entry(guid).ok_or_else(|| {
+            PlaywrightError::error(format!("elements[{index}]: no object with guid {guid}"))
+        })?;
+        if !entry.element {
+            // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection._tChannelImplFromWire`: `has type ${dispatcher._type}, expected ${names.toString()}`
+            return Err(PlaywrightError::error(format!(
+                "elements[{index}]: object with guid {guid} has type JSHandle, expected ElementHandle"
+            )));
+        }
+        Ok(entry)
+    }
+
     /// Releases every handle group the run created and forgets every guid. Called at run end;
     /// the releases run on the pages' tracked tasks (`GroupGuard`).
     pub(crate) fn close(&self) {
@@ -1207,6 +1234,50 @@ fn element_scope(
         .into());
     }
     Ok(Some(entry))
+}
+
+/// Playwright: `server/dom.ts` `FrameExecutionContext.adoptIfNeeded`: `return this.frame._page.delegate.adoptElementHandle(handle, this);`
+///
+/// `entry`'s element adopted into `frame`'s utility world in `group`, as Playwright adopts
+/// `selectOption`'s `ElementHandle` values into the select's utility context for each attempt:
+/// the LIVE node, wherever it now is (`DOM.describeNode` where the handle's object lives, then
+/// `DOM.resolveNode` in the select's world), so an option moved into the select from another
+/// document of the same process is still the one its handle names. `None` when the node cannot
+/// be resolved there: another process's (another session's), or one whose object is gone, which
+/// Playwright's adoption refuses (`kUnableToAdoptErrorMessage`).
+///
+/// # Errors
+///
+/// `Closed` when the tab is gone.
+pub(crate) async fn adopt_element(
+    entry: &HandleEntry,
+    frame: &Arc<FrameContext>,
+    group: &ObjectGroup,
+) -> Result<Option<Handle<Element>>, PageError> {
+    let Remote::Object(id) = &entry.remote else {
+        return Ok(None);
+    };
+    // A backend node id names a node in its own process only.
+    // Deviation: `server/dom.ts` `FrameExecutionContext.adoptIfNeeded`: `return this.frame._page.delegate.adoptElementHandle(handle, this);` A handle of another session (an out-of-process frame's, another tab's) fails Playwright's adoption, which `_retryWithProgressIfNotConnected` retries until the call times out (TimeoutError); Neo refuses it at once with Playwright's adoption Error, since a script gains nothing from waiting its whole timeout to learn the handle is unusable. Neither selects anything.
+    if entry.frame.host.session_id() != frame.host.session_id() {
+        return Ok(None);
+    }
+    let backend = match entry
+        .frame
+        .main
+        .backend_of(&entry.frame, id.object_id())
+        .await
+    {
+        Ok(backend) => backend,
+        Err(PageError::Closed) => return Err(PageError::Closed),
+        // The handle's object went with its document.
+        Err(_) => return Ok(None),
+    };
+    match frame.world.element(group, backend).await {
+        Ok(node) => Ok(Some(node)),
+        Err(PageError::Closed) => Err(PageError::Closed),
+        Err(_) => Ok(None),
+    }
 }
 
 /// An element handle adopted into its frame's utility world, as the root of a scoped query, in
