@@ -61,6 +61,7 @@ mod forms;
 mod frame_selector;
 mod frames;
 mod getters;
+mod history;
 mod input_devices;
 mod keyboard;
 mod lists;

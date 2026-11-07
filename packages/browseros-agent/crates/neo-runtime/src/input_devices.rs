@@ -26,6 +26,7 @@
 //! acknowledged; a call that stopped part-way is `Unknown` (design section 4.7).
 
 use std::future::Future;
+use std::mem;
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -138,7 +139,7 @@ impl InputDevices {
     pub(crate) fn apply(&mut self, effect: &Effect, answered: bool) {
         self.apply_effect(effect, answered);
         // An ended run goes once nothing lists it.
-        let ended = std::mem::take(&mut self.ended);
+        let ended = mem::take(&mut self.ended);
         self.ended = ended
             .into_iter()
             .filter(|owner| self.holds_anything(owner))

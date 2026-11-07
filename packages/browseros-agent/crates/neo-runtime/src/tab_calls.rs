@@ -9,14 +9,18 @@ use neo_runtime_spec::serve::{
     BrowserContextCall, BrowserContextNewPageResult, ConsoleMessagesFilter, PageCall, PageChannel,
     PageClearConsoleMessagesParams, PageClearConsoleMessagesResult, PageClearPageErrorsParams,
     PageClearPageErrorsResult, PageConsoleMessagesParams, PageConsoleMessagesResult,
-    PagePageErrorsParams, PagePageErrorsResult,
+    PageGoBackParams, PageGoBackResult, PageGoForwardParams, PageGoForwardResult,
+    PagePageErrorsParams, PagePageErrorsResult, PageReloadParams, PageReloadResult,
+    ResponseChannel,
 };
 use serde_json::{Value, json};
 use tracing::debug;
 
 use crate::bridge;
 use crate::dispatch::encode_result;
-use crate::page::PageSession;
+use crate::frames::FrameScope;
+use crate::history::{self, HistoryOptions};
+use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::tabs::{self, PageEntry, Tabs};
 
@@ -65,6 +69,24 @@ pub(crate) async fn page(
     progress: &Progress,
 ) -> Result<Option<Value>, CallError> {
     match call {
+        PageCall::Reload(params) => {
+            let response = history_step(tabs, entry, HistoryOptions::reload(&params), progress);
+            return encode_result::<PageReloadParams>(&PageReloadResult {
+                response: response.await?,
+            });
+        }
+        PageCall::GoBack(params) => {
+            let response = history_step(tabs, entry, HistoryOptions::back(&params), progress);
+            return encode_result::<PageGoBackParams>(&PageGoBackResult {
+                response: response.await?,
+            });
+        }
+        PageCall::GoForward(params) => {
+            let response = history_step(tabs, entry, HistoryOptions::forward(&params), progress);
+            return encode_result::<PageGoForwardParams>(&PageGoForwardResult {
+                response: response.await?,
+            });
+        }
         // Playwright's server keeps a page's console and page errors from its first moment;
         // Neo starts on the first read, with what V8 kept of the tab's live documents
         // (`page_events.rs`). A clear enables first, so that replay cannot bring back what it
@@ -102,23 +124,7 @@ pub(crate) async fn page(
             return encode_result::<PageClearPageErrorsParams>(&PageClearPageErrorsResult {});
         }
         PageCall::Close(_) => close(tabs, entry, progress).await?,
-        PageCall::RunBeforeUnload(_) => {
-            // Playwright 26137face server/page.ts:852-861 and chromium/crPage.ts:264-270:
-            // Page.close runs beforeunload; errors are logged and closure is not awaited.
-            let page = progress.race(tabs.session(entry)).await??;
-            let prepared = progress.race(page.prepare()).await?;
-            checked(tabs, entry, progress, prepared).await?;
-            progress.check()?;
-            entry.request_close();
-            tabs.finish_close(Arc::clone(&page), Arc::clone(entry));
-            match progress.race(page.send("Page.close", json!({}))).await {
-                Ok(Ok(_)) => {}
-                Ok(Err(error)) => debug!(%error, "running beforeunload failed"),
-                // The watcher can report closure before Page.close's acknowledgement.
-                Err(CallError::Playwright(error)) if error == PlaywrightError::target_closed() => {}
-                Err(error) => return Err(error),
-            }
-        }
+        PageCall::RunBeforeUnload(_) => run_before_unload(tabs, entry, progress).await?,
         // The dispatcher serves these over the tab's input devices (`devices.rs`).
         PageCall::KeyboardDown(_)
         | PageCall::KeyboardUp(_)
@@ -164,6 +170,24 @@ pub(crate) async fn page(
     Ok(None)
 }
 
+/// `Page.reload`, `goBack` or `goForward` on the main frame of `entry`'s session: the new
+/// document's response, or `None` where Playwright's answer is `null`. An option Neo refuses
+/// (`networkidle`) fails before the session is touched.
+async fn history_step(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    options: Result<HistoryOptions, PlaywrightError>,
+    progress: &Progress,
+) -> Result<Option<ResponseChannel>, CallError> {
+    let options = options?;
+    let page = progress.race(tabs.session(entry)).await??;
+    let main = FrameTab {
+        page,
+        scope: FrameScope::Main,
+    };
+    history::navigate(&main, &options, progress).await
+}
+
 /// `entry`'s session with console messages and page errors reported (`PageSession::enable_runtime`).
 async fn console_page(
     tabs: &Tabs,
@@ -194,6 +218,29 @@ async fn checked<T>(
             }
         }
     }
+}
+
+/// Playwright 26137face server/page.ts:852-861 and chromium/crPage.ts:264-270: Page.close runs
+/// beforeunload; errors are logged and closure is not awaited.
+async fn run_before_unload(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    let prepared = progress.race(page.prepare()).await?;
+    checked(tabs, entry, progress, prepared).await?;
+    progress.check()?;
+    entry.request_close();
+    tabs.finish_close(Arc::clone(&page), Arc::clone(entry));
+    match progress.race(page.send("Page.close", json!({}))).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => debug!(%error, "running beforeunload failed"),
+        // The watcher can report closure before Page.close's acknowledgement.
+        Err(CallError::Playwright(error)) if error == PlaywrightError::target_closed() => {}
+        Err(error) => return Err(error),
+    }
+    Ok(())
 }
 
 async fn close(tabs: &Tabs, entry: &PageEntry, progress: &Progress) -> Result<(), CallError> {
