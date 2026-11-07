@@ -56,6 +56,7 @@ mod check;
 mod click;
 mod console;
 mod content;
+mod coverage;
 mod deadline;
 mod devices;
 mod dialogs;

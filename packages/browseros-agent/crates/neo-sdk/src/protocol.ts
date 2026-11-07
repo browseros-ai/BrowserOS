@@ -64,6 +64,8 @@ import type {
   PageRegisterLocatorHandlerParams,
   PageReloadParams,
   PageResolveLocatorHandlerNoReplyParams,
+  PageStartCSSCoverageParams,
+  PageStartJSCoverageParams,
   PageTouchscreenTapParams,
   PageUnregisterLocatorHandlerParams,
 } from '@browseros/neo-runtime-spec/serve'
@@ -693,6 +695,29 @@ type _PageConsoleMessagesKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof PAGE_CONSOLE_MESSAGES_KEYS)[number], true>,
     Required<PageConsoleMessagesParams>
+  >
+>
+
+/** Neo: `Page.startJSCoverage`'s params in Playwright schema order (`spec/playwright/page.yml`). */
+export const PAGE_START_JS_COVERAGE_KEYS = [
+  'resetOnNavigation',
+  'reportAnonymousScripts',
+] as const
+
+type _PageStartJSCoverageKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_START_JS_COVERAGE_KEYS)[number], true>,
+    Required<PageStartJSCoverageParams>
+  >
+>
+
+/** Neo: `Page.startCSSCoverage`'s params (`spec/playwright/page.yml`). */
+export const PAGE_START_CSS_COVERAGE_KEYS = ['resetOnNavigation'] as const
+
+type _PageStartCSSCoverageKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_START_CSS_COVERAGE_KEYS)[number], true>,
+    Required<PageStartCSSCoverageParams>
   >
 >
 

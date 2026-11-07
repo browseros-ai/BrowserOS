@@ -19,6 +19,7 @@ and NOTICE.
 | `packages/playwright-core/src/client/channelOwner.ts` | `3e69df35c3f6deb444bb84fb5eff6fada175d44586d4fd4906cd986eb6b98706` |
 | `packages/playwright-core/src/client/connection.ts` | `d0d7bb74eb984f3a9316f77304d24b1a2698aededfba181cfb59cfde62b189fc` |
 | `packages/playwright-core/src/client/consoleMessage.ts` | `379d334d4abfff811612837b5f701e5c6d184d1b0e09e7f9aefade7bc395b1a7` |
+| `packages/playwright-core/src/client/coverage.ts` | `98d13ebe786172978602f7cafa43f698a6eb39ed72448e0771f3031475137bab` |
 | `packages/playwright-core/src/client/dialog.ts` | `493428ce8b51cef33be1d0fd5b7d8e65ad53ba3e7e357ca055d65517e87937a1` |
 | `packages/playwright-core/src/client/disposable.ts` | `485bdfd0540fba21550f807ff2012f84527bda80815730c72239497490ff94e7` |
 | `packages/playwright-core/src/client/download.ts` | `3d6c82b5191ffe192cd43ab555dd048d80df4ab20b7a9d992b993837cc3736bc` |
@@ -36,6 +37,8 @@ and NOTICE.
 | `packages/playwright-core/src/server/artifact.ts` | `5640b77b270078ef29f976052a95a64d07f12b999b6ca8ef437eb9a2c41ca5da` |
 | `packages/playwright-core/src/server/chromium/chromiumSwitches.ts` | `35dc159f3f27deac0de803ef55efa31713b62aa762908a26a2663e7f6fbb4bc3` |
 | `packages/playwright-core/src/server/chromium/crBrowser.ts` | `b8553078358be5326ca4905983059947a0f838111f0fde73940bf0e7792c43c9` |
+| `packages/playwright-core/src/server/chromium/crConnection.ts` | `dcdd9ca2091fa6353f69ec2883c4025bd8972166b4fe4f5caadc3c4310a1abca` |
+| `packages/playwright-core/src/server/chromium/crCoverage.ts` | `dbd9e96feb07796d351fc65878ac3fade4f5847884b61427dd7cfddff7e21aac` |
 | `packages/playwright-core/src/server/chromium/crDragDrop.ts` | `131ebd185079794f03724eed23d1dbace95afa1b913dfee0c8b93821dba45f94` |
 | `packages/playwright-core/src/server/chromium/crExecutionContext.ts` | `4ae617fd41123eac3946187cd55474f89049cb082ea15c1bae240004a325f996` |
 | `packages/playwright-core/src/server/chromium/crInput.ts` | `20b43d336519f9bc8da1504fb503e711466ca8471aa68af67e867d0535840221` |

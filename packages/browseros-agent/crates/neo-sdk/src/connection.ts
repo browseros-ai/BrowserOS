@@ -46,6 +46,10 @@ import type { SignalLike, TimeoutOptions } from './timeout-settings'
 /** The public methods that send a browser call, named as Playwright's client names them. */
 export type ApiName =
   | 'page.frame'
+  | 'coverage.startJSCoverage'
+  | 'coverage.stopJSCoverage'
+  | 'coverage.startCSSCoverage'
+  | 'coverage.stopCSSCoverage'
   | 'keyboard.down'
   | 'keyboard.up'
   | 'keyboard.insertText'

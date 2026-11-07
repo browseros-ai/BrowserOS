@@ -13,13 +13,16 @@ use neo_runtime_spec::serve::{
     PagePageErrorsParams, PagePageErrorsResult, PageRegisterLocatorHandlerParams,
     PageRegisterLocatorHandlerResult, PageReloadParams, PageReloadResult, PageRequestsParams,
     PageRequestsResult, PageResolveLocatorHandlerNoReplyParams,
-    PageResolveLocatorHandlerNoReplyResult, PageUnregisterLocatorHandlerParams,
+    PageResolveLocatorHandlerNoReplyResult, PageStartCSSCoverageParams, PageStartCSSCoverageResult,
+    PageStartJSCoverageParams, PageStartJSCoverageResult, PageStopCSSCoverageParams,
+    PageStopJSCoverageParams, PageUnregisterLocatorHandlerParams,
     PageUnregisterLocatorHandlerResult, ResponseChannel,
 };
 use serde_json::{Value, json};
 use tracing::debug;
 
 use crate::bridge;
+use crate::coverage;
 use crate::dispatch::encode_result;
 use crate::frames::FrameScope;
 use crate::highlight;
@@ -165,6 +168,27 @@ pub(crate) async fn page(
         // `Network.enable`: the first goto, history step or navigation wait, a network event
         // listener, or this read, as Chromium replays no earlier request.
         PageCall::Requests(_) => return requests(tabs, entry, progress).await,
+        // (G) `page.coverage` on the tab's own session (`coverage.rs`).
+        PageCall::StartJSCoverage(params) => {
+            let page = progress.race(tabs.session(entry)).await??;
+            coverage::start_js(&page, params, progress).await?;
+            return encode_result::<PageStartJSCoverageParams>(&PageStartJSCoverageResult {});
+        }
+        PageCall::StopJSCoverage(_) => {
+            let page = progress.race(tabs.session(entry)).await??;
+            let result = coverage::stop_js(&page, progress).await?;
+            return encode_result::<PageStopJSCoverageParams>(&result);
+        }
+        PageCall::StartCSSCoverage(params) => {
+            let page = progress.race(tabs.session(entry)).await??;
+            coverage::start_css(&page, params, progress).await?;
+            return encode_result::<PageStartCSSCoverageParams>(&PageStartCSSCoverageResult {});
+        }
+        PageCall::StopCSSCoverage(_) => {
+            let page = progress.race(tabs.session(entry)).await??;
+            let result = coverage::stop_css(&page, progress).await?;
+            return encode_result::<PageStopCSSCoverageParams>(&result);
+        }
         PageCall::Close(_) => close(tabs, entry, progress).await?,
         PageCall::RunBeforeUnload(_) => run_before_unload(tabs, entry, progress).await?,
         // The dispatcher serves these over the tab's input devices (`devices.rs`).

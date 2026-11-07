@@ -55,6 +55,12 @@ interfaces:
     - registerLocatorHandler
     - resolveLocatorHandlerNoReply
     - unregisterLocatorHandler
+    # (G) `page.coverage` on the page's own session (neo-runtime `coverage.rs`, Playwright's
+    # `CRCoverage`): precise JS coverage and CSS rule usage, from start to stop.
+    - startJSCoverage
+    - stopJSCoverage
+    - startCSSCoverage
+    - stopCSSCoverage
   # A JavaScript dialog the run's `dialog` event handed out.
   Dialog:
     - accept

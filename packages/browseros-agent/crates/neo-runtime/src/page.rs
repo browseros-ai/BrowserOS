@@ -73,6 +73,7 @@ use crate::click::{
     Arming, Geometry, NotReady, PageError, PressReport, Resolved, Scroll, SelectorFacts,
     StatesCheck, Stop, Tab, Verdict,
 };
+use crate::coverage::Coverage;
 use crate::events::{EventHub, Flushes};
 use crate::frame_selector::{self, FrameOwner};
 use crate::frames::{FrameContext, FrameScope, Frames, Host, local_tree};
@@ -219,6 +220,8 @@ pub(crate) struct PageSession {
     /// `Runtime.enable` and `Log.enable`, sent once a run listens to console messages or page
     /// errors (or reads their history) and kept for the run.
     runtime_enabled: OnceCell<()>,
+    /// The run's `page.coverage` on this tab (`coverage.rs`), ended with the session.
+    pub(crate) coverage: Coverage,
 }
 
 /// One call's frame scope over the tab's shared input, navigation and lifetime.
@@ -695,11 +698,22 @@ impl PageSession {
             events,
             locator_handlers: LocatorHandlers::default(),
             runtime_enabled: OnceCell::new(),
+            coverage: Coverage::default(),
         }
     }
 
     pub(crate) fn session_id(&self) -> &SessionId {
         &self.session.id
+    }
+
+    /// The CDP client this session is on.
+    pub(crate) fn cdp(&self) -> &CdpClient {
+        &self.session.cdp
+    }
+
+    /// The tab's main frame id, which is its target id.
+    pub(crate) fn main_frame(&self) -> &str {
+        &self.main_frame
     }
 
     pub(crate) fn closed(&self) -> CancellationToken {

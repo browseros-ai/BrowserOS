@@ -21,6 +21,7 @@ import {
 import type { BrowserContext } from './browser-context'
 import type { ApiName, Connection } from './connection'
 import { ConsoleMessage } from './console-message'
+import { Coverage } from './coverage'
 import type { ElementHandle } from './element-handle'
 import {
   isTargetClosedError,
@@ -199,6 +200,8 @@ export class Page extends ChannelOwner {
   readonly #frames = new Map<string, Frame>()
   readonly _timeoutSettings: TimeoutSettings
   /** Playwright's `page.keyboard`, `page.mouse` and `page.touchscreen`, one each per page. */
+  /** Playwright's `page.coverage`: JS and CSS coverage on this page's own session. */
+  readonly coverage: Coverage
   readonly keyboard: Keyboard
   readonly mouse: Mouse
   readonly touchscreen: Touchscreen
@@ -227,6 +230,7 @@ export class Page extends ChannelOwner {
       name: '',
     })
     this.#frames.set(mainFrameGuid, this.#mainFrame)
+    this.coverage = new Coverage(this.#connection, this.#guid)
     this.keyboard = new Keyboard(this)
     this.mouse = new Mouse(this)
     this.touchscreen = new Touchscreen(this)

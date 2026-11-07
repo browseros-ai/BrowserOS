@@ -17,6 +17,7 @@ neo-runtime-injected/src/wait-result.ts
 neo-runtime/src/abort.rs
 neo-runtime/src/console.rs
 neo-runtime/src/content.rs
+neo-runtime/src/coverage.rs
 neo-runtime/src/devices.rs
 neo-runtime/src/dialogs.rs
 neo-runtime/src/discovery.rs
@@ -37,6 +38,7 @@ neo-runtime/src/network_idle.rs
 neo-runtime/src/page_events.rs
 neo-runtime/src/switch.rs
 neo-sdk/src/console-message.ts
+neo-sdk/src/coverage.ts
 neo-sdk/src/dialog.ts
 neo-sdk/src/disposable.ts
 neo-sdk/src/download.ts
