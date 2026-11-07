@@ -46,6 +46,7 @@ neo-runtime/src/network_idle.rs
 neo-runtime/src/page_events.rs
 neo-runtime/src/pdf.rs
 neo-runtime/src/screenshot.rs
+neo-runtime/src/session_state.rs
 neo-runtime/src/set_input_files.rs
 neo-runtime/src/switch.rs
 neo-sdk/src/buffer.ts
@@ -56,6 +57,7 @@ neo-sdk/src/download.ts
 neo-sdk/src/element-handle.ts
 neo-sdk/src/events.ts
 neo-sdk/src/file-chooser.ts
+neo-sdk/src/headers.ts
 neo-sdk/src/init-script.ts
 neo-sdk/src/input.ts
 neo-sdk/src/js-handle.ts

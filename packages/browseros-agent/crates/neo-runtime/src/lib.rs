@@ -102,6 +102,7 @@ mod responses;
 mod run;
 mod runtime;
 mod screenshot;
+mod session_state;
 mod set_input_files;
 mod states;
 mod switch;

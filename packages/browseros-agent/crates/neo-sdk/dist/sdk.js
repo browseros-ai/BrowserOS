@@ -1501,6 +1501,25 @@ class Download {
   }
 }
 
+// src/headers.ts
+function validateHeaders(headers) {
+  for (const key of Object.keys(headers)) {
+    const value = headers[key];
+    if (!Object.is(value, undefined) && typeof value !== "string")
+      throw new Error(`Expected value of header "${key}" to be String, but "${typeof value}" is found.`);
+  }
+}
+function headersObjectToArray(headers) {
+  const result = [];
+  for (const name in headers) {
+    const value = headers[name];
+    if (value === undefined)
+      continue;
+    result.push({ name, value });
+  }
+  return result;
+}
+
 // src/init-script.ts
 function evaluationScript(apiName, fun, arg) {
   if (typeof fun === "function") {
@@ -6988,6 +7007,10 @@ class Page extends ChannelOwner {
   async bringToFront() {
     await this.#connection.sendPage("page.bringToFront", this.#guid, "bringToFront", {}, 0);
   }
+  async setExtraHTTPHeaders(headers) {
+    validateHeaders(headers);
+    await this.#connection.sendPage("page.setExtraHTTPHeaders", this.#guid, "setExtraHTTPHeaders", { headers: headersObjectToArray(headers) }, 0);
+  }
   async close(options = {}) {
     this.#closeReason = options.reason;
     try {
@@ -7518,6 +7541,32 @@ var CONTEXT_EVENTS = {
   quiet: ["backgroundpage"],
   unserved: ["serviceworker"]
 };
+var STORAGE_STATE_PATH = "path: this run has no artifact directory, so Neo cannot write the storage state; the host sets one per run";
+var STATE_FILE_PATH = "storageState: this run has no artifact directory, so Neo cannot read a state file; the host sets one per run";
+var CLEAR_ALL_COOKIES_REFUSED = "Neo does not clear every cookie of the user's browser, which would sign the user out of every site: pass clearCookies a name, domain or path";
+function clearCookieFilter(options) {
+  const kept = (value) => typeof value === "string" || value instanceof RegExp ? value : undefined;
+  return {
+    name: kept(options.name),
+    domain: kept(options.domain),
+    path: kept(options.path)
+  };
+}
+function hasClearCookieFilter(filter) {
+  return filter.name !== undefined || filter.domain !== undefined || filter.path !== undefined;
+}
+function clearCookieMatches(cookie, filter) {
+  const matches = (property, value) => {
+    if (value === undefined)
+      return true;
+    if (value instanceof RegExp) {
+      value.lastIndex = 0;
+      return value.test(cookie[property]);
+    }
+    return cookie[property] === value;
+  };
+  return matches("name", filter.name) && matches("domain", filter.domain) && matches("path", filter.path);
+}
 
 class BrowserContext extends ChannelOwner {
   #guid;
@@ -7697,6 +7746,61 @@ class BrowserContext extends ChannelOwner {
   async newPage() {
     const { page } = await this.#connection.sendContext("browserContext.newPage", this.#guid, "newPage", {}, 0);
     return this.#pageFor(page.guid);
+  }
+  async cookies(urls) {
+    const list = !urls ? [] : typeof urls === "string" ? [urls] : urls;
+    const { cookies } = await this.#connection.sendContext("browserContext.cookies", this.#guid, "cookies", { urls: list }, 0);
+    return cookies;
+  }
+  async addCookies(cookies) {
+    await this.#connection.sendContext("browserContext.addCookies", this.#guid, "addCookies", { cookies }, 0);
+  }
+  async clearCookies(options = {}) {
+    const filter = clearCookieFilter(options);
+    if (!hasClearCookieFilter(filter))
+      throw new Error(CLEAR_ALL_COOKIES_REFUSED);
+    const { cookies } = await this.#connection.sendContext("browserContext.clearCookies", this.#guid, "cookies", { urls: [] }, 0);
+    const expired = cookies.filter((cookie) => clearCookieMatches(cookie, filter)).map((cookie) => ({ ...cookie, expires: 0 }));
+    if (!expired.length)
+      return;
+    await this.#connection.sendContext("browserContext.clearCookies", this.#guid, "addCookies", { cookies: expired }, 0);
+  }
+  async setExtraHTTPHeaders(headers) {
+    validateHeaders(headers);
+    await this.#connection.sendContext("browserContext.setExtraHTTPHeaders", this.#guid, "setExtraHTTPHeaders", { headers: headersObjectToArray(headers) }, 0);
+  }
+  async setOffline(offline) {
+    await this.#connection.sendContext("browserContext.setOffline", this.#guid, "setOffline", { offline }, 0);
+  }
+  async setGeolocation(geolocation) {
+    await this.#connection.sendContext("browserContext.setGeolocation", this.#guid, "setGeolocation", geolocation ? { geolocation } : {}, 0);
+  }
+  async grantPermissions(permissions, options) {
+    await this.#connection.sendContext("browserContext.grantPermissions", this.#guid, "grantPermissions", { permissions, ...options }, 0);
+  }
+  async clearPermissions() {
+    await this.#connection.sendContext("browserContext.clearPermissions", this.#guid, "clearPermissions", {}, 0);
+  }
+  async setHTTPCredentials(httpCredentials) {
+    const list = !httpCredentials ? [] : Array.isArray(httpCredentials) ? httpCredentials : [httpCredentials];
+    await this.#connection.sendContext("browserContext.setHTTPCredentials", this.#guid, "setHTTPCredentials", list.length ? { httpCredentials: list } : {}, 0);
+  }
+  async storageState(options = {}) {
+    if (options.path !== undefined)
+      throw new Error(STORAGE_STATE_PATH);
+    const params = {};
+    if (options.indexedDB !== undefined)
+      params.indexedDB = options.indexedDB;
+    if (options.opfs !== undefined)
+      params.opfs = options.opfs;
+    if (options.credentials !== undefined)
+      params.credentials = options.credentials;
+    return await this.#connection.sendContext("browserContext.storageState", this.#guid, "storageState", params, 0);
+  }
+  async setStorageState(storageState) {
+    if (typeof storageState === "string")
+      throw new Error(STATE_FILE_PATH);
+    await this.#connection.sendContext("browserContext.setStorageState", this.#guid, "setStorageState", storageState ? { storageState } : {}, 0);
   }
   setDefaultTimeout(timeout) {
     this._timeoutSettings.setDefaultTimeout(timeout);

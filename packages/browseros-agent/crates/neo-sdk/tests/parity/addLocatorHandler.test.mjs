@@ -297,3 +297,35 @@ test('a removed handler no longer runs, and a child-frame locator is refused (LH
     zero: 'undefined',
   })
 })
+
+// Review (delta 995823580, F4): a handler's completion (`resolveLocatorHandlerNoReply`) is the
+// realm's own call. With 63 other public calls and the click in flight (Neo admits 64), it is
+// admitted as a release, as a navigation's is, so the click the handler holds goes on: the
+// handler runs once and the click lands once, as in Playwright. 0 other calls is the control.
+test('review: a handler completes while public calls fill the in-flight cap', {
+  skip,
+  timeout: 180_000,
+}, async (t) => {
+  for (const others of [0, 63]) {
+    await t.test(`${others} other calls`, async (t) => {
+      const outcome = await compareMethod(t, {
+        html: `<div id="banner">Banner</div><button id="target" onclick="window.hits++">Target</button><script>window.hits = 0; new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.remove()).observe(document.documentElement, { childList: true, subtree: true })</script>`,
+        source: `
+          let handled = 0
+          await page.addLocatorHandler(page.locator('#banner'), () => { handled++ }, { times: 1, noWaitAfter: true })
+          await page.locator('#target').isVisible()
+          const others = Array.from({ length: ${others} }, () => page.waitForTimeout(800))
+          const click = page.locator('#target').click({ timeout: 3000 }).then(() => 'resolved', errorCategory)
+          await Promise.all(others)
+          return { click: await click, handled, hits: await page.evaluate(() => window.hits) }
+        `,
+        probe: 'window.hits',
+      })
+      assert.deepEqual(outcome.value, {
+        click: 'resolved',
+        handled: 1,
+        hits: 1,
+      })
+    })
+  }
+})

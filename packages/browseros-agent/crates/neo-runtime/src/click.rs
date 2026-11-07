@@ -401,6 +401,16 @@ impl PointerAction {
         }
     }
 
+    /// Playwright: `server/frames.ts` `Frame.dragAndDrop`: `// Note: do not perform locator handlers checkpoint to avoid moving the mouse in the middle of a drag operation.`
+    ///
+    /// Whether loops A and B skip `performActionPreChecks` (the navigation checks and the
+    /// locator handlers' checkpoint): only a drag's target half, which runs with the source's
+    /// button held, so a handler's own input would break the drag. Its actionability checks,
+    /// the deadline, the signal and the input turn stay.
+    pub(crate) fn skips_action_pre_checks(self) -> bool {
+        matches!(self, Self::MoveAndUp)
+    }
+
     /// Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `const elementStates: ElementState[] = action.waitForEnabled ? ['visible', 'enabled', 'stable', 'non-inert'] : ['visible', 'stable'];`
     fn states(self) -> &'static [ElementState] {
         match self {
@@ -778,11 +788,13 @@ pub(crate) async fn pointer_action<T: KeyboardTab>(
     } else {
         options
     };
+    // Playwright: `server/frames.ts` `Frame.dragAndDrop`: `dom.assertDone(await this._retryWithProgressIfNotConnected(progress, target, { force: options.force, waitForFrameVisible: true, skipActionPreChecks: true }, async (progress, handle, box, frameVisible) => {`
+    let skip_pre_checks = options.force || options.action.skips_action_pre_checks();
     retry_with_progress_if_not_connected(
         tab,
         &options.selector,
         options.strict,
-        options.force,
+        skip_pre_checks,
         progress,
         &PointerElementAction { options, delivery },
     )
@@ -843,11 +855,14 @@ impl<T: Tab> ElementAction<T> for PointerElementAction<'_> {
 /// Playwright's `_retryWithProgressIfNotConnected`, shared by pointer and form actions. Naming,
 /// backoff, preparation, pre-checks, description and resolution stay in exactly that order.
 /// The element and its object group drop after each iteration, as Playwright disposes its handle.
+/// `skip_pre_checks` is Playwright's `!performActionPreChecks`: the call's `force`, or a drag's
+/// target half ([`PointerAction::skips_action_pre_checks`]).
+/// Playwright: `server/frames.ts` `Frame._retryWithProgressIfNotConnected`: `const performActionPreChecks = !options.skipActionPreChecks && !options.force;`
 pub(crate) async fn retry_with_progress_if_not_connected<T: Tab, A: ElementAction<T>>(
     tab: &T,
     selector: &str,
     strict: bool,
-    force: bool,
+    skip_pre_checks: bool,
     progress: &Progress,
     action: &A,
 ) -> Result<A::Output, CallError> {
@@ -863,7 +878,7 @@ pub(crate) async fn retry_with_progress_if_not_connected<T: Tab, A: ElementActio
         }
         let iteration = async {
             progress.race(tab.prepare()).await??;
-            if !force {
+            if !skip_pre_checks {
                 wait_out_pending_navigation(tab, progress).await?;
             }
             if !named {
@@ -938,7 +953,8 @@ pub(crate) async fn retry_pointer_action<T: Tab>(
                 progress.wait(wait).await?;
             }
         }
-        if !options.force {
+        // Playwright: `server/dom.ts` `ElementHandle._retryAction`: `if (!options.skipActionPreChecks && !options.force)`
+        if !options.force && !options.action.skips_action_pre_checks() {
             wait_out_pending_navigation(tab, progress).await?;
         }
         let reason =
@@ -1664,6 +1680,8 @@ pub(crate) mod tests {
         pub(crate) devices: Arc<Mutex<InputDevices>>,
         /// Every plan `press` was given, in call order.
         pub(crate) plans: Mutex<Vec<Plan>>,
+        /// Each locator handlers' checkpoint, as how many plans had been pressed before it.
+        pub(crate) checkpoints: Mutex<Vec<usize>>,
     }
 
     impl FakeTab {
@@ -1699,6 +1717,7 @@ pub(crate) mod tests {
                 states: Mutex::default(),
                 devices: Arc::default(),
                 plans: Mutex::default(),
+                checkpoints: Mutex::default(),
             }
         }
 
@@ -1877,6 +1896,15 @@ pub(crate) mod tests {
             self.record("navigation_settled");
             time::sleep(ROUND_TRIP).await;
             Ok(self.pending.lock().expect("pending").take())
+        }
+
+        fn locator_handlers_checkpoint(
+            &self,
+            _progress: &Progress,
+        ) -> impl Future<Output = Result<(), Stop>> + Send {
+            let pressed = self.plans.lock().expect("plans").len();
+            self.checkpoints.lock().expect("checkpoints").push(pressed);
+            future::ready(Ok(()))
         }
 
         fn watch_navigations(&self) {
