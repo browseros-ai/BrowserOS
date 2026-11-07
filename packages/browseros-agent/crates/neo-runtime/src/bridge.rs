@@ -207,6 +207,18 @@ fn subscribe(tabs: &Tabs, request: &str) -> Result<(), String> {
             .map(|(entry, _)| entry)
             .filter(|entry| entry.context.get().is_none())
             .collect()
+    } else if let Some(context) = tabs.created().find(&guid) {
+        // (platform) A context the run created: its own pages, and none of the run's.
+        tabs.attached()
+            .into_iter()
+            .map(|(entry, _)| entry)
+            .filter(|entry| {
+                entry
+                    .context
+                    .get()
+                    .is_some_and(|owner| Arc::ptr_eq(owner, &context))
+            })
+            .collect()
     } else {
         let (entry, _) = tabs
             .resolve(&guid)

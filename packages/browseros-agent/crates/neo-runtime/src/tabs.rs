@@ -401,6 +401,10 @@ impl Tabs {
     ) -> Result<Arc<PageEntry>, PlaywrightError> {
         let entry = self.register(id, created)?;
         let _first = entry.context.set(Arc::clone(context));
+        // Its context-level events answer to that context's listeners.
+        self.0
+            .events
+            .set_owner(&bridge::page_guid(&entry.id), &context.guid);
         Ok(entry)
     }
 
@@ -454,12 +458,15 @@ impl Tabs {
                 let session = self.attach(entry).await?;
                 // A created context's page emulates its options before any call on it runs.
                 browser_calls::prepare(entry, &session).await?;
-                // A context listener covers every page the run has a session on, this one
-                // from now on. Registered before the call that attached it continues, so that
-                // call waits for the enable (`EventHub::ready`). It is the run's own context's
-                // listener, so a created context's page is not one of them.
-                if let Some(needs) = self.0.events.context_needs()
-                    && entry.context.get().is_none()
+                // A context listener covers every page of its context the run has a session
+                // on, this one from now on. Registered before the call that attached it
+                // continues, so that call waits for the enable (`EventHub::ready`). The page's
+                // own context's listeners: a created context's, or the run's own.
+                let context = entry
+                    .context
+                    .get()
+                    .map_or(CONTEXT_GUID, |context| context.guid.as_str());
+                if let Some(needs) = self.0.events.context_needs(context)
                     && needs.of_page()
                     && let Some(entry) = self.entry(&entry.id)
                 {
@@ -960,7 +967,8 @@ impl Tabs {
             Err(error) => debug!(%error, "a new page's record could not be written"),
         }
         if !closed {
-            let needs = hub.context_needs().unwrap_or(Needs::WATCHER);
+            // Discovery reports the run's own context's tabs only.
+            let needs = hub.context_needs(CONTEXT_GUID).unwrap_or(Needs::WATCHER);
             page_events::enable(
                 self,
                 entry,

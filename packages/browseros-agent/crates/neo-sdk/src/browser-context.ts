@@ -597,7 +597,12 @@ export class BrowserContext extends ChannelOwner {
       {},
       0,
     )
-    return this.#pageFor(page.guid)
+    const created = this.#pageFor(page.guid)
+    // Playwright's context emits `page` before `newPage()` resolves. Rust's target discovery
+    // emits it for the run's own context; a context the run created has none, so here.
+    if (this._browser && this._browser._runContext() !== this)
+      this.emit('page', created)
+    return created
   }
 
   /** Playwright: `client/browserContext.ts` `BrowserContext.cookies`: `if (urls && typeof urls === 'string')`

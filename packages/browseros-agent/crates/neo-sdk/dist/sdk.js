@@ -7890,7 +7890,10 @@ class BrowserContext extends ChannelOwner {
     if (this._ownerPage)
       throw new Error("Please use browser.newContext()");
     const { page } = await this.#connection.sendContext("browserContext.newPage", this.#guid, "newPage", {}, 0);
-    return this.#pageFor(page.guid);
+    const created = this.#pageFor(page.guid);
+    if (this._browser && this._browser._runContext() !== this)
+      this.emit("page", created);
+    return created;
   }
   async cookies(urls) {
     const list = !urls ? [] : typeof urls === "string" ? [urls] : urls;

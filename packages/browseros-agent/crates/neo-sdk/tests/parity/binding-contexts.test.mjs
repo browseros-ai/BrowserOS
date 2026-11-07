@@ -2,10 +2,8 @@
 // the run's own context's `exposeFunction` answers the run's own pages and never reaches a page
 // of a context `browser.newContext()` created, one opened before it or after. A binding on a
 // created context, or on one of its pages, is asserted on each engine's side: Playwright serves
-// it, Neo fails. A page's fails naming the method (neo-runtime `browser_calls.rs`
-// `created_state`); a context's fails at the SDK's `bindingCall` subscription first, as a created
-// context produces no events. Each case disconnects Playwright before Neo's turn, so its
-// bindings go with its sessions.
+// it, Neo fails naming the method (neo-runtime `browser_calls.rs` `created_state`). Each case
+// disconnects Playwright before Neo's turn, so its bindings go with its sessions.
 //
 // Playwright cases (pin 26137face): `tests/library/browsercontext-expose-function.spec.ts`
 // "EF-023 should work" and "EF-024 should dispose", run across two contexts.
@@ -72,22 +70,17 @@ test('a binding on a created context: Playwright serves it, Neo refuses naming i
       'Playwright',
     )
     await (await connect()).close()
-    const { context, page } = outcomeValue(
-      await neo('/bindings.html', ON_CREATED),
-    )
-    assert.equal(context[0], 'failed', 'Neo: the context binding')
-    assert.match(
-      context[1],
-      /^Neo does not produce "bindingCall" events on "context@[0-9A-F]+"$/,
-      'Neo: the context binding',
-    )
+    const refused = (api) => [
+      'failed',
+      `${api}: neo-runtime: exposeBinding is not served yet for a context browser.newContext created, only for the run's own context`,
+    ]
     assert.deepEqual(
-      page,
-      [
-        'failed',
-        "page.exposeFunction: neo-runtime: exposeBinding is not served yet for a context browser.newContext created, only for the run's own context",
-      ],
-      'Neo: the page binding',
+      outcomeValue(await neo('/bindings.html', ON_CREATED)),
+      {
+        context: refused('browserContext.exposeFunction'),
+        page: refused('page.exposeFunction'),
+      },
+      'Neo',
     )
   })
 })

@@ -101,3 +101,106 @@ test('context-level events stay in their context: Neo matches Playwright', {
     }
   })
 })
+
+// A created context's own listeners, one case per family: each hears its own pages' events,
+// and none of the run's own pages'.
+const CREATED = `const origin = page.url().slice(0, page.url().indexOf('/', 'http://'.length))
+const created = await context.browser().newContext()
+const heard = []
+`
+
+const createdCases = [
+  {
+    name: 'requests, responses and their ends',
+    source: `${CREATED}const path = (url) => (url.startsWith(origin) ? url.slice(origin.length) : url)
+created.on('request', (request) => heard.push('request ' + path(request.url())))
+created.on('response', (response) => heard.push('response ' + path(response.url())))
+created.on('requestfinished', (request) => heard.push('requestfinished ' + path(request.url())))
+created.on('requestfailed', (request) => heard.push('requestfailed ' + path(request.url())))
+const other = await created.newPage()
+await other.goto(origin + '/scope.html')
+await other.evaluate(() => fetch('/missing-host-request', { mode: 'no-cors' }).catch(() => {}))
+await other.evaluate(() => fetch('http://127.0.0.1:1/refused').catch(() => {}))
+await page.goto(origin + '/download.html')
+await other.waitForTimeout(500)
+await created.close()
+return heard.filter((line) => !line.endsWith('/favicon.ico')).sort()`,
+    expected: [
+      'request /missing-host-request',
+      'request /scope.html',
+      'request http://127.0.0.1:1/refused',
+      'requestfailed http://127.0.0.1:1/refused',
+      'requestfinished /missing-host-request',
+      'requestfinished /scope.html',
+      'response /missing-host-request',
+      'response /scope.html',
+    ],
+  },
+  {
+    name: 'a download',
+    source: `${CREATED}created.on('download', (download) => heard.push(download.suggestedFilename()))
+const other = await created.newPage()
+await other.goto(origin + '/download.html')
+const [download] = await Promise.all([other.waitForEvent('download', { timeout: 10000 }), other.click('a')])
+await download.cancel().catch(() => {})
+await created.close()
+return heard`,
+    expected: ['scope.txt'],
+  },
+  {
+    name: 'a console message, an uncaught error and a dialog',
+    source: `${CREATED}created.on('console', (message) => heard.push('console ' + message.text()))
+created.on('weberror', (error) => heard.push('weberror ' + error.error().message))
+created.on('dialog', (dialog) => { heard.push('dialog ' + dialog.message()); dialog.dismiss().catch(() => {}) })
+const other = await created.newPage()
+await other.goto(origin + '/scope.html')
+await other.evaluate(() => console.log('from the created context'))
+await Promise.all([other.waitForEvent('pageerror'), other.evaluate(() => { setTimeout(() => { throw new Error('boom') }, 0) })])
+await other.evaluate(() => alert('hello'))
+await page.evaluate(() => console.log('from the run'))
+await created.close()
+return heard.sort()`,
+    expected: [
+      'console from the created context',
+      'dialog hello',
+      'weberror boom',
+    ],
+  },
+  {
+    name: 'its page, the page loading and closing, and its main frame navigating',
+    source: `${CREATED}created.on('page', () => heard.push('page'))
+created.on('pageload', (p) => heard.push('pageload ' + p.url().slice(origin.length)))
+created.on('pageclose', () => heard.push('pageclose'))
+created.on('framenavigated', (frame) => { if (frame.url() !== 'about:blank') heard.push('framenavigated ' + frame.url().slice(origin.length)) })
+const other = await created.newPage()
+await other.goto(origin + '/scope.html')
+await page.goto(origin + '/download.html')
+await other.close()
+await created.close()
+return heard`,
+    expected: [
+      'page',
+      'framenavigated /scope.html',
+      'pageload /scope.html',
+      'pageclose',
+    ],
+  },
+]
+
+test("a created context's own listeners hear its pages only: Neo matches Playwright", {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await withPlatform(t, { pages }, async ({ playwright, neo, connect }) => {
+    for (const { name, source, expected } of createdCases) {
+      const reference = outcomeValue(await playwright('/scope.html', source))
+      await (await connect()).close()
+      assert.deepEqual(reference, expected, `${name}: Playwright`)
+      assert.deepEqual(
+        outcomeValue(await neo('/scope.html', source)),
+        reference,
+        `${name}: Neo`,
+      )
+    }
+  })
+})
