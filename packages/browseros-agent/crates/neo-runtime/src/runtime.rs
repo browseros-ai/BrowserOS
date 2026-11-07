@@ -25,6 +25,7 @@ use crate::browser_representations::page::TabInputs;
 use crate::browser_representations::tabs::Tabs;
 use crate::chromium_bridge::browser_connection_settings::Switches;
 use crate::deadline::Deadline;
+use crate::host::{Host, HostOptions};
 use crate::method_router::Dispatcher;
 use crate::playwright_methods::getters::CLOSED_TAB_MESSAGE;
 use crate::playwright_methods::screenshot::TabScreenshots;
@@ -43,7 +44,7 @@ const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
 /// concurrent runs. Runs on one tab share only its input and its screenshots: their clicks take
 /// turns at its input, from interceptor setup to stop (`page.rs` `TabInputs`), and their
 /// screenshots at its capture, cleanup included (`screenshot.rs` `TabScreenshots`). Clones share
-/// those turns too.
+/// those turns and the optional host side too.
 ///
 /// Runs also share the connection's target discovery, on while any of them listens for new
 /// pages (`discovery.rs`), and its download reports, on while any listens for downloads
@@ -62,6 +63,7 @@ pub struct Runtime {
     /// How every run's `path` options treat an absolute path (`artifacts.rs`).
     absolute_paths: AbsolutePaths,
     cleanup: TaskTracker,
+    host: Option<Host>,
 }
 
 /// Close the run's tracker on every exit, including a dropped future or failed tab open.
@@ -72,6 +74,14 @@ impl Drop for CloseRunTasks {
     fn drop(&mut self) {
         self.0.close();
     }
+}
+
+/// How [`Runtime::connect_with`] builds a runtime. The default runs scripts and nothing else.
+#[derive(Clone, Debug, Default)]
+pub struct RuntimeOptions {
+    /// Gives the runtime a host side ([`Runtime::host`]). `None` adds no host state, no events
+    /// and no connection.
+    pub host: Option<HostOptions>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -88,13 +98,25 @@ pub enum RuntimeError {
 
 impl Runtime {
     /// Wraps a connected client after checking the browser reports a closed tab the way
-    /// `page.isClosed()` expects.
+    /// `page.isClosed()` expects. The runtime has no host side.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::connect_with`].
+    pub async fn connect(cdp: CdpClient) -> Result<Self, RuntimeError> {
+        Self::connect_with(cdp, RuntimeOptions::default()).await
+    }
+
+    /// Like [`Self::connect`], with a host side when `options.host` asks for one.
     ///
     /// # Errors
     ///
     /// [`RuntimeError::UnsupportedBrowser`] when `Browser.getTabInfo` is missing or reports
     /// an unknown tab differently, and [`RuntimeError::Cdp`] when the check itself fails.
-    pub async fn connect(cdp: CdpClient) -> Result<Self, RuntimeError> {
+    pub async fn connect_with(
+        cdp: CdpClient,
+        options: RuntimeOptions,
+    ) -> Result<Self, RuntimeError> {
         let probe = cdp
             .send_typed::<_, Value>(
                 "Browser.getTabInfo",
@@ -116,6 +138,7 @@ impl Runtime {
                     permissions: Permissions::new(cleanup.clone()),
                     absolute_paths: AbsolutePaths::default(),
                     cleanup,
+                    host: options.host.map(Host::new),
                 })
             }
             Err(CdpError::Protocol { message, .. }) => {
@@ -145,6 +168,12 @@ impl Runtime {
     pub async fn drain(&self) {
         self.cleanup.close();
         self.cleanup.wait().await;
+    }
+
+    /// The host side, when the runtime was built with one.
+    #[must_use]
+    pub fn host(&self) -> Option<&Host> {
+        self.host.as_ref()
     }
 
     /// Runs `request.code` against `request.page` and reports how it ended. Every failure,
@@ -289,8 +318,22 @@ mod tests {
     use tokio_util::sync::CancellationToken;
     use ulid::Ulid;
 
+    use super::*;
     use crate::fake_browser::{self, FakeBrowser, Replies};
-    use crate::run::{PageId, RunStatus};
+    use crate::run::PageId;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn only_a_runtime_given_host_options_has_a_host_side() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        assert!(browser.runtime().await.host().is_none());
+        let options = RuntimeOptions {
+            host: Some(HostOptions::new(9222, 1)),
+        };
+        let hosted = Runtime::connect_with(browser.cdp().await, options)
+            .await
+            .unwrap();
+        assert!(hosted.host().is_some());
+    }
 
     /// A run that never reaches its tab is a run too: it gets an id of its own, and the outcome's
     /// JSON carries the id as `runId`.
