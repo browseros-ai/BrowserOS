@@ -157,8 +157,7 @@ impl NetworkIdle {
 
     /// `FrameManager.frameCommittedNewDocumentNavigation` for `frame`'s new `document` (its
     /// loader id): its child frames go, its requests other than the document's own end
-    /// (`_failInflightRequests`), and its lifecycle clears (`_onClearLifecycle`), then `commit`
-    /// fires.
+    /// (`_failInflightRequests`), and its lifecycle clears ([`Self::clear_lifecycle`]).
     pub(crate) fn commit(&mut self, frame: &str, document: &str, now: Instant) -> Vec<IdleChange> {
         let Some(children) = self.frames.get(frame).map(|_| self.children(frame)) else {
             return Vec::new();
@@ -166,7 +165,6 @@ impl NetworkIdle {
         for child in children {
             self.remove_recursively(&child);
         }
-        let mut changes = Vec::new();
         if let Some(state) = self.frames.get_mut(frame) {
             let left: Vec<HopId> = state
                 .inflight
@@ -178,16 +176,34 @@ impl NetworkIdle {
                 state.inflight.remove(request);
                 self.requests.remove(request);
             }
-            // Playwright: `server/frames.ts` `Frame._onClearLifecycle`: `this._networkIdleRequests = new Set(Array.from(this._networkIdleRequests).filter(request => request === this._currentDocument.request));`
-            state
-                .idle_requests
-                .retain(|request| request.request == document);
-            if state.networkidle {
-                changes.push(IdleChange::Lost(frame.to_string()));
-            }
-            state.networkidle = false;
-            state.lifecycle.clear();
         }
+        self.clear_lifecycle(frame, document, now)
+    }
+
+    /// `Frame._onClearLifecycle`, at a commit and right after a `setContent` write's
+    /// `document.open()`: `frame`'s fired events clear, and its quiet period starts over without
+    /// its requests other than its current document's own (`current_document`, the loader id,
+    /// which names the document's request), then `commit` fires. Those requests stay in flight,
+    /// their ends no longer counting for the frame's idleness; its child frames stay.
+    pub(crate) fn clear_lifecycle(
+        &mut self,
+        frame: &str,
+        current_document: &str,
+        now: Instant,
+    ) -> Vec<IdleChange> {
+        let mut changes = Vec::new();
+        let Some(state) = self.frames.get_mut(frame) else {
+            return changes;
+        };
+        // Playwright: `server/frames.ts` `Frame._onClearLifecycle`: `this._networkIdleRequests = new Set(Array.from(this._networkIdleRequests).filter(request => request === this._currentDocument.request));`
+        state
+            .idle_requests
+            .retain(|request| request.request == current_document);
+        if state.networkidle {
+            changes.push(IdleChange::Lost(frame.to_string()));
+        }
+        state.networkidle = false;
+        state.lifecycle.clear();
         self.stop_timer(frame);
         if self
             .frames
@@ -475,6 +491,49 @@ mod tests {
         assert_eq!(idle.deadline(), None, "the document's request still loads");
         idle.ended(&hop("DOC"), at);
         assert_eq!(idle.tick(at + QUIET), [fired("M")]);
+    }
+
+    #[test]
+    fn tests_that_a_cleared_lifecycle_judges_idleness_without_the_old_documents_requests() {
+        let start = Instant::now();
+        let mut idle = NetworkIdle::new("M", start);
+        idle.attach("C", "M", start);
+        assert_eq!(idle.tick(start + QUIET), [fired("C"), fired("M")]);
+        // The old content's image still loads when setContent reopens the document.
+        idle.started(hop("old-image"), "M", false);
+        let at = start + QUIET * 2;
+        assert_eq!(idle.clear_lifecycle("M", "DOC", at), [lost("M")]);
+        assert_eq!(
+            idle.deadline(),
+            Some(at + QUIET),
+            "the old request no longer holds the frame"
+        );
+        assert_eq!(idle.tick(at + QUIET), [fired("M")]);
+        idle.ended(&hop("old-image"), at + QUIET * 2);
+        assert!(idle.fired("M"), "the old request's end changes nothing");
+        assert!(
+            idle.fired("C"),
+            "unlike a commit, a clear keeps the child frames"
+        );
+    }
+
+    #[test]
+    fn tests_that_a_cleared_lifecycle_waits_for_the_written_documents_requests() {
+        let start = Instant::now();
+        let mut idle = NetworkIdle::new("M", start);
+        assert_eq!(idle.tick(start + QUIET), [fired("M")]);
+        let at = start + QUIET * 2;
+        assert_eq!(idle.clear_lifecycle("M", "DOC", at), [lost("M")]);
+        // The written document's fetch starts within the quiet period.
+        idle.started(hop("fetch"), "M", false);
+        assert!(idle.tick(at + QUIET * 4).is_empty(), "the fetch holds it");
+        let end = at + QUIET * 4;
+        idle.ended(&hop("fetch"), end);
+        assert_eq!(idle.tick(end + QUIET), [fired("M")]);
+        assert!(
+            idle.clear_lifecycle("UNKNOWN", "DOC", end).is_empty(),
+            "a frame the tracker does not know changes nothing"
+        );
     }
 
     #[test]

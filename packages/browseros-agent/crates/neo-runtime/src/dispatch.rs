@@ -856,8 +856,10 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::Content(params) => {
             Ok(Route::FrameContent(params.include_shadow.unwrap_or(false)))
         }
-        FrameCall::SetContent(params) => SetContentOptions::from_params(params)
-            .map(|options| Route::FrameSetContent(options, None)),
+        FrameCall::SetContent(params) => Ok(Route::FrameSetContent(
+            SetContentOptions::from_params(params),
+            None,
+        )),
         FrameCall::WaitForTimeout(params) => Ok(Route::FrameWaitForTimeout(params.wait_timeout)),
         FrameCall::ResolveSelector(params) => Ok(Route::FrameResolveSelector(params.selector)),
         FrameCall::AriaSnapshotJSON(params) => Ok(Route::FrameAriaSnapshotJson(
