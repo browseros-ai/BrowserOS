@@ -1,17 +1,16 @@
-// The Rust route of Playwright's `Locator.waitForFunction`: `Frame.waitForFunction` with
-// `selector` and `strict`, served by `evaluate::call_on_element_main` (A3). The predicate runs on
-// the first match in the page's own world and polls until it is truthy. The public method is
-// med-pw-dom's (dom.md row); until it lands, Neo's side sends the exact protocol call
-// Playwright's client sends (client/locator.ts `Locator.waitForFunction`) through the SDK's own
-// connection, while Playwright's side calls `locator.waitForFunction`. Compared: how each call
-// settles (by `describe`, errors by category and the words Playwright's tests look for) and what
-// the page shows afterwards.
+// `Locator.waitForFunction` through both engines: Playwright's client sends `Frame.waitForFunction`
+// with `selector` and `strict` (client/locator.ts), which Neo serves by
+// `evaluate::call_on_element_main` (A3). The predicate runs on the first match in the page's own
+// world and polls until it is truthy. Compared: how each call settles (by `describe`, errors by
+// category and the words Playwright's tests look for) and what the page shows afterwards.
 //
 // Cases from tests/page/locator-wait-for-function.spec.ts at 26137face: LO-183 "should wait for an
 // attribute to appear", LO-184 "should return immediately when already truthy", LO-185 "should
 // accept ElementHandle arguments", LO-186 "should accept string expression", LO-187 "should
-// resolve a promise returned by the predicate", LO-189 "should throw when predicate throws",
-// LO-190 "should throw on strict mode violation".
+// resolve a promise returned by the predicate", LO-188 "should wait for element to appear and
+// survive rerender", LO-189 "should throw when predicate throws", LO-190 "should throw on strict
+// mode violation", LO-191 "should abort via signal" and LO-192 "should abort via already-aborted
+// signal" (a signal-shaped object, which both clients read the same way).
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { compareMethod, skip } from './harness.mjs'
@@ -39,24 +38,8 @@ test('waitForFunction on a selector polls the first match as Playwright does', {
   const outcome = await compareMethod(t, {
     html,
     source: `${VALUES}
-      const waitOn = async (selector, pageFunction, arg, options = {}) => {
-        const locator = page.locator(selector)
-        if (typeof locator.waitForFunction === 'function')
-          return await locator.waitForFunction(pageFunction, arg, options)
-        // Neo, until med-pw-dom's public method lands: the protocol call Playwright's client sends.
-        const frame = page.mainFrame()
-        const serialized = arg === undefined
-          ? { value: { v: 'undefined' }, handles: [] }
-          : { value: { h: 0 }, handles: [arg._guid] }
-        await frame._connection.sendEval('locator.waitForFunction', frame._guid, 'waitForFunction', {
-          selector,
-          strict: true,
-          expression: String(pageFunction),
-          isFunction: typeof pageFunction === 'function',
-          arg: serialized,
-        }, options.timeout ?? 30000)
-        return undefined
-      }
+      const waitOn = (selector, pageFunction, arg, options) =>
+        page.locator(selector).waitForFunction(pageFunction, arg, options)
       const results = {}
       results.appears = await outcome(async () => {
         await page.evaluate(() => setTimeout(() => document.querySelector('#toggle').setAttribute('aria-expanded', 'true'), 300))
@@ -70,6 +53,41 @@ test('waitForFunction on a selector polls the first match as Playwright does', {
       results.throws = await outcome(() => waitOn('#no', () => { throw new Error('oh my') }), ['oh my'])
       results.strict = await outcome(() => waitOn('div.x', () => true), ['strict mode violation'])
       results.timeout = await outcome(() => waitOn('#no', (element) => element.textContent === 'yes', undefined, { timeout: 300 }))
+      // LO-188: the element appears late and is replaced twice before its text is '3'.
+      results.rerender = await outcome(async () => {
+        await page.evaluate(() => {
+          let count = 0
+          let previous = null
+          const tick = () => {
+            const next = document.createElement('div')
+            next.id = 'rerendered'
+            next.textContent = String(++count)
+            previous?.remove()
+            document.body.appendChild(next)
+            previous = next
+            if (count < 3) setTimeout(tick, 200)
+          }
+          setTimeout(tick, 200)
+        })
+        return await waitOn('#rerendered', (element) => element.textContent === '3')
+      })
+      // LO-192 and LO-191: an already-aborted signal, and one aborted while the predicate polls.
+      results.alreadyAborted = await outcome(() =>
+        waitOn('#no', () => true, undefined, { signal: { aborted: true, reason: 'already aborted' } }))
+      const listeners = []
+      const signal = {
+        aborted: false,
+        reason: undefined,
+        addEventListener: (_type, listener) => listeners.push(listener),
+        removeEventListener() {},
+      }
+      const pending = outcome(() =>
+        waitOn('#no', (element) => element.textContent === 'yes', undefined, { timeout: 0, signal }))
+      await page.waitForTimeout(100)
+      signal.aborted = true
+      signal.reason = new Error('Aborted by user')
+      for (const listener of listeners) listener()
+      results.aborted = await pending
       return results
     `,
     probe: 'window.__facts()',

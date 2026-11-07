@@ -99,8 +99,14 @@ export type EvalFrameCommands = SelectorCommands & {
     result: { handle: CreatedHandle }
   }
   waitForFunction: {
-    params: EvaluateParams & { pollingInterval?: number }
-    result: { handle: CreatedHandle }
+    params: EvaluateParams & {
+      pollingInterval?: number
+      /** `Locator.waitForFunction`'s target: the predicate runs on its first match. */
+      selector?: string
+      strict?: boolean
+    }
+    /** The page form answers the predicate's value as a handle; the selector form nothing. */
+    result: { handle: CreatedHandle } | Record<string, never>
   }
   addScriptTag: {
     params: { url?: string; content?: string; type?: string }

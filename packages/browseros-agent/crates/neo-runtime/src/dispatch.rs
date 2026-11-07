@@ -44,14 +44,14 @@ use neo_runtime_spec::injected::ReadableElementState;
 use neo_runtime_spec::serve::{
     ArtifactCall, BrowserContextCall, DialogCall, FrameAriaSnapshotJSONParams,
     FrameAriaSnapshotParams, FrameCall, FrameCheckParams, FrameCheckResult, FrameClickParams,
-    FrameContentParams, FrameDblclickParams, FrameDragAndDropParams, FrameDragAndDropResult,
-    FrameDropParams, FrameDropResult, FrameFillParams, FrameFillResult, FrameGetAttributeParams,
-    FrameGotoParams, FrameHoverParams, FrameInnerHTMLParams, FrameInnerTextParams,
-    FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams, FrameIsCheckedResult,
-    FrameIsDisabledParams, FrameIsDisabledResult, FrameIsEditableParams, FrameIsEditableResult,
-    FrameIsEnabledParams, FrameIsEnabledResult, FrameIsHiddenParams, FrameIsHiddenResult,
-    FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams, FramePressResult,
-    FrameQueryCountParams, FrameResolveSelectorParams, FrameSelectOptionParams,
+    FrameContentParams, FrameDblclickParams, FrameDispatchEventParams, FrameDragAndDropParams,
+    FrameDragAndDropResult, FrameDropParams, FrameDropResult, FrameFillParams, FrameFillResult,
+    FrameGetAttributeParams, FrameGotoParams, FrameHoverParams, FrameInnerHTMLParams,
+    FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams,
+    FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult, FrameIsEditableParams,
+    FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult, FrameIsHiddenParams,
+    FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams,
+    FramePressResult, FrameQueryCountParams, FrameResolveSelectorParams, FrameSelectOptionParams,
     FrameSelectOptionResult, FrameSetContentParams, FrameSetContentResult,
     FrameSetInputFilesParams, FrameSetInputFilesResult, FrameTapParams, FrameTextContentParams,
     FrameTitleParams, FrameTypeParams, FrameTypeResult, FrameUncheckParams, FrameUncheckResult,
@@ -83,8 +83,8 @@ use crate::downloads;
 use crate::drag::{self, DragOptions};
 use crate::drop_on;
 use crate::element_ops::{
-    self, BOUNDING_BOX_META, DispatchOptions, ElementTarget, NeoElementParams, NeoSelectTextParams,
-    SCROLL_INTO_VIEW_META, SELECT_TEXT_META,
+    self, BOUNDING_BOX_META, DispatchEventParams, DispatchOptions, ElementTarget, NeoElementParams,
+    NeoSelectTextParams, SCROLL_INTO_VIEW_META, SELECT_TEXT_META,
 };
 use crate::evaluate::{self, EvalCall};
 use crate::events::{ALL_PAGES, EventHub};
@@ -1023,6 +1023,17 @@ fn route_frame_extension(method: &str, params: Option<&Value>) -> Option<Routed>
                 .map(|options| ObjectCall::Frame(Route::FrameWaitForUrl(options))),
         });
     }
+    if method == FrameDispatchEventParams::META.method {
+        // Playwright: `server/dispatchers/frameDispatcher.ts` `FrameDispatcher.dispatchEvent`: `return this._frame.dispatchEvent(progress, params, params.type, parseArgument(params.eventInit));`
+        return Some(Routed {
+            meta: Some(FrameDispatchEventParams::META),
+            route: decode_neo_params::<DispatchEventParams>(
+                params.cloned(),
+                FrameDispatchEventParams::META,
+            )
+            .map(|params| ObjectCall::Frame(Route::FrameDispatchEvent(params.into()))),
+        });
+    }
     if let Some(routed) = route_element_command(method, params.cloned()) {
         return Some(routed);
     }
@@ -1267,9 +1278,10 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         )),
         FrameCall::Focus(params) => Ok(Route::FrameFocus(ElementTarget::from_focus(params))),
         FrameCall::Blur(params) => Ok(Route::FrameBlur(ElementTarget::from_blur(params))),
-        FrameCall::DispatchEvent(params) => {
-            DispatchOptions::from_params(params).map(Route::FrameDispatchEvent)
-        }
+        // `route_frame_extension` decodes it first: its `eventInit` is in the page's format.
+        FrameCall::DispatchEvent(_) => Err(PlaywrightError::error(
+            "neo-runtime: Frame.dispatchEvent is decoded by route_frame_extension",
+        )),
         FrameCall::Highlight(params) => Ok(Route::FrameHighlight(
             HighlightOptions::from_highlight(params),
         )),

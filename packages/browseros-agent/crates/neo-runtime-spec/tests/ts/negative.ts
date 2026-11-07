@@ -84,7 +84,6 @@ const valid = {
   webStorageClear: () => ({}),
   blurElement: () => ({ outcome: 'done' }),
   selectText: () => ({ outcome: 'done' }),
-  dispatchEvent: () => ({}),
   setHighlights: () => ({}),
   hideHighlight: () => ({}),
   prepareForScreenshot: () => ({}),

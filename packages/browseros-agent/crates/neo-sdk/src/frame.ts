@@ -136,7 +136,6 @@ import {
 } from './neo-commands'
 import { type Response, responseFor } from './network'
 import type { Page } from './page'
-import { serializePlainArgument } from './plain-argument'
 import {
   FRAME_ARIA_SNAPSHOT_JSON_KEYS,
   FRAME_ARIA_SNAPSHOT_KEYS,
@@ -1521,7 +1520,31 @@ export class Frame {
       pollingInterval === undefined ? params : { ...params, pollingInterval },
       this._page._timeoutSettings.timeout(options, apiName),
     )
+    if (!('handle' in result))
+      throw new Error(
+        'neo-sdk: Frame.waitForFunction contract error: missing handle',
+      )
     return handleFrom(this._connection, result.handle, this) as JSHandle<R>
+  }
+
+  /** Playwright's `Locator.waitForFunction` on this frame's channel: `pageFunction` polled on
+   * `selector`'s one match, with `arg`, in the page's own world until it returns a truthy value.
+   * Playwright: `client/locator.ts` `Locator.waitForFunction`: `await this._frame._channel.waitForFunction({` */
+  async _waitForFunctionOnSelector(
+    apiName: ApiName,
+    selector: string,
+    pageFunction: unknown,
+    arg: unknown,
+    options?: TimeoutInput | null,
+  ): Promise<void> {
+    const params = evaluateParams(apiName, pageFunction, arg, undefined)
+    await this._connection.sendEval(
+      apiName,
+      this._guid,
+      'waitForFunction',
+      { selector, strict: true, ...params },
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
+    )
   }
 
   /**
@@ -2363,7 +2386,8 @@ export class Frame {
   }
 
   /** Sends `Frame.dispatchEvent` under the action timeout, `eventInit` serialized first, so a
-   * value Neo cannot send throws before anything is sent. */
+   * value Playwright's serializer refuses throws before anything is sent.
+   * Playwright: `client/frame.ts` `Frame.dispatchEvent`: `await this._channel.dispatchEvent({ selector, type, eventInit: serializeArgument(eventInit), ...options }, this._timeout(options));` */
   async _dispatchEvent(
     apiName: ApiName,
     selector: string,
@@ -2378,7 +2402,7 @@ export class Frame {
       pickParams(FRAME_DISPATCH_EVENT_KEYS, {
         selector,
         type,
-        eventInit: serializePlainArgument(eventInit),
+        eventInit: serializeArgument(eventInit),
         ...options,
       }) as FrameDispatchEventParams,
       this._page._timeoutSettings.timeout(options ?? {}, apiName),
