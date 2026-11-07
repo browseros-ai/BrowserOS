@@ -9,9 +9,14 @@
 //!   only, on the `UtilityScript` it builds there, and on a page object an event named (the
 //!   built `(object) => object`, which keeps it in a run's handle group).
 //!
-//! In both, every `functionDeclaration` is a `const` that is `include_str!` of a built
-//! `neo-runtime-injected/dist/*.js` artifact (or a parameter every caller in the file passes one
+//! In both, every `functionDeclaration` is a `const` whose initializer is exactly
+//! `include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/<name>.js"))`
+//! and that nothing else in the file re-binds (or a parameter every caller in the file passes one
 //! of those consts), so agent code can reach a page only as an argument value.
+//!
+//! Literals are read as the compiler reads them: `proc-macro2` tokenizes the file and `syn`
+//! decodes each string literal (escapes, raw, byte and C strings), so `"\x52untime.evaluate"` is
+//! `Runtime.evaluate`; the literals of a `concat!` are also read joined.
 //!
 //! Every other Neo Rust source (`src/`, `examples/`, `codegen/`, `build.rs` of each `crates/neo-*`
 //! crate) may not hold a string literal naming a script-running or world-reaching CDP method at
@@ -25,6 +30,11 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
+
+use proc_macro2::{Delimiter, Literal, Span, TokenStream, TokenTree};
+use syn::punctuated::Punctuated;
+use syn::{Expr, Item, Lit, Token as SynToken};
 
 /// The methods that run script or reach a world of the page.
 const GUARDED: &[&str] = &[
@@ -219,7 +229,12 @@ fn check(relative: &str, source: &str) -> Vec<String> {
         .iter()
         .find(|(path, _)| *path == relative)
         .map_or(&[][..], |(_, methods)| *methods);
-    let tokens = without_test_modules(&lex(source));
+    let Some(all) = lex(source) else {
+        return vec![format!(
+            "{relative}: does not tokenize as Rust, so the guard cannot read it"
+        )];
+    };
+    let tokens = without_test_modules(&all);
     let mut problems = Vec::new();
     for token in &tokens {
         let Token::Str { text, line } = token else {
@@ -238,8 +253,47 @@ fn check(relative: &str, source: &str) -> Vec<String> {
             ));
         }
     }
-    problems.extend(declarations(relative, &tokens, !allowed.is_empty()));
+    for (text, line) in concatenations(&tokens) {
+        for method in GUARDED {
+            if names(&text, method) && !allowed.contains(method) {
+                problems.push(format!(
+                    "{relative}:{line}: a concat! of literals names {method}, which only its ALLOWED file may"
+                ));
+            }
+        }
+    }
+    let built = built_consts(source, &tokens);
+    problems.extend(declarations(relative, &tokens, !allowed.is_empty(), &built));
     problems
+}
+
+/// The literals of every `concat!(…)`, joined as the macro joins them, with its line.
+fn concatenations(tokens: &[Token]) -> Vec<(String, usize)> {
+    let mut joined = Vec::new();
+    for (index, token) in tokens.iter().enumerate() {
+        let opens = token.is("concat")
+            && tokens.get(index + 1).is_some_and(|token| token.is("!"))
+            && tokens.get(index + 2).is_some_and(|token| token.is("("));
+        if !opens {
+            continue;
+        }
+        let mut text = String::new();
+        let mut depth = 0usize;
+        for token in &tokens[index + 2..] {
+            if token.is("(") || token.is("[") || token.is("{") {
+                depth += 1;
+            } else if token.is(")") || token.is("]") || token.is("}") {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            } else if let Token::Str { text: part, .. } = token {
+                text.push_str(part);
+            }
+        }
+        joined.push((text, token.line()));
+    }
+    joined
 }
 
 /// Whether a literal names `method` as code would: anywhere but inside Markdown backticks, which
@@ -267,9 +321,8 @@ fn composes_method(text: &str) -> bool {
 
 /// The `functionDeclaration` rule. Outside the two doors no file builds one; in them each value
 /// is a built const, or a parameter every in-file call passes a built const.
-fn declarations(relative: &str, tokens: &[Token], door: bool) -> Vec<String> {
+fn declarations(relative: &str, tokens: &[Token], door: bool, built: &[String]) -> Vec<String> {
     let mut problems = Vec::new();
-    let built = built_consts(tokens);
     for (index, token) in tokens.iter().enumerate() {
         let is_key = matches!(token, Token::Str { text, .. } if text == "functionDeclaration")
             || matches!(token, Token::Ident { text, .. } if text == "function_declaration");
@@ -301,7 +354,7 @@ fn declarations(relative: &str, tokens: &[Token], door: bool) -> Vec<String> {
         );
         match value {
             Token::Ident { text, .. } if ends && built.iter().any(|name| name == text) => {}
-            Token::Ident { text, .. } if ends && relayed(tokens, text, &built) => {}
+            Token::Ident { text, .. } if ends && relayed(tokens, text, built) => {}
             _ => problems.push(format!(
                 "{relative}:{line}: a functionDeclaration that is not a built neo-runtime-injected/dist/*.js const"
             )),
@@ -310,41 +363,109 @@ fn declarations(relative: &str, tokens: &[Token], door: bool) -> Vec<String> {
     problems
 }
 
-/// `const NAME: &str = include_str!(…"/../neo-runtime-injected/dist/<file>.js"…);`, by name.
-fn built_consts(tokens: &[Token]) -> Vec<String> {
-    let mut names = Vec::new();
-    for (index, token) in tokens.iter().enumerate() {
-        if !matches!(token, Token::Ident { text, .. } if text == "const") {
-            continue;
-        }
-        let Some(Token::Ident { text: name, .. }) = tokens.get(index + 1) else {
-            continue;
-        };
-        let Some(end) = tokens[index..]
-            .iter()
-            .position(|token| matches!(token, Token::Punct { text: ';', .. }))
-        else {
-            continue;
-        };
-        let body = &tokens[index..index + end];
-        let includes = body
-            .iter()
-            .any(|token| matches!(token, Token::Ident { text, .. } if text == "include_str"));
-        let path = body.iter().find_map(|token| match token {
-            Token::Str { text, .. }
-                if Path::new(text)
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("js")) =>
-            {
-                Some(text.as_str())
+/// The top-level consts of `source` that are built artifacts ([`is_built_artifact`]), by name.
+/// A name is trusted only when every top-level const of that name is one and nothing else in the
+/// file binds the name again ([`bound_once`]); a file that does not parse has none.
+fn built_consts(source: &str, tokens: &[Token]) -> Vec<String> {
+    let Ok(file) = syn::parse_file(source) else {
+        return Vec::new();
+    };
+    let mut built = Vec::new();
+    let mut other = Vec::new();
+    for item in &file.items {
+        if let Item::Const(item) = item {
+            let name = item.ident.to_string();
+            let only_docs = item.attrs.iter().all(|attr| attr.path().is_ident("doc"));
+            if only_docs && is_built_artifact(&item.expr) {
+                built.push(name);
+            } else {
+                other.push(name);
             }
-            _ => None,
-        });
-        if includes && path.is_some_and(|path| path.starts_with(BUILT_PREFIX)) {
-            names.push(name.clone());
         }
     }
-    names
+    built.retain(|name| !other.contains(name) && bound_once(tokens, name));
+    built
+}
+
+/// Exactly `include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/<name>.js"))`:
+/// no block around it, no transformation of it, no other path.
+fn is_built_artifact(expr: &Expr) -> bool {
+    let Expr::Macro(include) = expr else {
+        return false;
+    };
+    if !include.attrs.is_empty() || !include.mac.path.is_ident("include_str") {
+        return false;
+    }
+    let Ok(Expr::Macro(concat)) = include.mac.parse_body::<Expr>() else {
+        return false;
+    };
+    if !concat.mac.path.is_ident("concat") {
+        return false;
+    }
+    let Ok(parts) = concat
+        .mac
+        .parse_body_with(Punctuated::<Expr, SynToken![,]>::parse_terminated)
+    else {
+        return false;
+    };
+    if parts.len() != 2 || parts.trailing_punct() {
+        return false;
+    }
+    let (Some(Expr::Macro(env)), Some(Expr::Lit(path))) = (parts.first(), parts.last()) else {
+        return false;
+    };
+    let manifest_dir = env.attrs.is_empty()
+        && env.mac.path.is_ident("env")
+        && env
+            .mac
+            .parse_body::<syn::LitStr>()
+            .is_ok_and(|name| name.value() == "CARGO_MANIFEST_DIR");
+    let Lit::Str(path) = &path.lit else {
+        return false;
+    };
+    manifest_dir && is_artifact_path(&path.value())
+}
+
+/// `/../neo-runtime-injected/dist/<name>.js`, `<name>` one plain file name.
+fn is_artifact_path(path: &str) -> bool {
+    path.strip_prefix(BUILT_PREFIX)
+        .and_then(|rest| rest.strip_suffix(".js"))
+        .is_some_and(|name| {
+            !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        })
+}
+
+/// Whether `name` is declared by exactly one `const` and bound by nothing else in the tokens: no
+/// `let`, parameter, closure argument, `static`, `fn`, `use … as`, or binding pattern of that name
+/// that would shadow the const where a `functionDeclaration` reads it.
+fn bound_once(tokens: &[Token], name: &str) -> bool {
+    let mut consts = 0;
+    for (index, token) in tokens.iter().enumerate() {
+        if !token.is(name) {
+            continue;
+        }
+        let before = index.checked_sub(1).and_then(|at| tokens.get(at));
+        if before.is_some_and(|token| token.is("const")) {
+            consts += 1;
+            continue;
+        }
+        let rebinds = before.is_some_and(|token| {
+            ["let", "mut", "ref", "static", "fn", "as", "|"]
+                .iter()
+                .any(|word| token.is(word))
+        });
+        let after = tokens.get(index + 1);
+        let binds = after.is_some_and(|token| token.is("@"))
+            || (after.is_some_and(|token| token.is(":"))
+                && !tokens.get(index + 2).is_some_and(|token| token.is(":")));
+        if rebinds || binds {
+            return false;
+        }
+    }
+    consts == 1
 }
 
 /// Whether `param` is a parameter of a function whose every call in this file passes a built
@@ -505,199 +626,100 @@ impl Token {
     }
 }
 
-/// A small Rust lexer: string literals (escaped, raw, byte), identifiers, numbers and
-/// punctuation, with comments, char literals and lifetimes skipped.
-fn lex(source: &str) -> Vec<Token> {
-    let mut lexer = Lexer {
-        chars: source.chars().collect(),
-        i: 0,
-        line: 1,
-        tokens: Vec::new(),
+/// The tokens of `source` as the compiler reads them: every string literal (plain, raw, byte or
+/// C) by its decoded value, identifiers, and punctuation with each delimiter as its own token.
+/// Comments and doc attributes (what `///` and `//!` become) are prose and dropped; other
+/// literals carry no code. `None` when `source` does not tokenize as Rust.
+fn lex(source: &str) -> Option<Vec<Token>> {
+    let stream = TokenStream::from_str(source).ok()?;
+    let mut tokens = Vec::new();
+    flatten(stream, &mut tokens);
+    Some(tokens)
+}
+
+fn flatten(stream: TokenStream, tokens: &mut Vec<Token>) {
+    let trees: Vec<TokenTree> = stream.into_iter().collect();
+    let mut index = 0;
+    while index < trees.len() {
+        if let Some(span) = doc_attribute(&trees[index..]) {
+            index += span;
+            continue;
+        }
+        match &trees[index] {
+            TokenTree::Group(group) => {
+                let delimiters = match group.delimiter() {
+                    Delimiter::Parenthesis => Some(('(', ')')),
+                    Delimiter::Brace => Some(('{', '}')),
+                    Delimiter::Bracket => Some(('[', ']')),
+                    Delimiter::None => None,
+                };
+                if let Some((open, _)) = delimiters {
+                    tokens.push(Token::Punct {
+                        text: open,
+                        line: line_of(group.span_open()),
+                    });
+                }
+                flatten(group.stream(), tokens);
+                if let Some((_, close)) = delimiters {
+                    tokens.push(Token::Punct {
+                        text: close,
+                        line: line_of(group.span_close()),
+                    });
+                }
+            }
+            TokenTree::Ident(ident) => tokens.push(Token::Ident {
+                text: ident.to_string(),
+                line: line_of(ident.span()),
+            }),
+            TokenTree::Punct(punct) => tokens.push(Token::Punct {
+                text: punct.as_char(),
+                line: line_of(punct.span()),
+            }),
+            TokenTree::Literal(literal) => {
+                if let Some(text) = string_value(literal) {
+                    tokens.push(Token::Str {
+                        text,
+                        line: line_of(literal.span()),
+                    });
+                }
+            }
+        }
+        index += 1;
+    }
+}
+
+/// How many trees a doc attribute at the start of `trees` spans (`#[doc …]` or `#![doc …]`).
+fn doc_attribute(trees: &[TokenTree]) -> Option<usize> {
+    let Some(TokenTree::Punct(hash)) = trees.first() else {
+        return None;
     };
-    while lexer.i < lexer.chars.len() {
-        lexer.step();
-    }
-    lexer.tokens
-}
-
-struct Lexer {
-    chars: Vec<char>,
-    i: usize,
-    line: usize,
-    tokens: Vec<Token>,
-}
-
-impl Lexer {
-    fn at(&self, offset: usize) -> Option<char> {
-        self.chars.get(self.i + offset).copied()
-    }
-
-    fn step(&mut self) {
-        let c = self.chars[self.i];
-        if c == '\n' {
-            self.line += 1;
-            self.i += 1;
-        } else if c.is_whitespace() {
-            self.i += 1;
-        } else if c == '/' && self.at(1) == Some('/') {
-            while self.i < self.chars.len() && self.chars[self.i] != '\n' {
-                self.i += 1;
-            }
-        } else if c == '/' && self.at(1) == Some('*') {
-            self.block_comment();
-        } else if c == '"' || (c == 'b' && self.at(1) == Some('"')) {
-            self.i += if c == 'b' { 2 } else { 1 };
-            self.string();
-        } else if let Some((hashes, body)) = raw_string_start(&self.chars, self.i) {
-            self.i = body;
-            self.raw_string(hashes);
-        } else if c == '\'' {
-            self.char_or_lifetime();
-        } else if c.is_alphanumeric() || c == '_' {
-            // An identifier or a number: one argument token either way.
-            let start = self.i;
-            while self.i < self.chars.len()
-                && (self.chars[self.i].is_alphanumeric()
-                    || self.chars[self.i] == '_'
-                    || (c.is_ascii_digit() && self.chars[self.i] == '.'))
-            {
-                self.i += 1;
-            }
-            self.tokens.push(Token::Ident {
-                text: self.chars[start..self.i].iter().collect(),
-                line: self.line,
-            });
-        } else {
-            self.tokens.push(Token::Punct {
-                text: c,
-                line: self.line,
-            });
-            self.i += 1;
-        }
-    }
-
-    fn block_comment(&mut self) {
-        let mut depth = 0;
-        while self.i < self.chars.len() {
-            if self.chars[self.i] == '/' && self.at(1) == Some('*') {
-                depth += 1;
-                self.i += 2;
-            } else if self.chars[self.i] == '*' && self.at(1) == Some('/') {
-                depth -= 1;
-                self.i += 2;
-                if depth == 0 {
-                    return;
-                }
-            } else {
-                if self.chars[self.i] == '\n' {
-                    self.line += 1;
-                }
-                self.i += 1;
-            }
-        }
-    }
-
-    /// The body of an escaped string, after its opening quote.
-    fn string(&mut self) {
-        let start_line = self.line;
-        let mut text = String::new();
-        while self.i < self.chars.len() && self.chars[self.i] != '"' {
-            if self.chars[self.i] != '\\' {
-                if self.chars[self.i] == '\n' {
-                    self.line += 1;
-                }
-                text.push(self.chars[self.i]);
-                self.i += 1;
-                continue;
-            }
-            match self.at(1) {
-                Some('n') => text.push('\n'),
-                Some('t') => text.push('\t'),
-                Some('\n') => {
-                    // A line continuation: the newline and the next line's indent vanish.
-                    self.line += 1;
-                    self.i += 2;
-                    while self.i < self.chars.len() && self.chars[self.i].is_whitespace() {
-                        if self.chars[self.i] == '\n' {
-                            self.line += 1;
-                        }
-                        self.i += 1;
-                    }
-                    continue;
-                }
-                Some(other) => text.push(other),
-                None => {}
-            }
-            self.i += 2;
-        }
-        self.i += 1;
-        self.tokens.push(Token::Str {
-            text,
-            line: start_line,
-        });
-    }
-
-    /// The body of a raw string with `hashes` `#`s, after its opening quote.
-    fn raw_string(&mut self, hashes: usize) {
-        let start_line = self.line;
-        let mut text = String::new();
-        while self.i < self.chars.len() {
-            if self.chars[self.i] == '"' && (0..hashes).all(|k| self.at(1 + k) == Some('#')) {
-                self.i += 1 + hashes;
-                break;
-            }
-            if self.chars[self.i] == '\n' {
-                self.line += 1;
-            }
-            text.push(self.chars[self.i]);
-            self.i += 1;
-        }
-        self.tokens.push(Token::Str {
-            text,
-            line: start_line,
-        });
-    }
-
-    /// A char literal (`'a'`, `'\n'`, `'\''`) or a lifetime (`'a`): skipped.
-    fn char_or_lifetime(&mut self) {
-        if self.at(1) == Some('\\') {
-            self.i += 2;
-            while self.i < self.chars.len() && self.chars[self.i] != '\'' {
-                self.i += 1;
-            }
-            self.i += 1;
-        } else if self.at(2) == Some('\'') {
-            self.i += 3;
-        } else {
-            self.i += 1;
-            while self.i < self.chars.len()
-                && (self.chars[self.i].is_alphanumeric() || self.chars[self.i] == '_')
-            {
-                self.i += 1;
-            }
-        }
-    }
-}
-
-/// `r"`, `r#"`, `br"`, `br#"` at `i`: the number of `#`s and where the body starts.
-fn raw_string_start(chars: &[char], i: usize) -> Option<(usize, usize)> {
-    let mut j = i;
-    if chars.get(j) == Some(&'b') {
-        j += 1;
-    }
-    if chars.get(j) != Some(&'r') {
+    if hash.as_char() != '#' {
         return None;
     }
-    if i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_') {
+    let bang = matches!(trees.get(1), Some(TokenTree::Punct(bang)) if bang.as_char() == '!');
+    let at = if bang { 2 } else { 1 };
+    let Some(TokenTree::Group(group)) = trees.get(at) else {
         return None;
+    };
+    let doc = group.delimiter() == Delimiter::Bracket
+        && matches!(group.stream().into_iter().next(), Some(TokenTree::Ident(ident)) if ident == "doc");
+    doc.then_some(at + 1)
+}
+
+/// A string literal's value as the compiler reads it; a literal `syn` does not classify is read
+/// as written, so nothing unreadable passes. `None` for numbers, chars and bytes.
+fn string_value(literal: &Literal) -> Option<String> {
+    match Lit::new(literal.clone()) {
+        Lit::Str(text) => Some(text.value()),
+        Lit::ByteStr(bytes) => Some(String::from_utf8_lossy(&bytes.value()).into_owned()),
+        Lit::CStr(text) => Some(text.value().to_string_lossy().into_owned()),
+        Lit::Verbatim(other) => Some(other.to_string()),
+        _ => None,
     }
-    j += 1;
-    let mut hashes = 0;
-    while chars.get(j) == Some(&'#') {
-        hashes += 1;
-        j += 1;
-    }
-    (chars.get(j) == Some(&'"')).then_some((hashes, j + 1))
+}
+
+fn line_of(span: Span) -> usize {
+    span.start().line
 }
 
 fn collect(dir: &Path, files: &mut Vec<PathBuf>) {
@@ -711,5 +733,75 @@ fn collect(dir: &Path, files: &mut Vec<PathBuf>) {
         } else if path.extension().is_some_and(|extension| extension == "rs") {
             files.push(path);
         }
+    }
+}
+
+#[test]
+fn tests_that_an_escaped_literal_is_read_as_its_value() {
+    let source = r#"const EVAL: &str = "\x52untime.evaluate";"#;
+    assert!(
+        !check("neo-runtime/src/probe.rs", source).is_empty(),
+        "the Rust literal evaluates to Runtime.evaluate"
+    );
+    for literal in [
+        r#""\u{52}untime.evaluate""#,
+        r##"r#"Runtime.evaluate"#"##,
+        r#"b"Runtime.evaluate""#,
+        r#"c"Runtime.evaluate""#,
+        "\"Runtime.\\\n        evaluate\"",
+        r#"concat!("Run", "time.evaluate")"#,
+        r#"concat!("Runtime.eva", "luate")"#,
+    ] {
+        let source = format!("const EVAL: &str = {literal};");
+        assert!(
+            !check("neo-runtime/src/probe.rs", &source).is_empty(),
+            "not refused: {source}"
+        );
+    }
+}
+
+#[test]
+fn tests_that_only_an_exact_artifact_include_is_a_built_function() {
+    let source = r#"const GLUE: &str = {
+        let _ = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/evaluate.js"));
+        "function () { return globalThis.secret; }"
+    };
+    fn probe() { json!({"functionDeclaration": GLUE}); }"#;
+    assert!(
+        !check("neo-runtime/src/main_world.rs", source).is_empty(),
+        "the const mentions an include_str but evaluates to another string"
+    );
+    let built = r#"include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/evaluate.js"))"#;
+    let accepted = format!(
+        "const GLUE: &str = {built};\nfn probe() {{ json!({{\"functionDeclaration\": GLUE}}); }}"
+    );
+    assert!(check("neo-runtime/src/main_world.rs", &accepted).is_empty());
+    for initializer in [
+        r#"include_str!("/../neo-runtime-injected/dist/evaluate.js")"#,
+        r#"include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/../evil.js"))"#,
+        r#"include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/sub/x.js"))"#,
+        r#"include_str!(concat!(env!("OUT_DIR"), "/../neo-runtime-injected/dist/evaluate.js"))"#,
+        r#"include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/evaluate.js", ""))"#,
+        r#"include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/evaluate.js")).trim_start()"#,
+    ] {
+        let source = format!(
+            "const GLUE: &str = {initializer};\nfn probe() {{ json!({{\"functionDeclaration\": GLUE}}); }}"
+        );
+        assert!(
+            !check("neo-runtime/src/main_world.rs", &source).is_empty(),
+            "not refused: {initializer}"
+        );
+    }
+    for shadow in [
+        "fn probe() { let GLUE = \"() => 1\"; json!({\"functionDeclaration\": GLUE}); }",
+        "fn probe(GLUE: &str) { json!({\"functionDeclaration\": GLUE}); }",
+        "fn probe() { const GLUE: &str = \"() => 1\"; json!({\"functionDeclaration\": GLUE}); }",
+        "#[cfg(any())]\nconst GLUE: &str = \"() => 1\";\nfn probe() { json!({\"functionDeclaration\": GLUE}); }",
+    ] {
+        let source = format!("const GLUE: &str = {built};\n{shadow}");
+        assert!(
+            !check("neo-runtime/src/main_world.rs", &source).is_empty(),
+            "a re-bound name passed: {shadow}"
+        );
     }
 }

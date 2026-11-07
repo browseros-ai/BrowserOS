@@ -803,6 +803,9 @@ function handleFrom(connection, created) {
   return new JSHandle(connection, created.guid, created.initializer);
 }
 function evaluateParams(apiName, pageFunction, arg, options) {
+  if (options?.signal !== undefined) {
+    throw new Error(`${apiName}: Neo does not support signal yet`);
+  }
   if (options?.exposeFunctions) {
     throw new Error(`${apiName}: Neo does not support exposeFunctions yet`);
   }
@@ -1010,7 +1013,7 @@ class Locator {
     return await this._frame._selectOption("locator.selectOption", this._selector, values, { strict: true, ...options });
   }
   async evaluate(pageFunction, arg, options) {
-    return await this._frame._withElement("locator.evaluate", this._selector, (handle) => handle._evaluate("locator.evaluate", pageFunction, arg, options), { timeout: options?.timeout });
+    return await this._frame._withElement("locator.evaluate", this._selector, (handle) => handle._evaluate("locator.evaluate", pageFunction, arg, options), { timeout: options?.timeout, signal: options?.signal });
   }
   async evaluateHandle(pageFunction, arg, options) {
     return await this._frame._withElement("locator.evaluateHandle", this._selector, (handle) => handle._evaluateHandle("locator.evaluateHandle", pageFunction, arg, options), { timeout: options?.timeout });
@@ -1893,6 +1896,8 @@ class Frame {
     return handleFrom(this._connection, result.handle);
   }
   async _withElement(apiName, selector, task, options) {
+    if (options.signal !== undefined)
+      throw new Error(`${apiName}: Neo does not support signal yet`);
     const result = await this._connection.send(apiName, this._guid, "waitForSelector", { selector, strict: true, state: "attached" }, this._page._timeoutSettings.timeout(options));
     const handle = ElementHandle.fromNullable(this._connection, result?.element);
     if (!handle)

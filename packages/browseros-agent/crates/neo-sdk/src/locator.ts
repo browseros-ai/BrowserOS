@@ -260,14 +260,14 @@ export class Locator {
   async evaluate<R, Arg>(
     pageFunction: PageFunctionOn<PageElement, Arg, R>,
     arg?: Arg,
-    options?: EvaluateOptions & { timeout?: number },
+    options?: EvaluateOptions & { timeout?: number; signal?: unknown },
   ): Promise<R> {
     return await this._frame._withElement(
       'locator.evaluate',
       this._selector,
       (handle) =>
         handle._evaluate<R>('locator.evaluate', pageFunction, arg, options),
-      { timeout: options?.timeout },
+      { timeout: options?.timeout, signal: options?.signal },
     )
   }
 
