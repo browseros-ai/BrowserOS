@@ -222,6 +222,50 @@ const cases = [
     },
   },
   {
+    // B2 re-review (review-review-b2-r2.md, P2): an out-of-process frame Neo already attached
+    // navigates again, to a streaming document. Neo saw that request start, so removing the frame
+    // after its commit fails it (`Frame._failInflightRequests`); only the first document, whose
+    // end came on the frame's session before Neo attached it, stays silent.
+    name: 'removing an attached out-of-process frame fails its next streaming document request',
+    source: `await page.goto(ORIGIN + '/net/oopif-top.html')
+    let cross
+    for (let tries = 0; !cross && tries < 150; tries++) {
+      cross = page.frames().find((frame) => frame.url().endsWith('/net/oopif-child.html'))
+      if (!cross) await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    await cross.waitForLoadState('load')
+    const failures = []
+    page.on('requestfailed', (request) => failures.push([path(request.url()), request.failure()?.errorText]))
+    const waiting = page.waitForResponse('**/net/hold?id=moved-doc*')
+    await page.evaluate(() => {
+      const frame = document.querySelector('iframe')
+      frame.src = frame.src.replace('/net/oopif-child.html', '/net/hold?id=moved-doc&type=html')
+    })
+    const response = await waiting
+    await cross.waitForURL('**/net/hold?id=moved-doc*', { waitUntil: 'commit', timeout: 5000 })
+    const within = (promise) => Promise.race([
+      promise.then((value) => ({ value: value === null ? null : typeof value }), (error) => ({ error: errorCategory(error) })),
+      new Promise((resolve) => setTimeout(() => resolve('pending'), 2000)),
+    ])
+    const body = within(response.text())
+    await page.evaluate(() => document.querySelector('iframe').remove())
+    const idle = await settle(page.waitForLoadState('networkidle', { timeout: 5000 }))
+    return {
+      body: await body,
+      failures,
+      failure: response.request().failure()?.errorText ?? null,
+      ownFrame: response.frame() === cross,
+      idle,
+    }`,
+    expected: {
+      body: { error: 'Error' },
+      failures: [['/net/hold?id=moved-doc&type=html', 'net::ERR_ABORTED']],
+      failure: 'net::ERR_ABORTED',
+      ownFrame: true,
+      idle: 'undefined',
+    },
+  },
+  {
     // server/frames.ts `FrameManager._removeFramesRecursively`: a removed frame's in-flight
     // requests, its document's included, fail (`Frame._failInflightRequests`) before
     // `framedetached`; the document's body read settles and `finished()` never does.

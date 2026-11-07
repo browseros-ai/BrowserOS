@@ -313,9 +313,6 @@ struct Log {
     /// `page.requests()`: every hop's request in the order it started, favicons left out,
     /// Playwright's last 100 or so.
     started: VecDeque<HopId>,
-    /// The frames still attached whose document moved to another process in the run
-    /// ([`NetworkLog::frame_moved`]).
-    moved: HashSet<String>,
 }
 
 /// Extra info for a request id no chain holds yet.
@@ -337,6 +334,10 @@ struct ResponseExtra {
 }
 
 /// One request id: its hops and `ResponseExtraInfoTracker`'s `RequestInfo`.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent fact about the request, set by a different event"
+)]
 struct Chain {
     request: String,
     /// `requestId` is `loaderId` and the type is `Document`: Playwright's `isNavigationRequest`.
@@ -356,6 +357,10 @@ struct Chain {
     served_from_cache: bool,
     /// What a watcher lag since the chain began may have cost it.
     lag: Lag,
+    /// A navigation still loading when its frame's document moved to another process
+    /// ([`NetworkLog::frame_moved`]): its end comes on that process's frame session, which Neo may
+    /// have attached only after it.
+    ends_elsewhere: bool,
 }
 
 /// A watcher lag that may have lost one of a chain's events.
@@ -590,19 +595,19 @@ impl NetworkLog {
     /// a removed frame's document.
     ///
     /// Deviation: `server/frames.ts` `Frame._failInflightRequests`: `for (const request of [...this._inflightRequests]) {`
-    /// A navigation request of a frame whose document moved to another process in the run ends
-    /// without an event ([`Ending::Unseen`]): such a document's request ends on that process's
-    /// frame session, which Neo may have attached only afterwards, so Neo cannot tell a loading
-    /// one from one that finished unseen. A body read on it still goes on and settles.
+    /// A navigation request that was still loading when its frame's document moved to another
+    /// process ends without an event ([`Ending::Unseen`]): its end comes on that process's frame
+    /// session, which Neo may have attached only afterwards, so Neo cannot tell a loading one from
+    /// one that finished unseen. A body read on it still goes on and settles. Every request the
+    /// frame started after the move, Neo saw from its start, and fails.
     pub(crate) fn detach_frame(&self, frame: &str) -> Vec<Happening> {
         let happenings = self
             .log
             .lock()
             .map(|mut log| {
-                let moved = log.moved.remove(frame);
                 log.end_loading(|chain| {
                     let ours = chain.hops.last().is_some_and(|hop| hop.frame == frame);
-                    ours.then_some(if moved && chain.navigation {
+                    ours.then_some(if chain.ends_elsewhere {
                         Ending::Unseen
                     } else {
                         Ending::Failed
@@ -641,10 +646,17 @@ impl NetworkLog {
     }
 
     /// `Page.frameDetached` reason `swap`: `frame`'s document moved to another process, so its
-    /// navigation requests may end on a session Neo does not read ([`Self::detach_frame`]).
+    /// navigation requests still loading end on a session Neo may not read
+    /// ([`Self::detach_frame`]).
     pub(crate) fn frame_moved(&self, frame: &str) {
         if let Ok(mut log) = self.log.lock() {
-            log.moved.insert(frame.to_string());
+            for chain in log.chains.iter_mut().filter(|chain| {
+                chain.navigation
+                    && !chain.ended
+                    && chain.hops.last().is_some_and(|hop| hop.frame == frame)
+            }) {
+                chain.ends_elsewhere = true;
+            }
         }
     }
 
@@ -1267,6 +1279,7 @@ impl Chain {
             expecting: Vec::new(),
             served_from_cache: false,
             lag: Lag::None,
+            ends_elsewhere: false,
         }
     }
 
@@ -2792,36 +2805,40 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_a_moved_frame_leaves_its_navigation_requests_alone() {
+    fn tests_that_only_a_document_loading_as_its_frame_moved_ends_unseen() {
         let log = NetworkLog::new("MAIN".to_string());
+        let child = SessionId::from("OOPIF");
         let document = navigation("DOC", "REMOTE", "Document", "https://b.test/");
+        apply_all(&log, &[document, response("DOC", true)]);
+        log.frame_moved("REMOTE");
+        log.add_child(&child);
+        let again = navigation("DOC2", "REMOTE", "Document", "https://b.test/2");
+        log.apply(Some(&child), &again.0, &again.1);
         let mut fetch = sub("F1", "https://b.test/data", "Fetch");
         fetch.1["frameId"] = json!("REMOTE");
-        apply_all(&log, &[document, response("DOC", true), fetch]);
-        log.frame_moved("REMOTE");
+        log.apply(Some(&child), &fetch.0, &fetch.1);
         assert_eq!(
             log.detach_frame("REMOTE"),
             [
                 Happening::Forgotten(at("DOC", 0)),
+                Happening::Failed(at("DOC2", 0)),
                 Happening::Failed(at("F1", 0))
             ],
-            "in start order; its document may have finished on a session Neo did not read"
+            "in start order: the first document may have finished on a session Neo did not read; \
+             Neo saw the next one start"
         );
         assert!(
             log.body(&at("DOC", 0)).expect("a body").is_some(),
-            "a body read on the document goes on"
+            "a body read on the first document goes on"
         );
         assert_eq!(
             log.failure(&at("DOC", 0)),
             Ok(None),
             "and reports no failure"
         );
-        let again = navigation("DOC3", "REMOTE", "Document", "https://b.test/3");
-        log.apply(None, &again.0, &again.1);
         assert_eq!(
-            log.detach_frame("REMOTE"),
-            [Happening::Failed(at("DOC3", 0))],
-            "a frame id reattached later starts out in its parent's process"
+            log.failure(&at("DOC2", 0)),
+            Ok(Some("net::ERR_ABORTED".to_string()))
         );
     }
 
