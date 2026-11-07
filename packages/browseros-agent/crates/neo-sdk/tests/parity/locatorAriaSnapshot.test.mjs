@@ -35,6 +35,6 @@ test('tests that locator snapshots match Playwright and scoped refs work', {
   assert.notEqual(outcome.value.shallow, outcome.value.plain)
   assert.match(outcome.value.ai, /\[ref=e\d+\]/)
   assert.equal(outcome.value.refText, 'Buy apple')
-  assert.deepEqual(outcome.value.strict, ['strict', 'strict'])
-  assert.equal(outcome.value.noMatch, 'error')
+  assert.deepEqual(outcome.value.strict, ['Error:strict', 'Error:strict'])
+  assert.equal(outcome.value.noMatch, 'Error')
 })
