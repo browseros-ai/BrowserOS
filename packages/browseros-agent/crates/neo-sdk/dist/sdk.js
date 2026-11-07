@@ -826,6 +826,8 @@ class Request {
     return response ? networkObject(this.#connection, response.guid, this.#frame._page) : null;
   }
   #actualHeaders(apiName) {
+    if (this.#fallbackOverrides.headers)
+      return Promise.resolve(RawHeaders._fromHeadersObjectLossy(this.#fallbackOverrides.headers));
     this.#actualHeadersPromise ??= this.#connection.sendRequest(apiName, this._guid, "rawRequestHeaders", {}, 0).then(({ headers }) => new RawHeaders(headers));
     return this.#actualHeadersPromise;
   }

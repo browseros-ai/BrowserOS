@@ -44,6 +44,7 @@ and NOTICE.
 | `packages/playwright-core/src/server/dispatchers/browserContextDispatcher.ts` | `51709e7de7843e0f7d254caa953dc05886e3230373153dc5a7eae1703bcea1f8` |
 | `packages/playwright-core/src/server/dispatchers/dispatcher.ts` | `d36f4b9599c46ad545e907a3573964b384b855da4c84fdcc80ca7b0db4998860` |
 | `packages/playwright-core/src/server/dispatchers/jsHandleDispatcher.ts` | `a2ad5a61b1b8421d58956a2f51c0897b69fa0519a27f98f52a321ac4e52d5209` |
+| `packages/playwright-core/src/server/dispatchers/networkDispatchers.ts` | `6aaa50a68ba88db2c6b1f5b9948563c1b1e9709bfb80de55a1ec7c5574fb7a0e` |
 | `packages/playwright-core/src/server/dispatchers/pageDispatcher.ts` | `d9078e4d188e29725b14148321091a0a03536ee7d4ec1cc7fd13c3e9d7d1275e` |
 | `packages/playwright-core/src/server/dom.ts` | `65cb43c91893e5cb82869d37686ad1d1500f4719711015d10eaac7c0b04cfb66` |
 | `packages/playwright-core/src/server/errors.ts` | `5dde9a10a8843f80c65f67bc2dae4b80bc1e2628ed514c2500fc7b9bbe6aadf0` |

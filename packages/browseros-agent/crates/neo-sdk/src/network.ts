@@ -315,7 +315,13 @@ export class Request {
       : null
   }
 
+  /** Playwright's `Request._actualHeaders`: a route's header overrides once it gave some, else
+   * the headers the browser sent. */
   #actualHeaders(apiName: ApiName): Promise<RawHeaders> {
+    if (this.#fallbackOverrides.headers)
+      return Promise.resolve(
+        RawHeaders._fromHeadersObjectLossy(this.#fallbackOverrides.headers),
+      )
     this.#actualHeadersPromise ??= this.#connection
       .sendRequest(apiName, this._guid, 'rawRequestHeaders', {}, 0)
       .then(({ headers }) => new RawHeaders(headers))

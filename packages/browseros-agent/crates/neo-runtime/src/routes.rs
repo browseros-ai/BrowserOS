@@ -22,7 +22,7 @@
 //! A pause the run was handed and never answered goes on when the run ends
 //! ([`Routes::left_open`]), as Playwright continues a disconnected client's paused requests.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::mem;
 use std::sync::{Arc, Mutex};
 
@@ -348,6 +348,8 @@ struct State {
     on: bool,
     parked: VecDeque<(String, Parked)>,
     paused: HashMap<u64, Paused>,
+    /// The pauses whose one answer was taken, by the script or a release.
+    answered: HashSet<u64>,
     /// Playwright: `server/chromium/crNetworkManager.ts` `RouteImpl.continue`: `this._alreadyContinuedParams = {`
     ///
     /// Each continued request's params (without its interception id), by `networkId`: its
@@ -635,10 +637,18 @@ impl Routes {
         });
     }
 
+    /// Playwright: `server/dispatchers/networkDispatchers.ts` `RouteDispatcher._checkNotHandled`: `throw new Error('Route is already handled!');`
+    ///
     /// Takes the one answer of pause `index`, or refuses a second one with Playwright's error.
+    /// The answer is taken before it is checked, as Playwright's dispatcher does: an answer the
+    /// browser cannot carry (a URL changing protocol, an unknown abort code) still uses it, and
+    /// the pause stays, for the run's end to release.
     fn take(&self, index: u64) -> Result<Paused, PlaywrightError> {
-        self.with(|state| state.paused.remove(&index))?
-            .ok_or_else(|| PlaywrightError::error(ROUTE_HANDLED))
+        self.with(|state| {
+            let paused = state.paused.get(&index)?.clone();
+            state.answered.insert(index).then_some(paused)
+        })?
+        .ok_or_else(|| PlaywrightError::error(ROUTE_HANDLED))
     }
 
     /// The `Fetch` command answering pause `index` as `call` asks. Takes its one answer.
@@ -648,9 +658,7 @@ impl Routes {
     /// Playwright's error for a second answer, a URL override that changes the protocol, or an
     /// unknown abort code.
     pub(crate) fn answer(&self, index: u64, call: RouteCall) -> Result<Answer, PlaywrightError> {
-        let paused = self
-            .with(|state| state.paused.get(&index).cloned())?
-            .ok_or_else(|| PlaywrightError::error(ROUTE_HANDLED))?;
+        let paused = self.take(index)?;
         let (method, params) = match call {
             RouteCall::Abort(params) => (
                 "Fetch.failRequest",
@@ -671,7 +679,8 @@ impl Routes {
                 ("Fetch.fulfillRequest", fulfill_params(&paused, params)?)
             }
         };
-        self.take(index)?;
+        // The browser carries it: the pause is no longer the run's to release.
+        let _released = self.with(|state| state.paused.remove(&index));
         Ok(Answer {
             session: paused.session,
             method,
@@ -1281,6 +1290,38 @@ mod tests {
             .answer(1, RouteCall::Abort(RouteAbortParams { error_code: None }))
             .unwrap_err();
         assert_eq!(second.message, ROUTE_HANDLED);
+    }
+
+    #[test]
+    fn tests_that_a_refused_answer_still_takes_the_routes_one_answer() {
+        let routes = Routes::new("T", Arc::default());
+        routes
+            .with(|state| {
+                state.paused.insert(1, paused("https://a.test/x", &[]));
+            })
+            .unwrap();
+        let refused = routes
+            .answer(
+                1,
+                RouteCall::Continue(RouteContinueParams {
+                    url: Some("file:///tmp/foo".into()),
+                    method: None,
+                    headers: None,
+                    post_data: None,
+                    is_fallback: false,
+                }),
+            )
+            .unwrap_err();
+        assert_eq!(refused.message, NEW_PROTOCOL);
+        let second = routes
+            .answer(1, RouteCall::Abort(RouteAbortParams { error_code: None }))
+            .unwrap_err();
+        assert_eq!(second.message, ROUTE_HANDLED, "as Playwright's dispatcher");
+        assert_eq!(
+            routes.left_open().len(),
+            1,
+            "the pause stays for the run's end to release"
+        );
     }
 
     #[test]
