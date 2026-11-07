@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use browseros_cdp::runtime::RemoteObject;
 use browseros_cdp::{CdpClient, CdpError};
+use futures_util::future;
 use neo_runtime_spec::injected::InjectedPreviewNodeParams;
 use neo_runtime_spec::serve::{FrameChannel, FrameInitializer, PageChannel, PageInitializer};
 use serde::{Deserialize, Serialize};
@@ -661,8 +662,8 @@ impl Tabs {
     /// Everything the run installed that the tabs it leaves open would otherwise keep, taken
     /// back, in one place that each area adding such state releases it from: the run's init
     /// scripts (`init_scripts.rs`) and exposed bindings (`bindings.rs`), its session overrides (extra headers, offline mode,
-    /// geolocation; HTTP credentials hold none while `setHTTPCredentials` is pending) and its
-    /// permission grants (`session_state.rs`). `context.close()` awaits it before it resolves and
+    /// geolocation; HTTP credentials hold none while `setHTTPCredentials` is pending), its
+    /// permission grants (`session_state.rs`) and its routes' paused requests (`routes.rs`). `context.close()` awaits it before it resolves and
     /// `Dispatcher::finish` runs it, so a closed context and an ended run let go the same way.
     /// Each part marks itself released before it waits, so an attach or a call still running
     /// installs nothing after it, and waits [`PAGE_END_WAIT`] at most: the overrides' resets
@@ -691,6 +692,15 @@ impl Tabs {
             PAGE_END_WAIT,
             self.0.permissions.release(&self.0.cdp, self.0.run_id),
         )
+        .await;
+        // Deviation: `server/dispatchers/pageDispatcher.ts` `PageDispatcher._onDispose`: `this._page.removeRequestInterceptor(this._requestInterceptor).catch(() => {});`
+        // Every request the run's routes hold goes on and no tab pauses requests for the run any
+        // more (`routes::finish`), as Playwright's closed context releases its client's paused
+        // requests; the page's requests after the close reach the network untouched.
+        let _routes = time::timeout(PAGE_END_WAIT, async {
+            let sessions = self.attached_sessions();
+            future::join_all(sessions.iter().map(|session| routes::finish(session))).await;
+        })
         .await;
     }
 

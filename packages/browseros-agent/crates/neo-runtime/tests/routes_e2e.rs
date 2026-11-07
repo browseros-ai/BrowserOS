@@ -148,7 +148,13 @@ await new Promise(() => {})"
             "void fetch('/after').then((response) => response.text()).then((text) => { window.__after = text })",
         )
         .await;
-    let after = read_while_live(&tab, &run, "window.__after ?? null", Duration::from_secs(20)).await;
+    let after = read_while_live(
+        &tab,
+        &run,
+        "window.__after ?? null",
+        Duration::from_secs(20),
+    )
+    .await;
     cancel.cancel();
     let outcome = run
         .await

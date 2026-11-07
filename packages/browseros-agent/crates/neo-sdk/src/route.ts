@@ -22,6 +22,7 @@ import {
   type Headers,
   type Request,
 } from './network'
+import { serializePostData, typeData } from './request-data'
 import { matchesURL } from './runtime-bridge'
 import type { TimeoutInput, TimeoutSettings } from './timeout-settings'
 import { type URLPredicate, urlFor } from './url'
@@ -79,12 +80,11 @@ const BODY_AND_JSON = 'Can specify either body or json parameters'
 const NO_PATH =
   'route.fulfill: Neo cannot read a file for "path" yet (it reads only inside the run\'s artifact directory, which this build lacks); pass "body" instead'
 
-/** Playwright: `client/network.ts` `Request._applyFallbackOverrides`: `this._fallbackOverrides.postDataBuffer = Buffer.from(JSON.stringify(overrides.postData), 'utf-8');` */
-function postDataBytes(postData: unknown): Uint8Array | undefined {
-  if (postData === undefined || postData === null) return undefined
-  if (typeof postData === 'string') return encodeUtf8(postData)
-  if (postData instanceof Uint8Array) return postData
-  return encodeUtf8(JSON.stringify(postData))
+/** Neo: whether `headers` name `name`, in any case. */
+function hasHeader(headers: Headers, name: string): boolean {
+  return Object.keys(headers).some(
+    (key) => key.toLowerCase() === name.toLowerCase(),
+  )
 }
 
 /** Neo: a promise resolved from outside, as Playwright's `ManualPromise` is used here. */
@@ -191,35 +191,48 @@ export class Route {
   /**
    * Deviation: `client/network.ts` `Route.fetch`: `return await this._context.request._innerFetch({ request: this.request(), data: options.postData, ...options });`
    * The browser sends the routed request itself, once (neo-runtime `routes.rs` `fetch`);
-   * `maxRetries` is checked as Playwright's and leaves retries to the browser.
+   * `maxRetries` is checked as Playwright's and leaves retries to the browser. Its `postData`
+   * is typed as Playwright's API request types `data` (`request-data.ts`), and the request goes
+   * with the content type Playwright's server would give that body; with no `postData`, the
+   * request's own body is typed as bytes. Only what changes goes to the browser: a body the
+   * script gave, and the headers once they change.
    */
   async fetch(options: FetchOptions = {}): Promise<APIResponse> {
+    const request = this.#request
+    const overrides = request._fallbackOverridesForContinue()
+    // Playwright: `client/fetch.ts` `APIRequestContext._innerFetch`: `const headersObj = options.headers || options.request?.headers();`
+    const headers = options.headers ?? request.headers()
     // The checks run here; the call's own errors come back prefixed already.
-    await wrapApiCall('route.fetch', async () => {
+    const typed = await wrapApiCall('route.fetch', async () => {
       if (options.maxRedirects !== undefined && options.maxRedirects < 0)
         throw new Error(`'maxRedirects' must be greater than or equal to '0'`)
       if (options.maxRetries !== undefined && options.maxRetries < 0)
         throw new Error(`'maxRetries' must be greater than or equal to '0'`)
+      return typeData(options.postData, headersObjectToArray(headers))
     })
-    {
-      const overrides = this.#request._fallbackOverridesForContinue()
-      const headers = options.headers ?? overrides.headers
-      const postData =
-        postDataBytes(options.postData) ?? overrides.postDataBuffer
-      const result = await this.#connection.sendRouteFetch(
-        'route.fetch',
-        this._guid,
-        {
-          url: options.url ?? overrides.url,
-          method: options.method ?? overrides.method,
-          headers: headers ? headersObjectToArray(headers) : undefined,
-          postData: postData ? toBinary(postData) : undefined,
-          maxRedirects: options.maxRedirects,
-        },
-        this.#timeoutSettings.timeout(options, 'route.fetch'),
-      )
-      return new APIResponse(result)
-    }
+    const given = typed.json !== undefined || typed.bytes !== undefined
+    // Playwright: `client/fetch.ts` `APIRequestContext._innerFetch`: `postDataBuffer = options.request?.postDataBuffer() || undefined;`
+    const own = given ? undefined : (request.postDataBuffer() ?? undefined)
+    const serialized = serializePostData(given ? typed : { bytes: own })
+    let headerOverrides = options.headers ?? overrides.headers
+    if (serialized && !hasHeader(headers, 'content-type'))
+      headerOverrides = { ...headers, 'content-type': serialized.contentType }
+    const postData = given ? serialized?.body : overrides.postDataBuffer
+    const result = await this.#connection.sendRouteFetch(
+      'route.fetch',
+      this._guid,
+      {
+        url: options.url ?? overrides.url,
+        method: options.method ?? overrides.method,
+        headers: headerOverrides
+          ? headersObjectToArray(headerOverrides)
+          : undefined,
+        postData: postData ? toBinary(postData) : undefined,
+        maxRedirects: options.maxRedirects,
+      },
+      this.#timeoutSettings.timeout(options, 'route.fetch'),
+    )
+    return new APIResponse(result)
   }
 
   async fulfill(options: FulfillOptions = {}): Promise<void> {
