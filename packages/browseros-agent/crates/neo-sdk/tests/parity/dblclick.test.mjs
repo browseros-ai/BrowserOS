@@ -112,3 +112,50 @@ test('dblclick inside frames reaches the same element through Neo and Playwright
 }, async (t) => {
   await compareFrameCases(t, frameCases)
 })
+
+// Review regression: design-dom.md section 4.7 requires Unknown for partial input.
+test('review: an interrupted double click releases input and records partial delivery', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  const outcome = await compareMethod(t, {
+    html: `<!doctype html><button id="target">Target</button><button id="after">After</button>
+      <script>
+        window.facts = { presses: 0, releases: 0, doubles: 0, after: 0, held: false }
+        target.onmousedown = () => { facts.presses++; facts.held = true }
+        target.onmouseup = () => { facts.releases++; facts.held = false }
+        target.ondblclick = () => facts.doubles++
+        after.onclick = () => { facts.after++; facts.held = false }
+      </script>`,
+    source: `
+      let stopped = 'resolved'
+      try {
+        await page.locator('#target').dblclick({ delay: 10000, timeout: 1500 })
+      } catch (error) {
+        stopped = errorCategory(error)
+      }
+      await page.locator('#after').click()
+      return stopped
+    `,
+    probe: 'window.facts',
+    effects: ({ playwright, neo }) => {
+      t.diagnostic(JSON.stringify({ playwright, neo }))
+      assert.equal(playwright.doubles, 0)
+      assert.deepEqual(neo, {
+        presses: 1,
+        releases: 1,
+        doubles: 0,
+        after: 1,
+        held: false,
+      })
+    },
+  })
+  assert.equal(outcome.value, 'TimeoutError')
+  const call = outcome.calls.find((call) => call.method === 'dblclick')
+  t.diagnostic(JSON.stringify({ result: call.result, delivery: call.delivery }))
+  assert.equal(
+    call.delivery,
+    'unknown',
+    'a double click stopped after its first press is partial',
+  )
+})
