@@ -1,5 +1,5 @@
-//! `Frame.textContent`, `Frame.innerText`, `Frame.getAttribute` and `Frame.ariaSnapshot` (no
-//! selector, as `page.ariaSnapshot` sends it): Playwright's page reads, in the structure of its
+//! `Frame.textContent`, `Frame.innerText`, `Frame.getAttribute` and `Frame.ariaSnapshot`:
+//! Playwright's page and locator reads, in the structure of its
 //! server. The text reads use `frames.ts` `_waitForFunctionOnSelector` over
 //! `retryWithProgressAndBackoff`; `ariaSnapshot` is `page.ts`
 //! `ariaSnapshotJSONForFrame` over `retryWithProgressAndTimeouts`, rendered by `aria_yaml.rs` as
@@ -24,7 +24,7 @@
 //! The seam is two traits of their own, [`SelectorTab`] and [`ReadTab`], so the reads never grow
 //! click's `Tab`; `Arc<PageSession>` implements both at the bottom of this file, over click's own
 //! `prepare` and `describe` and the main frame's utility world. [`wait_for_function_on_selector`]
-//! takes the page call as a closure shared by `textContent`, `innerText` and `getAttribute`.
+//! takes the page call as a closure shared by text reads and default locator snapshots.
 //! The tests drive both loops against a scripted tab under paused time.
 //!
 //! An `ai` snapshot also records its refs in the document's injected script, so a later
@@ -48,7 +48,8 @@ use std::time::Duration;
 
 use neo_runtime_spec::injected::{
     AriaFrameSnapshot, AriaSnapshotMode, AttributeMatch, InjectedAriaSnapshotParams,
-    InjectedGetAttributeParams, InjectedInnerTextParams, InjectedTextContentParams, TextMatch,
+    InjectedAriaSnapshotResult, InjectedGetAttributeParams, InjectedInnerTextParams,
+    InjectedTextContentParams, TextMatch,
 };
 use neo_runtime_spec::serve::{
     FrameAriaSnapshotParams, FrameAriaSnapshotParamsMode, FrameAriaSnapshotResult,
@@ -68,9 +69,6 @@ const FRAME_ROOT: &str = "body,frameset";
 /// The waits before each snapshot attempt: Playwright's `[1000, 2000, 4000, 8000]` after an
 /// immediate first try, the last repeating, and never capped by the call's timeout.
 const SNAPSHOT_WAITS_MS: [u64; 5] = [0, 1000, 2000, 4000, 8000];
-
-/// Neo's refusal of `locator.ariaSnapshot`, whose default mode is Playwright's action loop.
-const LOCATOR_SNAPSHOT_UNSERVED: &str = "Neo does not serve locator.ariaSnapshot yet";
 
 // ---------------------------------------------------------------------------------------------
 // The seam.
@@ -117,12 +115,12 @@ pub(crate) trait ReadTab: SelectorTab {
         name: &str,
     ) -> impl Future<Output = Result<Option<AttributeMatch>, PageError>> + Send;
 
-    /// The `ariaSnapshot` glue: the tree of the first match of `params.selector`, `None` while
-    /// nothing matches.
+    /// The `ariaSnapshot` glue: the tree and preview of the first match of `params.selector`.
+    /// The snapshot is absent while nothing matches.
     fn aria_snapshot(
         &self,
         params: &InjectedAriaSnapshotParams,
-    ) -> impl Future<Output = Result<Option<AriaFrameSnapshot>, PageError>> + Send;
+    ) -> impl Future<Output = Result<InjectedAriaSnapshotResult, PageError>> + Send;
 }
 
 /// What a read found on the first match: the value the call replies with, and
@@ -182,6 +180,8 @@ impl AttributeOptions {
 /// One `Frame.ariaSnapshot`'s options, decoded once by the dispatcher's route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SnapshotOptions {
+    /// A non-empty selector scopes the snapshot to one strict match.
+    pub(crate) selector: Option<String>,
     /// `mode ?? 'default'`.
     pub(crate) mode: AriaSnapshotMode,
     /// Passed to the page as given: Playwright's renderer treats 0 as no limit.
@@ -189,28 +189,25 @@ pub(crate) struct SnapshotOptions {
     pub(crate) boxes: Option<bool>,
 }
 
+// Neo: decodes the generated snapshot params once for the runtime route.
 impl SnapshotOptions {
-    /// Reads Playwright's params, refusing a selector before any work: that is
-    /// `locator.ariaSnapshot`, which Neo does not serve. An empty selector is no selector, as
-    /// Playwright's `options.selector &&` reads it.
-    pub(crate) fn from_params(params: FrameAriaSnapshotParams) -> Result<Self, PlaywrightError> {
+    /// Playwright: `server/frames.ts` `Frame.ariaSnapshotJSON`: `if (options.selector && options.mode !== 'ai') {`
+    pub(crate) fn from_params(params: FrameAriaSnapshotParams) -> Self {
         let FrameAriaSnapshotParams {
             mode,
             selector,
             depth,
             boxes,
         } = params;
-        if selector.is_some_and(|selector| !selector.is_empty()) {
-            return Err(PlaywrightError::error(LOCATOR_SNAPSHOT_UNSERVED));
-        }
-        Ok(Self {
+        Self {
+            selector: selector.filter(|selector| !selector.is_empty()),
             mode: match mode {
                 Some(FrameAriaSnapshotParamsMode::Ai) => AriaSnapshotMode::Ai,
                 Some(FrameAriaSnapshotParamsMode::Default) | None => AriaSnapshotMode::Default,
             },
             depth,
             boxes,
-        })
+        }
     }
 }
 
@@ -355,13 +352,15 @@ where
     Ok(Some(matched.value))
 }
 
-/// Serves `Frame.ariaSnapshot` without a selector: `{snapshot}`, the main frame's document as
-/// Playwright's YAML.
+/// Serves `Frame.ariaSnapshot`: a locator subtree or the main frame's document as YAML.
 pub(crate) async fn aria_snapshot<T: ReadTab>(
     tab: &T,
     options: &SnapshotOptions,
     progress: &Progress,
 ) -> Result<FrameAriaSnapshotResult, CallError> {
+    if let Some(selector) = &options.selector {
+        return locator_aria_snapshot(tab, selector, options, progress).await;
+    }
     // Non-strict: a document of nested framesets has several `frameset` elements.
     let params = InjectedAriaSnapshotParams {
         selector: FRAME_ROOT.to_string(),
@@ -389,6 +388,78 @@ pub(crate) async fn aria_snapshot<T: ReadTab>(
     }
 }
 
+/// Playwright: `server/frames.ts` `Frame.ariaSnapshotJSON`: `if (options.selector && options.mode !== 'ai') {`
+async fn locator_aria_snapshot<T: ReadTab>(
+    tab: &T,
+    selector: &str,
+    options: &SnapshotOptions,
+    progress: &Progress,
+) -> Result<FrameAriaSnapshotResult, CallError> {
+    let params = InjectedAriaSnapshotParams {
+        selector: selector.to_string(),
+        strict: true,
+        mode: options.mode,
+        depth: options.depth,
+        boxes: options.boxes,
+    };
+    if options.mode == AriaSnapshotMode::Ai {
+        return locator_ai_snapshot(tab, &params, progress).await;
+    }
+    let snapshot = wait_for_function_on_selector(tab, selector, progress, || async {
+        let result = tab.aria_snapshot(&params).await?;
+        let Some(value) = result.snapshot else {
+            return Ok(None);
+        };
+        // Neo: a successful glue read returns both values from the same matched element.
+        let preview = result.preview.ok_or_else(|| {
+            PageError::Contract(
+                "neo-runtime: aria snapshot is missing its element preview".to_string(),
+            )
+        })?;
+        Ok(Some(Matched { value, preview }))
+    })
+    .await?;
+    render_locator_snapshot(&snapshot)
+}
+
+/// Playwright: `server/page.ts` `ariaSnapshotJSONForFrame`: `frame.retryWithProgressAndTimeouts(progress, [1000, 2000, 4000, 8000],`
+async fn locator_ai_snapshot<T: ReadTab>(
+    tab: &T,
+    params: &InjectedAriaSnapshotParams,
+    progress: &Progress,
+) -> Result<FrameAriaSnapshotResult, CallError> {
+    let mut attempt: usize = 0;
+    loop {
+        let wait = SNAPSHOT_WAITS_MS[attempt.min(SNAPSHOT_WAITS_MS.len() - 1)];
+        attempt = attempt.saturating_add(1);
+        if wait > 0 {
+            progress.wait(Duration::from_millis(wait)).await?;
+        }
+        match snapshot_once(tab, params, progress).await {
+            Ok(Some(snapshot)) => return render_locator_snapshot(&snapshot),
+            Ok(None) => {
+                // Playwright: `server/page.ts` `ariaSnapshotJSONForFrame`: `throw new NonRecoverableDOMError(`
+                return Err(PlaywrightError::error(format!(
+                    "Selector \"{}\" does not match any element",
+                    params.selector
+                ))
+                .into());
+            }
+            Err(Stop::Again) => {}
+            Err(Stop::End(error)) => return Err(error),
+        }
+    }
+}
+
+/// Playwright: `server/frames.ts` `Frame.ariaSnapshot`: `return { snapshot: renderAriaSnapshotAsYaml(snapshot) };`
+fn render_locator_snapshot(
+    snapshot: &AriaFrameSnapshot,
+) -> Result<FrameAriaSnapshotResult, CallError> {
+    let snapshot = aria_yaml::render(&snapshot.nodes)
+        .map_err(|error| PlaywrightError::error(format!("neo-runtime: {error}")))?;
+    Ok(FrameAriaSnapshotResult { snapshot })
+}
+
 /// One snapshot attempt: `Ok(None)` while the document has no body yet.
 async fn snapshot_once<T: ReadTab>(
     tab: &T,
@@ -396,7 +467,7 @@ async fn snapshot_once<T: ReadTab>(
     progress: &Progress,
 ) -> Result<Option<AriaFrameSnapshot>, Stop> {
     progress.race(tab.prepare()).await??;
-    Ok(progress.race(tab.aria_snapshot(params)).await??)
+    Ok(progress.race(tab.aria_snapshot(params)).await??.snapshot)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -478,8 +549,8 @@ impl ReadTab for Arc<PageSession> {
     async fn aria_snapshot(
         &self,
         params: &InjectedAriaSnapshotParams,
-    ) -> Result<Option<AriaFrameSnapshot>, PageError> {
-        Ok(self.world.call(None, params).await?.snapshot)
+    ) -> Result<InjectedAriaSnapshotResult, PageError> {
+        self.world.call(None, params).await
     }
 }
 
@@ -636,13 +707,15 @@ mod tests {
         async fn aria_snapshot(
             &self,
             params: &InjectedAriaSnapshotParams,
-        ) -> Result<Option<AriaFrameSnapshot>, PageError> {
+        ) -> Result<InjectedAriaSnapshotResult, PageError> {
             self.record("ariaSnapshot");
             self.snapshot_params
                 .lock()
                 .expect("params")
                 .push(params.clone());
-            self.snapshot.answer().await
+            let snapshot = self.snapshot.answer().await?;
+            let preview = snapshot.as_ref().map(|_| "<ul>…</ul>".to_string());
+            Ok(InjectedAriaSnapshotResult { snapshot, preview })
         }
     }
 
@@ -748,6 +821,7 @@ mod tests {
     ) -> Result<FrameAriaSnapshotResult, CallError> {
         let progress = Progress::for_test(timeout_ms);
         let options = SnapshotOptions {
+            selector: None,
             mode: AriaSnapshotMode::Ai,
             depth: None,
             boxes: None,
@@ -1169,26 +1243,98 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_options_refuse_a_selector_and_default_the_mode() {
+    fn snapshot_options_accept_a_selector_and_default_the_mode() {
         let decode = |params: serde_json::Value| {
             SnapshotOptions::from_params(serde_json::from_value(params).expect("params"))
         };
         assert_eq!(
             decode(serde_json::json!({ "selector": "#list", "mode": "ai" })),
-            Err(PlaywrightError::error(LOCATOR_SNAPSHOT_UNSERVED))
+            SnapshotOptions {
+                selector: Some("#list".to_string()),
+                mode: AriaSnapshotMode::Ai,
+                depth: None,
+                boxes: None,
+            }
         );
         assert_eq!(
             decode(serde_json::json!({ "selector": "", "depth": 2, "boxes": true })),
-            Ok(SnapshotOptions {
+            SnapshotOptions {
+                selector: None,
                 mode: AriaSnapshotMode::Default,
                 depth: Some(2),
                 boxes: Some(true),
-            }),
+            },
             "an empty selector is none, as Playwright reads it"
         );
         assert_eq!(
-            decode(serde_json::json!({ "mode": "ai" })).map(|options| options.mode),
-            Ok(AriaSnapshotMode::Ai)
+            decode(serde_json::json!({ "mode": "ai" })).mode,
+            AriaSnapshotMode::Ai
         );
+    }
+
+    // Neo: exercises scoped snapshots against the same scripted tab as page reads.
+    async fn locator_snapshot(
+        tab: &FakeReads,
+        mode: &str,
+    ) -> Result<FrameAriaSnapshotResult, CallError> {
+        let options = SnapshotOptions::from_params(
+            serde_json::from_value(serde_json::json!({
+                "selector": SELECTOR,
+                "mode": mode,
+                "depth": 2,
+            }))
+            .expect("params"),
+        );
+        aria_snapshot(tab, &options, &Progress::for_test(30_000.0)).await
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_locator_snapshot_waits_for_its_subtree() {
+        let mut tab = FakeReads::ready();
+        tab.snapshot = Step::new(ROUND_TRIP, [Ok(None), Ok(Some(tree()))]);
+        let result = locator_snapshot(&tab, "default").await.expect("snapshot");
+        assert_eq!(result.snapshot, TREE_YAML);
+        assert!(
+            tab.snapshot_params
+                .lock()
+                .expect("params")
+                .iter()
+                .all(|params| {
+                    params.selector == SELECTOR
+                        && params.strict
+                        && params.mode == AriaSnapshotMode::Default
+                        && params.depth == Some(2)
+                })
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_locator_snapshot_rejects_strict_violations() {
+        for mode in ["default", "ai"] {
+            let mut tab = FakeReads::ready();
+            tab.snapshot = Step::always(
+                ROUND_TRIP,
+                Err(PageError::Threw("strict mode violation".to_string())),
+            );
+            let error = locator_snapshot(&tab, mode)
+                .await
+                .expect_err("strict violation");
+            let CallError::Playwright(error) = error else {
+                panic!("expected a Playwright error");
+            };
+            assert_eq!(error.name, ErrorName::Error);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_an_ai_locator_snapshot_rejects_no_match_without_polling() {
+        let mut tab = FakeReads::ready();
+        // A later match would succeed if the AI branch incorrectly auto-waited.
+        tab.snapshot = Step::new(ROUND_TRIP, [Ok(None), Ok(Some(tree()))]);
+        let error = locator_snapshot(&tab, "ai").await.expect_err("no match");
+        let CallError::Playwright(error) = error else {
+            panic!("expected a Playwright error");
+        };
+        assert_eq!(error.name, ErrorName::Error);
     }
 }

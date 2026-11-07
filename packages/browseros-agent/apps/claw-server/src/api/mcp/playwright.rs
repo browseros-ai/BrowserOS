@@ -21,9 +21,14 @@ use rmcp::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::{sync::OnceCell, time::Instant};
+use tokio::{
+    sync::{Mutex, OnceCell},
+    time::Instant,
+};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
+
+use super::output::Store;
 
 const DEFAULT_TIMEOUT: u64 = 30_000;
 const MAX_TIMEOUT: u64 = 120_000;
@@ -34,8 +39,9 @@ const INSTRUCTIONS: &str = concat!(
     "Tabs: omit `page` to start in a new background tab; pass a returned `pages[].id` to continue in that tab. Every result's `pages` lists the tabs the run used, including ones it opened or closed (`id`, `created`, `closed`, plus `url` when available), also when the run failed or timed out, so a later run can resume or close them.\n",
     "Clicking a link navigates the tab it is in. To keep the current page, open links in background tabs in the same run: `const tab = await context.newPage(); await tab.goto(href, { waitUntil: 'domcontentloaded' });`. `context.pages()` lists the profile's open tabs, `page.context()` returns the context, `tab.bringToFront()` activates a tab, `tab.close()` closes it.\n\n",
     "Navigation: `goto` waits for `load` by default, which slow pages can miss within the run. To read a page, prefer `goto(url, { waitUntil: 'domcontentloaded' })`, then wait for the content you need, e.g. `await page.getByRole('heading').first().waitFor()`.\n\n",
-    "Supported, a Playwright subset: context.pages/newPage/setDefaultTimeout/setDefaultNavigationTimeout; page.goto/url/title/context/bringToFront/close/isClosed/waitForURL/waitForLoadState/ariaSnapshot/locator/getBy* and the selector forms of the locator methods; locator.click/fill/clear/press/check/uncheck/setChecked/selectOption/textContent/innerText/getAttribute/inputValue/isVisible/isChecked/count/allTextContents/waitFor/first/last/nth/filter/locator/getBy*/and/or.\n\n",
-    "`timeout` is milliseconds (default 30000, maximum 120000). Reuse your MCP session and set its request timeout longer than the run timeout. If the client times out without a result, use `context.pages()` to find open tabs before opening replacements.",
+    "Supported, a Playwright subset: context.pages/newPage/setDefaultTimeout/setDefaultNavigationTimeout; page.goto/url/title/context/bringToFront/close/isClosed/waitForURL/waitForLoadState/ariaSnapshot/locator/getBy* and the selector forms of the locator methods; locator.click/fill/clear/press/check/uncheck/setChecked/selectOption/textContent/innerText/getAttribute/inputValue/isVisible/isChecked/count/allTextContents/ariaSnapshot/waitFor/first/last/nth/filter/locator/getBy*/and/or.\n\n",
+    "`timeout` is milliseconds (default 30000, maximum 120000). Reuse your MCP session and set its request timeout longer than the run timeout. If the client times out without a result, use `context.pages()` to find open tabs before opening replacements.\n\n",
+    "Scope large reads with locator.ariaSnapshot({mode:'ai'}); responses use a 24000-byte JSON budget and truncated fields include next arguments for run({result,field,offset}) to read the stored original without changing refs.",
 );
 
 struct Browser {
@@ -50,6 +56,7 @@ pub struct PlaywrightService {
     browser: Arc<OnceCell<Arc<Browser>>>,
     shutdown: CancellationToken,
     runs: TaskTracker,
+    output: Arc<Mutex<Store>>,
 }
 
 #[derive(Deserialize)]
@@ -60,6 +67,17 @@ struct Arguments {
     timeout: Option<u64>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RequestArguments {
+    code: Option<String>,
+    page: Option<String>,
+    timeout: Option<u64>,
+    result: Option<String>,
+    field: Option<String>,
+    offset: Option<usize>,
+}
+
 impl PlaywrightService {
     #[must_use]
     pub fn new(cdp_port: u16, shutdown: CancellationToken) -> Self {
@@ -68,6 +86,7 @@ impl PlaywrightService {
             browser: Arc::new(OnceCell::new()),
             shutdown,
             runs: TaskTracker::new(),
+            output: Arc::new(Mutex::new(Store::default())),
         }
     }
 
@@ -319,11 +338,18 @@ fn stopped(status: &str, timeout: u64) -> Value {
 
 fn tool() -> Tool {
     Tool::new("run", INSTRUCTIONS, Arc::new(serde_json::from_value(json!({
-        "type":"object", "additionalProperties":false, "required":["code"],
+        "type":"object", "additionalProperties":false,
+        "oneOf":[
+            {"required":["code"],"not":{"anyOf":[{"required":["result"]},{"required":["field"]},{"required":["offset"]}]}},
+            {"required":["result"],"not":{"anyOf":[{"required":["code"]},{"required":["page"]},{"required":["timeout"]}]}}
+        ],
         "properties": {
             "code":{"type":"string","description":"Playwright async function body; page and context are provided. Return a value."},
             "page":{"type":"string","minLength":1,"description":"A pages[].id from an earlier result. Omit to open a background tab."},
-            "timeout":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT,"default":DEFAULT_TIMEOUT,"description":"Whole-run timeout in milliseconds."}
+            "timeout":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT,"default":DEFAULT_TIMEOUT,"description":"Whole-run timeout in milliseconds."},
+            "result":{"type":"string","minLength":1,"description":"Stored truncated result ID. Use instead of code, without page or timeout; retrieval never touches the browser. Process-local LRU: 16 results, 64 MiB; cleared on restart."},
+            "field":{"type":"string","enum":["value","logs","calls","error"],"default":"value","description":"Original field to retrieve. Strings are raw text; other values and logs/calls/error use pretty JSON. Follow truncated.next verbatim."},
+            "offset":{"type":"integer","minimum":0,"default":0,"description":"UTF-8 byte offset into the original field text. Prefer the next arguments returned with truncation metadata."}
         }
     })).unwrap_or_default()))
     .with_title("Run Playwright code")
@@ -385,10 +411,60 @@ impl ServerHandler for PlaywrightService {
             ))
             .into());
         }
-        let args = serde_json::from_value::<Arguments>(Value::Object(
-            request.arguments.unwrap_or_default(),
-        ))
-        .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        let arguments = request.arguments.unwrap_or_default();
+        if arguments.values().any(Value::is_null) {
+            return Err(McpError::invalid_params(
+                "provided run arguments must not be null",
+                None,
+            ));
+        }
+        let args = serde_json::from_value::<RequestArguments>(Value::Object(arguments))
+            .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        if let Some(id) = args.result {
+            if args.code.is_some()
+                || args.page.is_some()
+                || args.timeout.is_some()
+                || id.trim().is_empty()
+            {
+                return Err(McpError::invalid_params(
+                    "use result instead of code, without page or timeout",
+                    None,
+                ));
+            }
+            let result = self
+                .output
+                .lock()
+                .await
+                .retrieve(
+                    &id,
+                    args.field.as_deref().unwrap_or("value"),
+                    args.offset.unwrap_or(0),
+                )
+                .map_err(|error| McpError::invalid_params(error, None))?;
+            return Ok(if result["status"] == "ok" {
+                CallToolResult::structured(result)
+            } else {
+                CallToolResult::structured_error(result)
+            }
+            .into());
+        }
+        let Some(code) = args.code else {
+            return Err(McpError::invalid_params(
+                "exactly one of code or result is required",
+                None,
+            ));
+        };
+        if args.field.is_some() || args.offset.is_some() {
+            return Err(McpError::invalid_params(
+                "field and offset require result",
+                None,
+            ));
+        }
+        let args = Arguments {
+            code,
+            page: args.page,
+            timeout: args.timeout,
+        };
         if args
             .timeout
             .is_some_and(|timeout| timeout == 0 || timeout > MAX_TIMEOUT)
@@ -422,6 +498,7 @@ impl ServerHandler for PlaywrightService {
             })
             .await
             .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        let result = self.output.lock().await.limit(result);
         Ok(if result["status"] == "ok" {
             CallToolResult::structured(result)
         } else {

@@ -177,6 +177,31 @@ describe('textContent', () => {
 })
 
 describe('ariaSnapshot', () => {
+  test('tests that a locator sends its scoped selector and returns the YAML', async () => {
+    const { page } = run()
+    results.push({ snapshot: '- button "Buy" [ref=e2]' })
+    const section = page.getByRole('main').filter({ hasText: 'Products' })
+    expect(
+      await section.ariaSnapshot({
+        mode: 'ai',
+        depth: 2,
+        boxes: true,
+        timeout: 9,
+      }),
+    ).toBe('- button "Buy" [ref=e2]')
+    expect(sent[0]).toMatchObject({
+      guid: 'frame@T',
+      method: 'ariaSnapshot',
+      params: {
+        selector: section._selector,
+        mode: 'ai',
+        depth: 2,
+        boxes: true,
+      },
+      metadata: { timeout: 9 },
+    })
+  })
+
   test('sends mode, depth and boxes only, never a selector, and returns the YAML', async () => {
     const { page } = run()
     results.push({ snapshot: '- button "Go" [ref=e2]' }, { snapshot: '- main' })
