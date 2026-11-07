@@ -107,6 +107,12 @@ const CALL_ON_ELEMENT: &str = include_str!(concat!(
     "/../neo-runtime-injected/dist/call-on-element.js"
 ));
 
+/// Playwright: `server/frames.ts` `Frame._addScriptTag`
+const ADD_TAG: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/add-tag.js"
+));
+
 /// A page function of Playwright's server, built in neo-runtime-injected, that runs as the
 /// `expression` of `UtilityScript.evaluate` (`EVALUATE`), so its arguments arrive parsed with
 /// their handles, primitives included. Agent code never takes this path.
@@ -123,6 +129,8 @@ pub(crate) enum BuiltExpression {
     /// `(injected, selector, strict, scope, callback, ...data) => 0 | 1 | preview`: a
     /// `mainWorld: true` element callback on the first match.
     CallOnElement,
+    /// `(utilityScript, kind, value, type) => element`: `addScriptTag` / `addStyleTag`.
+    AddTag,
 }
 
 impl BuiltExpression {
@@ -134,6 +142,7 @@ impl BuiltExpression {
             Self::WaitResult => WAIT_RESULT,
             Self::WaitAbort => WAIT_ABORT,
             Self::CallOnElement => CALL_ON_ELEMENT,
+            Self::AddTag => ADD_TAG,
         }
     }
 }

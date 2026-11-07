@@ -27,6 +27,9 @@
  */
 
 /** Playwright's `WaitForFunctionOptions`: `polling` is `'raf'` (default) or an interval in ms. */
+/** Playwright's `addScriptTag` / `addStyleTag` options. */
+export type TagOptions = { url?: string; path?: string; content?: string }
+
 export type WaitForFunctionOptions = {
   polling?: number | 'raf'
   timeout?: number
@@ -672,6 +675,49 @@ export class Frame {
         'neo-sdk: Frame.evalOnSelectorAll contract error: expected a string array',
       )
     return values
+  }
+
+  /** Playwright's `frame.addScriptTag`: a `<script>` from `url` or `content` in the page's head,
+   * as an `ElementHandle` once it loaded (or ran). */
+  async addScriptTag(
+    options: TagOptions & { type?: string } = {},
+  ): Promise<ElementHandle> {
+    return await this._addTag('frame.addScriptTag', 'addScriptTag', options)
+  }
+
+  /** Playwright's `frame.addStyleTag`: a `<style>` or stylesheet `<link>`, once it loaded. */
+  async addStyleTag(options: TagOptions = {}): Promise<ElementHandle> {
+    return await this._addTag('frame.addStyleTag', 'addStyleTag', options)
+  }
+
+  /** Both tags: Playwright's client reads `path` into `content`; Neo reads files only from the
+   * run's artifact directory, which a run does not have yet. */
+  async _addTag(
+    apiName: ApiName,
+    method: 'addScriptTag' | 'addStyleTag',
+    options: TagOptions & { type?: string },
+  ): Promise<ElementHandle> {
+    if (options.path)
+      // Deviation: `client/frame.ts` `Frame.addScriptTag`: `copy.content = (await fs.promises.readFile(copy.path)).toString();` Neo reads files only from the run's artifact directory.
+      throw new Error(
+        `${apiName}: path: this run has no artifact directory, so Neo cannot read "${options.path}"`,
+      )
+    const params: { url?: string; content?: string; type?: string } = {}
+    if (options.url !== undefined) params.url = options.url
+    if (options.content !== undefined) params.content = options.content
+    if (method === 'addScriptTag' && options.type !== undefined)
+      params.type = options.type
+    const result = await this._connection.sendEval(
+      apiName,
+      this._guid,
+      method,
+      params,
+      0,
+    )
+    const handle = ElementHandle.fromNullable(this._connection, result.element)
+    if (!handle)
+      throw new Error(`neo-sdk: Frame.${method} contract error: no element`)
+    return handle
   }
 
   /** Playwright's `frame.$`: the first match, or `null`, as an `ElementHandle`. */

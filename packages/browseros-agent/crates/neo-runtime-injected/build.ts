@@ -17,6 +17,7 @@
  *                       held by CDP id, never on a global
  *   dist/call-on-element.js  Playwright's `mainWorld: true` element callbacks, run as a
  *                       `UtilityScript.evaluate` expression with that InjectedScript
+ *   dist/add-tag.js     Playwright's `addScriptTag` / `addStyleTag` page functions, an expression
  *   dist/spec-sha256    neo-runtime-spec's SPEC_SHA256, no trailing newline, which neo-runtime
  *                       const-asserts against the Rust crate's own hash
  *
@@ -68,6 +69,7 @@ const ENTRIES = [
   'retain',
   'main-injected',
   'call-on-element',
+  'add-tag',
 ] as const
 const VALUE_IMPORTERS = ['install.ts', 'utility.ts', 'main-injected.ts']
 const VENDOR_ALIASES = ['@injected/', '@isomorphic/', '@protocol/']

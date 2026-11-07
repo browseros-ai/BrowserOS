@@ -3,12 +3,14 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (9)
+## Deviations (11)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
+| neo-runtime-injected/src/add-tag.ts | (file) | `server/frames.ts` `Frame._raceWithCSPError` | Playwright rejects a tag the page's Content Security Policy blocked by watching the console; Neo watches no console, so it waits for the document's `securitypolicyviolation` event instead, one task after the tag (Chromium reports an inline script's violation in a later task), and rejects with an Error naming the policy. |
 | neo-runtime/src/evaluate.rs | `created_handle` | `server/dom.ts` `ElementHandle._initializePreview` | Playwright starts at `JSHandle@node` and updates the preview by event; Neo has no events, so the handle starts with the final preview. |
 | neo-runtime/src/evaluate.rs | `utility_root` | `server/frameSelectors.ts` `FrameSelectors._resolveChainedSelector` | Playwright resolves frame hops from a scope too; Neo serves a scoped query within the element's own document only. |
+| neo-sdk/src/frame.ts | `Frame._addTag` | `client/frame.ts` `Frame.addScriptTag` | Neo reads files only from the run's artifact directory. |
 | neo-sdk/src/frame.ts | `Frame._querySelector` | `client/timeoutSettings.ts` `kNoTimeout` | Playwright's `$` sends this, so it ignores a caller's signal; Neo refuses one rather than ignore it. |
 | neo-sdk/src/frame.ts | `Frame._waitForFunction` | `client/timeoutSettings.ts` `TimeoutSettings.timeout` | Neo refuses a signal rather than ignore it. |
 | neo-sdk/src/frame.ts | `Frame._waitForSelectorElement` | `client/timeoutSettings.ts` `TimeoutSettings.timeout` | Neo refuses a signal rather than ignore it. |

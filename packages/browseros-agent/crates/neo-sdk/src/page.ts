@@ -22,6 +22,7 @@ import {
   type IsVisibleOptions,
   type PressOptions,
   type SelectOptionOptions,
+  type TagOptions,
   type TextContentOptions,
   type UncheckOptions,
   type URLMatch,
@@ -209,6 +210,26 @@ export class Page {
   /** The navigation's `Response`, or `null` where Playwright's has none. */
   async goto(url: string, options: GotoOptions = {}): Promise<Response | null> {
     return await this.#mainFrame._goto('page.goto', url, options)
+  }
+
+  /** Playwright's `page.addScriptTag`: `frame.addScriptTag` in the main frame. */
+  async addScriptTag(
+    options: TagOptions & { type?: string } = {},
+  ): Promise<ElementHandle> {
+    return await this.mainFrame()._addTag(
+      'page.addScriptTag',
+      'addScriptTag',
+      options,
+    )
+  }
+
+  /** Playwright's `page.addStyleTag`: `frame.addStyleTag` in the main frame. */
+  async addStyleTag(options: TagOptions = {}): Promise<ElementHandle> {
+    return await this.mainFrame()._addTag(
+      'page.addStyleTag',
+      'addStyleTag',
+      options,
+    )
   }
 
   /** Playwright's `page.$`: `frame.$` in the main frame. */

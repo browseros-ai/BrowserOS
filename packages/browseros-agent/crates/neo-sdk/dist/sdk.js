@@ -1968,6 +1968,28 @@ class Frame {
       throw new Error("neo-sdk: Frame.evalOnSelectorAll contract error: expected a string array");
     return values;
   }
+  async addScriptTag(options = {}) {
+    return await this._addTag("frame.addScriptTag", "addScriptTag", options);
+  }
+  async addStyleTag(options = {}) {
+    return await this._addTag("frame.addStyleTag", "addStyleTag", options);
+  }
+  async _addTag(apiName, method, options) {
+    if (options.path)
+      throw new Error(`${apiName}: path: this run has no artifact directory, so Neo cannot read "${options.path}"`);
+    const params = {};
+    if (options.url !== undefined)
+      params.url = options.url;
+    if (options.content !== undefined)
+      params.content = options.content;
+    if (method === "addScriptTag" && options.type !== undefined)
+      params.type = options.type;
+    const result = await this._connection.sendEval(apiName, this._guid, method, params, 0);
+    const handle = ElementHandle.fromNullable(this._connection, result.element);
+    if (!handle)
+      throw new Error(`neo-sdk: Frame.${method} contract error: no element`);
+    return handle;
+  }
   async $(selector, options) {
     return await this._querySelector("frame.$", selector, options);
   }
@@ -2292,6 +2314,12 @@ class Page {
   }
   async goto(url, options = {}) {
     return await this.#mainFrame._goto("page.goto", url, options);
+  }
+  async addScriptTag(options = {}) {
+    return await this.mainFrame()._addTag("page.addScriptTag", "addScriptTag", options);
+  }
+  async addStyleTag(options = {}) {
+    return await this.mainFrame()._addTag("page.addStyleTag", "addStyleTag", options);
   }
   async $(selector, options) {
     return await this.mainFrame()._querySelector("page.$", selector, options);

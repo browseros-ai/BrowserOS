@@ -263,6 +263,28 @@ struct WaitForFunctionParams {
     strict: Option<bool>,
 }
 
+/// `Frame.addScriptTag`'s params (`path` became `content` in the SDK).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AddScriptTagParams {
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
+}
+
+/// `Frame.addStyleTag`'s params.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AddStyleTagParams {
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    content: Option<String>,
+}
+
 /// `ElementHandle.dispatchEvent`'s params.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -278,6 +300,29 @@ struct DispatchEventParams {
 struct GetPropertyParams {
     name: String,
 }
+
+/// Neo: `Frame.addScriptTag`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
+pub(crate) static FRAME_ADD_SCRIPT_TAG_META: MethodMeta = MethodMeta {
+    interface: "Frame",
+    method: "addScriptTag",
+    title: Some("Add script tag"),
+    subtitle: None,
+    group: None,
+    render_params: &["url"],
+    internal: false,
+    flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+};
+/// Neo: `Frame.addStyleTag`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
+pub(crate) static FRAME_ADD_STYLE_TAG_META: MethodMeta = MethodMeta {
+    interface: "Frame",
+    method: "addStyleTag",
+    title: Some("Add style tag"),
+    subtitle: None,
+    group: None,
+    render_params: &["url"],
+    internal: false,
+    flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+};
 
 /// Neo: `ElementHandle.dispatchEvent`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
 pub(crate) static HANDLE_DISPATCH_EVENT_META: MethodMeta = MethodMeta {
@@ -464,6 +509,13 @@ pub(crate) enum EvalCall {
         strict: bool,
         evaluation: Evaluation,
     },
+    /// `Frame.addScriptTag` / `Frame.addStyleTag`: one of `dist/add-tag.js`'s functions by name,
+    /// with its URL or content and a script's `type`.
+    AddTag {
+        tag: &'static str,
+        value: String,
+        kind: String,
+    },
     /// `ElementHandle.dispatchEvent`.
     DispatchEvent {
         guid: String,
@@ -521,6 +573,36 @@ pub(crate) fn route_frame(
 ) -> Option<(&'static MethodMeta, Result<EvalCall, PlaywrightError>)> {
     if let Some(routed) = route_selector_call(None, method, params) {
         return routed.0.map(|meta| (meta, routed.1));
+    }
+    if method == "addScriptTag" {
+        let meta = &FRAME_ADD_SCRIPT_TAG_META;
+        return Some((
+            meta,
+            decode::<AddScriptTagParams>(params, meta).and_then(|params| {
+                let (tag, value) =
+                    tag_source(params.url, params.content, "scriptUrl", "scriptContent")?;
+                Ok(EvalCall::AddTag {
+                    tag,
+                    value,
+                    kind: params.kind.unwrap_or_default(),
+                })
+            }),
+        ));
+    }
+    if method == "addStyleTag" {
+        let meta = &FRAME_ADD_STYLE_TAG_META;
+        return Some((
+            meta,
+            decode::<AddStyleTagParams>(params, meta).and_then(|params| {
+                let (tag, value) =
+                    tag_source(params.url, params.content, "styleUrl", "styleContent")?;
+                Ok(EvalCall::AddTag {
+                    tag,
+                    value,
+                    kind: String::new(),
+                })
+            }),
+        ));
     }
     if method == "waitForFunction" {
         let meta = &FRAME_WAIT_FOR_FUNCTION_META;
@@ -907,6 +989,11 @@ pub(crate) async fn serve(
         | EvalCall::EvalOnSelectorAll { .. }) => {
             return serve_selector(tab, call, handles, progress).await;
         }
+        EvalCall::AddTag { tag, value, kind } => {
+            return add_tag(tab, tag, &value, &kind, handles, progress)
+                .await
+                .map(Some);
+        }
         call @ (EvalCall::DispatchEvent { .. } | EvalCall::WaitForFunctionOnElement { .. }) => {
             serve_element(tab, call, handles, progress).await?;
             return Ok(Some(json!({})));
@@ -1124,6 +1211,75 @@ async fn invoke(
         match called {
             Called::Stale if attempt == 1 => frame.main.invalidate(&installed).await,
             called => return Ok((installed.document, called)),
+        }
+    }
+}
+
+/// The tag function and its argument, as Playwright's `_addScriptTag` picks them: `url` when it
+/// is given, else `content`; neither (or both empty) is Playwright's error.
+fn tag_source(
+    url: Option<String>,
+    content: Option<String>,
+    by_url: &'static str,
+    by_content: &'static str,
+) -> Result<(&'static str, String), PlaywrightError> {
+    let missing = |value: &Option<String>| value.as_deref().is_none_or(str::is_empty);
+    if missing(&url) && missing(&content) {
+        // Playwright: `server/frames.ts` `Frame._addScriptTag`: `if (!url && !content)`
+        return Err(PlaywrightError::error(
+            "Provide an object with a `url`, `path` or `content` property",
+        ));
+    }
+    Ok(match (url, content) {
+        (Some(url), _) => (by_url, url),
+        (None, content) => (by_content, content.unwrap_or_default()),
+    })
+}
+
+/// `Frame.addScriptTag` / `addStyleTag`: the new element, as an `ElementHandle` of the run.
+async fn add_tag(
+    tab: &FrameTab,
+    tag: &str,
+    value: &str,
+    kind: &str,
+    handles: &Handles,
+    progress: &Progress,
+) -> Result<Value, CallError> {
+    let frame = tab.context().await.map_err(page_error)?;
+    let no_arg = SerializedArgument {
+        value: json!({ "v": "undefined" }),
+        handles: Vec::new(),
+    };
+    let extras = [Extra::Utility];
+    // `(utilityScript, kind, value, type)`.
+    let leading = |base: usize| vec![json!({ "h": base }), json!(tag), json!(value), json!(kind)];
+    let (document, called) = invoke(
+        tab,
+        &Invocation {
+            frame: &frame,
+            receiver: None,
+            expression: BuiltExpression::AddTag.source(),
+            is_function: Some(true),
+            return_by_value: false,
+            leading: &leading,
+            extras: &extras,
+            arg: &no_arg,
+        },
+        handles,
+        progress,
+    )
+    .await?;
+    match called {
+        Called::Object(object) => {
+            let created = create_handle(tab, &frame, document, *object, handles, progress).await?;
+            Ok(json!({ "element": created }))
+        }
+        Called::Threw(message) => Err(PlaywrightError::error(message).into()),
+        Called::Value(_) => {
+            Err(PlaywrightError::error("neo-runtime: the tag answered by value").into())
+        }
+        Called::Stale | Called::Protocol(_) => {
+            Err(PlaywrightError::error(CONTEXT_DESTROYED).into())
         }
     }
 }
