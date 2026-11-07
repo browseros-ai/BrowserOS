@@ -1476,6 +1476,30 @@ class ConsoleMessage {
   }
 }
 
+// src/credentials.ts
+class Credentials {
+  #connection;
+  #guid;
+  constructor(connection, guid) {
+    this.#connection = connection;
+    this.#guid = guid;
+  }
+  async install() {
+    await this.#connection.sendContext("credentials.install", this.#guid, "credentialsInstall", {}, 0);
+  }
+  async create(rpId, options = {}) {
+    const { credential } = await this.#connection.sendContext("credentials.create", this.#guid, "credentialsCreate", { ...options, rpId }, 0);
+    return credential;
+  }
+  async get(options = {}) {
+    const { credentials } = await this.#connection.sendContext("credentials.get", this.#guid, "credentialsGet", options, 0);
+    return credentials;
+  }
+  async delete(id) {
+    await this.#connection.sendContext("credentials.delete", this.#guid, "credentialsDelete", { id }, 0);
+  }
+}
+
 // src/dialog.ts
 class Dialog extends EventEmitter {
   #guid;
@@ -6934,11 +6958,13 @@ class BrowserContext extends ChannelOwner {
   _pipe;
   #closingStatus = "none";
   #closeReason;
+  credentials;
   constructor(guid, connection, pipe) {
     super(guid, pipe, CONTEXT_EVENTS);
     this.#guid = guid;
     this.#connection = connection;
     this._pipe = pipe;
+    this.credentials = new Credentials(connection, guid);
     connection._closeReasonFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._closeReason() ?? this.#closeReason;
     connection._closedFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._isClosedLocally() ?? false;
   }

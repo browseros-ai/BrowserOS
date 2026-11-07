@@ -23,6 +23,7 @@ use tracing::debug;
 use crate::bridge;
 use crate::cdp_session::CdpSessions;
 use crate::click::PageError;
+use crate::credentials::Credentials;
 use crate::dialogs;
 use crate::discovery::{self, TargetInfo};
 use crate::downloads::{self, Downloads, Opened};
@@ -58,6 +59,8 @@ struct Inner {
     events: EventHub,
     /// The CDP sessions the run's script opened (`cdp_session.rs`), detached at run end.
     cdp_sessions: CdpSessions,
+    /// (G) The run's virtual WebAuthn credentials (`credentials.rs`), taken back at run end.
+    credentials: Credentials,
     /// The `Runtime`'s shared switches: target discovery, which this run holds while it listens
     /// for new pages ([`Tabs::discover`]), and download reports ([`Tabs::watch_downloads`]).
     switches: Switches,
@@ -190,6 +193,7 @@ impl Tabs {
             pages: Mutex::new(Vec::new()),
             events: EventHub::default(),
             cdp_sessions: CdpSessions::default(),
+            credentials: Credentials::default(),
             switches,
             discovering: OnceLock::new(),
             discovery_enabling: Mutex::new(None),
@@ -227,6 +231,11 @@ impl Tabs {
     /// The CDP sessions the run's script opened (`cdp_session.rs`).
     pub(crate) fn cdp_sessions(&self) -> &CdpSessions {
         &self.0.cdp_sessions
+    }
+
+    /// The run's virtual WebAuthn credentials (`credentials.rs`).
+    pub(crate) fn credentials(&self) -> &Credentials {
+        &self.0.credentials
     }
 
     /// Runs `task` on the run's tracker, so `Dispatcher::finish` waits for it.

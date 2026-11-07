@@ -58,6 +58,7 @@ mod click;
 mod console;
 mod content;
 mod coverage;
+mod credentials;
 mod deadline;
 mod devices;
 mod dialogs;

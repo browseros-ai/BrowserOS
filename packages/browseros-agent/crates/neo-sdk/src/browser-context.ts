@@ -29,6 +29,7 @@ import type {
 import { CDPSession } from './cdp-session'
 import type { Connection } from './connection'
 import { ConsoleMessage, type ConsoleMessagePayload } from './console-message'
+import { Credentials } from './credentials'
 import { Dialog } from './dialog'
 import { Download } from './download'
 import { parseSerializedError, targetClosedError } from './errors'
@@ -97,11 +98,15 @@ export class BrowserContext extends ChannelOwner {
   #closingStatus: 'none' | 'closing' | 'closed' = 'none'
   #closeReason: string | undefined
 
+  /** Playwright's `browserContext.credentials`: the run's virtual WebAuthn credentials. */
+  readonly credentials: Credentials
+
   constructor(guid: string, connection: Connection, pipe: EventPipe) {
     super(guid, pipe, CONTEXT_EVENTS)
     this.#guid = guid
     this.#connection = connection
     this._pipe = pipe
+    this.credentials = new Credentials(connection, guid)
     connection._closeReasonFor = (callGuid) =>
       this.#pages.get(pageGuidOf(callGuid))?._closeReason() ?? this.#closeReason
     connection._closedFor = (callGuid) =>

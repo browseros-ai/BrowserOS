@@ -6,19 +6,24 @@ use std::time::Duration;
 
 use browseros_cdp::CdpError;
 use neo_runtime_spec::serve::{
-    BrowserContextCall, BrowserContextNewCDPSessionParams, BrowserContextNewCDPSessionResult,
-    BrowserContextNewPageResult, CDPSessionCall, CDPSessionChannel, CDPSessionDetachParams,
-    CDPSessionDetachResult, CDPSessionSendParams, CDPSessionSendResult, ConsoleMessagesFilter,
-    PageCall, PageChannel, PageClearConsoleMessagesParams, PageClearConsoleMessagesResult,
-    PageClearPageErrorsParams, PageClearPageErrorsResult, PageConsoleMessagesParams,
-    PageConsoleMessagesResult, PageGoBackParams, PageGoBackResult, PageGoForwardParams,
-    PageGoForwardResult, PagePageErrorsParams, PagePageErrorsResult,
-    PageRegisterLocatorHandlerParams, PageRegisterLocatorHandlerResult, PageReloadParams,
-    PageReloadResult, PageRequestsParams, PageRequestsResult,
-    PageResolveLocatorHandlerNoReplyParams, PageResolveLocatorHandlerNoReplyResult,
-    PageStartCSSCoverageParams, PageStartCSSCoverageResult, PageStartJSCoverageParams,
-    PageStartJSCoverageResult, PageStopCSSCoverageParams, PageStopJSCoverageParams,
-    PageUnregisterLocatorHandlerParams, PageUnregisterLocatorHandlerResult, ResponseChannel,
+    BrowserContextCall, BrowserContextCredentialsCreateParams,
+    BrowserContextCredentialsCreateResult, BrowserContextCredentialsDeleteParams,
+    BrowserContextCredentialsDeleteResult, BrowserContextCredentialsGetParams,
+    BrowserContextCredentialsGetResult, BrowserContextCredentialsInstallParams,
+    BrowserContextCredentialsInstallResult, BrowserContextNewCDPSessionParams,
+    BrowserContextNewCDPSessionResult, BrowserContextNewPageResult, CDPSessionCall,
+    CDPSessionChannel, CDPSessionDetachParams, CDPSessionDetachResult, CDPSessionSendParams,
+    CDPSessionSendResult, ConsoleMessagesFilter, PageCall, PageChannel,
+    PageClearConsoleMessagesParams, PageClearConsoleMessagesResult, PageClearPageErrorsParams,
+    PageClearPageErrorsResult, PageConsoleMessagesParams, PageConsoleMessagesResult,
+    PageGoBackParams, PageGoBackResult, PageGoForwardParams, PageGoForwardResult,
+    PagePageErrorsParams, PagePageErrorsResult, PageRegisterLocatorHandlerParams,
+    PageRegisterLocatorHandlerResult, PageReloadParams, PageReloadResult, PageRequestsParams,
+    PageRequestsResult, PageResolveLocatorHandlerNoReplyParams,
+    PageResolveLocatorHandlerNoReplyResult, PageStartCSSCoverageParams, PageStartCSSCoverageResult,
+    PageStartJSCoverageParams, PageStartJSCoverageResult, PageStopCSSCoverageParams,
+    PageStopJSCoverageParams, PageUnregisterLocatorHandlerParams,
+    PageUnregisterLocatorHandlerResult, ResponseChannel,
 };
 use serde_json::{Value, json};
 use tracing::debug;
@@ -71,6 +76,43 @@ pub(crate) async fn context(
         BrowserContextCall::Close(_) => {
             close_context(tabs, progress).await?;
             Ok(None)
+        }
+        // (G) `context.credentials` (`credentials.rs`).
+        BrowserContextCall::CredentialsInstall(_) => {
+            let pages: Vec<Arc<PageSession>> =
+                tabs.attached().into_iter().map(|(_, page)| page).collect();
+            tabs.credentials()
+                .install(tabs.cdp(), &pages, progress)
+                .await?;
+            encode_result::<BrowserContextCredentialsInstallParams>(
+                &BrowserContextCredentialsInstallResult {},
+            )
+        }
+        BrowserContextCall::CredentialsCreate(params) => {
+            let credential = tabs
+                .credentials()
+                .create(tabs.cdp(), params, progress)
+                .await?;
+            encode_result::<BrowserContextCredentialsCreateParams>(
+                &BrowserContextCredentialsCreateResult { credential },
+            )
+        }
+        BrowserContextCall::CredentialsGet(params) => {
+            let credentials = tabs
+                .credentials()
+                .get(tabs.cdp(), &params, progress)
+                .await?;
+            encode_result::<BrowserContextCredentialsGetParams>(
+                &BrowserContextCredentialsGetResult { credentials },
+            )
+        }
+        BrowserContextCall::CredentialsDelete(params) => {
+            tabs.credentials()
+                .delete(tabs.cdp(), &params.id, progress)
+                .await?;
+            encode_result::<BrowserContextCredentialsDeleteParams>(
+                &BrowserContextCredentialsDeleteResult {},
+            )
         }
         // (G) A CDP session of the script's own on the page's target (`cdp_session.rs`).
         BrowserContextCall::NewCDPSession(params) => {

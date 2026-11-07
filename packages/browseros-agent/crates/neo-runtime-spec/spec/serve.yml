@@ -16,6 +16,12 @@ interfaces:
     - close
     # (G) A CDP session of the script's own on a page's target (neo-runtime `cdp_session.rs`).
     - newCDPSession
+    # (G) `context.credentials`: the run's virtual WebAuthn credentials, served by Chromium's own
+    # virtual authenticator on each page (neo-runtime `credentials.rs`).
+    - credentialsInstall
+    - credentialsCreate
+    - credentialsGet
+    - credentialsDelete
   # (G) What a script's CDP session forwards, guarded (neo-runtime `cdp_session.rs` `REFUSED`).
   CDPSession:
     - send

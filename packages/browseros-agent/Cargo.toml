@@ -59,6 +59,9 @@ tracing-appender = "0.2"
 socket2 = "0.6"
 url = "2"
 base64 = "0.22"
+# (G) neo-runtime's virtual WebAuthn credentials: P-256 keys (`credentials.rs`). Already in the
+# graph through reqwest's rustls.
+ring = "0.17"
 bytes = "1"
 imagesize = "0.15"
 tokio-util = { version = "0.7", features = ["rt"] }

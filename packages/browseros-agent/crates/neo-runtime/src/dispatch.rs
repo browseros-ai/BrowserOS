@@ -568,11 +568,12 @@ impl Dispatcher {
         // drain below waits for it and `Runtime::drain` for what the budget leaves running:
         // no budget cuts a release off, and no other cleanup goes before one.
         self.0.tabs.release_input();
-        // (G) The script's CDP sessions go with the run (`cdp_session.rs`).
-        let _detached = time::timeout_at(
-            deadline,
-            self.0.tabs.cdp_sessions().close(self.0.tabs.cdp()),
-        )
+        // (G) The script's CDP sessions and virtual authenticators go with the run
+        // (`cdp_session.rs`, `credentials.rs`).
+        let _detached = time::timeout_at(deadline, async {
+            self.0.tabs.cdp_sessions().close(self.0.tabs.cdp()).await;
+            self.0.tabs.credentials().close(self.0.tabs.cdp()).await;
+        })
         .await;
         let _created = time::timeout_at(deadline, self.0.tabs.finish_creations()).await;
         run.tasks.close();
@@ -989,6 +990,11 @@ async fn serve_call(
             tab_calls::cdp_session(&tabs, &guid, call, &progress).await
         }
         (ObjectCall::Page(call), Some((page, _))) => {
+            // (G) A page the run's installed credentials have not reached gets its
+            // authenticator first (`credentials.rs`).
+            if let Ok(Ok(session)) = progress.race(tabs.session(&page)).await {
+                tabs.credentials().ensure(tabs.cdp(), &session).await;
+            }
             tab_calls::page(&tabs, &page, call, &progress).await
         }
         (ObjectCall::Frame(route), Some((page, scope))) => {
@@ -1001,6 +1007,7 @@ async fn serve_call(
             };
             match session {
                 Ok(page) => {
+                    tabs.credentials().ensure(tabs.cdp(), &page).await;
                     // A page attached just now may have started a context subscription's
                     // enable; the call waits for that too.
                     if reply.events.enabling(page_id(&page))
