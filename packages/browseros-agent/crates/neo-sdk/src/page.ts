@@ -456,15 +456,15 @@ export class Page extends ChannelOwner {
   }
 
   /**
-   * The main frame's accessibility tree as YAML. Default mode omits refs and prints iframes
-   * without their content, as Playwright's does. `mode: 'ai'` adds `[ref=eN]` refs that
-   * `page.locator('aria-ref=…')` resolves, in this run or a later one, until that document's
-   * next snapshot or navigation, and puts each rendered iframe's document under its `iframe`
-   * node, as in Playwright. A ref inside a frame is its path from the main frame:
+   * The main frame's accessibility tree as Playwright's YAML. With `mode: 'ai'`, each rendered
+   * iframe's document appears under its `iframe` node, as in Playwright, and nodes carry refs that
+   * `page.locator('aria-ref=…')` resolves, in this run or a later one, until that document's next
+   * snapshot or navigation. A ref inside a frame is its path from the main frame:
    * `- iframe [ref=e7]:` holds `- textbox "Email" [ref=f7e3]`, and a frame inside it adds a step
-   * (`f7f2e1`); Playwright numbers frames instead (`f1e3`). `depth` limits tree levels (0 means
-   * unlimited). For a section, use `locator.ariaSnapshot()`: AI mode does not auto-wait for that
-   * locator, so use `locator.waitFor()` first if needed.
+   * (`f7f2e1`); Playwright numbers frames instead (`f1e3`). The default mode prints iframes without
+   * their content, as Playwright's does. `depth` limits tree levels (0 means unlimited).
+   * For a section, use `locator.ariaSnapshot()`. AI mode does not auto-wait for that locator,
+   * so use `locator.waitFor()` first if needed.
    */
   async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
     return await this.#mainFrame._ariaSnapshot('page.ariaSnapshot', options)
