@@ -528,13 +528,6 @@ export abstract class ChannelOwner extends EventEmitter {
     if (this.#served(event)) this.#pipe._subscribe(this._guid, event, enabled)
   }
 
-  /** Neo: a channel event the client itself listens to, which no script listener names
-   * (`route`). While on, Rust produces it and the pipe wakes for it, so its handler runs while
-   * the script awaits another call. Call it only when that need starts or ends. */
-  _listenToChannel(event: string, enabled: boolean): void {
-    this.#pipe._subscribe(this._guid, event, enabled)
-  }
-
   override on(event: EventType, listener: Listener): this {
     this._refuseUnserved(event)
     if (!this.listenerCount(event)) this.#updateSubscription(event, true)

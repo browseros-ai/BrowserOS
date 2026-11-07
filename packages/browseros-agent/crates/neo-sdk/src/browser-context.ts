@@ -94,7 +94,7 @@ export class BrowserContext extends ChannelOwner {
   readonly #connection: Connection
   /** Playwright's `BrowserContext._routes`: the context's route handlers, newest first. */
   _routes: RouteHandler[] = []
-  /** Whether the client listens to the context's `route` channel event (`_listenToChannel`). */
+  /** Whether the client listens to the context's `route` channel event (`_subscribeChannelEvent`). */
   #routeListening = false
   /** The last pattern update sent, which the next one waits for. */
   #patternsSent: Promise<void> = Promise.resolve()
@@ -296,7 +296,7 @@ export class BrowserContext extends ChannelOwner {
     const listening = patterns.length > 0
     if (listening && !this.#routeListening) {
       this.#routeListening = true
-      this._listenToChannel('route', true)
+      this._subscribeChannelEvent('route', true)
     }
     await this.#connection.sendContext(
       'browserContext.route',
@@ -307,7 +307,7 @@ export class BrowserContext extends ChannelOwner {
     )
     if (!this._routes.length && this.#routeListening) {
       this.#routeListening = false
-      this._listenToChannel('route', false)
+      this._subscribeChannelEvent('route', false)
     }
   }
 

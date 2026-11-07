@@ -225,7 +225,7 @@ export class Page extends ChannelOwner {
   #closedLocally = false
   /** Playwright's `Page._routes`: the page's route handlers, newest first. */
   _routes: RouteHandler[] = []
-  /** Whether the client listens to the page's `route` channel event (`_listenToChannel`). */
+  /** Whether the client listens to the page's `route` channel event (`_subscribeChannelEvent`). */
   #routeListening = false
   /** The last pattern update sent, which the next one waits for. */
   #patternsSent: Promise<void> = Promise.resolve()
@@ -595,7 +595,7 @@ export class Page extends ChannelOwner {
     const listening = patterns.length > 0
     if (listening && !this.#routeListening) {
       this.#routeListening = true
-      this._listenToChannel('route', true)
+      this._subscribeChannelEvent('route', true)
     }
     await this.#connection.sendPage(
       apiName,
@@ -606,7 +606,7 @@ export class Page extends ChannelOwner {
     )
     if (!this._routes.length && this.#routeListening) {
       this.#routeListening = false
-      this._listenToChannel('route', false)
+      this._subscribeChannelEvent('route', false)
     }
   }
 

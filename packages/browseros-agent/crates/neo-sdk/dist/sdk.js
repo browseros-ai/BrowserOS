@@ -1314,9 +1314,6 @@ class ChannelOwner extends EventEmitter {
     if (this.#served(event))
       this.#pipe._subscribe(this._guid, event, enabled);
   }
-  _listenToChannel(event, enabled) {
-    this.#pipe._subscribe(this._guid, event, enabled);
-  }
   on(event, listener) {
     this._refuseUnserved(event);
     if (!this.listenerCount(event))
@@ -6846,12 +6843,12 @@ class Page extends ChannelOwner {
     const listening = patterns.length > 0;
     if (listening && !this.#routeListening) {
       this.#routeListening = true;
-      this._listenToChannel("route", true);
+      this._subscribeChannelEvent("route", true);
     }
     await this.#connection.sendPage(apiName, this.#guid, "setNetworkInterceptionPatterns", { patterns }, 0);
     if (!this._routes.length && this.#routeListening) {
       this.#routeListening = false;
-      this._listenToChannel("route", false);
+      this._subscribeChannelEvent("route", false);
     }
   }
   #onFrameAttached(record) {
@@ -7384,12 +7381,12 @@ class BrowserContext extends ChannelOwner {
     const listening = patterns.length > 0;
     if (listening && !this.#routeListening) {
       this.#routeListening = true;
-      this._listenToChannel("route", true);
+      this._subscribeChannelEvent("route", true);
     }
     await this.#connection.sendContext("browserContext.route", this._guid, "setNetworkInterceptionPatterns", { patterns }, 0);
     if (!this._routes.length && this.#routeListening) {
       this.#routeListening = false;
-      this._listenToChannel("route", false);
+      this._subscribeChannelEvent("route", false);
     }
   }
   #onRequest({ request, page }) {
