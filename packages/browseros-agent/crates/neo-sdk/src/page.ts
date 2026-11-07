@@ -18,9 +18,14 @@ import {
   type GetAttributeOptions,
   type GotoOptions,
   type HoverOptions,
+  type InnerHTMLOptions,
   type InnerTextOptions,
   type InputValueOptions,
   type IsCheckedOptions,
+  type IsDisabledOptions,
+  type IsEditableOptions,
+  type IsEnabledOptions,
+  type IsHiddenOptions,
   type IsVisibleOptions,
   type PressOptions,
   type SelectOptionOptions,
@@ -43,8 +48,9 @@ import { TimeoutSettings } from './timeout-settings'
 
 /**
  * Playwright's `Page`, backed by live reads from its own tab, which its guid names. Its
- * selector builders, `goto`, `title`, `textContent`, `innerText`, `getAttribute`, browser actions,
- * `waitForURL` and `waitForLoadState` forward to the main frame, as Playwright's do
+ * selector builders, `goto`, `title`, `textContent`, `innerText`, `innerHTML`, `getAttribute`,
+ * state reads, browser actions, `waitForURL` and `waitForLoadState` forward to the main frame, as
+ * Playwright's do
  * (`client/page.ts`); `ariaSnapshot` snapshots the main frame's document. Only the run's
  * `BrowserContext` builds one, once per guid.
  *
@@ -270,6 +276,13 @@ export class Page {
     return await this.#mainFrame._innerText('page.innerText', selector, options)
   }
 
+  async innerHTML(
+    selector: string,
+    options: InnerHTMLOptions = {},
+  ): Promise<string> {
+    return await this.#mainFrame._innerHTML('page.innerHTML', selector, options)
+  }
+
   async getAttribute(
     selector: string,
     name: string,
@@ -362,6 +375,42 @@ export class Page {
     return await this.#mainFrame._isChecked('page.isChecked', selector, options)
   }
 
+  async isHidden(
+    selector: string,
+    options: IsHiddenOptions = {},
+  ): Promise<boolean> {
+    return await this.#mainFrame._isHidden('page.isHidden', selector, options)
+  }
+
+  async isEnabled(
+    selector: string,
+    options: IsEnabledOptions = {},
+  ): Promise<boolean> {
+    return await this.#mainFrame._isEnabled('page.isEnabled', selector, options)
+  }
+
+  async isDisabled(
+    selector: string,
+    options: IsDisabledOptions = {},
+  ): Promise<boolean> {
+    return await this.#mainFrame._isDisabled(
+      'page.isDisabled',
+      selector,
+      options,
+    )
+  }
+
+  async isEditable(
+    selector: string,
+    options: IsEditableOptions = {},
+  ): Promise<boolean> {
+    return await this.#mainFrame._isEditable(
+      'page.isEditable',
+      selector,
+      options,
+    )
+  }
+
   async check(selector: string, options: CheckOptions = {}): Promise<void> {
     return await this.#mainFrame._check('page.check', selector, options)
   }
@@ -395,6 +444,12 @@ export class Page {
 
   locator(selector: string, options?: LocatorOptions): Locator {
     return this.mainFrame().locator(selector, options)
+  }
+
+  /** The element an `ai` snapshot named `ref` (`page.ariaSnapshot({ mode: 'ai' })`), until a
+   * later snapshot of its document or a navigation renames it. */
+  getByRef(ref: string): Locator {
+    return this.locator(`aria-ref=${ref}`)
   }
 
   frameLocator(selector?: string): FrameLocator {

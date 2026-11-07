@@ -21,3 +21,4 @@ and NOTICE.
 | `packages/playwright-core/src/server/frames.ts` | `c3b72c48361de93312eba80b096304bb374c6208429f2de65944571480c74445` |
 | `packages/playwright-core/src/server/input.ts` | `dd1a2025bf3e04f52079a9ed0669f77b99a91a9746be452627de389b9539dfcc` |
 | `packages/playwright-core/src/server/page.ts` | `c17ffdb5133c507085447a5914b8a38992b83c65985b9b5b06ee65ce68c975bf` |
+| `packages/protocol/src/serializers.ts` | `86abc4624acae85914da10cd032b5878aab66fd2cad6c5f51840896d6309fc31` |
