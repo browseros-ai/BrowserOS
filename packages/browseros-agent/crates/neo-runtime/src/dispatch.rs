@@ -1690,14 +1690,27 @@ mod tests {
             );
         }
         assert!(route_frame("waitForSelector", json!({"selector":"iframe >> internal:control=enter-frame >> button", "omitReturnValue": true})).route.is_ok());
+        // `networkidle` is served by every wait (`network_idle.rs`).
         for (method, params) in [
             (
                 "neo:waitForURL",
                 json!({"url":{"glob":""},"waitUntil":"networkidle"}),
             ),
             ("neo:waitForLoadState", json!({"state":"networkidle"})),
+            (
+                "neo:waitForNavigation",
+                json!({"url":{"glob":""},"waitUntil":"networkidle"}),
+            ),
+            (
+                "neo:finishNavigation",
+                json!({"cursor":1,"index":0,"waitUntil":"networkidle"}),
+            ),
+            (
+                "goto",
+                json!({"url":"https://example.test","waitUntil":"networkidle"}),
+            ),
         ] {
-            assert_eq!(error_of(route_frame(method, params)).name, ErrorName::Error);
+            assert!(route_frame(method, params).route.is_ok(), "{method}");
         }
         for (method, params) in [
             (
@@ -1757,18 +1770,10 @@ mod tests {
             assert!(routed.route.is_ok(), "{method}");
         }
         for (method, params) in [
-            (
-                "neo:waitForNavigation",
-                json!({"url":{"glob":""},"waitUntil":"networkidle"}),
-            ),
             ("neo:waitForNavigation", json!({"url":{}})),
             ("neo:waitForNavigation", json!({"url":{"glob":"**/{a"}})),
             ("neo:nextNavigation", json!({})),
             ("neo:nextNavigation", json!({"response":true,"extra":1})),
-            (
-                "neo:finishNavigation",
-                json!({"cursor":1,"index":0,"waitUntil":"networkidle"}),
-            ),
             (
                 "neo:finishNavigation",
                 json!({"index":0,"waitUntil":"load"}),
@@ -2108,14 +2113,6 @@ mod tests {
                 route_frame("expect", json!({ "selector": "#go" })),
                 None,
                 PlaywrightError::error("Neo does not serve Frame.expect"),
-            ),
-            (
-                route_frame(
-                    "goto",
-                    json!({ "url": "https://example.test", "waitUntil": "networkidle" }),
-                ),
-                Some("Navigate"),
-                PlaywrightError::error("Neo does not support waitUntil: \"networkidle\" yet"),
             ),
             (
                 route(ObjectKind::Page, "click", None),

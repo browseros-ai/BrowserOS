@@ -60,7 +60,7 @@ use url::Url;
 /// cap only bounds a script that loops on `goto`, whose records live in Rust outside the realm.
 pub(crate) const MAX_CHAINS: usize = 256;
 
-/// Deviation: `server/network.ts` `Request.constructor`: `this._frame = frame;`
+/// Deviation: `server/network.ts` `Request.frame`: `return this._frame;`
 /// How many other requests' chains (subresources, a frame's non-navigation fetches) one session
 /// keeps. Playwright's objects live as long as their page; Neo's records live in Rust outside the
 /// realm's memory limit for the run, so a busy page (a news site makes hundreds of requests per
@@ -520,6 +520,15 @@ impl NetworkLog {
         self.with_chain(id, "response", |chain| {
             Ok(chain.response_record(&target, id.hop))
         })
+    }
+
+    /// What `networkidle` needs of a hop that started: its frame, and whether it is an event
+    /// stream, which never holds a frame's idleness.
+    pub(crate) fn idle_facts(&self, id: &HopId) -> Option<(String, bool)> {
+        self.with_hop(id, "request", |hop| {
+            Ok((hop.frame.clone(), hop.resource_type == "eventsource"))
+        })
+        .ok()
     }
 
     /// `request._responseEndTiming`, which `requestFinished` and `requestFailed` events carry.

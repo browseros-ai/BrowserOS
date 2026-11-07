@@ -533,9 +533,9 @@ export class Page extends ChannelOwner {
 
   /**
    * Reloads the page and resolves the new document's main `Response` once `waitUntil` (default
-   * `load`; also `domcontentloaded` or `commit`) fires for it, as Playwright's `page.reload`.
-   * A failed reload rejects with its network error. Runs under the navigation timeout.
-   * Neo limit: `networkidle` throws an `Error`.
+   * `load`; also `domcontentloaded`, `networkidle` or `commit`) fires for it, as Playwright's
+   * `page.reload`. A failed reload rejects with its network error. Runs under the navigation
+   * timeout.
    */
   async reload(options: HistoryOptions = {}): Promise<Response | null> {
     const waitUntil = verifyLoadState(
@@ -617,9 +617,8 @@ export class Page extends ChannelOwner {
 
   /**
    * The main frame's {@link Frame.waitForURL}: waits until the page's URL matches `url` (a glob
-   * string, a `RegExp` or a predicate on its `URL`), then until `waitUntil` (default `load`;
-   * `networkidle` throws) fires, at once if the current document already fired it, and resolves
-   * `undefined`.
+   * string, a `RegExp` or a predicate on its `URL`), then until `waitUntil` (default `load`)
+   * fires, at once if the current document already fired it, and resolves `undefined`.
    */
   async waitForURL(
     url: NavigationURLMatch,
@@ -629,8 +628,8 @@ export class Page extends ChannelOwner {
   }
 
   /**
-   * The main frame's {@link Frame.waitForLoadState}: waits until `state` (default `load`;
-   * `networkidle` throws) fired for the current or next document, and resolves `undefined`.
+   * The main frame's {@link Frame.waitForLoadState}: waits until `state` (default `load`) fired
+   * for the current or next document, and resolves `undefined`.
    */
   async waitForLoadState(
     state?: LifecycleEvent,

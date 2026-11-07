@@ -20,11 +20,6 @@ pub(crate) struct GotoOptions {
 
 impl GotoOptions {
     pub(crate) fn from_params(params: FrameGotoParams) -> Result<Self, PlaywrightError> {
-        if params.wait_until == Some(LifecycleEvent::Networkidle) {
-            return Err(PlaywrightError::error(
-                "Neo does not support waitUntil: \"networkidle\" yet",
-            ));
-        }
         Ok(Self {
             url: params.url,
             wait_until: params.wait_until.unwrap_or(LifecycleEvent::Load),
@@ -59,6 +54,10 @@ pub(crate) struct Lifecycle {
     pub(crate) load: bool,
     pub(crate) dom_content_loaded_count: u64,
     pub(crate) load_count: u64,
+    /// `networkidle`, which Playwright computes itself (`network_idle.rs`); unlike the others it
+    /// can also be removed again before the next commit.
+    pub(crate) network_idle: bool,
+    pub(crate) network_idle_count: u64,
 }
 
 /// The current URL and lifecycle, sampled without consuming buffered commits.
@@ -121,12 +120,7 @@ pub(crate) async fn goto(
         LifecycleEvent::Commit => "commit",
         LifecycleEvent::Domcontentloaded => "domcontentloaded",
         LifecycleEvent::Load => "load",
-        LifecycleEvent::Networkidle => {
-            return Err(PlaywrightError::error(
-                "Neo does not support waitUntil: \"networkidle\" yet",
-            )
-            .into());
-        }
+        LifecycleEvent::Networkidle => "networkidle",
     };
     progress.log(format!(
         "navigating to \"{url}\", waiting until \"{wait_until}\""
@@ -183,7 +177,7 @@ pub(crate) async fn goto(
             LifecycleEvent::Commit => true,
             LifecycleEvent::Domcontentloaded => state.lifecycle.dom_content_loaded,
             LifecycleEvent::Load => state.lifecycle.load,
-            LifecycleEvent::Networkidle => false,
+            LifecycleEvent::Networkidle => state.lifecycle.network_idle,
         };
         if done {
             // server/frames.ts:750: the new document's request, after its redirects, and that
@@ -688,15 +682,14 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_networkidle_is_refused_before_any_work() {
-        let error = GotoOptions::from_params(FrameGotoParams {
+    fn tests_that_networkidle_is_a_wait_like_the_others() {
+        let options = GotoOptions::from_params(FrameGotoParams {
             url: "x".to_string(),
             wait_until: Some(LifecycleEvent::Networkidle),
             referer: None,
         })
-        .unwrap_err();
-        assert_eq!(error.name, ErrorName::Error);
-        assert!(error.message.contains("networkidle"));
+        .expect("networkidle is served");
+        assert_eq!(options.wait_until, LifecycleEvent::Networkidle);
     }
 
     #[tokio::test(start_paused = true)]

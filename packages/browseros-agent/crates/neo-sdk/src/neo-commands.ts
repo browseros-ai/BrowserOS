@@ -55,21 +55,20 @@ export type NeoSerializedUrlMatch =
   | { regexSource: string; regexFlags: string }
 
 /** `neo:waitForURL`: once the main frame's URL has matched `url`, resolves when `waitUntil` fires,
- * at once if the current document already fired it, as Playwright's `waitForURL` does. Rust
- * refuses `networkidle`. */
+ * at once if the current document already fired it, as Playwright's `waitForURL` does. */
 export type NeoWaitForURLParams = {
   url: NeoSerializedUrlMatch
   waitUntil: LifecycleEvent
 }
 
 /** `neo:waitForLoadState`: resolves once `state` fired for the main frame's current document,
- * or for the next one. Rust refuses `networkidle`. */
+ * or for the next one. */
 export type NeoWaitForLoadStateParams = { state: LifecycleEvent }
 
 /** `neo:waitForNavigation`: Playwright's `waitForNavigation` for the main frame with a glob or
  * `RegExp` `url` (`''` for none): the first navigation after the call whose URL matches (a
- * same-document one counts; a failed one rejects), then `waitUntil`. Rust refuses `networkidle`
- * and child frames, whose navigation requests it does not record. */
+ * same-document one counts; a failed one rejects), then `waitUntil`. Rust refuses child frames,
+ * whose navigation requests it does not record. */
 export type NeoWaitForNavigationParams = {
   url: NeoSerializedUrlMatch
   waitUntil: LifecycleEvent

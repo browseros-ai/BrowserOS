@@ -99,8 +99,6 @@ impl HistoryOptions {
         Self::new(HistoryStep::Forward, params.wait_until)
     }
 
-    // Deviation: `server/page.ts` `Page.reload` Neo refuses `waitUntil: 'networkidle'`, as its
-    // goto does: it records no subresource requests to tell network idleness by.
     fn new(step: HistoryStep, wait_until: Option<LifecycleEvent>) -> Result<Self, PlaywrightError> {
         Ok(Self {
             step,
@@ -818,6 +816,7 @@ mod tests {
                     load: true,
                     dom_content_loaded_count: 1,
                     load_count: 1,
+                    ..Lifecycle::default()
                 },
                 ..NavigationState::default()
             });
@@ -1334,11 +1333,11 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_networkidle_is_refused_before_any_step() {
-        let error = HistoryOptions::back(&PageGoBackParams {
+    fn tests_that_networkidle_is_a_wait_like_the_others() {
+        let options = HistoryOptions::back(&PageGoBackParams {
             wait_until: Some(LifecycleEvent::Networkidle),
         })
-        .unwrap_err();
-        assert!(error.message.contains("networkidle"));
+        .expect("networkidle is served");
+        assert_eq!(options.wait_until, LifecycleEvent::Networkidle);
     }
 }

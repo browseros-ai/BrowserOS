@@ -65,7 +65,7 @@ use serde_json::{Value, json};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::{Mutex, OnceCell, OwnedMutexGuard, broadcast, oneshot, watch};
-use tokio::time;
+use tokio::time::{self, Instant};
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 use tracing::{debug, warn};
@@ -81,7 +81,8 @@ use crate::keyboard::{self, InputSender};
 use crate::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
 };
-use crate::network::{Lookup, NetworkLog};
+use crate::network::{Happening, Lookup, NetworkLog};
+use crate::network_idle::{IdleChange, SharedIdle};
 use crate::page_events::PageEvents;
 use crate::progress::InputTicket;
 use crate::progress::PlaywrightError;
@@ -194,6 +195,8 @@ pub(crate) struct PageSession {
     pub(crate) network: Arc<NetworkLog>,
     /// `Network.enable`, sent on this session's first goto and kept for the run.
     network_enabled: OnceCell<()>,
+    /// The tab's frames' `networkidle`, fed and timed by the watcher.
+    idle: Arc<SharedIdle>,
     /// What the watcher turns into the run's events, and the tab's console history and dialogs.
     pub(crate) events: PageEvents,
     /// `Runtime.enable` and `Log.enable`, sent once a run listens to console messages or page
@@ -242,6 +245,8 @@ struct PageUpdates<S> {
     /// The run's events from this tab, and the hub's flushes; `None` in tests of navigation
     /// alone.
     producer: Option<(PageEvents, Flushes)>,
+    /// The tab's `networkidle` bookkeeping; `None` in tests of navigation alone.
+    idle: Option<Arc<SharedIdle>>,
 }
 
 /// What the run's session has reported since `prepare`. Counters only grow, so a caller takes
@@ -265,6 +270,10 @@ pub(crate) struct PageState {
     pub(crate) load: bool,
     pub(crate) dom_content_loaded_count: u64,
     pub(crate) load_count: u64,
+    /// `networkidle` fired for the current document (`network_idle.rs`), and how often it fired
+    /// across documents.
+    pub(crate) network_idle: bool,
+    pub(crate) network_idle_count: u64,
     /// Playwright's `Frame.pendingDocument()`: the navigation the frame requested or whose
     /// request started, until a commit takes it or its request fails. Requests are seen only once
     /// `Network.enable` ran.
@@ -297,7 +306,21 @@ impl PageState {
             load: self.load,
             dom_content_loaded_count: self.dom_content_loaded_count,
             load_count: self.load_count,
+            network_idle: self.network_idle,
+            network_idle_count: self.network_idle_count,
         }
+    }
+
+    /// `networkidle` added (`true`) or removed for the current document. Whether it changed.
+    fn set_network_idle(&mut self, fired: bool) -> bool {
+        if self.network_idle == fired {
+            return false;
+        }
+        self.network_idle = fired;
+        if fired {
+            self.network_idle_count += 1;
+        }
+        true
     }
 
     fn did_dom_content_load(&mut self) {
@@ -406,6 +429,7 @@ impl FrameFeeds {
                     page.document = None;
                     page.dom_content_loaded = false;
                     page.load = false;
+                    page.network_idle = false;
                     page.pending_document = None;
                     state.swaps += 1;
                     state.swapped_from = Some(session.clone());
@@ -440,6 +464,16 @@ impl FrameFeeds {
 }
 
 impl FrameFeeds {
+    /// `frame`'s `networkidle` fired or was removed (`network_idle.rs`).
+    fn set_network_idle(&self, frame: &str, fired: bool) {
+        if let Ok(frames) = self.frames.lock()
+            && let Some(feed) = frames.get(frame)
+        {
+            feed.state
+                .send_if_modified(|state| state.page.set_network_idle(fired));
+        }
+    }
+
     /// Ends every child frame's feed: the main frame committed a new document, and the old
     /// document's frames went with it. Chromium reports `frameDetached` for an OOPIF then, but
     /// nothing for a same-process frame (measured on BrowserOS neo), so its wait would
@@ -555,6 +589,7 @@ impl PageSession {
             input,
             network,
             network_enabled: OnceCell::new(),
+            idle: Arc::new(SharedIdle::new(page.as_str(), Instant::now())),
             events,
             runtime_enabled: OnceCell::new(),
         }
@@ -609,6 +644,7 @@ impl PageSession {
                         feeds: Some(Arc::clone(&self.frame_feeds)),
                         initial_url,
                         producer: Some((self.events.clone(), self.events.hub().watcher())),
+                        idle: Some(Arc::clone(&self.idle)),
                     },
                     self.closed.clone(),
                     stop,
@@ -682,6 +718,7 @@ impl PageSession {
             .get_or_try_init(|| async {
                 self.send("Network.enable", json!({})).await?;
                 self.network.mark_enabled();
+                self.restart_idle().await;
                 for host in self.frames.child_hosts() {
                     enable_child_network(&self.network, &host).await;
                 }
@@ -689,6 +726,39 @@ impl PageSession {
             })
             .await
             .copied()
+    }
+
+    /// The requests seen from now on are the tab's whole traffic: `networkidle` starts over
+    /// (`NetworkIdle::restart`), over the frames this session reports, which a frame-tree read
+    /// adds to the ones the watcher saw attach. A failed read leaves the tree as the watcher knows
+    /// it.
+    async fn restart_idle(&self) {
+        let frames = match self.send("Page.getFrameTree", json!({})).await {
+            Ok(reply) => local_tree(&reply).unwrap_or_default(),
+            Err(error) => {
+                debug!(%error, "the frame tree for networkidle could not be read");
+                Vec::new()
+            }
+        };
+        let now = Instant::now();
+        let changes = self
+            .idle
+            .with(|idle| {
+                for frame in &frames {
+                    if let Some(parent) = &frame.parent {
+                        idle.attach(&frame.id, parent, now);
+                    }
+                }
+                idle.restart(now)
+            })
+            .unwrap_or_default();
+        apply_idle(
+            &self.main_frame,
+            &self.state_updates,
+            Some(&self.frame_feeds),
+            changes,
+        );
+        self.idle.moved();
     }
 
     pub(crate) async fn send(&self, method: &str, params: Value) -> Result<Value, CdpError> {
@@ -1052,6 +1122,7 @@ async fn watch_events(
         feeds,
         initial_url,
         producer,
+        idle,
     } = updates;
     let (producer, mut flushes) = producer.unzip();
     let mut watcher = Watcher {
@@ -1066,10 +1137,15 @@ async fn watch_events(
         feeds,
         producer,
         closed,
+        idle,
     };
     tokio::pin!(initial_url);
     let mut seed_pending = true;
     loop {
+        let deadline = watcher
+            .idle
+            .as_ref()
+            .and_then(|idle| idle.with(|idle| idle.deadline()).flatten());
         let event = tokio::select! {
             // The CDP reader publishes events and replies in socket order. Drain events
             // before applying the frame-tree reply, even if both became ready in one poll.
@@ -1094,6 +1170,12 @@ async fn watch_events(
                 let _waiter = ack.send(());
                 continue;
             }
+            // A frame's quiet period ended: Playwright's network idle timer.
+            () = sleep_until(deadline) => {
+                watcher.idle_tick();
+                continue;
+            }
+            () = moved(watcher.idle.as_deref()) => continue,
             seed = &mut initial_url, if seed_pending => {
                 seed_pending = false;
                 match seed {
@@ -1114,6 +1196,42 @@ async fn watch_events(
         };
         if !watcher.on(event) {
             return;
+        }
+    }
+}
+
+/// Sleeps until `deadline`; forever without one.
+async fn sleep_until(deadline: Option<Instant>) {
+    match deadline {
+        Some(deadline) => time::sleep_until(deadline).await,
+        None => future::pending().await,
+    }
+}
+
+/// Resolves when the idle tracker's deadline moved from outside the watcher; never without one.
+async fn moved(idle: Option<&SharedIdle>) {
+    match idle {
+        Some(idle) => idle.wait_moved().await,
+        None => future::pending().await,
+    }
+}
+
+/// Writes `networkidle` changes into the main frame's state and the child frames' feeds.
+fn apply_idle(
+    main_frame: &str,
+    state: &watch::Sender<PageState>,
+    feeds: Option<&FrameFeeds>,
+    changes: Vec<IdleChange>,
+) {
+    for change in changes {
+        let (frame, fired) = match &change {
+            IdleChange::Fired(frame) => (frame, true),
+            IdleChange::Lost(frame) => (frame, false),
+        };
+        if frame == main_frame {
+            state.send_if_modified(|state| state.set_network_idle(fired));
+        } else if let Some(feeds) = feeds {
+            feeds.set_network_idle(frame, fired);
         }
     }
 }
@@ -1139,9 +1257,93 @@ struct Watcher {
     feeds: Option<Arc<FrameFeeds>>,
     producer: Option<PageEvents>,
     closed: CancellationToken,
+    idle: Option<Arc<SharedIdle>>,
 }
 
 impl Watcher {
+    /// Applies what `networkidle` makes of one event of the tab's session: its requests (the
+    /// network log's `happenings`) and its frames' attach, detach, commit and lifecycle.
+    fn idle_event(&self, event: &CdpEvent, happenings: &[Happening]) {
+        let Some(idle) = &self.idle else {
+            return;
+        };
+        let now = Instant::now();
+        let params = &event.params;
+        let changes = idle
+            .with(|idle| {
+                for happening in happenings {
+                    match happening {
+                        Happening::Request(hop) => {
+                            if let Some((frame, event_stream)) = self.network.idle_facts(hop) {
+                                idle.started(hop.clone(), &frame, event_stream);
+                            }
+                        }
+                        Happening::Finished(hop) | Happening::Failed(hop) => idle.ended(hop, now),
+                        Happening::Response(_) => {}
+                    }
+                }
+                match event.method.as_str() {
+                    "Page.frameAttached" => {
+                        if let (Some(frame), Some(parent)) =
+                            (params["frameId"].as_str(), params["parentFrameId"].as_str())
+                        {
+                            idle.attach(frame, parent, now);
+                        }
+                        Vec::new()
+                    }
+                    "Page.frameDetached" => params["frameId"]
+                        .as_str()
+                        .map(|frame| idle.detach(frame))
+                        .unwrap_or_default(),
+                    "Page.frameNavigated" => {
+                        let frame = &params["frame"];
+                        match (frame["id"].as_str(), frame["loaderId"].as_str()) {
+                            (Some(id), Some(loader)) => {
+                                if let Some(parent) = frame["parentId"].as_str() {
+                                    idle.attach(id, parent, now);
+                                }
+                                idle.commit(id, loader, now)
+                            }
+                            _ => Vec::new(),
+                        }
+                    }
+                    "Page.lifecycleEvent" => {
+                        let name = match params["name"].as_str() {
+                            Some("DOMContentLoaded") => Some("domcontentloaded"),
+                            Some("load") => Some("load"),
+                            _ => None,
+                        };
+                        match (params["frameId"].as_str(), name) {
+                            (Some(frame), Some(name)) => idle.lifecycle_event(frame, name),
+                            _ => Vec::new(),
+                        }
+                    }
+                    _ => Vec::new(),
+                }
+            })
+            .unwrap_or_default();
+        self.apply_idle(changes);
+    }
+
+    /// A network idle timer fired.
+    fn idle_tick(&self) {
+        let changes = self
+            .idle
+            .as_ref()
+            .and_then(|idle| idle.with(|idle| idle.tick(Instant::now())))
+            .unwrap_or_default();
+        self.apply_idle(changes);
+    }
+
+    fn apply_idle(&self, changes: Vec<IdleChange>) {
+        apply_idle(
+            &self.main_frame,
+            &self.state,
+            self.feeds.as_deref(),
+            changes,
+        );
+    }
+
     /// Applies one event, or the ring's lag or end. Returns `false` once the session is gone.
     fn on(&mut self, event: Result<CdpEvent, RecvError>) -> bool {
         let session = &self.session;
@@ -1150,6 +1352,7 @@ impl Watcher {
                 // Before the Page events that follow it, so a commit never outruns its request.
                 // An out-of-process frame session's requests are the tab's once the page enabled
                 // its Network domain (`enable_child_network`).
+                let mut happenings = Vec::new();
                 if event.method.starts_with("Network.") {
                     let from = match event.session_id.as_ref() {
                         Some(from) if from == session => Some(None),
@@ -1157,7 +1360,7 @@ impl Watcher {
                         _ => None,
                     };
                     if let Some(from) = from {
-                        let happenings = self.network.apply(from, &event.method, &event.params);
+                        happenings = self.network.apply(from, &event.method, &event.params);
                         if let Some(producer) = &self.producer {
                             producer.network(&self.network, &happenings);
                         }
@@ -1190,6 +1393,11 @@ impl Watcher {
                         feeds.detach_all();
                     }
                     feeds.apply(&event, session, Some(&self.main_frame));
+                }
+                // After the frames' state, so a commit's cleared lifecycle comes first. Only the
+                // tab's own session reports the frames `networkidle` follows (`network_idle.rs`).
+                if event.session_id.as_ref() == Some(session) {
+                    self.idle_event(&event, &happenings);
                 }
                 // The run's events from this one, after the page state they may describe. A
                 // dialog a listener owns is the script's to answer.
@@ -1528,6 +1736,7 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                 };
                 state.dom_content_loaded = false;
                 state.load = false;
+                state.network_idle = false;
                 if kind.as_deref() == Some("BackForwardCacheRestore") {
                     // Deviation: `server/chromium/chromiumSwitches.ts` `chromiumSwitches`: `'--disable-back-forward-cache',`
                     // Playwright's Chromium never restores a cached document, and one it met
@@ -3580,6 +3789,7 @@ mod tests {
                 feeds: None,
                 initial_url,
                 producer: None,
+                idle: None,
             };
             let watcher = watch_events(
                 receiver,
@@ -3678,6 +3888,7 @@ mod tests {
                 feeds: None,
                 initial_url,
                 producer: None,
+                idle: None,
             },
             closed.clone(),
             stop.clone(),
