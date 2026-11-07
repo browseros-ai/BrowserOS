@@ -126,6 +126,12 @@ var uncaughtListenerError;
 function onUncaughtListenerError(report) {
   uncaughtListenerError = report;
 }
+function reportUncaught(error) {
+  if (uncaughtListenerError)
+    uncaughtListenerError(error);
+  else
+    throw error;
+}
 
 class EventEmitter {
   _events = undefined;
@@ -459,6 +465,9 @@ class ChannelOwner extends EventEmitter {
     if (this.#served(event))
       this.#pipe._subscribe(this._guid, event, enabled);
   }
+  _listenToChannel(event, enabled) {
+    this.#pipe._subscribe(this._guid, event, enabled);
+  }
   on(event, listener) {
     this._refuseUnserved(event);
     if (!this.listenerCount(event))
@@ -608,6 +617,32 @@ class Dialog extends EventEmitter {
   }
 }
 
+// src/disposable.ts
+class DisposableStub {
+  #dispose;
+  constructor(dispose) {
+    this.#dispose = dispose;
+    const asyncDispose = Symbol.asyncDispose;
+    if (asyncDispose)
+      Object.defineProperty(this, asyncDispose, {
+        value: () => this.dispose()
+      });
+  }
+  async dispose() {
+    if (!this.#dispose)
+      return;
+    try {
+      const dispose = this.#dispose;
+      this.#dispose = undefined;
+      await dispose();
+    } catch (e) {
+      if (isTargetClosedError(e))
+        return;
+      throw e;
+    }
+  }
+}
+
 // src/network.ts
 class RawHeaders {
   #headersArray;
@@ -622,6 +657,9 @@ class RawHeaders {
       else
         this.#headersMap.set(name, [header.value]);
     }
+  }
+  static _fromHeadersObjectLossy(headers) {
+    return new RawHeaders(Object.entries(headers).filter(([, value]) => value !== undefined).map(([name, value]) => ({ name, value })));
   }
   get(name) {
     const values = this.getAll(name);
@@ -654,6 +692,7 @@ class Request {
   _response = null;
   #provisionalHeaders;
   #actualHeadersPromise;
+  #fallbackOverrides = {};
   #timing = {
     startTime: 0,
     domainLookupStart: -1,
@@ -676,18 +715,20 @@ class Request {
     this.#provisionalHeaders = new RawHeaders(initializer.headers);
   }
   url() {
-    return this.#initializer.url;
+    return this.#fallbackOverrides.url || this.#initializer.url;
   }
   resourceType() {
     return this.#initializer.resourceType;
   }
   method() {
-    return this.#initializer.method;
+    return this.#fallbackOverrides.method || this.#initializer.method;
   }
   postData() {
     return this.postDataBuffer()?.toString("utf-8") ?? null;
   }
   postDataBuffer() {
+    if (this.#fallbackOverrides.postDataBuffer)
+      return this.#fallbackOverrides.postDataBuffer;
     const data = this.#initializer.postData;
     return data ? Buffer.fromBinary(data) : null;
   }
@@ -705,7 +746,28 @@ class Request {
     }
   }
   headers() {
+    if (this.#fallbackOverrides.headers)
+      return RawHeaders._fromHeadersObjectLossy(this.#fallbackOverrides.headers).headers();
     return this.#provisionalHeaders.headers();
+  }
+  _applyFallbackOverrides(overrides) {
+    if (overrides.url)
+      this.#fallbackOverrides.url = overrides.url;
+    if (overrides.method)
+      this.#fallbackOverrides.method = overrides.method;
+    if (overrides.headers)
+      this.#fallbackOverrides.headers = overrides.headers;
+    if (typeof overrides.postData === "string")
+      this.#fallbackOverrides.postDataBuffer = encodeUtf8(overrides.postData);
+    else if (overrides.postData instanceof Uint8Array) {
+      const bytes = new Buffer(overrides.postData.length);
+      bytes.set(overrides.postData);
+      this.#fallbackOverrides.postDataBuffer = bytes;
+    } else if (overrides.postData)
+      this.#fallbackOverrides.postDataBuffer = encodeUtf8(JSON.stringify(overrides.postData));
+  }
+  _fallbackOverridesForContinue() {
+    return this.#fallbackOverrides;
   }
   async allHeaders() {
     return (await this.#actualHeaders("request.allHeaders")).headers();
@@ -1092,6 +1154,32 @@ function fromCodeUnits(bytes, unit) {
   for (let i = 0;i < bytes.length; i += 4096)
     out += String.fromCharCode(...[...bytes.subarray(i, i + 4096)].map(unit));
   return out;
+}
+function encodeUtf8(text) {
+  const bytes = [];
+  for (let index = 0;index < text.length; index++) {
+    let code = text.charCodeAt(index);
+    if (code >= 55296 && code <= 56319 && index + 1 < text.length) {
+      const next = text.charCodeAt(index + 1);
+      if (next >= 56320 && next <= 57343) {
+        code = 65536 + (code - 55296 << 10) + (next - 56320);
+        index++;
+      } else
+        code = 65533;
+    } else if (code >= 55296 && code <= 57343)
+      code = 65533;
+    if (code < 128)
+      bytes.push(code);
+    else if (code < 2048)
+      bytes.push(192 | code >> 6, 128 | code & 63);
+    else if (code < 65536)
+      bytes.push(224 | code >> 12, 128 | code >> 6 & 63, 128 | code & 63);
+    else
+      bytes.push(240 | code >> 18, 128 | code >> 12 & 63, 128 | code >> 6 & 63, 128 | code & 63);
+  }
+  const buffer = new Buffer(bytes.length);
+  buffer.set(bytes);
+  return buffer;
 }
 function encodeBase64(bytes) {
   let out = "";
@@ -1762,6 +1850,9 @@ class Connection {
     return await this.#send(apiName, guid, method, params, timeout);
   }
   async sendResponse(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendRoute(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
   async sendDialog(apiName, guid, method, params, timeout) {
@@ -4197,32 +4288,6 @@ function isRegExp3(obj) {
   return obj instanceof RegExp;
 }
 
-// src/disposable.ts
-class DisposableStub {
-  #dispose;
-  constructor(dispose) {
-    this.#dispose = dispose;
-    const asyncDispose = Symbol.asyncDispose;
-    if (asyncDispose)
-      Object.defineProperty(this, asyncDispose, {
-        value: () => this.dispose()
-      });
-  }
-  async dispose() {
-    if (!this.#dispose)
-      return;
-    try {
-      const dispose = this.#dispose;
-      this.#dispose = undefined;
-      await dispose();
-    } catch (e) {
-      if (isTargetClosedError(e))
-        return;
-      throw e;
-    }
-  }
-}
-
 // src/locator.ts
 class Locator {
   _frame;
@@ -5822,50 +5887,6 @@ class Touchscreen {
   }
 }
 
-// src/timeout-settings.ts
-var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
-
-class TimeoutSettings {
-  #parent;
-  #defaultTimeout;
-  #defaultNavigationTimeout;
-  constructor(parent) {
-    this.#parent = parent;
-  }
-  setDefaultTimeout(timeout) {
-    this.#defaultTimeout = timeout;
-  }
-  setDefaultNavigationTimeout(timeout) {
-    this.#defaultNavigationTimeout = timeout;
-  }
-  timeout(options, _apiName) {
-    return { signal: options.signal, timeout: this.#timeout(options) };
-  }
-  navigationTimeout(options, _apiName) {
-    return { signal: options.signal, timeout: this.#navigationTimeout(options) };
-  }
-  #timeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.#timeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
-  }
-  #navigationTimeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultNavigationTimeout !== undefined)
-      return this.#defaultNavigationTimeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.#navigationTimeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
-  }
-}
-
 // src/waiter.ts
 async function wrapApiCall(apiName, body) {
   try {
@@ -6003,6 +6024,276 @@ ${lines.join(`
   return e;
 }
 
+// src/route.ts
+var MAX_FULFILL_BYTES = 6 * 1024 * 1024;
+var BODY_TOO_LARGE = "route.fulfill: Neo carries a body of at most 6291456 bytes (6 MiB) to the browser";
+var ROUTE_HANDLED = "Route is already handled!";
+var BODY_AND_JSON = "Can specify either body or json parameters";
+var NO_PATH = `route.fulfill: Neo cannot read a file for "path" yet (it reads only inside the run's artifact directory, which this build lacks); pass "body" instead`;
+function deferred() {
+  let resolve = () => {};
+  const promise = new Promise((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+function headersObjectToArray(headers) {
+  return Object.entries(headers).filter(([, value]) => value !== undefined).map(([name, value]) => ({ name, value }));
+}
+function serializeURLMatch(match) {
+  if (typeof match === "string")
+    return { glob: match };
+  if (isRegExp4(match))
+    return { regexSource: match.source, regexFlags: match.flags };
+  return null;
+}
+function urlMatchesEqual(match1, match2) {
+  if (isRegExp4(match1) && isRegExp4(match2))
+    return match1.source === match2.source && match1.flags === match2.flags;
+  return match1 === match2;
+}
+
+class Route {
+  _guid;
+  #request;
+  #connection;
+  #handlingPromise = null;
+  _didThrow = false;
+  constructor(guid, request, connection) {
+    this._guid = guid;
+    this.#request = request;
+    this.#connection = connection;
+  }
+  request() {
+    return this.#request;
+  }
+  async#raceWithTargetClose(promise) {
+    try {
+      await promise;
+    } catch (error) {
+      if (isTargetClosedError(error))
+        return;
+      throw error;
+    }
+  }
+  _startHandling() {
+    this.#handlingPromise = deferred();
+    return this.#handlingPromise.promise;
+  }
+  async fallback(options = {}) {
+    this._checkNotHandled();
+    this.#request._applyFallbackOverrides(options);
+    this._reportHandled(false);
+  }
+  async abort(errorCode) {
+    await this.#handleRoute(async () => {
+      await this.#raceWithTargetClose(this.#connection.sendRoute("route.abort", this._guid, "abort", { errorCode }, 0));
+    });
+  }
+  async fulfill(options = {}) {
+    await this.#handleRoute(async () => {
+      await this.#innerFulfill(options);
+    });
+  }
+  async#handleRoute(callback) {
+    this._checkNotHandled();
+    try {
+      await callback();
+      this._reportHandled(true);
+    } catch (error) {
+      this._didThrow = true;
+      throw error;
+    }
+  }
+  async#innerFulfill(options) {
+    let { status: statusOption, headers: headersOption, body } = options;
+    if (options.json !== undefined) {
+      if (options.body !== undefined)
+        throw new Error(BODY_AND_JSON);
+      body = JSON.stringify(options.json);
+    }
+    if (options.path !== undefined)
+      throw new Error(NO_PATH);
+    let isBase64 = false;
+    let length = 0;
+    let wire;
+    if (typeof body === "string") {
+      length = encodeUtf8(body).length;
+      wire = body;
+    } else if (body instanceof Uint8Array) {
+      length = body.length;
+      wire = encodeBase64(body);
+      isBase64 = true;
+    }
+    if (length > MAX_FULFILL_BYTES)
+      throw new Error(BODY_TOO_LARGE);
+    const headers = {};
+    for (const header of Object.keys(headersOption || {}))
+      headers[header.toLowerCase()] = String(headersOption[header]);
+    if (options.contentType)
+      headers["content-type"] = String(options.contentType);
+    else if (options.json)
+      headers["content-type"] = "application/json";
+    if (length && !("content-length" in headers))
+      headers["content-length"] = String(length);
+    await this.#raceWithTargetClose(this.#connection.sendRoute("route.fulfill", this._guid, "fulfill", {
+      status: statusOption || 200,
+      headers: headersObjectToArray(headers),
+      body: wire,
+      isBase64
+    }, 0));
+  }
+  async continue(options = {}) {
+    await this.#handleRoute(async () => {
+      this.#request._applyFallbackOverrides(options);
+      await this._innerContinue(false);
+    });
+  }
+  _checkNotHandled() {
+    if (!this.#handlingPromise)
+      throw new Error(ROUTE_HANDLED);
+  }
+  _reportHandled(done) {
+    const chain = this.#handlingPromise;
+    this.#handlingPromise = null;
+    chain?.resolve(done);
+  }
+  async _innerContinue(isFallback) {
+    const options = this.#request._fallbackOverridesForContinue();
+    await this.#raceWithTargetClose(this.#connection.sendRoute("route.continue", this._guid, "continue", {
+      url: options.url,
+      method: options.method,
+      headers: options.headers ? headersObjectToArray(options.headers) : undefined,
+      postData: options.postDataBuffer ? encodeBase64(options.postDataBuffer) : undefined,
+      isFallback
+    }, 0));
+  }
+}
+
+class RouteHandler {
+  #handledCount = 0;
+  #times;
+  url;
+  handler;
+  #ignoreException = false;
+  #activeInvocations = new Set;
+  constructor(url, handler, times = Number.MAX_SAFE_INTEGER) {
+    this.#times = times;
+    this.url = url;
+    this.handler = handler;
+    if (typeof url === "string")
+      matchesURL("about:blank", { glob: url });
+  }
+  static prepareInterceptionPatterns(handlers) {
+    const patterns = [];
+    let all = false;
+    for (const handler of handlers) {
+      const serialized = serializeURLMatch(handler.url);
+      if (serialized)
+        patterns.push(serialized);
+      else
+        all = true;
+    }
+    if (all)
+      return [{ glob: "**/*" }];
+    return patterns;
+  }
+  matches(requestURL) {
+    if (typeof this.url === "function") {
+      const url = urlFor(requestURL);
+      return !!url && !!this.url(url);
+    }
+    const serialized = serializeURLMatch(this.url);
+    return !!serialized && matchesURL(requestURL, serialized);
+  }
+  async handle(route) {
+    const invocation = { complete: deferred(), route };
+    this.#activeInvocations.add(invocation);
+    try {
+      return await this.#handleInternal(route);
+    } catch (error) {
+      if (this.#ignoreException)
+        return false;
+      if (isTargetClosedError(error) && error instanceof Error)
+        rewriteErrorMessage(error, `"${error.message}" while running route callback.
+Consider awaiting \`await page.unrouteAll({ behavior: 'ignoreErrors' })\`
+before the end of the test to ignore remaining routes in flight.`);
+      throw error;
+    } finally {
+      invocation.complete.resolve();
+      this.#activeInvocations.delete(invocation);
+    }
+  }
+  async stop(behavior) {
+    if (behavior === "ignoreErrors") {
+      this.#ignoreException = true;
+      return;
+    }
+    const promises = [];
+    for (const activation of this.#activeInvocations)
+      if (!activation.route._didThrow)
+        promises.push(activation.complete.promise);
+    await Promise.all(promises);
+  }
+  async#handleInternal(route) {
+    ++this.#handledCount;
+    const handledPromise = route._startHandling();
+    const handler = this.handler;
+    const [handled] = await Promise.all([
+      handledPromise,
+      handler(route, route.request())
+    ]);
+    return handled;
+  }
+  willExpire() {
+    return this.#handledCount + 1 >= this.#times;
+  }
+}
+
+// src/timeout-settings.ts
+var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
+
+class TimeoutSettings {
+  #parent;
+  #defaultTimeout;
+  #defaultNavigationTimeout;
+  constructor(parent) {
+    this.#parent = parent;
+  }
+  setDefaultTimeout(timeout) {
+    this.#defaultTimeout = timeout;
+  }
+  setDefaultNavigationTimeout(timeout) {
+    this.#defaultNavigationTimeout = timeout;
+  }
+  timeout(options, _apiName) {
+    return { signal: options.signal, timeout: this.#timeout(options) };
+  }
+  navigationTimeout(options, _apiName) {
+    return { signal: options.signal, timeout: this.#navigationTimeout(options) };
+  }
+  #timeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#timeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+  #navigationTimeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultNavigationTimeout !== undefined)
+      return this.#defaultNavigationTimeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#navigationTimeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+}
+
 // src/page.ts
 var PAGE_EVENTS = {
   receiver: "Page",
@@ -6047,6 +6338,9 @@ class Page extends ChannelOwner {
   mouse;
   touchscreen;
   #closedLocally = false;
+  _routes = [];
+  #routeListening = false;
+  #patternsSent = Promise.resolve();
   #closeReason;
   constructor(guid, mainFrameGuid, url, context, connection) {
     super(guid, context._pipe, PAGE_EVENTS);
@@ -6118,6 +6412,79 @@ class Page extends ChannelOwner {
       this.#onFrameDetached(params.frame);
     else if (method === "frameNavigated")
       this.#onFrameNavigated(params);
+    else if (method === "route")
+      this.#onRouteEvent(params);
+  }
+  #onRouteEvent({ route, request }) {
+    const routed = new Route(route.guid, requestFromRecord(this.#connection, request, this), this.#connection);
+    this._onRoute(routed).catch(reportUncaught);
+  }
+  async _onRoute(route) {
+    const routeHandlers = this._routes;
+    for (const routeHandler of routeHandlers.slice()) {
+      if (this.#closedLocally || this.#context.isClosed())
+        return;
+      if (!routeHandler.matches(route.request().url()))
+        continue;
+      const index = this._routes.indexOf(routeHandler);
+      if (index === -1)
+        continue;
+      if (routeHandler.willExpire())
+        this._routes.splice(index, 1);
+      const handled = await routeHandler.handle(route);
+      if (routeHandlers === this._routes && !this._routes.length)
+        this.#updateInterceptionPatterns("page.route").catch(() => {});
+      if (handled)
+        return;
+    }
+    await this.#context._onRoute(route);
+  }
+  async route(url, handler, options = {}) {
+    return await wrapApiCall("page.route", async () => {
+      this._routes.unshift(new RouteHandler(url, handler, options.times));
+      await this.#updateInterceptionPatterns("page.route");
+      return new DisposableStub(() => this.unroute(url, handler));
+    });
+  }
+  async unrouteAll(options) {
+    await wrapApiCall("page.unrouteAll", () => this.#unrouteInternal("page.unrouteAll", this._routes, [], options?.behavior));
+  }
+  async unroute(url, handler) {
+    await wrapApiCall("page.unroute", async () => {
+      const removed = [];
+      const remaining = [];
+      for (const route of this._routes) {
+        if (urlMatchesEqual(route.url, url) && (!handler || route.handler === handler))
+          removed.push(route);
+        else
+          remaining.push(route);
+      }
+      await this.#unrouteInternal("page.unroute", removed, remaining, "default");
+    });
+  }
+  async#unrouteInternal(apiName, removed, remaining, behavior) {
+    this._routes = remaining;
+    if (behavior && behavior !== "default")
+      await Promise.all(removed.map((handler) => handler.stop(behavior)));
+    await this.#updateInterceptionPatterns(apiName);
+  }
+  async#updateInterceptionPatterns(apiName) {
+    const update = this.#patternsSent.then(() => this.#sendInterceptionPatterns(apiName));
+    this.#patternsSent = update.catch(() => {});
+    await update;
+  }
+  async#sendInterceptionPatterns(apiName) {
+    const patterns = RouteHandler.prepareInterceptionPatterns(this._routes);
+    const listening = patterns.length > 0;
+    if (listening && !this.#routeListening) {
+      this.#routeListening = true;
+      this._listenToChannel("route", true);
+    }
+    await this.#connection.sendPage(apiName, this.#guid, "setNetworkInterceptionPatterns", { patterns }, 0);
+    if (!this._routes.length && this.#routeListening) {
+      this.#routeListening = false;
+      this._listenToChannel("route", false);
+    }
   }
   #onFrameAttached(record) {
     this.#frameEvent(record, "frameattached", false);
@@ -6498,6 +6865,9 @@ var CONTEXT_EVENTS = {
 class BrowserContext extends ChannelOwner {
   #guid;
   #connection;
+  _routes = [];
+  #routeListening = false;
+  #patternsSent = Promise.resolve();
   #pages = new Map;
   #dialogs = new Map;
   _timeoutSettings = new TimeoutSettings;
@@ -6561,6 +6931,80 @@ class BrowserContext extends ChannelOwner {
       this.#onRequestFinished(params);
     else if (method === "requestFailed")
       this.#onRequestFailed(params);
+    else if (method === "route")
+      this.#onRouteEvent(params);
+  }
+  #onRouteEvent({ route, request, page }) {
+    const pageObject = this.#pageFor(page.guid);
+    const routed = new Route(route.guid, requestFromRecord(this.#connection, request, pageObject), this.#connection);
+    this._onRoute(routed, pageObject).catch(reportUncaught);
+  }
+  async _onRoute(route, page) {
+    const routeHandlers = this._routes;
+    for (const routeHandler of routeHandlers.slice()) {
+      if (page?._isClosedLocally() || this.isClosed())
+        return;
+      if (!routeHandler.matches(route.request().url()))
+        continue;
+      const index = this._routes.indexOf(routeHandler);
+      if (index === -1)
+        continue;
+      if (routeHandler.willExpire())
+        this._routes.splice(index, 1);
+      const handled = await routeHandler.handle(route);
+      if (routeHandlers === this._routes && !this._routes.length)
+        this.#updateInterceptionPatterns().catch(() => {});
+      if (handled)
+        return;
+    }
+    await route._innerContinue(true).catch(() => {});
+  }
+  async route(url, handler, options = {}) {
+    return await wrapApiCall("browserContext.route", async () => {
+      this._routes.unshift(new RouteHandler(url, handler, options.times));
+      await this.#updateInterceptionPatterns();
+      return new DisposableStub(() => this.unroute(url, handler));
+    });
+  }
+  async unrouteAll(options) {
+    await wrapApiCall("browserContext.unrouteAll", () => this.#unrouteInternal(this._routes, [], options?.behavior));
+  }
+  async unroute(url, handler) {
+    await wrapApiCall("browserContext.unroute", async () => {
+      const removed = [];
+      const remaining = [];
+      for (const route of this._routes) {
+        if (urlMatchesEqual(route.url, url) && (!handler || route.handler === handler))
+          removed.push(route);
+        else
+          remaining.push(route);
+      }
+      await this.#unrouteInternal(removed, remaining, "default");
+    });
+  }
+  async#unrouteInternal(removed, remaining, behavior) {
+    this._routes = remaining;
+    if (behavior && behavior !== "default")
+      await Promise.all(removed.map((handler) => handler.stop(behavior)));
+    await this.#updateInterceptionPatterns();
+  }
+  async#updateInterceptionPatterns() {
+    const update = this.#patternsSent.then(() => this.#sendInterceptionPatterns());
+    this.#patternsSent = update.catch(() => {});
+    await update;
+  }
+  async#sendInterceptionPatterns() {
+    const patterns = RouteHandler.prepareInterceptionPatterns(this._routes);
+    const listening = patterns.length > 0;
+    if (listening && !this.#routeListening) {
+      this.#routeListening = true;
+      this._listenToChannel("route", true);
+    }
+    await this.#connection.sendContext("browserContext.route", this._guid, "setNetworkInterceptionPatterns", { patterns }, 0);
+    if (!this._routes.length && this.#routeListening) {
+      this.#routeListening = false;
+      this._listenToChannel("route", false);
+    }
   }
   #onRequest({ request, page }) {
     const pageObject = this.#pageFor(page.guid);

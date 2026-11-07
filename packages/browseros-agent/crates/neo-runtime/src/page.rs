@@ -89,6 +89,7 @@ use crate::network_idle::{IdleChange, SharedIdle};
 use crate::page_events::PageEvents;
 use crate::progress::InputTicket;
 use crate::progress::PlaywrightError;
+use crate::routes::{Answer, ContextRoutes, Pause, Routes};
 use crate::run::PageId;
 use crate::world::{self, ObjectGroup, World};
 
@@ -196,6 +197,8 @@ pub(crate) struct PageSession {
     input: Arc<TabInput>,
     /// The main frame's navigation requests, fed by the watcher once Network is enabled.
     pub(crate) network: Arc<NetworkLog>,
+    /// The run's routed requests on this tab (`routes.rs`).
+    pub(crate) routes: Arc<Routes>,
     /// `Network.enable`, sent on this session's first goto and kept for the run.
     network_enabled: OnceCell<()>,
     /// The tab's frames' `networkidle`, fed and timed by the watcher.
@@ -252,6 +255,8 @@ struct PageUpdates<S> {
     producer: Option<(PageEvents, Flushes)>,
     /// The tab's `networkidle` bookkeeping; `None` in tests of navigation alone.
     idle: Option<Arc<SharedIdle>>,
+    /// The tab's routed requests; `None` in tests of navigation alone.
+    routes: Option<Arc<Routes>>,
 }
 
 /// What the run's session has reported since `prepare`. Counters only grow, so a caller takes
@@ -593,6 +598,11 @@ impl PageSession {
     /// `input` is the tab's lock and devices from the `Runtime`'s [`TabInputs`].
     /// `discovered`: the run's discovery reported the page as new (`Tabs::report_new`), so the
     /// first lifecycle replay is the page's own new life ([`PageEvents::new`]).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the tab's run-wide pieces (its input, closure, event hub, context routes) are \
+                  each owned by the run and handed to every tab"
+    )]
     pub(crate) fn new(
         session: Session,
         page: &PageId,
@@ -601,7 +611,10 @@ impl PageSession {
         closed: CancellationToken,
         hub: EventHub,
         discovered: bool,
+        context_routes: Arc<ContextRoutes>,
     ) -> Self {
+        let routes = Arc::new(Routes::new(page.as_str(), context_routes));
+        let child_routes = Arc::clone(&routes);
         let events = PageEvents::new(
             hub,
             page.as_str(),
@@ -630,10 +643,21 @@ impl PageSession {
         frames.on_child_host(Arc::new(move |host| {
             let events = child_events.clone();
             let network = Arc::clone(&child_network);
+            let routes = Arc::clone(&child_routes);
             Box::pin(async move {
                 events.child_attached(&host).await;
                 if network.enabled() {
                     enable_child_network(&network, &host).await;
+                    // Playwright gives a new frame session the page's interception before it
+                    // runs (`FrameSession._initialize`); Neo's is attached lazily, so its
+                    // requests pause from now on.
+                    if routes.intercepting() {
+                        for (method, params) in interception(true) {
+                            if let Err(error) = host.send(method, params).await {
+                                debug!(%error, "pausing a frame session's requests failed");
+                            }
+                        }
+                    }
                 }
             })
         }));
@@ -655,6 +679,7 @@ impl PageSession {
             next_group: AtomicU64::new(1),
             input,
             network,
+            routes,
             network_enabled: OnceCell::new(),
             idle: Arc::new(SharedIdle::new(page.as_str(), Instant::now())),
             highlights: Highlights::default(),
@@ -718,6 +743,7 @@ impl PageSession {
                         initial_url,
                         producer: Some((self.events.clone(), self.events.hub().watcher())),
                         idle: Some(Arc::clone(&self.idle)),
+                        routes: Some(Arc::clone(&self.routes)),
                     },
                     self.closed.clone(),
                     stop,
@@ -804,6 +830,26 @@ impl PageSession {
             })
             .await
             .copied()
+    }
+
+    /// Turns the pausing of every request on or off on the tab's session and on every
+    /// out-of-process frame session attached (`routes.rs`); the network log first, as a pause's
+    /// route carries its request's record.
+    pub(crate) async fn intercept(&self, on: bool) -> Result<(), CdpError> {
+        if on {
+            self.enable_network().await?;
+        }
+        for (method, params) in interception(on) {
+            self.send(method, params).await?;
+        }
+        for host in self.frames.child_hosts() {
+            for (method, params) in interception(on) {
+                if let Err(error) = host.send(method, params).await {
+                    debug!(%error, "turning a frame session's request pausing over failed");
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The requests seen from now on are the tab's whole traffic: `networkidle` starts over
@@ -1306,6 +1352,7 @@ async fn watch_events(
         initial_url,
         producer,
         idle,
+        routes,
     } = updates;
     let (producer, mut flushes) = producer.unzip();
     let mut watcher = Watcher {
@@ -1321,6 +1368,7 @@ async fn watch_events(
         producer,
         closed,
         idle,
+        routes,
     };
     tokio::pin!(initial_url);
     let mut seed_pending = true;
@@ -1441,6 +1489,7 @@ struct Watcher {
     producer: Option<PageEvents>,
     closed: CancellationToken,
     idle: Option<Arc<SharedIdle>>,
+    routes: Option<Arc<Routes>>,
 }
 
 impl Watcher {
@@ -1508,6 +1557,69 @@ impl Watcher {
             })
             .unwrap_or_default();
         self.apply_idle(changes);
+    }
+
+    /// The tab's routes' share of one event (`routes.rs`): a pause of the tab's session or of an
+    /// attached frame session's; a `requestWillBeSent` a parked pause waited for, its `request`
+    /// event just gone, so its `route` event follows it; a frame session gone with its pauses.
+    fn route_event(&self, event: &CdpEvent) {
+        let Some(routes) = &self.routes else {
+            return;
+        };
+        let from = || match event.session_id.as_ref() {
+            Some(from) if from == &self.session => Some(None),
+            Some(from) if self.network.has_child(from) => Some(Some(from)),
+            _ => None,
+        };
+        match event.method.as_str() {
+            "Fetch.requestPaused" => {
+                if let Some(from) = from() {
+                    let pause = routes.paused(from, &event.params, &self.network);
+                    self.apply_pause(pause);
+                }
+            }
+            "Network.requestWillBeSent" => {
+                if from().is_some()
+                    && let Some(request) = event.params["requestId"].as_str()
+                    && let Some(pause) = routes.unpark(request, &self.network)
+                {
+                    self.apply_pause(pause);
+                }
+            }
+            "Target.detachedFromTarget" => {
+                if let Some(child) = event.params["sessionId"].as_str() {
+                    routes.forget_session(&SessionId::from(child));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Carries out what the tab's routes made of a pause: an answer at once, nothing yet, or the
+    /// run's `route` event, whose pause goes on untouched when nobody takes it.
+    fn apply_pause(&self, pause: Pause) {
+        match pause {
+            Pause::Answer(answer) => send_answer(&self.cdp, &self.session, answer),
+            Pause::Parked => {}
+            Pause::Route {
+                index,
+                channel,
+                params,
+            } => {
+                let Some(routes) = &self.routes else {
+                    return;
+                };
+                if self
+                    .producer
+                    .as_ref()
+                    .is_some_and(|producer| producer.route(channel, &params))
+                {
+                    routes.emitted(index);
+                } else if let Some(answer) = routes.release(index) {
+                    send_answer(&self.cdp, &self.session, answer);
+                }
+            }
+        }
     }
 
     /// `Frame._failInflightRequests` for a frame the tab's session reports removed
@@ -1601,6 +1713,7 @@ impl Watcher {
                         }
                     }
                 }
+                self.route_event(&event);
                 // A frame removed from the page, or an out-of-process frame session gone, ends
                 // its requests still loading: no later event of theirs can arrive.
                 let detached = self.detached_requests(&event);
@@ -1709,6 +1822,39 @@ async fn enable_child_network(network: &NetworkLog, host: &Arc<Host>) {
         Ok(Err(error)) => debug!(%session, %error, "a frame's network did not turn on"),
         Err(_) => debug!(%session, "a frame's network did not turn on in time"),
     }
+}
+
+/// Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager._updateProtocolRequestInterceptionForSession`: `fetchPromise = info.session.send('Fetch.enable', { handleAuthRequests: true, patterns: [{ urlPattern: '*', requestStage: 'Request' }] });`
+///
+/// Deviation: `server/chromium/crNetworkManager.ts` `CRNetworkManager._onAuthRequired`: `authChallengeResponse: { response, username, password },`
+/// Neo pauses requests without taking their auth challenges (`handleAuthRequests: false`):
+/// with no credentials Playwright answers `Default`, which is Chromium's own handling.
+fn interception(on: bool) -> [(&'static str, Value); 2] {
+    let fetch = if on {
+        (
+            "Fetch.enable",
+            json!({ "handleAuthRequests": false, "patterns": [{ "urlPattern": "*", "requestStage": "Request" }] }),
+        )
+    } else {
+        ("Fetch.disable", json!({}))
+    };
+    [
+        // Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager._updateProtocolRequestInterceptionForSession`: `const cachePromise = info.session.send('Network.setCacheDisabled', { cacheDisabled: enabled });`
+        ("Network.setCacheDisabled", json!({ "cacheDisabled": on })),
+        fetch,
+    ]
+}
+
+/// Sends a pause's answer without waiting for it (`_sendMayFail`): the request may already be
+/// gone, which only the page sees.
+fn send_answer(cdp: &CdpClient, tab: &SessionId, answer: Answer) {
+    let cdp = cdp.clone();
+    let session = answer.session.unwrap_or_else(|| tab.clone());
+    tokio::spawn(async move {
+        if let Err(error) = cdp.send(answer.method, answer.params, Some(&session)).await {
+            debug!(%session, %error, "answering a paused request failed");
+        }
+    });
 }
 
 /// Sends a dialog answer without waiting for it: the renderer is blocked until it lands, and
@@ -3697,6 +3843,7 @@ mod tests {
                 initial_url,
                 producer: None,
                 idle: None,
+                routes: None,
             };
             let watcher = watch_events(
                 receiver,
@@ -3743,6 +3890,7 @@ mod tests {
             CancellationToken::new(),
             EventHub::default(),
             false,
+            Arc::default(),
         ));
         let tab = FrameTab {
             page: Arc::clone(&page),
@@ -3797,6 +3945,7 @@ mod tests {
                 initial_url,
                 producer: None,
                 idle: None,
+                routes: None,
             },
             closed.clone(),
             stop.clone(),

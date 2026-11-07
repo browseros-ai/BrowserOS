@@ -14,6 +14,8 @@ interfaces:
   BrowserContext:
     - newPage
     - close
+    # The run's context routes (`context.route`): which URLs pause for its handlers (`routes.rs`).
+    - setNetworkInterceptionPatterns
   # A BrowserContext initializer requires these three. Neo never sends one (a run receives its
   # context at start) and serves no command on them; listing them keeps the type constructible.
   APIRequestContext: []
@@ -50,6 +52,13 @@ interfaces:
     - clearPageErrors
     # The page's recent requests (`page.requests()`), as the run's network log recorded them.
     - requests
+    # The page's routes (`page.route`): which URLs pause for its handlers (`routes.rs`).
+    - setNetworkInterceptionPatterns
+  # A paused request the run's `route` event handed out (`routes.rs`): one answer each.
+  Route:
+    - abort
+    - continue
+    - fulfill
   # A JavaScript dialog the run's `dialog` event handed out.
   Dialog:
     - accept

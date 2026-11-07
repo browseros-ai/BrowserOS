@@ -28,6 +28,7 @@ import type {
   PageCommands,
   RequestCommands,
   ResponseCommands,
+  RouteCommands,
 } from '@browseros/neo-runtime-spec/serve'
 import {
   AbortError,
@@ -193,6 +194,18 @@ export type ApiName =
   | 'page.clearPageErrors'
   | 'dialog.accept'
   | 'dialog.dismiss'
+  // Routes (B3, `route.ts`).
+  | 'page.route'
+  | 'page.unroute'
+  | 'page.unrouteAll'
+  | 'browserContext.route'
+  | 'browserContext.unroute'
+  | 'browserContext.unrouteAll'
+  | 'route.abort'
+  | 'route.continue'
+  | 'route.fulfill'
+  | 'route.fallback'
+  | 'route.fetch'
   // Element reads and states (B1).
   | 'locator.isEnabled'
   | 'page.isEnabled'
@@ -358,6 +371,23 @@ export class Connection {
       params,
       timeout,
     )) as ResponseCommands[M]['result']
+  }
+
+  /** {@link Connection.send} for a `Route` command, to a `route@…` guid. */
+  async sendRoute<M extends keyof RouteCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: RouteCommands[M]['params'],
+    timeout: number | TimeoutOptions,
+  ): Promise<Resolved<RouteCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<RouteCommands[M]['result']>
   }
 
   /** {@link Connection.send} for a `Dialog` command, to a `dialog@…` guid. */

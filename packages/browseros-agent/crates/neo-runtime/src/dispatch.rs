@@ -50,7 +50,7 @@ use neo_runtime_spec::serve::{
     FramePressResult, FrameQueryCountParams, FrameSelectOptionParams, FrameSelectOptionResult,
     FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameTypeParams, FrameTypeResult,
     FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
-    Metadata, PageCall, RequestCall, ResponseCall,
+    Metadata, PageCall, RequestCall, ResponseCall, RouteCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -93,6 +93,7 @@ use crate::progress::{
 };
 use crate::reads::{self, AttributeOptions, ReadOptions, SnapshotOptions};
 use crate::responses::{self, NetworkCall};
+use crate::routes;
 use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
 use crate::states::{self, StateOptions};
 use crate::tab_calls;
@@ -301,6 +302,9 @@ enum ObjectKind {
     Handle(String),
     /// A JavaScript dialog the run's `dialog` event handed out, by its index on the tab.
     Dialog(u64),
+    /// A paused request the run's `route` event handed out (Playwright's `Route`), by its index
+    /// on the tab; named apart from this module's call-routing `Route`.
+    Intercepted(u64),
     Unknown,
 }
 
@@ -312,6 +316,7 @@ enum ObjectCall {
     Frame(Route),
     Network(NetworkCall),
     Dialog(u64, DialogCall),
+    Intercepted(u64, RouteCall),
 }
 
 /// What a message asks for. One variant per served (object, method).
@@ -509,6 +514,13 @@ impl Dispatcher {
         // sessions detach (`Dialogs::left_open`).
         self.0.tabs.events().close();
         let _answered = time::timeout_at(deadline, answer_left_open(&self.0.tabs)).await;
+        // Every request a route handler left paused goes on, and no tab keeps pausing requests
+        // for a run that is over (`routes.rs`).
+        let _routed = time::timeout_at(deadline, async {
+            let sessions = self.0.tabs.attached_sessions();
+            future::join_all(sessions.iter().map(|session| routes::finish(session))).await;
+        })
+        .await;
         let _created = time::timeout_at(deadline, self.0.tabs.finish_creations()).await;
         run.tasks.close();
         let _waited = time::timeout_at(deadline, run.tasks.wait()).await;
@@ -576,6 +588,8 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         }
         ObjectKind::Dialog(index) => DialogCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
+        ObjectKind::Intercepted(index) => RouteCall::decode(method, params)
+            .map(|call| (call.meta(), Ok(ObjectCall::Intercepted(index, call)))),
         ObjectKind::Unknown => {
             return Routed {
                 meta: None,
@@ -842,7 +856,9 @@ async fn serve_call(
     // context call (`newPage`) waits for target discovery's baseline. A dialog's answer never
     // waits: an open dialog can hold that very enable, and only the answer frees the page.
     let gate = match (&route, &target) {
-        (ObjectCall::Dialog(..), _) => None,
+        // A route's answer never waits either: the paused request may be what the page's
+        // enable, or the script's goto, waits for.
+        (ObjectCall::Dialog(..) | ObjectCall::Intercepted(..), _) => None,
         (ObjectCall::Context(_), _) => Some(ALL_PAGES),
         (_, Some((page, _))) => Some(page.id.as_str()),
         (_, None) => None,
@@ -911,6 +927,11 @@ async fn serve_call(
         // A dialog exists only after its tab's watcher saw it open on this run's session.
         (ObjectCall::Dialog(index, call), Some((page, _))) => match page.attached_session() {
             Some(session) => dialogs::serve(&session, index, call, &progress).await,
+            None => Err(PlaywrightError::target_closed().into()),
+        },
+        // A paused request exists only after its tab's watcher handed it to this run.
+        (ObjectCall::Intercepted(index, call), Some((page, _))) => match page.attached_session() {
+            Some(session) => routes::serve(&session, index, call, &progress).await,
             None => Err(PlaywrightError::target_closed().into()),
         },
         _ => Err(PlaywrightError::target_closed().into()),
@@ -1280,6 +1301,8 @@ fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
         ObjectKind::Network(kind, hop)
     } else if let Some((_, index)) = dialogs::parse(guid) {
         ObjectKind::Dialog(index)
+    } else if let Some((_, index)) = routes::parse(guid) {
+        ObjectKind::Intercepted(index)
     } else {
         ObjectKind::Page
     }
@@ -1582,7 +1605,8 @@ mod tests {
             | ObjectCall::Page(_)
             | ObjectCall::Device(_)
             | ObjectCall::Network(_)
-            | ObjectCall::Dialog(..) => {
+            | ObjectCall::Dialog(..)
+            | ObjectCall::Intercepted(..) => {
                 panic!("a Frame message routed to another object")
             }
         })

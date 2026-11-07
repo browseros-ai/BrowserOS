@@ -7,6 +7,7 @@ import type {
   PageGoForwardParams,
   PagePageErrorsParams,
   PageReloadParams,
+  RequestInitializer,
   ResponseChannel,
 } from '@browseros/neo-runtime-spec/serve'
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
@@ -17,13 +18,14 @@ import {
 import type { BrowserContext } from './browser-context'
 import type { ApiName, Connection } from './connection'
 import { ConsoleMessage } from './console-message'
+import { DisposableStub } from './disposable'
 import type { ElementHandle } from './element-handle'
 import {
   isTargetClosedError,
   parseSerializedError,
   targetClosedError,
 } from './errors'
-import { ChannelOwner, type EventTable } from './events'
+import { ChannelOwner, type EventTable, reportUncaught } from './events'
 import {
   type AriaSnapshotOptions,
   type CheckOptions,
@@ -72,9 +74,11 @@ import {
 import type { Locator, LocatorOptions } from './locator'
 import { isRegExp, serializeUrlMatch } from './neo-commands'
 import {
+  type Created,
   networkObject,
   type Request,
   type Response,
+  requestFromRecord,
   responseFor,
 } from './network'
 import {
@@ -86,6 +90,14 @@ import {
   PAGE_RELOAD_KEYS,
   pickParams,
 } from './protocol'
+import {
+  Route,
+  RouteHandler,
+  type RouteHandlerCallback,
+  type RouteURLMatch,
+  type UnrouteBehavior,
+  urlMatchesEqual,
+} from './route'
 import { type CreatedFrame, get, matchesURL } from './runtime-bridge'
 import type { SelectOptionValues } from './select-option'
 import { type TimeoutInput, TimeoutSettings } from './timeout-settings'
@@ -117,6 +129,13 @@ const PAGE_EVENTS: EventTable = {
   ],
   quiet: [],
   unserved: ['download', 'filechooser', 'websocket', 'worker'],
+}
+
+/** The `route` event's params from Rust (`routes.rs`): the route, and its request's full
+ * record, as the `request` event's. */
+interface RouteEventParams {
+  route: { guid: string }
+  request: Created<RequestInitializer>
 }
 
 /** `waitForRequest` and `waitForResponse`'s options: Playwright's `TimeoutOptions`; the Waiter
@@ -189,6 +208,12 @@ export class Page extends ChannelOwner {
   readonly touchscreen: Touchscreen
   /** Set when this page's `close` ran (`_onClose`): what Playwright's client flips then. */
   #closedLocally = false
+  /** Playwright's `Page._routes`: the page's route handlers, newest first. */
+  _routes: RouteHandler[] = []
+  /** Whether the client listens to the page's `route` channel event (`_listenToChannel`). */
+  #routeListening = false
+  /** The last pattern update sent, which the next one waits for. */
+  #patternsSent: Promise<void> = Promise.resolve()
   /** Playwright's `_closeReason`: what `close({ reason })` was given. */
   #closeReason: string | undefined
 
@@ -319,6 +344,130 @@ export class Page extends ChannelOwner {
       this.#onFrameDetached((params as FrameEventParams).frame)
     else if (method === 'frameNavigated')
       this.#onFrameNavigated(params as FrameEventParams)
+    else if (method === 'route') this.#onRouteEvent(params as RouteEventParams)
+  }
+
+  /** Playwright's `_channel.on('route', ({ route }) => this._onRoute(Route.from(route)))`: the
+   * request is the one object of its guid the `request` event handed out. */
+  #onRouteEvent({ route, request }: RouteEventParams): void {
+    const routed = new Route(
+      route.guid,
+      requestFromRecord(this.#connection, request, this),
+      this.#connection,
+    )
+    this._onRoute(routed).catch(reportUncaught)
+  }
+
+  /** Playwright's `Page._onRoute`: the page's handlers, newest first, then the context's. */
+  async _onRoute(route: Route): Promise<void> {
+    const routeHandlers = this._routes
+    for (const routeHandler of routeHandlers.slice()) {
+      // A page whose close ran stalls its requests at once, as Playwright's does.
+      if (this.#closedLocally || this.#context.isClosed()) return
+      if (!routeHandler.matches(route.request().url())) continue
+      const index = this._routes.indexOf(routeHandler)
+      if (index === -1) continue
+      if (routeHandler.willExpire()) this._routes.splice(index, 1)
+      const handled = await routeHandler.handle(route)
+      // unrouteAll() replaces _routes and updates the patterns after waiting for handlers.
+      if (routeHandlers === this._routes && !this._routes.length)
+        this.#updateInterceptionPatterns('page.route').catch(() => {})
+      if (handled) return
+    }
+    await this.#context._onRoute(route)
+  }
+
+  /** Playwright's `Page.route`: `handler` answers the requests `url` matches, `times` of them. */
+  async route(
+    url: RouteURLMatch,
+    handler: RouteHandlerCallback,
+    options: { times?: number } = {},
+  ): Promise<DisposableStub> {
+    return await wrapApiCall('page.route', async () => {
+      this._routes.unshift(new RouteHandler(url, handler, options.times))
+      await this.#updateInterceptionPatterns('page.route')
+      return new DisposableStub(() => this.unroute(url, handler))
+    })
+  }
+
+  /** Playwright's `Page.unrouteAll`. */
+  async unrouteAll(options?: { behavior?: UnrouteBehavior }): Promise<void> {
+    await wrapApiCall('page.unrouteAll', () =>
+      this.#unrouteInternal(
+        'page.unrouteAll',
+        this._routes,
+        [],
+        options?.behavior,
+      ),
+    )
+  }
+
+  /** Playwright's `Page.unroute`: every handler of `url` (and `handler`, when given). */
+  async unroute(
+    url: RouteURLMatch,
+    handler?: RouteHandlerCallback,
+  ): Promise<void> {
+    await wrapApiCall('page.unroute', async () => {
+      const removed: RouteHandler[] = []
+      const remaining: RouteHandler[] = []
+      for (const route of this._routes) {
+        if (
+          urlMatchesEqual(route.url, url) &&
+          (!handler || route.handler === handler)
+        )
+          removed.push(route)
+        else remaining.push(route)
+      }
+      await this.#unrouteInternal('page.unroute', removed, remaining, 'default')
+    })
+  }
+
+  async #unrouteInternal(
+    apiName: ApiName,
+    removed: RouteHandler[],
+    remaining: RouteHandler[],
+    behavior?: UnrouteBehavior,
+  ): Promise<void> {
+    this._routes = remaining
+    if (behavior && behavior !== 'default')
+      await Promise.all(removed.map((handler) => handler.stop(behavior)))
+    await this.#updateInterceptionPatterns(apiName)
+  }
+
+  /**
+   * Playwright's `Page._updateInterceptionPatterns`. The client listens to the page's `route`
+   * event while it has routes, before Rust pauses anything for them.
+   *
+   * Deviation: `client/page.ts` `Page._onRoute`: `this._disableInterception().catch(() => {});`
+   * Playwright's messages reach its server in the order sent; Neo's calls run side by side, so
+   * the updates queue here, each sending the patterns of its turn.
+   */
+  async #updateInterceptionPatterns(apiName: ApiName): Promise<void> {
+    const update = this.#patternsSent.then(() =>
+      this.#sendInterceptionPatterns(apiName),
+    )
+    this.#patternsSent = update.catch(() => {})
+    await update
+  }
+
+  async #sendInterceptionPatterns(apiName: ApiName): Promise<void> {
+    const patterns = RouteHandler.prepareInterceptionPatterns(this._routes)
+    const listening = patterns.length > 0
+    if (listening && !this.#routeListening) {
+      this.#routeListening = true
+      this._listenToChannel('route', true)
+    }
+    await this.#connection.sendPage(
+      apiName,
+      this.#guid,
+      'setNetworkInterceptionPatterns',
+      { patterns },
+      0,
+    )
+    if (!this._routes.length && this.#routeListening) {
+      this.#routeListening = false
+      this._listenToChannel('route', false)
+    }
   }
 
   /** Playwright's `Page._onFrameAttached`: a frame attaches with no name or URL yet. */

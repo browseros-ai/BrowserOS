@@ -11,7 +11,8 @@ use neo_runtime_spec::serve::{
     PageClearPageErrorsResult, PageConsoleMessagesParams, PageConsoleMessagesResult,
     PageGoBackParams, PageGoBackResult, PageGoForwardParams, PageGoForwardResult,
     PagePageErrorsParams, PagePageErrorsResult, PageReloadParams, PageReloadResult,
-    PageRequestsParams, PageRequestsResult, ResponseChannel,
+    PageRequestsParams, PageRequestsResult, PageSetNetworkInterceptionPatternsParams,
+    PageSetNetworkInterceptionPatternsResult, ResponseChannel,
 };
 use serde_json::{Value, json};
 use tracing::debug;
@@ -23,6 +24,7 @@ use crate::highlight;
 use crate::history::{self, HistoryOptions};
 use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
+use crate::routes::{self, Patterns};
 use crate::tabs::{self, PageEntry, Tabs};
 
 pub(crate) async fn context(
@@ -64,6 +66,18 @@ pub(crate) async fn context(
             close_context(tabs, progress).await?;
             Ok(None)
         }
+        BrowserContextCall::SetNetworkInterceptionPatterns(params) => {
+            let patterns = Patterns::new(params.patterns.into_iter().map(|pattern| {
+                (
+                    pattern.glob,
+                    pattern.regex_source,
+                    pattern.regex_flags,
+                    pattern.url_pattern.is_some(),
+                )
+            }))?;
+            routes::set_context_patterns(tabs, patterns, progress).await?;
+            Ok(Some(json!({})))
+        }
     }
 }
 
@@ -91,6 +105,10 @@ async fn close_context(tabs: &Tabs, progress: &Progress) -> Result<(), CallError
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per Page call Neo serves outside the frame, each a line or a helper"
+)]
 pub(crate) async fn page(
     tabs: &Tabs,
     entry: &Arc<PageEntry>,
@@ -157,6 +175,10 @@ pub(crate) async fn page(
         // `Network.enable`: the first goto, history step or navigation wait, a network event
         // listener, or this read, as Chromium replays no earlier request.
         PageCall::Requests(_) => return requests(tabs, entry, progress).await,
+        // The page's routes (`routes.rs`): its sessions pause every request while one exists.
+        PageCall::SetNetworkInterceptionPatterns(params) => {
+            return set_page_patterns(tabs, entry, params, progress).await;
+        }
         PageCall::Close(_) => close(tabs, entry, progress).await?,
         PageCall::RunBeforeUnload(_) => run_before_unload(tabs, entry, progress).await?,
         // The dispatcher serves these over the tab's input devices (`devices.rs`).
@@ -226,6 +248,27 @@ async fn history_step(
 }
 
 /// `page.requests()`: what the session's network log recorded, after making sure it records.
+async fn set_page_patterns(
+    tabs: &Tabs,
+    entry: &PageEntry,
+    params: PageSetNetworkInterceptionPatternsParams,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let patterns = Patterns::new(params.patterns.into_iter().map(|pattern| {
+        (
+            pattern.glob,
+            pattern.regex_source,
+            pattern.regex_flags,
+            pattern.url_pattern.is_some(),
+        )
+    }))?;
+    let page = progress.race(tabs.session(entry)).await??;
+    routes::set_page_patterns(&page, patterns, progress).await?;
+    encode_result::<PageSetNetworkInterceptionPatternsParams>(
+        &PageSetNetworkInterceptionPatternsResult {},
+    )
+}
+
 async fn requests(
     tabs: &Tabs,
     entry: &PageEntry,
