@@ -62,7 +62,7 @@ Or close it with `await page.close()`.
 
 ## Connecting
 
-Call `run` through the configured BrowserOS neo MCP server; if it is not connected, tell the user instead of guessing another endpoint. Reuse the MCP client's session; if the server forgets it, reconnect and initialize once before continuing. Keep the client's request timeout longer than the run's `timeout`, allowing time for cleanup and the reply. A client timeout or cancelled request may deliver no result or tab ID; use `context.pages()` to find open tabs by URL before opening replacements.
+Call `run` through the configured BrowserOS neo MCP server; if it is not connected, tell the user instead of guessing another endpoint. Reuse the MCP client's session; if the server forgets it, reconnect and initialize once before continuing. Keep the client's request timeout longer than the run's `timeout`, allowing time for cleanup and the reply. A client timeout or cancelled request may deliver no result or tab ID; use `context.pages()` to find open tabs by URL before opening replacements. Parse the whole result before shortening it: in its JSON text, `pages` comes after the long `calls` trace, so trimming the text first can drop the tab IDs.
 
 ## Supported API
 
