@@ -296,8 +296,9 @@ export async function serveFixture(cleanups, { pages = {}, slowMs = 0 } = {}) {
  * Launches a headless BrowserOS neo on a throwaway profile, leading a process group of its own.
  * Every helper it starts (GPU, utility, renderers) joins that group (`ps -o pid,pgid` on
  * 155.0.8318.26), so one signal to the group reaches them all. Its cleanup is `closeBrowser`.
+ * `args` go before the first URL, such as Playwright's own `--disable-back-forward-cache`.
  */
-export async function launchBrowser(cleanups, binary) {
+export async function launchBrowser(cleanups, binary, args = []) {
   const profile = mkdtempSync(join(tmpdir(), 'neo-parity-'))
   const child = spawn(
     binary,
@@ -309,6 +310,7 @@ export async function launchBrowser(cleanups, binary) {
       '--remote-debugging-port=0',
       `--user-data-dir=${profile}`,
       '--no-first-run',
+      ...args,
       'about:blank',
     ],
     // `detached` makes it a group leader, as Playwright's launcher does, so one SIGKILL to the

@@ -9,9 +9,11 @@
 neo-runtime/src/console.rs
 neo-runtime/src/dialogs.rs
 neo-runtime/src/events.rs
+neo-runtime/src/history.rs
 neo-runtime/src/page_events.rs
 neo-sdk/src/console-message.ts
 neo-sdk/src/dialog.ts
 neo-sdk/src/events.ts
+neo-sdk/src/url.ts
 neo-sdk/src/waiter.ts
 neo-sdk/src/web-error.ts

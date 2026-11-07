@@ -37,7 +37,7 @@ use tokio::time;
 use crate::click::{LoopAWaits, PageError, SelectorFacts, Tab};
 use crate::frame_selector;
 use crate::frames::{FrameScope, Host};
-use crate::navigate::{Lifecycle, Navigation, NavigationState, Observation};
+use crate::navigate::{Lifecycle, Navigation, NavigationState, NavigationTab, Observation};
 use crate::page::{FrameState, FrameTab, NavigationObservation, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::url_match::{SerializedUrlMatch, UrlMatcher};
@@ -54,6 +54,9 @@ pub(crate) trait WaitTab: Send + Sync {
         selector: &str,
     ) -> impl Future<Output = Result<SelectorFacts, PageError>> + Send;
     fn observe(&self) -> Result<Self::Observation, PageError>;
+    /// Starts recording the page's navigation requests (`Network.enable`), once per session, so
+    /// a navigation whose request fails rejects a URL wait, as in Playwright.
+    fn track_network(&self) -> impl Future<Output = Result<(), PageError>> + Send;
     fn pending_navigation(&self) -> Option<String>;
     fn navigation_settled(&self) -> impl Future<Output = Result<(), PageError>> + Send;
     fn selector_state(
@@ -130,7 +133,7 @@ impl WaitForLoadStateOptions {
     }
 }
 
-fn supported_lifecycle(
+pub(crate) fn supported_lifecycle(
     state: Option<LifecycleEvent>,
     name: &str,
 ) -> Result<LifecycleEvent, PlaywrightError> {
@@ -162,7 +165,7 @@ trait Condition {
 
 /// Preparation can lose its execution context to a commit. Retry through the same loop and
 /// deadline as a DOM probe, before subscribing to navigation events.
-async fn prepare_tab<T: WaitTab>(tab: &T, progress: &Progress) -> Result<(), CallError> {
+pub(crate) async fn prepare_tab<T: WaitTab>(tab: &T, progress: &Progress) -> Result<(), CallError> {
     let mut backoff = LoopAWaits::new(progress.timeout_ms());
     let _ = backoff.next_wait();
     wait_until(&mut PrepareCondition { tab, backoff }, progress).await
@@ -323,6 +326,10 @@ pub(crate) async fn wait_for_url<T: WaitTab>(
     // Preparation can itself observe commits; keep them queued before it starts.
     let events = tab.observe().map_err(page_error)?;
     prepare_tab(tab, progress).await?;
+    progress
+        .race(tab.track_network())
+        .await?
+        .map_err(page_error)?;
     wait_until(
         &mut NavigationCondition {
             events,
@@ -358,6 +365,17 @@ impl<O: Observation> NavigationCondition<'_, O> {
     fn satisfied(&mut self, progress: &Progress) -> Result<bool, PlaywrightError> {
         let state = self.events.state();
         let navigation = self.navigation.take();
+        // client/frame.ts waitForNavigation, which waitForURL runs: a navigation that fails
+        // before the URL matched rejects the wait.
+        if matches!(self.phase, Phase::Matching)
+            && self.matcher.is_some()
+            && let Some(error) = navigation
+                .as_ref()
+                .and_then(|navigation| navigation.error.clone())
+        {
+            return Err(PlaywrightError::error(error));
+        }
+        let navigation = navigation.filter(|navigation| navigation.error.is_none());
         if self.matcher.is_some()
             && let Some(navigation) = &navigation
         {
@@ -423,7 +441,7 @@ impl<O: Observation> Condition for NavigationCondition<'_, O> {
     }
 }
 
-fn lifecycle_name(state: LifecycleEvent) -> &'static str {
+pub(crate) fn lifecycle_name(state: LifecycleEvent) -> &'static str {
     match state {
         LifecycleEvent::Commit => "commit",
         LifecycleEvent::Domcontentloaded => "domcontentloaded",
@@ -441,7 +459,11 @@ fn lifecycle_fired(lifecycle: Lifecycle, state: LifecycleEvent) -> bool {
     }
 }
 
-fn lifecycle_reached(since: Lifecycle, current: Lifecycle, state: LifecycleEvent) -> bool {
+pub(crate) fn lifecycle_reached(
+    since: Lifecycle,
+    current: Lifecycle,
+    state: LifecycleEvent,
+) -> bool {
     match state {
         LifecycleEvent::Commit => true,
         LifecycleEvent::Domcontentloaded => {
@@ -628,6 +650,10 @@ impl WaitTab for FrameTab {
             _ => Ok(WaitObservation::Main(self.observe_waits())),
         }
     }
+
+    async fn track_network(&self) -> Result<(), PageError> {
+        NavigationTab::track_network(self).await.map(|_| ())
+    }
     fn pending_navigation(&self) -> Option<String> {
         PageSession::pending_navigation(self)
     }
@@ -806,6 +832,8 @@ mod tests {
                         document: matches!(event, Event::Commit(_)).then(|| url.to_string()),
                         url: url.to_string(),
                         lifecycle: state.lifecycle,
+                        request: matches!(event, Event::Commit(_)),
+                        error: None,
                     });
                 }
                 Event::Load => {
@@ -845,6 +873,9 @@ mod tests {
         async fn describe(&self, _: &str) -> Result<SelectorFacts, PageError> {
             self.descriptions.fetch_add(1, Ordering::Relaxed);
             self.describe.answer().await
+        }
+        fn track_network(&self) -> impl Future<Output = Result<(), PageError>> {
+            future::ready(Ok(()))
         }
         fn observe(&self) -> Result<Events, PageError> {
             let observation = Events {
@@ -1580,6 +1611,8 @@ mod tests {
                             document: Some(MATCH.to_string()),
                             url: MATCH.to_string(),
                             lifecycle: state.lifecycle,
+                            request: true,
+                            error: None,
                         });
                     });
                     time::sleep(Duration::from_millis(20)).await;
