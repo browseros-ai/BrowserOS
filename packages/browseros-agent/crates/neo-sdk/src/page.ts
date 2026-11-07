@@ -17,6 +17,7 @@ import { isString } from '../vendor/playwright/isomorphic/stringUtils'
 import type { BrowserContext } from './browser-context'
 import type { Connection } from './connection'
 import { ConsoleMessage } from './console-message'
+import type { ElementHandle } from './element-handle'
 import {
   isTargetClosedError,
   parseSerializedError,
@@ -50,6 +51,7 @@ import {
   type UncheckOptions,
   type URLMatch,
   verifyLoadState,
+  type WaitForFunctionOptions,
   type WaitForLoadStateOptions,
   type WaitForNavigationOptions,
   type WaitForURLOptions,
@@ -59,7 +61,9 @@ import {
   assertMaxArguments,
   type EvaluateOptions,
   type JSHandle,
+  type PageElement,
   type PageFunction,
+  type PageFunctionOn,
 } from './js-handle'
 import type { Locator, LocatorOptions } from './locator'
 import { serializeUrlMatch } from './neo-commands'
@@ -514,6 +518,65 @@ export class Page extends ChannelOwner {
   /** The navigation's `Response`, or `null` where Playwright's has none. */
   async goto(url: string, options: GotoOptions = {}): Promise<Response | null> {
     return await this.#mainFrame._goto('page.goto', url, options)
+  }
+
+  /** Playwright's `page.$`: `frame.$` in the main frame. */
+  async $(
+    selector: string,
+    options?: { strict?: boolean },
+  ): Promise<ElementHandle | null> {
+    return await this.mainFrame()._querySelector('page.$', selector, options)
+  }
+
+  /** Playwright's `page.$$`: `frame.$$` in the main frame. */
+  async $$(selector: string): Promise<ElementHandle[]> {
+    return await this.mainFrame()._querySelectorAll('page.$$', selector)
+  }
+
+  /** Playwright's `page.$eval`: `frame.$eval` in the main frame. */
+  async $eval<R, Arg>(
+    selector: string,
+    pageFunction: PageFunctionOn<PageElement, Arg, R>,
+    arg?: Arg,
+  ): Promise<R> {
+    // biome-ignore lint/complexity/noArguments: Playwright counts the arguments the call passed
+    assertMaxArguments(arguments.length, 3)
+    return await this.mainFrame()._evalOnSelector(
+      'page.$eval',
+      selector,
+      pageFunction,
+      arg,
+    )
+  }
+
+  /** Playwright's `page.$$eval`: `frame.$$eval` in the main frame. */
+  async $$eval<R, Arg>(
+    selector: string,
+    pageFunction: PageFunctionOn<PageElement[], Arg, R>,
+    arg?: Arg,
+  ): Promise<R> {
+    // biome-ignore lint/complexity/noArguments: Playwright counts the arguments the call passed
+    assertMaxArguments(arguments.length, 3)
+    return await this.mainFrame()._evalOnSelectorAll(
+      'page.$$eval',
+      selector,
+      pageFunction,
+      arg,
+    )
+  }
+
+  /** Playwright's `page.waitForFunction`: `frame.waitForFunction` in the main frame. */
+  async waitForFunction<R, Arg>(
+    pageFunction: PageFunction<Arg, R>,
+    arg?: Arg,
+    options?: WaitForFunctionOptions,
+  ): Promise<JSHandle<R>> {
+    return await this.mainFrame()._waitForFunction(
+      'page.waitForFunction',
+      pageFunction,
+      arg,
+      options,
+    )
   }
 
   /** Playwright's `page.evaluate`: `frame.evaluate` in the main frame. */
