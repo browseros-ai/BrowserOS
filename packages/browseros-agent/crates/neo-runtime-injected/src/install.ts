@@ -22,7 +22,12 @@ import {
   InjectedScript,
   type InjectedScriptOptions,
 } from '../vendor/playwright/injected/src/injectedScript'
-import { glue } from './glue'
+import { WebMCPScript } from '../vendor/playwright/injected/src/webMCP'
+import {
+  parseEvaluationResultValue,
+  serializeAsCallArgument,
+} from '../vendor/playwright/isomorphic/utilityScriptSerializers'
+import { glue, vendored } from './glue'
 import { wellFormedCall } from './well-formed'
 import { WORLD_KEY } from './world-key'
 
@@ -48,6 +53,13 @@ export type GlueObject = {
 export type NeoWorld = typeof globalThis & {
   [WORLD_KEY]?: Record<string, GlueObject>
 }
+
+// Neo: the glue's WebMCP calls construct Playwright's `WebMCPScript` (`glue.ts` `vendored`).
+vendored.WebMCPScript = WebMCPScript
+vendored.parseValue = (value) => parseEvaluationResultValue(value)
+// Playwright: `injected/src/utilityScript.ts` `UtilityScript.jsonValue`: `return serializeAsCallArgument(value, (value: any) => ({ fallThrough: value }));`
+vendored.serializeValue = (value) =>
+  serializeAsCallArgument(value, (inner) => ({ fallThrough: inner }))
 
 export default function install(
   key: string,

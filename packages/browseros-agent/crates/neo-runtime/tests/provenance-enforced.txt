@@ -38,6 +38,7 @@ neo-runtime/src/network_events.rs
 neo-runtime/src/network_idle.rs
 neo-runtime/src/page_events.rs
 neo-runtime/src/switch.rs
+neo-runtime/src/webmcp.rs
 neo-sdk/src/cdp-session.ts
 neo-sdk/src/console-message.ts
 neo-sdk/src/coverage.ts
@@ -55,3 +56,4 @@ neo-sdk/src/vendor-globals.d.ts
 neo-sdk/src/vendor-shims.ts
 neo-sdk/src/waiter.ts
 neo-sdk/src/web-error.ts
+neo-sdk/src/webmcp.ts

@@ -66,6 +66,26 @@ Injected:
       returns:
         value: string
 
+    # (G) The tools the document registered with `WebMCP`, as Playwright's `WebMCPScript.tools`
+    # describes them in its utility world, for `Frame.webmcpTools`. Needs no `InjectedScript`.
+    webmcpTools:
+      internal: true
+      returns:
+        tools:
+          type: array
+          items: WebMCPToolDescription
+
+    # (G) Calls the `WebMCP` tool `name` with `input`, as Playwright's `WebMCPScript.callTool` does
+    # in its utility world, for `Frame.webmcpCallTool`. `input` and `result` are Playwright's
+    # `SerializedValue`s, which the page parses and writes with Playwright's own serializers.
+    webmcpCallTool:
+      internal: true
+      parameters:
+        name: string
+        input: json
+      returns:
+        result: json
+
     # Probes the first match for `Frame.waitForSelector`, without marking elements or waiting.
     # Rust owns the retry loop and deadline.
     selectorState:
@@ -1039,3 +1059,17 @@ AriaRole:
   - treeitem
   - iframe
   - text
+
+# (G) A `WebMCP` tool as Playwright's injected `WebMCPScript` describes it (`WebMCPToolDescription`).
+WebMCPToolDescription:
+  type: object
+  properties:
+    name: string
+    description: string
+    inputSchema: json?
+    annotations:
+      type: object?
+      properties:
+        readOnly: boolean?
+        untrustedContent: boolean?
+        consequential: boolean?

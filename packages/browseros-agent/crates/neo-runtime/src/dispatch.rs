@@ -54,8 +54,8 @@ use neo_runtime_spec::serve::{
     FrameSelectOptionParams, FrameSelectOptionResult, FrameSetContentParams, FrameSetContentResult,
     FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameTypeParams, FrameTypeResult,
     FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
-    FrameWaitForTimeoutParams, FrameWaitForTimeoutResult, Metadata, PageCall, RequestCall,
-    ResponseCall,
+    FrameWaitForTimeoutParams, FrameWaitForTimeoutResult, FrameWebmcpCallToolParams,
+    FrameWebmcpToolsParams, Metadata, PageCall, RequestCall, ResponseCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -111,6 +111,7 @@ use crate::waits::{
     self, NeoWaitForLoadStateParams, NeoWaitForUrlParams, WaitForLoadStateOptions,
     WaitForSelectorOptions, WaitForUrlOptions, WaitTab,
 };
+use crate::webmcp;
 
 /// The shared budget for creation settlement, call draining and closing-state reads after
 /// the realm ends. Tasks still running keep their state and records read `Unfinished`.
@@ -398,6 +399,9 @@ enum Route {
     FrameBoundingBox(ElementTarget),
     FrameHighlight(HighlightOptions),
     FrameHideHighlight(HighlightOptions),
+    /// (G) `Frame.webmcpTools` and `webmcpCallTool` (`webmcp.rs`).
+    FrameWebmcpTools,
+    FrameWebmcpCallTool(Box<FrameWebmcpCallToolParams>),
     FrameWaitForNavigation(WaitForNavigationOptions),
     FrameNextNavigation(NeoNextNavigationParams),
     FrameFinishNavigation(FinishNavigationOptions),
@@ -923,6 +927,9 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::HideHighlight(params) => Ok(Route::FrameHideHighlight(
             HighlightOptions::from_hide(params),
         )),
+        // (G) `page.webmcp`, `frame.webmcp` (`webmcp.rs`).
+        FrameCall::WebmcpTools(_) => Ok(Route::FrameWebmcpTools),
+        FrameCall::WebmcpCallTool(params) => Ok(Route::FrameWebmcpCallTool(Box::new(params))),
     }
 }
 
@@ -1175,6 +1182,9 @@ async fn serve(
         | Route::FrameBoundingBox(_)
         | Route::FrameHighlight(_)
         | Route::FrameHideHighlight(_)) => serve_element_op(&page, route, &progress).await,
+        route @ (Route::FrameWebmcpTools | Route::FrameWebmcpCallTool(_)) => {
+            serve_webmcp(&page, route, &progress).await
+        }
         route => serve_route(&page, route, &progress).await,
     };
     finish_reply(result, reply).await;
@@ -1365,6 +1375,23 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
     let _sent = reply.send((text, events.seq()));
 }
 
+/// (G) `Frame.webmcpTools` and `webmcpCallTool` (`webmcp.rs`).
+async fn serve_webmcp(
+    page: &FrameTab,
+    route: Route,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    match route {
+        Route::FrameWebmcpTools => webmcp::tools(page, progress)
+            .await
+            .and_then(|result| encode_result::<FrameWebmcpToolsParams>(&result)),
+        Route::FrameWebmcpCallTool(params) => {
+            webmcp::call_tool(page, *params, progress).await.map(Some)
+        }
+        _ => Err(PlaywrightError::error("neo-runtime: not a WebMCP call").into()),
+    }
+}
+
 /// The typed handler dispatch, also used by the skeleton's tests with click's existing fake.
 async fn serve_route<T: FormTab + KeyboardTab>(
     tab: &T,
@@ -1441,6 +1468,8 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameBoundingBox(_)
         | Route::FrameHighlight(_)
         | Route::FrameHideHighlight(_)
+        | Route::FrameWebmcpTools
+        | Route::FrameWebmcpCallTool(_)
         | Route::FrameWaitForNavigation(_)
         | Route::FrameNextNavigation(_)
         | Route::FrameFinishNavigation(_)

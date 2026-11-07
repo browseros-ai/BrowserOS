@@ -148,6 +148,10 @@ interfaces:
     - dispatchEvent
     - highlight
     - hideHighlight
+    # (G) `page.webmcp` and `frame.webmcp`: the document's WebMCP tools, read and called in the
+    # utility world (neo-runtime `webmcp.rs`, Playwright's server `WebMCP`).
+    - webmcpTools
+    - webmcpCallTool
 
 # Named Playwright types the call bridge needs outside any command. `Metadata` is the `metadata`
 # of every protocol call; it carries the call's timeout, which is never a command parameter.

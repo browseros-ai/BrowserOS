@@ -24,6 +24,7 @@ paths under Playwright's `packages/`, plus its LICENSE and NOTICE.
 | `injected/src/selectorGenerator.ts` | `90d84bb6b8fd51aefde2c798ac7f0c9aab557ee691faa23dc5e804cc1440be89` |
 | `injected/src/selectorUtils.ts` | `1d3718153d2eacd340c5a7ab66dc0ad8f94ae1eabb5dc190f8514fae7b1513c1` |
 | `injected/src/utilityScript.ts` | `cd5c44588e81327e5fdc11120e55be2088b96f7cb042d3d6aa07e9b72650fc77` |
+| `injected/src/webMCP.ts` | `ba714637afa9bae61acf1f565969f5dde40c5c318934e37059a272b26b58b7e0` |
 | `injected/src/xpathSelectorEngine.ts` | `5b73a267252e076078131ec34302c2be1b7fc916ef50f59a2b94fd68e53727c5` |
 | `isomorphic/ariaSnapshot.ts` | `8a6d5d90933b786bcbf6407359702257ca8d499eec568215830afc9fd25e1fec` |
 | `isomorphic/ariaSnapshotRenderer.ts` | `f9fb30f2895e89b23c9bf75ccbb32100676f834b648785ee629c0065b4611d20` |

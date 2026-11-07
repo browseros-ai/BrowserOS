@@ -29,7 +29,9 @@ import type {
   HitTargetInterceptionResult,
   InjectedScript,
 } from '../vendor/playwright/injected/src/injectedScript'
+import type { WebMCPScript } from '../vendor/playwright/injected/src/webMCP'
 import type { AriaNodeJSON } from '../vendor/playwright/isomorphic/ariaSnapshot'
+import type { SerializedValue } from '../vendor/playwright/isomorphic/utilityScriptSerializers'
 
 /** An element with the aria ref Playwright's snapshots keep on it (`ariaSnapshot.ts`
  * `computeAriaRef`: `(element as any)._ariaRef = ariaRef;`). */
@@ -92,8 +94,43 @@ function elementList(elements: Element[]): Record<string, Element> {
   return Object.assign(Object.create(null), elements)
 }
 
+/**
+ * Neo: Playwright's `WebMCPScript` class (`injected/src/webMCP.ts`), which `install.ts`, the one
+ * file that may construct vendored code, hands in. Each WebMCP call makes a new one over this
+ * world's globals, as Playwright's server evaluates `new WebMCPScript(globalThis)` per call in
+ * its utility world.
+ */
+export const vendored: {
+  WebMCPScript?: new (global: typeof globalThis) => WebMCPScript
+  /** Playwright's `parseEvaluationResultValue`, for a value the call carried. */
+  parseValue?: (value: SerializedValue) => unknown
+  /** Playwright's `serializeAsCallArgument`, for a value the call answers. */
+  serializeValue?: (value: unknown) => SerializedValue
+} = {}
+
+/** Neo: a new `WebMCPScript` over this world's globals. */
+function webMCP(): WebMCPScript {
+  const Script = vendored.WebMCPScript
+  if (!Script) throw new Error('neo-runtime-injected: WebMCP is not installed')
+  return new Script(globalThis)
+}
+
 export const glue = {
   title: () => ({ value: document.title }),
+
+  /** Playwright: `server/webmcp.ts` `WebMCP.tools`: `{ world: 'utility' });` */
+  webmcpTools: async () => ({ tools: await webMCP().tools() }),
+
+  /** Playwright: `server/webmcp.ts` `WebMCP.callTool`: `{ isFunction: true, world }, { name, input: input ?? {} });` */
+  webmcpCallTool: async (_injected, { name, input }) => {
+    const { parseValue, serializeValue } = vendored
+    if (!parseValue || !serializeValue)
+      throw new Error('neo-runtime-injected: WebMCP is not installed')
+    // Playwright: `server/webmcp.ts` `WebMCP.callTool`: `{ name, input: input ?? {} }`
+    const parsed = parseValue(input as SerializedValue) ?? {}
+    const result = await webMCP().callTool(name, parsed as object)
+    return { result: serializeValue(result) }
+  },
 
   /** `frames.ts:855-864`: one waitForSelector probe, without marking the matches. */
   selectorState: (injected, { selector, strict }) => {

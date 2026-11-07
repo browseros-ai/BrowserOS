@@ -54,6 +54,8 @@ export type ApiName =
   | 'browserContext.newCDPSession'
   | 'cdpSession.send'
   | 'cdpSession.detach'
+  | 'webMCP.tools'
+  | 'webMCP.callTool'
   | 'keyboard.down'
   | 'keyboard.up'
   | 'keyboard.insertText'

@@ -104,6 +104,7 @@ import { type CreatedFrame, get, matchesURL } from './runtime-bridge'
 import type { SelectOptionValues } from './select-option'
 import { type TimeoutInput, TimeoutSettings } from './timeout-settings'
 import { Waiter, type WaitForEventOptions, wrapApiCall } from './waiter'
+import type { WebMCP } from './webmcp'
 
 /**
  * Neo: the page's listener events, by Playwright's names (`Events.Page`): what Neo produces,
@@ -202,6 +203,11 @@ export class Page extends ChannelOwner {
   /** Playwright's `page.keyboard`, `page.mouse` and `page.touchscreen`, one each per page. */
   /** Playwright's `page.coverage`: JS and CSS coverage on this page's own session. */
   readonly coverage: Coverage
+
+  /** Playwright's `page.webmcp`: its main frame's WebMCP tools (`webmcp.ts`). */
+  get webmcp(): WebMCP {
+    return this.mainFrame().webmcp
+  }
   readonly keyboard: Keyboard
   readonly mouse: Mouse
   readonly touchscreen: Touchscreen

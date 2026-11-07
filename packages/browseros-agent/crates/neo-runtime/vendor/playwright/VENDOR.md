@@ -35,6 +35,7 @@ and NOTICE.
 | `packages/playwright-core/src/client/timeoutSettings.ts` | `5a4b0c7dfe3a9f0bfee321732265a8fefd3e101d74517eef32a3ae079ba70ce8` |
 | `packages/playwright-core/src/client/waiter.ts` | `fd4a8f0a723e56cc6e3e02bebf7e3e5ff6b169070a37a9617111db291722cbc9` |
 | `packages/playwright-core/src/client/webError.ts` | `e322ebd2c4e1a7a8b036840ac50be2ed191aac6f8668911d582fd9f613fa780a` |
+| `packages/playwright-core/src/client/webmcp.ts` | `a43b4fb511cbd5d53dc02ff40d6d3308dd456a178aa42404ad40bfa3bd0e0153` |
 | `packages/playwright-core/src/server/artifact.ts` | `5640b77b270078ef29f976052a95a64d07f12b999b6ca8ef437eb9a2c41ca5da` |
 | `packages/playwright-core/src/server/chromium/chromiumSwitches.ts` | `35dc159f3f27deac0de803ef55efa31713b62aa762908a26a2663e7f6fbb4bc3` |
 | `packages/playwright-core/src/server/chromium/crBrowser.ts` | `b8553078358be5326ca4905983059947a0f838111f0fde73940bf0e7792c43c9` |
@@ -64,4 +65,5 @@ and NOTICE.
 | `packages/playwright-core/src/server/page.ts` | `c17ffdb5133c507085447a5914b8a38992b83c65985b9b5b06ee65ce68c975bf` |
 | `packages/playwright-core/src/server/progress.ts` | `0770a2b225b77df82f0aefea8ca89b699ebb3e58eb4274771d5e0c0cf43aed01` |
 | `packages/playwright-core/src/server/protocolError.ts` | `b6d54500d5764b973f93504d7c21126e8176266c8ddfa4da47d218f8ec88bb04` |
+| `packages/playwright-core/src/server/webmcp.ts` | `38f756b2bf55bb6030d03f2de4b50f3c8aeddf28a03503f9c2f57fa4291e2832` |
 | `packages/utils/stackTrace.ts` | `fd74bd690ad37498ad3b676025129b38c08c5bffb190c8d96f228a2be7b5210b` |

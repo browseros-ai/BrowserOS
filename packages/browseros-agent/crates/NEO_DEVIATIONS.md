@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (61)
+## Deviations (62)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -50,6 +50,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/reads.rs | `UNNAMED_FRAME` | `server/page.ts` `ariaSnapshotJSONForFrame` | Playwright names a child frame's refs by the frame's number, which needs no ref on its `<iframe>`; Neo's refs inside a frame are the path of iframe refs from the main frame, and an iframe that is not visible or receives no pointer events gets no ref unless an earlier snapshot gave it one. So an AI snapshot inside a frame behind such an iframe throws, before that frame is snapshotted, rather than answer refs no selector could route. |
 | neo-runtime/src/realm.rs | `RACE_UNCAUGHT` | `client/eventEmitter.ts` `EventEmitter._handleListenerError` | A listener's throw, or its rejection with no `error` listener, is an uncaught exception in Node, which exits. QuickJS has no such exit, so neo-sdk reports the first one on its `uncaught` promise, and the run ends with that error at once instead of running on. The realm's own `abort` listeners report theirs the same way (`abort::REALM_GLOBALS`). |
 | neo-runtime/src/tabs.rs | `Tabs::file_chooser_element` | `server/chromium/crPage.ts` `FrameSession._onFileChooserOpened` | Playwright makes the input's handle in its utility world as the chooser opens; Neo makes it in the main world, where every Neo `ElementHandle` lives (`evaluate.rs`), at the first read, so `element().evaluate` sees the page's own globals. |
+| neo-runtime/src/webmcp.rs | `call_tool` | `server/webmcp.ts` `WebMCP.callTool` | Playwright hands a handle in `input` to its utility world, where a page's handle cannot be read; Neo refuses one before the call. |
 | neo-sdk/src/browser-context.ts | `BrowserContext.newPage` | `server/chromium/crBrowser.ts` `CRBrowserContext.doCreateNewPage` | Playwright's new page takes the window's focus. Neo opens it in the background of the run page's window, by design: the user's active tab stays active until a script calls `bringToFront`. |
 | neo-sdk/src/browser-context.ts | `BrowserContext.pages` | `client/browserContext.ts` `BrowserContext.pages` | Playwright lists the pages its client was told of, in that order. Neo lists the context's tabs as the browser reports them, the run page first. |
 | neo-sdk/src/console-message.ts | (file) | `client/consoleMessage.ts` `ConsoleMessage.args` | Playwright's server sends every argument as a handle with the message. Neo sends a message's arguments by an id (`argsId`) and makes the run's handles of them when `args()` first reads them (a getter; neo-runtime `tabs.rs` `console_args`), so a message nobody reads costs no browser call and keeps its place among the events. Each handle lives in the frame that logged the message, as Playwright's does. After the page closed, `args()` still answers with them, and an object's handle then fails on use, as Playwright's does. A message read from `consoleMessages()` kept no arguments: its `args()` throws an Error naming why. |

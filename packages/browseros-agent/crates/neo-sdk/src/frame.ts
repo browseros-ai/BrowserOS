@@ -175,6 +175,7 @@ import type {
   TimeoutOptions,
 } from './timeout-settings'
 import { type URLPredicate, urlFor } from './url'
+import { WebMCP } from './webmcp'
 
 /** `click`'s options as a script passes them: the wire params plus `timeout`. */
 export type ClickOptions = Omit<FrameClickParams, 'selector'> & {
@@ -544,6 +545,8 @@ export class Frame {
   readonly _guid: string
   readonly _page: Page
   readonly _connection: Connection
+  /** Playwright's `frame.webmcp`: the document's WebMCP tools (`webmcp.ts`). */
+  readonly webmcp: WebMCP
   #lastUrl: string
   #lastName: string
   /** While the listeners of an event about this frame run, what the event says of it. */
@@ -558,6 +561,7 @@ export class Frame {
     this._guid = guid
     this._page = page
     this._connection = connection
+    this.webmcp = new WebMCP(this)
     this.#lastUrl = initializer.url
     this.#lastName = initializer.name
   }
