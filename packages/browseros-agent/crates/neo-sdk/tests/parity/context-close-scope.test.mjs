@@ -12,7 +12,9 @@
 //
 // The second case holds the browser's reply to the script's installation, so the close comes
 // while that installation is still out: the tab's next document runs no script, before or
-// after the reply arrives, as Playwright's control of the same delay reads none.
+// after the reply arrives, as Playwright's control of the same delay reads none. The third
+// exposes a function of the context: after the close, the tab's next document has neither the
+// function nor the CDP binding it calls through.
 //
 // From the batch-2 delta review (review-delta-8d74c805a, D1, the init-script half of its
 // `context-close-scope` repro) and the D1 re-review's item 2 (`late-init`).
@@ -99,10 +101,14 @@ function buildHost(root) {
 
 /**
  * A CDP proxy in front of `upstream` that counts the `Browser.getTabs` requests sent after the
- * run's init script went in (`Page.addScriptToEvaluateOnNewDocument` with the marker). With
- * `hold`, it keeps the browser's reply to that installation until `release()`.
+ * run's init script went in (`Page.addScriptToEvaluateOnNewDocument` whose source holds `arm`).
+ * With `hold`, it keeps the browser's reply to that installation until `release()`.
  */
-async function countingProxy(cleanups, upstream, { hold = false } = {}) {
+async function countingProxy(
+  cleanups,
+  upstream,
+  { hold = false, arm = MARKER } = {},
+) {
   let port
   let armed = false
   let reads = 0
@@ -129,7 +135,7 @@ async function countingProxy(cleanups, upstream, { hold = false } = {}) {
       const message = JSON.parse(text)
       if (
         message.method === 'Page.addScriptToEvaluateOnNewDocument' &&
-        String(message.params?.source).includes(MARKER)
+        String(message.params?.source).includes(arm)
       ) {
         armed = true
         installs.add(message.id)
@@ -387,6 +393,98 @@ await new Promise(() => {})`,
     assert.equal(code, 0, host.stderr)
     assert.equal(beforeReply, null, 'no script runs after the awaited close')
     assert.equal(afterReply, null, 'the late reply installs nothing')
+  } finally {
+    if (host && host.child.exitCode === null) {
+      host.child.kill('SIGTERM')
+      await host.exited
+    }
+    await runCleanups(cleanups)
+  }
+})
+
+test('context.close releases the run’s exposed bindings while the realm goes on', {
+  skip,
+  timeout: 180_000,
+}, async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'neo-context-close-binding-'))
+  const cleanups = [() => rmSync(root, { recursive: true, force: true })]
+  let host
+  try {
+    const bin = buildHost(root)
+    const origin = await serveFixture(cleanups, {
+      pages: {
+        '/top.html': '<!doctype html><title>top</title>',
+        '/after.html': '<!doctype html><title>after</title>',
+      },
+    })
+    const { port } = await launchBrowser(cleanups, browserBinary)
+    const cdp = await connectCdp(cleanups, port)
+    const binding = async (session) => {
+      await cdp.send('Page.navigate', { url: `${origin}/after.html` }, session)
+      const read = async (expression) =>
+        (
+          await cdp.send(
+            'Runtime.evaluate',
+            { expression, returnByValue: true },
+            session,
+          )
+        ).result.value
+      await eventually(
+        async () =>
+          (await read(
+            'document.readyState === "complete" && location.pathname',
+          )) === '/after.html',
+        'the tab loaded /after.html',
+      )
+      // The function, and the CDP binding it sends through (`__playwright__binding__`), which
+      // only the binding's own release takes off the session.
+      return await read(
+        '({ binding: typeof window.closedFn, transport: typeof window.__playwright__binding__ })',
+      )
+    }
+
+    const first = await openTab(cdp, `${origin}/top.html`)
+    const playwright = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
+    const [context] = playwright.contexts()
+    await context.exposeFunction('closedFn', () => 41)
+    await context.close()
+    const reference = await binding(first.sessionId)
+    await playwright.close()
+    await cdp.send('Target.closeTarget', { targetId: first.targetId })
+
+    const second = await openTab(cdp, `${origin}/top.html`)
+    const upstream = (
+      await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()
+    ).webSocketDebuggerUrl
+    const proxy = await countingProxy(cleanups, upstream, { arm: 'closedFn' })
+    const script = join(root, 'context-close-binding.js')
+    writeFileSync(
+      script,
+      `await context.exposeFunction('closedFn', () => 41)
+await context.close()
+for (let i = 0; i < ${READS}; i++)
+  __neo_runtime.get(JSON.stringify({ guid: 'context@default', field: 'pages' }))
+await new Promise(() => {})`,
+    )
+    host = startHost(bin, proxy, second.targetId, script)
+    await eventually(
+      () => proxy.reads >= READ,
+      'the realm read the context after its close',
+      30_000,
+    )
+    const neo = await binding(second.sessionId)
+    host.child.stdin.write('stop\n')
+    const [code] = await host.exited
+    t.diagnostic(
+      JSON.stringify({ playwright: reference, neo, run: host.stdout.trim() }),
+    )
+    assert.equal(code, 0, host.stderr)
+    assert.deepEqual(
+      reference,
+      { binding: 'undefined', transport: 'undefined' },
+      'Playwright’s close leaves no binding',
+    )
+    assert.deepEqual(neo, reference, 'Neo’s close leaves no binding')
   } finally {
     if (host && host.child.exitCode === null) {
       host.child.kill('SIGTERM')
