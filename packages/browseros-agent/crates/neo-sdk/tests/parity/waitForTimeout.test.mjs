@@ -3,7 +3,8 @@
 // resolves `undefined`; every delay Node's setTimeout rule turns into 1 ms (0, negative, below 1,
 // NaN, ±Infinity, past 2^31 − 1) resolving while a 3 s timer is still pending; no action timeout
 // applying; and a page closed under the wait, which rejects it as closed. Compared: what each call
-// settled to (`waits.mjs` `settle`). The only times measured are those lower bounds.
+// settled to (`waits.mjs` `settle`), never elapsed time (#3162): Node's own timers can resolve a
+// millisecond early, and the delay itself is pinned under paused time in waits.rs.
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs, waits.mjs).
 
@@ -23,10 +24,9 @@ const RESOLVED = 'undefined'
 const cases = [
   {
     name: 'waits out its delay and resolves undefined',
-    source: (frame) => `const started = Date.now()
-    const waited = await settle(${frame}.waitForTimeout(300))
-    return { waited, atLeastTheDelay: Date.now() - started >= 300 }`,
-    expected: { waited: RESOLVED, atLeastTheDelay: true },
+    source: (frame) =>
+      `return { waited: await settle(${frame}.waitForTimeout(300)) }`,
+    expected: { waited: RESOLVED },
   },
   {
     // A delay that is waited out as given would still be pending when the 3 s timer fires.
