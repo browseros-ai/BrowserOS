@@ -5851,9 +5851,12 @@ class Page extends ChannelOwner {
     await this.#context._onBinding(call2);
   }
   _frameForGuid(guid) {
-    if (guid === this.#mainFrame._guid)
-      return this.#mainFrame;
-    return this.frames().find((frame) => frame._guid === guid) ?? this.#mainFrame;
+    let frame = this.#frames.get(guid);
+    if (!frame) {
+      frame = new Frame(guid, this, this.#connection);
+      this.#frames.set(guid, frame);
+    }
+    return frame;
   }
   #onFrameAttached(record) {
     this.#frameEvent(record, "frameattached", false);

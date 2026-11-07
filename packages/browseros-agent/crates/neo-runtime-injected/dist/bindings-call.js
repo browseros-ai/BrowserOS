@@ -6,8 +6,11 @@ var BINDING = "__playwright__binding__";
 function bindingsCall(op, arg) {
   const global = globalThis;
   const controller = global[CONTROLLER];
-  if (!controller)
+  if (!controller) {
+    if (op === "end")
+      delete global[BINDING];
     return;
+  }
   switch (op) {
     case "add": {
       const { name, noGlobal } = arg;

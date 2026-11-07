@@ -11,10 +11,13 @@
 //!                each session that shows a page: Runtime.addBinding(__playwright__binding__)
 //!  page          window[name](...args) → the controller → __playwright__binding__(payload)
 //!  Chromium      Runtime.bindingCalled{payload, executionContextId} on that session
-//!  here          the calling frame (contexts.rs) → `bindingCall` on the page, or on the
-//!                context for its binding (EventHub), the call kept by its `bindingcall@` guid
+//!  here          the calling frame (contexts.rs, as the call's event found it, the frame kept
+//!                after it detaches) → `bindingCall` on the page, or on the context for its
+//!                binding (EventHub), the call kept by its `bindingcall@` guid
 //!  realm         BindingCall.call(callback) → resolve{result} | reject{error}
-//!  here          bindings-call.js `deliver` in the calling frame's main world
+//!  here          bindings-call.js `deliver` in the calling frame's main world, pinned to the
+//!                execution context that called: a document gone since never gets the answer,
+//!                and the next one never gets it either
 //!  run end       after init_scripts.rs removed every script: bindings-call.js `end` in every
 //!                frame (each call still waiting rejects; the names and the controller go)
 //! ```
@@ -314,6 +317,8 @@ struct Call {
     seq: u64,
     target: String,
     frame: String,
+    /// The execution context that called, the only one its answer may reach.
+    context: i64,
 }
 
 /// A page's call, as the controller sends it.
@@ -332,6 +337,8 @@ struct Incoming {
     session: String,
     prepared: Prepared,
     context: i64,
+    /// An iframe session's calling frame, read in event order by the session reader.
+    frame: Option<String>,
     payload: String,
 }
 
@@ -484,6 +491,11 @@ impl Bindings {
             debug!(%error, "a page's runtime did not turn on for its bindings");
         }
         add_binding(cdp, page.session_id(), None).await;
+        // Run end took the session's bindings off before this added one: off again, or every
+        // later document of the tab would get it.
+        if self.state.lock().await.closed {
+            remove_binding(cdp, page.session_id(), None).await;
+        }
     }
 
     /// Gives an iframe session `init_scripts.rs` holds for `target`'s page the CDP binding,
@@ -498,6 +510,9 @@ impl Bindings {
         )
         .await;
         add_binding(cdp, &link.session, Some(&link.gone)).await;
+        if self.state.lock().await.closed {
+            remove_binding(cdp, &link.session, Some(&link.gone)).await;
+        }
     }
 
     /// Records `session` as one with the CDP binding: `false` when it already was, or the run
@@ -532,20 +547,29 @@ impl Bindings {
             session,
             prepared,
             context,
+            frame,
             payload,
         } = incoming;
         let Some(page) = page_of(&tabs, &prepared.target) else {
             return;
         };
-        let frame = if prepared.child {
-            self.contexts.frame_of(&session, context)
-        } else {
-            // net's watcher applies the tab's contexts; it has applied what came before once
-            // the hub's barrier returns.
-            tabs.events().barrier().await;
-            page.events.contexts.frame_of(&session, context)
-        }
-        .unwrap_or_else(|| prepared.target.clone());
+        // Playwright: `server/page.ts` `PageBinding.dispatch`: `const result = await binding.playwrightFunction({ frame: context.frame, page, context: page.browserContext }, ...args);`
+        let frame = match frame {
+            Some(frame) => Some(frame),
+            None if prepared.child => None,
+            None => {
+                // net's watcher applies the tab's contexts; it has applied what came before once
+                // the hub's barrier returns, and a context destroyed since still names its frame.
+                tabs.events().barrier().await;
+                page.events.contexts.frame_of(&session, context)
+            }
+        };
+        let Some(frame) = frame else {
+            // Never another frame in its place: no frame can answer the call in its document,
+            // and run end rejects it there.
+            debug!(%session, context, "a binding call came from a context of no known frame");
+            return;
+        };
         let tab = frame_tab(&page, &prepared.target, &frame);
         let Ok(payload) = serde_json::from_str::<Payload>(&payload) else {
             debug!("a binding call's payload is not the controller's");
@@ -570,7 +594,7 @@ impl Bindings {
             Some(_) => None,
         };
         if let Some(message) = refused {
-            deliver_error(&tab, &payload.name, payload.seq, &message).await;
+            deliver_error(&tab, context, &payload.name, payload.seq, &message).await;
             return;
         }
         let guid = format!(
@@ -604,12 +628,13 @@ impl Bindings {
                     seq: payload.seq,
                     target: prepared.target.clone(),
                     frame: frame.clone(),
+                    context,
                 },
             );
         }
         if tabs.events().emit(&owner, "bindingCall", &params) != Emitted::Queued {
             self.state.lock().await.calls.remove(&guid);
-            deliver_error(&tab, &payload.name, payload.seq, RUN_ENDED).await;
+            deliver_error(&tab, context, &payload.name, payload.seq, RUN_ENDED).await;
         }
     }
 
@@ -650,8 +675,9 @@ impl Bindings {
             handles: carried,
         };
         // Playwright: `server/page.ts` `PageBinding.dispatch`: `.catch(e => debugLogger.log('error', e));`
-        if let Err(error) = evaluate::call_built(
+        if let Err(error) = evaluate::call_built_in(
             &tab,
+            Some(call.context),
             BuiltExpression::BindingsCall,
             vec![json!("deliver")],
             &arg,
@@ -725,13 +751,7 @@ impl Bindings {
         let cdp = tabs.cdp();
         for (session, prepared) in sessions {
             if !prepared.child {
-                let _removed = cdp
-                    .send(
-                        "Runtime.removeBinding",
-                        json!({ "name": BINDING_NAME }),
-                        Some(&SessionId::from(session.as_str())),
-                    )
-                    .await;
+                remove_binding(cdp, &SessionId::from(session.as_str()), None).await;
             }
         }
         self.stop.cancel();
@@ -840,15 +860,34 @@ async fn add_binding(cdp: &CdpClient, session: &SessionId, gone: Option<&Cancell
     }
 }
 
-/// The page's call `seq` of `name` rejects with `message`, at once.
-async fn deliver_error(tab: &FrameTab, name: &str, seq: u64, message: &str) {
+/// Neo: takes the CDP binding off `session`, so no later document gets it. A document that has it
+/// keeps it (probe C2): bindings-call.js `end` deletes it there.
+async fn remove_binding(cdp: &CdpClient, session: &SessionId, gone: Option<&CancellationToken>) {
+    let remove = cdp.send(
+        "Runtime.removeBinding",
+        json!({ "name": BINDING_NAME }),
+        Some(session),
+    );
+    let removed = match gone {
+        Some(gone) => until_gone(gone, remove).await.is_some(),
+        None => remove.await.is_ok(),
+    };
+    if !removed {
+        debug!(%session, "a session kept the binding");
+    }
+}
+
+/// The page's call `seq` of `name` rejects with `message`, at once, in the execution context
+/// `context` that made it.
+async fn deliver_error(tab: &FrameTab, context: i64, name: &str, seq: u64, message: &str) {
     let error = json!({ "e": { "n": "Error", "m": message, "s": "" } });
     let arg = page_object(
         0,
         vec![("name", json!(name)), ("seq", json!(seq)), ("error", error)],
     );
-    if let Err(error) = evaluate::run_built(
+    if let Err(error) = evaluate::run_built_in(
         tab,
+        Some(context),
         BuiltExpression::BindingsCall,
         vec![json!("deliver"), arg],
     )
@@ -943,10 +982,18 @@ async fn watch(bindings: Weak<Bindings>, tabs: Tabs, mut events: broadcast::Rece
                 ) else {
                     continue;
                 };
+                // An iframe session's contexts are this reader's: its calling frame is read here,
+                // in event order, before a later event can end that context.
+                let frame = if prepared.child {
+                    bindings.contexts.frame_of(session, context)
+                } else {
+                    None
+                };
                 let incoming = Incoming {
                     session: session.to_string(),
                     prepared,
                     context,
+                    frame,
                     payload: payload.to_string(),
                 };
                 tokio::spawn(Arc::clone(&bindings).called(tabs.clone(), incoming));

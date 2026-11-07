@@ -6,15 +6,66 @@
 //! One map per producer, fed in socket order by the task that reads that producer's events:
 //! `PageEvents` (net's watcher) for a tab's session and its frame hosts, `bindings.rs` for the
 //! sessions `init_scripts.rs` auto-attached.
+//!
+//! A destroyed context keeps naming its frame: a call made in it can be read after the context
+//! went, as when a binding's iframe is removed in the evaluation that called it, and Playwright's
+//! binding call keeps that frame as its source. Only the newest [`DEAD_KEPT`] of a map's
+//! destroyed contexts are kept.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
 use browseros_cdp::{CdpEvent, SessionId};
 
+/// Neo: how many destroyed contexts a map keeps naming their frames, oldest dropped first: a
+/// session's every navigation destroys a few, and a map lives as long as its producer.
+const DEAD_KEPT: usize = 1024;
+
 /// `(session, executionContextId)` → frame id, for each session's default (main world) contexts.
 #[derive(Debug, Default)]
-pub(crate) struct ContextFrames(Mutex<HashMap<(String, i64), String>>);
+pub(crate) struct ContextFrames(Mutex<Contexts>);
+
+#[derive(Debug, Default)]
+struct Contexts {
+    frames: HashMap<(String, i64), Context>,
+    /// Each death, oldest first, by its number: a key created again since is no longer that
+    /// death's, and outlives it.
+    dead: VecDeque<((String, i64), u64)>,
+    deaths: u64,
+}
+
+#[derive(Debug)]
+struct Context {
+    frame: String,
+    /// The number of its death; `None` while the context lives.
+    died: Option<u64>,
+}
+
+impl Contexts {
+    fn kill(&mut self, key: (String, i64)) {
+        let Some(context) = self.frames.get_mut(&key) else {
+            return;
+        };
+        if context.died.is_some() {
+            return;
+        }
+        self.deaths += 1;
+        context.died = Some(self.deaths);
+        self.dead.push_back((key, self.deaths));
+        while self.dead.len() > DEAD_KEPT {
+            let Some((oldest, died)) = self.dead.pop_front() else {
+                break;
+            };
+            if self
+                .frames
+                .get(&oldest)
+                .is_some_and(|context| context.died == Some(died))
+            {
+                self.frames.remove(&oldest);
+            }
+        }
+    }
+}
 
 impl ContextFrames {
     /// Applies one event of `Runtime.executionContextCreated` (a default context only),
@@ -35,34 +86,50 @@ impl ContextFrames {
                     aux["frameId"].as_str(),
                     aux["isDefault"].as_bool(),
                 ) {
-                    contexts.insert((session.to_string(), id), frame.to_string());
+                    contexts.frames.insert(
+                        (session.to_string(), id),
+                        Context {
+                            frame: frame.to_string(),
+                            died: None,
+                        },
+                    );
                 }
             }
             "Runtime.executionContextDestroyed" => {
                 if let Some(id) = event.params["executionContextId"].as_i64() {
-                    contexts.remove(&(session.to_string(), id));
+                    contexts.kill((session.to_string(), id));
                 }
             }
             "Runtime.executionContextsCleared" => {
-                contexts.retain(|(owner, _), _| owner != session);
+                let owned: Vec<(String, i64)> = contexts
+                    .frames
+                    .iter()
+                    .filter(|((owner, _), context)| owner == session && context.died.is_none())
+                    .map(|(key, _)| key.clone())
+                    .collect();
+                for key in owned {
+                    contexts.kill(key);
+                }
             }
             _ => {}
         }
     }
 
-    /// The frame of `context` on `session`, when its creation was applied.
+    /// The frame of `context` on `session` once its creation was applied, destroyed or not.
     pub(crate) fn frame_of(&self, session: &str, context: i64) -> Option<String> {
         self.0
             .lock()
             .ok()?
+            .frames
             .get(&(session.to_string(), context))
-            .cloned()
+            .map(|context| context.frame.clone())
     }
 
     /// Forgets every context of `session`, which detached.
     pub(crate) fn forget(&self, session: &str) {
         if let Ok(mut contexts) = self.0.lock() {
-            contexts.retain(|(owner, _), _| owner != session);
+            contexts.frames.retain(|(owner, _), _| owner != session);
+            contexts.dead.retain(|((owner, _), _)| owner != session);
         }
     }
 }
@@ -82,7 +149,7 @@ mod tests {
     }
 
     #[test]
-    fn a_default_context_names_its_frame_until_destroyed_or_cleared() {
+    fn a_default_context_names_its_frame_after_it_is_destroyed_or_cleared() {
         let contexts = ContextFrames::default();
         let created = |session: &str, id: i64, frame: &str, default: bool| {
             event(
@@ -107,11 +174,42 @@ mod tests {
             "tab",
             json!({"executionContextId": 2}),
         ));
-        assert_eq!(contexts.frame_of("tab", 2), None);
+        assert_eq!(
+            contexts.frame_of("tab", 2).as_deref(),
+            Some("child"),
+            "a call made before its context went still finds its frame"
+        );
         contexts.apply(&event("Runtime.executionContextsCleared", "tab", json!({})));
-        assert_eq!(contexts.frame_of("tab", 1), None);
+        assert_eq!(contexts.frame_of("tab", 1).as_deref(), Some("main"));
+        contexts.apply(&created("tab", 1, "next", true));
+        assert_eq!(
+            contexts.frame_of("tab", 1).as_deref(),
+            Some("next"),
+            "a context created again names its new frame"
+        );
         assert_eq!(contexts.frame_of("iframe", 1).as_deref(), Some("oopif"));
         contexts.forget("iframe");
         assert_eq!(contexts.frame_of("iframe", 1), None);
+    }
+
+    #[test]
+    fn only_the_newest_destroyed_contexts_are_kept() {
+        let contexts = ContextFrames::default();
+        let kept = i64::try_from(DEAD_KEPT).expect("a small bound");
+        for id in 0..=kept {
+            contexts.apply(&event(
+                "Runtime.executionContextCreated",
+                "tab",
+                json!({"context": {"id": id, "auxData": {"frameId": "frame", "isDefault": true}}}),
+            ));
+            contexts.apply(&event(
+                "Runtime.executionContextDestroyed",
+                "tab",
+                json!({"executionContextId": id}),
+            ));
+        }
+        assert_eq!(contexts.frame_of("tab", 0), None, "the oldest went first");
+        assert_eq!(contexts.frame_of("tab", 1).as_deref(), Some("frame"));
+        assert_eq!(contexts.frame_of("tab", kept).as_deref(), Some("frame"));
     }
 }

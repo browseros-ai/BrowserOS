@@ -316,12 +316,20 @@ export class Page extends ChannelOwner {
     await this.#context._onBinding(call)
   }
 
-  /** Neo: the frame `guid` names, or the main frame when that frame is gone. */
+  /**
+   * The frame a binding call came from: the frame object this page already has for `guid`, the
+   * one it held when that frame detached included, as Playwright's client resolves the call's
+   * frame channel to its object. A frame the page never handed out gets its object now.
+   *
+   * Playwright: `server/page.ts` `PageBinding.dispatch`: `const result = await binding.playwrightFunction({ frame: context.frame, page, context: page.browserContext }, ...args);`
+   */
   _frameForGuid(guid: string): Frame {
-    if (guid === this.#mainFrame._guid) return this.#mainFrame
-    return (
-      this.frames().find((frame) => frame._guid === guid) ?? this.#mainFrame
-    )
+    let frame = this.#frames.get(guid)
+    if (!frame) {
+      frame = new Frame(guid, this, this.#connection)
+      this.#frames.set(guid, frame)
+    }
+    return frame
   }
 
   /** Playwright's `Page._onFrameAttached`: a frame attaches with no name or URL yet. */
