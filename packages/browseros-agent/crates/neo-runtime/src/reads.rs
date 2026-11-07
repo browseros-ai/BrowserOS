@@ -720,11 +720,21 @@ impl ReadTab for FrameTab {
         Ok(read.matched)
     }
 
+    /// Through `locate`, like the other reads: an iframe's document is reached by the hops in
+    /// front of `body,frameset` (`aria-ref=e7 >> internal:control=enter-frame >> …`).
     async fn aria_snapshot(
         &self,
         params: &InjectedAriaSnapshotParams,
     ) -> Result<Option<AriaFrameSnapshot>, PageError> {
-        Ok(self.context().await?.call(None, params).await?.snapshot)
+        let Some(located) = frame_selector::locate(self, &params.selector, params.strict).await?
+        else {
+            return Ok(None);
+        };
+        let params = InjectedAriaSnapshotParams {
+            selector: located.selector,
+            ..params.clone()
+        };
+        Ok(located.frame.call(None, &params).await?.snapshot)
     }
 }
 
