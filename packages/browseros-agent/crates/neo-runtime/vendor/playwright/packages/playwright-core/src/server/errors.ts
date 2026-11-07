@@ -1,0 +1,85 @@
+/**
+ * Copyright (c) Microsoft Corporation.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { isError } from '@isomorphic/rtti';
+import { parseSerializedValue, serializeValue, systemErrorCode, systemErrorMessage } from '@protocol/serializers';
+import { rewriteErrorMessage } from '@utils/stackTrace';
+
+import { isProtocolError } from './protocolError';
+
+import type { SerializedError } from './channels';
+
+class CustomError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = this.constructor.name;
+  }
+}
+
+export class TimeoutError extends CustomError {}
+
+export class EvaluationStalledError extends CustomError {}
+
+export class TargetClosedError extends CustomError {
+  constructor(cause: string | undefined, logs?: string) {
+    super((cause || 'Target page, context or browser has been closed') + (logs || ''));
+  }
+}
+
+// mirrors https://github.com/nodejs/node/blob/4e7c07dfe2b253393702545c0ffe2712b21fd3dd/lib/internal/errors.js#L976-L988
+export class AbortError extends CustomError {
+  constructor(message = 'The operation was aborted', options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'AbortError';
+  }
+}
+
+export function isTargetClosedError(error: Error) {
+  return error instanceof TargetClosedError || error.name === 'TargetClosedError';
+}
+
+export function rewriteErrorForClosedTarget(error: Error, closeReason: string | undefined): Error {
+  if (isTargetClosedError(error)) {
+    if (closeReason)
+      rewriteErrorMessage(error, closeReason);
+  } else if (isProtocolError(error)) {
+    if (error.type === 'closed')
+      return new TargetClosedError(closeReason, error.browserLogMessage());
+    if (error.type === 'crashed')
+      rewriteErrorMessage(error, 'Target crashed ' + error.browserLogMessage());
+  }
+  return error;
+}
+
+export function serializeError(e: any): SerializedError {
+  if (isError(e))
+    return { error: { message: systemErrorMessage(e), stack: e.stack, name: e.name, code: systemErrorCode(e) } };
+  return { value: serializeValue(e, value => ({ fallThrough: value })) };
+}
+
+export function parseError(error: SerializedError): Error {
+  if (!error.error) {
+    if (error.value === undefined)
+      throw new Error('Serialized error must have either an error or a value');
+    return parseSerializedValue(error.value, undefined);
+  }
+  const e = new Error(error.error.message);
+  e.stack = error.error.stack || '';
+  e.name = error.error.name;
+  if (error.error.code !== undefined)
+    (e as any).code = error.error.code;
+  return e;
+}

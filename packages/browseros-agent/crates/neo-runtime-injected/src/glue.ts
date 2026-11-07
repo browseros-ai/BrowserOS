@@ -202,16 +202,36 @@ export const glue = {
     }
   },
 
-  isChecked: (injected, { selector, strict }) => {
+  /**
+   * Every `Frame.is*` read that waits for its match: one state of the first match, labels
+   * followed. `elementState` throws for a state the element cannot have.
+   *
+   * Playwright: `server/frames.ts` `Frame._elementState`: `return { result: injected.elementState(element, data.state) };`
+   */
+  elementStateOnSelector: (injected, { selector, strict, state }) => {
     const [element] = query(injected, selector, strict, {
       markTargets: 'first',
     })
     if (!element) return {}
-    const { matches, received } = injected.elementState(element, 'checked')
+    const { matches, received } = injected.elementState(element, state)
     return {
       matched: {
-        checked: matches,
+        matches,
         received,
+        preview: injected.previewNode(element),
+      },
+    }
+  },
+
+  /** Playwright: `server/frames.ts` `Frame.innerHTML`: `(injected, element) => ({ result: element.innerHTML })` */
+  innerHTML: (injected, { selector, strict }) => {
+    const [element] = query(injected, selector, strict, {
+      markTargets: 'first',
+    })
+    if (!element) return {}
+    return {
+      matched: {
+        value: element.innerHTML,
         preview: injected.previewNode(element),
       },
     }
@@ -307,14 +327,15 @@ export const glue = {
     outcome: injected.expectHitTarget(point, element),
   }),
 
+  /** Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `injected.setupHitTargetInterceptor(node, actionType, hitPoint, trial)` */
   setupHitTargetInterceptor: (
     injected,
-    { hitPoint, blockAllEvents },
+    { action, hitPoint, blockAllEvents },
     element,
   ) => ({
     outcome: injected.setupHitTargetInterceptor(
       element,
-      'mouse',
+      action,
       hitPoint,
       blockAllEvents,
     ),
@@ -386,10 +407,6 @@ export const glue = {
   },
   queryCount: (injected, { selector }) => ({
     value: query(injected, selector, false).length,
-  }),
-
-  allTextContents: (injected, { selector }) => ({
-    values: query(injected, selector, false).map((e) => e.textContent || ''),
   }),
 } satisfies InjectedApi<InjectedScript, Handles>
 

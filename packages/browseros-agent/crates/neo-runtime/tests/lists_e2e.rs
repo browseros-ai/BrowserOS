@@ -119,3 +119,44 @@ async fn tests_that_collection_reads_enter_the_selected_frame() {
     tab.close().await;
     assert_eq!(value(&outcome), json!({"count":1,"texts":["Inner"]}));
 }
+
+/// `allInnerTexts` reads each match's rendered text, as the page's own `innerText`, and `all()`
+/// turns a count into nth locators that read their own match.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_all_inner_texts_and_all_read_every_match_as_the_page_renders_it() {
+    let Some(tab) = open().await else { return };
+    let outcome = run(
+        &tab,
+        "const items = await page.locator('#veg > li').all()
+         const each = []
+         for (const item of items) each.push(await item.textContent())
+         return {
+           inner: await page.locator('.fruit').allInnerTexts(),
+           missing: await page.locator('.missing').allInnerTexts(),
+           each,
+           none: (await page.locator('.missing').all()).length,
+         };",
+    )
+    .await;
+    let dom = tab
+        .evaluate("[...document.querySelectorAll('.fruit')].map(e => e.innerText)")
+        .await;
+    tab.close().await;
+    let result = value(&outcome);
+    assert_eq!(result["inner"], dom, "the DOM's own innerText agrees");
+    assert_eq!(
+        result["inner"],
+        json!(["Apple", "Banana split", "", "Cherry", "Date"])
+    );
+    assert_eq!(result["missing"], json!([]));
+    assert_eq!(result["each"], json!(["Kale", "Carrot", "Leek"]));
+    assert_eq!(result["none"], 0);
+    assert!(
+        outcome
+            .calls
+            .iter()
+            .all(|call| call.result == CallResult::Ok && call.delivery.is_none()),
+        "reads that answer and write no input: {:#?}",
+        outcome.calls
+    );
+}

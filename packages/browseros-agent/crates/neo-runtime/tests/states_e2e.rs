@@ -133,3 +133,108 @@ async fn tests_that_state_reads_and_checkbox_changes_work_through_every_receiver
         assert_eq!(call.delivery, expected, "{call:#?}");
     }
 }
+
+const CONTROLS: &str = r"<!doctype html><html><body>
+<button id='enabled'>Enabled</button>
+<button id='disabled' disabled>Disabled</button>
+<input id='text'>
+<input id='readonly' readonly>
+<div id='plain'>Plain element</div>
+<div id='shown'>Shown</div>
+<div id='hidden' hidden>Hidden</div>
+<button id='later' onclick='setTimeout(() => {
+  const late = document.createElement(`input`); late.id = `late`; late.disabled = true
+  document.body.append(late) }, 300)'>Later</button>
+</body></html>";
+
+const CONTROL_FLOW: &str = r"const typed = value => [value, typeof value]
+const receivers = [
+  {
+    isEnabled: (s, o) => page.locator(s).isEnabled(o),
+    isDisabled: (s, o) => page.locator(s).isDisabled(o),
+    isEditable: (s, o) => page.locator(s).isEditable(o),
+    isHidden: (s, o) => page.locator(s).isHidden(o),
+  },
+  page,
+  page.mainFrame(),
+]
+const reads = []
+for (const receiver of receivers)
+  reads.push([
+    typed(await receiver.isEnabled('#enabled')),
+    typed(await receiver.isEnabled('#disabled')),
+    typed(await receiver.isDisabled('#disabled')),
+    typed(await receiver.isEditable('#text')),
+    typed(await receiver.isEditable('#readonly')),
+    typed(await receiver.isHidden('#shown', { timeout: -1 })),
+    typed(await receiver.isHidden('#hidden')),
+    typed(await receiver.isHidden('#missing')),
+  ])
+await page.click('#later')
+const late = await page.isDisabled('#late')
+async function rejection(action) {
+  const started = Date.now()
+  try { await action(); return ['resolved'] }
+  catch (error) { return [error.name, Date.now() - started < 3000] }
+}
+return {
+  reads,
+  late,
+  notEditable: await rejection(() => page.locator('#enabled').isEditable({ timeout: 10000 })),
+  missing: (await rejection(() => page.locator('#missing').isEnabled({ timeout: 300 })))[0],
+  strict: (await rejection(() => page.locator('button').isDisabled()))[0],
+}";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_enabled_editable_and_hidden_reads_work_through_every_receiver() {
+    let Some(binary) = browser::e2e_browser() else {
+        return;
+    };
+    let tab = Tab::open(
+        binary,
+        Fixture {
+            pages: vec![("/controls.html".into(), CONTROLS.into())],
+            ..Fixture::default()
+        },
+        "/controls.html",
+    )
+    .await;
+    let outcome = tab
+        .start_run(CONTROL_FLOW.to_string())
+        .await
+        .await
+        .unwrap_or_else(|error| panic!("run task: {error}"));
+    tab.close().await;
+
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:#?}");
+    let reads = json!([
+        [true, "boolean"],
+        [false, "boolean"],
+        [true, "boolean"],
+        [true, "boolean"],
+        [false, "boolean"],
+        [false, "boolean"],
+        [true, "boolean"],
+        [true, "boolean"]
+    ]);
+    assert_eq!(
+        outcome.value,
+        Some(json!({
+            "reads": [reads, reads, reads],
+            "late": true,
+            // The page refuses a button as never editable: an Error at once, not a timeout.
+            "notEditable": ["Error", true],
+            "missing": "TimeoutError",
+            "strict": "Error",
+        })),
+        "values, boolean types and public error categories"
+    );
+    for call in &outcome.calls {
+        let expected = match call.method.as_str() {
+            "isEnabled" | "isDisabled" | "isEditable" | "isHidden" => None,
+            "click" => Some(Delivery::Done),
+            method => panic!("unexpected call: {method}"),
+        };
+        assert_eq!(call.delivery, expected, "{call:#?}");
+    }
+}
