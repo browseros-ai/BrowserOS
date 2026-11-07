@@ -5890,7 +5890,7 @@ class BrowserContext extends ChannelOwner {
     this.#guid = guid;
     this.#connection = connection;
     this._pipe = pipe;
-    connection._closeReasonFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._closeReason();
+    connection._closeReasonFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._closeReason() ?? this.#closeReason;
     connection._closedFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._isClosedLocally() ?? false;
   }
   isClosed() {
@@ -5904,9 +5904,15 @@ class BrowserContext extends ChannelOwner {
       return;
     this.#closeReason = options.reason;
     this.#closingStatus = "closing";
-    await this.#connection.sendContext("browserContext.close", this.#guid, "close", pickParams(BROWSER_CONTEXT_CLOSE_KEYS, {
-      reason: options.reason
-    }), 0);
+    try {
+      await this.#connection.sendContext("browserContext.close", this.#guid, "close", pickParams(BROWSER_CONTEXT_CLOSE_KEYS, {
+        reason: options.reason
+      }), 0);
+    } catch (error) {
+      this.#closingStatus = "none";
+      this.#closeReason = undefined;
+      throw error;
+    }
     this.#connection._close(options.reason);
     const pages = this.pages();
     for (const page of this.#pages.values())

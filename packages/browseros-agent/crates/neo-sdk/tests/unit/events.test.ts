@@ -510,3 +510,33 @@ test("tests that a page's close reason reaches its waits and the calls it interr
     'page.title: Target page, context or browser has been closed',
   )
 })
+
+test('tests that a close Rust refuses leaves the context open, to close again', async () => {
+  const { context } = run()
+  const native = (
+    globalThis as unknown as Record<
+      string,
+      { callWithEvents: unknown; get: unknown }
+    >
+  ).__neo_runtime
+  native.get = (request: string) =>
+    JSON.parse(request).field === 'pages'
+      ? JSON.stringify([pageRecord('T', 'https://run.test/')])
+      : JSON.stringify(null)
+  let refuse = true
+  native.callWithEvents = async (message: string) => {
+    const { id } = JSON.parse(message)
+    const refused = {
+      error: { error: { name: 'Error', message: 'neo-runtime: refused' } },
+    }
+    const reply = refuse ? { id, ...refused } : { id }
+    refuse = false
+    return { reply: JSON.stringify(reply), events: 0 }
+  }
+  await expect(context.close({ reason: 'first' })).rejects.toThrow(
+    'browserContext.close: neo-runtime: refused',
+  )
+  expect(context.isClosed()).toBe(false)
+  await context.close({ reason: 'second' })
+  expect(context.isClosed()).toBe(true)
+})

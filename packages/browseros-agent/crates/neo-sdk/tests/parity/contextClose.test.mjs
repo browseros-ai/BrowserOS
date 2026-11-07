@@ -150,6 +150,47 @@ const cases = [
     },
     effect: { tabOpen: true, openedStillOpen: 0, probe: 1 },
   },
+  {
+    // Reviewer's case (review-review-a2.md P1), on Playwright's semantics: its close drops the
+    // connection, so a click still waiting for its target never runs. The click waits for #late,
+    // which #arm shows 1.8 s later, while the script outlives the close by 2.6 s: the click must
+    // reject and the button must never be clicked.
+    name: 'a click still waiting when the context closes never runs, even once its target shows',
+    source: `await page.click('#arm')
+    const pending = settle(page.locator('#late').click({ timeout: 10000 }))
+    const hidden = await page.isHidden('#late')
+    await context.close({ reason: 'done' })
+    await new Promise((resolve) => setTimeout(resolve, 2600))
+    return { hidden, pending: await pending, closed: context.isClosed() }`,
+    expected: { hidden: true, pending: { error: 'Error' }, closed: true },
+    effect: { tabOpen: true, openedStillOpen: 0, probe: 0 },
+  },
+  {
+    // Reviewer's case (review-review-a2.md P2): close() is not a call the 64-call cap of a run
+    // refuses, so it releases 64 waits in flight and the context ends closed, not half-closed.
+    name: 'close() releases 64 calls in flight and leaves the context closed',
+    source: `const results = []
+    for (let i = 0; i < 64; i++)
+      settle(page.locator('#hidden').waitFor({ timeout: 0 })).then((result) => results.push(result))
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    const close = await settle(context.close({ reason: 'full' }))
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    return {
+      close,
+      settled: results.length,
+      allRejected: results.every((result) => result.error === 'Error'),
+      closed: context.isClosed(),
+      secondClose: await settle(context.close()),
+    }`,
+    expected: {
+      close: 'undefined',
+      settled: 64,
+      allRejected: true,
+      closed: true,
+      secondClose: 'undefined',
+    },
+    effect: { tabOpen: true, openedStillOpen: 0, probe: 0 },
+  },
 ]
 
 test('context.close() lets go of every tab the same way through Neo and Playwright', {

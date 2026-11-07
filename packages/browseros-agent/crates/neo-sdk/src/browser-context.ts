@@ -98,7 +98,7 @@ export class BrowserContext extends ChannelOwner {
     this.#connection = connection
     this._pipe = pipe
     connection._closeReasonFor = (callGuid) =>
-      this.#pages.get(pageGuidOf(callGuid))?._closeReason()
+      this.#pages.get(pageGuidOf(callGuid))?._closeReason() ?? this.#closeReason
     connection._closedFor = (callGuid) =>
       this.#pages.get(pageGuidOf(callGuid))?._isClosedLocally() ?? false
   }
@@ -120,21 +120,30 @@ export class BrowserContext extends ChannelOwner {
    * page the context lists, or the run holds, closes as the script sees it: its `close`, then
    * the context's `pageclose`; then the context's `close`. From then on `pages()` is empty,
    * every page reads closed, calls fail as closed, and the waits and calls the close
-   * interrupted reject with `reason` when given. A second call resolves at once.
+   * interrupted reject with `reason` when given, and Rust stops those calls before the close
+   * resolves, so none writes input after it. A second call resolves at once; a close that
+   * failed leaves the context open.
    */
   async close(options: { reason?: string } = {}): Promise<void> {
     if (this.isClosed()) return
     this.#closeReason = options.reason
     this.#closingStatus = 'closing'
-    await this.#connection.sendContext(
-      'browserContext.close',
-      this.#guid,
-      'close',
-      pickParams(BROWSER_CONTEXT_CLOSE_KEYS, {
-        reason: options.reason,
-      }) as BrowserContextCloseParams,
-      0,
-    )
+    try {
+      await this.#connection.sendContext(
+        'browserContext.close',
+        this.#guid,
+        'close',
+        pickParams(BROWSER_CONTEXT_CLOSE_KEYS, {
+          reason: options.reason,
+        }) as BrowserContextCloseParams,
+        0,
+      )
+    } catch (error) {
+      // Never half-closed: a close Rust did not do leaves the context open, to close again.
+      this.#closingStatus = 'none'
+      this.#closeReason = undefined
+      throw error
+    }
     this.#connection._close(options.reason)
     const pages = this.pages()
     for (const page of this.#pages.values())

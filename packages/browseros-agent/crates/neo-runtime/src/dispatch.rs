@@ -403,7 +403,11 @@ impl Dispatcher {
         inner.trace.push(Arc::clone(&entry));
         let admitted = route.and_then(|route| {
             let ending = ending_cursor(&route).and_then(|id| inner.cursors.begin_ending(id));
-            let share = if ending.is_some() {
+            // A navigation's release, and the context's close, end calls in flight: the cap
+            // never refuses them, or a full run could not let go.
+            let releases = ending.is_some()
+                || matches!(route, ObjectCall::Context(BrowserContextCall::Close(_)));
+            let share = if releases {
                 None
             } else {
                 Some(inner.in_flight.admit(message.len())?)
@@ -434,6 +438,11 @@ impl Dispatcher {
             inner.run.clone(),
             closed,
         );
+        let progress = if matches!(route, ObjectCall::Context(BrowserContextCall::Close(_))) {
+            progress.closing_the_context()
+        } else {
+            progress
+        };
         let (reply, receiver) = oneshot::channel();
         let served = serve_call(
             inner.tabs.clone(),
