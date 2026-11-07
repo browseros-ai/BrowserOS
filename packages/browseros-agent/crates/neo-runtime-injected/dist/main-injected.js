@@ -8919,9 +8919,23 @@ function deepEquals(a, b) {
 }
 
 // src/main-injected.ts
+var SKIPPED_SETUPS = [
+  "_setupGlobalListenersRemovalDetection",
+  "_setupHitTargetInterceptors"
+];
+
+class MainWorldInjectedScript extends InjectedScript {
+}
+for (const setup of SKIPPED_SETUPS) {
+  if (typeof InjectedScript.prototype[setup] !== "function")
+    throw new Error(`neo-runtime-injected: InjectedScript has no ${setup}`);
+  Object.defineProperty(MainWorldInjectedScript.prototype, setup, {
+    value: () => {}
+  });
+}
 function mainInjected(initializer) {
   const fromSpec = initializer;
-  return new InjectedScript(window, {
+  return new MainWorldInjectedScript(window, {
     ...fromSpec,
     isUnderTest: false,
     sdkLanguage: "javascript",

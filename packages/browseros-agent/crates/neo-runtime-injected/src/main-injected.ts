@@ -5,7 +5,8 @@
  * (main) world, built as Playwright builds that world's injected script (`isUtilityWorld:
  * false`). neo-runtime's `main_world.rs` keeps the object by CDP id in its own object group and
  * hands it to the built element callbacks (`dist/call-on-element.js`). Nothing is stored on the
- * page's globals, unlike `install.ts` in Neo's isolated world.
+ * page's globals, unlike `install.ts` in Neo's isolated world, and nothing is left on the page
+ * once the run ends ({@link MainWorldInjectedScript}).
  */
 
 import type { InjectedInitializer } from '@browseros/neo-runtime-spec/injected'
@@ -14,12 +15,40 @@ import {
   type InjectedScriptOptions,
 } from '../vendor/playwright/injected/src/injectedScript'
 
+/** The constructor's two setups that add window listeners and a document observer. */
+const SKIPPED_SETUPS = [
+  '_setupGlobalListenersRemovalDetection',
+  '_setupHitTargetInterceptors',
+] as const
+
+/**
+ * Playwright's `InjectedScript`, without the window listeners and the document observer its
+ * constructor adds for the hit-target interceptor. Only `setupHitTargetInterceptor` uses them,
+ * and Playwright runs that in the utility world. Playwright builds one main-world instance per
+ * context; Neo builds one per run and document, and each would stay on the page after its run,
+ * kept alive by those listeners.
+ * Deviation: `injected/src/injectedScript.ts` `InjectedScript.constructor`: `this._setupHitTargetInterceptors();` Neo's main-world instance adds no window listener or document observer.
+ */
+class MainWorldInjectedScript extends InjectedScript {}
+for (const setup of SKIPPED_SETUPS) {
+  // A vendored Playwright that renamed one fails every main-world call here, not by leaking.
+  if (
+    typeof (InjectedScript.prototype as unknown as Record<string, unknown>)[
+      setup
+    ] !== 'function'
+  )
+    throw new Error(`neo-runtime-injected: InjectedScript has no ${setup}`)
+  Object.defineProperty(MainWorldInjectedScript.prototype, setup, {
+    value: () => {},
+  })
+}
+
 export default function mainInjected(
   initializer: InjectedInitializer,
 ): InjectedScript {
   const fromSpec: Pick<InjectedScriptOptions, keyof InjectedInitializer> =
     initializer
-  return new InjectedScript(window, {
+  return new MainWorldInjectedScript(window, {
     ...fromSpec,
     isUnderTest: false,
     sdkLanguage: 'javascript',
