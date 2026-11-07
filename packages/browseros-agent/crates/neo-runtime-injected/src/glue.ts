@@ -70,8 +70,9 @@ function query(
   return elements
 }
 
-/** Elements as a null-prototype object's own properties `0`, `1`, …, which CDP reports as a
- * plain object (an array would carry the subtype `array`). */
+/** Neo: elements as a null-prototype object's own properties `0`, `1`, …, which CDP reports
+ * as a plain object (an array would carry the subtype `array`), so Rust lists them with
+ * `Runtime.getProperties` as handles of the matches. */
 function elementList(elements: Element[]): Record<string, Element> {
   return Object.assign(Object.create(null), elements)
 }
