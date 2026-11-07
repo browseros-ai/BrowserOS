@@ -525,6 +525,51 @@ impl Frames {
         Ok(Some(offset))
     }
 
+    /// Playwright: `server/chromium/crPage.ts` `FrameSession._framePosition`: `const box = await element.boundingBox(nullProgress);`
+    ///
+    /// Where a box measured in `host`'s coordinates sits in the main frame's, as Playwright's
+    /// `getBoundingBox` places it: crossing each remote boundary adds the owner iframe's
+    /// border-box origin (the corner of its border quad), not where the frame's viewport starts
+    /// (its content box, [`Frames::offset`], which input aims by). `(0, 0)` for the main
+    /// process's frames; `None` when an owner on the way has no box, as Playwright's `null`.
+    pub(crate) async fn border_offset(
+        &self,
+        host: &Arc<Host>,
+    ) -> Result<Option<(f64, f64)>, PageError> {
+        let mut host = Arc::clone(host);
+        let mut offset = (0.0, 0.0);
+        while let Some(frame) = &host.target_id {
+            let parent = host
+                .parent
+                .as_ref()
+                .ok_or_else(|| PageError::Contract("A child host has no parent".to_string()))?;
+            let owner = parent
+                .send("DOM.getFrameOwner", json!({"frameId": frame}))
+                .await
+                .map_err(|error| parent.classify(&error))?;
+            let backend = owner["backendNodeId"].as_i64().ok_or_else(|| {
+                PageError::Contract("DOM.getFrameOwner returned no backendNodeId".to_string())
+            })?;
+            // Playwright's `_sendMayFail`: an owner with no box gives no position.
+            let Ok(model) = parent
+                .send("DOM.getBoxModel", json!({"backendNodeId": backend}))
+                .await
+            else {
+                return Ok(None);
+            };
+            let Some((x, y)) = quad_origin(&model["model"]["border"]) else {
+                return Ok(None);
+            };
+            offset.0 += x;
+            offset.1 += y;
+            host = Arc::clone(parent);
+        }
+        if host.session_id() != self.main.host.session_id() {
+            return Err(PageError::NotConnected);
+        }
+        Ok(Some(offset))
+    }
+
     pub(crate) fn forget(&self, stale: &Arc<FrameContext>) {
         if let Ok(mut contexts) = self.contexts.lock()
             && contexts
@@ -542,6 +587,27 @@ impl Frames {
             context.world.document_committed();
         }
     }
+}
+
+/// Playwright: `server/chromium/crPage.ts` `FrameSession._getBoundingBox`: `const x = Math.min(quad[0], quad[2], quad[4], quad[6]);`
+///
+/// The top-left corner of a quad: the smallest x and y of its four points.
+fn quad_origin(quad: &Value) -> Option<(f64, f64)> {
+    let points: Vec<f64> = quad
+        .as_array()?
+        .iter()
+        .map(Value::as_f64)
+        .collect::<Option<_>>()?;
+    if points.len() != 8 {
+        return None;
+    }
+    let x = [points[0], points[2], points[4], points[6]]
+        .into_iter()
+        .fold(f64::INFINITY, f64::min);
+    let y = [points[1], points[3], points[5], points[7]]
+        .into_iter()
+        .fold(f64::INFINITY, f64::min);
+    Some((x, y))
 }
 
 fn target_parent(target: &Value) -> Option<&str> {

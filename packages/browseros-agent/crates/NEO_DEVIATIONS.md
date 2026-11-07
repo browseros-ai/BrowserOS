@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (51)
+## Deviations (49)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -23,7 +23,6 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/dispatch.rs | `unsupported_child_call` | `client/frame.ts` `Frame.waitForNavigation` | Playwright answers a child frame's navigation Response; the network log records only the main frame's requests, so Neo refuses the wait. A predicate wait that answers none (`waitForURL`) is served. |
 | neo-runtime/src/element_ops.rs | `EVENT_INIT_UNSERVED` | `server/frames.ts` `Frame.dispatchEvent` | Playwright builds and dispatches the event in the page's main world from any serialized value, handles included; Neo dispatches from its isolated world, so `eventInit` takes plain values only (strings, finite numbers, booleans, null, arrays and plain objects) and anything else is refused before any page call. |
 | neo-runtime/src/element_ops.rs | `EXPANDED_VALUES_MAX` | `protocol/src/serializers.ts` `innerSerializeValue` | Playwright's serializer writes a value met again as a `ref` to its first occurrence and its server hands the refs on, so any number of references to one value dispatches; Neo hands `eventInit` to its isolated world as JSON, which writes a repeated value out in full each time (a chain of values each holding the next twice doubles at every level), so one `eventInit` expands to at most this many values and a larger one is refused, naming the limit, before any page call. |
-| neo-runtime/src/element_ops.rs | `FrameTab::bounding_box` | `server/chromium/crPage.ts` `FrameSession._framePosition` | an out-of-process frame's boxes move by its iframe's content box (the frames foundation's geometry, as a click aims), where Playwright adds the iframe's border box, so Neo's sit the iframe's border and padding further in. |
 | neo-runtime/src/evaluate.rs | `created_handle` | `server/dom.ts` `ElementHandle._initializePreview` | Playwright starts at `JSHandle@node` and updates the preview by event; Neo has no events, so the handle starts with the final preview. |
 | neo-runtime/src/evaluate.rs | `route_frame` | `server/frames.ts` `Frame.waitForFunctionExpressionOnElement` | Neo has no main-world injected script yet to run the predicate on an element, so it refuses the selector form. |
 | neo-runtime/src/evaluate.rs | `utility_root` | `server/frameSelectors.ts` `FrameSelectors._resolveChainedSelector` | Playwright resolves frame hops from a scope too; Neo serves a scoped query within the element's own document only. |
@@ -54,7 +53,6 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-sdk/src/page.ts | `Page.opener` | `client/page.ts` `Page.opener` | Playwright's page keeps the opener its server named when it reported the page. Neo reads the tab's opener when asked, so the run page and a `pages()` page name theirs too. |
 | neo-sdk/src/page.ts | `Page` | `client/page.ts` `Page.constructor` | Playwright's page holds a `close` and a `crash` listener of its own from its first moment, which `eventNames()` and `listenerCount` report; Neo's holds none, so a page nobody listens to costs the run nothing. |
 | neo-sdk/src/plain-argument.ts | `serialize` | `protocol/src/serializers.ts` `innerSerializeValue` | Playwright sends a typed array's bytes; the realm has no `Buffer` to write them with, so Neo refuses one here. |
-| neo-sdk/src/select-option.ts | `ELEMENT_VALUES_UNSUPPORTED` | `client/elementHandle.ts` `convertSelectOptionValues` | Playwright selects the very option nodes ElementHandle values name; Neo refuses an ElementHandle (or any JSHandle) value before anything is sent, where it would otherwise travel as an option object matching the first option. |
 | neo-sdk/src/url.ts | (file) | `isomorphic/urlMatch.ts` `urlMatches` | Playwright passes a URL predicate a WHATWG `URL`. The realm has no `URL`, so Neo passes this read-only one, built from Rust's WHATWG parser: every getter and `toString`/`toJSON` read as `URL`'s do, and `searchParams` reads as `URLSearchParams`; setters and `searchParams`' mutators throw, and `instanceof URL` cannot hold. |
 | neo-sdk/src/url.ts | `READ_ONLY` | `isomorphic/urlMatch.ts` `urlMatches` | the error a write to Neo's read-only `URL` throws, where Playwright's predicate gets a writable WHATWG `URL`. |
 | neo-sdk/src/vendor-shims.ts | `URL` | `isomorphic/utilityScriptSerializers.ts` `parseEvaluationResultValue` | QuickJS has no WHATWG URL, so a `URL` the page returns (and a `URL` an agent passes back) is this object: its `href`, `toString()` and `toJSON()` as Playwright's client gives them, and no parsed parts (`host`, `pathname`, `searchParams`). |

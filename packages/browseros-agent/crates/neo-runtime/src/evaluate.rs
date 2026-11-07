@@ -50,6 +50,7 @@ use crate::frames::{FrameContext, FrameScope};
 use crate::main_world::{self, BuiltExpression, Called, DocumentId, Installed, MainFunction};
 use crate::page::{FrameTab, GroupGuard};
 use crate::progress::{CallError, PlaywrightError, Progress, js_number};
+use crate::world::ObjectGroup;
 
 /// Neo: the guid prefix of a run's handles (`handle@<run>.<n>`), opaque to the SDK.
 pub(crate) const HANDLE_PREFIX: &str = "handle@";
@@ -752,6 +753,32 @@ impl Handles {
         self.entries.lock().ok()?.get(guid).cloned()
     }
 
+    /// Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection._tChannelImplFromWire`: `no object with guid ${guid}`
+    ///
+    /// `selectOption`'s `elements[index]`: the element handle `guid` names, checked as
+    /// Playwright's dispatcher checks an `ElementHandle` channel. A disposed handle's guid is
+    /// gone, so it names nothing.
+    ///
+    /// # Errors
+    ///
+    /// No handle has `guid`, or it is a `JSHandle` that is not an element.
+    pub(crate) fn select_element(
+        &self,
+        index: usize,
+        guid: &str,
+    ) -> Result<Arc<HandleEntry>, PlaywrightError> {
+        let entry = self.entry(guid).ok_or_else(|| {
+            PlaywrightError::error(format!("elements[{index}]: no object with guid {guid}"))
+        })?;
+        if !entry.element {
+            // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection._tChannelImplFromWire`: `has type ${dispatcher._type}, expected ${names.toString()}`
+            return Err(PlaywrightError::error(format!(
+                "elements[{index}]: object with guid {guid} has type JSHandle, expected ElementHandle"
+            )));
+        }
+        Ok(entry)
+    }
+
     /// Releases every handle group the run created and forgets every guid. Called at run end;
     /// the releases run on the pages' tracked tasks (`GroupGuard`).
     pub(crate) fn close(&self) {
@@ -1207,6 +1234,35 @@ fn element_scope(
         .into());
     }
     Ok(Some(entry))
+}
+
+/// Playwright: `server/dom.ts` `FrameExecutionContext.adoptIfNeeded`: `return this.frame._page.delegate.adoptElementHandle(handle, this);`
+///
+/// `entry`'s element adopted into `frame`'s utility world in `group`, as Playwright adopts
+/// `selectOption`'s `ElementHandle` values into the select's utility context for each attempt.
+/// `None` when the element belongs to another frame or to a document `frame` has left, which
+/// Playwright's adoption refuses (`kUnableToAdoptErrorMessage`).
+///
+/// # Errors
+///
+/// `Closed` when the tab is gone; another page error when the frame's world cannot be reached.
+pub(crate) async fn adopt_element(
+    entry: &HandleEntry,
+    frame: &Arc<FrameContext>,
+    group: &ObjectGroup,
+) -> Result<Option<Handle<Element>>, PageError> {
+    let Remote::Object(id) = &entry.remote else {
+        return Ok(None);
+    };
+    if entry.frame.id != frame.id || frame.main.installed(frame).await?.document != entry.document {
+        return Ok(None);
+    }
+    match frame.main.backend_of(frame, id.object_id()).await {
+        Ok(backend) => frame.element(group, backend).await.map(Some),
+        Err(PageError::Closed) => Err(PageError::Closed),
+        // The handle's object went with its document.
+        Err(_) => Ok(None),
+    }
 }
 
 /// An element handle adopted into its frame's utility world, as the root of a scoped query, in

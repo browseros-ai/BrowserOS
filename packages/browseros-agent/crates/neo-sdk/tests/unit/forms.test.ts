@@ -7,10 +7,7 @@ import { EventPipe } from '../../src/events'
 import { JSHandle } from '../../src/js-handle'
 import { Page } from '../../src/page'
 import * as protocol from '../../src/protocol'
-import {
-  convertSelectOptionValues,
-  ELEMENT_VALUES_UNSUPPORTED,
-} from '../../src/select-option'
+import { convertSelectOptionValues } from '../../src/select-option'
 
 test('tests that select values preserve Playwright conversion and null errors', () => {
   expect(convertSelectOptionValues(null)).toEqual({})
@@ -132,12 +129,12 @@ test('tests that invalid select fields reject before sending anything', async ()
   expect(calls).toBe(0)
 })
 
-test('tests that ElementHandle and JSHandle selectOption values are refused before sending', async () => {
+test('tests that ElementHandle and JSHandle selectOption values convert as Playwright does', async () => {
   const connection = new Connection(0)
-  let calls = 0
-  connection.send = async () => {
-    calls++
-    return { values: ['unexpected'] } as never
+  const sent: unknown[] = []
+  connection.send = async (_apiName, _guid, _method, params) => {
+    sent.push(JSON.parse(JSON.stringify(params)))
+    return { values: ['two'] } as never
   }
   const page = new Page(
     'page@T',
@@ -152,23 +149,41 @@ test('tests that ElementHandle and JSHandle selectOption values are refused befo
   const object = new JSHandle(connection, 'handle@run.2', {
     preview: 'JSHandle@object',
   })
-  for (const values of [
-    element,
-    [element],
-    [element, element],
-    ['one', element],
-    [{ value: 'one' }, element],
-    object,
-  ]) {
+  const one = { guid: 'handle@run.1' }
+  // Playwright's `convertSelectOptionValues`: a first ElementHandle makes every value an
+  // element channel; otherwise a handle is an option object with none of the option fields.
+  for (const [values, wire] of [
+    [element, { elements: [one] }],
+    [[element], { elements: [one] }],
+    [[element, element], { elements: [one, one] }],
+    [[{ value: 'one' }, element], { options: [{ value: 'one' }, {}] }],
+    [object, { options: [{}] }],
+  ] as const) {
     for (const call of [
       () => page.selectOption('select', values as never),
       () => page.mainFrame().selectOption('select', values as never),
       () => page.locator('select').selectOption(values as never),
     ]) {
-      await expect(call()).rejects.toThrow(ELEMENT_VALUES_UNSUPPORTED)
+      sent.length = 0
+      await call()
+      expect(sent).toHaveLength(1)
+      expect(sent[0]).toMatchObject(wire)
+      expect(sent[0]).not.toHaveProperty(
+        'elements' in wire ? 'options' : 'elements',
+      )
     }
   }
-  expect(calls).toBe(0)
+  // Mixed lists fail Playwright's protocol validation before anything is sent.
+  for (const [values, message] of [
+    [['one', element], 'options[1].valueOrLabel: expected string'],
+    [[element, 'one'], 'elements[1]: expected channel ElementHandle'],
+  ] as const) {
+    sent.length = 0
+    await expect(
+      page.locator('select').selectOption(values as never),
+    ).rejects.toThrow(message)
+    expect(sent).toEqual([])
+  }
 })
 
 test('tests that selectOption reads the caller value once and sends that copy', async () => {
@@ -200,11 +215,12 @@ test('tests that selectOption reads the caller value once and sends that copy', 
     new Proxy(element, {}),
     [new Proxy(element, {})],
   ]) {
-    await expect(
-      page.locator('select').selectOption(values as never),
-    ).rejects.toThrow(ELEMENT_VALUES_UNSUPPORTED)
+    sent.length = 0
+    await page.locator('select').selectOption(values as never)
+    expect(sent).toEqual([
+      expect.objectContaining({ elements: [{ guid: 'handle@run.1' }] }),
+    ])
   }
-  expect(sent).toEqual([])
   // A field that changes between reads is read once: the value checked is the value sent.
   let reads = 0
   const changing = {
