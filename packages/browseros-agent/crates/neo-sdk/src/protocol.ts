@@ -12,9 +12,11 @@ import type {
   FrameAriaSnapshotParams,
   FrameCheckParams,
   FrameClickParams,
+  FrameDblclickParams,
   FrameFillParams,
   FrameGetAttributeParams,
   FrameGotoParams,
+  FrameHoverParams,
   FrameInnerTextParams,
   FrameInputValueParams,
   FrameIsCheckedParams,
@@ -22,6 +24,7 @@ import type {
   FramePressParams,
   FrameQueryCountParams,
   FrameSelectOptionParams,
+  FrameTapParams,
   FrameTextContentParams,
   FrameUncheckParams,
   FrameWaitForSelectorParams,
@@ -65,6 +68,42 @@ export const FRAME_CLICK_KEYS = [
   'clickCount',
   'trial',
   'steps',
+] as const
+
+/** `Frame.dblclick` in Playwright schema order: no `clickCount` and no `noWaitAfter`. */
+export const FRAME_DBLCLICK_KEYS = [
+  'selector',
+  'strict',
+  'force',
+  'scroll',
+  'modifiers',
+  'position',
+  'delay',
+  'button',
+  'trial',
+  'steps',
+] as const
+
+/** `Frame.hover` in Playwright schema order: no `noWaitAfter`. */
+export const FRAME_HOVER_KEYS = [
+  'selector',
+  'strict',
+  'force',
+  'scroll',
+  'modifiers',
+  'position',
+  'trial',
+] as const
+
+/** `Frame.tap` in Playwright schema order: no `noWaitAfter`. */
+export const FRAME_TAP_KEYS = [
+  'selector',
+  'strict',
+  'force',
+  'scroll',
+  'modifiers',
+  'position',
+  'trial',
 ] as const
 
 /** `Frame.fill` in Playwright schema order. */
@@ -138,6 +177,24 @@ type _FrameClickKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_CLICK_KEYS)[number], true>,
     Required<FrameClickParams>
+  >
+>
+type _FrameDblclickKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_DBLCLICK_KEYS)[number], true>,
+    Required<FrameDblclickParams>
+  >
+>
+type _FrameHoverKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_HOVER_KEYS)[number], true>,
+    Required<FrameHoverParams>
+  >
+>
+type _FrameTapKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_TAP_KEYS)[number], true>,
+    Required<FrameTapParams>
   >
 >
 type _FrameGotoKeysMatchSpec = Assert<

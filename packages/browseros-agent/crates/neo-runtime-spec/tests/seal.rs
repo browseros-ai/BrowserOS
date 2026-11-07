@@ -4,13 +4,13 @@
 //! `neo-runtime` reaches them, and that each result decodes the way its spec says it crosses.
 
 use neo_runtime_spec::injected::{
-    ElementState, ElementStatesOutcome, HitTargetBlocked, HitTargetOutcome, HitTargetSetup,
-    InjectedAriaSnapshotParams, InjectedCheckElementStatesParams, InjectedCheckElementStatesResult,
-    InjectedFrameOwnerParams, InjectedFrameOwnerResult, InjectedResolveResult,
-    InjectedSetupHitTargetInterceptorParams, InjectedSetupHitTargetInterceptorResult,
-    InjectedStopHitTargetInterceptorParams, InjectedStopHitTargetInterceptorResult,
-    InjectedTextContentParams, InjectedTitleParams, InjectedTitleResult, MissingState,
-    NotConnected, Point,
+    ElementState, ElementStatesOutcome, HitTargetAction, HitTargetBlocked, HitTargetOutcome,
+    HitTargetSetup, InjectedAriaSnapshotParams, InjectedCheckElementStatesParams,
+    InjectedCheckElementStatesResult, InjectedFrameOwnerParams, InjectedFrameOwnerResult,
+    InjectedResolveResult, InjectedSetupHitTargetInterceptorParams,
+    InjectedSetupHitTargetInterceptorResult, InjectedStopHitTargetInterceptorParams,
+    InjectedStopHitTargetInterceptorResult, InjectedTextContentParams, InjectedTitleParams,
+    InjectedTitleResult, MissingState, NotConnected, Point,
 };
 use neo_runtime_spec::serve::FrameTitleParams;
 use neo_runtime_spec::{
@@ -259,6 +259,7 @@ fn a_click_resolves_one_element_and_passes_it_by_handle() {
 fn an_armed_interceptor_is_the_handle_its_stop_consumes() {
     let setup = InjectedSetupHitTargetInterceptorParams {
         element: element("-7.1.9").unwrap(),
+        action: HitTargetAction::Hover,
         hit_point: Some(Point { x: 40.5, y: 18.0 }),
         block_all_events: false,
     };
@@ -266,7 +267,7 @@ fn an_armed_interceptor_is_the_handle_its_stop_consumes() {
         page_call(&setup).unwrap(),
         (
             "setupHitTargetInterceptor",
-            json!({"hitPoint": {"x": 40.5, "y": 18.0}, "blockAllEvents": false}),
+            json!({"action": "hover", "hitPoint": {"x": 40.5, "y": 18.0}, "blockAllEvents": false}),
             vec!["-7.1.9".to_owned()],
             false
         )

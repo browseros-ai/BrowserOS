@@ -32,10 +32,12 @@ import type {
   FrameAriaSnapshotResult,
   FrameCheckParams,
   FrameClickParams,
+  FrameDblclickParams,
   FrameFillParams,
   FrameGetAttributeParams,
   FrameGetAttributeResult,
   FrameGotoParams,
+  FrameHoverParams,
   FrameInitializer,
   FrameInnerTextParams,
   FrameInnerTextResult,
@@ -45,6 +47,7 @@ import type {
   FramePressParams,
   FrameQueryCountParams,
   FrameSelectOptionParams,
+  FrameTapParams,
   FrameTextContentParams,
   FrameTextContentResult,
   FrameTitleResult,
@@ -72,9 +75,11 @@ import {
   FRAME_ARIA_SNAPSHOT_KEYS,
   FRAME_CHECK_KEYS,
   FRAME_CLICK_KEYS,
+  FRAME_DBLCLICK_KEYS,
   FRAME_FILL_KEYS,
   FRAME_GET_ATTRIBUTE_KEYS,
   FRAME_GOTO_KEYS,
+  FRAME_HOVER_KEYS,
   FRAME_INNER_TEXT_KEYS,
   FRAME_INPUT_VALUE_KEYS,
   FRAME_IS_CHECKED_KEYS,
@@ -82,6 +87,7 @@ import {
   FRAME_PRESS_KEYS,
   FRAME_QUERY_COUNT_KEYS,
   FRAME_SELECT_OPTION_KEYS,
+  FRAME_TAP_KEYS,
   FRAME_TEXT_CONTENT_KEYS,
   FRAME_UNCHECK_KEYS,
   FRAME_WAIT_FOR_SELECTOR_KEYS,
@@ -96,6 +102,27 @@ import {
 /** `click`'s options as a script passes them: the wire params plus `timeout`. */
 export type ClickOptions = Omit<FrameClickParams, 'selector'> & {
   timeout?: number
+}
+
+/**
+ * `dblclick`'s options as a script passes them: the wire params plus `timeout`, and the
+ * deprecated `noWaitAfter`, which Playwright's client accepts and its protocol drops.
+ */
+export type DblclickOptions = Omit<FrameDblclickParams, 'selector'> & {
+  timeout?: number
+  noWaitAfter?: boolean
+}
+
+/** `hover`'s options as a script passes them, with the deprecated `noWaitAfter` (dropped). */
+export type HoverOptions = Omit<FrameHoverParams, 'selector'> & {
+  timeout?: number
+  noWaitAfter?: boolean
+}
+
+/** `tap`'s options as a script passes them, with the deprecated `noWaitAfter` (dropped). */
+export type TapOptions = Omit<FrameTapParams, 'selector'> & {
+  timeout?: number
+  noWaitAfter?: boolean
 }
 
 /** `goto`'s options as a script passes them: the wire params plus `timeout`. */
@@ -608,6 +635,78 @@ export class Frame {
         selector,
         ...options,
       }) as FrameClickParams,
+      this._page._timeoutSettings.timeout(options ?? {}),
+    )
+  }
+
+  /** Not strict, as Playwright's `frame.dblclick`. */
+  async dblclick(
+    selector: string,
+    options: DblclickOptions = {},
+  ): Promise<void> {
+    return await this._dblclick('frame.dblclick', selector, options)
+  }
+
+  /** Sends `Frame.dblclick`. */
+  async _dblclick(
+    apiName: ApiName,
+    selector: string,
+    options: DblclickOptions,
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'dblclick',
+      pickParams(FRAME_DBLCLICK_KEYS, {
+        selector,
+        ...options,
+      }) as FrameDblclickParams,
+      this._page._timeoutSettings.timeout(options ?? {}),
+    )
+  }
+
+  /** Not strict, as Playwright's `frame.hover`. */
+  async hover(selector: string, options: HoverOptions = {}): Promise<void> {
+    return await this._hover('frame.hover', selector, options)
+  }
+
+  /** Sends `Frame.hover`. */
+  async _hover(
+    apiName: ApiName,
+    selector: string,
+    options: HoverOptions,
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'hover',
+      pickParams(FRAME_HOVER_KEYS, {
+        selector,
+        ...options,
+      }) as FrameHoverParams,
+      this._page._timeoutSettings.timeout(options ?? {}),
+    )
+  }
+
+  /** Not strict, as Playwright's `frame.tap`. */
+  async tap(selector: string, options: TapOptions = {}): Promise<void> {
+    return await this._tap('frame.tap', selector, options)
+  }
+
+  /** Sends `Frame.tap`. */
+  async _tap(
+    apiName: ApiName,
+    selector: string,
+    options: TapOptions,
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'tap',
+      pickParams(FRAME_TAP_KEYS, {
+        selector,
+        ...options,
+      }) as FrameTapParams,
       this._page._timeoutSettings.timeout(options ?? {}),
     )
   }
