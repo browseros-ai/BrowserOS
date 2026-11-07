@@ -321,7 +321,11 @@ async fn tests_that_transformed_iframes_use_the_event_interceptor() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_a_main_frame_button_in_the_scrollbar_gutter_times_out() {
-    let Some(tab) = open("html{overflow-x:hidden}body{min-height:3000px}").await else {
+    let Some(tab) = open(
+        "html{overflow-x:hidden}body{min-height:3000px}::-webkit-scrollbar{width:15px;height:15px}",
+    )
+    .await
+    else {
         return;
     };
     tab.evaluate(r"{
