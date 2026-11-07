@@ -1337,7 +1337,7 @@ mod tests {
 
     #[test]
     fn tests_that_only_a_browser_preflight_is_answered_as_one() {
-        let preflight = json!({ "request": { "method": "OPTIONS", "headers": { "Access-Control-Request-Method": "POST", "Origin": "https://page.test" } }, "resourceType": "XHR" });
+        let pause = json!({ "request": { "method": "OPTIONS", "headers": { "Access-Control-Request-Method": "POST", "Origin": "https://page.test" } }, "resourceType": "XHR" });
         assert!(
             is_preflight(&preflight),
             "Chromium gives it the resource type of the request it precedes"
@@ -1347,7 +1347,7 @@ mod tests {
             !is_preflight(&options),
             "a script's own OPTIONS request is routed"
         );
-        let answer = preflight(None, "i", &headers_array(&preflight["request"]["headers"]));
+        let answer = preflight(None, "i", &headers_array(&pause["request"]["headers"]));
         assert_eq!(answer.params["responseCode"], 204);
         assert_eq!(
             answer.params["responseHeaders"][0],
