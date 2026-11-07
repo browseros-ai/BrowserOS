@@ -136,7 +136,10 @@ export function errorCategory(error) {
  * `effects({ playwright, neo })`, for a deliberate difference, asserts both effects itself in
  * place of the equality check.
  */
-export async function compareMethod(t, { html, source, probe, effects }) {
+export async function compareMethod(
+  t,
+  { html, source, probe, effects, slowMs = 0 },
+) {
   t.diagnostic(
     `Playwright ${playwrightVersion}; ${playwrightDir ?? 'npm playwright-core'}`,
   )
@@ -146,6 +149,7 @@ export async function compareMethod(t, { html, source, probe, effects }) {
   try {
     const origin = await serveFixture(cleanups, {
       pages: { '/method.html': html },
+      slowMs,
     })
     const browser = await launchBrowser(cleanups, browserBinary)
     const playwright = await chromium.connectOverCDP(
