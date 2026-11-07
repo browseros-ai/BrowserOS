@@ -68,6 +68,36 @@ const revision = spawnSync('git', ['rev-parse', 'HEAD'], {
   cwd: agent,
   encoding: 'utf8',
 })
+const policyFiles = [
+  'Cargo.toml',
+  'src/model.rs',
+  'src/report.rs',
+  'tests/playwright.rs',
+]
+const policySources = Object.fromEntries(
+  policyFiles.map((file) => [
+    file,
+    sha256(fs.readFileSync(path.join(crate, file))),
+  ]),
+)
+const dirty = spawnSync(
+  'git',
+  [
+    'status',
+    '--porcelain',
+    '--',
+    'Cargo.lock',
+    'crates/neo-runtime',
+    'crates/neo-playwright-tests',
+    'crates/neo-sdk',
+    'crates/neo-runtime-injected',
+    'crates/neo-runtime-spec',
+  ],
+  { cwd: agent, encoding: 'utf8' },
+)
+const parentExecutableSha256 = process.env.NEO_TESTS_PARENT_EXE
+  ? sha256(fs.readFileSync(process.env.NEO_TESTS_PARENT_EXE))
+  : null
 fs.writeFileSync(
   path.join(root, 'metadata.json'),
   JSON.stringify(
@@ -83,6 +113,9 @@ fs.writeFileSync(
       neoRevision: revision.stdout?.trim(),
       nativeWorkerSha256: sha256(fs.readFileSync(worker)),
       harnessFiles,
+      parentExecutableSha256,
+      policySources,
+      workingTreeDirty: Boolean(dirty.stdout?.trim()),
       hostReason:
         'Bun 1.3.6 closes the upstream HTTP listener in TestServer.reset; Node 26 preserves it.',
     },

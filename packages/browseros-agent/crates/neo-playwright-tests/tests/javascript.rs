@@ -18,7 +18,12 @@ fn javascript_transport_and_value_contracts() {
     );
     for host in ["node", "bun"] {
         let mut command = Command::new(host);
-        command.arg(if host == "node" { "--test" } else { "test" });
+        if host == "node" {
+            command.args(["--test", "--test-concurrency=1"]);
+        } else {
+            command.args(["test", "--timeout", "30000"]);
+        }
+        command.env_remove("NEO_OBSERVER_BROWSER");
         let output = command
             .args(&files)
             .output()
