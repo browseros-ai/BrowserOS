@@ -25,12 +25,23 @@ url.workspace = true
 # clap backs the `neo_run` example. tokio-tungstenite serves the fake browser in
 # tests/support/fake_browser.rs; tempfile gives the end-to-end tests a throwaway profile.
 # tokio's test-util lets unit tests pause time, so deadline races and click attempt counts are
-# deterministic.
+# deterministic. regex and sha2 back tests/provenance.rs: it matches Playwright's definitions and
+# message templates, and hashes the vendored files against their VENDOR.md.
 [dev-dependencies]
 clap.workspace = true
+regex.workspace = true
+sha2.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite.workspace = true
+
+[[test]]
+name = "amazon_cart_live"
+path = "integration-tests/amazon_cart_live.rs"
+
+[[test]]
+name = "hacker_news_live"
+path = "integration-tests/hacker_news_live.rs"
 
 [lints.rust]
 unsafe_code = "forbid"

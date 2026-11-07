@@ -6,7 +6,7 @@ mod fake_browser;
 use std::time::{Duration, Instant};
 
 use fake_browser::{FakeBrowser, Replies};
-use neo_runtime::RunStatus;
+use neo_runtime::{RunStatus, Runtime};
 use serde_json::json;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -201,6 +201,35 @@ async fn tests_that_a_listed_page_forced_click_waits_for_another_runs_trial() {
         1,
         "the forced click waited for the trial's stop"
     );
+}
+
+/// A host can close its CDP link after drain even when the run returned before the tab id
+/// was acknowledged. This is a shutdown boundary, separate from the outcome's short drain.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_runtime_drain_waits_for_late_creation_cleanup() {
+    let browser = FakeBrowser::start(Replies {
+        create_tab_delay: Some(Duration::from_secs(3)),
+        ..Replies::default()
+    })
+    .await;
+    let cdp = browser.cdp().await;
+    let runtime = Runtime::connect(cdp.clone())
+        .await
+        .expect("connect runtime");
+    let outcome = runtime
+        .run(fake_browser::run_request(
+            &format!("{WIRE} await call('context@default','newPage');"),
+            Duration::from_millis(100),
+            CancellationToken::new(),
+        ))
+        .await;
+    assert_eq!(outcome.status, RunStatus::Timeout);
+    assert!(tab_ids(&browser).contains(&"new-page-1".to_string()));
+    time::timeout(Duration::from_secs(5), runtime.drain())
+        .await
+        .expect("runtime cleanup did not drain");
+    assert!(!tab_ids(&browser).contains(&"new-page-1".to_string()));
+    cdp.disconnect().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

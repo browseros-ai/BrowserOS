@@ -162,7 +162,7 @@ pub(super) fn internal(request_id: &RequestId, source: AppError) -> CanonicalErr
 
 /// Rejects browser-page requests to the loopback MCP endpoint. Browser fetches
 /// carry `origin` or `sec-fetch-site`; native MCP clients do not.
-async fn mcp_request_hygiene(req: Request, next: Next) -> Response {
+pub(crate) async fn mcp_request_hygiene(req: Request, next: Next) -> Response {
     // The nested /mcp service shadows the router's `/{*path}` preflight route,
     // so answer OPTIONS here to keep loopback preflight behavior consistent.
     if *req.method() == Method::OPTIONS {

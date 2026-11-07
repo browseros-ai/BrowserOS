@@ -1,0 +1,4 @@
+# Fixture for neo-runtime's provenance tests: the files whose coverage the gate checks.
+neo-runtime-injected/src/glue.ts
+neo-runtime/src/click.rs
+neo-sdk/src/locator.ts

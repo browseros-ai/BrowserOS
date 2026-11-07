@@ -67,6 +67,24 @@ async fn async_main() -> anyhow::Result<()> {
         CliAction::Run { config, stdio } => (config, stdio),
     };
     let config = Arc::new(claw_server::config::Config::load(config_path)?);
+    if claw_server::prototype::enabled() {
+        let _guard = init_tracing(config.clone())?;
+        // Select before AppState opens databases or installs browser hooks, and before
+        // AppRuntime starts legacy cleanup/recording/analytics jobs. The two runtimes
+        // must never share ownership of a prototype tab.
+        let result =
+            claw_server::prototype::serve(config.clone(), stdio_mode, wait_for_shutdown_signal())
+                .await;
+        if result
+            .as_ref()
+            .err()
+            .and_then(|error| error.downcast_ref::<io::Error>())
+            .is_some_and(|error| error.kind() == io::ErrorKind::AddrInUse)
+        {
+            std::process::exit(EXIT_PORT_CONFLICT);
+        }
+        return result;
+    }
     // Process-wide and fixed from here on; every page script reads it as it runs.
     browseros_core::page_js::set_isolated_world_enabled(config.behavior.isolated_world);
     let _guard = init_tracing(config.clone())?;

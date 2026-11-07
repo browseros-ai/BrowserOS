@@ -22,6 +22,8 @@
       "!crates/neo-sdk/dist",
       "!crates/neo-runtime-injected/dist",
       "!crates/neo-runtime-injected/vendor",
+      "!crates/neo-runtime/vendor",
+      "!crates/neo-runtime/tests/fixtures/provenance",
       "!crates/neo-sdk/tests/scripts",
       "!crates/neo-sdk/tests/goldens",
       "!crates/neo-sdk/vendor",

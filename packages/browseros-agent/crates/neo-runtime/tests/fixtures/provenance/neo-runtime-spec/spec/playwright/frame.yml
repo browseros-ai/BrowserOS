@@ -1,0 +1,15 @@
+# Fixture for neo-runtime's provenance tests, shaped like Playwright's protocol/spec/frame.yml.
+Frame:
+  type: interface
+
+  commands:
+
+    click:
+      title: Click
+      parameters:
+        selector: string
+        timeout: float
+
+    textContent:
+      parameters:
+        selector: string

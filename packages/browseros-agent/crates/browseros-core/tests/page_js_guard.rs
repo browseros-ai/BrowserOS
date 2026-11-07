@@ -24,7 +24,13 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("crates/browseros-core/src/page_js.rs", METHODS),
     ("crates/neo-runtime/src/world.rs", &[CALL_FUNCTION_ON]),
 ];
-const SKIPPED_DIRS: &[&str] = &["target", "node_modules", "dist", "tests"];
+const SKIPPED_DIRS: &[&str] = &[
+    "target",
+    "node_modules",
+    "dist",
+    "tests",
+    "integration-tests",
+];
 
 #[test]
 fn tests_that_page_javascript_is_only_sent_through_page_js() -> std::io::Result<()> {
