@@ -1,7 +1,7 @@
 //! One handed-out tab as the server side of a browser call sees it (Playwright's `server/page.ts`
 //! with `chromium/crPage.ts` and `crInput.ts`): this tab's CDP session,
 //! the domains a browser call needs, one watcher task that answers dialogs and tracks
-//! navigations, the tab's input turns ([`TabInputs`]), the mouse writer, and the `click::Tab`
+//! navigations, the tab's input turns ([`TabInputs`]), the pointer writers, and the `click::Tab`
 //! implementation over all of it and the utility world (`world.rs`).
 //!
 //! This file is mechanism; `click.rs` and `navigate.rs` own policy. Nothing here writes a
@@ -9,7 +9,7 @@
 //!
 //! Lifetime: [`PageSession`] owns this tab's [`Session`], whose `Drop` detaches, so the session
 //! detaches when the last `Arc<PageSession>` drops. Every task that writes on the session holds
-//! one: the dispatcher's call tasks, the interceptor setups, the mouse writers, the interceptor
+//! one: the dispatcher's call tasks, the interceptor setups, the pointer writers, the interceptor
 //! stops and the object-group releases, all spawned on the run's `TaskTracker`. So no release
 //! can find its session gone, and no end-of-run step has to order a drain before a detach; this
 //! also covers a caller that drops the run's future. The watcher holds no `Arc<PageSession>` (it would keep
@@ -50,8 +50,8 @@ use browseros_cdp::input::DispatchMouseEventParams;
 use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId, dom, target};
 use futures_util::future;
 use neo_runtime_spec::injected::{
-    ElementState, ElementStatesOutcome, FrameStyle, FrameStyleStatus, HitTargetInterceptor,
-    HitTargetOutcome, HitTargetSetup, InjectedCheckElementStatesParams,
+    ElementState, ElementStatesOutcome, FrameStyle, FrameStyleStatus, HitTargetAction,
+    HitTargetInterceptor, HitTargetOutcome, HitTargetSetup, InjectedCheckElementStatesParams,
     InjectedDescribeIFrameStyleParams, InjectedDescribeSelectorParams,
     InjectedExpectHitTargetParams, InjectedGetElementBorderWidthParams, InjectedResolveParams,
     InjectedScrollIntoViewParams, InjectedSetupHitTargetInterceptorParams,
@@ -71,12 +71,13 @@ use tokio_util::task::TaskTracker;
 use tracing::{debug, warn};
 
 use crate::click::{
-    Arming, Geometry, MouseButton, MouseClick, NotReady, PageError, PressReport, Resolved, Scroll,
-    SelectorFacts, StatesCheck, Tab, Verdict,
+    Arming, Geometry, MouseButton, MouseClick, NotReady, PageError, PointerInput, PressReport,
+    Resolved, Scroll, SelectorFacts, StatesCheck, Tab, Verdict,
 };
 use crate::events::{EventHub, Flushes};
 use crate::frame_selector::{self, FrameOwner};
 use crate::frames::{FrameContext, FrameScope, Frames, Host, local_tree};
+use crate::keyboard::{self, InputSender};
 use crate::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
 };
@@ -918,7 +919,7 @@ impl TabInputs {
 /// every party that operates a click's input holds a copy, and the tab's input is free for the
 /// next click once the last copy drops. The click holds one from before its interceptor's setup
 /// to its verdict; the setup's task until the page answers; the armed interceptor until its
-/// stop has answered, `Drop`'s stop included; the mouse writer until its last event is answered.
+/// stop has answered, `Drop`'s stop included; the pointer writer until its last event is answered.
 /// So a call that stops early lets go of its own copy only, and the next click on the tab never
 /// replaces an interceptor whose events may still land, nor presses into one still armed.
 #[derive(Clone)]
@@ -1646,10 +1647,14 @@ impl Tab for FrameTab {
         &self,
         element: &ResolvedElement,
         states: &[ElementState],
+        scroll: bool,
     ) -> Result<StatesCheck, PageError> {
         // An offscreen OOPIF can throttle animation frames indefinitely. Bring its owners
-        // into view before a stability check waits on that frame's animation callbacks.
-        if states.contains(&ElementState::Stable) {
+        // into view before a stability check waits on that frame's animation callbacks, as
+        // Playwright's best-effort scroll of an element in a child frame does; never under
+        // `scroll: 'none'`, where Playwright scrolls nothing and the frame stays offscreen.
+        // Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `if (scroll === 'none')`
+        if scroll && states.contains(&ElementState::Stable) {
             for owner in &element.owners {
                 owner
                     .frame
@@ -1865,6 +1870,7 @@ impl Tab for FrameTab {
         &self,
         element: &ResolvedElement,
         hit_point: Point,
+        action: HitTargetAction,
         input: InputPermit,
     ) -> impl Future<Output = Result<Arming<ArmedInterceptor>, PageError>> + Send {
         let page = Arc::clone(self);
@@ -1879,7 +1885,7 @@ impl Tab for FrameTab {
                 }
             };
             let (answer, armed) = oneshot::channel();
-            let setup = arm_interceptor(Arc::clone(&page), element, hit_point, input);
+            let setup = arm_interceptor(Arc::clone(&page), element, hit_point, action, input);
             page.spawn(async move {
                 // Nobody may be waiting any more; the unsent answer drops here, disarming.
                 let _waiting = answer.send(setup.await);
@@ -1888,25 +1894,39 @@ impl Tab for FrameTab {
         }
     }
 
-    /// Spawns [`write_mouse`] on the run's tracker now, with an `Arc` of this page (so of the
-    /// session), the ticket and the armed interceptor, and returns a future that awaits its
-    /// report while holding a drop guard on the writer's `cut_short` token: dropping the future
-    /// (the call stopped) cuts any remaining `delay` short, and the writer still sends the
-    /// release and marks the ticket. The interceptor stays in the writer's task until the last
-    /// event is acknowledged; if nobody waits for the report then, it drops there and disarms,
-    /// after the page has handled the release. The writer's copy of `input` goes once the last
-    /// event is answered.
+    /// Spawns the action's writer ([`write_mouse`] for a move or a click, [`write_tap`] for a
+    /// tap) on the run's tracker now, with an `Arc` of this page (so of the session), the ticket
+    /// and the armed interceptor, and returns a future that awaits its report while holding a
+    /// drop guard on the writer's `cut_short` token: dropping the future (the call stopped) cuts
+    /// any remaining `delay` short, and the writer still sends the release and marks the ticket.
+    /// The interceptor stays in the writer's task until the last event is acknowledged; if nobody
+    /// waits for the report then, it drops there and disarms, after the page has handled the
+    /// release. The writer's copy of `input` goes once the last event is answered.
     fn press(
         &self,
         point: Point,
-        click: MouseClick,
+        pointer: PointerInput,
         ticket: InputTicket,
         armed: Option<ArmedInterceptor>,
         input: InputPermit,
     ) -> impl Future<Output = (PressReport, Option<ArmedInterceptor>)> + Send {
         let cut_short = CancellationToken::new();
         let (report, receiver) = oneshot::channel();
-        let writer = write_mouse(Arc::clone(self), point, click, ticket, cut_short.clone());
+        let page = Arc::clone(self);
+        let writer_cut_short = cut_short.clone();
+        let writer = async move {
+            match pointer {
+                PointerInput::Click(click) => {
+                    let events = mouse_events(&point, &click);
+                    write_mouse(page, events, click.delay, ticket, writer_cut_short).await
+                }
+                PointerInput::Move => {
+                    let events = vec![move_event(&point)];
+                    write_mouse(page, events, None, ticket, writer_cut_short).await
+                }
+                PointerInput::Tap => write_tap(page, point, ticket).await,
+            }
+        };
         self.spawn(async move {
             let written = writer.await;
             drop(input);
@@ -1919,7 +1939,7 @@ impl Tab for FrameTab {
             let pressed = receiver.await.unwrap_or_else(|_| {
                 let failed = PressReport::Failed {
                     closed: true,
-                    message: "the mouse writer stopped before reporting".to_string(),
+                    message: "the pointer writer stopped before reporting".to_string(),
                 };
                 (failed, None)
             });
@@ -2125,6 +2145,7 @@ async fn arm_interceptor(
     page: Arc<PageSession>,
     element: ResolvedElement,
     hit_point: Option<Point>,
+    action: HitTargetAction,
     input: InputPermit,
 ) -> Result<Arming<ArmedInterceptor>, PageError> {
     let mark = page.mark();
@@ -2135,6 +2156,7 @@ async fn arm_interceptor(
             Some(group.group()),
             &InjectedSetupHitTargetInterceptorParams {
                 element: element.handle.clone(),
+                action,
                 hit_point,
                 // Only Playwright's trial blocks every event, and Neo's trial sends none.
                 block_all_events: false,
@@ -2200,73 +2222,74 @@ fn pixels(value: i64) -> f64 {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The mouse writer.
+// The pointer writers.
 // ---------------------------------------------------------------------------------------------
 
-/// The writer task. It owns every mouse event of one attempt and the ticket that records them,
-/// and holds the page (so the session) until the last event is acknowledged or failed:
+/// The mouse writer task. It owns every mouse event of one attempt (a hover's move, or a click's
+/// move, presses and releases) and the ticket that records them, and holds the sender (for the
+/// real tab, the page and so the session) until the last event is acknowledged or failed:
 /// cancellation can stop a caller's wait, never split a press from its release.
 ///
-/// Without `delay`: every event from [`mouse_events`] is sent at once with `send_at_epoch` and
-/// awaited together (`join_all` polls them in order, and browseros-cdp's FIFO send lock writes
-/// them in that order: Playwright's pipelined move, press, release). With `delay`: move, then
-/// per click press, sleep `delay` (ended early by `cut_short`), release, and the same sleep
-/// between clicks; after `cut_short` no further click starts. A release is sent after every
-/// press that may have been written, whatever happened in between.
-///
-/// Report: every written event acknowledged → `ticket.acked()`; every event refused with
-/// `ConnectionEpochChanged` (raised before writing) → `ticket.unsent()`; otherwise the ticket is
-/// dropped (`Unknown`) and the first error is reported.
-async fn write_mouse(
-    page: Arc<PageSession>,
-    point: Point,
-    click: MouseClick,
+/// Without `delay`: every event is sent at once at the session's socket incarnation and awaited
+/// together (`join_all` polls them in order, and browseros-cdp's FIFO send lock writes them in
+/// that order: Playwright's pipelined move, press, release). With `delay`: move, then per click
+/// press, sleep `delay` (ended early by `cut_short`), release, and the same sleep between
+/// clicks; after `cut_short` no further click starts. A release is sent after every press that
+/// may have been written, whatever happened in between. Delivery is `Done` only once every
+/// planned event was written and acknowledged: a double click cut short after its first click
+/// stays `Unknown` (`keyboard::report`).
+pub(crate) async fn write_mouse(
+    sender: impl InputSender,
+    events: Vec<DispatchMouseEventParams>,
+    delay: Option<Duration>,
     ticket: InputTicket,
     cut_short: CancellationToken,
 ) -> PressReport {
-    let events = mouse_events(&point, &click);
-    let outcomes = match click.delay {
-        None => future::join_all(events.iter().map(|event| send_input(&page, event))).await,
-        Some(delay) => write_with_delay(&page, events, delay, &cut_short).await,
+    let outcomes = match delay {
+        None => future::join_all(events.iter().map(|event| send_mouse(&sender, event))).await,
+        Some(delay) => write_with_delay(&sender, &events, delay, &cut_short).await,
     };
-    let first_error = outcomes.iter().find_map(|outcome| outcome.as_ref().err());
-    match first_error {
-        None => PressReport::Acked(ticket.acked()),
-        Some(_)
-            if outcomes
-                .iter()
-                .all(|outcome| matches!(outcome, Err(CdpError::ConnectionEpochChanged { .. }))) =>
-        {
-            ticket.unsent();
-            PressReport::NothingWritten
-        }
-        Some(error) => {
-            drop(ticket);
-            PressReport::Failed {
-                closed: world::classify(error) == PageError::Closed,
-                message: error.to_string(),
-            }
-        }
-    }
+    let complete = outcomes.len() == events.len();
+    keyboard::report(&outcomes, complete, ticket)
+}
+
+/// The touch writer: Playwright's `touchStart` at the point and the `touchEnd` with no points,
+/// sent together as the mouse writer's pipelined events are, so a stopped call never leaves a
+/// touch down: both are written whoever still waits. `Done` once both are acknowledged.
+/// Playwright: `server/chromium/crInput.ts` `RawTouchscreenImpl.tap`: `await progress.race(Promise.all([`
+pub(crate) async fn write_tap(
+    sender: impl InputSender,
+    point: Point,
+    ticket: InputTicket,
+) -> PressReport {
+    let events = tap_events(&point);
+    let outcomes = future::join_all(
+        events
+            .iter()
+            .map(|event| sender.send_input("Input.dispatchTouchEvent", event.clone())),
+    )
+    .await;
+    let complete = outcomes.len() == events.len();
+    keyboard::report(&outcomes, complete, ticket)
 }
 
 /// Playwright's sequential path (`input.ts` `Mouse.click` with `delay`).
 async fn write_with_delay(
-    page: &PageSession,
-    events: Vec<DispatchMouseEventParams>,
+    sender: &impl InputSender,
+    events: &[DispatchMouseEventParams],
     delay: Duration,
     cut_short: &CancellationToken,
 ) -> Vec<Result<(), CdpError>> {
     let mut outcomes = Vec::with_capacity(events.len());
-    let mut events = events.into_iter();
+    let mut events = events.iter();
     if let Some(moved) = events.next() {
-        outcomes.push(send_input(page, &moved).await);
+        outcomes.push(send_mouse(sender, moved).await);
     }
     while let Some(pressed) = events.next() {
         if cut_short.is_cancelled() || outcomes.iter().any(Result::is_err) {
             break;
         }
-        let written = send_input(page, &pressed).await;
+        let written = send_mouse(sender, pressed).await;
         let refused = matches!(written, Err(CdpError::ConnectionEpochChanged { .. }));
         outcomes.push(written);
         if refused {
@@ -2274,7 +2297,7 @@ async fn write_with_delay(
         }
         pause(delay, cut_short).await;
         if let Some(released) = events.next() {
-            outcomes.push(send_input(page, &released).await);
+            outcomes.push(send_mouse(sender, released).await);
         }
         if !events.as_slice().is_empty() {
             pause(delay, cut_short).await;
@@ -2291,19 +2314,15 @@ async fn pause(delay: Duration, cut_short: &CancellationToken) {
     }
 }
 
-/// One mouse event on the session's own socket incarnation.
-async fn send_input(page: &PageSession, event: &DispatchMouseEventParams) -> Result<(), CdpError> {
-    let params = serde_json::to_value(event)?;
-    page.session
-        .cdp
-        .send_at_epoch(
-            page.session.epoch,
-            "Input.dispatchMouseEvent",
-            params,
-            Some(&page.session.id),
-        )
-        .await
-        .map(|_| ())
+/// One mouse event, serialized as Playwright sends it. Serializing this plain struct cannot
+/// fail; if it ever did, the error counts as a failed event, so delivery stays `Unknown` rather
+/// than claiming nothing was written.
+async fn send_mouse(
+    sender: &impl InputSender,
+    event: &DispatchMouseEventParams,
+) -> Result<(), CdpError> {
+    let params = serde_json::to_string(event)?;
+    sender.send_input("Input.dispatchMouseEvent", params).await
 }
 
 // Keyboard input (`keyboard.rs`) goes through these two.
@@ -2362,10 +2381,7 @@ pub(crate) fn mouse_events(point: &Point, click: &MouseClick) -> Vec<DispatchMou
         buttons: Some(buttons),
         ..DispatchMouseEventParams::default()
     };
-    let mut events = vec![DispatchMouseEventParams {
-        force: Some(0.0),
-        ..event("mouseMoved", "none", 0)
-    }];
+    let mut events = vec![move_event(point)];
     for count in 1..=click.click_count {
         events.push(DispatchMouseEventParams {
             click_count: Some(i64::from(count)),
@@ -2380,9 +2396,45 @@ pub(crate) fn mouse_events(point: &Point, click: &MouseClick) -> Vec<DispatchMou
     events
 }
 
+/// The one move of a hover, and the first event of a click: `crInput.ts` `RawMouseImpl.move`
+/// with no button held (`button: 'none'`, `buttons: 0`, `force: 0`) and no modifier. Pure.
+/// Playwright: `server/chromium/crInput.ts` `RawMouseImpl.move`: `type: 'mouseMoved',`
+pub(crate) fn move_event(point: &Point) -> DispatchMouseEventParams {
+    DispatchMouseEventParams {
+        r#type: "mouseMoved".to_string(),
+        x: point.x,
+        y: point.y,
+        modifiers: Some(0),
+        button: Some("none".to_string()),
+        buttons: Some(0),
+        force: Some(0.0),
+        ..DispatchMouseEventParams::default()
+    }
+}
+
+/// Playwright's two touch events for a tap (`crInput.ts` `RawTouchscreenImpl.tap`), as the JSON
+/// params of `Input.dispatchTouchEvent`: a start with one touch point at `point`, then an end
+/// with none, both without modifiers. browseros-cdp has no typed touch params. Pure.
+/// Playwright: `server/chromium/crInput.ts` `RawTouchscreenImpl.tap`: `touchPoints: []`
+pub(crate) fn tap_events(point: &Point) -> [String; 2] {
+    // Playwright: `server/chromium/crInput.ts` `RawTouchscreenImpl.tap`: `type: 'touchStart',`
+    let start = json!({
+        "type": "touchStart",
+        "modifiers": 0,
+        "touchPoints": [{ "x": point.x, "y": point.y }],
+    });
+    // Playwright: `server/chromium/crInput.ts` `RawTouchscreenImpl.tap`: `type: 'touchEnd',`
+    let end = json!({ "type": "touchEnd", "modifiers": 0, "touchPoints": [] });
+    [start.to_string(), end.to_string()]
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+
     use super::*;
+    use crate::progress::DeliveryCell;
+    use crate::run::Delivery;
 
     const SESSION: &str = "S1";
     const MAIN: &str = "MAIN";
@@ -2631,6 +2683,192 @@ mod tests {
             }
             assert_eq!(summary, expected, "{name}");
         }
+    }
+
+    /// A scripted session for the pointer writers, under paused time: each send is recorded
+    /// with its event type and answers the next scripted outcome after a round trip; `Hang`
+    /// never answers, as a renderer frozen mid-event.
+    #[derive(Clone)]
+    enum Answer {
+        Ok,
+        Fail,
+        Refuse,
+        Hang,
+    }
+
+    struct WriterSender {
+        sent: Arc<SyncMutex<Vec<String>>>,
+        answers: Arc<SyncMutex<VecDeque<Answer>>>,
+    }
+
+    impl WriterSender {
+        fn new(answers: impl IntoIterator<Item = Answer>) -> (Self, Arc<SyncMutex<Vec<String>>>) {
+            let sent = Arc::<SyncMutex<Vec<String>>>::default();
+            let sender = Self {
+                sent: Arc::clone(&sent),
+                answers: Arc::new(SyncMutex::new(answers.into_iter().collect())),
+            };
+            (sender, sent)
+        }
+    }
+
+    impl InputSender for WriterSender {
+        async fn send_input(&self, _method: &'static str, params: String) -> Result<(), CdpError> {
+            let params: Value = serde_json::from_str(&params).expect("params are JSON");
+            let kind = params["type"].as_str().unwrap_or_default().to_string();
+            self.sent.lock().expect("sent").push(kind);
+            let answer = self
+                .answers
+                .lock()
+                .expect("answers")
+                .pop_front()
+                .unwrap_or(Answer::Ok);
+            time::sleep(Duration::from_millis(1)).await;
+            match answer {
+                Answer::Ok => Ok(()),
+                Answer::Fail => Err(CdpError::Timeout {
+                    method: "Input.dispatchMouseEvent".to_string(),
+                }),
+                Answer::Refuse => Err(CdpError::ConnectionEpochChanged {
+                    expected: 1,
+                    actual: 2,
+                }),
+                Answer::Hang => future::pending().await,
+            }
+        }
+    }
+
+    fn fresh_ticket() -> (Arc<DeliveryCell>, InputTicket) {
+        let cell = Arc::new(DeliveryCell::default());
+        let ticket = cell.begin().expect("a fresh cell");
+        (cell, ticket)
+    }
+
+    fn dblclick(delay: Option<Duration>) -> Vec<DispatchMouseEventParams> {
+        let click = MouseClick {
+            button: MouseButton::Left,
+            click_count: 2,
+            delay,
+        };
+        mouse_events(&Point { x: 5.0, y: 6.0 }, &click)
+    }
+
+    /// Design §4.7: a double click the call stopped after its first click is partial input,
+    /// `Unknown`, never `Done`; the release its press owes is still written.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_double_click_cut_short_after_its_first_click_reads_unknown() {
+        let (sender, sent) = WriterSender::new([]);
+        let (cell, ticket) = fresh_ticket();
+        let cut_short = CancellationToken::new();
+        let delay = Duration::from_millis(50);
+        let writer = tokio::spawn(write_mouse(
+            sender,
+            dblclick(Some(delay)),
+            Some(delay),
+            ticket,
+            cut_short.clone(),
+        ));
+        time::sleep(Duration::from_millis(10)).await;
+        cut_short.cancel();
+        let report = writer.await.expect("the writer task");
+        assert!(
+            matches!(report, PressReport::Failed { closed: false, .. }),
+            "{report:?}"
+        );
+        assert_eq!(cell.delivery(), Delivery::Unknown);
+        assert_eq!(
+            *sent.lock().expect("sent"),
+            ["mouseMoved", "mousePressed", "mouseReleased"],
+            "the first press is released; the second click never starts"
+        );
+
+        let (sender, sent) = WriterSender::new([]);
+        let (cell, ticket) = fresh_ticket();
+        let report = write_mouse(
+            sender,
+            dblclick(Some(delay)),
+            Some(delay),
+            ticket,
+            CancellationToken::new(),
+        )
+        .await;
+        assert!(matches!(report, PressReport::Acked(_)), "{report:?}");
+        assert_eq!(cell.delivery(), Delivery::Done);
+        assert_eq!(
+            sent.lock().expect("sent").len(),
+            5,
+            "the whole double click"
+        );
+    }
+
+    /// A tap whose answers are lost still ends its touch (both events are written together),
+    /// and reads `Unknown`: the page may have seen them.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_tap_whose_answers_fail_ends_its_touch_and_reads_unknown() {
+        let (sender, sent) = WriterSender::new([Answer::Fail, Answer::Fail]);
+        let (cell, ticket) = fresh_ticket();
+        let report = write_tap(sender, Point { x: 1.0, y: 2.0 }, ticket).await;
+        assert!(
+            matches!(report, PressReport::Failed { closed: false, .. }),
+            "{report:?}"
+        );
+        assert_eq!(cell.delivery(), Delivery::Unknown);
+        assert_eq!(*sent.lock().expect("sent"), ["touchStart", "touchEnd"]);
+    }
+
+    /// A tap whose start is never answered has still written its end, and stays `Unknown`
+    /// while it waits; a tap whose caller stopped finishes anyway and reads `Done`; a refused
+    /// tap wrote nothing.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_tap_survives_a_lost_answer_and_a_stopped_caller() {
+        let (sender, sent) = WriterSender::new([Answer::Hang, Answer::Ok]);
+        let (cell, ticket) = fresh_ticket();
+        let writer = tokio::spawn(write_tap(sender, Point { x: 1.0, y: 2.0 }, ticket));
+        time::sleep(Duration::from_secs(5)).await;
+        assert_eq!(*sent.lock().expect("sent"), ["touchStart", "touchEnd"]);
+        assert_eq!(cell.delivery(), Delivery::Unknown);
+        writer.abort();
+
+        let (sender, sent) = WriterSender::new([]);
+        let (cell, ticket) = fresh_ticket();
+        // Detached, as `Tab::press` starts it: nobody awaits the report.
+        drop(tokio::spawn(write_tap(
+            sender,
+            Point { x: 1.0, y: 2.0 },
+            ticket,
+        )));
+        time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(cell.delivery(), Delivery::Done);
+        assert_eq!(sent.lock().expect("sent").len(), 2);
+
+        let (sender, _) = WriterSender::new([Answer::Refuse, Answer::Refuse]);
+        let (cell, ticket) = fresh_ticket();
+        let report = write_tap(sender, Point { x: 1.0, y: 2.0 }, ticket).await;
+        assert!(matches!(report, PressReport::NothingWritten), "{report:?}");
+        assert_eq!(cell.delivery(), Delivery::NotSent);
+    }
+
+    /// A hover's one move is a click's first event, and a tap is Playwright's two touch events:
+    /// the start with one touch point at the point, the end with none, both without modifiers.
+    #[test]
+    fn tests_that_a_hover_moves_like_a_click_and_a_tap_starts_and_ends_one_touch() {
+        let point = Point { x: 10.5, y: 20.25 };
+        let click = MouseClick {
+            button: MouseButton::Left,
+            click_count: 1,
+            delay: None,
+        };
+        assert_eq!(move_event(&point), mouse_events(&point, &click)[0]);
+        let [start, end] = tap_events(&point)
+            .map(|event| serde_json::from_str::<Value>(&event).expect("touch params are JSON"));
+        assert_eq!(
+            start,
+            json!({ "type": "touchStart", "modifiers": 0, "touchPoints": [{ "x": 10.5, "y": 20.25 }] })
+        );
+        assert_eq!(
+            end,
+            json!({ "type": "touchEnd", "modifiers": 0, "touchPoints": [] })
+        );
     }
 
     #[test]

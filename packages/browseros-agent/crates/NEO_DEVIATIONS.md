@@ -3,10 +3,14 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (17)
+## Deviations (21)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
+| neo-runtime/src/click.rs | `PointerOptions::from_tap` | `server/frames.ts` `Frame.tap` | Neo's run attaches to the user's BrowserOS context, which has no hasTouch option, and its tab answers Input.dispatchTouchEvent with the events of a hasTouch context, so Neo taps where Playwright refuses. |
+| neo-runtime/src/click.rs | `attempt` | `server/dom.ts` `ElementHandle._performPointerAction` | Playwright's trial still performs the input into an interceptor that blocks every event it judges, which the page's earlier listeners and the hover state still see; Neo's trial ends at its checks and sends no input. Dropping the interceptor disarms it, and the tab's input comes back once that stop has answered. |
+| neo-runtime/src/click.rs | `refuse_unserved` | `server/dom.ts` `ElementHandle._performPointerAction` | Neo's tab keeps no keyboard state yet to press and restore them with, so it refuses them before any work. |
+| neo-runtime/src/click.rs | `refuse_unserved` | `server/dom.ts` `ElementHandle._performPointerAction` | Playwright moves in `steps` from the page's last mouse position, which Neo's tab does not keep yet, so it refuses other steps before any work. |
 | neo-runtime/src/console.rs | `HISTORY_BYTES_LIMIT` | `server/page.ts` `Page.addConsoleMessage` | Playwright bounds the count only. Neo keeps the history in the server for the run, outside the realm's memory limit, so each list also keeps at most this many bytes of text (a message's, an error's message and stack), dropping its oldest entries first; the newest always stays. |
 | neo-runtime/src/console.rs | `arg_preview` | `server/dom.ts` `ElementHandle._initializePreview` | Playwright later swaps a node's preview for its markup (`JSHandle@<div id="a">hi</div>`), which a message's text shows when first read after the swap: a history read with no console listener (a listener, or a `debug` message, reads the text at once). Neo never swaps, so the text is always `JSHandle@node`, what a listener sees. |
 | neo-runtime/src/console.rs | `ensure_bytes_limit` | `server/page.ts` `ensureArrayLimit` | Playwright trims a list by count only; Neo also drops its oldest entries until the list's text fits [`HISTORY_BYTES_LIMIT`], keeping the newest entry whatever its size. |

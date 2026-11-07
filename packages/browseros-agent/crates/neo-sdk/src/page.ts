@@ -19,16 +19,19 @@ import {
   type AriaSnapshotOptions,
   type CheckOptions,
   type ClickOptions,
+  type DblclickOptions,
   type FillOptions,
   Frame,
   type GetAttributeOptions,
   type GotoOptions,
+  type HoverOptions,
   type InnerTextOptions,
   type InputValueOptions,
   type IsCheckedOptions,
   type IsVisibleOptions,
   type PressOptions,
   type SelectOptionOptions,
+  type TapOptions,
   type TextContentOptions,
   type UncheckOptions,
   type URLMatch,
@@ -457,6 +460,24 @@ export class Page extends ChannelOwner {
   /** Not strict, as Playwright's `page.click`, which forwards to the main frame. */
   async click(selector: string, options: ClickOptions = {}): Promise<void> {
     return await this.#mainFrame._click('page.click', selector, options)
+  }
+
+  /** Not strict, as Playwright's `page.dblclick`, which forwards to the main frame. */
+  async dblclick(
+    selector: string,
+    options: DblclickOptions = {},
+  ): Promise<void> {
+    return await this.#mainFrame._dblclick('page.dblclick', selector, options)
+  }
+
+  /** Not strict, as Playwright's `page.hover`, which forwards to the main frame. */
+  async hover(selector: string, options: HoverOptions = {}): Promise<void> {
+    return await this.#mainFrame._hover('page.hover', selector, options)
+  }
+
+  /** Not strict, as Playwright's `page.tap`, which forwards to the main frame. */
+  async tap(selector: string, options: TapOptions = {}): Promise<void> {
+    return await this.#mainFrame._tap('page.tap', selector, options)
   }
 
   async fill(
