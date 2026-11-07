@@ -401,6 +401,8 @@ async fn tests_that_scoped_snapshots_and_bounded_results_work_through_mcp() -> a
         json!({"result":id,"page":page}),
         json!({"result":id,"timeout":1}),
         json!({"code":"return 1","field":"value"}),
+        json!({"code":"return 1","result":null}),
+        json!({"result":id,"page":null}),
         json!({}),
     ] {
         let reply = rpc(

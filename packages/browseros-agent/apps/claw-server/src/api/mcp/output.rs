@@ -292,9 +292,12 @@ fn inside_ref(text: &str, offset: usize) -> bool {
 }
 
 fn ref_start(text: &str, offset: usize) -> Option<usize> {
-    text[..offset]
-        .rfind('[')
-        .filter(|&start| text[start..].starts_with("[ref=") && !text[start..offset].contains(']'))
+    text[..offset].rfind('[').filter(|&start| {
+        text[start..].starts_with("[ref=")
+            && text[start..]
+                .find(']')
+                .is_some_and(|end| offset <= start + end)
+    })
 }
 
 fn prefix_end(text: &str, limit: usize) -> usize {
@@ -540,6 +543,16 @@ mod tests {
                 text
             );
         }
+        let text = format!("ordinary text [ref={}", "x".repeat(40_000));
+        let bounded = store.limit(report(json!(text)));
+        assert_eq!(
+            remainder(
+                &mut store,
+                bounded["truncated"]["value"]["next"].clone(),
+                bounded["value"].as_str().expect("string prefix").into()
+            ),
+            text
+        );
         let mut failed = report(Value::Null);
         failed["status"] = json!("error");
         failed["error"] = json!({"name":"Error", "message":"\u{1}".repeat(40_000)});

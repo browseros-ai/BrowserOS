@@ -377,10 +377,15 @@ impl ServerHandler for PlaywrightService {
             ))
             .into());
         }
-        let args = serde_json::from_value::<RequestArguments>(Value::Object(
-            request.arguments.unwrap_or_default(),
-        ))
-        .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        let arguments = request.arguments.unwrap_or_default();
+        if arguments.values().any(Value::is_null) {
+            return Err(McpError::invalid_params(
+                "provided run arguments must not be null",
+                None,
+            ));
+        }
+        let args = serde_json::from_value::<RequestArguments>(Value::Object(arguments))
+            .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
         if let Some(id) = args.result {
             if args.code.is_some()
                 || args.page.is_some()
