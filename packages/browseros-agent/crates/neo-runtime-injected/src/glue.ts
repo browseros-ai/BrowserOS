@@ -32,7 +32,10 @@ import type {
 import type { AriaNodeJSON } from '../vendor/playwright/isomorphic/ariaSnapshot'
 
 /** The Playwright page types behind the spec's named handle kinds. */
-type Handles = { HitTargetInterceptor: HitTargetInterceptionResult }
+type Handles = {
+  HitTargetInterceptor: HitTargetInterceptionResult
+  ElementList: Record<string, Element>
+}
 
 /**
  * Parses one frame chunk, queries the document, and applies Playwright's checks in Playwright's
@@ -48,10 +51,13 @@ function query(
   injected: InjectedScript,
   selector: string,
   strict: boolean,
-  { markTargets = 'none' }: { markTargets?: 'all' | 'first' | 'none' } = {},
+  {
+    markTargets = 'none',
+    root = document,
+  }: { markTargets?: 'all' | 'first' | 'none'; root?: Node } = {},
 ): Element[] {
   const parsed = injected.parseSelector(selector)
-  const elements = injected.querySelectorAll(parsed, document)
+  const elements = injected.querySelectorAll(parsed, root)
   // Before the checks, as in Playwright: the page's own listeners see the matches marked even
   // when strict mode then fails the call.
   if (markTargets === 'all') injected.markTargetElements(new Set(elements))
@@ -62,6 +68,12 @@ function query(
   if (strict && elements.length > 1)
     throw injected.strictModeViolationError(parsed, elements)
   return elements
+}
+
+/** Elements as a null-prototype object's own properties `0`, `1`, …, which CDP reports as a
+ * plain object (an array would carry the subtype `array`). */
+function elementList(elements: Element[]): Record<string, Element> {
+  return Object.assign(Object.create(null), elements)
 }
 
 export const glue = {
@@ -93,6 +105,34 @@ export const glue = {
       preview: injected.previewNode(element),
     }
   },
+
+  /** `selectorElement` under an adopted element handle (`frameSelectors.ts` with a scope). */
+  scopedSelectorElement: (injected, { selector, strict }, root) => {
+    const elements = query(injected, selector, strict, { root })
+    const [element] = elements
+    if (!element) return { count: 0, visible: false }
+    return {
+      element,
+      count: elements.length,
+      visible: injected.elementState(element, 'visible', true).matches,
+      preview: injected.previewNode(element),
+    }
+  },
+
+  /** Every match, as Playwright's `queryAll` resolves it: the elements, by index. */
+  queryAll: (injected, { selector }) => ({
+    elements: elementList(query(injected, selector, false)),
+  }),
+
+  scopedQueryAll: (injected, { selector }, root) => ({
+    elements: elementList(query(injected, selector, false, { root })),
+  }),
+
+  listPreviews: (injected, _params, list) => ({
+    previews: Object.values(list).map((element) =>
+      injected.previewNode(element),
+    ),
+  }),
 
   // Rust only reads the node's `backendNodeId` (`DOM.describeNode`), which a `Document` has like
   // any node; the cast is what lets the spec's one node handle kind carry it.

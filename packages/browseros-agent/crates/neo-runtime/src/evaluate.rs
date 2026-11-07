@@ -28,17 +28,23 @@ use std::hash::{BuildHasher, Hasher};
 use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use browseros_cdp::SessionId;
-use browseros_cdp::runtime::RemoteObject;
-use neo_runtime_spec::injected::InjectedPreviewNodeParams;
+use browseros_cdp::runtime::{GetPropertiesResult, RemoteObject};
+use neo_runtime_spec::injected::{
+    InjectedListPreviewsParams, InjectedPreviewNodeParams, InjectedQueryAllParams,
+    InjectedScopedQueryAllParams, InjectedScopedSelectorElementParams,
+    InjectedSelectorElementParams,
+};
 use neo_runtime_spec::{Element, Handle, HandleId, MethodFlag, MethodGroup, MethodMeta};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::click::{LoopAWaits, PageError};
+use crate::frame_selector;
 use crate::frames::{FrameContext, FrameScope};
-use crate::main_world::{Called, DocumentId, Installed, MainFunction};
+use crate::main_world::{BuiltExpression, Called, DocumentId, Installed, MainFunction};
 use crate::page::{FrameTab, GroupGuard};
 use crate::progress::{CallError, PlaywrightError, Progress, js_number};
 
@@ -50,6 +56,9 @@ static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 
 /// Neo: counts runs, salting each run's random token, so two runs never share one.
 static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
+
+/// Playwright: `server/frames.ts` `Frame.waitForFunctionExpression`: `return this.retryWithProgressAndTimeouts(progress, [100], async () => {`
+const WAIT_FOR_FUNCTION_RETRY: Duration = Duration::from_millis(100);
 
 /// Playwright: `server/javascript.ts` `evaluateExpression`: `throw new JavaScriptErrorInEvaluate('JSHandles can be evaluated only in the context they were created!');`
 const OTHER_CONTEXT: &str = "JSHandles can be evaluated only in the context they were created!";
@@ -191,6 +200,193 @@ pub(crate) struct Evaluation {
     pub(crate) return_by_value: bool,
 }
 
+/// `querySelector`'s params (`Frame` and `ElementHandle`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QueryParams {
+    selector: String,
+    #[serde(default)]
+    strict: Option<bool>,
+}
+
+/// `querySelectorAll`'s params.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QueryAllParams {
+    selector: String,
+}
+
+/// `evalOnSelector`'s params.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EvalOnSelectorParams {
+    selector: String,
+    #[serde(default)]
+    strict: Option<bool>,
+    expression: String,
+    #[serde(default)]
+    is_function: Option<bool>,
+    arg: SerializedArgument,
+}
+
+/// `evalOnSelectorAll`'s params.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EvalOnSelectorAllParams {
+    selector: String,
+    expression: String,
+    #[serde(default)]
+    is_function: Option<bool>,
+    arg: SerializedArgument,
+}
+
+/// `Frame.waitForFunction`'s params. `selector` and `strict` belong to `Locator.waitForFunction`,
+/// which runs on an element in the main world's injected script: refused until that lands.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WaitForFunctionParams {
+    expression: String,
+    #[serde(default)]
+    is_function: Option<bool>,
+    arg: SerializedArgument,
+    #[serde(default)]
+    polling_interval: Option<f64>,
+    #[serde(default)]
+    selector: Option<String>,
+    #[serde(default)]
+    strict: Option<bool>,
+}
+
+/// `JSHandle.getProperty`'s params.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GetPropertyParams {
+    name: String,
+}
+
+/// Neo: `Frame.querySelector`'s trace metadata, as `neo-runtime-spec/spec/playwright/frame.yml`
+/// declares it.
+pub(crate) static FRAME_QUERY_META: MethodMeta = MethodMeta {
+    interface: "Frame",
+    method: "querySelector",
+    title: Some("Query selector"),
+    subtitle: Some("{selector}"),
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[MethodFlag::Snapshot],
+};
+/// Neo: `Frame.querySelectorAll`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
+pub(crate) static FRAME_QUERY_ALL_META: MethodMeta = MethodMeta {
+    interface: "Frame",
+    method: "querySelectorAll",
+    title: Some("Query selector all"),
+    subtitle: Some("{selector}"),
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[MethodFlag::Snapshot],
+};
+/// Neo: `Frame.evalOnSelector`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
+pub(crate) static FRAME_EVAL_ON_SELECTOR_META: MethodMeta = MethodMeta {
+    interface: "Frame",
+    method: "evalOnSelector",
+    title: Some("Evaluate"),
+    subtitle: Some("{selector}"),
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+};
+/// Neo: `Frame.evalOnSelectorAll`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
+pub(crate) static FRAME_EVAL_ON_SELECTOR_ALL_META: MethodMeta = MethodMeta {
+    interface: "Frame",
+    method: "evalOnSelectorAll",
+    title: Some("Evaluate"),
+    subtitle: Some("{selector}"),
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+};
+/// Neo: `Frame.waitForFunction`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
+pub(crate) static FRAME_WAIT_FOR_FUNCTION_META: MethodMeta = MethodMeta {
+    interface: "Frame",
+    method: "waitForFunction",
+    title: Some("Wait for function"),
+    subtitle: Some("{selector}"),
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+};
+/// Neo: `ElementHandle.querySelector`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
+pub(crate) static ELEMENT_QUERY_META: MethodMeta = MethodMeta {
+    interface: "ElementHandle",
+    method: "querySelector",
+    title: Some("Query selector"),
+    subtitle: Some("{selector}"),
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[MethodFlag::Snapshot],
+};
+/// Neo: `ElementHandle.querySelectorAll`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
+pub(crate) static ELEMENT_QUERY_ALL_META: MethodMeta = MethodMeta {
+    interface: "ElementHandle",
+    method: "querySelectorAll",
+    title: Some("Query selector all"),
+    subtitle: Some("{selector}"),
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[MethodFlag::Snapshot],
+};
+/// Neo: `ElementHandle.evalOnSelector`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
+pub(crate) static ELEMENT_EVAL_ON_SELECTOR_META: MethodMeta = MethodMeta {
+    interface: "ElementHandle",
+    method: "evalOnSelector",
+    title: Some("Evaluate"),
+    subtitle: Some("{selector}"),
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+};
+/// Neo: `ElementHandle.evalOnSelectorAll`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
+pub(crate) static ELEMENT_EVAL_ON_SELECTOR_ALL_META: MethodMeta = MethodMeta {
+    interface: "ElementHandle",
+    method: "evalOnSelectorAll",
+    title: Some("Evaluate"),
+    subtitle: Some("{selector}"),
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+};
+/// Neo: `JSHandle.getProperty`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
+pub(crate) static HANDLE_GET_PROPERTY_META: MethodMeta = MethodMeta {
+    interface: "JSHandle",
+    method: "getProperty",
+    title: Some("Get JS property"),
+    subtitle: None,
+    group: Some(MethodGroup::Getter),
+    render_params: &[],
+    internal: false,
+    flags: &[],
+};
+/// Neo: `JSHandle.getPropertyList`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
+pub(crate) static HANDLE_GET_PROPERTY_LIST_META: MethodMeta = MethodMeta {
+    interface: "JSHandle",
+    method: "getPropertyList",
+    title: Some("Get property list"),
+    subtitle: None,
+    group: Some(MethodGroup::Getter),
+    render_params: &[],
+    internal: false,
+    flags: &[],
+};
+
 /// A routed evaluation command.
 #[derive(Debug)]
 pub(crate) enum EvalCall {
@@ -203,6 +399,44 @@ pub(crate) enum EvalCall {
         guid: String,
     },
     Dispose {
+        guid: String,
+    },
+    /// `Frame.querySelector` / `ElementHandle.querySelector` (`scope` names the element).
+    Query {
+        scope: Option<String>,
+        selector: String,
+        strict: bool,
+    },
+    /// `Frame.querySelectorAll` / `ElementHandle.querySelectorAll`.
+    QueryAll {
+        scope: Option<String>,
+        selector: String,
+    },
+    /// `Frame.evalOnSelector` / `ElementHandle.evalOnSelector` (`$eval`).
+    EvalOnSelector {
+        scope: Option<String>,
+        selector: String,
+        strict: bool,
+        evaluation: Evaluation,
+    },
+    /// `Frame.evalOnSelectorAll` / `ElementHandle.evalOnSelectorAll` (`$$eval`, `evaluateAll`).
+    EvalOnSelectorAll {
+        scope: Option<String>,
+        selector: String,
+        evaluation: Evaluation,
+    },
+    /// `Frame.waitForFunction`.
+    WaitForFunction {
+        evaluation: Evaluation,
+        polling: Option<f64>,
+    },
+    /// `JSHandle.getProperty`.
+    GetProperty {
+        guid: String,
+        name: String,
+    },
+    /// `JSHandle.getPropertyList`.
+    GetPropertyList {
         guid: String,
     },
 }
@@ -245,6 +479,32 @@ pub(crate) fn route_frame(
     method: &str,
     params: Option<&Value>,
 ) -> Option<(&'static MethodMeta, Result<EvalCall, PlaywrightError>)> {
+    if let Some(routed) = route_selector_call(None, method, params) {
+        return routed.0.map(|meta| (meta, routed.1));
+    }
+    if method == "waitForFunction" {
+        let meta = &FRAME_WAIT_FOR_FUNCTION_META;
+        return Some((
+            meta,
+            decode::<WaitForFunctionParams>(params, meta).and_then(|params| {
+                if params.selector.is_some() || params.strict.is_some() {
+                    // Deviation: `server/frames.ts` `Frame.waitForFunctionExpressionOnElement`: `expression = js.normalizeEvaluationExpression(expression, isFunction);` Neo has no main-world injected script yet to run the predicate on an element, so it refuses the selector form.
+                    return Err(PlaywrightError::error(
+                        "Neo does not support waitForFunction on a selector yet",
+                    ));
+                }
+                Ok(EvalCall::WaitForFunction {
+                    evaluation: Evaluation {
+                        expression: params.expression,
+                        is_function: params.is_function,
+                        arg: params.arg,
+                        return_by_value: false,
+                    },
+                    polling: params.polling_interval,
+                })
+            }),
+        ));
+    }
     let (meta, return_by_value) = match method {
         "evaluateExpression" => (&FRAME_EVALUATE_META, true),
         "evaluateExpressionHandle" => (&FRAME_EVALUATE_HANDLE_META, false),
@@ -273,6 +533,9 @@ pub(crate) fn route_handle(
     Option<&'static MethodMeta>,
     Result<EvalCall, PlaywrightError>,
 ) {
+    if let Some(routed) = route_selector_call(Some(guid), method, params) {
+        return routed;
+    }
     let guid = guid.to_string();
     let (meta, call) = match method {
         "evaluateExpression" | "evaluateExpressionHandle" => {
@@ -302,6 +565,21 @@ pub(crate) fn route_handle(
             decode::<NoParams>(params, &HANDLE_DISPOSE_META)
                 .map(|NoParams {}| EvalCall::Dispose { guid }),
         ),
+        "getProperty" => (
+            &HANDLE_GET_PROPERTY_META,
+            decode::<GetPropertyParams>(params, &HANDLE_GET_PROPERTY_META).map(|params| {
+                EvalCall::GetProperty {
+                    guid,
+                    name: params.name,
+                }
+            }),
+        ),
+        "getPropertyList" => (
+            &HANDLE_GET_PROPERTY_LIST_META,
+            decode::<NoParams>(params, &HANDLE_GET_PROPERTY_LIST_META)
+                .map(|NoParams {}| EvalCall::GetPropertyList { guid }),
+        ),
+
         // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection.dispatch`: `Mismatching dispatcher: "${dispatcher._type}" does not implement "${method}"`
         _ => {
             return (
@@ -313,6 +591,89 @@ pub(crate) fn route_handle(
         }
     };
     (Some(meta), call)
+}
+
+/// The selector commands `Frame` and `ElementHandle` share (`scope` is the element handle's guid):
+/// `querySelector`, `querySelectorAll`, `evalOnSelector`, `evalOnSelectorAll`; `None` for any
+/// other method.
+fn route_selector_call(
+    scope: Option<&str>,
+    method: &str,
+    params: Option<&Value>,
+) -> Option<(
+    Option<&'static MethodMeta>,
+    Result<EvalCall, PlaywrightError>,
+)> {
+    let scope = scope.map(str::to_string);
+    let element = scope.is_some();
+    let pick = |frame: &'static MethodMeta, handle: &'static MethodMeta| {
+        if element { handle } else { frame }
+    };
+    let (meta, call) = match method {
+        "querySelector" => {
+            let meta = pick(&FRAME_QUERY_META, &ELEMENT_QUERY_META);
+            (
+                meta,
+                decode::<QueryParams>(params, meta).map(|params| EvalCall::Query {
+                    scope,
+                    selector: params.selector,
+                    strict: params.strict.unwrap_or(false),
+                }),
+            )
+        }
+        "querySelectorAll" => {
+            let meta = pick(&FRAME_QUERY_ALL_META, &ELEMENT_QUERY_ALL_META);
+            (
+                meta,
+                decode::<QueryAllParams>(params, meta).map(|params| EvalCall::QueryAll {
+                    scope,
+                    selector: params.selector,
+                }),
+            )
+        }
+        "evalOnSelector" => {
+            let meta = pick(&FRAME_EVAL_ON_SELECTOR_META, &ELEMENT_EVAL_ON_SELECTOR_META);
+            (
+                meta,
+                decode::<EvalOnSelectorParams>(params, meta).map(|params| {
+                    EvalCall::EvalOnSelector {
+                        scope,
+                        selector: params.selector,
+                        strict: params.strict.unwrap_or(false),
+                        evaluation: Evaluation {
+                            expression: params.expression,
+                            is_function: params.is_function,
+                            arg: params.arg,
+                            return_by_value: true,
+                        },
+                    }
+                }),
+            )
+        }
+        "evalOnSelectorAll" => {
+            let meta = pick(
+                &FRAME_EVAL_ON_SELECTOR_ALL_META,
+                &ELEMENT_EVAL_ON_SELECTOR_ALL_META,
+            );
+            (
+                meta,
+                decode::<EvalOnSelectorAllParams>(params, meta).map(|params| {
+                    EvalCall::EvalOnSelectorAll {
+                        scope,
+                        selector: params.selector,
+                        evaluation: Evaluation {
+                            expression: params.expression,
+                            is_function: params.is_function,
+                            arg: params.arg,
+                            return_by_value: true,
+                        },
+                    }
+                }),
+            )
+        }
+        _ => return None,
+    };
+    Some((Some(meta), call))
 }
 
 fn decode<T: for<'de> Deserialize<'de>>(
@@ -347,6 +708,8 @@ pub(crate) struct HandleEntry {
     frame: Arc<FrameContext>,
     document: DocumentId,
     remote: Remote,
+    /// An `ElementHandle`: only these serve the selector commands, as in Playwright's dispatchers.
+    element: bool,
 }
 
 /// The page object, or for a primitive the value itself, as Playwright keeps `JSHandle._value`
@@ -445,6 +808,7 @@ impl Handles {
                 frame: Arc::clone(frame),
                 document,
                 remote,
+                element,
             }),
         );
         Ok(CreatedHandle {
@@ -480,6 +844,32 @@ pub(crate) async fn serve(
 ) -> Result<Option<Value>, CallError> {
     let handles = progress.handles();
     let result = match call {
+        call @ (EvalCall::Query { .. }
+        | EvalCall::QueryAll { .. }
+        | EvalCall::EvalOnSelector { .. }
+        | EvalCall::EvalOnSelectorAll { .. }) => {
+            return serve_selector(tab, call, handles, progress).await;
+        }
+        EvalCall::WaitForFunction {
+            evaluation,
+            polling,
+        } => {
+            let frame = tab.context().await.map_err(page_error)?;
+            wait_for_function(tab, &frame, &evaluation, polling, handles, progress).await?
+        }
+        EvalCall::GetProperty { guid, name } => {
+            let receiver = handles
+                .entry(&guid)
+                .ok_or_else(PlaywrightError::target_closed)?;
+            get_property(tab, &receiver, &name, handles, progress).await?
+        }
+        EvalCall::GetPropertyList { guid } => {
+            let receiver = handles
+                .entry(&guid)
+                .ok_or_else(PlaywrightError::target_closed)?;
+            let properties = get_property_list(tab, &receiver, handles, progress).await?;
+            return Ok(Some(json!({ "properties": properties })));
+        }
         EvalCall::Frame(evaluation) => {
             let frame = tab.context().await.map_err(page_error)?;
             evaluate(tab, &frame, None, &evaluation, handles, progress).await?
@@ -539,8 +929,71 @@ pub(crate) async fn evaluate(
     handles: &Handles,
     progress: &Progress,
 ) -> Result<EvalResult, CallError> {
-    let args = resolve_args(&evaluation.arg.handles, handles)?;
-    let group = if evaluation.return_by_value {
+    let extras: Vec<Extra<'_>> = receiver.map(Extra::Entry).into_iter().collect();
+    let (document, called) = invoke(
+        tab,
+        &Invocation {
+            frame,
+            receiver,
+            expression: &evaluation.expression,
+            is_function: evaluation.is_function,
+            return_by_value: evaluation.return_by_value,
+            // `serializeAsCallArgument(this)`, then the arg; the receiver is the last handle, so
+            // the SDK's `{h: i}` indices hold as they are.
+            leading: &|base| {
+                if receiver.is_some() {
+                    vec![json!({ "h": base })]
+                } else {
+                    Vec::new()
+                }
+            },
+            extras: &extras,
+            arg: &evaluation.arg,
+        },
+        handles,
+        progress,
+    )
+    .await?;
+    answer(tab, frame, document, called, handles, progress).await
+}
+
+/// A handle `invoke` passes after the agent argument's own handles.
+enum Extra<'a> {
+    /// A handle of the run, checked against the document as an argument is.
+    Entry(&'a HandleEntry),
+    /// An object of this call's own, by id: a waiter between its start and its result.
+    Object(&'a str),
+    /// The document's `UtilityScript`.
+    Utility,
+}
+
+/// One `UtilityScript.evaluate` call: `leading` page-format arguments before the agent's `arg`
+/// (given the agent handles' count, so they can name `extras` as `{h: base + i}`), then `extras`
+/// after the agent's handles.
+struct Invocation<'a> {
+    frame: &'a Arc<FrameContext>,
+    /// The handle whose document must still be the frame's (Playwright's destroyed context).
+    receiver: Option<&'a HandleEntry>,
+    expression: &'a str,
+    is_function: Option<bool>,
+    return_by_value: bool,
+    leading: &'a (dyn Fn(usize) -> Vec<Value> + Sync),
+    extras: &'a [Extra<'a>],
+    arg: &'a SerializedArgument,
+}
+
+/// Runs one invocation in its frame's main world: Playwright's `evaluateWithArguments` over
+/// `dist/evaluate.js`, installing the `UtilityScript` again once if it went stale before the call
+/// started. By-handle results land in the run's handle group of the frame's session.
+async fn invoke(
+    tab: &FrameTab,
+    invocation: &Invocation<'_>,
+    handles: &Handles,
+    progress: &Progress,
+) -> Result<(DocumentId, Called), CallError> {
+    let frame = invocation.frame;
+    let args = resolve_args(&invocation.arg.handles, handles)?;
+    let group = if invocation.return_by_value {
         None
     } else {
         Some(handles.group(tab, frame).map_err(page_error)?)
@@ -548,30 +1001,30 @@ pub(crate) async fn evaluate(
     let mut attempt = 0;
     loop {
         attempt += 1;
-        let installed = installed(tab, frame, receiver, progress).await?;
-        let mut handle_args = Vec::with_capacity(args.len() + 1);
+        let installed = installed(tab, frame, invocation.receiver, progress).await?;
+        let mut handle_args = Vec::with_capacity(args.len() + invocation.extras.len());
         for arg in &args {
             handle_args.push(call_argument(arg, frame, &installed)?);
         }
-        // `serializeAsCallArgument(this)` and the arg, in Playwright's order; the receiver is the
-        // last handle, so the SDK's `{h: i}` indices hold as they are.
+        let leading = (invocation.leading)(handle_args.len());
+        for extra in invocation.extras {
+            handle_args.push(match extra {
+                Extra::Entry(entry) => call_argument(entry, frame, &installed)?,
+                Extra::Object(id) => json!({ "objectId": id }),
+                Extra::Utility => json!({ "objectId": installed.utility_id() }),
+            });
+        }
         let mut values = vec![
-            match evaluation.is_function {
+            match invocation.is_function {
                 Some(flag) => json!({ "value": flag }),
                 None => json!({}),
             },
-            json!({ "value": evaluation.return_by_value }),
-            json!({ "value": evaluation.expression }),
+            json!({ "value": invocation.return_by_value }),
+            json!({ "value": invocation.expression }),
+            json!({ "value": leading.len() + 1 }),
         ];
-        if let Some(receiver) = receiver {
-            values.push(json!({ "value": 2 }));
-            values.push(json!({ "value": { "h": handle_args.len() } }));
-            values.push(json!({ "value": evaluation.arg.value }));
-            handle_args.push(call_argument(receiver, frame, &installed)?);
-        } else {
-            values.push(json!({ "value": 1 }));
-            values.push(json!({ "value": evaluation.arg.value }));
-        }
+        values.extend(leading.into_iter().map(|value| json!({ "value": value })));
+        values.push(json!({ "value": invocation.arg.value }));
         values.extend(handle_args);
         let called = progress
             .race(frame.main.call(
@@ -579,18 +1032,655 @@ pub(crate) async fn evaluate(
                 &installed,
                 MainFunction::Evaluate,
                 values,
-                evaluation.return_by_value,
+                invocation.return_by_value,
                 group.as_deref().map(GroupGuard::group),
             ))
             .await?
             .map_err(page_error)?;
         match called {
             Called::Stale if attempt == 1 => frame.main.invalidate(&installed).await,
-            called => {
-                return answer(tab, frame, installed.document, called, handles, progress).await;
-            }
+            called => return Ok((installed.document, called)),
         }
     }
+}
+
+/// The selector commands' share of [`serve`].
+async fn serve_selector(
+    tab: &FrameTab,
+    call: EvalCall,
+    handles: &Handles,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let result = match call {
+        EvalCall::Query {
+            scope,
+            selector,
+            strict,
+        } => {
+            let scope = element_scope(handles, scope.as_deref(), "querySelector")?;
+            let created =
+                query_one(tab, scope.as_deref(), &selector, strict, handles, progress).await?;
+            return Ok(Some(match created {
+                Some(created) => json!({ "element": created }),
+                None => json!({}),
+            }));
+        }
+        EvalCall::QueryAll { scope, selector } => {
+            let scope = element_scope(handles, scope.as_deref(), "querySelectorAll")?;
+            let created = query_all(tab, scope.as_deref(), &selector, handles, progress)
+                .await?
+                .map_or_else(Vec::new, |(_, created)| created);
+            return Ok(Some(json!({ "elements": created })));
+        }
+        EvalCall::EvalOnSelector {
+            scope,
+            selector,
+            strict,
+            evaluation,
+        } => {
+            let scope = element_scope(handles, scope.as_deref(), "evalOnSelector")?;
+            eval_on_selector(
+                tab,
+                scope.as_deref(),
+                &selector,
+                strict,
+                &evaluation,
+                handles,
+                progress,
+            )
+            .await?
+        }
+        EvalCall::EvalOnSelectorAll {
+            scope,
+            selector,
+            evaluation,
+        } => {
+            let scope = element_scope(handles, scope.as_deref(), "evalOnSelectorAll")?;
+            eval_on_selector_all(
+                tab,
+                scope.as_deref(),
+                &selector,
+                &evaluation,
+                handles,
+                progress,
+            )
+            .await?
+        }
+        _ => return Err(PlaywrightError::error("neo-runtime: not a selector command").into()),
+    };
+    Ok(Some(match result {
+        EvalResult::Value(Some(value)) => json!({ "value": value }),
+        EvalResult::Value(None) => json!({}),
+        EvalResult::Handle(created) => json!({ "handle": created }),
+    }))
+}
+
+/// The element handle a selector command is scoped to, refusing a `JSHandle` as Playwright's
+/// dispatcher does.
+fn element_scope(
+    handles: &Handles,
+    scope: Option<&str>,
+    method: &str,
+) -> Result<Option<Arc<HandleEntry>>, CallError> {
+    let Some(guid) = scope else {
+        return Ok(None);
+    };
+    let entry = handles
+        .entry(guid)
+        .ok_or_else(PlaywrightError::target_closed)?;
+    if !entry.element {
+        // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection.dispatch`: `Mismatching dispatcher: "${dispatcher._type}" does not implement "${method}"`
+        return Err(PlaywrightError::error(format!(
+            "Mismatching dispatcher: \"JSHandle\" does not implement \"{method}\""
+        ))
+        .into());
+    }
+    Ok(Some(entry))
+}
+
+/// An element handle adopted into its frame's utility world, as the root of a scoped query, in
+/// `group`. Frame-crossing selectors from an element are not served.
+async fn utility_root(
+    root: &HandleEntry,
+    selector: &str,
+    group: &GroupGuard,
+) -> Result<Handle<Element>, CallError> {
+    let chunks = frame_selector::split(selector).map_err(PlaywrightError::error)?;
+    if !chunks.hops.is_empty() || chunks.from_main {
+        // Deviation: `server/frameSelectors.ts` `FrameSelectors.resolveFrameForSelector`: `const element = await this.frame.selectors.query(...)` Playwright resolves frame hops from a scope too; Neo serves a scoped query within the element's own document only.
+        return Err(PlaywrightError::error(
+            "Neo does not support selectors that enter frames from an element handle yet",
+        )
+        .into());
+    }
+    let Remote::Object(id) = &root.remote else {
+        return Err(PlaywrightError::error(CONTEXT_DESTROYED).into());
+    };
+    let frame = &root.frame;
+    let backend = frame
+        .main
+        .backend_of(frame, id.object_id())
+        .await
+        .map_err(page_error)?;
+    frame
+        .element(group.group(), backend)
+        .await
+        .map_err(|error| page_error(error).into())
+}
+
+/// Playwright's `frameSelectors.ts` `query`: the first match of `selector` (strict when asked),
+/// in the frame the selector ends in, adopted into that frame's main world; `None` when nothing
+/// matched. With `scope`, within that element.
+async fn query_one(
+    tab: &FrameTab,
+    scope: Option<&HandleEntry>,
+    selector: &str,
+    strict: bool,
+    handles: &Handles,
+    progress: &Progress,
+) -> Result<Option<CreatedHandle>, CallError> {
+    let (frame, element, preview, _group) = if let Some(root) = scope {
+        let group = tab.group(&root.frame, "query");
+        let utility_root = utility_root(root, selector, &group).await?;
+        let found = progress
+            .race(root.frame.call(
+                Some(group.group()),
+                &InjectedScopedSelectorElementParams {
+                    selector: selector.to_string(),
+                    strict,
+                    root: utility_root,
+                },
+            ))
+            .await?
+            .map_err(page_error)?;
+        (Arc::clone(&root.frame), found.element, found.preview, group)
+    } else {
+        let Some(located) = progress
+            .race(frame_selector::locate(tab, selector, strict))
+            .await?
+            .map_err(page_error)?
+        else {
+            return Ok(None);
+        };
+        let group = tab.group(&located.frame, "query");
+        let found = progress
+            .race(located.frame.call(
+                Some(group.group()),
+                &InjectedSelectorElementParams {
+                    selector: located.selector,
+                    strict,
+                },
+            ))
+            .await?
+            .map_err(page_error)?;
+        (located.frame, found.element, found.preview, group)
+    };
+    let (Some(element), Some(preview)) = (element, preview) else {
+        return Ok(None);
+    };
+    progress
+        .race(element_handle_for(tab, &frame, &element, &preview, handles))
+        .await?
+        .map(Some)
+        .map_err(|error| page_error(error).into())
+}
+
+/// Playwright's `frameSelectors.ts` `queryAll`: every match, in document order, each adopted
+/// into the main world of the frame the selector ends in; `None` when the selector's frame is not
+/// there. With `scope`, within that element.
+async fn query_all(
+    tab: &FrameTab,
+    scope: Option<&HandleEntry>,
+    selector: &str,
+    handles: &Handles,
+    progress: &Progress,
+) -> Result<Option<(Arc<FrameContext>, Vec<CreatedHandle>)>, CallError> {
+    let (frame, list, group) = if let Some(root) = scope {
+        let group = tab.group(&root.frame, "query-all");
+        let utility_root = utility_root(root, selector, &group).await?;
+        let found = progress
+            .race(root.frame.call(
+                Some(group.group()),
+                &InjectedScopedQueryAllParams {
+                    selector: selector.to_string(),
+                    root: utility_root,
+                },
+            ))
+            .await?
+            .map_err(page_error)?;
+        (Arc::clone(&root.frame), found.elements, group)
+    } else {
+        let Some(located) = progress
+            .race(frame_selector::locate(tab, selector, false))
+            .await?
+            .map_err(page_error)?
+        else {
+            return Ok(None);
+        };
+        let group = tab.group(&located.frame, "query-all");
+        let found = progress
+            .race(located.frame.call(
+                Some(group.group()),
+                &InjectedQueryAllParams {
+                    selector: located.selector,
+                },
+            ))
+            .await?
+            .map_err(page_error)?;
+        (located.frame, found.elements, group)
+    };
+    let previews = progress
+        .race(frame.call(None, &InjectedListPreviewsParams { list: list.clone() }))
+        .await?
+        .map_err(page_error)?
+        .previews;
+    let elements = progress
+        .race(own_properties(&frame, list.id().object_id()))
+        .await?
+        .map_err(page_error)?;
+    let mut created = Vec::with_capacity(elements.len());
+    for ((_, element), preview) in elements.into_iter().zip(previews) {
+        let Some(element) = element
+            .object_id
+            .and_then(|id| Handle::<Element>::new(HandleId::new(id), element.subtype.as_deref()))
+        else {
+            continue;
+        };
+        created.push(
+            progress
+                .race(element_handle_for(tab, &frame, &element, &preview, handles))
+                .await?
+                .map_err(page_error)?,
+        );
+    }
+    drop(group);
+    Ok(Some((frame, created)))
+}
+
+/// `Runtime.getProperties {ownProperties: true}`: each enumerable own property that has a value,
+/// in the order CDP lists them (Playwright's `CRExecutionContext.getProperties`).
+async fn own_properties(
+    frame: &FrameContext,
+    object_id: &str,
+) -> Result<Vec<(String, RemoteObject)>, PageError> {
+    let reply = frame
+        .host
+        .send(
+            "Runtime.getProperties",
+            json!({ "objectId": object_id, "ownProperties": true }),
+        )
+        .await
+        .map_err(|error| frame.host.classify(&error))?;
+    let properties: GetPropertiesResult = serde_json::from_value(reply)
+        .map_err(|error| PageError::Contract(format!("Runtime.getProperties answered: {error}")))?;
+    // Playwright: `server/chromium/crExecutionContext.ts` `CRExecutionContext.getProperties`: `if (!property.enumerable || !property.value)`
+    Ok(properties
+        .result
+        .into_iter()
+        .filter(|property| property.enumerable)
+        .filter_map(|property| Some((property.name, property.value?)))
+        .collect())
+}
+
+/// Forgets the run's handles of one call's temporaries and releases their objects.
+async fn release(handles: &Handles, created: &[CreatedHandle]) {
+    for created in created {
+        if let Some(entry) = handles.forget(&created.guid)
+            && let Remote::Object(id) = &entry.remote
+        {
+            let _released = entry
+                .frame
+                .host
+                .send(
+                    "Runtime.releaseObject",
+                    json!({ "objectId": id.object_id() }),
+                )
+                .await;
+        }
+    }
+}
+
+/// Playwright's `Frame._evalOnSelector`: the first match (strict when asked), then the
+/// function on it, by value; no match fails with Playwright's error.
+async fn eval_on_selector(
+    tab: &FrameTab,
+    scope: Option<&HandleEntry>,
+    selector: &str,
+    strict: bool,
+    evaluation: &Evaluation,
+    handles: &Handles,
+    progress: &Progress,
+) -> Result<EvalResult, CallError> {
+    let Some(created) = query_one(tab, scope, selector, strict, handles, progress).await? else {
+        // Playwright: `server/frames.ts` `Frame._evalOnSelector`: `throw new Error(`Failed to find element matching selector "${target.selector}"`);`
+        return Err(PlaywrightError::error(format!(
+            "Failed to find element matching selector \"{selector}\""
+        ))
+        .into());
+    };
+    let result = match handles.entry(&created.guid) {
+        Some(receiver) => {
+            let frame = Arc::clone(&receiver.frame);
+            evaluate(tab, &frame, Some(&receiver), evaluation, handles, progress).await
+        }
+        None => Err(PlaywrightError::target_closed().into()),
+    };
+    release(handles, &[created]).await;
+    result
+}
+
+/// Playwright's `Frame._evalOnSelectorAll`: every match as one array, the function's first
+/// argument, by value. The array is built in the page from the adopted elements:
+/// `{a: [{h: k}, …]}` is `UtilityScript`'s own encoding of an array of handles.
+async fn eval_on_selector_all(
+    tab: &FrameTab,
+    scope: Option<&HandleEntry>,
+    selector: &str,
+    evaluation: &Evaluation,
+    handles: &Handles,
+    progress: &Progress,
+) -> Result<EvalResult, CallError> {
+    let (frame, created) = match query_all(tab, scope, selector, handles, progress).await? {
+        Some(found) => found,
+        // Playwright: `server/frameSelectors.ts` `FrameSelectors.queryArrayInMainWorld`: `return await context.evaluateHandle(() => []);`
+        None => (tab.context().await.map_err(page_error)?, Vec::new()),
+    };
+    let entries: Vec<Arc<HandleEntry>> = created
+        .iter()
+        .filter_map(|created| handles.entry(&created.guid))
+        .collect();
+    let extras: Vec<Extra<'_>> = entries.iter().map(|entry| Extra::Entry(entry)).collect();
+    let count = extras.len();
+    let invoked = invoke(
+        tab,
+        &Invocation {
+            frame: &frame,
+            receiver: None,
+            expression: &evaluation.expression,
+            is_function: evaluation.is_function,
+            return_by_value: true,
+            leading: &|base| {
+                vec![json!({
+                    "a": (base..base + count).map(|h| json!({ "h": h })).collect::<Vec<_>>(),
+                    "id": 1,
+                })]
+            },
+            extras: &extras,
+            arg: &evaluation.arg,
+        },
+        handles,
+        progress,
+    )
+    .await;
+    release(handles, &created).await;
+    let (document, called) = invoked?;
+    answer(tab, &frame, document, called, handles, progress).await
+}
+
+/// Playwright's `JSHandle._getProperty`: the property, read in the page (own, inherited or a
+/// getter's value) onto a null-prototype object, then that object's one property as a handle.
+async fn get_property(
+    tab: &FrameTab,
+    receiver: &HandleEntry,
+    name: &str,
+    handles: &Handles,
+    progress: &Progress,
+) -> Result<EvalResult, CallError> {
+    let frame = Arc::clone(&receiver.frame);
+    let arg = SerializedArgument {
+        value: json!(name),
+        handles: Vec::new(),
+    };
+    let extras = [Extra::Entry(receiver)];
+    let (document, called) = invoke(
+        tab,
+        &Invocation {
+            frame: &frame,
+            receiver: Some(receiver),
+            expression: BuiltExpression::GetProperty.source(),
+            is_function: Some(true),
+            return_by_value: false,
+            leading: &|base| vec![json!({ "h": base })],
+            extras: &extras,
+            arg: &arg,
+        },
+        handles,
+        progress,
+    )
+    .await?;
+    let holder = match called {
+        Called::Object(object) => object,
+        called => return answer(tab, &frame, document, called, handles, progress).await,
+    };
+    let holder_id = holder.object_id.clone().unwrap_or_default();
+    let properties = progress
+        .race(own_properties(&frame, &holder_id))
+        .await?
+        .map_err(page_error)?;
+    let _released = frame
+        .host
+        .send("Runtime.releaseObject", json!({ "objectId": holder_id }))
+        .await;
+    let value = properties
+        .into_iter()
+        .find_map(|(property, value)| (property == name).then_some(value))
+        .unwrap_or_else(undefined_object);
+    create_handle(tab, &frame, document, value, handles, progress)
+        .await
+        .map(EvalResult::Handle)
+}
+
+/// Playwright's `JSHandle.getProperties`: the enumerable own properties as handles, none for a
+/// primitive.
+async fn get_property_list(
+    tab: &FrameTab,
+    receiver: &HandleEntry,
+    handles: &Handles,
+    progress: &Progress,
+) -> Result<Vec<Value>, CallError> {
+    let Remote::Object(id) = &receiver.remote else {
+        // Playwright: `server/javascript.ts` `JSHandle.internalGetProperties`: `return new Map();`
+        return Ok(Vec::new());
+    };
+    let frame = Arc::clone(&receiver.frame);
+    let installed = installed(tab, &frame, Some(receiver), progress).await?;
+    let properties = progress
+        .race(own_properties(&frame, id.object_id()))
+        .await?
+        .map_err(page_error)?;
+    let mut list = Vec::with_capacity(properties.len());
+    for (name, value) in properties {
+        let created =
+            create_handle(tab, &frame, installed.document, value, handles, progress).await?;
+        list.push(json!({ "name": name, "value": created }));
+    }
+    Ok(list)
+}
+
+/// A CDP `RemoteObject` for `undefined`, as Playwright reads a property the holder lacks.
+fn undefined_object() -> RemoteObject {
+    RemoteObject {
+        r#type: "undefined".to_string(),
+        ..RemoteObject::default()
+    }
+}
+
+/// Playwright's `Frame.waitForFunctionExpression`: polls the predicate in the page (every
+/// animation frame, or every `polling` ms) until it returns a truthy value, under the call's
+/// deadline, and answers a handle to that value. A document that goes away under the wait
+/// starts it again in the next one after 100 ms, as Playwright's retry does; a predicate that
+/// throws ends the call. Leaving for any reason stops the page's polling first.
+async fn wait_for_function(
+    tab: &FrameTab,
+    frame: &Arc<FrameContext>,
+    evaluation: &Evaluation,
+    polling: Option<f64>,
+    handles: &Handles,
+    progress: &Progress,
+) -> Result<EvalResult, CallError> {
+    if let Some(polling) = polling
+        && polling <= 0.0
+    {
+        // Playwright: `server/frames.ts` `Frame.waitForFunctionExpression`: `'Cannot poll with non-positive interval: ' + options.pollingInterval`
+        return Err(PlaywrightError::error(format!(
+            "Cannot poll with non-positive interval: {}",
+            js_number(polling)
+        ))
+        .into());
+    }
+    loop {
+        match wait_once(tab, frame, evaluation, polling, handles, progress).await? {
+            Some(result) => return Ok(result),
+            None => progress.wait(WAIT_FOR_FUNCTION_RETRY).await?,
+        }
+    }
+}
+
+/// One attempt of [`wait_for_function`] in the frame's current document: `None` when that
+/// document went away and the wait must start again.
+async fn wait_once(
+    tab: &FrameTab,
+    frame: &Arc<FrameContext>,
+    evaluation: &Evaluation,
+    polling: Option<f64>,
+    handles: &Handles,
+    progress: &Progress,
+) -> Result<Option<EvalResult>, CallError> {
+    let extras = [Extra::Utility];
+    let is_function = match evaluation.is_function {
+        Some(flag) => json!(flag),
+        None => json!({ "v": "undefined" }),
+    };
+    let polling_value =
+        polling.map_or_else(|| json!({ "v": "undefined" }), |polling| json!(polling));
+    let started = invoke(
+        tab,
+        &Invocation {
+            frame,
+            receiver: None,
+            expression: BuiltExpression::WaitForFunction.source(),
+            is_function: Some(true),
+            return_by_value: false,
+            // `(utilityScript, expression, isFunction, polling, arg)`.
+            leading: &|base| {
+                vec![
+                    json!({ "h": base }),
+                    json!(evaluation.expression),
+                    is_function.clone(),
+                    polling_value.clone(),
+                ]
+            },
+            extras: &extras,
+            arg: &evaluation.arg,
+        },
+        handles,
+        progress,
+    )
+    .await;
+    let waiter = match started {
+        Ok((_, Called::Object(waiter))) => waiter.object_id.unwrap_or_default(),
+        Ok((_, Called::Threw(message))) => return Err(PlaywrightError::error(message).into()),
+        Ok((_, Called::Stale | Called::Protocol(_))) => return Ok(None),
+        Ok((_, Called::Value(_))) => {
+            return Err(PlaywrightError::error("neo-runtime: the waiter answered by value").into());
+        }
+        Err(CallError::Playwright(error)) if error.message == CONTEXT_DESTROYED => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let no_arg = SerializedArgument {
+        value: json!({ "v": "undefined" }),
+        handles: Vec::new(),
+    };
+    let waiter_extras = [Extra::Object(&waiter)];
+    let answered = invoke(
+        tab,
+        &Invocation {
+            frame,
+            receiver: None,
+            expression: BuiltExpression::WaitResult.source(),
+            is_function: Some(true),
+            return_by_value: false,
+            leading: &|base| vec![json!({ "h": base })],
+            extras: &waiter_extras,
+            arg: &no_arg,
+        },
+        handles,
+        progress,
+    )
+    .await;
+    let outcome = match answered {
+        Ok((document, Called::Object(object))) => Ok(Some(
+            create_handle(tab, frame, document, *object, handles, progress).await?,
+        )),
+        Ok((_, Called::Threw(message))) => Err(PlaywrightError::error(message).into()),
+        Ok((_, Called::Stale | Called::Protocol(_))) => Ok(None),
+        Ok((_, Called::Value(_))) => {
+            Err(PlaywrightError::error("neo-runtime: the waiter's result answered by value").into())
+        }
+        Err(error) => Err(error),
+    };
+    // Playwright awaits the abort, so no poll runs after the call returns; a stopped call's
+    // abort runs detached on the page's tracked tasks.
+    let abort = abort_waiter(tab.clone(), Arc::clone(frame), waiter);
+    if outcome.is_ok() {
+        abort.await;
+    } else {
+        tab.spawn(abort);
+    }
+    outcome.map(|created| created.map(EvalResult::Handle))
+}
+
+/// Stops a waiter's polling and releases it; errors are ignored, as Playwright's `.catch(() => {})`.
+async fn abort_waiter(tab: FrameTab, frame: Arc<FrameContext>, waiter: String) {
+    let Ok(installed) = frame.main.installed(&frame).await else {
+        return;
+    };
+    let arguments = vec![
+        json!({ "value": true }),
+        json!({ "value": true }),
+        json!({ "value": BuiltExpression::WaitAbort.source() }),
+        json!({ "value": 2 }),
+        json!({ "value": { "h": 0 } }),
+        json!({ "value": { "v": "undefined" } }),
+        json!({ "objectId": waiter }),
+    ];
+    let _aborted = frame
+        .main
+        .call(
+            &frame,
+            &installed,
+            MainFunction::Evaluate,
+            arguments,
+            true,
+            None,
+        )
+        .await;
+    let _released = frame
+        .host
+        .send("Runtime.releaseObject", json!({ "objectId": waiter }))
+        .await;
+    drop(tab);
+}
+
+/// A page object another area found (a console message's argument) as a handle of the run, for
+/// med-pw-net's `ConsoleMessage.args()`: the object stays in the group CDP put it in.
+///
+/// # Errors
+///
+/// See [`serve`].
+#[expect(
+    dead_code,
+    reason = "the seam med-pw-net's ConsoleMessage.args() calls; remove this once it does"
+)]
+pub(crate) async fn handle_for_remote_object(
+    tab: &FrameTab,
+    frame: &Arc<FrameContext>,
+    object: RemoteObject,
+    handles: &Handles,
+    progress: &Progress,
+) -> Result<CreatedHandle, CallError> {
+    let installed = installed(tab, frame, None, progress).await?;
+    create_handle(tab, frame, installed.document, object, handles, progress).await
 }
 
 /// Playwright's `JSHandle.jsonValue`: the page's `UtilityScript.jsonValue(true, handle)`.
@@ -1007,6 +2097,9 @@ mod tests {
         assert!(meta.is_some_and(|meta| meta.internal));
         assert!(matches!(call, Ok(EvalCall::Dispose { .. })));
         let (meta, call) = route_handle("handle@1", "getProperty", Some(&json!({"name":"a"})));
+        assert!(meta.is_some());
+        assert!(matches!(call, Ok(EvalCall::GetProperty { .. })));
+        let (meta, call) = route_handle("handle@1", "boundingBox", Some(&json!({})));
         assert!(meta.is_none());
         assert!(call.is_err());
     }

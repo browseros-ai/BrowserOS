@@ -23,9 +23,14 @@
  *   An unknown `waitUntil` is reported as `waitUntil`, where Playwright names it `state` when the
  *   URL already matches.
  * - `allTextContents` sends `client/locator.ts` source text; compiled Playwright clients may
- *   format it differently. It reads in Neo's isolated world, so page-defined `textContent`
- *   overrides (prototype patches, custom element classes or per-instance properties) can differ.
+ *   format it differently. Like every `$$eval`, it runs in the page's main world, as Playwright's.
  */
+
+/** Playwright's `WaitForFunctionOptions`: `polling` is `'raf'` (default) or an interval in ms. */
+export type WaitForFunctionOptions = {
+  polling?: number | 'raf'
+  timeout?: number
+}
 
 import type {
   FrameAriaSnapshotParams,
@@ -63,7 +68,7 @@ import {
   getByTitleSelector,
 } from '../vendor/playwright/isomorphic/locatorUtils'
 import type { ApiName, Connection } from './connection'
-import { ElementHandle } from './element-handle'
+import { ElementHandle, elementsFrom } from './element-handle'
 import { FrameLocator, kAnyFrameSelector } from './frame-locator'
 import {
   assertEvaluateOptions,
@@ -73,8 +78,11 @@ import {
   evaluateParams,
   handleFrom,
   type JSHandle,
+  type PageElement,
   type PageFunction,
+  type PageFunctionOn,
   parseResult,
+  serializeArgument,
 } from './js-handle'
 import { Locator, type LocatorOptions, testIdAttributeName } from './locator'
 import { serializeUrlMatch } from './neo-commands'
@@ -637,7 +645,8 @@ export class Frame {
     apiName: ApiName,
     selector: string,
   ): Promise<string[]> {
-    const result = await this._connection.send(
+    // Playwright's `allTextContents` is this `$$eval` of its own function, in the main world.
+    const result = await this._connection.sendEval(
       apiName,
       this._guid,
       'evalOnSelectorAll',
@@ -645,34 +654,191 @@ export class Frame {
         selector,
         expression: "ee => ee.map(e => e.textContent || '')",
         isFunction: true,
-        arg: { value: { v: 'undefined' }, handles: [] },
+        arg: serializeArgument(undefined),
       },
       0,
     )
-    // `protocol/serializers.ts` assigns id 1 to the outer array and encodes each string as {s}.
-    const value = result?.value
+    const values = parseResult(result?.value)
     if (
-      !value ||
-      typeof value !== 'object' ||
-      Object.keys(value).length !== 2 ||
-      value.id !== 1 ||
-      !Array.isArray(value.a)
+      !Array.isArray(values) ||
+      values.some((item) => typeof item !== 'string')
     )
       throw new Error(
-        'neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string array',
+        'neo-sdk: Frame.evalOnSelectorAll contract error: expected a string array',
       )
-    return value.a.map((item) => {
-      if (
-        !item ||
-        typeof item !== 'object' ||
-        Object.keys(item).length !== 1 ||
-        typeof item.s !== 'string'
-      )
-        throw new Error(
-          'neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string',
-        )
-      return item.s
-    })
+    return values
+  }
+
+  /** Playwright's `frame.$`: the first match, or `null`, as an `ElementHandle`. */
+  async $(
+    selector: string,
+    options?: { strict?: boolean },
+  ): Promise<ElementHandle | null> {
+    return await this._querySelector('frame.$', selector, options)
+  }
+
+  async _querySelector(
+    apiName: ApiName,
+    selector: string,
+    options: { strict?: boolean } | undefined,
+  ): Promise<ElementHandle | null> {
+    const params: { selector: string; strict?: boolean } = { selector }
+    if (options?.strict !== undefined) params.strict = options.strict
+    const result = await this._connection.sendEval(
+      apiName,
+      this._guid,
+      'querySelector',
+      params,
+      0,
+    )
+    return ElementHandle.fromNullable(this._connection, result?.element)
+  }
+
+  /** Playwright's `frame.$$`: every match, as `ElementHandle`s. */
+  async $$(selector: string): Promise<ElementHandle[]> {
+    return await this._querySelectorAll('frame.$$', selector)
+  }
+
+  async _querySelectorAll(
+    apiName: ApiName,
+    selector: string,
+  ): Promise<ElementHandle[]> {
+    const result = await this._connection.sendEval(
+      apiName,
+      this._guid,
+      'querySelectorAll',
+      { selector },
+      0,
+    )
+    return elementsFrom(this._connection, result?.elements ?? [])
+  }
+
+  /** Playwright's `frame.$eval`: `pageFunction` on the first match, by value. */
+  async $eval<R, Arg>(
+    selector: string,
+    pageFunction: PageFunctionOn<PageElement, Arg, R>,
+    arg?: Arg,
+  ): Promise<R> {
+    // biome-ignore lint/complexity/noArguments: Playwright counts the arguments the call passed
+    assertMaxArguments(arguments.length, 3)
+    return await this._evalOnSelector(
+      'frame.$eval',
+      selector,
+      pageFunction,
+      arg,
+    )
+  }
+
+  async _evalOnSelector<R>(
+    apiName: ApiName,
+    selector: string,
+    pageFunction: unknown,
+    arg: unknown,
+  ): Promise<R> {
+    const params = evaluateParams(apiName, pageFunction, arg, undefined)
+    const result = await this._connection.sendEval(
+      apiName,
+      this._guid,
+      'evalOnSelector',
+      { selector, ...params },
+      0,
+    )
+    return parseResult(result?.value) as R
+  }
+
+  /** Playwright's `frame.$$eval`: `pageFunction` on the array of every match, by value. */
+  async $$eval<R, Arg>(
+    selector: string,
+    pageFunction: PageFunctionOn<PageElement[], Arg, R>,
+    arg?: Arg,
+  ): Promise<R> {
+    // biome-ignore lint/complexity/noArguments: Playwright counts the arguments the call passed
+    assertMaxArguments(arguments.length, 3)
+    return await this._evalOnSelectorAll(
+      'frame.$$eval',
+      selector,
+      pageFunction,
+      arg,
+    )
+  }
+
+  async _evalOnSelectorAll<R>(
+    apiName: ApiName,
+    selector: string,
+    pageFunction: unknown,
+    arg: unknown,
+  ): Promise<R> {
+    const params = evaluateParams(apiName, pageFunction, arg, undefined)
+    const result = await this._connection.sendEval(
+      apiName,
+      this._guid,
+      'evalOnSelectorAll',
+      { selector, ...params },
+      0,
+    )
+    return parseResult(result?.value) as R
+  }
+
+  /**
+   * Playwright's `frame.waitForFunction`: polls `pageFunction` in the page (every animation
+   * frame, or every `polling` ms) until it returns a truthy value, under the action timeout, and
+   * resolves a handle to that value.
+   */
+  async waitForFunction<R, Arg>(
+    pageFunction: PageFunction<Arg, R>,
+    arg?: Arg,
+    options?: WaitForFunctionOptions,
+  ): Promise<JSHandle<R>> {
+    return await this._waitForFunction(
+      'frame.waitForFunction',
+      pageFunction,
+      arg,
+      options,
+    )
+  }
+
+  async _waitForFunction<R>(
+    apiName: ApiName,
+    pageFunction: unknown,
+    arg: unknown,
+    options: WaitForFunctionOptions = {},
+  ): Promise<JSHandle<R>> {
+    // Playwright: `client/frame.ts` `Frame.waitForFunction`: `assert(options.polling === 'raf', 'Unknown polling option: ' + options.polling);`
+    if (typeof options.polling === 'string' && options.polling !== 'raf')
+      throw new Error(`Unknown polling option: ${options.polling}`)
+    const params = evaluateParams(apiName, pageFunction, arg, undefined)
+    const pollingInterval =
+      options.polling === 'raf' ? undefined : options.polling
+    const result = await this._connection.sendEval(
+      apiName,
+      this._guid,
+      'waitForFunction',
+      pollingInterval === undefined ? params : { ...params, pollingInterval },
+      this._page._timeoutSettings.timeout(options),
+    )
+    return handleFrom(this._connection, result.handle) as JSHandle<R>
+  }
+
+  /**
+   * `Frame.waitForSelector` answering its element, as Playwright's `frame.waitForSelector` does
+   * for an attached or visible wait: behind `locator.elementHandle`.
+   */
+  async _waitForSelectorElement(
+    apiName: ApiName,
+    selector: string,
+    options: WaitForSelectorOptions & { strict?: boolean },
+  ): Promise<ElementHandle | null> {
+    const result = (await this._connection.send(
+      apiName,
+      this._guid,
+      'waitForSelector',
+      pickParams(FRAME_WAIT_FOR_SELECTOR_KEYS, {
+        selector,
+        ...options,
+      }) as FrameWaitForSelectorParams,
+      this._page._timeoutSettings.timeout(options),
+    )) as { element?: CreatedHandle } | undefined
+    return ElementHandle.fromNullable(this._connection, result?.element)
   }
 
   /** Playwright: `client/locator.ts` `Locator.ariaSnapshot`: `selector: this._selector,` */

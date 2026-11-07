@@ -65,6 +65,54 @@ const JSON_VALUE: &str = include_str!(concat!(
     "/../neo-runtime-injected/dist/json-value.js"
 ));
 
+/// Playwright: `server/javascript.ts` `JSHandle._getProperty`
+const GET_PROPERTY: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/get-property.js"
+));
+/// Playwright: `server/frames.ts` `Frame.waitForFunctionExpression`
+const WAIT_FOR_FUNCTION: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/wait-for-function.js"
+));
+/// Playwright: `server/frames.ts` `Frame.waitForFunctionExpression`
+const WAIT_RESULT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/wait-result.js"
+));
+/// Playwright: `server/frames.ts` `Frame.waitForFunctionExpression`
+const WAIT_ABORT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/wait-abort.js"
+));
+
+/// A page function of Playwright's server, built in neo-runtime-injected, that runs as the
+/// `expression` of `UtilityScript.evaluate` (`EVALUATE`), so its arguments arrive parsed with
+/// their handles, primitives included. Agent code never takes this path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BuiltExpression {
+    /// `(object, name) => ({ __proto__: null, [name]: object[name] })`.
+    GetProperty,
+    /// `(utilityScript, expression, isFunction, polling, arg) => { result, abort }`.
+    WaitForFunction,
+    /// `(waiter) => waiter.result`.
+    WaitResult,
+    /// `(waiter) => waiter.abort()`.
+    WaitAbort,
+}
+
+impl BuiltExpression {
+    /// The built source, as `UtilityScript.evaluate`'s `expression`.
+    pub(crate) fn source(self) -> &'static str {
+        match self {
+            Self::GetProperty => GET_PROPERTY,
+            Self::WaitForFunction => WAIT_FOR_FUNCTION,
+            Self::WaitResult => WAIT_RESULT,
+            Self::WaitAbort => WAIT_ABORT,
+        }
+    }
+}
+
 /// Neo: the object group of every document's `UtilityScript` and its anchor document. Never
 /// released by Neo, as `world.rs`'s glue group: Chromium frees it with the run's session, and a
 /// new document's install replaces the old one's dead objects.
@@ -124,6 +172,13 @@ pub(crate) enum Called {
     /// The `UtilityScript`, the document or an argument's object was gone before the call
     /// started: nothing ran, so the caller may install again and retry.
     Stale,
+}
+
+impl Installed {
+    /// The `UtilityScript`'s object id, for an evaluation that hands it to a built page function.
+    pub(crate) fn utility_id(&self) -> &str {
+        self.utility.object_id()
+    }
 }
 
 impl MainWorld {

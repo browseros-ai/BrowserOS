@@ -766,6 +766,17 @@ class JSHandle {
     const result = await this._connection.sendHandle(`${this._apiPrefix}.jsonValue`, this._guid, "jsonValue", {}, 0);
     return parseResult(result.value);
   }
+  async getProperty(propertyName) {
+    const result = await this._connection.sendHandle(`${this._apiPrefix}.getProperty`, this._guid, "getProperty", { name: propertyName }, 0);
+    return handleFrom(this._connection, result.handle);
+  }
+  async getProperties() {
+    const map = new Map;
+    const result = await this._connection.sendHandle(`${this._apiPrefix}.getProperties`, this._guid, "getPropertyList", {}, 0);
+    for (const { name, value } of result.properties)
+      map.set(name, handleFrom(this._connection, value));
+    return map;
+  }
   asElement() {
     return null;
   }
@@ -869,6 +880,27 @@ class ElementHandle extends JSHandle {
   asElement() {
     return this;
   }
+  async $(selector) {
+    const result = await this._connection.sendHandle("elementHandle.$", this._guid, "querySelector", { selector }, 0);
+    return ElementHandle.fromNullable(this._connection, result.element);
+  }
+  async $$(selector) {
+    const result = await this._connection.sendHandle("elementHandle.$$", this._guid, "querySelectorAll", { selector }, 0);
+    return elementsFrom(this._connection, result.elements);
+  }
+  async $eval(selector, pageFunction, arg) {
+    const params = evaluateParams("elementHandle.$eval", pageFunction, arg, undefined);
+    const result = await this._connection.sendHandle("elementHandle.$eval", this._guid, "evalOnSelector", { selector, ...params }, 0);
+    return parseResult(result.value);
+  }
+  async $$eval(selector, pageFunction, arg) {
+    const params = evaluateParams("elementHandle.$$eval", pageFunction, arg, undefined);
+    const result = await this._connection.sendHandle("elementHandle.$$eval", this._guid, "evalOnSelectorAll", { selector, ...params }, 0);
+    return parseResult(result.value);
+  }
+}
+function elementsFrom(connection, created) {
+  return created.map((record) => ElementHandle.fromNullable(connection, record)).filter((handle) => handle !== null);
 }
 handleFactory.element = (connection, guid, initializer) => new ElementHandle(connection, guid, initializer);
 
@@ -979,6 +1011,21 @@ class Locator {
   }
   async evaluate(pageFunction, arg, options) {
     return await this._frame._withElement("locator.evaluate", this._selector, (handle) => handle._evaluate("locator.evaluate", pageFunction, arg, options), { timeout: options?.timeout });
+  }
+  async evaluateHandle(pageFunction, arg, options) {
+    return await this._frame._withElement("locator.evaluateHandle", this._selector, (handle) => handle._evaluateHandle("locator.evaluateHandle", pageFunction, arg, options), { timeout: options?.timeout });
+  }
+  async evaluateAll(pageFunction, arg) {
+    return await this._frame._evalOnSelectorAll("locator.evaluateAll", this._selector, pageFunction, arg);
+  }
+  async elementHandle(options) {
+    const handle = await this._frame._waitForSelectorElement("locator.elementHandle", this._selector, { strict: true, state: "attached", ...options });
+    if (!handle)
+      throw new Error(`Could not resolve ${this._selector} to DOM Element`);
+    return handle;
+  }
+  async elementHandles() {
+    return await this._frame._querySelectorAll("locator.elementHandles", this._selector);
   }
   async waitFor(options) {
     await this._frame._waitForSelector("locator.waitFor", this._selector, {
@@ -1901,20 +1948,69 @@ class Frame {
     return result.value;
   }
   async _allTextContents(apiName, selector) {
-    const result = await this._connection.send(apiName, this._guid, "evalOnSelectorAll", {
+    const result = await this._connection.sendEval(apiName, this._guid, "evalOnSelectorAll", {
       selector,
       expression: "ee => ee.map(e => e.textContent || '')",
       isFunction: true,
-      arg: { value: { v: "undefined" }, handles: [] }
+      arg: serializeArgument(undefined)
     }, 0);
-    const value = result?.value;
-    if (!value || typeof value !== "object" || Object.keys(value).length !== 2 || value.id !== 1 || !Array.isArray(value.a))
-      throw new Error("neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string array");
-    return value.a.map((item) => {
-      if (!item || typeof item !== "object" || Object.keys(item).length !== 1 || typeof item.s !== "string")
-        throw new Error("neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string");
-      return item.s;
-    });
+    const values = parseResult(result?.value);
+    if (!Array.isArray(values) || values.some((item) => typeof item !== "string"))
+      throw new Error("neo-sdk: Frame.evalOnSelectorAll contract error: expected a string array");
+    return values;
+  }
+  async $(selector, options) {
+    return await this._querySelector("frame.$", selector, options);
+  }
+  async _querySelector(apiName, selector, options) {
+    const params = { selector };
+    if (options?.strict !== undefined)
+      params.strict = options.strict;
+    const result = await this._connection.sendEval(apiName, this._guid, "querySelector", params, 0);
+    return ElementHandle.fromNullable(this._connection, result?.element);
+  }
+  async $$(selector) {
+    return await this._querySelectorAll("frame.$$", selector);
+  }
+  async _querySelectorAll(apiName, selector) {
+    const result = await this._connection.sendEval(apiName, this._guid, "querySelectorAll", { selector }, 0);
+    return elementsFrom(this._connection, result?.elements ?? []);
+  }
+  async $eval(selector, pageFunction, arg) {
+    assertMaxArguments(arguments.length, 3);
+    return await this._evalOnSelector("frame.$eval", selector, pageFunction, arg);
+  }
+  async _evalOnSelector(apiName, selector, pageFunction, arg) {
+    const params = evaluateParams(apiName, pageFunction, arg, undefined);
+    const result = await this._connection.sendEval(apiName, this._guid, "evalOnSelector", { selector, ...params }, 0);
+    return parseResult(result?.value);
+  }
+  async $$eval(selector, pageFunction, arg) {
+    assertMaxArguments(arguments.length, 3);
+    return await this._evalOnSelectorAll("frame.$$eval", selector, pageFunction, arg);
+  }
+  async _evalOnSelectorAll(apiName, selector, pageFunction, arg) {
+    const params = evaluateParams(apiName, pageFunction, arg, undefined);
+    const result = await this._connection.sendEval(apiName, this._guid, "evalOnSelectorAll", { selector, ...params }, 0);
+    return parseResult(result?.value);
+  }
+  async waitForFunction(pageFunction, arg, options) {
+    return await this._waitForFunction("frame.waitForFunction", pageFunction, arg, options);
+  }
+  async _waitForFunction(apiName, pageFunction, arg, options = {}) {
+    if (typeof options.polling === "string" && options.polling !== "raf")
+      throw new Error(`Unknown polling option: ${options.polling}`);
+    const params = evaluateParams(apiName, pageFunction, arg, undefined);
+    const pollingInterval = options.polling === "raf" ? undefined : options.polling;
+    const result = await this._connection.sendEval(apiName, this._guid, "waitForFunction", pollingInterval === undefined ? params : { ...params, pollingInterval }, this._page._timeoutSettings.timeout(options));
+    return handleFrom(this._connection, result.handle);
+  }
+  async _waitForSelectorElement(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "waitForSelector", pickParams(FRAME_WAIT_FOR_SELECTOR_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options));
+    return ElementHandle.fromNullable(this._connection, result?.element);
   }
   async _ariaSnapshot(apiName, options, selector) {
     const result = await this._connection.send(apiName, this._guid, "ariaSnapshot", pickParams(FRAME_ARIA_SNAPSHOT_KEYS, {
@@ -2181,6 +2277,23 @@ class Page {
   }
   async goto(url, options = {}) {
     return await this.#mainFrame._goto("page.goto", url, options);
+  }
+  async $(selector, options) {
+    return await this.mainFrame()._querySelector("page.$", selector, options);
+  }
+  async $$(selector) {
+    return await this.mainFrame()._querySelectorAll("page.$$", selector);
+  }
+  async $eval(selector, pageFunction, arg) {
+    assertMaxArguments(arguments.length, 3);
+    return await this.mainFrame()._evalOnSelector("page.$eval", selector, pageFunction, arg);
+  }
+  async $$eval(selector, pageFunction, arg) {
+    assertMaxArguments(arguments.length, 3);
+    return await this.mainFrame()._evalOnSelectorAll("page.$$eval", selector, pageFunction, arg);
+  }
+  async waitForFunction(pageFunction, arg, options) {
+    return await this.mainFrame()._waitForFunction("page.waitForFunction", pageFunction, arg, options);
   }
   async evaluate(pageFunction, arg, options) {
     assertMaxArguments(arguments.length, 3);

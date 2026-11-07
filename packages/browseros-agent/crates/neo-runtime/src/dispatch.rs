@@ -429,6 +429,8 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
                     .map(|options| ObjectCall::Frame(Route::FrameWaitForLoadState(options))),
                 };
             }
+            // `evalOnSelectorAll` is served above by the evaluation route (main world, as
+            // Playwright's `$$eval`), so `FrameCall::EvalOnSelectorAll` below is not reached.
             // ElementHandleChannel is uninhabited in Neo, so reject non-empty arrays before
             // serde tries to decode their members. Keep the method's input flag and title.
             if method == "selectOption"
@@ -1893,16 +1895,21 @@ mod tests {
             panic!("queryCount routes");
         };
         assert_eq!(selector, ".item");
-        let Ok(ObjectCall::Frame(Route::FrameAllTextContents(selector))) =
-            route_frame("evalOnSelectorAll", all_text_contents_params(".item")).route
+        // `allTextContents` is Playwright's `$$eval`: the evaluation route serves it in the main
+        // world, ahead of the spec's `FrameCall::EvalOnSelectorAll`.
+        let Ok(ObjectCall::Frame(Route::FrameEval(EvalCall::EvalOnSelectorAll {
+            selector,
+            scope: None,
+            ..
+        }))) = route_frame("evalOnSelectorAll", all_text_contents_params(".item")).route
         else {
-            panic!("allTextContents routes");
+            panic!("allTextContents routes to the evaluation route");
         };
         assert_eq!(selector, ".item");
     }
 
     #[test]
-    fn tests_that_collection_eval_refuses_other_expressions_and_non_functions() {
+    fn tests_that_collection_eval_serves_any_expression_as_playwrights_eval_on_selector_all() {
         let mut other_expression = all_text_contents_params(".item");
         other_expression["expression"] = json!("ee => ee.length");
         let mut not_a_function = all_text_contents_params(".item");
@@ -1913,11 +1920,22 @@ mod tests {
             .expect("params")
             .remove("isFunction");
         for params in [other_expression, not_a_function, absent_function] {
-            assert_eq!(
-                error_of(route_frame("evalOnSelectorAll", params)),
-                PlaywrightError::error(EVAL_ON_SELECTOR_ALL_UNSERVED)
+            assert!(
+                matches!(
+                    route_frame("evalOnSelectorAll", params).route,
+                    Ok(ObjectCall::Frame(Route::FrameEval(
+                        EvalCall::EvalOnSelectorAll { .. }
+                    )))
+                ),
+                "every $$eval is served"
             );
         }
+        let mut missing_arg = all_text_contents_params(".item");
+        missing_arg.as_object_mut().expect("params").remove("arg");
+        assert_eq!(
+            error_of(route_frame("evalOnSelectorAll", missing_arg)).name,
+            ErrorName::Error
+        );
     }
 
     #[test]
@@ -1935,9 +1953,9 @@ mod tests {
         );
         let mut params = all_text_contents_params(selector);
         params["expression"] = json!("ee => ee.length");
-        assert_eq!(
-            error_of(route_frame("evalOnSelectorAll", params)),
-            PlaywrightError::error(EVAL_ON_SELECTOR_ALL_UNSERVED)
+        assert!(
+            route_frame("evalOnSelectorAll", params).route.is_ok(),
+            "a frame-crossing $$eval is served"
         );
     }
 

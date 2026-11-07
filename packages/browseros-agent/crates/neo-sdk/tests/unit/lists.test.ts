@@ -23,10 +23,9 @@ test('tests that count sends a non-strict queryCount with no timeout', async () 
 test('tests that allTextContents sends Playwright’s function and unwraps ordered strings', async () => {
   const { fake, page } = start()
   page.setDefaultTimeout(17)
+  // The page's own encoding (`utilityScriptSerializers.ts`): strings are plain JSON.
   fake.answer = () => ({
-    result: {
-      value: { a: [{ s: 'visible' }, { s: 'hidden' }, { s: '' }], id: 1 },
-    },
+    result: { value: { a: ['visible', 'hidden', ''], id: 1 } },
   })
   expect(await page.locator('.item').allTextContents()).toEqual([
     'visible',
@@ -51,21 +50,18 @@ test('tests that allTextContents sends Playwright’s function and unwraps order
   expect(await page.locator('.missing').allTextContents()).toEqual([])
 })
 
-test('tests that allTextContents rejects malformed serialized string arrays', async () => {
+test('tests that allTextContents rejects what is not a string array', async () => {
   const { fake, page } = start()
   for (const result of [
     undefined,
     {},
     { value: null },
-    { value: [] },
-    { value: { s: 'x' } },
-    { value: { a: null, id: 1 } },
-    { value: { a: [], id: 2 } },
-    { value: { a: [] } },
-    { value: { a: [{ n: 3 }], id: 1 } },
-    { value: { a: [null], id: 1 } },
-    { value: { a: [{ s: 'x', n: 3 }], id: 1 } },
-    { value: { a: [], id: 1, ref: 1 } },
+    { value: 'x' },
+    { value: { v: 'null' } },
+    { value: { a: [3], id: 1 } },
+    { value: { a: [{ v: 'null' }], id: 1 } },
+    { value: { a: ['x', { v: 'undefined' }], id: 1 } },
+    { value: { o: [], id: 1 } },
   ]) {
     fake.answer = () => ({ result })
     await expect(page.locator('.item').allTextContents()).rejects.toThrow(
