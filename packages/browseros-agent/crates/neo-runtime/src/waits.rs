@@ -2,7 +2,7 @@
 //! frame or a child frame.
 //!
 //! ```text
-//! wait_for_selector ── SelectorCondition ── check: prepare, pre-check, selectorState
+//! wait_for_selector ── SelectorCondition ── check: prepare, pre-checks, selectorState
 //!                      │                   changed: loop A's backoff timer
 //! wait_for_url ─────┐   │
 //! wait_for_load_state ─ NavigationCondition ─ check: URL/flags/lifecycle counts
@@ -40,6 +40,7 @@ use crate::click::{LoopAWaits, PageError, SelectorFacts, Tab};
 use crate::evaluate::{self, CreatedHandle, Handles};
 use crate::frame_selector;
 use crate::frames::{FrameScope, Host};
+use crate::locator_handlers;
 use crate::navigate::{Lifecycle, Navigation, NavigationState, NavigationTab, Observation};
 use crate::page::{FrameState, FrameTab, NavigationObservation, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
@@ -85,6 +86,16 @@ pub(crate) trait WaitTab: Send + Sync {
             "this tab cannot return a selector wait's element".to_string(),
         )))
     }
+
+    /// The tab's locator-handler checkpoint (`locator_handlers.rs`), between the two navigation
+    /// checks of Playwright's `performActionPreChecks`; none on a tab without handlers.
+    fn locator_handlers_checkpoint(
+        &self,
+        progress: &Progress,
+    ) -> impl Future<Output = Result<(), CallError>> + Send {
+        let _ = progress;
+        future::ready(Ok(()))
+    }
 }
 
 /// Decoded once by the route.
@@ -96,15 +107,25 @@ pub(crate) struct WaitForSelectorOptions {
     /// Playwright's `!omitReturnValue`: an attached or visible wait answers its element, adopted
     /// into the main world (`frames.ts` `waitForSelector`), as `locator.evaluate` needs.
     pub(crate) return_element: bool,
+    /// Playwright's `performActionPreChecksAndLog`: each attempt first runs the page's action
+    /// pre-checks (a pending navigation, the locator handlers, a navigation again). Every served
+    /// wait does, as Playwright's dispatcher passes `true`; the locator-handler checkpoint's own
+    /// wait for its selector to hide does not.
+    pub(crate) pre_checks: bool,
 }
 
 impl WaitForSelectorOptions {
+    /// A served wait, which Playwright's dispatcher sends with `performActionPreChecksAndLog`
+    /// set, so its attempts run the pre-checks.
+    ///
+    /// Playwright: `server/frames.ts` `Frame.waitForSelector`: `if (performActionPreChecksAndLog)`
     pub(crate) fn from_params(params: FrameWaitForSelectorParams) -> Self {
         Self {
             selector: params.selector,
             strict: params.strict.unwrap_or(false),
             state: params.state.unwrap_or(SelectorState::Visible),
             return_element: params.omit_return_value != Some(true),
+            pre_checks: true,
         }
     }
 }
@@ -132,7 +153,7 @@ pub(crate) struct WaitForUrlOptions {
 
 impl WaitForUrlOptions {
     pub(crate) fn from_params(params: &NeoWaitForUrlParams) -> Result<Self, PlaywrightError> {
-        let wait_until = supported_lifecycle(params.wait_until, "waitUntil")?;
+        let wait_until = params.wait_until.unwrap_or(LifecycleEvent::Load);
         Ok(Self {
             matcher: UrlMatcher::new(&params.url)?,
             wait_until,
@@ -146,23 +167,12 @@ pub(crate) struct WaitForLoadStateOptions {
 }
 
 impl WaitForLoadStateOptions {
-    pub(crate) fn from_params(params: NeoWaitForLoadStateParams) -> Result<Self, PlaywrightError> {
-        Ok(Self {
-            state: supported_lifecycle(params.state, "state")?,
-        })
+    /// Every lifecycle event Playwright waits for is served, `load` when absent.
+    pub(crate) fn from_params(params: NeoWaitForLoadStateParams) -> Self {
+        Self {
+            state: params.state.unwrap_or(LifecycleEvent::Load),
+        }
     }
-}
-
-pub(crate) fn supported_lifecycle(
-    state: Option<LifecycleEvent>,
-    name: &str,
-) -> Result<LifecycleEvent, PlaywrightError> {
-    if state == Some(LifecycleEvent::Networkidle) {
-        return Err(PlaywrightError::error(format!(
-            "Neo does not support {name}: \"networkidle\" yet"
-        )));
-    }
-    Ok(state.unwrap_or(LifecycleEvent::Load))
 }
 
 /// The three public waits share deadline, cancellation and disposal here. A condition's
@@ -179,7 +189,7 @@ async fn wait_until(condition: &mut impl Condition, progress: &Progress) -> Resu
 }
 
 trait Condition {
-    async fn check(&mut self, progress: &Progress) -> Result<bool, PlaywrightError>;
+    async fn check(&mut self, progress: &Progress) -> Result<bool, CallError>;
     async fn changed(&mut self) -> Result<(), PlaywrightError>;
 }
 
@@ -197,11 +207,10 @@ struct PrepareCondition<'a, T> {
 }
 
 impl<T: WaitTab> Condition for PrepareCondition<'_, T> {
-    async fn check(&mut self, _progress: &Progress) -> Result<bool, PlaywrightError> {
+    async fn check(&mut self, _progress: &Progress) -> Result<bool, CallError> {
         match self.tab.prepare().await {
             Ok(()) => Ok(true),
-            Err(PageError::NotConnected) => Ok(false),
-            Err(error) => Err(page_error(error)),
+            Err(error) => polled(error),
         }
     }
 
@@ -256,14 +265,34 @@ struct SelectorCondition<'a, T> {
 }
 
 impl<T: WaitTab> SelectorCondition<'_, T> {
-    async fn probe(&mut self, progress: &Progress) -> Result<bool, PageError> {
-        self.tab.prepare().await?;
-        // Playwright server/page.ts:547-569: settle navigation before resolving the selector,
-        // including the first description/validity check.
+    /// Playwright's `performActionPreChecks` for one attempt, after the tab is prepared (its
+    /// watcher knows of pending navigations): settle a pending navigation, run the locator
+    /// handlers, then settle any navigation a handler started, all before resolving the selector
+    /// (its first description and validity check included).
+    ///
+    /// Playwright: `server/page.ts` `Page.performActionPreChecks`: `await this._performLocatorHandlersCheckpoint(progress);`
+    async fn pre_checks(&mut self, progress: &Progress) -> Result<bool, CallError> {
+        if let Err(error) = self.settle_navigation(progress).await {
+            return polled(error);
+        }
+        self.tab.locator_handlers_checkpoint(progress).await?;
+        match self.settle_navigation(progress).await {
+            Ok(()) => Ok(true),
+            Err(error) => polled(error),
+        }
+    }
+
+    /// `performActionPreChecks`' navigation half (`page.ts` `_performWaitForNavigationCheck`):
+    /// a requested main-frame navigation that has not settled is logged and waited for.
+    async fn settle_navigation(&self, progress: &Progress) -> Result<(), PageError> {
         if let Some(url) = self.tab.pending_navigation() {
             progress.log(format!("  waiting for \"{url}\" navigation to finish..."));
             self.tab.navigation_settled().await?;
         }
+        Ok(())
+    }
+
+    async fn probe(&mut self, progress: &Progress) -> Result<bool, PageError> {
         if !self.named {
             let facts = self.tab.describe(&self.options.selector).await?;
             name_selector(progress, &facts.locator, self.options.state);
@@ -328,17 +357,32 @@ impl<T: WaitTab> SelectorCondition<'_, T> {
 }
 
 impl<T: WaitTab> Condition for SelectorCondition<'_, T> {
-    async fn check(&mut self, progress: &Progress) -> Result<bool, PlaywrightError> {
+    async fn check(&mut self, progress: &Progress) -> Result<bool, CallError> {
+        if let Err(error) = self.tab.prepare().await {
+            return polled(error);
+        }
+        // Playwright: `server/frames.ts` `Frame.waitForSelector`: `await this._page.performActionPreChecks(progress);`
+        if self.options.pre_checks && !self.pre_checks(progress).await? {
+            return Ok(false);
+        }
         match self.probe(progress).await {
             Ok(ready) => Ok(ready),
-            Err(PageError::NotConnected) => Ok(false),
-            Err(error) => Err(page_error(error)),
+            Err(error) => polled(error),
         }
     }
 
     async fn changed(&mut self) -> Result<(), PlaywrightError> {
         time::sleep(self.backoff.next_wait()).await;
         Ok(())
+    }
+}
+
+/// Neo: a page step's error within a wait's attempt: a document that went away polls again, as
+/// Playwright retries a context destroyed under it; anything else ends the wait.
+fn polled(error: PageError) -> Result<bool, CallError> {
+    match error {
+        PageError::NotConnected => Ok(false),
+        error => Err(page_error(error).into()),
     }
 }
 
@@ -363,6 +407,13 @@ pub(crate) async fn wait_for_load_state<T: WaitTab>(
         progress.log("  not waiting, \"commit\" event already fired");
         return Ok(());
     }
+    // `networkidle` is told from the page's requests, which Neo sees once Network is enabled.
+    if options.state == LifecycleEvent::Networkidle {
+        progress
+            .race(tab.track_network())
+            .await?
+            .map_err(page_error)?;
+    }
     let events = tab.observe().map_err(page_error)?;
     let since = events.state().lifecycle;
     wait_until(
@@ -378,6 +429,44 @@ pub(crate) async fn wait_for_load_state<T: WaitTab>(
         progress,
     )
     .await
+}
+
+/// Neo: the delay Node's `setTimeout` waits for Playwright's `waitForTimeout(ms)`: none for a
+/// negative or NaN delay, and [`OVERFLOWED_TIMER`] past the 32-bit timer range, as Node sets
+/// an overflowing delay to 1 ms.
+pub(crate) fn timer_delay(ms: f64) -> time::Duration {
+    if ms > MAX_TIMER_MS {
+        return OVERFLOWED_TIMER;
+    }
+    time::Duration::try_from_secs_f64(ms.max(0.0) / 1000.0).unwrap_or_default()
+}
+
+/// Neo: Node's largest timer delay, `2 ** 31 - 1` ms.
+const MAX_TIMER_MS: f64 = 2_147_483_647.0;
+
+/// Neo: what Node waits instead of a delay past [`MAX_TIMER_MS`].
+const OVERFLOWED_TIMER: time::Duration = time::Duration::from_millis(1);
+
+/// Serves `Frame.waitForTimeout`: the wait, ended early when the frame goes or the page closes.
+///
+/// Playwright: `server/frames.ts` `Frame.waitForTimeout`: `// Make sure we react to page close or frame detach.`
+pub(crate) async fn wait_for_timeout<T: WaitTab>(
+    tab: &T,
+    wait: time::Duration,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let mut events = tab.observe().map_err(page_error)?;
+    let gone = async {
+        loop {
+            if let Err(error) = events.next().await {
+                return error;
+            }
+        }
+    };
+    tokio::select! {
+        waited = progress.wait(wait) => waited,
+        error = gone => Err(page_error(error).into()),
+    }
 }
 
 pub(crate) async fn wait_for_url<T: WaitTab>(
@@ -488,12 +577,9 @@ impl<O: Observation> NavigationCondition<'_, O> {
 }
 
 impl<O: Observation> Condition for NavigationCondition<'_, O> {
-    fn check(
-        &mut self,
-        progress: &Progress,
-    ) -> impl Future<Output = Result<bool, PlaywrightError>> {
+    fn check(&mut self, progress: &Progress) -> impl Future<Output = Result<bool, CallError>> {
         // Matching runs synchronously inside check, bounded by the matcher's evaluation budget.
-        future::ready(self.satisfied(progress))
+        future::ready(self.satisfied(progress).map_err(CallError::from))
     }
 
     async fn changed(&mut self) -> Result<(), PlaywrightError> {
@@ -517,7 +603,7 @@ fn lifecycle_fired(lifecycle: Lifecycle, state: LifecycleEvent) -> bool {
         LifecycleEvent::Commit => true,
         LifecycleEvent::Domcontentloaded => lifecycle.dom_content_loaded,
         LifecycleEvent::Load => lifecycle.load,
-        LifecycleEvent::Networkidle => false,
+        LifecycleEvent::Networkidle => lifecycle.network_idle,
     }
 }
 
@@ -533,7 +619,10 @@ pub(crate) fn lifecycle_reached(
                 || current.dom_content_loaded_count > since.dom_content_loaded_count
         }
         LifecycleEvent::Load => since.load || current.load_count > since.load_count,
-        LifecycleEvent::Networkidle => false,
+        // Playwright: `server/frames.ts` `Frame.waitForLoadState`: `if (!this._firedLifecycleEvents.has(waitUntil))`
+        LifecycleEvent::Networkidle => {
+            since.network_idle || current.network_idle_count > since.network_idle_count
+        }
     }
 }
 
@@ -722,6 +811,10 @@ impl WaitTab for FrameTab {
 
     async fn navigation_settled(&self) -> Result<(), PageError> {
         PageSession::navigation_settled(self).await.map(|_| ())
+    }
+
+    async fn locator_handlers_checkpoint(&self, progress: &Progress) -> Result<(), CallError> {
+        locator_handlers::checkpoint(self, progress).await
     }
 
     async fn selector_element(
@@ -1036,6 +1129,7 @@ mod tests {
             strict: true,
             state,
             return_element: false,
+            pre_checks: true,
         }
     }
 
@@ -1052,7 +1146,6 @@ mod tests {
 
     fn load(state: LifecycleEvent) -> WaitForLoadStateOptions {
         WaitForLoadStateOptions::from_params(NeoWaitForLoadStateParams { state: Some(state) })
-            .expect("load options")
     }
 
     struct Run {

@@ -6,8 +6,7 @@
 // `waits.mjs` `settle`) and the title the page's own DOMContentLoaded and load handlers set.
 // Never wording, call logs or timing.
 //
-// Known, intended difference, asserted per engine and not counted as parity: Neo refuses
-// `networkidle` with an `Error` (neo-runtime `waits.rs`), where Playwright resolves.
+// `networkidle` resolves on a quiet loaded page in both (neo-runtime `network_idle.rs`).
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs, waits.mjs).
 
@@ -105,13 +104,14 @@ const cases = [
     expected: { unknown: ERROR, nullState: ERROR },
   },
   {
-    name: 'Neo limit: networkidle',
+    // tests/page/page-network-idle.spec.ts "NE-070 should navigate to empty page with
+    // networkidle", for a loaded page.
+    name: 'networkidle resolves on a quiet loaded page',
     path: '/loaded.html',
     source: `return {
       networkidle: await settle(page.waitForLoadState('networkidle', { timeout: 5000 })),
     }`,
     expected: { networkidle: RESOLVED },
-    neoExpected: { networkidle: ERROR },
   },
 ]
 

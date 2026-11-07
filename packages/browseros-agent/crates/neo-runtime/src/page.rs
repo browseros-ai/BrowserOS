@@ -51,11 +51,11 @@ use futures_util::future;
 use neo_runtime_spec::injected::{
     ElementState, ElementStatesOutcome, FrameStyle, FrameStyleStatus, HitTargetAction,
     HitTargetInterceptor, HitTargetOutcome, HitTargetSetup, InjectedCheckElementStatesParams,
-    InjectedDescribeIFrameStyleParams, InjectedDescribeSelectorParams,
+    InjectedCleanupDragParams, InjectedDescribeIFrameStyleParams, InjectedDescribeSelectorParams,
     InjectedExpectHitTargetParams, InjectedGetElementBorderWidthParams, InjectedResolveParams,
-    InjectedScrollIntoViewParams, InjectedSetupHitTargetInterceptorParams,
-    InjectedStopHitTargetInterceptorParams, InjectedTitleParams, InjectedViewportSizeParams, Point,
-    ScrollAlignment,
+    InjectedScrollIntoViewParams, InjectedSetupDragListenersParams,
+    InjectedSetupHitTargetInterceptorParams, InjectedStopHitTargetInterceptorParams,
+    InjectedTitleParams, InjectedViewportSizeParams, Point, ScrollAlignment,
 };
 use neo_runtime_spec::serve::ResponseChannel;
 use neo_runtime_spec::{Element, Handle};
@@ -64,14 +64,14 @@ use serde_json::{Value, json};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::{Mutex, OnceCell, OwnedMutexGuard, broadcast, oneshot, watch};
-use tokio::time;
+use tokio::time::{self, Instant};
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 use tracing::{debug, warn};
 
 use crate::click::{
     Arming, Geometry, NotReady, PageError, PressReport, Resolved, Scroll, SelectorFacts,
-    StatesCheck, Tab, Verdict,
+    StatesCheck, Stop, Tab, Verdict,
 };
 use crate::events::{EventHub, Flushes};
 use crate::frame_selector::{self, FrameOwner};
@@ -81,19 +81,30 @@ use crate::input_devices::{
     self, Devices, Effect, EffectSink, InputDevices, InputSender, Owner, Plan,
 };
 use crate::keyboard;
+use crate::locator_handlers::{self, LocatorHandlers};
 use crate::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
 };
-use crate::network::{Lookup, NetworkLog};
+use crate::network::{Happening, Lookup, NetworkLog};
+use crate::network_idle::{IdleChange, SharedIdle};
 use crate::page_events::PageEvents;
 use crate::progress::InputTicket;
-use crate::progress::PlaywrightError;
+use crate::progress::{PlaywrightError, Progress};
 use crate::run::PageId;
 use crate::world::{self, ObjectGroup, World};
 
 /// Detaching is best effort. It runs in the background after a run, so this bound only keeps
 /// a hung browser from piling up detach tasks.
 const DETACH_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Neo: how long one frame's drag-listener call may take before a move goes on without that
+/// frame. Playwright evaluates there without stalling, so a frame paused on a dialog never holds
+/// up the input; Neo bounds the call instead.
+const DRAG_FRAME_CALL_WAIT: Duration = Duration::from_secs(1);
+
+/// Neo: how long a move waits for `Input.dragIntercepted` once a frame saw its drag start.
+/// Chromium sends it while it handles the move, so this only bounds a browser that never does.
+const DRAG_INTERCEPT_WAIT: Duration = Duration::from_secs(5);
 
 /// One run's CDP session on one tab, which owns the attach: dropping it detaches. The
 /// `Runtime`'s connection outlives every run, so a session nobody detaches stays attached
@@ -197,10 +208,14 @@ pub(crate) struct PageSession {
     pub(crate) network: Arc<NetworkLog>,
     /// `Network.enable`, sent on this session's first goto and kept for the run.
     network_enabled: OnceCell<()>,
+    /// The tab's frames' `networkidle`, fed and timed by the watcher.
+    idle: Arc<SharedIdle>,
     /// The run's highlights on this tab, hidden when the run ends (`highlight.rs`).
     pub(crate) highlights: Highlights,
     /// What the watcher turns into the run's events, and the tab's console history and dialogs.
     pub(crate) events: PageEvents,
+    /// The run's locator handlers on this tab (`locator_handlers.rs`).
+    pub(crate) locator_handlers: LocatorHandlers,
     /// `Runtime.enable` and `Log.enable`, sent once a run listens to console messages or page
     /// errors (or reads their history) and kept for the run.
     runtime_enabled: OnceCell<()>,
@@ -247,6 +262,8 @@ struct PageUpdates<S> {
     /// The run's events from this tab, and the hub's flushes; `None` in tests of navigation
     /// alone.
     producer: Option<(PageEvents, Flushes)>,
+    /// The tab's `networkidle` bookkeeping; `None` in tests of navigation alone.
+    idle: Option<Arc<SharedIdle>>,
 }
 
 /// What the run's session has reported since `prepare`. Counters only grow, so a caller takes
@@ -270,12 +287,21 @@ pub(crate) struct PageState {
     pub(crate) load: bool,
     pub(crate) dom_content_loaded_count: u64,
     pub(crate) load_count: u64,
+    /// `networkidle` fired for the current document (`network_idle.rs`), and how often it fired
+    /// across documents.
+    pub(crate) network_idle: bool,
+    pub(crate) network_idle_count: u64,
     /// Playwright's `Frame.pendingDocument()`: the navigation the frame requested or whose
     /// request started, until a commit takes it or its request fails. Requests are seen only once
     /// `Network.enable` ran.
     pending_document: Option<PendingDocument>,
     /// `Page.javascriptDialogOpening` events seen; each was answered.
     pub(crate) dialogs_opened: u64,
+    /// Neo: how many `setContent` writes still expect their reopened document's `init`, each to
+    /// clear this frame's lifecycle once, as Playwright's clears it right after each
+    /// `document.open()`. Overlapping writes each get their own clear; a new document drops them
+    /// (a write still pending then targets the old document, and fails).
+    pub(crate) reopens_expected: u32,
 }
 
 /// The navigation a frame is waiting to commit ([`PageState::pending_document`]).
@@ -302,7 +328,21 @@ impl PageState {
             load: self.load,
             dom_content_loaded_count: self.dom_content_loaded_count,
             load_count: self.load_count,
+            network_idle: self.network_idle,
+            network_idle_count: self.network_idle_count,
         }
+    }
+
+    /// `networkidle` added (`true`) or removed for the current document. Whether it changed.
+    fn set_network_idle(&mut self, fired: bool) -> bool {
+        if self.network_idle == fired {
+            return false;
+        }
+        self.network_idle = fired;
+        if fired {
+            self.network_idle_count += 1;
+        }
+        true
     }
 
     fn did_dom_content_load(&mut self) {
@@ -318,6 +358,23 @@ impl PageState {
         self.did_dom_content_load();
         self.did_load();
         Fired::between(before, self)
+    }
+
+    /// Playwright's `Frame._onClearLifecycle` for a committed document: its `DOMContentLoaded`,
+    /// `load` and `networkidle` count again, and no write still expects a reopen of the previous one.
+    fn clear_lifecycle(&mut self) {
+        self.reopens_expected = 0;
+        self.dom_content_loaded = false;
+        self.load = false;
+        self.network_idle = false;
+    }
+
+    /// Playwright's `Frame._onClearLifecycle` right after one `setContent` write's
+    /// `document.open()`: that write's clear, and only that one, is spent.
+    fn reopened(&mut self) {
+        self.reopens_expected -= 1;
+        self.dom_content_loaded = false;
+        self.load = false;
     }
 
     fn did_load(&mut self) {
@@ -365,6 +422,15 @@ pub(crate) struct FrameFeeds {
 }
 
 impl FrameFeeds {
+    /// [`PageSession::expect_reopen`] for a child frame.
+    pub(crate) fn expect_reopen(&self, frame: &str, expected: bool) {
+        if let Ok(mut frames) = self.frames.lock() {
+            let feed = frames.entry(frame.to_string()).or_insert_with(new_feed);
+            feed.state
+                .send_modify(|state| expect(&mut state.page, expected));
+        }
+    }
+
     /// `frame`'s current state and its commits from now on.
     pub(crate) fn subscribe(
         &self,
@@ -417,8 +483,7 @@ impl FrameFeeds {
                     page.committed_url = None;
                     page.pending_url = None;
                     page.document = None;
-                    page.dom_content_loaded = false;
-                    page.load = false;
+                    page.clear_lifecycle();
                     page.pending_document = None;
                     state.swaps += 1;
                     state.swapped_from = Some(session.clone());
@@ -453,6 +518,36 @@ impl FrameFeeds {
 }
 
 impl FrameFeeds {
+    /// A navigation request of child frame `frame` started or failed (`Network.requestWillBeSent`,
+    /// `Network.loadingFailed`), which the frame's feed follows as the main frame's state does
+    /// ([`apply_navigation_request`]): its pending document, and a failure that aborts it.
+    /// Network events name no frame's session, so the tab's watcher routes them here by frame.
+    fn apply_network(&self, event: &CdpEvent, frame: &str) {
+        let Ok(mut frames) = self.frames.lock() else {
+            return;
+        };
+        let feed = frames.entry(frame.to_string()).or_insert_with(new_feed);
+        let mut navigation = None;
+        feed.state.send_if_modified(|state| {
+            let applied = apply_navigation_request(&mut state.page, event, frame);
+            navigation = applied.navigation;
+            applied.changed
+        });
+        if let Some(navigation) = navigation {
+            let _listeners = feed.navigations.send(navigation);
+        }
+    }
+
+    /// `frame`'s `networkidle` fired or was removed (`network_idle.rs`).
+    fn set_network_idle(&self, frame: &str, fired: bool) {
+        if let Ok(frames) = self.frames.lock()
+            && let Some(feed) = frames.get(frame)
+        {
+            feed.state
+                .send_if_modified(|state| state.page.set_network_idle(fired));
+        }
+    }
+
     /// Ends every child frame's feed: the main frame committed a new document, and the old
     /// document's frames went with it. Chromium reports `frameDetached` for an OOPIF then, but
     /// nothing for a same-process frame (measured on BrowserOS neo), so its wait would
@@ -549,6 +644,8 @@ impl PageSession {
             discovered,
         );
         let child_events = events.clone();
+        let network = Arc::new(NetworkLog::new(page.as_str().to_string()));
+        let child_network = Arc::clone(&network);
         let world = World::new(
             session.cdp.clone(),
             session.id.clone(),
@@ -562,11 +659,17 @@ impl PageSession {
             Arc::clone(&world),
             tasks.clone(),
         ));
-        // An out-of-process frame's console is this tab's: it turns on when the frame's session
-        // is attached, if the run wants the tab's console by then.
+        // An out-of-process frame's console and requests are this tab's: each turns on when the
+        // frame's session is attached, if the run wants the tab's by then.
         frames.on_child_host(Arc::new(move |host| {
             let events = child_events.clone();
-            Box::pin(async move { events.child_attached(&host).await })
+            let network = Arc::clone(&child_network);
+            Box::pin(async move {
+                events.child_attached(&host).await;
+                if network.enabled() {
+                    enable_child_network(&network, &host).await;
+                }
+            })
         }));
         let (state_updates, state) = watch::channel(PageState::default());
         let (navigations, _) = broadcast::channel(4096);
@@ -585,10 +688,12 @@ impl PageSession {
             host_watchers: SyncMutex::default(),
             next_group: AtomicU64::new(1),
             input,
-            network: Arc::new(NetworkLog::new(page.as_str().to_string())),
+            network,
             network_enabled: OnceCell::new(),
+            idle: Arc::new(SharedIdle::new(page.as_str(), Instant::now())),
             highlights: Highlights::default(),
             events,
+            locator_handlers: LocatorHandlers::default(),
             runtime_enabled: OnceCell::new(),
         }
     }
@@ -647,6 +752,7 @@ impl PageSession {
                         feeds: Some(Arc::clone(&self.frame_feeds)),
                         initial_url,
                         producer: Some((self.events.clone(), self.events.hub().watcher())),
+                        idle: Some(Arc::clone(&self.idle)),
                     },
                     self.closed.clone(),
                     stop,
@@ -710,11 +816,81 @@ impl PageSession {
             .copied()
     }
 
+    /// `Network.enable`, once per session and after [`Self::prepare`]: from then on the watcher
+    /// records every request of the tab in [`NetworkLog`], and each out-of-process frame session
+    /// this run has attached (or attaches later) reports its own requests there too. Sent by the
+    /// first goto, history step or navigation wait, a network event listener, or
+    /// `page.requests()`, and kept for the run: the session's detach at the run's end disables it.
+    ///
+    /// # Errors
+    ///
+    /// The CDP error of `Page.enable` or of `Network.enable` on the tab's session.
+    pub(crate) async fn enable_network(&self) -> Result<(), CdpError> {
+        self.prepare().await?;
+        self.network_enabled
+            .get_or_try_init(|| async {
+                self.send("Network.enable", json!({})).await?;
+                self.network.mark_enabled();
+                self.restart_idle().await;
+                for host in self.frames.child_hosts() {
+                    enable_child_network(&self.network, &host).await;
+                }
+                Ok::<(), CdpError>(())
+            })
+            .await
+            .copied()
+    }
+
+    /// The requests seen from now on are the tab's whole traffic: `networkidle` starts over
+    /// (`NetworkIdle::restart`), over the frames this session reports, which a frame-tree read
+    /// adds to the ones the watcher saw attach. A failed read leaves the tree as the watcher knows
+    /// it.
+    async fn restart_idle(&self) {
+        let frames = match self.send("Page.getFrameTree", json!({})).await {
+            Ok(reply) => local_tree(&reply).unwrap_or_default(),
+            Err(error) => {
+                debug!(%error, "the frame tree for networkidle could not be read");
+                Vec::new()
+            }
+        };
+        let now = Instant::now();
+        let changes = self
+            .idle
+            .with(|idle| {
+                for frame in &frames {
+                    if let Some(parent) = &frame.parent {
+                        idle.attach(&frame.id, parent, now);
+                    }
+                }
+                idle.restart(now)
+            })
+            .unwrap_or_default();
+        apply_idle(
+            &self.main_frame,
+            &self.state_updates,
+            Some(&self.frame_feeds),
+            changes,
+        );
+        self.idle.moved();
+    }
+
     pub(crate) async fn send(&self, method: &str, params: Value) -> Result<Value, CdpError> {
         self.session
             .cdp
             .send(method, params, Some(&self.session.id))
             .await
+    }
+
+    /// Sends on `session`, one of this tab's out-of-process frame sessions, or on the tab's own
+    /// for `None`: where a request the network log recorded is read (`responses.rs`).
+    pub(crate) async fn send_to(
+        &self,
+        session: Option<&SessionId>,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, CdpError> {
+        let session = session.unwrap_or(&self.session.id);
+        self.session.cdp.send(method, params, Some(session)).await
     }
 
     /// Runs a cleanup or writer task on the run's tracker. Spawned on the session's runtime
@@ -742,6 +918,19 @@ impl PageSession {
         } else {
             None
         })
+    }
+
+    /// Neo: one `setContent` write expects (or, failing before its `document.open()`, no longer
+    /// expects) its reopened document's `init` in `frame`, which clears the frame's lifecycle once,
+    /// as Playwright's `_onClearLifecycle` right after `document.open()`, so a later
+    /// `waitForLoadState` waits for that write's document.
+    pub(crate) fn expect_reopen(&self, frame: &str, expected: bool) {
+        if frame == self.main_frame {
+            self.state_updates
+                .send_modify(|state| expect(state, expected));
+        } else {
+            self.frame_feeds.expect_reopen(frame, expected);
+        }
     }
 
     pub(crate) fn pending_navigation(&self) -> Option<String> {
@@ -875,8 +1064,7 @@ impl NavigationTab for FrameTab {
     }
 
     async fn track_network(&self) -> Result<u64, PageError> {
-        self.network_enabled
-            .get_or_try_init(|| async { self.send("Network.enable", json!({})).await.map(|_| ()) })
+        self.enable_network()
             .await
             .map_err(|error| match world::classify(&error) {
                 PageError::Closed => PageError::Closed,
@@ -1165,6 +1353,7 @@ async fn watch_events(
         feeds,
         initial_url,
         producer,
+        idle,
     } = updates;
     let (producer, mut flushes) = producer.unzip();
     let mut watcher = Watcher {
@@ -1179,10 +1368,15 @@ async fn watch_events(
         feeds,
         producer,
         closed,
+        idle,
     };
     tokio::pin!(initial_url);
     let mut seed_pending = true;
     loop {
+        let deadline = watcher
+            .idle
+            .as_ref()
+            .and_then(|idle| idle.with(|idle| idle.deadline()).flatten());
         let event = tokio::select! {
             // The CDP reader publishes events and replies in socket order. Drain events
             // before applying the frame-tree reply, even if both became ready in one poll.
@@ -1207,6 +1401,12 @@ async fn watch_events(
                 let _waiter = ack.send(());
                 continue;
             }
+            // A frame's quiet period ended: Playwright's network idle timer.
+            () = sleep_until(deadline) => {
+                watcher.idle_tick();
+                continue;
+            }
+            () = moved(watcher.idle.as_deref()) => continue,
             seed = &mut initial_url, if seed_pending => {
                 seed_pending = false;
                 match seed {
@@ -1227,6 +1427,42 @@ async fn watch_events(
         };
         if !watcher.on(event) {
             return;
+        }
+    }
+}
+
+/// Sleeps until `deadline`; forever without one.
+async fn sleep_until(deadline: Option<Instant>) {
+    match deadline {
+        Some(deadline) => time::sleep_until(deadline).await,
+        None => future::pending().await,
+    }
+}
+
+/// Resolves when the idle tracker's deadline moved from outside the watcher; never without one.
+async fn moved(idle: Option<&SharedIdle>) {
+    match idle {
+        Some(idle) => idle.wait_moved().await,
+        None => future::pending().await,
+    }
+}
+
+/// Writes `networkidle` changes into the main frame's state and the child frames' feeds.
+fn apply_idle(
+    main_frame: &str,
+    state: &watch::Sender<PageState>,
+    feeds: Option<&FrameFeeds>,
+    changes: Vec<IdleChange>,
+) {
+    for change in changes {
+        let (frame, fired) = match &change {
+            IdleChange::Fired(frame) => (frame, true),
+            IdleChange::Lost(frame) => (frame, false),
+        };
+        if frame == main_frame {
+            state.send_if_modified(|state| state.set_network_idle(fired));
+        } else if let Some(feeds) = feeds {
+            feeds.set_network_idle(frame, fired);
         }
     }
 }
@@ -1252,19 +1488,175 @@ struct Watcher {
     feeds: Option<Arc<FrameFeeds>>,
     producer: Option<PageEvents>,
     closed: CancellationToken,
+    idle: Option<Arc<SharedIdle>>,
 }
 
 impl Watcher {
+    /// Applies what `networkidle` makes of one event of the tab's session: its requests (the
+    /// network log's `happenings`) and its frames' attach, detach, commit and lifecycle.
+    fn idle_event(&self, event: &CdpEvent, happenings: &[Happening]) {
+        let Some(idle) = &self.idle else {
+            return;
+        };
+        let now = Instant::now();
+        let params = &event.params;
+        let changes = idle
+            .with(|idle| {
+                for happening in happenings {
+                    match happening {
+                        Happening::Request(hop) => {
+                            if let Some((frame, event_stream)) = self.network.idle_facts(hop) {
+                                idle.started(hop.clone(), &frame, event_stream);
+                            }
+                        }
+                        Happening::Finished(hop)
+                        | Happening::Failed(hop)
+                        | Happening::Forgotten(hop) => idle.ended(hop, now),
+                        Happening::Response(_) => {}
+                    }
+                }
+                match event.method.as_str() {
+                    "Page.frameAttached" => {
+                        if let (Some(frame), Some(parent)) =
+                            (params["frameId"].as_str(), params["parentFrameId"].as_str())
+                        {
+                            idle.attach(frame, parent, now);
+                        }
+                        Vec::new()
+                    }
+                    "Page.frameDetached" => params["frameId"]
+                        .as_str()
+                        .map(|frame| idle.detach(frame))
+                        .unwrap_or_default(),
+                    "Page.frameNavigated" => {
+                        let frame = &params["frame"];
+                        match (frame["id"].as_str(), frame["loaderId"].as_str()) {
+                            (Some(id), Some(loader)) => {
+                                if let Some(parent) = frame["parentId"].as_str() {
+                                    idle.attach(id, parent, now);
+                                }
+                                idle.commit(id, loader, now)
+                            }
+                            _ => Vec::new(),
+                        }
+                    }
+                    "Page.lifecycleEvent" => {
+                        let name = match params["name"].as_str() {
+                            Some("DOMContentLoaded") => Some("domcontentloaded"),
+                            Some("load") => Some("load"),
+                            _ => None,
+                        };
+                        match (params["frameId"].as_str(), name) {
+                            (Some(frame), Some(name)) => idle.lifecycle_event(frame, name),
+                            _ => Vec::new(),
+                        }
+                    }
+                    _ => Vec::new(),
+                }
+            })
+            .unwrap_or_default();
+        self.apply_idle(changes);
+    }
+
+    /// `Frame._failInflightRequests` for a frame the tab's session reports removed
+    /// (`Page.frameDetached`, reason `remove`), and for the requests of an out-of-process frame
+    /// session that detached (`Target.detachedFromTarget`). A frame whose document moved to
+    /// another process (reason `swap`) is noted for its later removal.
+    fn detached_requests(&self, event: &CdpEvent) -> Vec<Happening> {
+        match event.method.as_str() {
+            "Page.frameDetached" if event.session_id.as_ref() == Some(&self.session) => {
+                let Some(frame) = event.params["frameId"].as_str() else {
+                    return Vec::new();
+                };
+                match event.params["reason"].as_str() {
+                    Some("remove") => self.network.detach_frame(frame),
+                    Some("swap") => {
+                        self.network.frame_moved(frame);
+                        Vec::new()
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            "Target.detachedFromTarget" => event.params["sessionId"]
+                .as_str()
+                .map(SessionId::from)
+                .filter(|child| self.network.has_child(child))
+                .map(|child| self.network.detach_session(&child))
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// A child frame's navigation request starting or failing, routed to that frame's feed: the
+    /// start names its frame, the failure only its request, whose frame the network log knows.
+    /// `recorded`: the event came from a session the network log records.
+    fn child_navigation_request(&self, feeds: &FrameFeeds, event: &CdpEvent, recorded: bool) {
+        if !recorded {
+            return;
+        }
+        let frame = match event.method.as_str() {
+            "Network.requestWillBeSent" => event.params["frameId"].as_str().map(str::to_string),
+            "Network.loadingFailed" => event.params["requestId"]
+                .as_str()
+                .and_then(|request| self.network.frame_of(request)),
+            _ => None,
+        };
+        if let Some(frame) = frame.filter(|frame| *frame != self.main_frame) {
+            feeds.apply_network(event, &frame);
+        }
+    }
+
+    /// A network idle timer fired.
+    fn idle_tick(&self) {
+        let changes = self
+            .idle
+            .as_ref()
+            .and_then(|idle| idle.with(|idle| idle.tick(Instant::now())))
+            .unwrap_or_default();
+        self.apply_idle(changes);
+    }
+
+    fn apply_idle(&self, changes: Vec<IdleChange>) {
+        apply_idle(
+            &self.main_frame,
+            &self.state,
+            self.feeds.as_deref(),
+            changes,
+        );
+    }
+
     /// Applies one event, or the ring's lag or end. Returns `false` once the session is gone.
     fn on(&mut self, event: Result<CdpEvent, RecvError>) -> bool {
         let session = &self.session;
         match event {
             Ok(event) => {
                 // Before the Page events that follow it, so a commit never outruns its request.
-                if event.method.starts_with("Network.")
-                    && event.session_id.as_ref() == Some(session)
-                {
-                    self.network.apply(&event.method, &event.params);
+                // An out-of-process frame session's requests are the tab's once the page enabled
+                // its Network domain (`enable_child_network`).
+                let mut happenings = Vec::new();
+                let mut recorded = false;
+                if event.method.starts_with("Network.") {
+                    let from = match event.session_id.as_ref() {
+                        Some(from) if from == session => Some(None),
+                        Some(from) if self.network.has_child(from) => Some(Some(from)),
+                        _ => None,
+                    };
+                    if let Some(from) = from {
+                        recorded = true;
+                        happenings = self.network.apply(from, &event.method, &event.params);
+                        if let Some(producer) = &self.producer {
+                            producer.network(&self.network, &happenings);
+                        }
+                    }
+                }
+                // A frame removed from the page, or an out-of-process frame session gone, ends
+                // its requests still loading: no later event of theirs can arrive.
+                let detached = self.detached_requests(&event);
+                if !detached.is_empty() {
+                    if let Some(producer) = &self.producer {
+                        producer.network(&self.network, &detached);
+                    }
+                    happenings.extend(detached);
                 }
                 if event.method == "Page.frameNavigated"
                     && event.session_id.as_ref() == Some(session)
@@ -1293,6 +1685,12 @@ impl Watcher {
                         feeds.detach_all();
                     }
                     feeds.apply(&event, session, Some(&self.main_frame));
+                    self.child_navigation_request(feeds, &event, recorded);
+                }
+                // After the frames' state, so a commit's cleared lifecycle comes first. Only the
+                // tab's own session reports the frames `networkidle` follows (`network_idle.rs`).
+                if event.session_id.as_ref() == Some(session) {
+                    self.idle_event(&event, &happenings);
                 }
                 // The run's events from this one, after the page state they may describe. A
                 // dialog a listener owns is the script's to answer.
@@ -1314,6 +1712,14 @@ impl Watcher {
             Err(RecvError::Lagged(skipped)) => {
                 warn!(%session, skipped, "the run's event watcher lagged; answering any dialog");
                 self.network.lagged();
+                // A lost end would hold `networkidle` forever: the requests seen so far are
+                // forgotten, and every frame's quiet period starts again.
+                let changes = self
+                    .idle
+                    .as_ref()
+                    .and_then(|idle| idle.with(|idle| idle.forget_requests(Instant::now())))
+                    .unwrap_or_default();
+                self.apply_idle(changes);
                 self.state
                     .send_if_modified(|state| state.pending_url.take().is_some());
                 if let Some(producer) = &self.producer {
@@ -1330,6 +1736,26 @@ impl Watcher {
             }
         }
         true
+    }
+}
+
+/// Neo: how long an out-of-process frame's first call waits for that frame's `Network.enable`. A
+/// frame frozen by its page's dialog may never answer; the call then goes on without it.
+const CHILD_NETWORK_WAIT: Duration = Duration::from_secs(5);
+
+/// `Network.enable` on an out-of-process frame's session, whose requests are the tab's from then
+/// on: the session is registered first, so no event the enable triggers is dropped. Bounded by
+/// [`CHILD_NETWORK_WAIT`]; a failure is logged, and the frame's requests stay unseen.
+async fn enable_child_network(network: &NetworkLog, host: &Arc<Host>) {
+    let session = host.session_id().clone();
+    if network.has_child(&session) {
+        return;
+    }
+    network.add_child(&session);
+    match time::timeout(CHILD_NETWORK_WAIT, host.send("Network.enable", json!({}))).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => debug!(%session, %error, "a frame's network did not turn on"),
+        Err(_) => debug!(%session, "a frame's network did not turn on in time"),
     }
 }
 
@@ -1609,8 +2035,7 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                     }
                     Some(PendingDocument::Requested) | None => false,
                 };
-                state.dom_content_loaded = false;
-                state.load = false;
+                state.clear_lifecycle();
                 if kind.as_deref() == Some("BackForwardCacheRestore") {
                     // Deviation: `server/chromium/chromiumSwitches.ts` `chromiumSwitches`: `'--disable-back-forward-cache',`
                     // Playwright's Chromium never restores a cached document, and one it met
@@ -1718,6 +2143,15 @@ fn apply_navigation_request(state: &mut PageState, event: &CdpEvent, main_frame:
     applied
 }
 
+/// Neo: one write's expected reopen, counted in or given back.
+fn expect(state: &mut PageState, expected: bool) {
+    state.reopens_expected = if expected {
+        state.reopens_expected.saturating_add(1)
+    } else {
+        state.reopens_expected.saturating_sub(1)
+    };
+}
+
 fn apply_lifecycle(state: &mut PageState, event: &LifecycleEvent) -> bool {
     let seeded = state.document.is_none();
     if seeded {
@@ -1729,6 +2163,8 @@ fn apply_lifecycle(state: &mut PageState, event: &LifecycleEvent) -> bool {
     match event.name.as_str() {
         "DOMContentLoaded" => state.did_dom_content_load(),
         "load" => state.did_load(),
+        // Playwright: `server/frames.ts` `Frame.setContent`: `this._onClearLifecycle();`
+        "init" if state.reopens_expected > 0 => state.reopened(),
         _ => return seeded,
     }
     true
@@ -2286,6 +2722,12 @@ impl Tab for FrameTab {
         PageSession::pending_navigation(self)
     }
 
+    async fn locator_handlers_checkpoint(&self, progress: &Progress) -> Result<(), Stop> {
+        locator_handlers::checkpoint(self, progress)
+            .await
+            .map_err(Stop::End)
+    }
+
     async fn navigation_settled(&self) -> Result<Option<String>, PageError> {
         PageSession::navigation_settled(self).await
     }
@@ -2518,6 +2960,113 @@ fn pixels(value: i64) -> f64 {
 impl InputSender for Arc<PageSession> {
     async fn send_input(&self, method: &'static str, params: String) -> Result<(), CdpError> {
         self.send_input_json(method, &params).await
+    }
+
+    /// Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `await progress.race(client.send('Input.setInterceptDrags', { enabled: true }));`
+    ///
+    /// The listeners go into every frame's utility world, interception is on for the move
+    /// alone and always turned off again, and a frame that saw a drag start hands Neo the
+    /// drag Chromium intercepted.
+    async fn move_intercepting_drag(&self, params: String) -> Result<Option<Value>, CdpError> {
+        let frames = self.drag_frames().await;
+        future::join_all(frames.iter().map(|frame| {
+            time::timeout(
+                DRAG_FRAME_CALL_WAIT,
+                frame.call(None, &InjectedSetupDragListenersParams {}),
+            )
+        }))
+        .await;
+        // Subscribed before interception is on, so its event cannot slip past.
+        let mut events = self.session.cdp.events();
+        if let Err(error) = self
+            .send_input_json("Input.setInterceptDrags", r#"{"enabled":true}"#)
+            .await
+        {
+            // Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `this._crPage._page.safeNonStallingEvaluateInAllFrames('window.__cleanupDrag?.()', 'utility').catch(() => {});`
+            // The listeners go on every exit, this one included.
+            PageSession::cleanup_drag(&frames).await;
+            return Err(error);
+        }
+        let moved = self
+            .send_input_json("Input.dispatchMouseEvent", &params)
+            .await;
+        let started = PageSession::cleanup_drag(&frames).await;
+        let disabled = self
+            .send_input_json("Input.setInterceptDrags", r#"{"enabled":false}"#)
+            .await;
+        moved?;
+        disabled?;
+        if !started {
+            return Ok(None);
+        }
+        let intercepted = async {
+            loop {
+                match events.recv().await {
+                    Ok(event)
+                        if event.method == "Input.dragIntercepted"
+                            && event.session_id.as_ref() == Some(&self.session.id) =>
+                    {
+                        return Ok(event.params["data"].clone());
+                    }
+                    Ok(_) | Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => return Err(CdpError::SessionGone),
+                }
+            }
+        };
+        time::timeout(DRAG_INTERCEPT_WAIT, intercepted)
+            .await
+            .map_err(|_| CdpError::Timeout {
+                method: "Input.dragIntercepted".to_string(),
+            })?
+            .map(Some)
+    }
+}
+
+// The frames a drag's listeners go to.
+impl PageSession {
+    /// Neo: `cleanupDrag` in every frame, each call bounded: removes the drag listeners and
+    /// answers whether any frame saw the move start a drag the page did not prevent.
+    async fn cleanup_drag(frames: &[Arc<FrameContext>]) -> bool {
+        future::join_all(frames.iter().map(|frame| {
+            time::timeout(
+                DRAG_FRAME_CALL_WAIT,
+                frame.call(None, &InjectedCleanupDragParams {}),
+            )
+        }))
+        .await
+        .into_iter()
+        .any(|cleaned| cleaned.is_ok_and(|result| result.is_ok_and(|cleaned| cleaned.started)))
+    }
+
+    /// Neo: every frame's context, the main one first, then the frame tree in pre-order. A
+    /// frame whose context cannot be reached is left out, as Playwright's evaluation in all
+    /// frames skips one it cannot reach.
+    async fn drag_frames(&self) -> Vec<Arc<FrameContext>> {
+        let main = self.frames.main();
+        let Ok(tree) = self.frames.tree().await else {
+            return vec![main];
+        };
+        let mut contexts: HashMap<String, Arc<FrameContext>> = HashMap::new();
+        contexts.insert(main.id.clone(), Arc::clone(&main));
+        let mut frames = vec![main];
+        for info in tree {
+            if contexts.contains_key(&info.id) {
+                continue;
+            }
+            let Some(parent) = info
+                .parent
+                .as_ref()
+                .and_then(|parent| contexts.get(parent))
+                .map(|parent| Arc::clone(&parent.host))
+            else {
+                continue;
+            };
+            if let Ok(context) = self.frames.context(&info.id, Some(&parent)).await {
+                contexts.insert(info.id.clone(), Arc::clone(&context));
+                frames.push(context);
+            }
+        }
+        frames
     }
 }
 
@@ -3227,6 +3776,71 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_a_reopened_document_clears_its_lifecycle_only_when_set_content_armed_it() {
+        let lifecycle = |state: &mut PageState, name: &str| {
+            applied(
+                state,
+                &event(
+                    "Page.lifecycleEvent",
+                    Some(SESSION),
+                    json!({ "frameId": MAIN, "loaderId": "one", "name": name }),
+                ),
+            )
+        };
+        let mut state = PageState::default();
+        applied(
+            &mut state,
+            &event(
+                "Page.frameNavigated",
+                Some(SESSION),
+                json!({ "frame": {"id": MAIN, "url": "https://a.test/", "loaderId": "one"} }),
+            ),
+        );
+        for name in ["DOMContentLoaded", "load"] {
+            lifecycle(&mut state, name);
+        }
+        // A page's own document.open(), unarmed: Playwright keeps the frame loaded.
+        lifecycle(&mut state, "init");
+        assert!(state.load && state.dom_content_loaded);
+        // setContent's: the reopened document's events count again.
+        expect(&mut state, true);
+        assert!(lifecycle(&mut state, "init").changed);
+        assert!(!state.load && !state.dom_content_loaded && state.reopens_expected == 0);
+        for name in ["DOMContentLoaded", "load"] {
+            lifecycle(&mut state, name);
+        }
+        assert!(state.load && state.dom_content_loaded);
+        assert_eq!((state.dom_content_loaded_count, state.load_count), (2, 2));
+        // Two overlapping writes: each init spends its own clear, so the later document's
+        // unfired load is not the earlier one's.
+        expect(&mut state, true);
+        expect(&mut state, true);
+        lifecycle(&mut state, "init");
+        for name in ["DOMContentLoaded", "load"] {
+            lifecycle(&mut state, name);
+        }
+        lifecycle(&mut state, "init");
+        lifecycle(&mut state, "DOMContentLoaded");
+        assert!(state.dom_content_loaded && !state.load && state.reopens_expected == 0);
+        // A write that failed before document.open() gives its clear back.
+        expect(&mut state, true);
+        expect(&mut state, false);
+        lifecycle(&mut state, "init");
+        assert!(state.dom_content_loaded);
+        // A new document drops the clears nothing consumed.
+        expect(&mut state, true);
+        applied(
+            &mut state,
+            &event(
+                "Page.frameNavigated",
+                Some(SESSION),
+                json!({ "frame": {"id": MAIN, "url": "https://a.test/b", "loaderId": "two"} }),
+            ),
+        );
+        assert_eq!(state.reopens_expected, 0);
+    }
+
+    #[test]
     fn tests_that_bfcache_counts_each_lifecycle_once() {
         let mut state = PageState::default();
         applied(
@@ -3320,6 +3934,7 @@ mod tests {
                 feeds: None,
                 initial_url,
                 producer: None,
+                idle: None,
             };
             let watcher = watch_events(
                 receiver,
@@ -3419,6 +4034,7 @@ mod tests {
                 feeds: None,
                 initial_url,
                 producer: None,
+                idle: None,
             },
             closed.clone(),
             stop.clone(),
@@ -3874,6 +4490,9 @@ mod tests {
         /// call (a modifier's restore) is theirs again.
         released: HashMap<String, Vec<Owner>>,
         held_back: Vec<oneshot::Sender<()>>,
+        /// Whether an intercepted HTML5 drag runs: a move with the left button down may start
+        /// one; a drop or a cancel ends it.
+        dragging: bool,
         /// Once set, every write is answered at once.
         settled: bool,
         answers: Seeded,
@@ -3895,7 +4514,35 @@ mod tests {
 
         /// One write: what the browser does with it if `received`, and what this call released
         /// whether received or not, so its restore goes back to whoever had the key.
-        fn write(&mut self, event: &Value, writer: &Owner, run_end: bool, received: bool) {
+        fn write(
+            &mut self,
+            method: &str,
+            event: &Value,
+            writer: &Owner,
+            run_end: bool,
+            received: bool,
+        ) {
+            if method == "Input.dispatchDragEvent" {
+                let ends = matches!(event["type"].as_str(), Some("drop" | "dragCancel"));
+                if received && ends {
+                    self.dragging = false;
+                    // The drag held the left button, and a drop stands in for whichever
+                    // button's release made it (Playwright's `RawMouseImpl.up`): after it the
+                    // events carry the tab's own mask, so no button stays down.
+                    let pressers = self.down.remove("left").unwrap_or_default();
+                    self.down.remove("right");
+                    let live = pressers
+                        .iter()
+                        .find(|presser| *presser != writer && self.live.contains(presser));
+                    if let Some(live) = live
+                        && run_end
+                    {
+                        self.stolen
+                            .push(format!("{}'s end ended a drag under {}", writer.0, live.0));
+                    }
+                }
+                return;
+            }
             let what = event["code"]
                 .as_str()
                 .or_else(|| event["button"].as_str())
@@ -3944,6 +4591,8 @@ mod tests {
         browser: Arc<SyncMutex<FuzzBrowser>>,
         writer: Owner,
         run_end: bool,
+        /// Set once a write of this sender failed or was refused.
+        failed: Arc<AtomicBool>,
     }
 
     impl InputSender for FuzzSender {
@@ -3954,7 +4603,10 @@ mod tests {
                 let answer = browser.answer();
                 let received =
                     !matches!(answer, Answer::Refused | Answer::Fails { received: false });
-                browser.write(&event, &self.writer, self.run_end, received);
+                if matches!(answer, Answer::Refused | Answer::Fails { .. }) {
+                    self.failed.store(true, Ordering::SeqCst);
+                }
+                browser.write(method, &event, &self.writer, self.run_end, received);
                 let held_back = matches!(answer, Answer::HeldBack).then(|| {
                     let (release, wait) = oneshot::channel();
                     browser.held_back.push(release);
@@ -3976,10 +4628,26 @@ mod tests {
                 }),
             }
         }
+
+        /// The move, and then, with the left button down and no drag running, a drag the page
+        /// starts three times in four, which Chromium hands over (`Input.dragIntercepted`).
+        async fn move_intercepting_drag(&self, params: String) -> Result<Option<Value>, CdpError> {
+            self.send_input("Input.dispatchMouseEvent", params).await?;
+            let mut browser = self.browser.lock().expect("browser");
+            let left_down = browser
+                .down
+                .get("left")
+                .is_some_and(|pressers| !pressers.is_empty());
+            if left_down && !browser.dragging && browser.answers.below(4) != 0 {
+                browser.dragging = true;
+                return Ok(Some(json!({ "items": [], "dragOperationsMask": 1 })));
+            }
+            Ok(None)
+        }
     }
 
     /// One call of a run's script.
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     enum FuzzCall {
         Down(&'static str),
         Up(&'static str),
@@ -3987,22 +4655,31 @@ mod tests {
         Modifiers(u8),
         /// A click with modifiers: the change, a left press and its release, the restore.
         Click(u8),
-        Press,
-        Release,
+        /// `mouse.down` and `mouse.up` with the left button, or the right one.
+        Press(bool),
+        Release(bool),
+        /// A move that is not a click's, through the drag manager.
+        Move((f64, f64), u32),
     }
 
     impl FuzzCall {
         fn random(rng: &mut Seeded) -> Self {
             use crate::keyboard::{CONTROL, SHIFT};
-            const KEYS: [&str; 3] = ["Shift", "Control", "a"];
+            const KEYS: [&str; 4] = ["Shift", "Control", "a", "Escape"];
             const MASKS: [u8; 4] = [0, SHIFT, CONTROL, SHIFT | CONTROL];
-            match rng.below(6) {
+            const POINTS: [(f64, f64); 3] = [(10.0, 10.0), (60.0, 40.0), (250.0, 60.0)];
+            // Presses and moves weigh more, so that drags start and meet the other calls.
+            match rng.below(10) {
                 0 => Self::Down(KEYS[rng.index(KEYS.len())]),
                 1 => Self::Up(KEYS[rng.index(KEYS.len())]),
                 2 => Self::Modifiers(MASKS[rng.index(MASKS.len())]),
                 3 => Self::Click(MASKS[rng.index(MASKS.len())]),
-                4 => Self::Press,
-                _ => Self::Release,
+                4 | 5 => Self::Press(rng.below(3) == 0),
+                6 => Self::Release(rng.below(3) == 0),
+                _ => Self::Move(
+                    POINTS[rng.index(POINTS.len())],
+                    u32::try_from(1 + rng.below(3)).expect("steps"),
+                ),
             }
         }
 
@@ -4030,12 +4707,23 @@ mod tests {
                     input_devices::plan_up(plan, simulated, MouseButton::Left, 1, Some(down));
                     keyboard::plan_restore_modifiers(plan, simulated, &changes, linux, owner);
                 }
-                Self::Press => {
-                    input_devices::plan_down(plan, simulated, MouseButton::Left, 1, owner);
+                Self::Press(right) => {
+                    let button = if right {
+                        MouseButton::Right
+                    } else {
+                        MouseButton::Left
+                    };
+                    input_devices::plan_down(plan, simulated, button, 1, owner);
                 }
-                Self::Release => {
-                    input_devices::plan_up(plan, simulated, MouseButton::Left, 1, None);
+                Self::Release(right) => {
+                    let button = if right {
+                        MouseButton::Right
+                    } else {
+                        MouseButton::Left
+                    };
+                    input_devices::plan_up(plan, simulated, button, 1, None);
                 }
+                Self::Move(to, steps) => input_devices::plan_free_move(plan, simulated, to, steps),
             }
         }
     }
@@ -4065,6 +4753,7 @@ mod tests {
                     stolen: Vec::new(),
                     released: HashMap::new(),
                     held_back: Vec::new(),
+                    dragging: false,
                     settled: false,
                     answers: Seeded(seed ^ 0x5EED_5EED),
                 })),
@@ -4079,6 +4768,7 @@ mod tests {
                 browser: Arc::clone(&self.browser),
                 writer: fuzz_owner(run),
                 run_end,
+                failed: Arc::default(),
             }
         }
 
@@ -4095,8 +4785,20 @@ mod tests {
                 let mut simulated = permit.snapshot().expect("devices");
                 let mut plan = Plan::default();
                 call.plan(&mut plan, &mut simulated, &owner);
-                let _written = input_devices::write_plan(&sender, &permit, &plan, &stop).await;
-                sender.browser.lock().expect("browser").released.clear();
+                let written = input_devices::write_plan(&sender, &permit, &plan, &stop).await;
+                let mut browser = sender.browser.lock().expect("browser");
+                browser.released.clear();
+                // A call whose every write was answered resolves, a drag's skipped press
+                // included, unless its run ended under it.
+                if !written.complete
+                    && !sender.failed.load(Ordering::SeqCst)
+                    && !stop.is_cancelled()
+                {
+                    browser.stolen.push(format!(
+                        "{}'s {call:?} read incomplete, every write answered",
+                        owner.0
+                    ));
+                }
             }));
         }
 
@@ -4185,7 +4887,7 @@ mod tests {
     async fn fuzz_case(seed: u64) {
         let mut rng = Seeded(seed);
         let mut case = FuzzCase::new(seed);
-        for _ in 0..4 + rng.below(14) {
+        for _ in 0..4 + rng.below(20) {
             let run = rng.index(2);
             match rng.below(10) {
                 0..=5 if !case.ended[run] => case.call(run, FuzzCall::random(&mut rng)),
@@ -4211,6 +4913,7 @@ mod tests {
             "seed {seed}: still down {:?}",
             browser.down
         );
+        assert!(!browser.dragging, "seed {seed}: a drag still runs");
         let devices = case.tab.devices.lock().expect("devices").clone();
         assert_eq!(
             devices,
@@ -4223,10 +4926,13 @@ mod tests {
         assert!(devices.mouse.buttons.is_empty(), "seed {seed}: {devices:?}");
     }
 
-    /// Two runs and an observer on one tab, 3000 seeded schedules of key presses and releases,
-    /// modifier changes, clicks with modifiers, button presses, run ends (some bounded, cut off
-    /// waiting for the turn or mid-write, some dropped with no release at all), with each write
-    /// answered at once, held back, failed (received or not) or refused. Once every answer is in and every run has ended, nothing
+    /// Two runs and an observer on one tab, 3000 seeded schedules of key presses and releases
+    /// (Escape included), modifier changes, clicks with modifiers, button presses, free moves
+    /// that may start an intercepted HTML5 drag, run ends (some bounded, cut off waiting for
+    /// the turn or mid-write, some dropped with no release at all), with each write answered at
+    /// once, held back, failed (received or not) or refused. A call whose every write was
+    /// answered reads complete, a drag's skipped press included; no run's end ends a drag
+    /// another live run has the left button down for. Once every answer is in and every run has ended, nothing
     /// is down in the browser or held in the tab's devices, and no run's end ever released what
     /// a live run had pressed.
     #[tokio::test(start_paused = true)]

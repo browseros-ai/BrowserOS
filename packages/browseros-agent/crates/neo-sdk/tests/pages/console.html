@@ -18,6 +18,7 @@ console.warn('load warning');
 <button type="button" id="format" onclick="__logged++; console.log('a', 1, { x: 1 }, [1, 2])">Format</button>
 <button type="button" id="previews" onclick="__logged++; console.log('%s is %d', { a: { b: 1 } }, [[1]], null, undefined, true, window)">Previews</button>
 <button type="button" id="empty" onclick="__logged++; console.log('')">Empty</button>
+<button type="button" id="element" onclick="__logged++; console.log('body', document.body)">Element</button>
 <button type="button" id="throw" onclick="throw new Error('click error')">Throw</button>
 <button type="button" id="broken" onclick="const image = new Image(); image.src = 'http://127.0.0.1:1/missing.png'; document.body.append(image)">Broken image</button>
 </body></html>
