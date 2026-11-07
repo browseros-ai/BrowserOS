@@ -1,0 +1,63 @@
+[package]
+name = "neo-playwright-tests"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Runs Playwright upstream tests against real Playwright and one native Neo run."
+
+[features]
+default = []
+playwright = ["dep:libtest-mimic", "dep:neo-runtime", "dep:browseros-cdp", "dep:tokio", "dep:tokio-util", "dep:futures-util", "dep:url"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+libtest-mimic = { version = "=0.8.2", optional = true }
+neo-runtime = { path = "../neo-runtime", features = ["test-host"], optional = true }
+browseros-cdp = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["io-std"], optional = true }
+tokio-util = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+
+[[bin]]
+name = "neo-playwright-tests-worker"
+path = "src/bin/worker.rs"
+required-features = ["playwright"]
+
+[[test]]
+name = "playwright"
+path = "tests/playwright.rs"
+harness = false
+required-features = ["playwright"]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+# A crate's own table cannot be combined with `workspace = true`, so the workspace lints are
+# restated first. The rest is Google Rust style: pedantic plus the lints mapped from its rules.
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+print_stdout = "warn"
+print_stderr = "warn"
+dbg_macro = "warn"
+pedantic = { level = "warn", priority = -1 }
+wildcard_imports = "warn"
+enum_glob_use = "warn"
+absolute_paths = "warn"
+ref_option = "warn"
+redundant_clone = "warn"
+implicit_clone = "warn"
+clone_on_ref_ptr = "warn"
+fn_params_excessive_bools = "warn"
+must_use_candidate = "warn"
+missing_assert_message = "warn"
+needless_for_each = "warn"
+string_add = "warn"
+mod_module_files = "warn"
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+disallowed_methods = "warn"
