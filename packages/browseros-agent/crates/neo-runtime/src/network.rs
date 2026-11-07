@@ -117,6 +117,9 @@ pub(crate) enum LogError {
     Lost,
     #[error("Response body is unavailable for redirect responses")]
     RedirectBody,
+    /// A value Playwright cannot compute either, where its server throws.
+    #[error("{0}")]
+    Invalid(&'static str),
     #[error("neo-runtime: the network log cannot be read")]
     Poisoned,
 }
@@ -483,7 +486,7 @@ impl NetworkLog {
 
     /// `Response.sizes` (`internalSizes`) once every size it awaits is known.
     pub(crate) fn sizes(&self, id: &HopId) -> Result<Option<RequestSizes>, LogError> {
-        self.with_hop(id, "response", |hop| Ok(hop.sizes()))
+        self.with_hop(id, "response", Hop::sizes)
     }
 
     /// What `Response.body` reads, once the response is done (`internalBody` awaits its
@@ -972,30 +975,41 @@ impl Hop {
     }
 
     /// `internalSizes`, once the raw request headers, the header size and the body size are
-    /// known; a hop without a response has none (the client throws first).
-    fn sizes(&self) -> Option<RequestSizes> {
-        let response = self.response.as_ref()?;
-        let raw_request_headers = self.raw_request_headers.as_ref()?;
+    /// known (`None` while one is pending); a hop without a response has none (the client throws
+    /// first). A size Playwright cannot compute is an error, as its server throws there.
+    fn sizes(&self) -> Result<Option<RequestSizes>, LogError> {
+        let (Some(response), Some(raw_request_headers)) =
+            (self.response.as_ref(), self.raw_request_headers.as_ref())
+        else {
+            return Ok(None);
+        };
         let request_headers_size =
             request_headers_size(raw_request_headers, &self.url, &self.method)?;
         let response_headers_size = match response.headers_size {
-            HeadersSize::Pending => return None,
+            HeadersSize::Pending => return Ok(None),
             HeadersSize::Known(size) => size,
             HeadersSize::Unknown => {
-                response_headers_size(response.raw_headers.as_ref()?, &response.status_text)
+                let Some(raw) = response.raw_headers.as_ref() else {
+                    return Ok(None);
+                };
+                response_headers_size(raw, &response.status_text)
             }
         };
         let response_body_size = match response.body_size {
-            BodySize::Pending => return None,
+            BodySize::Pending => return Ok(None),
             BodySize::Loaded(length) => js_int(length - js_number(response_headers_size))?,
             BodySize::Unknown => {
-                let raw = response.raw_headers.as_ref()?;
+                let Some(raw) = response.raw_headers.as_ref() else {
+                    return Ok(None);
+                };
+                // `contentLength ? +contentLength : 0`: an empty value is 0, any other is
+                // JavaScript's `Number` of it.
                 match raw
                     .iter()
                     .find(|header| header.name.eq_ignore_ascii_case("content-length"))
                 {
                     Some(header) if !header.value.is_empty() => {
-                        js_int(header.value.trim().parse::<f64>().ok()?)?
+                        js_int(js_string_to_number(&header.value))?
                     }
                     _ => 0,
                 }
@@ -1005,20 +1019,25 @@ impl Hop {
             .post_data
             .as_ref()
             .map_or(0, |bytes| i64::try_from(bytes.len()).unwrap_or(i64::MAX));
-        Some(RequestSizes {
+        Ok(Some(RequestSizes {
             request_body_size,
             request_headers_size,
             response_body_size,
             response_headers_size,
-        })
+        }))
     }
 }
 
 /// `requestHeadersSize` (`server/network.ts`): the request line plus every header line, in
-/// JavaScript string lengths. `None` when the URL does not parse, where `new URL` throws.
-fn request_headers_size(headers: &[NameValue], url: &str, method: &str) -> Option<i64> {
-    let path = Url::parse(url).ok()?.path().to_string();
-    Some(4 + utf16_len(method) + utf16_len(&path) + 8 + headers_size(headers))
+/// JavaScript string lengths. A URL that does not parse is an error, where `new URL` throws; that
+/// is a `TypeError` in Playwright, a plain `Error` here, since Chromium's canonical navigation URLs
+/// always parse.
+fn request_headers_size(headers: &[NameValue], url: &str, method: &str) -> Result<i64, LogError> {
+    let path = Url::parse(url)
+        .map_err(|_| LogError::Invalid("Invalid URL"))?
+        .path()
+        .to_string();
+    Ok(4 + utf16_len(method) + utf16_len(&path) + 8 + headers_size(headers))
 }
 
 /// `responseHeadersSize` (`server/network.ts`).
@@ -1056,13 +1075,78 @@ fn js_number(value: i64) -> f64 {
     value as f64
 }
 
-/// A size Playwright's `tInt` validator would accept: an integral, finite number.
+/// A size Playwright's `tInt` validator accepts: an integral, finite number; any other rejects.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "checked integral and within i64 first"
 )]
-fn js_int(value: f64) -> Option<i64> {
-    (value.is_finite() && value.fract() == 0.0 && value.abs() < 9.2e18).then_some(value as i64)
+fn js_int(value: f64) -> Result<i64, LogError> {
+    if value.is_finite() && value.fract() == 0.0 && value.abs() < 9.2e18 {
+        Ok(value as i64)
+    } else {
+        Err(LogError::Invalid("sizes: expected integer, got float"))
+    }
+}
+
+/// JavaScript's `Number(text)` (ECMAScript `StringToNumber`): trimmed of JavaScript white space,
+/// empty is 0, `0x`/`0o`/`0b` integers, `Infinity`, and decimal literals; anything else is NaN.
+fn js_string_to_number(text: &str) -> f64 {
+    let text = text.trim_matches(is_js_whitespace);
+    if text.is_empty() {
+        return 0.0;
+    }
+    let radix = |digits: &str, radix: u32| {
+        if digits.is_empty() {
+            return f64::NAN;
+        }
+        digits
+            .chars()
+            .try_fold(0.0_f64, |value, digit| {
+                digit
+                    .to_digit(radix)
+                    .map(|digit| value * f64::from(radix) + f64::from(digit))
+            })
+            .unwrap_or(f64::NAN)
+    };
+    let lower = text.get(..2).map(str::to_ascii_lowercase);
+    match lower.as_deref() {
+        Some("0x") => return radix(&text[2..], 16),
+        Some("0o") => return radix(&text[2..], 8),
+        Some("0b") => return radix(&text[2..], 2),
+        _ => {}
+    }
+    match text {
+        "Infinity" | "+Infinity" => return f64::INFINITY,
+        "-Infinity" => return f64::NEG_INFINITY,
+        _ => {}
+    }
+    // Rust's parser also takes `inf`, `nan` and the like; JavaScript's decimal literal does not.
+    let decimal = text
+        .strip_prefix(['+', '-'])
+        .unwrap_or(text)
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'.' | b'e' | b'E' | b'+' | b'-'));
+    if decimal {
+        text.parse().unwrap_or(f64::NAN)
+    } else {
+        f64::NAN
+    }
+}
+
+/// ECMAScript's `StrWhiteSpaceChar`: white space and line terminators.
+fn is_js_whitespace(c: char) -> bool {
+    matches!(
+        c,
+        '\t' | '\u{b}'
+            | '\u{c}'
+            | ' '
+            | '\u{a0}'
+            | '\u{feff}'
+            | '\n'
+            | '\r'
+            | '\u{2028}'
+            | '\u{2029}'
+    ) || (c != '\u{85}' && c.is_whitespace() && !c.is_ascii_control())
 }
 
 /// `helper.secondsToRoundishMillis`: `((seconds * 1000000) | 0) / 1000`, whose `| 0` is
@@ -1993,6 +2077,102 @@ mod tests {
             ),
             (250.0, 250.0, 250.0)
         );
+    }
+
+    /// Answers from Node 22's `Number(text)`; `None` is NaN.
+    #[test]
+    fn tests_that_strings_convert_to_numbers_as_javascript_does() {
+        let cases: [(&str, Option<f64>); 34] = [
+            ("", Some(0.0)),
+            (" ", Some(0.0)),
+            ("\t\n 12 \r", Some(12.0)),
+            ("0x1F", Some(31.0)),
+            ("0X1f", Some(31.0)),
+            ("0o17", Some(15.0)),
+            ("0B101", Some(5.0)),
+            ("-0x10", None),
+            ("+0x10", None),
+            ("1e3", Some(1000.0)),
+            ("1E-2", Some(0.01)),
+            (".5", Some(0.5)),
+            ("5.", Some(5.0)),
+            ("+.5", Some(0.5)),
+            ("-7", Some(-7.0)),
+            ("Infinity", Some(f64::INFINITY)),
+            ("-Infinity", Some(f64::NEG_INFINITY)),
+            ("+Infinity", Some(f64::INFINITY)),
+            ("infinity", None),
+            ("inf", None),
+            ("NaN", None),
+            ("1_000", None),
+            ("12px", None),
+            ("0x", None),
+            ("1e", None),
+            ("--1", None),
+            ("\u{a0}12\u{2028}", Some(12.0)),
+            ("\u{85}12", None),
+            ("\u{feff}3", Some(3.0)),
+            ("\u{661}", None),
+            ("1e5000", Some(f64::INFINITY)),
+            ("0x1g", None),
+            ("00012", Some(12.0)),
+            ("1.2.3", None),
+        ];
+        for (text, number) in cases {
+            let got = js_string_to_number(text);
+            match number {
+                Some(number) => assert!(got.total_cmp(&number).is_eq(), "{text:?}: {got}"),
+                None => assert!(got.is_nan(), "{text:?}: {got}"),
+            }
+        }
+    }
+
+    fn content_length_redirect(content_length: &str) -> NetworkLog {
+        let redirect = event(
+            "Network.requestWillBeSent",
+            json!({
+                "requestId": "N", "loaderId": "N", "type": "Document", "frameId": "MAIN",
+                "request": {"url": "https://a.test/next", "method": "GET", "headers": {}},
+                "timestamp": 10.25, "wallTime": 1000.25,
+                "redirectResponse": {"url": "https://a.test/", "status": 302, "statusText": "Found",
+                                     "headers": {"Content-Length": content_length}},
+            }),
+        );
+        replay(
+            "MAIN",
+            &[
+                navigation("N", "MAIN", "Document", "https://a.test/"),
+                redirect,
+            ],
+        )
+    }
+
+    /// A redirect's body size falls back to `+contentLength` (JavaScript's `Number`), and the
+    /// result must be an integer, as Playwright's result validator requires; a size that cannot be
+    /// one rejects instead of waiting forever.
+    #[test]
+    fn tests_that_sizes_read_content_length_as_javascript_and_reject_non_integers() {
+        let hop = HopId {
+            request: "N".to_string(),
+            hop: 0,
+        };
+        for (content_length, size) in [("0x10", 16), (" 7 ", 7), (" ", 0), ("", 0), ("1e2", 100)] {
+            let log = content_length_redirect(content_length);
+            assert_eq!(
+                log.sizes(&hop)
+                    .map(|sizes| sizes.map(|sizes| sizes.response_body_size)),
+                Ok(Some(size)),
+                "{content_length:?}"
+            );
+        }
+        for content_length in ["abc", "1.5", "0x", "Infinity", "1_000"] {
+            let log = content_length_redirect(content_length);
+            assert!(
+                matches!(log.sizes(&hop), Err(LogError::Invalid(_))),
+                "{content_length:?}: {:?}",
+                log.sizes(&hop)
+            );
+        }
     }
 
     #[test]
