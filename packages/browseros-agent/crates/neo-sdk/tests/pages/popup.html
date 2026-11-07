@@ -1,0 +1,10 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>popup</title>
+<script>
+// The page tests/pages/opener.html opens as a popup. Its title names its query, the control that
+// opened it. #close closes the popup from its own script, as a page opened by script may; #open
+// opens a popup of its own.
+document.title = `popup ${location.search.slice(1)}`;
+</script></head><body>
+<button type="button" id="close" onclick="window.close()">Close</button>
+<button type="button" id="open" onclick="window.open('/popup.html?from-popup')">Open</button>
+</body></html>
