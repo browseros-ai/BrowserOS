@@ -25,6 +25,7 @@
 use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
+use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -64,7 +65,10 @@ const CHAIN_TOO_LONG: &str = "Cannot serialize result: object reference chain is
 const PROMISE_COLLECTED: &str = "Resulting promise was garbage collected.";
 
 /// Playwright: `server/chromium/crExecutionContext.ts` `rewriteError`: `if (error.message.includes('Object reference chain is too long') || error.message.includes('CBOR: stack limit exceeded'))`
-const CHAIN_TOO_LONG_CDP: [&str; 2] = ["Object reference chain is too long", "CBOR: stack limit exceeded"];
+const CHAIN_TOO_LONG_CDP: [&str; 2] = [
+    "Object reference chain is too long",
+    "CBOR: stack limit exceeded",
+];
 
 /// Playwright: `server/chromium/crExecutionContext.ts` `rewriteError`: `if (error.message.includes('Object couldn\'t be returned by value'))`
 const NOT_BY_VALUE_CDP: &str = "Object couldn't be returned by value";
@@ -191,9 +195,16 @@ pub(crate) struct Evaluation {
 #[derive(Debug)]
 pub(crate) enum EvalCall {
     Frame(Evaluation),
-    Handle { guid: String, evaluation: Evaluation },
-    JsonValue { guid: String },
-    Dispose { guid: String },
+    Handle {
+        guid: String,
+        evaluation: Evaluation,
+    },
+    JsonValue {
+        guid: String,
+    },
+    Dispose {
+        guid: String,
+    },
 }
 
 /// What a page evaluation answers: the page's JSON value (absent for `undefined`), or a new
@@ -258,7 +269,10 @@ pub(crate) fn route_handle(
     guid: &str,
     method: &str,
     params: Option<&Value>,
-) -> (Option<&'static MethodMeta>, Result<EvalCall, PlaywrightError>) {
+) -> (
+    Option<&'static MethodMeta>,
+    Result<EvalCall, PlaywrightError>,
+) {
     let guid = guid.to_string();
     let (meta, call) = match method {
         "evaluateExpression" | "evaluateExpressionHandle" => {
@@ -378,13 +392,17 @@ impl Handles {
         let groups = self
             .groups
             .lock()
-            .map(|mut groups| std::mem::take(&mut *groups))
+            .map(|mut groups| mem::take(&mut *groups))
             .unwrap_or_default();
         drop(groups);
     }
 
     /// The run's handle group of `frame`'s session, created on first use.
-    fn group(&self, tab: &FrameTab, frame: &Arc<FrameContext>) -> Result<Arc<GroupGuard>, PageError> {
+    fn group(
+        &self,
+        tab: &FrameTab,
+        frame: &Arc<FrameContext>,
+    ) -> Result<Arc<GroupGuard>, PageError> {
         let mut groups = self.groups.lock().map_err(|_| table_error())?;
         if self.closed.load(Ordering::SeqCst) {
             return Err(PageError::Closed);
@@ -490,7 +508,10 @@ pub(crate) async fn serve(
                 let _released = entry
                     .frame
                     .host
-                    .send("Runtime.releaseObject", json!({ "objectId": id.object_id() }))
+                    .send(
+                        "Runtime.releaseObject",
+                        json!({ "objectId": id.object_id() }),
+                    )
                     .await;
             }
             return Ok(None);
@@ -700,11 +721,9 @@ async fn answer(
 ) -> Result<EvalResult, CallError> {
     match called {
         Called::Value(value) => Ok(EvalResult::Value(value)),
-        Called::Object(object) => {
-            create_handle(tab, frame, document, object, handles, progress)
-                .await
-                .map(EvalResult::Handle)
-        }
+        Called::Object(object) => create_handle(tab, frame, document, *object, handles, progress)
+            .await
+            .map(EvalResult::Handle),
         Called::Threw(message) => Err(PlaywrightError::error(message).into()),
         Called::Protocol(message) => {
             if CHAIN_TOO_LONG_CDP.iter().any(|text| message.contains(text)) {
@@ -737,7 +756,14 @@ async fn create_handle(
     let Some(object_id) = object.object_id.clone() else {
         let (argument, preview) = primitive(&object);
         return handles
-            .register(tab, frame, document, Remote::Value(argument), false, preview)
+            .register(
+                tab,
+                frame,
+                document,
+                Remote::Value(argument),
+                false,
+                preview,
+            )
             .map_err(|error| page_error(error).into());
     };
     let element = object.subtype.as_deref() == Some(NODE_TYPE);
@@ -764,7 +790,11 @@ async fn create_handle(
 
 /// The utility world's `previewNode` of a main-world node, `None` when the node cannot be
 /// adopted (Playwright keeps `JSHandle@node` when `_initializePreview` fails).
-async fn node_preview(tab: &FrameTab, frame: &Arc<FrameContext>, object_id: &str) -> Option<String> {
+async fn node_preview(
+    tab: &FrameTab,
+    frame: &Arc<FrameContext>,
+    object_id: &str,
+) -> Option<String> {
     let backend = frame.main.backend_of(frame, object_id).await.ok()?;
     let group = tab.group(frame, "preview");
     let node = frame.element(group.group(), backend).await.ok()?;
@@ -776,7 +806,7 @@ async fn node_preview(tab: &FrameTab, frame: &Arc<FrameContext>, object_id: &str
 }
 
 /// A primitive result as Playwright's `JSHandle` keeps it (`potentiallyUnserializableValue`:
-/// `-0`, `NaN` and `±Infinity` parsed, any other unserializable value such as a BigInt read as
+/// `-0`, `NaN` and `±Infinity` parsed, any other unserializable value such as a `BigInt` read as
 /// `undefined`), as a CDP `CallArgument`, and its preview, JavaScript's `String(value)`.
 fn primitive(object: &RemoteObject) -> (Value, String) {
     // `null` arrives as `value: null`, which serde reads as no value.
@@ -812,12 +842,14 @@ fn render_preview(object: &RemoteObject) -> String {
         object.description.clone()
     };
     // Playwright: `server/javascript.ts` `JSHandle.constructor`: `JSHandle@${this._objectType}`
-    preview.filter(|preview| !preview.is_empty()).unwrap_or_else(|| {
-        format!(
-            "JSHandle@{}",
-            object.subtype.as_deref().unwrap_or(object.r#type.as_str())
-        )
-    })
+    preview
+        .filter(|preview| !preview.is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "JSHandle@{}",
+                object.subtype.as_deref().unwrap_or(object.r#type.as_str())
+            )
+        })
 }
 
 /// JavaScript's `String(value)` for a value CDP returned by value.
@@ -880,28 +912,64 @@ mod tests {
     #[test]
     fn primitives_keep_playwrights_value_and_preview() {
         let cases = [
-            (json!({"type":"number","value":2,"description":"2"}), json!({"value":2}), "2"),
-            (json!({"type":"string","value":"a"}), json!({"value":"a"}), "a"),
-            (json!({"type":"boolean","value":true}), json!({"value":true}), "true"),
+            (
+                json!({"type":"number","value":2,"description":"2"}),
+                json!({"value":2}),
+                "2",
+            ),
+            (
+                json!({"type":"string","value":"a"}),
+                json!({"value":"a"}),
+                "a",
+            ),
+            (
+                json!({"type":"boolean","value":true}),
+                json!({"value":true}),
+                "true",
+            ),
             (json!({"type":"undefined"}), json!({}), "undefined"),
-            (json!({"type":"object","subtype":"null","value":null}), json!({"value":null}), "null"),
-            (json!({"type":"number","unserializableValue":"NaN","description":"NaN"}), json!({"unserializableValue":"NaN"}), "NaN"),
-            (json!({"type":"number","unserializableValue":"-0","description":"-0"}), json!({"unserializableValue":"-0"}), "0"),
-            (json!({"type":"bigint","unserializableValue":"5n","description":"5n"}), json!({}), "undefined"),
+            (
+                json!({"type":"object","subtype":"null","value":null}),
+                json!({"value":null}),
+                "null",
+            ),
+            (
+                json!({"type":"number","unserializableValue":"NaN","description":"NaN"}),
+                json!({"unserializableValue":"NaN"}),
+                "NaN",
+            ),
+            (
+                json!({"type":"number","unserializableValue":"-0","description":"-0"}),
+                json!({"unserializableValue":"-0"}),
+                "0",
+            ),
+            (
+                json!({"type":"bigint","unserializableValue":"5n","description":"5n"}),
+                json!({}),
+                "undefined",
+            ),
         ];
         for (object, argument, preview) in cases {
-            assert_eq!(primitive(&remote(object.clone())), (argument, preview.to_string()), "{object}");
+            assert_eq!(
+                primitive(&remote(object.clone())),
+                (argument, preview.to_string()),
+                "{object}"
+            );
         }
     }
 
     #[test]
     fn objects_preview_their_description_or_their_type() {
         assert_eq!(
-            render_preview(&remote(json!({"type":"object","className":"Window","description":"Window","objectId":"1"}))),
+            render_preview(&remote(
+                json!({"type":"object","className":"Window","description":"Window","objectId":"1"})
+            )),
             "Window"
         );
         assert_eq!(
-            render_preview(&remote(json!({"type":"object","subtype":"proxy","objectId":"1"}))),
+            render_preview(&remote(
+                json!({"type":"object","subtype":"proxy","objectId":"1"})
+            )),
             "JSHandle@proxy"
         );
     }
@@ -921,9 +989,13 @@ mod tests {
         assert_eq!(evaluation.arg.value, json!({"a":[1],"id":1}));
         assert_eq!(evaluation.arg.handles, ["handle@7"]);
         assert!(route_frame("click", None).is_none());
-        let (_, refused) = route_frame("evaluateExpressionHandle", Some(&json!({"expression":"1"})))
-            .expect("an evaluation");
-        assert!(refused.is_err(), "arg is required, as in Playwright's protocol");
+        let (_, refused) =
+            route_frame("evaluateExpressionHandle", Some(&json!({"expression":"1"})))
+                .expect("an evaluation");
+        assert!(
+            refused.is_err(),
+            "arg is required, as in Playwright's protocol"
+        );
     }
 
     #[test]

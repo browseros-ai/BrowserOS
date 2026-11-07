@@ -258,8 +258,8 @@ enum Route {
     FrameWaitForSelector(WaitForSelectorOptions),
     FrameWaitForUrl(WaitForUrlOptions),
     FrameWaitForLoadState(WaitForLoadStateOptions),
-    /// Page evaluation and the `JSHandle` commands, served by `evaluate.rs`.
-    Eval(EvalCall),
+    /// Page evaluation and the `JSHandle` commands (on a handle's frame), served by `evaluate.rs`.
+    FrameEval(EvalCall),
 }
 
 impl Dispatcher {
@@ -415,7 +415,7 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             if let Some((meta, call)) = evaluate::route_frame(method, params.as_ref()) {
                 return Routed {
                     meta: Some(meta),
-                    route: call.map(|call| ObjectCall::Frame(Route::Eval(call))),
+                    route: call.map(|call| ObjectCall::Frame(Route::FrameEval(call))),
                 };
             }
             if method == WAIT_FOR_LOAD_STATE_META.method {
@@ -466,7 +466,7 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             let (meta, call) = evaluate::route_handle(&guid, method, params.as_ref());
             return Routed {
                 meta,
-                route: call.map(|call| ObjectCall::Frame(Route::Eval(call))),
+                route: call.map(|call| ObjectCall::Frame(Route::FrameEval(call))),
             };
         }
         ObjectKind::Unknown => {
@@ -550,9 +550,9 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::SelectOption(params) => {
             Ok(Route::FrameSelectOption(SelectOptions::from_params(params)))
         }
-        FrameCall::WaitForSelector(params) => {
-            WaitForSelectorOptions::from_params(params).map(Route::FrameWaitForSelector)
-        }
+        FrameCall::WaitForSelector(params) => Ok(Route::FrameWaitForSelector(
+            WaitForSelectorOptions::from_params(params),
+        )),
     }
 }
 
@@ -670,16 +670,9 @@ async fn serve(
         Route::FrameWaitForSelector(options) => {
             waits::wait_for_selector_element(&page, &options, &progress)
                 .await
-                .and_then(|element| match element {
-                    // `ElementHandle` is no interface of the generated spec: the created handle
-                    // travels as the record the SDK builds it from (`evaluate.rs`).
-                    Some(created) => Ok(Some(json!({ "element": created }))),
-                    None => encode_result::<FrameWaitForSelectorParams>(
-                        &FrameWaitForSelectorResult { element: None },
-                    ),
-                })
+                .and_then(wait_for_selector_reply)
         }
-        Route::Eval(call) => evaluate::serve(&page, call, &progress).await,
+        Route::FrameEval(call) => evaluate::serve(&page, call, &progress).await,
         // Neo extensions answer an empty result.
         Route::FrameWaitForUrl(options) => waits::wait_for_url(&page, &options, &progress)
             .await
@@ -795,10 +788,23 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameWaitForSelector(_)
         | Route::FrameWaitForUrl(_)
         | Route::FrameWaitForLoadState(_)
-        | Route::Eval(_) => Err(PlaywrightError::error(
+        | Route::FrameEval(_) => Err(PlaywrightError::error(
             "neo-runtime: navigation and page reads are served by `serve`",
         )
         .into()),
+    }
+}
+
+/// `Frame.waitForSelector`'s reply. `ElementHandle` is no interface of the generated spec, so a
+/// returned element travels as the record the SDK builds it from (`evaluate.rs`).
+fn wait_for_selector_reply(
+    element: Option<evaluate::CreatedHandle>,
+) -> Result<Option<Value>, CallError> {
+    match element {
+        Some(created) => Ok(Some(json!({ "element": created }))),
+        None => encode_result::<FrameWaitForSelectorParams>(&FrameWaitForSelectorResult {
+            element: None,
+        }),
     }
 }
 
@@ -1204,7 +1210,7 @@ mod tests {
                 | Route::FrameWaitForSelector(_)
                 | Route::FrameWaitForUrl(_)
                 | Route::FrameWaitForLoadState(_)
-                | Route::Eval(_) => {
+                | Route::FrameEval(_) => {
                     panic!("a form is not a navigation, read or wait")
                 }
             }

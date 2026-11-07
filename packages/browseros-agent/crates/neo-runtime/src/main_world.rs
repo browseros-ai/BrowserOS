@@ -34,8 +34,8 @@
 
 use std::sync::Arc;
 
-use browseros_cdp::runtime::{CallFunctionOnResult, RemoteObject};
 use browseros_cdp::CdpError;
+use browseros_cdp::runtime::{CallFunctionOnResult, ExceptionDetails, RemoteObject};
 use neo_runtime_spec::injected::InjectedDocumentParams;
 use neo_runtime_spec::{Element, Handle, HandleId};
 use serde_json::{Value, json};
@@ -116,7 +116,7 @@ pub(crate) enum Called {
     /// `returnByValue: true`: the page's JSON value, `None` for `undefined`.
     Value(Option<Value>),
     /// `returnByValue: false`: the result object, in the caller's group when it has an id.
-    Object(RemoteObject),
+    Object(Box<RemoteObject>),
     /// The page threw: Playwright's `getExceptionMessage` of the exception details.
     Threw(String),
     /// A protocol error: Playwright's `rewriteError` decides what it means.
@@ -235,11 +235,13 @@ impl MainWorld {
         let reply = match frame.host.send("Runtime.callFunctionOn", request).await {
             Ok(reply) => reply,
             Err(CdpError::Protocol { message, .. }) => {
-                return Ok(if message.contains(CONTEXT_GONE) || message.contains(OBJECT_GONE) {
-                    Called::Stale
-                } else {
-                    Called::Protocol(message)
-                });
+                return Ok(
+                    if message.contains(CONTEXT_GONE) || message.contains(OBJECT_GONE) {
+                        Called::Stale
+                    } else {
+                        Called::Protocol(message)
+                    },
+                );
             }
             Err(error) => {
                 return match frame.host.classify(&error) {
@@ -258,7 +260,7 @@ impl MainWorld {
         Ok(if return_by_value {
             Called::Value(answer.result.value)
         } else {
-            Called::Object(answer.result)
+            Called::Object(Box::new(answer.result))
         })
     }
 
@@ -302,9 +304,7 @@ impl MainWorld {
         frame: &FrameContext,
         node: &Handle<Element>,
     ) -> Result<DocumentId, PageError> {
-        describe(frame, node.id().object_id())
-            .await
-            .map(DocumentId)
+        describe(frame, node.id().object_id()).await.map(DocumentId)
     }
 
     async fn resolve(
@@ -339,7 +339,7 @@ async fn describe(frame: &FrameContext, object_id: &str) -> Result<i64, PageErro
 }
 
 /// Playwright: `server/chromium/crProtocolHelper.ts` `getExceptionMessage`: `return exceptionDetails.exception.description || String(exceptionDetails.exception.value);`
-fn exception_message(details: browseros_cdp::runtime::ExceptionDetails) -> String {
+fn exception_message(details: ExceptionDetails) -> String {
     if let Some(exception) = details.exception {
         if let Some(description) = exception.description {
             return description;
@@ -362,12 +362,17 @@ fn exception_message(details: browseros_cdp::runtime::ExceptionDetails) -> Strin
             } else {
                 frame.function_name.as_str()
             };
-            message.push_str(&format!(
-                "\n    at {name} ({}:{}:{})",
+            let location = [
                 frame.url,
-                frame.line_number + 1,
-                frame.column_number + 1
-            ));
+                (frame.line_number + 1).to_string(),
+                (frame.column_number + 1).to_string(),
+            ]
+            .join(":");
+            message.push_str("\n    at ");
+            message.push_str(name);
+            message.push_str(" (");
+            message.push_str(&location);
+            message.push(')');
         }
     }
     message

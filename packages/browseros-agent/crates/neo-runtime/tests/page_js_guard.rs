@@ -134,7 +134,11 @@ fn tests_that_a_method_is_refused_outside_its_file() {
         !check("neo-runtime/src/main_world.rs", world).is_empty(),
         "main_world.rs reaches the page's own world only"
     );
-    for method in ["Runtime.evaluate", "Runtime.addBinding", "Runtime.runScript"] {
+    for method in [
+        "Runtime.evaluate",
+        "Runtime.addBinding",
+        "Runtime.runScript",
+    ] {
         let line = format!("self.send(\"{method}\", params)");
         assert!(
             !check("neo-runtime/src/main_world.rs", &line).is_empty(),
@@ -182,7 +186,8 @@ fn tests_that_a_function_declaration_must_be_a_built_artifact() {
     );
     assert!(!check("neo-runtime/src/main_world.rs", &literal).is_empty());
 
-    let other_const = "const JS: &str = \"() => 1\";\nfn f() { json!({\"functionDeclaration\": JS}); }\n";
+    let other_const =
+        "const JS: &str = \"() => 1\";\nfn f() { json!({\"functionDeclaration\": JS}); }\n";
     assert!(!check("neo-runtime/src/world.rs", other_const).is_empty());
 
     let wrong_dir = "const JS: &str = include_str!(\"../payload.js\");\nfn f() { json!({\"functionDeclaration\": JS}); }\n";
@@ -213,7 +218,7 @@ fn check(relative: &str, source: &str) -> Vec<String> {
         .iter()
         .find(|(path, _)| *path == relative)
         .map_or(&[][..], |(_, methods)| *methods);
-    let tokens = without_test_modules(lex(source));
+    let tokens = without_test_modules(&lex(source));
     let mut problems = Vec::new();
     for token in &tokens {
         let Token::Str { text, line } = token else {
@@ -277,17 +282,22 @@ fn declarations(relative: &str, tokens: &[Token], door: bool) -> Vec<String> {
             ));
             continue;
         }
-        let value = match (tokens.get(index + 1), tokens.get(index + 2)) {
-            (Some(Token::Punct { text: ':', .. }), Some(value)) => value,
-            _ => {
-                problems.push(format!(
-                    "{relative}:{line}: a functionDeclaration whose value the guard cannot read"
-                ));
-                continue;
-            }
+        let (Some(Token::Punct { text: ':', .. }), Some(value)) =
+            (tokens.get(index + 1), tokens.get(index + 2))
+        else {
+            problems.push(format!(
+                "{relative}:{line}: a functionDeclaration whose value the guard cannot read"
+            ));
+            continue;
         };
         let after = tokens.get(index + 3);
-        let ends = matches!(after, Some(Token::Punct { text: ',' | '}', .. }) | None);
+        let ends = matches!(
+            after,
+            Some(Token::Punct {
+                text: ',' | '}',
+                ..
+            }) | None
+        );
         match value {
             Token::Ident { text, .. } if ends && built.iter().any(|name| name == text) => {}
             Token::Ident { text, .. } if ends && relayed(tokens, text, &built) => {}
@@ -320,7 +330,13 @@ fn built_consts(tokens: &[Token]) -> Vec<String> {
             .iter()
             .any(|token| matches!(token, Token::Ident { text, .. } if text == "include_str"));
         let path = body.iter().find_map(|token| match token {
-            Token::Str { text, .. } if text.ends_with(".js") => Some(text.as_str()),
+            Token::Str { text, .. }
+                if Path::new(text)
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("js")) =>
+            {
+                Some(text.as_str())
+            }
             _ => None,
         });
         if includes && path.is_some_and(|path| path.starts_with(BUILT_PREFIX)) {
@@ -398,9 +414,18 @@ fn split_arguments(tokens: &[Token]) -> Vec<Vec<Token>> {
     let mut depth = 0usize;
     for token in tokens {
         match token {
-            Token::Punct { text: '(' | '[' | '{', .. } => depth += 1,
-            Token::Punct { text: ')' | ']' | '}', .. } if depth == 0 => break,
-            Token::Punct { text: ')' | ']' | '}', .. } => depth -= 1,
+            Token::Punct {
+                text: '(' | '[' | '{',
+                ..
+            } => depth += 1,
+            Token::Punct {
+                text: ')' | ']' | '}',
+                ..
+            } if depth == 0 => break,
+            Token::Punct {
+                text: ')' | ']' | '}',
+                ..
+            } => depth -= 1,
             Token::Punct { text: ',', .. } if depth == 0 => {
                 items.push(Vec::new());
                 continue;
@@ -420,7 +445,7 @@ fn split_arguments(tokens: &[Token]) -> Vec<Vec<Token>> {
 
 /// The tokens without any `#[cfg(test)] mod name { … }` block, whose fakes name the methods;
 /// code before and after such a block stays.
-fn without_test_modules(tokens: Vec<Token>) -> Vec<Token> {
+fn without_test_modules(tokens: &[Token]) -> Vec<Token> {
     let attribute = ["#", "[", "cfg", "(", "test", ")", "]", "mod"];
     let mut kept = Vec::with_capacity(tokens.len());
     let mut i = 0;
@@ -479,153 +504,178 @@ impl Token {
     }
 }
 
-/// A small Rust lexer: string literals (escaped, raw, byte), identifiers and punctuation, with
-/// comments, char literals, lifetimes and numbers skipped.
+/// A small Rust lexer: string literals (escaped, raw, byte), identifiers, numbers and
+/// punctuation, with comments, char literals and lifetimes skipped.
 fn lex(source: &str) -> Vec<Token> {
-    let chars: Vec<char> = source.chars().collect();
-    let mut tokens = Vec::new();
-    let mut i = 0;
-    let mut line = 1;
-    while i < chars.len() {
-        let c = chars[i];
+    let mut lexer = Lexer {
+        chars: source.chars().collect(),
+        i: 0,
+        line: 1,
+        tokens: Vec::new(),
+    };
+    while lexer.i < lexer.chars.len() {
+        lexer.step();
+    }
+    lexer.tokens
+}
+
+struct Lexer {
+    chars: Vec<char>,
+    i: usize,
+    line: usize,
+    tokens: Vec<Token>,
+}
+
+impl Lexer {
+    fn at(&self, offset: usize) -> Option<char> {
+        self.chars.get(self.i + offset).copied()
+    }
+
+    fn step(&mut self) {
+        let c = self.chars[self.i];
         if c == '\n' {
-            line += 1;
-            i += 1;
+            self.line += 1;
+            self.i += 1;
         } else if c.is_whitespace() {
-            i += 1;
-        } else if c == '/' && chars.get(i + 1) == Some(&'/') {
-            while i < chars.len() && chars[i] != '\n' {
-                i += 1;
+            self.i += 1;
+        } else if c == '/' && self.at(1) == Some('/') {
+            while self.i < self.chars.len() && self.chars[self.i] != '\n' {
+                self.i += 1;
             }
-        } else if c == '/' && chars.get(i + 1) == Some(&'*') {
-            let mut depth = 0;
-            while i < chars.len() {
-                if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
-                    depth += 1;
-                    i += 2;
-                } else if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
-                    depth -= 1;
-                    i += 2;
-                    if depth == 0 {
-                        break;
-                    }
-                } else {
-                    if chars[i] == '\n' {
-                        line += 1;
-                    }
-                    i += 1;
-                }
-            }
-        } else if c == '"' || (c == 'b' && chars.get(i + 1) == Some(&'"')) {
-            let start_line = line;
-            i += if c == 'b' { 2 } else { 1 };
-            let mut text = String::new();
-            while i < chars.len() && chars[i] != '"' {
-                if chars[i] == '\\' {
-                    match chars.get(i + 1) {
-                        Some('n') => text.push('\n'),
-                        Some('t') => text.push('\t'),
-                        Some('"') => text.push('"'),
-                        Some('\\') => text.push('\\'),
-                        Some('\n') => {
-                            line += 1;
-                            i += 2;
-                            while i < chars.len() && chars[i].is_whitespace() {
-                                if chars[i] == '\n' {
-                                    line += 1;
-                                }
-                                i += 1;
-                            }
-                            continue;
-                        }
-                        Some(other) => text.push(*other),
-                        None => {}
-                    }
-                    i += 2;
-                } else {
-                    if chars[i] == '\n' {
-                        line += 1;
-                    }
-                    text.push(chars[i]);
-                    i += 1;
-                }
-            }
-            i += 1;
-            tokens.push(Token::Str {
-                text,
-                line: start_line,
-            });
-        } else if (c == 'r' || c == 'b')
-            && raw_string_start(&chars, i).is_some()
-        {
-            let (hashes, body) = raw_string_start(&chars, i).unwrap_or((0, i));
-            let start_line = line;
-            let mut j = body;
-            let mut text = String::new();
-            loop {
-                if j >= chars.len() {
-                    break;
-                }
-                if chars[j] == '"'
-                    && (0..hashes).all(|k| chars.get(j + 1 + k) == Some(&'#'))
-                {
-                    j += 1 + hashes;
-                    break;
-                }
-                if chars[j] == '\n' {
-                    line += 1;
-                }
-                text.push(chars[j]);
-                j += 1;
-            }
-            i = j;
-            tokens.push(Token::Str {
-                text,
-                line: start_line,
-            });
+        } else if c == '/' && self.at(1) == Some('*') {
+            self.block_comment();
+        } else if c == '"' || (c == 'b' && self.at(1) == Some('"')) {
+            self.i += if c == 'b' { 2 } else { 1 };
+            self.string();
+        } else if let Some((hashes, body)) = raw_string_start(&self.chars, self.i) {
+            self.i = body;
+            self.raw_string(hashes);
         } else if c == '\'' {
-            // A char literal (`'a'`, `'\n'`, `'\''`) or a lifetime (`'a`): skip either.
-            if chars.get(i + 1) == Some(&'\\') {
-                i += 2;
-                while i < chars.len() && chars[i] != '\'' {
-                    i += 1;
-                }
-                i += 1;
-            } else if chars.get(i + 2) == Some(&'\'') {
-                i += 3;
-            } else {
-                i += 1;
-                while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                    i += 1;
-                }
-            }
-        } else if c.is_alphabetic() || c == '_' {
-            let start = i;
-            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                i += 1;
-            }
-            tokens.push(Token::Ident {
-                text: chars[start..i].iter().collect(),
-                line,
-            });
-        } else if c.is_ascii_digit() {
-            // A number is one argument token, as an identifier would be.
-            let start = i;
-            while i < chars.len()
-                && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == '.')
+            self.char_or_lifetime();
+        } else if c.is_alphanumeric() || c == '_' {
+            // An identifier or a number: one argument token either way.
+            let start = self.i;
+            while self.i < self.chars.len()
+                && (self.chars[self.i].is_alphanumeric()
+                    || self.chars[self.i] == '_'
+                    || (c.is_ascii_digit() && self.chars[self.i] == '.'))
             {
-                i += 1;
+                self.i += 1;
             }
-            tokens.push(Token::Ident {
-                text: chars[start..i].iter().collect(),
-                line,
+            self.tokens.push(Token::Ident {
+                text: self.chars[start..self.i].iter().collect(),
+                line: self.line,
             });
         } else {
-            tokens.push(Token::Punct { text: c, line });
-            i += 1;
+            self.tokens.push(Token::Punct {
+                text: c,
+                line: self.line,
+            });
+            self.i += 1;
         }
     }
-    tokens
+
+    fn block_comment(&mut self) {
+        let mut depth = 0;
+        while self.i < self.chars.len() {
+            if self.chars[self.i] == '/' && self.at(1) == Some('*') {
+                depth += 1;
+                self.i += 2;
+            } else if self.chars[self.i] == '*' && self.at(1) == Some('/') {
+                depth -= 1;
+                self.i += 2;
+                if depth == 0 {
+                    return;
+                }
+            } else {
+                if self.chars[self.i] == '\n' {
+                    self.line += 1;
+                }
+                self.i += 1;
+            }
+        }
+    }
+
+    /// The body of an escaped string, after its opening quote.
+    fn string(&mut self) {
+        let start_line = self.line;
+        let mut text = String::new();
+        while self.i < self.chars.len() && self.chars[self.i] != '"' {
+            if self.chars[self.i] != '\\' {
+                if self.chars[self.i] == '\n' {
+                    self.line += 1;
+                }
+                text.push(self.chars[self.i]);
+                self.i += 1;
+                continue;
+            }
+            match self.at(1) {
+                Some('n') => text.push('\n'),
+                Some('t') => text.push('\t'),
+                Some('\n') => {
+                    // A line continuation: the newline and the next line's indent vanish.
+                    self.line += 1;
+                    self.i += 2;
+                    while self.i < self.chars.len() && self.chars[self.i].is_whitespace() {
+                        if self.chars[self.i] == '\n' {
+                            self.line += 1;
+                        }
+                        self.i += 1;
+                    }
+                    continue;
+                }
+                Some(other) => text.push(other),
+                None => {}
+            }
+            self.i += 2;
+        }
+        self.i += 1;
+        self.tokens.push(Token::Str {
+            text,
+            line: start_line,
+        });
+    }
+
+    /// The body of a raw string with `hashes` `#`s, after its opening quote.
+    fn raw_string(&mut self, hashes: usize) {
+        let start_line = self.line;
+        let mut text = String::new();
+        while self.i < self.chars.len() {
+            if self.chars[self.i] == '"' && (0..hashes).all(|k| self.at(1 + k) == Some('#')) {
+                self.i += 1 + hashes;
+                break;
+            }
+            if self.chars[self.i] == '\n' {
+                self.line += 1;
+            }
+            text.push(self.chars[self.i]);
+            self.i += 1;
+        }
+        self.tokens.push(Token::Str {
+            text,
+            line: start_line,
+        });
+    }
+
+    /// A char literal (`'a'`, `'\n'`, `'\''`) or a lifetime (`'a`): skipped.
+    fn char_or_lifetime(&mut self) {
+        if self.at(1) == Some('\\') {
+            self.i += 2;
+            while self.i < self.chars.len() && self.chars[self.i] != '\'' {
+                self.i += 1;
+            }
+            self.i += 1;
+        } else if self.at(2) == Some('\'') {
+            self.i += 3;
+        } else {
+            self.i += 1;
+            while self.i < self.chars.len()
+                && (self.chars[self.i].is_alphanumeric() || self.chars[self.i] == '_')
+            {
+                self.i += 1;
+            }
+        }
+    }
 }
 
 /// `r"`, `r#"`, `br"`, `br#"` at `i`: the number of `#`s and where the body starts.

@@ -96,13 +96,13 @@ pub(crate) struct WaitForSelectorOptions {
 }
 
 impl WaitForSelectorOptions {
-    pub(crate) fn from_params(params: FrameWaitForSelectorParams) -> Result<Self, PlaywrightError> {
-        Ok(Self {
+    pub(crate) fn from_params(params: FrameWaitForSelectorParams) -> Self {
+        Self {
             selector: params.selector,
             strict: params.strict.unwrap_or(false),
             state: params.state.unwrap_or(SelectorState::Visible),
             return_element: params.omit_return_value != Some(true),
-        })
+        }
     }
 }
 
