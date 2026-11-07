@@ -554,15 +554,7 @@ impl Dispatcher {
                 return PendingReply::ready(Ok((encode_reply(&id, Err(&error), None), watermark)));
             }
         };
-        // Close must finish its own acknowledgement after cancelling this page's other
-        // calls. A context call also survives the original run page being closed.
-        let closed = if matches!(route, ObjectCall::Page(PageCall::Close(_))) {
-            CancellationToken::new()
-        } else {
-            target
-                .as_ref()
-                .map_or_else(CancellationToken::new, |(page, _)| page.closed.clone())
-        };
+        let closed = closed_token(&route, target.as_ref());
         let held = self.in_call_order(&route, meta.zip(debugged), &metadata, &entry);
         // The run's disconnection outlives the stop it gives every other call of the run.
         let disconnecting = disconnects(&route);
@@ -892,6 +884,20 @@ async fn released(run: &RunScope, resumed: oneshot::Receiver<()>) -> Result<(), 
         () = run.ended.cancelled() => Err(None),
         () = run.context_closed.cancelled() => Err(Some(PlaywrightError::target_closed().into())),
         resumed = resumed => resumed.map_err(|_| None),
+    }
+}
+
+/// The token that stops a call with its page. Close must finish its own acknowledgement after
+/// cancelling this page's other calls, and a call without a page (a context's) also survives
+/// the original run page being closed: neither has the page's.
+fn closed_token(
+    route: &ObjectCall,
+    target: Option<&(Arc<PageEntry>, FrameScope)>,
+) -> CancellationToken {
+    if matches!(route, ObjectCall::Page(PageCall::Close(_))) {
+        CancellationToken::new()
+    } else {
+        target.map_or_else(CancellationToken::new, |(page, _)| page.closed.clone())
     }
 }
 
@@ -1385,8 +1391,6 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         )),
     }
 }
-
-/// An admitted call: its route, its share of the in-flight caps, and the wait it ends.
 
 struct CallReply {
     entry: Arc<CallEntry>,
