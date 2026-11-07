@@ -52,6 +52,7 @@ export default class Reporter {
         if (testRun.mode(parent) === 'serial') mode = 'serial'
       catalog.push({
         ...entry,
+        feature: policy.feature || 'unclassified',
         upstreamId: test.id,
         location: {
           file: entry.file,
