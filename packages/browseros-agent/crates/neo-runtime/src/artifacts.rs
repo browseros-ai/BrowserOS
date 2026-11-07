@@ -97,9 +97,18 @@ impl Artifacts {
                  the host sets one per run (RunRequest.artifacts)"
             )));
         }
-        let (relative, parts) = relative_path(option, path)?;
+        let Relative {
+            path: relative,
+            parts,
+            directory,
+        } = relative_path(option, path)?;
         if parts.is_empty() {
             return Err(refused(option, path, "names no file"));
+        }
+        // Node's `fs` refuses to write a file at `capture.png/`; Neo refuses before any effect,
+        // so an existing `capture.png` stays as it was.
+        if directory {
+            return Err(refused(option, path, "names a directory, not a file"));
         }
         Ok(ArtifactPath {
             option,
@@ -171,7 +180,11 @@ impl Artifacts {
         if path.is_empty() {
             return Err(refused(option, path, "names no file"));
         }
-        let (relative, parts) = relative_path(option, path)?;
+        let Relative {
+            path: relative,
+            parts,
+            directory,
+        } = relative_path(option, path)?;
         let display = if parts.is_empty() {
             ".".to_string()
         } else {
@@ -186,6 +199,10 @@ impl Artifacts {
                 "{option}: \"{display}\" cannot be read in the run's artifact directory: {error}"
             ))
         })?;
+        // Playwright's client stats the path as spelled: `real.txt/` is no file (`ENOTDIR`).
+        if directory && !metadata.is_dir() {
+            return Err(refused(option, path, "is not a directory"));
+        }
         let Some(text) = at.to_str() else {
             return Err(refused(
                 option,
@@ -216,10 +233,21 @@ impl Artifacts {
     }
 }
 
+/// A path a script named, as [`relative_path`] reads it.
+struct Relative {
+    /// Normal components only.
+    path: PathBuf,
+    /// Their text.
+    parts: Vec<String>,
+    /// The spelling names a directory: `.` itself, or a trailing `/` or `/.`, which
+    /// `Path::components` drops. Node's `fs` keeps it: `stat('real.txt/')` is `ENOTDIR`.
+    directory: bool,
+}
+
 /// The normal components of `path` and their text, refusing what leaves the artifact directory:
 /// `..`, an absolute path, text that is not UTF-8. `.` components vanish, so `.` names the
-/// directory itself (no components).
-fn relative_path(option: &str, path: &str) -> Result<(PathBuf, Vec<String>), PlaywrightError> {
+/// directory itself (no components); a trailing `/` or `/.` is kept as directory intent.
+fn relative_path(option: &str, path: &str) -> Result<Relative, PlaywrightError> {
     let mut relative = PathBuf::new();
     let mut parts = Vec::new();
     for component in Path::new(path).components() {
@@ -248,7 +276,11 @@ fn relative_path(option: &str, path: &str) -> Result<(PathBuf, Vec<String>), Pla
             }
         }
     }
-    Ok((relative, parts))
+    Ok(Relative {
+        path: relative,
+        parts,
+        directory: path == "." || path.ends_with('/') || path.ends_with("/."),
+    })
 }
 
 fn refused(option: &str, path: &str, why: &str) -> PlaywrightError {
@@ -467,6 +499,26 @@ mod tests {
             artifacts.check("path", ".").is_err(),
             "a write needs a file name"
         );
+        // A trailing `/` or `/.` names a directory: a read must find one, a write refuses it.
+        let folder = artifacts
+            .existing("files", "uploads/")
+            .await
+            .expect("a folder");
+        assert!(folder.is_dir, "{folder:?}");
+        for file in ["uploads/a.txt/", "uploads/a.txt/."] {
+            let error = artifacts.existing("files", file).await.expect_err(file);
+            assert!(
+                error.message.contains("is not a directory"),
+                "{file}: {error:?}"
+            );
+        }
+        for target in ["shot.png/", "shot.png/.", "shots/."] {
+            let error = artifacts.check("path", target).expect_err(target);
+            assert!(
+                error.message.contains("names a directory"),
+                "{target}: {error:?}"
+            );
+        }
         let error = Artifacts::new(None)
             .existing("files", "a.txt")
             .await
@@ -499,5 +551,81 @@ mod tests {
         .expect_err("too large");
         assert!(error.message.contains("16777217 bytes"), "{error:?}");
         assert!(error.message.contains("\"big.png\""), "{error:?}");
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn review_shared_path_rules_keep_reads_and_writes_inside_the_root() {
+        use std::os::unix::fs as unix_fs;
+        let (dir, artifacts) = artifacts();
+        let root = dir.path().join("run");
+        let outside_dir = dir.path().join("outside-dir");
+        fs::create_dir_all(root.join("a/subdir")).unwrap();
+        fs::create_dir_all(&outside_dir).unwrap();
+        fs::write(root.join("safe.txt"), b"safe").unwrap();
+        fs::write(outside_dir.join("outside.txt"), b"outside").unwrap();
+        let outside_file = dir.path().join("outside.txt");
+        fs::write(&outside_file, b"outside").unwrap();
+        unix_fs::symlink(&outside_file, root.join("file-link")).unwrap();
+        unix_fs::symlink(&outside_dir, root.join("dir-link")).unwrap();
+        let absolute_inside = root.join("safe.txt").to_str().unwrap().to_string();
+        for spelling in [
+            "./../outside.txt",
+            "a/../../outside.txt",
+            absolute_inside.as_str(),
+            "",
+        ] {
+            assert!(
+                artifacts.existing("files", spelling).await.is_err(),
+                "read {spelling}"
+            );
+            assert!(
+                artifacts.check("path", spelling).is_err(),
+                "write {spelling}"
+            );
+        }
+        for spelling in ["file-link", "dir-link", "dir-link/", "dir-link/outside.txt"] {
+            assert!(
+                artifacts.existing("files", spelling).await.is_err(),
+                "read {spelling}"
+            );
+            // Refused by `check` (a directory spelling) or by the write (a link on the way).
+            if let Ok(write) = artifacts.check("path", spelling) {
+                assert!(
+                    artifacts.write(&write, b"changed").await.is_err(),
+                    "write {spelling}"
+                );
+            }
+        }
+        for spelling in [".", "./", ".//."] {
+            assert!(
+                artifacts.existing("files", spelling).await.unwrap().is_dir,
+                "read root {spelling}"
+            );
+            assert!(
+                artifacts.check("path", spelling).is_err(),
+                "write root {spelling}"
+            );
+        }
+        for spelling in ["a", "a/", "a/subdir/"] {
+            assert!(
+                artifacts.existing("files", spelling).await.unwrap().is_dir,
+                "read directory {spelling}"
+            );
+            // Refused by `check` (a directory spelling) or by the write (an actual directory).
+            if let Ok(write) = artifacts.check("path", spelling) {
+                assert!(
+                    artifacts.write(&write, b"changed").await.is_err(),
+                    "write directory {spelling}"
+                );
+            }
+        }
+        assert!(root.is_dir());
+        assert_eq!(fs::read(&outside_file).unwrap(), b"outside");
+        assert_eq!(
+            fs::read(outside_dir.join("outside.txt")).unwrap(),
+            b"outside"
+        );
+        assert_eq!(fs::read(root.join("safe.txt")).unwrap(), b"safe");
+        assert!(artifacts.written().is_empty());
     }
 }
