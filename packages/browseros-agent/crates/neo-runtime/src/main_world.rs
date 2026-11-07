@@ -15,8 +15,10 @@
 //!    Runtime.callFunctionOn{objectId: UtilityScript, EVALUATE | JSON_VALUE,
 //!      arguments: [{objectId: UtilityScript}, …], awaitPromise, userGesture, returnByValue}
 //!  a commit (the world's document generation moved) → install again on the next call
-//!  a call whose UtilityScript or context is gone before it ran → `Stale`; the caller installs
-//!    again and retries once
+//!  a call whose UtilityScript or context is gone before it went out → `Stale`; the caller
+//!    installs again and retries once
+//!  a call whose document went while it was out (its frame's commit, seen by the page's
+//!    watcher before the reply) → `Protocol`: the destroyed context's error, never run again
 //!  a binding call's answer (bindings.rs): the same call, in the execution context that called
 //!    {executionContextId, arguments: [{objectId: UtilityScript}, …]}: it runs only while that
 //!    context lives and holds the UtilityScript, so it never reaches the next document
@@ -37,11 +39,12 @@
 
 use std::sync::Arc;
 
-use browseros_cdp::CdpError;
 use browseros_cdp::runtime::{CallFunctionOnResult, ExceptionDetails, RemoteObject};
+use browseros_cdp::{CdpError, CdpEvent};
 use neo_runtime_spec::injected::{InjectedDocumentParams, InjectedInitializer};
 use neo_runtime_spec::{Element, Handle, HandleId};
 use serde_json::{Value, json};
+use tokio::sync::broadcast::{self, error::TryRecvError};
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::click::PageError;
@@ -201,6 +204,41 @@ const CONTEXT_GONE: &str = "Cannot find context with specified id";
 /// `v8/src/inspector/injected-script.cc`), measured in probe M1. The call never started.
 const OBJECT_GONE: &str = "Could not find object with given id";
 
+/// Whether `frame`'s document went while a call was out: among the events its host's session
+/// reported since the call was sent, a commit of the frame or of the session's main frame
+/// (which takes its child frames along), or the frame's removal. Events a lagging reader missed
+/// count as gone, so a call that may have run is never sent again.
+///
+/// Playwright: `server/frames.ts` `Frame.contextDestroyed`: `context.contextDestroyed('Execution context was destroyed, most likely because of a navigation');`
+pub(crate) fn replaced_during(
+    events: &mut broadcast::Receiver<CdpEvent>,
+    frame: &FrameContext,
+) -> bool {
+    let session = frame.host.session_id();
+    loop {
+        let event = match events.try_recv() {
+            Ok(event) => event,
+            Err(TryRecvError::Lagged(_)) => return true,
+            Err(TryRecvError::Empty | TryRecvError::Closed) => return false,
+        };
+        if event.session_id.as_ref() != Some(session) {
+            continue;
+        }
+        let gone = match event.method.as_str() {
+            "Page.frameNavigated" => {
+                let navigated = &event.params["frame"];
+                navigated["id"].as_str() == Some(frame.id.as_str())
+                    || navigated.get("parentId").is_none()
+            }
+            "Page.frameDetached" => event.params["frameId"].as_str() == Some(frame.id.as_str()),
+            _ => false,
+        };
+        if gone {
+            return true;
+        }
+    }
+}
+
 /// One frame document's main world as one session sees it: the `UtilityScript` of the
 /// document that this frame context showed last. Lives in its [`FrameContext`].
 #[derive(Default)]
@@ -263,7 +301,9 @@ pub(crate) enum Called {
     /// A protocol error: Playwright's `rewriteError` decides what it means.
     Protocol(String),
     /// The `UtilityScript`, the document or an argument's object was gone before the call
-    /// started: nothing ran, so the caller may install again and retry.
+    /// went out (an install this session kept from a document replaced since): nothing ran, so
+    /// the caller may install again and retry. A document replaced while the call was out is a
+    /// [`Called::Protocol`] error instead: the call may have run there.
     Stale,
 }
 
@@ -461,16 +501,22 @@ impl MainWorld {
             return_by_value,
             group,
         );
+        // Subscribed before the call goes out: what arrives here came after it, in the socket's
+        // order, so a commit that precedes the reply came while the call was in the page.
+        let mut events = frame.host.events();
         let reply = match frame.host.send("Runtime.callFunctionOn", request).await {
             Ok(reply) => reply,
             Err(CdpError::Protocol { message, .. }) => {
-                return Ok(
-                    if message.contains(CONTEXT_GONE) || message.contains(OBJECT_GONE) {
-                        Called::Stale
-                    } else {
-                        Called::Protocol(message)
-                    },
-                );
+                let gone = message.contains(CONTEXT_GONE) || message.contains(OBJECT_GONE);
+                return Ok(if gone && !replaced_during(&mut events, frame) {
+                    Called::Stale
+                } else {
+                    // Gone while the call was in the page (Chromium holds a call to a document
+                    // with a navigation pending, then answers once the next one commits):
+                    // Playwright's call fails with the context it was sent to
+                    // (`rewriteError`) and never runs again in the next document.
+                    Called::Protocol(message)
+                });
             }
             Err(error) => {
                 return match frame.host.classify(&error) {
