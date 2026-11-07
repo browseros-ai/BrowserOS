@@ -72,7 +72,7 @@ const REPLAY_WAIT: Duration = Duration::from_secs(5);
 /// Neo: the listener events Neo produces on a `Page`, under the names Playwright's client gives
 /// them (`Events.Page`), and what each needs switched on in the page's session; and the one
 /// channel event the SDK handles itself, `locatorHandlerTriggered` (`locator_handlers.rs`).
-const PAGE_EVENTS: [(&str, Needs); 19] = [
+const PAGE_EVENTS: [(&str, Needs); 21] = [
     ("console", Needs::RUNTIME),
     ("pageerror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
@@ -94,6 +94,9 @@ const PAGE_EVENTS: [(&str, Needs); 19] = [
     ("requestfinished", Needs::NETWORK),
     ("requestfailed", Needs::NETWORK),
     ("locatorHandlerTriggered", Needs::NOTHING),
+    // A dedicated worker of the tab, and its close, which the SDK routes to its `Worker`.
+    ("worker", Needs::WORKERS),
+    ("workerClose", Needs::WORKERS),
 ];
 
 /// Neo: the listener events Neo produces on the run's `BrowserContext` (`Events.BrowserContext`),
@@ -135,6 +138,8 @@ pub(crate) struct Needs {
     /// The run's download reports (`downloads.rs`). Not a page's either: every call of the run
     /// waits for them ([`ALL_PAGES`]).
     pub(crate) downloads: bool,
+    /// The tab's dedicated workers (`workers.rs`): its session's worker auto-attach.
+    pub(crate) workers: bool,
 }
 
 impl Needs {
@@ -146,6 +151,7 @@ impl Needs {
         network: false,
         discovery: false,
         downloads: false,
+        workers: false,
     };
     /// Neo: an event the page watcher produces from the domains it always enables.
     pub(crate) const WATCHER: Self = Self {
@@ -154,6 +160,16 @@ impl Needs {
         network: false,
         discovery: false,
         downloads: false,
+        workers: false,
+    };
+    /// Neo: the tab's dedicated workers, which its watcher reports (`workers.rs`).
+    const WORKERS: Self = Self {
+        watcher: true,
+        runtime: false,
+        network: false,
+        discovery: false,
+        downloads: false,
+        workers: true,
     };
     /// Neo: an event only `Runtime.enable` and `Log.enable` report.
     const RUNTIME: Self = Self {
@@ -162,6 +178,7 @@ impl Needs {
         network: false,
         discovery: false,
         downloads: false,
+        workers: false,
     };
     /// Neo: an event only `Network.enable` reports: a request's.
     const NETWORK: Self = Self {
@@ -170,6 +187,7 @@ impl Needs {
         network: true,
         discovery: false,
         downloads: false,
+        workers: false,
     };
     /// Neo: an event the run's target discovery produces, about a page no session watches yet.
     const DISCOVERY: Self = Self {
@@ -178,6 +196,7 @@ impl Needs {
         network: false,
         discovery: true,
         downloads: false,
+        workers: false,
     };
     /// Neo: an event the run's download watcher produces from the browser's reports, for any
     /// tab of the run's context.
@@ -187,6 +206,7 @@ impl Needs {
         network: false,
         discovery: false,
         downloads: true,
+        workers: false,
     };
 
     /// Whether a page's session has anything to switch on for it.
@@ -341,6 +361,7 @@ impl EventHub {
                     network: left.network || right.network,
                     discovery: left.discovery || right.discovery,
                     downloads: left.downloads || right.downloads,
+                    workers: left.workers || right.workers,
                 })
         })
         .flatten()

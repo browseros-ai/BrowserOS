@@ -25,7 +25,7 @@
 //! forbidden. `Runtime.enable` goes to worker sessions only: a rule of this file, which neither
 //! guard checks, as neither lists `Runtime.enable`.
 
-use browseros_cdp::runtime::CallFunctionOnResult;
+use browseros_cdp::runtime::{CallFunctionOnResult, GetPropertiesResult, RemoteObject};
 use browseros_cdp::{CdpClient, CdpError, SessionId};
 use neo_runtime_spec::HandleId;
 use serde_json::{Value, json};
@@ -49,6 +49,22 @@ const EVALUATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../neo-runtime-injected/dist/evaluate.js"
 ));
+
+/// `(utilityScript, ...args) => utilityScript.jsonValue(...args)`.
+/// Playwright: `server/javascript.ts` `JSHandle._jsonValue`
+const JSON_VALUE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/json-value.js"
+));
+
+/// Neo: which built function a worker call runs on its `UtilityScript`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WorkerFunction {
+    /// `dist/evaluate.js`: an evaluation (`evaluate`, `evaluateHandle`).
+    Evaluate,
+    /// `dist/json-value.js`: a handle's `jsonValue`.
+    JsonValue,
+}
 
 /// Neo: the object group the worker's `UtilityScript` lives in; it goes with the worker.
 const WORKER_WORLD_GROUP: &str = "neo-worker-world";
@@ -96,12 +112,7 @@ impl WorkerWorld {
         }
     }
 
-    /// The worker's session, which a call's handle arguments must come from.
-    pub(crate) fn session(&self) -> &SessionId {
-        &self.session
-    }
-
-    /// `evaluate.js` with `arguments`, after the `{objectId: UtilityScript}` Playwright passes
+    /// `function` with `arguments`, after the `{objectId: UtilityScript}` Playwright passes
     /// first, as `main_world.rs` `MainWorld::call` runs it in a frame: `awaitPromise` and
     /// `userGesture`, by value or into `group`.
     /// Playwright: `server/chromium/crExecutionContext.ts` `CRExecutionContext.evaluateWithArguments`
@@ -111,6 +122,7 @@ impl WorkerWorld {
     /// `Closed` when the worker or its session is gone; every other outcome is a [`Called`].
     pub(crate) async fn call(
         &self,
+        function: WorkerFunction,
         arguments: Vec<Value>,
         return_by_value: bool,
         group: Option<&ObjectGroup>,
@@ -119,7 +131,11 @@ impl WorkerWorld {
         let mut all = Vec::with_capacity(arguments.len() + 1);
         all.push(json!({ "objectId": utility.object_id() }));
         all.extend(arguments);
-        let mut request = json!({ "functionDeclaration": EVALUATE });
+        // Each declaration is named at its key, so the page JS guard can see it is built.
+        let mut request = match function {
+            WorkerFunction::Evaluate => json!({ "functionDeclaration": EVALUATE }),
+            WorkerFunction::JsonValue => json!({ "functionDeclaration": JSON_VALUE }),
+        };
         request["objectId"] = json!(utility.object_id());
         request["arguments"] = json!(all);
         request["returnByValue"] = json!(return_by_value);
@@ -146,6 +162,56 @@ impl WorkerWorld {
         } else {
             Called::Object(Box::new(answer.result))
         })
+    }
+
+    /// The object's own enumerable properties, as Playwright's `getProperties` reads them.
+    /// Playwright: `server/chromium/crExecutionContext.ts` `CRExecutionContext.getProperties`: `if (!property.enumerable || !property.value)`
+    ///
+    /// # Errors
+    ///
+    /// `Closed` when the worker is gone; a malformed answer otherwise.
+    pub(crate) async fn own_properties(
+        &self,
+        object_id: &str,
+    ) -> Result<Vec<(String, RemoteObject)>, PageError> {
+        let reply = self
+            .send(
+                "Runtime.getProperties",
+                json!({ "objectId": object_id, "ownProperties": true }),
+            )
+            .await?
+            .map_err(|error| world::classify(&error))?;
+        let properties: GetPropertiesResult = serde_json::from_value(reply).map_err(|error| {
+            PageError::Contract(format!("Runtime.getProperties answered: {error}"))
+        })?;
+        Ok(properties
+            .result
+            .into_iter()
+            .filter(|property| property.enumerable)
+            .filter_map(|property| Some((property.name, property.value?)))
+            .collect())
+    }
+
+    /// Releases one object, its answer ignored as Playwright ignores it.
+    /// Playwright: `server/chromium/crProtocolHelper.ts` `releaseObject`: `await client.send('Runtime.releaseObject', { objectId }).catch(error => { });`
+    pub(crate) async fn release_object(&self, object_id: &str) {
+        let _released = self
+            .send("Runtime.releaseObject", json!({ "objectId": object_id }))
+            .await;
+    }
+
+    /// A read or release on the worker's session, ended `Closed` once the worker goes.
+    async fn send(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<Result<Value, CdpError>, PageError> {
+        let sent = self.cdp.send(method, params, Some(&self.session));
+        tokio::select! {
+            biased;
+            () = self.closed.cancelled() => Err(PageError::Closed),
+            reply = sent => Ok(reply),
+        }
     }
 
     /// The `UtilityScript` in the worker's context, built on first use.

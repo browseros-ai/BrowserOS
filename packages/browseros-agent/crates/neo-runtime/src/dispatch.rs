@@ -79,7 +79,7 @@ use crate::element_ops::{
     self, BOUNDING_BOX_META, DispatchOptions, ElementTarget, NeoElementParams, NeoSelectTextParams,
     SCROLL_INTO_VIEW_META, SELECT_TEXT_META,
 };
-use crate::evaluate::{self, EvalCall};
+use crate::evaluate::{self, EvalCall, Evaluation};
 use crate::events::{ALL_PAGES, EventHub};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
@@ -114,6 +114,8 @@ use crate::waits::{
     self, NeoWaitForLoadStateParams, NeoWaitForUrlParams, WaitForLoadStateOptions,
     WaitForSelectorOptions, WaitForUrlOptions, WaitTab,
 };
+use crate::worker_eval;
+use crate::workers;
 
 /// The shared budget for creation settlement, call draining and closing-state reads after
 /// the realm ends. Tasks still running keep their state and records read `Unfinished`.
@@ -344,6 +346,8 @@ enum ObjectKind {
     /// A download the run's `download` event handed out, by the browser's guid
     /// (`downloads.rs`). It belongs to the run, not to its tab, which may close first.
     Download(String),
+    /// A dedicated worker of a tab (`workers.rs`), by guid.
+    Worker(String),
     Unknown,
 }
 
@@ -358,6 +362,8 @@ enum ObjectCall {
     Init(InitRoute),
     Dialog(u64, DialogCall),
     Download(String, ArtifactCall),
+    /// `worker.evaluate` / `evaluateHandle` (`worker_eval.rs`), by the worker's guid.
+    Worker(String, Evaluation),
     /// `page.localStorage` and `page.sessionStorage` (`web_storage.rs`), with the call's place
     /// in its page's storage order, taken as it arrives ([`Inner::ordered`]).
     Storage(PageCall, Option<WriteTurn>),
@@ -739,6 +745,14 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         }
         ObjectKind::Dialog(index) => DialogCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
+        // Hand-routed: the spec's `Worker` commands have no generated decoder (`serve.yml`).
+        ObjectKind::Worker(guid) => {
+            let (meta, evaluation) = worker_eval::route(method, params.as_ref());
+            return Routed {
+                meta,
+                route: evaluation.map(|evaluation| ObjectCall::Worker(guid, evaluation)),
+            };
+        }
         ObjectKind::Download(guid) => ArtifactCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Download(guid, call)))),
         // `route_init` answers every Disposable message.
@@ -1153,6 +1167,11 @@ async fn serve_call(
         (ObjectCall::Download(guid, call), _) => {
             downloads::serve(&tabs, &guid, call, &progress).await
         }
+        // A worker exists only after its tab's watcher saw it attach on this run's session.
+        (ObjectCall::Worker(guid, evaluation), Some((page, _))) => match page.attached_session() {
+            Some(session) => worker_eval::serve(&session, &guid, evaluation, &progress).await,
+            None => Err(PlaywrightError::target_closed().into()),
+        },
         _ => Err(PlaywrightError::target_closed().into()),
     };
     finish_reply(result, reply).await;
@@ -1583,6 +1602,8 @@ fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
         ObjectKind::Network(kind, hop)
     } else if let Some((_, index)) = dialogs::parse(guid) {
         ObjectKind::Dialog(index)
+    } else if guid.starts_with(workers::WORKER_PREFIX) {
+        ObjectKind::Worker(guid.to_owned())
     } else {
         ObjectKind::Page
     }
@@ -1897,6 +1918,7 @@ mod tests {
             | ObjectCall::Init(_)
             | ObjectCall::Dialog(..)
             | ObjectCall::Download(..)
+            | ObjectCall::Worker(..)
             | ObjectCall::Storage(..) => {
                 panic!("a Frame message routed to another object")
             }

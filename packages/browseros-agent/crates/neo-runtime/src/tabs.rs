@@ -35,6 +35,7 @@ use crate::page_events::{self, Kept, MAX_KEPT_ARGS, MAX_KEPT_CHOOSERS};
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunPage};
 use crate::switch::Switches;
+use crate::workers;
 
 /// Neo: how long `ConsoleMessage.args()` waits for its arguments' handles. A page a dialog holds
 /// answers no call until the dialog is answered, which the script may be about to do.
@@ -278,6 +279,9 @@ impl Tabs {
             }
         } else if let Some((target, _)) = dialogs::parse(guid) {
             (target, FrameScope::Main)
+        } else if let Some(worker) = guid.strip_prefix(workers::WORKER_PREFIX) {
+            // A dedicated worker runs its calls on its tab (`workers.rs`).
+            (worker.split_once(':')?.0, FrameScope::Main)
         } else {
             // A hop is one of the main frame's navigation requests (network.rs).
             let (_, target, _) = HopId::parse(guid)?;

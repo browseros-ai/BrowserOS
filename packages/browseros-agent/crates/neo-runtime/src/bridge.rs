@@ -358,6 +358,8 @@ enum GetterField {
     Args,
     /// On a file chooser (`filechooser@<targetId>:<n>`): `element()`'s handle record.
     Element,
+    /// On a page: `workers()`'s records, `{guid, initializer: {url}}` each (`workers.rs`).
+    Workers,
 }
 
 #[derive(Deserialize)]
@@ -509,6 +511,7 @@ impl Getters {
                 request.field
             ))),
             GetterField::Frames => self.wait(async { getters::frames(&self.tabs, &page).await }),
+            GetterField::Workers => self.wait(async { getters::workers(&self.tabs, &page).await }),
             GetterField::Name
             | GetterField::ParentFrame
             | GetterField::ChildFrames

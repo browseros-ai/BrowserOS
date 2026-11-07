@@ -28,7 +28,7 @@ use crate::page;
 use crate::page::PageState;
 use crate::progress::PlaywrightError;
 use crate::run::PageId;
-use crate::tabs::{PageEntry, Tabs};
+use crate::tabs::{self, PageEntry, Tabs};
 use crate::url_match::{SerializedUrlMatch, UrlMatcher};
 
 /// Frame fields. The main URL comes directly from history; other fields read a fresh tree.
@@ -304,6 +304,26 @@ pub(crate) fn matches_url(
 
 /// Every current frame, in the core's tree order. Rust alone mints the SDK's opaque guids.
 /// This can wait for a pending main-frame navigation to commit before the tree answers.
+/// `page.workers()`: the tab's open dedicated workers' records, in attach order. The first read
+/// starts the tab's worker tracking (`workers.rs`); the workers already running attach before
+/// the setting answers, and the barrier lets the watcher apply them first.
+/// Playwright: `client/page.ts` `Page.workers`
+pub(crate) async fn workers(tabs: &Tabs, page: &PageEntry) -> Result<Value, PlaywrightError> {
+    let session = tabs.session(page).await?;
+    session
+        .prepare()
+        .await
+        .map_err(|error| tabs::cdp_error(&error))?;
+    session
+        .events
+        .workers
+        .track()
+        .await
+        .map_err(|error| tabs::cdp_error(&error))?;
+    tabs.events().replay_barrier().await;
+    Ok(Value::Array(session.events.workers.records()))
+}
+
 pub(crate) async fn frames(tabs: &Tabs, page: &PageEntry) -> Result<Value, PlaywrightError> {
     let tree = frame_tree(tabs, page).await?;
     frame_records(&page.id, &tree, tree.iter())

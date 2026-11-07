@@ -18,6 +18,7 @@ neo-runtime-injected/src/wait-abort.ts
 neo-runtime-injected/src/wait-for-function.ts
 neo-runtime-injected/src/wait-result.ts
 neo-runtime/src/abort.rs
+neo-runtime/src/auto_attach.rs
 neo-runtime/src/console.rs
 neo-runtime/src/content.rs
 neo-runtime/src/devices.rs
@@ -41,6 +42,9 @@ neo-runtime/src/network_idle.rs
 neo-runtime/src/page_events.rs
 neo-runtime/src/switch.rs
 neo-runtime/src/web_storage.rs
+neo-runtime/src/worker_eval.rs
+neo-runtime/src/worker_world.rs
+neo-runtime/src/workers.rs
 neo-sdk/src/console-message.ts
 neo-sdk/src/dialog.ts
 neo-sdk/src/disposable.ts
