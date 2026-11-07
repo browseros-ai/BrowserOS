@@ -1186,7 +1186,19 @@ async fn invoke_with(
     let mut attempt = 0;
     loop {
         attempt += 1;
-        let installed = installed(tab, frame, invocation.receiver, progress).await?;
+        let installed = if invocation.context.is_some() {
+            // A pinned call answers one document: that document's install or none. A document
+            // gone drops the call, never waits for the next one.
+            match progress.race(frame.main.installed(frame)).await? {
+                Ok(installed) => installed,
+                Err(PageError::NotConnected) => {
+                    return Err(PlaywrightError::error(CONTEXT_DESTROYED).into());
+                }
+                Err(error) => return Err(page_error(error).into()),
+            }
+        } else {
+            installed(tab, frame, invocation.receiver, progress).await?
+        };
         let wants_injected = invocation
             .extras
             .iter()
@@ -1303,23 +1315,24 @@ pub(crate) async fn run_built(
     expression: BuiltExpression,
     leading: Vec<Value>,
 ) -> Result<Value, PageError> {
-    run_built_in(tab, None, expression, leading).await
+    let frame = tab.context().await?;
+    run_built_on(&frame, None, expression, leading).await
 }
 
-/// Neo: [`run_built`] in the execution context `context` names when given
+/// Neo: [`run_built`] on `frame`, a frame context as the caller kept it, never the frame's
+/// current one, and in the execution context `context` names when given
 /// (`MainWorld::call_in`): `bindings.rs` refuses a binding call in the context that made it.
 ///
 /// # Errors
 ///
 /// As [`run_built`].
-pub(crate) async fn run_built_in(
-    tab: &FrameTab,
+pub(crate) async fn run_built_on(
+    frame: &Arc<FrameContext>,
     context: Option<i64>,
     expression: BuiltExpression,
     leading: Vec<Value>,
 ) -> Result<Value, PageError> {
-    let frame = tab.context().await?;
-    let installed = frame.main.installed(&frame).await?;
+    let installed = frame.main.installed(frame).await?;
     let mut values = vec![
         json!({ "value": true }),
         json!({ "value": true }),
@@ -1330,7 +1343,7 @@ pub(crate) async fn run_built_in(
     match frame
         .main
         .call_in(
-            &frame,
+            frame,
             &installed,
             context,
             MainFunction::Evaluate,
@@ -1348,29 +1361,34 @@ pub(crate) async fn run_built_in(
 }
 
 /// Neo: [`run_built`] within a call of the run, with the agent's `arg` (and its handles) after
-/// `leading`, in the execution context `context` names when given (`MainWorld::call_in`):
-/// `bindings.rs` answers a binding call in the context that made it, so an answer for a document
-/// that is gone is dropped (Playwright's `PageBinding.dispatch` logs the failed evaluation).
+/// `leading`, on `frame` as the caller kept it and pinned to its execution context `context`
+/// (`MainWorld::call_in`): `bindings.rs` answers a binding call in the context that made it,
+/// through the session it came from, so an answer for a document that is gone is dropped
+/// (Playwright's `PageBinding.dispatch` logs the failed evaluation).
 ///
 /// # Errors
 ///
 /// The call's error; a throw in the page is Playwright's plain `Error`.
-pub(crate) async fn call_built_in(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "an invocation's every part, and the frame context and execution context it is pinned to"
+)]
+pub(crate) async fn call_built_on(
     tab: &FrameTab,
-    context: Option<i64>,
+    frame: &Arc<FrameContext>,
+    context: i64,
     expression: BuiltExpression,
     leading: Vec<Value>,
     arg: &SerializedArgument,
     handles: &Handles,
     progress: &Progress,
 ) -> Result<(), CallError> {
-    let frame = tab.context().await.map_err(page_error)?;
     let leading = move |_: usize| leading.clone();
     let (_, called) = invoke(
         tab,
         &Invocation {
-            context,
-            frame: &frame,
+            context: Some(context),
+            frame,
             receiver: None,
             expression: expression.source(),
             is_function: Some(true),
