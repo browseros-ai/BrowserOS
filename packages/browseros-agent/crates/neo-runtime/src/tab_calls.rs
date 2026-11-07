@@ -6,12 +6,16 @@ use std::time::Duration;
 
 use browseros_cdp::CdpError;
 use neo_runtime_spec::serve::{
-    BrowserContextCall, BrowserContextNewPageResult, ConsoleMessagesFilter, PageCall, PageChannel,
-    PageClearConsoleMessagesParams, PageClearConsoleMessagesResult, PageClearPageErrorsParams,
-    PageClearPageErrorsResult, PageConsoleMessagesParams, PageConsoleMessagesResult,
-    PageGoBackParams, PageGoBackResult, PageGoForwardParams, PageGoForwardResult,
-    PagePageErrorsParams, PagePageErrorsResult, PageReloadParams, PageReloadResult,
-    ResponseChannel,
+    BrowserContextCall, BrowserContextCookiesParams, BrowserContextCookiesResult,
+    BrowserContextNewPageResult, BrowserContextStorageStateParams, ConsoleMessagesFilter,
+    NameValue, PageCall, PageChannel, PageClearConsoleMessagesParams,
+    PageClearConsoleMessagesResult, PageClearPageErrorsParams, PageClearPageErrorsResult,
+    PageConsoleMessagesParams, PageConsoleMessagesResult, PageGoBackParams, PageGoBackResult,
+    PageGoForwardParams, PageGoForwardResult, PagePageErrorsParams, PagePageErrorsResult,
+    PageRegisterLocatorHandlerParams, PageRegisterLocatorHandlerResult, PageReloadParams,
+    PageReloadResult, PageRequestsParams, PageRequestsResult,
+    PageResolveLocatorHandlerNoReplyParams, PageResolveLocatorHandlerNoReplyResult,
+    PageUnregisterLocatorHandlerParams, PageUnregisterLocatorHandlerResult, ResponseChannel,
 };
 use serde_json::{Value, json};
 use tracing::debug;
@@ -19,9 +23,11 @@ use tracing::debug;
 use crate::bridge;
 use crate::dispatch::encode_result;
 use crate::frames::FrameScope;
+use crate::highlight;
 use crate::history::{self, HistoryOptions};
 use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
+use crate::session_state;
 use crate::tabs::{self, PageEntry, Tabs};
 
 pub(crate) async fn context(
@@ -72,7 +78,76 @@ pub(crate) async fn context(
             close_context(tabs, progress).await?;
             Ok(None)
         }
+        BrowserContextCall::Cookies(params) => {
+            let cookies = session_state::cookies(tabs, &params.urls, progress).await?;
+            encode_result::<BrowserContextCookiesParams>(&BrowserContextCookiesResult { cookies })
+        }
+        BrowserContextCall::AddCookies(params) => {
+            session_state::add_cookies(tabs, params.cookies, progress).await?;
+            Ok(None)
+        }
+        BrowserContextCall::SetExtraHTTPHeaders(params) => {
+            tabs.overrides()
+                .set_context_headers(tabs, params.headers, progress)
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::SetOffline(params) => {
+            tabs.overrides()
+                .set_offline(tabs, params.offline, progress)
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::SetGeolocation(params) => {
+            tabs.overrides()
+                .set_geolocation(tabs, params.geolocation, progress)
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::GrantPermissions(params) => {
+            tabs.permissions()
+                .grant(
+                    tabs,
+                    tabs.run_id(),
+                    params.origin.as_deref(),
+                    &params.permissions,
+                    progress,
+                )
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::ClearPermissions(_) => {
+            tabs.permissions()
+                .clear(tabs, tabs.run_id(), progress)
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::SetHTTPCredentials(_) => {
+            session_state::set_http_credentials()?;
+            Ok(None)
+        }
+        BrowserContextCall::StorageState(params) => {
+            let state = session_state::storage_state(tabs, &params, progress).await?;
+            encode_result::<BrowserContextStorageStateParams>(&state)
+        }
+        BrowserContextCall::SetStorageState(params) => {
+            session_state::set_storage_state(tabs, params.storage_state, progress).await?;
+            Ok(None)
+        }
     }
+}
+
+/// `page.setExtraHTTPHeaders`: the page's own, over the context's (`session_state.rs`).
+async fn set_page_headers(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    headers: Vec<NameValue>,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    tabs.overrides()
+        .set_page_headers(&page, &entry.id, headers, progress)
+        .await
 }
 
 /// Playwright's close of a connectOverCDP default context, which only disconnects: every tab
@@ -97,6 +172,14 @@ async fn close_context(tabs: &Tabs, progress: &Progress) -> Result<(), CallError
     // before the close resolves, so none writes input to a tab the run let go of.
     progress.stop_the_runs_calls();
     Ok(())
+}
+
+/// Neo: `dispatch::route` hands every `Page.screenshot` and `Page.pdf` to `capture.rs`, so one
+/// reaching the tab-lifecycle handler is a routing bug, reported as such.
+const CAPTURE_MISROUTED: &str = "neo-runtime: a capture reached the tab-lifecycle handler";
+
+fn misrouted_capture() -> CallError {
+    PlaywrightError::error(CAPTURE_MISROUTED).into()
 }
 
 pub(crate) async fn page(
@@ -152,6 +235,11 @@ pub(crate) async fn page(
                 &PageClearConsoleMessagesResult {},
             );
         }
+        call @ (PageCall::RegisterLocatorHandler(_)
+        | PageCall::ResolveLocatorHandlerNoReply(_)
+        | PageCall::UnregisterLocatorHandler(_)) => {
+            return locator_handler_call(tabs, entry, call, progress).await;
+        }
         PageCall::ClearPageErrors(_) => {
             console_page(tabs, entry, progress)
                 .await?
@@ -160,50 +248,109 @@ pub(crate) async fn page(
                 .clear_errors();
             return encode_result::<PageClearPageErrorsParams>(&PageClearPageErrorsResult {});
         }
+        // Playwright's server keeps a page's last requests from its first moment; Neo keeps
+        // what the run's network log recorded, which starts with the session's
+        // `Network.enable`: the first goto, history step or navigation wait, a network event
+        // listener, or this read, as Chromium replays no earlier request.
+        PageCall::Requests(_) => return requests(tabs, entry, progress).await,
         PageCall::Close(_) => close(tabs, entry, progress).await?,
-        PageCall::RunBeforeUnload(_) => {
-            // Playwright 26137face server/page.ts:852-861 and chromium/crPage.ts:264-270:
-            // Page.close runs beforeunload; errors are logged and closure is not awaited.
-            let page = progress.race(tabs.session(entry)).await??;
-            let prepared = progress.race(page.prepare()).await?;
-            checked(tabs, entry, progress, prepared).await?;
-            progress.check()?;
-            entry.request_close();
-            tabs.finish_close(Arc::clone(&page), Arc::clone(entry));
-            match progress.race(page.send("Page.close", json!({}))).await {
-                Ok(Ok(_)) => {}
-                Ok(Err(error)) => debug!(%error, "running beforeunload failed"),
-                // The watcher can report closure before Page.close's acknowledgement.
-                Err(CallError::Playwright(error)) if error == PlaywrightError::target_closed() => {}
-                Err(error) => return Err(error),
-            }
+        PageCall::SetExtraHTTPHeaders(params) => {
+            set_page_headers(tabs, entry, params.headers, progress).await?;
         }
-        PageCall::BringToFront(_) => {
-            // Playwright 26137face server/chromium/crPage.ts:207 sends Page.bringToFront.
+        PageCall::RunBeforeUnload(_) => run_before_unload(tabs, entry, progress).await?,
+        PageCall::Screenshot(_) | PageCall::Pdf(_) => return Err(misrouted_capture()),
+        // The dispatcher serves these over the tab's input devices (`devices.rs`).
+        PageCall::KeyboardDown(_)
+        | PageCall::KeyboardUp(_)
+        | PageCall::KeyboardInsertText(_)
+        | PageCall::KeyboardType(_)
+        | PageCall::KeyboardPress(_)
+        | PageCall::MouseMove(_)
+        | PageCall::MouseDown(_)
+        | PageCall::MouseUp(_)
+        | PageCall::MouseClick(_)
+        | PageCall::MouseWheel(_)
+        | PageCall::TouchscreenTap(_) => {
+            return Err(PlaywrightError::error(
+                "neo-runtime: a device call reached the tab-lifecycle handler",
+            )
+            .into());
+        }
+        PageCall::BringToFront(_) => bring_to_front(tabs, entry, progress).await?,
+        PageCall::HideHighlight(_) => {
             let page = progress.race(tabs.session(entry)).await??;
-            let brought = progress
-                .race(page.send("Page.bringToFront", json!({})))
-                .await?;
-            checked(tabs, entry, progress, brought).await?;
-            let info = progress
-                .race(tabs::tab_info(tabs.cdp(), &entry.id))
-                .await??
-                .ok_or_else(PlaywrightError::target_closed)?;
-            // BrowserOS headless accepts Page.bringToFront without selecting the tab strip
-            // entry. Browser.activateTab changes that selection (see probes-runtime.md).
-            if !info.is_active {
-                let activated = progress
-                    .race(tabs.cdp().send(
-                        "Browser.activateTab",
-                        json!({"targetId":entry.id.as_str()}),
-                        None,
-                    ))
-                    .await?;
-                checked(tabs, entry, progress, activated).await?;
-            }
+            highlight::hide_all(&page, progress).await?;
         }
     }
     Ok(None)
+}
+
+/// `Page.bringToFront`: the tab's own `Page.bringToFront`, then its tab-strip selection.
+async fn bring_to_front(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    // Playwright 26137face server/chromium/crPage.ts:207 sends Page.bringToFront.
+    let page = progress.race(tabs.session(entry)).await??;
+    let brought = progress
+        .race(page.send("Page.bringToFront", json!({})))
+        .await?;
+    checked(tabs, entry, progress, brought).await?;
+    let info = progress
+        .race(tabs::tab_info(tabs.cdp(), &entry.id))
+        .await??
+        .ok_or_else(PlaywrightError::target_closed)?;
+    // BrowserOS headless accepts Page.bringToFront without selecting the tab strip
+    // entry. Browser.activateTab changes that selection (see probes-runtime.md).
+    if !info.is_active {
+        let activated = progress
+            .race(tabs.cdp().send(
+                "Browser.activateTab",
+                json!({"targetId":entry.id.as_str()}),
+                None,
+            ))
+            .await?;
+        checked(tabs, entry, progress, activated).await?;
+    }
+    Ok(())
+}
+
+/// The locator handler commands of `entry`'s session (`locator_handlers.rs`).
+async fn locator_handler_call(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    call: PageCall,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    match call {
+        PageCall::RegisterLocatorHandler(params) => {
+            let uid = page
+                .locator_handlers
+                .register(params.selector, params.no_wait_after.unwrap_or(false))?;
+            encode_result::<PageRegisterLocatorHandlerParams>(&PageRegisterLocatorHandlerResult {
+                uid,
+            })
+        }
+        PageCall::ResolveLocatorHandlerNoReply(params) => {
+            page.locator_handlers
+                .resolve(params.uid, params.remove.unwrap_or(false))?;
+            encode_result::<PageResolveLocatorHandlerNoReplyParams>(
+                &PageResolveLocatorHandlerNoReplyResult {},
+            )
+        }
+        PageCall::UnregisterLocatorHandler(params) => {
+            page.locator_handlers.unregister(params.uid)?;
+            encode_result::<PageUnregisterLocatorHandlerParams>(
+                &PageUnregisterLocatorHandlerResult {},
+            )
+        }
+        _ => Err(PlaywrightError::error(
+            "neo-runtime: `locator_handler_call` serves the locator handler commands only",
+        )
+        .into()),
+    }
 }
 
 /// `Page.reload`, `goBack` or `goForward` on the main frame of `entry`'s session: the new
@@ -212,16 +359,31 @@ pub(crate) async fn page(
 async fn history_step(
     tabs: &Tabs,
     entry: &Arc<PageEntry>,
-    options: Result<HistoryOptions, PlaywrightError>,
+    options: HistoryOptions,
     progress: &Progress,
 ) -> Result<Option<ResponseChannel>, CallError> {
-    let options = options?;
     let page = progress.race(tabs.session(entry)).await??;
     let main = FrameTab {
         page,
         scope: FrameScope::Main,
     };
     history::navigate(&main, &options, progress).await
+}
+
+/// `page.requests()`: what the session's network log recorded, after making sure it records.
+async fn requests(
+    tabs: &Tabs,
+    entry: &PageEntry,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    let enabled = progress.race(page.enable_network()).await?;
+    checked(tabs, entry, progress, enabled).await?;
+    let requests = page
+        .network
+        .requests()
+        .map_err(|error| PlaywrightError::error(error.to_string()))?;
+    encode_result::<PageRequestsParams>(&PageRequestsResult { requests })
 }
 
 /// `entry`'s session with console messages and page errors reported (`PageSession::enable_runtime`).
@@ -254,6 +416,29 @@ async fn checked<T>(
             }
         }
     }
+}
+
+/// Playwright 26137face server/page.ts:852-861 and chromium/crPage.ts:264-270: Page.close runs
+/// beforeunload; errors are logged and closure is not awaited.
+async fn run_before_unload(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    let prepared = progress.race(page.prepare()).await?;
+    checked(tabs, entry, progress, prepared).await?;
+    progress.check()?;
+    entry.request_close();
+    tabs.finish_close(Arc::clone(&page), Arc::clone(entry));
+    match progress.race(page.send("Page.close", json!({}))).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => debug!(%error, "running beforeunload failed"),
+        // The watcher can report closure before Page.close's acknowledgement.
+        Err(CallError::Playwright(error)) if error == PlaywrightError::target_closed() => {}
+        Err(error) => return Err(error),
+    }
+    Ok(())
 }
 
 async fn close(tabs: &Tabs, entry: &PageEntry, progress: &Progress) -> Result<(), CallError> {

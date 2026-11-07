@@ -66,6 +66,7 @@ async fn check_cleanup(cancel_run: bool) {
         page: PageId::new(tab.target_id.clone()),
         timeout: Duration::from_secs(if cancel_run { 30 } else { 5 }),
         cancel: cancel.clone(),
+        artifacts: None,
     };
     let run = tokio::spawn({
         let runtime = runtime.clone();

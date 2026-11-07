@@ -42,9 +42,17 @@ type NamedElement = Element & { _ariaRef?: { ref: string } }
  */
 const namedOwners = new Map<string, WeakRef<Element>>()
 
+/**
+ * What `prepareForScreenshot` leaves in a document, as the one function that undoes it.
+ * Playwright stores that function as `window.__pwCleanupScreenshot` in the utility world;
+ * Neo hands it to Rust as a handle instead (NEO_STYLE "Page objects").
+ */
+type ScreenshotCleanup = { restore: () => void }
+
 /** The Playwright page types behind the spec's named handle kinds. */
 type Handles = {
   HitTargetInterceptor: HitTargetInterceptionResult
+  ScreenshotCleanup: ScreenshotCleanup
   ElementList: Record<string, Element>
 }
 
@@ -80,6 +88,10 @@ function query(
     throw injected.strictModeViolationError(parsed, elements)
   return elements
 }
+
+/** The listeners `setupDragListeners` armed in this document, until `cleanupDrag` reads them.
+ * Playwright keeps it as `window.__cleanupDrag`; the glue's own scope keeps it from the page. */
+let cleanupDrag: (() => Promise<boolean>) | undefined
 
 /** Neo: elements as a null-prototype object's own properties `0`, `1`, …, which CDP reports
  * as a plain object (an array would carry the subtype `array`), so Rust lists them with
@@ -319,6 +331,33 @@ export const glue = {
     return { ref }
   },
 
+  /** Playwright: `server/frames.ts` `Frame._content`: `return await injected.evaluate((injected, includeShadow) => injected.documentContent(includeShadow), !!options.includeShadow);` */
+  documentContent: (injected, { includeShadow }) => ({
+    value: injected.documentContent(includeShadow),
+  }),
+
+  /** Playwright: `server/frames.ts` `Frame.setContent`: `document.write(html);` */
+  writeContent: (_injected, { html }) => {
+    // No console tag marks the open: neo-runtime waits for the reopened document's lifecycle
+    // events, from its `init`, on the frame's own session.
+    document.open()
+    document.write(html)
+    document.close()
+    return {}
+  },
+
+  /** Playwright: `server/frames.ts` `Frame.resolveSelector`: `return injected.generateSelectorSimple(node as unknown as Element);` */
+  generateSelector: (injected, { selector }) => {
+    const [element] = query(injected, selector, false)
+    if (!element) return {}
+    return { generated: injected.generateSelectorSimple(element) }
+  },
+
+  /** Playwright: `server/frames.ts` `Frame.resolveSelector`: `return injected.generateSelectorSimple(node as unknown as Element);` */
+  generateOwnerSelector: (injected, _params, element) => ({
+    generated: injected.generateSelectorSimple(element),
+  }),
+
   describeSelector: (injected, { selector }) => {
     const locator = injected.utils.asLocator('javascript', selector)
     try {
@@ -384,6 +423,44 @@ export const glue = {
     ),
   }),
 
+  // Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `window.addEventListener('mousemove', mouseListener, { once: true, capture: true });`
+  setupDragListeners: () => {
+    let didStartDrag = Promise.resolve(false)
+    let dragEvent: Event | null = null
+    const dragListener = (event: Event) => {
+      dragEvent = event
+    }
+    const mouseListener = () => {
+      didStartDrag = new Promise<boolean>((callback) => {
+        window.addEventListener('dragstart', dragListener, {
+          once: true,
+          capture: true,
+        })
+        setTimeout(
+          () => callback(dragEvent ? !dragEvent.defaultPrevented : false),
+          0,
+        )
+      })
+    }
+    window.addEventListener('mousemove', mouseListener, {
+      once: true,
+      capture: true,
+    })
+    cleanupDrag = async () => {
+      const started = await didStartDrag
+      window.removeEventListener('mousemove', mouseListener, { capture: true })
+      window.removeEventListener('dragstart', dragListener, { capture: true })
+      cleanupDrag = undefined
+      return started
+    }
+    return { armed: true }
+  },
+
+  // Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `const val = await didStartDrag;`
+  cleanupDrag: async () => ({
+    started: cleanupDrag ? await cleanupDrag() : false,
+  }),
+
   stopHitTargetInterceptor: (_injected, _params, interceptor) => ({
     outcome: interceptor.stop(),
   }),
@@ -419,12 +496,87 @@ export const glue = {
     return Array.isArray(outcome) ? { values: outcome } : { outcome }
   },
 
+  /** `dom.ts` `_selectOption` with `ElementHandle` values: `[...elements, ...values]`. */
+  selectOptionsWithElements: async (
+    injected,
+    { options, force, frameVisible },
+    element,
+    elements,
+  ) => {
+    if (!force) {
+      const outcome = await injected.checkElementStates(
+        element,
+        ['visible', 'enabled', 'non-inert'],
+        frameVisible,
+      )
+      if (outcome) return { outcome }
+    }
+    const outcome = injected.selectOptions(element, [
+      ...Object.values(elements),
+      ...options,
+    ])
+    return Array.isArray(outcome) ? { values: outcome } : { outcome }
+  },
+
+  elementListOf: (_injected, _params, element) => ({
+    list: elementList([element]),
+  }),
+
+  elementListWith: (_injected, _params, list, element) => ({
+    list: elementList([...Object.values(list), element]),
+  }),
+
   elementState: (injected, { state }, element) =>
     injected.elementState(element, state),
 
   focusElement: (injected, { resetSelectionIfNotFocused }, element) => ({
     outcome: injected.focusNode(element, resetSelectionIfNotFocused),
   }),
+
+  /** Playwright: `server/dom.ts` `ElementHandle._blur`: `injected.blurNode(node)` */
+  blurElement: (injected, _params, element) => ({
+    outcome: injected.blurNode(element),
+  }),
+
+  /** Playwright: `server/dom.ts` `ElementHandle.selectText`: `return injected.selectText(node);` */
+  selectText: async (injected, { force, frameVisible }, element) => {
+    if (!force) {
+      const outcome = await injected.checkElementStates(
+        element,
+        ['visible'],
+        frameVisible,
+      )
+      if (outcome) return { outcome }
+    }
+    return { outcome: injected.selectText(element) }
+  },
+
+  /** Playwright: `server/frames.ts` `Frame.dispatchEvent`: `injectedScript.dispatchEvent(element, data.type, data.eventInit);` */
+  dispatchEvent: (injected, { selector, strict, type, eventInit }) => {
+    const [element] = query(injected, selector, strict, {
+      markTargets: 'first',
+    })
+    if (!element) return {}
+    injected.dispatchEvent(element, type, JSON.parse(eventInit))
+    return { preview: injected.previewNode(element) }
+  },
+
+  /** Playwright: `server/highlightController.ts` `HighlightController._resolve`: `await injectedScript.evaluate((injected, highlights) => injected.setHighlights(highlights), highlights);` */
+  setHighlights: (injected, { highlights }) => {
+    injected.setHighlights(
+      highlights.map(({ selector, cssStyle }) => ({
+        selector: injected.parseSelector(selector),
+        cssStyle,
+      })),
+    )
+    return {}
+  },
+
+  /** Playwright: `server/highlightController.ts` `HighlightController.hideHighlights`: `await injectedScript?.evaluate(injected => injected.hideHighlight());` */
+  hideHighlight: (injected) => {
+    injected.hideHighlight()
+    return {}
+  },
 
   inputValue: (injected, { selector, strict }) => {
     const [node] = query(injected, selector, strict, { markTargets: 'first' })
@@ -451,6 +603,187 @@ export const glue = {
   queryCount: (injected, { selector }) => ({
     value: query(injected, selector, false).length,
   }),
+
+  /**
+   * Playwright's page function for screenshots, for one document. Chromium never syncs
+   * animations by toggling a style sheet, so the WebKit-only first step is not here.
+   * Playwright: `server/screenshotter.ts` `inPagePrepareForScreenshots`: `if (!screenshotStyle && !hideCaret && !disableAnimations)`
+   * Playwright: `server/chromium/crPage.ts` `CRPage.shouldToggleStyleSheetToSyncAnimations`: `return false;`
+   */
+  prepareForScreenshot: (
+    _injected,
+    { style, hideCaret, disableAnimations },
+  ) => {
+    if (!style && !hideCaret && !disableAnimations) return {}
+
+    const collectRoots = (
+      root: Document | ShadowRoot,
+      roots: (Document | ShadowRoot)[] = [],
+    ): (Document | ShadowRoot)[] => {
+      roots.push(root)
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT)
+      do {
+        const node = walker.currentNode
+        const shadowRoot = node instanceof Element ? node.shadowRoot : null
+        if (shadowRoot) collectRoots(shadowRoot, roots)
+      } while (walker.nextNode())
+      return roots
+    }
+
+    const roots = collectRoots(document)
+    const cleanupCallbacks: (() => void)[] = []
+
+    if (style) {
+      for (const root of roots) {
+        const styleTag = document.createElement('style')
+        styleTag.textContent = style
+        if (root === document) document.documentElement.append(styleTag)
+        else root.append(styleTag)
+        cleanupCallbacks.push(() => {
+          styleTag.remove()
+        })
+      }
+    }
+
+    if (hideCaret) {
+      const elements = new Map<
+        HTMLElement,
+        { value: string; priority: string }
+      >()
+      for (const root of roots) {
+        root
+          .querySelectorAll('input,textarea,[contenteditable]')
+          .forEach((element) => {
+            elements.set(element as HTMLElement, {
+              value: (element as HTMLElement).style.getPropertyValue(
+                'caret-color',
+              ),
+              priority: (element as HTMLElement).style.getPropertyPriority(
+                'caret-color',
+              ),
+            })
+            ;(element as HTMLElement).style.setProperty(
+              'caret-color',
+              'transparent',
+              'important',
+            )
+          })
+      }
+      cleanupCallbacks.push(() => {
+        for (const [element, value] of elements)
+          element.style.setProperty('caret-color', value.value, value.priority)
+      })
+    }
+
+    if (disableAnimations) {
+      const infiniteAnimationsToResume: Set<Animation> = new Set()
+      const handleAnimations = (root: Document | ShadowRoot): void => {
+        for (const animation of root.getAnimations()) {
+          if (
+            !animation.effect ||
+            animation.playbackRate === 0 ||
+            infiniteAnimationsToResume.has(animation)
+          )
+            continue
+          const endTime = animation.effect.getComputedTiming().endTime
+          if (Number.isFinite(endTime)) {
+            try {
+              animation.finish()
+            } catch {
+              // Playwright's own guard: finish() should not throw for a finite animation.
+            }
+          } else {
+            try {
+              animation.cancel()
+              infiniteAnimationsToResume.add(animation)
+            } catch {
+              // Playwright's own guard: cancel() should not throw for an infinite animation.
+            }
+          }
+        }
+      }
+      for (const root of roots) {
+        const handleRootAnimations: () => void = handleAnimations.bind(
+          null,
+          root,
+        )
+        handleRootAnimations()
+        root.addEventListener('transitionrun', handleRootAnimations)
+        root.addEventListener('animationstart', handleRootAnimations)
+        cleanupCallbacks.push(() => {
+          root.removeEventListener('transitionrun', handleRootAnimations)
+          root.removeEventListener('animationstart', handleRootAnimations)
+        })
+      }
+      cleanupCallbacks.push(() => {
+        for (const animation of infiniteAnimationsToResume) {
+          try {
+            animation.play()
+          } catch {
+            // Playwright's own guard: play() should never throw.
+          }
+        }
+      })
+    }
+
+    return {
+      cleanup: {
+        restore: () => {
+          for (const cleanupCallback of cleanupCallbacks) cleanupCallback()
+        },
+      },
+    }
+  },
+
+  // Playwright: `server/screenshotter.ts` `Screenshotter._restorePageAfterScreenshot`: `window.__pwCleanupScreenshot && window.__pwCleanupScreenshot()`
+  restoreAfterScreenshot: (_injected, _params, cleanup) => {
+    cleanup.restore()
+    return {}
+  },
+
+  // Playwright: `server/screenshotter.ts` `Screenshotter._preparePageForScreenshot`: `frame.nonStallingEvaluateInExistingContext('document.fonts.ready', 'utility')`
+  fontsReady: async () => {
+    await document.fonts.ready
+    return {}
+  },
+
+  // Playwright: `server/screenshotter.ts` `Screenshotter._fullPageSize`: `if (!document.body || !document.documentElement)`
+  fullPageSize: () => {
+    if (!document.body || !document.documentElement) return {}
+    return {
+      size: {
+        width: Math.max(
+          document.body.scrollWidth,
+          document.documentElement.scrollWidth,
+          document.body.offsetWidth,
+          document.documentElement.offsetWidth,
+          document.body.clientWidth,
+          document.documentElement.clientWidth,
+        ),
+        height: Math.max(
+          document.body.scrollHeight,
+          document.documentElement.scrollHeight,
+          document.body.offsetHeight,
+          document.documentElement.offsetHeight,
+          document.body.clientHeight,
+          document.documentElement.clientHeight,
+        ),
+      },
+    }
+  },
+
+  // Playwright: `server/screenshotter.ts` `Screenshotter.screenshotElement`: `({ x: window.scrollX, y: window.scrollY })`
+  scrollOffset: () => ({ x: window.scrollX, y: window.scrollY }),
+
+  /**
+   * One mask entry, as `callOnSelector` runs its callback: only when something matched.
+   * Playwright: `server/screenshotter.ts` `Screenshotter._maskElements`: `injected.addMaskedElements(elements, color);`
+   */
+  maskElements: (injected, { selector, color }) => {
+    const elements = query(injected, selector, false)
+    if (elements.length) injected.addMaskedElements(elements, color)
+    return {}
+  },
 } satisfies InjectedApi<InjectedScript, Handles>
 
 // Playwright's AriaNodeJSON reaches Rust unchanged, but TypeScript lets a structurally wider

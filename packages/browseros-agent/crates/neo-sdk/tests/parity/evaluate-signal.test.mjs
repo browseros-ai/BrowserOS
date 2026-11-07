@@ -1,39 +1,41 @@
-// A `signal` on any evaluation or handle method Neo serves is refused with an Error before the
-// page sees the call: Neo cannot honour an abort yet, so it never takes one silently (fleet
-// rule, med-pw-eval fix-a1.md 4 and 6). A page counter that every page function bumps shows
-// whether the call took effect. One case per receiver family: Page, Frame, Locator,
-// JSHandle/ElementHandle. The signal is an already-aborted signal-shaped object, because Neo's
-// realm has no `AbortController`.
+// A `signal` on the evaluation and handle methods Neo serves behaves as Playwright's (slice S).
+// A page counter that every page function bumps shows whether the call took effect. One case per
+// receiver family: Page, Frame, Locator, JSHandle/ElementHandle.
 //
 // - `signal: null` is no signal: the call runs exactly as without the option, in both engines.
-// - Where Playwright takes a signal (`TimeoutOptions`), it rejects an already-aborted one before
-//   the call runs (tests/page/locator-wait-for-function.spec.ts at 26137face, LO-192 "should abort
-//   via already-aborted signal", with `AbortError`); Neo rejects with an Error. Compared directly:
-//   both reject, the counter stays 0.
-// - Where Playwright reads no signal (`EvaluateOptions` = `{ exposeFunctions }`: the page, frame
-//   and handle evaluations; `$`, which sends `kNoTimeout`), it ignores one and runs the call; Neo
-//   refuses it (`Deviation:` in js-handle.ts and frame.ts). Each engine's side is asserted.
+// - Where Playwright takes a signal (`locator.evaluate`, `evaluateHandle` and `elementHandle`,
+//   whose element wait sends it, and `waitForFunction`), it rejects an already-aborted one
+//   with `AbortError` before the call runs (tests/page/locator-wait-for-function.spec.ts at
+//   26137face, LO-192 "should abort via already-aborted signal"). Compared directly: both
+//   reject, the counter stays 0.
+// - A signal aborted while the call waits (slice S2: for `locator.evaluate`, `evaluateHandle` and
+//   `elementHandle`, the element wait; for `waitForFunction`, the poll, as LO-191 "should abort
+//   via signal") rejects with `AbortError` whose `cause` is the reason. The wait then stops: a
+//   locator's page function never runs once its element shows up, and a poll stops calling
+//   its predicate. Compared directly.
+// - Where Playwright reads no signal (the page, frame and handle evaluations, and `$`, all sent
+//   with `kNoTimeout`), it ignores one and runs the call; so does Neo. Compared directly.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { compareMethod, skip } from './harness.mjs'
 
 const html =
-  '<title>signal</title><p id="p">text</p><script>window.__count = 0</script>'
+  '<title>signal</title><p id="p">text</p><script>window.__count = 0; window.__polls = 0</script>'
 
 const SIGNAL = `
-const signal = { aborted: true, reason: 'stop', addEventListener() {}, removeEventListener() {} }
+const signal = AbortSignal.abort('stop')
 const bump = () => { window.__count++; return 'ran' }
 const attempt = async (call) => {
   try {
     await call()
     return 'resolved'
   } catch (error) {
-    return error instanceof Error ? 'rejected' : 'threw a non-Error'
+    return error instanceof Error ? error.name : 'threw a non-Error'
   }
 }
 `
 
-test('methods that take a signal refuse an aborted one before the page sees the call', {
+test('methods that take a signal reject an aborted one before the page sees the call', {
   skip,
   timeout: 180_000,
 }, async (t) => {
@@ -53,15 +55,82 @@ test('methods that take a signal refuse an aborted one before the page sees the 
     probe: 'window.__count',
   })
   assert.deepEqual(outcome.value, {
-    locatorEvaluate: 'rejected',
-    locatorEvaluateHandle: 'rejected',
-    locatorElementHandle: 'rejected',
-    pageWaitForFunction: 'rejected',
-    frameWaitForFunction: 'rejected',
+    locatorEvaluate: 'AbortError',
+    locatorEvaluateHandle: 'AbortError',
+    locatorElementHandle: 'AbortError',
+    pageWaitForFunction: 'AbortError',
+    frameWaitForFunction: 'AbortError',
   })
 })
 
-test('evaluations Playwright reads no signal on: Neo refuses one, Playwright runs', {
+// Each method waits for what is not there yet; the abort comes while it waits.
+const MID_WAIT = `
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+const settle = (promise, reason) => promise.then(
+  () => 'resolved',
+  (error) => ({ name: error.name, causeIsReason: error.cause === reason }),
+)
+const bump = () => { window.__count++; return 'ran' }
+const appear = (id) => page.evaluate((id) => {
+  const element = document.createElement('p')
+  element.id = id
+  document.body.append(element)
+}, id)
+const bumps = () => page.evaluate(() => window.__count)
+const polls = () => page.evaluate(() => window.__polls)
+// A locator call waiting for its element: aborted, then the element shows up.
+const element = async (id, call) => {
+  const controller = new AbortController()
+  const pending = settle(call(page.locator('#' + id), { signal: controller.signal, timeout: 0 }), 'stop')
+  await pause(300)
+  controller.abort('stop')
+  const settled = await pending
+  await appear(id)
+  await pause(300)
+  return { settled, bumps: await bumps() }
+}
+// A poll that never passes: aborted while it polls, then left alone.
+const poll = async (receiver) => {
+  const controller = new AbortController()
+  const pending = settle(receiver.waitForFunction(() => { window.__polls++; return false }, undefined, { signal: controller.signal, timeout: 0, polling: 100 }), 'stop')
+  await pause(350)
+  controller.abort('stop')
+  const settled = await pending
+  const atAbort = await polls()
+  await pause(400)
+  const stopped = (await polls()) - atAbort <= 1
+  await page.evaluate(() => { window.__polls = 0 })
+  return { settled, polled: atAbort > 0, stopped }
+}
+return {
+  locatorEvaluate: await element('late1', (locator, options) => locator.evaluate(bump, undefined, options)),
+  locatorEvaluateHandle: await element('late2', (locator, options) => locator.evaluateHandle(bump, undefined, options)),
+  locatorElementHandle: await element('late3', (locator, options) => locator.elementHandle(options)),
+  pageWaitForFunction: await poll(page),
+  frameWaitForFunction: await poll(page.mainFrame()),
+}
+`
+
+test('a signal aborted while the call waits rejects it and stops the wait', {
+  skip,
+  timeout: 180_000,
+}, async (t) => {
+  const outcome = await compareMethod(t, {
+    html,
+    source: MID_WAIT,
+    probe: '({ count: window.__count, polls: window.__polls })',
+  })
+  const aborted = { name: 'AbortError', causeIsReason: true }
+  assert.deepEqual(outcome.value, {
+    locatorEvaluate: { settled: aborted, bumps: 0 },
+    locatorEvaluateHandle: { settled: aborted, bumps: 0 },
+    locatorElementHandle: { settled: aborted, bumps: 0 },
+    pageWaitForFunction: { settled: aborted, polled: true, stopped: true },
+    frameWaitForFunction: { settled: aborted, polled: true, stopped: true },
+  })
+})
+
+test('evaluations Playwright reads no signal on ignore one in both engines', {
   skip,
   timeout: 180_000,
 }, async (t) => {
@@ -103,7 +172,7 @@ test('evaluations Playwright reads no signal on: Neo refuses one, Playwright run
         { count: 6, outcomes: each('resolved') },
         'Playwright',
       )
-      assert.deepEqual(neo, { count: 0, outcomes: each('rejected') }, 'Neo')
+      assert.deepEqual(neo, playwright, 'Neo')
     },
   })
 })

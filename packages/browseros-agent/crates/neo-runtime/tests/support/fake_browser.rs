@@ -67,6 +67,10 @@ impl Reply {
 /// How the fake answers the calls a test can hold back. It answers every other call at once.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Replies {
+    /// Review probe: fail the acknowledgement that enables drag interception.
+    pub fail_drag_enable: bool,
+    /// Review probe: delay only a mouse press acknowledgement.
+    pub mouse_press_delay: Option<Duration>,
     /// `Target.attachToTarget`. The n-th attach the fake receives gets session `session-<n>`.
     pub attach: Reply,
     /// An optional schedule for attaches to tabs other than the initial run tab.
@@ -152,6 +156,8 @@ pub struct FakeBrowser {
 /// The page's own state, shared by every connection, as one tab is.
 pub struct Page {
     pub tabs: Vec<Value>,
+    /// Review probe: the page's drag listeners survive object-group release.
+    pub drag_listeners: bool,
     pub frames: Option<FrameReplies>,
     pub tab_info_delay: Option<Duration>,
     next_tab: usize,
@@ -180,6 +186,7 @@ pub struct FrameReplies {
 impl Default for Page {
     fn default() -> Self {
         Self {
+            drag_listeners: false,
             tabs: vec![json!({
                 "targetId": PAGE, "url": PAGE_URL, "windowId": 1,
                 "liveBrowserContextId": "profile", "isActive": true,
@@ -322,6 +329,7 @@ pub fn run_request(code: &str, timeout: Duration, cancel: CancellationToken) -> 
         page: PageId::new(PAGE.to_string()),
         timeout,
         cancel,
+        artifacts: None,
     }
 }
 
@@ -642,6 +650,28 @@ fn bring_to_front(command: &Value, calls: &Calls, page: &Mutex<Page>) -> Value {
 }
 
 /// The fake's answer to `command`, and when to send it.
+/// Commands the fake answers with an empty result.
+const EMPTY_RESULTS: &[&str] = &[
+    "Browser.getVersion",
+    "Target.setDiscoverTargets",
+    "Browser.setDownloadBehavior",
+    "Browser.cancelDownload",
+    "Page.setInterceptFileChooserDialog",
+    "Browser.grantPermissions",
+    "Browser.resetPermissions",
+    "Storage.setCookies",
+    "Network.setExtraHTTPHeaders",
+    "Network.emulateNetworkConditions",
+    "Emulation.setGeolocationOverride",
+    "Page.close",
+    "Page.enable",
+    "Network.enable",
+    "Page.setLifecycleEventsEnabled",
+    "Emulation.setFocusEmulationEnabled",
+    "Runtime.releaseObjectGroup",
+    "DOM.scrollIntoViewIfNeeded",
+];
+
 fn answer(
     command: &Value,
     replies: &Replies,
@@ -652,6 +682,7 @@ fn answer(
     if let Some(answer) = tab_command(command, replies, page)
         .or_else(|| frame_command(command, calls, page).map(|reply| (reply, now)))
         .or_else(|| init_script_command(command, calls).map(|reply| (reply, now)))
+        .or_else(|| input_command(command, replies, calls))
     {
         return answer;
     }
@@ -686,15 +717,7 @@ fn answer(
             );
             (json!({"result":{}}), now)
         }
-        "Browser.getVersion"
-        | "Target.setDiscoverTargets"
-        | "Page.close"
-        | "Page.enable"
-        | "Network.enable"
-        | "Page.setLifecycleEventsEnabled"
-        | "Emulation.setFocusEmulationEnabled"
-        | "Runtime.releaseObjectGroup"
-        | "DOM.scrollIntoViewIfNeeded" => (json!({ "result": {} }), now),
+        method if EMPTY_RESULTS.contains(&method) => (json!({ "result": {} }), now),
         "Page.navigate" => match replies.navigation {
             Some(script) => {
                 let result = if script.same_document {
@@ -734,11 +757,6 @@ fn answer(
             now,
         ),
         "DOM.getBoxModel" => (box_model(), now),
-        "Input.dispatchMouseEvent" => {
-            let call = calls.mouse;
-            calls.mouse += 1;
-            (json!({ "result": {} }), replies.mouse.when(call))
-        }
         method => (
             json!({ "error": { "code": -32601, "message": format!("'{method}' wasn't found") } }),
             now,
@@ -756,6 +774,41 @@ fn init_script_command(command: &Value, calls: &mut Calls) -> Option<Value> {
         "Page.removeScriptToEvaluateOnNewDocument"
         | "Target.setAutoAttach"
         | "Runtime.runIfWaitingForDebugger" => Some(json!({ "result": {} })),
+        _ => None,
+    }
+}
+
+/// The input commands: drag interception (the review probe can fail its enable) and mouse
+/// events (a press can be held back on its own).
+fn input_command(
+    command: &Value,
+    replies: &Replies,
+    calls: &mut Calls,
+) -> Option<(Value, Option<Duration>)> {
+    let now = Some(Duration::ZERO);
+    match command["method"].as_str().unwrap_or_default() {
+        "Input.setInterceptDrags" => Some(
+            if replies.fail_drag_enable && command["params"]["enabled"] == true {
+                (
+                    json!({"error":{"code":-32000,"message":"injected enable failure"}}),
+                    now,
+                )
+            } else {
+                (json!({"result":{}}), now)
+            },
+        ),
+        "Input.dispatchMouseEvent" => {
+            let call = calls.mouse;
+            calls.mouse += 1;
+            let delay = if command["params"]["type"] == "mousePressed" {
+                replies
+                    .mouse_press_delay
+                    .or_else(|| replies.mouse.when(call))
+            } else {
+                replies.mouse.when(call)
+            };
+            Some((json!({ "result": {} }), delay))
+        }
         _ => None,
     }
 }
@@ -945,6 +998,14 @@ fn call_function_on(
     let name = params["arguments"][0]["value"].as_str().unwrap_or_default();
     let glue_params = &params["arguments"][1]["value"];
     let value = match name {
+        "setupDragListeners" => {
+            lock(page).drag_listeners = true;
+            json!({"armed":true})
+        }
+        "cleanupDrag" => {
+            lock(page).drag_listeners = false;
+            json!({"started":false})
+        }
         "title" => json!({"value":if calls.world_document { "After commit" } else { "Fake page" }}),
         "describeSelector" => json!({ "locator": glue_params["selector"] }),
         "checkElementStates" | "scrollIntoView" => json!({}),

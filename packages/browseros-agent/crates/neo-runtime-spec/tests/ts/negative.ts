@@ -19,6 +19,7 @@ type Handles = {
   HitTargetInterceptor: {
     stop: () => 'done' | { hitTargetDescription: string }
   }
+  ScreenshotCleanup: { restore: () => void }
   ElementList: Element[]
 }
 type Api = InjectedApi<InjectedScript, Handles>
@@ -49,6 +50,10 @@ const valid = {
   frameOwnerByRef: () => ({ visible: false }),
   frameOwnerRef: () => ({}),
   describeSelector: (_injected, { selector }) => ({ locator: selector }),
+  documentContent: () => ({ value: '' }),
+  writeContent: () => ({}),
+  generateSelector: () => ({}),
+  generateOwnerSelector: () => ({ generated: '' }),
   resolve: () => ({ count: 0 }),
   checkElementStates: () => ({}),
   scrollIntoView: () => ({}),
@@ -60,12 +65,57 @@ const valid = {
   stopHitTargetInterceptor: (_injected, _params, interceptor) => ({
     outcome: interceptor.stop(),
   }),
+  setupDragListeners: () => ({ armed: false }),
+  cleanupDrag: () => ({ started: false }),
   fill: () => ({ outcome: 'done' }),
   selectOptions: () => ({ values: [] }),
+  selectOptionsWithElements: () => ({ values: [] }),
+  elementListOf: (_injected, _params, element) => ({ list: [element] }),
+  elementListWith: (_injected, _params, list) => ({ list }),
   elementState: () => ({ matches: false }),
   focusElement: () => ({ outcome: 'done' }),
   inputValue: () => ({}),
   queryCount: () => ({ value: 0 }),
+  blurElement: () => ({ outcome: 'done' }),
+  selectText: () => ({ outcome: 'done' }),
+  dispatchEvent: () => ({}),
+  setHighlights: () => ({}),
+  hideHighlight: () => ({}),
+  prepareForScreenshot: () => ({}),
+  restoreAfterScreenshot: (_injected, _params, cleanup) => {
+    cleanup.restore()
+    return {}
+  },
+  fontsReady: () => ({}),
+  fullPageSize: () => ({ size: { width: 1280, height: 720 } }),
+  scrollOffset: () => ({ x: 0, y: 0 }),
+  maskElements: () => ({}),
+} satisfies Api
+
+export const screenshotCleanupIsNotAnElement = {
+  ...valid,
+  // @ts-expect-error restoreAfterScreenshot takes the cleanup prepareForScreenshot returned.
+  restoreAfterScreenshot: (_injected, _params, cleanup: Element) => {
+    cleanup.remove()
+    return {}
+  },
+} satisfies Api
+
+export const unknownSelectTextOutcome = {
+  ...valid,
+  // @ts-expect-error selectText returns done, notconnected or the visibility it is missing.
+  selectText: () => ({ outcome: 'selected' }),
+} satisfies Api
+
+export const parsedHighlightSelector = {
+  ...valid,
+  setHighlights: (_injected, { highlights }) => {
+    // @ts-expect-error a highlight's selector crosses as text; the glue parses it in the page.
+    const parts: unknown[] = highlights[0]?.selector.parts ?? []
+    if (parts.length)
+      throw new Error('a selector that crosses as text has no parts')
+    return {}
+  },
 } satisfies Api
 
 export const unknownElementState = {

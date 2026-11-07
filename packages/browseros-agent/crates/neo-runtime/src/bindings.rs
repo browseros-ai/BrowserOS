@@ -1161,7 +1161,7 @@ impl Reader {
                         return None;
                     }
                     page_of(&self.tabs, &prepared.target)
-                        .and_then(|page| page.events.contexts.frame_of(session, context))
+                        .and_then(|page| page.events.context_frames.frame_of(session, context))
                 });
                 let (done, next) = oneshot::channel();
                 let incoming = Incoming {

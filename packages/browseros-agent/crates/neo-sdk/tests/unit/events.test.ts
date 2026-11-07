@@ -116,15 +116,15 @@ test('tests that the first listener subscribes and the last one unsubscribes', (
 
 test('tests that an unserved Playwright event refuses a listener instead of never firing', async () => {
   const { page, context } = run()
-  expect(() => page.on('request', () => {})).toThrow(
-    'Neo does not serve the "request" event on Page yet',
+  expect(() => page.on('websocket', () => {})).toThrow(
+    'Neo does not serve the "websocket" event on Page yet',
   )
   expect(() => context.once('serviceworker', () => {})).toThrow(
     /BrowserContext/,
   )
-  expect(page.listenerCount('request')).toBe(0)
-  await expect(page.waitForEvent('download')).rejects.toThrow(
-    'page.waitForEvent: Neo does not serve the "download" event on Page yet',
+  expect(page.listenerCount('websocket')).toBe(0)
+  await expect(page.waitForEvent('worker')).rejects.toThrow(
+    'page.waitForEvent: Neo does not serve the "worker" event on Page yet',
   )
   // The context never closes during a run: listening to it is allowed and silent.
   context.on('close', () => {})
@@ -186,18 +186,27 @@ test('tests that waitForEvent rejects when the page closes, unless it waits for 
   )
 })
 
-test('tests that a signal is refused before any effect, and null is no signal', async () => {
+test('tests that an object that is no signal throws before any effect, and null is no signal', async () => {
   const { page, context } = run()
-  await expect(
-    page.waitForEvent('console', { signal: {} } as never),
-  ).rejects.toThrow(
-    'page.waitForEvent: Neo does not support the "signal" option yet',
-  )
-  await expect(
-    context.waitForEvent('page', { signal: {} } as never),
-  ).rejects.toThrow(
-    'browserContext.waitForEvent: Neo does not support the "signal" option yet',
-  )
+  // Playwright's `Waiter.rejectOnTimeout` reads `signal.addEventListener`, which `{}` lacks, before
+  // the wait listens (aborted and aborting signals: signal.test.ts).
+  for (const [apiName, waiting] of [
+    [
+      'page.waitForEvent',
+      page.waitForEvent('console', { signal: {} } as never),
+    ],
+    [
+      'browserContext.waitForEvent',
+      context.waitForEvent('page', { signal: {} } as never),
+    ],
+  ] as const) {
+    const error = await waiting.then(
+      () => null,
+      (error: Error) => error,
+    )
+    expect(error, apiName).toBeInstanceOf(TypeError)
+    expect(error?.message.startsWith(`${apiName}: `), apiName).toBe(true)
+  }
   expect(subscriptions).toEqual([])
   expect(page.listenerCount('console') + context.listenerCount('page')).toBe(0)
   const waited = page.waitForEvent('console', { signal: null } as never)
@@ -233,6 +242,43 @@ test('tests that a dialog nobody listens to by then gets the default answer', as
   page.on('console', () => {})
   await new Promise((resolve) => setTimeout(resolve, 10))
   expect(sent).toEqual([{ guid: 'dialog@T:1', method: 'dismiss' }])
+})
+
+test('tests that dialog.accept refuses a promptText that is no string, null included', async () => {
+  // DeepScan 240332173 reports `promptText === null` as always true in dialog.ts's check; both
+  // values below reach that branch, so it is not.
+  const sent: string[] = []
+  const { page } = run()
+  const native = (
+    globalThis as unknown as Record<string, { callWithEvents: unknown }>
+  ).__neo_runtime
+  native.callWithEvents = async (message: string) => {
+    const parsed = JSON.parse(message)
+    sent.push(parsed.method)
+    return { reply: JSON.stringify({ id: parsed.id }), events: 0 }
+  }
+  const dialogs: { accept(promptText?: unknown): Promise<void> }[] = []
+  page.on('dialog', (dialog) => dialogs.push(dialog))
+  queueEvent('context@default', 'dialog', {
+    dialog: {
+      guid: 'dialog@T:2',
+      initializer: {
+        page: { guid: 'page@T' },
+        type: 'prompt',
+        message: 'Name?',
+        defaultValue: '',
+      },
+    },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  const [dialog] = dialogs
+  await expect(dialog?.accept(5)).rejects.toThrow(
+    'promptText: expected string, got number',
+  )
+  await expect(dialog?.accept(null)).rejects.toThrow(
+    'promptText: expected string, got object',
+  )
+  expect(sent).toEqual([])
 })
 
 test('tests that a listener error nobody handles ends the run, sync or async', async () => {

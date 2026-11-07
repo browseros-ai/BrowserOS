@@ -511,14 +511,15 @@ export abstract class ChannelOwner extends EventEmitter {
       )
   }
 
-  #updateSubscription(event: EventType, enabled: boolean): void {
-    if (this.#served(event)) this.#pipe._subscribe(this._guid, event, enabled)
+  /** Neo: a channel event the SDK handles itself, with no public listener (such as Page's
+   * `locatorHandlerTriggered`), subscribed while the SDK needs it; `bindingCall` is turned on for
+   * good once a binding is exposed, so its calls reach the realm while the script waits. */
+  _subscribeChannelEvent(event: string, enabled: boolean): void {
+    this.#pipe._subscribe(this._guid, event, enabled)
   }
 
-  /** Neo: turns on a protocol event no listener counts, for good: `bindingCall` once a binding
-   * is exposed, so its calls reach the realm while the script waits. */
-  _subscribeChannelEvent(event: string): void {
-    this.#pipe._subscribe(this._guid, event, true)
+  #updateSubscription(event: EventType, enabled: boolean): void {
+    if (this.#served(event)) this.#pipe._subscribe(this._guid, event, enabled)
   }
 
   override on(event: EventType, listener: Listener): this {

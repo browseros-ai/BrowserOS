@@ -305,6 +305,7 @@ fn start(tab: &Tab, runtime: &Runtime, code: &str) -> (CancellationToken, JoinHa
         page: PageId::new(tab.target_id.clone()),
         timeout: Duration::from_secs(30),
         cancel: cancel.clone(),
+        artifacts: None,
     };
     let runtime = runtime.clone();
     (

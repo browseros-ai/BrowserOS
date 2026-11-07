@@ -22,6 +22,7 @@ use std::fs;
 use std::io;
 use std::io::Write;
 use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::thread;
@@ -56,7 +57,8 @@ pub fn is_headed() -> bool {
 }
 
 /// What the fixture server serves. A path in `pages` gets its HTML; any other path gets a small
-/// page titled with the path. A path starting with `/slow` answers after `slow_response`, so a
+/// page titled with the path; `/echo-headers` answers with the request's head. A path starting
+/// with `/slow` answers after `slow_response`, so a
 /// navigation to it stays in flight before it commits.
 #[derive(Clone, Default)]
 pub struct Fixture {
@@ -77,6 +79,9 @@ pub struct Tab {
     pub origin: String,
     pub target_id: String,
     pub driver: SessionId,
+    /// The throwaway profile's download folder, where the browser saves a download it handles
+    /// itself (Neo's `behavior: 'default'`), never the user's ~/Downloads.
+    pub downloads: PathBuf,
     /// Declared last, so it is released after the browser has gone.
     _turn: MutexGuard<'static, ()>,
 }
@@ -124,19 +129,21 @@ impl Tab {
                 .unwrap_or_else(|| panic!("Target.attachToTarget answered {attached}")),
         );
         wait_for_url(&cdp, &driver, &url).await;
+        let downloads = browser.downloads.clone();
         Self {
             browser,
             cdp,
             origin,
             target_id,
             driver,
+            downloads,
             _turn: turn,
         }
     }
 
     /// Starts `code` as a Neo run against this tab; it reads the tab while the test drives it.
     pub async fn start_run(&self, code: String) -> JoinHandle<RunOutcome> {
-        self.start_run_within(code, Duration::from_secs(30)).await
+        self.start_run_within(code, RUN_TIMEOUT).await
     }
 
     /// [`Tab::start_run`] with the run's own deadline.
@@ -156,6 +163,7 @@ impl Tab {
                     page,
                     timeout,
                     cancel: CancellationToken::new(),
+                    artifacts: None,
                 })
                 .await
         })
@@ -190,12 +198,23 @@ impl Tab {
     }
 
     /// Closes the browser ([`Browser::close`]), failing the test if any of its processes
-    /// outlived it. The turn, still in `self`, is released when this returns.
+    /// outlived it, or its download folder outlived the profile it lives in. The turn, still in
+    /// `self`, is released when this returns.
     pub async fn close(self) {
         let Self {
-            mut browser, cdp, ..
+            mut browser,
+            cdp,
+            downloads,
+            ..
         } = self;
         browser.close(cdp).await;
+        // Dropping the browser removes its profile, and every download in it.
+        drop(browser);
+        assert!(
+            !downloads.exists(),
+            "{} outlived the browser's throwaway profile",
+            downloads.display()
+        );
     }
 }
 
@@ -260,14 +279,19 @@ async fn serve_fixture(fixture: Fixture) -> String {
                     if path.starts_with("/slow") {
                         time::sleep(fixture.slow_response).await;
                     }
-                    let body = fixture
-                        .pages
-                        .iter()
-                        .find(|(page, _)| *page == path)
-                        .map_or_else(
-                            || format!("<title>{path}</title><h1>{path}</h1>"),
-                            |(_, html)| html.clone(),
-                        );
+                    // `/echo-headers` answers with the request's own head, for the headers it sent.
+                    let body = if path == "/echo-headers" {
+                        head.to_string()
+                    } else {
+                        fixture
+                            .pages
+                            .iter()
+                            .find(|(page, _)| *page == path)
+                            .map_or_else(
+                                || format!("<title>{path}</title><h1>{path}</h1>"),
+                                |(_, html)| html.clone(),
+                            )
+                    };
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                         body.len()
@@ -282,6 +306,10 @@ async fn serve_fixture(fixture: Fixture) -> String {
 }
 
 /// How long [`Browser::close`] waits for the browser to exit after `Browser.close` before it
+/// The suite's bound on one run ([`Tab::start_run`]), which a loaded machine needs as much for a
+/// fixture's frames to load as a run needs for its calls.
+pub const RUN_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// SIGKILLs the browser's process group: Playwright's `closeOrKill` timeout
 /// (`DEFAULT_PLAYWRIGHT_TIMEOUT`).
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -302,6 +330,8 @@ struct Browser {
     child: Child,
     port: u16,
     profile: TempDir,
+    /// The profile's download folder ([`seed_downloads`]).
+    downloads: PathBuf,
     /// Set by [`Browser::close`], after which `Drop` has nothing left to end.
     closed: bool,
 }
@@ -310,6 +340,7 @@ impl Browser {
     fn launch(binary: OsString) -> Self {
         let profile = tempfile::tempdir()
             .unwrap_or_else(|error| panic!("create a profile directory: {error}"));
+        let downloads = seed_downloads(profile.path());
         let mut command = Command::new(binary);
         if !is_headed() {
             command.arg("--headless=new");
@@ -353,6 +384,7 @@ impl Browser {
             child,
             port: 0,
             profile,
+            downloads,
             closed: false,
         };
         let port_file = browser.profile.path().join("DevToolsActivePort");
@@ -537,6 +569,33 @@ impl Drop for Browser {
             "browser killed without Browser.close; still running: {left:?}"
         );
     }
+}
+
+/// Creates the profile's own `downloads` folder and makes it the profile's download folder, in
+/// `Default/Preferences` before the browser first reads them, and returns it. A download the
+/// browser saves itself (Neo's `behavior: 'default'`) goes to the profile's default folder,
+/// which a fresh profile puts at the user's ~/Downloads. "Ask where to save each file" is off, as
+/// a headless browser cancels a download that asks. `crates/neo-sdk/tests/parity/harness.mjs`
+/// seeds its profiles the same way.
+fn seed_downloads(profile: &Path) -> PathBuf {
+    let downloads = profile.join("downloads");
+    let settings = profile.join("Default");
+    for folder in [&downloads, &settings] {
+        fs::create_dir_all(folder)
+            .unwrap_or_else(|error| panic!("create {}: {error}", folder.display()));
+    }
+    let folder = downloads.to_string_lossy();
+    let preferences = json!({
+        "download": {
+            "default_directory": folder,
+            "prompt_for_download": false,
+            "directory_upgrade": true,
+        },
+        "savefile": { "default_directory": folder },
+    });
+    fs::write(settings.join("Preferences"), preferences.to_string())
+        .unwrap_or_else(|error| panic!("write the profile's Preferences: {error}"));
+    downloads
 }
 
 /// Process ids `pgrep` matches; empty when it matches none or cannot run.

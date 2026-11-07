@@ -12,14 +12,17 @@
 //!         ├─ Trace += CallEntry                 every message with an id leaves a record
 //!         ├─ early failure → reply now, no call log (Playwright's dispatcher does the same)
 //!         ├─ admit against the in-flight caps   past them → an early failure too
+//!         ├─ Aborts += message id               `__neo_runtime.abort(id, reason)` reaches it
 //!         └─ run.tasks.spawn(serve)             runs while JS spins, outlives the realm
 //!              ├─ events.ready(page)            what the page's subscriptions switched on
 //!              ├─ click::click(&page, &options, &progress)   prepares the tab first
 //!              ├─ entry.finish(…)
 //!              └─ events.barrier(); reply ({id} | {id, error:{error:{message,name}}, log}, W)
 //!  run end: Dispatcher::finish(reason)
-//!    record the reason → cancel `ended` → close the events, answer dialogs left open
-//!    → wait for the run's tasks (≤ RECORDS_WAIT) → records
+//!    record the reason → cancel `ended` → mark the run's input ended on every tab
+//!    → close the events, answer dialogs left open → start each tab's input release (a task)
+//!    → wait for the run's tasks, releases included (≤ RECORDS_WAIT)
+//!    → hide the run's highlights (≤ HIGHLIGHTS_WAIT) → records
 //! ```
 //!
 //! Why a task per call and not the realm's scheduler, where `setTimeout` runs: rquickjs polls
@@ -39,17 +42,20 @@ use std::time::Duration;
 use futures_util::future;
 use neo_runtime_spec::injected::ReadableElementState;
 use neo_runtime_spec::serve::{
-    BrowserContextCall, DialogCall, FrameAriaSnapshotParams, FrameCall, FrameCheckParams,
-    FrameCheckResult, FrameClickParams, FrameDblclickParams, FrameFillParams, FrameFillResult,
-    FrameGetAttributeParams, FrameGotoParams, FrameHoverParams, FrameInnerHTMLParams,
-    FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams,
-    FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult, FrameIsEditableParams,
-    FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult, FrameIsHiddenParams,
-    FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams,
-    FramePressResult, FrameQueryCountParams, FrameSelectOptionParams, FrameSelectOptionResult,
-    FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameUncheckParams,
-    FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult, Metadata, PageCall,
-    RequestCall, ResponseCall,
+    ArtifactCall, BrowserContextCall, DialogCall, FrameAriaSnapshotJSONParams,
+    FrameAriaSnapshotParams, FrameCall, FrameCheckParams, FrameCheckResult, FrameClickParams,
+    FrameContentParams, FrameDblclickParams, FrameDragAndDropParams, FrameDragAndDropResult,
+    FrameFillParams, FrameFillResult, FrameGetAttributeParams, FrameGotoParams, FrameHoverParams,
+    FrameInnerHTMLParams, FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult,
+    FrameIsCheckedParams, FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult,
+    FrameIsEditableParams, FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult,
+    FrameIsHiddenParams, FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult,
+    FramePressParams, FramePressResult, FrameQueryCountParams, FrameResolveSelectorParams,
+    FrameSelectOptionParams, FrameSelectOptionResult, FrameSetContentParams, FrameSetContentResult,
+    FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameTypeParams, FrameTypeResult,
+    FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
+    FrameWaitForTimeoutParams, FrameWaitForTimeoutResult, Metadata, PageCall, RequestCall,
+    ResponseCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -61,16 +67,28 @@ use tokio::time::Instant;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
+use crate::abort::{Aborts, Registration};
 use crate::bindings::{self, BindingRoute, Outcome};
+use crate::capture::{self, Capture, NEO_SCREENSHOT_META, NeoScreenshotParams};
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::clock::{self, ClockRoute};
+use crate::content::{self, SetContentOptions, WriteOrder, WriteTurn};
+use crate::devices::{self, DeviceCall};
 use crate::dialogs;
+use crate::downloads;
+use crate::drag::{self, DragOptions};
+use crate::element_ops::{
+    self, BOUNDING_BOX_META, DispatchOptions, ElementTarget, NeoElementParams, NeoSelectTextParams,
+    SCROLL_INTO_VIEW_META, SELECT_TEXT_META,
+};
 use crate::evaluate::{self, EvalCall};
 use crate::events::{ALL_PAGES, EventHub};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
+use crate::frame_element;
 use crate::frames::FrameScope;
+use crate::highlight::{self, HighlightOptions};
 use crate::history::{
     self, Cursors, Ending, FinishNavigationOptions, FrameCursor, NeoFinishNavigationParams,
     NeoNavigationResult, NeoNextNavigationParams, NeoReleaseNavigationParams,
@@ -82,6 +100,7 @@ use crate::init_scripts::{
 };
 use crate::keyboard::KeyboardTab;
 use crate::lists;
+use crate::locator_handlers::{self, Resolving};
 use crate::navigate::{self, GotoOptions};
 use crate::network::{HopId, ObjectKind as NetworkObject};
 use crate::page::{DialogAnswer, FrameTab, PageSession};
@@ -97,7 +116,7 @@ use crate::tab_calls;
 use crate::tabs::{PageEntry, Tabs};
 use crate::waits::{
     self, NeoWaitForLoadStateParams, NeoWaitForUrlParams, WaitForLoadStateOptions,
-    WaitForSelectorOptions, WaitForUrlOptions,
+    WaitForSelectorOptions, WaitForUrlOptions, WaitTab,
 };
 
 /// The shared budget for creation settlement, call draining and closing-state reads after
@@ -111,6 +130,11 @@ const RECORDS_WAIT: Duration = Duration::from_secs(1);
 /// run, a binding whose calls never settle, or the run's fake timers. Free for a run that used
 /// none of them.
 const PAGE_END_WAIT: Duration = Duration::from_secs(3);
+/// Neo: the budget for removing the run's highlights at its end, after [`RECORDS_WAIT`] and
+/// apart from it, so a document that does not answer delays the outcome by at most this and
+/// never holds back an input release. An overlay it cannot remove in time stays, as one in a
+/// document that navigated away does.
+const HIGHLIGHTS_WAIT: Duration = Duration::from_secs(1);
 
 /// The most browser calls one run may have unfinished at once. Each holds its params, its call
 /// log and a task in Rust, outside the realm's memory limit, and a script can start calls without
@@ -124,9 +148,6 @@ const MAX_CALLS_IN_FLIGHT: usize = 64;
 /// may total, for the same reason: a few calls with huge selectors would otherwise hold several
 /// copies of each outside the realm.
 const MAX_REQUEST_BYTES_IN_FLIGHT: usize = 8 * 1024 * 1024;
-
-/// Neo has no `ElementHandle` objects to pass as `selectOption` values.
-const ELEMENTS_UNSUPPORTED: &str = "Neo does not support ElementHandle values in selectOption yet";
 
 // Playwright implements these on its eventful client. Neo has a call/reply bridge, so its
 // Frame extensions keep the whole wait in Rust. Wire shapes live in waits.rs and neo-commands.ts.
@@ -220,10 +241,62 @@ struct Inner {
     in_flight: Arc<InFlight>,
     /// The URL-predicate navigation waits open between their calls.
     cursors: Arc<Cursors<FrameCursor>>,
+    /// The admitted calls a script's `signal` can still abort, by message id (`abort.rs`).
+    aborts: Arc<Aborts>,
     next_call_id: AtomicU64,
+    /// The `setContent` writes into each frame, in arrival order (`content.rs`).
+    write_order: WriteOrder,
     /// Cancels `run.ended` when the last `Dispatcher` drops. A reason `finish` recorded first
     /// wins; otherwise calls read [`RunEnd::Cancelled`].
     _ending: DropGuard,
+}
+
+/// What admitted one call ([`Inner::admit`]): its share of the in-flight caps, and the claim of
+/// a call that ends calls in flight.
+struct Admission {
+    share: Option<Admitted>,
+    ending: Option<Ending<FrameCursor>>,
+    resolving: Option<Resolving>,
+}
+
+impl Inner {
+    /// Admits `route`: a share of the in-flight caps, or none for a call that ends calls in
+    /// flight, with its claim. A navigation's release, a running locator handler's completion
+    /// (which frees the action waiting on it) and the context's close: the cap never refuses
+    /// them, or a full run could not let go.
+    fn admit(
+        &self,
+        route: &ObjectCall,
+        target: Option<&(Arc<PageEntry>, FrameScope)>,
+        bytes: usize,
+    ) -> Result<Admission, PlaywrightError> {
+        let ending = ending_cursor(route).and_then(|id| self.cursors.begin_ending(id));
+        let resolving = completed_handler(route).and_then(|uid| {
+            let page = target?.0.attached_session()?;
+            locator_handlers::begin_resolving(&page, uid)
+        });
+        let releases = ending.is_some()
+            || resolving.is_some()
+            || matches!(route, ObjectCall::Context(BrowserContextCall::Close(_)));
+        let share = if releases {
+            None
+        } else {
+            Some(self.in_flight.admit(bytes)?)
+        };
+        Ok(Admission {
+            share,
+            ending,
+            resolving,
+        })
+    }
+
+    /// A `setContent` call takes its place in its frame's write order as it arrives.
+    fn ordered(&self, guid: &str, mut call: ObjectCall) -> ObjectCall {
+        if let ObjectCall::Frame(Route::FrameSetContent(_, turn)) = &mut call {
+            *turn = Some(self.write_order.turn(guid));
+        }
+        call
+    }
 }
 
 /// Playwright's client message, `{id, guid, method, params, metadata}` (`connection.ts`).
@@ -306,21 +379,29 @@ enum ObjectKind {
     BindingCall(String),
     /// A JavaScript dialog the run's `dialog` event handed out, by its index on the tab.
     Dialog(u64),
+    /// A download the run's `download` event handed out, by the browser's guid
+    /// (`downloads.rs`). It belongs to the run, not to its tab, which may close first.
+    Download(String),
     Unknown,
 }
 
 enum ObjectCall {
     Context(BrowserContextCall),
     Page(PageCall),
+    /// `page.keyboard`, `page.mouse` and `page.touchscreen` (`devices.rs`).
+    Device(DeviceCall),
     Frame(Route),
     Network(NetworkCall),
     /// An init script command (`init_scripts.rs`).
     Init(InitRoute),
+    /// `Page.screenshot`, `Page.pdf` and `neo:screenshot`, with Neo's `path` (`capture.rs`).
+    Capture(Capture),
     /// A binding command (`bindings.rs`).
     Binding(BindingRoute),
     /// A clock command (`clock.rs`).
     Clock(ClockRoute),
     Dialog(u64, DialogCall),
+    Download(String, ArtifactCall),
 }
 
 /// What a message asks for. One variant per served (object, method).
@@ -342,6 +423,10 @@ enum Route {
     FrameAriaSnapshot(SnapshotOptions),
     FrameFill(FillOptions),
     FramePress(PressOptions),
+    /// `Frame.type`, served by press's policy.
+    FrameType(PressOptions),
+    /// `Frame.dragAndDrop`: two pointer actions over Chromium's drag manager.
+    FrameDragAndDrop(DragOptions),
     FrameInputValue(InputValueOptions),
     FrameIsVisible(StateOptions),
     FrameIsHidden(StateOptions),
@@ -352,8 +437,26 @@ enum Route {
     FrameSetChecked(CheckOptions),
     FrameSelectOption(SelectOptions),
     FrameWaitForSelector(WaitForSelectorOptions),
+    /// `Frame.frameElement` (`frame_element.rs`).
+    FrameFrameElement,
     FrameWaitForUrl(WaitForUrlOptions),
     FrameWaitForLoadState(WaitForLoadStateOptions),
+    // Document content and timing (content.rs, waits.rs, reads.rs).
+    FrameContent(bool),
+    /// The options, and the write's place in its frame's order (`Dispatcher::call` gives it).
+    FrameSetContent(SetContentOptions, Option<WriteTurn>),
+    FrameWaitForTimeout(f64),
+    FrameResolveSelector(String),
+    FrameAriaSnapshotJson(SnapshotOptions),
+    // Element operations (element_ops.rs, highlight.rs).
+    FrameFocus(ElementTarget),
+    FrameBlur(ElementTarget),
+    FrameDispatchEvent(DispatchOptions),
+    FrameScrollIntoViewIfNeeded(ElementTarget),
+    FrameSelectText(ElementTarget, bool),
+    FrameBoundingBox(ElementTarget),
+    FrameHighlight(HighlightOptions),
+    FrameHideHighlight(HighlightOptions),
     FrameWaitForNavigation(WaitForNavigationOptions),
     FrameNextNavigation(NeoNextNavigationParams),
     FrameFinishNavigation(FinishNavigationOptions),
@@ -371,7 +474,9 @@ impl Dispatcher {
             trace: Trace::default(),
             in_flight: Arc::default(),
             cursors: Arc::default(),
+            aborts: Arc::default(),
             next_call_id: AtomicU64::new(1),
+            write_order: WriteOrder::default(),
         }))
     }
 
@@ -402,6 +507,7 @@ impl Dispatcher {
         });
         let object = object_kind(&guid, target.is_some());
         let Routed { meta, route } = route(object, &method, params.clone());
+        let route = route.map(|call| inner.ordered(&guid, call));
         let metadata = metadata.unwrap_or(Metadata {
             location: None,
             title: None,
@@ -419,19 +525,10 @@ impl Dispatcher {
         }));
         inner.trace.push(Arc::clone(&entry));
         let admitted = route.and_then(|route| {
-            let ending = ending_cursor(&route).and_then(|id| inner.cursors.begin_ending(id));
-            // A navigation's release, and the context's close, end calls in flight: the cap
-            // never refuses them, or a full run could not let go.
-            let releases = ending.is_some()
-                || matches!(route, ObjectCall::Context(BrowserContextCall::Close(_)));
-            let share = if releases {
-                None
-            } else {
-                Some(inner.in_flight.admit(message.len())?)
-            };
-            Ok((route, share, ending))
+            let admission = inner.admit(&route, target.as_ref(), message.len())?;
+            Ok((route, admission))
         });
-        let (route, share, ending) = match admitted {
+        let (route, admission) = match admitted {
             Ok(admitted) => admitted,
             Err(error) => {
                 entry.finish(error.to_result());
@@ -460,6 +557,11 @@ impl Dispatcher {
         } else {
             progress
         };
+        // Registered before the call returns to JS, so the abort listener the SDK adds right
+        // after always finds it. The SDK's ids are integers; any other id cannot be aborted.
+        let abortable = id
+            .as_u64()
+            .map(|message_id| inner.aborts.register(message_id, &entry));
         let (reply, receiver) = oneshot::channel();
         let served = serve_call(
             inner.tabs.clone(),
@@ -473,21 +575,35 @@ impl Dispatcher {
                 id,
                 reply,
                 events: inner.tabs.events().clone(),
-                share,
-                ending,
+                share: admission.share,
+                ending: admission.ending,
+                resolving: admission.resolving,
+                abortable,
             },
         );
         inner.run.tasks.spawn(served);
         PendingReply(PendingInner::Waiting(receiver))
     }
 
+    /// `__neo_runtime.abort`: the script's `signal` aborted the call it sent as message `id`.
+    /// The call stops at its next race or check and replies `AbortError` with `reason`; an id
+    /// no call holds any more (it replied already) is ignored, as Playwright ignores one.
+    pub(crate) fn abort(&self, id: u64, reason: String) {
+        self.0.aborts.abort(id, reason);
+    }
+
     /// Ends the run's calls after the realm is gone: records why the run ended (the first
-    /// reason wins), and shares [`RECORDS_WAIT`] across creation settlement, task draining
-    /// and closing-state reads before returning the records and dropped-calls summary.
+    /// reason wins) and that its input is over, starts releasing the input it left held,
+    /// shares [`RECORDS_WAIT`] across creation settlement, task draining (the releases
+    /// included) and closing-state reads, then gives the run's highlights
+    /// [`HIGHLIGHTS_WAIT`] of their own before returning the records and dropped-calls summary.
     pub(crate) async fn finish(&self, reason: RunEnd) -> (Vec<CallRecord>, Option<DroppedCalls>) {
         let deadline = Instant::now() + RECORDS_WAIT;
         let run = &self.0.run;
         run.end(reason);
+        // Before anything below waits: what the run holds is held by no live run from now on,
+        // however its release goes (`TabInput::mark_ended`).
+        self.0.tabs.mark_input_ended();
         // The run's init scripts go first, then its bindings and its clock, on a budget of their
         // own: none waits on a call still running, so no document loaded after the run returns
         // runs one of its scripts, and no page keeps one of its bindings or fake timers.
@@ -502,6 +618,12 @@ impl Dispatcher {
         // sessions detach (`Dialogs::left_open`).
         self.0.tabs.events().close();
         let _answered = time::timeout_at(deadline, answer_left_open(&self.0.tabs)).await;
+        // Keys and buttons this run left held are released on each tab it touched, under a
+        // turn (design section 4.6), once the dialogs it left open are answered. Each tab's
+        // release is a task of the run's tracker, started before the tracker closes, so the
+        // drain below waits for it and `Runtime::drain` for what the budget leaves running:
+        // no budget cuts a release off, and no other cleanup goes before one.
+        self.0.tabs.release_input();
         let _created = time::timeout_at(deadline, self.0.tabs.finish_creations()).await;
         run.tasks.close();
         let _waited = time::timeout_at(deadline, run.tasks.wait()).await;
@@ -509,6 +631,16 @@ impl Dispatcher {
         // detach; a run whose future is dropped releases them as `RunScope` drops.
         run.handles.close();
         let _refreshed = time::timeout_at(deadline, self.0.tabs.refresh_closing()).await;
+        // The run's highlights show over the user's tab; none may outlive the run that made it.
+        // They go last, on their own budget: a document that does not answer (a busy
+        // out-of-process frame) delays the outcome, never a release.
+        let sessions = self.0.tabs.attached_sessions();
+        let _hidden = time::timeout(HIGHLIGHTS_WAIT, async {
+            for session in &sessions {
+                highlight::hide_at_run_end(session).await;
+            }
+        })
+        .await;
         self.0.trace.take(reason)
     }
 }
@@ -665,50 +797,22 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         ObjectKind::Context => BrowserContextCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Context(call)))),
         ObjectKind::Page => {
-            PageCall::decode(method, params).map(|call| (call.meta(), Ok(ObjectCall::Page(call))))
+            let path = neo_path(params.as_ref());
+            PageCall::decode(method, params).map(|call| {
+                let meta = call.meta();
+                let routed = match DeviceCall::from_page_call(call) {
+                    Ok(device) => device.map(ObjectCall::Device),
+                    Err(call) => page_call(call, path),
+                };
+                (meta, routed)
+            })
         }
         ObjectKind::Frame => {
-            if method == WAIT_FOR_URL_META.method {
-                return Routed {
-                    meta: Some(&WAIT_FOR_URL_META),
-                    route: decode_neo_params::<NeoWaitForUrlParams>(params, &WAIT_FOR_URL_META)
-                        .and_then(|params| WaitForUrlOptions::from_params(&params))
-                        .map(|options| ObjectCall::Frame(Route::FrameWaitForUrl(options))),
-                };
-            }
-            if let Some(routed) = route_navigation_wait(method, params.as_ref()) {
+            if let Some(routed) = route_neo_screenshot(method, params.as_ref()) {
                 return routed;
             }
-            if let Some((meta, call)) = evaluate::route_frame(method, params.as_ref()) {
-                return Routed {
-                    meta: Some(meta),
-                    route: call.map(|call| ObjectCall::Frame(Route::FrameEval(call))),
-                };
-            }
-            if method == WAIT_FOR_LOAD_STATE_META.method {
-                return Routed {
-                    meta: Some(&WAIT_FOR_LOAD_STATE_META),
-                    route: decode_neo_params::<NeoWaitForLoadStateParams>(
-                        params,
-                        &WAIT_FOR_LOAD_STATE_META,
-                    )
-                    .and_then(WaitForLoadStateOptions::from_params)
-                    .map(|options| ObjectCall::Frame(Route::FrameWaitForLoadState(options))),
-                };
-            }
-            // ElementHandleChannel is uninhabited in Neo, so reject non-empty arrays before
-            // serde tries to decode their members. Keep the method's input flag and title.
-            if method == "selectOption"
-                && params
-                    .as_ref()
-                    .and_then(|params| params.get("elements"))
-                    .and_then(Value::as_array)
-                    .is_some_and(|elements| !elements.is_empty())
-            {
-                return Routed {
-                    meta: Some(FrameSelectOptionParams::META),
-                    route: Err(PlaywrightError::error(ELEMENTS_UNSUPPORTED)),
-                };
+            if let Some(routed) = route_frame_extension(method, params.as_ref()) {
+                return routed;
             }
             FrameCall::decode(method, params)
                 .map(|call| (call.meta(), route_frame_call(call).map(ObjectCall::Frame)))
@@ -738,6 +842,8 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         }
         ObjectKind::Dialog(index) => DialogCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
+        ObjectKind::Download(guid) => ArtifactCall::decode(method, params)
+            .map(|call| (call.meta(), Ok(ObjectCall::Download(guid, call)))),
         // `route_init` answers every Disposable and BindingCall message.
         ObjectKind::Disposable(_) | ObjectKind::BindingCall(_) | ObjectKind::Unknown => {
             return Routed {
@@ -761,6 +867,184 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
     }
 }
 
+/// Neo's `neo:screenshot` on a Frame guid (`locator.screenshot`, `capture.rs`), or `None` for
+/// another method.
+fn route_neo_screenshot(method: &str, params: Option<&Value>) -> Option<Routed> {
+    (method == NEO_SCREENSHOT_META.method).then(|| Routed {
+        meta: Some(&NEO_SCREENSHOT_META),
+        route: decode_neo_params::<NeoScreenshotParams>(params.cloned(), &NEO_SCREENSHOT_META)
+            .map(|params| ObjectCall::Capture(Capture::Locator(Box::new(params)))),
+    })
+}
+
+/// Neo's `path` beside Playwright's params of a page call (`capture.rs`); Playwright's own
+/// decode ignores the key.
+fn neo_path(params: Option<&Value>) -> Result<Option<String>, PlaywrightError> {
+    match params.and_then(|params| params.get("path")) {
+        None => Ok(None),
+        Some(Value::String(path)) => Ok(Some(path.clone())),
+        Some(other) => Err(PlaywrightError::error(format!(
+            "path: expected string, got {}",
+            json_kind(other)
+        ))),
+    }
+}
+
+/// The JSON kind of `value`, as a validator names it.
+fn json_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// A decoded page call: the ones that answer bytes go to `capture.rs` with their `path`.
+fn page_call(
+    call: PageCall,
+    path: Result<Option<String>, PlaywrightError>,
+) -> Result<ObjectCall, PlaywrightError> {
+    Ok(match call {
+        PageCall::Screenshot(params) => ObjectCall::Capture(Capture::Page {
+            params: Box::new(params),
+            path: path?,
+        }),
+        PageCall::Pdf(params) => ObjectCall::Capture(Capture::Pdf {
+            params: Box::new(params),
+            path: path?,
+        }),
+        call => ObjectCall::Page(call),
+    })
+}
+
+/// A frame's calls that are not one generated `FrameCall` (Neo's URL and load-state waits,
+/// element commands, navigation waits, evaluation) or that `FrameCall` must not see
+/// (`selectOption` with element handles). `None` hands the call to `FrameCall::decode`.
+fn route_frame_extension(method: &str, params: Option<&Value>) -> Option<Routed> {
+    if method == WAIT_FOR_URL_META.method {
+        return Some(Routed {
+            meta: Some(&WAIT_FOR_URL_META),
+            route: decode_neo_params::<NeoWaitForUrlParams>(params.cloned(), &WAIT_FOR_URL_META)
+                .and_then(|params| WaitForUrlOptions::from_params(&params))
+                .map(|options| ObjectCall::Frame(Route::FrameWaitForUrl(options))),
+        });
+    }
+    if let Some(routed) = route_element_command(method, params.cloned()) {
+        return Some(routed);
+    }
+    if let Some(routed) = route_navigation_wait(method, params) {
+        return Some(routed);
+    }
+    if let Some(routed) = route_frame_element(method) {
+        return Some(routed);
+    }
+    if let Some((meta, call)) = evaluate::route_frame(method, params) {
+        return Some(Routed {
+            meta: Some(meta),
+            route: call.map(|call| ObjectCall::Frame(Route::FrameEval(call))),
+        });
+    }
+    if method == WAIT_FOR_LOAD_STATE_META.method {
+        return Some(Routed {
+            meta: Some(&WAIT_FOR_LOAD_STATE_META),
+            route: decode_neo_params::<NeoWaitForLoadStateParams>(
+                params.cloned(),
+                &WAIT_FOR_LOAD_STATE_META,
+            )
+            .map(WaitForLoadStateOptions::from_params)
+            .map(|options| ObjectCall::Frame(Route::FrameWaitForLoadState(options))),
+        });
+    }
+    // The generated `ElementHandleChannel` has no values, so `elements` (Playwright's
+    // `ElementHandle` values) leaves the wire before the generated decode, as guids. Keep the
+    // method's input flag and title.
+    if method == "selectOption"
+        && let Some(elements) = params
+            .and_then(|params| params.get("elements"))
+            .and_then(Value::as_array)
+        && !elements.is_empty()
+    {
+        return Some(Routed {
+            meta: Some(FrameSelectOptionParams::META),
+            route: select_option_with_elements(params, elements),
+        });
+    }
+    None
+}
+
+/// Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection._tChannelImplFromWire`: `expected guid for ${names.toString()}`
+///
+/// `selectOption` with `elements`: each element's guid, and the rest of its params decoded as
+/// the generated `FrameCall` decodes them. The guids name handles only once the call runs
+/// (`fill::select_option`).
+fn select_option_with_elements(
+    params: Option<&Value>,
+    elements: &[Value],
+) -> Result<ObjectCall, PlaywrightError> {
+    let guids = elements
+        .iter()
+        .enumerate()
+        .map(|(index, element)| {
+            element
+                .get("guid")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    PlaywrightError::error(format!(
+                        "elements[{index}]: expected guid for ElementHandle"
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut rest = params.cloned().unwrap_or_else(|| json!({}));
+    if let Some(object) = rest.as_object_mut() {
+        object.remove("elements");
+    }
+    let call = FrameCall::decode("selectOption", Some(rest))
+        .map_err(|error| PlaywrightError::error(error.to_string()))?;
+    match route_frame_call(call)? {
+        Route::FrameSelectOption(options) => Ok(ObjectCall::Frame(Route::FrameSelectOption(
+            options.with_elements(guids),
+        ))),
+        _ => Err(PlaywrightError::error(
+            "neo-runtime: selectOption decoded as another call",
+        )),
+    }
+}
+
+/// The Neo element commands (`element_ops.rs`), or `None` for any other method.
+fn route_element_command(method: &str, params: Option<Value>) -> Option<Routed> {
+    let (meta, route) = if method == SCROLL_INTO_VIEW_META.method {
+        let route = decode_neo_params::<NeoElementParams>(params, &SCROLL_INTO_VIEW_META)
+            .map(|params| Route::FrameScrollIntoViewIfNeeded(ElementTarget::from_neo(params)));
+        (&SCROLL_INTO_VIEW_META, route)
+    } else if method == SELECT_TEXT_META.method {
+        let route =
+            decode_neo_params::<NeoSelectTextParams>(params, &SELECT_TEXT_META).map(|params| {
+                let force = params.force.unwrap_or(false);
+                let target = ElementTarget::from_neo(NeoElementParams {
+                    selector: params.selector,
+                    strict: params.strict,
+                });
+                Route::FrameSelectText(target, force)
+            });
+        (&SELECT_TEXT_META, route)
+    } else if method == BOUNDING_BOX_META.method {
+        let route = decode_neo_params::<NeoElementParams>(params, &BOUNDING_BOX_META)
+            .map(|params| Route::FrameBoundingBox(ElementTarget::from_neo(params)));
+        (&BOUNDING_BOX_META, route)
+    } else {
+        return None;
+    };
+    Some(Routed {
+        meta: Some(meta),
+        route: route.map(ObjectCall::Frame),
+    })
+}
+
 /// Neo's navigation-wait commands on a Frame guid (`history.rs`), or `None` for another method.
 fn route_navigation_wait(method: &str, params: Option<&Value>) -> Option<Routed> {
     let params = params.cloned();
@@ -776,7 +1060,7 @@ fn route_navigation_wait(method: &str, params: Option<&Value>) -> Option<Routed>
         (&NEXT_NAVIGATION_META, route)
     } else if method == FINISH_NAVIGATION_META.method {
         let route = decode_neo_params::<NeoFinishNavigationParams>(params, &FINISH_NAVIGATION_META)
-            .and_then(|params| FinishNavigationOptions::from_params(&params))
+            .map(|params| FinishNavigationOptions::from_params(&params))
             .map(Route::FrameFinishNavigation);
         (&FINISH_NAVIGATION_META, route)
     } else if method == RELEASE_NAVIGATION_META.method {
@@ -837,9 +1121,9 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::Dblclick(params) => {
             PointerOptions::from_dblclick(params).map(Route::FramePointer)
         }
-        FrameCall::Hover(params) => PointerOptions::from_hover(params).map(Route::FramePointer),
-        FrameCall::Tap(params) => PointerOptions::from_tap(params).map(Route::FramePointer),
-        FrameCall::Goto(params) => GotoOptions::from_params(params).map(Route::FrameGoto),
+        FrameCall::Hover(params) => Ok(Route::FramePointer(PointerOptions::from_hover(params))),
+        FrameCall::Tap(params) => Ok(Route::FramePointer(PointerOptions::from_tap(params))),
+        FrameCall::Goto(params) => Ok(Route::FrameGoto(GotoOptions::from_params(params))),
         FrameCall::Title(_) => Ok(Route::FrameTitle),
         FrameCall::TextContent(params) => {
             Ok(Route::FrameTextContent(ReadOptions::from_params(params)))
@@ -859,6 +1143,10 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         )),
         FrameCall::Fill(params) => Ok(Route::FrameFill(FillOptions::from_params(params))),
         FrameCall::Press(params) => Ok(Route::FramePress(PressOptions::from_params(params))),
+        FrameCall::Type(params) => Ok(Route::FrameType(PressOptions::from_type(params))),
+        FrameCall::DragAndDrop(params) => {
+            DragOptions::from_params(params).map(Route::FrameDragAndDrop)
+        }
         FrameCall::InputValue(params) => Ok(Route::FrameInputValue(
             InputValueOptions::from_params(params),
         )),
@@ -871,6 +1159,29 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         }
         FrameCall::WaitForSelector(params) => Ok(Route::FrameWaitForSelector(
             WaitForSelectorOptions::from_params(params),
+        )),
+        FrameCall::Content(params) => {
+            Ok(Route::FrameContent(params.include_shadow.unwrap_or(false)))
+        }
+        FrameCall::SetContent(params) => Ok(Route::FrameSetContent(
+            SetContentOptions::from_params(params),
+            None,
+        )),
+        FrameCall::WaitForTimeout(params) => Ok(Route::FrameWaitForTimeout(params.wait_timeout)),
+        FrameCall::ResolveSelector(params) => Ok(Route::FrameResolveSelector(params.selector)),
+        FrameCall::AriaSnapshotJSON(params) => Ok(Route::FrameAriaSnapshotJson(
+            SnapshotOptions::from_json_params(params),
+        )),
+        FrameCall::Focus(params) => Ok(Route::FrameFocus(ElementTarget::from_focus(params))),
+        FrameCall::Blur(params) => Ok(Route::FrameBlur(ElementTarget::from_blur(params))),
+        FrameCall::DispatchEvent(params) => {
+            DispatchOptions::from_params(params).map(Route::FrameDispatchEvent)
+        }
+        FrameCall::Highlight(params) => Ok(Route::FrameHighlight(
+            HighlightOptions::from_highlight(params),
+        )),
+        FrameCall::HideHighlight(params) => Ok(Route::FrameHideHighlight(
+            HighlightOptions::from_hide(params),
         )),
     }
 }
@@ -886,6 +1197,11 @@ struct CallReply {
     share: Option<Admitted>,
     /// A wait's finish or release: its claim on the wait it ends (`Cursors::begin_ending`).
     ending: Option<Ending<FrameCursor>>,
+    /// A running locator handler's completion: its claim on that handler
+    /// (`locator_handlers::begin_resolving`).
+    resolving: Option<Resolving>,
+    /// The call's place in the abort registry; `None` for an id that is not an integer.
+    abortable: Option<Registration>,
 }
 
 /// Attachment can block or be cancelled independently of a frame handler. Once attached,
@@ -898,12 +1214,20 @@ async fn serve_call(
     progress: Progress,
     reply: CallReply,
 ) {
+    // A call the script aborted before its task first ran never starts its handler, even one
+    // that would not race its progress first. A run that ended meanwhile outranks the abort
+    // (`Progress::race`'s order): the handler starts and its first race reports the end.
+    if let Err(error) = progress.pending_abort() {
+        finish_reply(Err(error), reply).await;
+        return;
+    }
     // A page's call waits for what the run's subscriptions switched on there (console messages,
     // the dialog watcher), so the call cannot cause an event before its producer listens; a
     // context call (`newPage`) waits for target discovery's baseline. A dialog's answer never
     // waits: an open dialog can hold that very enable, and only the answer frees the page.
     let gate = match (&route, &target) {
-        (ObjectCall::Dialog(..), _) => None,
+        // A download's calls start nothing in a page; `cancel` must not wait for a page's enables.
+        (ObjectCall::Dialog(..) | ObjectCall::Download(..), _) => None,
         (ObjectCall::Context(_), _) => Some(ALL_PAGES),
         (_, Some((page, _))) => Some(page.id.as_str()),
         (_, None) => None,
@@ -934,6 +1258,9 @@ async fn serve_call(
             }
             tab_calls::page(&tabs, &page, call, &progress).await
         }
+        (ObjectCall::Capture(call), Some((page, scope))) => {
+            capture::serve(&tabs, &page, scope, call, &progress).await
+        }
         (ObjectCall::Frame(route), Some((page, scope))) => {
             let session = match page.attached_session() {
                 Some(session) => Ok(session),
@@ -960,6 +1287,25 @@ async fn serve_call(
                 Err(error) => Err(error),
             }
         }
+        (ObjectCall::Device(call), Some((page, _))) => {
+            let session = match page.attached_session() {
+                Some(session) => Ok(session),
+                None => match progress.race(tabs.session(&page)).await {
+                    Ok(result) => result.map_err(CallError::from),
+                    Err(error) => Err(error),
+                },
+            };
+            match session {
+                Ok(page) => {
+                    let tab = FrameTab {
+                        page,
+                        scope: FrameScope::Main,
+                    };
+                    devices::serve(&tab, &call, &progress).await.map(|()| None)
+                }
+                Err(error) => Err(error),
+            }
+        }
         // A hop's objects exist only after a goto on this page's session, which stays attached
         // for the run.
         (ObjectCall::Network(call), Some((page, _))) => match page.attached_session() {
@@ -971,6 +1317,9 @@ async fn serve_call(
             Some(session) => dialogs::serve(&session, index, call, &progress).await,
             None => Err(PlaywrightError::target_closed().into()),
         },
+        (ObjectCall::Download(guid, call), _) => {
+            downloads::serve(&tabs, &guid, call, &progress).await
+        }
         _ => Err(PlaywrightError::target_closed().into()),
     };
     finish_reply(result, reply).await;
@@ -1045,6 +1394,11 @@ async fn serve(
                 .await
                 .and_then(wait_for_selector_reply)
         }
+        // `ElementHandle` is no interface of the generated spec, so the element travels as the
+        // record the SDK builds it from, as `waitForSelector`'s does.
+        Route::FrameFrameElement => frame_element::frame_element(&page, &progress)
+            .await
+            .map(|created| Some(json!({ "element": created }))),
         Route::FrameEval(call) => evaluate::serve(&page, call, &progress).await,
         // Neo extensions answer an empty result.
         Route::FrameWaitForUrl(options) => waits::wait_for_url(&page, &options, &progress)
@@ -1056,9 +1410,17 @@ async fn serve(
                 .map(|()| Some(json!({})))
         }
         Route::FrameWaitForNavigation(options) => {
-            history::wait_for_navigation(&page, &options, &progress)
-                .await
-                .and_then(|response| encode_neo(&NeoNavigationResult { response }))
+            let waited = if matches!(page.scope, FrameScope::Main) {
+                history::wait_for_navigation(&page, &options, &progress).await
+            } else {
+                match WaitTab::observe(&page) {
+                    Ok(events) => {
+                        history::wait_for_navigation_on(&page, events, &options, &progress).await
+                    }
+                    Err(error) => Err(navigate::page_error(error).into()),
+                }
+            };
+            waited.and_then(|response| encode_neo(&NeoNavigationResult { response }))
         }
         Route::FrameNextNavigation(params) => {
             history::next_frame_navigation(cursors, page, &params, &progress)
@@ -1079,9 +1441,70 @@ async fn serve(
         | Route::FrameIsEnabled(_)
         | Route::FrameIsDisabled(_)
         | Route::FrameIsEditable(_)) => serve_state(&page, route, &progress).await,
+        route @ (Route::FrameContent(_)
+        | Route::FrameSetContent(..)
+        | Route::FrameWaitForTimeout(_)
+        | Route::FrameResolveSelector(_)
+        | Route::FrameAriaSnapshotJson(_)) => serve_document(&page, route, &progress).await,
+        route @ (Route::FrameFocus(_)
+        | Route::FrameBlur(_)
+        | Route::FrameDispatchEvent(_)
+        | Route::FrameScrollIntoViewIfNeeded(_)
+        | Route::FrameSelectText(..)
+        | Route::FrameBoundingBox(_)
+        | Route::FrameHighlight(_)
+        | Route::FrameHideHighlight(_)) => serve_element_op(&page, route, &progress).await,
         route => serve_route(&page, route, &progress).await,
     };
     finish_reply(result, reply).await;
+}
+
+/// The element operations `serve` answers on the call's page (`element_ops.rs`,
+/// `highlight.rs`); each replies `{}` but `neo:boundingBox`, which answers `{value?}`.
+async fn serve_element_op(
+    page: &FrameTab,
+    route: Route,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    match route {
+        Route::FrameFocus(target) => element_ops::focus(page, &target, progress)
+            .await
+            .map(|()| None),
+        Route::FrameBlur(target) => element_ops::blur(page, &target, progress)
+            .await
+            .map(|()| None),
+        Route::FrameDispatchEvent(options) => element_ops::dispatch_event(page, &options, progress)
+            .await
+            .map(|()| None),
+        Route::FrameScrollIntoViewIfNeeded(target) => {
+            element_ops::scroll_into_view_if_needed(page, &target, progress)
+                .await
+                .map(|()| Some(json!({})))
+        }
+        Route::FrameSelectText(target, force) => {
+            element_ops::select_text(page, &target, force, progress)
+                .await
+                .map(|()| Some(json!({})))
+        }
+        Route::FrameBoundingBox(target) => element_ops::bounding_box(page, &target, progress)
+            .await
+            .and_then(|result| {
+                serde_json::to_value(result).map(Some).map_err(|error| {
+                    PlaywrightError::error(format!("encoding neo:boundingBox result: {error}"))
+                        .into()
+                })
+            }),
+        Route::FrameHighlight(options) => highlight::highlight(page, &options, progress)
+            .await
+            .map(|()| None),
+        Route::FrameHideHighlight(options) => highlight::hide_highlight(page, &options, progress)
+            .await
+            .map(|()| None),
+        _ => Err(PlaywrightError::error(
+            "neo-runtime: `serve_element_op` serves element operations only",
+        )
+        .into()),
+    }
 }
 
 /// The state reads `serve` answers on the call's page (`states.rs`): `isVisible` and `isHidden`
@@ -1134,17 +1557,52 @@ async fn serve_state(
     }
 }
 
+/// The document-wide calls `serve` answers on the call's page (`content.rs`, `waits.rs`,
+/// `reads.rs`).
+async fn serve_document(
+    page: &FrameTab,
+    route: Route,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    match route {
+        Route::FrameContent(include_shadow) => content::content(page, include_shadow, progress)
+            .await
+            .and_then(|result| encode_result::<FrameContentParams>(&result)),
+        Route::FrameSetContent(options, turn) => {
+            content::set_content(page, &options, turn, progress)
+                .await
+                .and_then(|()| encode_result::<FrameSetContentParams>(&FrameSetContentResult {}))
+        }
+        Route::FrameWaitForTimeout(wait) => {
+            waits::wait_for_timeout(page, waits::timer_delay(wait), progress)
+                .await
+                .and_then(|()| {
+                    encode_result::<FrameWaitForTimeoutParams>(&FrameWaitForTimeoutResult {})
+                })
+        }
+        Route::FrameResolveSelector(selector) => {
+            content::resolve_selector(page, &selector, progress)
+                .await
+                .and_then(|result| encode_result::<FrameResolveSelectorParams>(&result))
+        }
+        Route::FrameAriaSnapshotJson(options) => {
+            reads::aria_snapshot_json(page, &options, progress)
+                .await
+                .and_then(|result| encode_result::<FrameAriaSnapshotJSONParams>(&result))
+        }
+        _ => Err(PlaywrightError::error(
+            "neo-runtime: `serve_document` serves the document calls only",
+        )
+        .into()),
+    }
+}
+
 fn unsupported_child_call(scope: &FrameScope, route: &Route) -> Option<PlaywrightError> {
     if matches!(scope, FrameScope::Main) {
         return None;
     }
     let method = match route {
         Route::FrameGoto(_) => "goto",
-        // Deviation: `client/frame.ts` `Frame.waitForNavigation` Playwright answers a child
-        // frame's navigation Response; the network log records only the main frame's requests,
-        // so Neo refuses the wait. A predicate wait that answers none (`waitForURL`) is served.
-        Route::FrameWaitForNavigation(_) => "waitForNavigation",
-        Route::FrameNextNavigation(params) if params.response => "waitForNavigation",
         _ => return None,
     };
     Some(PlaywrightError::error(format!(
@@ -1163,7 +1621,12 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
         events,
         share,
         ending,
+        resolving,
+        abortable,
     } = target;
+    // The outcome is decided: an abort from now on is ignored, as Playwright drops a call's
+    // controller before it replies.
+    drop(abortable);
     let (record, answer) = match result {
         Err(CallError::RunEnded(_)) => return,
         Ok(value) => (CallResult::Ok, Ok(value)),
@@ -1176,7 +1639,7 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
     events.barrier().await;
     // Given back before the reply leaves, so a script that awaited this call can start another
     // at once. A call that never replies gives them back as its task ends.
-    drop((share, ending));
+    drop((share, ending, resolving));
     // The script may have stopped waiting (the realm is gone); the record already holds the
     // outcome.
     let _sent = reply.send((text, events.seq()));
@@ -1198,6 +1661,12 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         Route::FramePress(options) => press::press(tab, &options, progress)
             .await
             .and_then(|()| encode_result::<FramePressParams>(&FramePressResult {})),
+        Route::FrameType(options) => press::press(tab, &options, progress)
+            .await
+            .and_then(|()| encode_result::<FrameTypeParams>(&FrameTypeResult {})),
+        Route::FrameDragAndDrop(options) => drag::drag_and_drop(tab, &options, progress)
+            .await
+            .and_then(|()| encode_result::<FrameDragAndDropParams>(&FrameDragAndDropResult {})),
         Route::FrameSetChecked(options) => {
             let checked = options.checked;
             check::set_checked(tab, &options, progress)
@@ -1236,8 +1705,22 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameIsEditable(_)
         | Route::FrameAriaSnapshot(_)
         | Route::FrameWaitForSelector(_)
+        | Route::FrameFrameElement
         | Route::FrameWaitForUrl(_)
         | Route::FrameWaitForLoadState(_)
+        | Route::FrameContent(_)
+        | Route::FrameSetContent(..)
+        | Route::FrameWaitForTimeout(_)
+        | Route::FrameResolveSelector(_)
+        | Route::FrameAriaSnapshotJson(_)
+        | Route::FrameFocus(_)
+        | Route::FrameBlur(_)
+        | Route::FrameDispatchEvent(_)
+        | Route::FrameScrollIntoViewIfNeeded(_)
+        | Route::FrameSelectText(..)
+        | Route::FrameBoundingBox(_)
+        | Route::FrameHighlight(_)
+        | Route::FrameHideHighlight(_)
         | Route::FrameWaitForNavigation(_)
         | Route::FrameNextNavigation(_)
         | Route::FrameFinishNavigation(_)
@@ -1258,6 +1741,8 @@ fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
         ObjectKind::Disposable(guid.to_owned())
     } else if guid.starts_with(bindings::BINDING_CALL_PREFIX) {
         ObjectKind::BindingCall(guid.to_owned())
+    } else if let Some(download) = guid.strip_prefix(downloads::DOWNLOAD_PREFIX) {
+        ObjectKind::Download(download.to_owned())
     } else if !resolved {
         ObjectKind::Unknown
     } else if guid.starts_with(evaluate::HANDLE_PREFIX) {
@@ -1303,9 +1788,26 @@ pub(crate) fn encode_result<C: Command>(result: &C::Result) -> Result<Option<Val
     })
 }
 
+/// `Frame.frameElement`, routed by hand: its result requires an `ElementHandle`, which the
+/// generated spec cannot create (`frame_element.rs`).
+fn route_frame_element(method: &str) -> Option<Routed> {
+    (method == frame_element::FRAME_ELEMENT_META.method).then(|| Routed {
+        meta: Some(&frame_element::FRAME_ELEMENT_META),
+        route: Ok(ObjectCall::Frame(Route::FrameFrameElement)),
+    })
+}
+
 /// The cursor a URL-predicate wait's finish or release names. Each skips the in-flight caps for
 /// the one call that claims its open cursor (`Cursors::begin_ending`): the wait it ends may hold
 /// that capacity, and the claim counts against the cursor cap instead.
+/// The locator handler a `Page.resolveLocatorHandlerNoReply` completes.
+fn completed_handler(call: &ObjectCall) -> Option<i64> {
+    match call {
+        ObjectCall::Page(PageCall::ResolveLocatorHandlerNoReply(params)) => Some(params.uid),
+        _ => None,
+    }
+}
+
 fn ending_cursor(call: &ObjectCall) -> Option<u64> {
     match call {
         ObjectCall::Frame(Route::FrameFinishNavigation(options)) => Some(options.cursor),
@@ -1416,6 +1918,7 @@ fn encode_reply(
 
 #[cfg(test)]
 mod tests {
+    use crate::press::KeyInput;
     use std::collections::BTreeMap;
     use std::env;
     use std::fs;
@@ -1429,13 +1932,15 @@ mod tests {
 
     use crate::click::tests::FakeTab;
     use crate::deadline::Deadline;
-    use crate::discovery::Discovery;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::forms::SelectOption;
     use crate::page::TabInputs;
     use crate::progress::{self, ErrorName};
     use crate::run::Delivery;
     use crate::run::PageId;
+    use crate::screenshot::TabScreenshots;
+    use crate::session_state::Permissions;
+    use crate::switch::Switches;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
 
@@ -1449,7 +1954,9 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
-            Discovery::default(),
+            TabScreenshots::default(),
+            Switches::default(),
+            Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1488,6 +1995,8 @@ mod tests {
                 events: EventHub::default(),
                 share: None,
                 ending: None,
+                resolving: None,
+                abortable: None,
             },
         );
         run.end(RunEnd::Settled);
@@ -1525,7 +2034,9 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
-            Discovery::default(),
+            TabScreenshots::default(),
+            Switches::default(),
+            Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1566,11 +2077,14 @@ mod tests {
             ObjectCall::Frame(route) => route,
             ObjectCall::Context(_)
             | ObjectCall::Page(_)
+            | ObjectCall::Device(_)
             | ObjectCall::Network(_)
             | ObjectCall::Init(_)
+            | ObjectCall::Capture(_)
             | ObjectCall::Binding(_)
             | ObjectCall::Clock(_)
-            | ObjectCall::Dialog(..) => {
+            | ObjectCall::Dialog(..)
+            | ObjectCall::Download(..) => {
                 panic!("a Frame message routed to another object")
             }
         })
@@ -1626,6 +2140,7 @@ mod tests {
             "press" => {
                 json!({ "selector": selector, "strict": true, "key": "Shift+Enter", "delay": 25.0, "noWaitAfter": true })
             }
+            "type" => json!({ "selector": selector, "strict": true, "text": "hi", "delay": 10.0 }),
             "inputValue" => json!({ "selector": selector, "strict": true }),
             "check" | "uncheck" => {
                 json!({ "selector": selector, "strict": true, "force": true, "scroll": "none", "position": { "x": 2, "y": 3 }, "trial": true })
@@ -1637,9 +2152,10 @@ mod tests {
         }
     }
 
-    const FORMS: [&str; 6] = [
+    const FORMS: [&str; 7] = [
         "fill",
         "press",
+        "type",
         "inputValue",
         "check",
         "uncheck",
@@ -1653,85 +2169,83 @@ mod tests {
             let meta = routed.meta.expect("served method metadata");
             assert_eq!(meta.has(MethodFlag::Input), method != "inputValue");
             assert!(meta.title.is_some());
-            match frame_route(routed.route).expect("served form route") {
-                Route::FrameFill(options) => {
-                    assert_eq!(
-                        options,
-                        FillOptions {
-                            selector: "input".into(),
-                            strict: true,
-                            value: "hello".into(),
-                            force: true
-                        }
-                    );
-                }
-                Route::FramePress(options) => {
-                    assert_eq!(
-                        options,
-                        PressOptions {
-                            selector: "input".into(),
-                            strict: true,
-                            key: "Shift+Enter".into(),
-                            delay: Some(25.0),
-                            wait_after: false
-                        }
-                    );
-                }
-                Route::FrameInputValue(options) => {
-                    assert_eq!(
-                        options,
-                        InputValueOptions {
-                            selector: "input".into(),
-                            strict: true
-                        }
-                    );
-                }
-                Route::FrameSetChecked(options) => {
-                    assert_eq!(options.checked, method == "check");
-                    assert_eq!(options.click.selector, "input");
-                    assert!(options.click.strict && options.click.force && options.click.trial);
-                    assert!(!options.click.scroll);
-                    assert_eq!(options.click.position, Some(Point { x: 2.0, y: 3.0 }));
-                }
-                Route::FrameSelectOption(options) => {
-                    assert!(options.strict && options.force);
-                    assert_eq!(options.selector, "input");
-                    assert_eq!(
-                        options.options,
-                        [SelectOption {
-                            value_or_label: Some("one".into()),
-                            value: Some("1".into()),
-                            label: Some("One".into()),
-                            index: Some(0)
-                        }]
-                    );
-                }
-                Route::FramePointer(_) => panic!("a form is not a pointer action"),
-                Route::FrameGoto(_)
-                | Route::FrameTitle
-                | Route::FrameTextContent(_)
-                | Route::FrameInnerText(_)
-                | Route::FrameGetAttribute(_)
-                | Route::FrameQueryCount(_)
-                | Route::FrameInnerHtml(_)
-                | Route::FrameIsVisible(_)
-                | Route::FrameIsHidden(_)
-                | Route::FrameIsChecked(_)
-                | Route::FrameIsEnabled(_)
-                | Route::FrameIsDisabled(_)
-                | Route::FrameIsEditable(_)
-                | Route::FrameAriaSnapshot(_)
-                | Route::FrameWaitForSelector(_)
-                | Route::FrameWaitForUrl(_)
-                | Route::FrameWaitForLoadState(_)
-                | Route::FrameWaitForNavigation(_)
-                | Route::FrameNextNavigation(_)
-                | Route::FrameFinishNavigation(_)
-                | Route::FrameReleaseNavigation(_)
-                | Route::FrameEval(_) => {
-                    panic!("a form is not a navigation, read or wait")
-                }
+            assert_form_route(
+                method,
+                frame_route(routed.route).expect("served form route"),
+            );
+        }
+    }
+
+    /// The options one forms command's route must retain; every other route fails the test.
+    fn assert_form_route(method: &str, route: Route) {
+        match route {
+            Route::FrameFill(options) => {
+                assert_eq!(
+                    options,
+                    FillOptions {
+                        selector: "input".into(),
+                        strict: true,
+                        value: "hello".into(),
+                        force: true
+                    }
+                );
             }
+            Route::FramePress(options) => {
+                assert_eq!(
+                    options,
+                    PressOptions {
+                        selector: "input".into(),
+                        strict: true,
+                        keys: KeyInput::Press("Shift+Enter".into()),
+                        delay: Some(25.0),
+                        wait_after: false
+                    }
+                );
+            }
+            Route::FrameType(options) => {
+                assert_eq!(
+                    options,
+                    PressOptions {
+                        selector: "input".into(),
+                        strict: true,
+                        keys: KeyInput::Type("hi".into()),
+                        delay: Some(10.0),
+                        wait_after: false
+                    },
+                    "a type waits for no navigation"
+                );
+            }
+            Route::FrameInputValue(options) => {
+                assert_eq!(
+                    options,
+                    InputValueOptions {
+                        selector: "input".into(),
+                        strict: true
+                    }
+                );
+            }
+            Route::FrameSetChecked(options) => {
+                assert_eq!(options.checked, method == "check");
+                assert_eq!(options.click.selector, "input");
+                assert!(options.click.strict && options.click.force && options.click.trial);
+                assert!(!options.click.scroll);
+                assert_eq!(options.click.position, Some(Point { x: 2.0, y: 3.0 }));
+            }
+            Route::FrameSelectOption(options) => {
+                assert!(options.strict && options.force);
+                assert_eq!(options.selector, "input");
+                assert_eq!(
+                    options.options,
+                    [SelectOption {
+                        value_or_label: Some("one".into()),
+                        value: Some("1".into()),
+                        label: Some("One".into()),
+                        index: Some(0)
+                    }]
+                );
+            }
+            // Every other route is no form; naming each would only grow this match.
+            other => panic!("{method} is a form, not {other:?}"),
         }
     }
 
@@ -1753,16 +2267,28 @@ mod tests {
                 "{error:?}"
             );
         }
+        // `elements` (Playwright's ElementHandle values) leave the wire as guids, the rest
+        // decodes as usual; a member that is no channel is refused as Playwright's dispatcher
+        // refuses it.
         let mut params = forms_params("selectOption", "select");
-        params["elements"] = json!([{ "guid": "element@1" }]);
+        params["elements"] = json!([{ "guid": "handle@1" }, { "guid": "handle@2" }]);
         let routed = route_frame("selectOption", params);
         assert_eq!(
             routed.meta.and_then(|meta| meta.title),
             Some("Select option")
         );
+        match frame_route(routed.route).expect("routed") {
+            Route::FrameSelectOption(options) => {
+                assert_eq!(options.elements, ["handle@1", "handle@2"]);
+                assert_eq!(options.selector, "select");
+            }
+            _ => panic!("not a selectOption"),
+        }
+        let mut params = forms_params("selectOption", "select");
+        params["elements"] = json!([{ "guid": "handle@1" }, "two"]);
         assert_eq!(
-            error_of(routed),
-            PlaywrightError::error(ELEMENTS_UNSUPPORTED)
+            error_of(route_frame("selectOption", params)),
+            PlaywrightError::error("elements[1]: expected guid for ElementHandle")
         );
     }
 
@@ -1824,6 +2350,66 @@ mod tests {
             panic!("a click on the run's frame routes to Frame.click");
         };
         assert_eq!((options.selector.as_str(), options.strict), ("#go", true));
+    }
+
+    #[test]
+    fn tests_that_page_device_commands_route_to_the_devices_with_a_delivery_cell() {
+        for (method, params, title) in [
+            (
+                "keyboardDown",
+                json!({ "key": "Shift" }),
+                "Key down \"{key}\"",
+            ),
+            (
+                "keyboardType",
+                json!({ "text": "hi", "delay": 5 }),
+                "Type \"{text}\"",
+            ),
+            (
+                "mouseMove",
+                json!({ "x": 1, "y": 2, "steps": 3 }),
+                "Mouse move",
+            ),
+            (
+                "mouseClick",
+                json!({ "x": 1, "y": 2, "clickCount": 2 }),
+                "Click",
+            ),
+            (
+                "mouseWheel",
+                json!({ "deltaX": 0, "deltaY": 9 }),
+                "Mouse wheel",
+            ),
+            ("touchscreenTap", json!({ "x": 1, "y": 2 }), "Tap"),
+        ] {
+            let routed = route(ObjectKind::Page, method, Some(params));
+            assert_eq!(
+                routed.meta.and_then(|meta| meta.title),
+                Some(title),
+                "{method}"
+            );
+            assert!(
+                routed.meta.is_some_and(|meta| meta.has(MethodFlag::Input)),
+                "{method} is an input method"
+            );
+            assert!(
+                matches!(routed.route, Ok(ObjectCall::Device(_))),
+                "{method} routes to the devices"
+            );
+        }
+        let routed = route(
+            ObjectKind::Page,
+            "mouseMove",
+            Some(json!({ "x": 1, "y": 2, "steps": 1001 })),
+        );
+        assert_eq!(
+            error_of(routed),
+            PlaywrightError::error("Neo does not support steps above 1000")
+        );
+        assert!(matches!(
+            route(ObjectKind::Page, "bringToFront", Some(json!({}))).route,
+            Ok(ObjectCall::Page(PageCall::BringToFront(_)))
+        ));
     }
 
     #[test]
@@ -1931,14 +2517,27 @@ mod tests {
             }
         }
         assert!(route_frame("waitForSelector", json!({"selector":"iframe >> internal:control=enter-frame >> button", "omitReturnValue": true})).route.is_ok());
+        // `networkidle` is served by every wait (`network_idle.rs`).
         for (method, params) in [
             (
                 "neo:waitForURL",
                 json!({"url":{"glob":""},"waitUntil":"networkidle"}),
             ),
             ("neo:waitForLoadState", json!({"state":"networkidle"})),
+            (
+                "neo:waitForNavigation",
+                json!({"url":{"glob":""},"waitUntil":"networkidle"}),
+            ),
+            (
+                "neo:finishNavigation",
+                json!({"cursor":1,"index":0,"waitUntil":"networkidle"}),
+            ),
+            (
+                "goto",
+                json!({"url":"https://example.test","waitUntil":"networkidle"}),
+            ),
         ] {
-            assert_eq!(error_of(route_frame(method, params)).name, ErrorName::Error);
+            assert!(route_frame(method, params).route.is_ok(), "{method}");
         }
         for (method, params) in [
             (
@@ -1998,18 +2597,10 @@ mod tests {
             assert!(routed.route.is_ok(), "{method}");
         }
         for (method, params) in [
-            (
-                "neo:waitForNavigation",
-                json!({"url":{"glob":""},"waitUntil":"networkidle"}),
-            ),
             ("neo:waitForNavigation", json!({"url":{}})),
             ("neo:waitForNavigation", json!({"url":{"glob":"**/{a"}})),
             ("neo:nextNavigation", json!({})),
             ("neo:nextNavigation", json!({"response":true,"extra":1})),
-            (
-                "neo:finishNavigation",
-                json!({"cursor":1,"index":0,"waitUntil":"networkidle"}),
-            ),
             (
                 "neo:finishNavigation",
                 json!({"index":0,"waitUntil":"load"}),
@@ -2026,14 +2617,15 @@ mod tests {
                 "{method}"
             );
         }
-        // A child frame's Response is unknown, so a wait that answers one is refused before it
-        // starts; a URL-only cursor (`waitForURL`) is served there.
+        // Every frame's requests are recorded, so a child frame's navigation waits are served
+        // with their Response, as the main frame's; only `goto` stays refused on a child.
         let child = FrameScope::Frame("child".to_string());
         for (method, params, refused) in [
-            ("neo:waitForNavigation", json!({"url":{"glob":""}}), true),
-            ("neo:nextNavigation", json!({"response":true}), true),
+            ("neo:waitForNavigation", json!({"url":{"glob":""}}), false),
+            ("neo:nextNavigation", json!({"response":true}), false),
             ("neo:nextNavigation", json!({"response":false}), false),
             ("neo:releaseNavigation", json!({"cursor":1}), false),
+            ("goto", json!({"url":"https://example.test"}), true),
         ] {
             let Ok(ObjectCall::Frame(route)) = route_frame(method, params).route else {
                 panic!("{method} routes");
@@ -2331,14 +2923,67 @@ mod tests {
 
     #[test]
     fn a_click_option_neo_does_not_serve_is_refused_before_any_work() {
-        let routed = route_frame(
-            "click",
-            json!({ "selector": "#go", "modifiers": ["Shift"] }),
-        );
+        let routed = route_frame("click", json!({ "selector": "#go", "clickCount": 1001 }));
         assert_eq!(routed.meta.and_then(|meta| meta.title), Some("Click"));
         assert_eq!(
             error_of(routed),
-            PlaywrightError::error("Neo does not support click modifiers yet")
+            PlaywrightError::error("Neo does not support a clickCount above 1000")
+        );
+    }
+
+    #[test]
+    fn tests_that_capture_calls_route_with_neos_path() {
+        let screenshot = route(
+            ObjectKind::Page,
+            "screenshot",
+            Some(json!({"type": "jpeg", "quality": 50, "path": "shots/a.jpg"})),
+        );
+        assert_eq!(screenshot.meta.map(|meta| meta.method), Some("screenshot"));
+        match screenshot.route {
+            Ok(ObjectCall::Capture(Capture::Page { params, path })) => {
+                assert_eq!(params.quality, Some(50));
+                assert_eq!(path.as_deref(), Some("shots/a.jpg"));
+            }
+            Ok(_) => panic!("expected a page screenshot"),
+            Err(error) => panic!("expected a page screenshot, got {error:?}"),
+        }
+        let pdf = route(ObjectKind::Page, "pdf", None);
+        assert_eq!(pdf.meta.map(|meta| meta.title), Some(Some("PDF")));
+        assert!(
+            matches!(
+                pdf.route,
+                Ok(ObjectCall::Capture(Capture::Pdf { path: None, .. }))
+            ),
+            "a pdf without a path writes nothing"
+        );
+        let bad_path = error_of(route(
+            ObjectKind::Page,
+            "screenshot",
+            Some(json!({"path": 5})),
+        ));
+        assert_eq!(bad_path.message, "path: expected string, got number");
+
+        let locator = route_frame(
+            "neo:screenshot",
+            json!({"selector": "#a", "strict": true, "path": "a.png", "omitBackground": true}),
+        );
+        assert_eq!(
+            locator.meta.map(|meta| (meta.method, meta.title)),
+            Some(("neo:screenshot", Some("Screenshot")))
+        );
+        match locator.route {
+            Ok(ObjectCall::Capture(Capture::Locator(params))) => {
+                assert_eq!(params.selector, "#a");
+                assert_eq!(params.path.as_deref(), Some("a.png"));
+                assert_eq!(params.omit_background, Some(true));
+            }
+            Ok(_) => panic!("expected a locator screenshot"),
+            Err(error) => panic!("expected a locator screenshot, got {error:?}"),
+        }
+        let no_selector = error_of(route_frame("neo:screenshot", json!({})));
+        assert!(
+            no_selector.message.contains("neo:screenshot"),
+            "{no_selector:?}"
         );
     }
 
@@ -2349,14 +2994,6 @@ mod tests {
                 route_frame("expect", json!({ "selector": "#go" })),
                 None,
                 PlaywrightError::error("Neo does not serve Frame.expect"),
-            ),
-            (
-                route_frame(
-                    "goto",
-                    json!({ "url": "https://example.test", "waitUntil": "networkidle" }),
-                ),
-                Some("Navigate"),
-                PlaywrightError::error("Neo does not support waitUntil: \"networkidle\" yet"),
             ),
             (
                 route(ObjectKind::Page, "click", None),
@@ -2443,6 +3080,8 @@ mod tests {
                 events: EventHub::default(),
                 share: Some(in_flight.admit(10).expect("under the caps")),
                 ending: None,
+                resolving: None,
+                abortable: None,
             },
         ));
         let _reply = receiver.await.expect("the call replied");
@@ -2709,5 +3348,94 @@ mod tests {
             serde_json::from_str(&encode_reply(&json!(7), Ok(result.as_ref()), None))
                 .expect("reply");
         assert_eq!(reply, json!({"id": 7, "result": {"value": 3}}));
+    }
+}
+
+#[cfg(test)]
+mod review_abort_priority {
+    use super::*;
+    use crate::deadline::Deadline;
+    use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+    use crate::page::TabInputs;
+    use crate::run::PageId;
+    use crate::screenshot::TabScreenshots;
+    use crate::session_state::Permissions;
+    use crate::switch::Switches;
+    use tokio::runtime::Handle;
+    use tokio_util::task::TaskTracker;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_run_end_wins_over_an_abort_before_the_handler_starts() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let run = RunScope::new(
+            Deadline::new(Duration::from_secs(30), CancellationToken::new()),
+            tasks.clone(),
+        );
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            TabScreenshots::default(),
+            Switches::default(),
+            Permissions::default(),
+            tasks,
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("opening the fake tab: {error:?}"));
+        let (page, scope) = tabs
+            .resolve(&format!("frame@{PAGE}"))
+            .unwrap_or_else(|| panic!("the fake tab must have a main frame"));
+        let entry = Arc::new(CallEntry::new(CallStart {
+            call_id: 1,
+            guid: format!("frame@{PAGE}"),
+            method: "click".to_string(),
+            title: Some("Click"),
+            params: json!({"selector":"#nothing"}),
+            location: None,
+            input: true,
+        }));
+        let trace = Trace::default();
+        trace.push(Arc::clone(&entry));
+        let progress = Progress::new(Arc::clone(&entry), 0.0, run.clone(), page.closed.clone());
+        let route = route(
+            ObjectKind::Frame,
+            "click",
+            Some(json!({"selector":"#nothing"})),
+        )
+        .route
+        .unwrap_or_else(|error| panic!("decoding the click: {error:?}"));
+        let (reply, _receiver) = oneshot::channel();
+        let call = serve_call(
+            tabs,
+            Arc::default(),
+            Some((page, scope)),
+            route,
+            progress,
+            CallReply {
+                entry: Arc::clone(&entry),
+                trace: trace.clone(),
+                id: json!(1),
+                reply,
+                events: EventHub::default(),
+                share: None,
+                ending: None,
+                resolving: None,
+                abortable: None,
+            },
+        );
+        // Neither stop can race scheduling: the handler future has never been polled.
+        entry.abort("stop call".to_string());
+        run.end(RunEnd::Settled);
+        call.await;
+        let (records, _) = trace.take(RunEnd::Settled);
+        assert_eq!(
+            records[0].result,
+            CallResult::Unfinished {
+                reason: RunEnd::Settled
+            },
+            "run end has priority over the signal abort at admission"
+        );
     }
 }

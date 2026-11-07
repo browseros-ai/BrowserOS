@@ -43,10 +43,12 @@
 
 import type {
   LifecycleEvent,
+  PageScreenshotParams,
   ResponseChannel,
 } from '@browseros/neo-runtime-spec/serve'
 import { isString } from '../vendor/playwright/isomorphic/stringUtils'
 import type { ApiName } from './connection'
+import type { CreatedHandle } from './js-handle'
 
 /** Playwright's `SerializedURLMatch` (`isomorphic/urlMatch.ts`) without `urlPattern`. A glob of
  * `''` matches every URL. */
@@ -55,21 +57,47 @@ export type NeoSerializedUrlMatch =
   | { regexSource: string; regexFlags: string }
 
 /** `neo:waitForURL`: once the main frame's URL has matched `url`, resolves when `waitUntil` fires,
- * at once if the current document already fired it, as Playwright's `waitForURL` does. Rust
- * refuses `networkidle`. */
+ * at once if the current document already fired it, as Playwright's `waitForURL` does. */
 export type NeoWaitForURLParams = {
   url: NeoSerializedUrlMatch
   waitUntil: LifecycleEvent
 }
 
 /** `neo:waitForLoadState`: resolves once `state` fired for the main frame's current document,
- * or for the next one. Rust refuses `networkidle`. */
+ * or for the next one. */
 export type NeoWaitForLoadStateParams = { state: LifecycleEvent }
 
-/** `neo:waitForNavigation`: Playwright's `waitForNavigation` for the main frame with a glob or
+/** `neo:screenshot`: `locator.screenshot`. Playwright's client resolves the locator to an
+ * element (`waitForSelector`, strict, `attached`) and calls `ElementHandle.screenshot` on it; Neo
+ * has no element handles yet, so one call carries the selector, `ElementHandle.screenshot`'s
+ * params, and Neo's `path` (relative to the run's artifact directory). Rust: `capture.rs`
+ * `NeoScreenshotParams`; the reply is `ElementHandle.screenshot`'s `{binary}`. */
+export type NeoScreenshotParams = Omit<
+  PageScreenshotParams,
+  'fullPage' | 'clip'
+> & {
+  selector: string
+  path?: string
+}
+
+/** `neo:scrollIntoViewIfNeeded` and `neo:boundingBox`: Playwright's `Locator` methods that its
+ * client reaches through an `ElementHandle` (`_withElement`), which Rust serves whole
+ * (`neo-runtime/src/element_ops.rs`). */
+export type NeoElementParams = { selector: string; strict: boolean }
+
+/** `neo:selectText`, with `ElementHandle.selectText`'s `force`. */
+export type NeoSelectTextParams = NeoElementParams & { force?: boolean }
+
+/** `neo:selectText`'s params in `ElementHandle.selectText`'s schema order; `pickParams` turns
+ * a `null` `force` into Playwright's validator error. */
+export const NEO_SELECT_TEXT_KEYS = ['selector', 'strict', 'force'] as const
+
+/** Playwright's `Rect`, in the main frame's CSS pixels. */
+export type NeoRect = { x: number; y: number; width: number; height: number }
+
+/** `neo:waitForNavigation`: Playwright's `waitForNavigation` for a frame with a glob or
  * `RegExp` `url` (`''` for none): the first navigation after the call whose URL matches (a
- * same-document one counts; a failed one rejects), then `waitUntil`. Rust refuses `networkidle`
- * and child frames, whose navigation requests it does not record. */
+ * same-document one counts; a failed one rejects), then `waitUntil`, on any frame. */
 export type NeoWaitForNavigationParams = {
   url: NeoSerializedUrlMatch
   waitUntil: LifecycleEvent
@@ -105,8 +133,21 @@ export type NeoFinishNavigationParams = {
  * `neo:nextNavigation`. */
 export type NeoReleaseNavigationParams = { cursor: number }
 
-/** Neo's commands on a frame guid, shaped as the generated `FrameCommands`. */
+/** Neo's commands on a frame guid, shaped as the generated `FrameCommands`;
+ * `neo:boundingBox`'s `value` is absent when the element has no box. */
 export type NeoFrameCommands = {
+  'neo:scrollIntoViewIfNeeded': {
+    params: NeoElementParams
+    result: Record<string, never>
+  }
+  'neo:selectText': {
+    params: NeoSelectTextParams
+    result: Record<string, never>
+  }
+  'neo:boundingBox': {
+    params: NeoElementParams
+    result: { value?: NeoRect }
+  }
   'neo:waitForURL': {
     params: NeoWaitForURLParams
     result: Record<string, never>
@@ -114,6 +155,10 @@ export type NeoFrameCommands = {
   'neo:waitForLoadState': {
     params: NeoWaitForLoadStateParams
     result: Record<string, never>
+  }
+  'neo:screenshot': {
+    params: NeoScreenshotParams
+    result: { binary: string }
   }
   'neo:waitForNavigation': {
     params: NeoWaitForNavigationParams
@@ -130,6 +175,13 @@ export type NeoFrameCommands = {
   'neo:releaseNavigation': {
     params: NeoReleaseNavigationParams
     result: Record<string, never>
+  }
+  /** Playwright's own `Frame.frameElement`, which neo-runtime routes by hand
+   * (`frame_element.rs`): its result names an `ElementHandle`, which the generated spec cannot
+   * create, so the element travels as the record the SDK builds it from. */
+  frameElement: {
+    params: Record<string, never>
+    result: { element?: CreatedHandle }
   }
 }
 
@@ -163,7 +215,7 @@ export function serializeUrlMatch(
 }
 
 /** Playwright's `isRegExp` (`isomorphic/urlMatch.ts`), which that module does not export. */
-function isRegExp(value: unknown): value is RegExp {
+export function isRegExp(value: unknown): value is RegExp {
   return (
     value instanceof RegExp ||
     Object.prototype.toString.call(value) === '[object RegExp]'

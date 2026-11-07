@@ -57,7 +57,8 @@ export function fixture(file) {
  * from the page after the script with the value Playwright's page holds (`effect`). Neo must
  * return what Playwright returned and leave its page as Playwright's was. A case with `neo` in
  * place of `expected` runs through Neo alone, for what Playwright's Node process cannot survive;
- * `neo(outcome)` asserts Neo's `RunOutcome`.
+ * `neo(outcome)` asserts Neo's `RunOutcome`. A case where Neo differs on purpose (a recorded
+ * Deviation) keeps `expected` for Playwright and pins Neo's side with `deviation(outcome)`.
  */
 export async function compareEvents(t, { pages, cases }) {
   t.diagnostic(`Playwright ${playwrightVersion}`)
@@ -91,6 +92,10 @@ export async function compareEvents(t, { pages, cases }) {
         assert.deepEqual(playwright.effect, c.effect, "Playwright's page")
         if (referenceOnly) return
         const theirs = await viaNeo(neo, next++, url, source, c.probe)
+        if (c.deviation) {
+          c.deviation(theirs.outcome)
+          return
+        }
         assert.deepEqual(
           theirs.result,
           playwright.result,
@@ -152,7 +157,8 @@ async function viaNeo(
     const effect = probe ? await probeWithin(cdp, sessionId, probe) : undefined
     return { outcome, result, effect }
   } finally {
-    await cdp.send('Target.closeTarget', { targetId })
+    // A script may have closed its tab itself.
+    await cdp.send('Target.closeTarget', { targetId }).catch(() => {})
   }
 }
 

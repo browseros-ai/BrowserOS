@@ -44,13 +44,14 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use tokio::time;
 
-use crate::click::{LoopAWaits, PageError};
+use crate::click::{self, LoopAWaits, PageError};
 use crate::frame_selector;
 use crate::frames::{FrameContext, FrameScope};
 use crate::main_world::{self, BuiltExpression, Called, DocumentId, Installed, MainFunction};
 use crate::page::{FrameTab, GroupGuard};
 use crate::progress::{CallError, PlaywrightError, Progress, js_number};
 use crate::reads::SelectorTab;
+use crate::world::ObjectGroup;
 
 /// Neo: the guid prefix of a run's handles (`handle@<run>.<n>`), opaque to the SDK.
 pub(crate) const HANDLE_PREFIX: &str = "handle@";
@@ -893,6 +894,32 @@ impl Handles {
         self.entries.lock().ok()?.get(guid).cloned()
     }
 
+    /// Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection._tChannelImplFromWire`: `no object with guid ${guid}`
+    ///
+    /// `selectOption`'s `elements[index]`: the element handle `guid` names, checked as
+    /// Playwright's dispatcher checks an `ElementHandle` channel. A disposed handle's guid is
+    /// gone, so it names nothing.
+    ///
+    /// # Errors
+    ///
+    /// No handle has `guid`, or it is a `JSHandle` that is not an element.
+    pub(crate) fn select_element(
+        &self,
+        index: usize,
+        guid: &str,
+    ) -> Result<Arc<HandleEntry>, PlaywrightError> {
+        let entry = self.entry(guid).ok_or_else(|| {
+            PlaywrightError::error(format!("elements[{index}]: no object with guid {guid}"))
+        })?;
+        if !entry.element {
+            // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection._tChannelImplFromWire`: `has type ${dispatcher._type}, expected ${names.toString()}`
+            return Err(PlaywrightError::error(format!(
+                "elements[{index}]: object with guid {guid} has type JSHandle, expected ElementHandle"
+            )));
+        }
+        Ok(entry)
+    }
+
     /// Releases every handle group the run created and forgets every guid. Called at run end;
     /// the releases run on the pages' tracked tasks (`GroupGuard`).
     pub(crate) fn close(&self) {
@@ -991,6 +1018,16 @@ pub(crate) async fn serve(
     progress: &Progress,
 ) -> Result<Option<Value>, CallError> {
     let handles = progress.handles();
+    if matches!(
+        call,
+        EvalCall::Frame(_)
+            | EvalCall::Handle { .. }
+            | EvalCall::WaitForFunction { .. }
+            | EvalCall::EvalOnSelector { .. }
+            | EvalCall::EvalOnSelectorAll { .. }
+    ) {
+        prepare_page(tab, progress).await?;
+    }
     let result = match call {
         call @ (EvalCall::Query { .. }
         | EvalCall::QueryAll { .. }
@@ -1633,6 +1670,50 @@ fn element_scope(
     Ok(Some(entry))
 }
 
+/// Playwright: `server/dom.ts` `FrameExecutionContext.adoptIfNeeded`: `return this.frame._page.delegate.adoptElementHandle(handle, this);`
+///
+/// `entry`'s element adopted into `frame`'s utility world in `group`, as Playwright adopts
+/// `selectOption`'s `ElementHandle` values into the select's utility context for each attempt:
+/// the LIVE node, wherever it now is (`DOM.describeNode` where the handle's object lives, then
+/// `DOM.resolveNode` in the select's world), so an option moved into the select from another
+/// document of the same process is still the one its handle names. `None` when the node cannot
+/// be resolved there: another process's (another session's), or one whose object is gone, which
+/// Playwright's adoption refuses (`kUnableToAdoptErrorMessage`).
+///
+/// # Errors
+///
+/// `Closed` when the tab is gone.
+pub(crate) async fn adopt_element(
+    entry: &HandleEntry,
+    frame: &Arc<FrameContext>,
+    group: &ObjectGroup,
+) -> Result<Option<Handle<Element>>, PageError> {
+    let Remote::Object(id) = &entry.remote else {
+        return Ok(None);
+    };
+    // A backend node id names a node in its own process only.
+    // Deviation: `server/dom.ts` `FrameExecutionContext.adoptIfNeeded`: `return this.frame._page.delegate.adoptElementHandle(handle, this);` A handle of another session (an out-of-process frame's, another tab's) fails Playwright's adoption, which `_retryWithProgressIfNotConnected` retries until the call times out (TimeoutError); Neo refuses it at once with Playwright's adoption Error, since a script gains nothing from waiting its whole timeout to learn the handle is unusable. Neither selects anything.
+    if entry.frame.host.session_id() != frame.host.session_id() {
+        return Ok(None);
+    }
+    let backend = match entry
+        .frame
+        .main
+        .backend_of(&entry.frame, id.object_id())
+        .await
+    {
+        Ok(backend) => backend,
+        Err(PageError::Closed) => return Err(PageError::Closed),
+        // The handle's object went with its document.
+        Err(_) => return Ok(None),
+    };
+    match frame.world.element(group, backend).await {
+        Ok(node) => Ok(Some(node)),
+        Err(PageError::Closed) => Err(PageError::Closed),
+        Err(_) => Ok(None),
+    }
+}
+
 /// An element handle adopted into its frame's utility world, as the root of a scoped query, in
 /// `group`. Frame-crossing selectors from an element are not served.
 async fn utility_root(
@@ -2005,8 +2086,10 @@ fn undefined_object() -> RemoteObject {
 /// Playwright's `Frame.waitForFunctionExpression`: polls the predicate in the page (every
 /// animation frame, or every `polling` ms) until it returns a truthy value, under the call's
 /// deadline, and answers a handle to that value. A document that goes away under the wait
-/// starts it again in the next one after 100 ms, as Playwright's retry does; a predicate that
-/// throws ends the call. Leaving for any reason stops the page's polling first.
+/// starts it again after 100 ms, as Playwright's retry does, on the frame's context as it is
+/// then: an iframe that changed process has another one (`frames.rs`). A frame that detached
+/// ends the wait, as does a predicate that throws. Leaving for any reason stops the page's
+/// polling first.
 async fn wait_for_function(
     tab: &FrameTab,
     frame: &Arc<FrameContext>,
@@ -2025,10 +2108,30 @@ async fn wait_for_function(
         ))
         .into());
     }
+    let mut frame = Arc::clone(frame);
     loop {
-        match wait_once(tab, frame, evaluation, polling, handles, progress).await? {
-            Some(result) => return Ok(result),
-            None => progress.wait(WAIT_FOR_FUNCTION_RETRY).await?,
+        if let Some(result) = wait_once(tab, &frame, evaluation, polling, handles, progress).await?
+        {
+            return Ok(result);
+        }
+        frame = current_context(tab, progress).await?;
+    }
+}
+
+/// The frame's context for the next attempt of a wait, after the retry interval: the same
+/// deadline and signal, on whatever context the frame has now. A frame between contexts (an
+/// iframe mid-way to another process) is looked up again after another interval; a frame that
+/// detached, or a tab that closed, ends the wait.
+async fn current_context(
+    tab: &FrameTab,
+    progress: &Progress,
+) -> Result<Arc<FrameContext>, CallError> {
+    loop {
+        progress.wait(WAIT_FOR_FUNCTION_RETRY).await?;
+        match progress.race(tab.context()).await? {
+            Ok(frame) => return Ok(frame),
+            Err(PageError::NotConnected) => {}
+            Err(error) => return Err(page_error(error).into()),
         }
     }
 }
@@ -2114,6 +2217,8 @@ async fn wait_once(
         )),
         Ok((_, Called::Threw(message))) => Err(PlaywrightError::error(message).into()),
         Ok((_, Called::Stale | Called::Protocol(_))) => Ok(None),
+        // The frame's context went while the waiter ran: the wait starts again on its next one.
+        Err(CallError::Playwright(error)) if error.message == CONTEXT_DESTROYED => Ok(None),
         Ok((_, Called::Value(_))) => {
             Err(PlaywrightError::error("neo-runtime: the waiter's result answered by value").into())
         }
@@ -2335,10 +2440,6 @@ async fn call_on_element_once(
 /// # Errors
 ///
 /// `NotConnected` when the object or its frame's document is gone; `Closed` once the run ended.
-#[expect(
-    dead_code,
-    reason = "the seam med-pw-net's ConsoleMessage.args() calls; remove this once it does"
-)]
 pub(crate) async fn handle_for_remote_object(
     tab: &FrameTab,
     frame: &Arc<FrameContext>,
@@ -2354,6 +2455,42 @@ pub(crate) async fn handle_for_remote_object(
         None => object,
     };
     created_handle(tab, frame, installed.document, object, handles).await
+}
+
+/// [`handle_for_remote_object`] for an argument whose page closed before the script read it: the
+/// same handle, made without the browser. A value keeps it, so `jsonValue()` still answers; a
+/// call through an object's handle fails as on a closed page, as Playwright's handle does then.
+pub(crate) fn handle_for_gone_object(
+    tab: &FrameTab,
+    frame: &Arc<FrameContext>,
+    object: &RemoteObject,
+    handles: &Handles,
+) -> Result<CreatedHandle, PageError> {
+    let Some(object_id) = object.object_id.clone() else {
+        let (argument, preview) = primitive(object);
+        return handles.register(
+            tab,
+            frame,
+            DocumentId::GONE,
+            Remote::Value(argument),
+            false,
+            preview,
+        );
+    };
+    let element = object.subtype.as_deref() == Some(NODE_TYPE);
+    let preview = if element {
+        format!("{NODE_PREVIEW_PREFIX}{NODE_TYPE}")
+    } else {
+        render_preview(object)
+    };
+    handles.register(
+        tab,
+        frame,
+        DocumentId::GONE,
+        Remote::Object(HandleId::new(object_id)),
+        element,
+        preview,
+    )
 }
 
 /// Playwright's `JSHandle.jsonValue`: the page's `UtilityScript.jsonValue(true, handle)`, or for a
@@ -2436,9 +2573,15 @@ async fn installed(
                 return Ok(installed);
             }
             Err(PageError::NotConnected) if receiver.is_none() => {
-                // A child frame may have been removed meanwhile: re-resolve its context.
+                // A child frame may have been removed meanwhile, or changed process, which gives
+                // it another context: re-resolve it. Another context ends this call as its
+                // destroyed one would, so a wait starts again on the frame's current one rather
+                // than poll a context that will never come back.
                 if !matches!(tab.scope, FrameScope::Main) {
-                    tab.context().await.map_err(page_error)?;
+                    let current = tab.context().await.map_err(page_error)?;
+                    if !Arc::ptr_eq(&current, frame) {
+                        return Err(PlaywrightError::error(CONTEXT_DESTROYED).into());
+                    }
                 }
             }
             Err(PageError::NotConnected) => {
@@ -2680,6 +2823,20 @@ pub(crate) async fn element_handle_for(
         true,
         format!("{NODE_PREVIEW_PREFIX}{preview}"),
     )
+}
+
+/// Neo: starts the page's watcher before the caller's page JS runs, once per run, as every action
+/// and read does first (`click::Tab::prepare`), so a navigation that JS requests
+/// (`location.href = …`) is followed from its request on. Playwright, listening since it
+/// connected, sees it too, and the next action's `performActionPreChecks` waits it out.
+/// This only arms tracking; it never runs action prechecks or waits for navigation or dialogs.
+/// Keep it at the `serve` boundary for page-frame targets (`FrameTab`): workers have no page
+/// lifecycle, and cleanup callers of the main-world helpers must not start page tracking.
+async fn prepare_page(tab: &FrameTab, progress: &Progress) -> Result<(), CallError> {
+    progress
+        .race(click::Tab::prepare(tab))
+        .await?
+        .map_err(|error| page_error(error).into())
 }
 
 fn page_error(error: PageError) -> PlaywrightError {

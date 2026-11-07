@@ -11,12 +11,16 @@
 //!   dispatch ──creates──▶ CallEntry ◀──holds── Trace (run)          read once, after `finish`'s wait
 //!       │                    ▲   ▲
 //!       └──▶ Progress ───────┘   └── DeliveryCell ◀── InputTicket / AckedInput (input writer)
-//!              race(work): run deadline or cancel │ run ended │ tab closed │ own deadline
+//!              race(work): run deadline or cancel │ run ended │ aborted │ tab closed │ own deadline
 //! ```
+//!
+//! An abort (`abort.rs`) is the script's `signal` reaching the call: the dispatcher's registry
+//! finds the call's entry by its message id and aborts it there, so the `Progress` and the record
+//! read the same reason.
 
 use std::future;
 use std::future::Future;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -27,6 +31,8 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::info;
 
+use crate::abort::CallAbort;
+use crate::artifacts::Artifacts;
 use crate::bindings::Bindings;
 use crate::clock::Clock;
 use crate::deadline::{Deadline, Stop};
@@ -50,13 +56,14 @@ pub(crate) struct PlaywrightError {
     pub(crate) message: String,
 }
 
-/// The wire error names Neo replies with. The SDK rebuilds `TimeoutError` under that name and
-/// `TargetClosedError` with name `Error`, as Playwright's client does.
+/// The wire error names Neo replies with. The SDK rebuilds `TimeoutError` and `AbortError`
+/// under those names and `TargetClosedError` with name `Error`, as Playwright's client does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorName {
     Error,
     TimeoutError,
     TargetClosedError,
+    AbortError,
 }
 
 impl ErrorName {
@@ -65,6 +72,7 @@ impl ErrorName {
             Self::Error => "Error",
             Self::TimeoutError => "TimeoutError",
             Self::TargetClosedError => "TargetClosedError",
+            Self::AbortError => "AbortError",
         }
     }
 }
@@ -85,6 +93,16 @@ impl PlaywrightError {
         Self {
             name: ErrorName::TimeoutError,
             message: format!("Timeout {}ms exceeded.", js_number(timeout_ms)),
+        }
+    }
+
+    /// Playwright's server `AbortError` for an aborted call (`dispatcher.ts`,
+    /// `new AbortError(params.reason)`): the message is the reason the client sent, the abort
+    /// reason's `message` or its `String(…)`.
+    pub(crate) fn aborted(reason: &str) -> Self {
+        Self {
+            name: ErrorName::AbortError,
+            message: reason.to_string(),
         }
     }
 
@@ -121,8 +139,9 @@ pub(crate) struct RunScope {
     /// Set once, before `ended` is cancelled, so every call reports the same reason. Unset when
     /// `ended` fired because the dispatcher dropped: read as [`RunEnd::Cancelled`].
     end_reason: Arc<OnceLock<RunEnd>>,
-    /// The run's call tasks, and every task they start. `Dispatcher::finish` waits on it,
-    /// bounded, so records read final deliveries.
+    /// The run's call tasks, every task they start, and the run-end input releases
+    /// (`Tabs::release_input`). `Dispatcher::finish` waits on it, bounded, so records read
+    /// final deliveries; `Runtime::drain` waits for what is left.
     pub(crate) tasks: TaskTracker,
     /// The run's JS handles (`evaluate.rs`); closed at run end, which releases their groups.
     pub(crate) handles: Arc<Handles>,
@@ -132,6 +151,8 @@ pub(crate) struct RunScope {
     /// every call still running stops at its next await or check, as Playwright's calls stop
     /// with its connection, and none writes input after.
     pub(crate) context_closed: CancellationToken,
+    /// Where the run's `path` options write, and what they wrote (`artifacts.rs`).
+    pub(crate) artifacts: Arc<Artifacts>,
     /// The run's exposed bindings (`bindings.rs`); ended in every frame at run end.
     pub(crate) bindings: Arc<Bindings>,
     /// The run's fake clock (`clock.rs`); uninstalled in every frame at run end.
@@ -148,9 +169,15 @@ impl RunScope {
             handles: Arc::default(),
             init_scripts: Arc::default(),
             context_closed: CancellationToken::new(),
+            artifacts: Arc::default(),
             bindings: Arc::default(),
             clock: Arc::default(),
         }
+    }
+
+    /// The run's artifact directory and its record of written files.
+    pub(crate) fn with_artifacts(self, artifacts: Arc<Artifacts>) -> Self {
+        Self { artifacts, ..self }
     }
 
     /// Records `reason` (the first one wins) and cancels `ended`.
@@ -239,9 +266,11 @@ impl Progress {
 impl Progress {
     /// Runs `work` until it finishes or the call must stop, whichever is first. The `biased`
     /// order is the precedence: the run's deadline or cancellation, then the run ending
-    /// otherwise, then the tab or the run's context closing (`TargetClosedError`), then the
-    /// call's own deadline (`TimeoutError`). Every `work` passed in must be cancel-safe: dropping it may lose only
-    /// its answer, never leave the page half-changed.
+    /// otherwise, then the script aborting the call (`AbortError`), then the tab or the run's
+    /// context closing (`TargetClosedError`), then the call's own deadline (`TimeoutError`).
+    /// Every `work` passed in must be cancel-safe: dropping it may lose only its answer, never
+    /// leave the page half-changed. An abort ends `work` exactly as a timeout does, so whatever
+    /// a timed-out call cleans up, an aborted one cleans up too.
     pub(crate) async fn race<T>(&self, work: impl Future<Output = T>) -> Result<T, CallError> {
         let own_deadline = async {
             match self.own_deadline {
@@ -253,6 +282,7 @@ impl Progress {
             biased;
             stop = self.run.deadline.reached() => Err(CallError::RunEnded(run_end(stop))),
             () = self.run.ended.cancelled() => Err(CallError::RunEnded(self.run.end_reason())),
+            error = self.entry.abort.aborted() => Err(error.into()),
             () = self.page_closed.cancelled() => Err(PlaywrightError::target_closed().into()),
             () = self.context_closed.cancelled() => Err(PlaywrightError::target_closed().into()),
             () = own_deadline => Err(PlaywrightError::timeout(self.timeout_ms).into()),
@@ -269,12 +299,10 @@ impl Progress {
     /// The checks of [`Self::race`] without waiting, for right before an irreversible step, so
     /// no input starts after the call has to stop.
     pub(crate) fn check(&self) -> Result<(), CallError> {
-        if let Some(stop) = self.run.deadline.stop() {
-            return Err(CallError::RunEnded(run_end(stop)));
+        if let Some(stop) = self.run_stop() {
+            return Err(stop);
         }
-        if self.run.ended.is_cancelled() {
-            return Err(CallError::RunEnded(self.run.end_reason()));
-        }
+        self.pending_abort()?;
         if self.page_closed.is_cancelled() || self.context_closed.is_cancelled() {
             return Err(PlaywrightError::target_closed().into());
         }
@@ -282,6 +310,47 @@ impl Progress {
             return Err(PlaywrightError::timeout(self.timeout_ms).into());
         }
         Ok(())
+    }
+
+    /// The run-level stops, first in [`Self::race`]'s precedence: the run's deadline or
+    /// cancellation, then the run ending otherwise. Each outranks the script's abort.
+    fn run_stop(&self) -> Option<CallError> {
+        if let Some(stop) = self.run.deadline.stop() {
+            return Some(CallError::RunEnded(run_end(stop)));
+        }
+        if self.run.ended.is_cancelled() {
+            return Some(CallError::RunEnded(self.run.end_reason()));
+        }
+        None
+    }
+
+    /// The call's `AbortError` if the script aborted it already, unless the run has stopped,
+    /// which outranks it. The dispatcher asks before the handler starts, as Playwright's `run`
+    /// throws `_pendingAbortError` before its task: an abort can arrive between the call's
+    /// admission and its task's first poll. When the run has stopped as well, the handler starts
+    /// as any call first polled after the run's end does, and its first race reports the end.
+    pub(crate) fn pending_abort(&self) -> Result<(), CallError> {
+        if self.run_stop().is_some() {
+            return Ok(());
+        }
+        match self.entry.abort.error() {
+            Some(error) => Err(error.into()),
+            None => Ok(()),
+        }
+    }
+
+    /// A token cancelled when the script aborts this call, for a wait that runs without the
+    /// call's `Progress` in hand (a task the call spawned, a watcher it waits on). Whoever holds
+    /// it selects on it and stops; the call itself still replies through its own `race`.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "slice S's seam for waits without a Progress (coordination.md Seams); no served wait needs it yet"
+        )
+    )]
+    pub(crate) fn abort_token(&self) -> CancellationToken {
+        self.entry.abort.token()
     }
 
     /// Appends one raw call-log line; leading spaces are Playwright's nesting.
@@ -328,6 +397,11 @@ impl Progress {
     pub(crate) fn delivery(&self) -> Option<&Arc<DeliveryCell>> {
         self.entry.delivery.as_ref()
     }
+
+    /// The run's artifact directory, where a `path` option writes.
+    pub(crate) fn artifacts(&self) -> &Artifacts {
+        &self.run.artifacts
+    }
 }
 
 #[cfg(test)]
@@ -369,24 +443,27 @@ impl Progress {
 /// ```
 ///
 /// `begin` succeeds only from `NotSent`, so after input whose fate is unknown or done no code
-/// path can write it again.
+/// path can write it again. A call that writes in two parts says so first
+/// ([`DeliveryCell::expect_more`]): then the first part's `acked()` leaves the cell `Unknown`,
+/// and only the second part's makes it `Done`.
 #[derive(Debug, Default)]
-pub(crate) struct DeliveryCell(AtomicU8);
+pub(crate) struct DeliveryCell(AtomicU8, AtomicBool);
 
 const NOT_SENT: u8 = 0;
 const UNKNOWN: u8 = 1;
 const DONE: u8 = 2;
 
 /// Proof that this attempt may write input: the cell read `NotSent` and now reads `Unknown`.
-/// It moves into whatever writes the input, which reports through it.
+/// It moves into whatever writes the input, which reports through it. Its states: what the
+/// cell goes back to when nothing reached the page, and what `acked()` makes it.
 #[must_use = "dropping the ticket leaves the call's delivery Unknown"]
 #[derive(Debug)]
-pub(crate) struct InputTicket(Arc<DeliveryCell>);
+pub(crate) struct InputTicket(Arc<DeliveryCell>, u8, u8);
 
 /// The browser acknowledged every input event of the attempt: the cell reads `Done`.
 #[must_use = "a blocked verdict must call `blocked`"]
 #[derive(Debug)]
-pub(crate) struct AckedInput(Arc<DeliveryCell>);
+pub(crate) struct AckedInput(Arc<DeliveryCell>, u8);
 
 /// `begin` refused: earlier input of this call may have reached the page.
 #[derive(Debug, PartialEq, Eq)]
@@ -406,10 +483,37 @@ impl DeliveryCell {
 impl DeliveryCell {
     /// Called just before an attempt hands its first input event to the writer.
     pub(crate) fn begin(self: &Arc<Self>) -> Result<InputTicket, InputAlreadySent> {
+        // The first of two parts completes only itself.
+        let done = if self.1.load(Ordering::Acquire) {
+            UNKNOWN
+        } else {
+            DONE
+        };
         self.0
             .compare_exchange(NOT_SENT, UNKNOWN, Ordering::AcqRel, Ordering::Acquire)
-            .map(|_| InputTicket(Arc::clone(self)))
+            .map(|_| InputTicket(Arc::clone(self), NOT_SENT, done))
             .map_err(|_| InputAlreadySent)
+    }
+
+    /// A call that writes its input in two parts (`dragAndDrop`'s move and down, then its move
+    /// and up), said before the first part begins: the first part's acknowledgement, however
+    /// late (after the call gave up on it), leaves the cell `Unknown`, and only the second
+    /// part's makes it `Done`. So a drag that stops before its drop is never `Done`.
+    pub(crate) fn expect_more(&self) {
+        self.1.store(true, Ordering::Release);
+    }
+
+    /// The second part's ticket. After a first part that wrote input the cell stays `Unknown`,
+    /// and nothing the second part does takes it back to `NotSent`; after one that wrote nothing
+    /// (a trial) it begins as any first input does.
+    pub(crate) fn begin_more(self: &Arc<Self>) -> Result<InputTicket, InputAlreadySent> {
+        // The second part's acknowledgement completes the call.
+        self.1.store(false, Ordering::Release);
+        match self.0.load(Ordering::Acquire) {
+            NOT_SENT => self.begin(),
+            UNKNOWN => Ok(InputTicket(Arc::clone(self), UNKNOWN, DONE)),
+            _ => Err(InputAlreadySent),
+        }
     }
 }
 
@@ -417,13 +521,13 @@ impl InputTicket {
     /// The writer proved nothing was written (browseros-cdp refuses a send at a stale epoch
     /// before writing it): back to `NotSent`.
     pub(crate) fn unsent(self) {
-        self.0.0.store(NOT_SENT, Ordering::Release);
+        self.0.0.store(self.1, Ordering::Release);
     }
 
     /// Every event was acknowledged.
     pub(crate) fn acked(self) -> AckedInput {
-        self.0.0.store(DONE, Ordering::Release);
-        AckedInput(self.0)
+        self.0.0.store(self.2, Ordering::Release);
+        AckedInput(self.0, self.1)
     }
 }
 
@@ -431,7 +535,7 @@ impl AckedInput {
     /// Neo's hit-target interceptor stopped a press that landed on another element, before the
     /// page's handlers saw it (`Delivery::NotSent` says how far it got): back to `NotSent`.
     pub(crate) fn blocked(self) {
-        self.0.0.store(NOT_SENT, Ordering::Release);
+        self.0.0.store(self.1, Ordering::Release);
     }
 
     /// The events reached the page: stays `Done`.
@@ -473,6 +577,8 @@ pub(crate) struct CallEntry {
     log: Mutex<CallLog>,
     /// `Some` for methods Playwright's spec flags `input`.
     delivery: Option<Arc<DeliveryCell>>,
+    /// The script's abort of this call, if its `signal` aborted while it ran (`abort.rs`).
+    abort: CallAbort,
     /// Set once by whoever ends the call; absent while it runs.
     end: OnceLock<CallEnd>,
 }
@@ -529,8 +635,28 @@ impl CallEntry {
             started: Instant::now(),
             log: Mutex::default(),
             delivery: input.then(Arc::default),
+            abort: CallAbort::default(),
             end: OnceLock::new(),
         }
+    }
+
+    /// Playwright's `ProgressController.abort` for this call: logs `operation was aborted:
+    /// <reason>` and aborts it, unless it already ended or was aborted. Its `Progress` stops at
+    /// its next race or check.
+    pub(crate) fn abort(&self, reason: String) {
+        if self.end.get().is_some() {
+            return;
+        }
+        let line = format!("operation was aborted: {reason}");
+        if self.abort.abort(reason) {
+            self.update_log(|log| log.push(line));
+        }
+    }
+
+    /// The call's `AbortError`, once the script aborted it.
+    #[cfg(test)]
+    pub(crate) fn abort_error(&self) -> Option<PlaywrightError> {
+        self.abort.error()
     }
 
     /// Ends the call with `result` and returns its folded log, which the reply carries. Only
@@ -1015,6 +1141,38 @@ mod tests {
         assert_eq!(cell.delivery(), Delivery::Done);
     }
 
+    /// A call that writes in two parts, said before the first: the first part's acknowledgement,
+    /// on time or late, leaves the cell `Unknown`; only the second part's makes it `Done`.
+    #[test]
+    fn delivery_cell_completes_a_two_part_call_only_with_its_second_part() {
+        let cell = Arc::new(DeliveryCell::default());
+        cell.expect_more();
+        let first = cell.begin().expect("the first part");
+        first.acked().delivered();
+        assert_eq!(
+            cell.delivery(),
+            Delivery::Unknown,
+            "half a drag is not done"
+        );
+        let second = cell.begin_more().expect("the second part");
+        assert_eq!(cell.delivery(), Delivery::Unknown);
+        second.acked().delivered();
+        assert_eq!(cell.delivery(), Delivery::Done);
+
+        // The first part acknowledged only after the call gave up: never `Done`.
+        let cell = Arc::new(DeliveryCell::default());
+        cell.expect_more();
+        let late = cell.begin().expect("the first part");
+        late.acked().delivered();
+        assert_eq!(cell.delivery(), Delivery::Unknown);
+
+        // A first part that wrote nothing (a trial): the second begins as any first input.
+        let cell = Arc::new(DeliveryCell::default());
+        cell.expect_more();
+        cell.begin_more().expect("fresh").acked().delivered();
+        assert_eq!(cell.delivery(), Delivery::Done);
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_call_times_out_on_its_own_deadline_with_playwrights_message() {
         let run = scope(Duration::from_secs(30));
@@ -1086,6 +1244,90 @@ mod tests {
             Err(expected.clone())
         );
         assert_eq!(progress.check(), Err(expected));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_abort_ends_the_call_with_the_reason_and_logs_it() {
+        let run = scope(Duration::from_secs(30));
+        let entry = entry(1, true);
+        let progress = Progress::new(Arc::clone(&entry), 0.0, run, CancellationToken::new());
+        let token = progress.abort_token();
+        assert_eq!(progress.pending_abort(), Ok(()));
+        let aborts = async {
+            time::sleep(Duration::from_millis(50)).await;
+            entry.abort("stop".to_string());
+            entry.abort("again".to_string());
+        };
+        let (raced, ()) = tokio::join!(progress.race(future::pending::<()>()), aborts);
+        let expected = CallError::Playwright(PlaywrightError::aborted("stop"));
+        assert_eq!(raced, Err(expected.clone()));
+        assert_eq!(progress.check(), Err(expected.clone()));
+        assert_eq!(progress.pending_abort(), Err(expected));
+        assert!(token.is_cancelled(), "the abort token follows the abort");
+        assert_eq!(
+            progress.folded_log(),
+            vec!["  - operation was aborted: stop".to_string()],
+            "one line, for the first abort only"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_abort_wins_a_tie_with_the_call_deadline_and_loses_one_with_the_run() {
+        let run = scope(Duration::from_secs(30));
+        let entry = entry(1, true);
+        let progress = Progress::new(
+            Arc::clone(&entry),
+            100.0,
+            run.clone(),
+            CancellationToken::new(),
+        );
+        time::advance(Duration::from_millis(100)).await;
+        entry.abort("stop".to_string());
+        assert_eq!(
+            progress.race(future::pending::<()>()).await,
+            Err(CallError::Playwright(PlaywrightError::aborted("stop")))
+        );
+        run.end(RunEnd::Settled);
+        assert_eq!(
+            progress.race(future::pending::<()>()).await,
+            Err(CallError::RunEnded(RunEnd::Settled))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_run_stop_outranks_a_pending_abort() {
+        let run = scope(Duration::from_secs(30));
+        let entry = entry(1, true);
+        let progress = Progress::new(
+            Arc::clone(&entry),
+            0.0,
+            run.clone(),
+            CancellationToken::new(),
+        );
+        entry.abort("stop".to_string());
+        let aborted = CallError::Playwright(PlaywrightError::aborted("stop"));
+        assert_eq!(progress.pending_abort(), Err(aborted.clone()));
+        assert_eq!(progress.check(), Err(aborted));
+        run.end(RunEnd::Settled);
+        assert_eq!(
+            progress.pending_abort(),
+            Ok(()),
+            "the handler starts, and its first race reports the run's end"
+        );
+        assert_eq!(progress.check(), Err(CallError::RunEnded(RunEnd::Settled)));
+        assert_eq!(
+            progress.race(future::pending::<()>()).await,
+            Err(CallError::RunEnded(RunEnd::Settled))
+        );
+    }
+
+    #[test]
+    fn an_abort_after_the_call_ended_changes_nothing() {
+        let entry = entry(1, false);
+        let _log = entry.finish(CallResult::Ok);
+        entry.abort("late".to_string());
+        assert!(entry.abort_error().is_none());
+        assert!(entry.folded_log().is_empty());
     }
 
     #[tokio::test(start_paused = true)]

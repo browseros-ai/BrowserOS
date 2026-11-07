@@ -1,11 +1,13 @@
 //! A script, its starting tab, and the outcome with every created or handed-out page.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+use crate::artifacts::RunArtifact;
 use crate::deadline::Stop;
 
 /// The CDP target id of a tab. In the script's realm the page is `page@<id>` and its main
@@ -33,11 +35,18 @@ pub struct RunRequest {
     pub code: String,
     pub page: PageId,
     /// Wall-clock budget from the tab check to the script's return. Finish adds one bounded
-    /// drain; cleanup tasks still pending then continue in the background.
+    /// drain, and one more bounded wait to remove the run's highlights; cleanup tasks still
+    /// pending then continue in the background, the run's input releases among them.
     pub timeout: Duration,
     /// Cancelling ends the run with [`RunStatus::Cancelled`] at the script's next instruction,
     /// timer or getter.
     pub cancel: CancellationToken,
+    /// The directory the run's `path` options write into (`page.screenshot({ path })`,
+    /// `page.pdf({ path })`), created on first write. A `path` must be relative to it and stay
+    /// inside it. `None` refuses every `path` with an Error naming the option; the bytes a
+    /// script asked for are still returned. Files written are listed in
+    /// [`RunOutcome::artifacts`].
+    pub artifacts: Option<PathBuf>,
 }
 
 /// How a run ended.
@@ -113,6 +122,10 @@ pub struct RunOutcome {
     pub pages: Vec<RunPage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calls_dropped: Option<DroppedCalls>,
+    /// The files the run wrote into its artifact directory ([`RunRequest::artifacts`]), in the
+    /// order first written, each once with its last size. Absent from the JSON when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<RunArtifact>,
 }
 
 impl RunOutcome {
@@ -125,6 +138,7 @@ impl RunOutcome {
             calls: Vec::new(),
             pages: Vec::new(),
             calls_dropped: None,
+            artifacts: Vec::new(),
         }
     }
 
@@ -137,6 +151,7 @@ impl RunOutcome {
             calls: Vec::new(),
             pages: Vec::new(),
             calls_dropped: None,
+            artifacts: Vec::new(),
         }
     }
 
@@ -153,6 +168,7 @@ impl RunOutcome {
             calls: Vec::new(),
             pages: Vec::new(),
             calls_dropped: None,
+            artifacts: Vec::new(),
         }
     }
 
@@ -172,6 +188,10 @@ impl RunOutcome {
 
     pub(crate) fn with_pages(self, pages: Vec<RunPage>) -> Self {
         Self { pages, ..self }
+    }
+
+    pub(crate) fn with_artifacts(self, artifacts: Vec<RunArtifact>) -> Self {
+        Self { artifacts, ..self }
     }
 }
 
@@ -233,8 +253,8 @@ pub struct CallLocation {
 pub enum CallResult {
     Ok,
     /// The Playwright error the call replied with: its wire `name` (`TimeoutError`,
-    /// `TargetClosedError`, `Error`) and message, without the client's `apiName` prefix or the
-    /// call log.
+    /// `TargetClosedError`, `AbortError`, `Error`) and message, without the client's `apiName`
+    /// prefix or the call log.
     Error {
         name: String,
         message: String,

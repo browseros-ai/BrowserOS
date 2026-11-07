@@ -46,6 +46,7 @@ async fn cancel_during_setup() {
                     page: PageId::new(target),
                     timeout: Duration::from_secs(30),
                     cancel,
+                    artifacts: None,
                 })
                 .await
         }

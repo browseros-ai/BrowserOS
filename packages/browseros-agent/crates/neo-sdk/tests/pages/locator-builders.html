@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Locator builders</title>
+</head>
+<body>
+<main id="main">
+  <h1 id="heading">Builders</h1>
+  <h2 id="subheading">Other level</h2>
+  <!-- Outside the form: the form's targets again, so a Locator builder that loses its scope,
+       or getByText that loses exact, matches more. -->
+  <label for="outside-name">Name</label><input id="outside-name">
+  <span id="outside-buy">Buy now</span>
+  <p id="outside-text">Test id, outside the form</p>
+  <input id="outside-email" placeholder="you@example.com">
+  <img id="outside-logo" alt="Company logo" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">
+  <span id="outside-hint" title="Helpful hint">!</span>
+  <div id="outside-special" data-testid="special">Outside</div>
+  <ul id="fruits">
+    <li id="apple" class="fruit">Apple <button id="buy-apple" type="button">Buy</button></li>
+    <li id="banana" class="fruit">Banana <button id="buy-banana" type="button">Buy</button></li>
+    <li id="cherry" class="fruit" style="display: none">Cherry <button id="buy-cherry" type="button">Buy</button></li>
+    <li id="date" class="fruit">Date</li>
+  </ul>
+  <form id="form">
+    <label for="name">Name</label><input id="name" placeholder="Your name">
+    <label id="email-label">Email <input id="email" placeholder="you@example.com"></label>
+    <img id="logo" alt="Company logo" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">
+    <span id="hint" title="Helpful hint">?</span>
+    <div id="special" data-testid="special">Test id</div>
+    <button id="submit" type="submit">Submit</button>
+    <button id="cancel" type="button" disabled>Cancel</button>
+  </form>
+  <table id="grid">
+    <tr id="row-a"><td id="a1">a1</td><td id="a2">a2</td><td id="a3">a3</td></tr>
+    <tr id="row-b"><td id="b1">b1</td><td id="b2">b2</td><td id="b3">b3</td></tr>
+  </table>
+  <section id="first-holder"><iframe id="first-frame" title="First builder frame" name="first-frame" srcdoc="<button id='inner-button' type='button'>Inner</button><label for='q'>Query</label><input id='q' placeholder='Search'><img id='inner-logo' alt='Inner logo' src='data:image/gif;base64,R0lGODlhAQABAAAAACw='><span id='inner-hint' title='Inner hint'>i</span><div id='inner-special' data-testid='inner'>Inner test id</div><p id='inner-text'>Inner text</p><iframe id='deep' srcdoc='&amp;lt;p&amp;gt;Deep&amp;lt;/p&amp;gt;'></iframe>"></iframe></section>
+  <section id="second-holder"><iframe id="second-frame" title="Second builder frame" name="second-frame" srcdoc="<button id='second-button' type='button'>Second</button><p id='second-text'>Second text</p>"></iframe></section>
+</main>
+<script>
+  // Keep the fixture independent of BrowserOS's document-idle takeover UI.
+  new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.remove()).observe(
+    document.documentElement, { childList: true, subtree: true })
+</script>
+</body>
+</html>

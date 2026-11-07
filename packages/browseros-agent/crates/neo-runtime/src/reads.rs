@@ -16,6 +16,8 @@
 //!   │   matched → log "  locator resolved to <preview>" → {value} (missing attribute → {})
 //!   │   nothing matched, or NotConnected → poll again
 //!   │   Threw (strict mode violation) or Contract → Error with the page's message; Closed → closed
+//!  locator aria_snapshot (default mode)   retry_on_selector: the same loop, each attempt first
+//!   running the page's action pre-checks after prepare (`_retryWithProgressIfNotConnected`)
 //!  aria_snapshot(tab, options, progress)               no call log at all
 //!   waits 0,1000,2000,4000,8000…  (never capped by the timeout; the last repeats)
 //!   │ prepare → glue ariaSnapshot {selector: 'body,frameset', strict: false, mode, depth, boxes}
@@ -46,9 +48,11 @@
 //! stay. Playwright numbers its frames instead (`f1e3`), which a later run could not rebuild. An
 //! `ai` snapshot taken inside a child frame names its refs the same way: the iframes on the way
 //! from the main frame each give their ref (`frameOwnerRef`, which also keeps the owner, so one
-//! inside a closed shadow root still routes), and an iframe that gets none (hidden) makes it
-//! throw before the frame is snapshotted ([`UNNAMED_FRAME`]). The `default` mode gives no node a ref, so, as in
-//! Playwright, its iframe nodes keep only what the page gave them.
+//! inside a closed shadow root still routes). Behind an iframe that gets none (it is not visible
+//! or receives no pointer events) the path starts again at that iframe's frame, named by its id
+//! (`- button [ref=fi35f6…b0f5e1]`, [`frame_selector::identity_hop`]), which any later run
+//! enters directly, as Playwright enters a frame by its number. The `default` mode gives no node a
+//! ref, so, as in Playwright, its iframe nodes keep only what the page gave them.
 //!
 //! Neo-only: a lone surrogate (a truncated emoji) in any page call's answer or thrown message
 //! reads as U+FFFD (`neo-runtime-injected/src/well-formed.ts`); Rust strings are UTF-8, and a CDP
@@ -60,7 +64,7 @@
 //! News, Wikipedia and MDN pages measured 11 to 16 levels).
 
 use std::collections::HashMap;
-use std::future::Future;
+use std::future::{self, Future};
 use std::time::Duration;
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -71,6 +75,7 @@ use neo_runtime_spec::injected::{
     InjectedTextContentParams, TextMatch,
 };
 use neo_runtime_spec::serve::{
+    FrameAriaSnapshotJSONParams, FrameAriaSnapshotJSONParamsMode, FrameAriaSnapshotJSONResult,
     FrameAriaSnapshotParams, FrameAriaSnapshotParamsMode, FrameAriaSnapshotResult,
     FrameGetAttributeParams, FrameGetAttributeResult, FrameInnerHTMLParams, FrameInnerHTMLResult,
     FrameInnerTextParams, FrameInnerTextResult, FrameTextContentParams, FrameTextContentResult,
@@ -94,9 +99,6 @@ const FRAME_HOP: &str = " >> internal:control=enter-frame >> ";
 /// immediate first try, the last repeating, and never capped by the call's timeout.
 const SNAPSHOT_WAITS_MS: [u64; 5] = [0, 1000, 2000, 4000, 8000];
 
-/// Deviation: `server/page.ts` `ariaSnapshotJSONForFrame`: `return { ...resolved.result, resolvedFrame: resolved.frame };` Playwright names a child frame's refs by the frame's number, which needs no ref on its `<iframe>`; Neo's refs inside a frame are the path of iframe refs from the main frame, and an iframe that is not visible or receives no pointer events gets no ref unless an earlier snapshot gave it one. So an AI snapshot inside a frame behind such an iframe throws, before that frame is snapshotted, rather than answer refs no selector could route.
-const UNNAMED_FRAME: &str = "Neo cannot name refs inside a frame whose <iframe> gets no ref (it is not visible or receives no pointer events); snapshot without mode: 'ai'";
-
 // ---------------------------------------------------------------------------------------------
 // The seam.
 // ---------------------------------------------------------------------------------------------
@@ -114,6 +116,16 @@ pub(crate) trait SelectorTab: Send + Sync {
         &self,
         selector: &str,
     ) -> impl Future<Output = Result<SelectorFacts, PageError>> + Send;
+
+    /// Playwright's `performActionPreChecks`, which a read over `_retryWithProgressIfNotConnected`
+    /// (the default-mode locator snapshot) runs before each attempt; none on a tab without them.
+    fn action_pre_checks(
+        &self,
+        progress: &Progress,
+    ) -> impl Future<Output = Result<(), click::Stop>> + Send {
+        let _ = progress;
+        future::ready(Ok(()))
+    }
 }
 
 /// The page reads, one glue call each.
@@ -246,6 +258,25 @@ pub(crate) struct SnapshotOptions {
 
 // Neo: decodes the generated snapshot params once for the runtime route.
 impl SnapshotOptions {
+    /// `Frame.ariaSnapshotJSON` takes `Frame.ariaSnapshot`'s params.
+    pub(crate) fn from_json_params(params: FrameAriaSnapshotJSONParams) -> Self {
+        let FrameAriaSnapshotJSONParams {
+            mode,
+            selector,
+            depth,
+            boxes,
+        } = params;
+        Self::from_params(FrameAriaSnapshotParams {
+            mode: mode.map(|mode| match mode {
+                FrameAriaSnapshotJSONParamsMode::Ai => FrameAriaSnapshotParamsMode::Ai,
+                FrameAriaSnapshotJSONParamsMode::Default => FrameAriaSnapshotParamsMode::Default,
+            }),
+            selector,
+            depth,
+            boxes,
+        })
+    }
+
     /// Playwright: `server/frames.ts` `Frame.ariaSnapshotJSON`: `if (options.selector && options.mode !== 'ai') {`
     pub(crate) fn from_params(params: FrameAriaSnapshotParams) -> Self {
         let FrameAriaSnapshotParams {
@@ -368,6 +399,41 @@ pub(crate) async fn wait_for_function_on_selector<T, R, F, Fut>(
     tab: &T,
     selector: &str,
     progress: &Progress,
+    evaluate: F,
+) -> Result<R, CallError>
+where
+    T: SelectorTab,
+    F: FnMut() -> Fut + Send,
+    Fut: Future<Output = Result<Option<Matched<R>>, PageError>> + Send,
+{
+    poll_selector(tab, selector, progress, false, evaluate).await
+}
+
+/// Playwright's `_retryWithProgressIfNotConnected` for a read (the default-mode locator snapshot):
+/// [`wait_for_function_on_selector`]'s loop, each attempt first running the page's action
+/// pre-checks (a pending main-frame navigation is waited out) once the tab is prepared.
+///
+/// Playwright: `server/frames.ts` `Frame._retryWithProgressIfNotConnected`: `await this._page.performActionPreChecks(progress);`
+pub(crate) async fn retry_on_selector<T, R, F, Fut>(
+    tab: &T,
+    selector: &str,
+    progress: &Progress,
+    evaluate: F,
+) -> Result<R, CallError>
+where
+    T: SelectorTab,
+    F: FnMut() -> Fut + Send,
+    Fut: Future<Output = Result<Option<Matched<R>>, PageError>> + Send,
+{
+    poll_selector(tab, selector, progress, true, evaluate).await
+}
+
+/// The loop of [`wait_for_function_on_selector`] and [`retry_on_selector`].
+async fn poll_selector<T, R, F, Fut>(
+    tab: &T,
+    selector: &str,
+    progress: &Progress,
+    pre_checks: bool,
     mut evaluate: F,
 ) -> Result<R, CallError>
 where
@@ -385,7 +451,16 @@ where
         if !wait.is_zero() {
             progress.wait(wait).await?;
         }
-        match read_once(tab, selector, progress, &mut named, &mut evaluate).await {
+        match read_once(
+            tab,
+            selector,
+            progress,
+            pre_checks,
+            &mut named,
+            &mut evaluate,
+        )
+        .await
+        {
             Ok(Some(value)) => return Ok(value),
             Ok(None) | Err(Stop::Again) => {}
             Err(Stop::End(error)) => return Err(error),
@@ -398,6 +473,7 @@ async fn read_once<T, R, F, Fut>(
     tab: &T,
     selector: &str,
     progress: &Progress,
+    pre_checks: bool,
     named: &mut bool,
     evaluate: &mut F,
 ) -> Result<Option<R>, Stop>
@@ -407,6 +483,14 @@ where
     Fut: Future<Output = Result<Option<Matched<R>>, PageError>> + Send,
 {
     progress.race(tab.prepare()).await??;
+    if pre_checks {
+        tab.action_pre_checks(progress)
+            .await
+            .map_err(|stop| match stop {
+                click::Stop::Retry => Stop::Again,
+                click::Stop::End(error) => Stop::End(error),
+            })?;
+    }
     if !*named {
         let facts = progress.race(tab.describe(selector)).await??;
         progress.name_locator(&facts.locator);
@@ -423,13 +507,39 @@ where
     Ok(Some(matched.value))
 }
 
-/// Serves a document or locator snapshot. AI snapshots rooted in the main frame stitch
-/// rendered iframe documents and prefix their refs with paths from that main frame.
+/// Serves `Frame.ariaSnapshot`: the tree as Playwright's YAML.
+///
+/// Playwright: `server/frames.ts` `Frame.ariaSnapshot`: `return { snapshot: renderAriaSnapshotAsYaml(snapshot) };`
 pub(crate) async fn aria_snapshot<T: ReadTab>(
     tab: &T,
     options: &SnapshotOptions,
     progress: &Progress,
 ) -> Result<FrameAriaSnapshotResult, CallError> {
+    render_snapshot(&aria_nodes(tab, options, progress).await?)
+}
+
+/// Serves `Frame.ariaSnapshotJSON`: the same tree as Playwright's `AriaSnapshotJSON`, the nodes
+/// the YAML renders.
+///
+/// Playwright: `server/frames.ts` `Frame.ariaSnapshotJSON`: `return { snapshot: await ariaSnapshotJSONForFrame(progress, this, options.selector, options) };`
+pub(crate) async fn aria_snapshot_json<T: ReadTab>(
+    tab: &T,
+    options: &SnapshotOptions,
+    progress: &Progress,
+) -> Result<FrameAriaSnapshotJSONResult, CallError> {
+    let nodes = aria_nodes(tab, options, progress).await?;
+    let snapshot = serde_json::to_value(nodes)
+        .map_err(|error| PlaywrightError::error(format!("neo-runtime: {error}")))?;
+    Ok(FrameAriaSnapshotJSONResult { snapshot })
+}
+
+/// Serves a document or locator snapshot. AI snapshots rooted in the main frame stitch
+/// rendered iframe documents and prefix their refs with paths from that main frame.
+async fn aria_nodes<T: ReadTab>(
+    tab: &T,
+    options: &SnapshotOptions,
+    progress: &Progress,
+) -> Result<Vec<AriaNode>, CallError> {
     if let Some(selector) = &options.selector {
         return locator_aria_snapshot(tab, selector, options, progress).await;
     }
@@ -439,7 +549,7 @@ pub(crate) async fn aria_snapshot<T: ReadTab>(
     } else {
         root.nodes
     };
-    render_snapshot(&nodes)
+    Ok(nodes)
 }
 
 /// The call's own document, polled until it has a body, and the path in front of its refs.
@@ -477,7 +587,7 @@ async fn locator_aria_snapshot<T: ReadTab>(
     selector: &str,
     options: &SnapshotOptions,
     progress: &Progress,
-) -> Result<FrameAriaSnapshotResult, CallError> {
+) -> Result<Vec<AriaNode>, CallError> {
     let params = InjectedAriaSnapshotParams {
         selector: selector.to_string(),
         strict: true,
@@ -488,7 +598,7 @@ async fn locator_aria_snapshot<T: ReadTab>(
     if options.mode == AriaSnapshotMode::Ai {
         return locator_ai_snapshot(tab, &params, options, progress).await;
     }
-    let snapshot = wait_for_function_on_selector(tab, selector, progress, || async {
+    let snapshot = retry_on_selector(tab, selector, progress, || async {
         let result = tab.aria_snapshot(&params, false).await?.result;
         let Some(value) = result.snapshot else {
             return Ok(None);
@@ -502,7 +612,7 @@ async fn locator_aria_snapshot<T: ReadTab>(
         Ok(Some(Matched { value, preview }))
     })
     .await?;
-    render_snapshot(&snapshot.nodes)
+    Ok(snapshot.nodes)
 }
 
 /// Playwright: `server/page.ts` `ariaSnapshotJSONForFrame`: `frame.retryWithProgressAndTimeouts(progress, [1000, 2000, 4000, 8000],`
@@ -511,7 +621,7 @@ async fn locator_ai_snapshot<T: ReadTab>(
     params: &InjectedAriaSnapshotParams,
     options: &SnapshotOptions,
     progress: &Progress,
-) -> Result<FrameAriaSnapshotResult, CallError> {
+) -> Result<Vec<AriaNode>, CallError> {
     let mut attempt: usize = 0;
     loop {
         let wait = SNAPSHOT_WAITS_MS[attempt.min(SNAPSHOT_WAITS_MS.len() - 1)];
@@ -521,8 +631,7 @@ async fn locator_ai_snapshot<T: ReadTab>(
         }
         match snapshot_once(tab, params, progress).await {
             Ok(Some((snapshot, base))) => {
-                let nodes = stitch(tab, options, progress, snapshot, &base).await?;
-                return render_snapshot(&nodes);
+                return stitch(tab, options, progress, snapshot, &base).await;
             }
             Ok(None) => {
                 // Playwright: `server/page.ts` `ariaSnapshotJSONForFrame`: `throw new NonRecoverableDOMError(`
@@ -773,12 +882,14 @@ fn prefix_refs(nodes: &mut [AriaNode], prefix: &str) {
     }
 }
 
-/// Neo: the main-rooted path of the document behind `owners` (main frame first): `f<N>` for each
-/// iframe, `N` the number of the ref its document's snapshots give it (`frameOwnerRef`, which
-/// leaves that document's last snapshot, and so every ref the caller holds there, as it was).
-async fn owner_path(owners: &[FrameOwner]) -> Result<String, PageError> {
+/// Neo: the main-rooted path of `frame`, the document behind `owners` (main frame first): `f<N>`
+/// for each iframe, `N` the number of the ref its document's snapshots give it (`frameOwnerRef`,
+/// which leaves that document's last snapshot, and so every ref the caller holds there, as it
+/// was). An iframe that gets no ref (not visible, or receiving no pointer events) starts the path
+/// again at its frame, named by the frame's id (`fi…`), which needs no hop before it.
+async fn owner_path(owners: &[FrameOwner], frame: &str) -> Result<String, PageError> {
     let mut path = String::new();
-    for owner in owners {
+    for (index, owner) in owners.iter().enumerate() {
         let named = owner
             .frame
             .call(
@@ -793,11 +904,19 @@ async fn owner_path(owners: &[FrameOwner]) -> Result<String, PageError> {
             .as_deref()
             .and_then(|aria_ref| aria_ref.strip_prefix('e'))
             .filter(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()));
-        let Some(number) = number else {
-            return Err(PageError::Threw(UNNAMED_FRAME.to_string()));
-        };
-        path.push('f');
-        path.push_str(number);
+        if let Some(number) = number {
+            path.push('f');
+            path.push_str(number);
+            continue;
+        }
+        let child = owners
+            .get(index + 1)
+            .map_or(frame, |next| next.frame.id.as_str());
+        path = frame_selector::identity_hop(child).ok_or_else(|| {
+            PageError::Contract(format!(
+                "neo-runtime: frame id {child:?} is not a devtools frame token"
+            ))
+        })?;
     }
     Ok(path)
 }
@@ -828,6 +947,10 @@ impl SelectorTab for FrameTab {
         selector: &str,
     ) -> impl Future<Output = Result<SelectorFacts, PageError>> + Send {
         click::Tab::describe(self, selector)
+    }
+
+    async fn action_pre_checks(&self, progress: &Progress) -> Result<(), click::Stop> {
+        click::wait_out_pending_navigation(self, progress).await
     }
 }
 
@@ -938,13 +1061,12 @@ impl ReadTab for FrameTab {
                 base: String::new(),
             });
         };
-        // The path first: behind an iframe that gets no ref, the call throws before the frame's
-        // document is snapshotted, so its refs keep their lifetime.
+        // The path first, so a call that fails naming it leaves the frame's refs as they were.
         let base = if !stitching
             && params.mode == AriaSnapshotMode::Ai
             && located.frame.id != self.frames.main().id
         {
-            owner_path(&located.owners).await?
+            owner_path(&located.owners, &located.frame.id).await?
         } else {
             String::new()
         };

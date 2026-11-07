@@ -12,6 +12,7 @@
  *    → __neo_runtime.call(json)  ── Rust: dispatch.rs serves it on its own task ──▶
  *    ◀ '{"id":1}'  |  '{"error":{"error":{"message","name"}},"id":1,"log":[…]}'
  *    → undefined   |  throw rebuildError(apiName, error, log)
+ *  signal aborts meanwhile → __neo_runtime.abort(1, reason) → the reply is AbortError(reason)
  * ```
  *
  * Each public method passes its `apiName` (the `locator.click: ` prefix of an error)
@@ -20,6 +21,7 @@
  */
 
 import type {
+  ArtifactCommands,
   BrowserContextCommands,
   DialogCommands,
   FrameCommands,
@@ -31,6 +33,7 @@ import type {
 import type { BindingCommands } from './binding-call'
 import type { ClockCommands } from './clock'
 import {
+  AbortError,
   isTargetClosedError,
   type PlaywrightError,
   parseError,
@@ -40,17 +43,33 @@ import type { InitScriptCommands } from './init-script'
 import type { EvalFrameCommands, JSHandleCommands } from './js-handle'
 import type { NeoFrameCommands } from './neo-commands'
 import type { Request, Response } from './network'
-import { call } from './runtime-bridge'
+import { abort, call } from './runtime-bridge'
+import type { SignalLike, TimeoutOptions } from './timeout-settings'
 
 /** The public methods that send a browser call, named as Playwright's client names them. */
 export type ApiName =
   | 'page.frame'
+  | 'keyboard.down'
+  | 'keyboard.up'
+  | 'keyboard.insertText'
+  | 'keyboard.type'
+  | 'keyboard.press'
+  | 'mouse.move'
+  | 'mouse.down'
+  | 'mouse.up'
+  | 'mouse.click'
+  | 'mouse.dblclick'
+  | 'mouse.wheel'
+  | 'touchscreen.tap'
   | 'locator.click'
   | 'locator.dblclick'
   | 'locator.hover'
   | 'locator.tap'
   | 'locator.fill'
   | 'locator.press'
+  | 'locator.pressSequentially'
+  | 'locator.dragTo'
+  | 'locator.type'
   | 'locator.inputValue'
   | 'locator.isChecked'
   | 'locator.isVisible'
@@ -65,6 +84,8 @@ export type ApiName =
   | 'page.tap'
   | 'page.fill'
   | 'page.press'
+  | 'page.type'
+  | 'page.dragAndDrop'
   | 'page.inputValue'
   | 'page.isChecked'
   | 'page.isVisible'
@@ -93,8 +114,20 @@ export type ApiName =
   | 'locator.allTextContents'
   | 'page.ariaSnapshot'
   | 'locator.ariaSnapshot'
+  // Document content and timing (B3).
+  | 'frame.content'
+  | 'page.content'
+  | 'frame.setContent'
+  | 'page.setContent'
+  | 'frame.waitForTimeout'
+  | 'page.waitForTimeout'
+  | 'locator.normalize'
+  | 'locator.ariaSnapshotJSON'
+  | 'page.ariaSnapshotJSON'
   | 'frame.fill'
   | 'frame.press'
+  | 'frame.type'
+  | 'frame.dragAndDrop'
   | 'frame.inputValue'
   | 'frame.isChecked'
   | 'frame.isVisible'
@@ -104,8 +137,25 @@ export type ApiName =
   | 'frame.selectOption'
   | 'browserContext.newPage'
   | 'browserContext.close'
+  | 'browserContext.cookies'
+  | 'browserContext.addCookies'
+  | 'browserContext.clearCookies'
+  | 'browserContext.setExtraHTTPHeaders'
+  | 'browserContext.setOffline'
+  | 'browserContext.setGeolocation'
+  | 'browserContext.grantPermissions'
+  | 'browserContext.clearPermissions'
+  | 'browserContext.setHTTPCredentials'
+  | 'browserContext.storageState'
+  | 'browserContext.setStorageState'
+  | 'page.setExtraHTTPHeaders'
   | 'page.close'
   | 'page.bringToFront'
+  | 'page.addLocatorHandler'
+  | 'page.waitForSelector'
+  | 'frame.waitForSelector'
+  | 'frame.frameElement'
+  | 'page.removeLocatorHandler'
   | 'locator.waitFor'
   | 'page.waitForURL'
   | 'frame.waitForURL'
@@ -187,14 +237,25 @@ export type ApiName =
   | 'locator.evaluateAll'
   | 'locator.elementHandle'
   | 'locator.elementHandles'
+  | 'page.screenshot'
+  | 'page.pdf'
+  | 'locator.screenshot'
   | 'page.waitForEvent'
   | 'browserContext.waitForEvent'
   | 'page.consoleMessages'
+  | 'page.waitForRequest'
+  | 'page.waitForResponse'
+  | 'page.requests'
   | 'page.pageErrors'
   | 'page.clearConsoleMessages'
   | 'page.clearPageErrors'
   | 'dialog.accept'
   | 'dialog.dismiss'
+  | 'download.path'
+  | 'download.saveAs'
+  | 'download.failure'
+  | 'download.cancel'
+  | 'download.delete'
   // Element reads and states (B1).
   | 'locator.isEnabled'
   | 'page.isEnabled'
@@ -213,6 +274,20 @@ export type ApiName =
   | 'frame.innerHTML'
   | 'locator.allInnerTexts'
   | 'locator.all'
+  // Element operations (B2).
+  | 'locator.focus'
+  | 'page.focus'
+  | 'frame.focus'
+  | 'locator.blur'
+  | 'locator.dispatchEvent'
+  | 'page.dispatchEvent'
+  | 'frame.dispatchEvent'
+  | 'locator.scrollIntoViewIfNeeded'
+  | 'locator.selectText'
+  | 'locator.boundingBox'
+  | 'locator.highlight'
+  | 'locator.hideHighlight'
+  | 'page.hideHighlight'
 
 /** Playwright's wire error, `{error: {name, message}}`'s inner object. */
 export type WireError = { name: string; message: string }
@@ -264,15 +339,16 @@ export class Connection {
 
   /**
    * Sends one `Frame` call and resolves with its result, `undefined` for a void method such
-   * as `click`, whose reply has no `result`. `timeout` is the resolved action timeout in ms,
-   * `0` for none; it travels in `metadata`, never in params.
+   * as `click`, whose reply has no `result`. `timeout` is what `TimeoutSettings` resolved, the
+   * timeout in ms (`0` for none) and the `signal` that aborts the call, or a bare number for a
+   * call Playwright sends without a signal (`kNoTimeout`). Neither travels in params.
    */
   async send<M extends keyof FrameCommands>(
     apiName: ApiName,
     guid: string,
     method: M,
     params: FrameCommands[M]['params'],
-    timeout: number,
+    timeout: number | TimeoutOptions,
   ): Promise<FrameCommands[M]['result'] | undefined> {
     return (await this.#send(apiName, guid, method, params, timeout)) as
       | FrameCommands[M]['result']
@@ -285,7 +361,7 @@ export class Connection {
     guid: string,
     method: M,
     params: PageCommands[M]['params'],
-    timeout: number,
+    timeout: number | TimeoutOptions,
   ): Promise<Resolved<PageCommands[M]['result']>> {
     return (await this.#send(
       apiName,
@@ -302,7 +378,7 @@ export class Connection {
     guid: string,
     method: M,
     params: BrowserContextCommands[M]['params'],
-    timeout: number,
+    timeout: number | TimeoutOptions,
   ): Promise<Resolved<BrowserContextCommands[M]['result']>> {
     return (await this.#send(
       apiName,
@@ -319,7 +395,7 @@ export class Connection {
     guid: string,
     method: M,
     params: RequestCommands[M]['params'],
-    timeout: number,
+    timeout: number | TimeoutOptions,
   ): Promise<RequestCommands[M]['result']> {
     return (await this.#send(
       apiName,
@@ -336,7 +412,7 @@ export class Connection {
     guid: string,
     method: M,
     params: ResponseCommands[M]['params'],
-    timeout: number,
+    timeout: number | TimeoutOptions,
   ): Promise<ResponseCommands[M]['result']> {
     return (await this.#send(
       apiName,
@@ -353,7 +429,7 @@ export class Connection {
     guid: string,
     method: M,
     params: DialogCommands[M]['params'],
-    timeout: number,
+    timeout: number | TimeoutOptions,
   ): Promise<Resolved<DialogCommands[M]['result']>> {
     return (await this.#send(
       apiName,
@@ -362,6 +438,23 @@ export class Connection {
       params,
       timeout,
     )) as Resolved<DialogCommands[M]['result']>
+  }
+
+  /** {@link Connection.send} for an `Artifact` command, to a `download@…` guid. */
+  async sendArtifact<M extends keyof ArtifactCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: ArtifactCommands[M]['params'],
+    timeout: number,
+  ): Promise<Resolved<ArtifactCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<ArtifactCommands[M]['result']>
   }
 
   /**
@@ -374,7 +467,7 @@ export class Connection {
     guid: string,
     method: M,
     params: NeoFrameCommands[M]['params'],
-    timeout: number,
+    timeout: number | TimeoutOptions,
   ): Promise<Resolved<NeoFrameCommands[M]['result']>> {
     return (await this.#send(
       apiName,
@@ -392,7 +485,7 @@ export class Connection {
     guid: string,
     method: M,
     params: EvalFrameCommands[M]['params'],
-    timeout: number,
+    timeout: number | TimeoutOptions,
   ): Promise<EvalFrameCommands[M]['result']> {
     return (await this.#send(
       apiName,
@@ -448,7 +541,7 @@ export class Connection {
     guid: string,
     method: M,
     params: JSHandleCommands[M]['params'],
-    timeout: number,
+    timeout: number | TimeoutOptions,
   ): Promise<JSHandleCommands[M]['result']> {
     return ((await this.#send(apiName, guid, method, params, timeout)) ??
       {}) as JSHandleCommands[M]['result']
@@ -466,8 +559,19 @@ export class Connection {
     guid: string,
     method: string,
     params: unknown,
-    timeout: number,
+    options: number | TimeoutOptions,
   ): Promise<unknown> {
+    const { timeout, signal } =
+      typeof options === 'number'
+        ? { timeout: options, signal: undefined }
+        : options
+    if (this.#closed) throw closedError(apiName)
+    // Playwright's client checks before it sends anything, so the browser sees nothing.
+    if (signal?.aborted)
+      throw prefixed(
+        apiName,
+        new AbortError(undefined, { cause: signal.reason }),
+      )
     // Playwright's server validates every call's metadata (`dispatcher.ts`, `tOptional(tFloat)`):
     // `setDefaultTimeout(null)` resolves a timeout to `null`, which rejects the call before it
     // runs. Rust's serde would read it as no timeout and run the call.
@@ -479,10 +583,10 @@ export class Connection {
       location: captureLocation(this.#lineOffset),
       timeout,
     }
-    if (this.#closed) throw closedError(apiName)
     const closedBefore = this._closedFor(guid)
-    const message = { id: this.#nextId++, guid, method, params, metadata }
-    const text = await new Promise<string>((resolve, reject) => {
+    const id = this.#nextId++
+    const message = { id, guid, method, params, metadata }
+    const pending = new Promise<string>((resolve, reject) => {
       const abandon = (reason: string | undefined) =>
         reject(closedError(apiName, reason))
       this.#inFlight.add(abandon)
@@ -490,9 +594,23 @@ export class Connection {
         .then(resolve, reject)
         .finally(() => this.#inFlight.delete(abandon))
     })
+    // Rust has registered the call by the time `call` returns, so an abort from now on reaches it.
+    let listener: (() => void) | undefined
+    try {
+      listener = signal ? listenForAbort(apiName, id, signal) : undefined
+    } catch (error) {
+      pending.catch(() => {})
+      throw error
+    }
+    let text: string
+    try {
+      text = await pending
+    } finally {
+      if (signal && listener) signal.removeEventListener('abort', listener)
+    }
     const reply: Reply = JSON.parse(text)
     if (reply.error) {
-      const error = rebuildError(apiName, reply.error.error, reply.log)
+      const error = rebuildError(apiName, reply.error.error, reply.log, signal)
       // As in Playwright, whose server closes a page's open calls with its close reason, the
       // reason a page's close gave reaches the calls it interrupted.
       const reason =
@@ -522,6 +640,38 @@ export class Connection {
 function closedError(apiName: ApiName, reason?: string): PlaywrightError {
   const error = targetClosedError(reason)
   error.message = `${apiName}: ${error.message}`
+  return error
+}
+
+/**
+ * Playwright's `sendMessageToServer` abort listener, added after the call is sent: once `signal`
+ * aborts, Rust aborts the call (`__abort__ {id, reason}`). A reason that is an `Error` sends its
+ * message, anything else its `String(…)`. A `signal` without `addEventListener` throws its
+ * `TypeError` here, after the call went out, as Playwright's does; the call still runs.
+ */
+function listenForAbort(
+  apiName: ApiName,
+  id: number,
+  signal: SignalLike,
+): () => void {
+  const listener = () => {
+    const reason =
+      signal.reason instanceof Error
+        ? signal.reason.message
+        : String(signal.reason)
+    abort(id, reason)
+  }
+  try {
+    signal.addEventListener('abort', listener, { once: true })
+  } catch (error) {
+    throw prefixed(apiName, error)
+  }
+  return listener
+}
+
+/** Playwright's `_wrapApiCall` prefix on an error raised inside the call. */
+function prefixed(apiName: ApiName, error: unknown): unknown {
+  if (error instanceof Error) error.message = `${apiName}: ${error.message}`
   return error
 }
 
@@ -565,8 +715,12 @@ export function rebuildError(
   apiName: ApiName,
   error: WireError,
   log: string[] | undefined,
+  signal?: SignalLike | null,
 ): PlaywrightError {
   const rebuilt = parseError(error)
+  // An aborted call's error carries what the script aborted with, as Playwright's `dispatch` sets.
+  if (signal?.aborted && rebuilt instanceof AbortError)
+    rebuilt.cause = signal.reason
   rebuilt.log = log || []
   rebuilt.message = `${apiName}: ${rebuilt.message}${formatCallLog(log)}`
   return rebuilt

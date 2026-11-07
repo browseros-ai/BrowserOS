@@ -114,7 +114,7 @@ test('the built bundle installs once per document and answers through call.js', 
     )
 
     // `frames.ts` `_elementState` and `innerHTML` read the first match; a state the element
-    // cannot have throws, as Playwright's page code does; `allInnerTexts` reads every match.
+    // cannot have throws, as Playwright's page code does; `queryAll` reads every match.
     const lonePreview = '<p id="lone">Only one</p>'
     assert.deepEqual(
       await page('elementStateOnSelector', {
@@ -151,11 +151,41 @@ test('the built bundle installs once per document and answers through call.js', 
       await page('innerHTML', { selector: '#lone', strict: true }),
       { value: { matched: { value: 'Only one', preview: lonePreview } } },
     )
-    assert.deepEqual(await page('allInnerTexts', { selector: '#lone' }), {
-      value: { values: [{ value: 'Only one' }] },
+    // `Locator.allInnerTexts` is Playwright's `$$eval(selector, ee => ee.map(e => e.innerText))`
+    // (eval #3185): neo-runtime reads every match with `queryAll` (a null-prototype object of the
+    // matches by index, which it lists with `Runtime.getProperties`), previews the list with
+    // `listPreviews`, and evaluates that expression over the matches; here it runs on the list.
+    const innerTexts = async (selector) => {
+      const { elements } = await handleCall(cdp, sessionA, glue, 'queryAll', {
+        selector,
+      })
+      const { previews } = await byValueCall(
+        cdp,
+        sessionA,
+        glue,
+        'listPreviews',
+        {},
+        [elements],
+      )
+      const read = await cdp.send(
+        'Runtime.callFunctionOn',
+        {
+          objectId: elements.objectId,
+          functionDeclaration:
+            'function () { return ((ee) => ee.map((e) => e.innerText))(Object.values(this)) }',
+          returnByValue: true,
+        },
+        sessionA,
+      )
+      return { previews, values: read.result.value }
+    }
+    assert.deepEqual(await innerTexts('#lone'), {
+      previews: [lonePreview],
+      values: ['Only one'],
     })
-    assert.deepEqual(await page('allInnerTexts', { selector: '#missing' }), {
-      value: { values: [] },
+    assert.deepEqual(await innerTexts('#missing'), {
+      previews: [],
+      values: [],
     })
 
     const aria = await page('ariaSnapshot', {
@@ -594,6 +624,204 @@ test('forms glue preserves Playwright values, state checks, targeting and errors
         [select],
       ),
       { value: { values: [] } },
+    )
+  } finally {
+    for (const cleanup of cleanups.reverse()) await cleanup()
+  }
+})
+
+test('element-ops glue blurs, selects, dispatches and highlights as Playwright does', {
+  skip: browserBinary ? false : 'NEO_E2E_BROWSER is unset',
+  timeout: 180_000,
+}, async () => {
+  const cleanups = []
+  try {
+    const browser = await launchBrowser(cleanups, browserBinary)
+    const cdp = await connectCdp(cleanups, browser.port)
+    const html = `<title>Element ops glue</title>
+      <input id="text" value="some value"><input id="hidden" value="hidden value" hidden>
+      <div id="plain">plain text</div><button id="go">Go</button><button class="dup">A</button><button class="dup">B</button>
+      <script>globalThis.seen = []; document.addEventListener('ping', e => seen.push({ type: e.type, detail: e.detail, isTrusted: e.isTrusted, bubbles: e.bubbles, custom: e instanceof CustomEvent, target: e.target.id }), true);
+      document.addEventListener('click', e => seen.push({ type: e.type, detail: e.detail, isTrusted: e.isTrusted, bubbles: e.bubbles, mouse: e instanceof MouseEvent, target: e.target.id || e.target.className }), true);</script>`
+    const { targetId } = await cdp.send('Target.createTarget', {
+      url: `data:text/html,${encodeURIComponent(html)}`,
+    })
+    const session = await attachTo(cdp, targetId)
+    await waitForTitle(cdp, session, 'Element ops glue')
+    const context = await isolatedWorld(cdp, session, targetId)
+    const glue = await callIn(cdp, session, context, bundle.install, [
+      key,
+      bundle.specSha256,
+      initializer,
+    ])
+    const page = (name, params, handles = []) =>
+      pageCall(cdp, session, glue, name, params, handles)
+    const main = async (expression) =>
+      (
+        await cdp.send(
+          'Runtime.evaluate',
+          { expression, returnByValue: true },
+          session,
+        )
+      ).result.value
+    const resolve = async (selector) =>
+      (
+        await handleCall(cdp, session, glue, 'resolve', {
+          selector,
+          strict: true,
+        })
+      ).element
+    const text = await resolve('#text')
+    const hidden = await resolve('#hidden')
+    const plain = await resolve('#plain')
+
+    // blurElement: Playwright's blurNode, done once the element is connected.
+    await page('focusElement', { resetSelectionIfNotFocused: false }, [text])
+    assert.equal(await main('document.activeElement.id'), 'text')
+    assert.deepEqual(await page('blurElement', {}, [text]), {
+      value: { outcome: 'done' },
+    })
+    assert.equal(await main('document.activeElement === document.body'), true)
+
+    // selectText: visible unless forced, then InjectedScript.selectText.
+    assert.deepEqual(
+      await page('selectText', { force: false, frameVisible: true }, [text]),
+      { value: { outcome: 'done' } },
+    )
+    assert.deepEqual(
+      await main(
+        '[text.selectionStart, text.selectionEnd, document.activeElement.id]',
+      ),
+      [0, 10, 'text'],
+    )
+    assert.deepEqual(
+      await page('selectText', { force: false, frameVisible: true }, [hidden]),
+      { value: { outcome: { missingState: 'visible' } } },
+    )
+    assert.deepEqual(
+      await page('selectText', { force: true, frameVisible: true }, [hidden]),
+      { value: { outcome: 'done' } },
+      'a forced selectText skips the visibility check',
+    )
+    assert.deepEqual(
+      await page('selectText', { force: false, frameVisible: true }, [plain]),
+      { value: { outcome: 'done' } },
+    )
+    assert.equal(await main('getSelection().toString()'), 'plain text')
+
+    // dispatchEvent: the first match, Playwright's event classes and defaults.
+    assert.deepEqual(
+      await page('dispatchEvent', {
+        selector: '#go',
+        strict: true,
+        type: 'click',
+        eventInit: JSON.stringify({ detail: 3 }),
+      }),
+      { value: { preview: '<button id="go">Go</button>' } },
+    )
+    assert.deepEqual(
+      await page('dispatchEvent', {
+        selector: '#go',
+        strict: true,
+        type: 'ping',
+        eventInit: JSON.stringify({ detail: 'x', bubbles: false }),
+      }),
+      { value: { preview: '<button id="go">Go</button>' } },
+    )
+    assert.deepEqual(
+      await page('dispatchEvent', {
+        selector: '.dup',
+        strict: false,
+        type: 'click',
+        eventInit: 'null',
+      }),
+      { value: { preview: '<button class="dup">A</button>' } },
+    )
+    assert.deepEqual(
+      await page('dispatchEvent', {
+        selector: '#missing',
+        strict: true,
+        type: 'click',
+        eventInit: '{}',
+      }),
+      { value: {} },
+    )
+    assert.match(
+      (
+        await page('dispatchEvent', {
+          selector: '.dup',
+          strict: true,
+          type: 'click',
+          eventInit: '{}',
+        })
+      ).exception.description,
+      /strict mode violation/,
+    )
+    assert.deepEqual(await main('seen'), [
+      {
+        type: 'click',
+        detail: 3,
+        isTrusted: false,
+        bubbles: true,
+        mouse: true,
+        target: 'go',
+      },
+      // An unknown type is a plain Event (Playwright's `default:` case): no detail.
+      {
+        type: 'ping',
+        isTrusted: false,
+        bubbles: false,
+        custom: false,
+        target: 'go',
+      },
+      {
+        type: 'click',
+        detail: 0,
+        isTrusted: false,
+        bubbles: true,
+        mouse: true,
+        target: 'dup',
+      },
+    ])
+
+    // setHighlights installs the overlay; an empty list keeps it; hideHighlight removes it.
+    const glass = () => main("document.querySelectorAll('x-pw-glass').length")
+    assert.deepEqual(await page('setHighlights', { highlights: [] }), {
+      value: {},
+    })
+    assert.equal(await glass(), 0, 'no highlight, no overlay')
+    assert.deepEqual(
+      await page('setHighlights', {
+        highlights: [
+          { selector: '#go' },
+          { selector: '.dup', cssStyle: 'outline: 1px solid red' },
+        ],
+      }),
+      { value: {} },
+    )
+    assert.equal(await glass(), 1)
+    assert.deepEqual(await page('setHighlights', { highlights: [] }), {
+      value: {},
+    })
+    assert.equal(await glass(), 1, 'clearing the highlights keeps the overlay')
+    assert.deepEqual(await page('hideHighlight', {}), { value: {} })
+    assert.equal(await glass(), 0)
+    assert.deepEqual(await page('hideHighlight', {}), { value: {} })
+
+    await cdp.send(
+      'Runtime.callFunctionOn',
+      {
+        objectId: text.objectId,
+        functionDeclaration: 'function () { this.remove() }',
+      },
+      session,
+    )
+    assert.deepEqual(await page('blurElement', {}, [text]), {
+      value: { outcome: 'error:notconnected' },
+    })
+    assert.deepEqual(
+      await page('selectText', { force: false, frameVisible: true }, [text]),
+      { value: { outcome: 'error:notconnected' } },
     )
   } finally {
     for (const cleanup of cleanups.reverse()) await cleanup()
