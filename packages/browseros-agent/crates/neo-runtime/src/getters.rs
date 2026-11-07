@@ -53,6 +53,13 @@ pub(crate) struct FrameMetadata {
     revision: u64,
 }
 
+/// Neo: A closing graph stays frozen across failed or cancelled live reads. Its candidate
+/// owns a separate event cursor and can replace retained state only after reconciliation.
+struct FrameSnapshot {
+    revision: u64,
+    closing_events: Option<broadcast::Receiver<CdpEvent>>,
+}
+
 /// Neo: Keeps observed metadata and real detach events separate from session closure.
 impl FrameMetadata {
     pub(crate) fn new(cdp: &CdpClient) -> Self {
@@ -132,16 +139,50 @@ impl FrameMetadata {
 
     /// Neo: A fresh receiver precedes recovery's live read. Lost history remains explicit
     /// until that read succeeds and no queued structural change invalidates its snapshot.
-    fn begin_snapshot(&mut self, cdp: &CdpClient) -> u64 {
-        self.closing = false;
+    fn begin_snapshot(&mut self, cdp: &CdpClient) -> FrameSnapshot {
+        if self.closing {
+            return FrameSnapshot {
+                revision: self.revision,
+                closing_events: Some(self.events.resubscribe()),
+            };
+        }
         let _collected = self.collect_events();
         if self.lost_events {
             self.events = cdp.events();
         }
-        self.revision
+        FrameSnapshot {
+            revision: self.revision,
+            closing_events: None,
+        }
     }
 
-    fn finish_snapshot(&mut self, tree: &[FrameInfo], revision: u64) -> bool {
+    fn finish_snapshot(&mut self, tree: &[FrameInfo], snapshot: FrameSnapshot) -> bool {
+        if let Some(events) = snapshot.closing_events {
+            let mut candidate = Self {
+                events,
+                watched: self.watched.clone(),
+                known: self.known.clone(),
+                live: self.live.clone(),
+                detached: self.detached.clone(),
+                closing: false,
+                lost_events: self.lost_events,
+                revision: self.revision,
+            };
+            let accepted = candidate.publish_snapshot(tree, snapshot.revision);
+            if accepted {
+                *self = candidate;
+            }
+            return accepted;
+        }
+        if self.closing {
+            // Closure started while this observation was in flight. Its queued teardown
+            // belongs to the frozen graph, not an open-page observation.
+            return false;
+        }
+        self.publish_snapshot(tree, snapshot.revision)
+    }
+
+    fn publish_snapshot(&mut self, tree: &[FrameInfo], revision: u64) -> bool {
         if self.collect_events().is_err() || revision != self.revision {
             return false;
         }
@@ -479,7 +520,7 @@ pub(crate) async fn is_closed(cdp: &CdpClient, page: &PageId) -> Result<bool, Cd
 mod tests {
     use std::sync::Arc;
 
-    use browseros_cdp::CdpEvent;
+    use browseros_cdp::{CdpEvent, SessionId};
     use serde_json::{Value, json};
 
     use tokio::runtime::Handle;
@@ -570,6 +611,22 @@ mod tests {
             });
         }
         sender
+    }
+
+    fn metadata_events(page: &PageEntry) -> (broadcast::Sender<CdpEvent>, SessionId) {
+        let (sender, receiver) = broadcast::channel(16);
+        let mut metadata = page
+            .frame_metadata
+            .lock()
+            .unwrap_or_else(|error| panic!("metadata state: {error}"));
+        let session = metadata
+            .watched
+            .iter()
+            .next()
+            .cloned()
+            .unwrap_or_else(|| panic!("fixture has no watched host"));
+        metadata.events = receiver;
+        (sender, session)
     }
 
     #[test]
@@ -766,6 +823,121 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.name, ErrorName::TargetClosedError);
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_failed_read_during_close_keeps_retained_attachment() {
+        let (_browser, tabs, page) = frame_fixture().await;
+        let local = FrameScope::Frame("local".to_string());
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::Name).await.unwrap(),
+            "before"
+        );
+        let (sender, receiver) = broadcast::channel(8);
+        let session = {
+            let mut metadata = page.frame_metadata.lock().unwrap();
+            metadata.events = receiver;
+            metadata.watched.iter().next().cloned().unwrap()
+        };
+        page.request_close();
+        tabs.cdp()
+            .send("Target.closeTarget", json!({"targetId":PAGE}), None)
+            .await
+            .unwrap();
+        sender
+            .send(CdpEvent {
+                method: "Page.frameDetached".to_string(),
+                params: json!({"frameId":"local","reason":"remove"}),
+                session_id: Some(session),
+            })
+            .unwrap();
+        tabs.cdp().disconnect().await;
+        assert!(frame(&tabs, &page, &local, FrameField::Name).await.is_err());
+        page.closed.cancel();
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::IsDetached)
+                .await
+                .unwrap(),
+            false
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_invalidated_read_during_close_keeps_retained_attachment() {
+        let (_browser, tabs, page) = frame_fixture().await;
+        let local = FrameScope::Frame("local".to_string());
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::Name).await.unwrap(),
+            "before"
+        );
+        let (sender, session) = metadata_events(&page);
+        page.request_close();
+        tabs.cdp()
+            .send("Target.closeTarget", json!({"targetId":PAGE}), None)
+            .await
+            .unwrap();
+        {
+            let mut metadata = page.frame_metadata.lock().unwrap();
+            let tree = metadata.known.clone();
+            let snapshot = metadata.begin_snapshot(tabs.cdp());
+            sender
+                .send(CdpEvent {
+                    method: "Page.frameDetached".to_string(),
+                    params: json!({"frameId":"local","reason":"remove"}),
+                    session_id: Some(session),
+                })
+                .unwrap();
+            assert!(!metadata.finish_snapshot(&tree, snapshot));
+        }
+        tabs.cdp().disconnect().await;
+        assert!(frame(&tabs, &page, &local, FrameField::Name).await.is_err());
+        page.closed.cancel();
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::IsDetached)
+                .await
+                .unwrap(),
+            false
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_observation_started_before_close_preserves_the_closing_snapshot() {
+        let (_browser, tabs, page) = frame_fixture().await;
+        let local = FrameScope::Frame("local".to_string());
+        frame(&tabs, &page, &local, FrameField::Name).await.unwrap();
+        let (sender, session) = metadata_events(&page);
+        let (tree, snapshot) = {
+            let mut metadata = page.frame_metadata.lock().unwrap();
+            (metadata.known.clone(), metadata.begin_snapshot(tabs.cdp()))
+        };
+        page.request_close();
+        tabs.cdp()
+            .send("Target.closeTarget", json!({"targetId":PAGE}), None)
+            .await
+            .unwrap();
+        sender
+            .send(CdpEvent {
+                method: "Page.frameDetached".to_string(),
+                params: json!({"frameId":"local","reason":"remove"}),
+                session_id: Some(session),
+            })
+            .unwrap();
+        assert!(
+            !page
+                .frame_metadata
+                .lock()
+                .unwrap()
+                .finish_snapshot(&tree, snapshot)
+        );
+        tabs.cdp().disconnect().await;
+        assert!(frame(&tabs, &page, &local, FrameField::Name).await.is_err());
+        page.closed.cancel();
+        assert_eq!(
+            frame(&tabs, &page, &local, FrameField::IsDetached)
+                .await
+                .unwrap(),
+            false
+        );
     }
 
     #[test]
