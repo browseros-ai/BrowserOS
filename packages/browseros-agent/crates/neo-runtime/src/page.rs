@@ -318,8 +318,8 @@ impl PageState {
         Fired::between(before, self)
     }
 
-    /// Playwright's `Frame._onClearLifecycle`, for the document `setContent` reopened: its
-    /// `DOMContentLoaded` and `load` count again, as a new document's do.
+    /// Playwright's `Frame._onClearLifecycle`: a new document's `DOMContentLoaded` and `load`
+    /// count again, whether it committed or `setContent` reopened it, and an armed clear is spent.
     fn clear_lifecycle(&mut self) {
         self.clear_at_reopen = false;
         self.dom_content_loaded = false;
@@ -432,10 +432,8 @@ impl FrameFeeds {
                     page.committed_url = None;
                     page.pending_url = None;
                     page.document = None;
-                    page.dom_content_loaded = false;
-                    page.load = false;
+                    page.clear_lifecycle();
                     page.pending_document = None;
-                    page.clear_at_reopen = false;
                     state.swaps += 1;
                     state.swapped_from = Some(session.clone());
                 } else {
@@ -1516,7 +1514,6 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                 let fragment = frame.url_fragment.as_deref().unwrap_or("");
                 state.committed_url = Some(format!("{}{fragment}", frame.url));
                 state.document = frame.loader_id;
-                state.clear_at_reopen = false;
                 // server/frames.ts frameCommittedNewDocumentNavigation: the pending document is
                 // this one, with its request, or, with no request known, assumed to be; a later
                 // navigation whose request already started stays pending.
@@ -1532,8 +1529,7 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                     }
                     Some(PendingDocument::Requested) | None => false,
                 };
-                state.dom_content_loaded = false;
-                state.load = false;
+                state.clear_lifecycle();
                 if kind.as_deref() == Some("BackForwardCacheRestore") {
                     // Deviation: `server/chromium/chromiumSwitches.ts` `chromiumSwitches`: `'--disable-back-forward-cache',`
                     // Playwright's Chromium never restores a cached document, and one it met
