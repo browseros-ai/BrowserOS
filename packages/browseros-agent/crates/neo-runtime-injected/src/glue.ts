@@ -31,6 +31,10 @@ import type {
 } from '../vendor/playwright/injected/src/injectedScript'
 import type { AriaNodeJSON } from '../vendor/playwright/isomorphic/ariaSnapshot'
 
+/** An element with the aria ref Playwright's snapshots keep on it (`ariaSnapshot.ts`
+ * `computeAriaRef`: `(element as any)._ariaRef = ariaRef;`). */
+type NamedElement = Element & { _ariaRef?: { ref: string } }
+
 /** The Playwright page types behind the spec's named handle kinds. */
 type Handles = { HitTargetInterceptor: HitTargetInterceptionResult }
 
@@ -205,6 +209,27 @@ export const glue = {
       element,
       visible: !!element && injected.utils.isElementVisible(element),
     }
+  },
+
+  /** Neo: one hop of a main-rooted path ref, by the owner's kept aria ref rather than the
+   * document's last snapshot, so a later snapshot of another part of the document leaves it. */
+  frameOwnerByRef: (injected, { ref }) => {
+    const element = injected
+      .querySelectorAll(injected.parseSelector('iframe, frame'), document)
+      .find((owner) => (owner as NamedElement)._ariaRef?.ref === ref)
+    return {
+      element,
+      visible: !!element && injected.utils.isElementVisible(element),
+    }
+  },
+
+  /** Neo: the owner's aria ref, from a snapshot of the owner alone through the one
+   * `InjectedScript` snapshot that leaves the document's last snapshot (and so its `aria-ref`
+   * selectors) as it was. */
+  frameOwnerRef: (injected, _params, element) => {
+    injected.ariaSnapshotForExpectFailure(element, { mode: 'ai' })
+    const ref = (element as NamedElement)._ariaRef?.ref
+    return ref === undefined ? {} : { ref }
   },
 
   describeSelector: (injected, { selector }) => {

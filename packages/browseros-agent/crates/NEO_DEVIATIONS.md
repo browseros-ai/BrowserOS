@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (7)
+## Deviations (8)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -13,7 +13,8 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/click.rs | `attempt` | `server/dom.ts` `ElementHandle._performPointerAction` | Playwright's trial still performs the input into an interceptor that blocks every event it judges, which the page's earlier listeners and the hover state still see; Neo's trial ends at its checks and sends no input. Dropping the interceptor disarms it, and the tab's input comes back once that stop has answered. |
 | neo-runtime/src/click.rs | `refuse_unserved` | `server/dom.ts` `ElementHandle._performPointerAction` | Neo's tab keeps no keyboard state yet to press and restore them with, so it refuses them before any work. |
 | neo-runtime/src/click.rs | `refuse_unserved` | `server/dom.ts` `ElementHandle._performPointerAction` | Playwright moves in `steps` from the page's last mouse position, which Neo's tab does not keep yet, so it refuses other steps before any work. |
-| neo-runtime/src/reads.rs | `CHILD_AI_SNAPSHOT_UNSERVED` | `server/frames.ts` `Frame.ariaSnapshotJSON` | Child-frame scoped AI refs cannot be main-frame paths; use the page snapshot until frame-id-prefixed refs are served. |
+| neo-runtime/src/frame_selector.rs | `Hop` | `server/frameSelectors.ts` `FrameSelectors._jumpToAriaRefFrameIfNeeded` | Playwright names a frame's refs by the frame's number; Neo names them by the path of iframe refs from the main frame (`f7f2e1`), which a later run can still follow. Such a ref stops routing when an iframe on its path is replaced, or its accessible role or name changes (its snapshots then give it a new ref), where Playwright's frame number stays. |
+| neo-runtime/src/reads.rs | `UNNAMED_FRAME` | `server/page.ts` `ariaSnapshotJSONForFrame` | Playwright names a child frame's refs by the frame's number, which needs no ref on its `<iframe>`; Neo's refs inside a frame are the path of iframe refs from the main frame, and an iframe that is not visible or receives no pointer events gets no ref. So an AI snapshot inside a frame behind such an iframe throws, when it would hold refs, rather than answer refs no selector could route. |
 
 ## Unexplained: owner questions (0)
 
