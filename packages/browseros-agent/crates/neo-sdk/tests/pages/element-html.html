@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Element HTML</title>
+<!-- Tests select by id only: BrowserOS neo's takeover bar adds shadow-root buttons and SVGs to
+     every page, and Playwright's CSS pierces open shadow roots. -->
+<button id="later" type="button">Add later</button>
+<main id="content">
+<div id="nested">Hello <b class="x">bold</b><br><!-- a comment --><i>it</i></div>
+<div id="entities">Fish &amp; chips &lt;3&nbsp;"quoted"</div>
+<p id="attrs"><a href="/x?a=1&amp;b=2" title='say "hi"'>link</a></p>
+<p id="empty"></p>
+<svg id="chart" width="120" height="24"><text id="label" x="0" y="16">Chart label</text></svg>
+<ul id="list"><li>First</li><li>Second</li></ul>
+<div id="hidden" style="display:none"><span>Hidden</span> text</div>
+</main>
+<script>
+// The click starts the timer, never page load. `#late` arrives outside `#content`.
+document.querySelector('#later').addEventListener('click', () => setTimeout(() => {
+  const late = document.createElement('div')
+  late.id = 'late'
+  late.innerHTML = '<em>late</em> arrival'
+  document.body.append(late)
+}, 500), { once: true })
+const content = document.getElementById('content')
+const loaded = content.outerHTML
+window.__facts = () => ({
+  unchanged: content.outerHTML === loaded,
+  late: !!document.getElementById('late'),
+})
+</script>

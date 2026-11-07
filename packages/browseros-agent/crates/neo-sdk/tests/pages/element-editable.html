@@ -1,0 +1,44 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Element enabled and editable</title>
+<!-- Tests select by id or class only: BrowserOS neo's takeover bar adds shadow-root buttons to
+     every page, and Playwright's CSS pierces open shadow roots. -->
+<button id="later" type="button">Add later</button>
+<main id="content">
+<button id="enabled-button" type="button">Enabled button</button>
+<button id="disabled-button" type="button" disabled>Disabled button</button>
+<div id="plain">Plain div</div>
+<span id="aria-disabled" role="button" aria-disabled="true">ARIA disabled</span>
+<fieldset id="fieldset" disabled><input id="fieldset-input"></fieldset>
+<label id="label">Name <input id="labelled" disabled></label>
+<input id="text-input">
+<input id="disabled-input" disabled>
+<input id="readonly-input" readonly>
+<textarea id="readonly-area" readonly></textarea>
+<div id="editable" contenteditable="true"></div>
+<span id="aria-readonly" role="textbox" aria-readonly="true"></span>
+<span id="aria-textbox" role="textbox"></span>
+<input class="dup">
+<input class="dup" disabled>
+</main>
+<script>
+// The click starts the timer, never page load: Neo's half starts seconds after its page loads.
+// `#late` arrives disabled and outside `#content`, so a read that waited for it sees it while
+// `#content` keeps the markup it loaded with.
+document.querySelector('#later').addEventListener('click', () => setTimeout(() => {
+  const late = document.createElement('input')
+  late.id = 'late'
+  late.disabled = true
+  document.body.append(late)
+}, 500), { once: true })
+const content = document.getElementById('content')
+const loaded = content.outerHTML
+// A state read changes nothing: the same markup, every control's value, and focus.
+window.__facts = () => ({
+  unchanged: content.outerHTML === loaded,
+  values: [...document.querySelectorAll('input, textarea')].map(e => e.value),
+  editable: document.getElementById('editable').textContent,
+  focused: document.activeElement.id || document.activeElement.tagName.toLowerCase(),
+  late: !!document.getElementById('late'),
+})
+</script>
