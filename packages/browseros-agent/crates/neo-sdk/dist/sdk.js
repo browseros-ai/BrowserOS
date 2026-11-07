@@ -8420,11 +8420,7 @@ function pageGuidOf(guid) {
 }
 
 // src/api-request.ts
-var ONLY_ONE_BODY = "Only one of 'data', 'form' or 'multipart' can be specified";
-var MAX_REDIRECTS_NEGATIVE = "'maxRedirects' must be greater than or equal to '0'";
-var MAX_RETRIES_NEGATIVE = "'maxRetries' must be greater than or equal to '0'";
 var URL_OR_REQUEST = "First argument must be either URL string or Request";
-var UNEXPECTED_DATA = "Unexpected 'data' type";
 var STATE_FILE = "storageState: Neo takes a storage state object, not a file path, in a run";
 var STATE_PATH = "path: Neo returns the storage state, and writes no file, in a run";
 var MULTIPART_STREAM = "multipart: Neo takes a file as { name, mimeType, buffer }; a run has no file system to stream from";
@@ -8535,11 +8531,11 @@ class APIRequestContext {
       throw new Error(URL_OR_REQUEST);
     const bodies = (options.data === undefined ? 0 : 1) + (options.form === undefined ? 0 : 1) + (options.multipart === undefined ? 0 : 1);
     if (bodies > 1)
-      throw new Error(ONLY_ONE_BODY);
+      throw new Error("Only one of 'data', 'form' or 'multipart' can be specified");
     if (options.maxRedirects !== undefined && options.maxRedirects < 0)
-      throw new Error(MAX_REDIRECTS_NEGATIVE);
+      throw new Error("'maxRedirects' must be greater than or equal to '0'");
     if (options.maxRetries !== undefined && options.maxRetries < 0)
-      throw new Error(MAX_RETRIES_NEGATIVE);
+      throw new Error("'maxRetries' must be greater than or equal to '0'");
     const url = options.url ?? options.request?.url() ?? "";
     const method = options.method || options.request?.method();
     const encodedParams = typeof options.params === "string" ? options.params : undefined;
@@ -8560,7 +8556,7 @@ class APIRequestContext {
       } else if (typeof options.data === "object" || typeof options.data === "number" || typeof options.data === "boolean") {
         jsonData = JSON.stringify(options.data);
       } else {
-        throw new Error(UNEXPECTED_DATA);
+        throw new Error("Unexpected 'data' type");
       }
     } else if (options.form) {
       formData = objectToArray(options.form);
