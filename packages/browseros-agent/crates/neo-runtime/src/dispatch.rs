@@ -75,7 +75,7 @@ use crate::lists;
 use crate::navigate::{self, GotoOptions};
 use crate::network::{HopId, ObjectKind as NetworkObject};
 use crate::page::{DialogAnswer, FrameTab, PageSession};
-use crate::press::{self, KeyInput, PressOptions};
+use crate::press::{self, PressOptions};
 use crate::progress::{
     CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
 };
@@ -1067,6 +1067,7 @@ fn encode_reply(
 
 #[cfg(test)]
 mod tests {
+    use crate::press::KeyInput;
     use std::collections::BTreeMap;
     use std::env;
     use std::fs;
