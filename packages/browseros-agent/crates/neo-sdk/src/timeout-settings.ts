@@ -14,6 +14,7 @@
  */
 
 import type { ApiName } from './connection'
+import { refuseSignal } from './waiter'
 
 /** `@isomorphic/time`'s `DEFAULT_PLAYWRIGHT_TIMEOUT`. Playwright Test's default of `0` does not
  * apply: a Neo run is a library call. */
@@ -24,10 +25,19 @@ export type TimeoutInput = { timeout?: number; signal?: unknown }
 
 /**
  * Deviation: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };` Playwright hands the signal to the call, which aborts when it aborts; Neo has no way to abort a sent call yet, so it refuses any signal, an aborted one included, before sending anything.
+ *
+ * `waiter.ts`'s `refuseSignal`, the one refusal, prefixed with `apiName` as Playwright's
+ * `_wrapApiCall` prefixes a client-side error; `null` inside a `wrapApiCall` body, which adds
+ * the prefix itself.
  */
-function refuseSignal(options: TimeoutInput, apiName: ApiName): void {
-  if (options.signal !== undefined)
-    throw new Error(`${apiName}: Neo does not support the signal option yet`)
+function refuse(options: TimeoutInput, apiName: ApiName | null): void {
+  try {
+    refuseSignal(options)
+  } catch (error) {
+    if (apiName !== null && error instanceof Error)
+      error.message = `${apiName}: ${error.message}`
+    throw error
+  }
 }
 
 export class TimeoutSettings {
@@ -50,10 +60,10 @@ export class TimeoutSettings {
   /**
    * The timeout in ms an action or read with these options runs under.
    *
-   * @throws `Error` prefixed with `apiName` when the options carry a `signal`.
+   * @throws `Error` prefixed with `apiName` (unless `null`) when the options carry a `signal`.
    */
-  timeout(options: TimeoutInput, apiName: ApiName): number {
-    refuseSignal(options, apiName)
+  timeout(options: TimeoutInput, apiName: ApiName | null): number {
+    refuse(options, apiName)
     return this.#timeout(options)
   }
 
@@ -61,10 +71,10 @@ export class TimeoutSettings {
    * The timeout in ms a navigation (`goto`, `waitForURL`, `waitForLoadState`) with these
    * options runs under.
    *
-   * @throws `Error` prefixed with `apiName` when the options carry a `signal`.
+   * @throws `Error` prefixed with `apiName` (unless `null`) when the options carry a `signal`.
    */
-  navigationTimeout(options: TimeoutInput, apiName: ApiName): number {
-    refuseSignal(options, apiName)
+  navigationTimeout(options: TimeoutInput, apiName: ApiName | null): number {
+    refuse(options, apiName)
     return this.#navigationTimeout(options)
   }
 

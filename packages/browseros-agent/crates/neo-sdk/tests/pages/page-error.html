@@ -1,0 +1,14 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>page error</title>
+<script>
+// pageError.test.mjs serves this page. Each button's click handler throws (or rejects) one
+// value and leaves it uncaught, so the page reports it as a page error; window.__thrown counts
+// the handlers that ran.
+window.__thrown = 0;
+</script></head><body>
+<button type="button" id="error" onclick="__thrown++; throw new Error('Fancy error!')">Error</button>
+<button type="button" id="named" onclick="__thrown++; const error = new Error('my-message'); error.name = 'my-name'; throw error">Named</button>
+<button type="button" id="string" onclick="__thrown++; throw 'oops'">String</button>
+<button type="button" id="number" onclick="__thrown++; throw 42">Number</button>
+<button type="button" id="null" onclick="__thrown++; throw null">Null</button>
+<button type="button" id="reject" onclick="__thrown++; Promise.reject(new Error('sad :('))">Reject</button>
+</body></html>
