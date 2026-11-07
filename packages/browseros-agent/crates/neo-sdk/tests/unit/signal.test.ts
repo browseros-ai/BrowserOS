@@ -38,6 +38,10 @@ function locatorCalls(page: ReturnType<typeof start>['page']): Call[] {
       'locator.ariaSnapshot',
       (signal) => locator.ariaSnapshot(withSignal(signal)),
     ],
+    [
+      'locator.ariaSnapshotJSON',
+      (signal) => locator.ariaSnapshotJSON(withSignal(signal)),
+    ],
     ['locator.fill', (signal) => locator.fill('x', withSignal(signal))],
     ['locator.focus', (signal) => locator.focus(withSignal(signal))],
     ['locator.blur', (signal) => locator.blur(withSignal(signal))],
@@ -93,12 +97,20 @@ function selectorCalls(
         target.dispatchEvent('#plain', 'click', {}, withSignal(signal)),
     ],
     [
+      `${name}.setContent`,
+      (signal) => target.setContent('<p>x</p>', withSignal(signal)),
+    ],
+    [
       `${name}.waitForURL`,
       (signal) => target.waitForURL('**/next', withSignal(signal)),
     ],
     [
       `${name}.waitForLoadState`,
       (signal) => target.waitForLoadState('load', withSignal(signal)),
+    ],
+    [
+      `${name}.waitForSelector`,
+      (signal) => target.waitForSelector('#target', withSignal(signal)),
     ],
     [`${name}.click`, (signal) => target.click('#target', withSignal(signal))],
     [
@@ -176,6 +188,10 @@ const FAMILIES = [
       [
         'page.ariaSnapshot',
         (signal: never) => page.ariaSnapshot(withSignal(signal)),
+      ] as Call,
+      [
+        'page.ariaSnapshotJSON',
+        (signal: never) => page.ariaSnapshotJSON(withSignal(signal)),
       ] as Call,
     ],
   ],

@@ -148,6 +148,13 @@ pub(crate) struct MainWorld {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DocumentId(i64);
 
+impl DocumentId {
+    /// Neo: the document of a handle made after its page closed (`evaluate.rs`
+    /// `handle_for_gone_object`): no live document has it, since Chromium's backend node ids are
+    /// positive.
+    pub(crate) const GONE: Self = Self(0);
+}
+
 /// A document's installed `UtilityScript`.
 pub(crate) struct Installed {
     /// The utility world's document generation at install (`World::generation`).

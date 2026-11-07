@@ -37,13 +37,18 @@ export type WaitForFunctionOptions = {
 }
 
 import type {
+  FrameAriaSnapshotJSONParams,
+  FrameAriaSnapshotJSONResult,
   FrameAriaSnapshotParams,
   FrameAriaSnapshotResult,
   FrameBlurParams,
   FrameCheckParams,
   FrameClickParams,
+  FrameContentParams,
+  FrameContentResult,
   FrameDblclickParams,
   FrameDispatchEventParams,
+  FrameDragAndDropParams,
   FrameFillParams,
   FrameFocusParams,
   FrameGetAttributeParams,
@@ -66,7 +71,10 @@ import type {
   FrameIsVisibleParams,
   FramePressParams,
   FrameQueryCountParams,
+  FrameResolveSelectorParams,
+  FrameResolveSelectorResult,
   FrameSelectOptionParams,
+  FrameSetContentParams,
   FrameTapParams,
   FrameTextContentParams,
   FrameTextContentResult,
@@ -74,6 +82,7 @@ import type {
   FrameTypeParams,
   FrameUncheckParams,
   FrameWaitForSelectorParams,
+  FrameWaitForTimeoutParams,
   LifecycleEvent,
 } from '@browseros/neo-runtime-spec/serve'
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
@@ -117,12 +126,15 @@ import { type Response, responseFor } from './network'
 import type { Page } from './page'
 import { serializePlainArgument } from './plain-argument'
 import {
+  FRAME_ARIA_SNAPSHOT_JSON_KEYS,
   FRAME_ARIA_SNAPSHOT_KEYS,
   FRAME_BLUR_KEYS,
   FRAME_CHECK_KEYS,
   FRAME_CLICK_KEYS,
+  FRAME_CONTENT_KEYS,
   FRAME_DBLCLICK_KEYS,
   FRAME_DISPATCH_EVENT_KEYS,
+  FRAME_DRAG_AND_DROP_KEYS,
   FRAME_FILL_KEYS,
   FRAME_FOCUS_KEYS,
   FRAME_GET_ATTRIBUTE_KEYS,
@@ -141,12 +153,15 @@ import {
   FRAME_IS_VISIBLE_KEYS,
   FRAME_PRESS_KEYS,
   FRAME_QUERY_COUNT_KEYS,
+  FRAME_RESOLVE_SELECTOR_KEYS,
   FRAME_SELECT_OPTION_KEYS,
+  FRAME_SET_CONTENT_KEYS,
   FRAME_TAP_KEYS,
   FRAME_TEXT_CONTENT_KEYS,
   FRAME_TYPE_KEYS,
   FRAME_UNCHECK_KEYS,
   FRAME_WAIT_FOR_SELECTOR_KEYS,
+  FRAME_WAIT_FOR_TIMEOUT_KEYS,
   pickParams,
 } from './protocol'
 import { get } from './runtime-bridge'
@@ -214,6 +229,141 @@ export type GetAttributeOptions = Omit<
 }
 
 /** Options shared by Playwright's page and locator snapshots. */
+/** `content`'s options (`channels.FrameContentOptions`). */
+export type ContentOptions = { includeShadow?: boolean }
+
+/** `setContent`'s options: `waitUntil` and the navigation `timeout`. */
+export type SetContentOptions = {
+  waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' | 'commit'
+  timeout?: number
+}
+
+/** Playwright: `isomorphic/ariaSnapshot.ts` `AriaRole` */
+export type AriaRole =
+  | 'alert'
+  | 'alertdialog'
+  | 'application'
+  | 'article'
+  | 'banner'
+  | 'blockquote'
+  | 'button'
+  | 'caption'
+  | 'cell'
+  | 'checkbox'
+  | 'code'
+  | 'columnheader'
+  | 'combobox'
+  | 'complementary'
+  | 'contentinfo'
+  | 'definition'
+  | 'deletion'
+  | 'dialog'
+  | 'directory'
+  | 'document'
+  | 'emphasis'
+  | 'feed'
+  | 'figure'
+  | 'form'
+  | 'generic'
+  | 'grid'
+  | 'gridcell'
+  | 'group'
+  | 'heading'
+  | 'img'
+  | 'insertion'
+  | 'link'
+  | 'list'
+  | 'listbox'
+  | 'listitem'
+  | 'log'
+  | 'main'
+  | 'mark'
+  | 'marquee'
+  | 'math'
+  | 'meter'
+  | 'menu'
+  | 'menubar'
+  | 'menuitem'
+  | 'menuitemcheckbox'
+  | 'menuitemradio'
+  | 'navigation'
+  | 'none'
+  | 'note'
+  | 'option'
+  | 'paragraph'
+  | 'presentation'
+  | 'progressbar'
+  | 'radio'
+  | 'radiogroup'
+  | 'region'
+  | 'row'
+  | 'rowgroup'
+  | 'rowheader'
+  | 'scrollbar'
+  | 'search'
+  | 'searchbox'
+  | 'separator'
+  | 'slider'
+  | 'spinbutton'
+  | 'status'
+  | 'strong'
+  | 'subscript'
+  | 'superscript'
+  | 'switch'
+  | 'tab'
+  | 'table'
+  | 'tablist'
+  | 'tabpanel'
+  | 'term'
+  | 'textbox'
+  | 'time'
+  | 'timer'
+  | 'toolbar'
+  | 'tooltip'
+  | 'tree'
+  | 'treegrid'
+  | 'treeitem'
+
+/** Playwright: `isomorphic/ariaSnapshot.ts` `AriaNodeJSON` */
+export type AriaNodeJSON = {
+  role: AriaRole | 'iframe' | 'text'
+  name?: string
+  checked?: true | 'mixed'
+  disabled?: true
+  expanded?: true
+  active?: true
+  invalid?: true | 'grammar' | 'spelling'
+  level?: number
+  pressed?: true | 'mixed'
+  selected?: true
+  ariaHidden?: true
+  ref?: string
+  cursor?: 'pointer'
+  box?: { x: number; y: number; width: number; height: number }
+  url?: string
+  placeholder?: string
+  text?: string
+  children?: (AriaNodeJSON | string)[]
+}
+
+/**
+ * Playwright: `isomorphic/ariaSnapshot.ts` `AriaSnapshotJSON`
+ *
+ * The tree `ariaSnapshot` renders as YAML.
+ */
+export type AriaSnapshotJSON = AriaNodeJSON[]
+
+/**
+ * Neo: the delay Node's `setTimeout` waits, which Playwright's server waits `waitForTimeout`
+ * with: a number outside [1, 2 ** 31 - 1], `NaN` and `±Infinity` included, waits 1 ms. JSON
+ * carries no `NaN` or `Infinity`, so the SDK settles the number before sending; any other value
+ * goes as given, for the protocol's own refusal.
+ */
+function nodeTimerDelay(timeout: unknown): unknown {
+  if (typeof timeout !== 'number') return timeout
+  return timeout >= 1 && timeout <= 2 ** 31 - 1 ? timeout : 1
+}
+
 export type AriaSnapshotOptions = {
   mode?: 'ai' | 'default'
   depth?: number
@@ -302,6 +452,13 @@ export type FillOptions = Omit<FrameFillParams, 'selector' | 'value'> & {
   noWaitAfter?: boolean
 }
 export type PressOptions = Omit<FramePressParams, 'selector' | 'key'> & {
+  timeout?: number
+}
+/** `Locator.dragTo`'s and `Page/Frame.dragAndDrop`'s options. */
+export type DragAndDropOptions = Omit<
+  FrameDragAndDropParams,
+  'source' | 'target'
+> & {
   timeout?: number
 }
 /** `Locator.pressSequentially`'s and the deprecated `type`s' options. */
@@ -819,9 +976,8 @@ export class Frame {
   }
 
   /**
-   * Sends `Frame.waitForSelector` under the action timeout. Behind `locator.waitFor` only, which
-   * passes `omitReturnValue: true`: Neo has no `ElementHandle`s, so a public
-   * `frame.waitForSelector` would have nothing to return.
+   * Sends `Frame.waitForSelector` under the action timeout, answering nothing: behind
+   * `locator.waitFor`, which passes `omitReturnValue: true`.
    */
   async _waitForSelector(
     apiName: ApiName,
@@ -1275,8 +1431,75 @@ export class Frame {
   }
 
   /**
+   * Waits until `selector` meets `state` (default `visible`: `attached`, `detached`, `visible`
+   * or `hidden`) and resolves its first match as an {@link ElementHandle}, or `null` for a
+   * `hidden` or `detached` wait. Before each attempt it runs the page's locator handlers
+   * ({@link Page.addLocatorHandler}). Not strict unless `strict`; under the action timeout.
+   */
+  waitForSelector(
+    selector: string,
+    options?: WaitForSelectorOptions & { state?: 'attached' | 'visible' },
+  ): Promise<ElementHandle>
+  waitForSelector(
+    selector: string,
+    options: WaitForSelectorOptions,
+  ): Promise<ElementHandle | null>
+  async waitForSelector(
+    selector: string,
+    options?: WaitForSelectorOptions,
+  ): Promise<ElementHandle | null> {
+    return await this._waitForSelectorPublic(
+      'frame.waitForSelector',
+      selector,
+      options,
+    )
+  }
+
+  /** Playwright: `client/frame.ts` `Frame.waitForSelector`: `throw new Error('options.visibility is not supported, did you mean options.state?');` */
+  async _waitForSelectorPublic(
+    apiName: ApiName,
+    selector: string,
+    options: WaitForSelectorOptions = {},
+  ): Promise<ElementHandle | null> {
+    // Playwright reads two names older releases took, from any value a script passes.
+    const legacy = options as { visibility?: unknown; waitFor?: unknown }
+    if (legacy.visibility)
+      throw new Error(
+        'options.visibility is not supported, did you mean options.state?',
+      )
+    if (legacy.waitFor && legacy.waitFor !== 'visible')
+      throw new Error(
+        'options.waitFor is not supported, did you mean options.state?',
+      )
+    return await this._waitForSelectorElement(apiName, selector, options)
+  }
+
+  /**
+   * The `<iframe>` or `<frame>` element that owns this frame, as an {@link ElementHandle} in its
+   * parent's main world. The main frame, and a frame that is gone, throw "Frame has been
+   * detached.". Sent with no timeout, as Playwright's (`kNoTimeout`).
+   */
+  async frameElement(): Promise<ElementHandle> {
+    const result = await this._connection.sendNeo(
+      'frame.frameElement',
+      this._guid,
+      'frameElement',
+      {},
+      0,
+    )
+    // Playwright: `client/frame.ts` `Frame.frameElement`: `return ElementHandle.from((await this._channel.frameElement({}, kNoTimeout)).element);`
+    const element = ElementHandle.fromNullable(
+      this._connection,
+      result?.element,
+    )
+    if (!element) throw new Error('neo-sdk: frameElement answered no element')
+    return element
+  }
+
+  /**
    * `Frame.waitForSelector` answering its element, as Playwright's `frame.waitForSelector` does
-   * for an attached or visible wait: behind `locator.elementHandle`.
+   * for an attached or visible wait: behind {@link Frame.waitForSelector} and
+   * `locator.elementHandle`.
    */
   async _waitForSelectorElement(
     apiName: ApiName,
@@ -1318,6 +1541,112 @@ export class Frame {
       this._page._timeoutSettings.timeout(options, apiName),
     )) as FrameAriaSnapshotResult
     return result.snapshot
+  }
+
+  /** Sends `Frame.ariaSnapshotJSON`: the tree `_ariaSnapshot` renders, as JSON. */
+  async _ariaSnapshotJSON(
+    apiName: ApiName,
+    options: AriaSnapshotOptions,
+    selector?: string,
+  ): Promise<AriaSnapshotJSON> {
+    const result = (await this._connection.send(
+      apiName,
+      this._guid,
+      'ariaSnapshotJSON',
+      pickParams(FRAME_ARIA_SNAPSHOT_JSON_KEYS, {
+        mode: options.mode,
+        selector,
+        depth: options.depth,
+        boxes: options.boxes,
+      }) as FrameAriaSnapshotJSONParams,
+      this._page._timeoutSettings.timeout(options, apiName),
+    )) as FrameAriaSnapshotJSONResult
+    return result.snapshot as AriaSnapshotJSON
+  }
+
+  /** The frame's markup, its doctype first; with no timeout, as Playwright's (`kNoTimeout`). */
+  async content(options: ContentOptions = {}): Promise<string> {
+    return await this._content('frame.content', options)
+  }
+
+  /** As Playwright's, `options` defaults only when `undefined`; `null` spreads to nothing. */
+  async _content(
+    apiName: ApiName,
+    options: ContentOptions = {},
+  ): Promise<string> {
+    const result = (await this._connection.send(
+      apiName,
+      this._guid,
+      'content',
+      pickParams(FRAME_CONTENT_KEYS, { ...options }) as FrameContentParams,
+      0,
+    )) as FrameContentResult
+    return result.value
+  }
+
+  /** Writes `html` into the frame's document and waits for `waitUntil` (default `load`) among
+   * the events the new content fires, under the navigation timeout. */
+  async setContent(
+    html: string,
+    options: SetContentOptions = {},
+  ): Promise<void> {
+    return await this._setContent('frame.setContent', html, options)
+  }
+
+  /** As Playwright's, `options` defaults only when `undefined`: a `null` one throws its
+   * TypeError reading `waitUntil`. */
+  async _setContent(
+    apiName: ApiName,
+    html: string,
+    options: SetContentOptions = {},
+  ): Promise<void> {
+    const waitUntil = verifyLoadState(
+      'waitUntil',
+      options.waitUntil === undefined ? 'load' : options.waitUntil,
+    )
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'setContent',
+      pickParams(FRAME_SET_CONTENT_KEYS, {
+        html,
+        ...options,
+        waitUntil,
+      }) as FrameSetContentParams,
+      this._page._timeoutSettings.navigationTimeout(options, apiName),
+    )
+  }
+
+  /** Waits `timeout` milliseconds, ending early if the frame goes or the page closes. */
+  async waitForTimeout(timeout: number): Promise<void> {
+    return await this._waitForTimeout('frame.waitForTimeout', timeout)
+  }
+
+  async _waitForTimeout(apiName: ApiName, timeout: number): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'waitForTimeout',
+      pickParams(FRAME_WAIT_FOR_TIMEOUT_KEYS, {
+        waitTimeout: nodeTimerDelay(timeout),
+      }) as FrameWaitForTimeoutParams,
+      0,
+    )
+  }
+
+  /** Sends `Frame.resolveSelector`: Playwright's simple selector for the first match, behind
+   * the selectors of the iframes on the way from the main frame. */
+  async _resolveSelector(apiName: ApiName, selector: string): Promise<string> {
+    const result = (await this._connection.send(
+      apiName,
+      this._guid,
+      'resolveSelector',
+      pickParams(FRAME_RESOLVE_SELECTOR_KEYS, {
+        selector,
+      }) as FrameResolveSelectorParams,
+      0,
+    )) as FrameResolveSelectorResult
+    return result.resolvedSelector
   }
 
   /** Not strict, as Playwright's `frame.click`. */
@@ -1467,6 +1796,35 @@ export class Frame {
         key,
         ...options,
       }) as FramePressParams,
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
+    )
+  }
+
+  /** A move and press on `source`, then a move and release on `target`, in one timeout. */
+  async dragAndDrop(
+    source: string,
+    target: string,
+    options: DragAndDropOptions = {},
+  ): Promise<void> {
+    return await this._dragAndDrop('frame.dragAndDrop', source, target, options)
+  }
+
+  /** Synchronously reaches `send` so it captures the script's call site. */
+  async _dragAndDrop(
+    apiName: ApiName,
+    source: string,
+    target: string,
+    options: DragAndDropOptions,
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'dragAndDrop',
+      pickParams(FRAME_DRAG_AND_DROP_KEYS, {
+        source,
+        target,
+        ...options,
+      }) as FrameDragAndDropParams,
       this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
   }

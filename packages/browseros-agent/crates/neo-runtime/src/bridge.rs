@@ -43,6 +43,7 @@ use tokio::task;
 
 use crate::deadline::{Deadline, Stop};
 use crate::dispatch::Dispatcher;
+use crate::evaluate::Handles;
 use crate::events::{self, CONTEXT_GUID};
 use crate::getters::{self, FrameField};
 use crate::network::{HopId, LogError, ObjectKind as NetworkObject};
@@ -199,7 +200,17 @@ fn subscribe(tabs: &Tabs, request: &str) -> Result<(), String> {
     if enabled && needs.discovery {
         tabs.discover();
     }
+    if enabled && needs.downloads {
+        tabs.watch_downloads();
+    }
     if !needs.of_page() {
+        return Ok(());
+    }
+    if event == "filechooser" {
+        // A page's own event: `pages` is that page alone.
+        for entry in pages {
+            page_events::intercept_file_chooser(tabs, entry);
+        }
         return Ok(());
     }
     for entry in pages {
@@ -313,6 +324,8 @@ pub(crate) struct Getters {
     tabs: Tabs,
     deadline: Deadline,
     tokio: Handle,
+    /// The run's handles, which `ConsoleMessage.args()` adds its message's arguments to.
+    handles: Arc<Handles>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -341,6 +354,10 @@ enum GetterField {
     IsDetached,
     /// On a page: `opener()`'s record, `null` when none is open in the run's context.
     Opener,
+    /// On a console message (`console@<targetId>:<n>`): `args()`'s handle records.
+    Args,
+    /// On a file chooser (`filechooser@<targetId>:<n>`): `element()`'s handle record.
+    Element,
 }
 
 #[derive(Deserialize)]
@@ -397,11 +414,17 @@ enum GetError {
 }
 
 impl Getters {
-    pub(crate) fn new(tabs: Tabs, deadline: Deadline, tokio: Handle) -> Self {
+    pub(crate) fn new(
+        tabs: Tabs,
+        deadline: Deadline,
+        tokio: Handle,
+        handles: Arc<Handles>,
+    ) -> Self {
         Self {
             tabs,
             deadline,
             tokio,
+            handles,
         }
     }
 
@@ -432,6 +455,9 @@ impl Getters {
                 serde_json::to_value(self.tabs.pages().await?)
                     .map_err(|error| PlaywrightError::error(error.to_string()))
             });
+        }
+        if let Some(answer) = self.handed_out(&request) {
+            return answer;
         }
         if let Some((kind, _, hop)) = HopId::parse(&request.guid) {
             return self.network(&request.guid, kind, &hop, request.field);
@@ -486,8 +512,45 @@ impl Getters {
             GetterField::Name
             | GetterField::ParentFrame
             | GetterField::ChildFrames
-            | GetterField::IsDetached => Err(GetError::BadRequest("not a page getter".to_string())),
+            | GetterField::IsDetached
+            | GetterField::Args
+            | GetterField::Element => Err(GetError::BadRequest("not a page getter".to_string())),
         }
+    }
+
+    /// What a run's event handed out by id, made at its first read: a console message's `args`
+    /// (`console@<targetId>:<n>`) or a file chooser's `element` (`filechooser@<targetId>:<n>`).
+    /// `None` for any other guid.
+    fn handed_out(&self, request: &ObjectRequest) -> Option<Result<Value, GetError>> {
+        let (kind, rest) = request.guid.split_once('@')?;
+        let wanted = match (kind, request.field) {
+            ("console", GetterField::Args) | ("filechooser", GetterField::Element) => true,
+            ("console" | "filechooser", _) => false,
+            _ => return None,
+        };
+        if !wanted {
+            return Some(Err(GetError::BadRequest(format!(
+                "no {:?} on {:?}",
+                request.field, request.guid
+            ))));
+        }
+        let Some((target, id)) = rest.rsplit_once(':').and_then(|(target, id)| {
+            Some((PageId::new(target.to_string()), id.parse::<u64>().ok()?))
+        }) else {
+            return Some(Err(GetError::BadRequest(format!(
+                "unknown guid {:?}",
+                request.guid
+            ))));
+        };
+        Some(self.wait(async {
+            if kind == "console" {
+                self.tabs.console_args(&target, id, &self.handles).await
+            } else {
+                self.tabs
+                    .file_chooser_element(&target, id, &self.handles)
+                    .await
+            }
+        }))
     }
 
     /// A hop's live client state, read from the network log of the session that recorded it.

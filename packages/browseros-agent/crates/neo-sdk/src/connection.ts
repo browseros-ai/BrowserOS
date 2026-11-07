@@ -21,6 +21,7 @@
  */
 
 import type {
+  ArtifactCommands,
   BrowserContextCommands,
   DialogCommands,
   FrameCommands,
@@ -69,6 +70,7 @@ export type ApiName =
   | 'locator.fill'
   | 'locator.press'
   | 'locator.pressSequentially'
+  | 'locator.dragTo'
   | 'locator.type'
   | 'locator.inputValue'
   | 'locator.isChecked'
@@ -85,6 +87,7 @@ export type ApiName =
   | 'page.fill'
   | 'page.press'
   | 'page.type'
+  | 'page.dragAndDrop'
   | 'page.inputValue'
   | 'page.isChecked'
   | 'page.isVisible'
@@ -113,9 +116,20 @@ export type ApiName =
   | 'locator.allTextContents'
   | 'page.ariaSnapshot'
   | 'locator.ariaSnapshot'
+  // Document content and timing (B3).
+  | 'frame.content'
+  | 'page.content'
+  | 'frame.setContent'
+  | 'page.setContent'
+  | 'frame.waitForTimeout'
+  | 'page.waitForTimeout'
+  | 'locator.normalize'
+  | 'locator.ariaSnapshotJSON'
+  | 'page.ariaSnapshotJSON'
   | 'frame.fill'
   | 'frame.press'
   | 'frame.type'
+  | 'frame.dragAndDrop'
   | 'frame.inputValue'
   | 'frame.isChecked'
   | 'frame.isVisible'
@@ -127,6 +141,11 @@ export type ApiName =
   | 'browserContext.close'
   | 'page.close'
   | 'page.bringToFront'
+  | 'page.addLocatorHandler'
+  | 'page.waitForSelector'
+  | 'frame.waitForSelector'
+  | 'frame.frameElement'
+  | 'page.removeLocatorHandler'
   | 'locator.waitFor'
   | 'page.waitForURL'
   | 'frame.waitForURL'
@@ -198,6 +217,11 @@ export type ApiName =
   | 'page.clearPageErrors'
   | 'dialog.accept'
   | 'dialog.dismiss'
+  | 'download.path'
+  | 'download.saveAs'
+  | 'download.failure'
+  | 'download.cancel'
+  | 'download.delete'
   // Routes (B3, `route.ts`).
   | 'page.route'
   | 'page.unroute'
@@ -425,6 +449,23 @@ export class Connection {
       params,
       timeout,
     )) as Resolved<DialogCommands[M]['result']>
+  }
+
+  /** {@link Connection.send} for an `Artifact` command, to a `download@…` guid. */
+  async sendArtifact<M extends keyof ArtifactCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: ArtifactCommands[M]['params'],
+    timeout: number,
+  ): Promise<Resolved<ArtifactCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<ArtifactCommands[M]['result']>
   }
 
   /**

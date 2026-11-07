@@ -47,6 +47,7 @@ import type {
 } from '@browseros/neo-runtime-spec/serve'
 import { isString } from '../vendor/playwright/isomorphic/stringUtils'
 import type { ApiName } from './connection'
+import type { CreatedHandle } from './js-handle'
 
 /** `neo:fetch` on a route's guid: `route.fetch`'s overrides, as Rust reads them (neo-runtime
  * `routes.rs`). `postData` is base64. */
@@ -175,6 +176,13 @@ export type NeoFrameCommands = {
   'neo:releaseNavigation': {
     params: NeoReleaseNavigationParams
     result: Record<string, never>
+  }
+  /** Playwright's own `Frame.frameElement`, which neo-runtime routes by hand
+   * (`frame_element.rs`): its result names an `ElementHandle`, which the generated spec cannot
+   * create, so the element travels as the record the SDK builds it from. */
+  frameElement: {
+    params: Record<string, never>
+    result: { element?: CreatedHandle }
   }
 }
 
