@@ -22,8 +22,10 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
+use std::future::Future;
 use std::hash::{BuildHasher, Hasher};
 use std::mem;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as SyncMutex, MutexGuard, OnceLock, Weak};
 
@@ -256,7 +258,16 @@ fn for_new_session<'a>(scripts: &'a [Script], target: &str) -> Vec<&'a Script> {
 struct ShownPage {
     target: String,
     sessions: Vec<Link>,
+    /// What the page does with each out-of-process iframe session attached for it.
+    hook: SessionHook,
 }
+
+/// Neo: what the page an out-of-process iframe session belongs to does with it before it runs,
+/// given the session and the frame's target id: the page's own producers on it, its requests
+/// and their routes (`page.rs` `PageSession::init_child_hook`), late-bound so this file names
+/// none of them, as the bindings' are (`Bindings::prepare_child`).
+pub(crate) type SessionHook =
+    Arc<dyn Fn(CdpClient, Link, String) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// A session that shows a page the run touched, with the token its detach cancels.
 #[derive(Clone)]
@@ -420,6 +431,7 @@ impl InitScripts {
         state.pages.push(ShownPage {
             target,
             sessions: vec![link],
+            hook: page.init_child_hook(),
         });
         drop(state);
         if let Some(bindings) = self.bindings() {
@@ -641,11 +653,13 @@ impl InitScripts {
     async fn attached(self: Arc<Self>, cdp: CdpClient, attach: Attach) {
         let Attach {
             target,
+            frame,
             link,
             held,
             iframe,
         } = attach;
         let mut shown_here = false;
+        let mut hook = None;
         if iframe && !self.closed() {
             let mut state = self.state.lock().await;
             let State { scripts, pages } = &mut *state;
@@ -662,6 +676,7 @@ impl InitScripts {
                 if !link.gone.is_cancelled() {
                     page.sessions.push(link.clone());
                     shown_here = true;
+                    hook = Some(Arc::clone(&page.hook));
                 }
             }
         }
@@ -669,6 +684,15 @@ impl InitScripts {
         // so a binding exposed meanwhile reaches this session one way or the other).
         if shown_here && let Some(bindings) = self.bindings() {
             bindings.prepare_child(&cdp, &link, &target).await;
+        }
+        // Then the page's requests and routes, so its first request is the tab's to see and to
+        // pause, as Playwright's `FrameSession._initialize` turns on a frame session's network
+        // before it runs it.
+        if let Some(hook) = hook {
+            tokio::select! {
+                () = link.gone.cancelled() => {}
+                () = hook(cdp.clone(), link.clone(), frame) => {}
+            }
         }
         // Sent together, in this order, as Playwright's `FrameSession` sends its batch: a target
         // held at its start may answer `Target.setAutoAttach` only once it runs.
@@ -727,6 +751,8 @@ pub(crate) async fn release_all(run: &RunScope) {
 struct Attach {
     /// The page the attaching session shows.
     target: String,
+    /// The attached target's id: an out-of-process iframe's is its frame's.
+    frame: String,
     /// The attached target's own session.
     link: Link,
     /// Chromium holds it at its start until `Runtime.runIfWaitingForDebugger`.
@@ -781,6 +807,10 @@ async fn watch(
                     gone: scripts.watched(&session, &target),
                     session,
                 },
+                frame: event.params["targetInfo"]["targetId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
                 target,
                 held: event.params["waitingForDebugger"]
                     .as_bool()

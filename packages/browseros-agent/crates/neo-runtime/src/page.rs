@@ -77,6 +77,7 @@ use crate::events::{EventHub, Flushes};
 use crate::frame_selector::{self, FrameOwner};
 use crate::frames::{FrameContext, FrameScope, Frames, Host, local_tree};
 use crate::highlight::Highlights;
+use crate::init_scripts::{self, Link, until_gone};
 use crate::input_devices::{
     self, Devices, Effect, EffectSink, InputDevices, InputSender, Owner, Plan,
 };
@@ -209,6 +210,9 @@ pub(crate) struct PageSession {
     pub(crate) network: Arc<NetworkLog>,
     /// The run's routed requests on this tab (`routes.rs`).
     pub(crate) routes: Arc<Routes>,
+    /// The out-of-process frame sessions the run's init scripts attached, that report their
+    /// frames' requests here ([`PageSession::init_child_hook`]).
+    init_children: Arc<InitChildren>,
     /// `Network.enable`, sent on this session's first goto and kept for the run.
     network_enabled: OnceCell<()>,
     /// Playwright's `Screenshotter` task queue: one screenshot at a time on this tab, so one's
@@ -671,6 +675,8 @@ impl PageSession {
     ) -> Self {
         let routes = Arc::new(Routes::new(page.as_str(), context_routes));
         let child_routes = Arc::clone(&routes);
+        let init_children = Arc::new(InitChildren::default());
+        let reported = Arc::clone(&init_children);
         let events = PageEvents::new(
             hub,
             page.as_str(),
@@ -700,9 +706,11 @@ impl PageSession {
             let events = child_events.clone();
             let network = Arc::clone(&child_network);
             let routes = Arc::clone(&child_routes);
+            let reported = Arc::clone(&reported);
             Box::pin(async move {
                 events.child_attached(&host).await;
-                if network.enabled() {
+                // A frame an init-script session reports already: no request twice.
+                if network.enabled() && !reported.reports(host.target_id()) {
                     enable_child_network(&network, &host).await;
                     // Playwright gives a new frame session the page's interception before it
                     // runs (`FrameSession._initialize`); Neo's is attached lazily, so its
@@ -736,6 +744,7 @@ impl PageSession {
             input,
             network,
             routes,
+            init_children,
             network_enabled: OnceCell::new(),
             screenshots,
             idle: Arc::new(SharedIdle::new(page.as_str(), Instant::now())),
@@ -882,7 +891,12 @@ impl PageSession {
                 self.network.mark_enabled();
                 self.restart_idle().await;
                 for host in self.frames.child_hosts() {
-                    enable_child_network(&self.network, &host).await;
+                    if !self.init_children.reports(host.target_id()) {
+                        enable_child_network(&self.network, &host).await;
+                    }
+                }
+                for child in self.init_children.live() {
+                    child.enable_network(&self.network).await;
                 }
                 Ok::<(), CdpError>(())
             })
@@ -897,17 +911,73 @@ impl PageSession {
         if on {
             self.enable_network().await?;
         }
-        for (method, params) in interception(on) {
-            self.send(method, params).await?;
-        }
-        for host in self.frames.child_hosts() {
-            for (method, params) in interception(on) {
-                if let Err(error) = host.send(method, params).await {
+        // Every session's commands go out together, none waiting on another's reply.
+        let tab = future::try_join_all(
+            interception(on)
+                .into_iter()
+                .map(|(method, params)| self.send(method, params)),
+        );
+        let hosts = self
+            .frames
+            .child_hosts()
+            .into_iter()
+            .filter(|host| !self.init_children.reports(host.target_id()))
+            .map(|host| async move {
+                let sent = future::join_all(
+                    interception(on)
+                        .into_iter()
+                        .map(|(method, params)| host.send(method, params)),
+                )
+                .await;
+                for error in sent.into_iter().filter_map(Result::err) {
                     debug!(%error, "turning a frame session's request pausing over failed");
                 }
-            }
-        }
-        Ok(())
+            });
+        let children = self
+            .init_children
+            .live()
+            .into_iter()
+            .map(|child| async move { child.intercept(on).await });
+        let (tab, _hosts, _children) =
+            tokio::join!(tab, future::join_all(hosts), future::join_all(children));
+        tab.map(|_| ())
+    }
+
+    /// Neo: the hook `init_scripts.rs` runs on each out-of-process iframe session it attached for
+    /// this tab, before the frame runs ([`init_scripts::SessionHook`]): the session reports its
+    /// frame's requests to the tab's network log, and pauses them while the tab pauses requests,
+    /// from its first request, as Playwright's `FrameSession._initialize` gives a new frame
+    /// session the page's network and interception before it runs. One session per frame
+    /// reports: none for a frame a session Frames attached reports already, and a session Frames
+    /// attaches later for this one's frame reports nothing ([`InitChildren`]).
+    pub(crate) fn init_child_hook(&self) -> init_scripts::SessionHook {
+        let network = Arc::clone(&self.network);
+        let routes = Arc::clone(&self.routes);
+        let frames = Arc::clone(&self.frames);
+        let children = Arc::clone(&self.init_children);
+        Arc::new(move |cdp, link, frame| {
+            let network = Arc::clone(&network);
+            let routes = Arc::clone(&routes);
+            let frames = Arc::clone(&frames);
+            let children = Arc::clone(&children);
+            Box::pin(async move {
+                let hosted = frames.child_hosts().iter().any(|host| {
+                    host.target_id() == Some(frame.as_str()) && network.has_child(host.session_id())
+                });
+                let child = InitChild { cdp, link };
+                if hosted || !children.adopt(&frame, &child) {
+                    return;
+                }
+                // Adopted first: an enable or a pausing that starts from now on reaches it, and
+                // one that started before is seen here.
+                if network.enabled() {
+                    child.enable_network(&network).await;
+                }
+                if routes.intercepting() {
+                    child.intercept(true).await;
+                }
+            })
+        })
     }
 
     /// The requests seen from now on are the tab's whole traffic: `networkidle` starts over
@@ -1951,6 +2021,95 @@ impl Watcher {
 /// Neo: how long an out-of-process frame's first call waits for that frame's `Network.enable`. A
 /// frame frozen by its page's dialog may never answer; the call then goes on without it.
 const CHILD_NETWORK_WAIT: Duration = Duration::from_secs(5);
+
+/// Neo: the out-of-process frame sessions the run's init scripts attached and hold
+/// (`init_scripts.rs`), by their frame's target id, each reporting its frame's requests to this
+/// tab's network log and routes ([`PageSession::init_child_hook`]).
+#[derive(Default)]
+struct InitChildren(SyncMutex<HashMap<String, InitChild>>);
+
+/// Neo: one init-script session of an out-of-process frame.
+#[derive(Clone)]
+struct InitChild {
+    cdp: CdpClient,
+    link: Link,
+}
+
+impl InitChildren {
+    /// Takes `child` as its frame's reporting session, unless a live one reports it already.
+    fn adopt(&self, frame: &str, child: &InitChild) -> bool {
+        let Ok(mut children) = self.0.lock() else {
+            return false;
+        };
+        children.retain(|_, held| !held.link.gone.is_cancelled());
+        if frame.is_empty() || children.contains_key(frame) {
+            return false;
+        }
+        children.insert(frame.to_string(), child.clone());
+        true
+    }
+
+    /// Whether a live init-script session reports `frame` (a child host's target id).
+    fn reports(&self, frame: Option<&str>) -> bool {
+        frame.is_some_and(|frame| {
+            self.0.lock().is_ok_and(|children| {
+                children
+                    .get(frame)
+                    .is_some_and(|child| !child.link.gone.is_cancelled())
+            })
+        })
+    }
+
+    /// The live sessions, one per frame.
+    fn live(&self) -> Vec<InitChild> {
+        self.0.lock().map_or_else(
+            |_| Vec::new(),
+            |children| {
+                children
+                    .values()
+                    .filter(|child| !child.link.gone.is_cancelled())
+                    .cloned()
+                    .collect()
+            },
+        )
+    }
+}
+
+impl InitChild {
+    /// Sends `method` on the session, until it detaches or [`CHILD_NETWORK_WAIT`] passes.
+    async fn send(&self, method: &str, params: Value) -> bool {
+        let sent = until_gone(
+            &self.link.gone,
+            self.cdp.send(method, params, Some(&self.link.session)),
+        );
+        matches!(time::timeout(CHILD_NETWORK_WAIT, sent).await, Ok(Some(_)))
+    }
+
+    /// `Network.enable` on the session, whose requests are the tab's from then on, once.
+    async fn enable_network(&self, network: &NetworkLog) {
+        let session = &self.link.session;
+        if network.has_child(session) {
+            return;
+        }
+        network.add_child(session);
+        if !self.send("Network.enable", json!({})).await {
+            debug!(%session, "an init-script frame's network did not turn on");
+        }
+    }
+
+    /// Turns the pausing of the session's requests on or off, its commands together.
+    async fn intercept(&self, on: bool) {
+        let sent = future::join_all(
+            interception(on)
+                .into_iter()
+                .map(|(method, params)| self.send(method, params)),
+        )
+        .await;
+        if sent.contains(&false) {
+            debug!(session = %self.link.session, "turning an init-script frame's request pausing over failed");
+        }
+    }
+}
 
 /// `Network.enable` on an out-of-process frame's session, whose requests are the tab's from then
 /// on: the session is registered first, so no event the enable triggers is dropped. Bounded by

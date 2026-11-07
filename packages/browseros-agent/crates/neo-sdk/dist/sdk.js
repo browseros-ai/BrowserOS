@@ -6903,6 +6903,50 @@ class APIResponse {
   }
 }
 
+// src/request-data.ts
+function isJsonContentType(headers) {
+  if (!headers)
+    return false;
+  for (const { name, value } of headers) {
+    if (name.toLocaleLowerCase() === "content-type")
+      return value.split(";")[0].trim().toLowerCase() === "application/json";
+  }
+  return false;
+}
+function isJsonParsable(value) {
+  if (typeof value !== "string")
+    return false;
+  try {
+    JSON.parse(value);
+    return true;
+  } catch (error) {
+    if (error instanceof SyntaxError)
+      return false;
+    throw error;
+  }
+}
+function typeData(data, headers) {
+  if (data === undefined)
+    return {};
+  if (typeof data === "string") {
+    if (isJsonContentType(headers))
+      return { json: isJsonParsable(data) ? data : JSON.stringify(data) };
+    return { bytes: encodeUtf8(data) };
+  }
+  if (data instanceof Uint8Array)
+    return { bytes: data };
+  if (typeof data === "object" || typeof data === "number" || typeof data === "boolean")
+    return { json: JSON.stringify(data) };
+  throw new Error(`Unexpected 'data' type`);
+}
+function serializePostData(data) {
+  if (data.json !== undefined)
+    return { body: encodeUtf8(data.json), contentType: "application/json" };
+  if (data.bytes !== undefined)
+    return { body: data.bytes, contentType: "application/octet-stream" };
+  return;
+}
+
 // src/waiter.ts
 async function wrapApiCall(apiName, body) {
   try {
@@ -7046,14 +7090,8 @@ var BODY_TOO_LARGE = "route.fulfill: Neo carries a body of at most 6291456 bytes
 var ROUTE_HANDLED = "Route is already handled!";
 var BODY_AND_JSON = "Can specify either body or json parameters";
 var NO_PATH = `route.fulfill: Neo cannot read a file for "path" yet (it reads only inside the run's artifact directory, which this build lacks); pass "body" instead`;
-function postDataBytes(postData) {
-  if (postData === undefined || postData === null)
-    return;
-  if (typeof postData === "string")
-    return encodeUtf8(postData);
-  if (postData instanceof Uint8Array)
-    return postData;
-  return encodeUtf8(JSON.stringify(postData));
+function hasHeader(headers, name) {
+  return Object.keys(headers).some((key) => key.toLowerCase() === name.toLowerCase());
 }
 function deferred() {
   let resolve = () => {};
@@ -7118,25 +7156,31 @@ class Route {
     });
   }
   async fetch(options = {}) {
-    await wrapApiCall("route.fetch", async () => {
+    const request = this.#request;
+    const overrides = request._fallbackOverridesForContinue();
+    const headers = options.headers ?? request.headers();
+    const typed = await wrapApiCall("route.fetch", async () => {
       if (options.maxRedirects !== undefined && options.maxRedirects < 0)
         throw new Error(`'maxRedirects' must be greater than or equal to '0'`);
       if (options.maxRetries !== undefined && options.maxRetries < 0)
         throw new Error(`'maxRetries' must be greater than or equal to '0'`);
+      return typeData(options.postData, headersObjectToArray2(headers));
     });
-    {
-      const overrides = this.#request._fallbackOverridesForContinue();
-      const headers = options.headers ?? overrides.headers;
-      const postData = postDataBytes(options.postData) ?? overrides.postDataBuffer;
-      const result = await this.#connection.sendRouteFetch("route.fetch", this._guid, {
-        url: options.url ?? overrides.url,
-        method: options.method ?? overrides.method,
-        headers: headers ? headersObjectToArray2(headers) : undefined,
-        postData: postData ? toBinary(postData) : undefined,
-        maxRedirects: options.maxRedirects
-      }, this.#timeoutSettings.timeout(options, "route.fetch"));
-      return new APIResponse(result);
-    }
+    const given = typed.json !== undefined || typed.bytes !== undefined;
+    const own = given ? undefined : request.postDataBuffer() ?? undefined;
+    const serialized = serializePostData(given ? typed : { bytes: own });
+    let headerOverrides = options.headers ?? overrides.headers;
+    if (serialized && !hasHeader(headers, "content-type"))
+      headerOverrides = { ...headers, "content-type": serialized.contentType };
+    const postData = given ? serialized?.body : overrides.postDataBuffer;
+    const result = await this.#connection.sendRouteFetch("route.fetch", this._guid, {
+      url: options.url ?? overrides.url,
+      method: options.method ?? overrides.method,
+      headers: headerOverrides ? headersObjectToArray2(headerOverrides) : undefined,
+      postData: postData ? toBinary(postData) : undefined,
+      maxRedirects: options.maxRedirects
+    }, this.#timeoutSettings.timeout(options, "route.fetch"));
+    return new APIResponse(result);
   }
   async fulfill(options = {}) {
     await this.#handleRoute(async () => {

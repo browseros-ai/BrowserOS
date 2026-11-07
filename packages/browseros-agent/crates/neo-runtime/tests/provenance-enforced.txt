@@ -69,6 +69,7 @@ neo-sdk/src/headers.ts
 neo-sdk/src/init-script.ts
 neo-sdk/src/input.ts
 neo-sdk/src/js-handle.ts
+neo-sdk/src/request-data.ts
 neo-sdk/src/route.ts
 neo-sdk/src/screenshot.ts
 neo-sdk/src/set-input-files.ts
