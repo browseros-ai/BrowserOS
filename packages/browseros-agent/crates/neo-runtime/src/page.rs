@@ -1466,10 +1466,11 @@ impl Tab for FrameTab {
         &self,
         element: &ResolvedElement,
         states: &[ElementState],
+        scroll: bool,
     ) -> Result<StatesCheck, PageError> {
         // An offscreen OOPIF can throttle animation frames indefinitely. Bring its owners
-        // into view before a stability check waits on that frame's animation callbacks.
-        if states.contains(&ElementState::Stable) {
+        // into view, when scrolling is enabled, before waiting for its animation callbacks.
+        if scroll && states.contains(&ElementState::Stable) {
             for owner in &element.owners {
                 owner
                     .frame

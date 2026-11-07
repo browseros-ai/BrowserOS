@@ -317,3 +317,31 @@ test('clicks inside frames reach the same element through Neo and Playwright', {
 }, async (t) => {
   await compareFrameCases(t, frameCases)
 })
+
+test('tests that scroll none leaves an offscreen iframe owner and button untouched', {
+  skip,
+  timeout: 180_000,
+}, async () => {
+  const c = {
+    name: 'no-scroll-frame',
+    html: `<!doctype html><style>
+      body{margin:0}iframe{display:block;margin-top:3000px;width:400px;height:200px}
+      </style><script>window.__clicks=0</script>
+      <iframe id="frame" srcdoc="<button onclick='parent.__clicks++'>Inside</button>"></iframe>`,
+    source: `await page.frameLocator('#frame').getByRole('button', {name:'Inside'}).click({scroll:'none',timeout:1000})`,
+    probe: '({scrolled:scrollX!==0||scrollY!==0,clicks:window.__clicks})',
+  }
+  await withBoth([c], async (run) => {
+    const { playwright, neo } = await run(c.name)
+    assert.deepEqual(kind(playwright.result), {
+      error: { name: 'TimeoutError', strict: false },
+    })
+    assert.deepEqual(playwright.probe, { scrolled: false, clicks: 0 })
+    assert.deepEqual(kind(neo.result), kind(playwright.result))
+    assert.deepEqual(neo.probe, playwright.probe)
+    assert.deepEqual(
+      neo.outcome.calls.map((call) => call.delivery),
+      ['notSent'],
+    )
+  })
+})
