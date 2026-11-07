@@ -391,7 +391,7 @@ mod tests {
     use super::*;
     use crate::events::EventHub;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
-    use crate::page::Session;
+    use crate::page::{PageSetup, Session};
     use crate::run::PageId;
 
     /// A session on the fake's tab, with its own tracker and closed token.
@@ -407,12 +407,15 @@ mod tests {
         Arc::new(PageSession::new(
             session,
             &id,
-            tasks.clone(),
-            Arc::default(),
-            Arc::new(Mutex::new(())),
-            closed.clone(),
-            EventHub::default(),
-            false,
+            PageSetup {
+                tasks: tasks.clone(),
+                input: Arc::default(),
+                screenshots: Arc::new(Mutex::new(())),
+                closed: closed.clone(),
+                hub: EventHub::default(),
+                test_id: Arc::default(),
+                discovered: false,
+            },
         ))
     }
 

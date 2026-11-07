@@ -116,6 +116,10 @@ const CONTEXT_EVENTS: [(&str, Needs); 15] = [
     ("requestfailed", Needs::NETWORK),
 ];
 
+/// Neo: the listener event of a context's `Debugger` (`Events.Debugger`), which needs nothing
+/// switched on: the debugger queues it itself (`debugger.rs`).
+const DEBUGGER_EVENTS: [(&str, Needs); 1] = [("pausedstatechanged", Needs::NOTHING)];
+
 /// What a subscription switches on in a page's session before that page's next call runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[expect(
@@ -138,8 +142,8 @@ pub(crate) struct Needs {
 }
 
 impl Needs {
-    /// Neo: an event an action's own call produces (`locatorHandlerTriggered`), with nothing to
-    /// switch on.
+    /// Neo: an event with nothing to switch on, which no page's domains produce: an action's own
+    /// call's (`locatorHandlerTriggered`) or the debugger's.
     const NOTHING: Self = Self {
         watcher: false,
         runtime: false,
@@ -207,6 +211,8 @@ pub(crate) fn needs(guid: &str, event: &str) -> Option<Needs> {
         &CONTEXT_EVENTS
     } else if guid.starts_with("page@") {
         &PAGE_EVENTS
+    } else if guid.starts_with("debugger@") {
+        &DEBUGGER_EVENTS
     } else {
         return None;
     };

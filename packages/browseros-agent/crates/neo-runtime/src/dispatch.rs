@@ -42,18 +42,19 @@ use std::time::Duration;
 use futures_util::future;
 use neo_runtime_spec::injected::ReadableElementState;
 use neo_runtime_spec::serve::{
-    ArtifactCall, BrowserContextCall, DialogCall, FrameAriaSnapshotJSONParams,
-    FrameAriaSnapshotParams, FrameCall, FrameCheckParams, FrameCheckResult, FrameClickParams,
-    FrameContentParams, FrameDblclickParams, FrameDragAndDropParams, FrameDragAndDropResult,
-    FrameFillParams, FrameFillResult, FrameGetAttributeParams, FrameGotoParams, FrameHoverParams,
-    FrameInnerHTMLParams, FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult,
-    FrameIsCheckedParams, FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult,
-    FrameIsEditableParams, FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult,
-    FrameIsHiddenParams, FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult,
-    FramePressParams, FramePressResult, FrameQueryCountParams, FrameResolveSelectorParams,
-    FrameSelectOptionParams, FrameSelectOptionResult, FrameSetContentParams, FrameSetContentResult,
-    FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameTypeParams, FrameTypeResult,
-    FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
+    ArtifactCall, BrowserCall, BrowserContextCall, DebuggerCall, DialogCall,
+    FrameAriaSnapshotJSONParams, FrameAriaSnapshotParams, FrameCall, FrameCheckParams,
+    FrameCheckResult, FrameClickParams, FrameContentParams, FrameDblclickParams,
+    FrameDragAndDropParams, FrameDragAndDropResult, FrameFillParams, FrameFillResult,
+    FrameGetAttributeParams, FrameGotoParams, FrameHoverParams, FrameInnerHTMLParams,
+    FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams,
+    FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult, FrameIsEditableParams,
+    FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult, FrameIsHiddenParams,
+    FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams,
+    FramePressResult, FrameQueryCountParams, FrameResolveSelectorParams, FrameSelectOptionParams,
+    FrameSelectOptionResult, FrameSetContentParams, FrameSetContentResult, FrameTapParams,
+    FrameTextContentParams, FrameTitleParams, FrameTypeParams, FrameTypeResult, FrameUncheckParams,
+    FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
     FrameWaitForTimeoutParams, FrameWaitForTimeoutResult, Metadata, PageCall, RequestCall,
     ResponseCall,
 };
@@ -68,10 +69,12 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
 use crate::abort::{Aborts, Registration};
+use crate::browser_calls::{self, BROWSER_GUID, CreatedContext};
 use crate::capture::{self, Capture, NEO_SCREENSHOT_META, NeoScreenshotParams};
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::content::{self, SetContentOptions, WriteOrder, WriteTurn};
+use crate::debugger::{CallToGate, DEBUGGER_PREFIX, DEFAULT_CONTEXT};
 use crate::devices::{self, DeviceCall};
 use crate::dialogs;
 use crate::downloads;
@@ -324,6 +327,8 @@ struct Routed {
 #[derive(Clone)]
 enum ObjectKind {
     Context,
+    /// The run's browser, a context it created, or a context's debugger.
+    Platform(PlatformObject),
     Page,
     Frame,
     /// A hop's `Request` or `Response`, behind `goto`'s answer.
@@ -340,8 +345,23 @@ enum ObjectKind {
     Unknown,
 }
 
+/// The objects of the run's platform (`browser_calls.rs`, `debugger.rs`).
+#[derive(Clone)]
+enum PlatformObject {
+    /// The run's `Browser`, `browser@default`.
+    Browser,
+    /// A context the run created with `browser.newContext`.
+    CreatedContext(Arc<CreatedContext>),
+    /// A context's debugger, by the context's key.
+    Debugger(String),
+}
+
 enum ObjectCall {
     Context(BrowserContextCall),
+    /// Boxed: `newContext`'s params are the largest of any call.
+    Browser(Box<BrowserCall>),
+    CreatedContext(Arc<CreatedContext>, BrowserContextCall),
+    Debugger(String, DebuggerCall),
     Page(PageCall),
     /// `page.keyboard`, `page.mouse` and `page.touchscreen` (`devices.rs`).
     Device(DeviceCall),
@@ -456,7 +476,10 @@ impl Dispatcher {
                 .frame_guid(&guid)
                 .and_then(|frame| inner.tabs.resolve(&frame))
         });
-        let object = object_kind(&guid, target.is_some());
+        let object = self
+            .platform_object(&guid)
+            .unwrap_or_else(|| object_kind(&guid, target.is_some()));
+        let debugged = debugger_context(&object, target.as_ref());
         let Routed { meta, route } = route(object, &method, params.clone());
         let route = route.map(|call| inner.ordered(&guid, call));
         let metadata = metadata.unwrap_or(Metadata {
@@ -475,20 +498,8 @@ impl Dispatcher {
             input: meta.is_some_and(|meta| meta.has(MethodFlag::Input)),
         }));
         inner.trace.push(Arc::clone(&entry));
-        let admitted = route.and_then(|route| {
-            let ending = ending_cursor(&route).and_then(|id| inner.cursors.begin_ending(id));
-            // A navigation's release, and the context's close, end calls in flight: the cap
-            // never refuses them, or a full run could not let go.
-            let releases = ending.is_some()
-                || matches!(route, ObjectCall::Context(BrowserContextCall::Close(_)));
-            let share = if releases {
-                None
-            } else {
-                Some(inner.in_flight.admit(message.len())?)
-            };
-            Ok((route, share, ending))
-        });
-        let (route, share, ending) = match admitted {
+        let (route, share, ending) = match route.and_then(|route| self.admit(route, message.len()))
+        {
             Ok(admitted) => admitted,
             Err(error) => {
                 entry.finish(error.to_result());
@@ -506,42 +517,120 @@ impl Dispatcher {
                 .as_ref()
                 .map_or_else(CancellationToken::new, |(page, _)| page.closed.clone())
         };
-        let progress = Progress::new(
-            Arc::clone(&entry),
-            metadata.timeout.unwrap_or(0.0),
-            inner.run.clone(),
-            closed,
-        );
-        let progress = if matches!(route, ObjectCall::Context(BrowserContextCall::Close(_))) {
-            progress.closing_the_context()
-        } else {
-            progress
-        };
+        let held = self.in_call_order(&route, meta.zip(debugged), &metadata, &entry);
+        // The run's disconnection outlives the stop it gives every other call of the run.
+        let disconnecting = disconnects(&route);
         // Registered before the call returns to JS, so the abort listener the SDK adds right
         // after always finds it. The SDK's ids are integers; any other id cannot be aborted.
         let abortable = id
             .as_u64()
             .map(|message_id| inner.aborts.register(message_id, &entry));
         let (reply, receiver) = oneshot::channel();
-        let served = serve_call(
-            inner.tabs.clone(),
-            Arc::clone(&inner.cursors),
-            target,
-            route,
-            progress,
-            CallReply {
-                entry,
-                trace: inner.trace.clone(),
-                id,
-                reply,
-                events: inner.tabs.events().clone(),
-                share,
-                ending,
-                abortable,
-            },
-        );
-        inner.run.tasks.spawn(served);
+        let call_reply = CallReply {
+            entry: Arc::clone(&entry),
+            trace: inner.trace.clone(),
+            id,
+            reply,
+            events: inner.tabs.events().clone(),
+            share,
+            ending,
+            abortable,
+        };
+        let timeout = metadata.timeout.unwrap_or(0.0);
+        let run = inner.run.clone();
+        let tabs = inner.tabs.clone();
+        let cursors = Arc::clone(&inner.cursors);
+        inner.run.tasks.spawn(async move {
+            if let Some(resumed) = held
+                && let Err(stopped) = released(&run, resumed).await
+            {
+                if let Some(error) = stopped {
+                    finish_reply(Err(error), call_reply).await;
+                }
+                return;
+            }
+            let progress = Progress::new(entry, timeout, run, closed);
+            let progress = if disconnecting {
+                progress.closing_the_context()
+            } else {
+                progress
+            };
+            serve_call(tabs, cursors, target, route, progress, call_reply).await;
+        });
         PendingReply(PendingInner::Waiting(receiver))
+    }
+
+    /// Takes a routed call's share of the run's in-flight caps. A navigation's release and the
+    /// run's disconnection end calls in flight: the cap never refuses them, or a full run could
+    /// not let go.
+    fn admit(&self, route: ObjectCall, bytes: usize) -> Result<Admission, PlaywrightError> {
+        let ending = ending_cursor(&route).and_then(|id| self.0.cursors.begin_ending(id));
+        let share = if ending.is_some() || disconnects(&route) {
+            None
+        } else {
+            Some(self.0.in_flight.admit(bytes)?)
+        };
+        Ok((route, share, ending))
+    }
+
+    /// What a call settles in call order, before its task starts, however the call tasks
+    /// interleave: every call after `setTestIdAttribute` sees the new attribute, and the
+    /// debugger of the call's context decides whether it waits before it starts.
+    fn in_call_order(
+        &self,
+        route: &ObjectCall,
+        debugged: Option<(&'static MethodMeta, String)>,
+        metadata: &Metadata,
+        entry: &CallEntry,
+    ) -> Option<oneshot::Receiver<()>> {
+        if let ObjectCall::Context(BrowserContextCall::SetTestIdAttributeName(params))
+        | ObjectCall::CreatedContext(_, BrowserContextCall::SetTestIdAttributeName(params)) =
+            route
+        {
+            self.0.tabs.test_id().set(&params.test_id_attribute_name);
+        }
+        let (meta, context) = debugged?;
+        self.hold(meta, &context, metadata, entry)
+    }
+
+    /// The run's browser, a context it created or a context's debugger, by guid
+    /// (`browser_calls.rs`, `debugger.rs`); `None` for every other object.
+    fn platform_object(&self, guid: &str) -> Option<ObjectKind> {
+        let created = self.0.tabs.created();
+        let object = if guid == BROWSER_GUID {
+            PlatformObject::Browser
+        } else if let Some(context) = created.find(guid) {
+            PlatformObject::CreatedContext(context)
+        } else {
+            let context = guid.strip_prefix(DEBUGGER_PREFIX)?;
+            if context != DEFAULT_CONTEXT && created.find(&format!("context@{context}")).is_none() {
+                return None;
+            }
+            PlatformObject::Debugger(context.to_string())
+        };
+        Some(ObjectKind::Platform(object))
+    }
+
+    /// Asks `context`'s debugger whether the call `entry` stops before it starts
+    /// (`Debuggers::before_call`); the answer resolves once something resumes it.
+    fn hold(
+        &self,
+        meta: &'static MethodMeta,
+        context: &str,
+        metadata: &Metadata,
+        entry: &CallEntry,
+    ) -> Option<oneshot::Receiver<()>> {
+        self.0.tabs.debuggers().before_call(
+            &CallToGate {
+                context,
+                meta,
+                internal: metadata.internal == Some(true),
+                location: metadata.location.as_ref(),
+                params: entry.params(),
+                title: metadata.title.as_deref(),
+            },
+            self.0.tabs.events(),
+        )
     }
 
     /// `__neo_runtime.abort`: the script's `signal` aborted the call it sent as message `id`.
@@ -553,7 +642,8 @@ impl Dispatcher {
 
     /// Ends the run's calls after the realm is gone: records why the run ended (the first
     /// reason wins) and that its input is over, starts releasing the input it left held,
-    /// shares [`RECORDS_WAIT`] across creation settlement, task draining (the releases
+    /// shares [`RECORDS_WAIT`] across disposing the contexts it created, creation settlement,
+    /// task draining (the releases
     /// included) and closing-state reads, then gives the run's highlights
     /// [`HIGHLIGHTS_WAIT`] of their own before returning the records and dropped-calls summary.
     pub(crate) async fn finish(&self, reason: RunEnd) -> (Vec<CallRecord>, Option<DroppedCalls>) {
@@ -577,6 +667,8 @@ impl Dispatcher {
         // drain below waits for it and `Runtime::drain` for what the budget leaves running:
         // no budget cuts a release off, and no other cleanup goes before one.
         self.0.tabs.release_input();
+        // The contexts the run created go with it, their pages too (`browser_calls.rs`).
+        let _disposed = time::timeout_at(deadline, browser_calls::dispose_all(&self.0.tabs)).await;
         let _created = time::timeout_at(deadline, self.0.tabs.finish_creations()).await;
         run.tasks.close();
         let _waited = time::timeout_at(deadline, run.tasks.wait()).await;
@@ -669,6 +761,78 @@ fn route_init(
     }
 }
 
+/// Whether a call the debugger holds may go on: `Ok` once something resumed it. Otherwise it
+/// never starts: the run's disconnection stopped it, and it fails as every call that stopped
+/// (`Some`), or the run ended first and nobody waits for its reply (`None`).
+///
+/// Deviation: `server/progress.ts` `ProgressController.run`: `if (this.metadata.pauseStartTime && !this.metadata.pauseEndTime)`
+/// Playwright's timeout already runs while its debugger holds a call (one that fires meanwhile is
+/// dropped); Neo starts the call, and its own timeout, once the debugger lets it go.
+///
+/// Deviation: `server/debugger.ts` `Debugger._pause`: `const result = new Promise<void>(resolve => {`
+/// Playwright's held call waits for a resume even after its browser disconnected, and never
+/// settles (measured on BrowserOS neo with pinned Playwright); Neo's fails as closed, as every
+/// call the disconnection stopped does, and never runs.
+async fn released(run: &RunScope, resumed: oneshot::Receiver<()>) -> Result<(), Option<CallError>> {
+    tokio::select! {
+        biased;
+        _ = run.deadline.reached() => Err(None),
+        () = run.ended.cancelled() => Err(None),
+        () = run.context_closed.cancelled() => Err(Some(PlaywrightError::target_closed().into())),
+        resumed = resumed => resumed.map_err(|_| None),
+    }
+}
+
+/// The calls that disconnect the run: the close of its own context, and of its browser.
+fn disconnects(route: &ObjectCall) -> bool {
+    match route {
+        ObjectCall::Context(call) => matches!(call, BrowserContextCall::Close(_)),
+        ObjectCall::Browser(call) => matches!(**call, BrowserCall::Close(_)),
+        _ => false,
+    }
+}
+
+/// The context whose debugger sees a call: the run's own, a created one, or none (a `Browser`
+/// call, which no context's debugger stops, as in Playwright).
+fn debugger_context(
+    object: &ObjectKind,
+    target: Option<&(Arc<PageEntry>, FrameScope)>,
+) -> Option<String> {
+    match object {
+        // A download is the run's own context's: the run's download watcher reports only its
+        // tabs' (`downloads.rs`).
+        ObjectKind::Context | ObjectKind::Download(_) => Some(DEFAULT_CONTEXT.to_string()),
+        ObjectKind::Platform(PlatformObject::CreatedContext(context)) => Some(context.id.clone()),
+        ObjectKind::Platform(PlatformObject::Debugger(context)) => Some(context.clone()),
+        ObjectKind::Platform(PlatformObject::Browser) | ObjectKind::Unknown => None,
+        ObjectKind::Page
+        | ObjectKind::Frame
+        | ObjectKind::Network(..)
+        | ObjectKind::Handle(_)
+        | ObjectKind::Dialog(_) => target.map(|(page, _)| {
+            page.context
+                .get()
+                .map_or_else(|| DEFAULT_CONTEXT.to_string(), |context| context.id.clone())
+        }),
+    }
+}
+
+/// The decoded call to the run's browser, a context it created or a context's debugger.
+fn decode_platform(
+    object: PlatformObject,
+    method: &str,
+    params: Option<Value>,
+) -> Result<(&'static MethodMeta, Result<ObjectCall, PlaywrightError>), CallDecodeError> {
+    match object {
+        PlatformObject::Browser => BrowserCall::decode(method, params)
+            .map(|call| (call.meta(), Ok(ObjectCall::Browser(Box::new(call))))),
+        PlatformObject::CreatedContext(context) => BrowserContextCall::decode(method, params)
+            .map(|call| (call.meta(), Ok(ObjectCall::CreatedContext(context, call)))),
+        PlatformObject::Debugger(context) => DebuggerCall::decode(method, params)
+            .map(|call| (call.meta(), Ok(ObjectCall::Debugger(context, call)))),
+    }
+}
+
 /// Names a message's target and decodes its params. Pure.
 fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
     let (object, params) = match route_init(object, method, params) {
@@ -678,6 +842,7 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
     let decoded = match object {
         ObjectKind::Context => BrowserContextCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Context(call)))),
+        ObjectKind::Platform(object) => decode_platform(object, method, params),
         ObjectKind::Page => {
             let path = neo_path(params.as_ref());
             PageCall::decode(method, params).map(|call| {
@@ -1066,6 +1231,9 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
     }
 }
 
+/// An admitted call: its route, its share of the in-flight caps, and the wait it ends.
+type Admission = (ObjectCall, Option<Admitted>, Option<Ending<FrameCursor>>);
+
 struct CallReply {
     entry: Arc<CallEntry>,
     trace: Trace,
@@ -1119,6 +1287,13 @@ async fn serve_call(
     let result = match (route, target) {
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
         (ObjectCall::Init(route), target) => init_call(&tabs, target, route, &progress).await,
+        (ObjectCall::Browser(call), _) => browser_calls::browser(&tabs, *call, &progress).await,
+        (ObjectCall::CreatedContext(context, call), _) => {
+            browser_calls::context(&tabs, &context, call, &progress).await
+        }
+        (ObjectCall::Debugger(context, call), _) => {
+            tabs.debuggers().serve(&context, &call, tabs.events())
+        }
         (ObjectCall::Page(call), Some((page, _))) => {
             // A page call that navigates (`reload`, `goBack`, …) shows the run's scripts first,
             // as a Frame call does.
@@ -1932,6 +2107,9 @@ mod tests {
         route.map(|call| match call {
             ObjectCall::Frame(route) => route,
             ObjectCall::Context(_)
+            | ObjectCall::Browser(_)
+            | ObjectCall::CreatedContext(..)
+            | ObjectCall::Debugger(..)
             | ObjectCall::Page(_)
             | ObjectCall::Device(_)
             | ObjectCall::Network(_)

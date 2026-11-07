@@ -3,6 +3,7 @@ import type {
   PageCloseParams,
   PageCommands,
   PageConsoleMessagesParams,
+  PageEmulateMediaParams,
   PageGoBackParams,
   PageGoForwardParams,
   PagePageErrorsParams,
@@ -157,6 +158,21 @@ function trimUrl(param: unknown): string | undefined {
   return undefined
 }
 
+/** Playwright's `Size`, a viewport's width and height in CSS pixels. */
+export interface ViewportSize {
+  width: number
+  height: number
+}
+
+/** `emulateMedia`'s options: `null` stops emulating a feature. */
+export interface EmulateMediaOptions {
+  media?: 'screen' | 'print' | null
+  colorScheme?: 'light' | 'dark' | 'no-preference' | null
+  reducedMotion?: 'reduce' | 'no-preference' | null
+  forcedColors?: 'active' | 'none' | null
+  contrast?: 'no-preference' | 'more' | null
+}
+
 /** A frame event's params from Rust (`frame_events.rs`): the frame's record, and for a
  * navigation the URL and name it committed, as Playwright's `navigated` event carries them. */
 interface FrameEventParams {
@@ -209,6 +225,11 @@ export class Page extends ChannelOwner {
   /** Stable identity, including detached frames a script may still hold. */
   readonly #frames = new Map<string, Frame>()
   readonly _timeoutSettings: TimeoutSettings
+  /** Playwright's `Page._viewportSize`: the page record's viewport (none for a tab of the run's
+   * own context), then what `setViewportSize` set. */
+  #viewportSize: ViewportSize | undefined
+  /** Playwright's `Page._ownedContext`: the context `browser.newPage` made for this page. */
+  _ownedContext: BrowserContext | undefined
   /** Playwright's `page.keyboard`, `page.mouse` and `page.touchscreen`, one each per page. */
   readonly keyboard: Keyboard
   readonly mouse: Mouse
@@ -226,9 +247,11 @@ export class Page extends ChannelOwner {
     url: string,
     context: BrowserContext,
     connection: Connection,
+    viewportSize?: ViewportSize,
   ) {
     super(guid, context._pipe, PAGE_EVENTS)
     this.#guid = guid
+    this.#viewportSize = viewportSize
     this.#lastUrl = url
     this.#context = context
     this.#connection = connection
@@ -253,6 +276,7 @@ export class Page extends ChannelOwner {
   }
 
   url(): string {
+    // A closed page, its context's or its browser's close included, answers its last URL.
     if (this.#closedLocally) return this.#lastUrl
     const url = get(this.#guid, 'url')
     if (url !== null) this.#lastUrl = url
@@ -290,7 +314,9 @@ export class Page extends ChannelOwner {
   ): Promise<void> {
     this.#closeReason = options.reason
     try {
-      if (options.runBeforeUnload)
+      // Playwright: `client/page.ts` `Page.close`: `await this._ownedContext.close();`
+      if (this._ownedContext) await this._ownedContext.close()
+      else if (options.runBeforeUnload)
         await this.#connection.sendPage(
           'page.close',
           this.#guid,
@@ -316,6 +342,125 @@ export class Page extends ChannelOwner {
 
   isClosed(): boolean {
     return this.#closedLocally || get(this.#guid, 'isClosed')
+  }
+
+  /**
+   * Playwright's `Page.setViewportSize`: the page's viewport and screen become `viewportSize`,
+   * and `viewportSize()` answers it from then on, even when the call fails, as Playwright's.
+   *
+   * Deviation: `server/page.ts` `Page.setViewportSize`: `this._setEmulatedSize({ viewport: { ...viewportSize }, screen: { ...viewportSize } });`
+   * Chromium drops the run session's override when the session detaches, so the page keeps the
+   * size until the run ends; a later run starts on the tab's own size.
+   */
+  async setViewportSize(viewportSize: ViewportSize): Promise<void> {
+    this.#viewportSize = viewportSize
+    await this.#connection.sendPage(
+      'page.setViewportSize',
+      this.#guid,
+      'setViewportSize',
+      { viewportSize },
+      0,
+    )
+  }
+
+  /** Playwright's `Page.viewportSize`: `null` while the page emulates no viewport, which a tab
+   * of the run's own context does until `setViewportSize`. */
+  viewportSize(): ViewportSize | null {
+    return this.#viewportSize || null
+  }
+
+  /**
+   * Playwright's `Page.emulateMedia`: each option given replaces what the page emulates for it,
+   * `null` stops emulating it, and an option left out keeps what it was.
+   *
+   * Deviation: `server/page.ts` `Page.emulateMedia`: `this._emulatedMedia.media = options.media;`
+   * The emulation lasts until the run ends (its session detaches), not for the page's life.
+   */
+  async emulateMedia(options: EmulateMediaOptions = {}): Promise<void> {
+    await this.#connection.sendPage(
+      'page.emulateMedia',
+      this.#guid,
+      'emulateMedia',
+      {
+        media: options.media === null ? 'no-override' : options.media,
+        colorScheme:
+          options.colorScheme === null ? 'no-override' : options.colorScheme,
+        reducedMotion:
+          options.reducedMotion === null
+            ? 'no-override'
+            : options.reducedMotion,
+        forcedColors:
+          options.forcedColors === null ? 'no-override' : options.forcedColors,
+        contrast: options.contrast === null ? 'no-override' : options.contrast,
+      } as PageEmulateMediaParams,
+      0,
+    )
+  }
+
+  /** Playwright's `Page.requestGC`: a full garbage collection in the page's renderer, which
+   * frees every object nothing reaches any more. */
+  async requestGC(): Promise<void> {
+    await this.#connection.sendPage(
+      'page.requestGC',
+      this.#guid,
+      'requestGC',
+      {},
+      0,
+    )
+  }
+
+  /**
+   * Playwright's `Page.pause`: its default timeouts are off while the context's `pause` call
+   * runs, which the context's debugger holds only once it is enabled (`context.debugger`'s
+   * `requestPause`, `next` or `runTo`), until it is resumed; otherwise the call returns at once,
+   * as Playwright's does with a headless browser and no inspector.
+   *
+   * Deviation: `client/page.ts` `Page.pause`: `await this._closedOrCrashedScope.safeRace(this.context()._channel.pause({}, kNoTimeout));`
+   * With a headed browser Playwright opens its Inspector and waits for a human to resume. A Neo
+   * run is unattended and has no Inspector, so `pause()` never waits, headed or not.
+   */
+  async pause(_options?: unknown): Promise<void> {
+    const settings = this.#context._timeoutSettings
+    const defaultNavigationTimeout = settings.defaultNavigationTimeout()
+    const defaultTimeout = settings.defaultTimeout()
+    this.#context.setDefaultNavigationTimeout(0)
+    this.#context.setDefaultTimeout(0)
+    try {
+      await this.#closedOrCrashedRace(
+        this.#connection.sendContext(
+          'page.pause',
+          this.#context._guid,
+          'pause',
+          {},
+          0,
+        ),
+      )
+    } finally {
+      this.#context.setDefaultNavigationTimeout(defaultNavigationTimeout)
+      this.#context.setDefaultTimeout(defaultTimeout)
+    }
+  }
+
+  /**
+   * Playwright's `_closedOrCrashedScope.safeRace`: `promise`, or nothing once the page closes or
+   * crashes first, which ends a pause the debugger still holds. A closed page ends it at once.
+   */
+  async #closedOrCrashedRace(promise: Promise<unknown>): Promise<void> {
+    // The call keeps running in Rust after the page goes; its answer is nobody's then.
+    promise.catch(() => {})
+    let settle = (): void => {}
+    const ended = new Promise<void>((resolve) => {
+      settle = resolve
+    })
+    this.once('close', settle)
+    this.once('crash', settle)
+    try {
+      if (this.isClosed()) return
+      await Promise.race([promise, ended])
+    } finally {
+      this.off('close', settle)
+      this.off('crash', settle)
+    }
   }
 
   /** Whether this page's `close` ran, from its tab's close or its context's. */

@@ -10,7 +10,9 @@ use std::time::Duration;
 use browseros_cdp::runtime::RemoteObject;
 use browseros_cdp::{CdpClient, CdpError};
 use neo_runtime_spec::injected::InjectedPreviewNodeParams;
-use neo_runtime_spec::serve::{FrameChannel, FrameInitializer, PageChannel, PageInitializer};
+use neo_runtime_spec::serve::{
+    FrameChannel, FrameInitializer, PageChannel, PageInitializer, PageInitializerViewportSize,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
@@ -21,7 +23,9 @@ use tokio_util::task::TaskTracker;
 use tracing::debug;
 
 use crate::bridge;
+use crate::browser_calls::{self, CreatedContext, CreatedContexts};
 use crate::click::PageError;
+use crate::debugger::Debuggers;
 use crate::dialogs;
 use crate::discovery::{self, TargetInfo};
 use crate::downloads::{self, Downloads, Opened};
@@ -30,12 +34,13 @@ use crate::events::{ALL_PAGES, CONTEXT_GUID, Enabling, EventHub, Needs};
 use crate::frames::{FrameContext, FrameScope};
 use crate::getters;
 use crate::network::HopId;
-use crate::page::{FrameTab, PageSession, Session, TabInputs};
+use crate::page::{FrameTab, PageSession, PageSetup, Session, TabInputs};
 use crate::page_events::{self, Kept, MAX_KEPT_ARGS, MAX_KEPT_CHOOSERS};
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunPage};
 use crate::screenshot::TabScreenshots;
 use crate::switch::Switches;
+use crate::world::TestIdAttribute;
 
 /// Neo: how long `ConsoleMessage.args()` waits for its arguments' handles. A page a dialog holds
 /// answers no call until the dialog is answered, which the script may be about to do.
@@ -58,6 +63,12 @@ struct Inner {
     pages: Mutex<Vec<Arc<PageEntry>>>,
     /// The run's event queue and subscriptions, shared with every page session it attaches.
     events: EventHub,
+    /// The contexts the run created with `browser.newContext` (`browser_calls.rs`).
+    created: CreatedContexts,
+    /// `context.debugger` of the run's own context and of each context it created.
+    debuggers: Debuggers,
+    /// The test id attribute every page world of the run hands its injected script.
+    test_id: Arc<TestIdAttribute>,
     /// The `Runtime`'s shared switches: target discovery, which this run holds while it listens
     /// for new pages ([`Tabs::discover`]), and download reports ([`Tabs::watch_downloads`]).
     switches: Switches,
@@ -83,6 +94,9 @@ pub(crate) struct PageEntry {
     pub(crate) closed: CancellationToken,
     pub(crate) frame_metadata: Mutex<getters::FrameMetadata>,
     session: OnceCell<Arc<PageSession>>,
+    /// The created context the page belongs to, unset for a tab of the run's own context. Set
+    /// once, before the page's session is attached, so the session emulates its options.
+    pub(crate) context: OnceLock<Arc<CreatedContext>>,
     /// Reported by the run's discovery as a new page: its session's first lifecycle replay is
     /// the page's own new life, not history (`PageEvents`).
     pub(crate) discovered: AtomicBool,
@@ -178,6 +192,9 @@ impl Tabs {
             .await?
             .ok_or_else(PlaywrightError::target_closed)?;
         let tabs = Self(Arc::new(Inner {
+            created: CreatedContexts::new(cdp.clone(), tokio.clone()),
+            debuggers: Debuggers::default(),
+            test_id: Arc::default(),
             cdp,
             tokio,
             inputs,
@@ -223,6 +240,21 @@ impl Tabs {
 
     pub(crate) fn events(&self) -> &EventHub {
         &self.0.events
+    }
+
+    /// The contexts the run created.
+    pub(crate) fn created(&self) -> &CreatedContexts {
+        &self.0.created
+    }
+
+    /// The run's debuggers (`debugger.rs`).
+    pub(crate) fn debuggers(&self) -> &Debuggers {
+        &self.0.debuggers
+    }
+
+    /// The run's test id attribute (`selectors.setTestIdAttribute`).
+    pub(crate) fn test_id(&self) -> &TestIdAttribute {
+        &self.0.test_id
     }
 
     /// Runs `task` on the run's tracker, so `Dispatcher::finish` waits for it.
@@ -328,11 +360,58 @@ impl Tabs {
             closed: CancellationToken::new(),
             frame_metadata: Mutex::new(getters::FrameMetadata::new(&self.0.cdp)),
             session: OnceCell::new(),
+            context: OnceLock::new(),
             discovered: AtomicBool::new(false),
             opener: Mutex::new(None),
         });
         pages.push(Arc::clone(&entry));
         Ok(entry)
+    }
+
+    /// Registers the tab `id` of the created context `context`, as [`Self::register`] does.
+    pub(crate) fn register_in_context(
+        &self,
+        id: PageId,
+        created: bool,
+        context: &Arc<CreatedContext>,
+    ) -> Result<Arc<PageEntry>, PlaywrightError> {
+        let entry = self.register(id, created)?;
+        let _first = entry.context.set(Arc::clone(context));
+        Ok(entry)
+    }
+
+    /// Every page the run registered in `context`, in first-seen order.
+    pub(crate) fn context_entries(&self, context: &CreatedContext) -> Vec<Arc<PageEntry>> {
+        self.0.pages.lock().map_or_else(
+            |_| Vec::new(),
+            |pages| {
+                pages
+                    .iter()
+                    .filter(|entry| entry.context.get().is_some_and(|own| own.id == context.id))
+                    .cloned()
+                    .collect()
+            },
+        )
+    }
+
+    /// `pages()` of a created context from its open tabs `live` (target id → URL): each is
+    /// registered in `context`, and they come back in the order the run first saw them.
+    pub(crate) fn live_context_pages(
+        &self,
+        context: &Arc<CreatedContext>,
+        mut live: HashMap<String, String>,
+    ) -> Result<Vec<CreatedPage>, PlaywrightError> {
+        for id in live.keys() {
+            self.register_in_context(PageId::new(id.clone()), false, context)?;
+        }
+        Ok(self
+            .context_entries(context)
+            .iter()
+            .filter_map(|entry| {
+                live.remove(entry.id.as_str())
+                    .map(|url| created_page(entry, url, false))
+            })
+            .collect())
     }
 
     pub(crate) async fn session(
@@ -349,10 +428,14 @@ impl Tabs {
                     return Err(PlaywrightError::target_closed());
                 }
                 let session = self.attach(entry).await?;
+                // A created context's page emulates its options before any call on it runs.
+                browser_calls::prepare(entry, &session).await?;
                 // A context listener covers every page the run has a session on, this one
                 // from now on. Registered before the call that attached it continues, so that
-                // call waits for the enable (`EventHub::ready`).
+                // call waits for the enable (`EventHub::ready`). It is the run's own context's
+                // listener, so a created context's page is not one of them.
                 if let Some(needs) = self.0.events.context_needs()
+                    && entry.context.get().is_none()
                     && needs.of_page()
                     && let Some(entry) = self.entry(&entry.id)
                 {
@@ -396,12 +479,15 @@ impl Tabs {
         Ok(Arc::new(PageSession::new(
             session,
             &entry.id,
-            self.0.tasks.clone(),
-            input,
-            screenshots,
-            entry.closed.clone(),
-            self.0.events.clone(),
-            entry.discovered.load(Ordering::Acquire),
+            PageSetup {
+                tasks: self.0.tasks.clone(),
+                input,
+                screenshots,
+                closed: entry.closed.clone(),
+                hub: self.0.events.clone(),
+                test_id: Arc::clone(&self.0.test_id),
+                discovered: entry.discovered.load(Ordering::Acquire),
+            },
         )))
     }
 
@@ -1181,13 +1267,27 @@ pub(crate) fn cdp_error(error: &CdpError) -> PlaywrightError {
 
 fn created_page(entry: &PageEntry, url: String, closed: bool) -> CreatedPage {
     let frame = bridge::frame_guid(&entry.id);
+    // Playwright's page record carries its viewport: what its session emulates now, else its
+    // context's. A page of the run's own context emulates none until the script sets one.
+    let viewport = entry
+        .attached_session()
+        .and_then(|session| session.emulation.viewport())
+        .or_else(|| {
+            entry
+                .context
+                .get()
+                .and_then(|context| context.emulation.viewport)
+        });
     CreatedPage {
         guid: bridge::page_guid(&entry.id),
         initializer: PageInitializer {
             main_frame: FrameChannel {
                 guid: frame.clone(),
             },
-            viewport_size: None,
+            viewport_size: viewport.map(|size| PageInitializerViewportSize {
+                width: size.width,
+                height: size.height,
+            }),
             is_closed: closed,
             opener: None,
             video: None,

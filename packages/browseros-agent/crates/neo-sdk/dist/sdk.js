@@ -593,6 +593,9 @@ function matchesURL(url, matcher) {
 function parseURL(url) {
   return JSON.parse(__neo_runtime.get(JSON.stringify({ field: "parseURL", url })));
 }
+function devices() {
+  return JSON.parse(__neo_runtime.get(JSON.stringify({ field: "devices" })));
+}
 async function call(message) {
   const { reply, events } = await __neo_runtime.callWithEvents(message);
   deliverEvents?.(events);
@@ -632,6 +635,12 @@ class Connection {
     return await this.#send(apiName, guid, method, params, timeout);
   }
   async sendPage(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendBrowser(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendDebugger(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
   async sendContext(apiName, guid, method, params, timeout) {
@@ -1353,6 +1362,7 @@ class EventPipe {
   #subscriptions = new Set;
   #waking = false;
   #failed = false;
+  #disconnected = false;
   #reject = () => {};
   uncaught;
   constructor() {
@@ -1364,7 +1374,18 @@ class EventPipe {
   _register(target) {
     this.#targets.set(target._guid, target);
   }
+  _disconnect() {
+    for (const key of this.#subscriptions) {
+      const [guid = "", event = ""] = key.split(`
+`);
+      subscribe(guid, event, false);
+    }
+    this.#subscriptions.clear();
+    this.#disconnected = true;
+  }
   _subscribe(guid, event, enabled) {
+    if (this.#disconnected)
+      return;
     subscribe(guid, event, enabled);
     const key = `${guid}
 ${event}`;
@@ -1376,7 +1397,10 @@ ${event}`;
       this.#arm();
   }
   deliver(until) {
-    for (const event of drain(until)) {
+    const events = drain(until);
+    if (this.#disconnected)
+      return;
+    for (const event of events) {
       const target = this.#targets.get(event.guid);
       if (!target)
         continue;
@@ -1403,6 +1427,41 @@ ${event}`;
       if (this.#subscriptions.size)
         this.#arm();
     });
+  }
+}
+
+// src/debugger.ts
+var DEBUGGER_EVENTS = {
+  receiver: "Debugger",
+  served: ["pausedstatechanged"],
+  quiet: [],
+  unserved: ["apicallsupdated"]
+};
+
+class Debugger extends ChannelOwner {
+  #connection;
+  constructor(guid, connection, pipe) {
+    super(guid, pipe, DEBUGGER_EVENTS);
+    this.#connection = connection;
+  }
+  _onEvent(method) {
+    if (method === "pausedStateChanged")
+      this.emit("pausedstatechanged");
+  }
+  async requestPause() {
+    await this.#connection.sendDebugger("debugger.requestPause", this._guid, "requestPause", {}, 0);
+  }
+  async resume() {
+    await this.#connection.sendDebugger("debugger.resume", this._guid, "resume", {}, 0);
+  }
+  async next() {
+    await this.#connection.sendDebugger("debugger.next", this._guid, "next", {}, 0);
+  }
+  async runTo(location) {
+    await this.#connection.sendDebugger("debugger.runTo", this._guid, "runTo", { location }, 0);
+  }
+  pausedDetails() {
+    return get(this._guid, "pausedDetails");
   }
 }
 
@@ -6653,6 +6712,12 @@ class TimeoutSettings {
   setDefaultNavigationTimeout(timeout) {
     this.#defaultNavigationTimeout = timeout;
   }
+  defaultTimeout() {
+    return this.#defaultTimeout;
+  }
+  defaultNavigationTimeout() {
+    return this.#defaultNavigationTimeout;
+  }
   timeout(options, _apiName) {
     return { signal: options.signal, timeout: this.#timeout(options) };
   }
@@ -6860,14 +6925,17 @@ class Page extends ChannelOwner {
   #mainFrame;
   #frames = new Map;
   _timeoutSettings;
+  #viewportSize;
+  _ownedContext;
   keyboard;
   mouse;
   touchscreen;
   #closedLocally = false;
   #closeReason;
-  constructor(guid, mainFrameGuid, url, context, connection) {
+  constructor(guid, mainFrameGuid, url, context, connection, viewportSize) {
     super(guid, context._pipe, PAGE_EVENTS);
     this.#guid = guid;
+    this.#viewportSize = viewportSize;
     this.#lastUrl = url;
     this.#context = context;
     this.#connection = connection;
@@ -6898,7 +6966,9 @@ class Page extends ChannelOwner {
   async close(options = {}) {
     this.#closeReason = options.reason;
     try {
-      if (options.runBeforeUnload)
+      if (this._ownedContext)
+        await this._ownedContext.close();
+      else if (options.runBeforeUnload)
         await this.#connection.sendPage("page.close", this.#guid, "runBeforeUnload", {}, 0);
       else
         await this.#connection.sendPage("page.close", this.#guid, "close", pickParams(PAGE_CLOSE_KEYS, {
@@ -6912,6 +6982,55 @@ class Page extends ChannelOwner {
   }
   isClosed() {
     return this.#closedLocally || get(this.#guid, "isClosed");
+  }
+  async setViewportSize(viewportSize) {
+    this.#viewportSize = viewportSize;
+    await this.#connection.sendPage("page.setViewportSize", this.#guid, "setViewportSize", { viewportSize }, 0);
+  }
+  viewportSize() {
+    return this.#viewportSize || null;
+  }
+  async emulateMedia(options = {}) {
+    await this.#connection.sendPage("page.emulateMedia", this.#guid, "emulateMedia", {
+      media: options.media === null ? "no-override" : options.media,
+      colorScheme: options.colorScheme === null ? "no-override" : options.colorScheme,
+      reducedMotion: options.reducedMotion === null ? "no-override" : options.reducedMotion,
+      forcedColors: options.forcedColors === null ? "no-override" : options.forcedColors,
+      contrast: options.contrast === null ? "no-override" : options.contrast
+    }, 0);
+  }
+  async requestGC() {
+    await this.#connection.sendPage("page.requestGC", this.#guid, "requestGC", {}, 0);
+  }
+  async pause(_options) {
+    const settings = this.#context._timeoutSettings;
+    const defaultNavigationTimeout = settings.defaultNavigationTimeout();
+    const defaultTimeout = settings.defaultTimeout();
+    this.#context.setDefaultNavigationTimeout(0);
+    this.#context.setDefaultTimeout(0);
+    try {
+      await this.#closedOrCrashedRace(this.#connection.sendContext("page.pause", this.#context._guid, "pause", {}, 0));
+    } finally {
+      this.#context.setDefaultNavigationTimeout(defaultNavigationTimeout);
+      this.#context.setDefaultTimeout(defaultTimeout);
+    }
+  }
+  async#closedOrCrashedRace(promise) {
+    promise.catch(() => {});
+    let settle = () => {};
+    const ended = new Promise((resolve) => {
+      settle = resolve;
+    });
+    this.once("close", settle);
+    this.once("crash", settle);
+    try {
+      if (this.isClosed())
+        return;
+      await Promise.race([promise, ended]);
+    } finally {
+      this.off("close", settle);
+      this.off("crash", settle);
+    }
   }
   _isClosedLocally() {
     return this.#closedLocally;
@@ -7430,45 +7549,46 @@ class BrowserContext extends ChannelOwner {
   #dialogs = new Map;
   _timeoutSettings = new TimeoutSettings;
   _pipe;
+  _browser = null;
+  _ownerPage;
   #closingStatus = "none";
   #closeReason;
+  #debugger;
   constructor(guid, connection, pipe) {
     super(guid, pipe, CONTEXT_EVENTS);
     this.#guid = guid;
     this.#connection = connection;
     this._pipe = pipe;
-    connection._closeReasonFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._closeReason() ?? this.#closeReason;
-    connection._closedFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._isClosedLocally() ?? false;
   }
   isClosed() {
     return this.#closingStatus !== "none";
   }
   _closeReason() {
-    return this.#closeReason;
+    return this.#closeReason ?? this._browser?._closeReason;
   }
   async close(options = {}) {
     if (this.isClosed())
       return;
     this.#closeReason = options.reason;
     this.#closingStatus = "closing";
+    const send = () => this.#connection.sendContext("browserContext.close", this.#guid, "close", pickParams(BROWSER_CONTEXT_CLOSE_KEYS, {
+      reason: options.reason
+    }), 0);
     try {
-      await this.#connection.sendContext("browserContext.close", this.#guid, "close", pickParams(BROWSER_CONTEXT_CLOSE_KEYS, {
-        reason: options.reason
-      }), 0);
+      if (this._browser && this._browser._runContext() === this)
+        await this._browser._disconnect(send, options.reason);
+      else {
+        const open = this._openPages();
+        await send();
+        for (const page of open)
+          page._onClose();
+        this._onClose();
+      }
     } catch (error) {
       this.#closingStatus = "none";
       this.#closeReason = undefined;
       throw error;
     }
-    this.#connection._close(options.reason);
-    const pages = this.pages();
-    for (const page of this.#pages.values())
-      if (!pages.includes(page) && !page._isClosedLocally())
-        pages.push(page);
-    for (const page of pages)
-      page._onClose();
-    this.#closingStatus = "closed";
-    this.emit("close", this);
   }
   _onEvent(method, params) {
     if (method === "page")
@@ -7527,12 +7647,12 @@ class BrowserContext extends ChannelOwner {
     const page = event.page ? this.#pageFor(event.page.guid) : null;
     const consoleMessage = new ConsoleMessage(event, page, null, this.#connection);
     page?.emit("console", consoleMessage);
-    this.emit("console", consoleMessage);
+    this.#contextOf(page).emit("console", consoleMessage);
   }
   #onPageError({ error, page, location }) {
     const pageObject = this.#pageFor(page.guid);
     const parsedError = parseSerializedError(error);
-    this.emit("weberror", new WebError(pageObject, parsedError, location));
+    this.#contextOf(pageObject).emit("weberror", new WebError(pageObject, parsedError, location));
     if (pageObject)
       pageObject.emit("pageerror", parsedError);
   }
@@ -7544,7 +7664,7 @@ class BrowserContext extends ChannelOwner {
   }
   #onDialog(record) {
     const dialogObject = this.#dialogFrom(record);
-    let hasListeners = this.emit("dialog", dialogObject);
+    let hasListeners = this.#contextOf(dialogObject.page()).emit("dialog", dialogObject);
     const page = dialogObject.page();
     if (page)
       hasListeners = page.emit("dialog", dialogObject) || hasListeners;
@@ -7553,7 +7673,7 @@ class BrowserContext extends ChannelOwner {
   }
   #onDialogClosed(record) {
     const dialogObject = this.#dialogFrom(record);
-    this.emit("dialogclosed", dialogObject);
+    this.#contextOf(dialogObject.page()).emit("dialogclosed", dialogObject);
     const page = dialogObject.page();
     if (page)
       page.emit("dialogclosed", dialogObject);
@@ -7576,7 +7696,7 @@ class BrowserContext extends ChannelOwner {
       const waiter = Waiter.createForEvent();
       waiter.rejectOnTimeout(timeoutOptions, `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`);
       if (event !== "close")
-        waiter.rejectOnEvent(this, "close", () => targetClosedError(this.#closeReason));
+        waiter.rejectOnEvent(this, "close", () => targetClosedError(this._closeReason()));
       const result = await waiter.waitForEvent(this, event, predicate);
       waiter.dispose();
       return result;
@@ -7598,7 +7718,16 @@ class BrowserContext extends ChannelOwner {
     const result = await this.#connection.sendInit("browserContext.addInitScript", this.#guid, "addInitScript", { source }, 0);
     return new Disposable(this.#connection, result.disposable.guid);
   }
+  get debugger() {
+    this.#debugger ??= new Debugger(get(this.#guid, "debugger"), this.#connection, this._pipe);
+    return this.#debugger;
+  }
+  browser() {
+    return this._browser;
+  }
   async newPage() {
+    if (this._ownerPage)
+      throw new Error("Please use browser.newContext()");
     const { page } = await this.#connection.sendContext("browserContext.newPage", this.#guid, "newPage", {}, 0);
     return this.#pageFor(page.guid);
   }
@@ -7608,8 +7737,28 @@ class BrowserContext extends ChannelOwner {
   setDefaultNavigationTimeout(timeout) {
     this._timeoutSettings.setDefaultNavigationTimeout(timeout);
   }
+  _onClose() {
+    if (this.#closingStatus === "closed")
+      return;
+    this.#closingStatus = "closed";
+    this._browser?._contexts.delete(this);
+    this.emit("close", this);
+  }
+  _openPages() {
+    const pages = this.pages();
+    for (const page of this.#pages.values())
+      if (!pages.includes(page) && !page.isClosed())
+        pages.push(page);
+    return pages;
+  }
+  _knownPage(guid) {
+    return this.#pages.get(guid);
+  }
   toJSON() {
     return { _type: "BrowserContext", _guid: this.#guid };
+  }
+  #contextOf(page) {
+    return page ? page.context() : this;
   }
   _addRunPage(guid, mainFrameGuid, url) {
     const page = new Page(guid, mainFrameGuid, url, this, this.#connection);
@@ -7620,10 +7769,10 @@ class BrowserContext extends ChannelOwner {
     return this.#pages.get(created.guid) ?? this.#add(created);
   }
   #pageFor(guid) {
-    return this.#pages.get(guid) ?? this.#add(get(guid, "initializer"));
+    return this.#pages.get(guid) ?? this._browser?._knownPage(guid) ?? this.#add(get(guid, "initializer"));
   }
   #add(created) {
-    const page = new Page(created.guid, created.mainFrame.guid, created.mainFrame.initializer.url, this, this.#connection);
+    const page = new Page(created.guid, created.mainFrame.guid, created.mainFrame.initializer.url, this, this.#connection, created.initializer.viewportSize);
     this.#pages.set(created.guid, page);
     return page;
   }
@@ -7633,6 +7782,290 @@ function pageGuidOf(guid) {
   return `page@${target}`;
 }
 
+// src/browser.ts
+var BROWSER_EVENTS = {
+  receiver: "Browser",
+  served: [],
+  quiet: [],
+  unserved: []
+};
+var BROWSER_CLOSE_KEYS = ["reason"];
+var BROWSER_NEW_CONTEXT_KEYS = [
+  "noDefaultViewport",
+  "viewport",
+  "screen",
+  "ignoreHTTPSErrors",
+  "clientCertificates",
+  "javaScriptEnabled",
+  "bypassCSP",
+  "userAgent",
+  "locale",
+  "timezoneId",
+  "geolocation",
+  "permissions",
+  "extraHTTPHeaders",
+  "offline",
+  "httpCredentials",
+  "deviceScaleFactor",
+  "isMobile",
+  "hasTouch",
+  "colorScheme",
+  "reducedMotion",
+  "forcedColors",
+  "acceptDownloads",
+  "contrast",
+  "baseURL",
+  "recordVideo",
+  "strictSelectors",
+  "serviceWorkers",
+  "selectorEngines",
+  "testIdAttributeName",
+  "proxy",
+  "storageState"
+];
+var CLIENT_OPTIONS = ["logger", "recordHar"];
+var STORAGE_STATE_REFUSAL = 'Neo does not support the "storageState" option of a new context yet';
+
+class Browser extends ChannelOwner {
+  #connection;
+  #pipe;
+  #browserType;
+  _contexts = new Set;
+  #known = [];
+  #isConnected = true;
+  _closeReason;
+  constructor(guid, connection, pipe, browserType) {
+    super(guid, pipe, BROWSER_EVENTS);
+    this.#connection = connection;
+    this.#pipe = pipe;
+    this.#browserType = browserType;
+    connection._closeReasonFor = (callGuid) => this.#closeReasonFor(callGuid);
+    connection._closedFor = (callGuid) => this._knownPage(pageGuidOf(callGuid))?._isClosedLocally() ?? false;
+  }
+  _onEvent() {}
+  browserType() {
+    return this.#browserType;
+  }
+  contexts() {
+    return [...this._contexts];
+  }
+  version() {
+    return get(this._guid, "version");
+  }
+  isConnected() {
+    return this.#isConnected && get(this._guid, "isConnected");
+  }
+  async newContext(options = {}) {
+    for (const option of CLIENT_OPTIONS)
+      if (options[option] !== undefined)
+        throw new Error(`browser.newContext: Neo does not support the "${option}" option of a new context yet`);
+    if (typeof options.storageState === "string")
+      throw new Error(`browser.newContext: ${STORAGE_STATE_REFUSAL}`);
+    const params = pickParams(BROWSER_NEW_CONTEXT_KEYS, prepareBrowserContextParams(options));
+    const { context } = await this.#connection.sendBrowser("browser.newContext", this._guid, "newContext", params, 0);
+    const created = new BrowserContext(context.guid, this.#connection, this.#pipe);
+    this._didCreateContext(created);
+    return created;
+  }
+  async newPage(options = {}) {
+    const context = await this.newContext(options);
+    const page = await context.newPage();
+    page._ownedContext = context;
+    context._ownerPage = page;
+    return page;
+  }
+  async close(options = {}) {
+    this._closeReason = options.reason;
+    if (!this.#isConnected)
+      return;
+    try {
+      await this._disconnect(() => this.#connection.sendBrowser("browser.close", this._guid, "close", pickParams(BROWSER_CLOSE_KEYS, {
+        reason: options.reason
+      }), 0), options.reason);
+    } catch (error) {
+      if (isTargetClosedError(error))
+        return;
+      throw error;
+    }
+  }
+  async _disconnect(send, reason) {
+    const open = this.contexts().map((context) => context._openPages());
+    await send();
+    this._didClose(open, reason);
+  }
+  _didClose(open, reason) {
+    this.#connection._close(reason);
+    this.#pipe._disconnect();
+    const contexts = this.contexts();
+    for (const pages of open)
+      for (const page of pages)
+        page._onClose();
+    for (const context of contexts.slice(1))
+      context._onClose();
+    contexts[0]?._onClose();
+    this.#isConnected = false;
+    this.emit("disconnected", this);
+  }
+  _runContext() {
+    return this.#known[0];
+  }
+  _knownPage(guid) {
+    for (const context of this.#known) {
+      const page = context._knownPage(guid);
+      if (page)
+        return page;
+    }
+    return;
+  }
+  #closeReasonFor(guid) {
+    const page = this._knownPage(pageGuidOf(guid));
+    if (page)
+      return page._closeReason();
+    const context = this.#known.find((known) => known._guid === guid) ?? this.#known[0];
+    return context?._closeReason();
+  }
+  _didCreateContext(context) {
+    context._browser = this;
+    this._contexts.add(context);
+    this.#known.push(context);
+    this.emit("context", context);
+  }
+  async bind(_title, _options) {
+    throw new Error("browser.bind: Neo runs inside BrowserOS and serves the browser to no other client");
+  }
+  async unbind() {
+    throw new Error("browser.unbind: Neo runs inside BrowserOS and serves the browser to no other client");
+  }
+  async newBrowserCDPSession() {
+    throw new Error("browser.newBrowserCDPSession: Neo does not serve CDP sessions yet");
+  }
+  async startTracing(_page, _options) {
+    throw new Error("browser.startTracing: Neo does not serve tracing yet");
+  }
+  async stopTracing() {
+    throw new Error("browser.stopTracing: Neo does not serve tracing yet");
+  }
+  async[Symbol.asyncDispose]() {
+    await this.close();
+  }
+  toJSON() {
+    return { _type: "Browser", _guid: this._guid };
+  }
+}
+function prepareBrowserContextParams(options) {
+  return {
+    ...options,
+    viewport: options.viewport === null ? undefined : options.viewport,
+    noDefaultViewport: options.viewport === null,
+    extraHTTPHeaders: options.extraHTTPHeaders ? headersObjectToArray(options.extraHTTPHeaders) : undefined,
+    colorScheme: options.colorScheme === null ? "no-override" : options.colorScheme,
+    reducedMotion: options.reducedMotion === null ? "no-override" : options.reducedMotion,
+    forcedColors: options.forcedColors === null ? "no-override" : options.forcedColors,
+    contrast: options.contrast === null ? "no-override" : options.contrast,
+    acceptDownloads: toAcceptDownloadsProtocol(options.acceptDownloads),
+    httpCredentials: toHttpCredentialsProtocol(options.httpCredentials)
+  };
+}
+function toAcceptDownloadsProtocol(acceptDownloads) {
+  if (acceptDownloads === undefined)
+    return;
+  if (acceptDownloads)
+    return "accept";
+  return "deny";
+}
+function toHttpCredentialsProtocol(credentials) {
+  if (!credentials)
+    return;
+  const list = Array.isArray(credentials) ? credentials : [credentials];
+  return list.length ? list : undefined;
+}
+function headersObjectToArray(headers) {
+  const result = [];
+  for (const name in headers) {
+    if (!Object.is(headers[name], undefined))
+      result.push({ name, value: headers[name] });
+  }
+  return result;
+}
+
+// src/browser-type.ts
+var ATTACHED_REFUSAL = "Neo runs attached to BrowserOS; use the provided context / context.browser()";
+var CHROMIUM_ONLY_REFUSAL = "Neo drives BrowserOS (Chromium) only; firefox and webkit are not available";
+var NO_EXECUTABLE_PATH = "Neo runs attached to BrowserOS and launches no browser; CDP does not report its executable path";
+
+class BrowserType {
+  #name;
+  constructor(name) {
+    this.#name = name;
+  }
+  name() {
+    return this.#name;
+  }
+  executablePath() {
+    throw new Error(NO_EXECUTABLE_PATH);
+  }
+  async launch(_options) {
+    this.#refuse("browserType.launch");
+  }
+  async launchPersistentContext(_userDataDir, _options) {
+    this.#refuse("browserType.launchPersistentContext");
+  }
+  async launchServer(_options) {
+    this.#refuse("browserType.launchServer");
+  }
+  async connect(_optionsOrEndpoint, _options) {
+    this.#refuse("browserType.connect");
+  }
+  async connectOverCDP(_endpointOrOptions, _options) {
+    this.#refuse("browserType.connectOverCDP");
+  }
+  toJSON() {
+    return { _type: "BrowserType", _guid: `browser-type@${this.#name}` };
+  }
+  #refuse(apiName) {
+    throw new Error(`${apiName}: ${this.#name === "chromium" ? ATTACHED_REFUSAL : CHROMIUM_ONLY_REFUSAL}`);
+  }
+}
+
+// src/playwright.ts
+class Selectors {
+  #connection;
+  #context;
+  _attach(connection, context) {
+    this.#connection = connection;
+    this.#context = context;
+  }
+  async register(_name, _script, _options) {
+    throw new Error("selectors.register: Neo does not run custom selector engines in the page");
+  }
+  setTestIdAttribute(attributeName) {
+    setTestIdAttribute(attributeName);
+    if (!this.#connection || !this.#context)
+      return;
+    this.#connection.sendContext("selectors.setTestIdAttribute", this.#context, "setTestIdAttributeName", { testIdAttributeName: attributeName }, 0).catch(() => {});
+  }
+}
+
+class APIRequest {
+  async newContext(_options) {
+    throw new Error("apiRequest.newContext: Neo does not serve playwright.request yet");
+  }
+}
+
+class Playwright {
+  chromium = new BrowserType("chromium");
+  firefox = new BrowserType("firefox");
+  webkit = new BrowserType("webkit");
+  selectors = new Selectors;
+  request = new APIRequest;
+  errors = { TimeoutError };
+  #devices;
+  get devices() {
+    this.#devices ??= devices();
+    return this.#devices;
+  }
+}
+
 // src/index.ts
 function createRun(init) {
   setTestIdAttribute(init.testIdAttribute);
@@ -7640,9 +8073,13 @@ function createRun(init) {
   const pipe = new EventPipe;
   onReplyEvents((until) => pipe.deliver(until));
   onUncaughtListenerError((error) => pipe.report(error));
+  const playwright = new Playwright;
+  const browser = new Browser(init.browser, connection, pipe, playwright.chromium);
   const context = new BrowserContext(init.context, connection, pipe);
+  browser._didCreateContext(context);
+  playwright.selectors._attach(connection, init.context);
   const page = context._addRunPage(init.page, init.mainFrame, init.url);
-  return { page, context, uncaught: pipe.uncaught };
+  return { page, context, playwright, uncaught: pipe.uncaught };
 }
 return { createRun };
 })();

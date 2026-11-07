@@ -146,6 +146,7 @@ function run() {
     page: 'page@T',
     mainFrame: 'frame@T',
     context: 'context@default',
+    browser: 'browser@default',
     url: 'http://a.test/start',
     testIdAttribute: 'data-testid',
     lineOffset: 0,

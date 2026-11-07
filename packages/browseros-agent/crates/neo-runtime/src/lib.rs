@@ -13,6 +13,8 @@
 //!             │                          (its frame tree), discovery.rs (new tabs, popups)
 //!             └─ Dispatcher::call        dispatch.rs: target routing, task, trace, reply
 //!                  ├─ tab_calls          context/page lifecycle; tracked creation and cleanup
+//!                  ├─ browser_calls      the run's Browser: created contexts, close, disposal
+//!                  ├─ debugger           context.debugger: holds a call before it starts
 //!                  └─ Tabs::session      one lazy session for the call's page
 //!                       ├─ click::click  click.rs: policy over the Tab seam
 //!                       ├─ navigate      navigate.rs: goto (commits, lifecycle, response) and title
@@ -23,6 +25,7 @@
 //!                       ├─ waits         waits.rs: selector, URL and lifecycle waits; no input lock
 //!                       ├─ capture       capture.rs: screenshot (screenshot.rs) and pdf (pdf.rs);
 //!                       │                `path` writes into the run's artifacts.rs directory
+//!                       ├─ emulation     emulation.rs: viewport, media, a created context's options
 //!                       └─ FrameTab      one frame scope over PageSession
 //!                            ├─ PageSession: shared input, watcher and navigation
 //!                            │    └─ NetworkLog  network.rs: the main frame's navigation requests
@@ -55,12 +58,14 @@ mod abort;
 mod aria_yaml;
 mod artifacts;
 mod bridge;
+mod browser_calls;
 mod capture;
 mod check;
 mod click;
 mod console;
 mod content;
 mod deadline;
+mod debugger;
 mod devices;
 mod dialogs;
 mod discovery;
@@ -68,6 +73,7 @@ mod dispatch;
 mod downloads;
 mod drag;
 mod element_ops;
+mod emulation;
 mod evaluate;
 mod events;
 mod fill;

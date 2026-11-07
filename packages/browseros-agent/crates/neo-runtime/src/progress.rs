@@ -622,6 +622,11 @@ impl CallEntry {
         }
     }
 
+    /// The call's params as the script sent them.
+    pub(crate) fn params(&self) -> &Value {
+        &self.params
+    }
+
     /// Playwright's `ProgressController.abort` for this call: logs `operation was aborted:
     /// <reason>` and aborts it, unless it already ended or was aborted. Its `Progress` stops at
     /// its next race or check.

@@ -26,8 +26,10 @@ import type {
   ResponseInitializer,
   SerializedError,
 } from '@browseros/neo-runtime-spec/serve'
+import type { Browser } from './browser'
 import type { Connection } from './connection'
 import { ConsoleMessage, type ConsoleMessagePayload } from './console-message'
+import { Debugger } from './debugger'
 import { Dialog } from './dialog'
 import { Download } from './download'
 import { parseSerializedError, targetClosedError } from './errors'
@@ -43,8 +45,8 @@ import { Waiter, type WaitForEventOptions, wrapApiCall } from './waiter'
 import { WebError, type WebErrorLocation } from './web-error'
 
 /**
- * Neo: the context's listener events, by Playwright's names (`Events.BrowserContext`). `close`
- * never happens: the run's context is the user's browser, which outlives the run.
+ * Neo: the context's listener events, by Playwright's names (`Events.BrowserContext`). The SDK
+ * emits `close` itself, when the context closes.
  */
 const CONTEXT_EVENTS: EventTable = {
   receiver: 'BrowserContext',
@@ -93,19 +95,21 @@ export class BrowserContext extends ChannelOwner {
   readonly _timeoutSettings = new TimeoutSettings()
   /** The run's event pipe, which this context's pages share. */
   readonly _pipe: EventPipe
+  /** Playwright's `BrowserContext._browser`: the run's `Browser`, set when it registers this
+   * context (`Browser._didCreateContext`). */
+  _browser: Browser | null = null
+  /** Playwright's `BrowserContext._ownerPage`: the page `browser.newPage` made this context for. */
+  _ownerPage: Page | undefined
   /** Playwright's `_closingStatus`: `closing` from `close()`'s call, `closed` once done. */
   #closingStatus: 'none' | 'closing' | 'closed' = 'none'
   #closeReason: string | undefined
+  #debugger: Debugger | undefined
 
   constructor(guid: string, connection: Connection, pipe: EventPipe) {
     super(guid, pipe, CONTEXT_EVENTS)
     this.#guid = guid
     this.#connection = connection
     this._pipe = pipe
-    connection._closeReasonFor = (callGuid) =>
-      this.#pages.get(pageGuidOf(callGuid))?._closeReason() ?? this.#closeReason
-    connection._closedFor = (callGuid) =>
-      this.#pages.get(pageGuidOf(callGuid))?._isClosedLocally() ?? false
   }
 
   /** Playwright's `BrowserContext.isClosed`: true from the moment `close()` is called. */
@@ -113,28 +117,37 @@ export class BrowserContext extends ChannelOwner {
     return this.#closingStatus !== 'none'
   }
 
-  /** Playwright's `_effectiveCloseReason`: the reason `close()` was given. */
+  /** Playwright's `_effectiveCloseReason`: the reason `close()` was given, else the one its
+   * browser's `close()` was. */
   _closeReason(): string | undefined {
-    return this.#closeReason
+    return this.#closeReason ?? this._browser?._closeReason
   }
 
   /**
-   * Playwright's `close` of a connectOverCDP default context, which only disconnects: no tab
-   * closes (measured on BrowserOS neo with pinned Playwright: every tab stays open, the one its
-   * own client opened too). The run lets go of its listeners in the browser (Rust), then every
-   * page the context lists, or the run holds, closes as the script sees it: its `close`, then
-   * the context's `pageclose`; then the context's `close`. From then on `pages()` is empty,
-   * every page reads closed, calls fail as closed, and the waits and calls the close
-   * interrupted reject with `reason` when given, and Rust stops those calls before the close
-   * resolves, so none writes input after it. A second call resolves at once; a close that
-   * failed leaves the context open.
+   * Playwright's `BrowserContext.close`. A second call resolves at once; a close that failed
+   * leaves the context open, to close again.
+   *
+   * The run's own context is a connectOverCDP default context, whose close closes its browser
+   * (`CRBrowserContext.doClose`), and that close only disconnects: no tab closes (measured on
+   * BrowserOS neo with pinned Playwright: every tab stays open, the one its own client opened
+   * too). So it is the browser's disconnection, as `browser.close()` is (`Browser._disconnect`):
+   * Rust lets go of the run's listeners, stops its other calls and disposes the contexts
+   * `browser.newContext` created; every page of the run closes as the script sees it
+   * (its `close`, then its context's `pageclose`), then each created context and this one fire
+   * `close`, and the browser reads disconnected and fires `disconnected`. From then on `pages()`
+   * is empty, every page reads closed, calls fail as closed, and the waits and calls the close
+   * interrupted reject with `reason` when given; Rust stops those calls before the close
+   * resolves, so none writes input after it.
+   *
+   * A context `browser.newContext` created closes with its pages, which leave the browser; the
+   * run and its other contexts stay.
    */
   async close(options: { reason?: string } = {}): Promise<void> {
     if (this.isClosed()) return
     this.#closeReason = options.reason
     this.#closingStatus = 'closing'
-    try {
-      await this.#connection.sendContext(
+    const send = () =>
+      this.#connection.sendContext(
         'browserContext.close',
         this.#guid,
         'close',
@@ -143,19 +156,21 @@ export class BrowserContext extends ChannelOwner {
         }) as BrowserContextCloseParams,
         0,
       )
+    try {
+      if (this._browser && this._browser._runContext() === this)
+        await this._browser._disconnect(send, options.reason)
+      else {
+        const open = this._openPages()
+        await send()
+        for (const page of open) page._onClose()
+        this._onClose()
+      }
     } catch (error) {
       // Never half-closed: a close Rust did not do leaves the context open, to close again.
       this.#closingStatus = 'none'
       this.#closeReason = undefined
       throw error
     }
-    this.#connection._close(options.reason)
-    const pages = this.pages()
-    for (const page of this.#pages.values())
-      if (!pages.includes(page) && !page._isClosedLocally()) pages.push(page)
-    for (const page of pages) page._onClose()
-    this.#closingStatus = 'closed'
-    this.emit('close', this)
   }
 
   /** Playwright's context channel handlers (`client/browserContext.ts` constructor). */
@@ -253,13 +268,16 @@ export class BrowserContext extends ChannelOwner {
       this.#connection,
     )
     page?.emit('console', consoleMessage)
-    this.emit('console', consoleMessage)
+    this.#contextOf(page).emit('console', consoleMessage)
   }
 
   #onPageError({ error, page, location }: PageErrorEventParams): void {
     const pageObject = this.#pageFor(page.guid)
     const parsedError = parseSerializedError(error)
-    this.emit('weberror', new WebError(pageObject, parsedError, location))
+    this.#contextOf(pageObject).emit(
+      'weberror',
+      new WebError(pageObject, parsedError, location),
+    )
     if (pageObject) pageObject.emit('pageerror', parsedError)
   }
 
@@ -283,7 +301,10 @@ export class BrowserContext extends ChannelOwner {
 
   #onDialog(record: DialogRecord): void {
     const dialogObject = this.#dialogFrom(record)
-    let hasListeners = this.emit('dialog', dialogObject)
+    let hasListeners = this.#contextOf(dialogObject.page()).emit(
+      'dialog',
+      dialogObject,
+    )
     const page = dialogObject.page()
     if (page) hasListeners = page.emit('dialog', dialogObject) || hasListeners
     // Playwright answers here too: its listener may have gone between its subscription and the
@@ -293,7 +314,7 @@ export class BrowserContext extends ChannelOwner {
 
   #onDialogClosed(record: DialogRecord): void {
     const dialogObject = this.#dialogFrom(record)
-    this.emit('dialogclosed', dialogObject)
+    this.#contextOf(dialogObject.page()).emit('dialogclosed', dialogObject)
     const page = dialogObject.page()
     if (page) page.emit('dialogclosed', dialogObject)
   }
@@ -317,8 +338,8 @@ export class BrowserContext extends ChannelOwner {
 
   /**
    * Playwright's `BrowserContext.waitForEvent`: resolves with the first `event` its predicate
-   * accepts, or rejects at the timeout (the context's default, 30 s unless set). The context
-   * never closes during a run, so only the timeout or the predicate ends it otherwise.
+   * accepts, or rejects at the timeout (the context's default, 30 s unless set) or when the
+   * context closes.
    */
   async waitForEvent(
     event: string,
@@ -341,7 +362,7 @@ export class BrowserContext extends ChannelOwner {
       )
       if (event !== 'close')
         waiter.rejectOnEvent(this, 'close', () =>
-          targetClosedError(this.#closeReason),
+          targetClosedError(this._closeReason()),
         )
       const result = await waiter.waitForEvent(this, event, predicate)
       waiter.dispose()
@@ -352,7 +373,7 @@ export class BrowserContext extends ChannelOwner {
   /**
    * Every open tab of the context, in the order Rust first saw them, the run page first; a
    * page seen before keeps its object. A live read, like every Neo getter, so it can list a new
-   * tab before that tab's `page` event has run; after `close()`, nothing.
+   * tab before that tab's `page` event has run; after the context closed, nothing.
    *
    * Deviation: `client/browserContext.ts` `BrowserContext.pages`: `return [...this._pages];`
    * Playwright lists the pages its client was told of, in that order. Neo lists the context's
@@ -396,9 +417,27 @@ export class BrowserContext extends ChannelOwner {
     return new Disposable(this.#connection, result.disposable.guid)
   }
 
+  /** Playwright's `BrowserContext.debugger`: the context's own debugger (`debugger.ts`), made
+   * when a script first reads it, with the guid Rust names for it. */
+  get debugger(): Debugger {
+    this.#debugger ??= new Debugger(
+      get(this.#guid, 'debugger'),
+      this.#connection,
+      this._pipe,
+    )
+    return this.#debugger
+  }
+
+  /** Playwright's `BrowserContext.browser`: the run's `Browser`, the BrowserOS it is attached
+   * to, for the run's own context and for every context it created. */
+  browser(): Browser | null {
+    return this._browser
+  }
+
   /**
    * Opens a tab on `about:blank` and resolves with its `Page` once the tab answers that URL; a
-   * `page` listener has run for it by then.
+   * `page` listener has run for it by then. A context `browser.newContext` created opens a tab
+   * of its own context, with the context's options emulated before the page resolves.
    *
    * Deviation: `server/chromium/crBrowser.ts` `CRBrowserContext.doCreateNewPage`: `const { targetId } = await this._browser._session.send('Target.createTarget', { url: 'about:blank', browserContextId: this._browserContextId });`
    * Playwright's new page takes the window's focus. Neo opens it in the background of the run
@@ -406,6 +445,8 @@ export class BrowserContext extends ChannelOwner {
    * `bringToFront`.
    */
   async newPage(): Promise<Page> {
+    // Playwright: `client/browserContext.ts` `BrowserContext.newPage`: `throw new Error('Please use browser.newContext()');`
+    if (this._ownerPage) throw new Error('Please use browser.newContext()')
     const { page } = await this.#connection.sendContext(
       'browserContext.newPage',
       this.#guid,
@@ -424,9 +465,41 @@ export class BrowserContext extends ChannelOwner {
     this._timeoutSettings.setDefaultNavigationTimeout(timeout)
   }
 
+  /** Playwright's `BrowserContext._onClose`: the context reads closed, leaves its browser's
+   * list, and fires `close`. */
+  _onClose(): void {
+    if (this.#closingStatus === 'closed') return
+    this.#closingStatus = 'closed'
+    this._browser?._contexts.delete(this)
+    this.emit('close', this)
+  }
+
+  /**
+   * Neo: the pages a close of this context ends, read before it, since a created context's tabs
+   * are gone once Rust answers: every tab the context lists and every page the run holds of it
+   * that is still open.
+   */
+  _openPages(): Page[] {
+    const pages = this.pages()
+    for (const page of this.#pages.values())
+      if (!pages.includes(page) && !page.isClosed()) pages.push(page)
+    return pages
+  }
+
+  /** Neo: this context's `Page` for `guid`, if it was handed one. */
+  _knownPage(guid: string): Page | undefined {
+    return this.#pages.get(guid)
+  }
+
   /** Playwright's `ChannelOwner.toJSON`: the context's type and guid only. */
   toJSON(): { _type: 'BrowserContext'; _guid: string } {
     return { _type: 'BrowserContext', _guid: this.#guid }
+  }
+
+  /** The context a page's context-level events belong to: its own, for a page of a context the
+   * run created, whose events reach the run's context (Rust names that one). */
+  #contextOf(page: Page | null): BrowserContext {
+    return page ? page.context() : this
   }
 
   /** `createRun`'s: registers the run's page before the script starts, so the first `pages()`
@@ -444,9 +517,14 @@ export class BrowserContext extends ChannelOwner {
   }
 
   /** The `Page` for a guid Rust just handed out: the object a `pages()` read made while the
-   * call was in flight, else one built from the page's creation record. */
+   * call was in flight, or another context's (an event of a created context's page), else one
+   * built from the page's creation record. */
   #pageFor(guid: string): Page {
-    return this.#pages.get(guid) ?? this.#add(get(guid, 'initializer'))
+    return (
+      this.#pages.get(guid) ??
+      this._browser?._knownPage(guid) ??
+      this.#add(get(guid, 'initializer'))
+    )
   }
 
   #add(created: CreatedPage): Page {
@@ -456,6 +534,7 @@ export class BrowserContext extends ChannelOwner {
       created.mainFrame.initializer.url,
       this,
       this.#connection,
+      created.initializer.viewportSize,
     )
     this.#pages.set(created.guid, page)
     return page
@@ -510,7 +589,7 @@ interface RequestEndEventParams {
 
 /** The page guid (`page@T`) a call's guid belongs to: its own, its frames' (`frame@T`,
  * `frame@T/F`), and its requests' and responses' (`request@T:…`). */
-function pageGuidOf(guid: string): string {
+export function pageGuidOf(guid: string): string {
   const target = guid.slice(guid.indexOf('@') + 1).split(/[/:]/)[0]
   return `page@${target}`
 }
