@@ -10,6 +10,7 @@ use neo_runtime_spec::serve::{FrameFillParams, FrameInputValueParams, FrameSelec
 use crate::click::{
     self, ActionResult, ElementAction, LoopAWaits, NotReady, PageError, PressReport, Stop, Tab,
 };
+use crate::evaluate::HandleEntry;
 use crate::forms::{FillOutcome, FormTab, SelectOption, SelectOutcome};
 use crate::input_devices::{Devices, Plan};
 use crate::keyboard::{self, KeyboardTab, Platform};
@@ -38,15 +39,22 @@ impl FillOptions {
 pub(crate) struct SelectOptions {
     pub(crate) selector: String,
     pub(crate) strict: bool,
+    /// Playwright's `elements`: the guids of the `ElementHandle` values, matched by node
+    /// identity before `options` (`dom.ts` `_selectOption`).
+    pub(crate) elements: Vec<String>,
     pub(crate) options: Vec<SelectOption>,
     pub(crate) force: bool,
 }
 
 impl SelectOptions {
+    /// The generated params never carry `elements`: `dispatch.rs` takes them out of the wire
+    /// first (their channel type has no values) and hands their guids to
+    /// [`SelectOptions::with_elements`].
     pub(crate) fn from_params(params: FrameSelectOptionParams) -> Self {
         Self {
             selector: params.selector,
             strict: params.strict.unwrap_or(false),
+            elements: Vec::new(),
             options: params
                 .options
                 .unwrap_or_default()
@@ -60,6 +68,11 @@ impl SelectOptions {
                 .collect(),
             force: params.force.unwrap_or(false),
         }
+    }
+
+    /// These options with `ElementHandle` values, by guid.
+    pub(crate) fn with_elements(self, elements: Vec<String>) -> Self {
+        Self { elements, ..self }
     }
 }
 
@@ -105,13 +118,24 @@ pub(crate) async fn select_option<T: FormTab>(
     progress: &Progress,
 ) -> Result<Vec<String>, CallError> {
     let delivery = delivery(progress)?;
+    // Checked before any work, as Playwright's dispatcher checks `elements` channels.
+    let elements = options
+        .elements
+        .iter()
+        .enumerate()
+        .map(|(index, guid)| progress.handles().select_element(index, guid))
+        .collect::<Result<Vec<_>, _>>()?;
     click::retry_with_progress_if_not_connected(
         tab,
         &options.selector,
         options.strict,
         options.force,
         progress,
-        &SelectAction { options, delivery },
+        &SelectAction {
+            options,
+            elements: &elements,
+            delivery,
+        },
     )
     .await
 }
@@ -295,6 +319,7 @@ fn plan_fill_input<D: Devices>(
 /// its own element (`element_handle.rs`).
 pub(crate) struct SelectAction<'a> {
     pub(crate) options: &'a SelectOptions,
+    pub(crate) elements: &'a [Arc<HandleEntry>],
     pub(crate) delivery: &'a Arc<DeliveryCell>,
 }
 
@@ -318,7 +343,14 @@ impl<T: FormTab> ElementAction<T> for SelectAction<'_> {
             progress.check()?;
             let ticket = self.delivery.begin().map_err(|_| input_already_sent())?;
             let outcome = progress
-                .race(tab.select_options(element, &options.options, options.force, input, ticket))
+                .race(tab.select_options(
+                    element,
+                    &options.options,
+                    self.elements,
+                    options.force,
+                    input,
+                    ticket,
+                ))
                 .await?
                 .map_err(mutation_error)?;
             match outcome {
@@ -331,6 +363,13 @@ impl<T: FormTab> ElementAction<T> for SelectAction<'_> {
                 SelectOutcome::OptionsNotFound => progress.log("  did not find some options"),
                 SelectOutcome::OptionNotEnabled => {
                     progress.log("  option being selected is not enabled");
+                }
+                SelectOutcome::Unadoptable => {
+                    // Playwright: `server/dom.ts` `kUnableToAdoptErrorMessage`: `Unable to adopt element handle from a different document`
+                    return Err(PlaywrightError::error(
+                        "Unable to adopt element handle from a different document",
+                    )
+                    .into());
                 }
             }
         }
@@ -669,6 +708,7 @@ mod tests {
         let tab = FakeTab::ready();
         let progress = Progress::for_test(1000.0);
         let options = SelectOptions {
+            elements: Vec::new(),
             selector: "select".into(),
             strict: true,
             options: vec![],
@@ -740,11 +780,32 @@ mod tests {
 
     fn select_options() -> SelectOptions {
         SelectOptions {
+            elements: Vec::new(),
             selector: "select".into(),
             strict: true,
             options: vec![],
             force: false,
         }
+    }
+
+    /// An `ElementHandle` value whose guid names no handle of the run (a disposed one) fails
+    /// before any page work, with Playwright's dispatcher message for the channel.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_an_unknown_element_value_fails_before_any_page_work() {
+        let tab = FakeTab::ready();
+        let progress = Progress::for_test(1000.0);
+        let options = select_options().with_elements(vec!["handle@gone".into()]);
+        assert_eq!(
+            select_option(&tab, &options, &progress).await,
+            Err(CallError::Playwright(PlaywrightError::error(
+                "elements[0]: no object with guid handle@gone"
+            )))
+        );
+        assert_eq!(tab.count("select_options"), 0);
+        assert_eq!(
+            progress.delivery().expect("input").delivery(),
+            Delivery::NotSent
+        );
     }
 
     fn is_error(result: &Result<(), CallError>, name: ErrorName) {

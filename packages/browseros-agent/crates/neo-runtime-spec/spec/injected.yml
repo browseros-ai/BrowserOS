@@ -591,6 +591,44 @@ Injected:
         # Present when no selection was made.
         outcome: FormSelectOutcome?
 
+    # `selectOptions` with `ElementHandle` values: `dom.ts` `_selectOption` passes
+    # `[...elements, ...values]`, and `InjectedScript.selectOptions` matches an element value by
+    # node identity. `elements` are the handles' nodes adopted into this world, in order
+    # (`elementListOf`, `elementListWith`).
+    selectOptionsWithElements:
+      internal: true
+      parameters:
+        element: Element
+        elements: ElementList
+        options:
+          type: array
+          items: FormSelectOption
+        force: boolean
+        frameVisible: boolean
+      returns:
+        values:
+          type: array?
+          items: string
+        outcome: FormSelectOutcome?
+
+    # A list of one element (`selectOptionsWithElements`'s `elements`): a handle argument is
+    # passed by position, so a list of handles is built one page call per element.
+    elementListOf:
+      internal: true
+      parameters:
+        element: Element
+      returns:
+        list: ElementList
+
+    # `list` with `element` after its elements, as a new list.
+    elementListWith:
+      internal: true
+      parameters:
+        list: ElementList
+        element: Element
+      returns:
+        list: ElementList
+
     # Playwright's `ElementStateQueryResult` for a checkbox or radio button.
     elementState:
       internal: true

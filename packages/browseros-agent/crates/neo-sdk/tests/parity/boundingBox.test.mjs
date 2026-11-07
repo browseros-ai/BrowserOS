@@ -1,14 +1,13 @@
 // Locator.boundingBox waits for the element and answers its border box in the main frame's
 // CSS pixels, as Playwright's `CRPage.getBoundingBox` does: a positioned div, an SVG rect, an
-// element inside a bordered same-process frame, an element inside a cross-site frame with no
-// border, and `null` for a display:none element. A strict locator, a missing element at its
-// timeout and an invalid selector reject by kind.
+// element inside a bordered same-process frame, an element inside a bordered and padded
+// cross-site frame, and `null` for a display:none element. A strict locator, a missing element
+// at its timeout and an invalid selector reject by kind.
 //
-// Inside a bordered cross-site (out-of-process) frame the two differ by design: Playwright adds
-// the iframe's border-box origin to the frame's own coordinates, Neo its content-box origin
-// (where the frame's viewport starts, as in a same-process frame), so Neo's box sits the
-// iframe's border further right and down: frame-top.html's 1px (the frame case below), and
-// neo-runtime's tests/element_ops_e2e.rs for a thicker border.
+// Inside a cross-site (out-of-process) frame Playwright adds the iframe's border-box origin to
+// the frame's own coordinates (`_framePosition`), not where the frame's viewport starts; Neo
+// places boxes the same way (input still aims by the content box), so every case below
+// compares the two engines' boxes directly, nested frames of both kinds included.
 //
 // From Playwright's specs at the pin (tests/page/elementhandle-bounding-box.spec.ts at
 // 26137face): 'EH-001 should work', 'EH-002 should handle nested frames', 'EH-005 should return
@@ -59,7 +58,7 @@ test('boundingBox answers the border box of the element it names as Playwright d
   assert.equal(
     boxes.cross.x,
     20 + 8,
-    'the cross frame starts at 20, its h1 at 8',
+    "the cross iframe's border box starts at 20, its h1 at 8: Playwright skips the border and padding",
   )
   assert.deepEqual(failures, {
     strict: 'Error:strict',
@@ -68,10 +67,10 @@ test('boundingBox answers the border box of the element it names as Playwright d
   })
 })
 
-/** boundingBox inside frame-top.html's frames (frames.mjs), whose iframes have a 1px border:
- * a same-process frame answers the same box through both engines; in an out-of-process frame
- * Neo's box is one border further right and down per out-of-process hop (the Deviation
- * above). */
+/** boundingBox inside frame-top.html's frames (frames.mjs), whose iframes have a 1px border, and
+ * inside frames a case adds with a thicker border and padding: every box is Playwright's, one
+ * and two out-of-process hops, an out-of-process frame inside a same-process one, and a
+ * same-process frame inside an out-of-process one. */
 const frameCases = [
   {
     name: 'boundingBox answers the box of the element in the frame it names',
@@ -87,35 +86,42 @@ const frameCases = [
     }`,
     expected: {
       same: (box) => assert.ok(box.value.width > 0 && box.value.height > 0),
+      // One out-of-process hop for cross, two for grandchild (127.0.0.1 inside localhost).
+      cross: (box) => assert.ok(box.value.width > 0 && box.value.height > 0),
+      grandchild: (box) =>
+        assert.ok(box.value.width > 0 && box.value.height > 0),
       missingFrame: { error: 'timeout', name: 'TimeoutError' },
     },
-    perEngine: ['cross', 'grandchild'],
-    checkPlaywright: ({ result }) => {
-      for (const who of ['cross', 'grandchild'])
-        assert.ok(result.value[who].value.width > 0, `${who} has a box`)
-    },
-    checkNeo: (neo, playwright) => {
-      // One out-of-process hop for cross, two for grandchild (127.0.0.1 inside localhost),
-      // each behind an iframe with a 1px border; the size is the same.
-      for (const [who, borders] of [
-        ['cross', 1],
-        ['grandchild', 2],
-      ]) {
-        const [n, p] = [
-          neo.result.value[who].value,
-          playwright.result.value[who].value,
-        ]
-        assert.deepEqual(
-          {
-            dx: Math.round((n.x - p.x) * 100) / 100,
-            dy: Math.round((n.y - p.y) * 100) / 100,
-            width: n.width,
-            height: n.height,
-          },
-          { dx: borders, dy: borders, width: p.width, height: p.height },
-          `${who}: Neo's box sits the iframe borders further right and down`,
-        )
-      }
+  },
+  {
+    name: 'boundingBox in mixed nested frames places boxes as Playwright does',
+    source: `const port = page.url().match(/:(\\d+)\\//)[1]
+    // An iframe with a 6px border and 4px padding, added in the frame \`body\` is in.
+    const add = (body, name, host) => body.evaluate((element, [frameName, src]) => new Promise((resolve) => {
+      const frame = document.createElement('iframe')
+      frame.name = frameName
+      frame.style.cssText = 'border: 6px solid #888; padding: 4px'
+      frame.onload = () => resolve(true)
+      frame.src = src
+      element.append(frame)
+    }), [name, 'http://' + host + ':' + port + '/frame-child.html?who=' + name])
+    await add(page.frameLocator('#same').locator('body'), 'same-cross', 'localhost')
+    await add(page.frameLocator('#login-iframe').locator('body'), 'cross-same', 'localhost')
+    const box = (locator) => settle(async () => {
+      const b = await locator.boundingBox()
+      return b && Object.fromEntries(Object.entries(b).map(([k, v]) => [k, Math.round(v * 100) / 100]))
+    })
+    return {
+      sameCross: await box(page.frameLocator('#same').frameLocator('iframe[name="same-cross"]').locator('#send')),
+      crossSame: await box(page.frameLocator('#login-iframe').frameLocator('iframe[name="cross-same"]').locator('#send')),
+    }`,
+    expected: {
+      // An out-of-process frame inside a same-process one; a same-process frame inside an
+      // out-of-process one.
+      sameCross: (box) =>
+        assert.ok(box.value.width > 0 && box.value.height > 0),
+      crossSame: (box) =>
+        assert.ok(box.value.width > 0 && box.value.height > 0),
     },
   },
 ]

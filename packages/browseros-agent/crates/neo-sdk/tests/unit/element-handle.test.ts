@@ -172,7 +172,7 @@ describe('ElementHandle actions', () => {
     )
   })
 
-  test('a null option or an ElementHandle value fails before anything is sent', async () => {
+  test('a null option fails before anything is sent', async () => {
     const run = start()
     run.fake.answer = () => ({
       result: { element: { ...ELEMENT, frame: run.page.mainFrame()._guid } },
@@ -183,9 +183,21 @@ describe('ElementHandle actions', () => {
     await expect(handle.click({ button: null as never })).rejects.toThrow(
       'button: expected a value, got null',
     )
-    await expect(handle.selectOption(handle as never)).rejects.toThrow(
-      'Neo does not support ElementHandle values in selectOption yet',
-    )
     expect(run.fake.messages).toEqual([])
+  })
+
+  test('ElementHandle values travel as their guids, as the frame’s selectOption sends them', async () => {
+    const run = start()
+    run.fake.answer = () => ({
+      result: { element: { ...ELEMENT, frame: run.page.mainFrame()._guid } },
+      log: [],
+    })
+    const handle = (await run.page.$('#x')) as ElementHandle
+    run.fake.answer = () => ({ result: { values: ['a'] }, log: [] })
+    run.fake.messages.length = 0
+    expect(await handle.selectOption(handle)).toEqual(['a'])
+    expect(
+      run.fake.messages.map(({ method, params }) => [method, params]),
+    ).toEqual([['selectOption', { elements: [{ guid: 'handle@r.1' }] }]])
   })
 })

@@ -6,7 +6,9 @@ const html = `<select id="s"><option value="one">One</option><option value="two"
 <iframe name="child" srcdoc="<select><option id='foreign' value='foreign'>Foreign</option></select>"></iframe>
 <script>window.seen=[];for(const type of ['input','change'])s.addEventListener(type,()=>seen.push(type));new MutationObserver(()=>document.querySelector('browseros-neo-takeover')?.remove()).observe(document.documentElement,{childList:true,subtree:true})</script>`
 
-test('review: nested, proxied, foreign and disposed handles cannot change selection', {
+// Since slice D (ElementHandle values served as Playwright's `elements`), Neo answers every case
+// as Playwright does: compared directly, beside Playwright's own expectations.
+test('review: nested, proxied, foreign and disposed handles change selection as Playwright does', {
   skip,
   timeout: 120_000,
 }, async (t) => {
@@ -29,11 +31,7 @@ test('review: nested, proxied, foreign and disposed handles cannot change select
     probe: `({selected:s.value,events:seen})`,
     values: ({ playwright, neo }) => {
       assert.equal(neo.length, 21)
-      for (const row of neo) {
-        assert.equal(row.rejected, true, JSON.stringify(row))
-        assert.equal(row.selected, 'three')
-        assert.deepEqual(row.events, [])
-      }
+      assert.deepEqual(neo, playwright, 'every receiver and case as Playwright')
       for (const row of playwright) {
         if (['proxy', 'object'].includes(row.name)) {
           assert.equal(row.rejected, false, JSON.stringify(row))
@@ -46,10 +44,13 @@ test('review: nested, proxied, foreign and disposed handles cannot change select
       }
     },
   })
+  // Per receiver, the proxied, foreign, disposed and plain-JSHandle values reach the runtime, as
+  // they reach Playwright's server; the three handles nested in option fields fail the
+  // protocol's validation before anything is sent.
   assert.equal(
     outcome.calls.filter((c) => c.method === 'selectOption').length,
-    0,
-    'SDK refusals send no selectOption call',
+    12,
+    'selectOption calls sent',
   )
 })
 
@@ -66,10 +67,9 @@ test('review: a plain guid object follows plain option-object semantics', {
   assert.deepEqual(outcome.value, { result: ['one'], selected: 'one' })
 })
 
-// Adapted (pw-dom-reads, F1 fix): as written this case required Neo to select 'two', which only
-// serving `elements` could do. Each call's rejection is now caught, as the first case does, and
-// Neo's refusal and Playwright's selection are both asserted.
-test('review: an array proxy cannot bypass the handle refusal', {
+// As first written by the F1 reviewer: an array proxy whose own methods lie selects 'two' through
+// Neo as through Playwright, now that `elements` is served (slice D).
+test('review: an array proxy of a handle selects its option as Playwright does', {
   skip,
   timeout: 120_000,
 }, async (t) => {
@@ -90,17 +90,12 @@ test('review: an array proxy cannot bypass the handle refusal', {
         playwright.every((row) => !row.rejected && row.selected === 'two'),
         JSON.stringify(playwright),
       )
-      assert.equal(neo.length, 3)
-      for (const row of neo) {
-        assert.equal(row.rejected, true, JSON.stringify(row))
-        assert.equal(row.selected, 'three')
-        assert.deepEqual(row.events, [])
-      }
+      assert.deepEqual(neo, playwright, 'every receiver as Playwright')
     },
   })
   assert.equal(
     outcome.calls.filter((c) => c.method === 'selectOption').length,
-    0,
-    'SDK refusals send no selectOption call',
+    3,
+    'one selectOption call per receiver',
   )
 })

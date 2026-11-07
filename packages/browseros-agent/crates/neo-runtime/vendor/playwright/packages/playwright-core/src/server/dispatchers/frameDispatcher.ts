@@ -1,0 +1,304 @@
+/**
+ * Copyright (c) Microsoft Corporation.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { renderFullTitleForCall } from '@isomorphic/protocolFormatter';
+import { asLocator } from '@isomorphic/locatorGenerators';
+import { ExpectError, Frame } from '../frames';
+import { Dispatcher } from './dispatcher';
+import { ElementHandleDispatcher } from './elementHandlerDispatcher';
+import { parseArgument, serializeResult } from './jsHandleDispatcher';
+import { ResponseDispatcher } from './networkDispatchers';
+import { RequestDispatcher } from './networkDispatchers';
+import type { Progress } from '../progress';
+import type { BrowserContextDispatcher } from './browserContextDispatcher';
+import type { PageDispatcher } from './pageDispatcher';
+import type { NavigationEvent } from '../frames';
+import type * as channels from '../channels';
+
+export class FrameDispatcher extends Dispatcher<Frame, channels.FrameChannel, BrowserContextDispatcher | PageDispatcher> implements channels.FrameChannel {
+  _type_Frame = true;
+  private _frame: Frame;
+  private _browserContextDispatcher: BrowserContextDispatcher;
+
+  static from(scope: BrowserContextDispatcher, frame: Frame): FrameDispatcher {
+    const result = scope.connection.existingDispatcher<FrameDispatcher>(frame);
+    return result || new FrameDispatcher(scope, frame);
+  }
+
+  static fromNullable(scope: BrowserContextDispatcher, frame: Frame | null): FrameDispatcher | undefined {
+    if (!frame)
+      return;
+    return FrameDispatcher.from(scope, frame);
+  }
+
+  private constructor(scope: BrowserContextDispatcher, frame: Frame) {
+    // Main frames are gc'ed separately from any other frames, so that
+    // methods on Page that redirect to the main frame remain operational.
+    // Note: we cannot check parentFrame() here because it may be null after the frame has been detached.
+    const gcBucket = frame._page.mainFrame() === frame ? 'MainFrame' : 'Frame';
+    const pageDispatcher = scope.connection.existingDispatcher<PageDispatcher>(frame._page);
+    super(pageDispatcher || scope, frame, 'Frame', {
+      url: frame.url(),
+      name: frame.name(),
+      parentFrame: FrameDispatcher.fromNullable(scope, frame.parentFrame()),
+      loadStates: Array.from(frame._firedLifecycleEvents),
+    }, gcBucket);
+    this._browserContextDispatcher = scope;
+    this._frame = frame;
+    this.addObjectListener(Frame.Events.AddLifecycle, lifecycleEvent => {
+      this._dispatchEvent('loadstate', { add: lifecycleEvent });
+    });
+    this.addObjectListener(Frame.Events.RemoveLifecycle, lifecycleEvent => {
+      this._dispatchEvent('loadstate', { remove: lifecycleEvent });
+    });
+    this.addObjectListener(Frame.Events.InternalNavigation, (event: NavigationEvent) => {
+      if (!event.isPublic)
+        return;
+      const params = { url: event.url, name: event.name, error: event.error ? event.error.message : undefined };
+      if (event.newDocument)
+        (params as any).newDocument = { request: RequestDispatcher.fromNullable(this._browserContextDispatcher, event.newDocument.request || null) };
+      this._dispatchEvent('navigated', params);
+    });
+  }
+
+  async goto(params: channels.FrameGotoParams, progress: Progress): Promise<channels.FrameGotoResult> {
+    return { response: ResponseDispatcher.fromNullable(this._browserContextDispatcher, await this._frame.goto(progress, params.url, params)) };
+  }
+
+  async frameElement(params: channels.FrameFrameElementParams, progress: Progress): Promise<channels.FrameFrameElementResult> {
+    return { element: ElementHandleDispatcher.from(this, await this._frame.frameElement(progress)) };
+  }
+
+  async evaluateExpression(params: channels.FrameEvaluateExpressionParams, progress: Progress): Promise<channels.FrameEvaluateExpressionResult> {
+    return { value: serializeResult(await this._frame.evaluateExpression(progress, params.expression, { isFunction: params.isFunction }, parseArgument(params.arg))) };
+  }
+
+  async evaluateExpressionHandle(params: channels.FrameEvaluateExpressionHandleParams, progress: Progress): Promise<channels.FrameEvaluateExpressionHandleResult> {
+    return { handle: ElementHandleDispatcher.fromJSOrElementHandle(this, await this._frame.evaluateExpressionHandle(progress, params.expression, { isFunction: params.isFunction }, parseArgument(params.arg))) };
+  }
+
+  async waitForSelector(params: channels.FrameWaitForSelectorParams, progress: Progress): Promise<channels.FrameWaitForSelectorResult> {
+    return { element: ElementHandleDispatcher.fromNullable(this, await this._frame.waitForSelector(progress, params, true, params)) };
+  }
+
+  async dispatchEvent(params: channels.FrameDispatchEventParams, progress: Progress): Promise<void> {
+    return this._frame.dispatchEvent(progress, params, params.type, parseArgument(params.eventInit));
+  }
+
+  async evalOnSelector(params: channels.FrameEvalOnSelectorParams, progress: Progress): Promise<channels.FrameEvalOnSelectorResult> {
+    return { value: serializeResult(await this._frame.evalOnSelector(progress, params, params.expression, params.isFunction, parseArgument(params.arg))) };
+  }
+
+  async evalOnSelectorAll(params: channels.FrameEvalOnSelectorAllParams, progress: Progress): Promise<channels.FrameEvalOnSelectorAllResult> {
+    return { value: serializeResult(await this._frame.evalOnSelectorAll(progress, params.selector, params.expression, params.isFunction, parseArgument(params.arg))) };
+  }
+
+  async querySelector(params: channels.FrameQuerySelectorParams, progress: Progress): Promise<channels.FrameQuerySelectorResult> {
+    return { element: ElementHandleDispatcher.fromNullable(this, await this._frame.querySelector(progress, params)) };
+  }
+
+  async querySelectorAll(params: channels.FrameQuerySelectorAllParams, progress: Progress): Promise<channels.FrameQuerySelectorAllResult> {
+    const elements = await this._frame.querySelectorAll(progress, params.selector);
+    return { elements: elements.map(e => ElementHandleDispatcher.from(this, e)) };
+  }
+
+  async queryCount(params: channels.FrameQueryCountParams, progress: Progress): Promise<channels.FrameQueryCountResult> {
+    return { value: await this._frame.queryCount(progress, params.selector) };
+  }
+
+  async content(params: channels.FrameContentParams, progress: Progress): Promise<channels.FrameContentResult> {
+    return { value: await this._frame.content(progress, params) };
+  }
+
+  async setContent(params: channels.FrameSetContentParams, progress: Progress): Promise<void> {
+    return await this._frame.setContent(progress, params.html, params);
+  }
+
+  async addScriptTag(params: channels.FrameAddScriptTagParams, progress: Progress): Promise<channels.FrameAddScriptTagResult> {
+    return { element: ElementHandleDispatcher.from(this, await this._frame.addScriptTag(progress, params)) };
+  }
+
+  async addStyleTag(params: channels.FrameAddStyleTagParams, progress: Progress): Promise<channels.FrameAddStyleTagResult> {
+    return { element: ElementHandleDispatcher.from(this, await this._frame.addStyleTag(progress, params)) };
+  }
+
+  async ariaSnapshot(params: channels.FrameAriaSnapshotParams, progress: Progress): Promise<channels.FrameAriaSnapshotResult> {
+    return await this._frame.ariaSnapshot(progress, params);
+  }
+
+  async ariaSnapshotJSON(params: channels.FrameAriaSnapshotJSONParams, progress: Progress): Promise<channels.FrameAriaSnapshotJSONResult> {
+    return await this._frame.ariaSnapshotJSON(progress, params);
+  }
+
+  async click(params: channels.FrameClickParams, progress: Progress): Promise<void> {
+    return await this._frame.click(progress, params, params);
+  }
+
+  async dblclick(params: channels.FrameDblclickParams, progress: Progress): Promise<void> {
+    return await this._frame.dblclick(progress, params, params);
+  }
+
+  async dragAndDrop(params: channels.FrameDragAndDropParams, progress: Progress): Promise<void> {
+    return await this._frame.dragAndDrop(progress, { selector: params.source, strict: params.strict }, { selector: params.target, strict: params.strict }, params);
+  }
+
+  async drop(params: channels.FrameDropParams, progress: Progress): Promise<void> {
+    return await this._frame.drop(progress, params, params);
+  }
+
+  async tap(params: channels.FrameTapParams, progress: Progress): Promise<void> {
+    return await this._frame.tap(progress, params, params);
+  }
+
+  async fill(params: channels.FrameFillParams, progress: Progress): Promise<void> {
+    return await this._frame.fill(progress, params, params.value, params);
+  }
+
+  async focus(params: channels.FrameFocusParams, progress: Progress): Promise<void> {
+    await this._frame.focus(progress, params);
+  }
+
+  async blur(params: channels.FrameBlurParams, progress: Progress): Promise<void> {
+    await this._frame.blur(progress, params);
+  }
+
+  async textContent(params: channels.FrameTextContentParams, progress: Progress): Promise<channels.FrameTextContentResult> {
+    const value = await this._frame.textContent(progress, params);
+    return { value: value === null ? undefined : value };
+  }
+
+  async innerText(params: channels.FrameInnerTextParams, progress: Progress): Promise<channels.FrameInnerTextResult> {
+    return { value: await this._frame.innerText(progress, params) };
+  }
+
+  async innerHTML(params: channels.FrameInnerHTMLParams, progress: Progress): Promise<channels.FrameInnerHTMLResult> {
+    return { value: await this._frame.innerHTML(progress, params) };
+  }
+
+  async resolveSelector(params: channels.FrameResolveSelectorParams, progress: Progress): Promise<channels.FrameResolveSelectorResult> {
+    const { resolvedSelector } = await this._frame.resolveSelector(progress, params.selector);
+    const locatorCode = params.sdkLanguage ? asLocator(params.sdkLanguage, resolvedSelector) : undefined;
+    return { resolvedSelector, locatorCode };
+  }
+
+  async getAttribute(params: channels.FrameGetAttributeParams, progress: Progress): Promise<channels.FrameGetAttributeResult> {
+    const value = await this._frame.getAttribute(progress, params, params.name);
+    return { value: value === null ? undefined : value };
+  }
+
+  async inputValue(params: channels.FrameInputValueParams, progress: Progress): Promise<channels.FrameInputValueResult> {
+    const value = await this._frame.inputValue(progress, params);
+    return { value };
+  }
+
+  async isChecked(params: channels.FrameIsCheckedParams, progress: Progress): Promise<channels.FrameIsCheckedResult> {
+    return { value: await this._frame.isChecked(progress, params) };
+  }
+
+  async isDisabled(params: channels.FrameIsDisabledParams, progress: Progress): Promise<channels.FrameIsDisabledResult> {
+    return { value: await this._frame.isDisabled(progress, params) };
+  }
+
+  async isEditable(params: channels.FrameIsEditableParams, progress: Progress): Promise<channels.FrameIsEditableResult> {
+    return { value: await this._frame.isEditable(progress, params) };
+  }
+
+  async isEnabled(params: channels.FrameIsEnabledParams, progress: Progress): Promise<channels.FrameIsEnabledResult> {
+    return { value: await this._frame.isEnabled(progress, params) };
+  }
+
+  async isHidden(params: channels.FrameIsHiddenParams, progress: Progress): Promise<channels.FrameIsHiddenResult> {
+    return { value: await this._frame.isHidden(progress, params) };
+  }
+
+  async isVisible(params: channels.FrameIsVisibleParams, progress: Progress): Promise<channels.FrameIsVisibleResult> {
+    return { value: await this._frame.isVisible(progress, params) };
+  }
+
+  async hover(params: channels.FrameHoverParams, progress: Progress): Promise<void> {
+    return await this._frame.hover(progress, params, params);
+  }
+
+  async selectOption(params: channels.FrameSelectOptionParams, progress: Progress): Promise<channels.FrameSelectOptionResult> {
+    const elements = (params.elements || []).map(e => (e as ElementHandleDispatcher)._elementHandle);
+    return { values: await this._frame.selectOption(progress, params, elements, params.options || [], params) };
+  }
+
+  async setInputFiles(params: channels.FrameSetInputFilesParams, progress: Progress): Promise<channels.FrameSetInputFilesResult> {
+    return await this._frame.setInputFiles(progress, params, params);
+  }
+
+  async type(params: channels.FrameTypeParams, progress: Progress): Promise<void> {
+    return await this._frame.type(progress, params, params.text, params);
+  }
+
+  async press(params: channels.FramePressParams, progress: Progress): Promise<void> {
+    return await this._frame.press(progress, params, params.key, params);
+  }
+
+  async check(params: channels.FrameCheckParams, progress: Progress): Promise<void> {
+    return await this._frame.check(progress, params, params);
+  }
+
+  async uncheck(params: channels.FrameUncheckParams, progress: Progress): Promise<void> {
+    return await this._frame.uncheck(progress, params, params);
+  }
+
+  async webmcpTools(params: channels.FrameWebmcpToolsParams, progress: Progress): Promise<channels.FrameWebmcpToolsResult> {
+    return { tools: await this._frame.webmcp.tools(progress) };
+  }
+
+  async webmcpCallTool(params: channels.FrameWebmcpCallToolParams, progress: Progress): Promise<channels.FrameWebmcpCallToolResult> {
+    return { result: serializeResult(await this._frame.webmcp.callTool(progress, params.name, parseArgument(params.input))) };
+  }
+
+  async waitForTimeout(params: channels.FrameWaitForTimeoutParams, progress: Progress): Promise<void> {
+    return await this._frame.waitForTimeout(progress, params.waitTimeout);
+  }
+
+  async waitForFunction(params: channels.FrameWaitForFunctionParams, progress: Progress): Promise<channels.FrameWaitForFunctionResult> {
+    if (params.selector !== undefined) {
+      await this._frame.waitForFunctionExpressionOnElement(progress, { selector: params.selector, strict: params.strict }, params.expression, params.isFunction, parseArgument(params.arg));
+      return {};
+    }
+    const handle = await this._frame.waitForFunctionExpression(progress, params.expression, params.isFunction, parseArgument(params.arg), params);
+    return { handle: ElementHandleDispatcher.fromJSOrElementHandle(this, handle) };
+  }
+
+  async title(params: channels.FrameTitleParams, progress: Progress): Promise<channels.FrameTitleResult> {
+    return { value: await this._frame.title(progress) };
+  }
+
+  async highlight(params: channels.FrameHighlightParams, progress: Progress): Promise<void> {
+    return await progress.race(this._frame._page.highlightController.addHighlight(params.selector, { style: params.style, frame: this._frame }));
+  }
+
+  async hideHighlight(params: channels.FrameHideHighlightParams, progress: Progress): Promise<void> {
+    return await progress.race(this._frame._page.highlightController.removeHighlight(params.selector, this._frame));
+  }
+
+  async expect(params: channels.FrameExpectParams, progress: Progress): Promise<channels.FrameExpectResult> {
+    progress.log(`${renderFullTitleForCall(progress.metadata, this._frame._page.browserContext._browser.sdkLanguage())}${progress.timeout ? ` with timeout ${progress.timeout}ms` : ''}`);
+    const expectedValue = params.expectedValue ? parseArgument(params.expectedValue) : undefined;
+    try {
+      await this._frame.expect(progress, params.selector, { ...params, expectedValue });
+    } catch (e) {
+      if (e instanceof ExpectError && e.details.received && 'value' in e.details.received)
+        e.details.received.value = serializeResult(e.details.received.value);
+      throw e;
+    }
+  }
+}

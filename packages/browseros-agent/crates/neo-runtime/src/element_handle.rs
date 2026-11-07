@@ -375,9 +375,24 @@ async fn form(
             press(tab, node, &options, progress).await
         }
         ElementHandleCall::SelectOption(params) => {
-            let options = SelectOptions::from_params(frame_params(&params)?);
+            let guids = params
+                .elements
+                .iter()
+                .flatten()
+                .map(|element| element.guid.clone())
+                .collect();
+            let options = SelectOptions::from_params(frame_params(&params)?).with_elements(guids);
+            // Checked before any work, as Playwright's dispatcher checks `elements` channels
+            // (`fill::select_option`).
+            let elements = options
+                .elements
+                .iter()
+                .enumerate()
+                .map(|(index, guid)| progress.handles().select_element(index, guid))
+                .collect::<Result<Vec<_>, _>>()?;
             let action = SelectAction {
                 options: &options,
+                elements: &elements,
                 delivery: delivery(progress)?,
             };
             let values = on_element(tab, node, &action, progress).await?;

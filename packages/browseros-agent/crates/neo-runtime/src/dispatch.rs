@@ -92,6 +92,10 @@ use crate::history::{
     NeoNavigationResult, NeoNextNavigationParams, NeoReleaseNavigationParams,
     NeoWaitForNavigationParams, WaitForNavigationOptions,
 };
+use crate::init_scripts::{
+    self, CONTEXT_ADD_INIT_SCRIPT_META, DISPOSABLE_DISPOSE_META, InitRoute,
+    PAGE_ADD_INIT_SCRIPT_META,
+};
 use crate::keyboard::KeyboardTab;
 use crate::lists;
 use crate::navigate::{self, GotoOptions};
@@ -117,6 +121,10 @@ use crate::waits::{
 /// Unkept creations close their tabs when their late acknowledgements arrive.
 const RECORDS_WAIT: Duration = Duration::from_secs(1);
 
+/// Neo: how long removing the run's init scripts may take at run end, apart from
+/// [`RECORDS_WAIT`]: a session it does not reach keeps a script the next run's documents would
+/// run. Free for a run that added none.
+const PAGE_END_WAIT: Duration = Duration::from_secs(3);
 /// Neo: the budget for removing the run's highlights at its end, after [`RECORDS_WAIT`] and
 /// apart from it, so a document that does not answer delays the outcome by at most this and
 /// never holds back an input release. An overlay it cannot remove in time stays, as one in a
@@ -135,11 +143,6 @@ const MAX_CALLS_IN_FLIGHT: usize = 64;
 /// may total, for the same reason: a few calls with huge selectors would otherwise hold several
 /// copies of each outside the realm.
 const MAX_REQUEST_BYTES_IN_FLIGHT: usize = 8 * 1024 * 1024;
-
-/// Neo: `selectOption`'s `elements` (Playwright's `ElementHandle` values, matched by node identity)
-/// cannot reach Neo's injected script yet; neo-sdk refuses such values before sending
-/// (`select-option.ts`), and this refuses them on the wire.
-const ELEMENTS_UNSUPPORTED: &str = "Neo does not support ElementHandle values in selectOption yet";
 
 // Playwright implements these on its eventful client. Neo has a call/reply bridge, so its
 // Frame extensions keep the whole wait in Rust. Wire shapes live in waits.rs and neo-commands.ts.
@@ -327,6 +330,8 @@ enum ObjectKind {
     Network(NetworkObject, HopId),
     /// A run's `JSHandle` or `ElementHandle` (`evaluate.rs`), by guid.
     Handle(String),
+    /// An init script's `Disposable` (`init_scripts.rs`), by guid.
+    Disposable(String),
     /// A JavaScript dialog the run's `dialog` event handed out, by its index on the tab.
     Dialog(u64),
     /// A download the run's `download` event handed out, by the browser's guid
@@ -342,6 +347,8 @@ enum ObjectCall {
     Device(DeviceCall),
     Frame(Route),
     Network(NetworkCall),
+    /// An init script command (`init_scripts.rs`).
+    Init(InitRoute),
     Dialog(u64, DialogCall),
     Download(String, ArtifactCall),
 }
@@ -557,6 +564,9 @@ impl Dispatcher {
         // Before anything below waits: what the run holds is held by no live run from now on,
         // however its release goes (`TabInput::mark_ended`).
         self.0.tabs.mark_input_ended();
+        // The run's init scripts go first, on a budget of their own: removal never waits on a
+        // call still running, so no document loaded after the run returns runs one.
+        let _removed = time::timeout(PAGE_END_WAIT, run.init_scripts.close()).await;
         // The realm is gone with its listeners: from now on the watchers answer dialogs
         // themselves, and a dialog a listener left open gets the default answer before the
         // sessions detach (`Dialogs::left_open`).
@@ -589,8 +599,83 @@ impl Dispatcher {
     }
 }
 
+/// An init script command: `addInitScript` answers its `Disposable`, as Playwright's
+/// `{ disposable }`; `dispose` answers nothing.
+async fn init_call(
+    tabs: &Tabs,
+    target: Option<(Arc<PageEntry>, FrameScope)>,
+    route: InitRoute,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let scripts = progress.init_scripts();
+    let guid = match route {
+        InitRoute::Page(source) => {
+            let (page, _) = target.ok_or_else(PlaywrightError::target_closed)?;
+            let session = progress.race(tabs.session(&page)).await??;
+            progress
+                .race(scripts.add(tabs.cdp(), Some(&session), &source))
+                .await??
+        }
+        InitRoute::Context(source) => {
+            let guid = progress
+                .race(scripts.add(tabs.cdp(), None, &source))
+                .await??;
+            // Every page the run has a session on shows it from its next document, a reload
+            // included, not only those a later call touches.
+            for (_, session) in tabs.attached() {
+                scripts.ensure(tabs.cdp(), &session).await;
+            }
+            guid
+        }
+        InitRoute::Dispose(guid) => {
+            progress.race(scripts.dispose(&guid)).await??;
+            return Ok(Some(json!({})));
+        }
+    };
+    Ok(Some(json!({ "disposable": { "guid": guid } })))
+}
+
+/// The init script commands (`init_scripts.rs`), served by name ahead of the spec's own; the
+/// object and params back when the message is another command.
+fn route_init(
+    object: ObjectKind,
+    method: &str,
+    params: Option<Value>,
+) -> Result<Routed, (ObjectKind, Option<Value>)> {
+    match object {
+        ObjectKind::Context if method == CONTEXT_ADD_INIT_SCRIPT_META.method => Ok(Routed {
+            meta: Some(&CONTEXT_ADD_INIT_SCRIPT_META),
+            route: init_scripts::source_of(&CONTEXT_ADD_INIT_SCRIPT_META, params)
+                .map(|source| ObjectCall::Init(InitRoute::Context(source))),
+        }),
+        ObjectKind::Page if method == PAGE_ADD_INIT_SCRIPT_META.method => Ok(Routed {
+            meta: Some(&PAGE_ADD_INIT_SCRIPT_META),
+            route: init_scripts::source_of(&PAGE_ADD_INIT_SCRIPT_META, params)
+                .map(|source| ObjectCall::Init(InitRoute::Page(source))),
+        }),
+        ObjectKind::Disposable(guid) => {
+            Ok(Routed {
+                meta: Some(&DISPOSABLE_DISPOSE_META),
+                route: if method == DISPOSABLE_DISPOSE_META.method {
+                    Ok(ObjectCall::Init(InitRoute::Dispose(guid)))
+                } else {
+                    // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection.dispatch`: `Mismatching dispatcher: "${dispatcher._type}" does not implement "${method}"`
+                    Err(PlaywrightError::error(format!(
+                        "Mismatching dispatcher: \"Disposable\" does not implement \"{method}\""
+                    )))
+                },
+            })
+        }
+        object => Err((object, params)),
+    }
+}
+
 /// Names a message's target and decodes its params. Pure.
 fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
+    let (object, params) = match route_init(object, method, params) {
+        Ok(routed) => return routed,
+        Err(unrouted) => unrouted,
+    };
     let decoded = match object {
         ObjectKind::Context => BrowserContextCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Context(call)))),
@@ -642,7 +727,8 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
         ObjectKind::Download(guid) => ArtifactCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Download(guid, call)))),
-        ObjectKind::Unknown => {
+        // `route_init` answers every Disposable message.
+        ObjectKind::Disposable(_) | ObjectKind::Unknown => {
             return Routed {
                 meta: None,
                 route: Err(PlaywrightError::target_closed()),
@@ -702,20 +788,61 @@ fn route_frame_extension(method: &str, params: Option<&Value>) -> Option<Routed>
             .map(|options| ObjectCall::Frame(Route::FrameWaitForLoadState(options))),
         });
     }
-    // ElementHandleChannel is uninhabited in Neo, so reject non-empty arrays before
-    // serde tries to decode their members. Keep the method's input flag and title.
+    // The generated `ElementHandleChannel` has no values, so `elements` (Playwright's
+    // `ElementHandle` values) leaves the wire before the generated decode, as guids. Keep the
+    // method's input flag and title.
     if method == "selectOption"
-        && params
+        && let Some(elements) = params
             .and_then(|params| params.get("elements"))
             .and_then(Value::as_array)
-            .is_some_and(|elements| !elements.is_empty())
+        && !elements.is_empty()
     {
         return Some(Routed {
             meta: Some(FrameSelectOptionParams::META),
-            route: Err(PlaywrightError::error(ELEMENTS_UNSUPPORTED)),
+            route: select_option_with_elements(params, elements),
         });
     }
     None
+}
+
+/// Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection._tChannelImplFromWire`: `expected guid for ${names.toString()}`
+///
+/// `selectOption` with `elements`: each element's guid, and the rest of its params decoded as
+/// the generated `FrameCall` decodes them. The guids name handles only once the call runs
+/// (`fill::select_option`).
+fn select_option_with_elements(
+    params: Option<&Value>,
+    elements: &[Value],
+) -> Result<ObjectCall, PlaywrightError> {
+    let guids = elements
+        .iter()
+        .enumerate()
+        .map(|(index, element)| {
+            element
+                .get("guid")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    PlaywrightError::error(format!(
+                        "elements[{index}]: expected guid for ElementHandle"
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut rest = params.cloned().unwrap_or_else(|| json!({}));
+    if let Some(object) = rest.as_object_mut() {
+        object.remove("elements");
+    }
+    let call = FrameCall::decode("selectOption", Some(rest))
+        .map_err(|error| PlaywrightError::error(error.to_string()))?;
+    match route_frame_call(call)? {
+        Route::FrameSelectOption(options) => Ok(ObjectCall::Frame(Route::FrameSelectOption(
+            options.with_elements(guids),
+        ))),
+        _ => Err(PlaywrightError::error(
+            "neo-runtime: selectOption decoded as another call",
+        )),
+    }
 }
 
 /// The Neo element commands (`element_ops.rs`), or `None` for any other method.
@@ -939,7 +1066,15 @@ async fn serve_call(
     }
     let result = match (route, target) {
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
+        (ObjectCall::Init(route), target) => init_call(&tabs, target, route, &progress).await,
         (ObjectCall::Page(call), Some((page, _))) => {
+            // A page call that navigates (`reload`, `goBack`, …) shows the run's scripts first,
+            // as a Frame call does.
+            if progress.init_scripts().has_scripts()
+                && let Ok(Ok(session)) = progress.race(tabs.session(&page)).await
+            {
+                progress.init_scripts().ensure(tabs.cdp(), &session).await;
+            }
             tab_calls::page(&tabs, &page, call, &progress).await
         }
         (ObjectCall::Frame(route), Some((page, scope))) => {
@@ -952,6 +1087,8 @@ async fn serve_call(
             };
             match session {
                 Ok(page) => {
+                    // A page the run's init scripts have not reached yet gets them first.
+                    progress.init_scripts().ensure(tabs.cdp(), &page).await;
                     // A page attached just now may have started a context subscription's
                     // enable; the call waits for that too.
                     if reply.events.enabling(page_id(&page))
@@ -1428,6 +1565,8 @@ async fn serve_route<T: FormTab + KeyboardTab>(
 fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
     if guid == "context@default" {
         ObjectKind::Context
+    } else if guid.starts_with(init_scripts::DISPOSABLE_PREFIX) {
+        ObjectKind::Disposable(guid.to_owned())
     } else if let Some(download) = guid.strip_prefix(downloads::DOWNLOAD_PREFIX) {
         ObjectKind::Download(download.to_owned())
     } else if !resolved {
@@ -1751,6 +1890,7 @@ mod tests {
             | ObjectCall::Page(_)
             | ObjectCall::Device(_)
             | ObjectCall::Network(_)
+            | ObjectCall::Init(_)
             | ObjectCall::Dialog(..)
             | ObjectCall::Download(..) => {
                 panic!("a Frame message routed to another object")
@@ -1935,16 +2075,28 @@ mod tests {
                 "{error:?}"
             );
         }
+        // `elements` (Playwright's ElementHandle values) leave the wire as guids, the rest
+        // decodes as usual; a member that is no channel is refused as Playwright's dispatcher
+        // refuses it.
         let mut params = forms_params("selectOption", "select");
-        params["elements"] = json!([{ "guid": "element@1" }]);
+        params["elements"] = json!([{ "guid": "handle@1" }, { "guid": "handle@2" }]);
         let routed = route_frame("selectOption", params);
         assert_eq!(
             routed.meta.and_then(|meta| meta.title),
             Some("Select option")
         );
+        match frame_route(routed.route).expect("routed") {
+            Route::FrameSelectOption(options) => {
+                assert_eq!(options.elements, ["handle@1", "handle@2"]);
+                assert_eq!(options.selector, "select");
+            }
+            _ => panic!("not a selectOption"),
+        }
+        let mut params = forms_params("selectOption", "select");
+        params["elements"] = json!([{ "guid": "handle@1" }, "two"]);
         assert_eq!(
-            error_of(routed),
-            PlaywrightError::error(ELEMENTS_UNSUPPORTED)
+            error_of(route_frame("selectOption", params)),
+            PlaywrightError::error("elements[1]: expected guid for ElementHandle")
         );
     }
 
