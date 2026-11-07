@@ -294,6 +294,11 @@ function verifyWaitState(
 
 export type FillOptions = Omit<FrameFillParams, 'selector' | 'value'> & {
   timeout?: number
+  /**
+   * This option has no effect.
+   * @deprecated This option has no effect.
+   */
+  noWaitAfter?: boolean
 }
 export type PressOptions = Omit<FramePressParams, 'selector' | 'key'> & {
   timeout?: number
@@ -326,14 +331,31 @@ export type IsEditableOptions = Omit<FrameIsEditableParams, 'selector'> & {
 }
 export type CheckOptions = Omit<FrameCheckParams, 'selector'> & {
   timeout?: number
+  /**
+   * This option has no effect.
+   * @deprecated This option has no effect.
+   */
+  noWaitAfter?: boolean
 }
 export type UncheckOptions = Omit<FrameUncheckParams, 'selector'> & {
   timeout?: number
+  /**
+   * This option has no effect.
+   * @deprecated This option has no effect.
+   */
+  noWaitAfter?: boolean
 }
 export type SelectOptionOptions = Omit<
   FrameSelectOptionParams,
   'selector' | 'elements' | 'options'
-> & { timeout?: number }
+> & {
+  timeout?: number
+  /**
+   * This option has no effect.
+   * @deprecated This option has no effect.
+   */
+  noWaitAfter?: boolean
+}
 
 /** `focus`'s and `blur`'s options as a script passes them. */
 export type FocusOptions = Omit<FrameFocusParams, 'selector'> & {
