@@ -115,7 +115,10 @@ pub(crate) struct WaitForSelectorOptions {
 }
 
 impl WaitForSelectorOptions {
-    /// Playwright: `server/dispatchers/frameDispatcher.ts` `FrameDispatcher.waitForSelector`: `await this._frame.waitForSelector(progress, params, true, params)`
+    /// A served wait, which Playwright's dispatcher sends with `performActionPreChecksAndLog`
+    /// set, so its attempts run the pre-checks.
+    ///
+    /// Playwright: `server/frames.ts` `Frame.waitForSelector`: `if (performActionPreChecksAndLog)`
     pub(crate) fn from_params(params: FrameWaitForSelectorParams) -> Self {
         Self {
             selector: params.selector,

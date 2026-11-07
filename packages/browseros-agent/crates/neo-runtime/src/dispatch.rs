@@ -504,12 +504,8 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             if let Some(routed) = route_navigation_wait(method, params.as_ref()) {
                 return routed;
             }
-            // Its result requires an `ElementHandle`, which the generated spec cannot create.
-            if method == frame_element::FRAME_ELEMENT_META.method {
-                return Routed {
-                    meta: Some(&frame_element::FRAME_ELEMENT_META),
-                    route: Ok(ObjectCall::Frame(Route::FrameFrameElement)),
-                };
+            if let Some(routed) = route_frame_element(method) {
+                return routed;
             }
             if let Some((meta, call)) = evaluate::route_frame(method, params.as_ref()) {
                 return Routed {
@@ -1117,6 +1113,15 @@ pub(crate) fn encode_result<C: Command>(result: &C::Result) -> Result<Option<Val
     }
     serde_json::to_value(result).map(Some).map_err(|error| {
         PlaywrightError::error(format!("encoding {} result: {error}", C::META.method)).into()
+    })
+}
+
+/// `Frame.frameElement`, routed by hand: its result requires an `ElementHandle`, which the
+/// generated spec cannot create (`frame_element.rs`).
+fn route_frame_element(method: &str) -> Option<Routed> {
+    (method == frame_element::FRAME_ELEMENT_META.method).then(|| Routed {
+        meta: Some(&frame_element::FRAME_ELEMENT_META),
+        route: Ok(ObjectCall::Frame(Route::FrameFrameElement)),
     })
 }
 

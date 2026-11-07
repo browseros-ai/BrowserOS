@@ -1262,13 +1262,13 @@ export class Frame {
    * detached.". Sent with no timeout, as Playwright's (`kNoTimeout`).
    */
   async frameElement(): Promise<ElementHandle> {
-    const result = (await this._connection.send(
+    const result = await this._connection.sendNeo(
       'frame.frameElement',
       this._guid,
       'frameElement',
       {},
       0,
-    )) as { element?: CreatedHandle } | undefined
+    )
     // Playwright: `client/frame.ts` `Frame.frameElement`: `return ElementHandle.from((await this._channel.frameElement({}, kNoTimeout)).element);`
     const element = ElementHandle.fromNullable(
       this._connection,

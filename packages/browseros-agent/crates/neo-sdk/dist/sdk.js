@@ -5338,7 +5338,7 @@ class Frame {
     return await this._waitForSelectorElement(apiName, selector, options);
   }
   async frameElement() {
-    const result = await this._connection.send("frame.frameElement", this._guid, "frameElement", {}, 0);
+    const result = await this._connection.sendNeo("frame.frameElement", this._guid, "frameElement", {}, 0);
     const element = ElementHandle.fromNullable(this._connection, result?.element);
     if (!element)
       throw new Error("neo-sdk: frameElement answered no element");

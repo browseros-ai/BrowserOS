@@ -173,7 +173,7 @@ pub(crate) async fn checkpoint(tab: &FrameTab, progress: &Progress) -> Result<()
         scope: FrameScope::Main,
     };
     for mut handler in due {
-        let visible = states::is_visible(
+        let visible = states::is_visible_internal(
             &main,
             &StateOptions::new(handler.selector.clone(), Some(true)),
             progress,

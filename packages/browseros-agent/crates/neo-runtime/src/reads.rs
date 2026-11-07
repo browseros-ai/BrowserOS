@@ -16,6 +16,8 @@
 //!   │   matched → log "  locator resolved to <preview>" → {value} (missing attribute → {})
 //!   │   nothing matched, or NotConnected → poll again
 //!   │   Threw (strict mode violation) or Contract → Error with the page's message; Closed → closed
+//!  locator aria_snapshot (default mode)   retry_on_selector: the same loop, each attempt first
+//!   running the page's action pre-checks after prepare (`_retryWithProgressIfNotConnected`)
 //!  aria_snapshot(tab, options, progress)               no call log at all
 //!   waits 0,1000,2000,4000,8000…  (never capped by the timeout; the last repeats)
 //!   │ prepare → glue ariaSnapshot {selector: 'body,frameset', strict: false, mode, depth, boxes}
@@ -60,7 +62,7 @@
 //! News, Wikipedia and MDN pages measured 11 to 16 levels).
 
 use std::collections::HashMap;
-use std::future::Future;
+use std::future::{self, Future};
 use std::time::Duration;
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -114,6 +116,16 @@ pub(crate) trait SelectorTab: Send + Sync {
         &self,
         selector: &str,
     ) -> impl Future<Output = Result<SelectorFacts, PageError>> + Send;
+
+    /// Playwright's `performActionPreChecks`, which a read over `_retryWithProgressIfNotConnected`
+    /// (the default-mode locator snapshot) runs before each attempt; none on a tab without them.
+    fn action_pre_checks(
+        &self,
+        progress: &Progress,
+    ) -> impl Future<Output = Result<(), click::Stop>> + Send {
+        let _ = progress;
+        future::ready(Ok(()))
+    }
 }
 
 /// The page reads, one glue call each.
@@ -368,6 +380,41 @@ pub(crate) async fn wait_for_function_on_selector<T, R, F, Fut>(
     tab: &T,
     selector: &str,
     progress: &Progress,
+    evaluate: F,
+) -> Result<R, CallError>
+where
+    T: SelectorTab,
+    F: FnMut() -> Fut + Send,
+    Fut: Future<Output = Result<Option<Matched<R>>, PageError>> + Send,
+{
+    poll_selector(tab, selector, progress, false, evaluate).await
+}
+
+/// Playwright's `_retryWithProgressIfNotConnected` for a read (the default-mode locator snapshot):
+/// [`wait_for_function_on_selector`]'s loop, each attempt first running the page's action
+/// pre-checks (a pending main-frame navigation is waited out) once the tab is prepared.
+///
+/// Playwright: `server/frames.ts` `Frame._retryWithProgressIfNotConnected`: `await this._page.performActionPreChecks(progress);`
+pub(crate) async fn retry_on_selector<T, R, F, Fut>(
+    tab: &T,
+    selector: &str,
+    progress: &Progress,
+    evaluate: F,
+) -> Result<R, CallError>
+where
+    T: SelectorTab,
+    F: FnMut() -> Fut + Send,
+    Fut: Future<Output = Result<Option<Matched<R>>, PageError>> + Send,
+{
+    poll_selector(tab, selector, progress, true, evaluate).await
+}
+
+/// The loop of [`wait_for_function_on_selector`] and [`retry_on_selector`].
+async fn poll_selector<T, R, F, Fut>(
+    tab: &T,
+    selector: &str,
+    progress: &Progress,
+    pre_checks: bool,
     mut evaluate: F,
 ) -> Result<R, CallError>
 where
@@ -385,7 +432,16 @@ where
         if !wait.is_zero() {
             progress.wait(wait).await?;
         }
-        match read_once(tab, selector, progress, &mut named, &mut evaluate).await {
+        match read_once(
+            tab,
+            selector,
+            progress,
+            pre_checks,
+            &mut named,
+            &mut evaluate,
+        )
+        .await
+        {
             Ok(Some(value)) => return Ok(value),
             Ok(None) | Err(Stop::Again) => {}
             Err(Stop::End(error)) => return Err(error),
@@ -398,6 +454,7 @@ async fn read_once<T, R, F, Fut>(
     tab: &T,
     selector: &str,
     progress: &Progress,
+    pre_checks: bool,
     named: &mut bool,
     evaluate: &mut F,
 ) -> Result<Option<R>, Stop>
@@ -407,6 +464,14 @@ where
     Fut: Future<Output = Result<Option<Matched<R>>, PageError>> + Send,
 {
     progress.race(tab.prepare()).await??;
+    if pre_checks {
+        tab.action_pre_checks(progress)
+            .await
+            .map_err(|stop| match stop {
+                click::Stop::Retry => Stop::Again,
+                click::Stop::End(error) => Stop::End(error),
+            })?;
+    }
     if !*named {
         let facts = progress.race(tab.describe(selector)).await??;
         progress.name_locator(&facts.locator);
@@ -488,7 +553,7 @@ async fn locator_aria_snapshot<T: ReadTab>(
     if options.mode == AriaSnapshotMode::Ai {
         return locator_ai_snapshot(tab, &params, options, progress).await;
     }
-    let snapshot = wait_for_function_on_selector(tab, selector, progress, || async {
+    let snapshot = retry_on_selector(tab, selector, progress, || async {
         let result = tab.aria_snapshot(&params, false).await?.result;
         let Some(value) = result.snapshot else {
             return Ok(None);
@@ -828,6 +893,10 @@ impl SelectorTab for FrameTab {
         selector: &str,
     ) -> impl Future<Output = Result<SelectorFacts, PageError>> + Send {
         click::Tab::describe(self, selector)
+    }
+
+    async fn action_pre_checks(&self, progress: &Progress) -> Result<(), click::Stop> {
+        click::wait_out_pending_navigation(self, progress).await
     }
 }
 

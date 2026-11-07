@@ -7,12 +7,14 @@
 // kind are compared, never the wording.
 //
 // From Playwright's specs at the pin (tests/page/page-add-locator-handler.spec.ts at 26137face):
-// 'LH-001 should work', 'LH-004 should not work with force:true', 'LH-005 should throw when
+// 'LH-001 should work', 'LH-003 should work with locator.hover()' (Playwright skips it headed; the
+// parity browser is headless), 'LH-004 should not work with force:true', 'LH-005 should throw when
 // handler times out', 'LH-007 should work with locator.waitFor' (with page.waitForSelector, which
-// runs the same pre-checks), 'LH-009 should work when owner frame detaches', 'LH-010 should
-// work with times: option', 'LH-011 should wait for hidden by default', 'LH-012 should wait for
-// hidden by default 2', 'LH-013 should work with noWaitAfter' and 'LH-014 should
-// removeLocatorHandler'.
+// runs the same pre-checks), 'LH-009 should work when owner frame detaches', 'LH-010 should work
+// with times: option', 'LH-011 should wait for hidden by default', 'LH-012 should wait for hidden
+// by default 2', 'LH-013 should work with noWaitAfter' and 'LH-014 should removeLocatorHandler'.
+// The locator snapshot case follows Playwright's loop A, whose attempts run the same pre-checks
+// (server/frames.ts _retryWithProgressIfNotConnected).
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
@@ -94,6 +96,29 @@ pinned(
   return { forced, visible: await page.locator('#interstitial').isVisible(), clicked: typeof (await page.evaluate(() => window.clicked)) }`,
   // A run's value crosses as JSON, which keeps no `undefined` member: its type does.
   { forced: 0, visible: true, clicked: 'undefined' },
+)
+
+pinned(
+  'locator.hover runs the handler first (LH-003; the parity browser is headless)',
+  `await page.addLocatorHandler(page.getByText('This interstitial covers the button'), async () => { await page.locator('#close').click() })
+  await page.locator('#aside').hover()
+  await page.evaluate(() => window.setupAnnoyingInterstitial('pointerover', 1, 'capture'))
+  await page.locator('#target').hover()
+  return {
+    visible: await page.locator('#interstitial').isVisible(),
+    background: await page.$eval('#target', (e) => window.getComputedStyle(e).backgroundColor),
+  }`,
+  { visible: false, background: 'rgb(255, 255, 0)' },
+)
+
+pinned(
+  "a locator snapshot runs the handler first, as Playwright's loop A pre-checks do",
+  `let handled = 0
+  await page.addLocatorHandler(page.getByText('This interstitial covers the button'), async () => { handled++; await page.locator('#close').click() })
+  await page.evaluate(() => window.setupAnnoyingInterstitial('none', 1))
+  const snapshot = await page.locator('#target').ariaSnapshot()
+  return { handled, visible: await page.locator('#interstitial').isVisible(), snapshot }`,
+  { handled: 1, visible: false, snapshot: '- button "Click me"' },
 )
 
 pinned(
