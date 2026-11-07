@@ -10,8 +10,10 @@ use neo_runtime_spec::serve::{FrameFillParams, FrameInputValueParams, FrameSelec
 use crate::click::{
     self, ActionResult, ElementAction, LoopAWaits, NotReady, PageError, PressReport, Stop, Tab,
 };
+use crate::evaluate::HandleEntry;
 use crate::forms::{FillOutcome, FormTab, SelectOption, SelectOutcome};
-use crate::keyboard::{self, KeyEvent, KeyboardTab, Platform};
+use crate::input_devices::{Devices, Plan};
+use crate::keyboard::{self, KeyboardTab, Platform};
 use crate::progress::{CallError, DeliveryCell, InputTicket, PlaywrightError, Progress};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,15 +39,22 @@ impl FillOptions {
 pub(crate) struct SelectOptions {
     pub(crate) selector: String,
     pub(crate) strict: bool,
+    /// Playwright's `elements`: the guids of the `ElementHandle` values, matched by node
+    /// identity before `options` (`dom.ts` `_selectOption`).
+    pub(crate) elements: Vec<String>,
     pub(crate) options: Vec<SelectOption>,
     pub(crate) force: bool,
 }
 
 impl SelectOptions {
+    /// The generated params never carry `elements`: `dispatch.rs` takes them out of the wire
+    /// first (their channel type has no values) and hands their guids to
+    /// [`SelectOptions::with_elements`].
     pub(crate) fn from_params(params: FrameSelectOptionParams) -> Self {
         Self {
             selector: params.selector,
             strict: params.strict.unwrap_or(false),
+            elements: Vec::new(),
             options: params
                 .options
                 .unwrap_or_default()
@@ -59,6 +68,11 @@ impl SelectOptions {
                 .collect(),
             force: params.force.unwrap_or(false),
         }
+    }
+
+    /// These options with `ElementHandle` values, by guid.
+    pub(crate) fn with_elements(self, elements: Vec<String>) -> Self {
+        Self { elements, ..self }
     }
 }
 
@@ -104,13 +118,24 @@ pub(crate) async fn select_option<T: FormTab>(
     progress: &Progress,
 ) -> Result<Vec<String>, CallError> {
     let delivery = delivery(progress)?;
+    // Checked before any work, as Playwright's dispatcher checks `elements` channels.
+    let elements = options
+        .elements
+        .iter()
+        .enumerate()
+        .map(|(index, guid)| progress.handles().select_element(index, guid))
+        .collect::<Result<Vec<_>, _>>()?;
     click::retry_with_progress_if_not_connected(
         tab,
         &options.selector,
         options.strict,
         options.force,
         progress,
-        &SelectAction { options, delivery },
+        &SelectAction {
+            options,
+            elements: &elements,
+            delivery,
+        },
     )
     .await
 }
@@ -180,17 +205,15 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for FillAction<'_> {
             if !options.force {
                 progress.log("  waiting for element to be visible, enabled and editable");
             }
-            let events = if options.value.is_empty() {
+            // An empty value is a press of Delete, planned under the turn from the tab's keyboard.
+            let delete = if options.value.is_empty() {
                 let platform = if let Some(platform) = self.platform.get() {
                     *platform
                 } else {
                     let platform = progress.race(tab.platform()).await??;
                     *self.platform.get_or_init(|| platform)
                 };
-                Some(
-                    keyboard::plan_press("Delete", platform)
-                        .map_err(|error| PlaywrightError::error(error.to_string()))?,
-                )
+                Some(platform)
             } else {
                 None
             };
@@ -213,7 +236,7 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for FillAction<'_> {
                 FillOutcome::NotConnected => return Ok(ActionResult::NotConnected),
                 FillOutcome::Missing(state) => log_missing(progress, state),
                 FillOutcome::NeedsInput(ticket) => {
-                    write_fill_input(tab, &options.value, events, input, ticket, progress).await?;
+                    write_fill_input(tab, &options.value, delete, input, ticket, progress).await?;
                     return Ok(ActionResult::Done(()));
                 }
             }
@@ -223,27 +246,30 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for FillAction<'_> {
 
 /// The page has focused and selected the target under this turn. The original ticket moves
 /// into the detached writer, which retains delivery truth even if this call stops waiting.
+/// `delete` (the browser's platform) presses Delete for an empty value; any other value is one
+/// `Input.insertText`. Both are planned from the tab's devices under the turn.
 async fn write_fill_input<T: KeyboardTab>(
     tab: &T,
     value: &str,
-    events: Option<Vec<KeyEvent>>,
+    delete: Option<Platform>,
     input: T::Input,
     ticket: InputTicket,
     progress: &Progress,
 ) -> Result<(), Stop> {
-    if let Err(error) = progress.check() {
-        // needsinput proves the page did not fill the value. Until a writer takes the
-        // ticket, failed preparation or cancellation proves no input was sent.
-        ticket.unsent();
-        return Err(error.into());
-    }
-    let report = if let Some(events) = events {
-        progress
-            .race(tab.write_keys(events, None, ticket, input))
-            .await?
-    } else {
-        progress.race(tab.insert_text(value, ticket, input)).await?
+    let planned = progress
+        .check()
+        .map_err(Stop::from)
+        .and_then(|()| plan_fill_input(value, delete, &input).map_err(Stop::from));
+    let plan = match planned {
+        Ok(plan) => plan,
+        Err(error) => {
+            // needsinput proves the page did not fill the value. Until a writer takes the
+            // ticket, failed preparation or cancellation proves no input was sent.
+            ticket.unsent();
+            return Err(error);
+        }
     };
+    let report = progress.race(tab.write(plan, ticket, input)).await?;
     match report {
         PressReport::Acked(acked) => acked.delivered(),
         PressReport::NothingWritten | PressReport::Failed { closed: true, .. } => {
@@ -259,8 +285,37 @@ async fn write_fill_input<T: KeyboardTab>(
     Ok(())
 }
 
+/// Fill's typing as a plan: Playwright's `keyboard.press('Delete')` for an empty value, else
+/// `keyboard.insertText(value)`.
+fn plan_fill_input<D: Devices>(
+    value: &str,
+    delete: Option<Platform>,
+    input: &D,
+) -> Result<Plan, PageError> {
+    let mut simulated = input.snapshot()?;
+    let mut plan = Plan::default();
+    match delete {
+        Some(platform) => {
+            keyboard::plan_press(
+                &mut plan,
+                &mut simulated,
+                "Delete",
+                platform,
+                &input.owner(),
+                None,
+            )
+            .map_err(|unknown| PageError::Contract(unknown.to_string()))?;
+        }
+        None => {
+            keyboard::plan_insert_text(&mut plan, &mut simulated, value);
+        }
+    }
+    Ok(plan)
+}
+
 struct SelectAction<'a> {
     options: &'a SelectOptions,
+    elements: &'a [Arc<HandleEntry>],
     delivery: &'a Arc<DeliveryCell>,
 }
 
@@ -284,7 +339,14 @@ impl<T: FormTab> ElementAction<T> for SelectAction<'_> {
             progress.check()?;
             let ticket = self.delivery.begin().map_err(|_| input_already_sent())?;
             let outcome = progress
-                .race(tab.select_options(element, &options.options, options.force, input, ticket))
+                .race(tab.select_options(
+                    element,
+                    &options.options,
+                    self.elements,
+                    options.force,
+                    input,
+                    ticket,
+                ))
                 .await?
                 .map_err(mutation_error)?;
             match outcome {
@@ -297,6 +359,13 @@ impl<T: FormTab> ElementAction<T> for SelectAction<'_> {
                 SelectOutcome::OptionsNotFound => progress.log("  did not find some options"),
                 SelectOutcome::OptionNotEnabled => {
                     progress.log("  option being selected is not enabled");
+                }
+                SelectOutcome::Unadoptable => {
+                    // Playwright: `server/dom.ts` `kUnableToAdoptErrorMessage`: `Unable to adopt element handle from a different document`
+                    return Err(PlaywrightError::error(
+                        "Unable to adopt element handle from a different document",
+                    )
+                    .into());
                 }
             }
         }
@@ -635,6 +704,7 @@ mod tests {
         let tab = FakeTab::ready();
         let progress = Progress::for_test(1000.0);
         let options = SelectOptions {
+            elements: Vec::new(),
             selector: "select".into(),
             strict: true,
             options: vec![],
@@ -706,11 +776,32 @@ mod tests {
 
     fn select_options() -> SelectOptions {
         SelectOptions {
+            elements: Vec::new(),
             selector: "select".into(),
             strict: true,
             options: vec![],
             force: false,
         }
+    }
+
+    /// An `ElementHandle` value whose guid names no handle of the run (a disposed one) fails
+    /// before any page work, with Playwright's dispatcher message for the channel.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_an_unknown_element_value_fails_before_any_page_work() {
+        let tab = FakeTab::ready();
+        let progress = Progress::for_test(1000.0);
+        let options = select_options().with_elements(vec!["handle@gone".into()]);
+        assert_eq!(
+            select_option(&tab, &options, &progress).await,
+            Err(CallError::Playwright(PlaywrightError::error(
+                "elements[0]: no object with guid handle@gone"
+            )))
+        );
+        assert_eq!(tab.count("select_options"), 0);
+        assert_eq!(
+            progress.delivery().expect("input").delivery(),
+            Delivery::NotSent
+        );
     }
 
     fn is_error(result: &Result<(), CallError>, name: ErrorName) {

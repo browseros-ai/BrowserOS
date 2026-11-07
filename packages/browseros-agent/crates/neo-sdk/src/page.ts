@@ -1,15 +1,23 @@
 import type {
   LifecycleEvent,
   PageCloseParams,
+  PageCommands,
   PageConsoleMessagesParams,
   PageGoBackParams,
   PageGoForwardParams,
   PagePageErrorsParams,
+  PageRegisterLocatorHandlerParams,
+  PageRegisterLocatorHandlerResult,
   PageReloadParams,
+  PageResolveLocatorHandlerNoReplyParams,
+  PageUnregisterLocatorHandlerParams,
   ResponseChannel,
 } from '@browseros/neo-runtime-spec/serve'
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
-import { isString } from '../vendor/playwright/isomorphic/stringUtils'
+import {
+  isString,
+  trimStringWithEllipsis,
+} from '../vendor/playwright/isomorphic/stringUtils'
 import {
   BindingCall,
   type BindingCallback,
@@ -25,12 +33,18 @@ import {
   targetClosedError,
 } from './errors'
 import { ChannelOwner, type EventTable } from './events'
+import { FileChooser } from './file-chooser'
 import {
+  type AriaSnapshotJSON,
   type AriaSnapshotOptions,
   type CheckOptions,
   type ClickOptions,
+  type ContentOptions,
   type DblclickOptions,
+  type DispatchEventOptions,
+  type DragAndDropOptions,
   type FillOptions,
+  type FocusOptions,
   Frame,
   type GetAttributeOptions,
   type GotoOptions,
@@ -47,19 +61,23 @@ import {
   type NavigationURLMatch,
   type PressOptions,
   type SelectOptionOptions,
+  type SetContentOptions,
   type TagOptions,
   type TapOptions,
   type TextContentOptions,
+  type TypeOptions,
   type UncheckOptions,
   type URLMatch,
   verifyLoadState,
   type WaitForFunctionOptions,
   type WaitForLoadStateOptions,
   type WaitForNavigationOptions,
+  type WaitForSelectorOptions,
   type WaitForURLOptions,
 } from './frame'
 import type { FrameLocator } from './frame-locator'
 import { Disposable, evaluationScript, type InitScript } from './init-script'
+import { Keyboard, Mouse, Touchscreen } from './input'
 import {
   assertEvaluateOptions,
   assertMaxArguments,
@@ -70,20 +88,28 @@ import {
   type PageFunctionOn,
 } from './js-handle'
 import type { Locator, LocatorOptions } from './locator'
-import { serializeUrlMatch } from './neo-commands'
-import { type Response, responseFor } from './network'
+import { isRegExp, serializeUrlMatch } from './neo-commands'
+import {
+  networkObject,
+  type Request,
+  type Response,
+  responseFor,
+} from './network'
 import {
   PAGE_CLOSE_KEYS,
   PAGE_CONSOLE_MESSAGES_KEYS,
   PAGE_GO_BACK_KEYS,
   PAGE_GO_FORWARD_KEYS,
   PAGE_PAGE_ERRORS_KEYS,
+  PAGE_REGISTER_LOCATOR_HANDLER_KEYS,
   PAGE_RELOAD_KEYS,
+  PAGE_RESOLVE_LOCATOR_HANDLER_KEYS,
+  PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS,
   pickParams,
 } from './protocol'
 import { type CreatedFrame, get, matchesURL } from './runtime-bridge'
 import type { SelectOptionValues } from './select-option'
-import { TimeoutSettings } from './timeout-settings'
+import { type TimeoutInput, TimeoutSettings } from './timeout-settings'
 import { Waiter, type WaitForEventOptions, wrapApiCall } from './waiter'
 
 /**
@@ -105,18 +131,27 @@ const PAGE_EVENTS: EventTable = {
     'framedetached',
     'framenavigated',
     'popup',
-  ],
-  quiet: [],
-  unserved: [
-    'download',
     'filechooser',
+    'download',
     'request',
     'response',
     'requestfailed',
     'requestfinished',
-    'websocket',
-    'worker',
   ],
+  quiet: [],
+  unserved: ['websocket', 'worker'],
+}
+
+/** `waitForRequest` and `waitForResponse`'s options: Playwright's `TimeoutOptions`; the Waiter
+ * honours `signal` (`_waitForEvent`). */
+export type WaitForNetworkOptions = TimeoutInput
+
+/** Playwright: `client/page.ts` `trimUrl` */
+function trimUrl(param: unknown): string | undefined {
+  if (isRegExp(param))
+    return `/${trimStringWithEllipsis(param.source, 50)}/${param.flags}`
+  if (isString(param)) return `"${trimStringWithEllipsis(param, 50)}"`
+  return undefined
 }
 
 /** A frame event's params from Rust (`frame_events.rs`): the frame's record, and for a
@@ -171,6 +206,10 @@ export class Page extends ChannelOwner {
   /** Stable identity, including detached frames a script may still hold. */
   readonly #frames = new Map<string, Frame>()
   readonly _timeoutSettings: TimeoutSettings
+  /** Playwright's `page.keyboard`, `page.mouse` and `page.touchscreen`, one each per page. */
+  readonly keyboard: Keyboard
+  readonly mouse: Mouse
+  readonly touchscreen: Touchscreen
   /** Set when this page's `close` ran (`_onClose`): what Playwright's client flips then. */
   #closedLocally = false
   /** Playwright's `_closeReason`: what `close({ reason })` was given. */
@@ -198,6 +237,18 @@ export class Page extends ChannelOwner {
       name: '',
     })
     this.#frames.set(mainFrameGuid, this.#mainFrame)
+    this.keyboard = new Keyboard(this)
+    this.mouse = new Mouse(this)
+    this.touchscreen = new Touchscreen(this)
+  }
+
+  /** Sends a device command to this page's tab, with no timeout (Playwright's `kNoTimeout`). */
+  async _sendInput<M extends keyof PageCommands>(
+    apiName: ApiName,
+    method: M,
+    params: PageCommands[M]['params'],
+  ): Promise<void> {
+    await this.#connection.sendPage(apiName, this.#guid, method, params, 0)
   }
 
   url(): string {
@@ -295,6 +346,21 @@ export class Page extends ChannelOwner {
       this.#onFrameNavigated(params as FrameEventParams)
     else if (method === 'bindingCall')
       void this._onBinding((params as { binding: BindingCallRecord }).binding)
+    else if (method === 'locatorHandlerTriggered')
+      this.#onLocatorHandlerTriggered((params as { uid: number }).uid).catch(
+        (error) => this.#context._pipe.report(error),
+      )
+    else if (method === 'fileChooser') {
+      // Playwright: `client/page.ts` `Page.constructor`: `this._channel.on('fileChooser', ({ element, isMultiple }) => this.emit(Events.Page.FileChooser, new FileChooser(this, ElementHandle.from(element), isMultiple)));`
+      const { chooser, isMultiple } = params as {
+        chooser: string
+        isMultiple: boolean
+      }
+      this.emit(
+        'filechooser',
+        new FileChooser(this, chooser, isMultiple, this.#connection),
+      )
+    }
   }
 
   /** Playwright: `client/page.ts` `Page._onBinding`: `await this._browserContext._onBinding(bindingCall);` */
@@ -312,20 +378,114 @@ export class Page extends ChannelOwner {
     await this.#context._onBinding(call)
   }
 
-  /**
-   * The frame a binding call came from: the frame object this page already has for `guid`, the
-   * one it held when that frame detached included, as Playwright's client resolves the call's
-   * frame channel to its object. A frame the page never handed out gets its object now.
-   *
-   * Playwright: `server/page.ts` `PageBinding.dispatch`: `const result = await binding.playwrightFunction({ frame: context.frame, page, context: page.browserContext }, ...args);`
-   */
-  _frameForGuid(guid: string): Frame {
-    let frame = this.#frames.get(guid)
-    if (!frame) {
-      frame = new Frame(guid, this, this.#connection)
-      this.#frames.set(guid, frame)
+  /** Playwright: `client/page.ts` `Page._locatorHandlers` */
+  readonly #locatorHandlers = new Map<
+    number,
+    {
+      locator: Locator
+      handler: (locator: Locator) => unknown
+      times: number | undefined
     }
-    return frame
+  >()
+
+  /**
+   * Runs `handler(locator)` whenever an action is about to act while `locator` is visible (a
+   * cookie banner, a popup), then lets the action go on once it hid, unless `noWaitAfter`, at
+   * most `times` times. Sent with no timeout, as Playwright's (`kNoTimeout`).
+   */
+  async addLocatorHandler(
+    locator: Locator,
+    handler: (locator: Locator) => unknown,
+    options: { times?: number; noWaitAfter?: boolean } = {},
+  ): Promise<void> {
+    if (locator._frame !== this.#mainFrame)
+      throw new Error('Locator must belong to the main frame of this page')
+    if (options.times === 0) return
+    // Subscribed before the handler exists, so its first trigger always reaches the realm, and
+    // kept while its registration is pending, so a concurrent removal of the last other handler
+    // cannot unsubscribe it.
+    this.#pendingLocatorHandlers++
+    this.#syncLocatorHandlerSubscription()
+    try {
+      const { uid } = (await this.#connection.sendPage(
+        'page.addLocatorHandler',
+        this.#guid,
+        'registerLocatorHandler',
+        pickParams(PAGE_REGISTER_LOCATOR_HANDLER_KEYS, {
+          selector: locator._selector,
+          noWaitAfter: options.noWaitAfter,
+        }) as PageRegisterLocatorHandlerParams,
+        0,
+      )) as PageRegisterLocatorHandlerResult
+      this.#locatorHandlers.set(uid, { locator, handler, times: options.times })
+    } finally {
+      this.#pendingLocatorHandlers--
+      this.#syncLocatorHandlerSubscription()
+    }
+  }
+
+  /** Registrations sent and not yet answered. */
+  #pendingLocatorHandlers = 0
+  #locatorHandlerSubscribed = false
+
+  /** Neo: the page listens for `locatorHandlerTriggered` while it holds or registers a handler. */
+  #syncLocatorHandlerSubscription(): void {
+    const wanted = this.#locatorHandlers.size + this.#pendingLocatorHandlers > 0
+    if (wanted === this.#locatorHandlerSubscribed) return
+    this.#locatorHandlerSubscribed = wanted
+    this._subscribeChannelEvent('locatorHandlerTriggered', wanted)
+  }
+
+  /** Playwright: `client/page.ts` `Page._onLocatorHandlerTriggered` */
+  async #onLocatorHandlerTriggered(uid: number): Promise<void> {
+    let remove = false
+    try {
+      const handler = this.#locatorHandlers.get(uid)
+      if (handler && handler.times !== 0) {
+        if (handler.times !== undefined) handler.times--
+        await handler.handler(handler.locator)
+      }
+      remove = handler?.times === 0
+    } finally {
+      if (remove) this.#dropLocatorHandler(uid)
+      this.#connection
+        .sendPage(
+          'page.addLocatorHandler',
+          this.#guid,
+          'resolveLocatorHandlerNoReply',
+          pickParams(PAGE_RESOLVE_LOCATOR_HANDLER_KEYS, {
+            uid,
+            remove,
+          }) as PageResolveLocatorHandlerNoReplyParams,
+          0,
+        )
+        .catch(() => {})
+    }
+  }
+
+  /** Removes every handler of `locator` (same frame and selector), as Playwright's. */
+  async removeLocatorHandler(locator: Locator): Promise<void> {
+    for (const [uid, data] of this.#locatorHandlers) {
+      if (data.locator._equals(locator)) {
+        this.#dropLocatorHandler(uid)
+        await this.#connection
+          .sendPage(
+            'page.removeLocatorHandler',
+            this.#guid,
+            'unregisterLocatorHandler',
+            pickParams(PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS, {
+              uid,
+            }) as PageUnregisterLocatorHandlerParams,
+            0,
+          )
+          .catch(() => {})
+      }
+    }
+  }
+
+  #dropLocatorHandler(uid: number): void {
+    this.#locatorHandlers.delete(uid)
+    this.#syncLocatorHandlerSubscription()
   }
 
   /** Playwright's `Page._onFrameAttached`: a frame attaches with no name or URL yet. */
@@ -417,6 +577,92 @@ export class Page extends ChannelOwner {
     )
   }
 
+  /**
+   * Playwright's `Page.waitForRequest`: resolves with the first request of the page whose URL
+   * matches `urlOrPredicate` (a glob string, a `RegExp`), or that a predicate (sync or async)
+   * accepts, from the call on. It rejects at the timeout (the page's default, 30 s unless set)
+   * and when the page closes or crashes first. A glob or `RegExp` matches as `page.waitForURL`'s
+   * does (neo-runtime `url_match.rs`); Neo has no `baseURL`, so a relative glob matches as
+   * written.
+   */
+  async waitForRequest(
+    urlOrPredicate:
+      | URLMatch
+      | ((request: Request) => boolean | Promise<boolean>),
+    options: WaitForNetworkOptions = {},
+  ): Promise<Request> {
+    return await wrapApiCall('page.waitForRequest', async () => {
+      const predicate = async (request: Request) => {
+        if (isString(urlOrPredicate) || isRegExp(urlOrPredicate))
+          return matchesURL(
+            request.url(),
+            serializeUrlMatch('page.waitForRequest', urlOrPredicate),
+          )
+        return await urlOrPredicate(request)
+      }
+      const trimmedUrl = trimUrl(urlOrPredicate)
+      const logLine = trimmedUrl
+        ? `waiting for request ${trimmedUrl}`
+        : undefined
+      return (await this._waitForEvent(
+        'request',
+        { predicate, timeout: options.timeout, signal: options.signal },
+        logLine,
+      )) as Request
+    })
+  }
+
+  /** Playwright's `Page.waitForResponse`: {@link Page.waitForRequest} for responses. */
+  async waitForResponse(
+    urlOrPredicate:
+      | URLMatch
+      | ((response: Response) => boolean | Promise<boolean>),
+    options: WaitForNetworkOptions = {},
+  ): Promise<Response> {
+    return await wrapApiCall('page.waitForResponse', async () => {
+      const predicate = async (response: Response) => {
+        if (isString(urlOrPredicate) || isRegExp(urlOrPredicate))
+          return matchesURL(
+            response.url(),
+            serializeUrlMatch('page.waitForResponse', urlOrPredicate),
+          )
+        return await urlOrPredicate(response)
+      }
+      const trimmedUrl = trimUrl(urlOrPredicate)
+      const logLine = trimmedUrl
+        ? `waiting for response ${trimmedUrl}`
+        : undefined
+      return (await this._waitForEvent(
+        'response',
+        { predicate, timeout: options.timeout, signal: options.signal },
+        logLine,
+      )) as Response
+    })
+  }
+
+  /**
+   * Playwright's `Page.requests`: the page's most recent requests (about the last 100, each
+   * redirect hop one), oldest first, as the same objects its events hand out.
+   *
+   * Deviation: `server/page.ts` `Page.addNetworkRequest`: `this._networkRequests.push(request);`
+   * Playwright's server records a page's requests from the page's first moment; Neo records them
+   * from the run's first look at the page's network (a goto, a history step or navigation wait, a
+   * network listener, or this call), as Chromium replays no earlier request.
+   */
+  async requests(): Promise<Request[]> {
+    const { requests } = await this.#connection.sendPage(
+      'page.requests',
+      this.#guid,
+      'requests',
+      {},
+      0,
+    )
+    return requests.map(
+      (request) =>
+        networkObject(this.#connection, request.guid, this) as Request,
+    )
+  }
+
   /** Playwright's `Page._waitForEvent`, which its `waitFor*` helpers share. */
   async _waitForEvent(
     event: string,
@@ -425,9 +671,8 @@ export class Page extends ChannelOwner {
   ): Promise<unknown> {
     const options =
       typeof optionsOrPredicate === 'function' ? {} : optionsOrPredicate
-    // Refuses a signal first (TimeoutSettings), inside its callers' `wrapApiCall`, which
-    // prefixes the api name.
-    const timeout = this._timeoutSettings.timeout(options, null)
+    // Inside its callers' `wrapApiCall`, which prefixes the api name.
+    const timeoutOptions = this._timeoutSettings.timeout(options, null)
     this._refuseUnserved(event)
     const predicate =
       typeof optionsOrPredicate === 'function'
@@ -436,8 +681,8 @@ export class Page extends ChannelOwner {
     const waiter = Waiter.createForEvent()
     if (logLine) waiter.log(logLine)
     waiter.rejectOnTimeout(
-      timeout,
-      `Timeout ${timeout}ms exceeded while waiting for event "${event}"`,
+      timeoutOptions,
+      `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`,
     )
     if (event !== 'crash')
       waiter.rejectOnEvent(this, 'crash', new Error('Page crashed'))
@@ -513,6 +758,24 @@ export class Page extends ChannelOwner {
 
   mainFrame(): Frame {
     return this.#mainFrame
+  }
+
+  /**
+   * The frame a request's or a binding call's record names, by guid: the object this page
+   * handed out for it (the one it held when that frame detached included, as Playwright's client
+   * resolves a call's frame channel to its object), or a new one, which reads its url and name
+   * live like any other.
+   *
+   * Playwright: `server/page.ts` `PageBinding.dispatch`: `const result = await binding.playwrightFunction({ frame: context.frame, page, context: page.browserContext }, ...args);`
+   */
+  _frameForGuid(guid: string | undefined): Frame {
+    if (!guid) return this.#mainFrame
+    let frame = this.#frames.get(guid)
+    if (!frame) {
+      frame = new Frame(guid, this, this.#connection)
+      this.#frames.set(guid, frame)
+    }
+    return frame
   }
 
   /** Interns records from every getter so frame comparisons remain valid across reads. */
@@ -596,7 +859,7 @@ export class Page extends ChannelOwner {
     // Deviation: `client/page.ts` `Page.exposeBinding`: `this._bindings.set(name, callback);` Playwright sets the callback after its answer; Neo before, as the answer's events, a first page call among them, run before the caller goes on.
     const previous = this._bindings.get(name)
     this._bindings.set(name, callback)
-    this._subscribeChannelEvent('bindingCall')
+    this._subscribeChannelEvent('bindingCall', true)
     try {
       const result = await this.#connection.sendBinding(
         apiName,
@@ -759,9 +1022,9 @@ export class Page extends ChannelOwner {
 
   /**
    * Reloads the page and resolves the new document's main `Response` once `waitUntil` (default
-   * `load`; also `domcontentloaded` or `commit`) fires for it, as Playwright's `page.reload`.
-   * A failed reload rejects with its network error. Runs under the navigation timeout.
-   * Neo limit: `networkidle` throws an `Error`.
+   * `load`; also `domcontentloaded`, `networkidle` or `commit`) fires for it, as Playwright's
+   * `page.reload`. A failed reload rejects with its network error. Runs under the navigation
+   * timeout.
    */
   async reload(options: HistoryOptions = {}): Promise<Response | null> {
     const waitUntil = verifyLoadState(
@@ -843,9 +1106,8 @@ export class Page extends ChannelOwner {
 
   /**
    * The main frame's {@link Frame.waitForURL}: waits until the page's URL matches `url` (a glob
-   * string, a `RegExp` or a predicate on its `URL`), then until `waitUntil` (default `load`;
-   * `networkidle` throws) fires, at once if the current document already fired it, and resolves
-   * `undefined`.
+   * string, a `RegExp` or a predicate on its `URL`), then until `waitUntil` (default `load`)
+   * fires, at once if the current document already fired it, and resolves `undefined`.
    */
   async waitForURL(
     url: NavigationURLMatch,
@@ -855,8 +1117,33 @@ export class Page extends ChannelOwner {
   }
 
   /**
-   * The main frame's {@link Frame.waitForLoadState}: waits until `state` (default `load`;
-   * `networkidle` throws) fired for the current or next document, and resolves `undefined`.
+   * The main frame's {@link Frame.waitForSelector}: waits until `selector` meets `state`
+   * (default `visible`) and resolves its first match as an {@link ElementHandle}, or `null` for a
+   * `hidden` or `detached` wait, running the page's locator handlers before each attempt.
+   */
+  waitForSelector(
+    selector: string,
+    options?: WaitForSelectorOptions & { state?: 'attached' | 'visible' },
+  ): Promise<ElementHandle>
+  waitForSelector(
+    selector: string,
+    options: WaitForSelectorOptions,
+  ): Promise<ElementHandle | null>
+  /** Playwright: `client/page.ts` `Page.waitForSelector`: `return await this._mainFrame.waitForSelector(selector, options);` */
+  async waitForSelector(
+    selector: string,
+    options?: WaitForSelectorOptions,
+  ): Promise<ElementHandle | null> {
+    return await this.#mainFrame._waitForSelectorPublic(
+      'page.waitForSelector',
+      selector,
+      options,
+    )
+  }
+
+  /**
+   * The main frame's {@link Frame.waitForLoadState}: waits until `state` (default `load`) fired
+   * for the current or next document, and resolves `undefined`.
    */
   async waitForLoadState(
     state?: LifecycleEvent,
@@ -923,9 +1210,67 @@ export class Page extends ChannelOwner {
     return await this.#mainFrame._ariaSnapshot('page.ariaSnapshot', options)
   }
 
+  /** The tree `ariaSnapshot` renders, as Playwright's `AriaSnapshotJSON`. */
+  async ariaSnapshotJSON(
+    options: AriaSnapshotOptions = {},
+  ): Promise<AriaSnapshotJSON> {
+    return await this.#mainFrame._ariaSnapshotJSON(
+      'page.ariaSnapshotJSON',
+      options,
+    )
+  }
+
+  /** The main frame's markup, as Playwright's `page.content`. */
+  async content(options?: ContentOptions): Promise<string> {
+    return await this.#mainFrame._content('page.content', options)
+  }
+
+  /** Writes `html` into the main frame, as Playwright's `page.setContent`. */
+  async setContent(html: string, options?: SetContentOptions): Promise<void> {
+    return await this.#mainFrame._setContent('page.setContent', html, options)
+  }
+
+  /** Waits `timeout` milliseconds in the main frame, as Playwright's `page.waitForTimeout`. */
+  async waitForTimeout(timeout: number): Promise<void> {
+    return await this.#mainFrame._waitForTimeout('page.waitForTimeout', timeout)
+  }
+
   /** Not strict, as Playwright's `page.click`, which forwards to the main frame. */
   async click(selector: string, options: ClickOptions = {}): Promise<void> {
     return await this.#mainFrame._click('page.click', selector, options)
+  }
+
+  /** Not strict, as Playwright's `page.focus`, which forwards to the main frame. */
+  async focus(selector: string, options: FocusOptions = {}): Promise<void> {
+    return await this.#mainFrame._focus('page.focus', selector, options)
+  }
+
+  /** Not strict, as Playwright's `page.dispatchEvent`, which forwards to the main frame. */
+  async dispatchEvent(
+    selector: string,
+    type: string,
+    eventInit?: unknown,
+    options: DispatchEventOptions = {},
+  ): Promise<void> {
+    return await this.#mainFrame._dispatchEvent(
+      'page.dispatchEvent',
+      selector,
+      type,
+      eventInit,
+      options,
+    )
+  }
+
+  /** Hides every highlight of this page, in every frame. Sent with no timeout, as Playwright's
+   * (`kNoTimeout`). */
+  async hideHighlight(): Promise<void> {
+    await this.#connection.sendPage(
+      'page.hideHighlight',
+      this.#guid,
+      'hideHighlight',
+      {},
+      0,
+    )
   }
 
   /** Not strict, as Playwright's `page.dblclick`, which forwards to the main frame. */
@@ -960,6 +1305,28 @@ export class Page extends ChannelOwner {
     options: PressOptions = {},
   ): Promise<void> {
     return await this.#mainFrame._press('page.press', selector, key, options)
+  }
+
+  async dragAndDrop(
+    source: string,
+    target: string,
+    options: DragAndDropOptions = {},
+  ): Promise<void> {
+    return await this.#mainFrame._dragAndDrop(
+      'page.dragAndDrop',
+      source,
+      target,
+      options,
+    )
+  }
+
+  /** Deprecated in Playwright for `Locator.pressSequentially`, and served the same way. */
+  async type(
+    selector: string,
+    text: string,
+    options: TypeOptions = {},
+  ): Promise<void> {
+    return await this.#mainFrame._type('page.type', selector, text, options)
   }
 
   async inputValue(

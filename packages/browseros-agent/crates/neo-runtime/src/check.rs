@@ -43,6 +43,10 @@ impl CheckOptions {
                     delay: None,
                 }),
                 trial: params.trial.unwrap_or(false),
+                // Playwright's check and uncheck take no modifiers, and move in one step.
+                modifiers: None,
+                steps: 1,
+                platform: None,
             },
         }
     }
@@ -66,6 +70,10 @@ impl CheckOptions {
                     delay: None,
                 }),
                 trial: params.trial.unwrap_or(false),
+                // Playwright's check and uncheck take no modifiers, and move in one step.
+                modifiers: None,
+                steps: 1,
+                platform: None,
             },
         }
     }

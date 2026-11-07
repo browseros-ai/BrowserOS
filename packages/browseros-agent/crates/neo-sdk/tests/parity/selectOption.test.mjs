@@ -50,6 +50,52 @@ test('selectOption returns selected values for every receiver', {
   assert.ok(delivered.every((c) => c.delivery === 'done'))
 })
 
+/** ElementHandle values: both engines send them as `elements` and select the very option nodes
+ * they name, by identity: one handle, an array, two handles of a multiple select. A handle after
+ * a string fails Playwright's validator in both, before anything is sent. A handle of another
+ * select's option matches nothing in this one, so the call waits for options and times out. */
+test('an ElementHandle value selects that very option, as Playwright does', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  await compareMethod(t, {
+    html: readFileSync(
+      new URL('../pages/form-actions.html', import.meta.url),
+      'utf8',
+    ),
+    source: `
+      const settle = async (call) => {
+        try { return { value: await call() } } catch (error) { return { error: errorCategory(error) } }
+      }
+      const second = await page.$('#single option:nth-child(2)')
+      const two = await page.$('#multiple option:nth-child(2)')
+      const three = await page.$('#multiple option:nth-child(3)')
+      return {
+        page: await settle(() => page.selectOption('#single', second)),
+        frame: await settle(() => page.mainFrame().selectOption('#single', [second])),
+        locator: await settle(() => page.locator('#multiple').selectOption([two, three])),
+        mixed: await settle(() => page.locator('#single').selectOption(['one', second])),
+        otherSelect: await settle(() => page.locator('#single').selectOption(two, { timeout: 500 })),
+        single: await page.inputValue('#single'),
+        multiple: await page.$eval('#multiple', (s) => [...s.selectedOptions].map((o) => o.value)),
+      }
+    `,
+    probe: 'window.__facts()',
+    values: ({ playwright, neo }) => {
+      assert.deepEqual(playwright, {
+        page: { value: ['two'] },
+        frame: { value: ['two'] },
+        locator: { value: ['two', 'three'] },
+        mixed: { error: 'Error' },
+        otherSelect: { error: 'TimeoutError' },
+        single: 'two',
+        multiple: ['two', 'three'],
+      })
+      assert.deepEqual(neo, playwright, 'public return values and types')
+    },
+  })
+})
+
 /** selectOption inside frames, on tabs of frame-top.html (frames.mjs): by value, label and
  * index, through a frame locator, a nested one and a child Frame; a refused option leaves its
  * frame unchanged. */

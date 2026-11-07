@@ -1,0 +1,46 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Select text</title>
+<!-- Tests select by id or class only: BrowserOS neo's takeover bar adds shadow-root buttons to
+     every page, and Playwright's CSS pierces open shadow roots. -->
+<style>
+  #hidden-input, #later { display: none; }
+</style>
+<button id="reveal" type="button">Reveal later</button>
+<main id="content">
+<textarea id="textarea" aria-label="Area"></textarea>
+<input id="input" aria-label="Input">
+<div id="plain"></div>
+<input id="hidden-input" aria-label="Hidden" value="hidden value">
+<input id="later" aria-label="Later" value="later value">
+<input class="dup" aria-label="Twin one">
+<input class="dup" aria-label="Twin two">
+</main>
+<script>
+// BrowserOS neo's takeover bar is not the page's (frame-top.html): removed on sight.
+new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.remove()).observe(
+  document.documentElement,
+  { childList: true, subtree: true },
+)
+// The values of Playwright's EH-102..EH-104 (tests/page/elementhandle-select-text.spec.ts at
+// 26137face), set by script as the specs do.
+document.querySelector('#textarea').value = 'some value'
+document.querySelector('#input').value = 'some value'
+document.querySelector('#plain').textContent = 'some value'
+// The click starts the timer, never page load: Neo's half starts seconds after its page loads.
+document.querySelector('#reveal').addEventListener('click', () => setTimeout(() => {
+  document.querySelector('#later').style.display = 'inline-block'
+}, 500))
+const range = (id) => {
+  const field = document.getElementById(id)
+  return [field.selectionStart, field.selectionEnd]
+}
+window.__facts = () => ({
+  textarea: range('textarea'),
+  input: range('input'),
+  hidden: range('hidden-input'),
+  later: range('later'),
+  selection: String(getSelection()),
+  active: document.activeElement?.id || document.activeElement?.nodeName.toLowerCase() || null,
+})
+</script>

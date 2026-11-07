@@ -152,7 +152,8 @@ async function viaNeo(
     const effect = probe ? await probeWithin(cdp, sessionId, probe) : undefined
     return { outcome, result, effect }
   } finally {
-    await cdp.send('Target.closeTarget', { targetId })
+    // A script may have closed its tab itself.
+    await cdp.send('Target.closeTarget', { targetId }).catch(() => {})
   }
 }
 

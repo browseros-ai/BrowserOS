@@ -4,11 +4,11 @@
 // predicate (a function, `options.predicate`, or an async function) skips the events it
 // rejects; and a wait rejects by kind on its own timeout, on the default timeout, when its
 // predicate throws, and when its page closes, while a wait for 'close' gets the page itself; a
-// null signal is no signal, and any other is refused before the wait listens (Neo only).
+// null signal is no signal, and an object that is no AbortSignal throws TypeError before the
+// wait listens (aborting signals: abort.test.mjs).
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs, events.mjs).
 
-import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { compareEvents, fixture } from './events.mjs'
 import { skip } from './harness.mjs'
@@ -129,19 +129,19 @@ const cases = [
     effect: 4,
   },
   {
-    // Neo only: Playwright takes an AbortSignal, which QuickJS has none of. Any other signal is
-    // refused before the wait listens, on the page and on the context (waiter.ts refuseSignal).
-    name: 'a signal is refused before the wait listens',
+    // client/waiter.ts `Waiter.rejectOnTimeout` (`if (signal) {`): an object that is no
+    // AbortSignal (no `addEventListener`) throws Playwright's TypeError before the wait listens,
+    // on the page and on the context. Aborted and aborting signals: abort.test.mjs.
+    name: 'a non-signal object throws before the wait listens',
     path: '/console.html',
     source: `const page_ = await settle(page.waitForEvent('console', { signal: {} }))
     const context_ = await settle(page.context().waitForEvent('page', { signal: {} }))
     return { page_, context_, listeners: page.listenerCount('console') + page.context().listenerCount('page') }`,
-    neo: (outcome) =>
-      assert.deepEqual(outcome.value, {
-        page_: { error: 'Error' },
-        context_: { error: 'Error' },
-        listeners: 0,
-      }),
+    expected: {
+      page_: { error: 'TypeError' },
+      context_: { error: 'TypeError' },
+      listeners: 0,
+    },
   },
 ]
 

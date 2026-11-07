@@ -4,7 +4,7 @@
 // src/vendor-shims.ts
 var DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-class URL {
+class URL2 {
   href;
   constructor(href) {
     this.href = String(href);
@@ -77,7 +77,7 @@ function isDate(obj) {
 }
 function isURL(obj) {
   try {
-    return obj instanceof URL || Object.prototype.toString.call(obj) === "[object URL]";
+    return obj instanceof URL2 || Object.prototype.toString.call(obj) === "[object URL]";
   } catch (error) {
     return false;
   }
@@ -168,7 +168,7 @@ function parseEvaluationResultValue(value, handles = [], refs = new Map) {
       return new Date(value.d);
     }
     if ("u" in value)
-      return new URL(value.u);
+      return new URL2(value.u);
     if ("bi" in value)
       return BigInt(value.bi);
     if ("e" in value) {
@@ -387,7 +387,7 @@ function innerParseSerializedValue(value, handles, refs, accessChain) {
   if (value.d !== undefined)
     return new Date(value.d);
   if (value.u !== undefined)
-    return new URL(value.u);
+    return new URL2(value.u);
   if (value.bi !== undefined)
     return BigInt(value.bi);
   if (value.e !== undefined) {
@@ -506,7 +506,7 @@ function isDate2(obj) {
   return obj instanceof Date || Object.prototype.toString.call(obj) === "[object Date]";
 }
 function isURL2(obj) {
-  return obj instanceof URL || Object.prototype.toString.call(obj) === "[object URL]";
+  return obj instanceof URL2 || Object.prototype.toString.call(obj) === "[object URL]";
 }
 function isError2(obj) {
   const proto = obj ? Object.getPrototypeOf(obj) : null;
@@ -539,6 +539,13 @@ class TimeoutError extends PlaywrightError {
   }
 }
 
+class AbortError extends PlaywrightError {
+  constructor(message = "The operation was aborted", options) {
+    super(message, options);
+    this.name = "AbortError";
+  }
+}
+
 class TargetClosedError extends PlaywrightError {
   constructor(cause) {
     super(cause || "Target page, context or browser has been closed");
@@ -556,6 +563,8 @@ function parseError(error) {
     e = new TimeoutError(error.message);
   else if (error.name === "TargetClosedError")
     e = new TargetClosedError(error.message);
+  else if (error.name === "AbortError")
+    e = new AbortError(error.message);
   else
     e = Object.assign(new PlaywrightError(error.message), {
       name: error.name
@@ -588,6 +597,9 @@ async function call(message) {
   const { reply, events } = await __neo_runtime.callWithEvents(message);
   deliverEvents?.(events);
   return reply;
+}
+function abort(id, reason) {
+  __neo_runtime.abort(id, reason);
 }
 function subscribe(guid, event, enabled) {
   __neo_runtime.subscribe(JSON.stringify({ guid, event, enabled }));
@@ -634,6 +646,9 @@ class Connection {
   async sendDialog(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
+  async sendArtifact(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
   async sendNeo(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
@@ -649,25 +664,43 @@ class Connection {
   async sendHandle(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout) ?? {};
   }
-  async#send(apiName, guid, method, params, timeout) {
+  async#send(apiName, guid, method, params, options) {
+    const { timeout, signal } = typeof options === "number" ? { timeout: options, signal: undefined } : options;
+    if (this.#closed)
+      throw closedError(apiName);
+    if (signal?.aborted)
+      throw prefixed(apiName, new AbortError(undefined, { cause: signal.reason }));
     if (typeof timeout !== "number")
       throw new Error(`timeout: expected float, got ${timeout === null ? "object" : typeof timeout}`);
     const metadata = {
       location: captureLocation(this.#lineOffset),
       timeout
     };
-    if (this.#closed)
-      throw closedError(apiName);
     const closedBefore = this._closedFor(guid);
-    const message = { id: this.#nextId++, guid, method, params, metadata };
-    const text = await new Promise((resolve, reject) => {
+    const id = this.#nextId++;
+    const message = { id, guid, method, params, metadata };
+    const pending = new Promise((resolve, reject) => {
       const abandon = (reason) => reject(closedError(apiName, reason));
       this.#inFlight.add(abandon);
       call(JSON.stringify(message)).then(resolve, reject).finally(() => this.#inFlight.delete(abandon));
     });
+    let listener;
+    try {
+      listener = signal ? listenForAbort(apiName, id, signal) : undefined;
+    } catch (error) {
+      pending.catch(() => {});
+      throw error;
+    }
+    let text;
+    try {
+      text = await pending;
+    } finally {
+      if (signal && listener)
+        signal.removeEventListener("abort", listener);
+    }
     const reply = JSON.parse(text);
     if (reply.error) {
-      const error = rebuildError(apiName, reply.error.error, reply.log);
+      const error = rebuildError(apiName, reply.error.error, reply.log, signal);
       const reason = isTargetClosedError(error) && !closedBefore ? this._closeReasonFor(guid) : undefined;
       if (reason)
         error.message = `${apiName}: ${reason}${formatCallLog(reply.log)}`;
@@ -685,6 +718,23 @@ class Connection {
 function closedError(apiName, reason) {
   const error = targetClosedError(reason);
   error.message = `${apiName}: ${error.message}`;
+  return error;
+}
+function listenForAbort(apiName, id, signal) {
+  const listener = () => {
+    const reason = signal.reason instanceof Error ? signal.reason.message : String(signal.reason);
+    abort(id, reason);
+  };
+  try {
+    signal.addEventListener("abort", listener, { once: true });
+  } catch (error) {
+    throw prefixed(apiName, error);
+  }
+  return listener;
+}
+function prefixed(apiName, error) {
+  if (error instanceof Error)
+    error.message = `${apiName}: ${error.message}`;
   return error;
 }
 function captureLocation(lineOffset) {
@@ -707,8 +757,10 @@ function agentLocation(stack, lineOffset) {
   }
   return { file: SCRIPT_FILE };
 }
-function rebuildError(apiName, error, log) {
+function rebuildError(apiName, error, log, signal) {
   const rebuilt = parseError(error);
+  if (signal?.aborted && rebuilt instanceof AbortError)
+    rebuilt.cause = signal.reason;
   rebuilt.log = log || [];
   rebuilt.message = `${apiName}: ${rebuilt.message}${formatCallLog(log)}`;
   return rebuilt;
@@ -801,10 +853,6 @@ function handleFrom(connection, created) {
   return new JSHandle(connection, created.guid, created.initializer);
 }
 function evaluateParams(apiName, pageFunction, arg, options) {
-  const signal = options?.signal;
-  if (signal !== undefined && signal !== null) {
-    throw new Error(`${apiName}: Neo does not support signal yet`);
-  }
   if (options?.exposeFunctions) {
     throw new Error(`${apiName}: Neo does not support exposeFunctions yet`);
   }
@@ -910,12 +958,27 @@ function thrown(error) {
 }
 
 // src/console-message.ts
+var HISTORY_KEEPS_NO_ARGS = 'Neo keeps no arguments of a message read from consoleMessages(); listen to "console" for them';
+
 class ConsoleMessage {
   #page;
   #event;
-  constructor(event, page, worker) {
+  #connection;
+  #args;
+  constructor(event, page, worker, connection = null) {
     this.#page = page;
     this.#event = event;
+    this.#connection = connection;
+  }
+  args() {
+    if (!this.#args) {
+      const connection = this.#connection;
+      if (!connection)
+        throw new Error(HISTORY_KEEPS_NO_ARGS);
+      const id = this.#event.argsId;
+      this.#args = id ? get(id, "args").map((created) => handleFrom(connection, created)) : [];
+    }
+    return [...this.#args];
   }
   worker() {
     return null;
@@ -1279,12 +1342,12 @@ class ChannelOwner extends EventEmitter {
     if (typeof event === "string" && this.#table.unserved.includes(event))
       throw new Error(`Neo does not serve the "${event}" event on ${this.#table.receiver} yet`);
   }
+  _subscribeChannelEvent(event, enabled) {
+    this.#pipe._subscribe(this._guid, event, enabled);
+  }
   #updateSubscription(event, enabled) {
     if (this.#served(event))
       this.#pipe._subscribe(this._guid, event, enabled);
-  }
-  _subscribeChannelEvent(event) {
-    this.#pipe._subscribe(this._guid, event, true);
   }
   on(event, listener) {
     this._refuseUnserved(event);
@@ -1435,6 +1498,53 @@ class Dialog extends EventEmitter {
   }
 }
 
+// src/download.ts
+var NO_STREAMS = "Neo cannot stream a download: its scripts have no streams; download.path() names the file";
+
+class Download {
+  #page;
+  #url;
+  #suggestedFilename;
+  #guid;
+  #connection;
+  constructor(page, url, suggestedFilename, guid, connection) {
+    this.#page = page;
+    this.#url = url;
+    this.#suggestedFilename = suggestedFilename;
+    this.#guid = guid;
+    this.#connection = connection;
+  }
+  page() {
+    return this.#page;
+  }
+  url() {
+    return this.#url;
+  }
+  suggestedFilename() {
+    return this.#suggestedFilename;
+  }
+  async path() {
+    const { value } = await this.#connection.sendArtifact("download.path", this.#guid, "pathAfterFinished", {}, 0);
+    return value;
+  }
+  async saveAs(path) {
+    await this.#connection.sendArtifact("download.saveAs", this.#guid, "saveAs", { path }, 0);
+  }
+  async failure() {
+    const { error } = await this.#connection.sendArtifact("download.failure", this.#guid, "failure", {}, 0);
+    return error || null;
+  }
+  async createReadStream() {
+    throw new Error(NO_STREAMS);
+  }
+  async cancel() {
+    await this.#connection.sendArtifact("download.cancel", this.#guid, "cancel", {}, 0);
+  }
+  async delete() {
+    await this.#connection.sendArtifact("download.delete", this.#guid, "delete", {}, 0);
+  }
+}
+
 // src/init-script.ts
 function evaluationScript(apiName, fun, arg) {
   if (typeof fun === "function") {
@@ -1469,6 +1579,504 @@ class Disposable {
       throw error;
     }
   }
+}
+
+// src/network.ts
+class RawHeaders {
+  #headersArray;
+  #headersMap = new Map;
+  constructor(headers) {
+    this.#headersArray = headers;
+    for (const header of headers) {
+      const name = header.name.toLowerCase();
+      const values = this.#headersMap.get(name);
+      if (values)
+        values.push(header.value);
+      else
+        this.#headersMap.set(name, [header.value]);
+    }
+  }
+  get(name) {
+    const values = this.getAll(name);
+    if (!values.length)
+      return null;
+    return values.join(name.toLowerCase() === "set-cookie" ? `
+` : ", ");
+  }
+  getAll(name) {
+    return [...this.#headersMap.get(name.toLowerCase()) ?? []];
+  }
+  headers() {
+    const result = {};
+    for (const name of this.#headersMap.keys())
+      result[name] = this.get(name) ?? "";
+    return result;
+  }
+  headersArray() {
+    return this.#headersArray;
+  }
+}
+
+class Request {
+  _guid;
+  #initializer;
+  #frame;
+  #connection;
+  #redirectedFrom;
+  _redirectedTo = null;
+  _response = null;
+  #provisionalHeaders;
+  #actualHeadersPromise;
+  #timing = {
+    startTime: 0,
+    domainLookupStart: -1,
+    domainLookupEnd: -1,
+    connectStart: -1,
+    secureConnectionStart: -1,
+    connectEnd: -1,
+    requestStart: -1,
+    responseStart: -1,
+    responseEnd: -1
+  };
+  constructor(guid, initializer, frame, redirectedFrom, connection) {
+    this._guid = guid;
+    this.#initializer = initializer;
+    this.#frame = frame;
+    this.#connection = connection;
+    this.#redirectedFrom = redirectedFrom;
+    if (redirectedFrom)
+      redirectedFrom._redirectedTo = this;
+    this.#provisionalHeaders = new RawHeaders(initializer.headers);
+  }
+  url() {
+    return this.#initializer.url;
+  }
+  resourceType() {
+    return this.#initializer.resourceType;
+  }
+  method() {
+    return this.#initializer.method;
+  }
+  postData() {
+    return this.postDataBuffer()?.toString("utf-8") ?? null;
+  }
+  postDataBuffer() {
+    const data = this.#initializer.postData;
+    return data ? Buffer3.fromBinary(data) : null;
+  }
+  postDataJSON() {
+    const postData = this.postData();
+    if (!postData)
+      return null;
+    const contentType = this.headers()["content-type"];
+    if (contentType?.includes("application/x-www-form-urlencoded"))
+      return parseFormBody(postData);
+    try {
+      return JSON.parse(postData);
+    } catch {
+      throw new Error(`POST data is not a valid JSON object: ${postData}`);
+    }
+  }
+  headers() {
+    return this.#provisionalHeaders.headers();
+  }
+  async allHeaders() {
+    return (await this.#actualHeaders("request.allHeaders")).headers();
+  }
+  async headersArray() {
+    return (await this.#actualHeaders("request.headersArray")).headersArray();
+  }
+  async headerValue(name) {
+    return (await this.#actualHeaders("request.headerValue")).get(name);
+  }
+  async response() {
+    return await this.#response("request.response");
+  }
+  existingResponse() {
+    if (this._response)
+      return this._response;
+    const guid = get(this._guid, "existingResponse");
+    return guid ? networkObject(this.#connection, guid, this.#frame._page) : null;
+  }
+  frame() {
+    return this.#frame;
+  }
+  serviceWorker() {
+    return null;
+  }
+  isNavigationRequest() {
+    return this.#initializer.isNavigationRequest;
+  }
+  redirectedFrom() {
+    return this.#redirectedFrom;
+  }
+  redirectedTo() {
+    if (this._redirectedTo)
+      return this._redirectedTo;
+    const guid = get(this._guid, "redirectedTo");
+    return guid ? networkObject(this.#connection, guid, this.#frame._page) : null;
+  }
+  failure() {
+    const errorText = get(this._guid, "failure");
+    return errorText ? { errorText } : null;
+  }
+  timing() {
+    return Object.assign(this.#timing, get(this._guid, "timing"));
+  }
+  async sizes() {
+    const response = await this.#response("request.sizes");
+    if (!response)
+      throw new Error("Unable to fetch sizes for failed request");
+    return await response._sizes("request.sizes");
+  }
+  toJSON() {
+    return { _type: "Request", _guid: this._guid };
+  }
+  async#response(apiName) {
+    const { response } = await this.#connection.sendRequest(apiName, this._guid, "response", {}, 0);
+    return response ? networkObject(this.#connection, response.guid, this.#frame._page) : null;
+  }
+  #actualHeaders(apiName) {
+    this.#actualHeadersPromise ??= this.#connection.sendRequest(apiName, this._guid, "rawRequestHeaders", {}, 0).then(({ headers }) => new RawHeaders(headers));
+    return this.#actualHeadersPromise;
+  }
+}
+
+class Response {
+  _guid;
+  #initializer;
+  #request;
+  #connection;
+  #provisionalHeaders;
+  #actualHeadersPromise;
+  constructor(guid, initializer, request, connection) {
+    this._guid = guid;
+    this.#initializer = initializer;
+    this.#request = request;
+    this.#connection = connection;
+    this.#provisionalHeaders = new RawHeaders(initializer.headers);
+    request._response = this;
+  }
+  url() {
+    return this.#initializer.url;
+  }
+  ok() {
+    const status = this.#initializer.status;
+    return status === 0 || status >= 200 && status <= 299;
+  }
+  status() {
+    return this.#initializer.status;
+  }
+  statusText() {
+    return this.#initializer.statusText;
+  }
+  fromServiceWorker() {
+    return this.#initializer.fromServiceWorker;
+  }
+  headers() {
+    return this.#provisionalHeaders.headers();
+  }
+  async allHeaders() {
+    return (await this.#actualHeaders("response.allHeaders")).headers();
+  }
+  async headersArray() {
+    return (await this.#actualHeaders("response.headersArray")).headersArray().slice();
+  }
+  async headerValue(name) {
+    return (await this.#actualHeaders("response.headerValue")).get(name);
+  }
+  async headerValues(name) {
+    return (await this.#actualHeaders("response.headerValues")).getAll(name);
+  }
+  async finished() {
+    for (let delay = 0;; delay = Math.min(delay * 2 || 4, 100)) {
+      const state = get(this._guid, "finished");
+      if (state === "finished")
+        return null;
+      if (state === "closed")
+        throw targetClosedError();
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  async body() {
+    return await this.#body("response.body");
+  }
+  async text() {
+    return (await this.#body("response.text")).toString("utf8");
+  }
+  async json() {
+    return JSON.parse((await this.#body("response.json")).toString("utf8"));
+  }
+  request() {
+    return this.#request;
+  }
+  frame() {
+    return this.#request.frame();
+  }
+  async serverAddr() {
+    const { value } = await this.#connection.sendResponse("response.serverAddr", this._guid, "serverAddr", {}, 0);
+    return value || null;
+  }
+  async securityDetails() {
+    const { value } = await this.#connection.sendResponse("response.securityDetails", this._guid, "securityDetails", {}, 0);
+    return value || null;
+  }
+  async httpVersion() {
+    const { value } = await this.#connection.sendResponse("response.httpVersion", this._guid, "httpVersion", {}, 0);
+    return value;
+  }
+  toJSON() {
+    return { _type: "Response", _guid: this._guid };
+  }
+  async _sizes(apiName) {
+    const { sizes } = await this.#connection.sendResponse(apiName, this._guid, "sizes", {}, 0);
+    return sizes;
+  }
+  async#body(apiName) {
+    const { binary } = await this.#connection.sendResponse(apiName, this._guid, "body", {}, 0);
+    return Buffer3.fromBinary(binary);
+  }
+  #actualHeaders(apiName) {
+    this.#actualHeadersPromise ??= this.#connection.sendResponse(apiName, this._guid, "rawResponseHeaders", {}, 0).then(({ headers }) => new RawHeaders(headers));
+    return this.#actualHeadersPromise;
+  }
+}
+function responseFor(connection, guid, frame) {
+  const built = networkObject(connection, guid, frame._page);
+  if (!(built instanceof Response))
+    throw new Error(`neo-sdk: Rust's chain for ${guid} has no such response`);
+  return built;
+}
+function networkObject(connection, guid, page) {
+  const known = connection._objects.get(guid);
+  if (known)
+    return known;
+  const chain = get(guid, "chain");
+  let previous = null;
+  for (const [index, created] of chain.requests.entries()) {
+    let request = connection._objects.get(created.guid);
+    if (!(request instanceof Request)) {
+      request = new Request(created.guid, created.initializer, page._frameForGuid(created.initializer.frame?.guid), previous, connection);
+      connection._objects.set(created.guid, request);
+    }
+    const response = chain.responses[index];
+    if (response && !connection._objects.has(response.guid))
+      connection._objects.set(response.guid, new Response(response.guid, response.initializer, request, connection));
+    previous = request;
+  }
+  const built = connection._objects.get(guid);
+  if (!built)
+    throw new Error(`neo-sdk: Rust's chain for ${guid} has no such object`);
+  return built;
+}
+function requestFromRecord(connection, record, page) {
+  const known = connection._objects.get(record.guid);
+  if (known instanceof Request)
+    return known;
+  const from = record.initializer.redirectedFrom?.guid;
+  let redirectedFrom = null;
+  if (from) {
+    try {
+      const earlier = networkObject(connection, from, page);
+      if (earlier instanceof Request)
+        redirectedFrom = earlier;
+    } catch {
+      redirectedFrom = null;
+    }
+  }
+  const request = new Request(record.guid, record.initializer, page._frameForGuid(record.initializer.frame?.guid), redirectedFrom, connection);
+  connection._objects.set(record.guid, request);
+  return request;
+}
+function responseFromRecord(connection, record, request) {
+  const known = connection._objects.get(record.guid);
+  if (known instanceof Response)
+    return known;
+  const response = new Response(record.guid, record.initializer, request, connection);
+  connection._objects.set(record.guid, response);
+  return response;
+}
+function parseFormBody(body) {
+  const entries = {};
+  for (const pair of body.split("&")) {
+    if (!pair)
+      continue;
+    const at = pair.indexOf("=");
+    const decode = (text) => decodeURIComponent(text.replace(/\+/g, " "));
+    const name = decode(at < 0 ? pair : pair.slice(0, at));
+    entries[name] = at < 0 ? "" : decode(pair.slice(at + 1));
+  }
+  return entries;
+}
+var BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+var BASE64_INDEX = new Map([...BASE64].map((char, index) => [char, index]));
+
+class Buffer3 extends Uint8Array {
+  static fromBinary(text) {
+    const clean = text.replace(/=+$/, "");
+    const bytes = new Buffer3(Math.floor(clean.length * 3 / 4));
+    let bits = 0;
+    let value = 0;
+    let at = 0;
+    for (const char of clean) {
+      const index = BASE64_INDEX.get(char);
+      if (index === undefined)
+        throw new Error("neo-sdk: invalid base64 from Rust");
+      value = value << 6 | index;
+      bits += 6;
+      if (bits >= 8) {
+        bits -= 8;
+        bytes[at++] = value >> bits & 255;
+      }
+    }
+    return bytes;
+  }
+  toString(...args) {
+    if (args.length === 0)
+      return decodeUtf8(this);
+    const [encoding, start, end] = args;
+    const length = this.length;
+    let from;
+    if (start <= 0)
+      from = 0;
+    else if (start >= length)
+      return "";
+    else
+      from = Math.trunc(start) || 0;
+    const to = end === undefined || end > length ? length : Math.trunc(end) || 0;
+    if (to <= from)
+      return "";
+    const bytes = this.subarray(from, to);
+    if (encoding === undefined)
+      return decodeUtf8(bytes);
+    switch (String(encoding).toLowerCase()) {
+      case "utf8":
+      case "utf-8":
+        return decodeUtf8(bytes);
+      case "ucs2":
+      case "ucs-2":
+      case "utf16le":
+      case "utf-16le":
+        return fromCodeUnits(utf16Units(bytes), (unit) => unit);
+      case "latin1":
+      case "binary":
+        return fromCodeUnits(bytes, (byte) => byte);
+      case "ascii":
+        return fromCodeUnits(bytes, (byte) => byte & 127);
+      case "base64":
+        return encodeBase64(bytes);
+      case "base64url":
+        return encodeBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      case "hex":
+        return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+      default:
+        throw new TypeError(`Unknown encoding: ${encoding}`);
+    }
+  }
+  toJSON() {
+    return { type: "Buffer", data: [...this] };
+  }
+  equals(other) {
+    return this.length === other.length && this.every((byte, i) => byte === other[i]);
+  }
+}
+function utf8Lead(byte) {
+  if (byte >= 194 && byte <= 223)
+    return { needed: 1, codePoint: byte & 31, lower: 128, upper: 191 };
+  if (byte >= 224 && byte <= 239)
+    return {
+      needed: 2,
+      codePoint: byte & 15,
+      lower: byte === 224 ? 160 : 128,
+      upper: byte === 237 ? 159 : 191
+    };
+  if (byte >= 240 && byte <= 244)
+    return {
+      needed: 3,
+      codePoint: byte & 7,
+      lower: byte === 240 ? 144 : 128,
+      upper: byte === 244 ? 143 : 191
+    };
+  return null;
+}
+function decodeUtf8(bytes) {
+  const units = new CodeUnits;
+  let lead = null;
+  for (let i = 0;i < bytes.length; i++) {
+    const byte = bytes[i];
+    if (!lead) {
+      lead = byte <= 127 ? null : utf8Lead(byte);
+      if (byte <= 127)
+        units.push(byte);
+      else if (!lead)
+        units.push(65533);
+      continue;
+    }
+    if (byte < lead.lower || byte > lead.upper) {
+      lead = null;
+      units.push(65533);
+      i--;
+      continue;
+    }
+    lead.codePoint = lead.codePoint << 6 | byte & 63;
+    lead.lower = 128;
+    lead.upper = 191;
+    lead.needed--;
+    if (lead.needed === 0) {
+      units.push(lead.codePoint);
+      lead = null;
+    }
+  }
+  if (lead)
+    units.push(65533);
+  return units.text();
+}
+
+class CodeUnits {
+  #units = [];
+  #out = "";
+  push(codePoint) {
+    if (codePoint > 65535) {
+      const offset = codePoint - 65536;
+      this.#units.push(55296 + (offset >> 10), 56320 + (offset & 1023));
+    } else {
+      this.#units.push(codePoint);
+    }
+    if (this.#units.length >= 4096)
+      this.#flush();
+  }
+  text() {
+    this.#flush();
+    return this.#out;
+  }
+  #flush() {
+    this.#out += String.fromCharCode(...this.#units);
+    this.#units = [];
+  }
+}
+function utf16Units(bytes) {
+  const units = new Uint16Array(bytes.length >> 1);
+  for (let i = 0;i < units.length; i++)
+    units[i] = bytes[2 * i] | bytes[2 * i + 1] << 8;
+  return units;
+}
+function fromCodeUnits(bytes, unit) {
+  let out = "";
+  for (let i = 0;i < bytes.length; i += 4096)
+    out += String.fromCharCode(...[...bytes.subarray(i, i + 4096)].map(unit));
+  return out;
+}
+function encodeBase64(bytes) {
+  let out = "";
+  for (let i = 0;i < bytes.length; i += 3) {
+    const [a = 0, b = 0, c = 0] = [bytes[i], bytes[i + 1], bytes[i + 2]];
+    const triple = a << 16 | b << 8 | c;
+    out += BASE64[triple >> 18 & 63];
+    out += BASE64[triple >> 12 & 63];
+    out += i + 1 < bytes.length ? BASE64[triple >> 6 & 63] : "=";
+    out += i + 2 < bytes.length ? BASE64[triple & 63] : "=";
+  }
+  return out;
 }
 
 // vendor/playwright/isomorphic/stringUtils.ts
@@ -1510,7 +2118,49 @@ function escapeForAttributeSelector(value, exact) {
     return escapeRegexForSelector(value);
   return `"${value.replace(/\\/g, "\\\\").replace(/["]/g, "\\\"")}"${exact ? "s" : "i"}`;
 }
+function trimString(input, cap, suffix = "") {
+  if (input.length <= cap)
+    return input;
+  const chars = [...input];
+  if (chars.length > cap)
+    return chars.slice(0, cap - suffix.length).join("") + suffix;
+  return chars.join("");
+}
+function trimStringWithEllipsis(input, cap) {
+  return trimString(input, cap, "…");
+}
 var ansiRegex = new RegExp("([\\u001B\\u009B][[\\]()#?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]*)*)?\\u0007)|(?:(?:\\d{0,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-ntqry=><~])))", "g");
+
+// src/file-chooser.ts
+var SET_FILES_UNSERVED = "Neo does not serve FileChooser.setFiles yet: it sets the input through setInputFiles, which Neo does not serve yet";
+
+class FileChooser {
+  #page;
+  #chooser;
+  #isMultiple;
+  #connection;
+  #element;
+  constructor(page, chooser, isMultiple, connection) {
+    this.#page = page;
+    this.#chooser = chooser;
+    this.#isMultiple = isMultiple;
+    this.#connection = connection;
+  }
+  element() {
+    if (!this.#element)
+      this.#element = handleFrom(this.#connection, get(this.#chooser, "element"));
+    return this.#element;
+  }
+  isMultiple() {
+    return this.#isMultiple;
+  }
+  page() {
+    return this.#page;
+  }
+  async setFiles(files, options) {
+    throw new Error(SET_FILES_UNSERVED);
+  }
+}
 
 // vendor/playwright/isomorphic/locatorUtils.ts
 function getByAttributeTextSelector(attrName, text, options) {
@@ -3732,6 +4382,32 @@ function isRegExp3(obj) {
   return obj instanceof RegExp;
 }
 
+// src/disposable.ts
+class DisposableStub {
+  #dispose;
+  constructor(dispose) {
+    this.#dispose = dispose;
+    const asyncDispose = Symbol.asyncDispose;
+    if (asyncDispose)
+      Object.defineProperty(this, asyncDispose, {
+        value: () => this.dispose()
+      });
+  }
+  async dispose() {
+    if (!this.#dispose)
+      return;
+    try {
+      const dispose = this.#dispose;
+      this.#dispose = undefined;
+      await dispose();
+    } catch (e) {
+      if (isTargetClosedError(e))
+        return;
+      throw e;
+    }
+  }
+}
+
 // src/locator.ts
 class Locator {
   _frame;
@@ -3764,6 +4440,42 @@ class Locator {
   }
   page() {
     return this._frame.page();
+  }
+  async boundingBox(options) {
+    return await this._frame._boundingBox("locator.boundingBox", this._selector, options ?? {});
+  }
+  async dispatchEvent(type, eventInit = {}, options) {
+    return await this._frame._dispatchEvent("locator.dispatchEvent", this._selector, type, eventInit, { strict: true, ...options });
+  }
+  async focus(options) {
+    return await this._frame._focus("locator.focus", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
+  async blur(options) {
+    await this._frame._blur("locator.blur", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
+  async scrollIntoViewIfNeeded(options = {}) {
+    return await this._frame._scrollIntoViewIfNeeded("locator.scrollIntoViewIfNeeded", this._selector, { ...options, timeout: options.timeout });
+  }
+  async selectText(options = {}) {
+    const timeout = options.timeout;
+    return await this._frame._selectText("locator.selectText", this._selector, {
+      ...options,
+      timeout
+    });
+  }
+  async highlight(options = {}) {
+    const style = typeof options.style === "object" ? cssObjectToString(options.style) : options.style;
+    await this._frame._highlight("locator.highlight", this._selector, style);
+    return new DisposableStub(() => this.hideHighlight());
+  }
+  async hideHighlight() {
+    await this._frame._hideHighlight("locator.hideHighlight", this._selector);
   }
   async click(options = {}) {
     return await this._frame._click("locator.click", this._selector, {
@@ -3810,6 +4522,13 @@ class Locator {
   async ariaSnapshot(options = {}) {
     return await this._frame._ariaSnapshot("locator.ariaSnapshot", options, this._selector);
   }
+  async ariaSnapshotJSON(options = {}) {
+    return await this._frame._ariaSnapshotJSON("locator.ariaSnapshotJSON", options, this._selector);
+  }
+  async normalize() {
+    const resolved = await this._frame._resolveSelector("locator.normalize", this._selector);
+    return new Locator(this._frame, resolved);
+  }
   async count() {
     return await this._frame._queryCount("locator.count", this._selector);
   }
@@ -3830,6 +4549,18 @@ class Locator {
   }
   async press(key, options = {}) {
     return await this._frame._press("locator.press", this._selector, key, {
+      strict: true,
+      ...options
+    });
+  }
+  async dragTo(target, options = {}) {
+    return await this._frame._dragAndDrop("locator.dragTo", this._selector, target._selector, { strict: true, ...options });
+  }
+  async pressSequentially(text, options = {}) {
+    return await this._frame._type("locator.pressSequentially", this._selector, text, { strict: true, ...options });
+  }
+  async type(text, options = {}) {
+    return await this._frame._type("locator.type", this._selector, text, {
       strict: true,
       ...options
     });
@@ -4013,6 +4744,12 @@ function testIdAttributeName() {
 function setTestIdAttribute(attributeName) {
   _testIdAttributeName = attributeName;
 }
+function cssObjectToString(style) {
+  return Object.entries(style).map(([key, value]) => {
+    const property = key.startsWith("--") ? key : key.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase());
+    return `${property}: ${value}`;
+  }).join("; ");
+}
 
 // src/frame-locator.ts
 var kAnyFrameSelector = "internal:control=any-frame";
@@ -4080,6 +4817,7 @@ class FrameLocator {
 }
 
 // src/neo-commands.ts
+var NEO_SELECT_TEXT_KEYS = ["selector", "strict", "force"];
 function serializeUrlMatch(apiName, url) {
   if (url === undefined || url === "")
     return { glob: "" };
@@ -4095,463 +4833,77 @@ function isRegExp4(value) {
   return value instanceof RegExp || Object.prototype.toString.call(value) === "[object RegExp]";
 }
 
-// src/network.ts
-class RawHeaders {
-  #headersArray;
-  #headersMap = new Map;
-  constructor(headers) {
-    this.#headersArray = headers;
-    for (const header of headers) {
-      const name = header.name.toLowerCase();
-      const values = this.#headersMap.get(name);
-      if (values)
-        values.push(header.value);
-      else
-        this.#headersMap.set(name, [header.value]);
-    }
-  }
-  get(name) {
-    const values = this.getAll(name);
-    if (!values.length)
-      return null;
-    return values.join(name.toLowerCase() === "set-cookie" ? `
-` : ", ");
-  }
-  getAll(name) {
-    return [...this.#headersMap.get(name.toLowerCase()) ?? []];
-  }
-  headers() {
-    const result = {};
-    for (const name of this.#headersMap.keys())
-      result[name] = this.get(name) ?? "";
-    return result;
-  }
-  headersArray() {
-    return this.#headersArray;
-  }
-}
-
-class Request {
-  _guid;
-  #initializer;
-  #frame;
-  #connection;
-  #redirectedFrom;
-  _redirectedTo = null;
-  _response = null;
-  #provisionalHeaders;
-  #actualHeadersPromise;
-  #timing = {
-    startTime: 0,
-    domainLookupStart: -1,
-    domainLookupEnd: -1,
-    connectStart: -1,
-    secureConnectionStart: -1,
-    connectEnd: -1,
-    requestStart: -1,
-    responseStart: -1,
-    responseEnd: -1
+// src/plain-argument.ts
+function serializePlainArgument(value) {
+  return {
+    value: serialize2(value, { lastId: 0, visited: new Map }, []),
+    handles: []
   };
-  constructor(guid, initializer, frame, redirectedFrom, connection) {
-    this._guid = guid;
-    this.#initializer = initializer;
-    this.#frame = frame;
-    this.#connection = connection;
-    this.#redirectedFrom = redirectedFrom;
-    if (redirectedFrom)
-      redirectedFrom._redirectedTo = this;
-    this.#provisionalHeaders = new RawHeaders(initializer.headers);
-  }
-  url() {
-    return this.#initializer.url;
-  }
-  resourceType() {
-    return this.#initializer.resourceType;
-  }
-  method() {
-    return this.#initializer.method;
-  }
-  postData() {
-    return this.postDataBuffer()?.toString("utf-8") ?? null;
-  }
-  postDataBuffer() {
-    const data = this.#initializer.postData;
-    return data ? Buffer3.fromBinary(data) : null;
-  }
-  postDataJSON() {
-    const postData = this.postData();
-    if (!postData)
-      return null;
-    const contentType = this.headers()["content-type"];
-    if (contentType?.includes("application/x-www-form-urlencoded"))
-      return parseFormBody(postData);
-    try {
-      return JSON.parse(postData);
-    } catch {
-      throw new Error(`POST data is not a valid JSON object: ${postData}`);
+}
+function serialize2(value, visitorInfo, accessChain) {
+  if (typeof value === "symbol")
+    return { v: "undefined" };
+  if (Object.is(value, undefined))
+    return { v: "undefined" };
+  if (Object.is(value, null))
+    return { v: "null" };
+  if (Object.is(value, Number.NaN))
+    return { v: "NaN" };
+  if (Object.is(value, Number.POSITIVE_INFINITY))
+    return { v: "Infinity" };
+  if (Object.is(value, Number.NEGATIVE_INFINITY))
+    return { v: "-Infinity" };
+  if (Object.is(value, -0))
+    return { v: "-0" };
+  if (typeof value === "boolean")
+    return { b: value };
+  if (typeof value === "number")
+    return { n: value };
+  if (typeof value === "string")
+    return { s: value };
+  if (typeof value === "bigint")
+    return { bi: value.toString() };
+  if (value instanceof Error)
+    return { e: { n: value.name, m: value.message, s: value.stack || "" } };
+  if (value instanceof Date)
+    return { d: value.toJSON() };
+  if (typeof URL !== "undefined" && value instanceof URL)
+    return { u: value.toJSON() };
+  if (value instanceof RegExp)
+    return { r: { p: value.source, f: value.flags } };
+  if (ArrayBuffer.isView(value))
+    refuseTypedArray();
+  if (typeof value === "object") {
+    const object = value;
+    const seen = visitorInfo.visited.get(object);
+    if (seen)
+      return { ref: seen };
+    if (Array.isArray(object)) {
+      const id2 = ++visitorInfo.lastId;
+      visitorInfo.visited.set(object, id2);
+      const a = object.map((item, i) => serialize2(item, visitorInfo, [...accessChain, i]));
+      return { a, id: id2 };
     }
+    const id = ++visitorInfo.lastId;
+    visitorInfo.visited.set(object, id);
+    const o = Object.keys(object).map((name) => ({
+      k: name,
+      v: serialize2(object[name], visitorInfo, [...accessChain, name])
+    }));
+    return { o, id };
   }
-  headers() {
-    return this.#provisionalHeaders.headers();
-  }
-  async allHeaders() {
-    return (await this.#actualHeaders("request.allHeaders")).headers();
-  }
-  async headersArray() {
-    return (await this.#actualHeaders("request.headersArray")).headersArray();
-  }
-  async headerValue(name) {
-    return (await this.#actualHeaders("request.headerValue")).get(name);
-  }
-  async response() {
-    return await this.#response("request.response");
-  }
-  existingResponse() {
-    return this._response;
-  }
-  frame() {
-    return this.#frame;
-  }
-  serviceWorker() {
-    return null;
-  }
-  isNavigationRequest() {
-    return this.#initializer.isNavigationRequest;
-  }
-  redirectedFrom() {
-    return this.#redirectedFrom;
-  }
-  redirectedTo() {
-    return this._redirectedTo;
-  }
-  failure() {
-    const errorText = get(this._guid, "failure");
-    return errorText ? { errorText } : null;
-  }
-  timing() {
-    return Object.assign(this.#timing, get(this._guid, "timing"));
-  }
-  async sizes() {
-    const response = await this.#response("request.sizes");
-    if (!response)
-      throw new Error("Unable to fetch sizes for failed request");
-    return await response._sizes("request.sizes");
-  }
-  toJSON() {
-    return { _type: "Request", _guid: this._guid };
-  }
-  async#response(apiName) {
-    const { response } = await this.#connection.sendRequest(apiName, this._guid, "response", {}, 0);
-    return response ? responseFor(this.#connection, response.guid, this.#frame) : null;
-  }
-  #actualHeaders(apiName) {
-    this.#actualHeadersPromise ??= this.#connection.sendRequest(apiName, this._guid, "rawRequestHeaders", {}, 0).then(({ headers }) => new RawHeaders(headers));
-    return this.#actualHeadersPromise;
-  }
+  throw new Error(`Attempting to serialize unexpected value${accessChainToDisplayString2(accessChain)}: ${String(value)}`);
 }
-
-class Response {
-  _guid;
-  #initializer;
-  #request;
-  #connection;
-  #provisionalHeaders;
-  #actualHeadersPromise;
-  constructor(guid, initializer, request, connection) {
-    this._guid = guid;
-    this.#initializer = initializer;
-    this.#request = request;
-    this.#connection = connection;
-    this.#provisionalHeaders = new RawHeaders(initializer.headers);
-    request._response = this;
-  }
-  url() {
-    return this.#initializer.url;
-  }
-  ok() {
-    const status = this.#initializer.status;
-    return status === 0 || status >= 200 && status <= 299;
-  }
-  status() {
-    return this.#initializer.status;
-  }
-  statusText() {
-    return this.#initializer.statusText;
-  }
-  fromServiceWorker() {
-    return this.#initializer.fromServiceWorker;
-  }
-  headers() {
-    return this.#provisionalHeaders.headers();
-  }
-  async allHeaders() {
-    return (await this.#actualHeaders("response.allHeaders")).headers();
-  }
-  async headersArray() {
-    return (await this.#actualHeaders("response.headersArray")).headersArray().slice();
-  }
-  async headerValue(name) {
-    return (await this.#actualHeaders("response.headerValue")).get(name);
-  }
-  async headerValues(name) {
-    return (await this.#actualHeaders("response.headerValues")).getAll(name);
-  }
-  async finished() {
-    for (let delay = 0;; delay = Math.min(delay * 2 || 4, 100)) {
-      const state = get(this._guid, "finished");
-      if (state === "finished")
-        return null;
-      if (state === "closed")
-        throw targetClosedError();
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-  }
-  async body() {
-    return await this.#body("response.body");
-  }
-  async text() {
-    return (await this.#body("response.text")).toString("utf8");
-  }
-  async json() {
-    return JSON.parse((await this.#body("response.json")).toString("utf8"));
-  }
-  request() {
-    return this.#request;
-  }
-  frame() {
-    return this.#request.frame();
-  }
-  async serverAddr() {
-    const { value } = await this.#connection.sendResponse("response.serverAddr", this._guid, "serverAddr", {}, 0);
-    return value || null;
-  }
-  async securityDetails() {
-    const { value } = await this.#connection.sendResponse("response.securityDetails", this._guid, "securityDetails", {}, 0);
-    return value || null;
-  }
-  async httpVersion() {
-    const { value } = await this.#connection.sendResponse("response.httpVersion", this._guid, "httpVersion", {}, 0);
-    return value;
-  }
-  toJSON() {
-    return { _type: "Response", _guid: this._guid };
-  }
-  async _sizes(apiName) {
-    const { sizes } = await this.#connection.sendResponse(apiName, this._guid, "sizes", {}, 0);
-    return sizes;
-  }
-  async#body(apiName) {
-    const { binary } = await this.#connection.sendResponse(apiName, this._guid, "body", {}, 0);
-    return Buffer3.fromBinary(binary);
-  }
-  #actualHeaders(apiName) {
-    this.#actualHeadersPromise ??= this.#connection.sendResponse(apiName, this._guid, "rawResponseHeaders", {}, 0).then(({ headers }) => new RawHeaders(headers));
-    return this.#actualHeadersPromise;
-  }
+function refuseTypedArray() {
+  throw new Error("Neo's dispatchEvent takes plain eventInit values (strings, finite numbers, booleans, null, arrays and plain objects); this one holds a typed array");
 }
-function responseFor(connection, guid, frame) {
-  const known = connection._objects.get(guid);
-  if (known instanceof Response)
-    return known;
-  const chain = get(guid, "chain");
-  let previous = null;
-  for (const [index, created] of chain.requests.entries()) {
-    let request = connection._objects.get(created.guid);
-    if (!(request instanceof Request)) {
-      request = new Request(created.guid, created.initializer, frame, previous, connection);
-      connection._objects.set(created.guid, request);
-    }
-    const response = chain.responses[index];
-    if (response && !connection._objects.has(response.guid))
-      connection._objects.set(response.guid, new Response(response.guid, response.initializer, request, connection));
-    previous = request;
-  }
-  const built = connection._objects.get(guid);
-  if (!(built instanceof Response))
-    throw new Error(`neo-sdk: Rust's chain for ${guid} has no such response`);
-  return built;
-}
-function parseFormBody(body) {
-  const entries = {};
-  for (const pair of body.split("&")) {
-    if (!pair)
-      continue;
-    const at = pair.indexOf("=");
-    const decode = (text) => decodeURIComponent(text.replace(/\+/g, " "));
-    const name = decode(at < 0 ? pair : pair.slice(0, at));
-    entries[name] = at < 0 ? "" : decode(pair.slice(at + 1));
-  }
-  return entries;
-}
-var BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-var BASE64_INDEX = new Map([...BASE64].map((char, index) => [char, index]));
-
-class Buffer3 extends Uint8Array {
-  static fromBinary(text) {
-    const clean = text.replace(/=+$/, "");
-    const bytes = new Buffer3(Math.floor(clean.length * 3 / 4));
-    let bits = 0;
-    let value = 0;
-    let at = 0;
-    for (const char of clean) {
-      const index = BASE64_INDEX.get(char);
-      if (index === undefined)
-        throw new Error("neo-sdk: invalid base64 from Rust");
-      value = value << 6 | index;
-      bits += 6;
-      if (bits >= 8) {
-        bits -= 8;
-        bytes[at++] = value >> bits & 255;
-      }
-    }
-    return bytes;
-  }
-  toString(...args) {
-    if (args.length === 0)
-      return decodeUtf8(this);
-    const [encoding, start, end] = args;
-    const length = this.length;
-    let from;
-    if (start <= 0)
-      from = 0;
-    else if (start >= length)
-      return "";
-    else
-      from = Math.trunc(start) || 0;
-    const to = end === undefined || end > length ? length : Math.trunc(end) || 0;
-    if (to <= from)
-      return "";
-    const bytes = this.subarray(from, to);
-    if (encoding === undefined)
-      return decodeUtf8(bytes);
-    switch (String(encoding).toLowerCase()) {
-      case "utf8":
-      case "utf-8":
-        return decodeUtf8(bytes);
-      case "ucs2":
-      case "ucs-2":
-      case "utf16le":
-      case "utf-16le":
-        return fromCodeUnits(utf16Units(bytes), (unit) => unit);
-      case "latin1":
-      case "binary":
-        return fromCodeUnits(bytes, (byte) => byte);
-      case "ascii":
-        return fromCodeUnits(bytes, (byte) => byte & 127);
-      case "base64":
-        return encodeBase64(bytes);
-      case "base64url":
-        return encodeBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-      case "hex":
-        return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-      default:
-        throw new TypeError(`Unknown encoding: ${encoding}`);
-    }
-  }
-  toJSON() {
-    return { type: "Buffer", data: [...this] };
-  }
-  equals(other) {
-    return this.length === other.length && this.every((byte, i) => byte === other[i]);
-  }
-}
-function utf8Lead(byte) {
-  if (byte >= 194 && byte <= 223)
-    return { needed: 1, codePoint: byte & 31, lower: 128, upper: 191 };
-  if (byte >= 224 && byte <= 239)
-    return {
-      needed: 2,
-      codePoint: byte & 15,
-      lower: byte === 224 ? 160 : 128,
-      upper: byte === 237 ? 159 : 191
-    };
-  if (byte >= 240 && byte <= 244)
-    return {
-      needed: 3,
-      codePoint: byte & 7,
-      lower: byte === 240 ? 144 : 128,
-      upper: byte === 244 ? 143 : 191
-    };
-  return null;
-}
-function decodeUtf8(bytes) {
-  const units = new CodeUnits;
-  let lead = null;
-  for (let i = 0;i < bytes.length; i++) {
-    const byte = bytes[i];
-    if (!lead) {
-      lead = byte <= 127 ? null : utf8Lead(byte);
-      if (byte <= 127)
-        units.push(byte);
-      else if (!lead)
-        units.push(65533);
-      continue;
-    }
-    if (byte < lead.lower || byte > lead.upper) {
-      lead = null;
-      units.push(65533);
-      i--;
-      continue;
-    }
-    lead.codePoint = lead.codePoint << 6 | byte & 63;
-    lead.lower = 128;
-    lead.upper = 191;
-    lead.needed--;
-    if (lead.needed === 0) {
-      units.push(lead.codePoint);
-      lead = null;
-    }
-  }
-  if (lead)
-    units.push(65533);
-  return units.text();
-}
-
-class CodeUnits {
-  #units = [];
-  #out = "";
-  push(codePoint) {
-    if (codePoint > 65535) {
-      const offset = codePoint - 65536;
-      this.#units.push(55296 + (offset >> 10), 56320 + (offset & 1023));
-    } else {
-      this.#units.push(codePoint);
-    }
-    if (this.#units.length >= 4096)
-      this.#flush();
-  }
-  text() {
-    this.#flush();
-    return this.#out;
-  }
-  #flush() {
-    this.#out += String.fromCharCode(...this.#units);
-    this.#units = [];
-  }
-}
-function utf16Units(bytes) {
-  const units = new Uint16Array(bytes.length >> 1);
-  for (let i = 0;i < units.length; i++)
-    units[i] = bytes[2 * i] | bytes[2 * i + 1] << 8;
-  return units;
-}
-function fromCodeUnits(bytes, unit) {
-  let out = "";
-  for (let i = 0;i < bytes.length; i += 4096)
-    out += String.fromCharCode(...[...bytes.subarray(i, i + 4096)].map(unit));
-  return out;
-}
-function encodeBase64(bytes) {
-  let out = "";
-  for (let i = 0;i < bytes.length; i += 3) {
-    const [a = 0, b = 0, c = 0] = [bytes[i], bytes[i + 1], bytes[i + 2]];
-    const triple = a << 16 | b << 8 | c;
-    out += BASE64[triple >> 18 & 63];
-    out += BASE64[triple >> 12 & 63];
-    out += i + 1 < bytes.length ? BASE64[triple >> 6 & 63] : "=";
-    out += i + 2 < bytes.length ? BASE64[triple & 63] : "=";
-  }
-  return out;
+function accessChainToDisplayString2(accessChain) {
+  const chainString = accessChain.map((accessor, i) => {
+    if (typeof accessor === "string")
+      return i ? `.${accessor}` : accessor;
+    return `[${accessor}]`;
+  }).join("");
+  return chainString.length > 0 ? ` at position "${chainString}"` : "";
 }
 
 // src/protocol.ts
@@ -4560,6 +4912,16 @@ var FRAME_TEXT_CONTENT_KEYS = ["selector", "strict"];
 var FRAME_INNER_TEXT_KEYS = ["selector", "strict"];
 var FRAME_GET_ATTRIBUTE_KEYS = ["selector", "strict", "name"];
 var FRAME_QUERY_COUNT_KEYS = ["selector"];
+var FRAME_CONTENT_KEYS = ["includeShadow"];
+var FRAME_SET_CONTENT_KEYS = ["html", "waitUntil"];
+var FRAME_WAIT_FOR_TIMEOUT_KEYS = ["waitTimeout"];
+var FRAME_RESOLVE_SELECTOR_KEYS = ["selector", "sdkLanguage"];
+var FRAME_ARIA_SNAPSHOT_JSON_KEYS = [
+  "mode",
+  "selector",
+  "depth",
+  "boxes"
+];
 var FRAME_ARIA_SNAPSHOT_KEYS = [
   "mode",
   "selector",
@@ -4610,6 +4972,23 @@ var FRAME_TAP_KEYS = [
   "position",
   "trial"
 ];
+var PAGE_KEYBOARD_DOWN_KEYS = ["key"];
+var PAGE_KEYBOARD_UP_KEYS = ["key"];
+var PAGE_KEYBOARD_INSERT_TEXT_KEYS = ["text"];
+var PAGE_KEYBOARD_TYPE_KEYS = ["text", "delay"];
+var PAGE_KEYBOARD_PRESS_KEYS = ["key", "delay"];
+var PAGE_MOUSE_MOVE_KEYS = ["x", "y", "steps"];
+var PAGE_MOUSE_DOWN_KEYS = ["button", "clickCount"];
+var PAGE_MOUSE_UP_KEYS = ["button", "clickCount"];
+var PAGE_MOUSE_CLICK_KEYS = [
+  "x",
+  "y",
+  "delay",
+  "button",
+  "clickCount"
+];
+var PAGE_MOUSE_WHEEL_KEYS = ["deltaX", "deltaY"];
+var PAGE_TOUCHSCREEN_TAP_KEYS = ["x", "y"];
 var FRAME_FILL_KEYS = ["selector", "strict", "value", "force"];
 var FRAME_PRESS_KEYS = [
   "selector",
@@ -4617,6 +4996,18 @@ var FRAME_PRESS_KEYS = [
   "key",
   "delay",
   "noWaitAfter"
+];
+var FRAME_TYPE_KEYS = ["selector", "strict", "text", "delay"];
+var FRAME_DRAG_AND_DROP_KEYS = [
+  "source",
+  "target",
+  "force",
+  "scroll",
+  "trial",
+  "sourcePosition",
+  "targetPosition",
+  "strict",
+  "steps"
 ];
 var FRAME_INPUT_VALUE_KEYS = ["selector", "strict"];
 var FRAME_IS_CHECKED_KEYS = ["selector", "strict"];
@@ -4655,8 +5046,24 @@ var FRAME_WAIT_FOR_SELECTOR_KEYS = [
   "state",
   "omitReturnValue"
 ];
+var FRAME_FOCUS_KEYS = ["selector", "strict"];
+var FRAME_BLUR_KEYS = ["selector", "strict"];
+var FRAME_DISPATCH_EVENT_KEYS = [
+  "selector",
+  "strict",
+  "type",
+  "eventInit"
+];
+var FRAME_HIGHLIGHT_KEYS = ["selector", "style"];
+var FRAME_HIDE_HIGHLIGHT_KEYS = ["selector"];
 var BROWSER_CONTEXT_CLOSE_KEYS = ["reason"];
 var PAGE_CLOSE_KEYS = ["reason"];
+var PAGE_REGISTER_LOCATOR_HANDLER_KEYS = [
+  "selector",
+  "noWaitAfter"
+];
+var PAGE_RESOLVE_LOCATOR_HANDLER_KEYS = ["uid", "remove"];
+var PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS = ["uid"];
 var PAGE_RELOAD_KEYS = ["waitUntil"];
 var PAGE_GO_BACK_KEYS = ["waitUntil"];
 var PAGE_GO_FORWARD_KEYS = ["waitUntil"];
@@ -4678,217 +5085,75 @@ function pickParams(keys, options) {
 function convertSelectOptionValues(values) {
   if (values === null)
     return {};
-  if (!Array.isArray(values))
-    values = [values];
-  if (!values.length)
+  const list = snapshot(values);
+  if (!list.length)
     return {};
-  for (let i = 0;i < values.length; i++) {
-    if (values[i] === null)
+  for (let i = 0;i < list.length; i++) {
+    if (list[i] === null)
       throw new Error(`options[${i}]: expected object, got null`);
   }
-  const options = isString(values[0]) ? values.map((valueOrLabel) => ({ valueOrLabel })) : values;
-  for (const [index, option] of options.entries()) {
-    if (typeof option !== "object" || option === null)
-      throw new Error(`options[${index}]: expected object`);
-    for (const field of ["valueOrLabel", "value", "label"]) {
-      if (option[field] !== undefined && typeof option[field] !== "string")
-        throw new Error(`options[${index}].${field}: expected string`);
-    }
-    if (option.index !== undefined && !Number.isInteger(option.index))
-      throw new Error(`options[${index}].index: expected integer`);
+  if (list[0] instanceof ElementHandle)
+    return { elements: elementsOf(list) };
+  const strings = isString(list[0]);
+  const options = [];
+  for (let i = 0;i < list.length; i++) {
+    options[i] = copyOption(strings ? { valueOrLabel: list[i] } : list[i], i);
   }
   return { options };
 }
-
-// src/waiter.ts
-function refuseSignal(options) {
-  if (options.signal !== undefined && options.signal !== null)
-    throw new Error('Neo does not support the "signal" option yet');
+function elementsOf(list) {
+  const elements = [];
+  for (let i = 0;i < list.length; i++) {
+    const value = list[i];
+    if (!(value instanceof ElementHandle))
+      throw new TypeError(`elements[${i}]: expected channel ElementHandle, got ${typeof value}`);
+    elements[i] = { guid: value._guid };
+  }
+  return elements;
 }
-async function wrapApiCall(apiName, body) {
-  try {
-    return await body();
-  } catch (e) {
-    if (e instanceof Error)
-      e.message = `${apiName}: ${e.message}`;
-    throw e;
-  }
+function snapshot(values) {
+  if (!Array.isArray(values))
+    return [values];
+  const length = values.length;
+  if (typeof length !== "number" || !Number.isSafeInteger(length) || length < 0)
+    throw new Error("options: expected array");
+  const list = [];
+  for (let i = 0;i < length; i++)
+    list[i] = values[i];
+  return list;
 }
-
-class Waiter {
-  _dispose = [];
-  _failures = [];
-  _immediateError;
-  _logs = [];
-  static createForEvent() {
-    return new Waiter;
+function copyOption(option, index) {
+  if (typeof option !== "object" || option === null)
+    throw new Error(`options[${index}]: expected object`);
+  const source = option;
+  const valueOrLabel = source.valueOrLabel;
+  const value = source.value;
+  const label = source.label;
+  const position = source.index;
+  const copy = {};
+  if (valueOrLabel !== undefined)
+    copy.valueOrLabel = text(valueOrLabel, index, "valueOrLabel");
+  if (value !== undefined)
+    copy.value = text(value, index, "value");
+  if (label !== undefined)
+    copy.label = text(label, index, "label");
+  if (position !== undefined) {
+    if (typeof position !== "number" || !Number.isInteger(position))
+      throw new Error(`options[${index}].index: expected integer`);
+    copy.index = position;
   }
-  async waitForEvent(emitter, event, predicate) {
-    const { promise, dispose } = waitForEvent(emitter, event, predicate);
-    return await this.waitForPromise(promise, dispose);
-  }
-  rejectOnEvent(emitter, event, error, predicate) {
-    const { promise, dispose } = waitForEvent(emitter, event, predicate);
-    this._rejectOn(promise.then(() => {
-      throw typeof error === "function" ? error() : error;
-    }), dispose);
-  }
-  rejectOnTimeout(timeout, timeoutMessage) {
-    if (timeout) {
-      const { promise, dispose } = waitForTimeout(timeout);
-      this._rejectOn(promise.then(() => {
-        throw new TimeoutError(timeoutMessage);
-      }), dispose);
-    }
-  }
-  rejectImmediately(error) {
-    this._immediateError = error;
-  }
-  throwIfImmediatelyRejected() {
-    if (this._immediateError)
-      throw this._immediateError;
-  }
-  dispose() {
-    for (const dispose of this._dispose)
-      dispose();
-  }
-  async waitForPromise(promise, dispose) {
-    try {
-      if (this._immediateError)
-        throw this._immediateError;
-      const result = await Promise.race([promise, ...this._failures]);
-      if (dispose)
-        dispose();
-      return result;
-    } catch (e) {
-      if (dispose)
-        dispose();
-      this.dispose();
-      if (e instanceof Error)
-        rewriteErrorMessage(e, e.message + formatLogRecording(this._logs));
-      throw e;
-    }
-  }
-  log(s) {
-    this._logs.push(s);
-  }
-  _rejectOn(promise, dispose) {
-    this._failures.push(promise);
-    if (dispose)
-      this._dispose.push(dispose);
-  }
+  return copy;
 }
-function waitForEvent(emitter, event, predicate) {
-  let listener = () => {};
-  const promise = new Promise((resolve, reject) => {
-    listener = async (eventArg) => {
-      try {
-        if (predicate && !await predicate(eventArg))
-          return;
-        emitter.removeListener(event, listener);
-        resolve(eventArg);
-      } catch (e) {
-        emitter.removeListener(event, listener);
-        reject(e);
-      }
-    };
-    emitter.addListener(event, listener);
-  });
-  const dispose = () => emitter.removeListener(event, listener);
-  return { promise, dispose };
-}
-function waitForTimeout(timeout) {
-  let timeoutId;
-  const promise = new Promise((resolve) => {
-    timeoutId = setTimeout(resolve, timeout);
-  });
-  const dispose = () => clearTimeout(timeoutId);
-  return { promise, dispose };
-}
-function formatLogRecording(log) {
-  if (!log.length)
-    return "";
-  const header = " logs ";
-  const headerLength = 60;
-  const leftLength = (headerLength - header.length) / 2;
-  const rightLength = headerLength - header.length - leftLength;
-  return `
-${"=".repeat(leftLength)}${header}${"=".repeat(rightLength)}
-${log.join(`
-`)}
-${"=".repeat(headerLength)}`;
-}
-function rewriteErrorMessage(e, newMessage) {
-  const lines = (e.stack?.split(`
-`) || []).filter((l) => l.startsWith("    at "));
-  e.message = newMessage;
-  const errorTitle = `${e.name}: ${e.message}`;
-  if (lines.length)
-    e.stack = `${errorTitle}
-${lines.join(`
-`)}`;
-  return e;
-}
-
-// src/timeout-settings.ts
-var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
-function refuseSignalFor(options, apiName) {
-  try {
-    refuseSignal(options);
-  } catch (error) {
-    if (apiName !== null && error instanceof Error)
-      error.message = `${apiName}: ${error.message}`;
-    throw error;
-  }
-}
-
-class TimeoutSettings {
-  #parent;
-  #defaultTimeout;
-  #defaultNavigationTimeout;
-  constructor(parent) {
-    this.#parent = parent;
-  }
-  setDefaultTimeout(timeout) {
-    this.#defaultTimeout = timeout;
-  }
-  setDefaultNavigationTimeout(timeout) {
-    this.#defaultNavigationTimeout = timeout;
-  }
-  timeout(options, apiName) {
-    refuseSignalFor(options, apiName);
-    return this.#timeout(options);
-  }
-  navigationTimeout(options, apiName) {
-    refuseSignalFor(options, apiName);
-    return this.#navigationTimeout(options);
-  }
-  #timeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.#timeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
-  }
-  #navigationTimeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultNavigationTimeout !== undefined)
-      return this.#defaultNavigationTimeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.#navigationTimeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
-  }
+function text(value, index, field) {
+  if (typeof value !== "string")
+    throw new Error(`options[${index}].${field}: expected string`);
+  return value;
 }
 
 // src/url.ts
 var READ_ONLY = "Neo's URL is read-only: build a new URL string instead";
 
-class URL2 {
+class URL3 {
   #parts;
   #searchParams;
   constructor(parts) {
@@ -5023,10 +5288,10 @@ class URLSearchParams {
 }
 function urlFor(url) {
   const parts = parseURL(url);
-  return parts ? new URL2(parts) : null;
+  return parts ? new URL3(parts) : null;
 }
-function formEncode(text) {
-  return encodeURIComponent(text).replace(/%20/g, "+").replace(/[!'()~]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+function formEncode(text2) {
+  return encodeURIComponent(text2).replace(/%20/g, "+").replace(/[!'()~]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 // src/frame.ts
@@ -5034,6 +5299,11 @@ var TAG_KEYS = {
   script: ["url", "content", "type"],
   style: ["url", "content"]
 };
+function nodeTimerDelay(timeout) {
+  if (typeof timeout !== "number")
+    return timeout;
+  return timeout >= 1 && timeout <= 2 ** 31 - 1 ? timeout : 1;
+}
 var LIFECYCLE_EVENTS = new Set([
   "load",
   "domcontentloaded",
@@ -5150,12 +5420,12 @@ class Frame {
   }
   async _waitForNavigation(apiName, options) {
     const waitUntil = verifyWaitState(apiName, "waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
-    const timeout = this._page._timeoutSettings.navigationTimeout(options, apiName);
-    const result = typeof options.url === "function" ? await this._navigationMatching(apiName, options.url, waitUntil, timeout, true) : await this._connection.sendNeo(apiName, this._guid, "neo:waitForNavigation", { url: serializeUrlMatch(apiName, options.url), waitUntil }, timeout);
+    const timeoutOptions = this._page._timeoutSettings.navigationTimeout(options, apiName);
+    const result = typeof options.url === "function" ? await this._navigationMatching(apiName, options.url, waitUntil, timeoutOptions, true) : await this._connection.sendNeo(apiName, this._guid, "neo:waitForNavigation", { url: serializeUrlMatch(apiName, options.url), waitUntil }, timeoutOptions);
     const guid = result?.response?.guid;
     return guid ? responseFor(this._connection, guid, this) : null;
   }
-  async _navigationMatching(apiName, predicate, waitUntil, timeout, respond) {
+  async _navigationMatching(apiName, predicate, waitUntil, { timeout, signal }, respond) {
     const deadline = timeout ? Date.now() + timeout : 0;
     const left = () => {
       if (!deadline)
@@ -5168,12 +5438,12 @@ class Frame {
     let cursor;
     let finished = false;
     const finish = async (id, index) => {
-      const result = await this.#finishNavigation(apiName, id, index, waitUntil, left());
+      const result = await this.#finishNavigation(apiName, id, index, waitUntil, { timeout: left(), signal });
       finished = true;
       return result;
     };
     const next = () => {
-      const call2 = this._connection.sendNeo(apiName, this._guid, "neo:nextNavigation", cursor === undefined ? { response: respond } : { cursor, response: respond }, left());
+      const call2 = this._connection.sendNeo(apiName, this._guid, "neo:nextNavigation", cursor === undefined ? { response: respond } : { cursor, response: respond }, { timeout: left(), signal });
       call2.catch(() => {});
       return call2;
     };
@@ -5205,11 +5475,11 @@ class Frame {
           try {
             verdict = predicate(parsed);
           } catch (error) {
-            throw prefixed(apiName, error);
+            throw prefixed2(apiName, error);
           }
           if (isPromiseLike(verdict)) {
             const answer = Promise.resolve(verdict).then((value) => ({ index, accepted: !!value }), (error) => {
-              throw prefixed(apiName, error);
+              throw prefixed2(apiName, error);
             });
             answer.catch(() => {});
             verdicts.set(index, answer);
@@ -5386,8 +5656,6 @@ class Frame {
     return await this._querySelector("frame.$", selector, options);
   }
   async _querySelector(apiName, selector, options) {
-    if (options?.signal !== undefined && options.signal !== null)
-      throw new Error(`${apiName}: Neo does not support signal yet`);
     const params = {
       selector,
       ...pickParams(["strict"], options ?? {})
@@ -5433,6 +5701,24 @@ class Frame {
     const result = await this._connection.sendEval(apiName, this._guid, "waitForFunction", pollingInterval === undefined ? params : { ...params, pollingInterval }, this._page._timeoutSettings.timeout(options, apiName));
     return handleFrom(this._connection, result.handle);
   }
+  async waitForSelector(selector, options) {
+    return await this._waitForSelectorPublic("frame.waitForSelector", selector, options);
+  }
+  async _waitForSelectorPublic(apiName, selector, options = {}) {
+    const legacy = options;
+    if (legacy.visibility)
+      throw new Error("options.visibility is not supported, did you mean options.state?");
+    if (legacy.waitFor && legacy.waitFor !== "visible")
+      throw new Error("options.waitFor is not supported, did you mean options.state?");
+    return await this._waitForSelectorElement(apiName, selector, options);
+  }
+  async frameElement() {
+    const result = await this._connection.sendNeo("frame.frameElement", this._guid, "frameElement", {}, 0);
+    const element = ElementHandle.fromNullable(this._connection, result?.element);
+    if (!element)
+      throw new Error("neo-sdk: frameElement answered no element");
+    return element;
+  }
   async _waitForSelectorElement(apiName, selector, options) {
     const result = await this._connection.send(apiName, this._guid, "waitForSelector", pickParams(FRAME_WAIT_FOR_SELECTOR_KEYS, {
       selector,
@@ -5448,6 +5734,47 @@ class Frame {
       boxes: options.boxes
     }), this._page._timeoutSettings.timeout(options, apiName));
     return result.snapshot;
+  }
+  async _ariaSnapshotJSON(apiName, options, selector) {
+    const result = await this._connection.send(apiName, this._guid, "ariaSnapshotJSON", pickParams(FRAME_ARIA_SNAPSHOT_JSON_KEYS, {
+      mode: options.mode,
+      selector,
+      depth: options.depth,
+      boxes: options.boxes
+    }), this._page._timeoutSettings.timeout(options, apiName));
+    return result.snapshot;
+  }
+  async content(options = {}) {
+    return await this._content("frame.content", options);
+  }
+  async _content(apiName, options = {}) {
+    const result = await this._connection.send(apiName, this._guid, "content", pickParams(FRAME_CONTENT_KEYS, { ...options }), 0);
+    return result.value;
+  }
+  async setContent(html, options = {}) {
+    return await this._setContent("frame.setContent", html, options);
+  }
+  async _setContent(apiName, html, options = {}) {
+    const waitUntil = verifyLoadState("waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
+    await this._connection.send(apiName, this._guid, "setContent", pickParams(FRAME_SET_CONTENT_KEYS, {
+      html,
+      ...options,
+      waitUntil
+    }), this._page._timeoutSettings.navigationTimeout(options, apiName));
+  }
+  async waitForTimeout(timeout) {
+    return await this._waitForTimeout("frame.waitForTimeout", timeout);
+  }
+  async _waitForTimeout(apiName, timeout) {
+    await this._connection.send(apiName, this._guid, "waitForTimeout", pickParams(FRAME_WAIT_FOR_TIMEOUT_KEYS, {
+      waitTimeout: nodeTimerDelay(timeout)
+    }), 0);
+  }
+  async _resolveSelector(apiName, selector) {
+    const result = await this._connection.send(apiName, this._guid, "resolveSelector", pickParams(FRAME_RESOLVE_SELECTOR_KEYS, {
+      selector
+    }), 0);
+    return result.resolvedSelector;
   }
   async click(selector, options = {}) {
     return await this._click("frame.click", selector, options);
@@ -5505,6 +5832,26 @@ class Frame {
       ...options
     }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
+  async dragAndDrop(source, target, options = {}) {
+    return await this._dragAndDrop("frame.dragAndDrop", source, target, options);
+  }
+  async _dragAndDrop(apiName, source, target, options) {
+    await this._connection.send(apiName, this._guid, "dragAndDrop", pickParams(FRAME_DRAG_AND_DROP_KEYS, {
+      source,
+      target,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async type(selector, text2, options = {}) {
+    return await this._type("frame.type", selector, text2, options);
+  }
+  async _type(apiName, selector, text2, options) {
+    await this._connection.send(apiName, this._guid, "type", pickParams(FRAME_TYPE_KEYS, {
+      selector,
+      text: text2,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
   async inputValue(selector, options = {}) {
     return await this._inputValue("frame.inputValue", selector, options);
   }
@@ -5521,7 +5868,6 @@ class Frame {
     return await this._isVisible("frame.isVisible", selector, options);
   }
   async _isVisible(apiName, selector, options) {
-    refuseSignalFor(options ?? {}, apiName);
     const result = await this._connection.send(apiName, this._guid, "isVisible", pickParams(FRAME_IS_VISIBLE_KEYS, {
       selector,
       ...options
@@ -5534,7 +5880,6 @@ class Frame {
     return await this._isHidden("frame.isHidden", selector, options);
   }
   async _isHidden(apiName, selector, options) {
-    refuseSignalFor(options ?? {}, apiName);
     const result = await this._connection.send(apiName, this._guid, "isHidden", pickParams(FRAME_IS_HIDDEN_KEYS, {
       selector,
       ...options
@@ -5628,6 +5973,59 @@ class Frame {
     else
       await this._uncheck("frame.setChecked", selector, options);
   }
+  async focus(selector, options = {}) {
+    return await this._focus("frame.focus", selector, options);
+  }
+  async _focus(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "focus", pickParams(FRAME_FOCUS_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async _blur(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "blur", pickParams(FRAME_BLUR_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async dispatchEvent(selector, type, eventInit, options = {}) {
+    return await this._dispatchEvent("frame.dispatchEvent", selector, type, eventInit, options);
+  }
+  async _dispatchEvent(apiName, selector, type, eventInit, options) {
+    await this._connection.send(apiName, this._guid, "dispatchEvent", pickParams(FRAME_DISPATCH_EVENT_KEYS, {
+      selector,
+      type,
+      eventInit: serializePlainArgument(eventInit),
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async _scrollIntoViewIfNeeded(apiName, selector, options) {
+    await this._connection.sendNeo(apiName, this._guid, "neo:scrollIntoViewIfNeeded", { selector, strict: true }, this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async _selectText(apiName, selector, options) {
+    const opts = options ?? {};
+    await this._connection.sendNeo(apiName, this._guid, "neo:selectText", pickParams(NEO_SELECT_TEXT_KEYS, {
+      selector,
+      strict: true,
+      force: opts.force
+    }), this._page._timeoutSettings.timeout(opts, apiName));
+  }
+  async _boundingBox(apiName, selector, options) {
+    const result = await this._connection.sendNeo(apiName, this._guid, "neo:boundingBox", { selector, strict: true }, this._page._timeoutSettings.timeout(options ?? {}, apiName));
+    const box = result?.value;
+    return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null;
+  }
+  async _highlight(apiName, selector, style) {
+    await this._connection.send(apiName, this._guid, "highlight", pickParams(FRAME_HIGHLIGHT_KEYS, {
+      selector,
+      style
+    }), 0);
+  }
+  async _hideHighlight(apiName, selector) {
+    await this._connection.send(apiName, this._guid, "hideHighlight", pickParams(FRAME_HIDE_HIGHLIGHT_KEYS, {
+      selector
+    }), 0);
+  }
   locator(selector, options) {
     return new Locator(this, selector, options);
   }
@@ -5637,20 +6035,20 @@ class Frame {
   getByTestId(testId) {
     return this.locator(getByTestIdSelector(testIdAttributeName(), testId));
   }
-  getByAltText(text, options) {
-    return this.locator(getByAltTextSelector(text, options));
+  getByAltText(text2, options) {
+    return this.locator(getByAltTextSelector(text2, options));
   }
-  getByLabel(text, options) {
-    return this.locator(getByLabelSelector(text, options));
+  getByLabel(text2, options) {
+    return this.locator(getByLabelSelector(text2, options));
   }
-  getByPlaceholder(text, options) {
-    return this.locator(getByPlaceholderSelector(text, options));
+  getByPlaceholder(text2, options) {
+    return this.locator(getByPlaceholderSelector(text2, options));
   }
-  getByText(text, options) {
-    return this.locator(getByTextSelector(text, options));
+  getByText(text2, options) {
+    return this.locator(getByTextSelector(text2, options));
   }
-  getByTitle(text, options) {
-    return this.locator(getByTitleSelector(text, options));
+  getByTitle(text2, options) {
+    return this.locator(getByTitleSelector(text2, options));
   }
   getByRole(role, options = {}) {
     return this.locator(getByRoleSelector(role, options));
@@ -5662,13 +6060,277 @@ class Frame {
 function navigationTimeout(apiName, timeout) {
   return new TimeoutError(`${apiName}: Timeout ${timeout}ms exceeded.`);
 }
-function prefixed(apiName, error) {
+function prefixed2(apiName, error) {
   if (error instanceof Error)
     error.message = `${apiName}: ${error.message}`;
   return error;
 }
 function isPromiseLike(value) {
   return (typeof value === "object" || typeof value === "function") && value !== null && typeof value.then === "function";
+}
+
+// src/input.ts
+class Keyboard {
+  #page;
+  constructor(page) {
+    this.#page = page;
+  }
+  async down(key) {
+    await this.#page._sendInput("keyboard.down", "keyboardDown", pickParams(PAGE_KEYBOARD_DOWN_KEYS, { key }));
+  }
+  async up(key) {
+    await this.#page._sendInput("keyboard.up", "keyboardUp", pickParams(PAGE_KEYBOARD_UP_KEYS, { key }));
+  }
+  async insertText(text2) {
+    await this.#page._sendInput("keyboard.insertText", "keyboardInsertText", pickParams(PAGE_KEYBOARD_INSERT_TEXT_KEYS, {
+      text: text2
+    }));
+  }
+  async type(text2, options = {}) {
+    await this.#page._sendInput("keyboard.type", "keyboardType", pickParams(PAGE_KEYBOARD_TYPE_KEYS, {
+      text: text2,
+      ...options
+    }));
+  }
+  async press(key, options = {}) {
+    await this.#page._sendInput("keyboard.press", "keyboardPress", pickParams(PAGE_KEYBOARD_PRESS_KEYS, {
+      key,
+      ...options
+    }));
+  }
+}
+
+class Mouse {
+  #page;
+  constructor(page) {
+    this.#page = page;
+  }
+  async move(x, y, options = {}) {
+    await this.#page._sendInput("mouse.move", "mouseMove", pickParams(PAGE_MOUSE_MOVE_KEYS, {
+      x,
+      y,
+      ...options
+    }));
+  }
+  async down(options = {}) {
+    await this.#page._sendInput("mouse.down", "mouseDown", pickParams(PAGE_MOUSE_DOWN_KEYS, { ...options }));
+  }
+  async up(options = {}) {
+    await this.#page._sendInput("mouse.up", "mouseUp", pickParams(PAGE_MOUSE_UP_KEYS, { ...options }));
+  }
+  async click(x, y, options = {}) {
+    await this._click("mouse.click", x, y, options);
+  }
+  async dblclick(x, y, options = {}) {
+    await this._click("mouse.dblclick", x, y, { ...options, clickCount: 2 });
+  }
+  async wheel(deltaX, deltaY) {
+    await this.#page._sendInput("mouse.wheel", "mouseWheel", pickParams(PAGE_MOUSE_WHEEL_KEYS, {
+      deltaX,
+      deltaY
+    }));
+  }
+  async _click(apiName, x, y, options) {
+    await this.#page._sendInput(apiName, "mouseClick", pickParams(PAGE_MOUSE_CLICK_KEYS, {
+      x,
+      y,
+      ...options
+    }));
+  }
+}
+
+class Touchscreen {
+  #page;
+  constructor(page) {
+    this.#page = page;
+  }
+  async tap(x, y) {
+    await this.#page._sendInput("touchscreen.tap", "touchscreenTap", pickParams(PAGE_TOUCHSCREEN_TAP_KEYS, {
+      x,
+      y
+    }));
+  }
+}
+
+// src/timeout-settings.ts
+var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
+
+class TimeoutSettings {
+  #parent;
+  #defaultTimeout;
+  #defaultNavigationTimeout;
+  constructor(parent) {
+    this.#parent = parent;
+  }
+  setDefaultTimeout(timeout) {
+    this.#defaultTimeout = timeout;
+  }
+  setDefaultNavigationTimeout(timeout) {
+    this.#defaultNavigationTimeout = timeout;
+  }
+  timeout(options, _apiName) {
+    return { signal: options.signal, timeout: this.#timeout(options) };
+  }
+  navigationTimeout(options, _apiName) {
+    return { signal: options.signal, timeout: this.#navigationTimeout(options) };
+  }
+  #timeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#timeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+  #navigationTimeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultNavigationTimeout !== undefined)
+      return this.#defaultNavigationTimeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#navigationTimeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+}
+
+// src/waiter.ts
+async function wrapApiCall(apiName, body) {
+  try {
+    return await body();
+  } catch (e) {
+    if (e instanceof Error)
+      e.message = `${apiName}: ${e.message}`;
+    throw e;
+  }
+}
+
+class Waiter {
+  _dispose = [];
+  _failures = [];
+  _immediateError;
+  _logs = [];
+  static createForEvent() {
+    return new Waiter;
+  }
+  async waitForEvent(emitter, event, predicate) {
+    const { promise, dispose } = waitForEvent(emitter, event, predicate);
+    return await this.waitForPromise(promise, dispose);
+  }
+  rejectOnEvent(emitter, event, error, predicate) {
+    const { promise, dispose } = waitForEvent(emitter, event, predicate);
+    this._rejectOn(promise.then(() => {
+      throw typeof error === "function" ? error() : error;
+    }), dispose);
+  }
+  rejectOnTimeout({ timeout, signal }, timeoutMessage) {
+    if (signal) {
+      if (signal.aborted)
+        return this.rejectImmediately(new AbortError(undefined, { cause: signal.reason }));
+      let rejectPromise = () => {};
+      const promise = new Promise((_, reject) => {
+        rejectPromise = reject;
+      });
+      const listener = () => rejectPromise(new AbortError(undefined, { cause: signal.reason }));
+      signal.addEventListener("abort", listener, { once: true });
+      this._rejectOn(promise, () => signal.removeEventListener("abort", listener));
+    }
+    if (timeout) {
+      const { promise, dispose } = waitForTimeout(timeout);
+      this._rejectOn(promise.then(() => {
+        throw new TimeoutError(timeoutMessage);
+      }), dispose);
+    }
+  }
+  rejectImmediately(error) {
+    this._immediateError = error;
+  }
+  throwIfImmediatelyRejected() {
+    if (this._immediateError)
+      throw this._immediateError;
+  }
+  dispose() {
+    for (const dispose of this._dispose)
+      dispose();
+  }
+  async waitForPromise(promise, dispose) {
+    try {
+      if (this._immediateError)
+        throw this._immediateError;
+      const result = await Promise.race([promise, ...this._failures]);
+      if (dispose)
+        dispose();
+      return result;
+    } catch (e) {
+      if (dispose)
+        dispose();
+      this.dispose();
+      if (e instanceof Error)
+        rewriteErrorMessage(e, e.message + formatLogRecording(this._logs));
+      throw e;
+    }
+  }
+  log(s) {
+    this._logs.push(s);
+  }
+  _rejectOn(promise, dispose) {
+    this._failures.push(promise);
+    if (dispose)
+      this._dispose.push(dispose);
+  }
+}
+function waitForEvent(emitter, event, predicate) {
+  let listener = () => {};
+  const promise = new Promise((resolve, reject) => {
+    listener = async (eventArg) => {
+      try {
+        if (predicate && !await predicate(eventArg))
+          return;
+        emitter.removeListener(event, listener);
+        resolve(eventArg);
+      } catch (e) {
+        emitter.removeListener(event, listener);
+        reject(e);
+      }
+    };
+    emitter.addListener(event, listener);
+  });
+  const dispose = () => emitter.removeListener(event, listener);
+  return { promise, dispose };
+}
+function waitForTimeout(timeout) {
+  let timeoutId;
+  const promise = new Promise((resolve) => {
+    timeoutId = setTimeout(resolve, timeout);
+  });
+  const dispose = () => clearTimeout(timeoutId);
+  return { promise, dispose };
+}
+function formatLogRecording(log) {
+  if (!log.length)
+    return "";
+  const header = " logs ";
+  const headerLength = 60;
+  const leftLength = (headerLength - header.length) / 2;
+  const rightLength = headerLength - header.length - leftLength;
+  return `
+${"=".repeat(leftLength)}${header}${"=".repeat(rightLength)}
+${log.join(`
+`)}
+${"=".repeat(headerLength)}`;
+}
+function rewriteErrorMessage(e, newMessage) {
+  const lines = (e.stack?.split(`
+`) || []).filter((l) => l.startsWith("    at "));
+  e.message = newMessage;
+  const errorTitle = `${e.name}: ${e.message}`;
+  if (lines.length)
+    e.stack = `${errorTitle}
+${lines.join(`
+`)}`;
+  return e;
 }
 
 // src/page.ts
@@ -5686,20 +6348,24 @@ var PAGE_EVENTS = {
     "frameattached",
     "framedetached",
     "framenavigated",
-    "popup"
-  ],
-  quiet: [],
-  unserved: [
-    "download",
+    "popup",
     "filechooser",
+    "download",
     "request",
     "response",
     "requestfailed",
-    "requestfinished",
-    "websocket",
-    "worker"
-  ]
+    "requestfinished"
+  ],
+  quiet: [],
+  unserved: ["websocket", "worker"]
 };
+function trimUrl(param) {
+  if (isRegExp4(param))
+    return `/${trimStringWithEllipsis(param.source, 50)}/${param.flags}`;
+  if (isString(param))
+    return `"${trimStringWithEllipsis(param, 50)}"`;
+  return;
+}
 
 class Page extends ChannelOwner {
   #guid;
@@ -5709,6 +6375,9 @@ class Page extends ChannelOwner {
   #mainFrame;
   #frames = new Map;
   _timeoutSettings;
+  keyboard;
+  mouse;
+  touchscreen;
   #closedLocally = false;
   #closeReason;
   _bindings = new Map;
@@ -5724,6 +6393,12 @@ class Page extends ChannelOwner {
       name: ""
     });
     this.#frames.set(mainFrameGuid, this.#mainFrame);
+    this.keyboard = new Keyboard(this);
+    this.mouse = new Mouse(this);
+    this.touchscreen = new Touchscreen(this);
+  }
+  async _sendInput(apiName, method, params) {
+    await this.#connection.sendPage(apiName, this.#guid, method, params, 0);
   }
   url() {
     if (this.#closedLocally)
@@ -5778,6 +6453,12 @@ class Page extends ChannelOwner {
       this.#onFrameNavigated(params);
     else if (method === "bindingCall")
       this._onBinding(params.binding);
+    else if (method === "locatorHandlerTriggered")
+      this.#onLocatorHandlerTriggered(params.uid).catch((error) => this.#context._pipe.report(error));
+    else if (method === "fileChooser") {
+      const { chooser, isMultiple } = params;
+      this.emit("filechooser", new FileChooser(this, chooser, isMultiple, this.#connection));
+    }
   }
   async _onBinding(record) {
     const call2 = new BindingCall(this.#connection, record, this._frameForGuid(record.frame.guid));
@@ -5788,13 +6469,66 @@ class Page extends ChannelOwner {
     }
     await this.#context._onBinding(call2);
   }
-  _frameForGuid(guid) {
-    let frame = this.#frames.get(guid);
-    if (!frame) {
-      frame = new Frame(guid, this, this.#connection);
-      this.#frames.set(guid, frame);
+  #locatorHandlers = new Map;
+  async addLocatorHandler(locator, handler, options = {}) {
+    if (locator._frame !== this.#mainFrame)
+      throw new Error("Locator must belong to the main frame of this page");
+    if (options.times === 0)
+      return;
+    this.#pendingLocatorHandlers++;
+    this.#syncLocatorHandlerSubscription();
+    try {
+      const { uid } = await this.#connection.sendPage("page.addLocatorHandler", this.#guid, "registerLocatorHandler", pickParams(PAGE_REGISTER_LOCATOR_HANDLER_KEYS, {
+        selector: locator._selector,
+        noWaitAfter: options.noWaitAfter
+      }), 0);
+      this.#locatorHandlers.set(uid, { locator, handler, times: options.times });
+    } finally {
+      this.#pendingLocatorHandlers--;
+      this.#syncLocatorHandlerSubscription();
     }
-    return frame;
+  }
+  #pendingLocatorHandlers = 0;
+  #locatorHandlerSubscribed = false;
+  #syncLocatorHandlerSubscription() {
+    const wanted = this.#locatorHandlers.size + this.#pendingLocatorHandlers > 0;
+    if (wanted === this.#locatorHandlerSubscribed)
+      return;
+    this.#locatorHandlerSubscribed = wanted;
+    this._subscribeChannelEvent("locatorHandlerTriggered", wanted);
+  }
+  async#onLocatorHandlerTriggered(uid) {
+    let remove = false;
+    try {
+      const handler = this.#locatorHandlers.get(uid);
+      if (handler && handler.times !== 0) {
+        if (handler.times !== undefined)
+          handler.times--;
+        await handler.handler(handler.locator);
+      }
+      remove = handler?.times === 0;
+    } finally {
+      if (remove)
+        this.#dropLocatorHandler(uid);
+      this.#connection.sendPage("page.addLocatorHandler", this.#guid, "resolveLocatorHandlerNoReply", pickParams(PAGE_RESOLVE_LOCATOR_HANDLER_KEYS, {
+        uid,
+        remove
+      }), 0).catch(() => {});
+    }
+  }
+  async removeLocatorHandler(locator) {
+    for (const [uid, data] of this.#locatorHandlers) {
+      if (data.locator._equals(locator)) {
+        this.#dropLocatorHandler(uid);
+        await this.#connection.sendPage("page.removeLocatorHandler", this.#guid, "unregisterLocatorHandler", pickParams(PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS, {
+          uid
+        }), 0).catch(() => {});
+      }
+    }
+  }
+  #dropLocatorHandler(uid) {
+    this.#locatorHandlers.delete(uid);
+    this.#syncLocatorHandlerSubscription();
   }
   #onFrameAttached(record) {
     this.#frameEvent(record, "frameattached", false);
@@ -5836,15 +6570,43 @@ class Page extends ChannelOwner {
   async waitForEvent(event, optionsOrPredicate = {}) {
     return await wrapApiCall("page.waitForEvent", () => this._waitForEvent(event, optionsOrPredicate, `waiting for event "${event}"`));
   }
+  async waitForRequest(urlOrPredicate, options = {}) {
+    return await wrapApiCall("page.waitForRequest", async () => {
+      const predicate = async (request) => {
+        if (isString(urlOrPredicate) || isRegExp4(urlOrPredicate))
+          return matchesURL(request.url(), serializeUrlMatch("page.waitForRequest", urlOrPredicate));
+        return await urlOrPredicate(request);
+      };
+      const trimmedUrl = trimUrl(urlOrPredicate);
+      const logLine = trimmedUrl ? `waiting for request ${trimmedUrl}` : undefined;
+      return await this._waitForEvent("request", { predicate, timeout: options.timeout, signal: options.signal }, logLine);
+    });
+  }
+  async waitForResponse(urlOrPredicate, options = {}) {
+    return await wrapApiCall("page.waitForResponse", async () => {
+      const predicate = async (response) => {
+        if (isString(urlOrPredicate) || isRegExp4(urlOrPredicate))
+          return matchesURL(response.url(), serializeUrlMatch("page.waitForResponse", urlOrPredicate));
+        return await urlOrPredicate(response);
+      };
+      const trimmedUrl = trimUrl(urlOrPredicate);
+      const logLine = trimmedUrl ? `waiting for response ${trimmedUrl}` : undefined;
+      return await this._waitForEvent("response", { predicate, timeout: options.timeout, signal: options.signal }, logLine);
+    });
+  }
+  async requests() {
+    const { requests } = await this.#connection.sendPage("page.requests", this.#guid, "requests", {}, 0);
+    return requests.map((request) => networkObject(this.#connection, request.guid, this));
+  }
   async _waitForEvent(event, optionsOrPredicate, logLine) {
     const options = typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate;
-    const timeout = this._timeoutSettings.timeout(options, null);
+    const timeoutOptions = this._timeoutSettings.timeout(options, null);
     this._refuseUnserved(event);
     const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : optionsOrPredicate.predicate;
     const waiter = Waiter.createForEvent();
     if (logLine)
       waiter.log(logLine);
-    waiter.rejectOnTimeout(timeout, `Timeout ${timeout}ms exceeded while waiting for event "${event}"`);
+    waiter.rejectOnTimeout(timeoutOptions, `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`);
     if (event !== "crash")
       waiter.rejectOnEvent(this, "crash", new Error("Page crashed"));
     if (event !== "close")
@@ -5873,6 +6635,16 @@ class Page extends ChannelOwner {
   }
   mainFrame() {
     return this.#mainFrame;
+  }
+  _frameForGuid(guid) {
+    if (!guid)
+      return this.#mainFrame;
+    let frame = this.#frames.get(guid);
+    if (!frame) {
+      frame = new Frame(guid, this, this.#connection);
+      this.#frames.set(guid, frame);
+    }
+    return frame;
   }
   _frameFrom(record) {
     let frame = this.#frames.get(record.guid);
@@ -5918,7 +6690,7 @@ class Page extends ChannelOwner {
   async#expose(apiName, name, callback) {
     const previous = this._bindings.get(name);
     this._bindings.set(name, callback);
-    this._subscribeChannelEvent("bindingCall");
+    this._subscribeChannelEvent("bindingCall", true);
     try {
       const result = await this.#connection.sendBinding(apiName, this.#guid, "exposeBinding", { name }, 0);
       return new Disposable(this.#connection, result.disposable.guid);
@@ -6008,6 +6780,9 @@ class Page extends ChannelOwner {
   async waitForURL(url, options) {
     return await this.#mainFrame._waitForURL("page.waitForURL", url, options);
   }
+  async waitForSelector(selector, options) {
+    return await this.#mainFrame._waitForSelectorPublic("page.waitForSelector", selector, options);
+  }
   async waitForLoadState(state, options) {
     return await this.#mainFrame._waitForLoadState("page.waitForLoadState", state, options);
   }
@@ -6026,8 +6801,29 @@ class Page extends ChannelOwner {
   async ariaSnapshot(options = {}) {
     return await this.#mainFrame._ariaSnapshot("page.ariaSnapshot", options);
   }
+  async ariaSnapshotJSON(options = {}) {
+    return await this.#mainFrame._ariaSnapshotJSON("page.ariaSnapshotJSON", options);
+  }
+  async content(options) {
+    return await this.#mainFrame._content("page.content", options);
+  }
+  async setContent(html, options) {
+    return await this.#mainFrame._setContent("page.setContent", html, options);
+  }
+  async waitForTimeout(timeout) {
+    return await this.#mainFrame._waitForTimeout("page.waitForTimeout", timeout);
+  }
   async click(selector, options = {}) {
     return await this.#mainFrame._click("page.click", selector, options);
+  }
+  async focus(selector, options = {}) {
+    return await this.#mainFrame._focus("page.focus", selector, options);
+  }
+  async dispatchEvent(selector, type, eventInit, options = {}) {
+    return await this.#mainFrame._dispatchEvent("page.dispatchEvent", selector, type, eventInit, options);
+  }
+  async hideHighlight() {
+    await this.#connection.sendPage("page.hideHighlight", this.#guid, "hideHighlight", {}, 0);
   }
   async dblclick(selector, options = {}) {
     return await this.#mainFrame._dblclick("page.dblclick", selector, options);
@@ -6043,6 +6839,12 @@ class Page extends ChannelOwner {
   }
   async press(selector, key, options = {}) {
     return await this.#mainFrame._press("page.press", selector, key, options);
+  }
+  async dragAndDrop(source, target, options = {}) {
+    return await this.#mainFrame._dragAndDrop("page.dragAndDrop", source, target, options);
+  }
+  async type(selector, text2, options = {}) {
+    return await this.#mainFrame._type("page.type", selector, text2, options);
   }
   async inputValue(selector, options = {}) {
     return await this.#mainFrame._inputValue("page.inputValue", selector, options);
@@ -6092,20 +6894,20 @@ class Page extends ChannelOwner {
   getByTestId(testId) {
     return this.mainFrame().getByTestId(testId);
   }
-  getByAltText(text, options) {
-    return this.mainFrame().getByAltText(text, options);
+  getByAltText(text2, options) {
+    return this.mainFrame().getByAltText(text2, options);
   }
-  getByLabel(text, options) {
-    return this.mainFrame().getByLabel(text, options);
+  getByLabel(text2, options) {
+    return this.mainFrame().getByLabel(text2, options);
   }
-  getByPlaceholder(text, options) {
-    return this.mainFrame().getByPlaceholder(text, options);
+  getByPlaceholder(text2, options) {
+    return this.mainFrame().getByPlaceholder(text2, options);
   }
-  getByText(text, options) {
-    return this.mainFrame().getByText(text, options);
+  getByText(text2, options) {
+    return this.mainFrame().getByText(text2, options);
   }
-  getByTitle(text, options) {
-    return this.mainFrame().getByTitle(text, options);
+  getByTitle(text2, options) {
+    return this.mainFrame().getByTitle(text2, options);
   }
   getByRole(role, options = {}) {
     return this.mainFrame().getByRole(role, options);
@@ -6144,23 +6946,21 @@ var CONTEXT_EVENTS = {
     "weberror",
     "dialog",
     "dialogclosed",
+    "request",
+    "response",
+    "requestfailed",
+    "requestfinished",
     "page",
     "pageclose",
     "pageload",
     "frameattached",
     "framedetached",
-    "framenavigated"
+    "framenavigated",
+    "download"
   ],
   local: ["close"],
   quiet: ["backgroundpage"],
-  unserved: [
-    "download",
-    "serviceworker",
-    "request",
-    "response",
-    "requestfailed",
-    "requestfinished"
-  ]
+  unserved: ["serviceworker"]
 };
 
 class BrowserContext extends ChannelOwner {
@@ -6224,6 +7024,16 @@ class BrowserContext extends ChannelOwner {
       this.#onDialogClosed(params.dialog);
     else if (method === "bindingCall")
       this.#onBindingCall(params.binding);
+    else if (method === "download")
+      this.#onDownload(params);
+    else if (method === "request")
+      this.#onRequest(params);
+    else if (method === "response")
+      this.#onResponse(params);
+    else if (method === "requestFinished")
+      this.#onRequestFinished(params);
+    else if (method === "requestFailed")
+      this.#onRequestFailed(params);
   }
   async#onBindingCall(record) {
     const page = this.#pageFor(record.page.guid);
@@ -6236,6 +7046,30 @@ class BrowserContext extends ChannelOwner {
       return;
     await call2.call(func);
   }
+  #onRequest({ request, page }) {
+    const pageObject = this.#pageFor(page.guid);
+    const requestObject = requestFromRecord(this.#connection, request, pageObject);
+    this.emit("request", requestObject);
+    pageObject.emit("request", requestObject);
+  }
+  #onResponse({ response, request, page }) {
+    const pageObject = this.#pageFor(page.guid);
+    const responseObject = responseFromRecord(this.#connection, response, requestFromRecord(this.#connection, request, pageObject));
+    this.emit("response", responseObject);
+    pageObject.emit("response", responseObject);
+  }
+  #onRequestFinished({ request, page }) {
+    const pageObject = this.#pageFor(page.guid);
+    const requestObject = requestFromRecord(this.#connection, request, pageObject);
+    this.emit("requestfinished", requestObject);
+    pageObject.emit("requestfinished", requestObject);
+  }
+  #onRequestFailed({ request, page }) {
+    const pageObject = this.#pageFor(page.guid);
+    const requestObject = requestFromRecord(this.#connection, request, pageObject);
+    this.emit("requestfailed", requestObject);
+    pageObject.emit("requestfailed", requestObject);
+  }
   #onPage(created) {
     const page = this._pageFrom(created);
     this.emit("page", page);
@@ -6245,7 +7079,7 @@ class BrowserContext extends ChannelOwner {
   }
   #onConsole(event) {
     const page = event.page ? this.#pageFor(event.page.guid) : null;
-    const consoleMessage = new ConsoleMessage(event, page, null);
+    const consoleMessage = new ConsoleMessage(event, page, null, this.#connection);
     page?.emit("console", consoleMessage);
     this.emit("console", consoleMessage);
   }
@@ -6255,6 +7089,12 @@ class BrowserContext extends ChannelOwner {
     this.emit("weberror", new WebError(pageObject, parsedError, location));
     if (pageObject)
       pageObject.emit("pageerror", parsedError);
+  }
+  #onDownload(event) {
+    const page = this.#pageFor(event.page.guid);
+    const download = new Download(page, event.url, event.suggestedFilename, event.artifact, this.#connection);
+    page.emit("download", download);
+    this.emit("download", download);
   }
   #onDialog(record) {
     const dialogObject = this.#dialogFrom(record);
@@ -6284,11 +7124,11 @@ class BrowserContext extends ChannelOwner {
   async waitForEvent(event, optionsOrPredicate = {}) {
     return await wrapApiCall("browserContext.waitForEvent", async () => {
       const options = typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate;
-      const timeout = this._timeoutSettings.timeout(options, null);
+      const timeoutOptions = this._timeoutSettings.timeout(options, null);
       this._refuseUnserved(event);
       const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : optionsOrPredicate.predicate;
       const waiter = Waiter.createForEvent();
-      waiter.rejectOnTimeout(timeout, `Timeout ${timeout}ms exceeded while waiting for event "${event}"`);
+      waiter.rejectOnTimeout(timeoutOptions, `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`);
       if (event !== "close")
         waiter.rejectOnEvent(this, "close", () => targetClosedError(this.#closeReason));
       const result = await waiter.waitForEvent(this, event, predicate);
@@ -6310,7 +7150,7 @@ class BrowserContext extends ChannelOwner {
   async#expose(apiName, name, callback) {
     const previous = this._bindings.get(name);
     this._bindings.set(name, callback);
-    this._subscribeChannelEvent("bindingCall");
+    this._subscribeChannelEvent("bindingCall", true);
     try {
       const result = await this.#connection.sendBinding(apiName, this.#guid, "exposeBinding", { name }, 0);
       return new Disposable(this.#connection, result.disposable.guid);

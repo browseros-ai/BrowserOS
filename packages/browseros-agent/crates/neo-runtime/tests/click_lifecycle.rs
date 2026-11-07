@@ -536,6 +536,91 @@ return await first",
     assert_eq!(browser.armed_interceptor(), None, "{:?}", trail(&exchanges));
 }
 
+/// The same cut short by the script's `signal` (slice S): an abort ends the call as its timeout
+/// would, so the writer still releases the button, and the next click waits for that release.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_click_aborted_mid_press_keeps_the_tab_input_until_its_release_lands() {
+    let browser = FakeBrowser::start(Replies {
+        mouse: Reply {
+            delay: Duration::from_millis(200),
+            ..Reply::default()
+        },
+        ..Replies::default()
+    })
+    .await;
+    let outcome = browser
+        .runtime()
+        .await
+        .run(fake_browser::run_request(
+            "const controller = new AbortController()
+setTimeout(() => controller.abort(), 700)
+const first = page.click('#go', { delay: 5000, timeout: 0, signal: controller.signal })
+  .catch((error) => error.name)
+await new Promise((resolve) => setTimeout(resolve, 800))
+await page.click('#go')
+return await first",
+            Duration::from_secs(10),
+            CancellationToken::new(),
+        ))
+        .await;
+
+    assert_eq!(outcome.value, Some(json!("AbortError")), "{outcome:?}");
+    let exchanges = settle(&browser, detached).await;
+    assert_eq!(
+        input_steps(&exchanges),
+        ONE_INPUT_PHASE.repeat(2),
+        "the second click set up only once the aborted one had released and stopped: {:?}",
+        trail(&exchanges)
+    );
+    assert_eq!(browser.armed_interceptor(), None, "{:?}", trail(&exchanges));
+}
+
+/// An abort after the press, with `mouseReleased`'s answer held: `AbortError`, the delivery
+/// `Unknown` as for a timeout there, and no second press.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_abort_after_the_press_is_unknown_and_never_presses_again() {
+    let browser = FakeBrowser::start(Replies {
+        mouse: Reply {
+            answers: 2,
+            ..Reply::default()
+        },
+        ..Replies::default()
+    })
+    .await;
+    let outcome = browser
+        .runtime()
+        .await
+        .run(fake_browser::run_request(
+            "const controller = new AbortController()
+setTimeout(() => controller.abort('stop'), 500)
+try { await page.click('#go', { timeout: 0, signal: controller.signal }) } catch (error) { return error.name }",
+            Duration::from_secs(10),
+            CancellationToken::new(),
+        ))
+        .await;
+
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    assert_eq!(outcome.value, Some(json!("AbortError")));
+    let [call] = outcome.calls.as_slice() else {
+        panic!("one record: {outcome:?}");
+    };
+    assert_eq!(
+        call.result,
+        CallResult::Error {
+            name: "AbortError".to_string(),
+            message: "stop".to_string(),
+        }
+    );
+    assert_eq!(call.delivery, Some(Delivery::Unknown));
+    let exchanges = browser.exchanges();
+    assert_eq!(mouse(&exchanges, "mousePressed").len(), 1, "{exchanges:#?}");
+    assert_eq!(
+        mouse(&exchanges, "mouseReleased").len(),
+        1,
+        "{exchanges:#?}"
+    );
+}
+
 /// The fake holds `mouseReleased`'s answer forever and the call's 500 ms timeout fires. The
 /// script sees `TimeoutError`; the record says `Unknown`, because the press was written and not
 /// every acknowledgement came back; and no second press is ever sent.
