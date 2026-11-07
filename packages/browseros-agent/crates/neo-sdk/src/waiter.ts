@@ -26,11 +26,11 @@ export type WaitForEventOptions =
 
 /**
  * Deviation: `client/waiter.ts` `Waiter.rejectOnTimeout`: `if (signal) {`
- * QuickJS has no `AbortSignal`, so Neo takes no `signal`; one passed anyway is refused instead
- * of being ignored.
+ * QuickJS has no `AbortSignal`, so Neo takes no `signal`; one passed anyway is refused before
+ * the method does anything, instead of being ignored. `null` is no signal, as `undefined` is.
  */
 export function refuseSignal(options: { signal?: unknown }): void {
-  if (options.signal !== undefined)
+  if (options.signal != null)
     throw new Error('Neo does not support the "signal" option yet')
 }
 

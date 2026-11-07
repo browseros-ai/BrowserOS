@@ -184,7 +184,25 @@ test('tests that waitForEvent rejects when the page closes, unless it waits for 
   expect(error.message).toStartWith(
     'page.waitForEvent: Target page, context or browser has been closed',
   )
-  expect(() => page.waitForEvent('console', { signal: {} } as never)).toThrow()
+})
+
+test('tests that a signal is refused before any effect, and null is no signal', async () => {
+  const { page, context } = run()
+  await expect(
+    page.waitForEvent('console', { signal: {} } as never),
+  ).rejects.toThrow(
+    'page.waitForEvent: Neo does not support the "signal" option yet',
+  )
+  await expect(
+    context.waitForEvent('page', { signal: {} } as never),
+  ).rejects.toThrow(
+    'browserContext.waitForEvent: Neo does not support the "signal" option yet',
+  )
+  expect(subscriptions).toEqual([])
+  expect(page.listenerCount('console') + context.listenerCount('page')).toBe(0)
+  const waited = page.waitForEvent('console', { signal: null } as never)
+  queueEvent('context@default', 'console', consoleEvent('with no signal'))
+  expect(((await waited) as { text(): string }).text()).toBe('with no signal')
 })
 
 test('tests that a dialog nobody listens to by then gets the default answer', async () => {

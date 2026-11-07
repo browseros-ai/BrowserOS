@@ -4197,7 +4197,7 @@ class TimeoutSettings {
 
 // src/waiter.ts
 function refuseSignal(options) {
-  if (options.signal !== undefined)
+  if (options.signal != null)
     throw new Error('Neo does not support the "signal" option yet');
 }
 async function wrapApiCall(apiName, body) {

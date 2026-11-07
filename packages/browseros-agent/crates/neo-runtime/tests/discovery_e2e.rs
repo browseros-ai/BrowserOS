@@ -74,7 +74,10 @@ async fn new_tab(tab: &Tab) -> String {
         .send("Target.createTarget", json!({ "url": "about:blank" }), None)
         .await
         .unwrap_or_else(|error| panic!("open a tab: {error}"));
-    created["targetId"].as_str().unwrap().to_string()
+    created["targetId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("Target.createTarget answered {created}"))
+        .to_string()
 }
 
 /// Whether `events` reports `Target.targetCreated` for `target` within `within`.
@@ -111,7 +114,7 @@ async fn discovery_turned_on(events: &mut broadcast::Receiver<CdpEvent>) {
         }
     })
     .await
-    .expect("the run turned discovery on");
+    .unwrap_or_else(|_| panic!("the run turned discovery on"));
 }
 
 /// Whether any CDP client is attached to `target`, polled until it is not, for a session the
@@ -126,7 +129,7 @@ async fn left_attached(tab: &Tab, target: &str) -> bool {
             .unwrap_or_else(|error| panic!("Target.getTargets: {error}"));
         let attached = targets["targetInfos"]
             .as_array()
-            .unwrap()
+            .unwrap_or_else(|| panic!("Target.getTargets answered {targets}"))
             .iter()
             .any(|info| info["targetId"] == target && info["attached"] == true);
         if !attached || Instant::now() > deadline {
@@ -141,7 +144,9 @@ async fn tests_that_a_popup_reaches_its_listeners_and_its_id_serves_the_next_run
     let Some(tab) = open().await else {
         return;
     };
-    let runtime = Runtime::connect(tab.cdp.clone()).await.unwrap();
+    let runtime = Runtime::connect(tab.cdp.clone())
+        .await
+        .unwrap_or_else(|error| panic!("Runtime::connect: {error}"));
     let first = run(
         &runtime,
         &tab.target_id,
@@ -202,7 +207,9 @@ async fn tests_that_discovery_stays_on_until_the_runtimes_last_listening_run_end
     let Some(tab) = open().await else {
         return;
     };
-    let runtime = Runtime::connect(tab.cdp.clone()).await.unwrap();
+    let runtime = Runtime::connect(tab.cdp.clone())
+        .await
+        .unwrap_or_else(|error| panic!("Runtime::connect: {error}"));
     let mut events = tab.cdp.events();
     // Listens until a new tab arrives.
     let holding = {
@@ -235,8 +242,8 @@ return 'done'",
     let opened = new_tab(&tab).await;
     let held = time::timeout(Duration::from_secs(20), holding)
         .await
-        .expect("the first run saw the new tab")
-        .unwrap();
+        .unwrap_or_else(|_| panic!("the first run saw the new tab"))
+        .unwrap_or_else(|error| panic!("run task: {error}"));
     assert_eq!(
         value(&held),
         &json!(["about:blank"]),
