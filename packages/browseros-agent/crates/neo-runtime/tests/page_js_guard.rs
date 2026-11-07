@@ -868,3 +868,14 @@ fn tests_that_only_an_exact_artifact_include_is_a_built_function() {
         );
     }
 }
+
+#[test]
+fn a_computed_init_world_name_is_refused() {
+    let source = r#"const KEY: &str = concat!("world", "Name");
+        cdp.send("Page.addScriptToEvaluateOnNewDocument", json!({"source": source, (KEY): name}), Some(session));"#;
+    let problems = check(INIT_SCRIPTS, source);
+    assert!(
+        !problems.is_empty(),
+        "init scripts must not select a world: {problems:?}"
+    );
+}
