@@ -61,6 +61,27 @@ pub(crate) trait StateTab: SelectorTab {
     ) -> impl Future<Output = Result<Option<ElementStateMatch>, PageError>> + Send;
 }
 
+/// Playwright's `Frame.isVisibleInternal`: [`is_visible`]'s one read, with no call-log line and
+/// no description first, for the locator-handler checkpoint. A context lost during the read
+/// reads false; a page exception (a strict mode violation) or a closed tab ends the call.
+///
+/// Playwright: `server/frames.ts` `Frame.isVisibleInternal`: `if (this.isNonRetriableError(e))`
+pub(crate) async fn is_visible_internal<T: StateTab>(
+    tab: &T,
+    options: &StateOptions,
+    progress: &Progress,
+) -> Result<bool, CallError> {
+    let attempt = progress
+        .race(tab.is_visible(&options.selector, options.strict))
+        .await?
+        .map_err(Stop::from);
+    match attempt {
+        Ok(value) => Ok(value),
+        Err(Stop::Retry) => Ok(false),
+        Err(Stop::End(error)) => Err(error),
+    }
+}
+
 pub(crate) async fn is_visible<T: StateTab>(
     tab: &T,
     options: &StateOptions,

@@ -572,13 +572,13 @@ mod tests {
     use super::{
         FrameField, FrameMetadata, frame, frame_records, frame_value, matches_url, watch_frame_host,
     };
-    use crate::discovery::Discovery;
     use crate::fake_browser::{FakeBrowser, FrameReplies, PAGE, PAGE_URL, Replies};
     use crate::frames::{FrameInfo, FrameScope, Host};
     use crate::page::TabInputs;
     use crate::progress::ErrorName;
     use crate::run::PageId;
     use crate::screenshot::TabScreenshots;
+    use crate::switch::Switches;
     use crate::tabs::{PageEntry, Tabs};
     use crate::url_match::SerializedUrlMatch;
 
@@ -633,7 +633,7 @@ mod tests {
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
-            Discovery::default(),
+            Switches::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
         )
@@ -816,7 +816,7 @@ mod tests {
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
-            Discovery::default(),
+            Switches::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
         )

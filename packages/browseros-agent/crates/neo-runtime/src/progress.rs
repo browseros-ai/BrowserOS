@@ -20,7 +20,7 @@
 
 use std::future;
 use std::future::Future;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -416,24 +416,27 @@ impl Progress {
 /// ```
 ///
 /// `begin` succeeds only from `NotSent`, so after input whose fate is unknown or done no code
-/// path can write it again.
+/// path can write it again. A call that writes in two parts says so first
+/// ([`DeliveryCell::expect_more`]): then the first part's `acked()` leaves the cell `Unknown`,
+/// and only the second part's makes it `Done`.
 #[derive(Debug, Default)]
-pub(crate) struct DeliveryCell(AtomicU8);
+pub(crate) struct DeliveryCell(AtomicU8, AtomicBool);
 
 const NOT_SENT: u8 = 0;
 const UNKNOWN: u8 = 1;
 const DONE: u8 = 2;
 
 /// Proof that this attempt may write input: the cell read `NotSent` and now reads `Unknown`.
-/// It moves into whatever writes the input, which reports through it.
+/// It moves into whatever writes the input, which reports through it. Its states: what the
+/// cell goes back to when nothing reached the page, and what `acked()` makes it.
 #[must_use = "dropping the ticket leaves the call's delivery Unknown"]
 #[derive(Debug)]
-pub(crate) struct InputTicket(Arc<DeliveryCell>);
+pub(crate) struct InputTicket(Arc<DeliveryCell>, u8, u8);
 
 /// The browser acknowledged every input event of the attempt: the cell reads `Done`.
 #[must_use = "a blocked verdict must call `blocked`"]
 #[derive(Debug)]
-pub(crate) struct AckedInput(Arc<DeliveryCell>);
+pub(crate) struct AckedInput(Arc<DeliveryCell>, u8);
 
 /// `begin` refused: earlier input of this call may have reached the page.
 #[derive(Debug, PartialEq, Eq)]
@@ -453,10 +456,37 @@ impl DeliveryCell {
 impl DeliveryCell {
     /// Called just before an attempt hands its first input event to the writer.
     pub(crate) fn begin(self: &Arc<Self>) -> Result<InputTicket, InputAlreadySent> {
+        // The first of two parts completes only itself.
+        let done = if self.1.load(Ordering::Acquire) {
+            UNKNOWN
+        } else {
+            DONE
+        };
         self.0
             .compare_exchange(NOT_SENT, UNKNOWN, Ordering::AcqRel, Ordering::Acquire)
-            .map(|_| InputTicket(Arc::clone(self)))
+            .map(|_| InputTicket(Arc::clone(self), NOT_SENT, done))
             .map_err(|_| InputAlreadySent)
+    }
+
+    /// A call that writes its input in two parts (`dragAndDrop`'s move and down, then its move
+    /// and up), said before the first part begins: the first part's acknowledgement, however
+    /// late (after the call gave up on it), leaves the cell `Unknown`, and only the second
+    /// part's makes it `Done`. So a drag that stops before its drop is never `Done`.
+    pub(crate) fn expect_more(&self) {
+        self.1.store(true, Ordering::Release);
+    }
+
+    /// The second part's ticket. After a first part that wrote input the cell stays `Unknown`,
+    /// and nothing the second part does takes it back to `NotSent`; after one that wrote nothing
+    /// (a trial) it begins as any first input does.
+    pub(crate) fn begin_more(self: &Arc<Self>) -> Result<InputTicket, InputAlreadySent> {
+        // The second part's acknowledgement completes the call.
+        self.1.store(false, Ordering::Release);
+        match self.0.load(Ordering::Acquire) {
+            NOT_SENT => self.begin(),
+            UNKNOWN => Ok(InputTicket(Arc::clone(self), UNKNOWN, DONE)),
+            _ => Err(InputAlreadySent),
+        }
     }
 }
 
@@ -464,13 +494,13 @@ impl InputTicket {
     /// The writer proved nothing was written (browseros-cdp refuses a send at a stale epoch
     /// before writing it): back to `NotSent`.
     pub(crate) fn unsent(self) {
-        self.0.0.store(NOT_SENT, Ordering::Release);
+        self.0.0.store(self.1, Ordering::Release);
     }
 
     /// Every event was acknowledged.
     pub(crate) fn acked(self) -> AckedInput {
-        self.0.0.store(DONE, Ordering::Release);
-        AckedInput(self.0)
+        self.0.0.store(self.2, Ordering::Release);
+        AckedInput(self.0, self.1)
     }
 }
 
@@ -478,7 +508,7 @@ impl AckedInput {
     /// Neo's hit-target interceptor stopped a press that landed on another element, before the
     /// page's handlers saw it (`Delivery::NotSent` says how far it got): back to `NotSent`.
     pub(crate) fn blocked(self) {
-        self.0.0.store(NOT_SENT, Ordering::Release);
+        self.0.0.store(self.1, Ordering::Release);
     }
 
     /// The events reached the page: stays `Done`.
@@ -1081,6 +1111,38 @@ mod tests {
         assert_eq!(cell.delivery(), Delivery::Unknown, "a dropped ticket");
         let cell = Arc::new(DeliveryCell::default());
         cell.begin().expect("fresh").acked().delivered();
+        assert_eq!(cell.delivery(), Delivery::Done);
+    }
+
+    /// A call that writes in two parts, said before the first: the first part's acknowledgement,
+    /// on time or late, leaves the cell `Unknown`; only the second part's makes it `Done`.
+    #[test]
+    fn delivery_cell_completes_a_two_part_call_only_with_its_second_part() {
+        let cell = Arc::new(DeliveryCell::default());
+        cell.expect_more();
+        let first = cell.begin().expect("the first part");
+        first.acked().delivered();
+        assert_eq!(
+            cell.delivery(),
+            Delivery::Unknown,
+            "half a drag is not done"
+        );
+        let second = cell.begin_more().expect("the second part");
+        assert_eq!(cell.delivery(), Delivery::Unknown);
+        second.acked().delivered();
+        assert_eq!(cell.delivery(), Delivery::Done);
+
+        // The first part acknowledged only after the call gave up: never `Done`.
+        let cell = Arc::new(DeliveryCell::default());
+        cell.expect_more();
+        let late = cell.begin().expect("the first part");
+        late.acked().delivered();
+        assert_eq!(cell.delivery(), Delivery::Unknown);
+
+        // A first part that wrote nothing (a trial): the second begins as any first input.
+        let cell = Arc::new(DeliveryCell::default());
+        cell.expect_more();
+        cell.begin_more().expect("fresh").acked().delivered();
         assert_eq!(cell.delivery(), Delivery::Done);
     }
 

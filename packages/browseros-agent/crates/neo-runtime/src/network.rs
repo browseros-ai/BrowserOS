@@ -1,19 +1,27 @@
-//! The main frame's navigation requests, as CDP's Network domain reports them to this tab's
-//! session, and every value Playwright derives from them: `server/chromium/crNetworkManager.ts`
-//! (`_onRequest`, `_createResponse`, `_handleRequestRedirect`, `_onLoadingFinished`,
-//! `_onLoadingFailed`, `ResponseExtraInfoTracker`) and `server/network.ts` (`Request`, `Response`,
-//! the header and size formulas) at 26137face.
+//! Every request of one tab, as CDP's Network domain reports them to this tab's session and to
+//! the out-of-process frame sessions the run attached, and every value Playwright derives from
+//! them: `server/chromium/crNetworkManager.ts` (`_onRequest`, `_createResponse`,
+//! `_handleRequestRedirect`, `_onLoadingFinished`, `_onLoadingFailed`,
+//! `ResponseExtraInfoTracker`), `server/frames.ts` (`FrameManager.requestStarted`,
+//! `requestReceivedResponse`, `reportRequestFinished`, `requestFailed`) and `server/network.ts`
+//! (`Request`, `Response`, the header and size formulas) at 26137face.
 //!
 //! ```text
-//!  page.rs watcher ── Network.* event ──▶ NetworkLog::apply   (one task, arrival order)
+//!  page.rs watcher ── Network.* event ──▶ NetworkLog::apply ──▶ Happenings (one task, arrival order)
+//!                                                              └▶ network_events.rs: request,
+//!                                                                 response, requestFinished/Failed
 //!  navigate.rs goto ── navigation(loaderId) ──▶ the final hop's response, once known
 //!  dispatch.rs / bridge.rs ── HopId ──▶ initializers, raw headers, sizes, timing, failure
 //! ```
 //!
-//! Only what `page.goto` can answer is recorded: a request whose `requestId` is its `loaderId`,
-//! of type `Document`, in the main frame, and not a `data:` URL (Playwright drops those). Each
-//! such request is a chain of hops, one per redirect, sharing the request id. Subresources and
-//! child frames are skipped as they arrive, so a busy page costs one comparison per event.
+//! Every request with a frame is recorded, except a `data:` URL (Playwright drops those): the
+//! frame's navigation requests (`requestId` equal to its `loaderId`, type `Document`), which
+//! `goto` and the navigation waits answer, and every other request, which the run's `request`
+//! events, `waitForRequest`/`waitForResponse` and `page.requests()` hand out. Each request is a
+//! chain of hops, one per redirect, sharing the request id. A request without a frame (a worker's,
+//! a service worker's) is dropped, as Playwright drops a page's request it finds no frame for.
+//! Recording starts with the session's `Network.enable` (`PageSession::enable_network`):
+//! Chromium replays nothing from before it.
 //!
 //! Playwright resolves most of these values through promises that the next event settles; here
 //! each is an `Option` that the matching event fills once (the first value wins, as a resolved
@@ -21,8 +29,9 @@
 //! here sends CDP.
 //!
 //! Neo-only:
-//! - A session keeps at most [`MAX_CHAINS`] chains, oldest dropped first; an object from a dropped
-//!   chain answers [`LogError::Dropped`].
+//! - A session keeps at most [`MAX_CHAINS`] navigation chains and [`MAX_REQUESTS`] other
+//!   requests' chains, oldest dropped first (a request still loading only once none has ended);
+//!   an object from a dropped chain answers [`LogError::Dropped`].
 //! - A watcher that lagged may have lost any event, so a navigation still unanswered when a lag
 //!   hit or first seen mid-redirect, and any value still pending after a lag, answer
 //!   [`LogError::Lost`] instead of a guess or a wait that could never end.
@@ -30,12 +39,14 @@
 //!   provisional headers) becomes an array in byte order; Chromium sends response headers and
 //!   every raw (extra info) header object sorted already.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::ops::RangeInclusive;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use browseros_cdp::SessionId;
 use neo_runtime_spec::Binary;
 use neo_runtime_spec::serve::{
     FrameChannel, NameValue, RemoteAddr, RequestChannel, RequestInitializer, RequestSizes,
@@ -50,18 +61,60 @@ use url::Url;
 /// cap only bounds a script that loops on `goto`, whose records live in Rust outside the realm.
 pub(crate) const MAX_CHAINS: usize = 256;
 
+/// Deviation: `server/network.ts` `Request.frame`: `return this._frame;`
+/// How many other requests' chains (subresources, a frame's non-navigation fetches) one session
+/// keeps. Playwright's objects live as long as their page; Neo's records live in Rust outside the
+/// realm's memory limit for the run, so a busy page (a news site makes hundreds of requests per
+/// load) is bounded here, the oldest finished request dropped first. A request still loading is
+/// kept past this count, up to [`MAX_LIVE_REQUESTS`], so its end is still reported.
+pub(crate) const MAX_REQUESTS: usize = 1000;
+
+/// Deviation: `server/network.ts` `Request.frame`: `return this._frame;`
+/// How many requests still loading one session keeps before it drops the oldest of them too,
+/// the last bound on the log's memory for a page that opens requests without end. A request
+/// dropped while loading reports no end, and stops holding `networkidle` (`Happening::Forgotten`).
+pub(crate) const MAX_LIVE_REQUESTS: usize = 10_000;
+
+/// How [`Log::end_loading`] ends a request still loading whose frame or session went away.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ending {
+    /// `Request._failFromDetachedDocument`: failed with [`DETACHED_FAILURE`], `requestfailed`.
+    Failed,
+    /// Its end may have come on a session Neo did not read: [`Happening::Forgotten`], no event.
+    Unseen,
+}
+
+/// Playwright: `server/network.ts` `Request._failFromDetachedDocument`: `'net::ERR_ABORTED');`
+/// Chromium's branch: the other browsers name the failure their own way.
+const DETACHED_FAILURE: &str = "net::ERR_ABORTED";
+
+/// Playwright: `server/page.ts` `Page.addNetworkRequest`: `ensureArrayLimit(this._networkRequests, 100);`
+const MAX_PAGE_REQUESTS: usize = 100;
+
 /// Extra info that arrives before its request: the two kinds travel on different channels in
-/// Chromium (`ResponseExtraInfoTracker`'s comment). Kept for the most recent request ids only,
-/// since most belong to subresources this log never records.
-const MAX_ORPHANS: usize = 64;
+/// Chromium (`ResponseExtraInfoTracker`'s comment). Kept for the most recent request ids only:
+/// a request's own events come within a few events of it, and requests this log drops (`data:`,
+/// workers') leave theirs behind.
+const MAX_ORPHANS: usize = 256;
 
 /// Statuses whose body Playwright refuses (`internalBody`).
 const REDIRECT_STATUSES: RangeInclusive<i64> = 300..=399;
 
-/// One hop of one navigation chain: the address of a `Request` and of its `Response`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Playwright: `server/chromium/crNetworkManager.ts` `kRefetchSafeResourceTypes`: `'font', 'image', 'manifest', 'media', 'script', 'stylesheet', 'texttrack',`
+const REFETCH_SAFE_TYPES: [&str; 7] = [
+    "font",
+    "image",
+    "manifest",
+    "media",
+    "script",
+    "stylesheet",
+    "texttrack",
+];
+
+/// One hop of one request chain: the address of a `Request` and of its `Response`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct HopId {
-    /// The navigation's request id, which is its loader id.
+    /// The request's id; a navigation's is its loader id.
     pub(crate) request: String,
     /// 0 for the first request, then one per redirect.
     pub(crate) hop: usize,
@@ -110,7 +163,10 @@ impl HopId {
 /// Why the log cannot answer for an object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum LogError {
-    #[error("Neo no longer holds this {0}: a tab keeps its last {MAX_CHAINS} navigations")]
+    #[error(
+        "Neo no longer holds this {0}: a tab keeps its last {MAX_CHAINS} navigations and its last \
+         {MAX_REQUESTS} other requests"
+    )]
     Dropped(&'static str),
     #[error(
         "Neo lost this navigation's network events (its event queue overflowed), so its response \
@@ -198,10 +254,42 @@ pub(crate) struct ClientTiming {
     pub(crate) response_end: f64,
 }
 
-/// A response body to read: the request id for `Network.getResponseBody`.
+/// A response body to read: the request id for `Network.getResponseBody`, on the session that
+/// reported the request's end, and what Playwright's refetch of an empty body needs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BodyRead {
     pub(crate) request_id: String,
+    /// `None` for the tab's own session.
+    pub(crate) session: Option<SessionId>,
+    /// Set when an empty body may be refetched (`createResponseBodyCallback`): a `GET` of a
+    /// static resource type, or a prefetch.
+    pub(crate) refetch: Option<Refetch>,
+}
+
+/// What `Network.loadNetworkResource` needs to load a body again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Refetch {
+    pub(crate) url: String,
+    pub(crate) frame: String,
+    /// The response's `content-length`: a body is refetched only when it says there is one.
+    pub(crate) content_length: Option<String>,
+}
+
+/// What one event did that Playwright's server reports as a context event
+/// (`FrameManager.requestStarted`, `requestReceivedResponse`, `reportRequestFinished`,
+/// `requestFailed`), in the order it reports them. Favicons never appear.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Happening {
+    Request(HopId),
+    Response(HopId),
+    /// The hop finished loading, redirected, or was a subresource 204 Chromium aborted.
+    Finished(HopId),
+    Failed(HopId),
+    /// Neo stopped following the hop while it may still be loading: dropped past
+    /// [`MAX_LIVE_REQUESTS`], or the document of a removed frame that had moved to another process,
+    /// whose end Neo may not have seen ([`NetworkLog::detach_frame`]). No event, but it no longer
+    /// holds its frame's `networkidle`.
+    Forgotten(HopId),
 }
 
 /// The session's record, shared by its watcher (the only writer) and every call and getter.
@@ -210,6 +298,11 @@ pub(crate) struct NetworkLog {
     log: Mutex<Log>,
     /// Bumped after every change, so a waiter rechecks; never read for its value.
     changes: watch::Sender<u64>,
+    /// The out-of-process frame sessions whose Network events are this tab's, each enabled by
+    /// `PageSession::enable_network`.
+    children: Mutex<HashSet<SessionId>>,
+    /// Set once the tab's `Network.enable` answered: frames attached later turn theirs on.
+    enabled: AtomicBool,
 }
 
 #[derive(Default)]
@@ -218,6 +311,9 @@ struct Log {
     orphans: VecDeque<Orphan>,
     /// How many times the watcher lagged since the session started.
     lags: u64,
+    /// `page.requests()`: every hop's request in the order it started, favicons left out,
+    /// Playwright's last 100 or so.
+    started: VecDeque<HopId>,
 }
 
 /// Extra info for a request id no chain holds yet.
@@ -238,9 +334,18 @@ struct ResponseExtra {
     headers_size: i64,
 }
 
-/// One navigation request id: its hops and `ResponseExtraInfoTracker`'s `RequestInfo`.
+/// One request id: its hops and `ResponseExtraInfoTracker`'s `RequestInfo`.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent fact about the request, set by a different event"
+)]
 struct Chain {
     request: String,
+    /// `requestId` is `loaderId` and the type is `Document`: Playwright's `isNavigationRequest`.
+    navigation: bool,
+    /// `None` for the tab's own session: the out-of-process frame session that reported the
+    /// request's last event (`_maybeUpdateRequestSession`), where its body is read.
+    session: Option<SessionId>,
     hops: Vec<Hop>,
     /// `loadingFinished` or `loadingFailed` arrived: Playwright deletes the request then, and
     /// later request events for its id start nothing here. Extra info still pairs up.
@@ -253,6 +358,10 @@ struct Chain {
     served_from_cache: bool,
     /// What a watcher lag since the chain began may have cost it.
     lag: Lag,
+    /// A navigation still loading when its frame's document moved to another process
+    /// ([`NetworkLog::frame_moved`]): its end comes on that process's frame session, which Neo may
+    /// have attached only after it.
+    ends_elsewhere: bool,
 }
 
 /// A watcher lag that may have lost one of a chain's events.
@@ -272,6 +381,12 @@ enum Lag {
 /// events.
 struct Hop {
     url: String,
+    /// `requestWillBeSent.frameId`.
+    frame: String,
+    /// `toResourceType(event.type)`.
+    resource_type: &'static str,
+    /// Playwright's `_isFavicon`: the URL ends in `/favicon.ico`, or an earlier hop's did.
+    favicon: bool,
     method: String,
     headers: Vec<NameValue>,
     post_data: Option<Vec<u8>>,
@@ -316,20 +431,143 @@ impl NetworkLog {
             main_frame,
             log: Mutex::new(Log::default()),
             changes,
+            children: Mutex::default(),
+            enabled: AtomicBool::new(false),
         }
     }
 
-    /// Applies one event of this session. Any method outside `Network.*` is ignored.
-    pub(crate) fn apply(&self, method: &str, params: &Value) {
+    /// The tab's `Network.enable` answered.
+    pub(crate) fn mark_enabled(&self) {
+        self.enabled.store(true, Ordering::Release);
+    }
+
+    /// Whether the tab's requests are being recorded.
+    pub(crate) fn enabled(&self) -> bool {
+        self.enabled.load(Ordering::Acquire)
+    }
+
+    /// Applies one event of the tab's session (`session` `None`) or of an out-of-process frame
+    /// session ([`Self::add_child`]), and answers what Playwright's server would report for it.
+    /// Any method outside `Network.*` is ignored.
+    pub(crate) fn apply(
+        &self,
+        session: Option<&SessionId>,
+        method: &str,
+        params: &Value,
+    ) -> Vec<Happening> {
         let Ok(mut log) = self.log.lock() else {
-            return;
+            return Vec::new();
         };
-        let changed = log.apply(&self.main_frame, method, params);
+        let mut happenings = Vec::new();
+        let changed = log.apply(session, method, params, &mut happenings);
         drop(log);
         if changed {
             self.changes
                 .send_modify(|version| *version = version.wrapping_add(1));
         }
+        happenings
+    }
+
+    /// From now on `session`'s Network events are this tab's: an out-of-process frame session
+    /// whose `Network.enable` the page sent.
+    pub(crate) fn add_child(&self, session: &SessionId) {
+        if let Ok(mut children) = self.children.lock() {
+            children.insert(session.clone());
+        }
+    }
+
+    /// Whether `session` is an out-of-process frame session this log records.
+    pub(crate) fn has_child(&self, session: &SessionId) -> bool {
+        self.children
+            .lock()
+            .is_ok_and(|children| children.contains(session))
+    }
+
+    /// `frame`'s guid as the SDK names frames: the main frame's, or a child's under the tab.
+    pub(crate) fn frame_guid(&self, frame: &str) -> String {
+        if frame == self.main_frame {
+            format!("frame@{}", self.main_frame)
+        } else {
+            format!("frame@{}/{frame}", self.main_frame)
+        }
+    }
+
+    /// `page.requests()`: Playwright's recent requests of the page, oldest first.
+    pub(crate) fn requests(&self) -> Result<Vec<RequestChannel>, LogError> {
+        let target = self.main_frame.as_str();
+        self.read(|log| {
+            log.started
+                .iter()
+                .filter(|id| log.chain(&id.request).is_some())
+                .map(|id| RequestChannel {
+                    guid: id.request_guid(target),
+                })
+                .collect()
+        })
+    }
+
+    /// The frame a request was made in, while the log holds it.
+    pub(crate) fn frame_of(&self, request: &str) -> Option<String> {
+        self.read(|log| {
+            log.chain(request)
+                .and_then(|chain| chain.hops.last())
+                .map(|hop| hop.frame.clone())
+        })
+        .ok()
+        .flatten()
+    }
+
+    /// The hop a redirect made of `id`, once it started: `request.redirectedTo()`.
+    pub(crate) fn redirected_to(&self, id: &HopId) -> Result<Option<HopId>, LogError> {
+        self.with_chain(id, "request", |chain| {
+            Ok((id.hop + 1 < chain.hops.len()).then(|| HopId {
+                request: id.request.clone(),
+                hop: id.hop + 1,
+            }))
+        })
+    }
+
+    /// Whether `id` has its response yet: `request.existingResponse()`.
+    pub(crate) fn has_response(&self, id: &HopId) -> Result<bool, LogError> {
+        self.with_hop(id, "request", |hop| Ok(hop.response.is_some()))
+    }
+
+    /// One hop's `Request` record, as a `request` event carries it.
+    pub(crate) fn created_request(
+        &self,
+        id: &HopId,
+    ) -> Result<Created<RequestInitializer>, LogError> {
+        let target = self.main_frame.clone();
+        self.with_chain(id, "request", |chain| {
+            chain
+                .request_record(&target, id.hop, |frame| self.frame_guid(frame))
+                .ok_or(LogError::Dropped("request"))
+        })
+    }
+
+    /// One hop's `Response` record, as a `response` event carries it, or `None` before it.
+    pub(crate) fn created_response(
+        &self,
+        id: &HopId,
+    ) -> Result<Option<Created<ResponseInitializer>>, LogError> {
+        let target = self.main_frame.clone();
+        self.with_chain(id, "response", |chain| {
+            Ok(chain.response_record(&target, id.hop))
+        })
+    }
+
+    /// What `networkidle` needs of a hop that started: its frame, and whether it is an event
+    /// stream, which never holds a frame's idleness.
+    pub(crate) fn idle_facts(&self, id: &HopId) -> Option<(String, bool)> {
+        self.with_hop(id, "request", |hop| {
+            Ok((hop.frame.clone(), hop.resource_type == "eventsource"))
+        })
+        .ok()
+    }
+
+    /// `request._responseEndTiming`, which `requestFinished` and `requestFailed` events carry.
+    pub(crate) fn response_end(&self, id: &HopId) -> Result<f64, LogError> {
+        self.with_hop(id, "request", |hop| Ok(hop.response_end))
     }
 
     /// The watcher lagged: any event may be missing from here on, so every value still pending
@@ -349,6 +587,85 @@ impl NetworkLog {
         }
         self.changes
             .send_modify(|version| *version = version.wrapping_add(1));
+    }
+
+    /// `Frame._failInflightRequests` for `frame`, removed from its page: each of its requests still
+    /// loading, its document's too, fails as a detached document's
+    /// (`Request._failFromDetachedDocument`), its response finished first, so a body read goes on
+    /// to its session and fails there as Playwright's does. Chromium reports no end of its own for
+    /// a removed frame's document.
+    ///
+    /// Deviation: `server/frames.ts` `Frame._failInflightRequests`: `for (const request of [...this._inflightRequests]) {`
+    /// A navigation request that was still loading when its frame's document moved to another
+    /// process ends without an event ([`Ending::Unseen`]): its end comes on that process's frame
+    /// session, which Neo may have attached only afterwards, so Neo cannot tell a loading one from
+    /// one that finished unseen. A body read on it still goes on and settles. Every request the
+    /// frame started after the move, Neo saw from its start, and fails.
+    pub(crate) fn detach_frame(&self, frame: &str) -> Vec<Happening> {
+        let happenings = self
+            .log
+            .lock()
+            .map(|mut log| {
+                log.end_loading(|chain| {
+                    let ours = chain.hops.last().is_some_and(|hop| hop.frame == frame);
+                    ours.then_some(if chain.ends_elsewhere {
+                        Ending::Unseen
+                    } else {
+                        Ending::Failed
+                    })
+                })
+            })
+            .unwrap_or_default();
+        self.changed_if(&happenings);
+        happenings
+    }
+
+    /// The same for the requests still loading on `session`, an out-of-process frame session that
+    /// went away (its frame removed, or moved back into its parent's process), but navigation
+    /// requests: a frame moving back goes on loading its new document in its parent's session.
+    ///
+    /// Deviation: `server/chromium/crPage.ts` `FrameSession._onDetachedFromTarget`: `if (childFrameSession._swappedIn) {`
+    /// Playwright drops a frame session that moved back into its parent's process and leaves its
+    /// old document's requests open; Neo fails them, since no event of theirs can arrive, so their
+    /// body reads end.
+    pub(crate) fn detach_session(&self, session: &SessionId) -> Vec<Happening> {
+        if let Ok(mut children) = self.children.lock() {
+            children.remove(session);
+        }
+        let happenings = self
+            .log
+            .lock()
+            .map(|mut log| {
+                log.end_loading(|chain| {
+                    (!chain.navigation && chain.session.as_ref() == Some(session))
+                        .then_some(Ending::Failed)
+                })
+            })
+            .unwrap_or_default();
+        self.changed_if(&happenings);
+        happenings
+    }
+
+    /// `Page.frameDetached` reason `swap`: `frame`'s document moved to another process, so its
+    /// navigation requests still loading end on a session Neo may not read
+    /// ([`Self::detach_frame`]).
+    pub(crate) fn frame_moved(&self, frame: &str) {
+        if let Ok(mut log) = self.log.lock() {
+            for chain in log.chains.iter_mut().filter(|chain| {
+                chain.navigation
+                    && !chain.ended
+                    && chain.hops.last().is_some_and(|hop| hop.frame == frame)
+            }) {
+                chain.ends_elsewhere = true;
+            }
+        }
+    }
+
+    fn changed_if(&self, happenings: &[Happening]) {
+        if !happenings.is_empty() {
+            self.changes
+                .send_modify(|version| *version = version.wrapping_add(1));
+        }
     }
 
     /// The lags counted so far; `goto` takes this before it navigates.
@@ -397,48 +714,13 @@ impl NetworkLog {
         self.with_chain(id, "request", |chain| {
             let mut requests = Vec::new();
             let mut responses = Vec::new();
-            for (index, hop) in chain.hops.iter().enumerate().take(id.hop + 1) {
-                let at = HopId {
-                    request: chain.request.clone(),
-                    hop: index,
-                };
-                let redirected_from = index.checked_sub(1).map(|previous| RequestChannel {
-                    guid: HopId {
-                        request: chain.request.clone(),
-                        hop: previous,
-                    }
-                    .request_guid(target),
-                });
-                requests.push(Created {
-                    guid: at.request_guid(target),
-                    initializer: RequestInitializer {
-                        frame: Some(FrameChannel {
-                            guid: format!("frame@{target}"),
-                        }),
-                        service_worker: None,
-                        url: hop.url.clone(),
-                        resource_type: "document".to_string(),
-                        method: hop.method.clone(),
-                        post_data: hop.post_data.clone().map(Binary),
-                        headers: hop.headers.clone(),
-                        is_navigation_request: true,
-                        redirected_from,
-                    },
-                });
-                responses.push(hop.response.as_ref().map(|response| Created {
-                    guid: at.response_guid(target),
-                    initializer: ResponseInitializer {
-                        request: RequestChannel {
-                            guid: at.request_guid(target),
-                        },
-                        url: hop.url.clone(),
-                        status: response.status,
-                        status_text: response.status_text.clone(),
-                        headers: response.headers.clone(),
-                        timing: response.timing.clone(),
-                        from_service_worker: response.from_service_worker,
-                    },
-                }));
+            for index in 0..=id.hop.min(chain.hops.len().saturating_sub(1)) {
+                if let Some(request) =
+                    chain.request_record(target, index, |frame| self.frame_guid(frame))
+                {
+                    requests.push(request);
+                    responses.push(chain.response_record(target, index));
+                }
             }
             Ok(CreatedChain {
                 requests,
@@ -529,19 +811,31 @@ impl NetworkLog {
     /// What `Response.body` reads, once the response is done (`internalBody` awaits its
     /// `_finishedPromise`); a redirect's body is refused as Playwright refuses it.
     pub(crate) fn body(&self, id: &HopId) -> Result<Option<BodyRead>, LogError> {
-        self.with_pending(id, "response", |hop| {
-            let Some(response) = &hop.response else {
-                return Ok(None);
-            };
-            if !hop.done {
-                return Ok(None);
+        self.with_chain(id, "response", |chain| {
+            let hop = chain
+                .hops
+                .get(id.hop)
+                .ok_or(LogError::Dropped("response"))?;
+            let read = (|| {
+                let Some(response) = &hop.response else {
+                    return Ok(None);
+                };
+                if !hop.done {
+                    return Ok(None);
+                }
+                if REDIRECT_STATUSES.contains(&response.status) {
+                    return Err(LogError::RedirectBody);
+                }
+                Ok(Some(BodyRead {
+                    request_id: id.request.clone(),
+                    session: chain.session.clone(),
+                    refetch: hop.refetch(response),
+                }))
+            })()?;
+            match read {
+                None if chain.lag != Lag::None => Err(LogError::Lost),
+                read => Ok(read),
             }
-            if REDIRECT_STATUSES.contains(&response.status) {
-                return Err(LogError::RedirectBody);
-            }
-            Ok(Some(BodyRead {
-                request_id: id.request.clone(),
-            }))
         })
     }
 
@@ -610,27 +904,76 @@ impl NetworkLog {
 }
 
 impl Log {
+    /// Ends every chain still loading that `how` names, as it says.
+    fn end_loading(&mut self, how: impl Fn(&Chain) -> Option<Ending>) -> Vec<Happening> {
+        let mut happenings = Vec::new();
+        for chain in self.chains.iter_mut().filter(|chain| !chain.ended) {
+            let Some(ending) = how(chain) else {
+                continue;
+            };
+            chain.ended = true;
+            let Some(index) = chain.hops.len().checked_sub(1) else {
+                continue;
+            };
+            let id = chain.hop_id(index);
+            let Some(hop) = chain.hops.get_mut(index) else {
+                continue;
+            };
+            if ending == Ending::Unseen {
+                if hop.response.is_some() {
+                    hop.request_finished(-1.0);
+                }
+                happenings.push(Happening::Forgotten(id));
+                continue;
+            }
+            if let Some(response) = &mut hop.response {
+                response.body_size = BodySize::Unknown;
+                // Playwright: `server/network.ts` `Request._failFromDetachedDocument`: `this._response._requestFinished(-1);`
+                hop.request_finished(-1.0);
+            } else {
+                hop.raw_request_headers
+                    .get_or_insert_with(|| hop.headers.clone());
+            }
+            hop.failure = Some(DETACHED_FAILURE.to_string());
+            if !hop.favicon {
+                happenings.push(Happening::Failed(id));
+            }
+        }
+        happenings
+    }
+
     fn chain(&self, request: &str) -> Option<&Chain> {
-        self.chains.iter().find(|chain| chain.request == request)
+        // From the newest: a request's events come soon after it starts.
+        self.chains
+            .iter()
+            .rev()
+            .find(|chain| chain.request == request)
     }
 
     fn chain_mut(&mut self, request: &str) -> Option<&mut Chain> {
         self.chains
             .iter_mut()
+            .rev()
             .find(|chain| chain.request == request)
     }
 
-    /// Applies one event; whether anything changed.
-    fn apply(&mut self, main_frame: &str, method: &str, params: &Value) -> bool {
+    /// Applies one event of `session` (`None`: the tab's own); whether anything changed. What
+    /// Playwright's server reports for it goes to `happenings`.
+    fn apply(
+        &mut self,
+        session: Option<&SessionId>,
+        method: &str,
+        params: &Value,
+        happenings: &mut Vec<Happening>,
+    ) -> bool {
         match method {
             "Network.requestWillBeSent" => {
                 decode(params).is_some_and(|event: RequestWillBeSent| {
-                    self.request_will_be_sent(main_frame, event)
+                    self.request_will_be_sent(session, &event, happenings)
                 })
             }
-            "Network.responseReceived" => {
-                decode(params).is_some_and(|event: ResponseReceived| self.response_received(&event))
-            }
+            "Network.responseReceived" => decode(params)
+                .is_some_and(|event: ResponseReceived| self.response_received(&event, happenings)),
             "Network.requestWillBeSentExtraInfo" => {
                 decode(params).is_some_and(|event: RequestExtraInfo| {
                     let headers = headers_to_array(&event.headers, Some('\n'));
@@ -649,41 +992,78 @@ impl Log {
             "Network.requestServedFromCache" => decode(params).is_some_and(|event: RequestId| {
                 self.extra(event.request_id, Extra::ServedFromCache)
             }),
-            "Network.loadingFinished" => {
-                decode(params).is_some_and(|event: LoadingFinished| self.loading_finished(&event))
-            }
-            "Network.loadingFailed" => {
-                decode(params).is_some_and(|event: LoadingFailed| self.loading_failed(event))
-            }
+            "Network.loadingFinished" => decode(params).is_some_and(|event: LoadingFinished| {
+                self.loading_finished(session, &event, happenings)
+            }),
+            "Network.loadingFailed" => decode(params).is_some_and(|event: LoadingFailed| {
+                self.loading_failed(session, event, happenings)
+            }),
             _ => false,
         }
     }
 
-    /// `_onRequestWillBeSent` and `_onRequest`, for the main frame's navigation requests.
-    fn request_will_be_sent(&mut self, main_frame: &str, event: RequestWillBeSent) -> bool {
-        if event.request.url.starts_with("data:")
-            || event.request_id != event.loader_id
-            || event.kind.as_deref() != Some("Document")
-            || event.frame_id.as_deref() != Some(main_frame)
-        {
+    /// `_onRequestWillBeSent` and `_onRequest`, then `FrameManager.requestStarted`: a request
+    /// starts a chain, and a redirect ends its chain's last hop (`_handleRequestRedirect`, which
+    /// reports that hop's response and its finish) before the next hop starts.
+    fn request_will_be_sent(
+        &mut self,
+        session: Option<&SessionId>,
+        event: &RequestWillBeSent,
+        happenings: &mut Vec<Happening>,
+    ) -> bool {
+        // `_onRequest` drops `data:` URLs, and a page's request it finds no frame for.
+        if event.request.url.starts_with("data:") {
             return false;
         }
-        let hop = Hop::new(&event);
-        if let Some(chain) = self
+        let Some(frame) = event.frame_id.as_deref().filter(|frame| !frame.is_empty()) else {
+            return false;
+        };
+        let navigation =
+            event.request_id == event.loader_id && event.kind.as_deref() == Some("Document");
+        let continued = self
             .chain_mut(&event.request_id)
             .filter(|chain| !chain.ended)
-        {
-            if let Some(redirect) = &event.redirect_response {
-                chain.redirect(redirect, event.timestamp, event.redirect_has_extra_info);
-            }
-            chain.hops.push(hop);
-            return true;
+            .map(|chain| {
+                let favicon = chain.hops.last().is_some_and(|hop| hop.favicon);
+                if let Some(redirect) = &event.redirect_response
+                    && let Some(index) =
+                        chain.redirect(redirect, event.timestamp, event.redirect_has_extra_info)
+                    && !favicon
+                {
+                    happenings.push(Happening::Response(chain.hop_id(index)));
+                    happenings.push(Happening::Finished(chain.hop_id(index)));
+                }
+                let hop = Hop::new(event, frame, favicon);
+                let started = (!hop.favicon).then(|| chain.hop_id(chain.hops.len()));
+                chain.hops.push(hop);
+                started
+            });
+        let started = continued
+            .unwrap_or_else(|| self.start_chain(session, event, frame, navigation, happenings));
+        if let Some(id) = started {
+            self.record_start(id.clone());
+            happenings.push(Happening::Request(id));
         }
-        let mut chain = Chain::new(event.request_id);
+        true
+    }
+
+    /// A request id this log holds no live chain for starts one, its earlier extra info
+    /// applied; the request's first hop, unless it is a favicon.
+    fn start_chain(
+        &mut self,
+        session: Option<&SessionId>,
+        event: &RequestWillBeSent,
+        frame: &str,
+        navigation: bool,
+        happenings: &mut Vec<Happening>,
+    ) -> Option<HopId> {
+        let mut chain = Chain::new(event.request_id.clone(), navigation, session.cloned());
         if event.redirect_response.is_some() {
             // A redirect with no chain to continue: the request's start was never seen.
             chain.lag = Lag::BeforeAnswer;
         }
+        let hop = Hop::new(event, frame, false);
+        let started = (!hop.favicon).then(|| chain.hop_id(0));
         chain.hops.push(hop);
         for orphan in self.take_orphans(&chain.request) {
             chain.extra(orphan);
@@ -691,14 +1071,68 @@ impl Log {
         self.chains
             .retain(|existing| existing.request != chain.request);
         self.chains.push_back(chain);
-        while self.chains.len() > MAX_CHAINS {
-            self.chains.pop_front();
-        }
-        true
+        self.evict(navigation, happenings);
+        started
     }
 
-    /// `_onResponseReceived`: the response of the request's latest hop.
-    fn response_received(&mut self, event: &ResponseReceived) -> bool {
+    /// Drops the oldest chains past their kind's cap: navigations past [`MAX_CHAINS`], oldest
+    /// first, as ever; other requests past [`MAX_REQUESTS`], only ended ones, so a request still
+    /// loading keeps its record (and its later end is reported) until [`MAX_LIVE_REQUESTS`],
+    /// past which the oldest loading one goes too. A chain dropped while loading is
+    /// [`Happening::Forgotten`].
+    fn evict(&mut self, navigation: bool, happenings: &mut Vec<Happening>) {
+        loop {
+            let count = self
+                .chains
+                .iter()
+                .filter(|chain| chain.navigation == navigation)
+                .count();
+            let index = if navigation {
+                if count <= MAX_CHAINS {
+                    return;
+                }
+                self.chains.iter().position(|chain| chain.navigation)
+            } else {
+                if count <= MAX_REQUESTS {
+                    return;
+                }
+                let ended = self
+                    .chains
+                    .iter()
+                    .position(|chain| !chain.navigation && chain.ended);
+                ended.or_else(|| {
+                    (count > MAX_LIVE_REQUESTS)
+                        .then(|| self.chains.iter().position(|chain| !chain.navigation))
+                        .flatten()
+                })
+            };
+            let Some(chain) = index.and_then(|index| self.chains.remove(index)) else {
+                return;
+            };
+            if !chain.ended
+                && let Some(index) = chain.hops.len().checked_sub(1)
+            {
+                happenings.push(Happening::Forgotten(chain.hop_id(index)));
+            }
+        }
+    }
+
+    /// `Page.addNetworkRequest` with `ensureArrayLimit`: past the limit, the oldest tenth goes.
+    fn record_start(&mut self, id: HopId) {
+        self.started.push_back(id);
+        if self.started.len() > MAX_PAGE_REQUESTS {
+            // Playwright: `server/page.ts` `ensureArrayLimit`: `return array.splice(0, limit / 10);`
+            self.started.drain(..MAX_PAGE_REQUESTS / 10);
+        }
+    }
+
+    /// `_onResponseReceived` and `FrameManager.requestReceivedResponse`: the response of the
+    /// request's latest hop.
+    fn response_received(
+        &mut self,
+        event: &ResponseReceived,
+        happenings: &mut Vec<Happening>,
+    ) -> bool {
         let Some(chain) = self
             .chain_mut(&event.request_id)
             .filter(|chain| !chain.ended)
@@ -709,11 +1143,19 @@ impl Log {
             return false;
         };
         chain.respond(index, &event.response, event.has_extra_info);
+        if chain.hops.get(index).is_some_and(|hop| !hop.favicon) {
+            happenings.push(Happening::Response(chain.hop_id(index)));
+        }
         true
     }
 
-    /// `_onLoadingFinished`.
-    fn loading_finished(&mut self, event: &LoadingFinished) -> bool {
+    /// `_onLoadingFinished` and `FrameManager.reportRequestFinished`.
+    fn loading_finished(
+        &mut self,
+        session: Option<&SessionId>,
+        event: &LoadingFinished,
+        happenings: &mut Vec<Happening>,
+    ) -> bool {
         let Some(chain) = self
             .chain_mut(&event.request_id)
             .filter(|chain| !chain.ended)
@@ -721,7 +1163,12 @@ impl Log {
             return false;
         };
         chain.ended = true;
-        let Some(hop) = chain.hops.last_mut() else {
+        chain.follow(session);
+        let Some(index) = chain.hops.len().checked_sub(1) else {
+            return true;
+        };
+        let id = chain.hop_id(index);
+        let Some(hop) = chain.hops.get_mut(index) else {
             return true;
         };
         if let Some(response) = &mut hop.response {
@@ -730,12 +1177,21 @@ impl Log {
             hop.request_finished(end);
         }
         hop.finished = true;
+        if !hop.favicon {
+            happenings.push(Happening::Finished(id));
+        }
         true
     }
 
-    /// `_onLoadingFailed`, for a navigation request: Chromium aborts a 204 navigation, so it
-    /// fails as every other failure does.
-    fn loading_failed(&mut self, event: LoadingFailed) -> bool {
+    /// `_onLoadingFailed`, then `FrameManager.requestFailed`. Chromium aborts a 204 response: a
+    /// subresource's then finishes (`reportRequestFinished`), and a navigation's fails as every
+    /// other failure does, since a 204 navigation never commits.
+    fn loading_failed(
+        &mut self,
+        session: Option<&SessionId>,
+        event: LoadingFailed,
+        happenings: &mut Vec<Happening>,
+    ) -> bool {
         let Some(chain) = self
             .chain_mut(&event.request_id)
             .filter(|chain| !chain.ended)
@@ -743,7 +1199,13 @@ impl Log {
             return false;
         };
         chain.ended = true;
-        let Some(hop) = chain.hops.last_mut() else {
+        chain.follow(session);
+        let navigation = chain.navigation;
+        let Some(index) = chain.hops.len().checked_sub(1) else {
+            return true;
+        };
+        let id = chain.hop_id(index);
+        let Some(hop) = chain.hops.get_mut(index) else {
             return true;
         };
         if let Some(response) = &mut hop.response {
@@ -754,6 +1216,18 @@ impl Log {
             hop.raw_request_headers
                 .get_or_insert_with(|| hop.headers.clone());
         }
+        if !navigation
+            && hop
+                .response
+                .as_ref()
+                .is_some_and(|response| response.status == 204)
+        {
+            hop.finished = true;
+            if !hop.favicon {
+                happenings.push(Happening::Finished(id));
+            }
+            return true;
+        }
         hop.failure = Some(
             event
                 .error_text
@@ -761,6 +1235,9 @@ impl Log {
                 .or(event.blocked_reason)
                 .unwrap_or_default(),
         );
+        if !hop.favicon {
+            happenings.push(Happening::Failed(id));
+        }
         true
     }
 
@@ -791,9 +1268,11 @@ impl Log {
 }
 
 impl Chain {
-    fn new(request: String) -> Self {
+    fn new(request: String, navigation: bool, session: Option<SessionId>) -> Self {
         Self {
             request,
+            navigation,
+            session,
             hops: Vec::new(),
             ended: false,
             request_extra: Vec::new(),
@@ -801,6 +1280,7 @@ impl Chain {
             expecting: Vec::new(),
             served_from_cache: false,
             lag: Lag::None,
+            ends_elsewhere: false,
         }
     }
 
@@ -820,15 +1300,84 @@ impl Chain {
         }
     }
 
-    /// `_handleRequestRedirect`: the redirect response finishes the previous hop.
-    fn redirect(&mut self, payload: &ResponsePayload, timestamp: f64, has_extra_info: bool) {
-        let Some(index) = self.hops.len().checked_sub(1) else {
-            return;
-        };
+    fn hop_id(&self, hop: usize) -> HopId {
+        HopId {
+            request: self.request.clone(),
+            hop,
+        }
+    }
+
+    /// `_maybeUpdateRequestSession`: a navigation request that started in its parent's session
+    /// and ends in the out-of-process frame's moves there, where its body is read.
+    fn follow(&mut self, session: Option<&SessionId>) {
+        if let Some(session) = session
+            && self.navigation
+        {
+            self.session = Some(session.clone());
+        }
+    }
+
+    /// The `__create__` record of the hop at `index`'s `Request` (`RequestDispatcher`'s
+    /// initializer), its frame named by `frame_guid`.
+    fn request_record(
+        &self,
+        target: &str,
+        index: usize,
+        frame_guid: impl Fn(&str) -> String,
+    ) -> Option<Created<RequestInitializer>> {
+        let hop = self.hops.get(index)?;
+        let redirected_from = index.checked_sub(1).map(|previous| RequestChannel {
+            guid: self.hop_id(previous).request_guid(target),
+        });
+        Some(Created {
+            guid: self.hop_id(index).request_guid(target),
+            initializer: RequestInitializer {
+                frame: Some(FrameChannel {
+                    guid: frame_guid(&hop.frame),
+                }),
+                service_worker: None,
+                url: hop.url.clone(),
+                resource_type: hop.resource_type.to_string(),
+                method: hop.method.clone(),
+                post_data: hop.post_data.clone().map(Binary),
+                headers: hop.headers.clone(),
+                is_navigation_request: self.navigation,
+                redirected_from,
+            },
+        })
+    }
+
+    /// The hop at `index`'s `Response` record, once it has one.
+    fn response_record(&self, target: &str, index: usize) -> Option<Created<ResponseInitializer>> {
+        let hop = self.hops.get(index)?;
+        let at = self.hop_id(index);
+        hop.response.as_ref().map(|response| Created {
+            guid: at.response_guid(target),
+            initializer: ResponseInitializer {
+                request: RequestChannel {
+                    guid: at.request_guid(target),
+                },
+                url: hop.url.clone(),
+                status: response.status,
+                status_text: response.status_text.clone(),
+                headers: response.headers.clone(),
+                timing: response.timing.clone(),
+                from_service_worker: response.from_service_worker,
+            },
+        })
+    }
+
+    /// `_handleRequestRedirect`: the redirect response finishes the previous hop, whose index
+    /// this answers.
+    fn redirect(
+        &mut self,
+        payload: &ResponsePayload,
+        timestamp: f64,
+        has_extra_info: bool,
+    ) -> Option<usize> {
+        let index = self.hops.len().checked_sub(1)?;
         self.respond(index, payload, has_extra_info);
-        let Some(hop) = self.hops.get_mut(index) else {
-            return;
-        };
+        let hop = self.hops.get_mut(index)?;
         if let Some(response) = &mut hop.response {
             response.body_size = BodySize::Unknown;
         }
@@ -843,6 +1392,7 @@ impl Chain {
         {
             response.timing.request_start = end;
         }
+        Some(index)
     }
 
     /// `_createResponse` and the tracker's `processResponse` for the hop at `index`.
@@ -956,7 +1506,8 @@ impl Chain {
 }
 
 impl Hop {
-    fn new(event: &RequestWillBeSent) -> Self {
+    /// The hop `event` starts in `frame`; `favicon` carries an earlier hop's `_isFavicon`.
+    fn new(event: &RequestWillBeSent, frame: &str, favicon: bool) -> Self {
         let entries = event
             .request
             .post_data_entries
@@ -970,6 +1521,9 @@ impl Hop {
             .collect();
         Self {
             url: strip_fragment(&event.request.url).to_string(),
+            frame: frame.to_string(),
+            resource_type: resource_type(event.kind.as_deref().unwrap_or("Other")),
+            favicon: favicon || event.request.url.ends_with("/favicon.ico"),
             method: event.request.method.clone(),
             headers: headers_to_array(&event.request.headers, None),
             post_data: (!bytes.is_empty()).then(|| bytes.concat()),
@@ -982,6 +1536,30 @@ impl Hop {
             finished: false,
             failure: None,
         }
+    }
+
+    /// What `createResponseBodyCallback` needs to load an empty body again: only a `GET` of a
+    /// static resource type, or a prefetch, is refetched.
+    fn refetch(&self, response: &HopResponse) -> Option<Refetch> {
+        if self.method != "GET" {
+            return None;
+        }
+        let headers = self.raw_request_headers.as_ref().unwrap_or(&self.headers);
+        let prefetch = headers.iter().any(|header| {
+            header.name.eq_ignore_ascii_case("sec-purpose") && header.value.starts_with("prefetch")
+        });
+        if !REFETCH_SAFE_TYPES.contains(&self.resource_type) && !prefetch {
+            return None;
+        }
+        Some(Refetch {
+            url: self.url.clone(),
+            frame: self.frame.clone(),
+            content_length: response
+                .headers
+                .iter()
+                .find(|header| header.name.eq_ignore_ascii_case("content-length"))
+                .map(|header| header.value.clone()),
+        })
     }
 
     /// `Response._requestFinished`.
@@ -1087,6 +1665,27 @@ impl Hop {
     }
 }
 
+/// `toResourceType` (`server/chromium/crNetworkManager.ts`): CDP's resource type as Playwright's.
+fn resource_type(kind: &str) -> &'static str {
+    match kind {
+        "Document" => "document",
+        "Stylesheet" => "stylesheet",
+        "Image" => "image",
+        "Media" => "media",
+        "Font" => "font",
+        "Script" => "script",
+        "TextTrack" => "texttrack",
+        "XHR" => "xhr",
+        "Fetch" => "fetch",
+        "EventSource" => "eventsource",
+        "WebSocket" => "websocket",
+        "Manifest" => "manifest",
+        "Ping" => "ping",
+        "CSPViolationReport" => "cspreport",
+        _ => "other",
+    }
+}
+
 /// `requestHeadersSize` (`server/network.ts`): the request line plus every header line, in
 /// JavaScript string lengths. A URL that does not parse is an error, where `new URL` throws; that
 /// is a `TypeError` in Playwright, a plain `Error` here, since Chromium's canonical navigation URLs
@@ -1149,7 +1748,7 @@ fn js_int(value: f64) -> Result<i64, LogError> {
 
 /// JavaScript's `Number(text)` (ECMAScript `StringToNumber`): trimmed of JavaScript white space,
 /// empty is 0, `0x`/`0o`/`0b` integers, `Infinity`, and decimal literals; anything else is NaN.
-fn js_string_to_number(text: &str) -> f64 {
+pub(crate) fn js_string_to_number(text: &str) -> f64 {
     let text = text.trim_matches(is_js_whitespace);
     if text.is_empty() {
         return 0.0;
@@ -1455,7 +2054,7 @@ mod tests {
     fn replay(main_frame: &str, events: &[(String, Value)]) -> NetworkLog {
         let log = NetworkLog::new(main_frame.to_string());
         for (method, params) in events {
-            log.apply(method, params);
+            log.apply(None, method, params);
         }
         log
     }
@@ -1836,7 +2435,7 @@ mod tests {
         assert_eq!(log.raw_response_headers(&hop), Ok(None), "still pending");
         assert_eq!(log.sizes(&hop), Ok(None), "sizes await the header size");
         for (method, params) in &late {
-            log.apply(method, params);
+            log.apply(None, method, params);
         }
         let want = &golden.playwright["hops"][0];
         assert_eq!(
@@ -1866,11 +2465,13 @@ mod tests {
         assert!(!log.finished(&hop).expect("hop"));
         assert!(is_unset(log.timing(&hop).expect("hop").response_end));
         let (method, params) = &golden.events[finished];
-        log.apply(method, params);
+        log.apply(None, method, params);
         assert_eq!(
             log.body(&hop),
             Ok(Some(BodyRead {
-                request_id: hop.request.clone()
+                request_id: hop.request.clone(),
+                session: None,
+                refetch: None,
             }))
         );
         assert!(log.finished(&hop).expect("hop"));
@@ -1910,7 +2511,7 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_only_main_frame_navigation_requests_are_recorded() {
+    fn tests_that_every_framed_request_is_recorded_but_data_urls_and_frameless_ones() {
         let log = replay(
             "MAIN",
             &[
@@ -1925,15 +2526,421 @@ mod tests {
                     }),
                 ),
                 navigation("DATA", "MAIN", "Document", "data:text/html,x"),
+                event(
+                    "Network.requestWillBeSent",
+                    json!({
+                        "requestId": "W.1", "loaderId": "W.1", "type": "Script",
+                        "request": {"url": "https://a.test/worker.js", "method": "GET"},
+                        "timestamp": 1.0, "wallTime": 1.0,
+                    }),
+                ),
             ],
         );
-        for id in ["CHILD", "SUB", "1.2", "MAIN-LOADER", "DATA"] {
+        for id in ["CHILD", "SUB", "1.2"] {
+            assert_eq!(log.lookup(id, 0), Ok(Lookup::Pending), "{id} is recorded");
+        }
+        for id in ["MAIN-LOADER", "DATA", "W.1"] {
             assert_eq!(
                 log.lookup(id, 0),
                 Ok(Lookup::NoRequest),
                 "{id} is not recorded"
             );
         }
+        let created = |id: &str| {
+            log.created_request(&HopId {
+                request: id.to_string(),
+                hop: 0,
+            })
+            .expect("a record")
+            .initializer
+        };
+        let child = created("CHILD");
+        assert!(
+            child.is_navigation_request,
+            "requestId is loaderId: navigation"
+        );
+        assert_eq!(child.frame.expect("a frame").guid, "frame@MAIN/OTHER");
+        let script = created("SUB");
+        assert_eq!(script.resource_type, "script");
+        assert_eq!(script.frame.expect("a frame").guid, "frame@MAIN");
+        let fetch = created("1.2");
+        assert!(
+            !fetch.is_navigation_request,
+            "a Document whose requestId is not its loaderId is no navigation"
+        );
+        assert_eq!(
+            log.requests()
+                .expect("requests")
+                .into_iter()
+                .map(|request| request.guid)
+                .collect::<Vec<_>>(),
+            [
+                "request@MAIN:CHILD:0",
+                "request@MAIN:SUB:0",
+                "request@MAIN:1.2:0"
+            ],
+            "page.requests() in start order"
+        );
+    }
+
+    fn sub(id: &str, url: &str, kind: &str) -> (String, Value) {
+        event(
+            "Network.requestWillBeSent",
+            json!({
+                "requestId": id, "loaderId": "DOC", "type": kind, "frameId": "MAIN",
+                "request": {"url": url, "method": "GET", "headers": {}},
+                "timestamp": 1.0, "wallTime": 1.0,
+            }),
+        )
+    }
+
+    fn apply_all(log: &NetworkLog, events: &[(String, Value)]) -> Vec<Happening> {
+        events
+            .iter()
+            .flat_map(|(method, params)| log.apply(None, method, params))
+            .collect()
+    }
+
+    fn at(id: &str, hop: usize) -> HopId {
+        HopId {
+            request: id.to_string(),
+            hop,
+        }
+    }
+
+    #[test]
+    fn tests_that_a_redirect_reports_its_hops_in_playwrights_order() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let mut redirected = sub("R", "https://a.test/target", "Fetch");
+        redirected.1["redirectResponse"] =
+            json!({"status": 302, "statusText": "Found", "headers": {}});
+        redirected.1["timestamp"] = json!(1.5);
+        let happenings = apply_all(
+            &log,
+            &[
+                sub("R", "https://a.test/start", "Fetch"),
+                redirected,
+                response("R", false),
+                event(
+                    "Network.loadingFinished",
+                    json!({"requestId": "R", "timestamp": 2.0, "encodedDataLength": 3.0}),
+                ),
+            ],
+        );
+        assert_eq!(
+            happenings,
+            [
+                Happening::Request(at("R", 0)),
+                Happening::Response(at("R", 0)),
+                Happening::Finished(at("R", 0)),
+                Happening::Request(at("R", 1)),
+                Happening::Response(at("R", 1)),
+                Happening::Finished(at("R", 1)),
+            ],
+            "_handleRequestRedirect reports the old hop's response and finish first"
+        );
+        assert_eq!(log.redirected_to(&at("R", 0)), Ok(Some(at("R", 1))));
+        assert_eq!(log.redirected_to(&at("R", 1)), Ok(None));
+    }
+
+    #[test]
+    fn tests_that_a_subresource_204_finishes_and_a_navigation_204_fails() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let mut no_content = response("S", false);
+        no_content.1["response"]["status"] = json!(204);
+        let aborted = event(
+            "Network.loadingFailed",
+            json!({"requestId": "S", "timestamp": 2.0, "errorText": "net::ERR_ABORTED"}),
+        );
+        let happenings = apply_all(
+            &log,
+            &[
+                sub("S", "https://a.test/beacon", "Fetch"),
+                no_content.clone(),
+                aborted.clone(),
+            ],
+        );
+        assert_eq!(happenings.last(), Some(&Happening::Finished(at("S", 0))));
+        assert_eq!(log.failure(&at("S", 0)), Ok(None));
+        assert!(log.finished(&at("S", 0)).expect("hop"));
+        let mut navigation_204 = response("N", false);
+        navigation_204.1["response"]["status"] = json!(204);
+        let mut navigation_failed = aborted;
+        navigation_failed.1["requestId"] = json!("N");
+        let happenings = apply_all(
+            &log,
+            &[
+                navigation("N", "MAIN", "Document", "https://a.test/empty"),
+                navigation_204,
+                navigation_failed,
+            ],
+        );
+        assert_eq!(happenings.last(), Some(&Happening::Failed(at("N", 0))));
+        assert_eq!(
+            log.failure(&at("N", 0)),
+            Ok(Some("net::ERR_ABORTED".to_string()))
+        );
+    }
+
+    #[test]
+    fn tests_that_favicons_are_recorded_but_never_reported() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let happenings = apply_all(
+            &log,
+            &[
+                sub("F", "https://a.test/favicon.ico", "Image"),
+                response("F", false),
+            ],
+        );
+        assert!(happenings.is_empty(), "{happenings:?}");
+        assert_eq!(log.requests(), Ok(Vec::new()), "nor listed by requests()");
+    }
+
+    #[test]
+    fn tests_that_requests_keep_playwrights_window() {
+        let log = NetworkLog::new("MAIN".to_string());
+        for i in 0..101 {
+            log.apply(
+                None,
+                &sub(&format!("S{i}"), "https://a.test/x", "Fetch").0,
+                &sub(&format!("S{i}"), "https://a.test/x", "Fetch").1,
+            );
+        }
+        let listed = log.requests().expect("requests");
+        assert_eq!(listed.len(), 91, "at 101 the oldest tenth goes");
+        assert_eq!(listed[0].guid, "request@MAIN:S10:0");
+    }
+
+    #[test]
+    fn tests_that_other_requests_past_their_cap_drop_an_ended_one_first() {
+        let log = NetworkLog::new("MAIN".to_string());
+        log.apply(
+            None,
+            &sub("LIVE", "https://a.test/stream", "Fetch").0,
+            &sub("LIVE", "https://a.test/stream", "Fetch").1,
+        );
+        let finished = |id: &str| {
+            event(
+                "Network.loadingFinished",
+                json!({"requestId": id, "timestamp": 2.0, "encodedDataLength": 0.0}),
+            )
+        };
+        for i in 0..MAX_REQUESTS {
+            let id = format!("E{i}");
+            let start = sub(&id, "https://a.test/e", "Fetch");
+            log.apply(None, &start.0, &start.1);
+            let end = finished(&id);
+            log.apply(None, &end.0, &end.1);
+        }
+        assert!(
+            log.created_request(&at("LIVE", 0)).is_ok(),
+            "the loading request outlives finished ones"
+        );
+        assert_eq!(
+            log.created_request(&at("E0", 0)).map(|_| ()),
+            Err(LogError::Dropped("request")),
+            "the oldest finished request went"
+        );
+        assert!(
+            LogError::Dropped("request")
+                .to_string()
+                .contains("its last 1000 other requests")
+        );
+    }
+
+    #[test]
+    fn tests_that_a_removed_frame_fails_its_loading_requests_once() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let mut in_child = sub("C1", "https://a.test/stream", "Fetch");
+        in_child.1["frameId"] = json!("CHILD");
+        let mut done_in_child = sub("C2", "https://a.test/done", "Fetch");
+        done_in_child.1["frameId"] = json!("CHILD");
+        apply_all(
+            &log,
+            &[
+                in_child,
+                response("C1", false),
+                done_in_child,
+                event(
+                    "Network.loadingFinished",
+                    json!({"requestId": "C2", "timestamp": 2.0, "encodedDataLength": 1.0}),
+                ),
+                sub("M1", "https://a.test/main", "Fetch"),
+            ],
+        );
+        let document = navigation("DOC2", "CHILD", "Document", "https://b.test/");
+        log.apply(None, &document.0, &document.1);
+        assert_eq!(
+            log.detach_frame("CHILD"),
+            [
+                Happening::Failed(at("C1", 0)),
+                Happening::Failed(at("DOC2", 0))
+            ],
+            "its document's request too: Chromium ends neither"
+        );
+        assert_eq!(
+            log.failure(&at("C1", 0)),
+            Ok(Some("net::ERR_ABORTED".to_string()))
+        );
+        assert!(
+            log.body(&at("C1", 0)).expect("a body").is_some(),
+            "its response finished, so a body read goes on to its session"
+        );
+        assert!(
+            !log.finished(&at("C1", 0)).expect("hop"),
+            "no requestFinished"
+        );
+        assert_eq!(
+            log.failure(&at("M1", 0)),
+            Ok(None),
+            "another frame's request"
+        );
+        let late = event(
+            "Network.loadingFailed",
+            json!({"requestId": "C1", "timestamp": 3.0, "errorText": "net::ERR_FAILED"}),
+        );
+        assert!(
+            log.apply(None, &late.0, &late.1).is_empty(),
+            "Chromium's own failure after it reports nothing twice"
+        );
+    }
+
+    #[test]
+    fn tests_that_only_a_document_loading_as_its_frame_moved_ends_unseen() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let child = SessionId::from("OOPIF");
+        let document = navigation("DOC", "REMOTE", "Document", "https://b.test/");
+        apply_all(&log, &[document, response("DOC", true)]);
+        log.frame_moved("REMOTE");
+        log.add_child(&child);
+        let again = navigation("DOC2", "REMOTE", "Document", "https://b.test/2");
+        log.apply(Some(&child), &again.0, &again.1);
+        let mut fetch = sub("F1", "https://b.test/data", "Fetch");
+        fetch.1["frameId"] = json!("REMOTE");
+        log.apply(Some(&child), &fetch.0, &fetch.1);
+        assert_eq!(
+            log.detach_frame("REMOTE"),
+            [
+                Happening::Forgotten(at("DOC", 0)),
+                Happening::Failed(at("DOC2", 0)),
+                Happening::Failed(at("F1", 0))
+            ],
+            "in start order: the first document may have finished on a session Neo did not read; \
+             Neo saw the next one start"
+        );
+        assert!(
+            log.body(&at("DOC", 0)).expect("a body").is_some(),
+            "a body read on the first document goes on"
+        );
+        assert_eq!(
+            log.failure(&at("DOC", 0)),
+            Ok(None),
+            "and reports no failure"
+        );
+        assert_eq!(
+            log.failure(&at("DOC2", 0)),
+            Ok(Some("net::ERR_ABORTED".to_string()))
+        );
+    }
+
+    #[test]
+    fn tests_that_a_gone_frame_session_fails_its_loading_requests() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let child = SessionId::from("OOPIF");
+        log.add_child(&child);
+        let mut start = sub("O1", "https://b.test/stream", "Fetch");
+        start.1["frameId"] = json!("REMOTE");
+        log.apply(Some(&child), &start.0, &start.1);
+        let back = navigation("BACK", "REMOTE", "Document", "https://a.test/back");
+        log.apply(Some(&child), &back.0, &back.1);
+        assert_eq!(
+            log.detach_session(&child),
+            [Happening::Failed(at("O1", 0))],
+            "a navigation request goes on in the parent's session"
+        );
+        assert!(!log.has_child(&child), "its events are no longer the tab's");
+    }
+
+    #[test]
+    fn tests_that_loading_requests_outlive_the_cap_until_the_live_bound() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let mut happenings = Vec::new();
+        for i in 0..=MAX_REQUESTS {
+            let start = sub(&format!("L{i}"), "https://a.test/l", "Fetch");
+            happenings.extend(log.apply(None, &start.0, &start.1));
+        }
+        assert!(
+            log.created_request(&at("L0", 0)).is_ok(),
+            "a loading request is kept past the cap"
+        );
+        assert!(
+            !happenings
+                .iter()
+                .any(|happening| matches!(happening, Happening::Forgotten(_))),
+            "nothing forgotten below the live bound"
+        );
+        let mut more = Vec::new();
+        for i in MAX_REQUESTS + 1..=MAX_LIVE_REQUESTS {
+            let start = sub(&format!("L{i}"), "https://a.test/l", "Fetch");
+            more.extend(log.apply(None, &start.0, &start.1));
+        }
+        assert!(
+            more.contains(&Happening::Forgotten(at("L0", 0))),
+            "past the live bound the oldest loading request goes, and says so"
+        );
+        assert_eq!(
+            log.created_request(&at("L0", 0)).map(|_| ()),
+            Err(LogError::Dropped("request"))
+        );
+    }
+
+    #[test]
+    fn tests_that_ended_requests_are_evicted_down_to_the_cap() {
+        let log = NetworkLog::new("MAIN".to_string());
+        for i in 0..MAX_REQUESTS + 5 {
+            let start = sub(&format!("A{i}"), "https://a.test/a", "Fetch");
+            log.apply(None, &start.0, &start.1);
+        }
+        for i in 0..MAX_REQUESTS + 5 {
+            let failed = event(
+                "Network.loadingFailed",
+                json!({"requestId": format!("A{i}"), "timestamp": 2.0, "errorText": "net::ERR_ABORTED"}),
+            );
+            assert_eq!(
+                log.apply(None, &failed.0, &failed.1),
+                [Happening::Failed(at(&format!("A{i}"), 0))],
+                "every loading request's failure is reported"
+            );
+        }
+        let next = sub("NEXT", "https://a.test/n", "Fetch");
+        log.apply(None, &next.0, &next.1);
+        for i in 0..6 {
+            assert!(
+                log.created_request(&at(&format!("A{i}"), 0)).is_err(),
+                "A{i} went to bring the log back to its cap"
+            );
+        }
+        assert!(log.created_request(&at("A6", 0)).is_ok());
+    }
+
+    #[test]
+    fn tests_that_a_navigation_ending_in_a_frame_session_reads_its_body_there() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let child = SessionId::from("OOPIF");
+        log.apply(
+            None,
+            &navigation("D", "FRAME", "Document", "https://b.test/").0,
+            &navigation("D", "FRAME", "Document", "https://b.test/").1,
+        );
+        log.apply(None, &response("D", false).0, &response("D", false).1);
+        let finished = event(
+            "Network.loadingFinished",
+            json!({"requestId": "D", "timestamp": 2.0, "encodedDataLength": 5.0}),
+        );
+        log.apply(Some(&child), &finished.0, &finished.1);
+        let read = log.body(&at("D", 0)).expect("a body").expect("done");
+        assert_eq!(read.session, Some(child), "_maybeUpdateRequestSession");
+        assert_eq!(log.frame_of("D").as_deref(), Some("FRAME"));
     }
 
     #[test]
@@ -2054,7 +3061,11 @@ mod tests {
             Err(LogError::Lost),
             "maybe never seen"
         );
-        log.apply(response("N", false).0.as_str(), &response("N", false).1);
+        log.apply(
+            None,
+            response("N", false).0.as_str(),
+            &response("N", false).1,
+        );
         assert_eq!(
             log.lookup("N", before),
             Err(LogError::Lost),
@@ -2066,7 +3077,7 @@ mod tests {
             &[navigation("A", "MAIN", "Document", "https://a.test/")],
         );
         let (method, params) = response("A", false);
-        answered.apply(&method, &params);
+        answered.apply(None, &method, &params);
         answered.lagged();
         assert!(
             matches!(answered.lookup("A", 0), Ok(Lookup::Response(_))),
@@ -2092,9 +3103,9 @@ mod tests {
                                      "headers": {"Location": "/next"}},
             }),
         );
-        log.apply(&method, &params);
+        log.apply(None, &method, &params);
         let (method, params) = response("N", false);
-        log.apply(&method, &params);
+        log.apply(None, &method, &params);
         assert_eq!(log.lookup("N", before), Err(LogError::Lost));
         assert_eq!(
             log.lookup("N", log.lags()),
@@ -2124,7 +3135,7 @@ mod tests {
         task::yield_now().await;
         assert!(!waiting.is_finished(), "nothing to answer yet");
         let (method, params) = response("N", false);
-        log.apply(&method, &params);
+        log.apply(None, &method, &params);
         assert!(matches!(
             waiting.await.expect("waiter"),
             Ok(Lookup::Response(_))
@@ -2309,7 +3320,7 @@ mod tests {
             "answered before the lag"
         );
         for (method, params) in &late {
-            log.apply(method, params);
+            log.apply(None, method, params);
         }
         assert!(
             log.raw_response_headers(&hop).expect("arrived").is_some(),

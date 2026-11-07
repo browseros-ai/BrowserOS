@@ -36,7 +36,9 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::click::{PageError, PressReport, Tab};
-use crate::input_devices::{self, Effect, InputDevices, KeyboardState, Owner, Plan, Planned};
+use crate::input_devices::{
+    self, DragStep, Effect, InputDevices, KeyboardState, Owner, Plan, Planned,
+};
 use crate::page::{FrameTab, InputPermit};
 use crate::progress::InputTicket;
 use crate::world;
@@ -591,7 +593,15 @@ fn key_command(event: &KeyEvent, owner: &Owner) -> Planned {
             modifier: modifier_bit(up.key).unwrap_or(0),
         },
     };
-    Planned::command("Input.dispatchKeyEvent", params, effect)
+    let drag = match event {
+        // Playwright: `server/chromium/crInput.ts` `RawKeyboardImpl.keydown`: `if (code === 'Escape' && await progress.race(this._dragManger.cancelDrag()))`
+        KeyEvent::Down(down) if down.code == "Escape" => DragStep::Escape,
+        _ => DragStep::None,
+    };
+    Planned {
+        drag,
+        ..Planned::command("Input.dispatchKeyEvent", params, effect)
+    }
 }
 
 /// `Keyboard.press`'s `split`: a `+` ends a token only when the token so far is not empty, so a
