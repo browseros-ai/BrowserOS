@@ -7,7 +7,7 @@
 //!                no match / NotConnected: poll; detached result: Error
 //! ```
 //!
-//! Both reads use the main frame's utility world without an input turn or delivery ticket.
+//! Both reads use the selected frame's utility world without an input turn or delivery ticket.
 
 use std::future::Future;
 
