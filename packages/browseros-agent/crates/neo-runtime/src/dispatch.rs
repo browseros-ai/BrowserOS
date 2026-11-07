@@ -110,6 +110,7 @@ use crate::progress::{
 use crate::reads::{self, AttributeOptions, ReadOptions, SnapshotOptions};
 use crate::responses::{self, NetworkCall};
 use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
+use crate::session_state::StateFile;
 use crate::states::{self, StateOptions};
 use crate::tab_calls;
 use crate::tabs::{PageEntry, Tabs};
@@ -385,6 +386,9 @@ enum ObjectKind {
 
 enum ObjectCall {
     Context(BrowserContextCall),
+    /// `context.storageState` and `context.setStorageState`, with the `path` the spec's params
+    /// lack (`neo_path`).
+    StorageState(StateFile, Option<String>),
     Page(PageCall),
     /// `page.keyboard`, `page.mouse` and `page.touchscreen` (`devices.rs`).
     Device(DeviceCall),
@@ -778,8 +782,11 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         Err(unrouted) => unrouted,
     };
     let decoded = match object {
-        ObjectKind::Context => BrowserContextCall::decode(method, params)
-            .map(|call| (call.meta(), Ok(ObjectCall::Context(call)))),
+        ObjectKind::Context => {
+            let path = neo_path(params.as_ref());
+            BrowserContextCall::decode(method, params)
+                .map(|call| (call.meta(), context_call(call, path)))
+        }
         ObjectKind::Page => {
             let path = neo_path(params.as_ref());
             PageCall::decode(method, params).map(|call| {
@@ -884,6 +891,22 @@ fn json_kind(value: &Value) -> &'static str {
         Value::Array(_) => "array",
         Value::Object(_) => "object",
     }
+}
+
+/// A decoded context call: the storage-state ones go with their `path`.
+fn context_call(
+    call: BrowserContextCall,
+    path: Result<Option<String>, PlaywrightError>,
+) -> Result<ObjectCall, PlaywrightError> {
+    Ok(match call {
+        BrowserContextCall::StorageState(params) => {
+            ObjectCall::StorageState(StateFile::Export(params), path?)
+        }
+        BrowserContextCall::SetStorageState(params) => {
+            ObjectCall::StorageState(StateFile::Import(params), path?)
+        }
+        call => ObjectCall::Context(call),
+    })
 }
 
 /// A decoded page call: the ones that answer bytes go to `capture.rs` with their `path`.
@@ -1212,7 +1235,7 @@ async fn serve_call(
     let gate = match (&route, &target) {
         // A download's calls start nothing in a page; `cancel` must not wait for a page's enables.
         (ObjectCall::Dialog(..) | ObjectCall::Download(..), _) => None,
-        (ObjectCall::Context(_), _) => Some(ALL_PAGES),
+        (ObjectCall::Context(_) | ObjectCall::StorageState(..), _) => Some(ALL_PAGES),
         (_, Some((page, _))) => Some(page.id.as_str()),
         (_, None) => None,
     };
@@ -1225,6 +1248,9 @@ async fn serve_call(
     }
     let result = match (route, target) {
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
+        (ObjectCall::StorageState(file, path), _) => {
+            tab_calls::state_file(&tabs, file, path, &progress).await
+        }
         (ObjectCall::Init(route), target) => init_call(&tabs, target, route, &progress).await,
         (ObjectCall::Binding(route), target) => binding_call(&tabs, target, route, &progress).await,
         (ObjectCall::Page(call), Some((page, _))) => {
@@ -2055,6 +2081,7 @@ mod tests {
         route.map(|call| match call {
             ObjectCall::Frame(route) => route,
             ObjectCall::Context(_)
+            | ObjectCall::StorageState(..)
             | ObjectCall::Page(_)
             | ObjectCall::Device(_)
             | ObjectCall::Network(_)

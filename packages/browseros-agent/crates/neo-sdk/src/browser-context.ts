@@ -82,14 +82,6 @@ const CONTEXT_EVENTS: EventTable = {
   unserved: ['serviceworker'],
 }
 
-/** Neo: why `storageState({ path })` throws: the run has no artifact directory to write it in. */
-const STORAGE_STATE_PATH =
-  'path: this run has no artifact directory, so Neo cannot write the storage state; the host sets one per run'
-
-/** Neo: why `setStorageState(path)` throws: the run has no artifact directory to read it from. */
-const STATE_FILE_PATH =
-  'storageState: this run has no artifact directory, so Neo cannot read a state file; the host sets one per run'
-
 /** Neo: why `clearCookies()` without a filter throws. */
 const CLEAR_ALL_COOKIES_REFUSED =
   "Neo does not clear every cookie of the user's browser, which would sign the user out of every site: pass clearCookies a name, domain or path"
@@ -718,8 +710,9 @@ export class BrowserContext extends ChannelOwner {
    * visited and still have open (neo-runtime `session_state.rs`).
    *
    * Deviation: `client/browserContext.ts` `BrowserContext.storageState`: `await fs.promises.writeFile(options.path, JSON.stringify(state, undefined, 2), 'utf8');`
-   * Playwright writes `path` anywhere on its host. Neo writes a script's files only inside the
-   * run's artifact directory, which the host gives the run; without one, `path` throws.
+   * Playwright writes `path` anywhere on its host. `path` travels with the call, and neo-runtime
+   * writes the state there, as Playwright does, inside the run's artifact directory only
+   * (`artifacts.rs`): a relative path without `..`; a run without a directory names the option.
    */
   async storageState(
     options: {
@@ -729,8 +722,8 @@ export class BrowserContext extends ChannelOwner {
       credentials?: boolean
     } = {},
   ): Promise<BrowserContextStorageStateResult> {
-    if (options.path !== undefined) throw new Error(STORAGE_STATE_PATH)
-    const params: BrowserContextStorageStateParams = {}
+    const params: BrowserContextStorageStateParams & { path?: string } = {}
+    if (options.path !== undefined) params.path = options.path
     if (options.indexedDB !== undefined) params.indexedDB = options.indexedDB
     if (options.opfs !== undefined) params.opfs = options.opfs
     if (options.credentials !== undefined)
@@ -750,19 +743,23 @@ export class BrowserContext extends ChannelOwner {
    * open page on it; nothing else of the user's browser is cleared (neo-runtime
    * `session_state.rs`, Deviation).
    *
-   * Deviation: `client/browserContext.ts` `prepareStorageState`: `return JSON.parse(await fs.promises.readFile(storageState, 'utf8'));`
-   * Playwright reads a state file anywhere on its host. Neo reads a script's files only inside
-   * the run's artifact directory, which the host gives the run; without one, a path throws.
+   * A state file's path travels with the call, and neo-runtime reads it inside the run's
+   * artifact directory only (`session_state.rs` `read_state`, Deviation).
    */
   async setStorageState(
     storageState: string | BrowserContextSetStorageStateParams['storageState'],
   ): Promise<void> {
-    if (typeof storageState === 'string') throw new Error(STATE_FILE_PATH)
+    const params: BrowserContextSetStorageStateParams & { path?: string } =
+      typeof storageState === 'string'
+        ? { path: storageState }
+        : storageState
+          ? { storageState }
+          : {}
     await this.#connection.sendContext(
       'browserContext.setStorageState',
       this.#guid,
       'setStorageState',
-      storageState ? { storageState } : {},
+      params,
       0,
     )
   }

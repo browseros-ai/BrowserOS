@@ -23,9 +23,10 @@ use std::sync::{Arc, OnceLock};
 use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId};
 use futures_util::future::join_all;
 use neo_runtime_spec::serve::{
-    BrowserContextSetGeolocationParamsGeolocation, BrowserContextSetStorageStateParamsStorageState,
-    BrowserContextStorageStateParams, BrowserContextStorageStateResult, NameValue, NetworkCookie,
-    NetworkCookieSameSite, OriginStorage, SetNetworkCookie, SetOriginStorage,
+    BrowserContextSetGeolocationParamsGeolocation, BrowserContextSetStorageStateParams,
+    BrowserContextSetStorageStateParamsStorageState, BrowserContextStorageStateParams,
+    BrowserContextStorageStateResult, NameValue, NetworkCookie, NetworkCookieSameSite,
+    OriginStorage, SetNetworkCookie, SetOriginStorage,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -36,6 +37,7 @@ use tokio_util::task::TaskTracker;
 use tracing::debug;
 use url::{Origin, Url};
 
+use crate::artifacts::{ArtifactPath, Artifacts};
 use crate::page::PageSession;
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::run::PageId;
@@ -997,6 +999,42 @@ const CREDENTIALS_PENDING: &str = "Neo does not serve setHTTPCredentials yet: it
 /// ([`CREDENTIALS_PENDING`]).
 pub(crate) fn set_http_credentials() -> Result<(), CallError> {
     Err(PlaywrightError::error(CREDENTIALS_PENDING).into())
+}
+
+/// `context.storageState` and `context.setStorageState`, each with the `path` the spec's params
+/// lack (`dispatch.rs` `neo_path`): written to or read from the run's artifact directory.
+pub(crate) enum StateFile {
+    Export(BrowserContextStorageStateParams),
+    Import(BrowserContextSetStorageStateParams),
+}
+
+/// Playwright: `client/browserContext.ts` `BrowserContext.storageState`: `await fs.promises.writeFile(options.path, JSON.stringify(state, undefined, 2), 'utf8');`
+///
+/// The state written to `path` as Playwright writes it: JSON, two spaces deep.
+pub(crate) async fn write_state(
+    artifacts: &Artifacts,
+    path: &ArtifactPath,
+    state: &BrowserContextStorageStateResult,
+) -> Result<(), PlaywrightError> {
+    let json = serde_json::to_vec_pretty(state)
+        .map_err(|error| PlaywrightError::error(error.to_string()))?;
+    artifacts.write(path, &json).await
+}
+
+/// Neo: what `setStorageState(path)` throws for a file that is no storage state.
+const NOT_A_STATE: &str = "Error reading storage state from";
+
+/// Deviation: `client/browserContext.ts` `prepareStorageState`: `return JSON.parse(await fs.promises.readFile(storageState, 'utf8'));`
+/// Playwright reads a state file anywhere on its host. Neo reads one only inside the run's
+/// artifact directory (`artifacts.rs`), at a relative path without `..`.
+pub(crate) async fn read_state(
+    artifacts: &Artifacts,
+    path: &ArtifactPath,
+) -> Result<BrowserContextSetStorageStateParamsStorageState, PlaywrightError> {
+    let bytes = artifacts.read(path).await?;
+    serde_json::from_slice(&bytes).map_err(|error| {
+        PlaywrightError::error(format!("{NOT_A_STATE} {}: {error}", path.display()))
+    })
 }
 
 /// Neo: what `storageState` throws for what Neo does not read yet: `IndexedDB`, OPFS and `WebAuthn`

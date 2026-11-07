@@ -7522,8 +7522,6 @@ var CONTEXT_EVENTS = {
   quiet: ["backgroundpage"],
   unserved: ["serviceworker"]
 };
-var STORAGE_STATE_PATH = "path: this run has no artifact directory, so Neo cannot write the storage state; the host sets one per run";
-var STATE_FILE_PATH = "storageState: this run has no artifact directory, so Neo cannot read a state file; the host sets one per run";
 var CLEAR_ALL_COOKIES_REFUSED = "Neo does not clear every cookie of the user's browser, which would sign the user out of every site: pass clearCookies a name, domain or path";
 function clearCookieFilter(options) {
   const kept = (value) => typeof value === "string" || value instanceof RegExp ? value : undefined;
@@ -7802,9 +7800,9 @@ class BrowserContext extends ChannelOwner {
     await this.#connection.sendContext("browserContext.setHTTPCredentials", this.#guid, "setHTTPCredentials", list.length ? { httpCredentials: list } : {}, 0);
   }
   async storageState(options = {}) {
-    if (options.path !== undefined)
-      throw new Error(STORAGE_STATE_PATH);
     const params = {};
+    if (options.path !== undefined)
+      params.path = options.path;
     if (options.indexedDB !== undefined)
       params.indexedDB = options.indexedDB;
     if (options.opfs !== undefined)
@@ -7814,9 +7812,8 @@ class BrowserContext extends ChannelOwner {
     return await this.#connection.sendContext("browserContext.storageState", this.#guid, "storageState", params, 0);
   }
   async setStorageState(storageState) {
-    if (typeof storageState === "string")
-      throw new Error(STATE_FILE_PATH);
-    await this.#connection.sendContext("browserContext.setStorageState", this.#guid, "setStorageState", storageState ? { storageState } : {}, 0);
+    const params = typeof storageState === "string" ? { path: storageState } : storageState ? { storageState } : {};
+    await this.#connection.sendContext("browserContext.setStorageState", this.#guid, "setStorageState", params, 0);
   }
   setDefaultTimeout(timeout) {
     this._timeoutSettings.setDefaultTimeout(timeout);
