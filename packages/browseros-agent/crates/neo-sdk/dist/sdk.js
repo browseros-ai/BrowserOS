@@ -1960,10 +1960,7 @@ class Frame {
       isFunction: true,
       arg: serializeArgument(undefined)
     }, 0);
-    const values = parseResult(result?.value);
-    if (!Array.isArray(values) || values.some((item) => typeof item !== "string"))
-      throw new Error("neo-sdk: Frame.evalOnSelectorAll contract error: expected a string array");
-    return values;
+    return parseResult(result?.value);
   }
   async $(selector, options) {
     return await this._querySelector("frame.$", selector, options);
@@ -1971,9 +1968,10 @@ class Frame {
   async _querySelector(apiName, selector, options) {
     if (options?.signal !== undefined && options.signal !== null)
       throw new Error(`${apiName}: Neo does not support signal yet`);
-    const params = { selector };
-    if (options?.strict !== undefined)
-      params.strict = options.strict;
+    const params = {
+      selector,
+      ...pickParams(["strict"], options ?? {})
+    };
     const result = await this._connection.sendEval(apiName, this._guid, "querySelector", params, 0);
     return ElementHandle.fromNullable(this._connection, result?.element);
   }
@@ -2011,7 +2009,9 @@ class Frame {
     if (options.signal !== undefined && options.signal !== null)
       throw new Error(`${apiName}: Neo does not support signal yet`);
     const params = evaluateParams(apiName, pageFunction, arg, undefined);
-    const pollingInterval = options.polling === "raf" ? undefined : options.polling;
+    const { pollingInterval } = pickParams(["pollingInterval"], {
+      pollingInterval: options.polling === "raf" ? undefined : options.polling
+    });
     const result = await this._connection.sendEval(apiName, this._guid, "waitForFunction", pollingInterval === undefined ? params : { ...params, pollingInterval }, this._page._timeoutSettings.timeout(options));
     return handleFrom(this._connection, result.handle);
   }

@@ -663,15 +663,9 @@ export class Frame {
       },
       0,
     )
-    const values = parseResult(result?.value)
-    if (
-      !Array.isArray(values) ||
-      values.some((item) => typeof item !== 'string')
-    )
-      throw new Error(
-        'neo-sdk: Frame.evalOnSelectorAll contract error: expected a string array',
-      )
-    return values
+    // Playwright answers whatever the page's function returned (a `textContent` getter may give
+    // a number); Neo does not narrow it.
+    return parseResult(result?.value) as string[]
   }
 
   /** Playwright's `frame.$`: the first match, or `null`, as an `ElementHandle`. */
@@ -691,8 +685,11 @@ export class Frame {
     if (options?.signal !== undefined && options.signal !== null)
       // Deviation: `client/timeoutSettings.ts` `kNoTimeout`: `export const kNoTimeout: channels.TimeoutOptions = { signal: undefined, timeout: 0 };` Playwright's `$` sends this, so it ignores a caller's signal; Neo refuses one rather than ignore it.
       throw new Error(`${apiName}: Neo does not support signal yet`)
-    const params: { selector: string; strict?: boolean } = { selector }
-    if (options?.strict !== undefined) params.strict = options.strict
+    // Playwright's validator lets only `undefined` through: `strict: null` rejects before the call.
+    const params = {
+      selector,
+      ...pickParams(['strict'] as const, options ?? {}),
+    } as { selector: string; strict?: boolean }
     const result = await this._connection.sendEval(
       apiName,
       this._guid,
@@ -820,8 +817,10 @@ export class Frame {
       // Deviation: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };` Neo refuses a signal rather than ignore it.
       throw new Error(`${apiName}: Neo does not support signal yet`)
     const params = evaluateParams(apiName, pageFunction, arg, undefined)
-    const pollingInterval =
-      options.polling === 'raf' ? undefined : options.polling
+    // Playwright's validator lets only `undefined` through: `polling: null` rejects before the call.
+    const { pollingInterval } = pickParams(['pollingInterval'] as const, {
+      pollingInterval: options.polling === 'raf' ? undefined : options.polling,
+    }) as { pollingInterval?: number }
     const result = await this._connection.sendEval(
       apiName,
       this._guid,

@@ -50,23 +50,18 @@ test('tests that allTextContents sends Playwright’s function and unwraps order
   expect(await page.locator('.missing').allTextContents()).toEqual([])
 })
 
-test('tests that allTextContents rejects what is not a string array', async () => {
+test('tests that allTextContents answers the page values as parsed', async () => {
   const { fake, page } = start()
-  for (const result of [
-    undefined,
-    {},
-    { value: null },
-    { value: 'x' },
-    { value: { v: 'null' } },
-    { value: { a: [3], id: 1 } },
-    { value: { a: [{ v: 'null' }], id: 1 } },
-    { value: { a: ['x', { v: 'undefined' }], id: 1 } },
-    { value: { o: [], id: 1 } },
-  ]) {
+  // Playwright answers what the page's function returned, a getter's number included.
+  const cases: [unknown, unknown[]][] = [
+    [{ value: { a: [42, 'B'], id: 1 } }, [42, 'B']],
+    [{ value: { a: [], id: 1 } }, []],
+    [{ value: { a: ['x', { v: 'null' }], id: 1 } }, ['x', null]],
+  ]
+  for (const [result, values] of cases) {
     fake.answer = () => ({ result })
-    await expect(page.locator('.item').allTextContents()).rejects.toThrow(
-      /neo-sdk: .*contract error/,
-    )
+    const texts: unknown[] = await page.locator('.item').allTextContents()
+    expect(texts).toEqual(values)
   }
 })
 
