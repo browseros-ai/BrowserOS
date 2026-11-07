@@ -7,6 +7,7 @@ import { closeSync, openSync, writeSync } from 'node:fs'
 import { mkdir, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { isDeepStrictEqual } from 'node:util'
 
 const START_TIMEOUT_MS = 20_000
 const REPLY_TIMEOUT_MS = 10_000
@@ -190,6 +191,160 @@ export async function connect(endpoint, options) {
   return await Cdp.connect(endpoint, options)
 }
 
+// These are the pinned runner's emitted defaults, not a replacement context API. Only the
+// already-owned blank page is configured before a test can receive an engine object.
+const contextDefaults = {
+  acceptDownloads: true,
+  bypassCSP: false,
+  colorScheme: 'light',
+  contrast: 'no-preference',
+  forcedColors: 'none',
+  hasTouch: false,
+  ignoreHTTPSErrors: false,
+  isMobile: false,
+  javaScriptEnabled: true,
+  locale: 'en-US',
+  offline: false,
+  reducedMotion: 'no-preference',
+  serviceWorkers: 'allow',
+  viewport: { width: 1280, height: 720 },
+}
+
+/** Captures the upstream fixture preconditions and rejects anything this initial-page
+ * bootstrap cannot establish. Unsupported configuration is evidence loss, never a Neo API. */
+export function contextBootstrapPlan(options = {}, fixtureOptions = {}) {
+  const effective = {
+    ...structuredClone(contextDefaults),
+    ...Object.fromEntries(
+      Object.entries(options).filter(([, value]) => value !== undefined),
+    ),
+  }
+  const limitations = []
+  for (const [key, value] of Object.entries(options)) {
+    if (value === undefined) continue
+    if (
+      !Object.hasOwn(contextDefaults, key) ||
+      !isDeepStrictEqual(value, contextDefaults[key])
+    )
+      limitations.push(
+        `Initial-page bootstrap does not support context option ${key}`,
+      )
+  }
+  const fixtureDefaults = {
+    actionTimeout: 0,
+    navigationTimeout: 0,
+    testIdAttribute: 'data-testid',
+  }
+  const fixture = { ...fixtureDefaults, ...fixtureOptions }
+  for (const [key, value] of Object.entries(fixture))
+    if (!isDeepStrictEqual(value, fixtureDefaults[key]))
+      limitations.push(
+        `Initial-page bootstrap does not support fixture option ${key}`,
+      )
+  return {
+    scope: 'owned-initial-blank-page',
+    initialUrl: 'about:blank',
+    contextOptions: effective,
+    fixtureOptions: fixture,
+    limitations,
+  }
+}
+
+/** This session must stay attached until the engine finishes because CDP can clear emulation
+ * on detach. No value read from this infrastructure connection is returned to a test. */
+export async function bootstrapInitialPage(
+  cdp,
+  pageId,
+  plan,
+  sessionId,
+  downloadPath,
+) {
+  if (plan.limitations.length) throw new Error(plan.limitations.join('; '))
+  const { targetInfo } = await cdp.send('Target.getTargetInfo', {
+    targetId: pageId,
+  })
+  if (targetInfo?.type !== 'page' || targetInfo.url !== 'about:blank')
+    throw new Error('Context bootstrap requires the owned initial blank page')
+  if (!sessionId)
+    throw new Error('Context bootstrap requires an owned observer session')
+  const { width, height } = plan.contextOptions.viewport
+  await cdp.send(
+    'Emulation.setDeviceMetricsOverride',
+    {
+      width,
+      height,
+      screenWidth: width,
+      screenHeight: height,
+      deviceScaleFactor: 1,
+      mobile: false,
+      screenOrientation: { angle: 0, type: 'landscapePrimary' },
+    },
+    sessionId,
+  )
+  await cdp.send(
+    'Emulation.setEmulatedMedia',
+    {
+      features: [
+        { name: 'prefers-color-scheme', value: 'light' },
+        { name: 'prefers-contrast', value: 'no-preference' },
+        { name: 'forced-colors', value: 'none' },
+        { name: 'prefers-reduced-motion', value: 'no-preference' },
+      ],
+    },
+    sessionId,
+  )
+  await cdp.send('Emulation.setLocaleOverride', { locale: 'en-US' }, sessionId)
+  if (downloadPath)
+    await cdp.send('Browser.setDownloadBehavior', {
+      behavior: 'allowAndName',
+      downloadPath,
+      eventsEnabled: true,
+    })
+}
+
+/** Normalizes BrowserOS's tab-strip identifiers against observer-owned pages. A missing or
+ * ambiguous strip cannot be inferred from DOM focus, especially in headless mode. */
+export function projectActivation(tabs, pages) {
+  if (!Array.isArray(tabs))
+    throw new Error('Browser.getTabs did not return a tab strip')
+  const live = new Map(
+    pages.filter((page) => !page.closed).map((page) => [page.targetId, page]),
+  )
+  const windows = new Map()
+  const seen = new Set()
+  const projection = tabs.map((tab) => {
+    const page = live.get(tab.targetId)
+    if (!page || seen.has(tab.targetId))
+      throw new Error('Tab strip contains an unobserved or duplicate page')
+    if (
+      !Number.isInteger(tab.windowId) ||
+      !Number.isInteger(tab.index) ||
+      tab.index < 0 ||
+      typeof tab.isActive !== 'boolean'
+    )
+      throw new Error('Tab strip lacks activation, order, or window identity')
+    seen.add(tab.targetId)
+    if (!windows.has(tab.windowId)) windows.set(tab.windowId, windows.size)
+    return {
+      page: page.ordinal,
+      window: windows.get(tab.windowId),
+      index: tab.index,
+      active: tab.isActive,
+    }
+  })
+  if (seen.size !== live.size)
+    throw new Error('Tab strip does not cover every live observed page')
+  for (const window of windows.values()) {
+    const strip = projection.filter((tab) => tab.window === window)
+    if (
+      strip.filter((tab) => tab.active).length !== 1 ||
+      new Set(strip.map((tab) => tab.index)).size !== strip.length
+    )
+      throw new Error('Tab strip has ambiguous active tab or order')
+  }
+  return { status: 'complete', tabs: projection }
+}
+
 /**
  * Runs only in the observer's isolated world. Native DOM wrappers stay independent of the
  * page's JavaScript prototypes. Its only writes install listeners and private bookkeeping.
@@ -312,6 +467,9 @@ function installObserver(binding, stateName) {
     return {
       url: location.href,
       title: document.title,
+      // New tabs and frames are read as they are. Their geometry is never inferred from
+      // the bootstrap of the initial page or changed by this independent observer.
+      viewport: { width: innerWidth, height: innerHeight, devicePixelRatio },
       tree,
       focus: document.activeElement ? path(document.activeElement) : null,
       deepFocus: deepFocus ? path(deepFocus) : null,
@@ -580,16 +738,32 @@ export class OwnedBrowser {
   #closePromise
   #closing = false
   #lastSnapshot
+  #activation = { status: 'incomplete', tabs: [] }
+  #signal
+  #outputReady = false
 
-  static async start({ executable, outputDir }) {
+  static async start({ executable, outputDir, signal }) {
     if (typeof executable !== 'string' || !executable)
       throw new TypeError('OwnedBrowser.start requires an executable')
     if (typeof outputDir !== 'string' || !outputDir)
       throw new TypeError('OwnedBrowser.start requires an outputDir')
     const owner = new OwnedBrowser()
     owner.#outputDir = resolve(outputDir)
+    owner.#signal = signal
+    // Startup owns partially acquired files and processes too. Abort is latched immediately,
+    // while cleanup waits for startup to stop acquiring resources before closing them.
+    const abort = () => {
+      owner.#closing = true
+      // Closing the known socket and the direct owned child wakes in-flight startup I/O.
+      // Full cleanup below still waits until startup can no longer acquire new resources.
+      void owner.#cdp?.close().catch(() => {})
+      owner.#child?.kill('SIGTERM')
+    }
+    signal?.addEventListener('abort', abort, { once: true })
     try {
+      owner.#checkStarting()
       await owner.#start(executable)
+      owner.#checkStarting()
       return owner
     } catch (error) {
       try {
@@ -601,12 +775,22 @@ export class OwnedBrowser {
         )
       }
       throw error
+    } finally {
+      signal?.removeEventListener('abort', abort)
     }
+  }
+
+  #checkStarting() {
+    this.#signal?.throwIfAborted()
+    if (this.#closing) throw new Error('Owned browser startup was cancelled')
   }
 
   async #start(executable) {
     await mkdir(this.#outputDir, { recursive: true, mode: 0o700 })
+    this.#outputReady = true
+    this.#checkStarting()
     this.#profile = await mkdtemp(join(this.#outputDir, 'profile-'))
+    this.#checkStarting()
     this.#rawFd = openSync(
       join(this.#outputDir, 'observer.raw.jsonl'),
       'wx',
@@ -624,6 +808,7 @@ export class OwnedBrowser {
         'wx',
         0o600,
       )
+      this.#checkStarting()
       this.#child = spawn(
         executable,
         [
@@ -633,6 +818,9 @@ export class OwnedBrowser {
           '--remote-debugging-port=0',
           `--user-data-dir=${this.#profile}`,
           '--no-first-run',
+          '--lang=en-US',
+          '--window-size=1280,720',
+          '--force-device-scale-factor=1',
           'about:blank',
         ],
         { detached: true, stdio: ['ignore', stdout.fd, stderr.fd] },
@@ -668,6 +856,7 @@ export class OwnedBrowser {
       throw new Error('Owned browser did not lead its own process group')
     const deadline = Date.now() + START_TIMEOUT_MS
     while (!this.endpoint) {
+      this.#checkStarting()
       if (this.#exit)
         throw new Error('Browser exited before publishing its CDP endpoint')
       try {
@@ -690,7 +879,9 @@ export class OwnedBrowser {
         await sleep(25)
       }
     }
+    this.#checkStarting()
     this.#cdp = await Cdp.connect(this.endpoint)
+    this.#checkStarting()
     this.#cdp.subscribe((message) => this.#receive(message))
     this.#cdp.onDisconnect((error) => {
       if (!this.#closing) this.#gap('observer-disconnected', undefined, error)
@@ -707,11 +898,20 @@ export class OwnedBrowser {
     for (const target of targetInfos)
       if (target.type === 'page') this.#page(target)
     await this.#drain()
+    this.#checkStarting()
     const initial = [...this.#pages.values()].find(
       (page) => !page.closed && page.url === 'about:blank',
     )
     if (!initial) throw new Error('Owned browser had no initial blank page')
     this.pageId = initial.targetId
+    await bootstrapInitialPage(
+      this.#cdp,
+      this.pageId,
+      contextBootstrapPlan(),
+      initial.session?.id,
+      join(this.#outputDir, 'downloads'),
+    )
+    this.#checkStarting()
     for (const page of this.#pages.values())
       if (!page.closed && !page.session) this.#gap('page-not-attached', page)
   }
@@ -1171,6 +1371,14 @@ export class OwnedBrowser {
     // A reply is ordered after earlier bindings on the observer socket. This last round trip
     // also exposes input arriving after a document's fence while another target was read.
     await this.#cdp.send('Browser.getVersion')
+    try {
+      const { tabs } = await this.#cdp.send('Browser.getTabs')
+      this.#raw({ kind: 'activation', tabs })
+      this.#activation = projectActivation(tabs, [...this.#pages.values()])
+    } catch (error) {
+      this.#activation = { status: 'incomplete', tabs: [] }
+      this.#gap('active-tab-evidence-missing', undefined, error)
+    }
     for (const [page, document, sequence] of fences)
       if (sequence !== document.sequence)
         this.#gap('input-after-document-fence', page)
@@ -1356,6 +1564,7 @@ export class OwnedBrowser {
       JSON.stringify({
         status: this.#incomplete.length ? 'incomplete' : 'complete',
         incomplete: this.#incomplete,
+        activation: this.#activation,
         pages,
         events: this.#events,
       }),
@@ -1449,13 +1658,14 @@ export class OwnedBrowser {
       this.#rawFd = undefined
     }
     cleanup.status = failures.length ? 'incomplete' : 'complete'
-    await attempt(() =>
-      writeFile(
-        join(this.#outputDir, 'cleanup.json'),
-        `${JSON.stringify(cleanup, null, 2)}\n`,
-        { mode: 0o600 },
-      ),
-    )
+    if (this.#outputReady)
+      await attempt(() =>
+        writeFile(
+          join(this.#outputDir, 'cleanup.json'),
+          `${JSON.stringify(cleanup, null, 2)}\n`,
+          { mode: 0o600 },
+        ),
+      )
     if (failures.length)
       throw new AggregateError(failures, 'Owned browser cleanup failed')
     return cleanup
