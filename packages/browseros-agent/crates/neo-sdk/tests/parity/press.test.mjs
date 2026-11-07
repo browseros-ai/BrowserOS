@@ -1,6 +1,9 @@
 // Press's Page, Frame and Locator receivers share one behavior check on fresh pages: the same
-// keys type the same text and the page sees the same key events. `Shift+Foo` is left out on
-// purpose: Playwright presses Shift and leaves it held, Neo sends nothing (press_e2e.rs checks it).
+// keys type the same text and the page sees the same key events.
+//
+// One difference is deliberate and asserted, not hidden: on `Shift+Foo` Playwright presses Shift,
+// rejects on the unknown `Foo` and leaves Shift held; Neo checks every key before it presses any,
+// so its page sees no key at all (press_e2e.rs). Both reject with the same error.
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
@@ -53,4 +56,55 @@ test('press returns undefined and types through ordinary key events', {
     ['Foo', 'notSent'],
     ['', 'notSent'],
   ])
+})
+
+test('Shift+Foo rejects alike: Playwright leaves Shift down, Neo presses no key', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  const outcome = await compareMethod(t, {
+    html: readFileSync(
+      new URL('../pages/form-actions.html', import.meta.url),
+      'utf8',
+    ),
+    source: `
+      try {
+        await page.locator('#text').press('Shift+Foo')
+        return 'resolved'
+      } catch (error) {
+        return errorCategory(error)
+      }
+    `,
+    probe: 'window.__facts()',
+    effects: ({ playwright, neo }) => {
+      const event = (type, key) => ({
+        type,
+        target: 'text',
+        key,
+        data: null,
+        inputType: null,
+      })
+      const untouched = { ...neo, events: [] }
+      assert.deepEqual(
+        { ...playwright, events: [] },
+        untouched,
+        'the same values',
+      )
+      assert.deepEqual(
+        playwright.events,
+        [event('focus', null), event('keydown', 'Shift')],
+        "Playwright's page: Shift went down and stayed",
+      )
+      assert.deepEqual(
+        neo.events,
+        [event('focus', null)],
+        "Neo's page: focused, no key",
+      )
+    },
+  })
+  assert.equal(outcome.value, 'Error')
+  assert.deepEqual(
+    outcome.calls.map((c) => [c.params.key, c.delivery]),
+    [['Shift+Foo', 'notSent']],
+  )
 })

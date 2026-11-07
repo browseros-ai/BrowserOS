@@ -131,8 +131,12 @@ export function errorCategory(error) {
   return strict ? `${error.name}:strict` : error.name
 }
 
-/** Runs one method's public script on fresh pages and compares its result and browser effect. */
-export async function compareMethod(t, { html, source, probe }) {
+/**
+ * Runs one method's public script on fresh pages and compares its result and browser effect.
+ * `effects({ playwright, neo })`, for a deliberate difference, asserts both effects itself in
+ * place of the equality check.
+ */
+export async function compareMethod(t, { html, source, probe, effects }) {
   t.diagnostic(
     `Playwright ${playwrightVersion}; ${playwrightDir ?? 'npm playwright-core'}`,
   )
@@ -172,7 +176,8 @@ export async function compareMethod(t, { html, source, probe }) {
     await page.close()
     assert.equal(outcome.status, 'ok', JSON.stringify(outcome))
     assert.deepEqual(outcome.value, value, 'public return values and types')
-    assert.deepEqual(actualEffect, effect, 'browser effect')
+    if (effects) effects({ playwright: effect, neo: actualEffect })
+    else assert.deepEqual(actualEffect, effect, 'browser effect')
     return outcome
   } finally {
     await runCleanups(cleanups)
