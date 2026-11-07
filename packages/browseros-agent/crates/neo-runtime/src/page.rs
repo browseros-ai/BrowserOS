@@ -925,18 +925,14 @@ pub(crate) struct TabInput {
 
 impl TabInput {
     /// Neo: records that `owner`'s run ended (`Effect::Retire`) without waiting for the turn, so
-    /// whatever it still holds counts as held by no live run however its release goes: a release
-    /// that is refused, fails, or never gets the turn before the run's deadline. It writes
-    /// nothing, and a held turn's planning sees it at its next snapshot.
+    /// whatever it holds, now or once a write it started answers, counts as held by no live run
+    /// however its release goes: a release that is refused, fails, or never gets the turn
+    /// before the run's deadline. It writes nothing, and a held turn's planning sees it at its
+    /// next snapshot.
     pub(crate) fn mark_ended(&self, owner: &Owner) {
         // A poisoned lock means a panic mid-update; Neo never reaches inside one.
         if let Ok(mut devices) = self.devices.lock() {
-            devices.apply(
-                &Effect::Retire {
-                    owner: owner.clone(),
-                },
-                true,
-            );
+            devices.mark_ended(owner);
         }
     }
 }
@@ -983,20 +979,39 @@ impl TabInputs {
 /// into them through it.
 #[derive(Clone)]
 pub(crate) struct InputPermit {
-    _turn: Arc<OwnedMutexGuard<()>>,
+    turn: Arc<HeldTurn>,
+}
+
+/// The turn itself, shared by every copy of its [`InputPermit`]: whatever still writes for its
+/// run holds a copy. Once the last goes, nothing of the turn writes any more, so an ended run
+/// that lists no hold is forgotten before the next turn starts, and never within a turn.
+struct HeldTurn {
+    _guard: OwnedMutexGuard<()>,
     tab: Arc<TabInput>,
     /// The run whose session took the turn.
     owner: Owner,
+}
+
+impl Drop for HeldTurn {
+    fn drop(&mut self) {
+        // The guard drops after this body, so the next turn finds the ended runs forgotten.
+        if let Ok(mut devices) = self.tab.devices.lock() {
+            devices.forget_ended();
+        }
+    }
 }
 
 impl InputPermit {
     /// A turn at `tab`'s input, granted in arrival order. tokio's lock is cancel-safe: a wait
     /// dropped before its turn holds nothing.
     async fn take(tab: &Arc<TabInput>, owner: Owner) -> Self {
+        let guard = Arc::clone(&tab.turn).lock_owned().await;
         Self {
-            _turn: Arc::new(Arc::clone(&tab.turn).lock_owned().await),
-            tab: Arc::clone(tab),
-            owner,
+            turn: Arc::new(HeldTurn {
+                _guard: guard,
+                tab: Arc::clone(tab),
+                owner,
+            }),
         }
     }
 }
@@ -1004,23 +1019,33 @@ impl InputPermit {
 impl EffectSink for InputPermit {
     fn apply(&self, effect: &Effect, answered: bool) {
         // A poisoned lock means a panic mid-update; Neo never reaches inside one.
-        if let Ok(mut devices) = self.tab.devices.lock() {
+        if let Ok(mut devices) = self.turn.tab.devices.lock() {
             devices.apply(effect, answered);
         }
     }
 
     fn devices(&self) -> InputDevices {
-        self.tab
+        self.turn
+            .tab
             .devices
             .lock()
             .map(|devices| devices.clone())
             .unwrap_or_default()
     }
+
+    fn run_ended(&self) -> bool {
+        self.turn
+            .tab
+            .devices
+            .lock()
+            .is_ok_and(|devices| devices.ended.contains(&self.turn.owner))
+    }
 }
 
 impl Devices for InputPermit {
     fn snapshot(&self) -> Result<InputDevices, PageError> {
-        self.tab
+        self.turn
+            .tab
             .devices
             .lock()
             .map(|devices| devices.clone())
@@ -1030,7 +1055,7 @@ impl Devices for InputPermit {
     }
 
     fn owner(&self) -> Owner {
-        self.owner.clone()
+        self.turn.owner.clone()
     }
 }
 
@@ -1695,6 +1720,14 @@ impl Drop for GroupGuard {
                 debug!(%error, "releasing an object group failed");
             }
         });
+    }
+}
+
+impl Drop for PageSession {
+    fn drop(&mut self) {
+        // A run whose future is dropped never reaches its run end: its end is recorded here,
+        // once nothing of the run writes any more, so what it holds is held by no live run.
+        self.mark_input_ended();
     }
 }
 
@@ -2440,6 +2473,12 @@ impl InputSender for Arc<PageSession> {
 
 // The run's end, for its input.
 impl PageSession {
+    /// Records that this session's run ended (`TabInput::mark_ended`): no wait, no write.
+    /// A run's end records it on every tab before any release waits (`Tabs::release_input`).
+    pub(crate) fn mark_input_ended(&self) {
+        self.input.mark_ended(&self.session.id);
+    }
+
     /// Releases every key and button this run's session left held on the tab (design section
     /// 4.6): a keyUp per held key, newest first, then a mouseUp per held button at the
     /// pointer's last position, under a turn so no other call's input lands in between. The
@@ -2448,26 +2487,29 @@ impl PageSession {
     /// wait for the turn and the writes) leaves what it holds to the next run's end, held by no
     /// live run. A closed tab writes nothing.
     pub(crate) async fn release_run_input(self: &Arc<Self>) {
-        self.input.mark_ended(&self.session.id);
+        self.mark_input_ended();
         if self.closed.is_cancelled() {
             return;
         }
         let permit = InputPermit::take(&self.input, self.session.id.clone()).await;
-        let Ok(mut simulated) = permit.snapshot() else {
-            return;
-        };
-        let owner = permit.owner();
-        let mut plan = Plan::default();
-        keyboard::plan_key_releases(&mut plan, &mut simulated, &owner);
-        input_devices::plan_button_releases(&mut plan, &mut simulated, &owner);
-        if plan.commands.is_empty() {
-            return;
-        }
-        let written =
-            input_devices::write_plan(self, &permit, &plan, &CancellationToken::new()).await;
-        if let Some(Err(error)) = written.outcomes.iter().find(|outcome| outcome.is_err()) {
-            debug!(%error, "releasing the run's held input failed");
-        }
+        write_run_releases(self, &permit).await;
+    }
+}
+
+/// Neo: a run end's releases under `permit`'s turn: whatever its run holds, and every dead
+/// hold (an ended run's), except what another live run still holds. A failed release stays
+/// held, for the next run's end.
+async fn write_run_releases(sender: &impl InputSender, permit: &InputPermit) {
+    let Ok(mut simulated) = permit.snapshot() else {
+        return;
+    };
+    let owner = permit.owner();
+    let mut plan = Plan::default();
+    keyboard::plan_key_releases(&mut plan, &mut simulated, &owner);
+    input_devices::plan_button_releases(&mut plan, &mut simulated, &owner);
+    let written = input_devices::write_plan(sender, permit, &plan, &CancellationToken::new()).await;
+    if let Some(Err(error)) = written.outcomes.iter().find(|outcome| outcome.is_err()) {
+        debug!(%error, "releasing the run's held input failed");
     }
 }
 
@@ -2505,6 +2547,12 @@ impl PageSession {
 
 #[cfg(test)]
 mod tests {
+    use std::mem;
+    use std::sync::atomic::AtomicBool;
+
+    use tokio::sync::Notify;
+    use tokio::task::JoinHandle;
+
     use super::*;
 
     const SESSION: &str = "S1";
@@ -3518,5 +3566,621 @@ mod tests {
             barrier.waiting, 0,
             "a request that stopped without committing"
         );
+    }
+
+    #[derive(Clone)]
+    struct ReviewDelayedInput {
+        events: Arc<SyncMutex<Vec<String>>>,
+        first: Arc<AtomicBool>,
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    impl ReviewDelayedInput {
+        fn new(gated: bool) -> Self {
+            Self {
+                events: Arc::default(),
+                first: Arc::new(AtomicBool::new(gated)),
+                entered: Arc::default(),
+                release: Arc::default(),
+            }
+        }
+
+        fn events(&self) -> Vec<String> {
+            self.events.lock().expect("events").clone()
+        }
+    }
+
+    impl InputSender for ReviewDelayedInput {
+        async fn send_input(&self, _method: &'static str, params: String) -> Result<(), CdpError> {
+            let value: Value = serde_json::from_str(&params).expect("input params");
+            self.events.lock().expect("events").push(
+                value["type"]
+                    .as_str()
+                    .expect("input event type")
+                    .to_string(),
+            );
+            if self.first.swap(false, Ordering::SeqCst) {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+            Ok(())
+        }
+    }
+
+    // The actual input turn and writer, with just one CDP acknowledgement held until
+    // after the run's cleanup has marked its owner and exhausted its turn-wait budget.
+    async fn review_end_before_late_input(restore: bool) {
+        use crate::keyboard::{Platform, SHIFT};
+
+        let tab = Arc::new(TabInput::default());
+        let owner_a = SessionId("review-A".to_string());
+        let owner_b = SessionId("review-B".to_string());
+        let a = InputPermit::take(&tab, owner_a.clone()).await;
+        if restore {
+            a.apply(
+                &Effect::KeyDown {
+                    code: "ShiftLeft",
+                    modifier: SHIFT,
+                    owner: owner_a.clone(),
+                },
+                true,
+            );
+        }
+        let mut simulated = a.snapshot().expect("initial devices");
+        let mut plan = Plan::default();
+        if restore {
+            let changes = keyboard::plan_ensure_modifiers(
+                &mut plan,
+                &mut simulated,
+                0,
+                Platform::Linux,
+                &owner_a,
+            );
+            keyboard::plan_restore_modifiers(
+                &mut plan,
+                &mut simulated,
+                &changes,
+                Platform::Linux,
+                &owner_a,
+            );
+        } else {
+            keyboard::plan_key_down(
+                &mut plan,
+                &mut simulated,
+                "Shift",
+                Platform::Linux,
+                &owner_a,
+            )
+            .expect("Shift");
+        }
+        let sender = ReviewDelayedInput::new(true);
+        let writer_sender = sender.clone();
+        let stopped = CancellationToken::new();
+        let writer_stop = stopped.clone();
+        let writer = tokio::spawn(async move {
+            let result = input_devices::write_plan(&writer_sender, &a, &plan, &writer_stop).await;
+            drop(a);
+            result
+        });
+        sender.entered.notified().await;
+
+        // release_run_input's mark happens before its wait. The writer still owns
+        // the turn, so the bounded release never gets to build a cleanup plan.
+        tab.mark_ended(&owner_a);
+        stopped.cancel();
+        assert!(
+            time::timeout(Duration::from_millis(1), InputPermit::take(&tab, owner_a),)
+                .await
+                .is_err()
+        );
+        sender.release.notify_one();
+        let written = writer.await.expect("writer task");
+        assert!(written.outcomes.iter().all(Result::is_ok));
+        assert_eq!(
+            sender.events(),
+            if restore {
+                vec!["keyUp", "rawKeyDown"]
+            } else {
+                vec!["rawKeyDown"]
+            },
+            "the already-sent input, and any owed restore, were acknowledged after the mark",
+        );
+
+        review_b_presses_shift_and_ends(&tab, owner_b).await;
+    }
+
+    // The second half of `review_end_before_late_input`, unchanged: B presses Shift and ends.
+    async fn review_b_presses_shift_and_ends(tab: &Arc<TabInput>, owner_b: SessionId) {
+        use crate::input_devices::KeyboardState;
+        use crate::keyboard::Platform;
+
+        let b = InputPermit::take(tab, owner_b.clone()).await;
+        let mut simulated = b.snapshot().expect("devices after late input");
+        let mut down_b = Plan::default();
+        keyboard::plan_key_down(
+            &mut down_b,
+            &mut simulated,
+            "Shift",
+            Platform::Linux,
+            &owner_b,
+        )
+        .expect("B's Shift");
+        let immediate = ReviewDelayedInput::new(false);
+        let _down =
+            input_devices::write_plan(&immediate, &b, &down_b, &CancellationToken::new()).await;
+        let mut simulated = b.snapshot().expect("B's devices");
+        let mut end_b = Plan::default();
+        keyboard::plan_key_releases(&mut end_b, &mut simulated, &owner_b);
+        input_devices::plan_button_releases(&mut end_b, &mut simulated, &owner_b);
+        let releasing = ReviewDelayedInput::new(false);
+        let _end =
+            input_devices::write_plan(&releasing, &b, &end_b, &CancellationToken::new()).await;
+        assert_eq!(
+            releasing.events(),
+            ["keyUp"],
+            "A ended before its final input was acknowledged; B must not preserve it as a live holder: {:?}",
+            b.devices(),
+        );
+        assert_eq!(b.devices().keyboard, KeyboardState::default());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn review_recheck3_late_down_keeps_its_finished_owner_retired() {
+        review_end_before_late_input(false).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn review_recheck3_owed_restore_keeps_its_finished_owner_retired() {
+        review_end_before_late_input(true).await;
+    }
+
+    /// A run whose end is recorded writes nothing new, only what it owes: a call that gets the
+    /// turn after its run's end, though not cut short, sends no press, and the run's releases
+    /// still go out.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_an_ended_runs_writer_sends_only_what_it_owes() {
+        use crate::input_devices::KeyboardState;
+        use crate::keyboard::{Platform, SHIFT};
+
+        let tab = Arc::new(TabInput::default());
+        let a = SessionId("A".to_string());
+        let permit = InputPermit::take(&tab, a.clone()).await;
+        permit.apply(
+            &Effect::KeyDown {
+                code: "ShiftLeft",
+                modifier: SHIFT,
+                owner: a.clone(),
+            },
+            true,
+        );
+        tab.mark_ended(&a);
+        let mut simulated = permit.snapshot().expect("devices");
+        let mut press = Plan::default();
+        keyboard::plan_key_down(&mut press, &mut simulated, "a", Platform::Linux, &a).expect("a");
+        let sender = ReviewDelayedInput::new(false);
+        let never = CancellationToken::new();
+        let _pressed = input_devices::write_plan(&sender, &permit, &press, &never).await;
+        assert!(sender.events().is_empty(), "an ended run presses nothing");
+        let mut simulated = permit.snapshot().expect("devices");
+        let mut end = Plan::default();
+        keyboard::plan_key_releases(&mut end, &mut simulated, &a);
+        let _released = input_devices::write_plan(&sender, &permit, &end, &never).await;
+        assert_eq!(sender.events(), ["keyUp"], "its release still goes out");
+        assert_eq!(permit.devices().keyboard, KeyboardState::default());
+    }
+
+    // Seeded random interleavings of two runs' input and ends (A2 re-check 3): the real turn,
+    // writer and run-end releases, with a browser that receives, holds back, fails or refuses
+    // each write.
+
+    /// `SplitMix64`, so each case replays one schedule.
+    struct Seeded(u64);
+
+    impl Seeded {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn below(&mut self, n: u64) -> u64 {
+            self.next() % n
+        }
+
+        fn index(&mut self, len: usize) -> usize {
+            usize::try_from(self.below(len as u64)).expect("index")
+        }
+    }
+
+    /// How the browser answers one write.
+    #[derive(Clone, Copy)]
+    enum Answer {
+        Now,
+        /// Received at once, answered when the schedule lets it go.
+        HeldBack,
+        /// Answered with an error, received or not.
+        Fails {
+            received: bool,
+        },
+        /// The session's socket is gone: never received.
+        Refused,
+    }
+
+    /// The browser's side of one case.
+    struct FuzzBrowser {
+        /// Each key code or button that is down, and the runs whose writes pressed it since it
+        /// last went up.
+        down: HashMap<String, Vec<Owner>>,
+        /// The runs whose end has not come.
+        live: Vec<Owner>,
+        /// Every release a run's end wrote while another live run had it pressed.
+        stolen: Vec<String>,
+        /// What the current call released, and who had it pressed: a press of it in the same
+        /// call (a modifier's restore) is theirs again.
+        released: HashMap<String, Vec<Owner>>,
+        held_back: Vec<oneshot::Sender<()>>,
+        /// Once set, every write is answered at once.
+        settled: bool,
+        answers: Seeded,
+    }
+
+    impl FuzzBrowser {
+        fn answer(&mut self) -> Answer {
+            if self.settled {
+                return Answer::Now;
+            }
+            match self.answers.below(10) {
+                0..=4 => Answer::Now,
+                5 | 6 => Answer::HeldBack,
+                7 => Answer::Fails { received: true },
+                8 => Answer::Fails { received: false },
+                _ => Answer::Refused,
+            }
+        }
+
+        /// One write: what the browser does with it if `received`, and what this call released
+        /// whether received or not, so its restore goes back to whoever had the key.
+        fn write(&mut self, event: &Value, writer: &Owner, run_end: bool, received: bool) {
+            let what = event["code"]
+                .as_str()
+                .or_else(|| event["button"].as_str())
+                .unwrap_or_default()
+                .to_string();
+            match event["type"].as_str().unwrap_or_default() {
+                "keyDown" | "rawKeyDown" | "mousePressed" => {
+                    // A press of what this call released is its restore, for whoever had it.
+                    let restored = self.released.remove(&what);
+                    if received {
+                        let pressers = self.down.entry(what).or_default();
+                        for presser in restored.unwrap_or_else(|| vec![writer.clone()]) {
+                            if !pressers.contains(&presser) {
+                                pressers.push(presser);
+                            }
+                        }
+                    }
+                }
+                "keyUp" | "mouseReleased" => {
+                    let pressers = self.down.get(&what).cloned().unwrap_or_default();
+                    if !run_end {
+                        self.released.insert(what.clone(), pressers.clone());
+                    }
+                    if received {
+                        self.down.remove(&what);
+                        let live = pressers
+                            .iter()
+                            .find(|presser| *presser != writer && self.live.contains(presser));
+                        if let Some(live) = live
+                            && run_end
+                        {
+                            self.stolen.push(format!(
+                                "{}'s end released {what} under {}",
+                                writer.0, live.0
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// One writer's way to the browser: whose writes, and whether they are a run end's.
+    struct FuzzSender {
+        browser: Arc<SyncMutex<FuzzBrowser>>,
+        writer: Owner,
+        run_end: bool,
+    }
+
+    impl InputSender for FuzzSender {
+        async fn send_input(&self, method: &'static str, params: String) -> Result<(), CdpError> {
+            let event: Value = serde_json::from_str(&params).expect("input params");
+            let (answer, held_back) = {
+                let mut browser = self.browser.lock().expect("browser");
+                let answer = browser.answer();
+                let received =
+                    !matches!(answer, Answer::Refused | Answer::Fails { received: false });
+                browser.write(&event, &self.writer, self.run_end, received);
+                let held_back = matches!(answer, Answer::HeldBack).then(|| {
+                    let (release, wait) = oneshot::channel();
+                    browser.held_back.push(release);
+                    wait
+                });
+                (answer, held_back)
+            };
+            if let Some(wait) = held_back {
+                let _released = wait.await;
+            }
+            match answer {
+                Answer::Now | Answer::HeldBack => Ok(()),
+                Answer::Fails { .. } => Err(CdpError::Timeout {
+                    method: method.to_string(),
+                }),
+                Answer::Refused => Err(CdpError::ConnectionEpochChanged {
+                    expected: 1,
+                    actual: 2,
+                }),
+            }
+        }
+    }
+
+    /// One call of a run's script.
+    #[derive(Clone, Copy)]
+    enum FuzzCall {
+        Down(&'static str),
+        Up(&'static str),
+        /// A click's modifiers with no click: Playwright's `_ensureModifiers`, then the restore.
+        Modifiers(u8),
+        /// A click with modifiers: the change, a left press and its release, the restore.
+        Click(u8),
+        Press,
+        Release,
+    }
+
+    impl FuzzCall {
+        fn random(rng: &mut Seeded) -> Self {
+            use crate::keyboard::{CONTROL, SHIFT};
+            const KEYS: [&str; 3] = ["Shift", "Control", "a"];
+            const MASKS: [u8; 4] = [0, SHIFT, CONTROL, SHIFT | CONTROL];
+            match rng.below(6) {
+                0 => Self::Down(KEYS[rng.index(KEYS.len())]),
+                1 => Self::Up(KEYS[rng.index(KEYS.len())]),
+                2 => Self::Modifiers(MASKS[rng.index(MASKS.len())]),
+                3 => Self::Click(MASKS[rng.index(MASKS.len())]),
+                4 => Self::Press,
+                _ => Self::Release,
+            }
+        }
+
+        fn plan(self, plan: &mut Plan, simulated: &mut InputDevices, owner: &Owner) {
+            use crate::click::MouseButton;
+            use crate::keyboard::Platform;
+            let linux = Platform::Linux;
+            match self {
+                Self::Down(key) => {
+                    keyboard::plan_key_down(plan, simulated, key, linux, owner).expect("key");
+                }
+                Self::Up(key) => {
+                    keyboard::plan_key_up(plan, simulated, key, linux, None).expect("key");
+                }
+                Self::Modifiers(target) => {
+                    let changes =
+                        keyboard::plan_ensure_modifiers(plan, simulated, target, linux, owner);
+                    keyboard::plan_restore_modifiers(plan, simulated, &changes, linux, owner);
+                }
+                Self::Click(target) => {
+                    let changes =
+                        keyboard::plan_ensure_modifiers(plan, simulated, target, linux, owner);
+                    let down =
+                        input_devices::plan_down(plan, simulated, MouseButton::Left, 1, owner);
+                    input_devices::plan_up(plan, simulated, MouseButton::Left, 1, Some(down));
+                    keyboard::plan_restore_modifiers(plan, simulated, &changes, linux, owner);
+                }
+                Self::Press => {
+                    input_devices::plan_down(plan, simulated, MouseButton::Left, 1, owner);
+                }
+                Self::Release => {
+                    input_devices::plan_up(plan, simulated, MouseButton::Left, 1, None);
+                }
+            }
+        }
+    }
+
+    /// One case: two runs and an observer (`case.tab`, which keeps the tab's devices) on one
+    /// tab.
+    struct FuzzCase {
+        tab: Arc<TabInput>,
+        browser: Arc<SyncMutex<FuzzBrowser>>,
+        /// Each run's calls are cut short at its end, as `RunScope::ended` does.
+        stops: [CancellationToken; 2],
+        ended: [bool; 2],
+        tasks: Vec<JoinHandle<()>>,
+    }
+
+    fn fuzz_owner(run: usize) -> Owner {
+        SessionId(["fuzz-A", "fuzz-B", "fuzz-observer"][run].to_string())
+    }
+
+    impl FuzzCase {
+        fn new(seed: u64) -> Self {
+            Self {
+                tab: Arc::new(TabInput::default()),
+                browser: Arc::new(SyncMutex::new(FuzzBrowser {
+                    down: HashMap::new(),
+                    live: (0..3).map(fuzz_owner).collect(),
+                    stolen: Vec::new(),
+                    released: HashMap::new(),
+                    held_back: Vec::new(),
+                    settled: false,
+                    answers: Seeded(seed ^ 0x5EED_5EED),
+                })),
+                stops: [CancellationToken::new(), CancellationToken::new()],
+                ended: [false; 2],
+                tasks: Vec::new(),
+            }
+        }
+
+        fn sender(&self, run: usize, run_end: bool) -> FuzzSender {
+            FuzzSender {
+                browser: Arc::clone(&self.browser),
+                writer: fuzz_owner(run),
+                run_end,
+            }
+        }
+
+        /// A call: a turn, a plan from the tab's devices, the writer.
+        fn call(&mut self, run: usize, call: FuzzCall) {
+            let (tab, owner, stop) = (
+                Arc::clone(&self.tab),
+                fuzz_owner(run),
+                self.stops[run].clone(),
+            );
+            let sender = self.sender(run, false);
+            self.tasks.push(tokio::spawn(async move {
+                let permit = InputPermit::take(&tab, owner.clone()).await;
+                let mut simulated = permit.snapshot().expect("devices");
+                let mut plan = Plan::default();
+                call.plan(&mut plan, &mut simulated, &owner);
+                let _written = input_devices::write_plan(&sender, &permit, &plan, &stop).await;
+                sender.browser.lock().expect("browser").released.clear();
+            }));
+        }
+
+        /// A run's end as `Dispatcher::finish` makes it: the end recorded on the tab, the run's
+        /// calls cut short, its releases under a turn (`write_run_releases`), the wait for the
+        /// turn and the writes bounded by `budget`.
+        fn end(&mut self, run: usize, budget: Option<Duration>) {
+            let owner = fuzz_owner(run);
+            self.browser
+                .lock()
+                .expect("browser")
+                .live
+                .retain(|live| *live != owner);
+            self.tab.mark_ended(&owner);
+            if let Some(stop) = self.stops.get(run) {
+                stop.cancel();
+                self.ended[run] = true;
+            }
+            let (tab, sender) = (Arc::clone(&self.tab), self.sender(run, true));
+            self.tasks.push(tokio::spawn(async move {
+                let release = async {
+                    let permit = InputPermit::take(&tab, owner).await;
+                    write_run_releases(&sender, &permit).await;
+                };
+                match budget {
+                    Some(budget) => {
+                        let _released = time::timeout(budget, release).await;
+                    }
+                    None => release.await,
+                }
+            }));
+        }
+
+        /// A run whose future is dropped: no run end, only `PageSession`'s drop, which records
+        /// the end once the run's calls are gone.
+        fn drop_run(&mut self, run: usize) {
+            let owner = fuzz_owner(run);
+            self.browser
+                .lock()
+                .expect("browser")
+                .live
+                .retain(|live| *live != owner);
+            self.stops[run].cancel();
+            self.ended[run] = true;
+            self.tab.mark_ended(&owner);
+        }
+
+        /// Lets one held-back answer go.
+        fn let_go(&mut self, rng: &mut Seeded) {
+            let mut browser = self.browser.lock().expect("browser");
+            if !browser.held_back.is_empty() {
+                let at = rng.index(browser.held_back.len());
+                let _answered = browser.held_back.swap_remove(at).send(());
+            }
+        }
+
+        /// Answers everything at once from now on, until every task is done; then the runs
+        /// still live end, and the observer last, nothing bounded.
+        async fn settle(&mut self) {
+            self.browser.lock().expect("browser").settled = true;
+            for _ in 0..10_000 {
+                let held_back = mem::take(&mut self.browser.lock().expect("browser").held_back);
+                for release in held_back {
+                    let _answered = release.send(());
+                }
+                if self.tasks.iter().all(JoinHandle::is_finished) {
+                    break;
+                }
+                time::sleep(Duration::from_millis(1)).await;
+            }
+            for task in mem::take(&mut self.tasks) {
+                task.await.expect("a call or a release panicked");
+            }
+            for run in 0..2 {
+                if !self.ended[run] {
+                    self.end(run, None);
+                }
+            }
+            self.end(2, None);
+            for task in mem::take(&mut self.tasks) {
+                task.await.expect("a release panicked");
+            }
+        }
+    }
+
+    async fn fuzz_case(seed: u64) {
+        let mut rng = Seeded(seed);
+        let mut case = FuzzCase::new(seed);
+        for _ in 0..4 + rng.below(14) {
+            let run = rng.index(2);
+            match rng.below(10) {
+                0..=5 if !case.ended[run] => case.call(run, FuzzCall::random(&mut rng)),
+                6 if !case.ended[run] => match rng.below(4) {
+                    0 => case.drop_run(run),
+                    1 => case.end(run, None),
+                    _ => case.end(run, Some(Duration::from_millis(rng.below(3)))),
+                },
+                7 | 8 => case.let_go(&mut rng),
+                _ => {}
+            }
+            time::sleep(Duration::from_millis(rng.below(3))).await;
+        }
+        case.settle().await;
+        let browser = case.browser.lock().expect("browser");
+        assert!(
+            browser.stolen.is_empty(),
+            "seed {seed}: {:?}",
+            browser.stolen
+        );
+        assert!(
+            browser.down.is_empty(),
+            "seed {seed}: still down {:?}",
+            browser.down
+        );
+        let devices = case.tab.devices.lock().expect("devices").clone();
+        assert_eq!(
+            devices,
+            InputDevices {
+                mouse: devices.mouse.clone(),
+                ..InputDevices::default()
+            },
+            "seed {seed}"
+        );
+        assert!(devices.mouse.buttons.is_empty(), "seed {seed}: {devices:?}");
+    }
+
+    /// Two runs and an observer on one tab, 3000 seeded schedules of key presses and releases,
+    /// modifier changes, clicks with modifiers, button presses, run ends (some bounded, cut off
+    /// waiting for the turn or mid-write, some dropped with no release at all), with each write
+    /// answered at once, held back, failed (received or not) or refused. Once every answer is in and every run has ended, nothing
+    /// is down in the browser or held in the tab's devices, and no run's end ever released what
+    /// a live run had pressed.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_random_interleavings_of_input_and_run_ends_leave_nothing_held() {
+        for seed in 0..3000 {
+            fuzz_case(seed).await;
+        }
     }
 }
