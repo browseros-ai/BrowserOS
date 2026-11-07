@@ -15,9 +15,10 @@
 //!                after it detaches) → `bindingCall` on the page, or on the context for its
 //!                binding (EventHub), the call kept by its `bindingcall@` guid
 //!  realm         BindingCall.call(callback) → resolve{result} | reject{error}
-//!  here          bindings-call.js `deliver` in the calling frame's main world, pinned to the
-//!                execution context that called: a document gone since never gets the answer,
-//!                and the next one never gets it either
+//!  here          bindings-call.js `deliver` in the main world of the frame context that called,
+//!                as the call kept it (its session, its document's generation), pinned to the
+//!                execution context that called: a document gone since, or a frame that changed
+//!                process, drops the answer; no other document ever gets it
 //!  run end       after init_scripts.rs removed every script: bindings-call.js `end` in every
 //!                frame (each call still waiting rejects; the names and the controller go)
 //! ```
@@ -52,7 +53,7 @@ use crate::bridge;
 use crate::contexts::ContextFrames;
 use crate::evaluate::{self, Handles, SerializedArgument};
 use crate::events::{CONTEXT_GUID, Emitted};
-use crate::frames::FrameScope;
+use crate::frames::{FrameContext, FrameScope};
 use crate::init_scripts::{self, InitScripts, Link, Rank, until_gone};
 use crate::main_world::BuiltExpression;
 use crate::page::{FrameTab, PageSession};
@@ -317,8 +318,20 @@ struct Call {
     seq: u64,
     target: String,
     frame: String,
+    /// Where the answer goes, `None` when the frame was gone before the call was read: the
+    /// callback still runs, and its answer has no document to reach.
+    origin: Option<Origin>,
     /// The execution context that called, the only one its answer may reach.
     context: i64,
+}
+
+/// The frame context that made a call, as the call found it.
+struct Origin {
+    /// Its answer goes through this context's session, never through a context the frame was
+    /// given since (another process, `frames.rs`).
+    frame: Arc<FrameContext>,
+    /// The context's document generation then: another document of it drops the answer.
+    generation: u64,
 }
 
 /// A page's call, as the controller sends it.
@@ -553,24 +566,15 @@ impl Bindings {
         let Some(page) = page_of(&tabs, &prepared.target) else {
             return;
         };
-        // Playwright: `server/page.ts` `PageBinding.dispatch`: `const result = await binding.playwrightFunction({ frame: context.frame, page, context: page.browserContext }, ...args);`
-        let frame = match frame {
-            Some(frame) => Some(frame),
-            None if prepared.child => None,
-            None => {
-                // net's watcher applies the tab's contexts; it has applied what came before once
-                // the hub's barrier returns, and a context destroyed since still names its frame.
-                tabs.events().barrier().await;
-                page.events.contexts.frame_of(&session, context)
-            }
-        };
-        let Some(frame) = frame else {
+        let Some(frame) = calling_frame(&tabs, &page, &session, &prepared, context, frame).await
+        else {
             // Never another frame in its place: no frame can answer the call in its document,
             // and run end rejects it there.
             debug!(%session, context, "a binding call came from a context of no known frame");
             return;
         };
         let tab = frame_tab(&page, &prepared.target, &frame);
+        let origin = origin_of(&tab).await;
         let Ok(payload) = serde_json::from_str::<Payload>(&payload) else {
             debug!("a binding call's payload is not the controller's");
             return;
@@ -583,18 +587,15 @@ impl Bindings {
                 .find(|exposed| exposed.name == payload.name && exposed.reaches(&prepared.target))
                 .map(|exposed| exposed.page.is_some())
         };
-        let refused = match binding {
-            // Playwright: `server/page.ts` `PageBinding.dispatch`: `" is not exposed`
-            None => Some(format!("Function \"{}\" is not exposed", payload.name)),
-            // Playwright: `server/page.ts` `PageBinding.dispatch`: `serializedArgs is not an array. This can happen when Array.prototype.toJSON is defined incorrectly`
-            Some(_) if !payload.serialized_args.is_array() => Some(
-                "serializedArgs is not an array. This can happen when Array.prototype.toJSON is defined incorrectly"
-                    .to_string(),
-            ),
-            Some(_) => None,
-        };
-        if let Some(message) = refused {
-            deliver_error(&tab, context, &payload.name, payload.seq, &message).await;
+        if let Some(message) = refused(binding, &payload) {
+            deliver_error(
+                origin.as_ref(),
+                context,
+                &payload.name,
+                payload.seq,
+                &message,
+            )
+            .await;
             return;
         }
         let guid = format!(
@@ -628,13 +629,27 @@ impl Bindings {
                     seq: payload.seq,
                     target: prepared.target.clone(),
                     frame: frame.clone(),
+                    origin,
                     context,
                 },
             );
         }
         if tabs.events().emit(&owner, "bindingCall", &params) != Emitted::Queued {
-            self.state.lock().await.calls.remove(&guid);
-            deliver_error(&tab, context, &payload.name, payload.seq, RUN_ENDED).await;
+            let origin = self
+                .state
+                .lock()
+                .await
+                .calls
+                .remove(&guid)
+                .and_then(|call| call.origin);
+            deliver_error(
+                origin.as_ref(),
+                context,
+                &payload.name,
+                payload.seq,
+                RUN_ENDED,
+            )
+            .await;
         }
     }
 
@@ -658,6 +673,15 @@ impl Bindings {
         let Some(page) = page_of(tabs, &call.target) else {
             return Ok(());
         };
+        let Some(origin) = &call.origin else {
+            debug!(name = %call.name, "a binding call's frame went before its answer");
+            return Ok(());
+        };
+        // Another document of the calling frame context: the call's own is gone.
+        if origin.frame.world.generation() != origin.generation {
+            debug!(name = %call.name, "a binding call's document went before its answer");
+            return Ok(());
+        }
         let tab = frame_tab(&page, &call.target, &call.frame);
         let (key, value, carried) = match outcome {
             Outcome::Result(result) => ("result", result.value, result.handles),
@@ -675,9 +699,10 @@ impl Bindings {
             handles: carried,
         };
         // Playwright: `server/page.ts` `PageBinding.dispatch`: `.catch(e => debugLogger.log('error', e));`
-        if let Err(error) = evaluate::call_built_in(
+        if let Err(error) = evaluate::call_built_on(
             &tab,
-            Some(call.context),
+            &origin.frame,
+            call.context,
             BuiltExpression::BindingsCall,
             vec![json!("deliver")],
             &arg,
@@ -860,6 +885,57 @@ async fn add_binding(cdp: &CdpClient, session: &SessionId, gone: Option<&Cancell
     }
 }
 
+/// The frame a call came from: an iframe session's, read in event order by the session reader,
+/// or the tab's, once net's watcher has applied what came before (the hub's barrier); a context
+/// destroyed since still names its frame (`contexts.rs`).
+/// Playwright: `server/page.ts` `PageBinding.dispatch`: `const result = await binding.playwrightFunction({ frame: context.frame, page, context: page.browserContext }, ...args);`
+async fn calling_frame(
+    tabs: &Tabs,
+    page: &Arc<PageSession>,
+    session: &str,
+    prepared: &Prepared,
+    context: i64,
+    frame: Option<String>,
+) -> Option<String> {
+    match frame {
+        Some(frame) => Some(frame),
+        None if prepared.child => None,
+        None => {
+            tabs.events().barrier().await;
+            page.events.contexts.frame_of(session, context)
+        }
+    }
+}
+
+/// The frame context that called, kept as it is now: one the frame gets later (another process,
+/// another document) never answers the call. A frame removed in the evaluation that called has
+/// none left: its callback still runs, as Playwright's does, and nothing answers there.
+/// Playwright: `server/page.ts` `PageBinding.dispatch`: `context.evaluateExpressionHandle(`
+async fn origin_of(tab: &FrameTab) -> Option<Origin> {
+    match tab.context().await {
+        Ok(frame) if !frame.host.gone().is_cancelled() => Some(Origin {
+            generation: frame.world.generation(),
+            frame,
+        }),
+        _ => None,
+    }
+}
+
+/// Why Playwright refuses a call at once, if it does: a name the page has no binding for, or
+/// arguments that are not an array. `binding` is `Some(page binding?)` for an exposed name.
+fn refused(binding: Option<bool>, payload: &Payload) -> Option<String> {
+    match binding {
+        // Playwright: `server/page.ts` `PageBinding.dispatch`: `" is not exposed`
+        None => Some(format!("Function \"{}\" is not exposed", payload.name)),
+        // Playwright: `server/page.ts` `PageBinding.dispatch`: `serializedArgs is not an array. This can happen when Array.prototype.toJSON is defined incorrectly`
+        Some(_) if !payload.serialized_args.is_array() => Some(
+            "serializedArgs is not an array. This can happen when Array.prototype.toJSON is defined incorrectly"
+                .to_string(),
+        ),
+        Some(_) => None,
+    }
+}
+
 /// Neo: takes the CDP binding off `session`, so no later document gets it. A document that has it
 /// keeps it (probe C2): bindings-call.js `end` deletes it there.
 async fn remove_binding(cdp: &CdpClient, session: &SessionId, gone: Option<&CancellationToken>) {
@@ -877,16 +953,20 @@ async fn remove_binding(cdp: &CdpClient, session: &SessionId, gone: Option<&Canc
     }
 }
 
-/// The page's call `seq` of `name` rejects with `message`, at once, in the execution context
-/// `context` that made it.
-async fn deliver_error(tab: &FrameTab, context: i64, name: &str, seq: u64, message: &str) {
+/// The page's call `seq` of `name` rejects with `message`, at once, in the frame context
+/// `origin` and its execution context `context` that made it.
+async fn deliver_error(origin: Option<&Origin>, context: i64, name: &str, seq: u64, message: &str) {
+    let Some(origin) = origin else {
+        debug!(%name, "a refused binding call's frame is gone");
+        return;
+    };
     let error = json!({ "e": { "n": "Error", "m": message, "s": "" } });
     let arg = page_object(
         0,
         vec![("name", json!(name)), ("seq", json!(seq)), ("error", error)],
     );
-    if let Err(error) = evaluate::run_built_in(
-        tab,
+    if let Err(error) = evaluate::run_built_on(
+        &origin.frame,
         Some(context),
         BuiltExpression::BindingsCall,
         vec![json!("deliver"), arg],
