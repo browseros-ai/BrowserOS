@@ -49,6 +49,15 @@ pub(crate) async fn context(
                 progress.wait(backoff).await?;
                 backoff = (backoff * 2).min(Duration::from_millis(16));
             }
+            // The run's init scripts reach the page's first document before the page is handed
+            // out, as a new page's `FrameSession` runs them in Playwright.
+            let scripts = progress.init_scripts();
+            if scripts.has_scripts() {
+                let session = progress.race(tabs.session(entry)).await??;
+                progress
+                    .race(scripts.show_new(tabs.cdp(), &session))
+                    .await?;
+            }
             let result = BrowserContextNewPageResult {
                 page: PageChannel {
                     guid: bridge::page_guid(&entry.id),
@@ -59,7 +68,35 @@ pub(crate) async fn context(
             created.keep();
             Ok(Some(value))
         }
+        BrowserContextCall::Close(_) => {
+            close_context(tabs, progress).await?;
+            Ok(None)
+        }
     }
+}
+
+/// Playwright's close of a connectOverCDP default context, which only disconnects: every tab
+/// stays open (measured on BrowserOS neo, a2-mapping-evidence.md §2). The run lets go of what it
+/// holds in the browser: a `beforeunload` dialog a listener holds is dismissed, so its tab stays,
+/// every subscription ends with target discovery, and every other call of the run stops, as
+/// Playwright's calls stop with its connection. The SDK closes the run's pages and context as the
+/// script sees them; the reason stays there.
+async fn close_context(tabs: &Tabs, progress: &Progress) -> Result<(), CallError> {
+    for (_, session) in tabs.attached() {
+        if session.events.dialogs.take_open_beforeunload() {
+            let dismissed = progress
+                .race(session.send("Page.handleJavaScriptDialog", json!({ "accept": false })))
+                .await?;
+            if let Err(error) = dismissed {
+                debug!(%error, "dismissing a beforeunload dialog at the context's close failed");
+            }
+        }
+    }
+    tabs.events().end_subscriptions();
+    // The script's promises for them have rejected (the SDK); this stops the calls themselves
+    // before the close resolves, so none writes input to a tab the run let go of.
+    progress.stop_the_runs_calls();
+    Ok(())
 }
 
 pub(crate) async fn page(

@@ -15,6 +15,7 @@
 //! `Date` (clock-call.js `parse`), as Rust has no JavaScript date parser.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use neo_runtime_spec::MethodMeta;
@@ -222,16 +223,15 @@ pub(crate) fn decode(
     })
 }
 
-/// The run's clock: whether it is installed, and whether the run has ended.
+/// The run's clock: whether it is on the run's pages, and whether the run has ended.
 #[derive(Default)]
 pub(crate) struct Clock {
-    state: Mutex<State>,
-}
-
-#[derive(Default)]
-struct State {
-    installed: bool,
-    closed: bool,
+    /// Serializes the clock's calls, as Playwright's server runs them; run end never waits on it.
+    work: Mutex<()>,
+    /// Set before the first call puts the clock on a page, so run end takes it back.
+    installed: AtomicBool,
+    /// Set as run end starts: a call still running stops at its next step.
+    closed: AtomicBool,
 }
 
 impl Clock {
@@ -247,27 +247,42 @@ impl Clock {
         scripts: &Arc<InitScripts>,
         route: ClockRoute,
     ) -> Result<(), PlaywrightError> {
-        let mut state = self.state.lock().await;
-        if state.closed {
-            return Err(PlaywrightError::target_closed());
+        let _work = self.work.lock().await;
+        let called = self.run_call(tabs, scripts, route).await;
+        // Run end came while this call ran: whatever the call put on a page after that end ran,
+        // this end takes back.
+        if self.closed.load(Ordering::Acquire) {
+            self.end(tabs).await;
         }
+        called
+    }
+
+    async fn run_call(
+        &self,
+        tabs: &Tabs,
+        scripts: &Arc<InitScripts>,
+        route: ClockRoute,
+    ) -> Result<(), PlaywrightError> {
+        self.open()?;
         let cdp = tabs.cdp();
         let pages: Vec<Arc<PageSession>> =
             tabs.attached().into_iter().map(|(_, page)| page).collect();
-        if !state.installed {
+        if !self.installed.swap(true, Ordering::AcqRel) {
             // Playwright: `server/clock.ts` `Clock._installIfNeeded`: `const initScript = await this._browserContext.addInitScript(nullProgress, script);`
             scripts.add(cdp, None, &install_source()).await?;
             for page in &pages {
                 scripts.ensure(cdp, page).await;
             }
+            self.open()?;
             in_all_frames(
                 &pages,
                 BuiltExpression::ClockInstall,
                 &[json!(BROWSER_NAME)],
+                Some(&self.closed),
             )
             .await?;
-            state.installed = true;
         }
+        self.open()?;
         let (op, param) = match route {
             // Playwright: `server/clock.ts` `Clock.install`: `const timeMillis = time !== undefined ? parseTime(time) : Date.now();`
             ClockRoute::Install(time) => match time {
@@ -289,22 +304,42 @@ impl Clock {
         scripts
             .add(cdp, None, &log_source(op, now(), param))
             .await?;
+        self.open()?;
         let mut args = vec![json!(op)];
         args.extend(param.map(|param| json!(param)));
-        in_all_frames(&pages, BuiltExpression::ClockCall, &args).await
+        in_all_frames(
+            &pages,
+            BuiltExpression::ClockCall,
+            &args,
+            Some(&self.closed),
+        )
+        .await
+    }
+
+    /// `TargetClosedError` once run end has started.
+    fn open(&self) -> Result<(), PlaywrightError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(PlaywrightError::target_closed());
+        }
+        Ok(())
     }
 
     /// Ends the run's clock, after `init_scripts.rs` removed every script: every frame of the
     /// run's pages gets its own timers back (clock-call.js `end`).
+    /// It never waits on a call still running, which stops at its next step and ends the clock
+    /// again on its way out.
     pub(crate) async fn close(&self, tabs: &Tabs) {
-        let mut state = self.state.lock().await;
-        state.closed = true;
-        if !state.installed {
-            return;
+        self.closed.store(true, Ordering::Release);
+        if self.installed.load(Ordering::Acquire) {
+            self.end(tabs).await;
         }
+    }
+
+    async fn end(&self, tabs: &Tabs) {
         let pages: Vec<Arc<PageSession>> =
             tabs.attached().into_iter().map(|(_, page)| page).collect();
-        if let Err(error) = in_all_frames(&pages, BuiltExpression::ClockCall, &[json!("end")]).await
+        if let Err(error) =
+            in_all_frames(&pages, BuiltExpression::ClockCall, &[json!("end")], None).await
         {
             debug!(?error, "a frame kept the run's clock");
         }
@@ -423,6 +458,7 @@ async fn in_all_frames(
     pages: &[Arc<PageSession>],
     expression: BuiltExpression,
     args: &[Value],
+    stop: Option<&AtomicBool>,
 ) -> Result<(), PlaywrightError> {
     let mut thrown = None;
     for page in pages {
@@ -431,6 +467,10 @@ async fn in_all_frames(
             continue;
         };
         for frame in tree {
+            // A call cut short by run end puts nothing on another frame.
+            if stop.is_some_and(|stop| stop.load(Ordering::Acquire)) {
+                return Err(PlaywrightError::target_closed());
+            }
             let tab = FrameTab {
                 page: Arc::clone(page),
                 scope: if frame.id == target {

@@ -26,8 +26,10 @@ neo-runtime/src/clock.rs
 neo-runtime/src/console.rs
 neo-runtime/src/contexts.rs
 neo-runtime/src/dialogs.rs
+neo-runtime/src/discovery.rs
 neo-runtime/src/evaluate.rs
 neo-runtime/src/events.rs
+neo-runtime/src/frame_events.rs
 neo-runtime/src/history.rs
 neo-runtime/src/init_scripts.rs
 neo-runtime/src/main_world.rs

@@ -460,14 +460,16 @@ function wrappedListener(l: Listener): Listener {
 
 /**
  * The listener events a receiver knows, by how Neo treats each: `served` ones are produced and
- * subscribed to on their first listener; `quiet` ones are Playwright's but never happen in a
- * run, and take listeners as Playwright's would; `unserved` ones are Playwright's and not
- * produced by Neo yet, so a listener for one throws rather than wait forever in silence. Any
- * other name is an ordinary emitter event, as in Playwright.
+ * subscribed to on their first listener; `local` ones the SDK emits itself, with no subscription
+ * (a context's `close`); `quiet` ones are Playwright's but never happen in a run, and take
+ * listeners as Playwright's would; `unserved` ones are Playwright's and not produced by Neo yet,
+ * so a listener for one throws rather than wait forever in silence. Any other name is an
+ * ordinary emitter event, as in Playwright.
  */
 export interface EventTable {
   receiver: string
   served: readonly string[]
+  local?: readonly string[]
   quiet: readonly string[]
   unserved: readonly string[]
 }
