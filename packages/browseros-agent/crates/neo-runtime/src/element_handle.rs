@@ -22,6 +22,7 @@
 //! scope element whether or not it is connected; a state of one (`isChecked`) ends with
 //! `Element is not attached to the DOM`.
 
+use std::future::{self, Future};
 use std::sync::Arc;
 
 use neo_runtime_spec::injected::{
@@ -491,14 +492,14 @@ impl ReadTab for Scoped<'_> {
         Ok(self.call(&params).await?.matched)
     }
 
-    async fn aria_snapshot(
+    fn aria_snapshot(
         &self,
         _params: &InjectedAriaSnapshotParams,
         _stitching: bool,
-    ) -> Result<AriaRead, PageError> {
-        Err(PageError::Contract(
+    ) -> impl Future<Output = Result<AriaRead, PageError>> + Send {
+        future::ready(Err(PageError::Contract(
             "neo-runtime: an element handle has no ariaSnapshot".to_string(),
-        ))
+        )))
     }
 }
 
