@@ -18,11 +18,13 @@
 //! Handles live for one run. Every agent handle of a session is in one object group, the run's
 //! handle group of that session ([`Handles`]), released when the run ends: by `Dispatcher::finish`,
 //! or by the run's state dropping on cancel. `dispose()` releases one object and forgets its guid,
-//! so a later call on it fails as on a guid Playwright's server never knew. Guids never repeat
-//! within the process, so a guid a script kept from an earlier run never names a handle of this
-//! one.
+//! so a later call on it fails as on a guid Playwright's server never knew. Every guid carries its
+//! run's random token, so a guid a script kept from an earlier run, in this process or another,
+//! never names a handle of this one.
 
 use std::collections::HashMap;
+use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasher, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -39,12 +41,14 @@ use crate::main_world::{Called, DocumentId, Installed, MainFunction};
 use crate::page::{FrameTab, GroupGuard};
 use crate::progress::{CallError, PlaywrightError, Progress, js_number};
 
-/// Neo: the guid prefix of a run's handles (`handle@<n>`), opaque to the SDK.
+/// Neo: the guid prefix of a run's handles (`handle@<run>.<n>`), opaque to the SDK.
 pub(crate) const HANDLE_PREFIX: &str = "handle@";
 
-/// Neo: the next handle number, process-wide, so a guid never names two handles in one process
-/// and a guid from an earlier run is unknown to every later one.
+/// Neo: the next handle number, process-wide, so a guid never names two handles in one process.
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
+
+/// Neo: counts runs, salting each run's random token, so two runs never share one.
+static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
 
 /// Playwright: `server/javascript.ts` `evaluateExpression`: `throw new JavaScriptErrorInEvaluate('JSHandles can be evaluated only in the context they were created!');`
 const OTHER_CONTEXT: &str = "JSHandles can be evaluated only in the context they were created!";
@@ -310,8 +314,10 @@ fn decode<T: for<'de> Deserialize<'de>>(
 }
 
 /// One run's handles: guid → what it names, and the run's handle group of each session.
-#[derive(Default)]
 pub(crate) struct Handles {
+    /// This run's random token in every guid it mints: runs in other processes (each `neo_run`)
+    /// count handles from 1 too, and a guid kept from one must never name another's handle.
+    run: String,
     entries: Mutex<HashMap<String, Arc<HandleEntry>>>,
     /// Keyed by the host session. Dropping a guard releases its group (`page.rs`).
     groups: Mutex<HashMap<SessionId, Arc<GroupGuard>>>,
@@ -337,6 +343,19 @@ enum Remote {
     /// A CDP `CallArgument` carrying the value: `{value}`, `{unserializableValue}` or `{}` for
     /// `undefined`.
     Value(Value),
+}
+
+impl Default for Handles {
+    fn default() -> Self {
+        let mut hasher = RandomState::new().build_hasher();
+        hasher.write_u64(NEXT_RUN.fetch_add(1, Ordering::Relaxed));
+        Self {
+            run: format!("{:016x}", hasher.finish()),
+            entries: Mutex::default(),
+            groups: Mutex::default(),
+            closed: AtomicBool::default(),
+        }
+    }
 }
 
 impl Handles {
@@ -387,7 +406,8 @@ impl Handles {
         preview: String,
     ) -> Result<CreatedHandle, PageError> {
         let guid = format!(
-            "{HANDLE_PREFIX}{}",
+            "{HANDLE_PREFIX}{}.{}",
+            self.run,
             NEXT_HANDLE.fetch_add(1, Ordering::Relaxed)
         );
         let main = tab.frames.main();
