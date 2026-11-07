@@ -75,6 +75,7 @@ use crate::devices::{self, DeviceCall};
 use crate::dialogs;
 use crate::downloads;
 use crate::drag::{self, DragOptions};
+use crate::element_handle::{self, ElementCommand};
 use crate::element_ops::{
     self, BOUNDING_BOX_META, DispatchOptions, ElementTarget, NeoElementParams, NeoSelectTextParams,
     SCROLL_INTO_VIEW_META, SELECT_TEXT_META,
@@ -404,6 +405,9 @@ enum Route {
     FrameReleaseNavigation(NeoReleaseNavigationParams),
     /// Page evaluation and the `JSHandle` commands (on a handle's frame), served by `evaluate.rs`.
     FrameEval(EvalCall),
+    /// An `ElementHandle` command on a run's element handle, on the handle's frame, served by
+    /// `element_handle.rs`.
+    FrameElementHandle(ElementCommand),
 }
 
 impl Dispatcher {
@@ -622,6 +626,12 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
                 )
             }),
         ObjectKind::Handle(guid) => {
+            if let Some((meta, call)) = element_handle::route(&guid, method, params.clone()) {
+                return Routed {
+                    meta,
+                    route: call.map(|call| ObjectCall::Frame(Route::FrameElementHandle(call))),
+                };
+            }
             let (meta, call) = evaluate::route_handle(&guid, method, params.as_ref());
             return Routed {
                 meta,
@@ -950,7 +960,15 @@ async fn serve_call(
                         finish_reply(Err(error), reply).await;
                         return;
                     }
-                    serve(FrameTab { page, scope }, &cursors, route, progress, reply).await;
+                    serve(
+                        &tabs,
+                        FrameTab { page, scope },
+                        &cursors,
+                        route,
+                        progress,
+                        reply,
+                    )
+                    .await;
                     return;
                 }
                 Err(error) => Err(error),
@@ -1020,6 +1038,7 @@ async fn answer_left_open(tabs: &Tabs) {
 /// ended leaves its entry open, so its record reads `Unfinished`, and sends nothing: nobody
 /// waits for it. The task holds the page, so the session stays attached while it runs.
 async fn serve(
+    tabs: &Tabs,
     page: FrameTab,
     cursors: &Cursors<FrameCursor>,
     route: Route,
@@ -1069,6 +1088,9 @@ async fn serve(
             .await
             .map(|created| Some(json!({ "element": created }))),
         Route::FrameEval(call) => evaluate::serve(&page, call, &progress).await,
+        Route::FrameElementHandle(command) => {
+            element_handle::serve(tabs, &page, command, &progress).await
+        }
         // Neo extensions answer an empty result.
         Route::FrameWaitForUrl(options) => waits::wait_for_url(&page, &options, &progress)
             .await
@@ -1393,7 +1415,8 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameNextNavigation(_)
         | Route::FrameFinishNavigation(_)
         | Route::FrameReleaseNavigation(_)
-        | Route::FrameEval(_) => Err(PlaywrightError::error(
+        | Route::FrameEval(_)
+        | Route::FrameElementHandle(_) => Err(PlaywrightError::error(
             "neo-runtime: navigation and page reads are served by `serve`",
         )
         .into()),

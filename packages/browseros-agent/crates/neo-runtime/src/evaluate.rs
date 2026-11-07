@@ -71,7 +71,7 @@ const WAITER_ABORT_BOUND: Duration = Duration::from_secs(2);
 const OTHER_CONTEXT: &str = "JSHandles can be evaluated only in the context they were created!";
 
 /// Playwright: `server/chromium/crExecutionContext.ts` `rewriteError`: `throw new Error('Execution context was destroyed, most likely because of a navigation.');`
-const CONTEXT_DESTROYED: &str =
+pub(crate) const CONTEXT_DESTROYED: &str =
     "Execution context was destroyed, most likely because of a navigation.";
 
 /// Playwright: `server/chromium/crExecutionContext.ts` `rewriteError`: `throw new Error('Cannot serialize result: object reference chain is too long.');`
@@ -1245,7 +1245,7 @@ pub(crate) struct UtilityElement {
     /// The frame document the handle was created in.
     pub(crate) frame: Arc<FrameContext>,
     pub(crate) element: Handle<Element>,
-    pub(crate) group: GroupGuard,
+    pub(crate) group: Arc<GroupGuard>,
 }
 
 /// Adopts the node of the run's element handle `guid` into its frame's utility world, as
@@ -1263,8 +1263,8 @@ pub(crate) async fn utility_element(
     method: &str,
     handles: &Handles,
 ) -> Result<Result<UtilityElement, PageError>, CallError> {
-    let entry = element_scope(handles, Some(guid), method)?
-        .ok_or_else(PlaywrightError::target_closed)?;
+    let entry =
+        element_scope(handles, Some(guid), method)?.ok_or_else(PlaywrightError::target_closed)?;
     let Remote::Object(id) = &entry.remote else {
         return Ok(Err(PageError::NotConnected));
     };
@@ -1278,7 +1278,7 @@ pub(crate) async fn utility_element(
     Ok(adopted.map(|element| UtilityElement {
         frame,
         element,
-        group,
+        group: Arc::new(group),
     }))
 }
 
@@ -2197,7 +2197,7 @@ pub(crate) async fn element_handle_for(
     )
 }
 
-fn page_error(error: PageError) -> PlaywrightError {
+pub(crate) fn page_error(error: PageError) -> PlaywrightError {
     match error {
         PageError::Threw(message) => PlaywrightError::error(message),
         PageError::Closed => PlaywrightError::target_closed(),

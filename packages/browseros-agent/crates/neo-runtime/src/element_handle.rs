@@ -10,6 +10,7 @@
 //!   getAttribute inputValue          tab, whose selectors resolve from the node, with the
 //!   isChecked isEnabled isDisabled   selector `:scope`: Playwright reads a handle through its
 //!   isEditable isVisible isHidden    frame as `{ selector: ':scope', scope: this }`
+//!   boundingBox   dom's `neo:boundingBox` step on the node (element_ops.rs), or null
 //!   ownerFrame    the node's document element → DOM.describeNode's frameId
 //!   contentFrame  DOM.describeNode of a frame element → its frameId
 //!                 → the frame's record (getters::frame_by_id), or null
@@ -26,24 +27,26 @@ use std::sync::Arc;
 use neo_runtime_spec::injected::{
     AttributeMatch, ElementStateMatch, FormInputValueMatch, InjectedAriaSnapshotParams,
     InjectedOwnerDocumentElementParams, InjectedScopedElementStateOnSelectorParams,
-    InjectedScopedGetAttributeParams, InjectedScopedInnerHTMLParams,
-    InjectedScopedInnerTextParams, InjectedScopedInputValueParams, InjectedScopedIsVisibleParams,
-    InjectedScopedTextContentParams, ReadableElementState, TextMatch,
+    InjectedScopedGetAttributeParams, InjectedScopedInnerHTMLParams, InjectedScopedInnerTextParams,
+    InjectedScopedInputValueParams, InjectedScopedIsVisibleParams, InjectedScopedTextContentParams,
+    ReadableElementState, TextMatch,
 };
 use neo_runtime_spec::serve::{
-    ElementHandleCall, ElementHandleGetAttributeResult, ElementHandleInnerHTMLResult,
-    ElementHandleInnerTextResult, ElementHandleInputValueResult, ElementHandleIsCheckedResult,
-    ElementHandleIsDisabledResult, ElementHandleIsEditableResult, ElementHandleIsEnabledResult,
-    ElementHandleIsHiddenResult, ElementHandleIsVisibleResult, ElementHandleTextContentResult,
+    ElementHandleBoundingBoxResult, ElementHandleCall, ElementHandleGetAttributeResult,
+    ElementHandleInnerHTMLResult, ElementHandleInnerTextResult, ElementHandleInputValueResult,
+    ElementHandleIsCheckedResult, ElementHandleIsDisabledResult, ElementHandleIsEditableResult,
+    ElementHandleIsEnabledResult, ElementHandleIsHiddenResult, ElementHandleIsVisibleResult,
+    ElementHandleTextContentResult, Rect,
 };
 use neo_runtime_spec::{InjectedCall, MethodMeta};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::click::{PageError, SelectorFacts};
+use crate::element_ops::ElementOpsTab;
 use crate::evaluate::{self, UtilityElement};
 use crate::getters;
-use crate::page::FrameTab;
+use crate::page::{FrameTab, ResolvedElement};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::reads::{self, AriaRead, AttributeOptions, Matched, ReadOptions, ReadTab, SelectorTab};
 use crate::states::{self, StateOptions, StateTab};
@@ -135,11 +138,49 @@ pub(crate) async fn serve(
             }
             encode(&ElementHandleIsVisibleResult { value: visible })
         }
+        ElementHandleCall::BoundingBox(_) => {
+            let value = match &node {
+                Ok(node) => bounding_box(tab, node, progress).await?,
+                Err(PageError::Closed) => return Err(PlaywrightError::target_closed().into()),
+                // Playwright: `server/chromium/crPage.ts` `FrameSession._getBoundingBox`: `const result = await this._client._sendMayFail('DOM.getBoxModel', {`
+                Err(_) => None,
+            };
+            encode(&ElementHandleBoundingBoxResult { value })
+        }
         call => {
             let node = node.map_err(evaluate::page_error)?;
             read(tabs, tab, &node, call, progress).await
         }
     }
+}
+
+/// The node's border box in the main frame's CSS pixels, `None` without one: dom's
+/// `neo:boundingBox` step on the adopted node, which a node gone also answers `None`.
+async fn bounding_box(
+    tab: &FrameTab,
+    node: &UtilityElement,
+    progress: &Progress,
+) -> Result<Option<Rect>, CallError> {
+    let element = ResolvedElement::adopted(
+        node.element.clone(),
+        Arc::clone(&node.group),
+        Arc::clone(&node.frame),
+    );
+    Ok(
+        match progress
+            .race(ElementOpsTab::bounding_box(tab, &element))
+            .await?
+        {
+            Ok(rect) => rect.map(|rect| Rect {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+            }),
+            Err(PageError::Closed) => return Err(PlaywrightError::target_closed().into()),
+            Err(_) => None,
+        },
+    )
 }
 
 /// Every command but the visibility reads, on the adopted node.
@@ -150,14 +191,14 @@ async fn read(
     call: ElementHandleCall,
     progress: &Progress,
 ) -> Result<Option<Value>, CallError> {
-    let scoped = Scoped { tab, node };
+    let scoped = &Scoped { tab, node };
     let scope = || ReadOptions {
         selector: SCOPE.to_string(),
         strict: false,
     };
     let state = |state| async move {
         states::element_state(
-            &scoped,
+            scoped,
             &StateOptions::new(SCOPE.to_string(), None),
             state,
             progress,
@@ -166,15 +207,15 @@ async fn read(
     };
     match call {
         ElementHandleCall::TextContent(_) => {
-            let read = reads::text_content(&scoped, &scope(), progress).await?;
+            let read = reads::text_content(scoped, &scope(), progress).await?;
             encode(&ElementHandleTextContentResult { value: read.value })
         }
         ElementHandleCall::InnerText(_) => {
-            let read = reads::inner_text(&scoped, &scope(), progress).await?;
+            let read = reads::inner_text(scoped, &scope(), progress).await?;
             encode(&ElementHandleInnerTextResult { value: read.value })
         }
         ElementHandleCall::InnerHTML(_) => {
-            let read = reads::inner_html(&scoped, &scope(), progress).await?;
+            let read = reads::inner_html(scoped, &scope(), progress).await?;
             encode(&ElementHandleInnerHTMLResult { value: read.value })
         }
         ElementHandleCall::GetAttribute(params) => {
@@ -183,11 +224,11 @@ async fn read(
                 strict: false,
                 name: params.name,
             };
-            let read = reads::get_attribute(&scoped, &options, progress).await?;
+            let read = reads::get_attribute(scoped, &options, progress).await?;
             encode(&ElementHandleGetAttributeResult { value: read.value })
         }
         ElementHandleCall::InputValue(_) => {
-            let value = input_value(&scoped, progress).await?;
+            let value = input_value(scoped, progress).await?;
             encode(&ElementHandleInputValueResult { value })
         }
         ElementHandleCall::IsChecked(_) => encode(&ElementHandleIsCheckedResult {
@@ -204,20 +245,24 @@ async fn read(
         }),
         ElementHandleCall::OwnerFrame(_) => {
             let frame = owner_frame(tabs, tab, node, progress).await?;
-            Ok(Some(frame.map_or_else(|| json!({}), |frame| json!({ "frame": frame }))))
+            Ok(Some(frame.map_or_else(
+                || json!({}),
+                |frame| json!({ "frame": frame }),
+            )))
         }
         ElementHandleCall::ContentFrame(_) => {
             let frame = content_frame(tabs, tab, node, progress).await?;
-            Ok(Some(frame.map_or_else(|| json!({}), |frame| json!({ "frame": frame }))))
+            Ok(Some(frame.map_or_else(
+                || json!({}),
+                |frame| json!({ "frame": frame }),
+            )))
         }
-        ElementHandleCall::BoundingBox(_) => Err(PlaywrightError::error(
-            "neo-runtime: ElementHandle.boundingBox is not served yet",
+        ElementHandleCall::BoundingBox(_)
+        | ElementHandleCall::IsVisible(_)
+        | ElementHandleCall::IsHidden(_) => Err(PlaywrightError::error(
+            "neo-runtime: boundingBox and the visibility reads are served by `serve`",
         )
         .into()),
-        ElementHandleCall::IsVisible(_) | ElementHandleCall::IsHidden(_) => Err(
-            PlaywrightError::error("neo-runtime: the visibility reads are served by `serve`")
-                .into(),
-        ),
     }
 }
 
@@ -354,8 +399,10 @@ const ELEMENT_NOT_ATTACHED: &str = "Element is not attached to the DOM";
 
 fn encode<R: Serialize>(result: &R) -> Result<Option<Value>, CallError> {
     serde_json::to_value(result).map(Some).map_err(|error| {
-        PlaywrightError::error(format!("neo-runtime: encoding an ElementHandle result: {error}"))
-            .into()
+        PlaywrightError::error(format!(
+            "neo-runtime: encoding an ElementHandle result: {error}"
+        ))
+        .into()
     })
 }
 
@@ -371,9 +418,9 @@ impl Scoped<'_> {
     /// error, which its handle reads race (`raceAgainstContextDestroyed`), rather than a poll.
     async fn call<C: InjectedCall + Sync>(&self, params: &C) -> Result<C::Result, PageError> {
         match self.node.frame.call(None, params).await {
-            Err(PageError::NotConnected) => Err(PageError::Threw(
-                evaluate::CONTEXT_DESTROYED.to_string(),
-            )),
+            Err(PageError::NotConnected) => {
+                Err(PageError::Threw(evaluate::CONTEXT_DESTROYED.to_string()))
+            }
             result => result,
         }
     }

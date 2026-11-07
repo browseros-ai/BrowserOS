@@ -2229,6 +2229,23 @@ pub(crate) struct ResolvedElement {
 }
 
 impl ResolvedElement {
+    /// An element a run's `ElementHandle` names, adopted into its frame's utility world in
+    /// `group` (`element_handle.rs`), for a step on that element alone. No frame hop led to it:
+    /// its own frame is the one it shows in.
+    pub(crate) fn adopted(
+        handle: Handle<Element>,
+        group: Arc<GroupGuard>,
+        frame: Arc<FrameContext>,
+    ) -> Self {
+        Self {
+            handle,
+            _group: group,
+            frame,
+            frame_visible: true,
+            owners: Vec::new(),
+        }
+    }
+
     /// A typed handle; this element's shared group keeps it alive through a detached page step.
     pub(crate) fn handle(&self) -> &Handle<Element> {
         &self.handle
