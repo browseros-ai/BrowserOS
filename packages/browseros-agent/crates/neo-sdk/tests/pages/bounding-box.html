@@ -1,0 +1,40 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Bounding box</title>
+<!-- Tests select by id or class only: BrowserOS neo's takeover bar adds shadow-root buttons to
+     every page, and Playwright's CSS pierces open shadow roots. -->
+<style>
+  body { margin: 0; }
+  #box { position: absolute; left: 100px; top: 50px; width: 50px; height: 50px; }
+  #hidden { display: none; }
+  #svg { position: absolute; left: 0; top: 120px; }
+  iframe { position: absolute; }
+  #same { left: 300px; top: 20px; width: 200px; height: 100px; border: 2px solid #888; padding: 3px; }
+  #cross { left: 20px; top: 440px; width: 300px; height: 120px; border: 0; padding: 0; }
+  .dup { position: absolute; top: 600px; width: 10px; height: 10px; }
+</style>
+<main id="content">
+<div id="box"></div>
+<div id="hidden">hi</div>
+<svg id="svg" width="500" height="300" aria-hidden="true"><rect id="rect" x="30" y="50" width="200" height="100"></rect></svg>
+<iframe id="same" title="Same" srcdoc="<style>body{margin:0}</style><div id='inner' style='margin:10px;height:18px'>inner</div>"></iframe>
+<div class="dup"></div>
+<div class="dup"></div>
+</main>
+<script>
+// BrowserOS neo's takeover bar is not the page's (frame-top.html): removed on sight, so it
+// never moves the layout one engine measures.
+new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.remove()).observe(
+  document.documentElement,
+  { childList: true, subtree: true },
+)
+// A cross-site, so out-of-process, frame without border or padding: there Playwright's
+// frame offset (the iframe's border box) and Neo's (its content box) are the same point.
+// localhost is another site than the 127.0.0.1 page; the harness serves it a page of an <h1>.
+const cross = document.createElement('iframe')
+cross.id = 'cross'
+cross.title = 'Cross'
+cross.src = `http://localhost:${location.port}/cross-child`
+document.querySelector('#content').append(cross)
+window.__facts = () => ({ scrollX, scrollY })
+</script>

@@ -1,9 +1,10 @@
 /**
  * Playwright's `BrowserContext` (`client/browserContext.ts` at 26137face), cut to what a run
  * needs: its pages, `newPage`, the default timeout its pages fall back to, and the events Rust
- * sends on it (`page`, `console`, `pageError`, `dialog`, `dialogClosed`), which it fans out to
- * the page each names and to its own listeners in Playwright's order. Its `pageload`,
- * `pageclose` and frame events come from its pages. Scripts receive it as `context`.
+ * sends on it (`page`, `console`, `pageError`, `dialog`, `dialogClosed`, `request`, `response`,
+ * `requestFinished`, `requestFailed`, `download`), which it fans out to the page each names and
+ * to its own listeners in Playwright's order. Its `pageload`, `pageclose` and frame events come
+ * from its pages. Scripts receive it as `context`.
  *
  * Its page-level listeners cover the pages the run has a session on, which include every page a
  * `page` event handed out: Neo does not attach to the user's other tabs just to listen
@@ -21,6 +22,8 @@ import type {
   BrowserContextCloseParams,
   DialogInitializer,
   PageChannel,
+  RequestInitializer,
+  ResponseInitializer,
   SerializedError,
 } from '@browseros/neo-runtime-spec/serve'
 import type { Browser } from './browser'
@@ -28,8 +31,10 @@ import type { Connection } from './connection'
 import { ConsoleMessage, type ConsoleMessagePayload } from './console-message'
 import { Debugger } from './debugger'
 import { Dialog } from './dialog'
+import { Download } from './download'
 import { parseSerializedError, targetClosedError } from './errors'
 import { ChannelOwner, type EventPipe, type EventTable } from './events'
+import { type Created, requestFromRecord, responseFromRecord } from './network'
 import { Page } from './page'
 import { BROWSER_CONTEXT_CLOSE_KEYS, pickParams } from './protocol'
 import { type CreatedPage, get } from './runtime-bridge'
@@ -48,23 +53,21 @@ const CONTEXT_EVENTS: EventTable = {
     'weberror',
     'dialog',
     'dialogclosed',
+    'request',
+    'response',
+    'requestfailed',
+    'requestfinished',
     'page',
     'pageclose',
     'pageload',
     'frameattached',
     'framedetached',
     'framenavigated',
+    'download',
   ],
   local: ['close'],
   quiet: ['backgroundpage'],
-  unserved: [
-    'download',
-    'serviceworker',
-    'request',
-    'response',
-    'requestfailed',
-    'requestfinished',
-  ],
+  unserved: ['serviceworker'],
 }
 
 /** A dialog record Rust sends: Playwright's `{guid, initializer}`. */
@@ -178,6 +181,66 @@ export class BrowserContext extends ChannelOwner {
       this.#onDialog((params as { dialog: DialogRecord }).dialog)
     else if (method === 'dialogClosed')
       this.#onDialogClosed((params as { dialog: DialogRecord }).dialog)
+    else if (method === 'download')
+      this.#onDownload(params as DownloadEventParams)
+    else if (method === 'request') this.#onRequest(params as RequestEventParams)
+    else if (method === 'response')
+      this.#onResponse(params as ResponseEventParams)
+    else if (method === 'requestFinished')
+      this.#onRequestFinished(params as RequestEndEventParams)
+    else if (method === 'requestFailed')
+      this.#onRequestFailed(params as RequestEndEventParams)
+  }
+
+  /** Playwright's `BrowserContext._onRequest`: the context's listeners, then the page's. */
+  #onRequest({ request, page }: RequestEventParams): void {
+    const pageObject = this.#pageFor(page.guid)
+    const requestObject = requestFromRecord(
+      this.#connection,
+      request,
+      pageObject,
+    )
+    this.emit('request', requestObject)
+    pageObject.emit('request', requestObject)
+  }
+
+  /** Playwright's `BrowserContext._onResponse`. */
+  #onResponse({ response, request, page }: ResponseEventParams): void {
+    const pageObject = this.#pageFor(page.guid)
+    const responseObject = responseFromRecord(
+      this.#connection,
+      response,
+      requestFromRecord(this.#connection, request, pageObject),
+    )
+    this.emit('response', responseObject)
+    pageObject.emit('response', responseObject)
+  }
+
+  /**
+   * Playwright's `BrowserContext._onRequestFinished`. Its `responseEndTiming` and the response's
+   * `finished()` are Rust's record, which `timing()` and `finished()` read live.
+   */
+  #onRequestFinished({ request, page }: RequestEndEventParams): void {
+    const pageObject = this.#pageFor(page.guid)
+    const requestObject = requestFromRecord(
+      this.#connection,
+      request,
+      pageObject,
+    )
+    this.emit('requestfinished', requestObject)
+    pageObject.emit('requestfinished', requestObject)
+  }
+
+  /** Playwright's `BrowserContext._onRequestFailed`; `failure()` reads Rust's record live. */
+  #onRequestFailed({ request, page }: RequestEndEventParams): void {
+    const pageObject = this.#pageFor(page.guid)
+    const requestObject = requestFromRecord(
+      this.#connection,
+      request,
+      pageObject,
+    )
+    this.emit('requestfailed', requestObject)
+    pageObject.emit('requestfailed', requestObject)
   }
 
   /**
@@ -196,7 +259,12 @@ export class BrowserContext extends ChannelOwner {
 
   #onConsole(event: ConsoleEventParams): void {
     const page = event.page ? this.#pageFor(event.page.guid) : null
-    const consoleMessage = new ConsoleMessage(event, page, null)
+    const consoleMessage = new ConsoleMessage(
+      event,
+      page,
+      null,
+      this.#connection,
+    )
     page?.emit('console', consoleMessage)
     this.#contextOf(page).emit('console', consoleMessage)
   }
@@ -209,6 +277,24 @@ export class BrowserContext extends ChannelOwner {
       new WebError(pageObject, parsedError, location),
     )
     if (pageObject) pageObject.emit('pageerror', parsedError)
+  }
+
+  /**
+   * Playwright: `client/page.ts` `Page.constructor`: `this._browserContext.emit(Events.BrowserContext.Download, download);`
+   * One `Download` for the page's `download`, then the context's. Rust sends it on the context,
+   * naming the page, since a tab the run has not met yet can begin one too.
+   */
+  #onDownload(event: DownloadEventParams): void {
+    const page = this.#pageFor(event.page.guid)
+    const download = new Download(
+      page,
+      event.url,
+      event.suggestedFilename,
+      event.artifact,
+      this.#connection,
+    )
+    page.emit('download', download)
+    this.emit('download', download)
   }
 
   #onDialog(record: DialogRecord): void {
@@ -260,9 +346,8 @@ export class BrowserContext extends ChannelOwner {
     return await wrapApiCall('browserContext.waitForEvent', async () => {
       const options =
         typeof optionsOrPredicate === 'function' ? {} : optionsOrPredicate
-      // Refuses a signal first (TimeoutSettings), inside `wrapApiCall`, which prefixes the
-      // api name.
-      const timeout = this._timeoutSettings.timeout(options, null)
+      // Inside `wrapApiCall`, which prefixes the api name.
+      const timeoutOptions = this._timeoutSettings.timeout(options, null)
       this._refuseUnserved(event)
       const predicate =
         typeof optionsOrPredicate === 'function'
@@ -270,8 +355,8 @@ export class BrowserContext extends ChannelOwner {
           : optionsOrPredicate.predicate
       const waiter = Waiter.createForEvent()
       waiter.rejectOnTimeout(
-        timeout,
-        `Timeout ${timeout}ms exceeded while waiting for event "${event}"`,
+        timeoutOptions,
+        `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`,
       )
       if (event !== 'close')
         waiter.rejectOnEvent(this, 'close', () =>
@@ -429,11 +514,44 @@ type ConsoleEventParams = ConsoleMessagePayload & {
   worker?: unknown
 }
 
+/** Playwright's `download` event params (`spec/playwright/page.yml`), sent on the context with
+ * the page it names, and `artifact` the download's guid. */
+interface DownloadEventParams {
+  page: PageChannel
+  url: string
+  suggestedFilename: string
+  artifact: string
+}
+
 /** Playwright's `pageError` event params (`spec/playwright/browserContext.yml`). */
 interface PageErrorEventParams {
   error: SerializedError
   page: PageChannel
   location: WebErrorLocation
+}
+
+/** Playwright's `request` event params (`spec/playwright/browserContext.yml`), with Neo's full
+ * record in place of a `__create__` reference. */
+interface RequestEventParams {
+  request: Created<RequestInitializer>
+  page: PageChannel
+}
+
+/** Playwright's `response` event params, the response as its full record, with Neo's record of
+ * its request, so the event builds both without asking Rust. */
+interface ResponseEventParams {
+  response: Created<ResponseInitializer>
+  request: Created<RequestInitializer>
+  page: PageChannel
+}
+
+/** Playwright's `requestFinished` and `requestFailed` event params, as Neo sends them. */
+interface RequestEndEventParams {
+  request: Created<RequestInitializer>
+  response?: Created<ResponseInitializer> | null
+  failureText?: string
+  responseEndTiming: number
+  page: PageChannel
 }
 
 /** The page guid (`page@T`) a call's guid belongs to: its own, its frames' (`frame@T`,

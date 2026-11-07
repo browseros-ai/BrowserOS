@@ -90,7 +90,7 @@ pub mod injected;
 #[rustfmt::skip]
 #[expect(
     clippy::large_enum_variant,
-    reason = "Browser.newContext carries Playwright's whole ContextOptions mixin"
+    reason = "Browser.newContext carries Playwright's whole ContextOptions mixin, Frame.dispatchEvent its full SerializedArgument wire value"
 )]
 pub mod serve;
 #[rustfmt::skip]

@@ -5,43 +5,42 @@
  * navigation default first at each level, then the action default. Neo has no inspector, so
  * Playwright's debug-mode branch (`0` under the inspector) is gone.
  *
- * Playwright's `timeout` and `navigationTimeout` return `{ signal, timeout }`, and the client
- * aborts the call when its `signal` aborts. Neo cannot abort a call it has sent, so both refuse
- * any `signal` instead, before the call is sent: every method that resolves its timeout here
- * (each Frame method, which every Locator and Page method reaches) rejects with an `Error`
- * naming the option, and the browser sees nothing. Silently dropping the signal would let a
- * script believe it could cancel the call.
+ * `timeout` and `navigationTimeout` return Playwright's `{ signal, timeout }`, the options every
+ * call sends with (`connection.ts`): the call rejects with `AbortError` before it is sent when
+ * its `signal` already aborted, and stops where it is when the signal aborts later. A method
+ * Playwright sends without them (`kNoTimeout`: `isVisible`, `title`, evaluations) sends `0` and
+ * reads no signal, as Playwright's does.
  */
 
 import type { ApiName } from './connection'
-import { refuseSignal } from './waiter'
 
 /** `@isomorphic/time`'s `DEFAULT_PLAYWRIGHT_TIMEOUT`. Playwright Test's default of `0` does not
  * apply: a Neo run is a library call. */
 const DEFAULT_PLAYWRIGHT_TIMEOUT = 30_000
 
-/** The options a call resolves its timeout from: Playwright's `TimeoutInput`. */
-export type TimeoutInput = { timeout?: number; signal?: unknown }
-
 /**
- * Deviation: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };` Playwright hands the signal to the call, which aborts when it aborts; Neo has no way to abort a sent call yet, so it refuses any signal, an aborted one included, before sending anything; null and undefined are none.
- *
- * `waiter.ts`'s `refuseSignal`, the one refusal, prefixed with `apiName` as Playwright's
- * `_wrapApiCall` prefixes a client-side error; `null` inside a `wrapApiCall` body, which adds
- * the prefix itself. Every timeout resolved here passes through it, and the reads that resolve
- * none (`isVisible`, `isHidden`) call it themselves.
+ * What Neo reads of a `signal` option: an `AbortSignal` (the realm's, `neo-runtime`
+ * `abort.rs`), or any object with its shape, as Playwright's client reads one. `null` is no
+ * signal, as `undefined` is.
  */
-export function refuseSignalFor(
-  options: TimeoutInput,
-  apiName: ApiName | null,
-): void {
-  try {
-    refuseSignal(options)
-  } catch (error) {
-    if (apiName !== null && error instanceof Error)
-      error.message = `${apiName}: ${error.message}`
-    throw error
-  }
+export type SignalLike = {
+  readonly aborted: boolean
+  readonly reason?: unknown
+  addEventListener(
+    type: 'abort',
+    listener: () => void,
+    options?: { once?: boolean },
+  ): void
+  removeEventListener(type: 'abort', listener: () => void): void
+}
+
+/** The options a call resolves its timeout from: Playwright's `TimeoutInput`. */
+export type TimeoutInput = { timeout?: number; signal?: SignalLike | null }
+
+/** Playwright's `channels.TimeoutOptions`: what a call is sent with. */
+export type TimeoutOptions = {
+  signal: SignalLike | null | undefined
+  timeout: number
 }
 
 export class TimeoutSettings {
@@ -73,24 +72,26 @@ export class TimeoutSettings {
   }
 
   /**
-   * The timeout in ms an action or read with these options runs under.
+   * Playwright: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };`
    *
-   * @throws `Error` prefixed with `apiName` (unless `null`) when the options carry a `signal`.
+   * The timeout (ms) and signal an action or read with these options runs under. `apiName`
+   * names the calling method, as every caller passes it; resolving never fails, so it is unused.
    */
-  timeout(options: TimeoutInput, apiName: ApiName | null): number {
-    refuseSignalFor(options, apiName)
-    return this.#timeout(options)
+  timeout(options: TimeoutInput, _apiName: ApiName | null): TimeoutOptions {
+    return { signal: options.signal, timeout: this.#timeout(options) }
   }
 
   /**
-   * The timeout in ms a navigation (`goto`, `waitForURL`, `waitForLoadState`) with these
-   * options runs under.
+   * Playwright: `client/timeoutSettings.ts` `TimeoutSettings.navigationTimeout`: `return { signal: options.signal, timeout: this._navigationTimeout(options) };`
    *
-   * @throws `Error` prefixed with `apiName` (unless `null`) when the options carry a `signal`.
+   * The timeout (ms) and signal a navigation (`goto`, `waitForURL`, `waitForLoadState`) with
+   * these options runs under. `apiName` as for {@link TimeoutSettings.timeout}.
    */
-  navigationTimeout(options: TimeoutInput, apiName: ApiName | null): number {
-    refuseSignalFor(options, apiName)
-    return this.#navigationTimeout(options)
+  navigationTimeout(
+    options: TimeoutInput,
+    _apiName: ApiName | null,
+  ): TimeoutOptions {
+    return { signal: options.signal, timeout: this.#navigationTimeout(options) }
   }
 
   #timeout(options: TimeoutInput): number {

@@ -1,0 +1,12 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>download owner</title></head><body>
+<!-- downloadOwner.test.mjs serves this page. #blank opens /attachment in a new tab, which starts
+     the download and closes; #same holds a same-origin frame that holds another, whose #nested
+     link downloads /attachment; #cross is a cross-site frame (localhost at the fixture server's
+     port, another site than the page's 127.0.0.1) whose #cross-link downloads /attachment. -->
+<a id="blank" target="_blank" href="/attachment">New window</a>
+<iframe id="same" src="/owner-outer.html"></iframe>
+<iframe id="cross"></iframe>
+<script>
+document.getElementById('cross').src = `http://localhost:${location.port}/owner-cross.html`;
+</script>
+</body></html>

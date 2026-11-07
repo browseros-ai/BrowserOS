@@ -164,9 +164,15 @@ describe('goto', () => {
     expect(first?.url()).toBe('http://a.test/r1')
     expect(first?.redirectedFrom()).toBeNull()
     expect(first?.redirectedTo()?.redirectedTo()).toBe(request)
-    expect(request.redirectedTo()).toBeNull()
     expect(first?.existingResponse()?.status()).toBe(302)
     expect(getters).toEqual([{ guid: FINAL, field: 'chain' }])
+    // The last hop knows of no later one until Rust's record says one started.
+    getterAnswers[`${request._guid} redirectedTo`] = [null]
+    expect(request.redirectedTo()).toBeNull()
+    expect(getters.at(-1)).toEqual({
+      guid: request._guid,
+      field: 'redirectedTo',
+    })
   })
 
   test('tests that goto resolves null when the navigation has no response', async () => {

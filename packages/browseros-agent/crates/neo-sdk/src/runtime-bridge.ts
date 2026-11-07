@@ -9,6 +9,8 @@
  *   the script never awaits still finishes and leaves its trace record. Its reply carries the
  *   event watermark W: `call` runs the listeners of every event up to W (`events.ts`) before it
  *   returns the reply text, so they run before the caller continues, Playwright's order.
+ * - `abort` aborts one call in flight, from its `signal`'s `abort` listener: the call stops and
+ *   replies `AbortError`.
  * - `subscribe` turns the run's listening to one event of a page or the context on or off.
  * - `drain` takes queued events; `nextEvents` resolves once one is queued (the idle wake).
  */
@@ -19,12 +21,14 @@ import type {
 } from '@browseros/neo-runtime-spec/serve'
 import type { PausedDetails } from './debugger'
 import type { RawEvent } from './events'
+import type { CreatedHandle } from './js-handle'
 import type { NeoSerializedUrlMatch } from './neo-commands'
 import type { CreatedChain, Timing } from './network'
 
 declare const __neo_runtime: {
   get(request: string): string
   callWithEvents(message: string): Promise<{ reply: string; events: number }>
+  abort(id: number, reason: string): void
   subscribe(request: string): void
   drain(until: number): string
   nextEvents(): Promise<void>
@@ -59,7 +63,7 @@ export interface CreatedFrame {
 /**
  * What each getter returns, keyed by the field name Rust dispatches on. Rust answers only for
  * guids it handed the run (the run page, every `pages` record, every `newPage` result, every
- * request and response of a `goto` answer) and throws `Error` for any other.
+ * request and response it recorded) and throws `Error` for any other.
  */
 export interface GetterReplies {
   /** `null` once the page is closed or the frame is detached. */
@@ -69,8 +73,12 @@ export interface GetterReplies {
   pages: CreatedPage[]
   /** On a page: its creation record, which `newPage` builds its `Page` from. */
   initializer: CreatedPage
-  /** On a response: its request and every hop before it, oldest first. */
+  /** On a request or response: its hop and every hop before it, oldest first. */
   chain: CreatedChain
+  /** On a request: the guid of the request a redirect made of it, once it started. */
+  redirectedTo: string | null
+  /** On a request: the guid of its response, once it arrived. */
+  existingResponse: string | null
   /** On a request: `timing()` now, `responseEnd` included once the request ended. */
   timing: Timing
   /** On a request: its failure text, `null` (or empty) while it has not failed. */
@@ -94,6 +102,10 @@ export interface GetterReplies {
   debugger: string
   /** On a page: the open tab of the run's context that opened it, `null` for none. */
   opener: CreatedPage | null
+  /** On a console message (`console@<targetId>:<n>`): its arguments as the run's handles. */
+  args: CreatedHandle[]
+  /** On a file chooser (`filechooser@<targetId>:<n>`): its input as the run's handle. */
+  element: CreatedHandle
 }
 
 export function get<Field extends keyof GetterReplies>(
@@ -160,6 +172,15 @@ export async function call(message: string): Promise<string> {
   const { reply, events } = await __neo_runtime.callWithEvents(message)
   deliverEvents?.(events)
   return reply
+}
+
+/**
+ * Aborts the call sent as message `id`, which stops at its next wait and replies `AbortError`
+ * with `reason`; one that already replied is left alone. Only `connection.ts` calls it, from the
+ * call's `signal` listener (Playwright's `__abort__ {id, reason}`).
+ */
+export function abort(id: number, reason: string): void {
+  __neo_runtime.abort(id, reason)
 }
 
 /** Turns the run's listening to `event` on `guid` on or off; throws for one Neo cannot produce. */

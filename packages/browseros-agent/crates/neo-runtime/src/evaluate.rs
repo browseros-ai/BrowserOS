@@ -1579,8 +1579,10 @@ fn undefined_object() -> RemoteObject {
 /// Playwright's `Frame.waitForFunctionExpression`: polls the predicate in the page (every
 /// animation frame, or every `polling` ms) until it returns a truthy value, under the call's
 /// deadline, and answers a handle to that value. A document that goes away under the wait
-/// starts it again in the next one after 100 ms, as Playwright's retry does; a predicate that
-/// throws ends the call. Leaving for any reason stops the page's polling first.
+/// starts it again after 100 ms, as Playwright's retry does, on the frame's context as it is
+/// then: an iframe that changed process has another one (`frames.rs`). A frame that detached
+/// ends the wait, as does a predicate that throws. Leaving for any reason stops the page's
+/// polling first.
 async fn wait_for_function(
     tab: &FrameTab,
     frame: &Arc<FrameContext>,
@@ -1599,10 +1601,30 @@ async fn wait_for_function(
         ))
         .into());
     }
+    let mut frame = Arc::clone(frame);
     loop {
-        match wait_once(tab, frame, evaluation, polling, handles, progress).await? {
-            Some(result) => return Ok(result),
-            None => progress.wait(WAIT_FOR_FUNCTION_RETRY).await?,
+        if let Some(result) = wait_once(tab, &frame, evaluation, polling, handles, progress).await?
+        {
+            return Ok(result);
+        }
+        frame = current_context(tab, progress).await?;
+    }
+}
+
+/// The frame's context for the next attempt of a wait, after the retry interval: the same
+/// deadline and signal, on whatever context the frame has now. A frame between contexts (an
+/// iframe mid-way to another process) is looked up again after another interval; a frame that
+/// detached, or a tab that closed, ends the wait.
+async fn current_context(
+    tab: &FrameTab,
+    progress: &Progress,
+) -> Result<Arc<FrameContext>, CallError> {
+    loop {
+        progress.wait(WAIT_FOR_FUNCTION_RETRY).await?;
+        match progress.race(tab.context()).await? {
+            Ok(frame) => return Ok(frame),
+            Err(PageError::NotConnected) => {}
+            Err(error) => return Err(page_error(error).into()),
         }
     }
 }
@@ -1686,6 +1708,8 @@ async fn wait_once(
         )),
         Ok((_, Called::Threw(message))) => Err(PlaywrightError::error(message).into()),
         Ok((_, Called::Stale | Called::Protocol(_))) => Ok(None),
+        // The frame's context went while the waiter ran: the wait starts again on its next one.
+        Err(CallError::Playwright(error)) if error.message == CONTEXT_DESTROYED => Ok(None),
         Ok((_, Called::Value(_))) => {
             Err(PlaywrightError::error("neo-runtime: the waiter's result answered by value").into())
         }
@@ -1745,10 +1769,6 @@ async fn abort_waiter(tab: FrameTab, frame: Arc<FrameContext>, waiter: String) {
 /// # Errors
 ///
 /// `NotConnected` when the object or its frame's document is gone; `Closed` once the run ended.
-#[expect(
-    dead_code,
-    reason = "the seam med-pw-net's ConsoleMessage.args() calls; remove this once it does"
-)]
 pub(crate) async fn handle_for_remote_object(
     tab: &FrameTab,
     frame: &Arc<FrameContext>,
@@ -1764,6 +1784,42 @@ pub(crate) async fn handle_for_remote_object(
         None => object,
     };
     created_handle(tab, frame, installed.document, object, handles).await
+}
+
+/// [`handle_for_remote_object`] for an argument whose page closed before the script read it: the
+/// same handle, made without the browser. A value keeps it, so `jsonValue()` still answers; a
+/// call through an object's handle fails as on a closed page, as Playwright's handle does then.
+pub(crate) fn handle_for_gone_object(
+    tab: &FrameTab,
+    frame: &Arc<FrameContext>,
+    object: &RemoteObject,
+    handles: &Handles,
+) -> Result<CreatedHandle, PageError> {
+    let Some(object_id) = object.object_id.clone() else {
+        let (argument, preview) = primitive(object);
+        return handles.register(
+            tab,
+            frame,
+            DocumentId::GONE,
+            Remote::Value(argument),
+            false,
+            preview,
+        );
+    };
+    let element = object.subtype.as_deref() == Some(NODE_TYPE);
+    let preview = if element {
+        format!("{NODE_PREVIEW_PREFIX}{NODE_TYPE}")
+    } else {
+        render_preview(object)
+    };
+    handles.register(
+        tab,
+        frame,
+        DocumentId::GONE,
+        Remote::Object(HandleId::new(object_id)),
+        element,
+        preview,
+    )
 }
 
 /// Playwright's `JSHandle.jsonValue`: the page's `UtilityScript.jsonValue(true, handle)`, or for a
@@ -1846,9 +1902,15 @@ async fn installed(
                 return Ok(installed);
             }
             Err(PageError::NotConnected) if receiver.is_none() => {
-                // A child frame may have been removed meanwhile: re-resolve its context.
+                // A child frame may have been removed meanwhile, or changed process, which gives
+                // it another context: re-resolve it. Another context ends this call as its
+                // destroyed one would, so a wait starts again on the frame's current one rather
+                // than poll a context that will never come back.
                 if !matches!(tab.scope, FrameScope::Main) {
-                    tab.context().await.map_err(page_error)?;
+                    let current = tab.context().await.map_err(page_error)?;
+                    if !Arc::ptr_eq(&current, frame) {
+                        return Err(PlaywrightError::error(CONTEXT_DESTROYED).into());
+                    }
                 }
             }
             Err(PageError::NotConnected) => {

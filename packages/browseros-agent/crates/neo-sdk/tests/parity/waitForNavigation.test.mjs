@@ -10,11 +10,11 @@
 // fails, and an option refused at once. Compared: the script's values, the URL it ended on, and
 // each page's load count.
 //
-// Known, intended difference, asserted per engine and not counted as parity: on a child frame
-// ("WA-108 should work on frame") Playwright answers the frame's new document's Response; Neo
-// rejects with an `Error` before waiting, because it does not record a child frame's navigation
-// requests (neo-runtime `dispatch.rs` `unsupported_child_call`). The frame still navigates.
-// And at the live-wait cap: Playwright accepts a 65th URL-predicate wait; Neo refuses it with an
+// On a child frame ("WA-108 should work on frame") both answer the frame's new document's
+// Response, whose frame is that child, and both reject when the child's navigation fails.
+//
+// Known, intended difference, asserted per engine and not counted as parity: at the live-wait
+// cap: Playwright accepts a 65th URL-predicate wait; Neo refuses it with an
 // `Error` (neo-runtime `history.rs` `MAX_CURSORS`), and everything else in that case matches.
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs, history.mjs).
@@ -198,7 +198,8 @@ const cases = [
     expected: { waited: { error: 'Error' } },
   },
   {
-    name: 'Neo limit: a child frame waits for its own navigation',
+    // tests/page/page-wait-for-navigation.spec.ts "WA-108 should work on frame".
+    name: 'a child frame waits for its own navigation and answers its Response',
     path: '/framed.html',
     source: `const frame = page.frame('child')
     const [waited] = await Promise.all([
@@ -206,12 +207,39 @@ const cases = [
       frame.locator('#to-next').click(),
     ])
     await frame.waitForURL('**/next.html')
-    return { waited: waited && waited.error ? waited : describe(waited), child: strip(frame.url()) }`,
+    return {
+      waited: waited && waited.error ? waited : describe(waited),
+      responseFrame: !waited.error && waited.frame() === frame,
+      requestFrame: !waited.error && waited.request().frame() === frame,
+      child: strip(frame.url()),
+      page: path(),
+    }`,
     expected: {
       waited: { status: 200, ok: true, path: '/next.html' },
+      responseFrame: true,
+      requestFrame: true,
       child: '/next.html',
+      page: '/framed.html',
     },
-    neoExpected: { waited: { error: 'Error' }, child: '/next.html' },
+  },
+  {
+    // A child frame's navigation that fails rejects its waits, as the main frame's
+    // ("a navigation that fails rejects the wait" above): Playwright's server aborts the frame's
+    // pending navigation when its request fails (server/frames.ts `FrameManager.requestFailed`).
+    name: "a child frame's failed navigation rejects its waitForNavigation and waitForURL",
+    path: '/framed.html',
+    source: `const frame = page.frame('child')
+    const [navigation, url] = await Promise.all([
+      settle(frame.waitForNavigation()),
+      settle(frame.waitForURL('**/never.html')),
+      frame.locator('#to-unsafe').click(),
+    ])
+    return { navigation, url, page: path() }`,
+    expected: {
+      navigation: { error: 'Error' },
+      url: { error: 'Error' },
+      page: '/framed.html',
+    },
   },
   // The three below are the independent review's regressions (review-review-b1.md): Playwright's
   // waiter tests each navigation's predicate on its own, so a pending answer holds back nothing.

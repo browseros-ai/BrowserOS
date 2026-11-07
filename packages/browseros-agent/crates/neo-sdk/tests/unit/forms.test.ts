@@ -2,10 +2,15 @@
 import { expect, test } from 'bun:test'
 import { BrowserContext } from '../../src/browser-context'
 import { Connection } from '../../src/connection'
+import { ElementHandle } from '../../src/element-handle'
 import { EventPipe } from '../../src/events'
+import { JSHandle } from '../../src/js-handle'
 import { Page } from '../../src/page'
 import * as protocol from '../../src/protocol'
-import { convertSelectOptionValues } from '../../src/select-option'
+import {
+  convertSelectOptionValues,
+  ELEMENT_VALUES_UNSUPPORTED,
+} from '../../src/select-option'
 
 test('tests that select values preserve Playwright conversion and null errors', () => {
   expect(convertSelectOptionValues(null)).toEqual({})
@@ -17,7 +22,9 @@ test('tests that select values preserve Playwright conversion and null errors', 
     options: [{ valueOrLabel: 'a' }, { valueOrLabel: 'b' }],
   })
   const values = [{ value: 'a', label: 'A', index: 0 }]
-  expect(convertSelectOptionValues(values).options).toBe(values)
+  // A copy the SDK owns is what is checked and sent, never the caller's own array.
+  expect(convertSelectOptionValues(values).options).toEqual(values)
+  expect(convertSelectOptionValues(values).options).not.toBe(values)
   expect(convertSelectOptionValues(values[0])).toEqual({ options: values })
   expect(() => convertSelectOptionValues(['a', null] as never)).toThrow(
     'options[1]: expected object, got null',
@@ -125,11 +132,100 @@ test('tests that invalid select fields reject before sending anything', async ()
   expect(calls).toBe(0)
 })
 
+test('tests that ElementHandle and JSHandle selectOption values are refused before sending', async () => {
+  const connection = new Connection(0)
+  let calls = 0
+  connection.send = async () => {
+    calls++
+    return { values: ['unexpected'] } as never
+  }
+  const page = new Page(
+    'page@T',
+    'frame@T',
+    '',
+    new BrowserContext('browser-context@T', connection, new EventPipe()),
+    connection,
+  )
+  const element = new ElementHandle(connection, 'handle@run.1', {
+    preview: 'JSHandle@<option value="two">Second</option>',
+  })
+  const object = new JSHandle(connection, 'handle@run.2', {
+    preview: 'JSHandle@object',
+  })
+  for (const values of [
+    element,
+    [element],
+    [element, element],
+    ['one', element],
+    [{ value: 'one' }, element],
+    object,
+  ]) {
+    for (const call of [
+      () => page.selectOption('select', values as never),
+      () => page.mainFrame().selectOption('select', values as never),
+      () => page.locator('select').selectOption(values as never),
+    ]) {
+      await expect(call()).rejects.toThrow(ELEMENT_VALUES_UNSUPPORTED)
+    }
+  }
+  expect(calls).toBe(0)
+})
+
+test('tests that selectOption reads the caller value once and sends that copy', async () => {
+  const connection = new Connection(0)
+  const sent: unknown[] = []
+  connection.send = async (_apiName, _guid, _method, params) => {
+    sent.push(JSON.parse(JSON.stringify(params)))
+    return { values: ['one'] } as never
+  }
+  const page = new Page(
+    'page@T',
+    'frame@T',
+    '',
+    new BrowserContext('browser-context@T', connection, new EventPipe()),
+    connection,
+  )
+  const element = new ElementHandle(connection, 'handle@run.1', {
+    preview: 'JSHandle@<option value="two">Second</option>',
+  })
+  // An array whose own methods lie, and a transparent proxy around a handle.
+  const lying = new Proxy([element], {
+    get: (target, key, receiver) =>
+      key === 'some' || key === 'map' || key === 'entries'
+        ? () => false
+        : Reflect.get(target, key, receiver),
+  })
+  for (const values of [
+    lying,
+    new Proxy(element, {}),
+    [new Proxy(element, {})],
+  ]) {
+    await expect(
+      page.locator('select').selectOption(values as never),
+    ).rejects.toThrow(ELEMENT_VALUES_UNSUPPORTED)
+  }
+  expect(sent).toEqual([])
+  // A field that changes between reads is read once: the value checked is the value sent.
+  let reads = 0
+  const changing = {
+    get value() {
+      reads++
+      return reads === 1 ? 'two' : (element as never)
+    },
+  }
+  await page.locator('select').selectOption(changing as never)
+  expect(reads).toBe(1)
+  expect(sent.at(-1)).toMatchObject({ options: [{ value: 'two' }] })
+  // A plain object with a guid is an option object, as Playwright reads it: unknown keys go.
+  await page.locator('select').selectOption({ _guid: 'handle@run.1' } as never)
+  expect(sent.at(-1)).toMatchObject({ options: [{}] })
+})
+
 test('tests that Page and Frame forms accept null options with the default timeout', async () => {
   const connection = new Connection(0)
   const timeouts: number[] = []
   connection.send = async (...args) => {
-    timeouts.push(args[4])
+    timeouts.push(typeof args[4] === 'number' ? args[4] : args[4].timeout)
     if (args[2] === 'inputValue') return { value: 'text' }
     if (args[2] === 'selectOption') return { values: ['one'] }
     return undefined
@@ -205,7 +301,7 @@ test('tests that forms send the outer API name, strictness and timeout and unwra
         `${scope}.${method}`,
         'frame@T',
         wire,
-        77,
+        { signal: undefined, timeout: 77 },
       ])
       expect((params as { selector: string }).selector).toBe('input')
       expect((params as { strict?: boolean }).strict).toBe(
@@ -228,6 +324,6 @@ test('tests that forms send the outer API name, strictness and timeout and unwra
     'frame@T',
     'fill',
     { selector: 'input', strict: true, value: '' },
-    123,
+    { signal: undefined, timeout: 123 },
   ])
 })

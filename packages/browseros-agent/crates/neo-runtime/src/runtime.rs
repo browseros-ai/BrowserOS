@@ -4,13 +4,15 @@
 //!
 //! ```text
 //!  Tabs ─▶ PageEntry ─▶ Arc<PageSession> ─┬─▶ realm::run(…, dispatcher)   the deadline decides, as before
-//!                                             ├─▶ dispatcher.finish(reason)  cancel calls, wait ≤ 1 s, records
+//!                                             ├─▶ dispatcher.finish(reason)  cancel calls, wait ≤ 1 s (highlights ≤ 1 s more), records
 //!                                             └─▶ last Arc drops ─▶ Session::drop ─▶ detach in background
 //! ```
 //!
 //! No step here detaches anything; ownership does (`page.rs`). The registry holds each page,
 //! so sessions detach once the realm, dispatcher and their writers are gone, also when a
 //! caller drops the run's future. Browser tabs themselves survive the run.
+
+use std::sync::Arc;
 
 use browseros_cdp::{CdpClient, CdpError, browser};
 use serde_json::Value;
@@ -20,7 +22,6 @@ use tokio_util::task::TaskTracker;
 use crate::bridge;
 use crate::bridge::Getters;
 use crate::deadline::Deadline;
-use crate::discovery::Discovery;
 use crate::dispatch::Dispatcher;
 use crate::getters::CLOSED_TAB_MESSAGE;
 use crate::page::TabInputs;
@@ -28,6 +29,7 @@ use crate::progress::{ErrorName, RunScope};
 use crate::realm;
 use crate::realm::Script;
 use crate::run::{RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
+use crate::switch::Switches;
 use crate::tabs::Tabs;
 
 /// A target id no tab can have, used to see how the browser reports a missing tab.
@@ -39,15 +41,16 @@ const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
 /// interceptor setup to stop (`page.rs` `TabInputs`). Clones share those turns too.
 ///
 /// Runs also share the connection's target discovery, on while any of them listens for new
-/// pages (`discovery.rs`), which the `Runtime` counts. Give a `CdpClient` one `Runtime` (clones
-/// are fine): a second `Runtime` on the same client would count its own runs, and the first to
-/// let go would turn discovery off for the other's.
+/// pages (`discovery.rs`), and its download reports, on while any listens for downloads
+/// (`downloads.rs`), which the `Runtime` counts (`switch.rs`). Give a `CdpClient` one `Runtime`
+/// (clones are fine): a second `Runtime` on the same client would count its own runs, and the
+/// first to let go would turn either off for the other's.
 #[derive(Clone)]
 pub struct Runtime {
     cdp: CdpClient,
     inputs: TabInputs,
-    /// Target discovery on `cdp`, on while any run listens for new pages (`discovery.rs`).
-    discovery: Discovery,
+    /// Target discovery and download reports on `cdp`, each on while any run listens for them.
+    switches: Switches,
     cleanup: TaskTracker,
 }
 
@@ -98,7 +101,7 @@ impl Runtime {
                 Ok(Self {
                     cdp,
                     inputs: TabInputs::default(),
-                    discovery: Discovery::new(cleanup.clone()),
+                    switches: Switches::new(cleanup.clone()),
                     cleanup,
                 })
             }
@@ -111,8 +114,9 @@ impl Runtime {
     }
 
     /// Waits for every run's remaining browser work, including late creation replies and
-    /// their tab cleanup. Hosts must stop admitting runs and cancel/await active runs first,
-    /// then drain before disconnecting CDP; a returned outcome alone does not settle writes.
+    /// their tab cleanup, and run-end input releases still writing. Hosts must stop admitting
+    /// runs and cancel/await active runs first, then drain before disconnecting CDP; a
+    /// returned outcome alone does not settle writes.
     pub async fn drain(&self) {
         self.cleanup.close();
         self.cleanup.wait().await;
@@ -154,7 +158,7 @@ impl Runtime {
             stop = deadline.reached() => {
                 return RunOutcome::stopped(stop, deadline.timeout(), Vec::new());
             }
-            opened = Tabs::open(self.cdp.clone(), tokio.clone(), self.inputs.clone(), self.discovery.clone(), tasks.clone(), &page) => opened,
+            opened = Tabs::open(self.cdp.clone(), tokio.clone(), self.inputs.clone(), self.switches.clone(), tasks.clone(), &page) => opened,
         };
         let (tabs, url) = match opened {
             Ok(opened) => opened,
@@ -176,8 +180,13 @@ impl Runtime {
         };
         // One tracker for the run: call tasks, and the writer, interceptor-stop and
         // group-release tasks the page spawns, so `finish` waits for them all.
-        let getters = Getters::new(tabs.clone(), deadline.clone(), tokio);
         let run = RunScope::new(deadline.clone(), tasks);
+        let getters = Getters::new(
+            tabs.clone(),
+            deadline.clone(),
+            tokio,
+            Arc::clone(&run.handles),
+        );
         let dispatcher = Dispatcher::new(tabs.clone(), run);
         let events = tabs.events().clone();
         let outcome = realm::run(script, getters, dispatcher.clone(), deadline, events).await;

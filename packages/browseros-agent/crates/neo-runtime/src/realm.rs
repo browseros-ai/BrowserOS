@@ -1,6 +1,7 @@
 //! One fresh QuickJS runtime per run: the script's whole world. It holds the host globals a
-//! Playwright script expects (`console`, `setTimeout`, `clearTimeout`), `__neo_runtime`, and
-//! the `page`, `context` and `playwright` objects neo-sdk builds, and nothing survives the run.
+//! Playwright script expects (`console`, `setTimeout`, `clearTimeout`, `AbortController`,
+//! `AbortSignal`), `__neo_runtime`, and the `page`, `context` and `playwright` objects neo-sdk
+//! builds, and nothing survives the run.
 //!
 //! The realm boundary is also where limits apply: a memory cap, an interrupt handler that
 //! stops running JS at the deadline or on cancellation, and a `select!` that ends the run when
@@ -20,7 +21,7 @@ use crate::deadline::Deadline;
 use crate::dispatch::Dispatcher;
 use crate::events::EventHub;
 use crate::run::{RunError, RunOutcome};
-use crate::{bridge, browser_calls, world};
+use crate::{abort, bridge, browser_calls, world};
 
 const MEMORY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 // Well under a tokio worker's 2 MiB native stack, so deep JS recursion throws a RangeError
@@ -69,8 +70,10 @@ const HOST_GLOBALS: &str = r"(sleep) => {
 /// Deviation: `client/eventEmitter.ts` `EventEmitter._handleListenerError`: `throw error;`
 /// A listener's throw, or its rejection with no `error` listener, is an uncaught exception in
 /// Node, which exits. QuickJS has no such exit, so neo-sdk reports the first one on its
-/// `uncaught` promise, and the run ends with that error at once instead of running on.
-const RACE_UNCAUGHT: &str = "(script, uncaught) => Promise.race([script, uncaught])";
+/// `uncaught` promise, and the run ends with that error at once instead of running on. The
+/// realm's own `abort` listeners report theirs the same way (`abort::REALM_GLOBALS`).
+const RACE_UNCAUGHT: &str =
+    "(script, uncaught, aborts) => Promise.race([script, uncaught, aborts])";
 
 /// How many lines QuickJS reports before the agent's line 1 in an `AsyncFunction`-constructed
 /// function (`async function anonymous(page,context,playwright\n) {\n`). Measured by probe P4 and pinned by
@@ -177,6 +180,9 @@ fn start<'js>(
     }));
     let install_host_globals: Function<'js> = ctx.eval(HOST_GLOBALS)?;
     install_host_globals.call::<_, ()>((sleep,))?;
+    // After the host globals: `AbortSignal.timeout` schedules with their `setTimeout`.
+    let install_abort_globals: Function<'js> = ctx.eval(abort::REALM_GLOBALS)?;
+    let abort_uncaught: rquickjs::Value<'js> = install_abort_globals.call(())?;
 
     let sdk: Object<'js> = ctx.eval(SDK_BUNDLE)?;
     let create_run: Function<'js> = sdk.get("createRun")?;
@@ -204,7 +210,7 @@ fn start<'js>(
         async_function.construct(("page", "context", "playwright", script.code))?;
     let script: Promise<'js> = agent_function.call((page, context, playwright))?;
     let race: Function<'js> = ctx.eval(RACE_UNCAUGHT)?;
-    race.call((script, uncaught))
+    race.call((script, uncaught, abort_uncaught))
 }
 
 /// `setTimeout` delays in JS milliseconds. A delay too large for a `Duration` is due after

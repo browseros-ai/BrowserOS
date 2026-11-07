@@ -167,7 +167,7 @@ describe('waitForURL', () => {
     ])
   })
 
-  test('every waitUntil is sent verified: networkidle0 is networkidle, which Rust refuses', async () => {
+  test('every waitUntil is sent verified: networkidle0 is networkidle', async () => {
     const { page } = run()
     for (const waitUntil of [
       'load',
@@ -270,7 +270,7 @@ describe('waitForLoadState', () => {
     )
   })
 
-  test('sends each state verified: networkidle0 is networkidle, which Rust refuses', async () => {
+  test('sends each state verified: networkidle0 is networkidle', async () => {
     const { page } = run()
     for (const state of [
       'load',
