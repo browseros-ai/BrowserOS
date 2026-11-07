@@ -34,6 +34,7 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
+use std::future;
 use std::hash::{BuildHasher, Hasher};
 use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -44,15 +45,16 @@ use neo_runtime_spec::{MethodGroup, MethodMeta};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use tokio::sync::Mutex;
 use tokio::sync::broadcast::{self, error::RecvError};
+use tokio::sync::{Mutex, oneshot};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::bridge;
 use crate::contexts::ContextFrames;
 use crate::evaluate::{self, Handles, SerializedArgument};
-use crate::events::{CONTEXT_GUID, Emitted};
+use crate::events::{CONTEXT_GUID, Emitted, Flushes};
 use crate::frames::{FrameContext, FrameScope};
 use crate::init_scripts::{self, InitScripts, Link, Rank, until_gone};
 use crate::main_world::BuiltExpression;
@@ -345,12 +347,31 @@ struct Payload {
     serialized_args: Value,
 }
 
+/// A read call, ready for the realm.
+struct Ready {
+    owner: String,
+    params: Value,
+    guid: String,
+    name: String,
+    seq: u64,
+    context: i64,
+}
+
+/// A call's place in the order the page made the calls: the signal of the call read before it,
+/// and its own, which goes once its event is in the hub or it has none.
+struct Turn {
+    previous: Option<oneshot::Receiver<()>>,
+    done: oneshot::Sender<()>,
+}
+
 /// One `Runtime.bindingCalled` of a session of the run.
 struct Incoming {
+    turn: Turn,
     session: String,
     prepared: Prepared,
     context: i64,
-    /// An iframe session's calling frame, read in event order by the session reader.
+    /// The calling frame, read in event order by the session reader; `None` when no frame is
+    /// known for the calling context.
     frame: Option<String>,
     payload: String,
 }
@@ -554,30 +575,53 @@ impl Bindings {
         self.contexts.forget(session);
     }
 
-    /// A page called a binding: the realm gets the call, or the page its error at once.
+    /// A page called a binding: the realm gets the call, or the page its error at once. Calls
+    /// reach the hub in the order the page made them: each waits for the call read before it
+    /// (`turn`) before its event goes, whatever its own reading came to.
     async fn called(self: Arc<Self>, tabs: Tabs, incoming: Incoming) {
-        let Incoming {
-            session,
-            prepared,
-            context,
-            frame,
-            payload,
-        } = incoming;
-        let Some(page) = page_of(&tabs, &prepared.target) else {
-            return;
-        };
-        let Some(frame) = calling_frame(&tabs, &page, &session, &prepared, context, frame).await
-        else {
+        let turn = incoming.turn;
+        let ready = self
+            .read(
+                &tabs,
+                incoming.session,
+                incoming.prepared,
+                incoming.context,
+                incoming.frame,
+                incoming.payload,
+            )
+            .await;
+        if let Some(previous) = turn.previous {
+            let _previous = previous.await;
+        }
+        if let Some(ready) = ready {
+            self.dispatch(&tabs, ready).await;
+        }
+        drop(turn.done);
+    }
+
+    /// Reads one call: the page gets its refusal now, or the call is kept for its answer and
+    /// handed back for the realm.
+    async fn read(
+        &self,
+        tabs: &Tabs,
+        session: String,
+        prepared: Prepared,
+        context: i64,
+        frame: Option<String>,
+        payload: String,
+    ) -> Option<Ready> {
+        let page = page_of(tabs, &prepared.target)?;
+        let Some(frame) = frame else {
             // Never another frame in its place: no frame can answer the call in its document,
             // and run end rejects it there.
             debug!(%session, context, "a binding call came from a context of no known frame");
-            return;
+            return None;
         };
         let tab = frame_tab(&page, &prepared.target, &frame);
         let origin = origin_of(&tab).await;
         let Ok(payload) = serde_json::from_str::<Payload>(&payload) else {
             debug!("a binding call's payload is not the controller's");
-            return;
+            return None;
         };
         let binding = {
             let state = self.state.lock().await;
@@ -596,7 +640,7 @@ impl Bindings {
                 &message,
             )
             .await;
-            return;
+            return None;
         }
         let guid = format!(
             "{BINDING_CALL_PREFIX}{}.{}",
@@ -617,23 +661,43 @@ impl Bindings {
             "name": payload.name,
             "args": payload.serialized_args,
         }});
-        {
-            let mut state = self.state.lock().await;
-            if state.closed {
-                return;
-            }
-            state.calls.insert(
-                guid.clone(),
-                Call {
-                    name: payload.name.clone(),
-                    seq: payload.seq,
-                    target: prepared.target.clone(),
-                    frame: frame.clone(),
-                    origin,
-                    context,
-                },
-            );
+        let mut state = self.state.lock().await;
+        if state.closed {
+            return None;
         }
+        state.calls.insert(
+            guid.clone(),
+            Call {
+                name: payload.name.clone(),
+                seq: payload.seq,
+                target: prepared.target.clone(),
+                frame,
+                origin,
+                context,
+            },
+        );
+        drop(state);
+        Some(Ready {
+            owner,
+            params,
+            guid,
+            name: payload.name,
+            seq: payload.seq,
+            context,
+        })
+    }
+
+    /// A read call's `bindingCall`, on the page or on the context; a hub that takes no more
+    /// events (the run is over) refuses it in the page.
+    async fn dispatch(&self, tabs: &Tabs, ready: Ready) {
+        let Ready {
+            owner,
+            params,
+            guid,
+            name,
+            seq,
+            context,
+        } = ready;
         if tabs.events().emit(&owner, "bindingCall", &params) != Emitted::Queued {
             let origin = self
                 .state
@@ -642,14 +706,7 @@ impl Bindings {
                 .calls
                 .remove(&guid)
                 .and_then(|call| call.origin);
-            deliver_error(
-                origin.as_ref(),
-                context,
-                &payload.name,
-                payload.seq,
-                RUN_ENDED,
-            )
-            .await;
+            deliver_error(origin.as_ref(), context, &name, seq, RUN_ENDED).await;
         }
     }
 
@@ -885,28 +942,6 @@ async fn add_binding(cdp: &CdpClient, session: &SessionId, gone: Option<&Cancell
     }
 }
 
-/// The frame a call came from: an iframe session's, read in event order by the session reader,
-/// or the tab's, once net's watcher has applied what came before (the hub's barrier); a context
-/// destroyed since still names its frame (`contexts.rs`).
-/// Playwright: `server/page.ts` `PageBinding.dispatch`: `const result = await binding.playwrightFunction({ frame: context.frame, page, context: page.browserContext }, ...args);`
-async fn calling_frame(
-    tabs: &Tabs,
-    page: &Arc<PageSession>,
-    session: &str,
-    prepared: &Prepared,
-    context: i64,
-    frame: Option<String>,
-) -> Option<String> {
-    match frame {
-        Some(frame) => Some(frame),
-        None if prepared.child => None,
-        None => {
-            tabs.events().barrier().await;
-            page.events.contexts.frame_of(session, context)
-        }
-    }
-}
-
 /// The frame context that called, kept as it is now: one the frame gets later (another process,
 /// another document) never answers the call. A frame removed in the evaluation that called has
 /// none left: its callback still runs, as Playwright's does, and nothing answers there.
@@ -1015,22 +1050,40 @@ fn page_of(tabs: &Tabs, target: &str) -> Option<Arc<PageSession>> {
         .find(|session| init_scripts::target_of(session) == target)
 }
 
-/// Neo: reads the binding calls and the iframe sessions' contexts of the run until it ends, on
-/// its own task; each call is answered on a task of its own.
+/// Neo: reads the binding calls and the contexts of the run's binding sessions until it ends, on
+/// its own task; each call is read on a task of its own. It is one of the event hub's watchers:
+/// a call's reply waits (`EventHub::barrier`) until every binding call read before it has reached
+/// the hub, so a binding the page called during that call reaches the script first, as
+/// Playwright's server dispatches its `bindingCall` before the call's reply.
 async fn watch(bindings: Weak<Bindings>, tabs: Tabs, mut events: broadcast::Receiver<CdpEvent>) {
     let Some(stop) = bindings.upgrade().map(|bindings| bindings.stop.clone()) else {
         return;
     };
+    let mut flushes = Some(tabs.events().watcher());
+    let mut reading: Vec<JoinHandle<()>> = Vec::new();
+    let mut last: Option<oneshot::Receiver<()>> = None;
     loop {
-        let event = tokio::select! {
+        let arrived = tokio::select! {
             biased;
             () = stop.cancelled() => return,
-            event = events.recv() => event,
+            event = events.recv() => Step::Event(event),
+            flush = next_flush(&mut flushes) => Step::Flush(flush),
         };
-        let event = match event {
-            Ok(event) => event,
-            Err(RecvError::Lagged(_)) => continue,
-            Err(RecvError::Closed) => return,
+        let event = match arrived {
+            Step::Flush(Some(done)) => {
+                for call in reading.drain(..) {
+                    let _read = call.await;
+                }
+                let _acked = done.send(());
+                continue;
+            }
+            Step::Flush(None) => {
+                flushes = None;
+                continue;
+            }
+            Step::Event(Ok(event)) => event,
+            Step::Event(Err(RecvError::Lagged(_))) => continue,
+            Step::Event(Err(RecvError::Closed)) => return,
         };
         let Some(bindings) = bindings.upgrade() else {
             return;
@@ -1050,9 +1103,7 @@ async fn watch(bindings: Weak<Bindings>, tabs: Tabs, mut events: broadcast::Rece
         match event.method.as_str() {
             "Runtime.executionContextCreated"
             | "Runtime.executionContextDestroyed"
-            | "Runtime.executionContextsCleared"
-                if prepared.child =>
-            {
+            | "Runtime.executionContextsCleared" => {
                 bindings.contexts.apply(&event);
             }
             "Runtime.bindingCalled" if event.params["name"].as_str() == Some(BINDING_NAME) => {
@@ -1062,24 +1113,50 @@ async fn watch(bindings: Weak<Bindings>, tabs: Tabs, mut events: broadcast::Rece
                 ) else {
                     continue;
                 };
-                // An iframe session's contexts are this reader's: its calling frame is read here,
-                // in event order, before a later event can end that context.
-                let frame = if prepared.child {
-                    bindings.contexts.frame_of(session, context)
-                } else {
-                    None
-                };
+                // The calling frame, read here in event order, before a later event can end that
+                // context: this reader's own map for a context it saw created, else net's for a
+                // tab context older than this reader (`contexts.rs` keeps destroyed ones).
+                // Playwright: `server/page.ts` `PageBinding.dispatch`: `const result = await binding.playwrightFunction({ frame: context.frame, page, context: page.browserContext }, ...args);`
+                let frame = bindings.contexts.frame_of(session, context).or_else(|| {
+                    if prepared.child {
+                        return None;
+                    }
+                    page_of(&tabs, &prepared.target)
+                        .and_then(|page| page.events.contexts.frame_of(session, context))
+                });
+                let (done, next) = oneshot::channel();
                 let incoming = Incoming {
+                    turn: Turn {
+                        previous: last.replace(next),
+                        done,
+                    },
                     session: session.to_string(),
                     prepared,
                     context,
                     frame,
                     payload: payload.to_string(),
                 };
-                tokio::spawn(Arc::clone(&bindings).called(tabs.clone(), incoming));
+                reading.retain(|call| !call.is_finished());
+                reading.push(tokio::spawn(
+                    Arc::clone(&bindings).called(tabs.clone(), incoming),
+                ));
             }
             _ => {}
         }
+    }
+}
+
+/// What the session reader does next: an event, or a flush of the hub's barrier.
+enum Step {
+    Event(Result<CdpEvent, RecvError>),
+    Flush(Option<oneshot::Sender<()>>),
+}
+
+/// The hub's next flush, never once the hub has gone.
+async fn next_flush(flushes: &mut Option<Flushes>) -> Option<oneshot::Sender<()>> {
+    match flushes {
+        Some(flushes) => flushes.recv().await,
+        None => future::pending().await,
     }
 }
 
