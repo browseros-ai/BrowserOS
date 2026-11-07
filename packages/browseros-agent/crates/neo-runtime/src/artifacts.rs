@@ -17,8 +17,9 @@
 
 use std::fs;
 use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::{self, Component, Path, PathBuf};
 use std::sync::Mutex;
+use std::time::UNIX_EPOCH;
 
 use neo_runtime_spec::Binary;
 use serde::Serialize;
@@ -47,6 +48,21 @@ pub struct RunArtifact {
 pub(crate) struct Artifacts {
     dir: Option<PathBuf>,
     written: Mutex<Vec<RunArtifact>>,
+}
+
+/// A file or directory a script named for `setInputFiles` or `drop`, found inside the artifact
+/// directory: what Playwright's client learns with `fs.promises.stat`.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ExistingPath {
+    /// Absolute, as CDP `DOM.setFileInputFiles` takes it.
+    pub(crate) path: String,
+    /// As the script named it, with `/` separators, for errors.
+    pub(crate) display: String,
+    pub(crate) is_dir: bool,
+    /// Its size in bytes (`stat.size`).
+    pub(crate) size: u64,
+    /// Its modification time in ms since the epoch (`stat.mtimeMs`), when the platform has one.
+    pub(crate) modified_ms: Option<f64>,
 }
 
 /// A `path` option [`Artifacts::check`] accepted: still relative, without `.` or `..`.
@@ -158,6 +174,58 @@ impl Artifacts {
         Ok(())
     }
 
+    /// Deviation: `client/elementHandle.ts` `resolvePathsAndDirectoryForInputFiles`: `const stat = await fs.promises.stat(item as string);` Playwright's client reads any path on its host, relative to its working directory. A Neo script has no file system, and the host must not hand an agent's script its disk, so Rust reads a file to upload or drop only inside the run's artifact directory, at a relative path without `..`, refusing a symbolic link on the way, and a run without one names the option.
+    ///
+    /// The file or directory `path` names for the option `option`, or why Neo will not read it.
+    ///
+    /// # Errors
+    ///
+    /// No artifact directory, a path [`Self::check`] refuses, a symbolic link on the way, or a
+    /// path that does not exist.
+    pub(crate) async fn existing(
+        &self,
+        option: &'static str,
+        path: &str,
+    ) -> Result<ExistingPath, PlaywrightError> {
+        let Some(dir) = self.dir.clone() else {
+            return Err(PlaywrightError::error(format!(
+                "{option}: this run has no artifact directory, so Neo cannot read \"{path}\"; \
+                 the host sets one per run (RunRequest.artifacts)"
+            )));
+        };
+        let checked = self.check(option, path)?;
+        let relative = checked.relative.clone();
+        let found = task::spawn_blocking(move || stat_inside(&dir, &relative))
+            .await
+            .map_err(|error| io::Error::other(error.to_string()))
+            .and_then(|result| result);
+        let (at, metadata) = found.map_err(|error| {
+            PlaywrightError::error(format!(
+                "{option}: \"{}\" cannot be read in the run's artifact directory: {error}",
+                checked.display
+            ))
+        })?;
+        let Some(text) = at.to_str() else {
+            return Err(refused(
+                option,
+                path,
+                "is not valid UTF-8 in the artifact directory",
+            ));
+        };
+        let modified_ms = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|since| since.as_secs_f64() * 1000.0);
+        Ok(ExistingPath {
+            path: text.to_string(),
+            display: checked.display,
+            is_dir: metadata.is_dir(),
+            size: metadata.len(),
+            modified_ms,
+        })
+    }
+
     /// The files written so far, in the order they were first written.
     pub(crate) fn written(&self) -> Vec<RunArtifact> {
         self.written
@@ -196,6 +264,26 @@ fn write_inside(dir: &Path, relative: &Path, bytes: &[u8]) -> io::Result<()> {
         }
     }
     fs::write(&at, bytes)
+}
+
+/// Walks `relative` under `dir` one component at a time, refusing any that is a symbolic link,
+/// and answers its absolute path and metadata.
+fn stat_inside(dir: &Path, relative: &Path) -> io::Result<(PathBuf, fs::Metadata)> {
+    let mut at = path::absolute(dir)?;
+    let mut metadata = None;
+    for component in relative.components() {
+        at.push(component);
+        let found = fs::symlink_metadata(&at)?;
+        if found.file_type().is_symlink() {
+            return Err(io::Error::other(format!(
+                "{} is a symbolic link",
+                at.display()
+            )));
+        }
+        metadata = Some(found);
+    }
+    let metadata = metadata.ok_or_else(|| io::Error::other("names no file"))?;
+    Ok((at, metadata))
 }
 
 /// `bytes` as a call's `binary` result, unless it is too large for the script's realm
@@ -303,6 +391,55 @@ mod tests {
         assert!(error.message.contains("symbolic link"), "{error:?}");
         assert!(!outside.join("a.png").exists(), "nothing written outside");
         assert!(artifacts.written().is_empty(), "nothing listed");
+    }
+
+    /// Upload paths resolve inside the directory only: a file and a directory are found with
+    /// their kind, a missing file and a run without a directory name the option, and a symbolic
+    /// link on the way is refused.
+    #[tokio::test]
+    async fn tests_that_existing_paths_resolve_inside_the_artifact_directory_only() {
+        let (dir, artifacts) = artifacts();
+        fs::create_dir_all(dir.path().join("run/uploads")).expect("uploads");
+        fs::write(dir.path().join("run/uploads/a.txt"), b"a").expect("a file");
+        let file = artifacts
+            .existing("files", "uploads/a.txt")
+            .await
+            .expect("found");
+        assert!(
+            !file.is_dir && file.path.ends_with("run/uploads/a.txt"),
+            "{file:?}"
+        );
+        assert!(file.modified_ms.is_some_and(|ms| ms > 0.0), "{file:?}");
+        let folder = artifacts
+            .existing("files", "./uploads")
+            .await
+            .expect("found");
+        assert!(folder.is_dir, "{folder:?}");
+        for (path, why) in [
+            ("uploads/missing.txt", "cannot be read"),
+            ("../escape.txt", "leaves the run's artifact directory"),
+            ("/etc/hosts", "must be relative"),
+        ] {
+            let error = artifacts.existing("files", path).await.expect_err(path);
+            assert!(error.message.starts_with("files: "), "{error:?}");
+            assert!(error.message.contains(why), "{path}: {error:?}");
+        }
+        let error = Artifacts::new(None)
+            .existing("files", "a.txt")
+            .await
+            .expect_err("no directory");
+        assert!(error.message.contains("cannot read \"a.txt\""), "{error:?}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs as unix_fs;
+
+            unix_fs::symlink("/etc", dir.path().join("run/link")).expect("a link");
+            let error = artifacts
+                .existing("files", "link/hosts")
+                .await
+                .expect_err("a link");
+            assert!(error.message.contains("symbolic link"), "{error:?}");
+        }
     }
 
     #[test]

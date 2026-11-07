@@ -49,11 +49,15 @@ const namedOwners = new Map<string, WeakRef<Element>>()
  */
 type ScreenshotCleanup = { restore: () => void }
 
+/** The `{promise}` Playwright's `_setInputFiles` arms before it sets a directory, as a handle. */
+type InputEventWaiter = { promise: Promise<void> }
+
 /** The Playwright page types behind the spec's named handle kinds. */
 type Handles = {
   HitTargetInterceptor: HitTargetInterceptionResult
   ScreenshotCleanup: ScreenshotCleanup
   ElementList: Record<string, Element>
+  InputEventWaiter: InputEventWaiter
 }
 
 /**
@@ -753,6 +757,84 @@ export const glue = {
     const elements = query(injected, selector, false)
     if (elements.length) injected.addMaskedElements(elements, color)
     return {}
+  },
+
+  // Playwright: `server/dom.ts` `ElementHandle._setInputFiles`: `const element = injected.retarget(node, 'follow-label');`
+  fileInput: (injected, { multiple, directoryUpload }, node) => {
+    const element = injected.retarget(node, 'follow-label')
+    if (!element) return {}
+    if (element.tagName !== 'INPUT')
+      throw injected.createStacklessError('Node is not an HTMLInputElement')
+    const inputElement = element as HTMLInputElement
+    if (multiple && !inputElement.multiple && !inputElement.webkitdirectory)
+      throw injected.createStacklessError(
+        'Non-multiple file input can only accept single file',
+      )
+    if (directoryUpload && !inputElement.webkitdirectory)
+      throw injected.createStacklessError(
+        'File input does not support directories, pass individual files instead',
+      )
+    if (!directoryUpload && inputElement.webkitdirectory)
+      throw injected.createStacklessError(
+        '[webkitdirectory] input requires passing a path to a directory',
+      )
+    return { input: inputElement }
+  },
+
+  // Playwright: `server/dom.ts` `ElementHandle._setInputFiles`: `injected.setInputFiles(node, files), filePayloads!));`
+  setInputFilePayloads: (injected, { payloads }, element) => {
+    injected.setInputFiles(element, payloads)
+    return {}
+  },
+
+  // Playwright: `server/dom.ts` `ElementHandle._setInputFiles`: `promise: new Promise<void>(fulfill => node.addEventListener('input', () => fulfill(), { once: true })),`
+  inputEventWaiter: (_injected, _params, element) => ({
+    waiter: {
+      promise: new Promise<void>((fulfill) =>
+        element.addEventListener('input', () => fulfill(), { once: true }),
+      ),
+    },
+  }),
+
+  // Playwright: `server/dom.ts` `ElementHandle._setInputFiles`: `await progress.race(inputEvent.evaluate(event => event.promise).catch(() => {}));`
+  waitForInputEvent: async (_injected, _params, waiter) => {
+    await waiter.promise
+    return {}
+  },
+
+  // Playwright: `server/dom.ts` `ElementHandle._drop`: `const dt = new DataTransfer();`
+  dropOn: (_injected, { payloads, data, point }, node) => {
+    if (!node.isConnected || node.nodeType !== 1 /* ELEMENT_NODE */)
+      return { outcome: 'error:notconnected' }
+    const element = node as Element
+    const dt = new DataTransfer()
+    for (const p of payloads) {
+      const bytes = Uint8Array.from(atob(p.buffer), (c) => c.charCodeAt(0))
+      const file = new File([bytes], p.name, {
+        type: p.mimeType,
+        lastModified: p.lastModifiedMs,
+      })
+      dt.items.add(file)
+    }
+    for (const entry of data) dt.setData(entry.mimeType, entry.value)
+    const makeEvent = (type: string) =>
+      new DragEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        clientX: point.x,
+        clientY: point.y,
+        dataTransfer: dt,
+      })
+    element.dispatchEvent(makeEvent('dragenter'))
+    const over = makeEvent('dragover')
+    element.dispatchEvent(over)
+    if (!over.defaultPrevented) {
+      element.dispatchEvent(makeEvent('dragleave'))
+      return { outcome: 'not-accepted' }
+    }
+    element.dispatchEvent(makeEvent('drop'))
+    return { outcome: 'accepted' }
   },
 } satisfies InjectedApi<InjectedScript, Handles>
 

@@ -19,7 +19,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   browserBinary,
   buildNeoRun,
@@ -122,9 +122,17 @@ export async function withEngines(t, { pages, browserArgs = [] }, body) {
     const scratch = mkdtempSync(join(tmpdir(), 'neo-capture-parity-'))
     cleanups.push(() => rmSync(scratch, { recursive: true, force: true }))
     let runs = 0
-    await body(async (path, source, probe) => {
+    await body(async (path, source, probe, files = {}) => {
       const dir = join(scratch, String(++runs))
       const url = `${origin}${path}`
+      // Files the script reads: the same ones in each engine's directory (`at(name)`).
+      for (const root of [join(dir, 'playwright'), join(dir, 'neo')]) {
+        for (const [name, content] of Object.entries(files)) {
+          const file = join(root, name)
+          mkdirSync(dirname(file), { recursive: true })
+          writeFileSync(file, content)
+        }
+      }
       return {
         playwright: await viaPlaywright(
           context,

@@ -642,6 +642,65 @@ Injected:
         selector: string
         color: string
 
+    # The first page call of `ElementHandle._setInputFiles`: the node retargeted to its input
+    # (`retarget(node, 'follow-label')`), then the checks that throw, with Playwright's messages,
+    # for a node that is no input or an input that cannot take these files.
+    fileInput:
+      internal: true
+      parameters:
+        element: Element
+        # More than one file is being set.
+        multiple: boolean
+        # A directory is being set (`localDirectory`).
+        directoryUpload: boolean
+      returns:
+        # The input the files go to, in the caller's object group. Absent when the node is no
+        # longer connected.
+        input: Element?
+
+    # `InjectedScript.setInputFiles`: the payloads become the input's files, then its `input` and
+    # `change` events fire. What it returns for an input that is not `type=file` is ignored, as
+    # Playwright's server ignores it.
+    setInputFilePayloads:
+      internal: true
+      parameters:
+        element: Element
+        payloads:
+          type: array
+          items: UploadFile
+
+    # Arms a promise of the input's next `input` event before a directory is set: Chromium lists
+    # a directory's files asynchronously (`ElementHandle._setInputFiles`).
+    inputEventWaiter:
+      internal: true
+      parameters:
+        element: Element
+      returns:
+        waiter: InputEventWaiter
+
+    # Resolves once the waiter's `input` event has fired.
+    waitForInputEvent:
+      internal: true
+      parameters:
+        waiter: InputEventWaiter
+
+    # The page function of `ElementHandle._drop`: a `DataTransfer` with the files and the data,
+    # dispatched on the element as `dragenter`, `dragover` and `drop` at `point`, or `dragleave`
+    # instead of `drop` when no `dragover` listener called `preventDefault()`.
+    dropOn:
+      internal: true
+      parameters:
+        element: Element
+        payloads:
+          type: array
+          items: UploadFile
+        data:
+          type: array
+          items: DropData
+        point: Point
+      returns:
+        outcome: DropOutcome
+
 # `_fill` returns a string or the first missing state, without mutating when not ready.
 FormFillOutcome:
   type: union
@@ -711,6 +770,37 @@ FormInputValueMatch:
 # The `{stop}` object `setupHitTargetInterceptor` arms: Playwright's
 # `HitTargetInterceptionResult`, bound in the glue's `satisfies` clause.
 HitTargetInterceptor:
+  type: handle
+
+# One file for an input or a drop, as Playwright's server hands it to the page: its bytes as
+# base64, its type already filled in (`prepareFilesForUpload`).
+UploadFile:
+  type: object
+  properties:
+    name: string
+    mimeType: string
+    buffer: string
+    # A local file's modification time; absent for a payload, whose `File` takes the time of
+    # its creation.
+    lastModifiedMs: float?
+
+# One `DataTransfer.setData` entry of a drop.
+DropData:
+  type: object
+  properties:
+    mimeType: string
+    value: string
+
+# How a drop's events ended (`ElementHandle._drop`).
+DropOutcome:
+  type: enum
+  literals:
+  - accepted
+  - not-accepted
+  - error:notconnected
+
+# The `{promise}` that `inputEventWaiter` arms, resolved by the input's next `input` event.
+InputEventWaiter:
   type: handle
 
 # What `prepareForScreenshot` changed in one document, as the function that undoes it.

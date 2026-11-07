@@ -45,17 +45,18 @@ use neo_runtime_spec::serve::{
     ArtifactCall, BrowserContextCall, DialogCall, FrameAriaSnapshotJSONParams,
     FrameAriaSnapshotParams, FrameCall, FrameCheckParams, FrameCheckResult, FrameClickParams,
     FrameContentParams, FrameDblclickParams, FrameDragAndDropParams, FrameDragAndDropResult,
-    FrameFillParams, FrameFillResult, FrameGetAttributeParams, FrameGotoParams, FrameHoverParams,
-    FrameInnerHTMLParams, FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult,
-    FrameIsCheckedParams, FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult,
-    FrameIsEditableParams, FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult,
-    FrameIsHiddenParams, FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult,
-    FramePressParams, FramePressResult, FrameQueryCountParams, FrameResolveSelectorParams,
-    FrameSelectOptionParams, FrameSelectOptionResult, FrameSetContentParams, FrameSetContentResult,
-    FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameTypeParams, FrameTypeResult,
-    FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
-    FrameWaitForTimeoutParams, FrameWaitForTimeoutResult, Metadata, PageCall, RequestCall,
-    ResponseCall,
+    FrameDropParams, FrameDropResult, FrameFillParams, FrameFillResult, FrameGetAttributeParams,
+    FrameGotoParams, FrameHoverParams, FrameInnerHTMLParams, FrameInnerTextParams,
+    FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams, FrameIsCheckedResult,
+    FrameIsDisabledParams, FrameIsDisabledResult, FrameIsEditableParams, FrameIsEditableResult,
+    FrameIsEnabledParams, FrameIsEnabledResult, FrameIsHiddenParams, FrameIsHiddenResult,
+    FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams, FramePressResult,
+    FrameQueryCountParams, FrameResolveSelectorParams, FrameSelectOptionParams,
+    FrameSelectOptionResult, FrameSetContentParams, FrameSetContentResult,
+    FrameSetInputFilesParams, FrameSetInputFilesResult, FrameTapParams, FrameTextContentParams,
+    FrameTitleParams, FrameTypeParams, FrameTypeResult, FrameUncheckParams, FrameUncheckResult,
+    FrameWaitForSelectorParams, FrameWaitForSelectorResult, FrameWaitForTimeoutParams,
+    FrameWaitForTimeoutResult, Metadata, PageCall, RequestCall, ResponseCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -76,6 +77,7 @@ use crate::devices::{self, DeviceCall};
 use crate::dialogs;
 use crate::downloads;
 use crate::drag::{self, DragOptions};
+use crate::drop_on;
 use crate::element_ops::{
     self, BOUNDING_BOX_META, DispatchOptions, ElementTarget, NeoElementParams, NeoSelectTextParams,
     SCROLL_INTO_VIEW_META, SELECT_TEXT_META,
@@ -104,6 +106,7 @@ use crate::progress::{
 use crate::reads::{self, AttributeOptions, ReadOptions, SnapshotOptions};
 use crate::responses::{self, NetworkCall};
 use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
+use crate::set_input_files;
 use crate::states::{self, StateOptions};
 use crate::tab_calls;
 use crate::tabs::{PageEntry, Tabs};
@@ -380,6 +383,10 @@ enum Route {
     FrameIsEditable(StateOptions),
     FrameSetChecked(CheckOptions),
     FrameSelectOption(SelectOptions),
+    /// `Frame.setInputFiles` (`set_input_files.rs`).
+    FrameSetInputFiles(FrameSetInputFilesParams),
+    /// `Frame.drop`, behind `Locator.drop` (`drop_on.rs`).
+    FrameDrop(FrameDropParams),
     FrameWaitForSelector(WaitForSelectorOptions),
     /// `Frame.frameElement` (`frame_element.rs`).
     FrameFrameElement,
@@ -912,6 +919,8 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::SelectOption(params) => {
             Ok(Route::FrameSelectOption(SelectOptions::from_params(params)))
         }
+        FrameCall::SetInputFiles(params) => Ok(Route::FrameSetInputFiles(params)),
+        FrameCall::Drop(params) => Ok(Route::FrameDrop(params)),
         FrameCall::WaitForSelector(params) => Ok(Route::FrameWaitForSelector(
             WaitForSelectorOptions::from_params(params),
         )),
@@ -1180,6 +1189,9 @@ async fn serve(
         | Route::FrameWaitForTimeout(_)
         | Route::FrameResolveSelector(_)
         | Route::FrameAriaSnapshotJson(_)) => serve_document(&page, route, &progress).await,
+        route @ (Route::FrameSetInputFiles(_) | Route::FrameDrop(_)) => {
+            serve_files(&page, route, &progress).await
+        }
         route @ (Route::FrameFocus(_)
         | Route::FrameBlur(_)
         | Route::FrameDispatchEvent(_)
@@ -1191,6 +1203,31 @@ async fn serve(
         route => serve_route(&page, route, &progress).await,
     };
     finish_reply(result, reply).await;
+}
+
+/// The file calls `serve` answers on the call's page: `setInputFiles` and `drop`, which read
+/// the run's artifact directory. Each replies `{}`.
+async fn serve_files(
+    page: &FrameTab,
+    route: Route,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    match route {
+        Route::FrameSetInputFiles(params) => {
+            set_input_files::set_input_files(page, params, progress)
+                .await
+                .and_then(|()| {
+                    encode_result::<FrameSetInputFilesParams>(&FrameSetInputFilesResult {})
+                })
+        }
+        Route::FrameDrop(params) => drop_on::drop_on(page, params, progress)
+            .await
+            .and_then(|()| encode_result::<FrameDropParams>(&FrameDropResult {})),
+        _ => Err(PlaywrightError::error(
+            "neo-runtime: `serve_files` serves setInputFiles and drop only",
+        )
+        .into()),
+    }
 }
 
 /// The element operations `serve` answers on the call's page (`element_ops.rs`,
@@ -1454,6 +1491,8 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameBoundingBox(_)
         | Route::FrameHighlight(_)
         | Route::FrameHideHighlight(_)
+        | Route::FrameSetInputFiles(_)
+        | Route::FrameDrop(_)
         | Route::FrameWaitForNavigation(_)
         | Route::FrameNextNavigation(_)
         | Route::FrameFinishNavigation(_)

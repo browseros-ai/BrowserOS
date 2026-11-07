@@ -25,6 +25,7 @@ and NOTICE.
 | `packages/playwright-core/src/client/elementHandle.ts` | `b5e6046e19cb08bebba69a816a8d4a451c594463020150aa96eba6fd90cf53bc` |
 | `packages/playwright-core/src/client/eventEmitter.ts` | `1217614d01c9c4986ef61b307672c09ce74db90a46d4880376bc0ec743879f3a` |
 | `packages/playwright-core/src/client/fileChooser.ts` | `b77e1ba334d92af1c2b7c0e6ca9cc096f58eb7daa1fe0465a664c695f13dcd14` |
+| `packages/playwright-core/src/client/fileUtils.ts` | `3210a261453ed7c7982ee60f0028d27985a7d1b5aaeedd1a299593e598d7ffcd` |
 | `packages/playwright-core/src/client/frame.ts` | `1b095c3631518860a56b6cbb28af2564909fbb43885c5cb3622b5267a9605464` |
 | `packages/playwright-core/src/client/input.ts` | `a5a6b242849fa4cb4635a205f5c398a2291b0b6bd7db7c48e1ec27704520b795` |
 | `packages/playwright-core/src/client/jsHandle.ts` | `9f26d49fe91b8c9963f9da8272eeeff7515f18916ece89075d104e20409f41d4` |
@@ -51,6 +52,7 @@ and NOTICE.
 | `packages/playwright-core/src/server/dispatchers/jsHandleDispatcher.ts` | `a2ad5a61b1b8421d58956a2f51c0897b69fa0519a27f98f52a321ac4e52d5209` |
 | `packages/playwright-core/src/server/dom.ts` | `65cb43c91893e5cb82869d37686ad1d1500f4719711015d10eaac7c0b04cfb66` |
 | `packages/playwright-core/src/server/errors.ts` | `5dde9a10a8843f80c65f67bc2dae4b80bc1e2628ed514c2500fc7b9bbe6aadf0` |
+| `packages/playwright-core/src/server/fileUploadUtils.ts` | `96dd5ef0713d59c01d03f8f021790ddf536f4a78e0fcab615cb872064f2af950` |
 | `packages/playwright-core/src/server/frameSelectors.ts` | `a8f0bb4a00e0ed48a8665559083dab274bb2da386f37d0bd173b9a37a87c26fc` |
 | `packages/playwright-core/src/server/frames.ts` | `c3b72c48361de93312eba80b096304bb374c6208429f2de65944571480c74445` |
 | `packages/playwright-core/src/server/helper.ts` | `a21387efb84b9a6dd6e5b0775748d016f3b17a4723f1886476cb71d96a90ce28` |
