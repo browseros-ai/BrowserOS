@@ -11,12 +11,12 @@
  */
 
 import { APIResponse } from './api-response'
+import { toBinary } from './buffer'
 import type { ApiName, Connection } from './connection'
 import { isTargetClosedError } from './errors'
 import type { NeoSerializedUrlMatch } from './neo-commands'
 import { isRegExp } from './neo-commands'
 import {
-  encodeBase64,
   encodeUtf8,
   type FallbackOverrides,
   type Headers,
@@ -213,7 +213,7 @@ export class Route {
           url: options.url ?? overrides.url,
           method: options.method ?? overrides.method,
           headers: headers ? headersObjectToArray(headers) : undefined,
-          postData: postData ? encodeBase64(postData) : undefined,
+          postData: postData ? toBinary(postData) : undefined,
           maxRedirects: options.maxRedirects,
         },
         this.#timeoutSettings.timeout(options, 'route.fetch'),
@@ -262,7 +262,7 @@ export class Route {
       wire = body
     } else if (body instanceof Uint8Array) {
       length = body.length
-      wire = encodeBase64(body)
+      wire = toBinary(body)
       isBase64 = true
     }
     if (length > MAX_FULFILL_BYTES) throw new Error(BODY_TOO_LARGE)
@@ -321,7 +321,7 @@ export class Route {
             ? headersObjectToArray(options.headers)
             : undefined,
           postData: options.postDataBuffer
-            ? encodeBase64(options.postDataBuffer)
+            ? toBinary(options.postDataBuffer)
             : undefined,
           isFallback,
         },

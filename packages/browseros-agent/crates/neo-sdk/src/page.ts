@@ -20,6 +20,7 @@ import {
   trimStringWithEllipsis,
 } from '../vendor/playwright/isomorphic/stringUtils'
 import type { BrowserContext } from './browser-context'
+import type { Buffer } from './buffer'
 import type { ApiName, Connection } from './connection'
 import { ConsoleMessage } from './console-message'
 import { DisposableStub } from './disposable'
@@ -73,6 +74,7 @@ import {
   type WaitForURLOptions,
 } from './frame'
 import type { FrameLocator } from './frame-locator'
+import { type Headers, headersObjectToArray, validateHeaders } from './headers'
 import { Disposable, evaluationScript, type InitScript } from './init-script'
 import { Keyboard, Mouse, Touchscreen } from './input'
 import {
@@ -115,6 +117,13 @@ import {
   urlMatchesEqual,
 } from './route'
 import { type CreatedFrame, get, matchesURL } from './runtime-bridge'
+import {
+  type PageScreenshotOptions,
+  type PDFOptions,
+  pageScreenshotParams,
+  pdfParams,
+  resultBuffer,
+} from './screenshot'
 import type { SelectOptionValues } from './select-option'
 import { type TimeoutInput, TimeoutSettings } from './timeout-settings'
 import { Waiter, type WaitForEventOptions, wrapApiCall } from './waiter'
@@ -289,6 +298,19 @@ export class Page extends ChannelOwner {
       this.#guid,
       'bringToFront',
       {},
+      0,
+    )
+  }
+
+  /** Playwright: `client/page.ts` `Page.setExtraHTTPHeaders`: `validateHeaders(headers);`
+   * Sent with every request of this tab, over the context's, until the run ends. */
+  async setExtraHTTPHeaders(headers: Headers): Promise<void> {
+    validateHeaders(headers)
+    await this.#connection.sendPage(
+      'page.setExtraHTTPHeaders',
+      this.#guid,
+      'setExtraHTTPHeaders',
+      { headers: headersObjectToArray(headers) },
       0,
     )
   }
@@ -1281,6 +1303,37 @@ export class Page extends ChannelOwner {
    * For a section, use `locator.ariaSnapshot()`. AI mode does not auto-wait for that locator,
    * so use `locator.waitFor()` first if needed.
    */
+  /**
+   * Playwright's `Page.screenshot`: the viewport, the full page, or a clip of either, as PNG,
+   * JPEG or WebP bytes. `path` (relative to the run's artifact directory) also writes them
+   * there (`screenshot.ts`).
+   */
+  async screenshot(options: PageScreenshotOptions = {}): Promise<Buffer> {
+    const result = await this.#connection.sendPage(
+      'page.screenshot',
+      this.#guid,
+      'screenshot',
+      pageScreenshotParams('page.screenshot', options),
+      this._timeoutSettings.timeout(options, 'page.screenshot'),
+    )
+    return resultBuffer(result.binary)
+  }
+
+  /**
+   * Playwright's `Page.pdf`: the page printed as PDF bytes, with no timeout, as Playwright's
+   * client calls it. `path` (relative to the run's artifact directory) also writes them there.
+   */
+  async pdf(options: PDFOptions = {}): Promise<Buffer> {
+    const result = await this.#connection.sendPage(
+      'page.pdf',
+      this.#guid,
+      'pdf',
+      pdfParams('page.pdf', options),
+      0,
+    )
+    return resultBuffer(result.pdf)
+  }
+
   async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
     return await this.#mainFrame._ariaSnapshot('page.ariaSnapshot', options)
   }

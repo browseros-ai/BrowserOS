@@ -21,6 +21,8 @@
 //!                       │                ariaSnapshot;
 //!                       │                aria_yaml.rs renders the snapshot as Playwright's YAML
 //!                       ├─ waits         waits.rs: selector, URL and lifecycle waits; no input lock
+//!                       ├─ capture       capture.rs: screenshot (screenshot.rs) and pdf (pdf.rs);
+//!                       │                `path` writes into the run's artifacts.rs directory
 //!                       └─ FrameTab      one frame scope over PageSession
 //!                            ├─ PageSession: shared input, watcher and navigation
 //!                            │    └─ NetworkLog  network.rs: the main frame's navigation requests
@@ -51,7 +53,9 @@ mod fake_browser;
 
 mod abort;
 mod aria_yaml;
+mod artifacts;
 mod bridge;
+mod capture;
 mod check;
 mod click;
 mod console;
@@ -87,6 +91,7 @@ mod network_events;
 mod network_idle;
 mod page;
 mod page_events;
+mod pdf;
 mod press;
 mod progress;
 mod reads;
@@ -95,6 +100,8 @@ mod responses;
 mod routes;
 mod run;
 mod runtime;
+mod screenshot;
+mod session_state;
 mod states;
 mod switch;
 mod tab_calls;
@@ -103,6 +110,7 @@ mod url_match;
 mod waits;
 mod world;
 
+pub use artifacts::RunArtifact;
 pub use run::{
     CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, PageId, RunEnd, RunError,
     RunOutcome, RunPage, RunRequest, RunStatus,

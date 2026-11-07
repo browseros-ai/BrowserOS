@@ -47,6 +47,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use browseros_cdp::SessionId;
+use neo_runtime_spec::Binary;
 use neo_runtime_spec::serve::{
     FrameChannel, NameValue, RemoteAddr, RequestChannel, RequestInitializer, RequestSizes,
     ResourceTiming, ResponseChannel, ResponseInitializer, SecurityDetails,
@@ -1405,7 +1406,7 @@ impl Chain {
                 url: hop.url.clone(),
                 resource_type: hop.resource_type.to_string(),
                 method: hop.method.clone(),
-                post_data: hop.post_data.as_ref().map(|bytes| STANDARD.encode(bytes)),
+                post_data: hop.post_data.clone().map(Binary),
                 headers: hop.headers.clone(),
                 is_navigation_request: self.navigation,
                 redirected_from,

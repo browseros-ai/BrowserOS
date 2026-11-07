@@ -29,8 +29,8 @@ use std::sync::{Arc, Mutex};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use browseros_cdp::{CdpError, SessionId};
-use neo_runtime_spec::MethodMeta;
 use neo_runtime_spec::serve::{NameValue, RouteCall, RouteContinueParams, RouteFulfillParams};
+use neo_runtime_spec::{Binary, MethodMeta};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
@@ -119,9 +119,9 @@ pub(crate) struct NeoRouteFetchParams {
     method: Option<String>,
     #[serde(default)]
     headers: Option<Vec<NameValue>>,
-    /// Base64, as Playwright's `binary`.
+    /// Playwright's `binary`.
     #[serde(default)]
-    post_data: Option<String>,
+    post_data: Option<Binary>,
     #[serde(default)]
     max_redirects: Option<i64>,
 }

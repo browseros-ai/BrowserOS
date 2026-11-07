@@ -8,8 +8,9 @@
  */
 
 import type { NameValue } from '@browseros/neo-runtime-spec/serve'
+import { Buffer } from './buffer'
 import type { NeoRouteFetchResult } from './neo-commands'
-import { Buffer, type Headers, RawHeaders } from './network'
+import { type Headers, RawHeaders } from './network'
 
 /** Playwright: `client/fetch.ts` `APIResponse.body`: `throw new Error('Response has been disposed');` */
 const DISPOSED = 'Response has been disposed'
