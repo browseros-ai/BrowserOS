@@ -53,9 +53,11 @@ pub(crate) type Owner = SessionId;
 pub(crate) struct InputDevices {
     pub(crate) keyboard: KeyboardState,
     pub(crate) mouse: MouseState,
-    /// Runs that ended still listed as holders, because a release failed at their end: what
-    /// they hold may still be down, but no live run holds it, so the next run's end releases
-    /// it and no live run's release waits for it. Each goes once nothing lists it.
+    /// Runs whose end was recorded. What one holds may still be down, but no live run holds
+    /// it (a dead hold), so the next run's end releases it and no live run's release waits for
+    /// it. A run is forgotten only between turns, once it lists no hold
+    /// ([`InputDevices::forget_ended`]): within a turn, a late answer to a write the run had
+    /// started, or a restore planned from a hold it had, records its hold the same way.
     pub(crate) ended: Vec<Owner>,
     /// Chromium's drag manager (Playwright's `DragManager`): the drag the browser handed
     /// over, while one runs.
@@ -147,8 +149,8 @@ pub(crate) enum Effect {
     },
     /// A `drop` or a `dragCancel` ended the drag.
     DragEnded,
-    /// A run ended: what it still holds (a release that failed) is held by no live run any
-    /// more, only possibly down (`InputDevices::ended`). Writes nothing.
+    /// A run ended: what it holds, now or once a write it started answers, is held by no live
+    /// run any more, only possibly down (`InputDevices::ended`). Writes nothing.
     Retire {
         owner: Owner,
     },
@@ -163,12 +165,24 @@ impl InputDevices {
     /// set), and a release lets every holder go.
     pub(crate) fn apply(&mut self, effect: &Effect, answered: bool) {
         self.apply_effect(effect, answered);
-        // An ended run goes once nothing lists it.
+    }
+
+    /// Neo: drops every ended run that lists no hold. Called as a turn ends, never within one:
+    /// a turn's plans name the holders they found, so a run they name stays ended through it.
+    pub(crate) fn forget_ended(&mut self) {
         let ended = mem::take(&mut self.ended);
         self.ended = ended
             .into_iter()
             .filter(|owner| self.holds_anything(owner))
             .collect();
+    }
+
+    /// Neo: records `owner`'s end (`Effect::Retire`), whatever it holds now, and forgets no
+    /// other ended run: another's turn may still be writing.
+    pub(crate) fn mark_ended(&mut self, owner: &Owner) {
+        if !self.ended.contains(owner) {
+            self.ended.push(owner.clone());
+        }
     }
 
     fn apply_effect(&mut self, effect: &Effect, answered: bool) {
@@ -242,11 +256,7 @@ impl InputDevices {
                     self.drag = None;
                 }
             }
-            Effect::Retire { owner } => {
-                if self.holds_anything(owner) && !self.ended.contains(owner) {
-                    self.ended.push(owner.clone());
-                }
-            }
+            Effect::Retire { owner } => self.mark_ended(owner),
         }
     }
 
@@ -741,6 +751,12 @@ pub(crate) trait EffectSink: Send + Sync {
     /// The devices as the writes so far left them, for a release written after a stop, whose
     /// planned masks assumed every earlier command went out.
     fn devices(&self) -> InputDevices;
+
+    /// Whether the run whose turn writes has ended (`InputDevices::ended`): its writer then
+    /// writes only what it owes, as after a stop.
+    fn run_ended(&self) -> bool {
+        false
+    }
 }
 
 /// Neo: what a turn at a tab's input gives a call, the tab's devices to plan from and to record
@@ -786,7 +802,7 @@ pub(crate) async fn write_plan(
     if let Some(tail) = &plan.tail {
         let mut tail = tail.clone();
         loop {
-            if cut_short.is_cancelled() {
+            if cut_short.is_cancelled() || sink.run_ended() {
                 writer.stopped = true;
             }
             if writer.stopped || writer.refused {
@@ -850,7 +866,7 @@ impl Writer {
             if commands[index].drag == DragStep::Move && !commands[index].with_next {
                 // A move that is not a click's goes alone: it may start a drag. A move is never
                 // owed, so nothing moves once the writer stopped.
-                if cut_short.is_cancelled() {
+                if cut_short.is_cancelled() || sink.run_ended() {
                     self.stopped = true;
                 }
                 if !self.stopped {
@@ -883,7 +899,7 @@ impl Writer {
                 {
                     pause(delay, cut_short).await;
                 }
-                if cut_short.is_cancelled() {
+                if cut_short.is_cancelled() || sink.run_ended() {
                     self.stopped = true;
                 }
                 if self.stopped && !owed {
@@ -1714,10 +1730,10 @@ mod tests {
 
     impl EffectSink for Turn {
         fn apply(&self, effect: &Effect, answered: bool) {
-            self.devices
-                .lock()
-                .expect("devices")
-                .apply(effect, answered);
+            // Each write is its own turn here.
+            let mut devices = self.devices.lock().expect("devices");
+            devices.apply(effect, answered);
+            devices.forget_ended();
         }
 
         fn devices(&self) -> InputDevices {

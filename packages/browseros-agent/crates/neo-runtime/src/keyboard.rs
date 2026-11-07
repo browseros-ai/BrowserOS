@@ -1832,10 +1832,10 @@ mod tests {
 
     impl EffectSink for Turn {
         fn apply(&self, effect: &Effect, answered: bool) {
-            self.devices
-                .lock()
-                .expect("devices")
-                .apply(effect, answered);
+            // Each write is its own turn here.
+            let mut devices = self.devices.lock().expect("devices");
+            devices.apply(effect, answered);
+            devices.forget_ended();
         }
 
         fn devices(&self) -> InputDevices {
