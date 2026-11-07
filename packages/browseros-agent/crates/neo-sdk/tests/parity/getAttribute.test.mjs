@@ -8,6 +8,12 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import {
+  assertDecoysUntouched,
+  compareFrameCases,
+  failed,
+  value,
+} from './frames.mjs'
 import { compareMethod, skip } from './harness.mjs'
 
 test('getAttribute returns strings or null and rejects ambiguous or missing targets', {
@@ -49,4 +55,36 @@ test('getAttribute returns strings or null and rejects ambiguous or missing targ
       nameNotAString: 'Error',
     },
   })
+})
+
+/** getAttribute through frame locators, on tabs of frame-top.html (frames.mjs): attributes only
+ * the named frame has (its own child iframe), in a nested and a mixed tree, and null for a
+ * missing one. */
+const frameCases = [
+  {
+    name: 'getAttribute reads an element of the frame it names',
+    source: `const login = page.frameLocator('#login-iframe')
+    return {
+      kid: await settle(() => login.locator('#grandchild').getAttribute('name')),
+      nested: await settle(() => page.frameLocator('#chain').locator('iframe').getAttribute('title')),
+      mixed: await settle(() => login.frameLocator('#grandchild').getByText('card grandchild').getAttribute('data-testid')),
+      missing: await settle(() => page.frameLocator('#same').locator('#email').getAttribute('data-missing')),
+      notInThatFrame: await settle(() => page.frameLocator('#same').locator('#grandchild').getAttribute('name', { timeout: 500 })),
+    }`,
+    expected: {
+      kid: value('grandchild'),
+      nested: value('chain-inner'),
+      mixed: value('card'),
+      missing: value(null),
+      notInThatFrame: failed('timeout'),
+    },
+    effect: (effect) => assertDecoysUntouched(effect, []),
+  },
+]
+
+test('getAttribute inside frames reads the same attributes through Neo and Playwright', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases)
 })

@@ -333,12 +333,27 @@ test('forms glue preserves Playwright values, state checks, targeting and errors
     const select = await resolve('#select')
     const wrong = await resolve('#wrong')
     assert.deepEqual(
-      await page('fill', { value: 'abc', force: false }, [text]),
+      await page('fill', { value: 'abc', force: false, frameVisible: true }, [
+        text,
+      ]),
       { value: { outcome: 'needsinput' } },
     )
     assert.deepEqual(
-      await page('fill', { value: '2025-05-04', force: false }, [date]),
+      await page(
+        'fill',
+        { value: '2025-05-04', force: false, frameVisible: true },
+        [date],
+      ),
       { value: { outcome: 'done' } },
+    )
+    assert.deepEqual(
+      await page(
+        'fill',
+        { value: '2026-01-02', force: false, frameVisible: false },
+        [date],
+      ),
+      { value: { outcome: { missingState: 'visible' } } },
+      'hidden frame owners block fill even when its control is visible in this document',
     )
     assert.equal(
       (await page('inputValue', { selector: '#date', strict: true })).value
@@ -352,12 +367,14 @@ test('forms glue preserves Playwright values, state checks, targeting and errors
     ]) {
       const element = await resolve(selector)
       assert.deepEqual(
-        await page('fill', { value: 'x', force: false }, [element]),
+        await page('fill', { value: 'x', force: false, frameVisible: true }, [
+          element,
+        ]),
         { value: { outcome: { missingState: state } } },
       )
     }
     assert.deepEqual(
-      await page('fill', { value: 'x', force: true }, [
+      await page('fill', { value: 'x', force: true, frameVisible: true }, [
         await resolve('#hidden'),
       ]),
       { value: { outcome: 'needsinput' } },
@@ -365,7 +382,11 @@ test('forms glue preserves Playwright values, state checks, targeting and errors
     assert.deepEqual(
       await page(
         'selectOptions',
-        { options: [{ label: 'Beta' }, { index: 0 }], force: false },
+        {
+          options: [{ label: 'Beta' }, { index: 0 }],
+          force: false,
+          frameVisible: true,
+        },
         [select],
       ),
       { value: { values: ['a', 'b'] } },
@@ -373,15 +394,26 @@ test('forms glue preserves Playwright values, state checks, targeting and errors
     assert.deepEqual(
       await page(
         'selectOptions',
-        { options: [{ value: 'missing' }], force: false },
+        { options: [{ value: 'a' }], force: false, frameVisible: false },
+        [select],
+      ),
+      { value: { outcome: { missingState: 'visible' } } },
+      'hidden frame owners block selecting options without changing the current selection',
+    )
+    assert.deepEqual(
+      await page(
+        'selectOptions',
+        { options: [{ value: 'missing' }], force: false, frameVisible: true },
         [select],
       ),
       { value: { outcome: 'error:optionsnotfound' } },
     )
     assert.deepEqual(
-      await page('selectOptions', { options: [{ value: 'c' }], force: false }, [
-        select,
-      ]),
+      await page(
+        'selectOptions',
+        { options: [{ value: 'c' }], force: false, frameVisible: true },
+        [select],
+      ),
       { value: { outcome: 'error:optionnotenabled' } },
     )
     const selected = await cdp.send(
@@ -450,11 +482,18 @@ test('forms glue preserves Playwright values, state checks, targeting and errors
       },
       session,
     )
-    assert.deepEqual(await page('fill', { value: 'x', force: false }, [text]), {
-      value: { outcome: 'error:notconnected' },
-    })
     assert.deepEqual(
-      await page('fill', { value: 'x', force: true }, [text]),
+      await page('fill', { value: 'x', force: false, frameVisible: true }, [
+        text,
+      ]),
+      {
+        value: { outcome: 'error:notconnected' },
+      },
+    )
+    assert.deepEqual(
+      await page('fill', { value: 'x', force: true, frameVisible: true }, [
+        text,
+      ]),
       { value: { outcome: 'needsinput' } },
       "forced fill preserves Playwright's absence of a connectedness check",
     )
@@ -466,7 +505,11 @@ test('forms glue preserves Playwright values, state checks, targeting and errors
       value: { matches: false, received: 'error:notconnected' },
     })
     assert.deepEqual(
-      await page('selectOptions', { options: [], force: false }, [select]),
+      await page(
+        'selectOptions',
+        { options: [], force: false, frameVisible: true },
+        [select],
+      ),
       { value: { values: [] } },
     )
   } finally {

@@ -12,7 +12,7 @@
 //! one: the dispatcher's call tasks, the interceptor setups, the mouse writers, the interceptor
 //! stops and the object-group releases, all spawned on the run's `TaskTracker`. So no release
 //! can find its session gone, and no end-of-run step has to order a drain before a detach; this
-//! also covers a caller that drops the run's future. The watcher holds no `Arc` (it would keep
+//! also covers a caller that drops the run's future. The watcher holds no `Arc<PageSession>` (it would keep
 //! the page alive forever): it holds a CDP client, the session id and a token cancelled when the
 //! page drops. A task stuck past the run (a renderer frozen by a dialog the watcher missed) keeps
 //! the session attached until its own CDP request times out (browseros-cdp's 60 s), then lets
@@ -38,6 +38,8 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::iter;
+use std::ops::Deref;
+use std::sync::Mutex as SyncMutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -46,11 +48,13 @@ use browseros_cdp::input::DispatchMouseEventParams;
 use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId, dom, target};
 use futures_util::future;
 use neo_runtime_spec::injected::{
-    ElementState, ElementStatesOutcome, HitTargetInterceptor, HitTargetOutcome, HitTargetSetup,
-    InjectedCheckElementStatesParams, InjectedDescribeSelectorParams,
-    InjectedGetElementBorderWidthParams, InjectedResolveParams, InjectedScrollIntoViewParams,
-    InjectedSetupHitTargetInterceptorParams, InjectedStopHitTargetInterceptorParams,
-    InjectedTitleParams, InjectedViewportSizeParams, Point, ScrollAlignment,
+    ElementState, ElementStatesOutcome, FrameStyle, FrameStyleStatus, HitTargetInterceptor,
+    HitTargetOutcome, HitTargetSetup, InjectedCheckElementStatesParams,
+    InjectedDescribeIFrameStyleParams, InjectedDescribeSelectorParams,
+    InjectedExpectHitTargetParams, InjectedGetElementBorderWidthParams, InjectedResolveParams,
+    InjectedScrollIntoViewParams, InjectedSetupHitTargetInterceptorParams,
+    InjectedStopHitTargetInterceptorParams, InjectedTitleParams, InjectedViewportSizeParams, Point,
+    ScrollAlignment,
 };
 use neo_runtime_spec::serve::ResponseChannel;
 use neo_runtime_spec::{Element, Handle};
@@ -68,6 +72,8 @@ use crate::click::{
     Arming, Geometry, MouseButton, MouseClick, NotReady, PageError, PressReport, Resolved, Scroll,
     SelectorFacts, StatesCheck, Tab, Verdict,
 };
+use crate::frame_selector::{self, FrameOwner};
+use crate::frames::{FrameContext, FrameScope, Frames, Host, local_tree};
 use crate::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
 };
@@ -149,7 +155,7 @@ impl Drop for Session {
 
 /// A handed-out tab's session, attached lazily once per run and shared by its call and writer tasks.
 pub(crate) struct PageSession {
-    session: Session,
+    session: Arc<Session>,
     /// The main frame's id, which is the target id.
     main_frame: String,
     /// The run's tracker, for the interceptor-setup, writer, interceptor-stop and
@@ -168,6 +174,12 @@ pub(crate) struct PageSession {
     closed: CancellationToken,
     /// The main frame's utility world, where the glue runs.
     pub(crate) world: Arc<World>,
+    pub(crate) frames: Arc<Frames>,
+    /// Child frames' navigation, written by this tab's watcher and every OOPIF host's.
+    frame_feeds: Arc<FrameFeeds>,
+    /// The navigation watcher of each OOPIF host session, started by the first wait on one of
+    /// its frames. Dropping a guard (with the page) stops that watcher.
+    host_watchers: SyncMutex<HashMap<SessionId, Arc<OnceCell<DropGuard>>>>,
     /// Names this session's object groups apart.
     next_group: AtomicU64,
     /// The tab's input lock, shared with every other run of the `Runtime` on this tab
@@ -179,11 +191,43 @@ pub(crate) struct PageSession {
     network_enabled: OnceCell<()>,
 }
 
+/// One call's frame scope over the tab's shared input, navigation and lifetime.
+#[derive(Clone)]
+pub(crate) struct FrameTab {
+    pub(crate) page: Arc<PageSession>,
+    pub(crate) scope: FrameScope,
+}
+
+// Input, preparation and top-level navigation always belong to the shared tab.
+impl Deref for FrameTab {
+    type Target = Arc<PageSession>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.page
+    }
+}
+
+impl FrameTab {
+    pub(crate) async fn context(&self) -> Result<Arc<FrameContext>, PageError> {
+        match &self.scope {
+            FrameScope::Main => Ok(self.frames.main()),
+            FrameScope::Frame(id) => self.frames.context(id, None).await,
+        }
+    }
+
+    pub(crate) fn group(&self, frame: &Arc<FrameContext>, purpose: &str) -> GroupGuard {
+        new_group(&self.page, frame, purpose)
+    }
+}
+
 struct PageUpdates<S> {
     state: watch::Sender<PageState>,
     navigations: broadcast::Sender<Navigation>,
     world: Arc<World>,
     network: Arc<NetworkLog>,
+    frames: Option<Arc<Frames>>,
+    /// Where the child frames' events go; `None` in tests of the main frame alone.
+    feeds: Option<Arc<FrameFeeds>>,
     initial_url: S,
 }
 
@@ -222,7 +266,7 @@ pub(crate) struct PageMark {
 }
 
 impl PageState {
-    fn lifecycle(&self) -> Lifecycle {
+    pub(crate) fn lifecycle(&self) -> Lifecycle {
         Lifecycle {
             dom_content_loaded: self.dom_content_loaded,
             load: self.load,
@@ -243,6 +287,169 @@ impl PageState {
             self.load = true;
             self.load_count += 1;
         }
+    }
+}
+
+/// A child frame's navigation as the watchers report it: the same [`PageState`] the main frame
+/// keeps (URL, document, lifecycle flags and counts, through [`apply_frame`]), plus what only a
+/// child frame does.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FrameState {
+    pub(crate) page: PageState,
+    /// Removed from its parent (`Page.frameDetached`, reason `remove`), or gone with the main
+    /// frame's document.
+    pub(crate) detached: bool,
+    /// How often its document moved to another process (`Page.frameDetached`, reason `swap`).
+    /// Its events then come from another session, which a wait has to find and watch.
+    pub(crate) swaps: u64,
+    /// The session that reported the last swap. Its late events about this frame would describe
+    /// the old document, so they are dropped until that session hosts the frame again.
+    swapped_from: Option<SessionId>,
+}
+
+/// One child frame's state and commit queue.
+struct FrameFeed {
+    state: watch::Sender<FrameState>,
+    navigations: broadcast::Sender<Navigation>,
+}
+
+/// Commits a child frame's queue keeps for a slow wait; a wait that lags behind rechecks the
+/// frame's current state instead.
+const FRAME_NAVIGATIONS: usize = 256;
+
+/// Every child frame's feed on a tab, by frame id, created by the first event or wait that names
+/// the frame. The tab's watcher and every OOPIF host's watcher write here, so a frame keeps one
+/// feed, and one set of lifecycle counts, when its document moves between processes. A feed
+/// goes when its frame is removed; a wait still holding it sees `detached`.
+#[derive(Default)]
+pub(crate) struct FrameFeeds {
+    frames: SyncMutex<HashMap<String, FrameFeed>>,
+}
+
+impl FrameFeeds {
+    /// `frame`'s current state and its commits from now on.
+    pub(crate) fn subscribe(
+        &self,
+        frame: &str,
+    ) -> Result<(watch::Receiver<FrameState>, broadcast::Receiver<Navigation>), PageError> {
+        let mut frames = self.frames.lock().map_err(|_| feeds_error())?;
+        let feed = frames.entry(frame.to_string()).or_insert_with(new_feed);
+        Ok((feed.state.subscribe(), feed.navigations.subscribe()))
+    }
+
+    /// Records `url` as `frame`'s URL while no commit has given it one: what the frame tree said
+    /// when a wait found the frame, or when its host's watcher started.
+    pub(crate) fn seed(&self, frame: &str, url: &str) {
+        if let Ok(mut frames) = self.frames.lock() {
+            let feed = frames.entry(frame.to_string()).or_insert_with(new_feed);
+            feed.state.send_if_modified(|state| {
+                if state.page.committed_url.is_some() {
+                    return false;
+                }
+                state.page.committed_url = Some(url.to_string());
+                true
+            });
+        }
+    }
+
+    /// Applies one event of `session` to the child frame it names. `main_frame` is the tab's
+    /// main frame, whose events the tab's own [`PageState`] takes instead.
+    fn apply(&self, event: &CdpEvent, session: &SessionId, main_frame: Option<&str>) {
+        if event.session_id.as_ref() != Some(session) {
+            return;
+        }
+        let Some(frame) = event_frame(event) else {
+            return;
+        };
+        if Some(frame) == main_frame {
+            return;
+        }
+        let Ok(mut frames) = self.frames.lock() else {
+            return;
+        };
+        let feed = frames.entry(frame.to_string()).or_insert_with(new_feed);
+        let mut navigation = None;
+        let mut removed = false;
+        feed.state.send_if_modified(|state| {
+            if event.method == "Page.frameDetached" {
+                if event.params["reason"] == "swap" {
+                    // The frame's next document lives in another process: forget this one so
+                    // that process's lifecycle replay seeds the new document.
+                    let page = &mut state.page;
+                    page.committed_url = None;
+                    page.pending_url = None;
+                    page.document = None;
+                    page.dom_content_loaded = false;
+                    page.load = false;
+                    page.restored_from_bfcache = false;
+                    state.swaps += 1;
+                    state.swapped_from = Some(session.clone());
+                } else {
+                    state.detached = true;
+                    removed = true;
+                }
+                return true;
+            }
+            if state.swapped_from.as_ref() == Some(session) {
+                // A frame coming back to this session announces itself before its document.
+                if !matches!(
+                    event.method.as_str(),
+                    "Page.frameAttached" | "Page.frameNavigated"
+                ) {
+                    return false;
+                }
+                state.swapped_from = None;
+            }
+            let applied = apply_frame(&mut state.page, event, frame);
+            navigation = applied.navigation;
+            applied.changed
+        });
+        if let Some(navigation) = navigation {
+            let _listeners = feed.navigations.send(navigation);
+        }
+        if removed {
+            // Waits keep their receivers and read `detached`; the frame id is never reused.
+            frames.remove(frame);
+        }
+    }
+}
+
+impl FrameFeeds {
+    /// Ends every child frame's feed: the main frame committed a new document, and the old
+    /// document's frames went with it. Chromium reports `frameDetached` for an OOPIF then, but
+    /// nothing for a same-process frame (measured on BrowserOS neo), so its wait would
+    /// otherwise run to its timeout.
+    fn detach_all(&self) {
+        if let Ok(mut frames) = self.frames.lock() {
+            for (_, feed) in frames.drain() {
+                feed.state.send_modify(|state| state.detached = true);
+            }
+        }
+    }
+}
+
+fn new_feed() -> FrameFeed {
+    FrameFeed {
+        state: watch::channel(FrameState::default()).0,
+        navigations: broadcast::channel(FRAME_NAVIGATIONS).0,
+    }
+}
+
+fn feeds_error() -> PageError {
+    PageError::Contract("neo-runtime: frame feeds cannot be accessed".to_string())
+}
+
+/// The frame a `Page` event is about: `frame.id` of a commit, `frameId` of the others.
+fn event_frame(event: &CdpEvent) -> Option<&str> {
+    match event.method.as_str() {
+        "Page.frameNavigated" => event.params["frame"]["id"].as_str(),
+        "Page.frameRequestedNavigation"
+        | "Page.navigatedWithinDocument"
+        | "Page.frameStoppedLoading"
+        | "Page.lifecycleEvent"
+        | "Page.frameAttached"
+        | "Page.frameDetached" => event.params["frameId"].as_str(),
+        _ => None,
     }
 }
 
@@ -279,6 +486,14 @@ impl PageSession {
             session.id.clone(),
             page.as_str().to_string(),
         );
+        let session = Arc::new(session);
+        let world = Arc::new(world);
+        let frames = Arc::new(Frames::new(
+            Arc::clone(&session),
+            page.as_str().to_string(),
+            Arc::clone(&world),
+            tasks.clone(),
+        ));
         let (state_updates, state) = watch::channel(PageState::default());
         let (navigations, _) = broadcast::channel(4096);
         Self {
@@ -290,17 +505,15 @@ impl PageSession {
             navigations,
             prepared: OnceCell::new(),
             closed,
-            world: Arc::new(world),
+            world,
+            frames,
+            frame_feeds: Arc::default(),
+            host_watchers: SyncMutex::default(),
             next_group: AtomicU64::new(1),
             input,
             network: Arc::new(NetworkLog::new(page.as_str().to_string())),
             network_enabled: OnceCell::new(),
         }
-    }
-
-    /// The typed utility-world calls used by sibling action seams.
-    pub(crate) fn world(&self) -> &World {
-        &self.world
     }
 
     pub(crate) fn session_id(&self) -> &SessionId {
@@ -348,6 +561,8 @@ impl PageSession {
                         navigations: self.navigations.clone(),
                         world: Arc::clone(&self.world),
                         network: Arc::clone(&self.network),
+                        frames: Some(Arc::clone(&self.frames)),
+                        feeds: Some(Arc::clone(&self.frame_feeds)),
                         initial_url,
                     },
                     self.closed.clone(),
@@ -423,6 +638,58 @@ impl PageSession {
         observation
     }
 
+    /// `frame`'s navigation state and its commits from now on.
+    pub(crate) fn subscribe_frame(
+        &self,
+        frame: &str,
+    ) -> Result<(watch::Receiver<FrameState>, broadcast::Receiver<Navigation>), PageError> {
+        self.frame_feeds.subscribe(frame)
+    }
+
+    /// See [`FrameFeeds::seed`].
+    pub(crate) fn seed_frame(&self, frame: &str, url: &str) {
+        self.frame_feeds.seed(frame, url);
+    }
+
+    /// Makes sure `host`'s frames feed [`FrameFeeds`]. The tab's own frames do once the page is
+    /// prepared; an OOPIF host gets its own watcher, once per session, and this resolves when
+    /// that watcher has applied its seed: `Page.enable`, then `Page.setLifecycleEventsEnabled`,
+    /// whose replay reports each of the host's frames' current lifecycle, then the host's frame
+    /// tree for their URLs. A setup the call abandons stops its watcher, and the next wait
+    /// starts another.
+    ///
+    /// # Errors
+    ///
+    /// The host's classified CDP error; `NotConnected` when its session went meanwhile.
+    pub(crate) async fn watch_host(&self, host: &Arc<Host>) -> Result<(), PageError> {
+        if !host.is_child() {
+            return Ok(());
+        }
+        let watcher = {
+            let mut watchers = self.host_watchers.lock().map_err(|_| feeds_error())?;
+            Arc::clone(watchers.entry(host.session_id().clone()).or_default())
+        };
+        watcher
+            .get_or_try_init(|| async {
+                // Subscribed before any command, so no event the setup causes is missed.
+                let events = self.session.cdp.events();
+                let (seeded, ready) = oneshot::channel();
+                let stop = CancellationToken::new();
+                let guard = stop.clone().drop_guard();
+                self.session.tokio.spawn(watch_host_frames(
+                    events,
+                    Arc::clone(host),
+                    Arc::clone(&self.frame_feeds),
+                    seeded,
+                    stop,
+                ));
+                ready.await.map_err(|_| PageError::NotConnected)??;
+                Ok(guard)
+            })
+            .await
+            .map(|_| ())
+    }
+
     fn observe_navigations(&self) -> NavigationObservation {
         NavigationObservation {
             navigations: self.navigations.subscribe(),
@@ -474,13 +741,18 @@ impl Observation for NavigationObservation {
     }
 }
 
-impl NavigationTab for Arc<PageSession> {
+impl NavigationTab for FrameTab {
     type Observation = NavigationObservation;
 
     async fn prepare(&self) -> Result<(), PageError> {
         PageSession::prepare(self)
             .await
-            .map_err(|error| world::classify(&error))
+            .map_err(|error| world::classify(&error))?;
+        // Title's navigation fallback must not hide a detached direct frame as an empty title.
+        if matches!(self.scope, FrameScope::Frame(_)) {
+            self.context().await?;
+        }
+        Ok(())
     }
 
     async fn track_network(&self) -> Result<u64, PageError> {
@@ -548,7 +820,8 @@ impl NavigationTab for Arc<PageSession> {
     }
 
     async fn read_title(&self) -> Result<String, PageError> {
-        self.world
+        self.context()
+            .await?
             .call(None, &InjectedTitleParams {})
             .await
             .map(|result| result.value)
@@ -556,10 +829,11 @@ impl NavigationTab for Arc<PageSession> {
 }
 
 /// A fresh object group of `page`'s session, released when the guard drops.
-fn new_group(page: &Arc<PageSession>, purpose: &str) -> GroupGuard {
+fn new_group(page: &Arc<PageSession>, frame: &Arc<FrameContext>, purpose: &str) -> GroupGuard {
     let index = page.next_group.fetch_add(1, Ordering::Relaxed);
     GroupGuard {
         page: Arc::clone(page),
+        frame: Arc::clone(frame),
         group: ObjectGroup(format!("neo-{purpose}-{index}")),
     }
 }
@@ -663,6 +937,8 @@ async fn watch_events(
         navigations,
         world,
         network,
+        frames,
+        feeds,
         initial_url,
     } = updates;
     tokio::pin!(initial_url);
@@ -700,6 +976,14 @@ async fn watch_events(
                 {
                     network.apply(&event.method, &event.params);
                 }
+                if event.method == "Page.frameNavigated"
+                    && event.session_id.as_ref() == Some(&session)
+                    && let Some(frame) = event.params["frame"]["id"].as_str()
+                    && frame != main_frame
+                    && let Some(frames) = &frames
+                {
+                    frames.committed(frame);
+                }
                 let mut applied = Applied::default();
                 state.send_if_modified(|state| {
                     applied = apply(state, &event, &session, &main_frame);
@@ -711,6 +995,12 @@ async fn watch_events(
                 });
                 if let Some(navigation) = applied.navigation {
                     let _listeners = navigations.send(navigation);
+                }
+                if let Some(feeds) = &feeds {
+                    if applied.new_document {
+                        feeds.detach_all();
+                    }
+                    feeds.apply(&event, &session, Some(&main_frame));
                 }
                 if let Some(answer) = applied.dialog {
                     answer_dialog(&cdp, &session, answer);
@@ -752,6 +1042,68 @@ fn answer_dialog(cdp: &CdpClient, session: &SessionId, answer: DialogAnswer) {
             debug!(%session, %error, "answering a dialog failed");
         }
     });
+}
+
+/// An OOPIF host's navigation watcher: one `cdp.events()` receiver filtered to the host's
+/// session, every frame event applied to `feeds`, until the session detaches or the page goes
+/// (`stop`). Its setup (`Page.enable`, lifecycle events, frame tree) runs inside the same loop,
+/// with events drained first, so the URL seed lands after every event that preceded its reply
+/// and never overwrites a commit. Dialogs are the tab's: Chromium reports an OOPIF's dialog on
+/// the tab session only (spike Q12). Holds the host, so its session stays attached while it
+/// runs; holds no page, so the page's drop stops it.
+async fn watch_host_frames(
+    mut events: broadcast::Receiver<CdpEvent>,
+    host: Arc<Host>,
+    feeds: Arc<FrameFeeds>,
+    seeded: oneshot::Sender<Result<(), PageError>>,
+    stop: CancellationToken,
+) {
+    let session = host.session_id().clone();
+    let setup = async {
+        host.send("Page.enable", json!({})).await?;
+        host.send("Page.setLifecycleEventsEnabled", json!({ "enabled": true }))
+            .await?;
+        host.send("Page.getFrameTree", json!({})).await
+    };
+    tokio::pin!(setup);
+    let mut seeded = Some(seeded);
+    loop {
+        tokio::select! {
+            biased;
+            () = stop.cancelled() => return,
+            event = events.recv() => match event {
+                Ok(event) => {
+                    if event.method == "Target.detachedFromTarget"
+                        && event.params["sessionId"].as_str() == Some(session.as_str())
+                    {
+                        return;
+                    }
+                    feeds.apply(&event, &session, None);
+                }
+                Err(RecvError::Lagged(skipped)) => {
+                    warn!(%session, skipped, "a frame host's event watcher lagged");
+                }
+                Err(RecvError::Closed) => return,
+            },
+            tree = &mut setup, if seeded.is_some() => {
+                let seed = tree
+                    .map_err(|error| host.classify(&error))
+                    .and_then(|tree| local_tree(&tree));
+                let result = seed.map(|frames| {
+                    for frame in frames {
+                        feeds.seed(&frame.id, &frame.url);
+                    }
+                });
+                let failed = result.is_err();
+                if let Some(seeded) = seeded.take() {
+                    let _waiter = seeded.send(result);
+                }
+                if failed {
+                    return;
+                }
+            }
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -828,6 +1180,30 @@ pub(crate) fn apply(
     if event.session_id.as_ref() != Some(session) {
         return applied;
     }
+    match event.method.as_str() {
+        "Page.javascriptDialogOpening" => {
+            let beforeunload = serde_json::from_value::<DialogOpening>(event.params.clone())
+                .is_ok_and(|dialog| dialog.kind == "beforeunload");
+            state.dialogs_opened += 1;
+            applied.changed = true;
+            applied.dialog = Some(if beforeunload {
+                DialogAnswer::Accept
+            } else {
+                DialogAnswer::Dismiss
+            });
+        }
+        "Inspector.detached" | "Inspector.targetCrashed" => applied.closed = true,
+        _ => applied = apply_frame(state, event, main_frame),
+    }
+    applied
+}
+
+/// The part of [`apply`] that follows one frame, `frame`: its requested navigations, commits,
+/// same-document navigations, stops and lifecycle. The main frame's state and every child
+/// frame's feed ([`FrameFeeds`]) both take it, so a child frame's document is followed exactly
+/// as the main frame's is. The caller has already matched the event's session.
+fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> Applied {
+    let mut applied = Applied::default();
     let params = event.params.clone();
     match event.method.as_str() {
         "Page.frameRequestedNavigation" => {
@@ -900,18 +1276,6 @@ pub(crate) fn apply(
                 applied.changed = apply_lifecycle(state, &event);
             }
         }
-        "Page.javascriptDialogOpening" => {
-            let beforeunload = serde_json::from_value::<DialogOpening>(params)
-                .is_ok_and(|dialog| dialog.kind == "beforeunload");
-            state.dialogs_opened += 1;
-            applied.changed = true;
-            applied.dialog = Some(if beforeunload {
-                DialogAnswer::Accept
-            } else {
-                DialogAnswer::Dismiss
-            });
-        }
-        "Inspector.detached" | "Inspector.targetCrashed" => applied.closed = true,
         _ => {}
     }
     applied
@@ -943,21 +1307,23 @@ fn apply_lifecycle(state: &mut PageState, event: &LifecycleEvent) -> bool {
 /// object and every handle `getProperties` read out of it (probe P1).
 pub(crate) struct GroupGuard {
     page: Arc<PageSession>,
+    frame: Arc<FrameContext>,
     group: ObjectGroup,
 }
 
 impl GroupGuard {
-    fn group(&self) -> &ObjectGroup {
+    pub(crate) fn group(&self) -> &ObjectGroup {
         &self.group
     }
 }
 
 impl Drop for GroupGuard {
     fn drop(&mut self) {
-        let page = Arc::clone(&self.page);
+        let frame = Arc::clone(&self.frame);
         let ObjectGroup(group) = self.group.clone();
         self.page.spawn(async move {
-            let released = page
+            let released = frame
+                .host
                 .send(
                     "Runtime.releaseObjectGroup",
                     json!({ "objectGroup": group }),
@@ -976,6 +1342,9 @@ impl Drop for GroupGuard {
 pub(crate) struct ResolvedElement {
     handle: Handle<Element>,
     _group: Arc<GroupGuard>,
+    pub(crate) frame: Arc<FrameContext>,
+    pub(crate) frame_visible: bool,
+    owners: Vec<FrameOwner>,
 }
 
 impl ResolvedElement {
@@ -998,6 +1367,7 @@ pub(crate) struct ArmedInterceptor {
     handle: Handle<HitTargetInterceptor>,
     group: Option<GroupGuard>,
     page: Arc<PageSession>,
+    frame: Arc<FrameContext>,
     /// The counters when it was armed, for the verdict's dialog and navigation race.
     mark: PageMark,
     /// Set once `stopHitTargetInterceptor` has answered, so `Drop` does not send it again.
@@ -1017,11 +1387,10 @@ impl Drop for ArmedInterceptor {
         }
         // Playwright's `finally` sends the same fire-and-forget stop. The stop goes before the
         // group release, in one task, so the handle is still alive when the stop names it.
-        let page = Arc::clone(&self.page);
+        let frame = Arc::clone(&self.frame);
         let interceptor = self.handle.clone();
         self.page.spawn(async move {
-            let stopped = page
-                .world
+            let stopped = frame
                 .call(
                     None,
                     &InjectedStopHitTargetInterceptorParams { interceptor },
@@ -1079,7 +1448,7 @@ impl Barrier {
 // The tab, for click.
 // ---------------------------------------------------------------------------------------------
 
-impl Tab for Arc<PageSession> {
+impl Tab for FrameTab {
     type Element = ResolvedElement;
     type Armed = ArmedInterceptor;
     type Input = InputPermit;
@@ -1092,8 +1461,14 @@ impl Tab for Arc<PageSession> {
     }
 
     async fn describe(&self, selector: &str) -> Result<SelectorFacts, PageError> {
-        let described = self
-            .world
+        let invalid = frame_selector::split(selector).err();
+        if let Some(message) = &invalid
+            && message.starts_with("Neo ")
+        {
+            return Err(PageError::Threw(message.clone()));
+        }
+        let frame = self.context().await?;
+        let described = frame
             .call(
                 None,
                 &InjectedDescribeSelectorParams {
@@ -1103,7 +1478,7 @@ impl Tab for Arc<PageSession> {
             .await?;
         Ok(SelectorFacts {
             locator: described.locator,
-            invalid: described.invalid_selector,
+            invalid: invalid.or(described.invalid_selector),
         })
     }
 
@@ -1112,13 +1487,16 @@ impl Tab for Arc<PageSession> {
         selector: &str,
         strict: bool,
     ) -> Result<Option<Resolved<ResolvedElement>>, PageError> {
-        let group = new_group(self, "resolve");
-        let resolved = self
-            .world
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok(None);
+        };
+        let group = self.group(&located.frame, "resolve");
+        let resolved = located
+            .frame
             .call(
                 Some(group.group()),
                 &InjectedResolveParams {
-                    selector: selector.to_string(),
+                    selector: located.selector,
                     strict,
                 },
             )
@@ -1127,6 +1505,9 @@ impl Tab for Arc<PageSession> {
             element: ResolvedElement {
                 handle,
                 _group: Arc::new(group),
+                frame: located.frame,
+                frame_visible: located.frame_visible,
+                owners: located.owners,
             },
             count: u32::try_from(resolved.count).unwrap_or(u32::MAX),
             preview: resolved.preview.unwrap_or_default(),
@@ -1138,14 +1519,29 @@ impl Tab for Arc<PageSession> {
         element: &ResolvedElement,
         states: &[ElementState],
     ) -> Result<StatesCheck, PageError> {
-        let checked = self
-            .world
+        // An offscreen OOPIF can throttle animation frames indefinitely. Bring its owners
+        // into view before a stability check waits on that frame's animation callbacks.
+        if states.contains(&ElementState::Stable) {
+            for owner in &element.owners {
+                owner
+                    .frame
+                    .host
+                    .send(
+                        "DOM.scrollIntoViewIfNeeded",
+                        json!({"objectId":owner.element.id().object_id()}),
+                    )
+                    .await
+                    .map_err(|error| owner.frame.host.classify(&error))?;
+            }
+        }
+        let checked = element
+            .frame
             .call(
                 None,
                 &InjectedCheckElementStatesParams {
                     element: element.handle.clone(),
                     states: states.to_vec(),
-                    frame_visible: true,
+                    frame_visible: element.frame_visible,
                 },
             )
             .await?;
@@ -1181,13 +1577,13 @@ impl Tab for Arc<PageSession> {
                     }),
                     ..dom::ScrollIntoViewIfNeededParams::default()
                 };
-                let scrolled = self
-                    .session
-                    .cdp
-                    .send_typed::<_, Value>(
+                let scrolled = element
+                    .frame
+                    .host
+                    .send(
                         "DOM.scrollIntoViewIfNeeded",
-                        params,
-                        Some(&self.session.id),
+                        serde_json::to_value(params)
+                            .map_err(|error| PageError::Contract(error.to_string()))?,
                     )
                     .await;
                 return match scrolled {
@@ -1202,14 +1598,15 @@ impl Tab for Arc<PageSession> {
                     {
                         Ok(Some(NotReady::NotConnected))
                     }
-                    Err(error) => Err(world::classify(&error)),
+                    Err(error) => Err(element.frame.host.classify(&error)),
                 };
             }
             Scroll::End => ScrollAlignment::End,
             Scroll::Center => ScrollAlignment::Center,
             Scroll::Start => ScrollAlignment::Start,
         };
-        self.world
+        element
+            .frame
             .call(
                 None,
                 &InjectedScrollIntoViewParams {
@@ -1230,56 +1627,94 @@ impl Tab for Arc<PageSession> {
         &self,
         element: &ResolvedElement,
         position: Option<&Point>,
+        force: bool,
     ) -> Result<Geometry, PageError> {
-        let object_id = Some(element.handle.id().object_id().to_string());
-        let session = Some(&self.session.id);
+        // Scrolling a remote descendant also scrolls its owners. Its own local rect can
+        // stay still while those parent documents are moving; wait for those rects before
+        // combining coordinates from separate renderer sessions.
+        // Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `if (!force) {`
+        if !force && !element.owners.is_empty() {
+            for owner in &element.owners {
+                let states = owner
+                    .frame
+                    .call(
+                        None,
+                        &InjectedCheckElementStatesParams {
+                            element: owner.element.clone(),
+                            states: vec![ElementState::Stable],
+                            frame_visible: true,
+                        },
+                    )
+                    .await?;
+                if states.outcome.is_some() {
+                    return Err(PageError::NotConnected);
+                }
+            }
+            let states = element
+                .frame
+                .call(
+                    None,
+                    &InjectedCheckElementStatesParams {
+                        element: element.handle.clone(),
+                        states: vec![ElementState::Stable],
+                        frame_visible: element.frame_visible,
+                    },
+                )
+                .await?;
+            if states.outcome.is_some() {
+                return Err(PageError::NotConnected);
+            }
+        }
+        let params = json!({"objectId":element.handle.id().object_id()});
         if position.is_some() {
-            let model = self.session.cdp.send_typed::<_, dom::GetBoxModelResult>(
-                "DOM.getBoxModel",
-                dom::GetBoxModelParams {
-                    object_id,
-                    ..dom::GetBoxModelParams::default()
-                },
-                session,
-            );
+            let model = element.frame.host.send("DOM.getBoxModel", params);
             let border_params = InjectedGetElementBorderWidthParams {
                 element: element.handle.clone(),
             };
-            let border = self.world.call(None, &border_params);
+            let border = element.frame.call(None, &border_params);
             let (model, border) = tokio::join!(model, border);
             let model = match model {
-                Ok(model) => model.model,
-                Err(error) => return no_geometry(&world::classify(&error)),
+                Ok(model) => model,
+                Err(error) => return no_geometry(&element.frame.host.classify(&error)),
             };
             let border = match border {
                 Ok(border) => border,
                 Err(error) => return no_geometry(&error),
             };
+            let model: dom::GetBoxModelResult = serde_json::from_value(model)
+                .map_err(|error| PageError::Contract(error.to_string()))?;
+            let offset = self
+                .frames
+                .offset(&element.frame.host)
+                .await?
+                .unwrap_or_default();
             return Ok(Geometry::Offset {
-                border_box: quad(model.border)?,
+                border_box: translate(quad(model.model.border)?, offset),
                 border: (border.left, border.top),
             });
         }
-        let quads = self
-            .session
-            .cdp
-            .send_typed::<_, dom::GetContentQuadsResult>(
-                "DOM.getContentQuads",
-                dom::GetContentQuadsParams {
-                    object_id,
-                    ..dom::GetContentQuadsParams::default()
-                },
-                session,
-            );
-        let viewport = self.world.call(None, &InjectedViewportSizeParams {});
+        let quads = element.frame.host.send("DOM.getContentQuads", params);
+        let viewport_frame = self.frames.main();
+        let viewport = viewport_frame.call(None, &InjectedViewportSizeParams {});
         let (quads, viewport) = tokio::join!(quads, viewport);
         let viewport = viewport?;
         let quads = match quads {
-            Ok(quads) => quads.quads,
-            Err(error) => return no_geometry(&world::classify(&error)),
+            Ok(quads) => quads,
+            Err(error) => return no_geometry(&element.frame.host.classify(&error)),
         };
+        let quads: dom::GetContentQuadsResult = serde_json::from_value(quads)
+            .map_err(|error| PageError::Contract(error.to_string()))?;
+        let offset = self
+            .frames
+            .offset(&element.frame.host)
+            .await?
+            .unwrap_or_default();
         Ok(Geometry::Quads {
-            quads: quads.into_iter().map(quad).collect::<Result<_, _>>()?,
+            quads: quads
+                .quads
+                .into_iter()
+                .map(|points| quad(points).map(|quad| translate(quad, offset)))
+                .collect::<Result<_, _>>()?,
             viewport: (pixels(viewport.width), pixels(viewport.height)),
         })
     }
@@ -1305,8 +1740,16 @@ impl Tab for Arc<PageSession> {
         input: InputPermit,
     ) -> impl Future<Output = Result<Arming<ArmedInterceptor>, PageError>> + Send {
         let page = Arc::clone(self);
-        let element = element.handle.clone();
+        let element = element.clone();
         async move {
+            // These reads install nothing: keep them in Progress's cancellable future. Only
+            // interceptor setup must outlive the waiter so a late handle is always disarmed.
+            let hit_point = match frame_hit_target(&page, &element, hit_point).await? {
+                FrameHitTarget::Point(point) => point,
+                FrameHitTarget::Blocked(description) => {
+                    return Ok(Arming::Intercepted(description));
+                }
+            };
             let (answer, armed) = oneshot::channel();
             let setup = arm_interceptor(Arc::clone(&page), element, hit_point, input);
             page.spawn(async move {
@@ -1383,7 +1826,7 @@ impl Tab for Arc<PageSession> {
         let params = InjectedStopHitTargetInterceptorParams {
             interceptor: armed.handle.clone(),
         };
-        let stop = self.world.call(None, &params);
+        let stop = armed.frame.call(None, &params);
         tokio::select! {
             biased;
             () = stalled => Verdict::Done,
@@ -1454,25 +1897,117 @@ impl Tab for Arc<PageSession> {
     }
 }
 
+enum FrameHitTarget {
+    Point(Option<Point>),
+    Blocked(String),
+}
+
+/// Playwright's `_checkFrameIsHitTarget`: owner boxes are top-level, but each hit check runs
+/// in its parent's document. Gather all boundaries before checking, because any transformed
+/// ancestor disables preliminary hit checks for the whole path, leaving the event interceptor.
+async fn frame_hit_target(
+    page: &PageSession,
+    element: &ResolvedElement,
+    point: Point,
+) -> Result<FrameHitTarget, PageError> {
+    let mut boundaries = Vec::new();
+    for owner in &element.owners {
+        let model = owner
+            .frame
+            .host
+            .send(
+                "DOM.getBoxModel",
+                json!({"objectId":owner.element.id().object_id()}),
+            )
+            .await
+            .map_err(|error| match owner.frame.host.classify(&error) {
+                PageError::Closed => PageError::Closed,
+                _ => PageError::NotConnected,
+            })?;
+        let style = owner
+            .frame
+            .call(
+                None,
+                &InjectedDescribeIFrameStyleParams {
+                    element: owner.element.clone(),
+                },
+            )
+            .await?;
+        let insets = match style.style {
+            FrameStyle::Status(FrameStyleStatus::ErrorNotconnected) => {
+                return Err(PageError::NotConnected);
+            }
+            FrameStyle::Status(FrameStyleStatus::Transformed) => {
+                return Ok(FrameHitTarget::Point(None));
+            }
+            FrameStyle::Insets(insets) => insets,
+        };
+        let model: dom::GetBoxModelResult = serde_json::from_value(model)
+            .map_err(|error| PageError::Contract(error.to_string()))?;
+        let offset = page
+            .frames
+            .offset(&owner.frame.host)
+            .await?
+            .unwrap_or_default();
+        let border = translate(quad(model.model.border)?, offset);
+        let x = border
+            .iter()
+            .step_by(2)
+            .copied()
+            .fold(f64::INFINITY, f64::min);
+        let y = border
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .copied()
+            .fold(f64::INFINITY, f64::min);
+        boundaries.push((
+            owner,
+            Point {
+                x: point.x - x - insets.left,
+                y: point.y - y - insets.top,
+            },
+        ));
+    }
+    let mut point_in_parent = point;
+    for (owner, point_in_frame) in boundaries {
+        let checked = owner
+            .frame
+            .call(
+                None,
+                &InjectedExpectHitTargetParams {
+                    element: owner.element.clone(),
+                    point: point_in_parent,
+                },
+            )
+            .await?;
+        if let HitTargetOutcome::Blocked(blocked) = checked.outcome {
+            return Ok(FrameHitTarget::Blocked(blocked.hit_target_description));
+        }
+        point_in_parent = point_in_frame;
+    }
+    Ok(FrameHitTarget::Point(Some(point_in_parent)))
+}
+
 /// `setupHitTargetInterceptor` into a fresh group: `error:notconnected` is `NotConnected`, any
 /// other description `Intercepted`, the handle `Armed` with the counters taken just before the
 /// setup was sent and the click's `input` turn. Runs on the run's tracker ([`Tab::arm`] for
-/// `Arc<PageSession>`), so it reads the answer to the end whoever still waits for it.
+/// `FrameTab`), so it reads the answer to the end whoever still waits for it.
 async fn arm_interceptor(
     page: Arc<PageSession>,
-    element: Handle<Element>,
-    hit_point: Point,
+    element: ResolvedElement,
+    hit_point: Option<Point>,
     input: InputPermit,
 ) -> Result<Arming<ArmedInterceptor>, PageError> {
     let mark = page.mark();
-    let group = new_group(&page, "interceptor");
-    let (armed, current) = page
-        .world
+    let group = new_group(&page, &element.frame, "interceptor");
+    let frame = Arc::clone(&element.frame);
+    let (armed, current) = frame
         .call_retaining_reply(
             Some(group.group()),
             &InjectedSetupHitTargetInterceptorParams {
-                element,
-                hit_point: Some(hit_point),
+                element: element.handle.clone(),
+                hit_point,
                 // Only Playwright's trial blocks every event, and Neo's trial sends none.
                 block_all_events: false,
             },
@@ -1487,6 +2022,7 @@ async fn arm_interceptor(
             handle,
             group: Some(group),
             page,
+            frame: Arc::clone(&frame),
             mark,
             stopped: false,
             input: Some(input),
@@ -1517,6 +2053,14 @@ fn no_geometry(error: &PageError) -> Result<Geometry, PageError> {
 }
 
 /// A CDP `DOM.Quad`, which is always eight numbers.
+fn translate(mut quad: [f64; 8], (x, y): (f64, f64)) -> [f64; 8] {
+    for point in quad.as_chunks_mut::<2>().0 {
+        point[0] += x;
+        point[1] += y;
+    }
+    quad
+}
+
 fn quad(points: Vec<f64>) -> Result<[f64; 8], PageError> {
     <[f64; 8]>::try_from(points)
         .map_err(|points| PageError::Contract(format!("a DOM quad of {} numbers", points.len())))
@@ -1725,6 +2269,184 @@ mod tests {
 
     fn applied(state: &mut PageState, event: &CdpEvent) -> Applied {
         apply(state, event, &SessionId::from(SESSION), MAIN)
+    }
+
+    const CHILD: &str = "CHILD";
+    const OOPIF_SESSION: &str = "S2";
+
+    fn lifecycle(session: &str, frame: &str, loader: &str, name: &str) -> CdpEvent {
+        event(
+            "Page.lifecycleEvent",
+            Some(session),
+            json!({ "frameId": frame, "loaderId": loader, "name": name }),
+        )
+    }
+
+    fn navigated(session: &str, frame: &str, url: &str, loader: &str) -> CdpEvent {
+        event(
+            "Page.frameNavigated",
+            Some(session),
+            json!({ "frame": { "id": frame, "url": url, "loaderId": loader } }),
+        )
+    }
+
+    fn detached(session: &str, frame: &str, reason: &str) -> CdpEvent {
+        event(
+            "Page.frameDetached",
+            Some(session),
+            json!({ "frameId": frame, "reason": reason }),
+        )
+    }
+
+    #[test]
+    fn tests_that_a_child_frames_events_feed_only_its_frame() {
+        let feeds = FrameFeeds::default();
+        let tab = SessionId::from(SESSION);
+        let (state, mut commits) = feeds.subscribe(CHILD).expect("feed");
+        for event in [
+            navigated(SESSION, CHILD, "https://b.test/pay", "doc-1"),
+            lifecycle(SESSION, CHILD, "doc-1", "DOMContentLoaded"),
+            lifecycle(SESSION, CHILD, "doc-1", "load"),
+            // Another session's and the main frame's events are not this frame's.
+            lifecycle(OOPIF_SESSION, CHILD, "doc-9", "load"),
+            navigated(SESSION, MAIN, "https://a.test/", "main-2"),
+        ] {
+            feeds.apply(&event, &tab, Some(MAIN));
+        }
+        let child = state.borrow().clone();
+        assert_eq!(
+            child.page.committed_url.as_deref(),
+            Some("https://b.test/pay")
+        );
+        assert_eq!(
+            (
+                child.page.load,
+                child.page.load_count,
+                child.page.document.as_deref()
+            ),
+            (true, 1, Some("doc-1"))
+        );
+        assert_eq!(
+            commits.try_recv().expect("the commit is queued").url,
+            "https://b.test/pay"
+        );
+        assert!(commits.try_recv().is_err(), "one commit only");
+
+        let mut main = PageState::default();
+        let event = navigated(SESSION, CHILD, "https://b.test/pay", "doc-1");
+        assert_eq!(
+            applied(&mut main, &event),
+            Applied::default(),
+            "the main frame's state ignores a child's commit"
+        );
+    }
+
+    #[test]
+    fn tests_that_a_swap_starts_a_new_document_and_ignores_the_old_process() {
+        let feeds = FrameFeeds::default();
+        let tab = SessionId::from(SESSION);
+        let oopif = SessionId::from(OOPIF_SESSION);
+        let (state, _commits) = feeds.subscribe(CHILD).expect("feed");
+        feeds.apply(
+            &navigated(SESSION, CHILD, "https://a.test/pay", "old"),
+            &tab,
+            Some(MAIN),
+        );
+        feeds.apply(&lifecycle(SESSION, CHILD, "old", "load"), &tab, Some(MAIN));
+        feeds.apply(&detached(SESSION, CHILD, "swap"), &tab, Some(MAIN));
+        // A late event of the old document from the old process must not seed the new one.
+        feeds.apply(&lifecycle(SESSION, CHILD, "old", "load"), &tab, Some(MAIN));
+        let swapped = state.borrow().clone();
+        assert_eq!(swapped.swaps, 1);
+        assert!(!swapped.detached);
+        assert_eq!(
+            (
+                swapped.page.committed_url,
+                swapped.page.document,
+                swapped.page.load
+            ),
+            (None, None, false)
+        );
+        // The new process's replay seeds the new document; the counts keep growing.
+        feeds.seed(CHILD, "https://c.test/pay");
+        feeds.apply(
+            &lifecycle(OOPIF_SESSION, CHILD, "new", "commit"),
+            &oopif,
+            None,
+        );
+        feeds.apply(
+            &lifecycle(OOPIF_SESSION, CHILD, "new", "load"),
+            &oopif,
+            None,
+        );
+        let replayed = state.borrow().clone();
+        assert_eq!(
+            replayed.page.committed_url.as_deref(),
+            Some("https://c.test/pay")
+        );
+        assert_eq!(
+            (
+                replayed.page.document.as_deref(),
+                replayed.page.load,
+                replayed.page.load_count
+            ),
+            (Some("new"), true, 2)
+        );
+        // Back in the page's process: its attach and commit are followed again.
+        feeds.apply(
+            &event(
+                "Page.frameAttached",
+                Some(SESSION),
+                json!({ "frameId": CHILD }),
+            ),
+            &tab,
+            Some(MAIN),
+        );
+        feeds.apply(
+            &navigated(SESSION, CHILD, "https://a.test/back", "back"),
+            &tab,
+            Some(MAIN),
+        );
+        assert_eq!(
+            state.borrow().page.committed_url.as_deref(),
+            Some("https://a.test/back")
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_removed_frame_or_a_page_commit_ends_its_feed() {
+        let feeds = FrameFeeds::default();
+        let tab = SessionId::from(SESSION);
+        let (mut removed, _commits) = feeds.subscribe(CHILD).expect("feed");
+        feeds.apply(&detached(SESSION, CHILD, "remove"), &tab, Some(MAIN));
+        removed.changed().await.expect("the removal is published");
+        assert!(removed.borrow_and_update().detached);
+        assert!(
+            removed.changed().await.is_err(),
+            "the feed is gone with its frame"
+        );
+
+        let (mut other, _other_commits) = feeds.subscribe("OTHER").expect("feed");
+        feeds.detach_all();
+        other.changed().await.expect("the page commit is published");
+        assert!(other.borrow().detached);
+    }
+
+    #[test]
+    fn tests_that_a_seed_never_replaces_a_commit() {
+        let feeds = FrameFeeds::default();
+        let tab = SessionId::from(SESSION);
+        let (state, _commits) = feeds.subscribe(CHILD).expect("feed");
+        feeds.apply(
+            &navigated(SESSION, CHILD, "https://a.test/new", "doc"),
+            &tab,
+            Some(MAIN),
+        );
+        feeds.seed(CHILD, "https://a.test/old");
+        assert_eq!(
+            state.borrow().page.committed_url.as_deref(),
+            Some("https://a.test/new")
+        );
     }
 
     /// An event's type, button, buttons mask and click count.
@@ -2118,6 +2840,8 @@ mod tests {
                     MAIN.to_string(),
                 )),
                 network: Arc::new(NetworkLog::new(MAIN.to_string())),
+                frames: None,
+                feeds: None,
                 initial_url,
             };
             let watcher = watch_events(
@@ -2164,9 +2888,13 @@ mod tests {
             Arc::new(Mutex::new(())),
             CancellationToken::new(),
         ));
-        let mut events = WaitTab::observe(&page).expect("wait observer before prepare");
+        let tab = FrameTab {
+            page: Arc::clone(&page),
+            scope: FrameScope::Main,
+        };
+        let mut events = WaitTab::observe(&tab).expect("wait observer before prepare");
         let mut navigation =
-            NavigationTab::observe(&page).expect("navigation observer before prepare");
+            NavigationTab::observe(&tab).expect("navigation observer before prepare");
         PageSession::prepare(&page).await.expect("prepare");
         time::timeout(Duration::from_secs(1), async {
             while !events.state().lifecycle.load {
@@ -2208,6 +2936,8 @@ mod tests {
                 navigations,
                 world: Arc::new(World::new(cdp, SessionId::from(SESSION), MAIN.to_string())),
                 network: Arc::new(NetworkLog::new(MAIN.to_string())),
+                frames: None,
+                feeds: None,
                 initial_url,
             },
             closed.clone(),

@@ -8,6 +8,12 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import {
+  assertDecoysUntouched,
+  compareFrameCases,
+  failed,
+  value,
+} from './frames.mjs'
 import { compareMethod, skip } from './harness.mjs'
 
 test('innerText returns rendered text and rejects non-HTML, ambiguous or missing targets', {
@@ -54,4 +60,33 @@ test('innerText returns rendered text and rejects non-HTML, ambiguous or missing
       notAString: 'Error',
     },
   })
+})
+
+/** innerText through frame locators, on tabs of frame-top.html (frames.mjs): each frame's
+ * rendered text (its hidden item left out), nested and cross-site, and a hop that matches
+ * several iframes refused as a strict mode violation. */
+const frameCases = [
+  {
+    name: 'innerText reads the rendered text of the frame it names',
+    source: `return {
+      cross: await settle(() => page.frameLocator('#login-iframe').locator('#who').innerText()),
+      list: await settle(() => page.frameLocator('#same').locator('ul').innerText()),
+      nested: await settle(() => page.frameLocator('#chain').frameLocator('#chain-inner').locator('#who').innerText()),
+      strict: await settle(() => page.frameLocator('.slot').locator('#who').innerText({ timeout: 5000 })),
+    }`,
+    expected: {
+      cross: value('cross'),
+      list: value('same one\nsame two'),
+      nested: value('chain-inner'),
+      strict: failed('strict'),
+    },
+    effect: (effect) => assertDecoysUntouched(effect, []),
+  },
+]
+
+test('innerText inside frames reads the same text through Neo and Playwright', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases)
 })

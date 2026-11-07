@@ -20,7 +20,8 @@ pub(crate) use neo_runtime_spec::injected::{
 };
 
 use crate::click::{PageError, Tab};
-use crate::page::{InputPermit, PageSession, ResolvedElement};
+use crate::frame_selector;
+use crate::page::{FrameTab, InputPermit, PageSession, ResolvedElement};
 use crate::progress::InputTicket;
 
 /// The result of the one fill evaluation. `NeedsInput` retains the original ticket for the
@@ -84,7 +85,7 @@ pub(crate) trait FormTab: Tab {
     ) -> impl Future<Output = Result<Option<InputValueMatch>, PageError>> + Send;
 }
 
-impl FormTab for Arc<PageSession> {
+impl FormTab for FrameTab {
     fn fill(
         &self,
         element: &ResolvedElement,
@@ -93,20 +94,20 @@ impl FormTab for Arc<PageSession> {
         input: InputPermit,
         ticket: InputTicket,
     ) -> impl Future<Output = Result<FillOutcome, PageError>> + Send {
-        let page = Arc::clone(self);
         let element = element.clone();
         let value = value.to_string();
         let (sender, receiver) = oneshot::channel();
         self.spawn(async move {
             let _input = input;
-            let result = page
-                .world()
+            let result = element
+                .frame
                 .call(
                     None,
                     &InjectedFillParams {
                         element: element.handle().clone(),
                         value,
                         force,
+                        frame_visible: element.frame_visible,
                     },
                 )
                 .await;
@@ -125,19 +126,19 @@ impl FormTab for Arc<PageSession> {
         input: InputPermit,
         ticket: InputTicket,
     ) -> impl Future<Output = Result<SelectOutcome, PageError>> + Send {
-        let page = Arc::clone(self);
         let element = element.clone();
         let options = options.to_vec();
         page_step(self, async move {
             let _input = input;
-            let result = page
-                .world()
+            let result = element
+                .frame
                 .call(
                     None,
                     &InjectedSelectOptionsParams {
                         element: element.handle().clone(),
                         options,
                         force,
+                        frame_visible: element.frame_visible,
                     },
                 )
                 .await;
@@ -147,7 +148,8 @@ impl FormTab for Arc<PageSession> {
     }
 
     async fn checked_state(&self, element: &ResolvedElement) -> Result<CheckedState, PageError> {
-        self.world()
+        element
+            .frame
             .call(
                 None,
                 &InjectedElementStateParams {
@@ -164,12 +166,11 @@ impl FormTab for Arc<PageSession> {
         reset_selection_if_not_focused: bool,
         input: InputPermit,
     ) -> impl Future<Output = Result<FocusOutcome, PageError>> + Send {
-        let page = Arc::clone(self);
         let element = element.clone();
         page_step(self, async move {
             let _input = input;
-            let result = page
-                .world()
+            let result = element
+                .frame
                 .call(
                     None,
                     &InjectedFocusElementParams {
@@ -188,11 +189,15 @@ impl FormTab for Arc<PageSession> {
         selector: &str,
         strict: bool,
     ) -> Result<Option<InputValueMatch>, PageError> {
-        self.world()
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok(None);
+        };
+        located
+            .frame
             .call(
                 None,
                 &InjectedInputValueParams {
-                    selector: selector.to_string(),
+                    selector: located.selector,
                     strict,
                 },
             )

@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import { assertDecoysUntouched, compareFrameCases, value } from './frames.mjs'
 import { compareMethod, skip } from './harness.mjs'
 
 test('count returns how many elements match, at once', {
@@ -36,4 +37,39 @@ test('count returns how many elements match, at once', {
     probe: `['.fruit', '.missing', '#veg > li'].map(s => document.querySelectorAll(s).length)`,
   })
   assert.ok(outcome.calls.every((c) => c.delivery === undefined))
+})
+
+/** count inside frames, on tabs of frame-top.html (frames.mjs): items of the frame it names, the
+ * `visible` filter judged inside that frame's own document, and 0 at once for a missing iframe. */
+const frameCases = [
+  {
+    name: 'count counts in the frame it names',
+    source: `page.setDefaultTimeout(1)
+    const items = (frame) => frame.locator('.item')
+    const login = page.frameLocator('#login-iframe')
+    return {
+      cross: await settle(() => items(login).count()),
+      visible: await settle(() => items(login).filter({ visible: true }).count()),
+      nested: await settle(() => items(page.frameLocator('#chain').frameLocator('#chain-inner')).count()),
+      frame: await settle(() => items(page.frame('grandchild')).count()),
+      inHiddenFrame: await settle(() => items(page.frameLocator('#hidden-same')).filter({ visible: true }).count()),
+      missingFrame: await settle(() => items(page.frameLocator('#nope')).count()),
+    }`,
+    expected: {
+      cross: value(3),
+      visible: value(2),
+      nested: value(3),
+      frame: value(3),
+      inHiddenFrame: value(2),
+      missingFrame: value(0),
+    },
+    effect: (effect) => assertDecoysUntouched(effect, []),
+  },
+]
+
+test('count inside frames counts the same elements through Neo and Playwright', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases)
 })

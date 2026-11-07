@@ -8,6 +8,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { assertDecoysUntouched, compareFrameCases, value } from './frames.mjs'
 import {
   browserBinary,
   buildNeoRun,
@@ -116,4 +117,147 @@ test('ariaSnapshot returns the same YAML and its refs click and read', {
   } finally {
     await runCleanups(cleanups)
   }
+})
+
+/**
+ * page.ariaSnapshot over frames, on tabs of frame-top.html (frames.mjs): the `ai` snapshot
+ * stitches each visible iframe's content under its `- iframe` node, out-of-process frames and
+ * the mixed tree included, also with a depth limit; the default snapshot does not (design §3.6).
+ * Refs read from the snapshot act inside frames: an Email inside the cross-site frame is filled
+ * and read back, a button in the 127.0.0.1 frame inside it is clicked, and the iframe's own ref
+ * leads into its frame through contentFrame(). The YAML is compared with refs blanked.
+ *
+ * Known, intended difference, asserted per engine (design §4.3): ref strings inside frames.
+ * Playwright prefixes a frame's refs with its frame number (`f4e3`); Neo with the iframe's ref
+ * number at each level (`- iframe [ref=e23]` → `f23e3`, one level deeper `f23f12e5`), so a later
+ * run can rebuild them. The local part (`e3`) names the same element on both.
+ */
+const frameCases = [
+  {
+    name: 'the ai snapshot stitches frames and its refs act inside them',
+    source: `const refOf = (line) => /\\[ref=([^\\]]+)\\]/.exec(line)?.[1]
+    const blank = (yaml) => yaml.replace(/\\[ref=[^\\]]+\\]/g, '[ref]')
+    const plain = await page.ariaSnapshot()
+    const shallow = await page.ariaSnapshot({ mode: 'ai', depth: 3 })
+    const ai = await page.ariaSnapshot({ mode: 'ai' })
+    const lines = ai.split('\\n')
+    const after = (marker, role) =>
+      refOf(lines.slice(lines.findIndex((line) => line.includes(marker))).find((line) => line.includes(role)))
+    const crossEmail = after(': cross gen 1', 'textbox "Email"')
+    const grandchildSend = after(': grandchild gen 1', 'button "Send"')
+    const iframes = lines.filter((line) => line.trimStart().startsWith('- iframe ')).map(refOf)
+    // A snapshot without a frame's content has no ref to act on: report that, not a timeout.
+    const act = (ref, call) => (ref === undefined ? 'no ref' : settle(() => call(page.locator('aria-ref=' + ref))))
+    return {
+      plain,
+      shallow: blank(shallow),
+      ai: blank(ai),
+      filled: await act(crossEmail, (target) => target.fill('via-ref')),
+      read: await act(crossEmail, (target) => target.inputValue()),
+      clicked: await act(grandchildSend, (target) => target.click()),
+      iframeName: await act(iframes[1], (target) => target.getAttribute('name')),
+      throughIframe: await act(iframes[1], (target) => target.contentFrame().locator('#who').textContent()),
+      refs: { crossEmail, grandchildSend, iframes },
+    }`,
+    perEngine: ['refs'],
+    expected: {
+      plain: (plain) => {
+        assert.equal(
+          plain.match(/^- iframe$/gm)?.length,
+          3,
+          'iframes as leaves',
+        )
+        assert.doesNotMatch(plain, /(same|cross|chain|grandchild) gen 1/)
+      },
+      shallow: (shallow) => {
+        assertStitched(shallow)
+        assert.ok(
+          !shallow.includes('same one'),
+          'the depth limit cuts frames too',
+        )
+      },
+      ai: (ai) => {
+        assertStitched(ai)
+        assert.ok(ai.includes('- listitem [ref]: same one'))
+      },
+      filled: 'undefined',
+      read: value('via-ref'),
+      clicked: 'undefined',
+      iframeName: value('cross'),
+      throughIframe: value('cross'),
+    },
+    effect: (effect) => {
+      const { cross, grandchild } = assertDecoysUntouched(effect, [
+        'cross',
+        'grandchild',
+      ])
+      assert.equal(cross.email, 'via-ref')
+      assert.deepEqual(
+        grandchild.events.filter((event) => event.type === 'click'),
+        [{ type: 'click', target: 'send', trusted: true }],
+        `the click reached the grandchild's Send: ${JSON.stringify({ grandchild: grandchild.events, cross: cross.events })}`,
+      )
+    },
+    deliveries: { fill: ['done'], click: ['done'] },
+    checkPlaywright: ({ result }) => {
+      const { crossEmail, grandchildSend, iframes } = result.value.refs
+      assert.match(
+        crossEmail,
+        /^f\d+e\d+$/,
+        'Playwright: frame number + local ref',
+      )
+      assert.match(grandchildSend, /^f\d+e\d+$/)
+      assert.equal(iframes.length, 5, 'five rendered iframes')
+    },
+    checkNeo: ({ result }, playwright) => {
+      const { crossEmail, grandchildSend, iframes } = result.value.refs
+      const reference = playwright.result.value.refs
+      const number = (ref) => /e(\d+)$/.exec(ref)[1]
+      const local = (ref) => /e\d+$/.exec(ref)[0]
+      const [, cross, nested] = iframes
+      assert.match(
+        cross,
+        /^e\d+$/,
+        "the cross-site iframe's own ref is a main-frame ref",
+      )
+      assert.equal(nested, `f${number(cross)}e${number(reference.iframes[2])}`)
+      assert.equal(
+        crossEmail,
+        `f${number(cross)}${local(reference.crossEmail)}`,
+      )
+      assert.equal(
+        grandchildSend,
+        `f${number(cross)}f${number(nested)}${local(reference.grandchildSend)}`,
+      )
+    },
+  },
+]
+
+/**
+ * Asserts that `yaml` (refs blanked) shows each visible frame's document under its `- iframe`
+ * node, nested frames one level deeper, and no hidden iframe.
+ */
+function assertStitched(yaml) {
+  const indent = (level) => '  '.repeat(level)
+  for (const [who, level] of [
+    ['same', 1],
+    ['cross', 1],
+    ['grandchild', 3],
+    ['chain', 1],
+    ['chain-inner', 3],
+  ])
+    assert.ok(
+      yaml.includes(
+        `${indent(level)}- iframe [ref]:\n${indent(level + 1)}- generic [ref]:\n${indent(level + 2)}- paragraph [ref]: ${who} gen 1\n`,
+      ),
+      `${who}'s document under its iframe`,
+    )
+  assert.doesNotMatch(yaml, /hidden-(same|cross)/, 'hidden iframes stay out')
+}
+
+test('ariaSnapshot over frames reads the same tree through Neo and Playwright', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases)
 })

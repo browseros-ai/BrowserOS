@@ -16,7 +16,6 @@
 //! CDP request timeouts also become `NotConnected`, so `count` can return 0 on a frozen page.
 
 use std::future::Future;
-use std::sync::Arc;
 
 use neo_runtime_spec::injected::{InjectedAllTextContentsParams, InjectedQueryCountParams};
 use neo_runtime_spec::serve::{
@@ -24,7 +23,8 @@ use neo_runtime_spec::serve::{
 };
 
 use crate::click::PageError;
-use crate::page::PageSession;
+use crate::frame_selector;
+use crate::page::FrameTab;
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::reads::SelectorTab;
 
@@ -144,14 +144,17 @@ pub(crate) fn serialize_strings(values: Vec<String>) -> SerializedValue {
 }
 
 /// By-value page calls, with no object group or page handles to retain.
-impl ListTab for Arc<PageSession> {
+impl ListTab for FrameTab {
     async fn query_count(&self, selector: &str) -> Result<i64, PageError> {
-        Ok(self
-            .world
+        let Some(located) = frame_selector::locate(self, selector, false).await? else {
+            return Ok(0);
+        };
+        Ok(located
+            .frame
             .call(
                 None,
                 &InjectedQueryCountParams {
-                    selector: selector.to_string(),
+                    selector: located.selector,
                 },
             )
             .await?
@@ -159,12 +162,15 @@ impl ListTab for Arc<PageSession> {
     }
 
     async fn all_text_contents(&self, selector: &str) -> Result<Vec<String>, PageError> {
-        Ok(self
-            .world
+        let Some(located) = frame_selector::locate(self, selector, false).await? else {
+            return Ok(Vec::new());
+        };
+        Ok(located
+            .frame
             .call(
                 None,
                 &InjectedAllTextContentsParams {
-                    selector: selector.to_string(),
+                    selector: located.selector,
                 },
             )
             .await?

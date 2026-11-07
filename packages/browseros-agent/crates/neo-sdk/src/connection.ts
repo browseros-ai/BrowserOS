@@ -34,6 +34,7 @@ import { call } from './runtime-bridge'
 
 /** The public methods that send a browser call, named as Playwright's client names them. */
 export type ApiName =
+  | 'page.frame'
   | 'locator.click'
   | 'locator.fill'
   | 'locator.press'

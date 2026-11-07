@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import { assertDecoysUntouched, compareFrameCases, failed } from './frames.mjs'
 import { compareMethod, skip } from './harness.mjs'
 
 test('fill returns undefined and uses ordinary input events', {
@@ -35,4 +36,46 @@ test('fill returns undefined and uses ordinary input events', {
   const delivered = outcome.calls.filter((c) => c.result.kind === 'ok')
   assert.equal(delivered.length, 5)
   assert.ok(delivered.every((c) => c.delivery === 'done'))
+})
+
+/**
+ * Fill inside frames, on tabs of frame-top.html (frames.mjs): through a frame locator, a nested
+ * one into the 127.0.0.1 frame inside the cross-site one, and a child Frame; the parent's and
+ * every other frame's Email keep their values, the nested frame's parent included. An input in
+ * a hidden iframe is never filled.
+ */
+const frameCases = [
+  {
+    name: "fill types into one frame's Email and no decoy",
+    source: `const login = page.frameLocator('#login-iframe')
+    return {
+      same: await settle(() => page.frameLocator('#same').getByLabel('Email').fill('same@new.test')),
+      grandchild: await settle(() => login.frameLocator('#grandchild').getByLabel('Email').fill('grandchild@new.test')),
+      frame: await settle(() => page.frame('chain-inner').fill('#email', 'chain-inner@new.test')),
+      hiddenFrame: await settle(() => page.frameLocator('#hidden-same').getByLabel('Email').fill('never', { timeout: 500 })),
+    }`,
+    expected: {
+      same: 'undefined',
+      grandchild: 'undefined',
+      frame: 'undefined',
+      hiddenFrame: failed('timeout'),
+    },
+    effect: (effect) => {
+      const touched = assertDecoysUntouched(effect, [
+        'same',
+        'grandchild',
+        'chain-inner',
+      ])
+      for (const [who, facts] of Object.entries(touched))
+        assert.equal(facts.email, `${who}@new.test`, `${who}'s Email`)
+    },
+    deliveries: { fill: ['done', 'done', 'done', 'notSent'] },
+  },
+]
+
+test('fill inside frames fills the same input through Neo and Playwright', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases)
 })

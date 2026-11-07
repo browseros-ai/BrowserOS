@@ -1,9 +1,9 @@
 /**
- * Playwright's `Frame` (`client/frame.ts` at 26137face), cut to a page's main frame: its guid,
+ * Playwright's `Frame` (`client/frame.ts` at 26137face): its Rust-minted guid,
  * its page, the selector builders, whose bodies are Playwright's, `goto`, `title`,
  * `textContent`, `innerText`, `getAttribute`, browser actions, and the waits `waitForURL` and
- * `waitForLoadState` (with `_waitForSelector` behind `locator.waitFor`). A page builds exactly
- * one `Frame` per run, because `Locator` compares frames by identity.
+ * `waitForLoadState` (with `_waitForSelector` behind `locator.waitFor`). A page keeps one
+ * `Frame` per guid, because `Locator` compares frames by identity.
  *
  * Each `_<method>` is where every public form of a browser call (`locator.textContent`,
  * `page.textContent`, `frame.textContent`) becomes a protocol message, with its caller's
@@ -14,6 +14,8 @@
  * a same-document change, or a document without a network request (`about:blank`, `data:`).
  *
  * What differs from Playwright:
+ * - Detached frames retain the last URL and name read by a getter or frame record, as Page
+ *   retains its last URL after closure; without frame events, unseen changes are not retained.
  * - `waitForURL` and `waitForLoadState` are one `neo:` call each, which Rust waits out
  *   (`neo-commands.ts`), where Playwright's client waits on `navigated` and `loadstate` events.
  *   `waitForURL` takes a glob or a `RegExp`, not a predicate function, and neither takes
@@ -34,6 +36,7 @@ import type {
   FrameGetAttributeParams,
   FrameGetAttributeResult,
   FrameGotoParams,
+  FrameInitializer,
   FrameInnerTextParams,
   FrameInnerTextResult,
   FrameInputValueParams,
@@ -60,6 +63,7 @@ import {
   getByTitleSelector,
 } from '../vendor/playwright/isomorphic/locatorUtils'
 import type { ApiName, Connection } from './connection'
+import { FrameLocator, kAnyFrameSelector } from './frame-locator'
 import { Locator, type LocatorOptions, testIdAttributeName } from './locator'
 import { serializeUrlMatch } from './neo-commands'
 import { type Response, responseFor } from './network'
@@ -83,6 +87,7 @@ import {
   FRAME_WAIT_FOR_SELECTOR_KEYS,
   pickParams,
 } from './protocol'
+import { get } from './runtime-bridge'
 import {
   convertSelectOptionValues,
   type SelectOptionValues,
@@ -210,19 +215,63 @@ export type SelectOptionOptions = Omit<
 > & { timeout?: number }
 
 export class Frame {
-  /** `frame@<targetId>`, the guid neo-runtime routes this frame's browser calls by. */
+  /** The opaque guid neo-runtime routes this frame's browser calls by. */
   readonly _guid: string
   readonly _page: Page
   readonly _connection: Connection
+  #lastUrl: string
+  #lastName: string
 
-  constructor(guid: string, page: Page, connection: Connection) {
+  constructor(
+    guid: string,
+    page: Page,
+    connection: Connection,
+    initializer: Pick<FrameInitializer, 'url' | 'name'> = { url: '', name: '' },
+  ) {
     this._guid = guid
     this._page = page
     this._connection = connection
+    this.#lastUrl = initializer.url
+    this.#lastName = initializer.name
+  }
+
+  /** Refreshes values observed through frame records without changing this object's identity. */
+  _updateInitializer(
+    initializer: Pick<FrameInitializer, 'url' | 'name'>,
+  ): void {
+    this.#lastUrl = initializer.url
+    this.#lastName = initializer.name
   }
 
   page(): Page {
     return this._page
+  }
+
+  url(): string {
+    const url = get(this._guid, 'url')
+    if (url !== null) this.#lastUrl = url
+    return this.#lastUrl
+  }
+
+  name(): string {
+    const name = get(this._guid, 'name')
+    if (name !== null) this.#lastName = name
+    return this.#lastName
+  }
+
+  parentFrame(): Frame | null {
+    const record = get(this._guid, 'parentFrame')
+    return record ? this._page._frameFrom(record) : null
+  }
+
+  childFrames(): Frame[] {
+    return get(this._guid, 'childFrames').map((record) =>
+      this._page._frameFrom(record),
+    )
+  }
+
+  isDetached(): boolean {
+    return get(this._guid, 'isDetached')
   }
 
   async goto(url: string, options: GotoOptions = {}): Promise<Response | null> {
@@ -798,6 +847,13 @@ export class Frame {
 
   locator(selector: string, options?: LocatorOptions): Locator {
     return new Locator(this, selector, options)
+  }
+
+  frameLocator(selector?: string): FrameLocator {
+    return new FrameLocator(
+      this,
+      selector === undefined ? kAnyFrameSelector : selector,
+    )
   }
 
   getByTestId(testId: string | RegExp): Locator {

@@ -18,9 +18,12 @@
 //!                       │                ariaSnapshot;
 //!                       │                aria_yaml.rs renders the snapshot as Playwright's YAML
 //!                       ├─ waits         waits.rs: selector, URL and lifecycle waits; no input lock
-//!                       └─ PageSession   page.rs: domains, watcher, document state, input
-//!                            ├─ NetworkLog  network.rs: the main frame's navigation requests
-//!                            └─ World    world.rs: per-document injected glue
+//!                       └─ FrameTab      one frame scope over PageSession
+//!                            ├─ PageSession: shared input, watcher and navigation
+//!                            │    └─ NetworkLog  network.rs: the main frame's navigation requests
+//!                            └─ frame_selector::locate → Frames → FrameContext
+//!                                 ├─ Host: tab or child target CDP session
+//!                                 └─ World: per-document injected glue
 //! ```
 //!
 //! The registry and session writers share each `PageSession`. Its last owner detaches the
@@ -51,6 +54,8 @@ mod deadline;
 mod dispatch;
 mod fill;
 mod forms;
+mod frame_selector;
+mod frames;
 mod getters;
 mod keyboard;
 mod lists;
