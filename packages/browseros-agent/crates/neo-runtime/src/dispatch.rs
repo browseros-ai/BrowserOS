@@ -33,16 +33,19 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use neo_runtime_spec::injected::ReadableElementState;
 use neo_runtime_spec::serve::{
     BrowserContextCall, FrameAriaSnapshotParams, FrameCall, FrameCheckParams, FrameCheckResult,
     FrameClickParams, FrameDblclickParams, FrameEvalOnSelectorAllParams, FrameFillParams,
     FrameFillResult, FrameGetAttributeParams, FrameGotoParams, FrameHoverParams,
-    FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams,
-    FrameIsCheckedResult, FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams,
-    FramePressResult, FrameQueryCountParams, FrameSelectOptionParams, FrameSelectOptionResult,
-    FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameUncheckParams,
-    FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult, Metadata, PageCall,
-    RequestCall, ResponseCall,
+    FrameInnerHTMLParams, FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult,
+    FrameIsCheckedParams, FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult,
+    FrameIsEditableParams, FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult,
+    FrameIsHiddenParams, FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult,
+    FramePressParams, FramePressResult, FrameQueryCountParams, FrameSelectOptionParams,
+    FrameSelectOptionResult, FrameTapParams, FrameTextContentParams, FrameTitleParams,
+    FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
+    Metadata, PageCall, RequestCall, ResponseCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -249,12 +252,18 @@ enum Route {
     FrameGetAttribute(AttributeOptions),
     FrameQueryCount(String),
     FrameAllTextContents(String),
+    FrameAllInnerTexts(String),
+    FrameInnerHtml(ReadOptions),
     FrameAriaSnapshot(SnapshotOptions),
     FrameFill(FillOptions),
     FramePress(PressOptions),
     FrameInputValue(InputValueOptions),
     FrameIsVisible(StateOptions),
+    FrameIsHidden(StateOptions),
     FrameIsChecked(StateOptions),
+    FrameIsEnabled(StateOptions),
+    FrameIsDisabled(StateOptions),
+    FrameIsEditable(StateOptions),
     FrameSetChecked(CheckOptions),
     FrameSelectOption(SelectOptions),
     FrameWaitForSelector(WaitForSelectorOptions),
@@ -482,12 +491,30 @@ fn decode_neo_params<T: DeserializeOwned>(
 /// stops compiling until the command is routed.
 fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
     match call {
-        FrameCall::IsVisible(params) => {
-            Ok(Route::FrameIsVisible(StateOptions::from_is_visible(params)))
-        }
-        FrameCall::IsChecked(params) => {
-            Ok(Route::FrameIsChecked(StateOptions::from_is_checked(params)))
-        }
+        FrameCall::IsVisible(params) => Ok(Route::FrameIsVisible(StateOptions::new(
+            params.selector,
+            params.strict,
+        ))),
+        FrameCall::IsHidden(params) => Ok(Route::FrameIsHidden(StateOptions::new(
+            params.selector,
+            params.strict,
+        ))),
+        FrameCall::IsChecked(params) => Ok(Route::FrameIsChecked(StateOptions::new(
+            params.selector,
+            params.strict,
+        ))),
+        FrameCall::IsEnabled(params) => Ok(Route::FrameIsEnabled(StateOptions::new(
+            params.selector,
+            params.strict,
+        ))),
+        FrameCall::IsDisabled(params) => Ok(Route::FrameIsDisabled(StateOptions::new(
+            params.selector,
+            params.strict,
+        ))),
+        FrameCall::IsEditable(params) => Ok(Route::FrameIsEditable(StateOptions::new(
+            params.selector,
+            params.strict,
+        ))),
         FrameCall::Click(params) => PointerOptions::from_click(params).map(Route::FramePointer),
         FrameCall::Dblclick(params) => {
             PointerOptions::from_dblclick(params).map(Route::FramePointer)
@@ -502,6 +529,9 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::InnerText(params) => {
             Ok(Route::FrameInnerText(ReadOptions::from_inner_text(params)))
         }
+        FrameCall::InnerHTML(params) => {
+            Ok(Route::FrameInnerHtml(ReadOptions::from_inner_html(params)))
+        }
         FrameCall::GetAttribute(params) => Ok(Route::FrameGetAttribute(
             AttributeOptions::from_params(params),
         )),
@@ -511,6 +541,12 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
                 && params.is_function == Some(true) =>
         {
             Ok(Route::FrameAllTextContents(params.selector))
+        }
+        FrameCall::EvalOnSelectorAll(params)
+            if params.expression == lists::ALL_INNER_TEXTS_EXPRESSION
+                && params.is_function == Some(true) =>
+        {
+            Ok(Route::FrameAllInnerTexts(params.selector))
         }
         FrameCall::EvalOnSelectorAll(_) => {
             Err(PlaywrightError::error(EVAL_ON_SELECTOR_ALL_UNSERVED))
@@ -644,6 +680,12 @@ async fn serve(
                 .await
                 .and_then(|result| encode_result::<FrameEvalOnSelectorAllParams>(&result))
         }
+        Route::FrameAllInnerTexts(selector) => lists::all_inner_texts(&page, &selector, &progress)
+            .await
+            .and_then(|result| encode_result::<FrameEvalOnSelectorAllParams>(&result)),
+        Route::FrameInnerHtml(options) => reads::inner_html(&page, &options, &progress)
+            .await
+            .and_then(|result| encode_result::<FrameInnerHTMLParams>(&result)),
         Route::FrameAriaSnapshot(options) => reads::aria_snapshot(&page, &options, &progress)
             .await
             .and_then(|result| encode_result::<FrameAriaSnapshotParams>(&result)),
@@ -665,16 +707,12 @@ async fn serve(
                 .await
                 .map(|()| Some(json!({})))
         }
-        Route::FrameIsVisible(options) => states::is_visible(&page, &options, &progress)
-            .await
-            .and_then(|value| {
-                encode_result::<FrameIsVisibleParams>(&FrameIsVisibleResult { value })
-            }),
-        Route::FrameIsChecked(options) => states::is_checked(&page, &options, &progress)
-            .await
-            .and_then(|value| {
-                encode_result::<FrameIsCheckedParams>(&FrameIsCheckedResult { value })
-            }),
+        route @ (Route::FrameIsVisible(_)
+        | Route::FrameIsHidden(_)
+        | Route::FrameIsChecked(_)
+        | Route::FrameIsEnabled(_)
+        | Route::FrameIsDisabled(_)
+        | Route::FrameIsEditable(_)) => serve_state(&page, route, &progress).await,
         route => serve_route(&page, route, &progress).await,
     };
     finish_reply(
@@ -686,6 +724,56 @@ async fn serve(
             reply,
         },
     );
+}
+
+/// The state reads `serve` answers on the call's page (`states.rs`): `isVisible` and `isHidden`
+/// read once; the others wait for a match and read one `ElementState`.
+async fn serve_state(
+    page: &FrameTab,
+    route: Route,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    match route {
+        Route::FrameIsVisible(options) => states::is_visible(page, &options, progress)
+            .await
+            .and_then(|value| {
+                encode_result::<FrameIsVisibleParams>(&FrameIsVisibleResult { value })
+            }),
+        Route::FrameIsHidden(options) => states::is_hidden(page, &options, progress)
+            .await
+            .and_then(|value| encode_result::<FrameIsHiddenParams>(&FrameIsHiddenResult { value })),
+        Route::FrameIsChecked(options) => {
+            states::element_state(page, &options, ReadableElementState::Checked, progress)
+                .await
+                .and_then(|value| {
+                    encode_result::<FrameIsCheckedParams>(&FrameIsCheckedResult { value })
+                })
+        }
+        Route::FrameIsEnabled(options) => {
+            states::element_state(page, &options, ReadableElementState::Enabled, progress)
+                .await
+                .and_then(|value| {
+                    encode_result::<FrameIsEnabledParams>(&FrameIsEnabledResult { value })
+                })
+        }
+        Route::FrameIsDisabled(options) => {
+            states::element_state(page, &options, ReadableElementState::Disabled, progress)
+                .await
+                .and_then(|value| {
+                    encode_result::<FrameIsDisabledParams>(&FrameIsDisabledResult { value })
+                })
+        }
+        Route::FrameIsEditable(options) => {
+            states::element_state(page, &options, ReadableElementState::Editable, progress)
+                .await
+                .and_then(|value| {
+                    encode_result::<FrameIsEditableParams>(&FrameIsEditableResult { value })
+                })
+        }
+        _ => {
+            Err(PlaywrightError::error("neo-runtime: `serve_state` serves state reads only").into())
+        }
+    }
 }
 
 fn unsupported_child_call(scope: &FrameScope, route: &Route) -> Option<PlaywrightError> {
@@ -767,8 +855,14 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameGetAttribute(_)
         | Route::FrameQueryCount(_)
         | Route::FrameAllTextContents(_)
+        | Route::FrameAllInnerTexts(_)
+        | Route::FrameInnerHtml(_)
         | Route::FrameIsVisible(_)
+        | Route::FrameIsHidden(_)
         | Route::FrameIsChecked(_)
+        | Route::FrameIsEnabled(_)
+        | Route::FrameIsDisabled(_)
+        | Route::FrameIsEditable(_)
         | Route::FrameAriaSnapshot(_)
         | Route::FrameWaitForSelector(_)
         | Route::FrameWaitForUrl(_)
@@ -1175,8 +1269,14 @@ mod tests {
                 | Route::FrameGetAttribute(_)
                 | Route::FrameQueryCount(_)
                 | Route::FrameAllTextContents(_)
+                | Route::FrameAllInnerTexts(_)
+                | Route::FrameInnerHtml(_)
                 | Route::FrameIsVisible(_)
+                | Route::FrameIsHidden(_)
                 | Route::FrameIsChecked(_)
+                | Route::FrameIsEnabled(_)
+                | Route::FrameIsDisabled(_)
+                | Route::FrameIsEditable(_)
                 | Route::FrameAriaSnapshot(_)
                 | Route::FrameWaitForSelector(_)
                 | Route::FrameWaitForUrl(_)
@@ -1570,9 +1670,19 @@ mod tests {
         }
     }
 
+    /// Every state read Neo serves: the two that read once and the four that wait for a match.
+    const STATE_READS: [&str; 6] = [
+        "isVisible",
+        "isHidden",
+        "isChecked",
+        "isEnabled",
+        "isDisabled",
+        "isEditable",
+    ];
+
     #[test]
     fn tests_that_state_reads_decode_the_selector_and_strict_option_without_input() {
-        for method in ["isVisible", "isChecked"] {
+        for method in STATE_READS {
             for strict in [None, Some(false), Some(true)] {
                 let mut params = json!({ "selector": "#control" });
                 if let Some(strict) = strict {
@@ -1584,7 +1694,11 @@ mod tests {
                 let (actual_method, options) = match frame_route(routed.route).expect("state route")
                 {
                     Route::FrameIsVisible(options) => ("isVisible", options),
+                    Route::FrameIsHidden(options) => ("isHidden", options),
                     Route::FrameIsChecked(options) => ("isChecked", options),
+                    Route::FrameIsEnabled(options) => ("isEnabled", options),
+                    Route::FrameIsDisabled(options) => ("isDisabled", options),
+                    Route::FrameIsEditable(options) => ("isEditable", options),
                     route => panic!("unexpected state route: {route:?}"),
                 };
                 assert_eq!(actual_method, method);
@@ -1601,7 +1715,7 @@ mod tests {
 
     #[test]
     fn tests_that_state_reads_route_frames_and_refuse_malformed_params() {
-        for method in ["isVisible", "isChecked"] {
+        for method in STATE_READS {
             assert!(
                 route_frame(
                     method,
@@ -1883,6 +1997,36 @@ mod tests {
             panic!("allTextContents routes");
         };
         assert_eq!(selector, ".item");
+        let mut inner_texts = all_text_contents_params(".fruit");
+        inner_texts["expression"] = json!(lists::ALL_INNER_TEXTS_EXPRESSION);
+        let Ok(ObjectCall::Frame(Route::FrameAllInnerTexts(selector))) =
+            route_frame("evalOnSelectorAll", inner_texts).route
+        else {
+            panic!("allInnerTexts routes");
+        };
+        assert_eq!(selector, ".fruit");
+    }
+
+    #[test]
+    fn tests_that_inner_html_decodes_its_selector_and_strictness_as_a_read() {
+        let routed = route_frame("innerHTML", json!({"selector": "#list", "strict": true}));
+        let meta = routed.meta.expect("innerHTML metadata");
+        assert!(!meta.has(MethodFlag::Input), "a read has no delivery");
+        let Ok(ObjectCall::Frame(Route::FrameInnerHtml(options))) = routed.route else {
+            panic!("innerHTML routes");
+        };
+        assert_eq!(
+            options,
+            ReadOptions {
+                selector: "#list".to_string(),
+                strict: true,
+            }
+        );
+        assert!(
+            route_frame("innerHTML", json!({"selector": 1}))
+                .route
+                .is_err()
+        );
     }
 
     #[test]
@@ -1896,7 +2040,19 @@ mod tests {
             .as_object_mut()
             .expect("params")
             .remove("isFunction");
-        for params in [other_expression, not_a_function, absent_function] {
+        let mut inner_texts_not_a_function = all_text_contents_params(".item");
+        inner_texts_not_a_function["expression"] = json!(lists::ALL_INNER_TEXTS_EXPRESSION);
+        inner_texts_not_a_function["isFunction"] = json!(false);
+        // Playwright's TypeScript body, which is not JavaScript, is not Neo's served expression.
+        let mut typescript_body = all_text_contents_params(".item");
+        typescript_body["expression"] = json!("ee => ee.map(e => (e as HTMLElement).innerText)");
+        for params in [
+            other_expression,
+            not_a_function,
+            absent_function,
+            inner_texts_not_a_function,
+            typescript_body,
+        ] {
             assert_eq!(
                 error_of(route_frame("evalOnSelectorAll", params)),
                 PlaywrightError::error(EVAL_ON_SELECTOR_ALL_UNSERVED)
