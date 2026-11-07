@@ -324,7 +324,9 @@ export function evaluateParams(
   arg: unknown,
   options: EvaluateOptions | undefined,
 ): EvaluateParams {
-  if ((options as { signal?: unknown } | undefined)?.signal !== undefined) {
+  const signal = (options as { signal?: unknown } | undefined)?.signal
+  // `null` is no signal, as `undefined`.
+  if (signal !== undefined && signal !== null) {
     // Deviation: `client/jsHandle.ts` `JSHandle.evaluate`: `const result = await this._channel.evaluateExpression({ expression: String(pageFunction), isFunction: typeof pageFunction === 'function', arg: serializedArg }, kNoTimeout);` Playwright's evaluations send no signal and ignore one; Neo refuses any signal rather than ignore one.
     throw new Error(`${apiName}: Neo does not support signal yet`)
   }
