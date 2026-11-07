@@ -46,6 +46,10 @@ function locatorCalls(page: ReturnType<typeof start>['page']): Call[] {
       'locator.ariaSnapshot',
       (signal) => locator.ariaSnapshot(withSignal(signal)),
     ],
+    [
+      'locator.ariaSnapshotJSON',
+      (signal) => locator.ariaSnapshotJSON(withSignal(signal)),
+    ],
     ['locator.fill', (signal) => locator.fill('x', withSignal(signal))],
     ['locator.clear', (signal) => locator.clear(withSignal(signal))],
     ['locator.press', (signal) => locator.press('a', withSignal(signal))],
@@ -78,6 +82,10 @@ function selectorCalls(
     [
       `${name}.goto`,
       (signal) => target.goto('https://run.test/next', withSignal(signal)),
+    ],
+    [
+      `${name}.setContent`,
+      (signal) => target.setContent('<p>x</p>', withSignal(signal)),
     ],
     [
       `${name}.waitForURL`,
@@ -163,6 +171,10 @@ for (const [family, calls] of [
       [
         'page.ariaSnapshot',
         (signal: never) => page.ariaSnapshot(withSignal(signal)),
+      ] as Call,
+      [
+        'page.ariaSnapshotJSON',
+        (signal: never) => page.ariaSnapshotJSON(withSignal(signal)),
       ] as Call,
     ],
   ],
