@@ -9061,7 +9061,13 @@ var glue = {
       element.scrollIntoView({ block, inline, behavior: "instant" });
     return {};
   },
-  viewportSize: () => ({ width: innerWidth, height: innerHeight }),
+  viewportSize: () => {
+    const root = document.compatMode === "BackCompat" ? document.body : document.documentElement;
+    return {
+      width: root?.clientWidth ?? innerWidth,
+      height: root?.clientHeight ?? innerHeight
+    };
+  },
   getElementBorderWidth: (injected, _params, element) => injected.getElementBorderWidth(element),
   setupHitTargetInterceptor: (injected, { hitPoint, blockAllEvents }, element) => ({
     outcome: injected.setupHitTargetInterceptor(element, "mouse", hitPoint, blockAllEvents)

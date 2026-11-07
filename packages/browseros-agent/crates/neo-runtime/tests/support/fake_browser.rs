@@ -623,6 +623,7 @@ fn answer(
         return answer;
     }
     match command["method"].as_str().unwrap_or_default() {
+        "Target.getTargets" => (json!({"result":{"targetInfos":[]}}), now),
         "Page.bringToFront" => (bring_to_front(command, calls, page), now),
         "Target.attachToTarget" => {
             let call = calls.attach;

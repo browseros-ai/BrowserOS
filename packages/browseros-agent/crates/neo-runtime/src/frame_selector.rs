@@ -358,19 +358,20 @@ mod tests {
     use super::*;
 
     use std::collections::VecDeque;
+    use std::future;
 
     struct ScriptedHops(VecDeque<Result<Option<(u32, bool)>, PageError>>);
 
     impl Hops for ScriptedHops {
         type Context = u32;
 
-        async fn enter(
+        fn enter(
             &mut self,
             _context: u32,
             _selector: &str,
             _strict: bool,
-        ) -> Result<Option<(u32, bool)>, PageError> {
-            self.0.pop_front().expect("scripted frame outcome")
+        ) -> impl Future<Output = Result<Option<(u32, bool)>, PageError>> + Send {
+            future::ready(self.0.pop_front().expect("scripted frame outcome"))
         }
     }
 

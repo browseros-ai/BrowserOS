@@ -194,14 +194,12 @@ impl Deref for FrameTab {
 }
 
 impl FrameTab {
-    #[expect(
-        clippy::unused_async,
-        reason = "Direct frame scopes resolve their live host asynchronously"
-    )]
-    pub(crate) async fn context(&self) -> Result<Arc<FrameContext>, PageError> {
-        match &self.scope {
+    pub(crate) fn context(
+        &self,
+    ) -> impl Future<Output = Result<Arc<FrameContext>, PageError>> + Send {
+        future::ready(match &self.scope {
             FrameScope::Main => Ok(self.frames.main()),
-        }
+        })
     }
 
     pub(crate) fn group(&self, frame: &Arc<FrameContext>, purpose: &str) -> GroupGuard {
@@ -1156,6 +1154,21 @@ impl Tab for FrameTab {
         element: &ResolvedElement,
         states: &[ElementState],
     ) -> Result<StatesCheck, PageError> {
+        // An offscreen OOPIF can throttle animation frames indefinitely. Bring its owners
+        // into view before a stability check waits on that frame's animation callbacks.
+        if states.contains(&ElementState::Stable) {
+            for owner in &element.owners {
+                owner
+                    .frame
+                    .host
+                    .send(
+                        "DOM.scrollIntoViewIfNeeded",
+                        json!({"objectId":owner.element.id().object_id()}),
+                    )
+                    .await
+                    .map_err(|error| owner.frame.host.classify(&error))?;
+            }
+        }
         let checked = element
             .frame
             .call(
@@ -1574,7 +1587,7 @@ fn no_geometry(error: &PageError) -> Result<Geometry, PageError> {
 
 /// A CDP `DOM.Quad`, which is always eight numbers.
 fn translate(mut quad: [f64; 8], (x, y): (f64, f64)) -> [f64; 8] {
-    for point in quad.chunks_exact_mut(2) {
+    for point in quad.as_chunks_mut::<2>().0 {
         point[0] += x;
         point[1] += y;
     }

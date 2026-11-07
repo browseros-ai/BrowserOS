@@ -75,15 +75,25 @@ pub(crate) struct Host {
     parent: Option<Arc<Host>>,
     gone: CancellationToken,
     _watch: Option<DropGuard>,
+    contexts: Weak<Contexts>,
 }
 
 impl Host {
     pub(crate) async fn send(&self, method: &str, params: Value) -> Result<Value, CdpError> {
-        tokio::select! {
+        let result = tokio::select! {
             biased;
             () = self.gone.cancelled() => Err(CdpError::SessionGone),
             result = self.session.cdp.send(method, params, Some(&self.session.id)) => result,
+        };
+        if result
+            .as_ref()
+            .is_err_and(|error| self.classify(error) == PageError::NotConnected)
+            && let Some(contexts) = self.contexts.upgrade()
+            && let Ok(mut contexts) = contexts.lock()
+        {
+            contexts.retain(|_, frame| frame.host.session_id() != self.session_id());
         }
+        result
     }
 
     pub(crate) fn is_child(&self) -> bool {
@@ -122,6 +132,7 @@ impl Frames {
                 parent: None,
                 gone: CancellationToken::new(),
                 _watch: None,
+                contexts: Arc::downgrade(&contexts),
             }),
             world,
             contexts: Arc::downgrade(&contexts),
@@ -149,19 +160,30 @@ impl Frames {
             return Ok(Arc::clone(context));
         }
         let parent = parent.unwrap_or(&self.main.host);
-        let info = self
+        // getTargetInfo alone can miss newly inserted OOPIFs. Listing targets discovers
+        // their current DevTools hosts before attempting the lazy attach.
+        let targets = self
             .main
             .host
             .session
             .cdp
-            .send("Target.getTargetInfo", json!({"targetId":frame}), None)
-            .await;
-        let host = match info {
-            Ok(info) if info["targetInfo"]["type"] == "iframe" => {
-                self.attach(frame, parent).await?
-            }
-            Ok(_) | Err(CdpError::Protocol { .. }) => Arc::clone(parent),
-            Err(error) => return Err(world::classify(&error)),
+            .send(
+                "Target.getTargets",
+                json!({"filter":[{"type":"iframe"}]}),
+                None,
+            )
+            .await
+            .map_err(|error| world::classify(&error))?;
+        let targets = targets["targetInfos"].as_array().ok_or_else(|| {
+            PageError::Contract("Target.getTargets returned no targetInfos".to_string())
+        })?;
+        let remote = targets
+            .iter()
+            .any(|target| target["targetId"] == frame && target["type"] == "iframe");
+        let host = if remote {
+            self.attach(frame, parent).await?
+        } else {
+            Arc::clone(parent)
         };
         let context = Arc::new(FrameContext {
             id: frame.to_string(),
@@ -212,6 +234,7 @@ impl Frames {
             parent: Some(Arc::clone(parent)),
             gone,
             _watch: Some(watch),
+            contexts: Arc::downgrade(&self.contexts),
         }))
     }
 

@@ -213,7 +213,18 @@ export const glue = {
     return {}
   },
 
-  viewportSize: () => ({ width: innerWidth, height: innerHeight }),
+  // Scrollbar gutters cannot receive content clicks. The root client size is the layout
+  // viewport without those gutters, including documents in quirks mode.
+  viewportSize: () => {
+    const root =
+      document.compatMode === 'BackCompat'
+        ? document.body
+        : document.documentElement
+    return {
+      width: root?.clientWidth ?? innerWidth,
+      height: root?.clientHeight ?? innerHeight,
+    }
+  },
 
   getElementBorderWidth: (injected, _params, element) =>
     injected.getElementBorderWidth(element),

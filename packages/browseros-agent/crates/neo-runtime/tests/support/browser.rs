@@ -235,41 +235,49 @@ async fn serve_fixture(fixture: Fixture) -> String {
     let address = listener
         .local_addr()
         .unwrap_or_else(|error| panic!("read the fixture server's port: {error}"));
+    let mut listeners = vec![listener];
+    // `localhost` can resolve to either family. Both listeners serve this same fixture.
+    if let Ok(localhost) = TcpListener::bind(("::1", address.port())).await {
+        listeners.push(localhost);
+    }
     let fixture = Arc::new(fixture);
-    tokio::spawn(async move {
-        while let Ok((mut stream, _)) = listener.accept().await {
-            let fixture = Arc::clone(&fixture);
-            tokio::spawn(async move {
-                let mut request = Vec::new();
-                let mut buffer = [0_u8; 1024];
-                while !request.windows(4).any(|part| part == b"\r\n\r\n") {
-                    match stream.read(&mut buffer).await {
-                        Ok(0) | Err(_) => return,
-                        Ok(read) => request.extend_from_slice(&buffer[..read]),
+    for listener in listeners {
+        let fixture = Arc::clone(&fixture);
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let fixture = Arc::clone(&fixture);
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut buffer = [0_u8; 1024];
+                    while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                        match stream.read(&mut buffer).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => request.extend_from_slice(&buffer[..read]),
+                        }
                     }
-                }
-                let head = String::from_utf8_lossy(&request);
-                let path = head.split(' ').nth(1).unwrap_or("/").to_string();
-                if path.starts_with("/slow") {
-                    time::sleep(fixture.slow_response).await;
-                }
-                let body = fixture
-                    .pages
-                    .iter()
-                    .find(|(page, _)| *page == path)
-                    .map_or_else(
-                        || format!("<title>{path}</title><h1>{path}</h1>"),
-                        |(_, html)| html.clone(),
+                    let head = String::from_utf8_lossy(&request);
+                    let path = head.split(' ').nth(1).unwrap_or("/").to_string();
+                    if path.starts_with("/slow") {
+                        time::sleep(fixture.slow_response).await;
+                    }
+                    let body = fixture
+                        .pages
+                        .iter()
+                        .find(|(page, _)| *page == path)
+                        .map_or_else(
+                            || format!("<title>{path}</title><h1>{path}</h1>"),
+                            |(_, html)| html.clone(),
+                        );
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
                     );
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                // The browser may cancel a request it no longer needs.
-                let _ = stream.write_all(response.as_bytes()).await;
-            });
-        }
-    });
+                    // The browser may cancel a request it no longer needs.
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+    }
     format!("http://{address}")
 }
 

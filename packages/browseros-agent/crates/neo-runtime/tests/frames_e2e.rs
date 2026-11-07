@@ -188,6 +188,11 @@ async fn cross_target(tab: &Tab) -> Value {
 #[tokio::test(flavor = "multi_thread")]
 async fn oopifs_and_nested_mixed_hosts_use_every_existing_operation() {
     let Some(tab) = open().await else { return };
+    exercise(&tab, "#cross").await;
+    exercise(&tab, &format!("#cross{HOP}#nested")).await;
+    exercise(&tab, &format!("#cross{HOP}#local")).await;
+    let untouched = tab.evaluate("[document.querySelector('#email').value, document.querySelector('#same').contentDocument.querySelector('#email').value, document.querySelector('#sibling').contentDocument.querySelector('#email').value]").await;
+    // Cold regression: no child target enumeration or attach occurs until Neo has acted.
     let target = cross_target(&tab).await;
     assert!(
         target["url"]
@@ -195,10 +200,6 @@ async fn oopifs_and_nested_mixed_hosts_use_every_existing_operation() {
             .unwrap()
             .starts_with("http://localhost:")
     );
-    exercise(&tab, "#cross").await;
-    exercise(&tab, &format!("#cross{HOP}#nested")).await;
-    exercise(&tab, &format!("#cross{HOP}#local")).await;
-    let untouched = tab.evaluate("[document.querySelector('#email').value, document.querySelector('#same').contentDocument.querySelector('#email').value, document.querySelector('#sibling').contentDocument.querySelector('#email').value]").await;
     let attached = tab
         .cdp
         .send(
