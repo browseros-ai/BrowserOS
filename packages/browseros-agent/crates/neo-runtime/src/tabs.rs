@@ -642,7 +642,7 @@ impl Tabs {
 
     /// Everything the run installed that the tabs it leaves open would otherwise keep, taken
     /// back, in one place that each area adding such state releases it from: the run's init
-    /// scripts (`init_scripts.rs`), its session overrides (extra headers, offline mode,
+    /// scripts (`init_scripts.rs`) and exposed bindings (`bindings.rs`), its session overrides (extra headers, offline mode,
     /// geolocation; HTTP credentials hold none while `setHTTPCredentials` is pending) and its
     /// permission grants (`session_state.rs`). `context.close()` awaits it before it resolves and
     /// `Dispatcher::finish` runs it, so a closed context and an ended run let go the same way.
@@ -652,7 +652,12 @@ impl Tabs {
     /// is given up. Idempotent: a run that closed its context finds nothing left at its end,
     /// but what its close could not take back yet.
     pub(crate) async fn release_run_scoped(&self, run: &RunScope) {
-        let _scripts = time::timeout(PAGE_END_WAIT, init_scripts::release_all(run)).await;
+        // The init scripts, then the bindings, on one budget, as the run's end had them (#3196).
+        let _scripts = time::timeout(PAGE_END_WAIT, async {
+            init_scripts::release_all(run).await;
+            run.bindings.close(self).await;
+        })
+        .await;
         // On a task of the run's tracker, which `Runtime::drain` waits for: a reset that outlasts
         // the budget still goes through, and none is given up as done.
         let releasing = self.0.tasks.spawn_on(
