@@ -1,5 +1,7 @@
 // What the evaluation parity files share (evaluate, evaluateHandle, frame-evaluate,
-// locator-evaluate, jsHandle-jsonValue, jsHandle-dispose, evaluate-world): `describe`, which each
+// locator-evaluate, jsHandle-jsonValue, jsHandle-dispose, evaluate-world, and the selector,
+// handle and wait files: query, evaluateAll, evalOnSelector, locator-elementHandle,
+// locator-evaluateHandle, getProperty, waitForFunction): `describe`, which each
 // script gets first, so both engines report any value an evaluation can return as the same JSON:
 // numbers JSON cannot carry (NaN, ±Infinity, -0), undefined, BigInt, Date, RegExp, URL, Map, Set,
 // typed arrays, circular references, and an object's own keys whose value is undefined. Values are
@@ -60,5 +62,24 @@ const outcome = async (call, mentions = []) => {
       mentions: mentions.filter((word) => String(error && error.message).includes(word)),
     }
   }
+}
+`
+
+/**
+ * `settled(handle)` and `previews(handles)`: a handle's `toString()` once its preview is final,
+ * for scripts that compare element handles. Neo's node previews are final at once; Playwright's
+ * start as `JSHandle@node` and arrive by event.
+ */
+export const SETTLED = `
+const settled = async (handle) => {
+  if (!handle) return handle
+  for (let attempt = 0; attempt < 100 && handle.toString() === 'JSHandle@node'; attempt++)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  return handle.toString()
+}
+const previews = async (list) => {
+  const out = []
+  for (const handle of list) out.push(await settled(handle))
+  return out
 }
 `

@@ -9,6 +9,7 @@
  */
 
 import type {
+  BrowserContextCloseParams,
   FrameAriaSnapshotJSONParams,
   FrameAriaSnapshotParams,
   FrameCheckParams,
@@ -398,6 +399,16 @@ type _FrameWaitForSelectorKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_WAIT_FOR_SELECTOR_KEYS)[number], true>,
     Required<FrameWaitForSelectorParams>
+  >
+>
+
+/** `BrowserContext.close`'s params (`spec/playwright/browserContext.yml`). */
+export const BROWSER_CONTEXT_CLOSE_KEYS = ['reason'] as const
+
+type _BrowserContextCloseKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof BROWSER_CONTEXT_CLOSE_KEYS)[number], true>,
+    Required<BrowserContextCloseParams>
   >
 >
 

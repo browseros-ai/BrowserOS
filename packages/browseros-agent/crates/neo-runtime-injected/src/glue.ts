@@ -43,7 +43,10 @@ type NamedElement = Element & { _ariaRef?: { ref: string } }
 const namedOwners = new Map<string, WeakRef<Element>>()
 
 /** The Playwright page types behind the spec's named handle kinds. */
-type Handles = { HitTargetInterceptor: HitTargetInterceptionResult }
+type Handles = {
+  HitTargetInterceptor: HitTargetInterceptionResult
+  ElementList: Record<string, Element>
+}
 
 /**
  * Parses one frame chunk, queries the document, and applies Playwright's checks in Playwright's
@@ -59,10 +62,13 @@ function query(
   injected: InjectedScript,
   selector: string,
   strict: boolean,
-  { markTargets = 'none' }: { markTargets?: 'all' | 'first' | 'none' } = {},
+  {
+    markTargets = 'none',
+    root = document,
+  }: { markTargets?: 'all' | 'first' | 'none'; root?: Node } = {},
 ): Element[] {
   const parsed = injected.parseSelector(selector)
-  const elements = injected.querySelectorAll(parsed, document)
+  const elements = injected.querySelectorAll(parsed, root)
   // Before the checks, as in Playwright: the page's own listeners see the matches marked even
   // when strict mode then fails the call.
   if (markTargets === 'all') injected.markTargetElements(new Set(elements))
@@ -73,6 +79,13 @@ function query(
   if (strict && elements.length > 1)
     throw injected.strictModeViolationError(parsed, elements)
   return elements
+}
+
+/** Neo: elements as a null-prototype object's own properties `0`, `1`, …, which CDP reports
+ * as a plain object (an array would carry the subtype `array`), so Rust lists them with
+ * `Runtime.getProperties` as handles of the matches. */
+function elementList(elements: Element[]): Record<string, Element> {
+  return Object.assign(Object.create(null), elements)
 }
 
 export const glue = {
@@ -105,6 +118,38 @@ export const glue = {
       preview: injected.previewNode(element),
     }
   },
+
+  /** `selectorElement` within an adopted element handle, for `ElementHandle.$` and `$eval`. */
+  // Playwright: `server/frameSelectors.ts` `FrameSelectors._callOnSelectorInternal`: `const elements = injected.querySelectorAll(params.info.parsed, params.scope || document);`
+  scopedSelectorElement: (injected, { selector, strict }, root) => {
+    const elements = query(injected, selector, strict, { root })
+    const [element] = elements
+    if (!element) return { count: 0, visible: false }
+    return {
+      element,
+      count: elements.length,
+      visible: injected.elementState(element, 'visible', true).matches,
+      preview: injected.previewNode(element),
+    }
+  },
+
+  /** Every match, as Playwright's `queryAll` resolves it: the elements, by index. */
+  // Playwright: `server/frameSelectors.ts` `FrameSelectors.queryAll`: `const resolved = await this.callOnSelectorHandle({ selector, strict: false, scope }, ({ elements }) => elements, {});`
+  queryAll: (injected, { selector }) => ({
+    elements: elementList(query(injected, selector, false)),
+  }),
+
+  // Playwright: `server/frameSelectors.ts` `FrameSelectors.queryAll`: `const resolved = await this.callOnSelectorHandle({ selector, strict: false, scope }, ({ elements }) => elements, {});`
+  scopedQueryAll: (injected, { selector }, root) => ({
+    elements: elementList(query(injected, selector, false, { root })),
+  }),
+
+  // Playwright: `server/dom.ts` `ElementHandle._initializePreview`: `this._setPreview(await utility.evaluate((injected, e) => 'JSHandle@' + injected.previewNode(e), this));`
+  listPreviews: (injected, _params, list) => ({
+    previews: Object.values(list).map((element) =>
+      injected.previewNode(element),
+    ),
+  }),
 
   // Neo: the anchor `main_world.rs` resolves into the page's own world; Playwright's server
   // finds that world by its execution context, which Neo does not watch.
@@ -432,24 +477,6 @@ export const glue = {
   },
   queryCount: (injected, { selector }) => ({
     value: query(injected, selector, false).length,
-  }),
-
-  /**
-   * Deviation: `client/locator.ts` `Locator.allTextContents`: `ee => ee.map(e => e.textContent || '')` runs in Neo's isolated world, where Playwright's `$$eval` runs in the page's main world, so a page's own `textContent` override (a prototype patch, a custom element class or a per-instance property) is not seen.
-   */
-  allTextContents: (injected, { selector }) => ({
-    values: query(injected, selector, false).map((e) => e.textContent || ''),
-  }),
-
-  /**
-   * Deviation: `client/locator.ts` `Locator.allInnerTexts`: `ee => ee.map(e => (e as HTMLElement).innerText)` runs in Neo's isolated world, where Playwright's `$$eval` runs in the page's main world, so a page's own `innerText` override (a prototype patch or a per-instance property) is not seen.
-   */
-  allInnerTexts: (injected, { selector }) => ({
-    values: query(injected, selector, false).map((e) => {
-      // Only HTML elements have `innerText`; the page function reads `undefined` for the rest.
-      const value = (e as Partial<HTMLElement>).innerText
-      return value === undefined ? {} : { value }
-    }),
   }),
 } satisfies InjectedApi<InjectedScript, Handles>
 

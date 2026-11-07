@@ -53,8 +53,8 @@ class TargetClosedError extends PlaywrightError {
     super(cause || "Target page, context or browser has been closed");
   }
 }
-function targetClosedError() {
-  return new TargetClosedError;
+function targetClosedError(reason) {
+  return new TargetClosedError(reason);
 }
 function isTargetClosedError(error) {
   return error instanceof TargetClosedError;
@@ -1218,6 +1218,12 @@ var AGENT_FRAME = /^ {4}at .* \(<input>:(\d+):(\d+)\)$/;
 class Connection {
   #nextId = 1;
   #lineOffset;
+  #closed = false;
+  #inFlight = new Set;
+  _closeReasonFor = () => {
+    return;
+  };
+  _closedFor = () => false;
   _objects = new Map;
   constructor(lineOffset) {
     this.#lineOffset = lineOffset;
@@ -1256,12 +1262,36 @@ class Connection {
       location: captureLocation(this.#lineOffset),
       timeout
     };
+    if (this.#closed)
+      throw closedError(apiName);
+    const closedBefore = this._closedFor(guid);
     const message = { id: this.#nextId++, guid, method, params, metadata };
-    const reply = JSON.parse(await call(JSON.stringify(message)));
-    if (reply.error)
-      throw rebuildError(apiName, reply.error.error, reply.log);
+    const text = await new Promise((resolve, reject) => {
+      const abandon = (reason) => reject(closedError(apiName, reason));
+      this.#inFlight.add(abandon);
+      call(JSON.stringify(message)).then(resolve, reject).finally(() => this.#inFlight.delete(abandon));
+    });
+    const reply = JSON.parse(text);
+    if (reply.error) {
+      const error = rebuildError(apiName, reply.error.error, reply.log);
+      const reason = isTargetClosedError(error) && !closedBefore ? this._closeReasonFor(guid) : undefined;
+      if (reason)
+        error.message = `${apiName}: ${reason}${formatCallLog(reply.log)}`;
+      throw error;
+    }
     return reply.result;
   }
+  _close(reason) {
+    this.#closed = true;
+    for (const abandon of this.#inFlight)
+      abandon(reason);
+    this.#inFlight.clear();
+  }
+}
+function closedError(apiName, reason) {
+  const error = targetClosedError(reason);
+  error.message = `${apiName}: ${error.message}`;
+  return error;
 }
 function captureLocation(lineOffset) {
   const stackTraceLimit = Error.stackTraceLimit;
@@ -1339,6 +1369,17 @@ class JSHandle {
   async jsonValue() {
     const result = await this._connection.sendHandle(`${this._apiPrefix}.jsonValue`, this._guid, "jsonValue", {}, 0);
     return parseResult(result.value);
+  }
+  async getProperty(propertyName) {
+    const result = await this._connection.sendHandle(`${this._apiPrefix}.getProperty`, this._guid, "getProperty", { name: propertyName }, 0);
+    return handleFrom(this._connection, result.handle);
+  }
+  async getProperties() {
+    const map = new Map;
+    const result = await this._connection.sendHandle(`${this._apiPrefix}.getProperties`, this._guid, "getPropertyList", {}, 0);
+    for (const { name, value } of result.properties)
+      map.set(name, handleFrom(this._connection, value));
+    return map;
   }
   asElement() {
     return null;
@@ -1447,6 +1488,27 @@ class ElementHandle extends JSHandle {
   asElement() {
     return this;
   }
+  async $(selector) {
+    const result = await this._connection.sendHandle("elementHandle.$", this._guid, "querySelector", { selector }, 0);
+    return ElementHandle.fromNullable(this._connection, result.element);
+  }
+  async $$(selector) {
+    const result = await this._connection.sendHandle("elementHandle.$$", this._guid, "querySelectorAll", { selector }, 0);
+    return elementsFrom(this._connection, result.elements);
+  }
+  async $eval(selector, pageFunction, arg) {
+    const params = evaluateParams("elementHandle.$eval", pageFunction, arg, undefined);
+    const result = await this._connection.sendHandle("elementHandle.$eval", this._guid, "evalOnSelector", { selector, ...params }, 0);
+    return parseResult(result.value);
+  }
+  async $$eval(selector, pageFunction, arg) {
+    const params = evaluateParams("elementHandle.$$eval", pageFunction, arg, undefined);
+    const result = await this._connection.sendHandle("elementHandle.$$eval", this._guid, "evalOnSelectorAll", { selector, ...params }, 0);
+    return parseResult(result.value);
+  }
+}
+function elementsFrom(connection, created) {
+  return created.map((record) => ElementHandle.fromNullable(connection, record)).filter((handle) => handle !== null);
 }
 handleFactory.element = (connection, guid, initializer) => new ElementHandle(connection, guid, initializer);
 
@@ -3750,6 +3812,21 @@ class Locator {
   async evaluate(pageFunction, arg, options) {
     return await this._frame._withElement("locator.evaluate", this._selector, (handle) => handle._evaluate("locator.evaluate", pageFunction, arg, options), { timeout: options?.timeout, signal: options?.signal });
   }
+  async evaluateHandle(pageFunction, arg, options) {
+    return await this._frame._withElement("locator.evaluateHandle", this._selector, (handle) => handle._evaluateHandle("locator.evaluateHandle", pageFunction, arg, options), { timeout: options?.timeout, signal: options?.signal });
+  }
+  async evaluateAll(pageFunction, arg) {
+    return await this._frame._evalOnSelectorAll("locator.evaluateAll", this._selector, pageFunction, arg);
+  }
+  async elementHandle(options) {
+    const handle = await this._frame._waitForSelectorElement("locator.elementHandle", this._selector, { strict: true, state: "attached", ...options });
+    if (!handle)
+      throw new Error(`Could not resolve ${this._selector} to DOM Element`);
+    return handle;
+  }
+  async elementHandles() {
+    return await this._frame._querySelectorAll("locator.elementHandles", this._selector);
+  }
   async waitFor(options) {
     await this._frame._waitForSelector("locator.waitFor", this._selector, {
       strict: true,
@@ -4506,6 +4583,7 @@ var FRAME_WAIT_FOR_SELECTOR_KEYS = [
   "state",
   "omitReturnValue"
 ];
+var BROWSER_CONTEXT_CLOSE_KEYS = ["reason"];
 var PAGE_CLOSE_KEYS = ["reason"];
 var PAGE_RELOAD_KEYS = ["waitUntil"];
 var PAGE_GO_BACK_KEYS = ["waitUntil"];
@@ -4909,6 +4987,7 @@ class Frame {
   _connection;
   #lastUrl;
   #lastName;
+  #during;
   constructor(guid, page, connection, initializer = { url: "", name: "" }) {
     this._guid = guid;
     this._page = page;
@@ -4923,13 +5002,26 @@ class Frame {
   page() {
     return this._page;
   }
+  _during(state, emit) {
+    const outer = this.#during;
+    this.#during = state;
+    try {
+      emit();
+    } finally {
+      this.#during = outer;
+    }
+  }
   url() {
+    if (this.#during)
+      return this.#during.url;
     const url = get(this._guid, "url");
     if (url !== null)
       this.#lastUrl = url;
     return this.#lastUrl;
   }
   name() {
+    if (this.#during)
+      return this.#during.name;
     const name = get(this._guid, "name");
     if (name !== null)
       this.#lastName = name;
@@ -4943,6 +5035,8 @@ class Frame {
     return get(this._guid, "childFrames").map((record) => this._page._frameFrom(record));
   }
   isDetached() {
+    if (this.#during)
+      return this.#during.detached;
     return get(this._guid, "isDetached");
   }
   async goto(url, options = {}) {
@@ -5107,8 +5201,6 @@ class Frame {
     return handleFrom(this._connection, result.handle);
   }
   async _withElement(apiName, selector, task, options) {
-    if (options.signal !== undefined && options.signal !== null)
-      throw new Error(`${apiName}: Neo does not support signal yet`);
     const result = await this._connection.send(apiName, this._guid, "waitForSelector", { selector, strict: true, state: "attached" }, this._page._timeoutSettings.timeout(options, apiName));
     const handle = ElementHandle.fromNullable(this._connection, result?.element);
     if (!handle)
@@ -5174,29 +5266,80 @@ class Frame {
     return result.value;
   }
   async _allTextContents(apiName, selector) {
-    return await this.#evalOnSelectorAllTexts(apiName, selector, "ee => ee.map(e => e.textContent || '')", false);
+    const result = await this._connection.sendEval(apiName, this._guid, "evalOnSelectorAll", {
+      selector,
+      expression: "ee => ee.map(e => e.textContent || '')",
+      isFunction: true,
+      arg: serializeArgument(undefined)
+    }, 0);
+    return parseResult(result?.value);
   }
   async _allInnerTexts(apiName, selector) {
-    return await this.#evalOnSelectorAllTexts(apiName, selector, "ee => ee.map(e => e.innerText)", true);
-  }
-  async#evalOnSelectorAllTexts(apiName, selector, expression, undefinedAllowed) {
-    const result = await this._connection.send(apiName, this._guid, "evalOnSelectorAll", {
+    const result = await this._connection.sendEval(apiName, this._guid, "evalOnSelectorAll", {
       selector,
-      expression,
+      expression: "ee => ee.map(e => e.innerText)",
       isFunction: true,
-      arg: { value: { v: "undefined" }, handles: [] }
+      arg: serializeArgument(undefined)
     }, 0);
-    const value = result?.value;
-    if (!value || typeof value !== "object" || Object.keys(value).length !== 2 || value.id !== 1 || !Array.isArray(value.a))
-      throw new Error("neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string array");
-    return value.a.map((item) => {
-      const single = !!item && typeof item === "object" && Object.keys(item).length === 1;
-      if (single && undefinedAllowed && item.v === "undefined")
-        return;
-      if (!single || typeof item.s !== "string")
-        throw new Error("neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string");
-      return item.s;
+    return parseResult(result?.value);
+  }
+  async $(selector, options) {
+    return await this._querySelector("frame.$", selector, options);
+  }
+  async _querySelector(apiName, selector, options) {
+    if (options?.signal !== undefined && options.signal !== null)
+      throw new Error(`${apiName}: Neo does not support signal yet`);
+    const params = {
+      selector,
+      ...pickParams(["strict"], options ?? {})
+    };
+    const result = await this._connection.sendEval(apiName, this._guid, "querySelector", params, 0);
+    return ElementHandle.fromNullable(this._connection, result?.element);
+  }
+  async $$(selector) {
+    return await this._querySelectorAll("frame.$$", selector);
+  }
+  async _querySelectorAll(apiName, selector) {
+    const result = await this._connection.sendEval(apiName, this._guid, "querySelectorAll", { selector }, 0);
+    return elementsFrom(this._connection, result?.elements ?? []);
+  }
+  async $eval(selector, pageFunction, arg) {
+    assertMaxArguments(arguments.length, 3);
+    return await this._evalOnSelector("frame.$eval", selector, pageFunction, arg);
+  }
+  async _evalOnSelector(apiName, selector, pageFunction, arg) {
+    const params = evaluateParams(apiName, pageFunction, arg, undefined);
+    const result = await this._connection.sendEval(apiName, this._guid, "evalOnSelector", { selector, ...params }, 0);
+    return parseResult(result?.value);
+  }
+  async $$eval(selector, pageFunction, arg) {
+    assertMaxArguments(arguments.length, 3);
+    return await this._evalOnSelectorAll("frame.$$eval", selector, pageFunction, arg);
+  }
+  async _evalOnSelectorAll(apiName, selector, pageFunction, arg) {
+    const params = evaluateParams(apiName, pageFunction, arg, undefined);
+    const result = await this._connection.sendEval(apiName, this._guid, "evalOnSelectorAll", { selector, ...params }, 0);
+    return parseResult(result?.value);
+  }
+  async waitForFunction(pageFunction, arg, options) {
+    return await this._waitForFunction("frame.waitForFunction", pageFunction, arg, options);
+  }
+  async _waitForFunction(apiName, pageFunction, arg, options = {}) {
+    if (typeof options.polling === "string" && options.polling !== "raf")
+      throw new Error(`Unknown polling option: ${options.polling}`);
+    const params = evaluateParams(apiName, pageFunction, arg, undefined);
+    const { pollingInterval } = pickParams(["pollingInterval"], {
+      pollingInterval: options.polling === "raf" ? undefined : options.polling
     });
+    const result = await this._connection.sendEval(apiName, this._guid, "waitForFunction", pollingInterval === undefined ? params : { ...params, pollingInterval }, this._page._timeoutSettings.timeout(options, apiName));
+    return handleFrom(this._connection, result.handle);
+  }
+  async _waitForSelectorElement(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "waitForSelector", pickParams(FRAME_WAIT_FOR_SELECTOR_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options, apiName));
+    return ElementHandle.fromNullable(this._connection, result?.element);
   }
   async _ariaSnapshot(apiName, options, selector) {
     const result = await this._connection.send(apiName, this._guid, "ariaSnapshot", pickParams(FRAME_ARIA_SNAPSHOT_KEYS, {
@@ -5473,21 +5616,28 @@ function isPromiseLike(value) {
 // src/page.ts
 var PAGE_EVENTS = {
   receiver: "Page",
-  served: ["console", "pageerror", "dialog", "dialogclosed", "close", "crash"],
+  served: [
+    "console",
+    "pageerror",
+    "dialog",
+    "dialogclosed",
+    "close",
+    "crash",
+    "load",
+    "domcontentloaded",
+    "frameattached",
+    "framedetached",
+    "framenavigated",
+    "popup"
+  ],
   quiet: [],
   unserved: [
     "download",
     "filechooser",
-    "domcontentloaded",
     "request",
     "response",
     "requestfailed",
     "requestfinished",
-    "frameattached",
-    "framedetached",
-    "framenavigated",
-    "load",
-    "popup",
     "websocket",
     "worker"
   ]
@@ -5501,6 +5651,8 @@ class Page extends ChannelOwner {
   #mainFrame;
   #frames = new Map;
   _timeoutSettings;
+  #closedLocally = false;
+  #closeReason;
   constructor(guid, mainFrameGuid, url, context, connection) {
     super(guid, context._pipe, PAGE_EVENTS);
     this.#guid = guid;
@@ -5515,6 +5667,8 @@ class Page extends ChannelOwner {
     this.#frames.set(mainFrameGuid, this.#mainFrame);
   }
   url() {
+    if (this.#closedLocally)
+      return this.#lastUrl;
     const url = get(this.#guid, "url");
     if (url !== null)
       this.#lastUrl = url;
@@ -5524,6 +5678,7 @@ class Page extends ChannelOwner {
     await this.#connection.sendPage("page.bringToFront", this.#guid, "bringToFront", {}, 0);
   }
   async close(options = {}) {
+    this.#closeReason = options.reason;
     try {
       if (options.runBeforeUnload)
         await this.#connection.sendPage("page.close", this.#guid, "runBeforeUnload", {}, 0);
@@ -5538,15 +5693,65 @@ class Page extends ChannelOwner {
     }
   }
   isClosed() {
-    return get(this.#guid, "isClosed");
+    return this.#closedLocally || get(this.#guid, "isClosed");
   }
-  _onEvent(method) {
+  _isClosedLocally() {
+    return this.#closedLocally;
+  }
+  _closeReason() {
+    return this.#closeReason ?? this.#context._closeReason();
+  }
+  _onEvent(method, params) {
     if (method === "close")
       this._onClose();
     else if (method === "crash")
       this.emit("crash", this);
+    else if (method === "load") {
+      this.emit("load", this);
+      this.#context.emit("pageload", this);
+    } else if (method === "domcontentloaded")
+      this.emit("domcontentloaded", this);
+    else if (method === "frameAttached")
+      this.#onFrameAttached(params.frame);
+    else if (method === "frameDetached")
+      this.#onFrameDetached(params.frame);
+    else if (method === "frameNavigated")
+      this.#onFrameNavigated(params);
+  }
+  #onFrameAttached(record) {
+    this.#frameEvent(record, "frameattached", false);
+  }
+  #onFrameDetached(record) {
+    this.#frameEvent(record, "framedetached", true);
+  }
+  #onFrameNavigated({ frame, url, name }) {
+    this.#frameEvent({
+      guid: frame.guid,
+      initializer: {
+        ...frame.initializer,
+        url: url ?? frame.initializer.url,
+        name: name ?? frame.initializer.name
+      }
+    }, "framenavigated", false);
+  }
+  #frameEvent(record, event, detached) {
+    const frame = this._frameFrom(record);
+    const { url, name } = record.initializer;
+    frame._during({ url, name, detached }, () => {
+      this.emit(event, frame);
+      this.#context.emit(event, frame);
+    });
+  }
+  async opener() {
+    if (this.#context.isClosed())
+      return null;
+    const record = get(this.#guid, "opener");
+    return record ? this.#context._pageFrom(record) : null;
   }
   _onClose() {
+    if (this.#closedLocally)
+      return;
+    this.#closedLocally = true;
     this.emit("close", this);
     this.#context.emit("pageclose", this);
   }
@@ -5555,9 +5760,8 @@ class Page extends ChannelOwner {
   }
   async _waitForEvent(event, optionsOrPredicate, logLine) {
     const options = typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate;
-    refuseSignal(options);
-    this._refuseUnserved(event);
     const timeout = this._timeoutSettings.timeout(options, null);
+    this._refuseUnserved(event);
     const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : optionsOrPredicate.predicate;
     const waiter = Waiter.createForEvent();
     if (logLine)
@@ -5566,7 +5770,7 @@ class Page extends ChannelOwner {
     if (event !== "crash")
       waiter.rejectOnEvent(this, "crash", new Error("Page crashed"));
     if (event !== "close")
-      waiter.rejectOnEvent(this, "close", () => targetClosedError());
+      waiter.rejectOnEvent(this, "close", () => targetClosedError(this._closeReason()));
     const result = await waiter.waitForEvent(this, event, predicate);
     waiter.dispose();
     return result;
@@ -5626,6 +5830,23 @@ class Page extends ChannelOwner {
   }
   async goto(url, options = {}) {
     return await this.#mainFrame._goto("page.goto", url, options);
+  }
+  async $(selector, options) {
+    return await this.mainFrame()._querySelector("page.$", selector, options);
+  }
+  async $$(selector) {
+    return await this.mainFrame()._querySelectorAll("page.$$", selector);
+  }
+  async $eval(selector, pageFunction, arg) {
+    assertMaxArguments(arguments.length, 3);
+    return await this.mainFrame()._evalOnSelector("page.$eval", selector, pageFunction, arg);
+  }
+  async $$eval(selector, pageFunction, arg) {
+    assertMaxArguments(arguments.length, 3);
+    return await this.mainFrame()._evalOnSelectorAll("page.$$eval", selector, pageFunction, arg);
+  }
+  async waitForFunction(pageFunction, arg, options) {
+    return await this.mainFrame()._waitForFunction("page.waitForFunction", pageFunction, arg, options);
   }
   async evaluate(pageFunction, arg, options) {
     assertMaxArguments(arguments.length, 3);
@@ -5814,16 +6035,22 @@ class WebError {
 // src/browser-context.ts
 var CONTEXT_EVENTS = {
   receiver: "BrowserContext",
-  served: ["console", "weberror", "dialog", "dialogclosed"],
-  quiet: ["close", "backgroundpage"],
-  unserved: [
-    "download",
-    "frameattached",
-    "framedetached",
-    "framenavigated",
+  served: [
+    "console",
+    "weberror",
+    "dialog",
+    "dialogclosed",
     "page",
     "pageclose",
     "pageload",
+    "frameattached",
+    "framedetached",
+    "framenavigated"
+  ],
+  local: ["close"],
+  quiet: ["backgroundpage"],
+  unserved: [
+    "download",
     "serviceworker",
     "request",
     "response",
@@ -5839,14 +6066,50 @@ class BrowserContext extends ChannelOwner {
   #dialogs = new Map;
   _timeoutSettings = new TimeoutSettings;
   _pipe;
+  #closingStatus = "none";
+  #closeReason;
   constructor(guid, connection, pipe) {
     super(guid, pipe, CONTEXT_EVENTS);
     this.#guid = guid;
     this.#connection = connection;
     this._pipe = pipe;
+    connection._closeReasonFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._closeReason() ?? this.#closeReason;
+    connection._closedFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._isClosedLocally() ?? false;
+  }
+  isClosed() {
+    return this.#closingStatus !== "none";
+  }
+  _closeReason() {
+    return this.#closeReason;
+  }
+  async close(options = {}) {
+    if (this.isClosed())
+      return;
+    this.#closeReason = options.reason;
+    this.#closingStatus = "closing";
+    try {
+      await this.#connection.sendContext("browserContext.close", this.#guid, "close", pickParams(BROWSER_CONTEXT_CLOSE_KEYS, {
+        reason: options.reason
+      }), 0);
+    } catch (error) {
+      this.#closingStatus = "none";
+      this.#closeReason = undefined;
+      throw error;
+    }
+    this.#connection._close(options.reason);
+    const pages = this.pages();
+    for (const page of this.#pages.values())
+      if (!pages.includes(page) && !page._isClosedLocally())
+        pages.push(page);
+    for (const page of pages)
+      page._onClose();
+    this.#closingStatus = "closed";
+    this.emit("close", this);
   }
   _onEvent(method, params) {
-    if (method === "console")
+    if (method === "page")
+      this.#onPage(params.page);
+    else if (method === "console")
       this.#onConsole(params);
     else if (method === "pageError")
       this.#onPageError(params);
@@ -5854,6 +6117,13 @@ class BrowserContext extends ChannelOwner {
       this.#onDialog(params.dialog);
     else if (method === "dialogClosed")
       this.#onDialogClosed(params.dialog);
+  }
+  #onPage(created) {
+    const page = this._pageFrom(created);
+    this.emit("page", page);
+    const opener = created.initializer.opener ? this.#pages.get(created.initializer.opener.guid) : undefined;
+    if (opener)
+      opener.emit("popup", page);
   }
   #onConsole(event) {
     const page = event.page ? this.#pageFor(event.page.guid) : null;
@@ -5896,21 +6166,22 @@ class BrowserContext extends ChannelOwner {
   async waitForEvent(event, optionsOrPredicate = {}) {
     return await wrapApiCall("browserContext.waitForEvent", async () => {
       const options = typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate;
-      refuseSignal(options);
-      this._refuseUnserved(event);
       const timeout = this._timeoutSettings.timeout(options, null);
+      this._refuseUnserved(event);
       const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : optionsOrPredicate.predicate;
       const waiter = Waiter.createForEvent();
       waiter.rejectOnTimeout(timeout, `Timeout ${timeout}ms exceeded while waiting for event "${event}"`);
       if (event !== "close")
-        waiter.rejectOnEvent(this, "close", () => targetClosedError());
+        waiter.rejectOnEvent(this, "close", () => targetClosedError(this.#closeReason));
       const result = await waiter.waitForEvent(this, event, predicate);
       waiter.dispose();
       return result;
     });
   }
   pages() {
-    return get(this.#guid, "pages").map((created) => this.#pages.get(created.guid) ?? this.#add(created));
+    if (this.#closingStatus === "closed")
+      return [];
+    return get(this.#guid, "pages").map((created) => this.#pages.get(created.guid) ?? this.#add(created)).filter((page) => !page._isClosedLocally());
   }
   async newPage() {
     const { page } = await this.#connection.sendContext("browserContext.newPage", this.#guid, "newPage", {}, 0);
@@ -5930,6 +6201,9 @@ class BrowserContext extends ChannelOwner {
     this.#pages.set(guid, page);
     return page;
   }
+  _pageFrom(created) {
+    return this.#pages.get(created.guid) ?? this.#add(created);
+  }
   #pageFor(guid) {
     return this.#pages.get(guid) ?? this.#add(get(guid, "initializer"));
   }
@@ -5938,6 +6212,10 @@ class BrowserContext extends ChannelOwner {
     this.#pages.set(created.guid, page);
     return page;
   }
+}
+function pageGuidOf(guid) {
+  const target = guid.slice(guid.indexOf("@") + 1).split(/[/:]/)[0];
+  return `page@${target}`;
 }
 
 // src/index.ts

@@ -41,13 +41,13 @@ use neo_runtime_spec::injected::ReadableElementState;
 use neo_runtime_spec::serve::{
     BrowserContextCall, DialogCall, FrameAriaSnapshotJSONParams, FrameAriaSnapshotParams,
     FrameCall, FrameCheckParams, FrameCheckResult, FrameClickParams, FrameContentParams,
-    FrameDblclickParams, FrameEvalOnSelectorAllParams, FrameFillParams, FrameFillResult,
-    FrameGetAttributeParams, FrameGotoParams, FrameHoverParams, FrameInnerHTMLParams,
-    FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams,
-    FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult, FrameIsEditableParams,
-    FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult, FrameIsHiddenParams,
-    FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams,
-    FramePressResult, FrameQueryCountParams, FrameResolveSelectorParams, FrameSelectOptionParams,
+    FrameDblclickParams, FrameFillParams, FrameFillResult, FrameGetAttributeParams,
+    FrameGotoParams, FrameHoverParams, FrameInnerHTMLParams, FrameInnerTextParams,
+    FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams, FrameIsCheckedResult,
+    FrameIsDisabledParams, FrameIsDisabledResult, FrameIsEditableParams, FrameIsEditableResult,
+    FrameIsEnabledParams, FrameIsEnabledResult, FrameIsHiddenParams, FrameIsHiddenResult,
+    FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams, FramePressResult,
+    FrameQueryCountParams, FrameResolveSelectorParams, FrameSelectOptionParams,
     FrameSelectOptionResult, FrameSetContentParams, FrameSetContentResult, FrameTapParams,
     FrameTextContentParams, FrameTitleParams, FrameUncheckParams, FrameUncheckResult,
     FrameWaitForSelectorParams, FrameWaitForSelectorResult, FrameWaitForTimeoutParams,
@@ -68,7 +68,7 @@ use crate::click::{self, PointerOptions};
 use crate::content::{self, SetContentOptions};
 use crate::dialogs;
 use crate::evaluate::{self, EvalCall};
-use crate::events::EventHub;
+use crate::events::{ALL_PAGES, EventHub};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
 use crate::frames::FrameScope;
@@ -183,10 +183,6 @@ static RELEASE_NAVIGATION_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[],
 };
-/// Arbitrary page JS remains outside Neo's typed glue boundary.
-const EVAL_ON_SELECTOR_ALL_UNSERVED: &str =
-    "Neo serves Frame.evalOnSelectorAll only for locator.allTextContents";
-
 // `serve` replies to a pointer action with `{id}` and no `result`, which is right only while
 // Playwright's spec declares no `returns` for `Frame.click`, `dblclick`, `hover` and `tap`. A
 // spec that gives one a result stops this compiling.
@@ -322,8 +318,6 @@ enum Route {
     FrameInnerText(ReadOptions),
     FrameGetAttribute(AttributeOptions),
     FrameQueryCount(String),
-    FrameAllTextContents(String),
-    FrameAllInnerTexts(String),
     FrameInnerHtml(ReadOptions),
     FrameAriaSnapshot(SnapshotOptions),
     FrameFill(FillOptions),
@@ -412,7 +406,11 @@ impl Dispatcher {
         inner.trace.push(Arc::clone(&entry));
         let admitted = route.and_then(|route| {
             let ending = ending_cursor(&route).and_then(|id| inner.cursors.begin_ending(id));
-            let share = if ending.is_some() {
+            // A navigation's release, and the context's close, end calls in flight: the cap
+            // never refuses them, or a full run could not let go.
+            let releases = ending.is_some()
+                || matches!(route, ObjectCall::Context(BrowserContextCall::Close(_)));
+            let share = if releases {
                 None
             } else {
                 Some(inner.in_flight.admit(message.len())?)
@@ -443,6 +441,11 @@ impl Dispatcher {
             inner.run.clone(),
             closed,
         );
+        let progress = if matches!(route, ObjectCall::Context(BrowserContextCall::Close(_))) {
+            progress.closing_the_context()
+        } else {
+            progress
+        };
         let (reply, receiver) = oneshot::channel();
         let served = serve_call(
             inner.tabs.clone(),
@@ -681,21 +684,6 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
             AttributeOptions::from_params(params),
         )),
         FrameCall::QueryCount(params) => Ok(Route::FrameQueryCount(params.selector)),
-        FrameCall::EvalOnSelectorAll(params)
-            if params.expression == lists::ALL_TEXT_CONTENTS_EXPRESSION
-                && params.is_function == Some(true) =>
-        {
-            Ok(Route::FrameAllTextContents(params.selector))
-        }
-        FrameCall::EvalOnSelectorAll(params)
-            if params.expression == lists::ALL_INNER_TEXTS_EXPRESSION
-                && params.is_function == Some(true) =>
-        {
-            Ok(Route::FrameAllInnerTexts(params.selector))
-        }
-        FrameCall::EvalOnSelectorAll(_) => {
-            Err(PlaywrightError::error(EVAL_ON_SELECTOR_ALL_UNSERVED))
-        }
         FrameCall::AriaSnapshot(params) => Ok(Route::FrameAriaSnapshot(
             SnapshotOptions::from_params(params),
         )),
@@ -752,13 +740,18 @@ async fn serve_call(
     reply: CallReply,
 ) {
     // A page's call waits for what the run's subscriptions switched on there (console messages,
-    // the dialog watcher), so the call cannot cause an event before its producer listens. A
-    // dialog's answer never waits: an open dialog can hold that very enable, and only the answer
-    // frees the page.
-    if let Some((page, _)) = &target
-        && !matches!(route, ObjectCall::Context(_) | ObjectCall::Dialog(..))
-        && reply.events.enabling(page.id.as_str())
-        && let Err(error) = progress.race(reply.events.ready(page.id.as_str())).await
+    // the dialog watcher), so the call cannot cause an event before its producer listens; a
+    // context call (`newPage`) waits for target discovery's baseline. A dialog's answer never
+    // waits: an open dialog can hold that very enable, and only the answer frees the page.
+    let gate = match (&route, &target) {
+        (ObjectCall::Dialog(..), _) => None,
+        (ObjectCall::Context(_), _) => Some(ALL_PAGES),
+        (_, Some((page, _))) => Some(page.id.as_str()),
+        (_, None) => None,
+    };
+    if let Some(gate) = gate
+        && reply.events.enabling(gate)
+        && let Err(error) = progress.race(reply.events.ready(gate)).await
     {
         finish_reply(Err(error), reply).await;
         return;
@@ -866,14 +859,6 @@ async fn serve(
         Route::FrameQueryCount(selector) => lists::query_count(&page, &selector, &progress)
             .await
             .and_then(|result| encode_result::<FrameQueryCountParams>(&result)),
-        Route::FrameAllTextContents(selector) => {
-            lists::all_text_contents(&page, &selector, &progress)
-                .await
-                .and_then(|result| encode_result::<FrameEvalOnSelectorAllParams>(&result))
-        }
-        Route::FrameAllInnerTexts(selector) => lists::all_inner_texts(&page, &selector, &progress)
-            .await
-            .and_then(|result| encode_result::<FrameEvalOnSelectorAllParams>(&result)),
         Route::FrameInnerHtml(options) => reads::inner_html(&page, &options, &progress)
             .await
             .and_then(|result| encode_result::<FrameInnerHTMLParams>(&result)),
@@ -1110,8 +1095,6 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameInnerText(_)
         | Route::FrameGetAttribute(_)
         | Route::FrameQueryCount(_)
-        | Route::FrameAllTextContents(_)
-        | Route::FrameAllInnerTexts(_)
         | Route::FrameInnerHtml(_)
         | Route::FrameIsVisible(_)
         | Route::FrameIsHidden(_)
@@ -1315,6 +1298,7 @@ mod tests {
 
     use crate::click::tests::FakeTab;
     use crate::deadline::Deadline;
+    use crate::discovery::Discovery;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::forms::SelectOption;
     use crate::page::TabInputs;
@@ -1334,6 +1318,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            Discovery::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1409,6 +1394,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            Discovery::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1593,8 +1579,6 @@ mod tests {
                 | Route::FrameInnerText(_)
                 | Route::FrameGetAttribute(_)
                 | Route::FrameQueryCount(_)
-                | Route::FrameAllTextContents(_)
-                | Route::FrameAllInnerTexts(_)
                 | Route::FrameInnerHtml(_)
                 | Route::FrameIsVisible(_)
                 | Route::FrameIsHidden(_)
@@ -2463,7 +2447,7 @@ mod tests {
     fn all_text_contents_params(selector: &str) -> Value {
         json!({
             "selector": selector,
-            "expression": lists::ALL_TEXT_CONTENTS_EXPRESSION,
+            "expression": "ee => ee.map(e => e.textContent || '')",
             "isFunction": true,
             "arg": {"value": {"v": "undefined"}, "handles": []},
         })
@@ -2477,16 +2461,24 @@ mod tests {
             panic!("queryCount routes");
         };
         assert_eq!(selector, ".item");
-        let Ok(ObjectCall::Frame(Route::FrameAllTextContents(selector))) =
-            route_frame("evalOnSelectorAll", all_text_contents_params(".item")).route
+        // `allTextContents` is Playwright's `$$eval`: the evaluation route serves it in the main
+        // world.
+        let Ok(ObjectCall::Frame(Route::FrameEval(EvalCall::EvalOnSelectorAll {
+            selector,
+            scope: None,
+            ..
+        }))) = route_frame("evalOnSelectorAll", all_text_contents_params(".item")).route
         else {
-            panic!("allTextContents routes");
+            panic!("allTextContents routes to the evaluation route");
         };
         assert_eq!(selector, ".item");
         let mut inner_texts = all_text_contents_params(".fruit");
-        inner_texts["expression"] = json!(lists::ALL_INNER_TEXTS_EXPRESSION);
-        let Ok(ObjectCall::Frame(Route::FrameAllInnerTexts(selector))) =
-            route_frame("evalOnSelectorAll", inner_texts).route
+        inner_texts["expression"] = json!("ee => ee.map(e => e.innerText)");
+        let Ok(ObjectCall::Frame(Route::FrameEval(EvalCall::EvalOnSelectorAll {
+            selector,
+            scope: None,
+            ..
+        }))) = route_frame("evalOnSelectorAll", inner_texts).route
         else {
             panic!("allInnerTexts routes");
         };
@@ -2516,7 +2508,7 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_collection_eval_refuses_other_expressions_and_non_functions() {
+    fn tests_that_collection_eval_serves_any_expression_as_playwrights_eval_on_selector_all() {
         let mut other_expression = all_text_contents_params(".item");
         other_expression["expression"] = json!("ee => ee.length");
         let mut not_a_function = all_text_contents_params(".item");
@@ -2526,24 +2518,23 @@ mod tests {
             .as_object_mut()
             .expect("params")
             .remove("isFunction");
-        let mut inner_texts_not_a_function = all_text_contents_params(".item");
-        inner_texts_not_a_function["expression"] = json!(lists::ALL_INNER_TEXTS_EXPRESSION);
-        inner_texts_not_a_function["isFunction"] = json!(false);
-        // Playwright's TypeScript body, which is not JavaScript, is not Neo's served expression.
-        let mut typescript_body = all_text_contents_params(".item");
-        typescript_body["expression"] = json!("ee => ee.map(e => (e as HTMLElement).innerText)");
-        for params in [
-            other_expression,
-            not_a_function,
-            absent_function,
-            inner_texts_not_a_function,
-            typescript_body,
-        ] {
-            assert_eq!(
-                error_of(route_frame("evalOnSelectorAll", params)),
-                PlaywrightError::error(EVAL_ON_SELECTOR_ALL_UNSERVED)
+        for params in [other_expression, not_a_function, absent_function] {
+            assert!(
+                matches!(
+                    route_frame("evalOnSelectorAll", params).route,
+                    Ok(ObjectCall::Frame(Route::FrameEval(
+                        EvalCall::EvalOnSelectorAll { .. }
+                    )))
+                ),
+                "every $$eval is served"
             );
         }
+        let mut missing_arg = all_text_contents_params(".item");
+        missing_arg.as_object_mut().expect("params").remove("arg");
+        assert_eq!(
+            error_of(route_frame("evalOnSelectorAll", missing_arg)).name,
+            ErrorName::Error
+        );
     }
 
     #[test]
@@ -2561,46 +2552,33 @@ mod tests {
         );
         let mut params = all_text_contents_params(selector);
         params["expression"] = json!("ee => ee.length");
-        assert_eq!(
-            error_of(route_frame("evalOnSelectorAll", params)),
-            PlaywrightError::error(EVAL_ON_SELECTOR_ALL_UNSERVED)
+        assert!(
+            route_frame("evalOnSelectorAll", params).route.is_ok(),
+            "a frame-crossing $$eval is served"
         );
     }
 
     #[test]
-    fn tests_that_serialized_arguments_accept_no_handles() {
-        assert!(
-            FrameCall::decode("evalOnSelectorAll", Some(all_text_contents_params(".item"))).is_ok()
-        );
-        for handle in [json!({"guid": "handle@1"}), json!("handle@1"), json!(null)] {
+    fn tests_that_collection_evaluation_accepts_handle_guids() {
+        let mut params = all_text_contents_params(".item");
+        params["arg"]["handles"] = json!(["handle@1"]);
+        assert!(route_frame("evalOnSelectorAll", params).route.is_ok());
+        for handle in [json!({"guid": "handle@1"}), json!(null)] {
             let mut params = all_text_contents_params(".item");
             params["arg"]["handles"] = json!([handle]);
-            assert!(FrameCall::decode("evalOnSelectorAll", Some(params)).is_err());
+            assert!(route_frame("evalOnSelectorAll", params).route.is_err());
         }
     }
 
     #[test]
-    fn tests_that_collection_replies_have_playwrights_generated_shapes() {
-        use neo_runtime_spec::serve::{FrameEvalOnSelectorAllResult, FrameQueryCountResult};
+    fn tests_that_count_replies_have_playwrights_generated_shape() {
+        use neo_runtime_spec::serve::FrameQueryCountResult;
 
-        for (result, expected) in [
-            (
-                encode_result::<FrameQueryCountParams>(&FrameQueryCountResult { value: 3 })
-                    .expect("count encodes"),
-                json!({"id": 7, "result": {"value": 3}}),
-            ),
-            (
-                encode_result::<FrameEvalOnSelectorAllParams>(&FrameEvalOnSelectorAllResult {
-                    value: lists::serialize_strings(vec!["x".to_string()]),
-                })
-                .expect("texts encode"),
-                json!({"id": 7, "result": {"value": {"a": [{"s": "x"}], "id": 1}}}),
-            ),
-        ] {
-            let reply: Value =
-                serde_json::from_str(&encode_reply(&json!(7), Ok(result.as_ref()), None))
-                    .expect("reply");
-            assert_eq!(reply, expected);
-        }
+        let result = encode_result::<FrameQueryCountParams>(&FrameQueryCountResult { value: 3 })
+            .expect("count encodes");
+        let reply: Value =
+            serde_json::from_str(&encode_reply(&json!(7), Ok(result.as_ref()), None))
+                .expect("reply");
+        assert_eq!(reply, json!({"id": 7, "result": {"value": 3}}));
     }
 }
