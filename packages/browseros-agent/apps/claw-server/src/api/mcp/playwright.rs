@@ -27,7 +27,16 @@ use tokio_util::task::TaskTracker;
 
 const DEFAULT_TIMEOUT: u64 = 30_000;
 const MAX_TIMEOUT: u64 = 120_000;
-const INSTRUCTIONS: &str = "Write Playwright JavaScript. `page` and `context` are provided; await browser calls and return a value. Send an async function body without imports or a wrapper. Omit `page` to open a background tab; pass a returned `pages[].id` to continue in that tab. `timeout` is milliseconds (default 30000, maximum 120000).";
+/// Both the server instructions and the tool description: often the only guide a client shows.
+/// Claude Code truncates each at about 4096 characters, so keep this compact.
+const INSTRUCTIONS: &str = concat!(
+    "Write Playwright JavaScript. `page` and `context` are provided; await browser calls and return a value. Send an async function body without imports or a wrapper. Variables do not survive between runs; tabs, cookies and logins do.\n\n",
+    "Tabs: omit `page` to start in a new background tab; pass a returned `pages[].id` to continue in that tab. Every result's `pages` lists the tabs the run started in, opened or closed (`id`, `url`, `created`, `closed`), also when the run failed or timed out, so a later run can resume or close them.\n",
+    "Clicking a link navigates the tab it is in. To keep the current page, open links in background tabs in the same run: `const tab = await context.newPage(); await tab.goto(href, { waitUntil: 'domcontentloaded' });`. `context.pages()` lists open tabs, `page.context()` returns the context, `tab.bringToFront()` activates a tab, `tab.close()` closes it.\n\n",
+    "Navigation: `goto` waits for `load` by default, which slow pages can miss within the run. To read a page, prefer `goto(url, { waitUntil: 'domcontentloaded' })`, then wait for the content you need, e.g. `await page.getByRole('heading').first().waitFor()`.\n\n",
+    "Supported, a Playwright subset: context.pages/newPage/setDefaultTimeout/setDefaultNavigationTimeout; page.goto/url/title/context/bringToFront/close/isClosed/waitForURL/waitForLoadState/ariaSnapshot/locator/getBy* and the selector forms of the locator methods; locator.click/fill/clear/press/check/uncheck/setChecked/selectOption/textContent/innerText/getAttribute/inputValue/isVisible/isChecked/count/allTextContents/waitFor/first/last/nth/filter/locator/getBy*/and/or.\n\n",
+    "`timeout` is milliseconds (default 30000, maximum 120000).",
+);
 
 struct Browser {
     cdp: CdpClient,
