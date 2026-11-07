@@ -677,6 +677,8 @@ impl Bindings {
             },
         );
         drop(state);
+        #[cfg(debug_assertions)]
+        test_hooks::read_delay().await;
         Some(Ready {
             owner,
             params,
@@ -1143,6 +1145,38 @@ async fn watch(bindings: Weak<Bindings>, tabs: Tabs, mut events: broadcast::Rece
             }
             _ => {}
         }
+    }
+}
+
+/// Neo: a test hook, in debug builds only. With `NEO_TEST_BINDING_READ_DELAYS_MS` set to
+/// comma-separated milliseconds, the process's n-th binding call waits the n-th of them (cycling)
+/// once it is read and before its event goes. A parity test thereby makes a call that would reach
+/// the script after the reply it preceded, or after a later call, do so every time
+/// (`neo-sdk/tests/parity/binding-order.test.mjs`). Release builds have no such wait.
+#[cfg(debug_assertions)]
+mod test_hooks {
+    use std::env;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use tokio::time;
+
+    /// Neo: how many binding calls this process has read, which picks each one's delay.
+    static READS: AtomicUsize = AtomicUsize::new(0);
+
+    pub(super) async fn read_delay() {
+        let Ok(delays) = env::var("NEO_TEST_BINDING_READ_DELAYS_MS") else {
+            return;
+        };
+        let delays: Vec<u64> = delays
+            .split(',')
+            .filter_map(|delay| delay.trim().parse().ok())
+            .collect();
+        if delays.is_empty() {
+            return;
+        }
+        let index = READS.fetch_add(1, Ordering::Relaxed) % delays.len();
+        time::sleep(Duration::from_millis(delays[index])).await;
     }
 }
 
