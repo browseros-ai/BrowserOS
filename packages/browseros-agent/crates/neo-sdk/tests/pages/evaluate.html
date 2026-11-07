@@ -1,0 +1,27 @@
+<!doctype html>
+<!-- The evaluation parity files' page (values.mjs): page globals for the main world, elements
+     for locator.evaluate and element handles, and `window.__facts()` for what a script changed. -->
+<title>evaluate</title>
+<script>
+window.__probe = 'main-world'
+window.FOO = 'page-foo'
+</script>
+<div class="tweet"><div class="like">100</div><div class="retweets">10</div></div>
+<div class="a">not-a-child-div</div><div id="myId"><div class="a">a-child-div</div></div>
+<section id="s" data-x="sec">42</section>
+<ul id="list"><li>one</li><li>two</li></ul>
+<div id="text">ee!</div>
+<p id="para" data-x="para-x">Para <b>bold</b></p>
+<script>
+// BrowserOS neo's takeover bar is not the page's (frame-top.html explains); remove it on sight.
+new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.remove()).observe(
+  document.documentElement,
+  { childList: true, subtree: true },
+)
+window.__facts = () => ({
+  title: document.title,
+  probe: window.__probe,
+  touched: window.__touched ?? null,
+  text: document.querySelector('#s').textContent,
+})
+</script>

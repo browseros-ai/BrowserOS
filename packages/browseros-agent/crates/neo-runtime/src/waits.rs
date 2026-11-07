@@ -25,7 +25,9 @@
 use std::future::{self, Future};
 use std::sync::Arc;
 
-use neo_runtime_spec::injected::{InjectedSelectorStateParams, SelectorMatch};
+use neo_runtime_spec::injected::{
+    InjectedSelectorElementParams, InjectedSelectorStateParams, SelectorMatch,
+};
 use neo_runtime_spec::serve::{
     FrameWaitForSelectorParams, FrameWaitForSelectorParamsState as SelectorState, LifecycleEvent,
 };
@@ -35,6 +37,7 @@ use tokio::sync::{broadcast, watch};
 use tokio::time;
 
 use crate::click::{LoopAWaits, PageError, SelectorFacts, Tab};
+use crate::evaluate::{self, CreatedHandle, Handles};
 use crate::frame_selector;
 use crate::frames::{FrameScope, Host};
 use crate::navigate::{Lifecycle, Navigation, NavigationState, NavigationTab, Observation};
@@ -64,28 +67,45 @@ pub(crate) trait WaitTab: Send + Sync {
         selector: &str,
         strict: bool,
     ) -> impl Future<Output = Result<Option<SelectorMatch>, PageError>> + Send;
+
+    /// `selector_state` for a wait that returns its element: when the first match meets `state`
+    /// (attached, or visible), also that element adopted into the frame's main world as a new
+    /// handle of the run (Playwright's `element._adoptTo(mainContext)`). An element that could
+    /// not be adopted reads as none, so the wait keeps polling. Only the real tab can adopt.
+    fn selector_element(
+        &self,
+        selector: &str,
+        strict: bool,
+        state: SelectorState,
+        handles: &Handles,
+    ) -> impl Future<Output = Result<(Option<SelectorMatch>, Option<CreatedHandle>), PageError>> + Send
+    {
+        let _ = (selector, strict, state, handles);
+        future::ready(Err(PageError::Contract(
+            "this tab cannot return a selector wait's element".to_string(),
+        )))
+    }
 }
 
-/// Decoded once by the route. Neo cannot return the `ElementHandle` of a selector wait.
+/// Decoded once by the route.
 #[derive(Debug)]
 pub(crate) struct WaitForSelectorOptions {
     pub(crate) selector: String,
     pub(crate) strict: bool,
     pub(crate) state: SelectorState,
+    /// Playwright's `!omitReturnValue`: an attached or visible wait answers its element, adopted
+    /// into the main world (`frames.ts` `waitForSelector`), as `locator.evaluate` needs.
+    pub(crate) return_element: bool,
 }
 
 impl WaitForSelectorOptions {
-    pub(crate) fn from_params(params: FrameWaitForSelectorParams) -> Result<Self, PlaywrightError> {
-        if params.omit_return_value != Some(true) {
-            return Err(PlaywrightError::error(
-                "Neo does not return ElementHandles yet: waitForSelector needs omitReturnValue: true",
-            ));
-        }
-        Ok(Self {
+    pub(crate) fn from_params(params: FrameWaitForSelectorParams) -> Self {
+        Self {
             selector: params.selector,
             strict: params.strict.unwrap_or(false),
             state: params.state.unwrap_or(SelectorState::Visible),
-        })
+            return_element: params.omit_return_value != Some(true),
+        }
     }
 }
 
@@ -191,25 +211,39 @@ impl<T: WaitTab> Condition for PrepareCondition<'_, T> {
     }
 }
 
+/// [`wait_for_selector_element`] without the element, as the policy tests drive it.
+#[cfg(test)]
 pub(crate) async fn wait_for_selector<T: WaitTab>(
     tab: &T,
     options: &WaitForSelectorOptions,
     progress: &Progress,
 ) -> Result<(), CallError> {
+    wait_for_selector_element(tab, options, progress)
+        .await
+        .map(|_| ())
+}
+
+/// Playwright's `Frame.waitForSelector`: waits for `options.state`, answering the element, adopted
+/// into the main world, when `options.return_element` asks for it and the state is attached or
+/// visible.
+pub(crate) async fn wait_for_selector_element<T: WaitTab>(
+    tab: &T,
+    options: &WaitForSelectorOptions,
+    progress: &Progress,
+) -> Result<Option<CreatedHandle>, CallError> {
     name_selector(progress, &options.selector, options.state);
     let mut backoff = LoopAWaits::new(progress.timeout_ms());
     // wait_until checks immediately; consume loop A's initial zero before parking.
     let _ = backoff.next_wait();
-    wait_until(
-        &mut SelectorCondition {
-            tab,
-            options,
-            named: false,
-            backoff,
-        },
-        progress,
-    )
-    .await
+    let mut condition = SelectorCondition {
+        tab,
+        options,
+        named: false,
+        backoff,
+        element: None,
+    };
+    wait_until(&mut condition, progress).await?;
+    Ok(condition.element)
 }
 
 struct SelectorCondition<'a, T> {
@@ -217,6 +251,8 @@ struct SelectorCondition<'a, T> {
     options: &'a WaitForSelectorOptions,
     named: bool,
     backoff: LoopAWaits,
+    /// The adopted element of the probe that met the wait, when the caller wants it.
+    element: Option<CreatedHandle>,
 }
 
 impl<T: WaitTab> SelectorCondition<'_, T> {
@@ -236,10 +272,29 @@ impl<T: WaitTab> SelectorCondition<'_, T> {
             }
             self.named = true;
         }
-        let matched = self
-            .tab
-            .selector_state(&self.options.selector, self.options.strict)
-            .await?;
+        // Hidden and detached waits answer no element (`frames.ts`: `state === 'attached' ||
+        // state === 'visible' ? … : null`).
+        let wants_element = self.options.return_element
+            && matches!(
+                self.options.state,
+                SelectorState::Attached | SelectorState::Visible
+            );
+        let (matched, element) = if wants_element {
+            self.tab
+                .selector_element(
+                    &self.options.selector,
+                    self.options.strict,
+                    self.options.state,
+                    progress.handles(),
+                )
+                .await?
+        } else {
+            let matched = self
+                .tab
+                .selector_state(&self.options.selector, self.options.strict)
+                .await?;
+            (matched, None)
+        };
         let visible = matched.as_ref().is_some_and(|matched| matched.visible);
         if let Some(matched) = &matched {
             let log = if matched.count > 1 {
@@ -256,12 +311,19 @@ impl<T: WaitTab> SelectorCondition<'_, T> {
             };
             progress.log(log);
         }
-        Ok(match self.options.state {
+        let met = match self.options.state {
             SelectorState::Attached => matched.is_some(),
             SelectorState::Detached => matched.is_none(),
             SelectorState::Visible => visible,
             SelectorState::Hidden => !visible,
-        })
+        };
+        if met && wants_element {
+            // An element that could not be adopted keeps the wait polling.
+            // Playwright: `server/frames.ts` `Frame.waitForSelector`: `return await progress.race(element._adoptTo(mainContext));`
+            self.element = element;
+            return Ok(self.element.is_some());
+        }
+        Ok(met)
     }
 }
 
@@ -700,6 +762,54 @@ impl WaitTab for FrameTab {
         PageSession::navigation_settled(self).await.map(|_| ())
     }
 
+    async fn selector_element(
+        &self,
+        selector: &str,
+        strict: bool,
+        state: SelectorState,
+        handles: &Handles,
+    ) -> Result<(Option<SelectorMatch>, Option<CreatedHandle>), PageError> {
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok((None, None));
+        };
+        let group = self.group(&located.frame, "wait-element");
+        let found = located
+            .frame
+            .call(
+                Some(group.group()),
+                &InjectedSelectorElementParams {
+                    selector: located.selector,
+                    strict,
+                },
+            )
+            .await?;
+        let (Some(element), Some(preview)) = (found.element, found.preview) else {
+            return Ok((None, None));
+        };
+        let matched = SelectorMatch {
+            count: found.count,
+            visible: found.visible && located.frame_visible,
+            preview,
+        };
+        if state == SelectorState::Visible && !matched.visible {
+            return Ok((Some(matched), None));
+        }
+        let created = match evaluate::element_handle_for(
+            self,
+            &located.frame,
+            &element,
+            &matched.preview,
+            handles,
+        )
+        .await
+        {
+            Ok(created) => Some(created),
+            Err(PageError::NotConnected) => None,
+            Err(error) => return Err(error),
+        };
+        Ok((Some(matched), created))
+    }
+
     async fn selector_state(
         &self,
         selector: &str,
@@ -963,6 +1073,7 @@ mod tests {
             selector: "#item".to_string(),
             strict: true,
             state,
+            return_element: false,
         }
     }
 
