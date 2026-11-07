@@ -14,6 +14,7 @@ and NOTICE.
 | `LICENSE` | `45873d00a0dd243596deb4aa23b2493b3d1f0671921bf2538ea431d7380220eb` |
 | `NOTICE` | `6d602191187b35b9b01d2cffa01c8469c2c8d9de8a96f1bf868e0f264f51c81d` |
 | `packages/isomorphic/urlMatch.ts` | `f05a84e098603327fddf12eeab03e81f7b420fec0e0d8e779632ae3bc87b55aa` |
+| `packages/playwright-core/src/client/browserContext.ts` | `1d882f7d1e6f8bc108a19528f88f734691fad38f358adebb86e01730274fad42` |
 | `packages/playwright-core/src/client/channelOwner.ts` | `3e69df35c3f6deb444bb84fb5eff6fada175d44586d4fd4906cd986eb6b98706` |
 | `packages/playwright-core/src/client/connection.ts` | `d0d7bb74eb984f3a9316f77304d24b1a2698aededfba181cfb59cfde62b189fc` |
 | `packages/playwright-core/src/client/consoleMessage.ts` | `379d334d4abfff811612837b5f701e5c6d184d1b0e09e7f9aefade7bc395b1a7` |
@@ -28,6 +29,7 @@ and NOTICE.
 | `packages/playwright-core/src/client/waiter.ts` | `fd4a8f0a723e56cc6e3e02bebf7e3e5ff6b169070a37a9617111db291722cbc9` |
 | `packages/playwright-core/src/client/webError.ts` | `e322ebd2c4e1a7a8b036840ac50be2ed191aac6f8668911d582fd9f613fa780a` |
 | `packages/playwright-core/src/server/chromium/chromiumSwitches.ts` | `35dc159f3f27deac0de803ef55efa31713b62aa762908a26a2663e7f6fbb4bc3` |
+| `packages/playwright-core/src/server/chromium/crBrowser.ts` | `b8553078358be5326ca4905983059947a0f838111f0fde73940bf0e7792c43c9` |
 | `packages/playwright-core/src/server/chromium/crExecutionContext.ts` | `4ae617fd41123eac3946187cd55474f89049cb082ea15c1bae240004a325f996` |
 | `packages/playwright-core/src/server/chromium/crInput.ts` | `20b43d336519f9bc8da1504fb503e711466ca8471aa68af67e867d0535840221` |
 | `packages/playwright-core/src/server/chromium/crNetworkManager.ts` | `dbc7567f8231c2af493a1b88bdc36dc0232cd5e65c5710be7a933578d416413a` |

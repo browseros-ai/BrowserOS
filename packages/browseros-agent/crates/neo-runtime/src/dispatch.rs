@@ -68,7 +68,7 @@ use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::dialogs;
 use crate::evaluate::{self, EvalCall};
-use crate::events::EventHub;
+use crate::events::{ALL_PAGES, EventHub};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
 use crate::frames::FrameScope;
@@ -405,7 +405,11 @@ impl Dispatcher {
         inner.trace.push(Arc::clone(&entry));
         let admitted = route.and_then(|route| {
             let ending = ending_cursor(&route).and_then(|id| inner.cursors.begin_ending(id));
-            let share = if ending.is_some() {
+            // A navigation's release, and the context's close, end calls in flight: the cap
+            // never refuses them, or a full run could not let go.
+            let releases = ending.is_some()
+                || matches!(route, ObjectCall::Context(BrowserContextCall::Close(_)));
+            let share = if releases {
                 None
             } else {
                 Some(inner.in_flight.admit(message.len())?)
@@ -436,6 +440,11 @@ impl Dispatcher {
             inner.run.clone(),
             closed,
         );
+        let progress = if matches!(route, ObjectCall::Context(BrowserContextCall::Close(_))) {
+            progress.closing_the_context()
+        } else {
+            progress
+        };
         // Registered before the call returns to JS, so the abort listener the SDK adds right
         // after always finds it. The SDK's ids are integers; any other id cannot be aborted.
         let abortable = id
@@ -791,19 +800,25 @@ async fn serve_call(
     reply: CallReply,
 ) {
     // A call the script aborted before its task first ran never starts its handler, even one
-    // that would not race its progress first.
+    // that would not race its progress first. A run that ended meanwhile outranks the abort
+    // (`Progress::race`'s order): the handler starts and its first race reports the end.
     if let Err(error) = progress.pending_abort() {
         finish_reply(Err(error), reply).await;
         return;
     }
     // A page's call waits for what the run's subscriptions switched on there (console messages,
-    // the dialog watcher), so the call cannot cause an event before its producer listens. A
-    // dialog's answer never waits: an open dialog can hold that very enable, and only the answer
-    // frees the page.
-    if let Some((page, _)) = &target
-        && !matches!(route, ObjectCall::Context(_) | ObjectCall::Dialog(..))
-        && reply.events.enabling(page.id.as_str())
-        && let Err(error) = progress.race(reply.events.ready(page.id.as_str())).await
+    // the dialog watcher), so the call cannot cause an event before its producer listens; a
+    // context call (`newPage`) waits for target discovery's baseline. A dialog's answer never
+    // waits: an open dialog can hold that very enable, and only the answer frees the page.
+    let gate = match (&route, &target) {
+        (ObjectCall::Dialog(..), _) => None,
+        (ObjectCall::Context(_), _) => Some(ALL_PAGES),
+        (_, Some((page, _))) => Some(page.id.as_str()),
+        (_, None) => None,
+    };
+    if let Some(gate) = gate
+        && reply.events.enabling(gate)
+        && let Err(error) = progress.race(reply.events.ready(gate)).await
     {
         finish_reply(Err(error), reply).await;
         return;
@@ -1309,6 +1324,7 @@ mod tests {
 
     use crate::click::tests::FakeTab;
     use crate::deadline::Deadline;
+    use crate::discovery::Discovery;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::forms::SelectOption;
     use crate::page::TabInputs;
@@ -1330,6 +1346,7 @@ mod tests {
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
+            Discovery::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1407,6 +1424,7 @@ mod tests {
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
+            Discovery::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -2645,5 +2663,91 @@ mod tests {
             serde_json::from_str(&encode_reply(&json!(7), Ok(result.as_ref()), None))
                 .expect("reply");
         assert_eq!(reply, json!({"id": 7, "result": {"value": 3}}));
+    }
+}
+
+#[cfg(test)]
+mod review_abort_priority {
+    use super::*;
+    use crate::deadline::Deadline;
+    use crate::discovery::Discovery;
+    use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+    use crate::page::TabInputs;
+    use crate::run::PageId;
+    use crate::screenshot::TabScreenshots;
+    use tokio::runtime::Handle;
+    use tokio_util::task::TaskTracker;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_run_end_wins_over_an_abort_before_the_handler_starts() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let run = RunScope::new(
+            Deadline::new(Duration::from_secs(30), CancellationToken::new()),
+            tasks.clone(),
+        );
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            TabScreenshots::default(),
+            Discovery::default(),
+            tasks,
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("opening the fake tab: {error:?}"));
+        let (page, scope) = tabs
+            .resolve(&format!("frame@{PAGE}"))
+            .unwrap_or_else(|| panic!("the fake tab must have a main frame"));
+        let entry = Arc::new(CallEntry::new(CallStart {
+            call_id: 1,
+            guid: format!("frame@{PAGE}"),
+            method: "click".to_string(),
+            title: Some("Click"),
+            params: json!({"selector":"#nothing"}),
+            location: None,
+            input: true,
+        }));
+        let trace = Trace::default();
+        trace.push(Arc::clone(&entry));
+        let progress = Progress::new(Arc::clone(&entry), 0.0, run.clone(), page.closed.clone());
+        let route = route(
+            ObjectKind::Frame,
+            "click",
+            Some(json!({"selector":"#nothing"})),
+        )
+        .route
+        .unwrap_or_else(|error| panic!("decoding the click: {error:?}"));
+        let (reply, _receiver) = oneshot::channel();
+        let call = serve_call(
+            tabs,
+            Arc::default(),
+            Some((page, scope)),
+            route,
+            progress,
+            CallReply {
+                entry: Arc::clone(&entry),
+                trace: trace.clone(),
+                id: json!(1),
+                reply,
+                events: EventHub::default(),
+                share: None,
+                ending: None,
+                abortable: None,
+            },
+        );
+        // Neither stop can race scheduling: the handler future has never been polled.
+        entry.abort("stop call".to_string());
+        run.end(RunEnd::Settled);
+        call.await;
+        let (records, _) = trace.take(RunEnd::Settled);
+        assert_eq!(
+            records[0].result,
+            CallResult::Unfinished {
+                reason: RunEnd::Settled
+            },
+            "run end has priority over the signal abort at admission"
+        );
     }
 }

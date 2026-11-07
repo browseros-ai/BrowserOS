@@ -143,6 +143,10 @@ pub(crate) struct RunScope {
     pub(crate) handles: Arc<Handles>,
     /// Where the run's `path` options write, and what they wrote (`artifacts.rs`).
     pub(crate) artifacts: Arc<Artifacts>,
+    /// Cancelled when the script closes the run's context (`tab_calls.rs` `close_context`):
+    /// every call still running stops at its next await or check, as Playwright's calls stop
+    /// with its connection, and none writes input after.
+    pub(crate) context_closed: CancellationToken,
 }
 
 impl RunScope {
@@ -154,6 +158,7 @@ impl RunScope {
             tasks,
             handles: Arc::default(),
             artifacts: Arc::default(),
+            context_closed: CancellationToken::new(),
         }
     }
 
@@ -194,6 +199,9 @@ pub(crate) struct Progress {
     run: RunScope,
     /// Cancelled when the tab closes.
     page_closed: CancellationToken,
+    /// The run's [`RunScope::context_closed`], or, for the context's own close, a token never
+    /// cancelled: that call finishes its acknowledgement after stopping the others.
+    context_closed: CancellationToken,
 }
 
 impl Progress {
@@ -217,24 +225,39 @@ impl Progress {
                 .and_then(|timeout| Instant::now().checked_add(timeout))
         }
         .filter(|at| *at < run.deadline.at());
+        let context_closed = run.context_closed.clone();
         Self {
             entry,
             timeout_ms,
             own_deadline,
             run,
             page_closed,
+            context_closed,
         }
+    }
+
+    /// The context's own close: it outlives the stop it gives every other call of the run.
+    #[must_use]
+    pub(crate) fn closing_the_context(mut self) -> Self {
+        self.context_closed = CancellationToken::new();
+        self
+    }
+
+    /// Stops every other call of the run (the context closed): each ends as its tab closing
+    /// would, at its next await or check.
+    pub(crate) fn stop_the_runs_calls(&self) {
+        self.run.context_closed.cancel();
     }
 }
 
 impl Progress {
     /// Runs `work` until it finishes or the call must stop, whichever is first. The `biased`
     /// order is the precedence: the run's deadline or cancellation, then the run ending
-    /// otherwise, then the script aborting the call (`AbortError`), then the tab closing
-    /// (`TargetClosedError`), then the call's own deadline (`TimeoutError`). Every `work`
-    /// passed in must be cancel-safe: dropping it may lose only its answer, never leave the page
-    /// half-changed. An abort ends `work` exactly as a timeout does, so whatever a timed-out
-    /// call cleans up, an aborted one cleans up too.
+    /// otherwise, then the script aborting the call (`AbortError`), then the tab or the run's
+    /// context closing (`TargetClosedError`), then the call's own deadline (`TimeoutError`).
+    /// Every `work` passed in must be cancel-safe: dropping it may lose only its answer, never
+    /// leave the page half-changed. An abort ends `work` exactly as a timeout does, so whatever
+    /// a timed-out call cleans up, an aborted one cleans up too.
     pub(crate) async fn race<T>(&self, work: impl Future<Output = T>) -> Result<T, CallError> {
         let own_deadline = async {
             match self.own_deadline {
@@ -248,6 +271,7 @@ impl Progress {
             () = self.run.ended.cancelled() => Err(CallError::RunEnded(self.run.end_reason())),
             error = self.entry.abort.aborted() => Err(error.into()),
             () = self.page_closed.cancelled() => Err(PlaywrightError::target_closed().into()),
+            () = self.context_closed.cancelled() => Err(PlaywrightError::target_closed().into()),
             () = own_deadline => Err(PlaywrightError::timeout(self.timeout_ms).into()),
             value = work => Ok(value),
         }
@@ -262,14 +286,11 @@ impl Progress {
     /// The checks of [`Self::race`] without waiting, for right before an irreversible step, so
     /// no input starts after the call has to stop.
     pub(crate) fn check(&self) -> Result<(), CallError> {
-        if let Some(stop) = self.run.deadline.stop() {
-            return Err(CallError::RunEnded(run_end(stop)));
-        }
-        if self.run.ended.is_cancelled() {
-            return Err(CallError::RunEnded(self.run.end_reason()));
+        if let Some(stop) = self.run_stop() {
+            return Err(stop);
         }
         self.pending_abort()?;
-        if self.page_closed.is_cancelled() {
+        if self.page_closed.is_cancelled() || self.context_closed.is_cancelled() {
             return Err(PlaywrightError::target_closed().into());
         }
         if self.own_deadline.is_some_and(|at| Instant::now() >= at) {
@@ -278,10 +299,27 @@ impl Progress {
         Ok(())
     }
 
-    /// The call's `AbortError` if the script aborted it already. The dispatcher asks before the
-    /// handler starts, as Playwright's `run` throws `_pendingAbortError` before its task: an
-    /// abort can arrive between the call's admission and its task's first poll.
+    /// The run-level stops, first in [`Self::race`]'s precedence: the run's deadline or
+    /// cancellation, then the run ending otherwise. Each outranks the script's abort.
+    fn run_stop(&self) -> Option<CallError> {
+        if let Some(stop) = self.run.deadline.stop() {
+            return Some(CallError::RunEnded(run_end(stop)));
+        }
+        if self.run.ended.is_cancelled() {
+            return Some(CallError::RunEnded(self.run.end_reason()));
+        }
+        None
+    }
+
+    /// The call's `AbortError` if the script aborted it already, unless the run has stopped,
+    /// which outranks it. The dispatcher asks before the handler starts, as Playwright's `run`
+    /// throws `_pendingAbortError` before its task: an abort can arrive between the call's
+    /// admission and its task's first poll. When the run has stopped as well, the handler starts
+    /// as any call first polled after the run's end does, and its first race reports the end.
     pub(crate) fn pending_abort(&self) -> Result<(), CallError> {
+        if self.run_stop().is_some() {
+            return Ok(());
+        }
         match self.entry.abort.error() {
             Some(error) => Err(error.into()),
             None => Ok(()),
@@ -888,6 +926,44 @@ pub(crate) fn js_number(value: f64) -> String {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn tests_that_closing_the_context_stops_every_other_call_but_itself() {
+        let run = RunScope::new(
+            Deadline::new(Duration::from_hours(1), CancellationToken::new()),
+            TaskTracker::new(),
+        );
+        let entry = || {
+            Arc::new(CallEntry::new(CallStart {
+                call_id: 1,
+                guid: "frame@T".to_string(),
+                method: "click".to_string(),
+                title: Some("Click"),
+                params: Value::Null,
+                location: None,
+                input: true,
+            }))
+        };
+        let waiting = Progress::new(entry(), 0.0, run.clone(), CancellationToken::new());
+        let closing = Progress::new(entry(), 0.0, run.clone(), CancellationToken::new())
+            .closing_the_context();
+        assert!(waiting.check().is_ok() && closing.check().is_ok());
+        closing.stop_the_runs_calls();
+        let closed: CallError = PlaywrightError::target_closed().into();
+        assert_eq!(
+            waiting.check(),
+            Err(closed.clone()),
+            "no input after the close"
+        );
+        assert_eq!(
+            waiting.race(future::pending::<()>()).await,
+            Err(closed),
+            "a wait in flight ends as its tab closing would"
+        );
+        assert!(closing.check().is_ok(), "the close finishes its own reply");
+        let later = Progress::new(entry(), 0.0, run, CancellationToken::new());
+        assert!(later.check().is_err(), "and a call after it never starts");
+    }
+
     fn entry(call_id: u64, input: bool) -> Arc<CallEntry> {
         entry_with_params(call_id, input, serde_json::json!({ "selector": "#go" }))
     }
@@ -1122,6 +1198,33 @@ mod tests {
             Err(CallError::Playwright(PlaywrightError::aborted("stop")))
         );
         run.end(RunEnd::Settled);
+        assert_eq!(
+            progress.race(future::pending::<()>()).await,
+            Err(CallError::RunEnded(RunEnd::Settled))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_run_stop_outranks_a_pending_abort() {
+        let run = scope(Duration::from_secs(30));
+        let entry = entry(1, true);
+        let progress = Progress::new(
+            Arc::clone(&entry),
+            0.0,
+            run.clone(),
+            CancellationToken::new(),
+        );
+        entry.abort("stop".to_string());
+        let aborted = CallError::Playwright(PlaywrightError::aborted("stop"));
+        assert_eq!(progress.pending_abort(), Err(aborted.clone()));
+        assert_eq!(progress.check(), Err(aborted));
+        run.end(RunEnd::Settled);
+        assert_eq!(
+            progress.pending_abort(),
+            Ok(()),
+            "the handler starts, and its first race reports the run's end"
+        );
+        assert_eq!(progress.check(), Err(CallError::RunEnded(RunEnd::Settled)));
         assert_eq!(
             progress.race(future::pending::<()>()).await,
             Err(CallError::RunEnded(RunEnd::Settled))

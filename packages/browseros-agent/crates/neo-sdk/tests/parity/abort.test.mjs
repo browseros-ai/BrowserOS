@@ -212,13 +212,14 @@ return {
 }`
 
 // A screenshot aborted mid-capture: the element is attached but hidden, so the capture prepares
-// the page (the caret style it injects) and then waits for it to show. The abort rejects it and
-// the page is restored, as Playwright's cleanup restores it.
+// the page (`style` goes in as a <style> in each document; the caret is hidden with inline
+// styles) and then waits for it to show. The abort rejects it and the page is restored, as
+// Playwright's cleanup restores it.
 const SCREENSHOT = `
 const styles = () => page.evaluate(() => document.querySelectorAll('style').length)
 const before = await styles()
 const controller = new AbortController()
-const pending = settle(page.locator('#hidden').screenshot({ signal: controller.signal, timeout: 0 }), 'stop capture')
+const pending = settle(page.locator('#hidden').screenshot({ signal: controller.signal, timeout: 0, style: 'body { color: red }' }), 'stop capture')
 await pause(500)
 const during = await styles()
 controller.abort('stop capture')

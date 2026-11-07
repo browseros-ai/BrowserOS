@@ -7,7 +7,10 @@
 //!   ├─ Tabs::open                        tabs.rs: context scope, ordered page registry
 //!   └─ realm::run                        realm.rs: fresh QuickJS and embedded neo-sdk
 //!        └─ __neo_runtime                bridge.rs: JS/Rust boundary
-//!             ├─ get → Tabs              live pages, URL, initializer and closed state
+//!             ├─ get → Tabs              live pages, URL, initializer, opener and closed state
+//!             ├─ subscribe → EventHub    events.rs: the run's event queue; producers:
+//!             │                          page_events.rs (one tab's watcher), frame_events.rs
+//!             │                          (its frame tree), discovery.rs (new tabs, popups)
 //!             └─ Dispatcher::call        dispatch.rs: target routing, task, trace, reply
 //!                  ├─ tab_calls          context/page lifecycle; tracked creation and cleanup
 //!                  └─ Tabs::session      one lazy session for the call's page
@@ -58,11 +61,13 @@ mod click;
 mod console;
 mod deadline;
 mod dialogs;
+mod discovery;
 mod dispatch;
 mod evaluate;
 mod events;
 mod fill;
 mod forms;
+mod frame_events;
 mod frame_selector;
 mod frames;
 mod getters;
