@@ -26,7 +26,7 @@ const EVENTS: &str = r#"<!doctype html><html><body>
 <button id="prompt" onclick="document.getElementById('prompt-result').textContent = JSON.stringify(prompt('Name?', 'anon'))">prompt</button>
 <button id="confirm" onclick="document.getElementById('confirm-result').textContent = JSON.stringify(confirm('Sure?'))">confirm</button>
 <button id="throw" onclick="throw new Error('boom')">throw</button>
-<button id="flood" onclick="const big = 'x'.repeat(1 << 20); for (let i = 0; i < 24; i++) console.log(big)">flood</button>
+<button id="flood" onclick="const big = 'x'.repeat(1 << 20); for (let i = 0; i < 24; i++) console.log(big); history.pushState({}, '', '#flooded')">flood</button>
 <script>console.log('before run')</script>
 </body></html>"#;
 
@@ -251,18 +251,21 @@ async fn tests_that_a_full_queue_drops_events_and_notes_it_once() {
     let Some(tab) = open().await else {
         return;
     };
-    // The script spins while the page logs 24 MiB, so nothing drains the queue past its 16 MiB.
+    // The page logs 24 MiB, then marks its URL. The script never yields meanwhile: it blocks in
+    // the synchronous `url()` getter until the mark, then spins a moment for the last messages
+    // in flight, so nothing drains the queue past its 16 MiB.
     let outcome = run(
         &tab,
         r"let count = 0
 page.on('console', () => count++)
 const clicking = page.click('#flood')
-const end = Date.now() + 4000
+while (!page.url().endsWith('#flooded')) {}
+const end = Date.now() + 1000
 while (Date.now() < end) {}
 await clicking
 await new Promise(resolve => setTimeout(resolve, 200))
 return count",
-        Duration::from_secs(30),
+        Duration::from_secs(60),
     )
     .await;
     tab.close().await;
