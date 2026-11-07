@@ -41,7 +41,7 @@ use neo_runtime_spec::serve::{
     FrameIsVisibleResult, FramePressParams, FramePressResult, FrameQueryCountParams,
     FrameSelectOptionParams, FrameSelectOptionResult, FrameTextContentParams, FrameTitleParams,
     FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
-    Metadata, PageCall,
+    FrameWaitForTimeoutParams, FrameWaitForTimeoutResult, Metadata, PageCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -71,7 +71,7 @@ use crate::tab_calls;
 use crate::tabs::{PageEntry, Tabs};
 use crate::waits::{
     self, NeoWaitForLoadStateParams, NeoWaitForUrlParams, WaitForLoadStateOptions,
-    WaitForSelectorOptions, WaitForUrlOptions,
+    WaitForSelectorOptions, WaitForTimeoutOptions, WaitForUrlOptions,
 };
 
 /// The shared budget for creation settlement, call draining and closing-state reads after
@@ -254,6 +254,7 @@ enum Route {
     FrameWaitForSelector(WaitForSelectorOptions),
     FrameWaitForUrl(WaitForUrlOptions),
     FrameWaitForLoadState(WaitForLoadStateOptions),
+    FrameWaitForTimeout(WaitForTimeoutOptions),
 }
 
 impl Dispatcher {
@@ -549,6 +550,9 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::WaitForSelector(params) => Ok(Route::FrameWaitForSelector(
             WaitForSelectorOptions::from_params(params),
         )),
+        FrameCall::WaitForTimeout(params) => Ok(Route::FrameWaitForTimeout(
+            WaitForTimeoutOptions::from_params(&params),
+        )),
     }
 }
 
@@ -665,6 +669,11 @@ async fn serve(
                 .await
                 .map(|()| Some(json!({})))
         }
+        Route::FrameWaitForTimeout(options) => waits::wait_for_timeout(&page, &options, &progress)
+            .await
+            .and_then(|()| {
+                encode_result::<FrameWaitForTimeoutParams>(&FrameWaitForTimeoutResult {})
+            }),
         Route::FrameIsVisible(options) => states::is_visible(&page, &options, &progress)
             .await
             .and_then(|value| {
@@ -757,7 +766,8 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameAriaSnapshot(_)
         | Route::FrameWaitForSelector(_)
         | Route::FrameWaitForUrl(_)
-        | Route::FrameWaitForLoadState(_) => Err(PlaywrightError::error(
+        | Route::FrameWaitForLoadState(_)
+        | Route::FrameWaitForTimeout(_) => Err(PlaywrightError::error(
             "neo-runtime: navigation and page reads are served by `serve`",
         )
         .into()),
@@ -1260,7 +1270,8 @@ mod tests {
                 | Route::FrameAriaSnapshot(_)
                 | Route::FrameWaitForSelector(_)
                 | Route::FrameWaitForUrl(_)
-                | Route::FrameWaitForLoadState(_) => {
+                | Route::FrameWaitForLoadState(_)
+                | Route::FrameWaitForTimeout(_) => {
                     panic!("a form is not a navigation, read or wait")
                 }
             }
@@ -1384,6 +1395,11 @@ mod tests {
                 "Wait for URL",
             ),
             ("neo:waitForLoadState", json!({}), "Wait for load state"),
+            (
+                "waitForTimeout",
+                json!({"waitTimeout":250}),
+                "Wait for timeout",
+            ),
         ] {
             let routed = route_frame(method, params);
             let meta = routed.meta.expect("wait metadata");
@@ -1410,6 +1426,12 @@ mod tests {
                 "{params}"
             );
         }
+        let Ok(ObjectCall::Frame(Route::FrameWaitForTimeout(options))) =
+            route_frame("waitForTimeout", json!({"waitTimeout":250})).route
+        else {
+            panic!("timeout route");
+        };
+        assert_eq!(options.delay, Duration::from_millis(250));
     }
 
     #[test]
@@ -1463,6 +1485,10 @@ mod tests {
             ),
             ("neo:waitForURL", json!({})),
             ("neo:waitForLoadState", json!({"state":"wrong"})),
+            // Neo's decode wording, where Playwright's validator writes its own (exception E6).
+            ("waitForTimeout", json!({})),
+            ("waitForTimeout", json!({"waitTimeout":"100"})),
+            ("waitForTimeout", json!({"waitTimeout":null})),
         ] {
             assert_eq!(error_of(route_frame(method, params)).name, ErrorName::Error);
         }
@@ -1473,6 +1499,87 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    /// A dispatcher for the fake browser's one tab, and the run it serves.
+    async fn fake_dispatcher(replies: &Replies) -> (FakeBrowser, Dispatcher) {
+        let browser = FakeBrowser::start(*replies).await;
+        let tasks = TaskTracker::new();
+        let run = RunScope::new(
+            Deadline::new(Duration::from_secs(30), CancellationToken::new()),
+            tasks.clone(),
+        );
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            tasks,
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap();
+        (browser, Dispatcher::new(tabs, run))
+    }
+
+    /// `page.waitForTimeout(ms)` as the SDK sends it: no call timeout (Playwright's `kNoTimeout`).
+    fn wait_for_timeout_message(ms: u64) -> String {
+        json!({
+            "id": 7,
+            "guid": format!("frame@{PAGE}"),
+            "method": "waitForTimeout",
+            "params": { "waitTimeout": ms },
+            "metadata": { "timeout": 0 },
+        })
+        .to_string()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_wait_for_timeout_replies_with_its_id_alone_and_no_delivery() {
+        let (_browser, dispatcher) = fake_dispatcher(&Replies::default()).await;
+        let reply = dispatcher.call(&wait_for_timeout_message(20)).await;
+        assert_eq!(reply.unwrap(), r#"{"id":7}"#);
+        let (records, _) = dispatcher.finish(RunEnd::Settled).await;
+        let [record] = &records[..] else {
+            panic!("one record: {records:?}");
+        };
+        assert_eq!(
+            (
+                record.method.as_str(),
+                record.title.as_deref(),
+                &record.result,
+                record.delivery
+            ),
+            (
+                "waitForTimeout",
+                Some("Wait for timeout"),
+                &CallResult::Ok,
+                None
+            )
+        );
+    }
+
+    /// The tab closes the moment `prepare` enables its domains (`closes_at_page_enable`), and only
+    /// the watcher `prepare` started can tell: the wait ends as closed, long before its delay.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_a_tab_closed_while_wait_for_timeout_prepares_ends_it_at_once() {
+        let (_browser, dispatcher) = fake_dispatcher(&Replies {
+            closes_at_page_enable: true,
+            ..Replies::default()
+        })
+        .await;
+        let started = Instant::now();
+        let reply = dispatcher.call(&wait_for_timeout_message(20_000)).await;
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the wait outlived its tab: {:?}",
+            started.elapsed()
+        );
+        let reply: Value = serde_json::from_str(&reply.unwrap()).expect("reply");
+        assert_eq!(
+            reply["error"]["error"]["name"],
+            json!("TargetClosedError"),
+            "{reply}"
+        );
     }
 
     #[test]

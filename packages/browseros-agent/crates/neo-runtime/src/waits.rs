@@ -1,4 +1,5 @@
-//! Main-frame selector, URL and lifecycle waits behind one loop and an input-free tab seam.
+//! Main-frame selector, URL and lifecycle waits behind one loop, `waitForTimeout`'s timer, and an
+//! input-free tab seam.
 //!
 //! ```text
 //! wait_for_selector ── SelectorCondition ── check: prepare, pre-check, selectorState
@@ -7,6 +8,8 @@
 //! wait_for_load_state ─ NavigationCondition ─ check: URL/flags/lifecycle counts
 //!                      │                    changed: buffered commits + watched state
 //!                      └─ wait_until: check → changed → check (Progress::race on each)
+//! wait_for_timeout ─── one timer: prepare raced against it (arms close detection), then the
+//!                      rest of the timer through Progress::race
 //! ```
 //!
 //! No wait acquires or holds the tab's input lock, including during probes and sleeps.
@@ -17,14 +20,16 @@
 
 use std::future::{self, Future};
 use std::mem;
+use std::pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use neo_runtime_spec::injected::{
     InjectedDescribeSelectorParams, InjectedSelectorStateParams, SelectorMatch,
 };
 use neo_runtime_spec::serve::{
     ElementHandleChannel, FrameWaitForSelectorParams,
-    FrameWaitForSelectorParamsState as SelectorState, LifecycleEvent,
+    FrameWaitForSelectorParamsState as SelectorState, FrameWaitForTimeoutParams, LifecycleEvent,
 };
 use serde::Deserialize;
 use tokio::time;
@@ -145,6 +150,33 @@ fn supported_lifecycle(
         )));
     }
     Ok(state.unwrap_or(LifecycleEvent::Load))
+}
+
+/// Node's `TIMEOUT_MAX` (`lib/internal/timers.js`), 2^31 − 1 ms, the longest delay `setTimeout`
+/// keeps.
+const NODE_TIMEOUT_MAX_MS: f64 = 2_147_483_647.0;
+
+/// `waitForTimeout`'s delay, decoded once by the route. Playwright's server hands `waitTimeout`
+/// to Node's `setTimeout` (`frames.ts:1461`), so the delay follows Node's rule in
+/// `lib/internal/timers.js`. Its `Timeout` constructor turns a delay that is NaN, below 1 or
+/// above [`NODE_TIMEOUT_MAX_MS`] into 1 ms, and `insert` truncates any other to whole ms.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct WaitForTimeoutOptions {
+    pub(crate) delay: Duration,
+}
+
+impl WaitForTimeoutOptions {
+    pub(crate) fn from_params(params: &FrameWaitForTimeoutParams) -> Self {
+        let ms = params.wait_timeout;
+        let ms = if (1.0..=NODE_TIMEOUT_MAX_MS).contains(&ms) {
+            ms.trunc()
+        } else {
+            1.0
+        };
+        // Whole milliseconds in [1, 2^31 − 1] convert exactly; the fallback is unreachable.
+        let delay = Duration::try_from_secs_f64(ms / 1000.0).unwrap_or(Duration::from_millis(1));
+        Self { delay }
+    }
 }
 
 /// The three public waits share deadline, cancellation and disposal here. A condition's
@@ -458,6 +490,39 @@ fn lifecycle_reached(since: Lifecycle, current: Lifecycle, state: LifecycleEvent
     }
 }
 
+/// `frames.ts:1459-1471` `waitForTimeout`, a timer raced against the page closing.
+///
+/// The timer starts with the call. Neo learns that a tab was closed from outside only through
+/// the event watcher that `prepare` starts, so `prepare` runs first, raced against the same
+/// timer, only to arm that watch. `Closed` ends the call with `TargetClosedError`; any other
+/// error is ignored and the timer runs on; a `prepare` slower than the delay is dropped, so it
+/// never stretches the wait. The rest of the timer goes through `Progress::race`, so a close
+/// mid-wait is `TargetClosedError` and a run end is `RunEnded`. `prepare` is the only page call.
+pub(crate) async fn wait_for_timeout<T: WaitTab>(
+    tab: &T,
+    options: &WaitForTimeoutOptions,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let mut timer = pin::pin!(time::sleep(options.delay));
+    let prepared = progress
+        .race(async {
+            tokio::select! {
+                biased;
+                () = timer.as_mut() => None,
+                prepared = tab.prepare() => Some(prepared),
+            }
+        })
+        .await?;
+    match prepared {
+        None => return Ok(()),
+        Some(Err(PageError::Closed)) => return Err(PlaywrightError::target_closed().into()),
+        Some(
+            Ok(()) | Err(PageError::NotConnected | PageError::Threw(_) | PageError::Contract(_)),
+        ) => {}
+    }
+    progress.race(timer).await
+}
+
 fn page_error(error: PageError) -> PlaywrightError {
     match error {
         PageError::Closed => PlaywrightError::target_closed(),
@@ -620,6 +685,7 @@ mod tests {
         prepare: Step<()>,
         describe: Step<SelectorFacts>,
         probe: Step<Option<SelectorMatch>>,
+        preparations: AtomicUsize,
         probes: AtomicUsize,
         descriptions: AtomicUsize,
         state: watch::Sender<NavigationState>,
@@ -643,6 +709,7 @@ mod tests {
                     invalid: None,
                 }),
                 probe: Step::ready(Some(matched(true))),
+                preparations: AtomicUsize::new(0),
                 probes: AtomicUsize::new(0),
                 descriptions: AtomicUsize::new(0),
                 state,
@@ -698,6 +765,7 @@ mod tests {
     impl WaitTab for FakeTab {
         type Observation = Events;
         async fn prepare(&self) -> Result<(), PageError> {
+            self.preparations.fetch_add(1, Ordering::Relaxed);
             for event in self.on_prepare.lock().expect("prepare hook").drain(..) {
                 self.emit(event);
             }
@@ -800,6 +868,16 @@ mod tests {
     fn load(state: LifecycleEvent) -> WaitForLoadStateOptions {
         WaitForLoadStateOptions::from_params(NeoWaitForLoadStateParams { state: Some(state) })
             .expect("load options")
+    }
+
+    fn timer(wait_timeout: f64) -> WaitForTimeoutOptions {
+        WaitForTimeoutOptions::from_params(&FrameWaitForTimeoutParams { wait_timeout })
+    }
+
+    /// A run whose calls have no timeout of their own, as the SDK sends `waitForTimeout`, and
+    /// whose deadline is a minute away.
+    fn untimed_run() -> Run {
+        Run::with_deadline(0.0, 60_000)
     }
 
     struct Run {
@@ -1584,6 +1662,136 @@ mod tests {
             );
             assert_eq!(result, Ok(()));
             assert_eq!(tab.subscribers(), (0, 0));
+        }
+    }
+
+    #[test]
+    fn tests_that_the_delay_follows_nodes_set_timeout_rule() {
+        for wait_timeout in [
+            0.0,
+            -5.0,
+            0.5,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            2_147_483_648.0,
+            1e300,
+        ] {
+            assert_eq!(
+                timer(wait_timeout).delay,
+                Duration::from_millis(1),
+                "{wait_timeout}"
+            );
+        }
+        for (wait_timeout, ms) in [
+            (1.0, 1),
+            (2.5, 2),
+            (300.9, 300),
+            (2_147_483_647.0, 2_147_483_647),
+        ] {
+            assert_eq!(
+                timer(wait_timeout).delay,
+                Duration::from_millis(ms),
+                "{wait_timeout}"
+            );
+        }
+    }
+
+    /// The only page call is `prepare`, and the tab's input stays free for others meanwhile.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_the_timer_resolves_at_its_delay_after_one_prepare() {
+        let tab = FakeTab::new();
+        let _input = tab.input.lock().await;
+        let run = untimed_run();
+        let start = Instant::now();
+        assert_eq!(
+            wait_for_timeout(&tab, &timer(300.0), &run.progress).await,
+            Ok(())
+        );
+        assert_eq!(start.elapsed(), Duration::from_millis(300));
+        assert_eq!(tab.preparations.load(Ordering::Relaxed), 1);
+        assert_eq!(tab.descriptions.load(Ordering::Relaxed), 0);
+        assert_eq!(tab.probes.load(Ordering::Relaxed), 0);
+    }
+
+    /// The delay counts from the call's start: a slow `prepare` is part of it, and one slower
+    /// than the delay is abandoned when the delay ends.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_slow_prepare_never_stretches_the_delay() {
+        for prepare in [Duration::from_millis(60), Duration::from_secs(5)] {
+            let mut tab = FakeTab::new();
+            tab.prepare.delay = prepare;
+            let run = untimed_run();
+            let start = Instant::now();
+            assert_eq!(
+                wait_for_timeout(&tab, &timer(100.0), &run.progress).await,
+                Ok(()),
+                "{prepare:?}"
+            );
+            assert_eq!(start.elapsed(), Duration::from_millis(100), "{prepare:?}");
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_closing_the_tab_mid_delay_ends_the_timer_at_once() {
+        let tab = FakeTab::new();
+        let run = untimed_run();
+        let options = timer(1000.0);
+        let start = Instant::now();
+        let (result, ()) = tokio::join!(wait_for_timeout(&tab, &options, &run.progress), async {
+            time::sleep(Duration::from_millis(200)).await;
+            run.closed.cancel();
+        });
+        assert_error(result, ErrorName::TargetClosedError);
+        assert_eq!(start.elapsed(), Duration::from_millis(200));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_prepare_ends_the_timer_only_for_a_closed_tab() {
+        let mut tab = FakeTab::new();
+        tab.prepare.script([Err(PageError::Closed)]);
+        let run = untimed_run();
+        let start = Instant::now();
+        assert_error(
+            wait_for_timeout(&tab, &timer(1000.0), &run.progress).await,
+            ErrorName::TargetClosedError,
+        );
+        assert_eq!(start.elapsed(), Duration::ZERO);
+        for error in [
+            PageError::NotConnected,
+            PageError::Contract("bad reply".to_string()),
+            PageError::Threw("Error: thrown".to_string()),
+        ] {
+            let mut tab = FakeTab::new();
+            tab.prepare.script([Err(error.clone())]);
+            let run = untimed_run();
+            let start = Instant::now();
+            assert_eq!(
+                wait_for_timeout(&tab, &timer(400.0), &run.progress).await,
+                Ok(()),
+                "{error:?}"
+            );
+            assert_eq!(start.elapsed(), Duration::from_millis(400), "{error:?}");
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_the_run_ending_stops_the_timer() {
+        for end in [RunEnd::Settled, RunEnd::Cancelled, RunEnd::Timeout] {
+            let tab = FakeTab::new();
+            let run = Run::with_deadline(0.0, 300);
+            let options = timer(5000.0);
+            let (result, ()) =
+                tokio::join!(wait_for_timeout(&tab, &options, &run.progress), async {
+                    time::sleep(Duration::from_millis(50)).await;
+                    match end {
+                        RunEnd::Settled => run.scope.end(RunEnd::Settled),
+                        RunEnd::Cancelled => run.cancel.cancel(),
+                        // The run's own 300 ms deadline.
+                        RunEnd::Timeout => {}
+                    }
+                });
+            assert_eq!(result, Err(CallError::RunEnded(end)), "{end:?}");
         }
     }
 }
