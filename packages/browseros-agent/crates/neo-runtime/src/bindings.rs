@@ -280,9 +280,17 @@ pub(crate) struct Bindings {
     contexts: ContextFrames,
     /// Stops the session reader, at run end.
     stop: CancellationToken,
-    /// The waiting calls whose answer has not claimed release admission yet, by guid
-    /// ([`Bindings::begin_answering`]): a plain lock, as the dispatcher's admission is no task.
-    unclaimed: SyncMutex<HashSet<String>>,
+    /// The waiting calls' admission claims ([`Bindings::begin_answering`]): a plain lock, as the
+    /// dispatcher's admission is no task.
+    claims: SyncMutex<Claims>,
+}
+
+/// Each waiting call by guid: free to claim release admission for its answer, or claimed by an
+/// answer still running.
+#[derive(Default)]
+struct Claims {
+    waiting: HashSet<String>,
+    claimed: HashSet<String>,
 }
 
 #[derive(Default)]
@@ -406,7 +414,7 @@ impl Default for Bindings {
             state: Mutex::default(),
             contexts: ContextFrames::default(),
             stop: CancellationToken::new(),
-            unclaimed: SyncMutex::default(),
+            claims: SyncMutex::default(),
         }
     }
 }
@@ -763,9 +771,7 @@ impl Bindings {
             },
         );
         drop(state);
-        if let Ok(mut unclaimed) = self.unclaimed.lock() {
-            unclaimed.insert(guid.clone());
-        }
+        self.wait_for_answer(&guid);
         #[cfg(debug_assertions)]
         test_hooks::read_delay().await;
         Some(Ready {
@@ -790,7 +796,7 @@ impl Bindings {
             context,
         } = ready;
         if tabs.events().emit(&owner, "bindingCall", &params) != Emitted::Queued {
-            self.unclaim(&guid);
+            self.settle_claim(&guid);
             let origin = self
                 .state
                 .lock()
@@ -816,10 +822,11 @@ impl Bindings {
         handles: &Handles,
         progress: &Progress,
     ) -> Result<(), CallError> {
-        self.unclaim(guid);
         let Some(call) = self.state.lock().await.calls.remove(guid) else {
             return Ok(());
         };
+        // The answer has its call: whatever becomes of its delivery, no later answer waits for it.
+        self.settle_claim(guid);
         let Some(page) = page_of(tabs, &call.target) else {
             return Ok(());
         };
@@ -920,8 +927,8 @@ impl Bindings {
             state.closed = true;
             state.calls.clear();
             state.exposed.clear();
-            if let Ok(mut unclaimed) = self.unclaimed.lock() {
-                unclaimed.clear();
+            if let Ok(mut claims) = self.claims.lock() {
+                *claims = Claims::default();
             }
             let names: Vec<String> = state.names.iter().cloned().collect();
             (state.started, mem::take(&mut state.sessions), names)
@@ -944,19 +951,35 @@ impl Bindings {
 impl Bindings {
     /// Neo: claims the answer to the waiting call `guid`, for the dispatcher to admit outside its
     /// in-flight cap, as it admits a locator handler's completion (`locator_handlers.rs`
-    /// `begin_resolving`): the answer frees the page call waiting on it and adds no work. Once per
-    /// call: an answer to a call answered or claimed already, or to one never made, takes an
-    /// ordinary share, so such answers never outnumber the calls the page waits on.
-    pub(crate) fn begin_answering(&self, guid: &str) -> bool {
-        self.unclaimed
-            .lock()
-            .is_ok_and(|mut unclaimed| unclaimed.remove(guid))
+    /// `begin_resolving`): the answer frees the page call waiting on it and adds no work. One
+    /// claim per call at a time: an answer to a call answered or claimed already, or to one never
+    /// made, takes an ordinary share, so such answers never outnumber the calls the page waits
+    /// on. The claim goes back when its answer ends without having taken the call (it failed, or
+    /// stopped first), so a later answer still gets it.
+    pub(crate) fn begin_answering(self: &Arc<Self>, guid: &str) -> Option<Answering> {
+        let mut claims = self.claims.lock().ok()?;
+        if !claims.waiting.remove(guid) {
+            return None;
+        }
+        claims.claimed.insert(guid.to_string());
+        Some(Answering {
+            bindings: Arc::clone(self),
+            guid: guid.to_string(),
+        })
     }
 
-    /// `guid` no longer waits for an answer that could claim admission.
-    fn unclaim(&self, guid: &str) {
-        if let Ok(mut unclaimed) = self.unclaimed.lock() {
-            unclaimed.remove(guid);
+    /// `guid` waits for an answer, whose claim is free.
+    fn wait_for_answer(&self, guid: &str) {
+        if let Ok(mut claims) = self.claims.lock() {
+            claims.waiting.insert(guid.to_string());
+        }
+    }
+
+    /// `guid` waits no more: its answer came, or it never will.
+    fn settle_claim(&self, guid: &str) {
+        if let Ok(mut claims) = self.claims.lock() {
+            claims.waiting.remove(guid);
+            claims.claimed.remove(guid);
         }
     }
 
@@ -980,6 +1003,23 @@ impl Bindings {
                 )],
             )
             .await;
+        }
+    }
+}
+
+/// Neo: the claim a waiting call's answer holds on release admission while it runs
+/// ([`Bindings::begin_answering`]); it goes back when the answer ends without taking its call.
+pub(crate) struct Answering {
+    bindings: Arc<Bindings>,
+    guid: String,
+}
+
+impl Drop for Answering {
+    fn drop(&mut self) {
+        if let Ok(mut claims) = self.bindings.claims.lock()
+            && claims.claimed.remove(&self.guid)
+        {
+            claims.waiting.insert(self.guid.clone());
         }
     }
 }
@@ -1427,6 +1467,34 @@ mod tests {
             disposable: String::new(),
             script: String::new(),
         }
+    }
+
+    #[test]
+    fn an_answer_claims_admission_once_and_gives_the_claim_back_unless_it_answered() {
+        let bindings = Arc::new(Bindings::default());
+        let guid = "bindingcall@run.1";
+        bindings.wait_for_answer(guid);
+        let claim = bindings
+            .begin_answering(guid)
+            .expect("a waiting call's answer claims");
+        assert!(
+            bindings.begin_answering(guid).is_none(),
+            "one claim per call at a time"
+        );
+        // The answer's call failed before it took the call: a later answer claims again.
+        drop(claim);
+        let again = bindings.begin_answering(guid).expect("the claim went back");
+        // This one took its call.
+        bindings.settle_claim(guid);
+        drop(again);
+        assert!(
+            bindings.begin_answering(guid).is_none(),
+            "an answered call takes no more claims"
+        );
+        assert!(
+            bindings.begin_answering("bindingcall@run.2").is_none(),
+            "an answer to a call never made claims nothing"
+        );
     }
 
     #[test]
