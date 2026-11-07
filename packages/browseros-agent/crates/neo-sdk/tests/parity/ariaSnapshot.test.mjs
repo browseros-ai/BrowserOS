@@ -136,14 +136,10 @@ const frameCases = [
   {
     name: 'the ai snapshot stitches frames and its refs act inside them',
     source: `const refOf = (line) => /\\[ref=([^\\]]+)\\]/.exec(line)?.[1]
-    // BrowserOS neo's takeover bar (<browseros-neo-takeover>, which claw-app's content script adds
-    // to every page at document_idle) shows as one '- document' line, or not, depending on when
-    // the snapshot runs; it is not the page's, so both engines drop it.
-    const own = (yaml) => yaml.split('\\n').filter((line) => line.trim() !== '- document').join('\\n')
     const blank = (yaml) => yaml.replace(/\\[ref=[^\\]]+\\]/g, '[ref]')
-    const plain = own(await page.ariaSnapshot())
-    const shallow = own(await page.ariaSnapshot({ mode: 'ai', depth: 3 }))
-    const ai = own(await page.ariaSnapshot({ mode: 'ai' }))
+    const plain = await page.ariaSnapshot()
+    const shallow = await page.ariaSnapshot({ mode: 'ai', depth: 3 })
+    const ai = await page.ariaSnapshot({ mode: 'ai' })
     const lines = ai.split('\\n')
     const after = (marker, role) =>
       refOf(lines.slice(lines.findIndex((line) => line.includes(marker))).find((line) => line.includes(role)))

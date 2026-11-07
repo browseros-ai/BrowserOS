@@ -67,6 +67,14 @@ hiddenCross.style.display = 'none'
 hiddenCross.src = `http://localhost:${port}/frame-child.html?who=hidden-cross`
 document.body.append(hiddenCross)
 
+// BrowserOS neo's takeover bar (<browseros-neo-takeover>, which claw-app's content script adds
+// to pages once the extension has started, so to some tabs and not others) shows in
+// accessibility snapshots in a shape that depends on how far it has set itself up, and its own
+// styles win over the page's. It is not the page's, so the page removes it on sight.
+new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.remove()).observe(
+  document.documentElement,
+  { childList: true, subtree: true },
+)
 window.__who = 'top'
 window.__events = []
 for (const type of ['click', 'focus', 'keydown', 'input', 'change']) {
