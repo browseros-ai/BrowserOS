@@ -2623,6 +2623,132 @@ pub(crate) mod tests {
         assert!(!dblclick.wait_after && !dblclick.strict);
     }
 
+    /// Each planned event of `plan`: `keyUp Shift` for a key, `mousePressed modifiers=8` for a
+    /// mouse event.
+    fn plan_events(plan: &Plan) -> Vec<String> {
+        plan.commands
+            .iter()
+            .filter(|command| command.method.is_some())
+            .map(|command| {
+                let event: Value = serde_json::from_str(&command.params).expect("params are JSON");
+                let kind = event["type"].as_str().unwrap_or_default();
+                if command.method == Some("Input.dispatchKeyEvent") {
+                    format!("{kind} {}", event["key"].as_str().unwrap_or_default())
+                } else {
+                    format!("{kind} modifiers={}", event["modifiers"])
+                }
+            })
+            .collect()
+    }
+
+    /// Where each planned `mouseMoved` goes.
+    fn plan_moves(plan: &Plan) -> Vec<(f64, f64)> {
+        plan.commands
+            .iter()
+            .filter_map(|command| {
+                let event: Value = serde_json::from_str(&command.params).ok()?;
+                (event["type"] == "mouseMoved").then(|| {
+                    (
+                        event["x"].as_f64().unwrap_or_default(),
+                        event["y"].as_f64().unwrap_or_default(),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// Design section 4.3: a pointer action plans from the tab's devices. A Shift held by an
+    /// earlier `keyboard.down` reaches a click; `modifiers: []` lifts it for the click and holds
+    /// it again after; `ControlOrMeta` is the mac's Meta, swapped in and out in `kModifiers`
+    /// order; `steps` start at the pointer's last position; the platform is read only when
+    /// `modifiers` is given.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_pointer_action_plans_from_the_tabs_devices() {
+        let tab = FakeTab::ready();
+        let place_pointer = |tab: &FakeTab| {
+            let mut devices = tab.devices.lock().expect("devices");
+            devices.mouse.x = 0.75;
+            devices.mouse.y = 0.5;
+        };
+        {
+            let mut devices = tab.devices.lock().expect("devices");
+            devices.keyboard.modifiers = keyboard::SHIFT;
+            devices.keyboard.pressed = vec![("ShiftLeft", fake_owner())];
+        }
+        let click = |params: serde_json::Value| {
+            let mut all = serde_json::json!({ "selector": SELECTOR });
+            if let (Some(all), Some(params)) = (all.as_object_mut(), params.as_object()) {
+                all.extend(params.clone());
+            }
+            decoded("click", all).expect("served")
+        };
+
+        let (result, _, delivery) = run(&tab, &click(serde_json::json!({})), 30_000.0).await;
+        assert_eq!((result, delivery), (Ok(()), Delivery::Done));
+        assert_eq!(tab.count("platform"), 0, "no modifiers, no platform");
+
+        place_pointer(&tab);
+        let options = click(serde_json::json!({ "modifiers": [], "steps": 2 }));
+        let (result, _, delivery) = run(&tab, &options, 30_000.0).await;
+        assert_eq!((result, delivery), (Ok(()), Delivery::Done));
+        assert_eq!(tab.count("platform"), 1);
+
+        let (result, _, delivery) = run(
+            &tab,
+            &click(serde_json::json!({ "modifiers": ["ControlOrMeta"] })),
+            30_000.0,
+        )
+        .await;
+        assert_eq!((result, delivery), (Ok(()), Delivery::Done));
+
+        let plans = tab.plans.lock().expect("plans").clone();
+        assert_eq!(plans.len(), 3);
+        assert_eq!(
+            plan_events(&plans[0]),
+            [
+                "mouseMoved modifiers=8",
+                "mousePressed modifiers=8",
+                "mouseReleased modifiers=8"
+            ],
+            "the held Shift reaches the click"
+        );
+        assert_eq!(
+            plan_events(&plans[1]),
+            [
+                "keyUp Shift",
+                "mouseMoved modifiers=0",
+                "mouseMoved modifiers=0",
+                "mousePressed modifiers=0",
+                "mouseReleased modifiers=0",
+                "rawKeyDown Shift"
+            ],
+            "modifiers: [] lifts Shift for the click only"
+        );
+        let moves = plan_moves(&plans[1]);
+        let to = moves[1];
+        assert_eq!(
+            moves[0],
+            (f64::midpoint(0.75, to.0), f64::midpoint(0.5, to.1)),
+            "the first of two steps is halfway from the last position"
+        );
+        assert_eq!(
+            plan_events(&plans[2]),
+            [
+                "rawKeyDown Meta",
+                "keyUp Shift",
+                "mouseMoved modifiers=4",
+                "mousePressed modifiers=4",
+                "mouseReleased modifiers=4",
+                "keyUp Meta",
+                "rawKeyDown Shift"
+            ],
+            "ControlOrMeta on mac, in kModifiers order both ways"
+        );
+        let keyboard = tab.devices.lock().expect("devices").keyboard.clone();
+        assert_eq!(keyboard.modifiers, keyboard::SHIFT, "Shift is held again");
+        assert_eq!(keyboard.pressed, [("ShiftLeft", fake_owner())]);
+    }
+
     #[test]
     fn the_click_point_is_the_middle_of_the_visible_part() {
         let quads = |quads: Vec<[f64; 8]>| Geometry::Quads {
