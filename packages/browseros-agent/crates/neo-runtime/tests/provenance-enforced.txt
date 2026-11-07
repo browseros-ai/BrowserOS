@@ -28,11 +28,13 @@ neo-runtime/src/history.rs
 neo-runtime/src/input_devices.rs
 neo-runtime/src/main_world.rs
 neo-runtime/src/page_events.rs
+neo-runtime/src/session_state.rs
 neo-sdk/src/console-message.ts
 neo-sdk/src/dialog.ts
 neo-sdk/src/disposable.ts
 neo-sdk/src/element-handle.ts
 neo-sdk/src/events.ts
+neo-sdk/src/headers.ts
 neo-sdk/src/input.ts
 neo-sdk/src/js-handle.ts
 neo-sdk/src/plain-argument.ts

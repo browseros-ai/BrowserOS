@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (51)
+## Deviations (52)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -42,6 +42,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/page.rs | `apply_frame` | `server/chromium/chromiumSwitches.ts` `chromiumSwitches` | Playwright's Chromium never restores a cached document, and one it met would never fire `load`, so its history navigation would time out. Neo runs in the user's browser, where Chromium caches only a document that finished loading and restores it without lifecycle events, reporting `frameStoppedLoading` before this commit (measured on BrowserOS neo): it counts as loaded at once. |
 | neo-runtime/src/reads.rs | `UNNAMED_FRAME` | `server/page.ts` `ariaSnapshotJSONForFrame` | Playwright names a child frame's refs by the frame's number, which needs no ref on its `<iframe>`; Neo's refs inside a frame are the path of iframe refs from the main frame, and an iframe that is not visible or receives no pointer events gets no ref unless an earlier snapshot gave it one. So an AI snapshot inside a frame behind such an iframe throws, before that frame is snapshotted, rather than answer refs no selector could route. |
 | neo-runtime/src/realm.rs | `RACE_UNCAUGHT` | `client/eventEmitter.ts` `EventEmitter._handleListenerError` | A listener's throw, or its rejection with no `error` listener, is an uncaught exception in Node, which exits. QuickJS has no such exit, so neo-sdk reports the first one on its `uncaught` promise, and the run ends with that error at once instead of running on. The realm's own `abort` listeners report theirs the same way (`abort::REALM_GLOBALS`). |
+| neo-sdk/src/browser-context.ts | `BrowserContext.clearCookies` | `server/browserContext.ts` `BrowserContext.clearCookies` | With no filter Playwright clears every cookie of its context. Neo's context is the user's own browser, where that would sign the user out of every site, so Neo refuses the call without a `name`, `domain` or `path`. |
 | neo-sdk/src/browser-context.ts | `BrowserContext.newPage` | `server/chromium/crBrowser.ts` `CRBrowserContext.doCreateNewPage` | Playwright's new page takes the window's focus. Neo opens it in the background of the run page's window, by design: the user's active tab stays active until a script calls `bringToFront`. |
 | neo-sdk/src/browser-context.ts | `BrowserContext.pages` | `client/browserContext.ts` `BrowserContext.pages` | Playwright lists the pages its client was told of, in that order. Neo lists the context's tabs as the browser reports them, the run page first. |
 | neo-sdk/src/console-message.ts | (file) | `client/consoleMessage.ts` `ConsoleMessage.args` | Neo has no `JSHandle` for a console argument yet, so a message has no `args()`; a script that calls it gets a TypeError rather than a list of stand-ins. |

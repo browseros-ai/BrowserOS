@@ -20,14 +20,17 @@
 import type {
   BrowserContextCloseParams,
   DialogInitializer,
+  NetworkCookie,
   PageChannel,
   SerializedError,
+  SetNetworkCookie,
 } from '@browseros/neo-runtime-spec/serve'
 import type { Connection } from './connection'
 import { ConsoleMessage, type ConsoleMessagePayload } from './console-message'
 import { Dialog } from './dialog'
 import { parseSerializedError, targetClosedError } from './errors'
 import { ChannelOwner, type EventPipe, type EventTable } from './events'
+import { type Headers, headersObjectToArray, validateHeaders } from './headers'
 import { Page } from './page'
 import { BROWSER_CONTEXT_CLOSE_KEYS, pickParams } from './protocol'
 import { type CreatedPage, get } from './runtime-bridge'
@@ -63,6 +66,61 @@ const CONTEXT_EVENTS: EventTable = {
     'requestfailed',
     'requestfinished',
   ],
+}
+
+/** Neo: why `clearCookies()` without a filter throws. */
+const CLEAR_ALL_COOKIES_REFUSED =
+  "Neo does not clear every cookie of the user's browser, which would sign the user out of every site: pass clearCookies a name, domain or path"
+
+/** Playwright's `clearCookies` options (`client/network.ts` `ClearNetworkCookieOptions`). */
+export interface ClearCookieOptions {
+  name?: string | RegExp
+  domain?: string | RegExp
+  path?: string | RegExp
+}
+
+/** Playwright: `client/network.ts` `toClearCookiesParams`: `name: isString(options.name) ? options.name : undefined,`
+ * The filters Playwright's client sends: a string or a `RegExp` each, anything else dropped. */
+function clearCookieFilter(options: ClearCookieOptions): ClearCookieOptions {
+  const kept = (value: unknown) =>
+    typeof value === 'string' || value instanceof RegExp ? value : undefined
+  return {
+    name: kept(options.name),
+    domain: kept(options.domain),
+    path: kept(options.path),
+  }
+}
+
+/** Playwright: `server/network.ts` `hasClearCookiesFilter`: `return options.name !== undefined || options.domain !== undefined || options.path !== undefined;` */
+function hasClearCookieFilter(filter: ClearCookieOptions): boolean {
+  return (
+    filter.name !== undefined ||
+    filter.domain !== undefined ||
+    filter.path !== undefined
+  )
+}
+
+/** Playwright: `server/network.ts` `cookieMatchesClearFilter`: `return matches('name', options.name) && matches('domain', options.domain) && matches('path', options.path);` */
+function clearCookieMatches(
+  cookie: NetworkCookie,
+  filter: ClearCookieOptions,
+): boolean {
+  const matches = (
+    property: 'name' | 'domain' | 'path',
+    value: string | RegExp | undefined,
+  ) => {
+    if (value === undefined) return true
+    if (value instanceof RegExp) {
+      value.lastIndex = 0
+      return value.test(cookie[property])
+    }
+    return cookie[property] === value
+  }
+  return (
+    matches('name', filter.name) &&
+    matches('domain', filter.domain) &&
+    matches('path', filter.path)
+  )
 }
 
 /** A dialog record Rust sends: Playwright's `{guid, initializer}`. */
@@ -295,6 +353,111 @@ export class BrowserContext extends ChannelOwner {
       0,
     )
     return this.#pageFor(page.guid)
+  }
+
+  /** Playwright: `client/browserContext.ts` `BrowserContext.cookies`: `if (urls && typeof urls === 'string')`
+   * Every cookie of the user's browser profile, which is the run's context, or those a request
+   * to one of `urls` would send. */
+  async cookies(urls?: string | string[]): Promise<NetworkCookie[]> {
+    const list = !urls ? [] : typeof urls === 'string' ? [urls] : urls
+    const { cookies } = await this.#connection.sendContext(
+      'browserContext.cookies',
+      this.#guid,
+      'cookies',
+      { urls: list },
+      0,
+    )
+    return cookies
+  }
+
+  /** Playwright: `client/browserContext.ts` `BrowserContext.addCookies`: `await this._channel.addCookies({ cookies }, kNoTimeout);`
+   * The cookies stay in the user's profile after the run, as a site's would. */
+  async addCookies(cookies: SetNetworkCookie[]): Promise<void> {
+    await this.#connection.sendContext(
+      'browserContext.addCookies',
+      this.#guid,
+      'addCookies',
+      { cookies },
+      0,
+    )
+  }
+
+  /**
+   * Playwright: `server/browserContext.ts` `BrowserContext.clearCookies`: `const cookiesToExpire = currentCookies.filter(cookie => network.cookieMatchesClearFilter(cookie, options));`
+   * The cookies matching every filter given expire, the user's others untouched: Playwright's
+   * server logic, run here, where a `RegExp` filter is the script's own.
+   *
+   * Deviation: `server/browserContext.ts` `BrowserContext.clearCookies`: `await this.doClearCookies();`
+   * With no filter Playwright clears every cookie of its context. Neo's context is the user's
+   * own browser, where that would sign the user out of every site, so Neo refuses the call
+   * without a `name`, `domain` or `path`.
+   */
+  async clearCookies(options: ClearCookieOptions = {}): Promise<void> {
+    const filter = clearCookieFilter(options)
+    if (!hasClearCookieFilter(filter))
+      throw new Error(CLEAR_ALL_COOKIES_REFUSED)
+    const { cookies } = await this.#connection.sendContext(
+      'browserContext.clearCookies',
+      this.#guid,
+      'cookies',
+      { urls: [] },
+      0,
+    )
+    const expired = cookies
+      .filter((cookie) => clearCookieMatches(cookie, filter))
+      // Playwright: `server/browserContext.ts` `BrowserContext.clearCookies`: `// Keep the original value: browsers reject or ignore cookies with both empty name and value.`
+      .map((cookie) => ({ ...cookie, expires: 0 }))
+    if (!expired.length) return
+    await this.#connection.sendContext(
+      'browserContext.clearCookies',
+      this.#guid,
+      'addCookies',
+      { cookies: expired },
+      0,
+    )
+  }
+
+  /** Playwright: `client/browserContext.ts` `BrowserContext.setExtraHTTPHeaders`: `network.validateHeaders(headers);`
+   * Sent with every request of the run's tabs, each page's own over them, until the run ends. */
+  async setExtraHTTPHeaders(headers: Headers): Promise<void> {
+    validateHeaders(headers)
+    await this.#connection.sendContext(
+      'browserContext.setExtraHTTPHeaders',
+      this.#guid,
+      'setExtraHTTPHeaders',
+      { headers: headersObjectToArray(headers) },
+      0,
+    )
+  }
+
+  /** Playwright: `client/browserContext.ts` `BrowserContext.setOffline`: `await this._channel.setOffline({ offline }, kNoTimeout);`
+   * The run's tabs, until the run ends. */
+  async setOffline(offline: boolean): Promise<void> {
+    await this.#connection.sendContext(
+      'browserContext.setOffline',
+      this.#guid,
+      'setOffline',
+      { offline },
+      0,
+    )
+  }
+
+  /** Playwright: `client/browserContext.ts` `BrowserContext.setGeolocation`: `await this._channel.setGeolocation({ geolocation: geolocation || undefined }, kNoTimeout);`
+   * The run's tabs, until the run ends; `null` clears it. */
+  async setGeolocation(
+    geolocation: {
+      longitude: number
+      latitude: number
+      accuracy?: number
+    } | null,
+  ): Promise<void> {
+    await this.#connection.sendContext(
+      'browserContext.setGeolocation',
+      this.#guid,
+      'setGeolocation',
+      geolocation ? { geolocation } : {},
+      0,
+    )
   }
 
   setDefaultTimeout(timeout: number | undefined): void {

@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use browseros_cdp::CdpError;
 use neo_runtime_spec::serve::{
-    BrowserContextCall, BrowserContextNewPageResult, ConsoleMessagesFilter, PageCall, PageChannel,
+    BrowserContextCall, BrowserContextCookiesParams, BrowserContextCookiesResult,
+    BrowserContextNewPageResult, ConsoleMessagesFilter, NameValue, PageCall, PageChannel,
     PageClearConsoleMessagesParams, PageClearConsoleMessagesResult, PageClearPageErrorsParams,
     PageClearPageErrorsResult, PageConsoleMessagesParams, PageConsoleMessagesResult,
     PageGoBackParams, PageGoBackResult, PageGoForwardParams, PageGoForwardResult,
@@ -23,6 +24,7 @@ use crate::highlight;
 use crate::history::{self, HistoryOptions};
 use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
+use crate::session_state;
 use crate::tabs::{self, PageEntry, Tabs};
 
 pub(crate) async fn context(
@@ -64,7 +66,85 @@ pub(crate) async fn context(
             close_context(tabs, progress).await?;
             Ok(None)
         }
+        BrowserContextCall::Cookies(params) => {
+            let cookies = session_state::cookies(tabs, &params.urls, progress).await?;
+            encode_result::<BrowserContextCookiesParams>(&BrowserContextCookiesResult { cookies })
+        }
+        BrowserContextCall::AddCookies(params) => {
+            session_state::add_cookies(tabs, params.cookies, progress).await?;
+            Ok(None)
+        }
+        BrowserContextCall::SetExtraHTTPHeaders(params) => {
+            tabs.overrides()
+                .set_context_headers(tabs, params.headers, progress)
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::SetOffline(params) => {
+            tabs.overrides()
+                .set_offline(tabs, params.offline, progress)
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::SetGeolocation(params) => {
+            tabs.overrides()
+                .set_geolocation(tabs, params.geolocation, progress)
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::StorageState(_)
+        | BrowserContextCall::SetStorageState(_)
+        | BrowserContextCall::SetHTTPCredentials(_)
+        | BrowserContextCall::GrantPermissions(_)
+        | BrowserContextCall::ClearPermissions(_) => Err(PlaywrightError::error(
+            "neo-runtime: this session-state call is not served yet",
+        )
+        .into()),
     }
+}
+
+/// `page.bringToFront`: the tab in front, and BrowserOS's tab strip selecting it.
+async fn bring_to_front(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    // Playwright 26137face server/chromium/crPage.ts:207 sends Page.bringToFront.
+    let page = progress.race(tabs.session(entry)).await??;
+    let brought = progress
+        .race(page.send("Page.bringToFront", json!({})))
+        .await?;
+    checked(tabs, entry, progress, brought).await?;
+    let info = progress
+        .race(tabs::tab_info(tabs.cdp(), &entry.id))
+        .await??
+        .ok_or_else(PlaywrightError::target_closed)?;
+    // BrowserOS headless accepts Page.bringToFront without selecting the tab strip
+    // entry. Browser.activateTab changes that selection (see probes-runtime.md).
+    if !info.is_active {
+        let activated = progress
+            .race(tabs.cdp().send(
+                "Browser.activateTab",
+                json!({"targetId":entry.id.as_str()}),
+                None,
+            ))
+            .await?;
+        checked(tabs, entry, progress, activated).await?;
+    }
+    Ok(())
+}
+
+/// `page.setExtraHTTPHeaders`: the page's own, over the context's (`session_state.rs`).
+async fn set_page_headers(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    headers: Vec<NameValue>,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    tabs.overrides()
+        .set_page_headers(&page, &entry.id, headers, progress)
+        .await
 }
 
 /// Playwright's close of a connectOverCDP default context, which only disconnects: every tab
@@ -153,6 +233,9 @@ pub(crate) async fn page(
             return encode_result::<PageClearPageErrorsParams>(&PageClearPageErrorsResult {});
         }
         PageCall::Close(_) => close(tabs, entry, progress).await?,
+        PageCall::SetExtraHTTPHeaders(params) => {
+            set_page_headers(tabs, entry, params.headers, progress).await?;
+        }
         PageCall::RunBeforeUnload(_) => run_before_unload(tabs, entry, progress).await?,
         // The dispatcher serves these over the tab's input devices (`devices.rs`).
         PageCall::KeyboardDown(_)
@@ -171,30 +254,7 @@ pub(crate) async fn page(
             )
             .into());
         }
-        PageCall::BringToFront(_) => {
-            // Playwright 26137face server/chromium/crPage.ts:207 sends Page.bringToFront.
-            let page = progress.race(tabs.session(entry)).await??;
-            let brought = progress
-                .race(page.send("Page.bringToFront", json!({})))
-                .await?;
-            checked(tabs, entry, progress, brought).await?;
-            let info = progress
-                .race(tabs::tab_info(tabs.cdp(), &entry.id))
-                .await??
-                .ok_or_else(PlaywrightError::target_closed)?;
-            // BrowserOS headless accepts Page.bringToFront without selecting the tab strip
-            // entry. Browser.activateTab changes that selection (see probes-runtime.md).
-            if !info.is_active {
-                let activated = progress
-                    .race(tabs.cdp().send(
-                        "Browser.activateTab",
-                        json!({"targetId":entry.id.as_str()}),
-                        None,
-                    ))
-                    .await?;
-                checked(tabs, entry, progress, activated).await?;
-            }
-        }
+        PageCall::BringToFront(_) => bring_to_front(tabs, entry, progress).await?,
         PageCall::HideHighlight(_) => {
             let page = progress.race(tabs.session(entry)).await??;
             highlight::hide_all(&page, progress).await?;

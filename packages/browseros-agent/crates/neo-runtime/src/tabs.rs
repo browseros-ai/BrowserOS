@@ -29,6 +29,7 @@ use crate::page::{PageSession, Session, TabInputs};
 use crate::page_events;
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunPage};
+use crate::session_state::Overrides;
 
 /// Cheap clones share the run's registry, context boundary, and session ownership.
 #[derive(Clone)]
@@ -52,6 +53,8 @@ struct Inner {
     discovering: OnceLock<()>,
     /// Holds every call of the run until discovery has its baseline ([`ALL_PAGES`]).
     discovery_enabling: Mutex<Option<Enabling>>,
+    /// The run's session-scoped state, which each session it attaches gets (`session_state.rs`).
+    overrides: Arc<Overrides>,
 }
 
 /// A page can be known without a session. Its closure token precedes the attachment so calls,
@@ -173,6 +176,7 @@ impl Tabs {
             discovery,
             discovering: OnceLock::new(),
             discovery_enabling: Mutex::new(None),
+            overrides: Arc::default(),
         }));
         let entry = tabs.register(page.clone(), false)?;
         // The scope read above already checked this tab. Avoid a second startup read so
@@ -368,7 +372,7 @@ impl Tabs {
             return Err(PlaywrightError::target_closed());
         }
         let input = self.0.inputs.lock_for(&entry.id).await;
-        Ok(Arc::new(PageSession::new(
+        let page = Arc::new(PageSession::new(
             session,
             &entry.id,
             self.0.tasks.clone(),
@@ -376,7 +380,25 @@ impl Tabs {
             entry.closed.clone(),
             self.0.events.clone(),
             entry.discovered.load(Ordering::Acquire),
-        )))
+        ));
+        // The run's session state reaches this tab's sessions before the call that attached
+        // each goes on: the tab's own now, each out-of-process frame's as it attaches.
+        let overrides = Arc::clone(&self.0.overrides);
+        let cdp = page.events.cdp().clone();
+        let id = entry.id.clone();
+        page.events.on_child_session(Arc::new(move |session| {
+            let overrides = Arc::clone(&overrides);
+            let cdp = cdp.clone();
+            let id = id.clone();
+            Box::pin(async move { overrides.apply_to_new(&cdp, session, &id).await })
+        }));
+        if let Some(own) = page.events.sessions().into_iter().next() {
+            self.0
+                .overrides
+                .apply_to_new(page.events.cdp(), own, &entry.id)
+                .await;
+        }
+        Ok(page)
     }
 
     pub(crate) async fn url(&self, entry: &PageEntry) -> Result<Option<String>, PlaywrightError> {
@@ -636,6 +658,16 @@ impl Tabs {
         if let Ok(mut held) = self.0.discovery_enabling.lock() {
             held.take();
         }
+    }
+
+    /// The browser context of the run's tabs, when BrowserOS names it.
+    pub(crate) fn context_id(&self) -> Option<&str> {
+        self.0.scope.context.as_deref()
+    }
+
+    /// The run's session-scoped state (`session_state.rs`).
+    pub(crate) fn overrides(&self) -> &Overrides {
+        &self.0.overrides
     }
 
     /// A new page target discovery saw (`discovery.rs`). When the run listens for new pages and
