@@ -8,10 +8,14 @@
 # the list grows until it holds every neo source.
 neo-runtime/src/console.rs
 neo-runtime/src/dialogs.rs
+neo-runtime/src/element_ops.rs
 neo-runtime/src/events.rs
+neo-runtime/src/highlight.rs
 neo-runtime/src/page_events.rs
 neo-sdk/src/console-message.ts
 neo-sdk/src/dialog.ts
+neo-sdk/src/disposable.ts
 neo-sdk/src/events.ts
+neo-sdk/src/plain-argument.ts
 neo-sdk/src/waiter.ts
 neo-sdk/src/web-error.ts

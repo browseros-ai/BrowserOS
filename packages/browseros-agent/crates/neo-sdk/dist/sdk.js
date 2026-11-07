@@ -2813,6 +2813,32 @@ function isRegExp(obj) {
   return obj instanceof RegExp;
 }
 
+// src/disposable.ts
+class DisposableStub {
+  #dispose;
+  constructor(dispose) {
+    this.#dispose = dispose;
+    const asyncDispose = Symbol.asyncDispose;
+    if (asyncDispose)
+      Object.defineProperty(this, asyncDispose, {
+        value: () => this.dispose()
+      });
+  }
+  async dispose() {
+    if (!this.#dispose)
+      return;
+    try {
+      const dispose = this.#dispose;
+      this.#dispose = undefined;
+      await dispose();
+    } catch (e) {
+      if (isTargetClosedError(e))
+        return;
+      throw e;
+    }
+  }
+}
+
 // src/locator.ts
 class Locator {
   _frame;
@@ -2845,6 +2871,42 @@ class Locator {
   }
   page() {
     return this._frame.page();
+  }
+  async boundingBox(options) {
+    return await this._frame._boundingBox("locator.boundingBox", this._selector, options ?? {});
+  }
+  async dispatchEvent(type, eventInit = {}, options) {
+    return await this._frame._dispatchEvent("locator.dispatchEvent", this._selector, type, eventInit, { strict: true, ...options });
+  }
+  async focus(options) {
+    return await this._frame._focus("locator.focus", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
+  async blur(options) {
+    await this._frame._blur("locator.blur", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
+  async scrollIntoViewIfNeeded(options = {}) {
+    return await this._frame._scrollIntoViewIfNeeded("locator.scrollIntoViewIfNeeded", this._selector, { ...options, timeout: options.timeout });
+  }
+  async selectText(options = {}) {
+    const timeout = options.timeout;
+    return await this._frame._selectText("locator.selectText", this._selector, {
+      ...options,
+      timeout
+    });
+  }
+  async highlight(options = {}) {
+    const style = typeof options.style === "object" ? cssObjectToString(options.style) : options.style;
+    await this._frame._highlight("locator.highlight", this._selector, style);
+    return new DisposableStub(() => this.hideHighlight());
+  }
+  async hideHighlight() {
+    await this._frame._hideHighlight("locator.hideHighlight", this._selector);
   }
   async click(options = {}) {
     return await this._frame._click("locator.click", this._selector, {
@@ -3076,6 +3138,12 @@ function testIdAttributeName() {
 function setTestIdAttribute(attributeName) {
   _testIdAttributeName = attributeName;
 }
+function cssObjectToString(style) {
+  return Object.entries(style).map(([key, value]) => {
+    const property = key.startsWith("--") ? key : key.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase());
+    return `${property}: ${value}`;
+  }).join("; ");
+}
 
 // src/frame-locator.ts
 var kAnyFrameSelector = "internal:control=any-frame";
@@ -3143,6 +3211,7 @@ class FrameLocator {
 }
 
 // src/neo-commands.ts
+var NEO_SELECT_TEXT_KEYS = ["selector", "strict", "force"];
 function serializeUrlMatch(apiName, url) {
   if (url === undefined || url === "")
     return { glob: "" };
@@ -3617,6 +3686,81 @@ function encodeBase64(bytes) {
   return out;
 }
 
+// src/plain-argument.ts
+function serializePlainArgument(value) {
+  return {
+    value: serialize(value, { lastId: 0, visited: new Map }, []),
+    handles: []
+  };
+}
+function serialize(value, visitorInfo, accessChain) {
+  if (typeof value === "symbol")
+    return { v: "undefined" };
+  if (Object.is(value, undefined))
+    return { v: "undefined" };
+  if (Object.is(value, null))
+    return { v: "null" };
+  if (Object.is(value, Number.NaN))
+    return { v: "NaN" };
+  if (Object.is(value, Number.POSITIVE_INFINITY))
+    return { v: "Infinity" };
+  if (Object.is(value, Number.NEGATIVE_INFINITY))
+    return { v: "-Infinity" };
+  if (Object.is(value, -0))
+    return { v: "-0" };
+  if (typeof value === "boolean")
+    return { b: value };
+  if (typeof value === "number")
+    return { n: value };
+  if (typeof value === "string")
+    return { s: value };
+  if (typeof value === "bigint")
+    return { bi: value.toString() };
+  if (value instanceof Error)
+    return { e: { n: value.name, m: value.message, s: value.stack || "" } };
+  if (value instanceof Date)
+    return { d: value.toJSON() };
+  if (typeof URL !== "undefined" && value instanceof URL)
+    return { u: value.toJSON() };
+  if (value instanceof RegExp)
+    return { r: { p: value.source, f: value.flags } };
+  if (ArrayBuffer.isView(value))
+    refuseTypedArray();
+  if (typeof value === "object" && value !== null) {
+    const seen = visitorInfo.visited.get(value);
+    if (seen)
+      return { ref: seen };
+    if (Array.isArray(value)) {
+      const id2 = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id2);
+      const a = value.map((item, i) => serialize(item, visitorInfo, [...accessChain, i]));
+      return { a, id: id2 };
+    }
+    const id = ++visitorInfo.lastId;
+    visitorInfo.visited.set(value, id);
+    const o = Object.keys(value).map((name) => ({
+      k: name,
+      v: serialize(value[name], visitorInfo, [
+        ...accessChain,
+        name
+      ])
+    }));
+    return { o, id };
+  }
+  throw new Error(`Attempting to serialize unexpected value${accessChainToDisplayString(accessChain)}: ${String(value)}`);
+}
+function refuseTypedArray() {
+  throw new Error("Neo's dispatchEvent takes plain eventInit values (strings, finite numbers, booleans, null, arrays and plain objects); this one holds a typed array");
+}
+function accessChainToDisplayString(accessChain) {
+  const chainString = accessChain.map((accessor, i) => {
+    if (typeof accessor === "string")
+      return i ? `.${accessor}` : accessor;
+    return `[${accessor}]`;
+  }).join("");
+  return chainString.length > 0 ? ` at position "${chainString}"` : "";
+}
+
 // src/protocol.ts
 var FRAME_GOTO_KEYS = ["url", "waitUntil", "referer"];
 var FRAME_TEXT_CONTENT_KEYS = ["selector", "strict"];
@@ -3718,6 +3862,16 @@ var FRAME_WAIT_FOR_SELECTOR_KEYS = [
   "state",
   "omitReturnValue"
 ];
+var FRAME_FOCUS_KEYS = ["selector", "strict"];
+var FRAME_BLUR_KEYS = ["selector", "strict"];
+var FRAME_DISPATCH_EVENT_KEYS = [
+  "selector",
+  "strict",
+  "type",
+  "eventInit"
+];
+var FRAME_HIGHLIGHT_KEYS = ["selector", "style"];
+var FRAME_HIDE_HIGHLIGHT_KEYS = ["selector"];
 var PAGE_CLOSE_KEYS = ["reason"];
 var PAGE_CONSOLE_MESSAGES_KEYS = ["filter"];
 var PAGE_PAGE_ERRORS_KEYS = ["filter"];
@@ -4125,6 +4279,59 @@ class Frame {
     else
       await this._uncheck("frame.setChecked", selector, options);
   }
+  async focus(selector, options = {}) {
+    return await this._focus("frame.focus", selector, options);
+  }
+  async _focus(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "focus", pickParams(FRAME_FOCUS_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}));
+  }
+  async _blur(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "blur", pickParams(FRAME_BLUR_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}));
+  }
+  async dispatchEvent(selector, type, eventInit, options = {}) {
+    return await this._dispatchEvent("frame.dispatchEvent", selector, type, eventInit, options);
+  }
+  async _dispatchEvent(apiName, selector, type, eventInit, options) {
+    await this._connection.send(apiName, this._guid, "dispatchEvent", pickParams(FRAME_DISPATCH_EVENT_KEYS, {
+      selector,
+      type,
+      eventInit: serializePlainArgument(eventInit),
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}));
+  }
+  async _scrollIntoViewIfNeeded(apiName, selector, options) {
+    await this._connection.sendNeo(apiName, this._guid, "neo:scrollIntoViewIfNeeded", { selector, strict: true }, this._page._timeoutSettings.timeout(options ?? {}));
+  }
+  async _selectText(apiName, selector, options) {
+    const opts = options ?? {};
+    await this._connection.sendNeo(apiName, this._guid, "neo:selectText", pickParams(NEO_SELECT_TEXT_KEYS, {
+      selector,
+      strict: true,
+      force: opts.force
+    }), this._page._timeoutSettings.timeout(opts));
+  }
+  async _boundingBox(apiName, selector, options) {
+    const result = await this._connection.sendNeo(apiName, this._guid, "neo:boundingBox", { selector, strict: true }, this._page._timeoutSettings.timeout(options ?? {}));
+    const box = result?.value;
+    return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null;
+  }
+  async _highlight(apiName, selector, style) {
+    await this._connection.send(apiName, this._guid, "highlight", pickParams(FRAME_HIGHLIGHT_KEYS, {
+      selector,
+      style
+    }), 0);
+  }
+  async _hideHighlight(apiName, selector) {
+    await this._connection.send(apiName, this._guid, "hideHighlight", pickParams(FRAME_HIDE_HIGHLIGHT_KEYS, {
+      selector
+    }), 0);
+  }
   locator(selector, options) {
     return new Locator(this, selector, options);
   }
@@ -4508,6 +4715,15 @@ class Page extends ChannelOwner {
   }
   async click(selector, options = {}) {
     return await this.#mainFrame._click("page.click", selector, options);
+  }
+  async focus(selector, options = {}) {
+    return await this.#mainFrame._focus("page.focus", selector, options);
+  }
+  async dispatchEvent(selector, type, eventInit, options = {}) {
+    return await this.#mainFrame._dispatchEvent("page.dispatchEvent", selector, type, eventInit, options);
+  }
+  async hideHighlight() {
+    await this.#connection.sendPage("page.hideHighlight", this.#guid, "hideHighlight", {}, 0);
   }
   async dblclick(selector, options = {}) {
     return await this.#mainFrame._dblclick("page.dblclick", selector, options);

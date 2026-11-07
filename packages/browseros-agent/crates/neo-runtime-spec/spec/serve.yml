@@ -22,6 +22,8 @@ interfaces:
     - close
     - runBeforeUnload
     - bringToFront
+    # Element operations (element_ops.rs, highlight.rs): every highlight of the page.
+    - hideHighlight
     # The page's console and page-error history (`page.consoleMessages()`, `page.pageErrors()`).
     # A message's `args` are JSHandles, which are not a key here, so they always travel empty.
     - consoleMessages
@@ -76,6 +78,14 @@ interfaces:
     - isEditable
     - isHidden
     - innerHTML
+    # Element operations (element_ops.rs, highlight.rs). `scrollIntoViewIfNeeded`, `selectText`
+    # and `boundingBox` are Neo commands (`neo:`), as Playwright's client reaches them only
+    # through an `ElementHandle`.
+    - focus
+    - blur
+    - dispatchEvent
+    - highlight
+    - hideHighlight
 
 # Named Playwright types the call bridge needs outside any command. `Metadata` is the `metadata`
 # of every protocol call; it carries the call's timeout, which is never a command parameter.

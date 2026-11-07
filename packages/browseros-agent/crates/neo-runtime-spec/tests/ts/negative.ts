@@ -54,6 +54,26 @@ const valid = {
   queryCount: () => ({ value: 0 }),
   allTextContents: () => ({ values: [] }),
   allInnerTexts: () => ({ values: [] }),
+  blurElement: () => ({ outcome: 'done' }),
+  selectText: () => ({ outcome: 'done' }),
+  dispatchEvent: () => ({}),
+  setHighlights: () => ({}),
+  hideHighlight: () => ({}),
+} satisfies Api
+
+export const unknownSelectTextOutcome = {
+  ...valid,
+  // @ts-expect-error selectText returns done, notconnected or the visibility it is missing.
+  selectText: () => ({ outcome: 'selected' }),
+} satisfies Api
+
+export const parsedHighlightSelector = {
+  ...valid,
+  setHighlights: (_injected, { highlights }) => {
+    // @ts-expect-error a highlight's selector crosses as text; the glue parses it in the page.
+    const parts: unknown[] = highlights[0]?.selector.parts ?? []
+    return parts.length ? {} : {}
+  },
 } satisfies Api
 
 export const unknownElementState = {

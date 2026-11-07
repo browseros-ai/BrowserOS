@@ -314,6 +314,51 @@ export const glue = {
     outcome: injected.focusNode(element, resetSelectionIfNotFocused),
   }),
 
+  /** Playwright: `server/dom.ts` `ElementHandle._blur`: `injected.blurNode(node)` */
+  blurElement: (injected, _params, element) => ({
+    outcome: injected.blurNode(element),
+  }),
+
+  /** Playwright: `server/dom.ts` `ElementHandle.selectText`: `return injected.selectText(node);` */
+  selectText: async (injected, { force, frameVisible }, element) => {
+    if (!force) {
+      const outcome = await injected.checkElementStates(
+        element,
+        ['visible'],
+        frameVisible,
+      )
+      if (outcome) return { outcome }
+    }
+    return { outcome: injected.selectText(element) }
+  },
+
+  /** Playwright: `server/frames.ts` `Frame.dispatchEvent`: `injectedScript.dispatchEvent(element, data.type, data.eventInit);` */
+  dispatchEvent: (injected, { selector, strict, type, eventInit }) => {
+    const [element] = query(injected, selector, strict, {
+      markTargets: 'first',
+    })
+    if (!element) return {}
+    injected.dispatchEvent(element, type, JSON.parse(eventInit))
+    return { preview: injected.previewNode(element) }
+  },
+
+  /** Playwright: `server/highlightController.ts` `HighlightController._resolve`: `await injectedScript.evaluate((injected, highlights) => injected.setHighlights(highlights), highlights);` */
+  setHighlights: (injected, { highlights }) => {
+    injected.setHighlights(
+      highlights.map(({ selector, cssStyle }) => ({
+        selector: injected.parseSelector(selector),
+        cssStyle,
+      })),
+    )
+    return {}
+  },
+
+  /** Playwright: `server/highlightController.ts` `HighlightController.hideHighlights`: `await injectedScript?.evaluate(injected => injected.hideHighlight());` */
+  hideHighlight: (injected) => {
+    injected.hideHighlight()
+    return {}
+  },
+
   inputValue: (injected, { selector, strict }) => {
     const [node] = query(injected, selector, strict, { markTargets: 'first' })
     if (!node) return {}
