@@ -383,6 +383,23 @@ impl Bindings {
         no_global: bool,
     ) -> Result<String, PlaywrightError> {
         let _work = self.work.lock().await;
+        let exposed = self.expose_now(tabs, scripts, page, name, no_global).await;
+        // Run end came while this expose ran: whatever it put on a page after that end ran, this
+        // end takes back.
+        if self.state.lock().await.closed {
+            self.end_pages(tabs).await;
+        }
+        exposed
+    }
+
+    async fn expose_now(
+        self: &Arc<Self>,
+        tabs: &Tabs,
+        scripts: &Arc<InitScripts>,
+        page: Option<&Arc<PageSession>>,
+        name: &str,
+        no_global: bool,
+    ) -> Result<String, PlaywrightError> {
         let target = page.map(|page| init_scripts::target_of(page));
         let first = {
             let state = self.state.lock().await;
@@ -430,6 +447,9 @@ impl Bindings {
         }
         let add = add_arg(name, no_global);
         for (_, session) in tabs.attached() {
+            if self.state.lock().await.closed {
+                return Err(PlaywrightError::target_closed());
+            }
             let shown = init_scripts::target_of(&session);
             // Shows the run's scripts on a page touched before it had any (its tab gets the
             // binding there, `prepare_tab`), and gives its held iframes the binding.
@@ -691,36 +711,15 @@ impl Bindings {
     /// running, which finds the run ended at its next step.
     /// Deviation: `server/page.ts` `Page.removeExposedBinding`: `await this.delegate.removeInitScripts([binding.initScript]);` Playwright's bindings live as long as their page or context; Neo's live as long as the run.
     pub(crate) async fn close(&self, tabs: &Tabs) {
-        let (exposed, sessions) = {
+        let (started, sessions) = {
             let mut state = self.state.lock().await;
             state.closed = true;
             state.calls.clear();
-            (
-                mem::take(&mut state.exposed),
-                mem::take(&mut state.sessions),
-            )
+            state.exposed.clear();
+            (state.started, mem::take(&mut state.sessions))
         };
-        for (_, session) in tabs.attached() {
-            let target = init_scripts::target_of(&session);
-            let names: Vec<Value> = exposed
-                .iter()
-                .filter(|exposed| exposed.reaches(&target))
-                .map(|exposed| json!(exposed.name))
-                .collect();
-            if !names.is_empty() {
-                let end = page_object(
-                    1,
-                    vec![
-                        ("names", json!({ "a": names, "id": 2 })),
-                        ("message", json!(RUN_ENDED)),
-                    ],
-                );
-                in_all_frames(
-                    &session,
-                    &[(BuiltExpression::BindingsCall, vec![json!("end"), end])],
-                )
-                .await;
-            }
+        if started {
+            self.end_pages(tabs).await;
         }
         // The iframe sessions went with `init_scripts.rs`'s auto-attach.
         let cdp = tabs.cdp();
@@ -736,6 +735,30 @@ impl Bindings {
             }
         }
         self.stop.cancel();
+    }
+}
+
+impl Bindings {
+    /// In every frame of the run's pages: each call still waiting rejects, and every binding the
+    /// page's controller holds goes, the controller and the CDP binding function with them.
+    async fn end_pages(&self, tabs: &Tabs) {
+        let end = page_object(
+            1,
+            vec![
+                ("names", json!({ "a": [], "id": 2 })),
+                ("message", json!(RUN_ENDED)),
+            ],
+        );
+        for (_, session) in tabs.attached() {
+            in_all_frames(
+                &session,
+                &[(
+                    BuiltExpression::BindingsCall,
+                    vec![json!("end"), end.clone()],
+                )],
+            )
+            .await;
+        }
     }
 }
 
