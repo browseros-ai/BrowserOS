@@ -261,3 +261,27 @@ test('ariaSnapshot over frames reads the same tree through Neo and Playwright', 
 }, async (t) => {
   await compareFrameCases(t, frameCases)
 })
+
+test('tests that default scoped snapshots enter an OOPIF and leave decoys unchanged', {
+  skip,
+  timeout: 180_000,
+}, async (t) => {
+  await compareFrameCases(t, [
+    {
+      name: 'remote list',
+      source: `return {
+      snapshot: await page.frameLocator('#login-iframe').locator('ul').ariaSnapshot(),
+      parent: await page.locator('#email').inputValue(),
+    };`,
+      expected: {
+        snapshot: (snapshot) => {
+          assert.match(snapshot, /cross one/)
+          assert.match(snapshot, /cross two/)
+          assert.doesNotMatch(snapshot, /top one|cross hidden|\[ref=/)
+        },
+        parent: 'top@seed.test',
+      },
+      effect: (frames) => assertDecoysUntouched(frames, []),
+    },
+  ])
+})
