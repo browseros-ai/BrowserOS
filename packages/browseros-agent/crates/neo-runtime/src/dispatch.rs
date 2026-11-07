@@ -103,6 +103,11 @@ use crate::waits::{
 /// Unkept creations close their tabs when their late acknowledgements arrive.
 const RECORDS_WAIT: Duration = Duration::from_secs(1);
 
+/// Neo: how long removing the run's init scripts may take at run end, apart from
+/// [`RECORDS_WAIT`]: a session it does not reach keeps a script the next run's documents would
+/// run. Free for a run that added none.
+const PAGE_END_WAIT: Duration = Duration::from_secs(3);
+
 /// The most browser calls one run may have unfinished at once. Each holds its params, its call
 /// log and a task in Rust, outside the realm's memory limit, and a script can start calls without
 /// awaiting them, so without a cap one run could hold any amount of the server's memory.
@@ -464,6 +469,9 @@ impl Dispatcher {
         let deadline = Instant::now() + RECORDS_WAIT;
         let run = &self.0.run;
         run.end(reason);
+        // The run's init scripts go first, on a budget of their own: removal never waits on a
+        // call still running, so no document loaded after the run returns runs one.
+        let _removed = time::timeout(PAGE_END_WAIT, run.init_scripts.close()).await;
         // The realm is gone with its listeners: from now on the watchers answer dialogs
         // themselves, and a dialog a listener left open gets the default answer before the
         // sessions detach (`Dialogs::left_open`).
@@ -475,7 +483,6 @@ impl Dispatcher {
         // Releases each session's handle group on its page's tracked task, before the sessions
         // detach; a run whose future is dropped releases them as `RunScope` drops.
         run.handles.close();
-        let _removed = time::timeout_at(deadline, run.init_scripts.close()).await;
         let _refreshed = time::timeout_at(deadline, self.0.tabs.refresh_closing()).await;
         self.0.trace.take(reason)
     }
@@ -499,9 +506,15 @@ async fn init_call(
                 .await??
         }
         InitRoute::Context(source) => {
-            progress
+            let guid = progress
                 .race(scripts.add(tabs.cdp(), None, &source))
-                .await??
+                .await??;
+            // Every page the run has a session on shows it from its next document, a reload
+            // included, not only those a later call touches.
+            for (_, session) in tabs.attached() {
+                scripts.ensure(tabs.cdp(), &session).await;
+            }
+            guid
         }
         InitRoute::Dispose(guid) => {
             progress.race(scripts.dispose(&guid)).await??;
@@ -805,6 +818,13 @@ async fn serve_call(
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
         (ObjectCall::Init(route), target) => init_call(&tabs, target, route, &progress).await,
         (ObjectCall::Page(call), Some((page, _))) => {
+            // A page call that navigates (`reload`, `goBack`, …) shows the run's scripts first,
+            // as a Frame call does.
+            if progress.init_scripts().has_scripts()
+                && let Ok(Ok(session)) = progress.race(tabs.session(&page)).await
+            {
+                progress.init_scripts().ensure(tabs.cdp(), &session).await;
+            }
             tab_calls::page(&tabs, &page, call, &progress).await
         }
         (ObjectCall::Frame(route), Some((page, scope))) => {
