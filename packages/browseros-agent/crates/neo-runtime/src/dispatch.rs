@@ -1642,11 +1642,7 @@ async fn serve_call(
             tab_calls::storage(&tabs, &page, call, turn, &progress).await
         }
         (ObjectCall::Binding(route), target) => binding_call(&tabs, target, route, &progress).await,
-        (ObjectCall::Clock(route), _) => progress
-            .race(progress.clock().call(&tabs, progress.init_scripts(), route))
-            .await
-            .and_then(|called| called.map_err(CallError::from))
-            .map(|()| Some(json!({}))),
+        (ObjectCall::Clock(route), _) => clock_call(&tabs, route, &progress).await,
         (ObjectCall::Browser(call), _) => browser_calls::browser(&tabs, *call, &progress).await,
         (ObjectCall::CreatedContext(context, call), _) => {
             browser_calls::context(&tabs, &context, call, &progress).await
@@ -1721,6 +1717,19 @@ async fn serve_call(
         _ => Err(PlaywrightError::target_closed().into()),
     };
     finish_reply(result, reply).await;
+}
+
+/// A clock command (`clock.rs`), raced against the call's progress; it answers `{}`.
+async fn clock_call(
+    tabs: &Tabs,
+    route: ClockRoute,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    progress
+        .race(progress.clock().call(tabs, progress.init_scripts(), route))
+        .await
+        .and_then(|called| called.map_err(CallError::from))
+        .map(|()| Some(json!({})))
 }
 
 /// Neo: a call reuses its page's session or attaches within the call's deadline and cancellation.

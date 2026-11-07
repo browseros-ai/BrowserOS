@@ -256,28 +256,14 @@ pub(crate) async fn page(
             });
         }
         PageCall::ClearConsoleMessages(_) => {
-            console_page(tabs, entry, progress)
-                .await?
-                .events
-                .console
-                .clear_messages();
-            return encode_result::<PageClearConsoleMessagesParams>(
-                &PageClearConsoleMessagesResult {},
-            );
+            return clear_console(tabs, entry, true, progress).await;
         }
         call @ (PageCall::RegisterLocatorHandler(_)
         | PageCall::ResolveLocatorHandlerNoReply(_)
         | PageCall::UnregisterLocatorHandler(_)) => {
             return locator_handler_call(tabs, entry, call, progress).await;
         }
-        PageCall::ClearPageErrors(_) => {
-            console_page(tabs, entry, progress)
-                .await?
-                .events
-                .console
-                .clear_errors();
-            return encode_result::<PageClearPageErrorsParams>(&PageClearPageErrorsResult {});
-        }
+        PageCall::ClearPageErrors(_) => return clear_console(tabs, entry, false, progress).await,
         // Playwright's server keeps a page's last requests from its first moment; Neo keeps
         // what the run's network log recorded, which starts with the session's
         // `Network.enable`: the first goto, history step or navigation wait, a network event
@@ -497,6 +483,24 @@ async fn requests(
         .requests()
         .map_err(|error| PlaywrightError::error(error.to_string()))?;
     encode_result::<PageRequestsParams>(&PageRequestsResult { requests })
+}
+
+/// `Page.clearConsoleMessages` (`messages`) or `Page.clearPageErrors`: the page's kept console
+/// messages, or its page errors, go.
+async fn clear_console(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    messages: bool,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let console = &console_page(tabs, entry, progress).await?.events.console;
+    if messages {
+        console.clear_messages();
+        encode_result::<PageClearConsoleMessagesParams>(&PageClearConsoleMessagesResult {})
+    } else {
+        console.clear_errors();
+        encode_result::<PageClearPageErrorsParams>(&PageClearPageErrorsResult {})
+    }
 }
 
 /// `entry`'s session with console messages and page errors reported (`PageSession::enable_runtime`).
