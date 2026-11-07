@@ -666,8 +666,8 @@ impl Tabs {
 
     /// Whether a new target is a tab of the run's context, as `pages()` decides, and whether it
     /// is closed: `None` when it is not the run's. A live target BrowserOS knows no tab for is
-    /// not a tab (an extension's action popup, a DevTools window) and is left out, as is a tab
-    /// that closed between its commit and this read. A target destroyed before its first commit
+    /// not a tab (an extension's action popup, a developer tools window) and is left out, as is a
+    /// tab that closed between its commit and this read. A target destroyed before its first commit
     /// is the run's when it belonged to the run's browser context.
     async fn new_tab_state(&self, id: &PageId, info: &TargetInfo, closed: bool) -> Option<bool> {
         if !closed {
