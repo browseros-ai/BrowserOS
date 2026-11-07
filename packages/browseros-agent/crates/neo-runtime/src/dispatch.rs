@@ -1446,6 +1446,7 @@ mod tests {
     use crate::progress::{self, ErrorName};
     use crate::run::Delivery;
     use crate::run::PageId;
+    use crate::session_state::Permissions;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
 
@@ -1460,6 +1461,7 @@ mod tests {
             Handle::current(),
             TabInputs::default(),
             Discovery::default(),
+            Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1537,6 +1539,7 @@ mod tests {
             Handle::current(),
             TabInputs::default(),
             Discovery::default(),
+            Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -2818,6 +2821,7 @@ mod review_abort_priority {
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::page::TabInputs;
     use crate::run::PageId;
+    use crate::session_state::Permissions;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
 
@@ -2834,6 +2838,7 @@ mod review_abort_priority {
             Handle::current(),
             TabInputs::default(),
             Discovery::default(),
+            Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )

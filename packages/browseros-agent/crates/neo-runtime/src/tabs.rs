@@ -29,7 +29,7 @@ use crate::page::{PageSession, Session, TabInputs};
 use crate::page_events;
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunPage};
-use crate::session_state::Overrides;
+use crate::session_state::{self, Overrides, Permissions};
 
 /// Cheap clones share the run's registry, context boundary, and session ownership.
 #[derive(Clone)]
@@ -55,6 +55,9 @@ struct Inner {
     discovery_enabling: Mutex<Option<Enabling>>,
     /// The run's session-scoped state, which each session it attaches gets (`session_state.rs`).
     overrides: Arc<Overrides>,
+    /// The `Runtime`'s permission grants, and this run's id among them.
+    permissions: Permissions,
+    run_id: u64,
 }
 
 /// A page can be known without a session. Its closure token precedes the attachment so calls,
@@ -154,6 +157,7 @@ impl Tabs {
         tokio: Handle,
         inputs: TabInputs,
         discovery: Discovery,
+        permissions: Permissions,
         tasks: TaskTracker,
         page: &PageId,
     ) -> Result<(Self, String), PlaywrightError> {
@@ -177,6 +181,8 @@ impl Tabs {
             discovering: OnceLock::new(),
             discovery_enabling: Mutex::new(None),
             overrides: Arc::default(),
+            permissions,
+            run_id: session_state::next_run(),
         }));
         let entry = tabs.register(page.clone(), false)?;
         // The scope read above already checked this tab. Avoid a second startup read so
@@ -670,6 +676,16 @@ impl Tabs {
         &self.0.overrides
     }
 
+    /// The `Runtime`'s permission grants (`session_state.rs`).
+    pub(crate) fn permissions(&self) -> &Permissions {
+        &self.0.permissions
+    }
+
+    /// This run's id among the `Runtime`'s runs.
+    pub(crate) fn run_id(&self) -> u64 {
+        self.0.run_id
+    }
+
     /// A new page target discovery saw (`discovery.rs`). When the run listens for new pages and
     /// the target is a tab of the run's context, registers it, emits Playwright's `page` event on
     /// the context with its record, and starts its watcher, so its events from its first
@@ -898,6 +914,7 @@ mod tests {
             Handle::current(),
             TabInputs::default(),
             Discovery::default(),
+            Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
         )

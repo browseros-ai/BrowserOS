@@ -642,6 +642,25 @@ fn bring_to_front(command: &Value, calls: &Calls, page: &Mutex<Page>) -> Value {
 }
 
 /// The fake's answer to `command`, and when to send it.
+/// Commands the fake answers with an empty result.
+const EMPTY_RESULTS: &[&str] = &[
+    "Browser.getVersion",
+    "Target.setDiscoverTargets",
+    "Browser.grantPermissions",
+    "Browser.resetPermissions",
+    "Storage.setCookies",
+    "Network.setExtraHTTPHeaders",
+    "Network.emulateNetworkConditions",
+    "Emulation.setGeolocationOverride",
+    "Page.close",
+    "Page.enable",
+    "Network.enable",
+    "Page.setLifecycleEventsEnabled",
+    "Emulation.setFocusEmulationEnabled",
+    "Runtime.releaseObjectGroup",
+    "DOM.scrollIntoViewIfNeeded",
+];
+
 fn answer(
     command: &Value,
     replies: &Replies,
@@ -685,15 +704,7 @@ fn answer(
             );
             (json!({"result":{}}), now)
         }
-        "Browser.getVersion"
-        | "Target.setDiscoverTargets"
-        | "Page.close"
-        | "Page.enable"
-        | "Network.enable"
-        | "Page.setLifecycleEventsEnabled"
-        | "Emulation.setFocusEmulationEnabled"
-        | "Runtime.releaseObjectGroup"
-        | "DOM.scrollIntoViewIfNeeded" => (json!({ "result": {} }), now),
+        method if EMPTY_RESULTS.contains(&method) => (json!({ "result": {} }), now),
         "Page.navigate" => match replies.navigation {
             Some(script) => {
                 let result = if script.same_document {

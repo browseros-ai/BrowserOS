@@ -16,7 +16,9 @@
 //! (neo-sdk `browser-context.ts`), and expires the matches through `addCookies`, as Playwright's
 //! server does: the user's other cookies are never touched.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use browseros_cdp::{CdpClient, SessionId};
 use neo_runtime_spec::serve::{
@@ -26,6 +28,7 @@ use neo_runtime_spec::serve::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
+use tokio_util::task::TaskTracker;
 use tracing::debug;
 use url::Url;
 
@@ -544,9 +547,356 @@ impl Overrides {
     }
 }
 
+/// Neo: each run's id among the process's runs, for the permission grants it holds.
+static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
+
+/// A new run's id ([`Permissions`]).
+pub(crate) fn next_run() -> u64 {
+    NEXT_RUN.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Playwright: `server/chromium/crBrowser.ts` `CRBrowserContext.doGrantPermissions`: `['local-network-access', ['localNetworkAccess', 'localNetwork', 'loopbackNetwork']],`
+///
+/// A web permission's CDP `Browser.PermissionType`s, or `None` for a name Playwright does not
+/// know. `fallback`: the mapping Playwright retries with on a browser that refuses the first.
+fn protocol_permission(name: &str, fallback: bool) -> Option<&'static [&'static str]> {
+    Some(match name {
+        "geolocation" => &["geolocation"],
+        "midi" => &["midi"],
+        "notifications" => &["notifications"],
+        "camera" => &["videoCapture"],
+        "microphone" => &["audioCapture"],
+        "background-sync" => &["backgroundSync"],
+        "ambient-light-sensor" | "accelerometer" | "gyroscope" | "magnetometer" => &["sensors"],
+        "clipboard-read" => &["clipboardReadWrite"],
+        "clipboard-write" => &["clipboardSanitizedWrite"],
+        "payment-handler" => &["paymentHandler"],
+        "midi-sysex" => &["midiSysex"],
+        "storage-access" => &["storageAccess"],
+        "local-fonts" => &["localFonts"],
+        "local-network-access" if fallback => &["localNetworkAccess"],
+        "local-network-access" => &["localNetworkAccess", "localNetwork", "loopbackNetwork"],
+        "screen-wake-lock" => &["wakeLockScreen"],
+        _ => return None,
+    })
+}
+
+/// Playwright: `server/chromium/crBrowser.ts` `CRBrowserContext.doGrantPermissions`: `throw new Error('Unknown permission: ' + permission);`
+const UNKNOWN_PERMISSION: &str = "Unknown permission: ";
+
+/// Playwright: `server/browserContext.ts` `BrowserContext.grantPermissions`: `resolvedOrigin = url.origin;`
+///
+/// The origin a grant names (`*` for every origin), as Playwright resolves it.
+fn grant_origin(origin: Option<&str>) -> Result<String, PlaywrightError> {
+    let Some(origin) = origin else {
+        return Ok("*".to_string());
+    };
+    let url = Url::parse(origin).map_err(|_| PlaywrightError::error(INVALID_URL))?;
+    Ok(url.origin().ascii_serialization())
+}
+
+/// The runs' permission grants, the `Runtime`'s: on the user's profile a grant is an override of
+/// its browser context, which every run and client of the browser shares, so Neo keeps each
+/// run's own and gives the browser their union, origin by origin. A run's grants go with its
+/// `clearPermissions` and with its end; once no run of the context holds one, its overrides are
+/// reset, back to the user's own settings.
+#[derive(Clone)]
+pub(crate) struct Permissions {
+    /// By run id: the earliest run first, so the browser gets each origin's list in that order.
+    grants: Arc<Mutex<BTreeMap<u64, RunGrants>>>,
+    /// The `Runtime`'s cleanup tracker, for a run dropped before it let go.
+    cleanup: TaskTracker,
+}
+
+impl Default for Permissions {
+    fn default() -> Self {
+        Self::new(TaskTracker::new())
+    }
+}
+
+/// One run's grants: its browser context, and by origin the web permissions it granted there.
+#[derive(Default)]
+struct RunGrants {
+    context: Option<String>,
+    origins: BTreeMap<String, Vec<String>>,
+}
+
+/// Playwright: `server/chromium/crBrowser.ts` `CRBrowserContext.doGrantPermissions`: `// Old stable browsers dislike the new permission name, so we use the fallback mapping.`
+///
+/// `Browser.grantPermissions` for every web permission the context's runs granted on `origin`.
+async fn grant_union(
+    cdp: &CdpClient,
+    grants: &BTreeMap<u64, RunGrants>,
+    context: Option<&str>,
+    origin: &str,
+) -> Result<(), PlaywrightError> {
+    let mut names: Vec<&str> = Vec::new();
+    for run in grants
+        .values()
+        .filter(|run| run.context.as_deref() == context)
+    {
+        for name in run.origins.get(origin).into_iter().flatten() {
+            if !names.contains(&name.as_str()) {
+                names.push(name);
+            }
+        }
+    }
+    let grant = |fallback: bool| {
+        let mut permissions: Vec<&str> = Vec::new();
+        for name in &names {
+            for permission in protocol_permission(name, fallback).unwrap_or(&[]) {
+                if !permissions.contains(permission) {
+                    permissions.push(permission);
+                }
+            }
+        }
+        let mut params = json!({ "permissions": permissions });
+        if origin != "*" {
+            params["origin"] = json!(origin);
+        }
+        if let Some(context) = context {
+            params["browserContextId"] = json!(context);
+        }
+        params
+    };
+    match cdp
+        .send("Browser.grantPermissions", grant(false), None)
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(_) => cdp
+            .send("Browser.grantPermissions", grant(true), None)
+            .await
+            .map(|_| ())
+            .map_err(|error| tabs::cdp_error(&error)),
+    }
+}
+
+/// Playwright: `server/chromium/crBrowser.ts` `CRBrowserContext.doClearPermissions`: `await this._browser._session.send('Browser.resetPermissions', { browserContextId: this._browserContextId });`
+///
+/// Resets the context's overrides, then grants again what its other runs hold.
+async fn reset_context(
+    cdp: &CdpClient,
+    grants: &BTreeMap<u64, RunGrants>,
+    context: Option<&str>,
+) -> Result<(), PlaywrightError> {
+    let mut params = json!({});
+    if let Some(context) = context {
+        params["browserContextId"] = json!(context);
+    }
+    cdp.send("Browser.resetPermissions", params, None)
+        .await
+        .map_err(|error| tabs::cdp_error(&error))?;
+    let origins: Vec<String> = grants
+        .values()
+        .filter(|run| run.context.as_deref() == context)
+        .flat_map(|run| run.origins.keys().cloned())
+        .collect();
+    let mut granted: Vec<String> = Vec::new();
+    for origin in origins {
+        if !granted.contains(&origin) {
+            grant_union(cdp, grants, context, &origin).await?;
+            granted.push(origin);
+        }
+    }
+    Ok(())
+}
+
+impl Permissions {
+    pub(crate) fn new(cleanup: TaskTracker) -> Self {
+        Self {
+            grants: Arc::default(),
+            cleanup,
+        }
+    }
+
+    /// Playwright: `server/browserContext.ts` `BrowserContext.grantPermissions`: `permissions.forEach(p => existing.add(p));`
+    ///
+    /// Run `run`'s grant of `permissions` on `origin` (every origin for none), added to what it
+    /// granted there before; the browser gets every run's on that origin.
+    pub(crate) async fn grant(
+        &self,
+        tabs: &Tabs,
+        run: u64,
+        origin: Option<&str>,
+        permissions: &[String],
+        progress: &Progress,
+    ) -> Result<(), CallError> {
+        if let Some(unknown) = permissions
+            .iter()
+            .find(|name| protocol_permission(name, false).is_none())
+        {
+            return Err(PlaywrightError::error(format!("{UNKNOWN_PERMISSION}{unknown}")).into());
+        }
+        let origin = grant_origin(origin)?;
+        let context = tabs.context_id().map(str::to_string);
+        let mut grants = self.grants.lock().await;
+        let held = grants.entry(run).or_default();
+        held.context.clone_from(&context);
+        let list = held.origins.entry(origin.clone()).or_default();
+        for name in permissions {
+            if !list.contains(name) {
+                list.push(name.clone());
+            }
+        }
+        progress
+            .race(grant_union(
+                tabs.cdp(),
+                &grants,
+                context.as_deref(),
+                &origin,
+            ))
+            .await??;
+        Ok(())
+    }
+
+    /// Playwright: `server/browserContext.ts` `BrowserContext.clearPermissions`: `this._permissions.clear();`
+    ///
+    /// Run `run`'s `clearPermissions`: its grants go; the other runs' stay. A run that granted
+    /// nothing changes nothing, so the user's browser keeps every other client's overrides.
+    pub(crate) async fn clear(
+        &self,
+        tabs: &Tabs,
+        run: u64,
+        progress: &Progress,
+    ) -> Result<(), CallError> {
+        let mut grants = self.grants.lock().await;
+        let Some(held) = grants.remove(&run) else {
+            return Ok(());
+        };
+        progress
+            .race(reset_context(tabs.cdp(), &grants, held.context.as_deref()))
+            .await??;
+        Ok(())
+    }
+
+    /// The run's end: its grants go, as [`Self::clear`]; a failure is logged.
+    pub(crate) async fn release(&self, cdp: &CdpClient, run: u64) {
+        let mut grants = self.grants.lock().await;
+        let Some(held) = grants.remove(&run) else {
+            return;
+        };
+        if let Err(error) = reset_context(cdp, &grants, held.context.as_deref()).await {
+            debug!(?error, "the run's permission grants were not reset");
+        }
+    }
+
+    /// [`Self::release`] on the `Runtime`'s cleanup tracker, for a run whose future was dropped.
+    pub(crate) fn release_later(&self, cdp: CdpClient, run: u64) {
+        let permissions = self.clone();
+        self.cleanup
+            .spawn(async move { permissions.release(&cdp, run).await });
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use tokio::runtime::Handle;
+    use tokio_util::sync::CancellationToken;
+
     use super::*;
+    use crate::deadline::Deadline;
+    use crate::discovery::Discovery;
+    use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+    use crate::page::TabInputs;
+    use crate::progress::{CallEntry, CallStart, RunScope};
+
+    fn call_progress() -> Progress {
+        let entry = Arc::new(CallEntry::new(CallStart {
+            call_id: 1,
+            guid: "context@default".to_string(),
+            method: "grantPermissions".to_string(),
+            title: None,
+            params: json!({}),
+            location: None,
+            input: false,
+        }));
+        let run = RunScope::new(
+            Deadline::new(Duration::from_mins(1), CancellationToken::new()),
+            TaskTracker::new(),
+        );
+        Progress::new(entry, 0.0, run, CancellationToken::new())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_each_runs_grants_add_up_and_reset_once_no_run_holds_one() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            Discovery::default(),
+            Permissions::default(),
+            TaskTracker::new(),
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("open: {error:?}"));
+        let permissions = tabs.permissions().clone();
+        let progress = call_progress();
+        let names = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect::<Vec<_>>()
+        };
+        let unknown = permissions
+            .grant(&tabs, 1, None, &names(&["telepathy"]), &progress)
+            .await;
+        assert!(unknown.is_err(), "an unknown permission, before any grant");
+        let ok = |result: Result<(), CallError>| result.unwrap_or_else(|error| panic!("{error:?}"));
+        ok(permissions
+            .grant(
+                &tabs,
+                1,
+                Some("http://a.test/page"),
+                &names(&["geolocation"]),
+                &progress,
+            )
+            .await);
+        ok(permissions
+            .grant(
+                &tabs,
+                2,
+                Some("http://a.test"),
+                &names(&["notifications"]),
+                &progress,
+            )
+            .await);
+        ok(permissions.clear(&tabs, 3, &progress).await);
+        ok(permissions.clear(&tabs, 1, &progress).await);
+        permissions.release(tabs.cdp(), 2).await;
+        let sent: Vec<Value> = browser
+            .exchanges()
+            .into_iter()
+            .filter(|exchange| exchange.method().ends_with("Permissions"))
+            .map(|exchange| {
+                let params = &exchange.command["params"];
+                json!([exchange.method(), params["origin"], params["permissions"]])
+            })
+            .collect();
+        assert_eq!(
+            sent,
+            [
+                json!(["Browser.grantPermissions", "http://a.test", ["geolocation"]]),
+                json!([
+                    "Browser.grantPermissions",
+                    "http://a.test",
+                    ["geolocation", "notifications"]
+                ]),
+                json!(["Browser.resetPermissions", null, null]),
+                json!([
+                    "Browser.grantPermissions",
+                    "http://a.test",
+                    ["notifications"]
+                ]),
+                json!(["Browser.resetPermissions", null, null]),
+            ],
+            "a run with no grant clears nothing; the others' grants stay until the last goes"
+        );
+    }
 
     fn cookie(domain: &str, path: &str, secure: bool) -> NetworkCookie {
         NetworkCookie {

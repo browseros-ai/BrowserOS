@@ -460,6 +460,34 @@ export class BrowserContext extends ChannelOwner {
     )
   }
 
+  /** Playwright: `client/browserContext.ts` `BrowserContext.grantPermissions`: `await this._channel.grantPermissions({ permissions, ...options }, kNoTimeout);`
+   * The run's own grant, on `origin` or every origin, over the user's settings until the run
+   * clears it or ends (neo-runtime `session_state.rs` `Permissions`). */
+  async grantPermissions(
+    permissions: string[],
+    options?: { origin?: string },
+  ): Promise<void> {
+    await this.#connection.sendContext(
+      'browserContext.grantPermissions',
+      this.#guid,
+      'grantPermissions',
+      { permissions, ...options },
+      0,
+    )
+  }
+
+  /** Playwright: `client/browserContext.ts` `BrowserContext.clearPermissions`: `await this._channel.clearPermissions({}, kNoTimeout);`
+   * The run's grants go; another run's, or the user's own settings, stay. */
+  async clearPermissions(): Promise<void> {
+    await this.#connection.sendContext(
+      'browserContext.clearPermissions',
+      this.#guid,
+      'clearPermissions',
+      {},
+      0,
+    )
+  }
+
   setDefaultTimeout(timeout: number | undefined): void {
     this._timeoutSettings.setDefaultTimeout(timeout)
   }

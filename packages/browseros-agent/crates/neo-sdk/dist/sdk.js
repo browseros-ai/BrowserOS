@@ -6611,6 +6611,12 @@ class BrowserContext extends ChannelOwner {
   async setGeolocation(geolocation) {
     await this.#connection.sendContext("browserContext.setGeolocation", this.#guid, "setGeolocation", geolocation ? { geolocation } : {}, 0);
   }
+  async grantPermissions(permissions, options) {
+    await this.#connection.sendContext("browserContext.grantPermissions", this.#guid, "grantPermissions", { permissions, ...options }, 0);
+  }
+  async clearPermissions() {
+    await this.#connection.sendContext("browserContext.clearPermissions", this.#guid, "clearPermissions", {}, 0);
+  }
   setDefaultTimeout(timeout) {
     this._timeoutSettings.setDefaultTimeout(timeout);
   }

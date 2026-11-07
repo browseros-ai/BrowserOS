@@ -92,11 +92,27 @@ pub(crate) async fn context(
                 .await?;
             Ok(None)
         }
+        BrowserContextCall::GrantPermissions(params) => {
+            tabs.permissions()
+                .grant(
+                    tabs,
+                    tabs.run_id(),
+                    params.origin.as_deref(),
+                    &params.permissions,
+                    progress,
+                )
+                .await?;
+            Ok(None)
+        }
+        BrowserContextCall::ClearPermissions(_) => {
+            tabs.permissions()
+                .clear(tabs, tabs.run_id(), progress)
+                .await?;
+            Ok(None)
+        }
         BrowserContextCall::StorageState(_)
         | BrowserContextCall::SetStorageState(_)
-        | BrowserContextCall::SetHTTPCredentials(_)
-        | BrowserContextCall::GrantPermissions(_)
-        | BrowserContextCall::ClearPermissions(_) => Err(PlaywrightError::error(
+        | BrowserContextCall::SetHTTPCredentials(_) => Err(PlaywrightError::error(
             "neo-runtime: this session-state call is not served yet",
         )
         .into()),

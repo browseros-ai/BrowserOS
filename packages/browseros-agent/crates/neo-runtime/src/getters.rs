@@ -578,6 +578,7 @@ mod tests {
     use crate::page::TabInputs;
     use crate::progress::ErrorName;
     use crate::run::PageId;
+    use crate::session_state::Permissions;
     use crate::tabs::{PageEntry, Tabs};
     use crate::url_match::SerializedUrlMatch;
 
@@ -632,6 +633,7 @@ mod tests {
             Handle::current(),
             TabInputs::default(),
             Discovery::default(),
+            Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
         )
@@ -814,6 +816,7 @@ mod tests {
             Handle::current(),
             TabInputs::default(),
             Discovery::default(),
+            Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
         )
