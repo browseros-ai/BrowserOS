@@ -78,6 +78,8 @@ mod lists;
 mod main_world;
 mod navigate;
 mod network;
+mod network_events;
+mod network_idle;
 mod page;
 mod page_events;
 mod press;

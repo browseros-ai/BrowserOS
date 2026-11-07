@@ -48,6 +48,8 @@ interfaces:
     - pageErrors
     - clearConsoleMessages
     - clearPageErrors
+    # The page's recent requests (`page.requests()`), as the run's network log recorded them.
+    - requests
   # A JavaScript dialog the run's `dialog` event handed out.
   Dialog:
     - accept
@@ -60,7 +62,8 @@ interfaces:
     - failure
     - cancel
     - delete
-  # The objects behind `goto`'s answer: its request, every redirect hop, and their responses.
+  # The objects behind `goto`'s answer and the run's network events: every request of the tab,
+  # each redirect hop, and their responses.
   Request:
     - response
     - rawRequestHeaders

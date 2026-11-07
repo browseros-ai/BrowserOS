@@ -335,8 +335,12 @@ enum GetterField {
     IsClosed,
     Pages,
     Initializer,
-    /// On a response: its request and every hop before, for the SDK to build.
+    /// On a request or response: its hop and every hop before, for the SDK to build.
     Chain,
+    /// On a request: the guid of the request a redirect made of it, or `null`.
+    RedirectedTo,
+    /// On a request: the guid of its response once it has one, or `null`.
+    ExistingResponse,
     /// On a request: `timing()`, which Playwright's client updates from events.
     Timing,
     /// On a request: `failure()`'s text, set by Playwright's `requestFailed` event.
@@ -496,6 +500,8 @@ impl Getters {
                 "pages is a context getter".to_string(),
             )),
             GetterField::Chain
+            | GetterField::RedirectedTo
+            | GetterField::ExistingResponse
             | GetterField::Timing
             | GetterField::Failure
             | GetterField::Finished => Err(GetError::BadRequest(format!(
@@ -561,10 +567,17 @@ impl Getters {
         // A hop exists only after a goto on this session, which stays attached for the run.
         let session = page.attached_session().ok_or_else(unknown)?;
         let log = &session.network;
+        let target = page.id.as_str();
         let value = match (kind, field) {
-            (NetworkObject::Response, GetterField::Chain) => log
+            (_, GetterField::Chain) => log
                 .chain(hop)
                 .and_then(|chain| serde_json::to_value(chain).map_err(|_| LogError::Poisoned)),
+            (NetworkObject::Request, GetterField::RedirectedTo) => log
+                .redirected_to(hop)
+                .map(|next| json!(next.map(|next| next.request_guid(target)))),
+            (NetworkObject::Request, GetterField::ExistingResponse) => log
+                .has_response(hop)
+                .map(|has| json!(has.then(|| hop.response_guid(target)))),
             (NetworkObject::Request, GetterField::Timing) => log
                 .timing(hop)
                 .and_then(|timing| serde_json::to_value(timing).map_err(|_| LogError::Poisoned)),
