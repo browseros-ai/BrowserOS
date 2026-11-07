@@ -1,18 +1,15 @@
-// A `signal` on any evaluation or handle method Neo serves is refused with an Error before the
-// page sees the call: Neo cannot honour an abort yet, so it never takes one silently (fleet
-// rule, med-pw-eval fix-a1.md 4 and 6). A page counter that every page function bumps shows
-// whether the call took effect. One case per receiver family: Page, Frame, Locator,
-// JSHandle/ElementHandle. The signal is an already-aborted signal-shaped object, because Neo's
-// realm has no `AbortController`.
+// A `signal` on the evaluation and handle methods Neo serves behaves as Playwright's (slice S).
+// A page counter that every page function bumps shows whether the call took effect. One case per
+// receiver family: Page, Frame, Locator, JSHandle/ElementHandle.
 //
 // - `signal: null` is no signal: the call runs exactly as without the option, in both engines.
-// - Where Playwright takes a signal (`TimeoutOptions`), it rejects an already-aborted one before
-//   the call runs (tests/page/locator-wait-for-function.spec.ts at 26137face, LO-192 "should abort
-//   via already-aborted signal", with `AbortError`); Neo rejects with an Error. Compared directly:
-//   both reject, the counter stays 0.
-// - Where Playwright reads no signal (`EvaluateOptions` = `{ exposeFunctions }`: the page, frame
-//   and handle evaluations; `$`, which sends `kNoTimeout`), it ignores one and runs the call; Neo
-//   refuses it (`Deviation:` in js-handle.ts and frame.ts). Each engine's side is asserted.
+// - Where Playwright takes a signal (`locator.evaluate`, `evaluateHandle` and `elementHandle`,
+//   whose element wait sends it, and `waitForFunction`), it rejects an already-aborted one
+//   with `AbortError` before the call runs (tests/page/locator-wait-for-function.spec.ts at
+//   26137face, LO-192 "should abort via already-aborted signal"). Compared directly: both
+//   reject, the counter stays 0.
+// - Where Playwright reads no signal (the page, frame and handle evaluations, and `$`, all sent
+//   with `kNoTimeout`), it ignores one and runs the call; so does Neo. Compared directly.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { compareMethod, skip } from './harness.mjs'
@@ -21,19 +18,19 @@ const html =
   '<title>signal</title><p id="p">text</p><script>window.__count = 0</script>'
 
 const SIGNAL = `
-const signal = { aborted: true, reason: 'stop', addEventListener() {}, removeEventListener() {} }
+const signal = AbortSignal.abort('stop')
 const bump = () => { window.__count++; return 'ran' }
 const attempt = async (call) => {
   try {
     await call()
     return 'resolved'
   } catch (error) {
-    return error instanceof Error ? 'rejected' : 'threw a non-Error'
+    return error instanceof Error ? error.name : 'threw a non-Error'
   }
 }
 `
 
-test('methods that take a signal refuse an aborted one before the page sees the call', {
+test('methods that take a signal reject an aborted one before the page sees the call', {
   skip,
   timeout: 180_000,
 }, async (t) => {
@@ -53,15 +50,15 @@ test('methods that take a signal refuse an aborted one before the page sees the 
     probe: 'window.__count',
   })
   assert.deepEqual(outcome.value, {
-    locatorEvaluate: 'rejected',
-    locatorEvaluateHandle: 'rejected',
-    locatorElementHandle: 'rejected',
-    pageWaitForFunction: 'rejected',
-    frameWaitForFunction: 'rejected',
+    locatorEvaluate: 'AbortError',
+    locatorEvaluateHandle: 'AbortError',
+    locatorElementHandle: 'AbortError',
+    pageWaitForFunction: 'AbortError',
+    frameWaitForFunction: 'AbortError',
   })
 })
 
-test('evaluations Playwright reads no signal on: Neo refuses one, Playwright runs', {
+test('evaluations Playwright reads no signal on ignore one in both engines', {
   skip,
   timeout: 180_000,
 }, async (t) => {
@@ -103,7 +100,7 @@ test('evaluations Playwright reads no signal on: Neo refuses one, Playwright run
         { count: 6, outcomes: each('resolved') },
         'Playwright',
       )
-      assert.deepEqual(neo, { count: 0, outcomes: each('rejected') }, 'Neo')
+      assert.deepEqual(neo, playwright, 'Neo')
     },
   })
 })

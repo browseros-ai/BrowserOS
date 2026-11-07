@@ -506,6 +506,56 @@ Injected:
       returns:
         outcome: FormFocusOutcome
 
+    # `InjectedScript.blurNode`, for `Frame.blur`.
+    blurElement:
+      internal: true
+      parameters:
+        element: Element
+      returns:
+        outcome: FormFocusOutcome
+
+    # `dom.ts` `selectText`'s page evaluation: unless `force`, `checkElementStates(['visible'])`,
+    # then `InjectedScript.selectText`, which selects an input's or textarea's value, or the
+    # element's contents, and focuses it.
+    selectText:
+      internal: true
+      parameters:
+        element: Element
+        force: boolean
+        frameVisible: boolean
+      returns:
+        outcome: SelectTextOutcome
+
+    # `frames.ts` `dispatchEvent`: resolves and marks the first match, then
+    # `InjectedScript.dispatchEvent(element, type, eventInit)`, in Neo's isolated world.
+    dispatchEvent:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+        type: string
+        # The event's init dictionary as JSON text: plain values, which neo-runtime decodes from
+        # the call's serialized argument.
+        eventInit: string
+      returns:
+        # `InjectedScript.previewNode` of the element the event went to; absent while nothing
+        # matches.
+        preview: string?
+
+    # `InjectedScript.setHighlights` for this document: each highlight is a frame chunk the page
+    # parses, and its CSS. An empty list clears them; the overlay follows its elements on every
+    # animation frame.
+    setHighlights:
+      internal: true
+      parameters:
+        highlights:
+          type: array
+          items: HighlightSpec
+
+    # `InjectedScript.hideHighlight`: removes this document's overlay.
+    hideHighlight:
+      internal: true
+
     # `frames.ts` `inputValue`: resolve and mark the first match, then follow its label.
     inputValue:
       internal: true
@@ -534,6 +584,24 @@ FormFillOutcome:
       - done
       - error:notconnected
     missing: MissingState
+
+# `selectText`'s answer: done or detached, or the visibility it is missing.
+SelectTextOutcome:
+  type: union
+  members:
+    status:
+      type: enum
+      literals:
+      - done
+      - error:notconnected
+    missing: MissingState
+
+# One highlight of a document: a selector chunk of that document and the overlay's CSS.
+HighlightSpec:
+  type: object
+  properties:
+    selector: string
+    cssStyle: string?
 
 # The option selector fields of Playwright's `selectOptions` page helper.
 FormSelectOption:
