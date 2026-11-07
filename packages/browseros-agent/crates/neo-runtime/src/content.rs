@@ -204,6 +204,14 @@ pub(crate) async fn set_content(
         .race(Tab::prepare(tab))
         .await?
         .map_err(call_error)?;
+    // `networkidle` is told from the page's requests, which Neo sees once Network is enabled, as
+    // `waitForLoadState`'s: before the write, so the written document's first requests count.
+    if options.wait_until == LifecycleEvent::Networkidle {
+        progress
+            .race(WaitTab::track_network(tab))
+            .await?
+            .map_err(call_error)?;
+    }
     let frame = progress.race(tab.context()).await?.map_err(call_error)?;
     // Before the write: the reopened document fires its first events while the write is in
     // flight, and the frame may go while it waits.

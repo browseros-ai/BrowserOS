@@ -12,6 +12,7 @@
 // - NE-077 "should wait for networkidle in setContent from the child frame": a frame the written
 //   document creates holds it too.
 // - A child frame's own setContent: the frame's lifecycle clears, and its late fetch holds it.
+// - A fresh page's first setContent with `networkidle`: the call watches the network itself.
 //
 // Every fetch reads its body: Chromium reports a fetch whose body is never read as still loading
 // (measured on BrowserOS neo: no `requestfinished` within 3 s, for plain, JSON and HTML bodies),
@@ -56,6 +57,15 @@ const cases = [
     const slow = JSON.stringify(ORIGIN + '/net/slow?ms=900')
     await page.setContent('<p id="new">new</p><script>window.done = false; fetch(' + slow + ').then((r) => r.text()).then(() => { window.done = true })</script>')
     const result = await settle(page.waitForLoadState('networkidle', { timeout: 3000 }))
+    return { result, finished: await page.evaluate(() => window.done) }`,
+    expected: { result: 'undefined', finished: true },
+  },
+  {
+    // Nothing before the write watched the network: the call itself must, as Playwright's
+    // server always does, or the written document's fetch would go unseen.
+    name: "a fresh page's first setContent with networkidle waits for its document's fetch",
+    source: `const slow = JSON.stringify(ORIGIN + '/net/slow?ms=900')
+    const result = await settle(page.setContent('<script>window.done = false; fetch(' + slow + ').then((r) => r.text()).then(() => { window.done = true })</script>', { waitUntil: 'networkidle' }))
     return { result, finished: await page.evaluate(() => window.done) }`,
     expected: { result: 'undefined', finished: true },
   },
