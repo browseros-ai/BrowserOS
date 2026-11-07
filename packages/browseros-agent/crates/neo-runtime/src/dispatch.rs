@@ -63,6 +63,7 @@ use tracing::debug;
 
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
+use crate::devices::{self, DeviceCall};
 use crate::dialogs;
 use crate::element_ops::{
     self, BOUNDING_BOX_META, DispatchOptions, ElementTarget, NeoElementParams, NeoSelectTextParams,
@@ -300,6 +301,8 @@ enum ObjectKind {
 enum ObjectCall {
     Context(BrowserContextCall),
     Page(PageCall),
+    /// `page.keyboard`, `page.mouse` and `page.touchscreen` (`devices.rs`).
+    Device(DeviceCall),
     Frame(Route),
     Network(NetworkCall),
     Dialog(u64, DialogCall),
@@ -495,6 +498,9 @@ impl Dispatcher {
             }
         })
         .await;
+        // Keys and buttons this run left held are released on each tab it touched, under a
+        // turn, inside the same budget (design section 4.6); a closed tab is skipped.
+        let _released = time::timeout_at(deadline, self.0.tabs.release_input()).await;
         // Releases each session's handle group on its page's tracked task, before the sessions
         // detach; a run whose future is dropped releases them as `RunScope` drops.
         run.handles.close();
@@ -508,9 +514,14 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
     let decoded = match object {
         ObjectKind::Context => BrowserContextCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Context(call)))),
-        ObjectKind::Page => {
-            PageCall::decode(method, params).map(|call| (call.meta(), Ok(ObjectCall::Page(call))))
-        }
+        ObjectKind::Page => PageCall::decode(method, params).map(|call| {
+            let meta = call.meta();
+            let routed = match DeviceCall::from_page_call(call) {
+                Ok(device) => device.map(ObjectCall::Device),
+                Err(call) => Ok(ObjectCall::Page(call)),
+            };
+            (meta, routed)
+        }),
         ObjectKind::Frame => {
             if method == WAIT_FOR_URL_META.method {
                 return Routed {
@@ -713,8 +724,8 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::Dblclick(params) => {
             PointerOptions::from_dblclick(params).map(Route::FramePointer)
         }
-        FrameCall::Hover(params) => PointerOptions::from_hover(params).map(Route::FramePointer),
-        FrameCall::Tap(params) => PointerOptions::from_tap(params).map(Route::FramePointer),
+        FrameCall::Hover(params) => Ok(Route::FramePointer(PointerOptions::from_hover(params))),
+        FrameCall::Tap(params) => Ok(Route::FramePointer(PointerOptions::from_tap(params))),
         FrameCall::Goto(params) => GotoOptions::from_params(params).map(Route::FrameGoto),
         FrameCall::Title(_) => Ok(Route::FrameTitle),
         FrameCall::TextContent(params) => {
@@ -827,6 +838,25 @@ async fn serve_call(
                     }
                     serve(FrameTab { page, scope }, &cursors, route, progress, reply).await;
                     return;
+                }
+                Err(error) => Err(error),
+            }
+        }
+        (ObjectCall::Device(call), Some((page, _))) => {
+            let session = match page.attached_session() {
+                Some(session) => Ok(session),
+                None => match progress.race(tabs.session(&page)).await {
+                    Ok(result) => result.map_err(CallError::from),
+                    Err(error) => Err(error),
+                },
+            };
+            match session {
+                Ok(page) => {
+                    let tab = FrameTab {
+                        page,
+                        scope: FrameScope::Main,
+                    };
+                    devices::serve(&tab, &call, &progress).await.map(|()| None)
                 }
                 Err(error) => Err(error),
             }
@@ -1497,6 +1527,7 @@ mod tests {
             ObjectCall::Frame(route) => route,
             ObjectCall::Context(_)
             | ObjectCall::Page(_)
+            | ObjectCall::Device(_)
             | ObjectCall::Network(_)
             | ObjectCall::Dialog(..) => {
                 panic!("a Frame message routed to another object")
@@ -1760,6 +1791,66 @@ mod tests {
             panic!("a click on the run's frame routes to Frame.click");
         };
         assert_eq!((options.selector.as_str(), options.strict), ("#go", true));
+    }
+
+    #[test]
+    fn tests_that_page_device_commands_route_to_the_devices_with_a_delivery_cell() {
+        for (method, params, title) in [
+            (
+                "keyboardDown",
+                json!({ "key": "Shift" }),
+                "Key down \"{key}\"",
+            ),
+            (
+                "keyboardType",
+                json!({ "text": "hi", "delay": 5 }),
+                "Type \"{text}\"",
+            ),
+            (
+                "mouseMove",
+                json!({ "x": 1, "y": 2, "steps": 3 }),
+                "Mouse move",
+            ),
+            (
+                "mouseClick",
+                json!({ "x": 1, "y": 2, "clickCount": 2 }),
+                "Click",
+            ),
+            (
+                "mouseWheel",
+                json!({ "deltaX": 0, "deltaY": 9 }),
+                "Mouse wheel",
+            ),
+            ("touchscreenTap", json!({ "x": 1, "y": 2 }), "Tap"),
+        ] {
+            let routed = route(ObjectKind::Page, method, Some(params));
+            assert_eq!(
+                routed.meta.and_then(|meta| meta.title),
+                Some(title),
+                "{method}"
+            );
+            assert!(
+                routed.meta.is_some_and(|meta| meta.has(MethodFlag::Input)),
+                "{method} is an input method"
+            );
+            assert!(
+                matches!(routed.route, Ok(ObjectCall::Device(_))),
+                "{method} routes to the devices"
+            );
+        }
+        let routed = route(
+            ObjectKind::Page,
+            "mouseMove",
+            Some(json!({ "x": 1, "y": 2, "steps": 1001 })),
+        );
+        assert_eq!(
+            error_of(routed),
+            PlaywrightError::error("Neo does not support steps above 1000")
+        );
+        assert!(matches!(
+            route(ObjectKind::Page, "bringToFront", Some(json!({}))).route,
+            Ok(ObjectCall::Page(PageCall::BringToFront(_)))
+        ));
     }
 
     #[test]
@@ -2267,14 +2358,11 @@ mod tests {
 
     #[test]
     fn a_click_option_neo_does_not_serve_is_refused_before_any_work() {
-        let routed = route_frame(
-            "click",
-            json!({ "selector": "#go", "modifiers": ["Shift"] }),
-        );
+        let routed = route_frame("click", json!({ "selector": "#go", "clickCount": 1001 }));
         assert_eq!(routed.meta.and_then(|meta| meta.title), Some("Click"));
         assert_eq!(
             error_of(routed),
-            PlaywrightError::error("Neo does not support click modifiers yet")
+            PlaywrightError::error("Neo does not support a clickCount above 1000")
         );
     }
 

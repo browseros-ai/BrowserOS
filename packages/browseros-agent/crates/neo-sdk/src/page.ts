@@ -1,6 +1,7 @@
 import type {
   LifecycleEvent,
   PageCloseParams,
+  PageCommands,
   PageConsoleMessagesParams,
   PageGoBackParams,
   PageGoForwardParams,
@@ -11,7 +12,7 @@ import type {
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
 import { isString } from '../vendor/playwright/isomorphic/stringUtils'
 import type { BrowserContext } from './browser-context'
-import type { Connection } from './connection'
+import type { ApiName, Connection } from './connection'
 import { ConsoleMessage } from './console-message'
 import type { ElementHandle } from './element-handle'
 import {
@@ -55,6 +56,7 @@ import {
   type WaitForURLOptions,
 } from './frame'
 import type { FrameLocator } from './frame-locator'
+import { Keyboard, Mouse, Touchscreen } from './input'
 import {
   assertMaxArguments,
   type EvaluateOptions,
@@ -165,6 +167,10 @@ export class Page extends ChannelOwner {
   /** Stable identity, including detached frames a script may still hold. */
   readonly #frames = new Map<string, Frame>()
   readonly _timeoutSettings: TimeoutSettings
+  /** Playwright's `page.keyboard`, `page.mouse` and `page.touchscreen`, one each per page. */
+  readonly keyboard: Keyboard
+  readonly mouse: Mouse
+  readonly touchscreen: Touchscreen
   /** Set when this page's `close` ran (`_onClose`): what Playwright's client flips then. */
   #closedLocally = false
   /** Playwright's `_closeReason`: what `close({ reason })` was given. */
@@ -190,6 +196,18 @@ export class Page extends ChannelOwner {
       name: '',
     })
     this.#frames.set(mainFrameGuid, this.#mainFrame)
+    this.keyboard = new Keyboard(this)
+    this.mouse = new Mouse(this)
+    this.touchscreen = new Touchscreen(this)
+  }
+
+  /** Sends a device command to this page's tab, with no timeout (Playwright's `kNoTimeout`). */
+  async _sendInput<M extends keyof PageCommands>(
+    apiName: ApiName,
+    method: M,
+    params: PageCommands[M]['params'],
+  ): Promise<void> {
+    await this.#connection.sendPage(apiName, this.#guid, method, params, 0)
   }
 
   url(): string {
