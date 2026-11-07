@@ -48,10 +48,10 @@ use crate::click::{LoopAWaits, PageError};
 use crate::frame_selector;
 use crate::frames::{FrameContext, FrameScope};
 use crate::main_world::{self, BuiltExpression, Called, DocumentId, Installed, MainFunction};
-use crate::page::{FrameTab, GroupGuard};
+use crate::page::{FrameTab, GroupGuard, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress, js_number};
 use crate::reads::SelectorTab;
-use crate::world::ObjectGroup;
+use crate::world::{self, ObjectGroup};
 
 /// Neo: the guid prefix of a run's handles (`handle@<run>.<n>`), opaque to the SDK.
 pub(crate) const HANDLE_PREFIX: &str = "handle@";
@@ -1206,6 +1206,13 @@ async fn invoke_with(
     } else {
         Some(handles.group(tab, frame).map_err(page_error)?)
     };
+    // The page's watcher reports its frames' commits, as Playwright's page always hears them:
+    // they tell a call whose document went while it was out from one sent to a document already
+    // gone (`main_world.rs` `replaced_during`), so only the latter runs again.
+    progress
+        .race(PageSession::prepare(tab))
+        .await?
+        .map_err(|error| page_error(world::classify(&error)))?;
     let mut attempt = 0;
     loop {
         attempt += 1;
