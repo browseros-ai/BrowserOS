@@ -194,11 +194,13 @@ export class Locator {
   /**
    * Playwright: `client/locator.ts` `Locator.ariaSnapshot`: `selector: this._selector,`
    * The matched subtree as YAML in the selected frame. Default mode waits for a match,
-   * omits refs and leaves iframe contents unstitched. Main-frame `mode: 'ai'` snapshots stitch
-   * iframe content with refs rooted in the main frame. AI does not auto-wait: use `waitFor()`
-   * first if needed. Child-frame AI snapshots are refused; use `page.ariaSnapshot({ mode: 'ai' })`.
-   * `depth` limits tree levels (0 means unlimited). AI refs work with `page.locator('aria-ref=…')`
-   * until the next snapshot or navigation replaces them. Every mode requires one match.
+   * omits refs and leaves iframe contents unstitched. `mode: 'ai'` snapshots stitch iframe
+   * content with refs rooted in the main frame, in a child frame too (its refs take the path
+   * of iframes from the main frame); behind an iframe that gets no ref (hidden, no pointer
+   * events) an AI snapshot that would hold refs throws. AI does not auto-wait: use `waitFor()`
+   * first if needed. `depth` limits tree levels (0 means unlimited). AI refs work with
+   * `page.locator('aria-ref=…')` until the next snapshot of their document or a navigation
+   * replaces them. Every mode requires one match.
    */
   async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
     return await this._frame._ariaSnapshot(
