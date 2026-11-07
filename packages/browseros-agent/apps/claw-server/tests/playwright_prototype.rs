@@ -5,6 +5,7 @@
 #![cfg(unix)]
 
 use std::{
+    collections::BTreeSet,
     env, fs,
     net::TcpListener as StdListener,
     os::unix::process::CommandExt,
@@ -247,6 +248,215 @@ async fn run(client: &Client, base: &str, id: u64, args: Value) -> anyhow::Resul
     Ok(reply["result"].clone())
 }
 
+async fn page_targets(cdp: &CdpClient) -> anyhow::Result<BTreeSet<String>> {
+    let reply = cdp.send("Target.getTargets", json!({}), None).await?;
+    let targets = reply["targetInfos"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing targets: {reply}"))?;
+    Ok(targets
+        .iter()
+        .filter(|target| target["type"] == "page")
+        .filter_map(|target| target["targetId"].as_str().map(str::to_string))
+        .collect())
+}
+
+async fn check_tab_workflow(
+    client: &Client,
+    base: &str,
+    cdp: &CdpClient,
+    fixture_url: &str,
+) -> anyhow::Result<()> {
+    let list_url = format!("{fixture_url}hn");
+    let article_urls: BTreeSet<_> = (1..=5)
+        .map(|n| format!("{fixture_url}article/{n}"))
+        .collect();
+    let list = run(
+        client,
+        base,
+        50,
+        json!({"code":format!("await page.goto({});", serde_json::to_string(&list_url)?)}),
+    )
+    .await?;
+    assert_eq!(list["structuredContent"]["status"], "ok", "{list}");
+    let list_id = list["structuredContent"]["pages"][0]["id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("no list tab: {list}"))?;
+    let guide = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../resources/skills/browserclaw/PLAYWRIGHT.md"),
+    )?;
+    let example = guide
+        .split_once("## Tabs\n")
+        .and_then(|(_, section)| section.split_once("```js\n"))
+        .and_then(|(_, fenced)| fenced.split_once("```"))
+        .map(|(code, _)| code)
+        .ok_or_else(|| anyhow::anyhow!("Playwright guide has no Tabs example"))?;
+    let opened = run(client, base, 51, json!({"page":list_id,"code":example})).await?;
+    let report = &opened["structuredContent"];
+    assert_eq!(report["status"], "ok", "{opened}");
+    let values: Vec<Value> = serde_json::from_value(report["value"].clone())?;
+    assert_eq!(
+        values,
+        (1..=5)
+            .map(|n| json!({"title":format!("Article {n}"),"url":format!("{fixture_url}article/{n}")}))
+            .collect::<Vec<_>>()
+    );
+    let pages: Vec<Value> = serde_json::from_value(report["pages"].clone())?;
+    let original = pages
+        .iter()
+        .find(|page| page["id"] == list_id)
+        .ok_or_else(|| anyhow::anyhow!("list tab missing: {opened}"))?;
+    assert_eq!(original["created"], false);
+    assert_eq!(original["url"], list_url);
+    let articles: Vec<_> = pages
+        .iter()
+        .filter(|page| page["created"] == true)
+        .collect();
+    assert_eq!(articles.len(), 5, "{opened}");
+    assert_eq!(
+        articles
+            .iter()
+            .filter_map(|page| page["url"].as_str().map(str::to_string))
+            .collect::<BTreeSet<_>>(),
+        article_urls
+    );
+    let article_ids: BTreeSet<_> = articles
+        .iter()
+        .filter_map(|page| page["id"].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(article_ids.len(), 5);
+    let article_id = articles
+        .iter()
+        .find(|page| page["url"] == format!("{fixture_url}article/1"))
+        .and_then(|page| page["id"].as_str())
+        .ok_or_else(|| anyhow::anyhow!("no first article tab: {opened}"))?;
+    let closed = run(
+        client,
+        base,
+        52,
+        json!({"page":article_id,"code":format!(
+            "const tabs = context.pages(); const urls = tabs.map(tab => tab.url());
+         const heading = await page.locator('h1').textContent();
+         for (const tab of tabs) {{ if ({}.includes(tab.url())) await tab.close(); }}
+         return {{ urls, heading }};", serde_json::to_string(&article_urls)?
+        )}),
+    )
+    .await?;
+    let report = &closed["structuredContent"];
+    assert_eq!(report["status"], "ok", "{closed}");
+    assert_eq!(report["value"]["heading"], "Article 1");
+    let listed_urls: BTreeSet<String> = serde_json::from_value(report["value"]["urls"].clone())?;
+    assert!(article_urls.is_subset(&listed_urls));
+    assert!(listed_urls.contains(&list_url));
+    let pages: Vec<Value> = serde_json::from_value(report["pages"].clone())?;
+    assert_eq!(
+        pages
+            .iter()
+            .filter(|page| page["closed"] == true)
+            .filter_map(|page| page["id"].as_str().map(str::to_string))
+            .collect::<BTreeSet<_>>(),
+        article_ids
+    );
+    let remaining = run(
+        client,
+        base,
+        53,
+        json!({"page":list_id,"code":
+            "const urls = context.pages().map(tab => tab.url()); await page.close(); return urls;"
+        }),
+    )
+    .await?;
+    assert_eq!(
+        remaining["structuredContent"]["status"], "ok",
+        "{remaining}"
+    );
+    let remaining_urls: BTreeSet<String> =
+        serde_json::from_value(remaining["structuredContent"]["value"].clone())?;
+    assert!(article_urls.is_disjoint(&remaining_urls));
+
+    let slow_url = format!("{fixture_url}slow");
+    let timeout = run(
+        client,
+        base,
+        54,
+        json!({"timeout":2000,"code":format!(
+            "await page.goto({});", serde_json::to_string(&slow_url)?
+        )}),
+    )
+    .await?;
+    let report = &timeout["structuredContent"];
+    assert_eq!(timeout["isError"], true, "{timeout}");
+    assert_eq!(report["status"], "timeout", "{timeout}");
+    assert_eq!(report["pages"][0]["created"], true, "{timeout}");
+    let timeout_id = report["pages"][0]["id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("timeout lost its created tab: {timeout}"))?;
+    let text: Value = serde_json::from_str(
+        timeout["content"][0]["text"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("timeout has no text content: {timeout}"))?,
+    )?;
+    assert_eq!(text, *report);
+    let resumed = run(
+        client,
+        base,
+        55,
+        json!({"page":timeout_id,"timeout":15000,"code":
+            "await page.waitForLoadState('domcontentloaded'); return page.url();"
+        }),
+    )
+    .await?;
+    assert_eq!(resumed["structuredContent"]["status"], "ok", "{resumed}");
+    assert_eq!(resumed["structuredContent"]["value"], slow_url);
+    let closed = run(
+        client,
+        base,
+        56,
+        json!({"page":timeout_id,"code":"await page.close();"}),
+    )
+    .await?;
+    assert_eq!(closed["structuredContent"]["status"], "ok", "{closed}");
+    assert_eq!(closed["structuredContent"]["pages"][0]["id"], timeout_id);
+    assert_eq!(closed["structuredContent"]["pages"][0]["closed"], true);
+
+    let before = page_targets(cdp).await?;
+    let late = run(
+        client,
+        base,
+        57,
+        json!({"timeout":1,"code":"return page.url();"}),
+    )
+    .await?;
+    let pages: Vec<Value> = serde_json::from_value(late["structuredContent"]["pages"].clone())?;
+    for page in &pages {
+        let id = page["id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("tab has no id: {late}"))?;
+        let closed = run(
+            client,
+            base,
+            58,
+            json!({"page":id,"code":"await page.close();"}),
+        )
+        .await?;
+        assert_eq!(closed["structuredContent"]["status"], "ok", "{closed}");
+        assert_eq!(closed["structuredContent"]["pages"][0]["closed"], true);
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let after = page_targets(cdp).await?;
+        if after.is_subset(&before) {
+            break;
+        }
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "late creation leaked tabs: {after:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Ok(())
+}
+
 async fn wait_skill(root: &Path, needle: &str) -> anyhow::Result<String> {
     let path = root.join("home/.agents/skills/browseros-neo/SKILL.md");
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -274,11 +484,11 @@ async fn stop_server(client: &Client, base: &str, process: &mut Process) -> anyh
     process.wait().await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[expect(
     clippy::print_stderr,
-    reason = "Report opt-in browser skips and verification steps"
+    reason = "Make a skipped live-browser check visible"
 )]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::Result<()> {
     let Some(binary) = env::var_os("NEO_E2E_BROWSER") else {
         eprintln!("SKIP: set NEO_E2E_BROWSER to a real BrowserOS neo executable");
@@ -337,7 +547,6 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
     stop_server(&client, &base, &mut legacy).await?;
     let database = root.path().join("state/browserclaw.sqlite");
     let database_before = fs::read(&database)?;
-    eprintln!("PASS flag off: legacy tool catalog, run and skill");
 
     let (mut prototype, base) = start_server(root.path(), cdp_port, "1", &client).await?;
     assert_eq!(
@@ -368,6 +577,11 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
         .ok_or_else(|| anyhow::anyhow!("missing tools: {tools}"))?;
     assert_eq!(listed.len(), 1, "{tools}");
     assert_eq!(listed[0]["name"], "run");
+    let description = listed[0]["description"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("run has no description: {tools}"))?;
+    assert!(description.contains("context.newPage()"));
+    assert!(description.chars().count() <= 4096);
     assert!(
         listed[0]["inputSchema"]["properties"]
             .get("session")
@@ -393,10 +607,20 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
 
     let fixture_listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let fixture_url = format!("http://{}/", fixture_listener.local_addr()?);
+    let headlines = format!(
+        "<title>Stories</title><table>{}</table>",
+        (1..=5)
+            .map(|n| format!("<tr><td class=\"titleline\"><a href=\"{fixture_url}article/{n}\">Story {n}</a></td></tr>"))
+            .collect::<String>()
+    );
     let fixture = tokio::spawn(async move {
         axum::serve(fixture_listener, Router::new()
             .route("/", get(|| async { axum::response::Html("<button onclick=\"const p=document.querySelector('p');p.textContent='clicked';p.setAttribute('data-clicks',String(Number(p.getAttribute('data-clicks')||0)+1))\">Continue</button><p>ready</p>") }))
             .route("/slow", get(|| async { tokio::time::sleep(Duration::from_secs(6)).await; axum::response::Html("<p>slow page</p>") }))
+            .route("/hn", get(move || { let html = headlines.clone(); async move { axum::response::Html(html) } }))
+            .route("/article/{n}", get(|axum::extract::Path(n): axum::extract::Path<u32>| async move {
+                axum::response::Html(format!("<title>Article {n}</title><h1>Article {n}</h1>"))
+            }))
         ).await
     });
     let first = run(&client, &base, 4, json!({"code":format!("await page.goto({}); await page.getByRole('button', {{name:'Continue'}}).click(); console.log('clicked once'); return await page.locator('p').textContent();", serde_json::to_string(&fixture_url)?)})).await?;
@@ -413,7 +637,6 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("no page id: {first}"))?;
     assert_eq!(report["pages"][0]["created"], true);
-    eprintln!("PASS real BrowserOS MCP: goto, click, textContent -> clicked; page {page}");
 
     let second = run(&client, &base, 5, json!({"page":page,"code":"return {text: await page.locator('p').textContent(), url: page.url()};"})).await?;
     assert_eq!(
@@ -423,7 +646,7 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
     assert_eq!(second["structuredContent"]["value"]["url"], fixture_url);
     assert_eq!(second["structuredContent"]["pages"][0]["id"], page);
     assert_eq!(second["structuredContent"]["pages"][0]["created"], false);
-    eprintln!("PASS second independent MCP request continues on the same page id");
+    check_tab_workflow(&client, &base, &cdp, &fixture_url).await?;
 
     let timeout = run(
         &client,
@@ -438,10 +661,8 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
     );
     assert_eq!(timeout["isError"], true);
     check_cancellation(&client, &base, page).await?;
-    eprintln!("PASS legacy MCP cancellation prevents the script's delayed click");
     let slow = run(&client, &base, 8, json!({"page":page,"timeout":12000,"code":format!("await page.goto({}); return await page.locator('p').textContent();", serde_json::to_string(&format!("{fixture_url}slow"))?)})).await?;
     assert_eq!(slow["structuredContent"]["value"], "slow page", "{slow}");
-    eprintln!("PASS six-second navigation respects the twelve-second run budget");
     let error = run(&client, &base, 7, json!({"page":page,"code":"console.log('before error'); throw new Error('expected failure');"})).await?;
     assert_eq!(error["structuredContent"]["status"], "error");
     assert!(
@@ -463,16 +684,12 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
         database_before,
         "prototype touched the legacy database"
     );
-    eprintln!(
-        "PASS timeouts/errors; legacy database unchanged, legacy HTTP effects absent, Playwright skill installed"
-    );
     stop_server(&client, &base, &mut prototype).await?;
     fixture.abort();
 
     let (mut restored, base) = start_server(root.path(), cdp_port, "0", &client).await?;
     wait_skill(root.path(), "Core loop: snapshot -> act -> verify").await?;
     stop_server(&client, &base, &mut restored).await?;
-    eprintln!("PASS flag off restores the legacy skill");
     let _ = cdp.send("Browser.close", json!({}), None).await;
     cdp.disconnect().await;
     browser.wait().await?;

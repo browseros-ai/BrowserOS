@@ -32,9 +32,16 @@ use super::output::Store;
 
 const DEFAULT_TIMEOUT: u64 = 30_000;
 const MAX_TIMEOUT: u64 = 120_000;
+/// Both the server instructions and the tool description: often the only guide a client shows.
+/// Claude Code truncates each at about 4096 characters, so keep this compact.
 const INSTRUCTIONS: &str = concat!(
-    "Write Playwright JavaScript. `page` and `context` are provided; await browser calls and return a value. Send an async function body without imports or a wrapper. Omit `page` to open a background tab; pass a returned `pages[].id` to continue in that tab. `timeout` is milliseconds (default 30000, maximum 120000).",
-    " Scope large reads with locator.ariaSnapshot({mode:'ai'}); responses use a 24000-byte JSON budget and truncated fields include next arguments for run({result,field,offset}) to read the stored original without changing refs."
+    "Write Playwright JavaScript. `page` and `context` are provided; await browser calls and return a value. Send an async function body without imports or a wrapper. Variables do not survive between runs; tabs, cookies and logins do.\n\n",
+    "Tabs: omit `page` to start in a new background tab; pass a returned `pages[].id` to continue in that tab. Every result's `pages` lists the tabs the run used, including ones it opened or closed (`id`, `created`, `closed`, plus `url` when available), also when the run failed or timed out, so a later run can resume or close them.\n",
+    "Clicking a link navigates the tab it is in. To keep the current page, open links in background tabs in the same run: `const tab = await context.newPage(); await tab.goto(href, { waitUntil: 'domcontentloaded' });`. `context.pages()` lists the profile's open tabs, `page.context()` returns the context, `tab.bringToFront()` activates a tab, `tab.close()` closes it.\n\n",
+    "Navigation: `goto` waits for `load` by default, which slow pages can miss within the run. To read a page, prefer `goto(url, { waitUntil: 'domcontentloaded' })`, then wait for the content you need, e.g. `await page.getByRole('heading').first().waitFor()`.\n\n",
+    "Supported, a Playwright subset: context.pages/newPage/setDefaultTimeout/setDefaultNavigationTimeout; page.goto/url/title/context/bringToFront/close/isClosed/waitForURL/waitForLoadState/ariaSnapshot/locator/getBy* and the selector forms of the locator methods; locator.click/fill/clear/press/check/uncheck/setChecked/selectOption/textContent/innerText/getAttribute/inputValue/isVisible/isChecked/count/allTextContents/ariaSnapshot/waitFor/first/last/nth/filter/locator/getBy*/and/or.\n\n",
+    "`timeout` is milliseconds (default 30000, maximum 120000). Reuse your MCP session and set its request timeout longer than the run timeout. If the client times out without a result, use `context.pages()` to find open tabs before opening replacements. Parse the whole result before trimming it; `pages` follows the long `calls` trace.\n\n",
+    "Scope large reads with locator.ariaSnapshot({mode:'ai'}); responses use a 24000-byte JSON budget and truncated fields include next arguments for run({result,field,offset}) to read the stored original without changing refs.",
 );
 
 struct Browser {
@@ -219,7 +226,53 @@ impl PlaywrightService {
         {
             error.message = format!("Timeout {timeout_ms}ms exceeded.");
         }
-        report(outcome)
+        let mut result = report(outcome);
+        // Best effort, bounded to 500 ms; cancellation must not start another CDP read.
+        if result["status"] != "cancelled" {
+            add_page_urls(&browser.cdp, &mut result).await;
+        }
+        result
+    }
+}
+
+async fn add_page_urls(cdp: &CdpClient, result: &mut Value) {
+    let Ok(Ok(reply)) = tokio::time::timeout(
+        Duration::from_millis(500),
+        cdp.send("Browser.getTabs", json!({}), None),
+    )
+    .await
+    else {
+        return;
+    };
+    if let (Some(pages), Some(tabs)) = (result["pages"].as_array_mut(), reply["tabs"].as_array()) {
+        set_page_urls(pages, tabs);
+    }
+}
+
+/// URL bytes one result may add to `pages`. The bounded output keeps `pages` whole, so long
+/// URLs (data: URLs, every tab `context.pages()` listed) must not crowd out the run's value.
+const PAGE_URL_BUDGET: usize = 4_096;
+
+/// Sets each open page's tab URL within [`PAGE_URL_BUDGET`]: the run's tab and the tabs it
+/// created first, since later runs resume those. A URL that does not fit is left out.
+fn set_page_urls(pages: &mut [Value], tabs: &[Value]) {
+    let (first, rest): (Vec<usize>, Vec<usize>) =
+        (0..pages.len()).partition(|&index| index == 0 || pages[index]["created"] == true);
+    let mut left = PAGE_URL_BUDGET;
+    for index in first.into_iter().chain(rest) {
+        let page = &mut pages[index];
+        if page["closed"] == true {
+            continue;
+        }
+        if let Some(url) = tabs
+            .iter()
+            .find(|tab| tab["targetId"] == page["id"])
+            .and_then(|tab| tab["url"].as_str())
+            && let Some(remaining) = left.checked_sub(url.len())
+        {
+            left = remaining;
+            page["url"] = json!(url);
+        }
     }
 }
 
@@ -471,5 +524,40 @@ impl ServerHandler for PlaywrightService {
             CallToolResult::structured_error(result)
         }
         .into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::set_page_urls;
+    use crate::api::mcp::output::{BUDGET, Store};
+
+    /// Long tab URLs must not push a small value out of the bounded reply: ids stay complete,
+    /// the run's tab keeps its URL, and a URL that does not fit is left out.
+    #[test]
+    fn tests_that_long_tab_urls_keep_the_value_within_the_output_budget() {
+        let mut pages = vec![
+            json!({"id":"run", "created":false, "closed":false}),
+            json!({"id":"new", "created":true, "closed":false}),
+        ];
+        let mut tabs = vec![
+            json!({"targetId":"run", "url":"https://news.example/"}),
+            json!({"targetId":"new", "url":format!("data:text/html,{}", "y".repeat(30_000))}),
+        ];
+        for index in 0..60 {
+            pages.push(json!({"id":format!("t{index}"), "created":false, "closed":false}));
+            tabs.push(json!({"targetId":format!("t{index}"),
+                "url":format!("https://example.com/{index}/{}", "z".repeat(430))}));
+        }
+        set_page_urls(&mut pages, &tabs);
+        let bounded = Store::default()
+            .limit(json!({"status":"ok", "value":62, "logs":[], "calls":[], "pages":pages}));
+        assert!(bounded.to_string().len() <= BUDGET);
+        assert_eq!(bounded["value"], 62);
+        assert_eq!(bounded["pages"].as_array().map(Vec::len), Some(62));
+        assert_eq!(bounded["pages"][0]["url"], "https://news.example/");
+        assert!(bounded["pages"][1].get("url").is_none());
     }
 }
