@@ -16,13 +16,15 @@
 //! retain intermediate URLs, and lifecycle counters retain events across watch coalescing.
 
 use std::future::{self, Future};
+use std::mem;
 use std::sync::Arc;
 
 use neo_runtime_spec::injected::{
     InjectedDescribeSelectorParams, InjectedSelectorStateParams, SelectorMatch,
 };
 use neo_runtime_spec::serve::{
-    FrameWaitForSelectorParams, FrameWaitForSelectorParamsState as SelectorState, LifecycleEvent,
+    ElementHandleChannel, FrameWaitForSelectorParams,
+    FrameWaitForSelectorParamsState as SelectorState, LifecycleEvent,
 };
 use serde::Deserialize;
 use tokio::time;
@@ -54,7 +56,10 @@ pub(crate) trait WaitTab: Send + Sync {
     ) -> impl Future<Output = Result<Option<SelectorMatch>, PageError>> + Send;
 }
 
-/// Decoded once by the route. Neo cannot return the `ElementHandle` of a selector wait.
+/// Decoded once by the route, with Playwright's defaults (`frames.ts:843`): `visible`, and not
+/// strict, so `page`/`frame.waitForSelector` judge the first match while `locator.waitFor` sends
+/// `strict: true`. `omitReturnValue` changes nothing yet. Every state replies `{}` until Neo
+/// serves `ElementHandle` (the assertion below).
 #[derive(Debug)]
 pub(crate) struct WaitForSelectorOptions {
     pub(crate) selector: String,
@@ -63,19 +68,28 @@ pub(crate) struct WaitForSelectorOptions {
 }
 
 impl WaitForSelectorOptions {
-    pub(crate) fn from_params(params: FrameWaitForSelectorParams) -> Result<Self, PlaywrightError> {
-        if params.omit_return_value != Some(true) {
-            return Err(PlaywrightError::error(
-                "Neo does not return ElementHandles yet: waitForSelector needs omitReturnValue: true",
-            ));
-        }
-        Ok(Self {
+    pub(crate) fn from_params(params: FrameWaitForSelectorParams) -> Self {
+        Self {
             selector: params.selector,
             strict: params.strict.unwrap_or(false),
             state: params.state.unwrap_or(SelectorState::Visible),
-        })
+        }
     }
 }
+
+// Playwright resolves an `attached` or `visible` wait sent without `omitReturnValue` with the
+// element it judged, adopted into the main world (`frames.ts:879-894`). Neo has no
+// `ElementHandle` to send, so `FrameWaitForSelectorResult.element` is always `None`, and the
+// script gets `null` for every state (exception E1). The generated channel is uninhabited, and
+// so zero-sized, only while `spec/serve.yml` does not serve `ElementHandle`. This assertion stops
+// the build the day it does, so the handle step lands with it. That step belongs at
+// `wait_for_selector`'s success point, on the element the same probe judged; neo-evaluate owns
+// turning it into a handle (`main_world::adopt`, then `handles.mint`).
+const _: () = assert!(
+    mem::size_of::<ElementHandleChannel>() == 0,
+    "ElementHandle is served now: mint it for attached/visible waits without omitReturnValue \
+     (frames.ts:879-894) via neo-evaluate's main_world::adopt + handles.mint",
+);
 
 /// Neo extension on the Frame guid: the SDK sends one call because its bridge has no event
 /// channel. Keep this shape in sync with neo-sdk's `NeoFrameCommands` and the wire tests.
@@ -717,14 +731,22 @@ mod tests {
         async fn selector_state(
             &self,
             _: &str,
-            _: bool,
+            strict: bool,
         ) -> Result<Option<SelectorMatch>, PageError> {
             assert!(
                 self.state.borrow().pending_url.is_none(),
                 "probe must wait for navigation"
             );
             self.probes.fetch_add(1, Ordering::Relaxed);
-            self.probe.answer().await
+            let answer = self.probe.answer().await?;
+            // The glue's strict query throws for more than one match, whatever the state.
+            if strict && answer.as_ref().is_some_and(|matched| matched.count > 1) {
+                return Err(PageError::Threw(
+                    "Error: strict mode violation: locator('#item') resolved to 2 elements"
+                        .to_string(),
+                ));
+            }
+            Ok(answer)
         }
     }
 
@@ -741,6 +763,26 @@ mod tests {
             selector: "#item".to_string(),
             strict: true,
             state,
+        }
+    }
+
+    /// `page`/`frame.waitForSelector`'s params: `strict` and `state` as the script gave them, and
+    /// no `omitReturnValue`.
+    fn page_selector(state: Option<SelectorState>, strict: Option<bool>) -> WaitForSelectorOptions {
+        WaitForSelectorOptions::from_params(FrameWaitForSelectorParams {
+            selector: "#item".to_string(),
+            strict,
+            state,
+            omit_return_value: None,
+        })
+    }
+
+    /// Two matches whose first is hidden, reported as the page does, by the first match's state.
+    fn first_of_two_hidden() -> SelectorMatch {
+        SelectorMatch {
+            count: 2,
+            visible: false,
+            preview: "<div id=\"item\">".to_string(),
         }
     }
 
@@ -894,6 +936,78 @@ mod tests {
             if invalid {
                 assert_eq!(tab.probes.load(Ordering::Relaxed), 0);
             }
+        }
+    }
+
+    #[test]
+    fn tests_that_selector_options_take_any_omit_return_value_with_playwrights_defaults() {
+        for omit_return_value in [None, Some(false), Some(true)] {
+            let options = WaitForSelectorOptions::from_params(FrameWaitForSelectorParams {
+                selector: "#item".to_string(),
+                strict: None,
+                state: None,
+                omit_return_value,
+            });
+            assert_eq!(
+                (options.selector.as_str(), options.strict, options.state),
+                ("#item", false, SelectorState::Visible),
+                "{omit_return_value:?}"
+            );
+        }
+        let options = page_selector(Some(SelectorState::Hidden), Some(true));
+        assert_eq!(
+            (options.strict, options.state),
+            (true, SelectorState::Hidden)
+        );
+    }
+
+    /// `page`/`frame.waitForSelector` are not strict: the first of two matches decides, so a
+    /// hidden first match keeps a `visible` wait polling and meets `hidden` and `attached` at once.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_page_waits_judge_the_first_of_several_matches() {
+        for (state, met) in [
+            (None, false),
+            (Some(SelectorState::Visible), false),
+            (Some(SelectorState::Hidden), true),
+            (Some(SelectorState::Attached), true),
+            (Some(SelectorState::Detached), false),
+        ] {
+            let mut tab = FakeTab::new();
+            tab.probe = Step::ready(Some(first_of_two_hidden()));
+            let run = Run::new(100.0);
+            let start = Instant::now();
+            let result = wait_for_selector(&tab, &page_selector(state, None), &run.progress).await;
+            if met {
+                assert_eq!(result, Ok(()), "{state:?}");
+                assert_eq!(start.elapsed(), Duration::ZERO, "{state:?}");
+            } else {
+                assert_error(result, ErrorName::TimeoutError);
+                assert_eq!(start.elapsed(), Duration::from_millis(100), "{state:?}");
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_strict_page_wait_on_two_matches_fails_at_once() {
+        for state in [
+            SelectorState::Attached,
+            SelectorState::Detached,
+            SelectorState::Visible,
+            SelectorState::Hidden,
+        ] {
+            let mut tab = FakeTab::new();
+            tab.probe = Step::ready(Some(first_of_two_hidden()));
+            let run = Run::new(500.0);
+            let start = Instant::now();
+            let result =
+                wait_for_selector(&tab, &page_selector(Some(state), Some(true)), &run.progress)
+                    .await;
+            let Err(CallError::Playwright(error)) = result else {
+                panic!("{state:?}: expected a strict mode violation, got {result:?}");
+            };
+            assert_eq!(error.name, ErrorName::Error, "{state:?}");
+            assert!(error.message.contains("strict mode violation"), "{error:?}");
+            assert_eq!(start.elapsed(), Duration::ZERO, "{state:?}");
         }
     }
 

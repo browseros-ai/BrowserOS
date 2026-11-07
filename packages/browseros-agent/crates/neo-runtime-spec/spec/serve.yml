@@ -37,9 +37,10 @@ interfaces:
     - check
     - uncheck
     - selectOption
-    # `locator.waitFor` sends it with `omitReturnValue: true`. `element` is an `ElementHandle`, which
-    # is not a key here, so its result is always `{}`; neo-runtime refuses any other
-    # `omitReturnValue` rather than answer "no element".
+    # `element` is an `ElementHandle`, which is not a key here, so the result is always `{}`:
+    # `page`/`frame.waitForSelector` resolve `null` even for `attached` and `visible`, where
+    # Playwright resolves the element. neo-runtime's waits.rs stops building once `ElementHandle`
+    # is a key, so the handle lands with it.
     - waitForSelector
     - innerText
     - getAttribute

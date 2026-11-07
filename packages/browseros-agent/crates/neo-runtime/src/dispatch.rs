@@ -546,9 +546,9 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::WaitForSelector(params) if enters_frame(&params.selector) => {
             Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
         }
-        FrameCall::WaitForSelector(params) => {
-            WaitForSelectorOptions::from_params(params).map(Route::FrameWaitForSelector)
-        }
+        FrameCall::WaitForSelector(params) => Ok(Route::FrameWaitForSelector(
+            WaitForSelectorOptions::from_params(params),
+        )),
     }
 }
 
@@ -645,6 +645,8 @@ async fn serve(
         Route::FrameAriaSnapshot(options) => reads::aria_snapshot(&page, &options, &progress)
             .await
             .and_then(|result| encode_result::<FrameAriaSnapshotParams>(&result)),
+        // `{}` for every state, `null` to the script, until Neo serves `ElementHandle`
+        // (waits.rs's assertion on `ElementHandleChannel`).
         Route::FrameWaitForSelector(options) => {
             waits::wait_for_selector(&page, &options, &progress)
                 .await
@@ -1390,16 +1392,24 @@ mod tests {
             assert!(!meta.has(MethodFlag::Input));
             assert!(routed.route.is_ok(), "{method}");
         }
-        let Ok(ObjectCall::Frame(Route::FrameWaitForSelector(options))) = route_frame(
-            "waitForSelector",
+        // `page`/`frame.waitForSelector` send neither `strict` nor `omitReturnValue` unless the
+        // script gives them: not strict, visible, and served whatever `omitReturnValue` says.
+        for params in [
+            json!({"selector":"#item"}),
+            json!({"selector":"#item","omitReturnValue":false}),
             json!({"selector":"#item","omitReturnValue":true}),
-        )
-        .route
-        else {
-            panic!("selector route");
-        };
-        assert_eq!(options.state, FrameWaitForSelectorParamsState::Visible);
-        assert!(!options.strict);
+        ] {
+            let Ok(ObjectCall::Frame(Route::FrameWaitForSelector(options))) =
+                route_frame("waitForSelector", params.clone()).route
+            else {
+                panic!("selector route for {params}");
+            };
+            assert_eq!(
+                (options.selector.as_str(), options.strict, options.state),
+                ("#item", false, FrameWaitForSelectorParamsState::Visible),
+                "{params}"
+            );
+        }
     }
 
     #[test]
@@ -1421,18 +1431,6 @@ mod tests {
 
     #[test]
     fn tests_that_wait_refusals_happen_during_routing() {
-        for omit in [json!({}), json!({"omitReturnValue":false})] {
-            let mut params = json!({"selector":"#item"});
-            params
-                .as_object_mut()
-                .expect("object")
-                .extend(omit.as_object().expect("object").clone());
-            assert_eq!(
-                error_of(route_frame("waitForSelector", params)).name,
-                ErrorName::Error
-            );
-        }
-        // Frame refusal wins even when omitReturnValue is missing.
         assert_eq!(
             error_of(route_frame(
                 "waitForSelector",
