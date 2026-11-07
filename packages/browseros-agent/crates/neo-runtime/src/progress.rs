@@ -321,12 +321,12 @@ const DONE: u8 = 2;
 /// It moves into whatever writes the input, which reports through it.
 #[must_use = "dropping the ticket leaves the call's delivery Unknown"]
 #[derive(Debug)]
-pub(crate) struct InputTicket(Arc<DeliveryCell>);
+pub(crate) struct InputTicket(Arc<DeliveryCell>, u8);
 
 /// The browser acknowledged every input event of the attempt: the cell reads `Done`.
 #[must_use = "a blocked verdict must call `blocked`"]
 #[derive(Debug)]
-pub(crate) struct AckedInput(Arc<DeliveryCell>);
+pub(crate) struct AckedInput(Arc<DeliveryCell>, u8);
 
 /// `begin` refused: earlier input of this call may have reached the page.
 #[derive(Debug, PartialEq, Eq)]
@@ -348,8 +348,28 @@ impl DeliveryCell {
     pub(crate) fn begin(self: &Arc<Self>) -> Result<InputTicket, InputAlreadySent> {
         self.0
             .compare_exchange(NOT_SENT, UNKNOWN, Ordering::AcqRel, Ordering::Acquire)
-            .map(|_| InputTicket(Arc::clone(self)))
+            .map(|_| InputTicket(Arc::clone(self), NOT_SENT))
             .map_err(|_| InputAlreadySent)
+    }
+
+    /// A call that writes its input in two parts (`dragAndDrop`'s move and down, then its move
+    /// and up): once the first part is in, the cell reads `Unknown` until the second part is
+    /// acknowledged too, so a drag that stops between them is never `Done`.
+    pub(crate) fn expect_more(&self) {
+        let _done = self
+            .0
+            .compare_exchange(DONE, UNKNOWN, Ordering::AcqRel, Ordering::Acquire);
+    }
+
+    /// The second part's ticket. After a first part that wrote input the cell stays `Unknown`,
+    /// and nothing the second part does takes it back to `NotSent`; after one that wrote nothing
+    /// (a trial) it begins as any first input does.
+    pub(crate) fn begin_more(self: &Arc<Self>) -> Result<InputTicket, InputAlreadySent> {
+        match self.0.load(Ordering::Acquire) {
+            NOT_SENT => self.begin(),
+            UNKNOWN => Ok(InputTicket(Arc::clone(self), UNKNOWN)),
+            _ => Err(InputAlreadySent),
+        }
     }
 }
 
@@ -357,13 +377,13 @@ impl InputTicket {
     /// The writer proved nothing was written (browseros-cdp refuses a send at a stale epoch
     /// before writing it): back to `NotSent`.
     pub(crate) fn unsent(self) {
-        self.0.0.store(NOT_SENT, Ordering::Release);
+        self.0.0.store(self.1, Ordering::Release);
     }
 
     /// Every event was acknowledged.
     pub(crate) fn acked(self) -> AckedInput {
         self.0.0.store(DONE, Ordering::Release);
-        AckedInput(self.0)
+        AckedInput(self.0, self.1)
     }
 }
 
@@ -371,7 +391,7 @@ impl AckedInput {
     /// Neo's hit-target interceptor stopped a press that landed on another element, before the
     /// page's handlers saw it (`Delivery::NotSent` says how far it got): back to `NotSent`.
     pub(crate) fn blocked(self) {
-        self.0.0.store(NOT_SENT, Ordering::Release);
+        self.0.0.store(self.1, Ordering::Release);
     }
 
     /// The events reached the page: stays `Done`.
