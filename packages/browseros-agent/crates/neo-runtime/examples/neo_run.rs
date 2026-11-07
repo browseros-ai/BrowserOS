@@ -3,6 +3,8 @@
 //!
 //! ```sh
 //! cargo run -p neo-runtime --example neo_run -- --cdp-port 9222 --page <targetId> script.js
+//! cargo run -p neo-runtime --example neo_run -- --cdp-port 9222 --page <targetId> \
+//!   --artifacts /tmp/run-artifacts script.js   # page.screenshot({ path: 'a.png' }) writes here
 //! ```
 //!
 //! Once connected it writes `connected` on stderr, so a harness driving the tab knows the run
@@ -17,7 +19,12 @@ use std::{fs, io};
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use clap::Parser;
 use neo_runtime::{PageId, RunRequest, RunStatus, Runtime};
+use tokio::time;
 use tokio_util::sync::CancellationToken;
+
+/// The longest `neo_run` waits for a run's cleanup before disconnecting: two CDP requests at
+/// browseros-cdp's 60 s request timeout, the most one cleanup task makes in a row.
+const DRAIN_TIMEOUT: Duration = Duration::from_mins(2);
 
 #[derive(Parser)]
 struct Args {
@@ -29,6 +36,10 @@ struct Args {
     page: String,
     #[arg(long, default_value_t = 30_000)]
     timeout_ms: u64,
+    /// The run's artifact directory: where `path` options (`page.screenshot({ path })`,
+    /// `page.pdf({ path })`) write, relative to it. Without it they are refused.
+    #[arg(long)]
+    artifacts: Option<PathBuf>,
     /// A file holding the body of an async function of `(page, context)`.
     script: PathBuf,
 }
@@ -69,8 +80,17 @@ async fn run(args: Args) -> Result<RunStatus, String> {
             page: PageId::new(args.page),
             timeout: Duration::from_millis(args.timeout_ms),
             cancel: CancellationToken::new(),
+            artifacts: args.artifacts,
         })
         .await;
+    // A run's outcome does not settle its cleanup (a screenshot's late restore, a PDF stream's
+    // close): drain it before going away, as `Runtime::drain` asks every host to.
+    if time::timeout(DRAIN_TIMEOUT, runtime.drain()).await.is_err() {
+        let _ = writeln!(
+            io::stderr(),
+            "neo_run: cleanup still pending after {DRAIN_TIMEOUT:?}"
+        );
+    }
     cdp.disconnect().await;
 
     let json = serde_json::to_string(&outcome).map_err(|error| error.to_string())?;

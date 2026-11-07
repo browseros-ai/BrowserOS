@@ -567,7 +567,8 @@ Injected:
           type: array
           items: HighlightSpec
 
-    # `InjectedScript.hideHighlight`: removes this document's overlay.
+    # `InjectedScript.hideHighlight`: removes this document's overlay and every mask in it (the
+    # highlights and a screenshot's masks).
     hideHighlight:
       internal: true
 
@@ -587,6 +588,59 @@ Injected:
         selector: string
       returns:
         value: int
+
+    # `screenshotter.ts` `inPagePrepareForScreenshots` in one document, which Playwright runs in
+    # the utility world of every frame before a screenshot: `style` in a `<style>` of the
+    # document and of each shadow root, a transparent `caret-color` on editable elements, and
+    # CSS animations finished or cancelled. The cleanup that undoes it all is returned as a
+    # handle rather than stored on `window`.
+    prepareForScreenshot:
+      internal: true
+      parameters:
+        # The `style` option; absent or empty adds no `<style>`.
+        style: string?
+        # Every caret except `caret: 'initial'`.
+        hideCaret: boolean
+        # `animations: 'disabled'`.
+        disableAnimations: boolean
+      returns:
+        # Absent when there was nothing to prepare.
+        cleanup: ScreenshotCleanup?
+
+    # Undoes one `prepareForScreenshot` (Playwright's `window.__pwCleanupScreenshot()`).
+    restoreAfterScreenshot:
+      internal: true
+      parameters:
+        cleanup: ScreenshotCleanup
+
+    # Awaits `document.fonts.ready` before a screenshot.
+    fontsReady:
+      internal: true
+
+    # `Screenshotter._fullPageSize`: the largest scroll, offset and client size of `body` and
+    # `documentElement`.
+    fullPageSize:
+      internal: true
+      returns:
+        # Absent while the document has no `body` or no `documentElement`.
+        size: DocumentSize?
+
+    # `window.scrollX` and `window.scrollY`, which place an element's box in its document for an
+    # element screenshot.
+    scrollOffset:
+      internal: true
+      returns:
+        x: float
+        y: float
+
+    # One `mask` entry of a screenshot (`Screenshotter._maskElements`): every element the frame
+    # chunk matches, without strictness, covered with a box of `color` by the injected script's
+    # highlight overlay.
+    maskElements:
+      internal: true
+      parameters:
+        selector: string
+        color: string
 
 # `_fill` returns a string or the first missing state, without mutating when not ready.
 FormFillOutcome:
@@ -658,6 +712,17 @@ FormInputValueMatch:
 # `HitTargetInterceptionResult`, bound in the glue's `satisfies` clause.
 HitTargetInterceptor:
   type: handle
+
+# What `prepareForScreenshot` changed in one document, as the function that undoes it.
+ScreenshotCleanup:
+  type: handle
+
+# A document's full size in CSS pixels, for a full-page screenshot.
+DocumentSize:
+  type: object
+  properties:
+    width: int
+    height: int
 
 # A null-prototype object holding a query's elements as its own properties `0`, `1`, …
 ElementList:

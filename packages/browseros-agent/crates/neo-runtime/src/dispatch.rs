@@ -68,6 +68,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
 use crate::abort::{Aborts, Registration};
+use crate::capture::{self, Capture, NEO_SCREENSHOT_META, NeoScreenshotParams};
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::content::{self, SetContentOptions, WriteOrder, WriteTurn};
@@ -341,6 +342,8 @@ enum ObjectCall {
     Device(DeviceCall),
     Frame(Route),
     Network(NetworkCall),
+    /// `Page.screenshot`, `Page.pdf` and `neo:screenshot`, with Neo's `path` (`capture.rs`).
+    Capture(Capture),
     Dialog(u64, DialogCall),
     Download(String, ArtifactCall),
 }
@@ -590,15 +593,21 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
     let decoded = match object {
         ObjectKind::Context => BrowserContextCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Context(call)))),
-        ObjectKind::Page => PageCall::decode(method, params).map(|call| {
-            let meta = call.meta();
-            let routed = match DeviceCall::from_page_call(call) {
-                Ok(device) => device.map(ObjectCall::Device),
-                Err(call) => Ok(ObjectCall::Page(call)),
-            };
-            (meta, routed)
-        }),
+        ObjectKind::Page => {
+            let path = neo_path(params.as_ref());
+            PageCall::decode(method, params).map(|call| {
+                let meta = call.meta();
+                let routed = match DeviceCall::from_page_call(call) {
+                    Ok(device) => device.map(ObjectCall::Device),
+                    Err(call) => page_call(call, path),
+                };
+                (meta, routed)
+            })
+        }
         ObjectKind::Frame => {
+            if let Some(routed) = route_neo_screenshot(method, params.as_ref()) {
+                return routed;
+            }
             if let Some(routed) = route_frame_extension(method, params.as_ref()) {
                 return routed;
             }
@@ -652,6 +661,59 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             route: Err(PlaywrightError::error(error.to_string())),
         },
     }
+}
+
+/// Neo's `neo:screenshot` on a Frame guid (`locator.screenshot`, `capture.rs`), or `None` for
+/// another method.
+fn route_neo_screenshot(method: &str, params: Option<&Value>) -> Option<Routed> {
+    (method == NEO_SCREENSHOT_META.method).then(|| Routed {
+        meta: Some(&NEO_SCREENSHOT_META),
+        route: decode_neo_params::<NeoScreenshotParams>(params.cloned(), &NEO_SCREENSHOT_META)
+            .map(|params| ObjectCall::Capture(Capture::Locator(Box::new(params)))),
+    })
+}
+
+/// Neo's `path` beside Playwright's params of a page call (`capture.rs`); Playwright's own
+/// decode ignores the key.
+fn neo_path(params: Option<&Value>) -> Result<Option<String>, PlaywrightError> {
+    match params.and_then(|params| params.get("path")) {
+        None => Ok(None),
+        Some(Value::String(path)) => Ok(Some(path.clone())),
+        Some(other) => Err(PlaywrightError::error(format!(
+            "path: expected string, got {}",
+            json_kind(other)
+        ))),
+    }
+}
+
+/// The JSON kind of `value`, as a validator names it.
+fn json_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// A decoded page call: the ones that answer bytes go to `capture.rs` with their `path`.
+fn page_call(
+    call: PageCall,
+    path: Result<Option<String>, PlaywrightError>,
+) -> Result<ObjectCall, PlaywrightError> {
+    Ok(match call {
+        PageCall::Screenshot(params) => ObjectCall::Capture(Capture::Page {
+            params: Box::new(params),
+            path: path?,
+        }),
+        PageCall::Pdf(params) => ObjectCall::Capture(Capture::Pdf {
+            params: Box::new(params),
+            path: path?,
+        }),
+        call => ObjectCall::Page(call),
+    })
 }
 
 /// A frame's calls that are not one generated `FrameCall` (Neo's URL and load-state waits,
@@ -931,6 +993,9 @@ async fn serve_call(
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
         (ObjectCall::Page(call), Some((page, _))) => {
             tab_calls::page(&tabs, &page, call, &progress).await
+        }
+        (ObjectCall::Capture(call), Some((page, scope))) => {
+            capture::serve(&tabs, &page, scope, call, &progress).await
         }
         (ObjectCall::Frame(route), Some((page, scope))) => {
             let session = match page.attached_session() {
@@ -1594,6 +1659,7 @@ mod tests {
     use crate::progress::{self, ErrorName};
     use crate::run::Delivery;
     use crate::run::PageId;
+    use crate::screenshot::TabScreenshots;
     use crate::switch::Switches;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
@@ -1608,6 +1674,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             Switches::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
@@ -1685,6 +1752,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             Switches::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
@@ -1728,6 +1796,7 @@ mod tests {
             | ObjectCall::Page(_)
             | ObjectCall::Device(_)
             | ObjectCall::Network(_)
+            | ObjectCall::Capture(_)
             | ObjectCall::Dialog(..)
             | ObjectCall::Download(..) => {
                 panic!("a Frame message routed to another object")
@@ -2565,6 +2634,62 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_capture_calls_route_with_neos_path() {
+        let screenshot = route(
+            ObjectKind::Page,
+            "screenshot",
+            Some(json!({"type": "jpeg", "quality": 50, "path": "shots/a.jpg"})),
+        );
+        assert_eq!(screenshot.meta.map(|meta| meta.method), Some("screenshot"));
+        match screenshot.route {
+            Ok(ObjectCall::Capture(Capture::Page { params, path })) => {
+                assert_eq!(params.quality, Some(50));
+                assert_eq!(path.as_deref(), Some("shots/a.jpg"));
+            }
+            Ok(_) => panic!("expected a page screenshot"),
+            Err(error) => panic!("expected a page screenshot, got {error:?}"),
+        }
+        let pdf = route(ObjectKind::Page, "pdf", None);
+        assert_eq!(pdf.meta.map(|meta| meta.title), Some(Some("PDF")));
+        assert!(
+            matches!(
+                pdf.route,
+                Ok(ObjectCall::Capture(Capture::Pdf { path: None, .. }))
+            ),
+            "a pdf without a path writes nothing"
+        );
+        let bad_path = error_of(route(
+            ObjectKind::Page,
+            "screenshot",
+            Some(json!({"path": 5})),
+        ));
+        assert_eq!(bad_path.message, "path: expected string, got number");
+
+        let locator = route_frame(
+            "neo:screenshot",
+            json!({"selector": "#a", "strict": true, "path": "a.png", "omitBackground": true}),
+        );
+        assert_eq!(
+            locator.meta.map(|meta| (meta.method, meta.title)),
+            Some(("neo:screenshot", Some("Screenshot")))
+        );
+        match locator.route {
+            Ok(ObjectCall::Capture(Capture::Locator(params))) => {
+                assert_eq!(params.selector, "#a");
+                assert_eq!(params.path.as_deref(), Some("a.png"));
+                assert_eq!(params.omit_background, Some(true));
+            }
+            Ok(_) => panic!("expected a locator screenshot"),
+            Err(error) => panic!("expected a locator screenshot, got {error:?}"),
+        }
+        let no_selector = error_of(route_frame("neo:screenshot", json!({})));
+        assert!(
+            no_selector.message.contains("neo:screenshot"),
+            "{no_selector:?}"
+        );
+    }
+
+    #[test]
     fn unserved_methods_and_objects_reply_as_playwrights_dispatcher_would() {
         let cases = [
             (
@@ -2934,6 +3059,7 @@ mod review_abort_priority {
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::page::TabInputs;
     use crate::run::PageId;
+    use crate::screenshot::TabScreenshots;
     use crate::switch::Switches;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
@@ -2950,6 +3076,7 @@ mod review_abort_priority {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             Switches::default(),
             tasks,
             &PageId::new(PAGE.to_string()),

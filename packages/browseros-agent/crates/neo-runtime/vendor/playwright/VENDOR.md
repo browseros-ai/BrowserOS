@@ -41,6 +41,7 @@ and NOTICE.
 | `packages/playwright-core/src/server/chromium/crInput.ts` | `20b43d336519f9bc8da1504fb503e711466ca8471aa68af67e867d0535840221` |
 | `packages/playwright-core/src/server/chromium/crNetworkManager.ts` | `dbc7567f8231c2af493a1b88bdc36dc0232cd5e65c5710be7a933578d416413a` |
 | `packages/playwright-core/src/server/chromium/crPage.ts` | `918f0f9beed354c579d00f5656662e36264043b3b59c420d4369fd15b119dd99` |
+| `packages/playwright-core/src/server/chromium/crPdf.ts` | `4df42a78b50c682b19c758193a6f837364231750d07bc30430d6f86fe6c33574` |
 | `packages/playwright-core/src/server/chromium/crProtocolHelper.ts` | `9c19f033f45589fb8a6588ceeada835bfeed7016d93138a9c5d6fb2b3d7a8ba9` |
 | `packages/playwright-core/src/server/console.ts` | `e4d49ae4f9011320d1c20fe6fe928ae24f9543b14c842284828e1bb031aec520` |
 | `packages/playwright-core/src/server/dialog.ts` | `9c70719be6a8b3cbb6d83066b8375b7bd125fa988b4bd7d9a0b7bcc22c9ae7b4` |
@@ -52,6 +53,7 @@ and NOTICE.
 | `packages/playwright-core/src/server/errors.ts` | `5dde9a10a8843f80c65f67bc2dae4b80bc1e2628ed514c2500fc7b9bbe6aadf0` |
 | `packages/playwright-core/src/server/frameSelectors.ts` | `a8f0bb4a00e0ed48a8665559083dab274bb2da386f37d0bd173b9a37a87c26fc` |
 | `packages/playwright-core/src/server/frames.ts` | `c3b72c48361de93312eba80b096304bb374c6208429f2de65944571480c74445` |
+| `packages/playwright-core/src/server/helper.ts` | `a21387efb84b9a6dd6e5b0775748d016f3b17a4723f1886476cb71d96a90ce28` |
 | `packages/playwright-core/src/server/highlightController.ts` | `14fb3a4d7eb66b533f8213098b883ad3d1adb9c6df3e956fc0cb4c9dc4127d03` |
 | `packages/playwright-core/src/server/input.ts` | `dd1a2025bf3e04f52079a9ed0669f77b99a91a9746be452627de389b9539dfcc` |
 | `packages/playwright-core/src/server/javascript.ts` | `2fc52119a81b92929aa5e292e76fde967d56cfacf16aadc27b7a96e6e880c788` |
@@ -59,4 +61,5 @@ and NOTICE.
 | `packages/playwright-core/src/server/page.ts` | `c17ffdb5133c507085447a5914b8a38992b83c65985b9b5b06ee65ce68c975bf` |
 | `packages/playwright-core/src/server/progress.ts` | `0770a2b225b77df82f0aefea8ca89b699ebb3e58eb4274771d5e0c0cf43aed01` |
 | `packages/playwright-core/src/server/protocolError.ts` | `b6d54500d5764b973f93504d7c21126e8176266c8ddfa4da47d218f8ec88bb04` |
+| `packages/playwright-core/src/server/screenshotter.ts` | `8a3f5de0754d091cefb1abf12e1eb697f6b56968b3ceca6852fd0d813d25a87c` |
 | `packages/utils/stackTrace.ts` | `fd74bd690ad37498ad3b676025129b38c08c5bffb190c8d96f228a2be7b5210b` |
