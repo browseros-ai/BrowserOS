@@ -113,6 +113,13 @@ async fn tests_that_a_request_past_the_retention_cap_answers_neos_error() {
         r"const [first] = await Promise.all([page.waitForRequest('**/data-first-0'), burst('first', 1)])
 const kept = await first.response()
 await burst('more', 1100)
+// With nothing subscribed, a reply skips the event barrier, so a call can run before the watcher
+// applied the burst's events: wait until the log holds the burst's last request.
+for (let tries = 0; tries < 100; tries++) {
+  const recent = await page.requests()
+  if (recent.length && recent[recent.length - 1].url().endsWith('/data-more-1099')) break
+  await new Promise((resolve) => setTimeout(resolve, 50))
+}
 const settle = (promise) => promise.then(() => 'resolved', (error) => [error.name, error.message])
 return {
   keptStatus: kept.status(),
