@@ -71,7 +71,7 @@ use tracing::{debug, warn};
 
 use crate::click::{
     Arming, Geometry, NotReady, PageError, PressReport, Resolved, Scroll, SelectorFacts,
-    StatesCheck, Tab, Verdict,
+    StatesCheck, Stop, Tab, Verdict,
 };
 use crate::events::{EventHub, Flushes};
 use crate::frame_selector::{self, FrameOwner};
@@ -81,6 +81,7 @@ use crate::input_devices::{
     self, Devices, Effect, EffectSink, InputDevices, InputSender, Owner, Plan,
 };
 use crate::keyboard;
+use crate::locator_handlers::{self, LocatorHandlers};
 use crate::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
 };
@@ -88,7 +89,7 @@ use crate::network::{Happening, Lookup, NetworkLog};
 use crate::network_idle::{IdleChange, SharedIdle};
 use crate::page_events::PageEvents;
 use crate::progress::InputTicket;
-use crate::progress::PlaywrightError;
+use crate::progress::{PlaywrightError, Progress};
 use crate::run::PageId;
 use crate::world::{self, ObjectGroup, World};
 
@@ -213,6 +214,8 @@ pub(crate) struct PageSession {
     pub(crate) highlights: Highlights,
     /// What the watcher turns into the run's events, and the tab's console history and dialogs.
     pub(crate) events: PageEvents,
+    /// The run's locator handlers on this tab (`locator_handlers.rs`).
+    pub(crate) locator_handlers: LocatorHandlers,
     /// `Runtime.enable` and `Log.enable`, sent once a run listens to console messages or page
     /// errors (or reads their history) and kept for the run.
     runtime_enabled: OnceCell<()>,
@@ -690,6 +693,7 @@ impl PageSession {
             idle: Arc::new(SharedIdle::new(page.as_str(), Instant::now())),
             highlights: Highlights::default(),
             events,
+            locator_handlers: LocatorHandlers::default(),
             runtime_enabled: OnceCell::new(),
         }
     }
@@ -2716,6 +2720,12 @@ impl Tab for FrameTab {
 
     fn pending_navigation(&self) -> Option<String> {
         PageSession::pending_navigation(self)
+    }
+
+    async fn locator_handlers_checkpoint(&self, progress: &Progress) -> Result<(), Stop> {
+        locator_handlers::checkpoint(self, progress)
+            .await
+            .map_err(Stop::End)
     }
 
     async fn navigation_settled(&self) -> Result<Option<String>, PageError> {

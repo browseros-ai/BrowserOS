@@ -61,8 +61,11 @@ import type {
   PageMouseUpParams,
   PageMouseWheelParams,
   PagePageErrorsParams,
+  PageRegisterLocatorHandlerParams,
   PageReloadParams,
+  PageResolveLocatorHandlerNoReplyParams,
   PageTouchscreenTapParams,
+  PageUnregisterLocatorHandlerParams,
 } from '@browseros/neo-runtime-spec/serve'
 
 /** `Frame.goto`'s params in Playwright's schema order (`spec/playwright/frame.yml`). */
@@ -616,6 +619,37 @@ type _BrowserContextCloseKeysMatchSpec = Assert<
 
 /** `Page.close`'s params (`spec/playwright/page.yml`). */
 export const PAGE_CLOSE_KEYS = ['reason'] as const
+
+/** `Page.registerLocatorHandler` in Playwright schema order. */
+export const PAGE_REGISTER_LOCATOR_HANDLER_KEYS = [
+  'selector',
+  'noWaitAfter',
+] as const
+
+/** `Page.resolveLocatorHandlerNoReply` in Playwright schema order. */
+export const PAGE_RESOLVE_LOCATOR_HANDLER_KEYS = ['uid', 'remove'] as const
+
+/** `Page.unregisterLocatorHandler` in Playwright schema order. */
+export const PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS = ['uid'] as const
+
+type _PageRegisterLocatorHandlerKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_REGISTER_LOCATOR_HANDLER_KEYS)[number], true>,
+    Required<PageRegisterLocatorHandlerParams>
+  >
+>
+type _PageResolveLocatorHandlerKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_RESOLVE_LOCATOR_HANDLER_KEYS)[number], true>,
+    Required<PageResolveLocatorHandlerNoReplyParams>
+  >
+>
+type _PageUnregisterLocatorHandlerKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS)[number], true>,
+    Required<PageUnregisterLocatorHandlerParams>
+  >
+>
 
 type _PageCloseKeysMatchSpec = Assert<
   SameKeys<

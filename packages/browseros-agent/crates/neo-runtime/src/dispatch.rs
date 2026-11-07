@@ -82,6 +82,7 @@ use crate::evaluate::{self, EvalCall};
 use crate::events::{ALL_PAGES, EventHub};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
+use crate::frame_element;
 use crate::frames::FrameScope;
 use crate::highlight::{self, HighlightOptions};
 use crate::history::{
@@ -372,6 +373,8 @@ enum Route {
     FrameSetChecked(CheckOptions),
     FrameSelectOption(SelectOptions),
     FrameWaitForSelector(WaitForSelectorOptions),
+    /// `Frame.frameElement` (`frame_element.rs`).
+    FrameFrameElement,
     FrameWaitForUrl(WaitForUrlOptions),
     FrameWaitForLoadState(WaitForLoadStateOptions),
     // Document content and timing (content.rs, waits.rs, reads.rs).
@@ -660,6 +663,9 @@ fn route_frame_extension(method: &str, params: Option<&Value>) -> Option<Routed>
         return Some(routed);
     }
     if let Some(routed) = route_navigation_wait(method, params) {
+        return Some(routed);
+    }
+    if let Some(routed) = route_frame_element(method) {
         return Some(routed);
     }
     if let Some((meta, call)) = evaluate::route_frame(method, params) {
@@ -1046,6 +1052,11 @@ async fn serve(
                 .await
                 .and_then(wait_for_selector_reply)
         }
+        // `ElementHandle` is no interface of the generated spec, so the element travels as the
+        // record the SDK builds it from, as `waitForSelector`'s does.
+        Route::FrameFrameElement => frame_element::frame_element(&page, &progress)
+            .await
+            .map(|created| Some(json!({ "element": created }))),
         Route::FrameEval(call) => evaluate::serve(&page, call, &progress).await,
         // Neo extensions answer an empty result.
         Route::FrameWaitForUrl(options) => waits::wait_for_url(&page, &options, &progress)
@@ -1351,6 +1362,7 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameIsEditable(_)
         | Route::FrameAriaSnapshot(_)
         | Route::FrameWaitForSelector(_)
+        | Route::FrameFrameElement
         | Route::FrameWaitForUrl(_)
         | Route::FrameWaitForLoadState(_)
         | Route::FrameContent(_)
@@ -1424,6 +1436,15 @@ pub(crate) fn encode_result<C: Command>(result: &C::Result) -> Result<Option<Val
     }
     serde_json::to_value(result).map(Some).map_err(|error| {
         PlaywrightError::error(format!("encoding {} result: {error}", C::META.method)).into()
+    })
+}
+
+/// `Frame.frameElement`, routed by hand: its result requires an `ElementHandle`, which the
+/// generated spec cannot create (`frame_element.rs`).
+fn route_frame_element(method: &str) -> Option<Routed> {
+    (method == frame_element::FRAME_ELEMENT_META.method).then(|| Routed {
+        meta: Some(&frame_element::FRAME_ELEMENT_META),
+        route: Ok(ObjectCall::Frame(Route::FrameFrameElement)),
     })
 }
 

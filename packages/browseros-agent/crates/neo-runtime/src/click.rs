@@ -210,6 +210,16 @@ pub(crate) trait Tab: Send + Sync {
     /// Resolves when no navigation is pending, with the URL it committed to, if any.
     fn navigation_settled(&self) -> impl Future<Output = Result<Option<String>, PageError>> + Send;
 
+    /// Playwright's `performActionPreChecks` locator-handler checkpoint (`page.ts`
+    /// `_performLocatorHandlersCheckpoint`), between its two navigation checks and before the
+    /// attempt takes the input turn. A tab without handlers has none to run.
+    fn locator_handlers_checkpoint(
+        &self,
+        _progress: &Progress,
+    ) -> impl Future<Output = Result<(), Stop>> + Send {
+        async { Ok(()) }
+    }
+
     /// Starts recording navigation requests. Called before `press`, so none of the input's own
     /// requests can be missed.
     fn watch_navigations(&self) -> Self::Navigations;
@@ -1222,13 +1232,23 @@ fn platform_error(error: PageError) -> CallError {
     }
 }
 
-/// `performActionPreChecks`' navigation half (`page.ts` `_performWaitForNavigationCheck`):
-/// when a requested main-frame navigation has not settled, log, wait for it, and log where it
-/// went.
+/// Playwright's `performActionPreChecks` (`page.ts`): waits out a pending main-frame
+/// navigation, runs the locator handlers' checkpoint, then waits once more, in case a handler
+/// navigated. Every caller runs it before the attempt takes the input turn, so a handler's own
+/// actions can take it.
 pub(crate) async fn wait_out_pending_navigation<T: Tab>(
     tab: &T,
     progress: &Progress,
 ) -> Result<(), Stop> {
+    navigation_check(tab, progress).await?;
+    tab.locator_handlers_checkpoint(progress).await?;
+    navigation_check(tab, progress).await
+}
+
+/// `performActionPreChecks`' navigation half (`page.ts` `_performWaitForNavigationCheck`):
+/// when a requested main-frame navigation has not settled, log, wait for it, and log where it
+/// went.
+async fn navigation_check<T: Tab>(tab: &T, progress: &Progress) -> Result<(), Stop> {
     let Some(url) = tab.pending_navigation() else {
         return Ok(());
     };

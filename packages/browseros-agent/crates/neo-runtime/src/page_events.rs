@@ -93,6 +93,23 @@ struct DialogOpening {
 }
 
 impl PageEvents {
+    /// `locatorHandlerTriggered` on the page while the realm listens (`locator_handlers.rs`):
+    /// whether it went out.
+    pub(crate) fn locator_handler_triggered(&self, uid: i64) -> bool {
+        if !self
+            .hub
+            .subscribed(&self.page_guid, "locatorHandlerTriggered")
+        {
+            return false;
+        }
+        let _emitted = self.hub.emit(
+            &self.page_guid,
+            "locatorHandlerTriggered",
+            &json!({ "uid": uid }),
+        );
+        true
+    }
+
     /// `discovered`: the run's discovery reported the tab as new, so its first lifecycle replay
     /// is the page's own new life and reaches listeners.
     pub(crate) fn new(

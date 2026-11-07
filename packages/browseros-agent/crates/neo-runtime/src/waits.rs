@@ -2,7 +2,7 @@
 //! frame or a child frame.
 //!
 //! ```text
-//! wait_for_selector ── SelectorCondition ── check: prepare, pre-check, selectorState
+//! wait_for_selector ── SelectorCondition ── check: prepare, pre-checks, selectorState
 //!                      │                   changed: loop A's backoff timer
 //! wait_for_url ─────┐   │
 //! wait_for_load_state ─ NavigationCondition ─ check: URL/flags/lifecycle counts
@@ -40,6 +40,7 @@ use crate::click::{LoopAWaits, PageError, SelectorFacts, Tab};
 use crate::evaluate::{self, CreatedHandle, Handles};
 use crate::frame_selector;
 use crate::frames::{FrameScope, Host};
+use crate::locator_handlers;
 use crate::navigate::{Lifecycle, Navigation, NavigationState, NavigationTab, Observation};
 use crate::page::{FrameState, FrameTab, NavigationObservation, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
@@ -85,6 +86,16 @@ pub(crate) trait WaitTab: Send + Sync {
             "this tab cannot return a selector wait's element".to_string(),
         )))
     }
+
+    /// The tab's locator-handler checkpoint (`locator_handlers.rs`), between the two navigation
+    /// checks of Playwright's `performActionPreChecks`; none on a tab without handlers.
+    fn locator_handlers_checkpoint(
+        &self,
+        progress: &Progress,
+    ) -> impl Future<Output = Result<(), CallError>> + Send {
+        let _ = progress;
+        future::ready(Ok(()))
+    }
 }
 
 /// Decoded once by the route.
@@ -96,15 +107,25 @@ pub(crate) struct WaitForSelectorOptions {
     /// Playwright's `!omitReturnValue`: an attached or visible wait answers its element, adopted
     /// into the main world (`frames.ts` `waitForSelector`), as `locator.evaluate` needs.
     pub(crate) return_element: bool,
+    /// Playwright's `performActionPreChecksAndLog`: each attempt first runs the page's action
+    /// pre-checks (a pending navigation, the locator handlers, a navigation again). Every served
+    /// wait does, as Playwright's dispatcher passes `true`; the locator-handler checkpoint's own
+    /// wait for its selector to hide does not.
+    pub(crate) pre_checks: bool,
 }
 
 impl WaitForSelectorOptions {
+    /// A served wait, which Playwright's dispatcher sends with `performActionPreChecksAndLog`
+    /// set, so its attempts run the pre-checks.
+    ///
+    /// Playwright: `server/frames.ts` `Frame.waitForSelector`: `if (performActionPreChecksAndLog)`
     pub(crate) fn from_params(params: FrameWaitForSelectorParams) -> Self {
         Self {
             selector: params.selector,
             strict: params.strict.unwrap_or(false),
             state: params.state.unwrap_or(SelectorState::Visible),
             return_element: params.omit_return_value != Some(true),
+            pre_checks: true,
         }
     }
 }
@@ -168,7 +189,7 @@ async fn wait_until(condition: &mut impl Condition, progress: &Progress) -> Resu
 }
 
 trait Condition {
-    async fn check(&mut self, progress: &Progress) -> Result<bool, PlaywrightError>;
+    async fn check(&mut self, progress: &Progress) -> Result<bool, CallError>;
     async fn changed(&mut self) -> Result<(), PlaywrightError>;
 }
 
@@ -186,11 +207,10 @@ struct PrepareCondition<'a, T> {
 }
 
 impl<T: WaitTab> Condition for PrepareCondition<'_, T> {
-    async fn check(&mut self, _progress: &Progress) -> Result<bool, PlaywrightError> {
+    async fn check(&mut self, _progress: &Progress) -> Result<bool, CallError> {
         match self.tab.prepare().await {
             Ok(()) => Ok(true),
-            Err(PageError::NotConnected) => Ok(false),
-            Err(error) => Err(page_error(error)),
+            Err(error) => polled(error),
         }
     }
 
@@ -245,14 +265,34 @@ struct SelectorCondition<'a, T> {
 }
 
 impl<T: WaitTab> SelectorCondition<'_, T> {
-    async fn probe(&mut self, progress: &Progress) -> Result<bool, PageError> {
-        self.tab.prepare().await?;
-        // Playwright server/page.ts:547-569: settle navigation before resolving the selector,
-        // including the first description/validity check.
+    /// Playwright's `performActionPreChecks` for one attempt, after the tab is prepared (its
+    /// watcher knows of pending navigations): settle a pending navigation, run the locator
+    /// handlers, then settle any navigation a handler started, all before resolving the selector
+    /// (its first description and validity check included).
+    ///
+    /// Playwright: `server/page.ts` `Page.performActionPreChecks`: `await this._performLocatorHandlersCheckpoint(progress);`
+    async fn pre_checks(&mut self, progress: &Progress) -> Result<bool, CallError> {
+        if let Err(error) = self.settle_navigation(progress).await {
+            return polled(error);
+        }
+        self.tab.locator_handlers_checkpoint(progress).await?;
+        match self.settle_navigation(progress).await {
+            Ok(()) => Ok(true),
+            Err(error) => polled(error),
+        }
+    }
+
+    /// `performActionPreChecks`' navigation half (`page.ts` `_performWaitForNavigationCheck`):
+    /// a requested main-frame navigation that has not settled is logged and waited for.
+    async fn settle_navigation(&self, progress: &Progress) -> Result<(), PageError> {
         if let Some(url) = self.tab.pending_navigation() {
             progress.log(format!("  waiting for \"{url}\" navigation to finish..."));
             self.tab.navigation_settled().await?;
         }
+        Ok(())
+    }
+
+    async fn probe(&mut self, progress: &Progress) -> Result<bool, PageError> {
         if !self.named {
             let facts = self.tab.describe(&self.options.selector).await?;
             name_selector(progress, &facts.locator, self.options.state);
@@ -317,17 +357,32 @@ impl<T: WaitTab> SelectorCondition<'_, T> {
 }
 
 impl<T: WaitTab> Condition for SelectorCondition<'_, T> {
-    async fn check(&mut self, progress: &Progress) -> Result<bool, PlaywrightError> {
+    async fn check(&mut self, progress: &Progress) -> Result<bool, CallError> {
+        if let Err(error) = self.tab.prepare().await {
+            return polled(error);
+        }
+        // Playwright: `server/frames.ts` `Frame.waitForSelector`: `await this._page.performActionPreChecks(progress);`
+        if self.options.pre_checks && !self.pre_checks(progress).await? {
+            return Ok(false);
+        }
         match self.probe(progress).await {
             Ok(ready) => Ok(ready),
-            Err(PageError::NotConnected) => Ok(false),
-            Err(error) => Err(page_error(error)),
+            Err(error) => polled(error),
         }
     }
 
     async fn changed(&mut self) -> Result<(), PlaywrightError> {
         time::sleep(self.backoff.next_wait()).await;
         Ok(())
+    }
+}
+
+/// Neo: a page step's error within a wait's attempt: a document that went away polls again, as
+/// Playwright retries a context destroyed under it; anything else ends the wait.
+fn polled(error: PageError) -> Result<bool, CallError> {
+    match error {
+        PageError::NotConnected => Ok(false),
+        error => Err(page_error(error).into()),
     }
 }
 
@@ -522,12 +577,9 @@ impl<O: Observation> NavigationCondition<'_, O> {
 }
 
 impl<O: Observation> Condition for NavigationCondition<'_, O> {
-    fn check(
-        &mut self,
-        progress: &Progress,
-    ) -> impl Future<Output = Result<bool, PlaywrightError>> {
+    fn check(&mut self, progress: &Progress) -> impl Future<Output = Result<bool, CallError>> {
         // Matching runs synchronously inside check, bounded by the matcher's evaluation budget.
-        future::ready(self.satisfied(progress))
+        future::ready(self.satisfied(progress).map_err(CallError::from))
     }
 
     async fn changed(&mut self) -> Result<(), PlaywrightError> {
@@ -759,6 +811,10 @@ impl WaitTab for FrameTab {
 
     async fn navigation_settled(&self) -> Result<(), PageError> {
         PageSession::navigation_settled(self).await.map(|_| ())
+    }
+
+    async fn locator_handlers_checkpoint(&self, progress: &Progress) -> Result<(), CallError> {
+        locator_handlers::checkpoint(self, progress).await
     }
 
     async fn selector_element(
@@ -1073,6 +1129,7 @@ mod tests {
             strict: true,
             state,
             return_element: false,
+            pre_checks: true,
         }
     }
 

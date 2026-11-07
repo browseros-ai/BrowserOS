@@ -6,7 +6,11 @@ import type {
   PageGoBackParams,
   PageGoForwardParams,
   PagePageErrorsParams,
+  PageRegisterLocatorHandlerParams,
+  PageRegisterLocatorHandlerResult,
   PageReloadParams,
+  PageResolveLocatorHandlerNoReplyParams,
+  PageUnregisterLocatorHandlerParams,
   ResponseChannel,
 } from '@browseros/neo-runtime-spec/serve'
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
@@ -61,6 +65,7 @@ import {
   type WaitForFunctionOptions,
   type WaitForLoadStateOptions,
   type WaitForNavigationOptions,
+  type WaitForSelectorOptions,
   type WaitForURLOptions,
 } from './frame'
 import type { FrameLocator } from './frame-locator'
@@ -87,7 +92,10 @@ import {
   PAGE_GO_BACK_KEYS,
   PAGE_GO_FORWARD_KEYS,
   PAGE_PAGE_ERRORS_KEYS,
+  PAGE_REGISTER_LOCATOR_HANDLER_KEYS,
   PAGE_RELOAD_KEYS,
+  PAGE_RESOLVE_LOCATOR_HANDLER_KEYS,
+  PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS,
   pickParams,
 } from './protocol'
 import { type CreatedFrame, get, matchesURL } from './runtime-bridge'
@@ -323,6 +331,120 @@ export class Page extends ChannelOwner {
       this.#onFrameDetached((params as FrameEventParams).frame)
     else if (method === 'frameNavigated')
       this.#onFrameNavigated(params as FrameEventParams)
+    else if (method === 'locatorHandlerTriggered')
+      this.#onLocatorHandlerTriggered((params as { uid: number }).uid).catch(
+        (error) => this.#context._pipe.report(error),
+      )
+  }
+
+  /** Playwright: `client/page.ts` `Page._locatorHandlers` */
+  readonly #locatorHandlers = new Map<
+    number,
+    {
+      locator: Locator
+      handler: (locator: Locator) => unknown
+      times: number | undefined
+    }
+  >()
+
+  /**
+   * Runs `handler(locator)` whenever an action is about to act while `locator` is visible (a
+   * cookie banner, a popup), then lets the action go on once it hid, unless `noWaitAfter`, at
+   * most `times` times. Sent with no timeout, as Playwright's (`kNoTimeout`).
+   */
+  async addLocatorHandler(
+    locator: Locator,
+    handler: (locator: Locator) => unknown,
+    options: { times?: number; noWaitAfter?: boolean } = {},
+  ): Promise<void> {
+    if (locator._frame !== this.#mainFrame)
+      throw new Error('Locator must belong to the main frame of this page')
+    if (options.times === 0) return
+    // Subscribed before the handler exists, so its first trigger always reaches the realm, and
+    // kept while its registration is pending, so a concurrent removal of the last other handler
+    // cannot unsubscribe it.
+    this.#pendingLocatorHandlers++
+    this.#syncLocatorHandlerSubscription()
+    try {
+      const { uid } = (await this.#connection.sendPage(
+        'page.addLocatorHandler',
+        this.#guid,
+        'registerLocatorHandler',
+        pickParams(PAGE_REGISTER_LOCATOR_HANDLER_KEYS, {
+          selector: locator._selector,
+          noWaitAfter: options.noWaitAfter,
+        }) as PageRegisterLocatorHandlerParams,
+        0,
+      )) as PageRegisterLocatorHandlerResult
+      this.#locatorHandlers.set(uid, { locator, handler, times: options.times })
+    } finally {
+      this.#pendingLocatorHandlers--
+      this.#syncLocatorHandlerSubscription()
+    }
+  }
+
+  /** Registrations sent and not yet answered. */
+  #pendingLocatorHandlers = 0
+  #locatorHandlerSubscribed = false
+
+  /** Neo: the page listens for `locatorHandlerTriggered` while it holds or registers a handler. */
+  #syncLocatorHandlerSubscription(): void {
+    const wanted = this.#locatorHandlers.size + this.#pendingLocatorHandlers > 0
+    if (wanted === this.#locatorHandlerSubscribed) return
+    this.#locatorHandlerSubscribed = wanted
+    this._subscribeChannelEvent('locatorHandlerTriggered', wanted)
+  }
+
+  /** Playwright: `client/page.ts` `Page._onLocatorHandlerTriggered` */
+  async #onLocatorHandlerTriggered(uid: number): Promise<void> {
+    let remove = false
+    try {
+      const handler = this.#locatorHandlers.get(uid)
+      if (handler && handler.times !== 0) {
+        if (handler.times !== undefined) handler.times--
+        await handler.handler(handler.locator)
+      }
+      remove = handler?.times === 0
+    } finally {
+      if (remove) this.#dropLocatorHandler(uid)
+      this.#connection
+        .sendPage(
+          'page.addLocatorHandler',
+          this.#guid,
+          'resolveLocatorHandlerNoReply',
+          pickParams(PAGE_RESOLVE_LOCATOR_HANDLER_KEYS, {
+            uid,
+            remove,
+          }) as PageResolveLocatorHandlerNoReplyParams,
+          0,
+        )
+        .catch(() => {})
+    }
+  }
+
+  /** Removes every handler of `locator` (same frame and selector), as Playwright's. */
+  async removeLocatorHandler(locator: Locator): Promise<void> {
+    for (const [uid, data] of this.#locatorHandlers) {
+      if (data.locator._equals(locator)) {
+        this.#dropLocatorHandler(uid)
+        await this.#connection
+          .sendPage(
+            'page.removeLocatorHandler',
+            this.#guid,
+            'unregisterLocatorHandler',
+            pickParams(PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS, {
+              uid,
+            }) as PageUnregisterLocatorHandlerParams,
+            0,
+          )
+          .catch(() => {})
+      }
+    }
+  }
+
+  #dropLocatorHandler(uid: number): void {
+    this.#locatorHandlers.delete(uid)
+    this.#syncLocatorHandlerSubscription()
   }
 
   /** Playwright's `Page._onFrameAttached`: a frame attaches with no name or URL yet. */
@@ -852,6 +974,31 @@ export class Page extends ChannelOwner {
     options?: WaitForURLOptions,
   ): Promise<void> {
     return await this.#mainFrame._waitForURL('page.waitForURL', url, options)
+  }
+
+  /**
+   * The main frame's {@link Frame.waitForSelector}: waits until `selector` meets `state`
+   * (default `visible`) and resolves its first match as an {@link ElementHandle}, or `null` for a
+   * `hidden` or `detached` wait, running the page's locator handlers before each attempt.
+   */
+  waitForSelector(
+    selector: string,
+    options?: WaitForSelectorOptions & { state?: 'attached' | 'visible' },
+  ): Promise<ElementHandle>
+  waitForSelector(
+    selector: string,
+    options: WaitForSelectorOptions,
+  ): Promise<ElementHandle | null>
+  /** Playwright: `client/page.ts` `Page.waitForSelector`: `return await this._mainFrame.waitForSelector(selector, options);` */
+  async waitForSelector(
+    selector: string,
+    options?: WaitForSelectorOptions,
+  ): Promise<ElementHandle | null> {
+    return await this.#mainFrame._waitForSelectorPublic(
+      'page.waitForSelector',
+      selector,
+      options,
+    )
   }
 
   /**
