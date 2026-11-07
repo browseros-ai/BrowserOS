@@ -38,7 +38,9 @@ use serde_json::{Value, json};
 use tokio::runtime::Handle;
 use tokio::task;
 
+use crate::browser_calls::{self, BROWSER_GUID};
 use crate::deadline::{Deadline, Stop};
+use crate::debugger;
 use crate::dispatch::Dispatcher;
 use crate::events::{self, CONTEXT_GUID};
 use crate::getters::{self, FrameField};
@@ -166,10 +168,15 @@ fn subscribe(tabs: &Tabs, request: &str) -> Result<(), String> {
     } = serde_json::from_str(request).map_err(|error| format!("bad subscribe request: {error}"))?;
     let needs = events::needs(&guid, &event)
         .ok_or_else(|| format!("Neo does not produce {event:?} events on {guid:?}"))?;
-    let pages = if guid == CONTEXT_GUID {
+    let pages = if guid.starts_with(debugger::DEBUGGER_PREFIX) {
+        // A debugger's event comes from no page.
+        Vec::new()
+    } else if guid == CONTEXT_GUID {
+        // The run's own context's pages: a created context's page is not one of them.
         tabs.attached()
             .into_iter()
             .map(|(entry, _)| entry)
+            .filter(|entry| entry.context.get().is_none())
             .collect()
     } else {
         let (entry, _) = tabs
@@ -311,6 +318,14 @@ enum GetterField {
     ParentFrame,
     ChildFrames,
     IsDetached,
+    /// On the browser: `version()`, as Playwright reports it.
+    Version,
+    /// On the browser: whether the run's CDP connection to it is up.
+    IsConnected,
+    /// On a debugger: the call it holds, `null` while none.
+    PausedDetails,
+    /// On a context: the guid of its debugger.
+    Debugger,
 }
 
 #[derive(Deserialize)]
@@ -336,6 +351,20 @@ struct MatchRequest {
 }
 
 #[derive(Deserialize)]
+enum DevicesField {
+    #[serde(rename = "devices")]
+    Devices,
+}
+
+/// `playwright.devices`: Playwright's device descriptors, the same for every run.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DevicesRequest {
+    #[serde(rename = "field")]
+    _field: DevicesField,
+}
+
+#[derive(Deserialize)]
 enum ParseField {
     #[serde(rename = "parseURL")]
     ParseUrl,
@@ -355,6 +384,7 @@ struct ParseRequest {
 enum GetRequest {
     Object(ObjectRequest),
     Match(MatchRequest),
+    Devices(DevicesRequest),
     Parse(ParseRequest),
 }
 
@@ -392,6 +422,13 @@ impl Getters {
                     getters::matches_url(&request.url, &request.matcher).map(|value| json!(value))
                 });
             }
+            GetRequest::Devices(_) => {
+                return serde_json::from_str(browser_calls::DEVICE_DESCRIPTORS).map_err(|error| {
+                    GetError::Page(PlaywrightError::error(format!(
+                        "neo-runtime: the device descriptors are unreadable: {error}"
+                    )))
+                });
+            }
             GetRequest::Parse(request) => {
                 return serde_json::to_value(url_match::parse_url(&request.url))
                     .map_err(|error| GetError::BadRequest(format!("encoding a URL: {error}")));
@@ -402,6 +439,9 @@ impl Getters {
                 serde_json::to_value(self.tabs.pages().await?)
                     .map_err(|error| PlaywrightError::error(error.to_string()))
             });
+        }
+        if let Some(answer) = self.platform(&request) {
+            return answer;
         }
         if let Some((kind, _, hop)) = HopId::parse(&request.guid) {
             return self.network(&request.guid, kind, &hop, request.field);
@@ -450,8 +490,57 @@ impl Getters {
             GetterField::Name
             | GetterField::ParentFrame
             | GetterField::ChildFrames
-            | GetterField::IsDetached => Err(GetError::BadRequest("not a page getter".to_string())),
+            | GetterField::IsDetached
+            | GetterField::Version
+            | GetterField::IsConnected
+            | GetterField::PausedDetails
+            | GetterField::Debugger => Err(GetError::BadRequest("not a page getter".to_string())),
         }
+    }
+
+    /// The getters of the run's browser, its debuggers and the contexts it created
+    /// (`browser_calls.rs`, `debugger.rs`), or `None` for any other object.
+    fn platform(&self, request: &ObjectRequest) -> Option<Result<Value, GetError>> {
+        if let Some(context) = request.guid.strip_prefix(debugger::DEBUGGER_PREFIX) {
+            return Some(match request.field {
+                GetterField::PausedDetails => Ok(self.tabs.debuggers().paused_details(context)),
+                _ => Err(GetError::BadRequest("not a debugger getter".to_string())),
+            });
+        }
+        if matches!(request.field, GetterField::Debugger) {
+            let context = if request.guid == "context@default" {
+                Some(debugger::DEFAULT_CONTEXT.to_string())
+            } else {
+                self.tabs
+                    .created()
+                    .find(&request.guid)
+                    .map(|context| context.id.clone())
+            };
+            return Some(
+                context
+                    .map(|context| json!(debugger::guid(&context)))
+                    .ok_or_else(|| {
+                        GetError::BadRequest(format!("unknown guid {:?}", request.guid))
+                    }),
+            );
+        }
+        if request.guid == BROWSER_GUID {
+            return Some(match request.field {
+                GetterField::Version => self.wait(browser_calls::version(&self.tabs)),
+                GetterField::IsConnected => Ok(json!(self.tabs.cdp().is_connected())),
+                _ => Err(GetError::BadRequest("not a browser getter".to_string())),
+            });
+        }
+        let context = self.tabs.created().find(&request.guid)?;
+        if !matches!(request.field, GetterField::Pages) {
+            return Some(Err(GetError::BadRequest(
+                "not a context getter".to_string(),
+            )));
+        }
+        Some(self.wait(async {
+            serde_json::to_value(browser_calls::context_pages(&self.tabs, &context).await?)
+                .map_err(|error| PlaywrightError::error(error.to_string()))
+        }))
     }
 
     /// A hop's live client state, read from the network log of the session that recorded it.

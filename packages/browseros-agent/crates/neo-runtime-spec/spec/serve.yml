@@ -13,15 +13,39 @@
 interfaces:
   BrowserContext:
     - newPage
+    # (platform) Closes a context `browser.newContext` created (neo-runtime `browser_calls.rs`);
+    # the run's own context refuses it.
+    - close
+    # (platform) `page.pause()`: Playwright's server handler does nothing itself; the context's
+    # debugger holds the call once it is enabled (neo-runtime `debugger.rs`).
+    - pause
+    # (platform) `selectors.setTestIdAttribute`'s page half: the attribute every page world of the
+    # run hands its injected script (neo-runtime `world.rs` `TestIdAttribute`).
+    - setTestIdAttributeName
+  # (platform) The BrowserOS the run is attached to, `browser@default`: contexts the run creates
+  # and its connected-browser `close` (`browser_calls.rs`). Its initializer is never sent.
+  Browser:
+    - newContext
+    - close
   # A BrowserContext initializer requires these three. Neo never sends one (a run receives its
-  # context at start) and serves no command on them; listing them keeps the type constructible.
+  # context at start); listing them keeps the type constructible.
   APIRequestContext: []
-  Debugger: []
+  # (platform) `context.debugger`: pauses the run's own calls of a context (neo-runtime
+  # `debugger.rs`), `debugger@<context>`.
+  Debugger:
+    - requestPause
+    - resume
+    - next
+    - runTo
   Tracing: []
   Page:
     - close
     - runBeforeUnload
     - bringToFront
+    # (platform) Emulation and GC on the page's own session (neo-runtime `emulation.rs`).
+    - setViewportSize
+    - emulateMedia
+    - requestGC
     # History navigations answer the new document's `Response` as `Frame.goto` does, or `{}`
     # where Playwright's has none: no history entry, a same-document entry, a restored document.
     - reload

@@ -29,7 +29,7 @@ struct Args {
     page: String,
     #[arg(long, default_value_t = 30_000)]
     timeout_ms: u64,
-    /// A file holding the body of an async function of `(page, context)`.
+    /// A file holding the body of an async function of `(page, context, playwright)`.
     script: PathBuf,
 }
 

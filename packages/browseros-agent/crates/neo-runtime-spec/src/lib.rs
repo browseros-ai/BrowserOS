@@ -88,6 +88,10 @@ mod call;
 #[rustfmt::skip]
 pub mod injected;
 #[rustfmt::skip]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Browser.newContext carries Playwright's whole ContextOptions mixin"
+)]
 pub mod serve;
 #[rustfmt::skip]
 mod spec_hash;

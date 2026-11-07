@@ -1,0 +1,63 @@
+<!doctype html>
+<!--
+  The platform parity tests' page (tests/parity/platform.mjs): it reports what the page itself
+  sees of its viewport, screen, media features, locale, storage and garbage collection into
+  #state, so a script reads it with textContent in both engines, without page.evaluate.
+  `?storage=set` writes a cookie and localStorage first.
+-->
+<title>emulation</title>
+<style>
+  body { margin: 0 }
+  #swatch { color: rgb(0, 0, 0) }
+  @media (prefers-color-scheme: dark) { #swatch { color: rgb(255, 255, 255) } }
+</style>
+<p id="swatch">swatch</p>
+<pre id="state"></pre>
+<script>
+  const params = new URLSearchParams(location.search)
+  if (params.get('storage') === 'set') {
+    // biome-ignore lint/suspicious/noDocumentCookie: the isolation case needs a cookie the page wrote
+    document.cookie = 'neo-parity=1; path=/'
+    localStorage.setItem('neo-parity', '1')
+  }
+  const queries = [
+    'print',
+    'screen',
+    '(prefers-color-scheme: dark)',
+    '(prefers-color-scheme: light)',
+    '(prefers-reduced-motion: reduce)',
+    '(forced-colors: active)',
+    '(prefers-contrast: more)',
+    '(max-width: 600px)',
+  ]
+  // Only the reporter's WeakRefs point at `unreachable` once this script's job ends; `kept`
+  // stays reachable from the global.
+  let unreachable = { hello: 'world' }
+  const unreachableRef = new WeakRef(unreachable)
+  unreachable = null
+  globalThis.kept = { hello: 'world' }
+  const keptRef = new WeakRef(globalThis.kept)
+  const report = () => {
+    document.getElementById('state').textContent = JSON.stringify({
+      innerWidth,
+      innerHeight,
+      outerWidth,
+      outerHeight,
+      screen: [screen.width, screen.height],
+      devicePixelRatio,
+      media: Object.fromEntries(queries.map((q) => [q, matchMedia(q).matches])),
+      color: getComputedStyle(document.getElementById('swatch')).color,
+      userAgent: navigator.userAgent,
+      language: navigator.language,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      maxTouchPoints: navigator.maxTouchPoints,
+      cookie: document.cookie,
+      localStorage: localStorage.getItem('neo-parity'),
+      gc: { collected: unreachableRef.deref() === undefined, kept: keptRef.deref() !== undefined },
+    })
+  }
+  report()
+  addEventListener('resize', report)
+  for (const q of queries) matchMedia(q).addEventListener('change', report)
+  setInterval(report, 25)
+</script>

@@ -17,6 +17,7 @@ import type {
   FrameInitializer,
   PageInitializer,
 } from '@browseros/neo-runtime-spec/serve'
+import type { PausedDetails } from './debugger'
 import type { RawEvent } from './events'
 import type { NeoSerializedUrlMatch } from './neo-commands'
 import type { CreatedChain, Timing } from './network'
@@ -83,6 +84,14 @@ export interface GetterReplies {
   parentFrame: CreatedFrame | null
   childFrames: CreatedFrame[]
   isDetached: boolean
+  /** On the browser: its version, as Playwright reports it (`155.0.8318.26`). */
+  version: string
+  /** On the browser: whether the runtime's connection to it is up. */
+  isConnected: boolean
+  /** On a debugger: the call it holds, `null` while none. */
+  pausedDetails: PausedDetails | null
+  /** On a context: its debugger's guid (`debugger@<context>`). */
+  debugger: string
 }
 
 export function get<Field extends keyof GetterReplies>(
@@ -130,6 +139,14 @@ export function parseURL(url: string): ParsedURL | null {
   return JSON.parse(
     __neo_runtime.get(JSON.stringify({ field: 'parseURL', url })),
   )
+}
+
+/**
+ * Playwright's device descriptors, by name: the vendored data neo-runtime embeds
+ * (`neo-sdk/vendor/playwright/isomorphic/deviceDescriptorsSource.json`), read once per run.
+ */
+export function devices(): Record<string, unknown> {
+  return JSON.parse(__neo_runtime.get(JSON.stringify({ field: 'devices' })))
 }
 
 /**

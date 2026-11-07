@@ -75,6 +75,7 @@ function run(): {
     page: 'page@T',
     mainFrame: 'frame@T',
     context: 'context@default',
+    browser: 'browser@default',
     url: 'https://run.test/',
     testIdAttribute: 'data-testid',
     lineOffset: 0,

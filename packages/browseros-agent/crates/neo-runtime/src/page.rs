@@ -74,6 +74,7 @@ use crate::click::{
     Arming, Geometry, MouseButton, MouseClick, NotReady, PageError, PointerInput, PressReport,
     Resolved, Scroll, SelectorFacts, StatesCheck, Tab, Verdict,
 };
+use crate::emulation::PageEmulation;
 use crate::events::{EventHub, Flushes};
 use crate::frame_selector::{self, FrameOwner};
 use crate::frames::{FrameContext, FrameScope, Frames, Host, local_tree};
@@ -86,7 +87,7 @@ use crate::page_events::PageEvents;
 use crate::progress::InputTicket;
 use crate::progress::PlaywrightError;
 use crate::run::PageId;
-use crate::world::{self, ObjectGroup, World};
+use crate::world::{self, ObjectGroup, TestIdAttribute, World};
 
 /// Detaching is best effort. It runs in the background after a run, so this bound only keeps
 /// a hung browser from piling up detach tasks.
@@ -199,6 +200,9 @@ pub(crate) struct PageSession {
     /// `Runtime.enable` and `Log.enable`, sent once a run listens to console messages or page
     /// errors (or reads their history) and kept for the run.
     runtime_enabled: OnceCell<()>,
+    /// What the page emulates for the run: its viewport and media, and its created context's
+    /// options (`emulation.rs`). Dropped with the session, as Chromium drops the overrides.
+    pub(crate) emulation: Arc<PageEmulation>,
 }
 
 /// One call's frame scope over the tab's shared input, navigation and lifetime.
@@ -506,6 +510,7 @@ impl PageSession {
         input: Arc<Mutex<()>>,
         closed: CancellationToken,
         hub: EventHub,
+        test_id: Arc<TestIdAttribute>,
     ) -> Self {
         let events = PageEvents::new(hub, page.as_str(), session.cdp.clone(), session.id.clone());
         let child_events = events.clone();
@@ -513,7 +518,8 @@ impl PageSession {
             session.cdp.clone(),
             session.id.clone(),
             page.as_str().to_string(),
-        );
+        )
+        .with_test_id(test_id);
         let session = Arc::new(session);
         let world = Arc::new(world);
         let frames = Arc::new(Frames::new(
@@ -523,10 +529,16 @@ impl PageSession {
             tasks.clone(),
         ));
         // An out-of-process frame's console is this tab's: it turns on when the frame's session
-        // is attached, if the run wants the tab's console by then.
+        // is attached, if the run wants the tab's console by then. Its emulation is the tab's too.
+        let emulation = Arc::new(PageEmulation::default());
+        let child_emulation = Arc::clone(&emulation);
         frames.on_child_host(Arc::new(move |host| {
             let events = child_events.clone();
-            Box::pin(async move { events.child_attached(&host).await })
+            let emulation = Arc::clone(&child_emulation);
+            Box::pin(async move {
+                events.child_attached(&host).await;
+                emulation.child_attached(&host).await;
+            })
         }));
         let (state_updates, state) = watch::channel(PageState::default());
         let (navigations, _) = broadcast::channel(4096);
@@ -549,11 +561,17 @@ impl PageSession {
             network_enabled: OnceCell::new(),
             events,
             runtime_enabled: OnceCell::new(),
+            emulation,
         }
     }
 
     pub(crate) fn session_id(&self) -> &SessionId {
         &self.session.id
+    }
+
+    /// The browser connection the session lives on, for commands to its child sessions.
+    pub(crate) fn cdp(&self) -> &CdpClient {
+        &self.session.cdp
     }
 
     pub(crate) fn closed(&self) -> CancellationToken {
@@ -3552,6 +3570,7 @@ mod tests {
             Arc::new(Mutex::new(())),
             CancellationToken::new(),
             EventHub::default(),
+            Arc::default(),
         ));
         let tab = FrameTab {
             page: Arc::clone(&page),
