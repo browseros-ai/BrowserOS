@@ -18,20 +18,29 @@
 //!   waits 0,1000,2000,4000,8000…  (never capped by the timeout; the last repeats)
 //!   │ prepare → glue ariaSnapshot {selector: 'body,frameset', strict: false, mode, depth, boxes}
 //!   │   no body yet, or NotConnected → poll again; Threw or Contract → Error; Closed → closed
+//!   ├ stitch: for each rendered iframe {ref: eN, depth}, concurrently, and again inside each
+//!   │   glue ariaSnapshot {selector: '<hops>aria-ref=eN >> internal:control=enter-frame >>
+//!   │     body,frameset', strict: false, depth: depth ? depth - iframe depth - 1 : none}
+//!   │   NotConnected → poll again with the same waits; nothing matched, Threw, Contract or the
+//!   │     call's own timeout → the iframe node stays as the page gave it; Closed → closed
+//!   │   nodes go under the iframe node (its text dropped), their refs prefixed f<N>
 //!   └ aria_yaml::render(nodes) → {snapshot}
 //! ```
 //!
 //! The seam is two traits of their own, [`SelectorTab`] and [`ReadTab`], so the reads never grow
-//! click's `Tab`; `Arc<PageSession>` implements both at the bottom of this file, over click's own
-//! `prepare` and `describe` and the main frame's utility world. [`wait_for_function_on_selector`]
+//! click's `Tab`; `FrameTab` implements both at the bottom of this file, over click's own
+//! `prepare` and `describe` and the call frame's utility world. [`wait_for_function_on_selector`]
 //! takes the page call as a closure shared by `textContent`, `innerText` and `getAttribute`.
 //! The tests drive both loops against a scripted tab under paused time.
 //!
-//! An `ai` snapshot also records its refs in the document's injected script, so a later
-//! `aria-ref=eN` selector (any run's, since the utility world is per document) resolves the
-//! element while it stays connected, until the next snapshot or a cross-document commit. Neo
-//! serves the main frame only: an iframe's node renders as the page gave it, without the iframe's
-//! document, which is what Playwright prints when it cannot read that document.
+//! An `ai` snapshot also records its refs in each document's injected script, so a later
+//! `aria-ref=` selector (any run's, since the utility world is per document) resolves the
+//! element while it stays connected, until that document's next snapshot or a cross-document
+//! commit. A ref inside an iframe is the path to it: `- iframe [ref=e7]:` holds
+//! `- textbox [ref=f7e3]`, and a frame inside that frame's `- iframe [ref=f7e2]` holds
+//! `[ref=f7f2e1]`; `frame_selector::split` turns one back into hops from the main frame. Playwright
+//! numbers its frames instead (`f1e3`), which a later run could not rebuild. The `default` mode
+//! gives no node a ref, so, as in Playwright, its iframe nodes keep only what the page gave them.
 //!
 //! Neo-only: a lone surrogate (a truncated emoji) in any page call's answer or thrown message
 //! reads as U+FFFD (`neo-runtime-injected/src/well-formed.ts`); Rust strings are UTF-8, and a CDP
@@ -42,12 +51,15 @@
 //! the call's timeout (on BrowserOS neo, 30 nested lists snapshot and 31 time out; GitHub, Hacker
 //! News, Wikipedia and MDN pages measured 11 to 16 levels).
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::time::Duration;
 
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use neo_runtime_spec::injected::{
-    AriaFrameSnapshot, AriaSnapshotMode, AttributeMatch, InjectedAriaSnapshotParams,
-    InjectedGetAttributeParams, InjectedInnerTextParams, InjectedTextContentParams, TextMatch,
+    AriaChild, AriaFrameSnapshot, AriaIframe, AriaNode, AriaRole, AriaSnapshotMode, AttributeMatch,
+    InjectedAriaSnapshotParams, InjectedGetAttributeParams, InjectedInnerTextParams,
+    InjectedTextContentParams, TextMatch,
 };
 use neo_runtime_spec::serve::{
     FrameAriaSnapshotParams, FrameAriaSnapshotParamsMode, FrameAriaSnapshotResult,
@@ -59,11 +71,15 @@ use crate::aria_yaml;
 use crate::click::{self, LoopAWaits, PageError, SelectorFacts};
 use crate::frame_selector;
 use crate::page::FrameTab;
-use crate::progress::{CallError, PlaywrightError, Progress};
+use crate::progress::{CallError, ErrorName, PlaywrightError, Progress};
 
 /// The selector Playwright snapshots a frame's document by when the caller gave none
 /// (`page.ts` `ariaSnapshotJSONForFrame`): a `<frameset>` document has no `<body>`.
 const FRAME_ROOT: &str = "body,frameset";
+
+/// What follows an iframe's selector to continue inside its document (Playwright's
+/// `frameRootSelector` is `aria-ref=${ref} >> internal:control=enter-frame >> body,frameset`).
+const FRAME_HOP: &str = " >> internal:control=enter-frame >> ";
 
 /// The waits before each snapshot attempt: Playwright's `[1000, 2000, 4000, 8000]` after an
 /// immediate first try, the last repeating, and never capped by the call's timeout.
@@ -355,13 +371,26 @@ where
     Ok(Some(matched.value))
 }
 
-/// Serves `Frame.ariaSnapshot` without a selector: `{snapshot}`, the main frame's document as
-/// Playwright's YAML.
+/// Serves `Frame.ariaSnapshot` without a selector: `{snapshot}`, the frame's document with every
+/// rendered iframe's document stitched under its `iframe` node, as Playwright's YAML.
 pub(crate) async fn aria_snapshot<T: ReadTab>(
     tab: &T,
     options: &SnapshotOptions,
     progress: &Progress,
 ) -> Result<FrameAriaSnapshotResult, CallError> {
+    let root = snapshot_root(tab, options, progress).await?;
+    let nodes = stitch(tab, options, progress, root).await?;
+    let snapshot = aria_yaml::render(&nodes)
+        .map_err(|error| PlaywrightError::error(format!("neo-runtime: {error}")))?;
+    Ok(FrameAriaSnapshotResult { snapshot })
+}
+
+/// The call's own document, polled until it has a body.
+async fn snapshot_root<T: ReadTab>(
+    tab: &T,
+    options: &SnapshotOptions,
+    progress: &Progress,
+) -> Result<AriaFrameSnapshot, CallError> {
     // Non-strict: a document of nested framesets has several `frameset` elements.
     let params = InjectedAriaSnapshotParams {
         selector: FRAME_ROOT.to_string(),
@@ -378,11 +407,7 @@ pub(crate) async fn aria_snapshot<T: ReadTab>(
             progress.wait(Duration::from_millis(wait)).await?;
         }
         match snapshot_once(tab, &params, progress).await {
-            Ok(Some(snapshot)) => {
-                let snapshot = aria_yaml::render(&snapshot.nodes)
-                    .map_err(|error| PlaywrightError::error(format!("neo-runtime: {error}")))?;
-                return Ok(FrameAriaSnapshotResult { snapshot });
-            }
+            Ok(Some(snapshot)) => return Ok(snapshot),
             Ok(None) | Err(Stop::Again) => {}
             Err(Stop::End(error)) => return Err(error),
         }
@@ -397,6 +422,218 @@ async fn snapshot_once<T: ReadTab>(
 ) -> Result<Option<AriaFrameSnapshot>, Stop> {
     progress.race(tab.prepare()).await??;
     Ok(progress.race(tab.aria_snapshot(params)).await??)
+}
+
+/// One document of a stitched snapshot, in the order its snapshot answered: the root first, a
+/// document always after the one holding its iframe.
+struct Document {
+    nodes: Vec<AriaNode>,
+    /// Where it goes; `None` for the root.
+    slot: Option<Slot>,
+    /// The documents of this one's iframes, prefixed and ready, by their iframe node's ref.
+    stitched: HashMap<String, Vec<AriaNode>>,
+}
+
+/// Where an iframe's document goes: under the iframe node `iframe` (its ref, `eN`) of document
+/// `owner`, an index into the stitched documents, with its refs prefixed by `prefix` (`fN`).
+struct Slot {
+    owner: usize,
+    iframe: String,
+    prefix: String,
+}
+
+/// One iframe's document still to snapshot.
+struct Pending {
+    slot: Slot,
+    /// The selector of the iframe element from the call's frame: its owner's hops, then its own
+    /// ref (`aria-ref=e7 >> internal:control=enter-frame >> aria-ref=e2` one document down).
+    hops: String,
+    /// Playwright's `childDepth` for this document.
+    depth: Option<i64>,
+}
+
+/// Playwright's `ariaSnapshotJSONForFrame` past the root snapshot: snapshots every rendered
+/// iframe's document through the iframe's ref (`aria-ref=eN >> internal:control=enter-frame >>
+/// body,frameset`, resolved by the tab's selector seam like any other selector, so a hop into a
+/// frame is the same hop a locator takes), then each of those documents' iframes, and nests each
+/// document under its iframe node. A document's nodes take its iframe's path as a ref prefix
+/// (`f7` for `- iframe [ref=e7]`, `f7f2` one level deeper), the form `frame_selector::split`
+/// reads back into those hops, from the main frame, in any later run.
+///
+/// Children are snapshotted concurrently, each as soon as the document holding its iframe has
+/// answered, from a queue rather than by recursion, so no frame tree deepens the stack. A child
+/// that cannot be read leaves its iframe node as the page gave it; only the tab closing or the
+/// run ending ends the call.
+async fn stitch<T: ReadTab>(
+    tab: &T,
+    options: &SnapshotOptions,
+    progress: &Progress,
+    root: AriaFrameSnapshot,
+) -> Result<Vec<AriaNode>, CallError> {
+    let mut documents = vec![Document {
+        nodes: root.nodes,
+        slot: None,
+        stitched: HashMap::new(),
+    }];
+    let mut snapshots = FuturesUnordered::new();
+    for child in children(0, "", options.depth, &root.iframes) {
+        snapshots.push(snapshot_child(tab, options, progress, child));
+    }
+    while let Some((child, snapshot)) = snapshots.next().await {
+        // Playwright stitches a document only when it has nodes (`childSnapshot?.length`).
+        let Some(snapshot) = snapshot?.filter(|snapshot| !snapshot.nodes.is_empty()) else {
+            continue;
+        };
+        let index = documents.len();
+        let hops = format!("{}{FRAME_HOP}", child.hops);
+        for grandchild in children(index, &hops, child.depth, &snapshot.iframes) {
+            snapshots.push(snapshot_child(tab, options, progress, grandchild));
+        }
+        documents.push(Document {
+            nodes: snapshot.nodes,
+            slot: Some(child.slot),
+            stitched: HashMap::new(),
+        });
+    }
+    // Every document comes after the one holding its iframe, so walking back from the last
+    // finishes each document before its own owner takes it.
+    while let Some(mut document) = documents.pop() {
+        merge_iframes(&mut document.nodes, &mut document.stitched);
+        let Some(slot) = document.slot else {
+            return Ok(document.nodes);
+        };
+        prefix_refs(&mut document.nodes, &slot.prefix);
+        if let Some(owner) = documents.get_mut(slot.owner) {
+            owner.stitched.insert(slot.iframe, document.nodes);
+        }
+    }
+    Err(PlaywrightError::error("neo-runtime: the stitched snapshot lost its root").into())
+}
+
+/// The documents to snapshot for `iframes`, the rendered iframe nodes of document `owner`
+/// reached through `hops`. Playwright's `childDepth`: a depth limit that is set and not zero,
+/// less the iframe's depth and its own level; JS's falsy `0` means no limit.
+fn children(owner: usize, hops: &str, depth: Option<i64>, iframes: &[AriaIframe]) -> Vec<Pending> {
+    iframes
+        .iter()
+        .filter_map(|iframe| {
+            // A ref outside `eN` cannot become a path ref: its document could never be acted on.
+            let number = iframe.r#ref.strip_prefix('e').filter(|number| {
+                !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
+            })?;
+            Some(Pending {
+                slot: Slot {
+                    owner,
+                    iframe: iframe.r#ref.clone(),
+                    prefix: format!("f{number}"),
+                },
+                hops: format!("{hops}aria-ref={}", iframe.r#ref),
+                depth: depth
+                    .filter(|depth| *depth != 0)
+                    .map(|depth| depth.saturating_sub(iframe.depth).saturating_sub(1)),
+            })
+        })
+        .collect()
+}
+
+/// One iframe's document, as Playwright's nested `ariaSnapshotJSONForFrame` reads it with a
+/// selector: polled with the root's waits while its world is gone (a frame mid-navigation), and
+/// `None` once nothing matches, the page throws or answers outside the spec, or the call runs
+/// out of time, all of which leave the iframe node as the page gave it. Playwright catches every
+/// child error; Neo still ends the call when the tab closes or the run ends, as every call does.
+async fn snapshot_child<T: ReadTab>(
+    tab: &T,
+    options: &SnapshotOptions,
+    progress: &Progress,
+    child: Pending,
+) -> (Pending, Result<Option<AriaFrameSnapshot>, CallError>) {
+    // Non-strict: a frameset document has several `frameset` elements.
+    let params = InjectedAriaSnapshotParams {
+        selector: format!("{}{FRAME_HOP}{FRAME_ROOT}", child.hops),
+        strict: false,
+        mode: options.mode,
+        depth: child.depth,
+        boxes: options.boxes,
+    };
+    let mut attempt: usize = 0;
+    let snapshot = loop {
+        let wait = SNAPSHOT_WAITS_MS[attempt.min(SNAPSHOT_WAITS_MS.len() - 1)];
+        attempt = attempt.saturating_add(1);
+        if wait > 0
+            && let Err(error) = progress.wait(Duration::from_millis(wait)).await
+        {
+            break out_of_time(error);
+        }
+        match progress.race(tab.aria_snapshot(&params)).await {
+            Ok(Ok(snapshot)) => break Ok(snapshot),
+            Ok(Err(PageError::NotConnected)) => {}
+            Ok(Err(PageError::Threw(_) | PageError::Contract(_))) => break Ok(None),
+            Ok(Err(PageError::Closed)) => break Err(PlaywrightError::target_closed().into()),
+            Err(error) => break out_of_time(error),
+        }
+    };
+    (child, snapshot)
+}
+
+/// A child read stopped by the call's own deadline gives up quietly, so the call still answers
+/// with every document it did read, as Playwright's does; any other stop ends the call.
+fn out_of_time(error: CallError) -> Result<Option<AriaFrameSnapshot>, CallError> {
+    match error {
+        CallError::Playwright(PlaywrightError {
+            name: ErrorName::TimeoutError,
+            ..
+        }) => Ok(None),
+        error => Err(error),
+    }
+}
+
+/// Playwright's `mergeIframeChildren`: each `iframe` node whose ref has a stitched document takes
+/// that document as its children, dropping the node's own text (an iframe's fallback content).
+/// Never looks inside an iframe node, so only this document's own iframes are matched.
+fn merge_iframes(nodes: &mut [AriaNode], stitched: &mut HashMap<String, Vec<AriaNode>>) {
+    if stitched.is_empty() {
+        return;
+    }
+    let mut stack: Vec<&mut AriaNode> = nodes.iter_mut().collect();
+    while let Some(node) = stack.pop() {
+        if node.role == AriaRole::Iframe
+            && let Some(aria_ref) = &node.r#ref
+        {
+            if let Some(document) = stitched.remove(aria_ref) {
+                node.text = None;
+                node.children = Some(
+                    document
+                        .into_iter()
+                        .map(|child| AriaChild::Node(Box::new(child)))
+                        .collect(),
+                );
+            }
+            continue;
+        }
+        stack.extend(child_nodes(node));
+    }
+}
+
+/// Prefixes every ref in `nodes` and below.
+fn prefix_refs(nodes: &mut [AriaNode], prefix: &str) {
+    let mut stack: Vec<&mut AriaNode> = nodes.iter_mut().collect();
+    while let Some(node) = stack.pop() {
+        if let Some(aria_ref) = &mut node.r#ref {
+            aria_ref.insert_str(0, prefix);
+        }
+        stack.extend(child_nodes(node));
+    }
+}
+
+/// A node's child nodes, skipping its text runs.
+fn child_nodes(node: &mut AriaNode) -> impl Iterator<Item = &mut AriaNode> {
+    node.children
+        .iter_mut()
+        .flatten()
+        .filter_map(|child| match child {
+            AriaChild::Node(node) => Some(node.as_mut()),
+            AriaChild::Text(_) => None,
+        })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -484,11 +721,21 @@ impl ReadTab for FrameTab {
         Ok(read.matched)
     }
 
+    /// Through `locate`, like the other reads: an iframe's document is reached by the hops in
+    /// front of `body,frameset` (`aria-ref=e7 >> internal:control=enter-frame >> …`).
     async fn aria_snapshot(
         &self,
         params: &InjectedAriaSnapshotParams,
     ) -> Result<Option<AriaFrameSnapshot>, PageError> {
-        Ok(self.context().await?.call(None, params).await?.snapshot)
+        let Some(located) = frame_selector::locate(self, &params.selector, params.strict).await?
+        else {
+            return Ok(None);
+        };
+        let params = InjectedAriaSnapshotParams {
+            selector: located.selector,
+            ..params.clone()
+        };
+        Ok(located.frame.call(None, &params).await?.snapshot)
     }
 }
 
@@ -501,13 +748,12 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
-    use neo_runtime_spec::injected::{AriaChild, AriaNode, AriaRole, AttributeMatch};
     use neo_runtime_spec::serve::{FrameGetAttributeResult, FrameInnerTextResult};
+    use tokio::sync::Barrier;
     use tokio::time;
     use tokio::time::Instant;
 
     use super::*;
-    use crate::progress::ErrorName;
 
     const ROUND_TRIP: Duration = Duration::from_millis(1);
     const SELECTOR: &str = "internal:role=listitem";
@@ -553,7 +799,13 @@ mod tests {
         inner: Step<Result<Option<TextMatch>, PageError>>,
         attribute: Step<Result<Option<AttributeMatch>, PageError>>,
         read_params: Mutex<Vec<(String, bool, Option<String>)>>,
+        /// The call frame's document, `body,frameset`.
         snapshot: Step<Result<Option<AriaFrameSnapshot>, PageError>>,
+        /// Each iframe's document, by the full selector that reaches it.
+        frames: HashMap<String, Step<Result<Option<AriaFrameSnapshot>, PageError>>>,
+        /// Frame selectors whose snapshots each wait, before answering, until all of them have
+        /// started: they complete only when they are read concurrently.
+        meet: Option<(Vec<String>, Barrier)>,
         calls: Mutex<Vec<String>>,
         snapshot_params: Mutex<Vec<InjectedAriaSnapshotParams>>,
     }
@@ -575,9 +827,35 @@ mod tests {
                 attribute: Step::always(ROUND_TRIP, Ok(Some(attribute(Some("fruit"))))),
                 read_params: Mutex::default(),
                 snapshot: Step::always(ROUND_TRIP, Ok(Some(tree()))),
+                frames: HashMap::new(),
+                meet: None,
                 calls: Mutex::default(),
                 snapshot_params: Mutex::default(),
             }
+        }
+
+        /// A tab whose page is `root`, with `frames`' documents behind their selectors.
+        fn framed(
+            root: AriaFrameSnapshot,
+            frames: impl IntoIterator<Item = (String, Result<Option<AriaFrameSnapshot>, PageError>)>,
+        ) -> Self {
+            let mut tab = Self::ready();
+            tab.snapshot = Step::always(ROUND_TRIP, Ok(Some(root)));
+            tab.frames = frames
+                .into_iter()
+                .map(|(selector, answer)| (selector, Step::always(ROUND_TRIP, answer)))
+                .collect();
+            tab
+        }
+
+        /// The selectors of every snapshot taken, in order.
+        fn snapshot_selectors(&self) -> Vec<String> {
+            self.snapshot_params
+                .lock()
+                .expect("params")
+                .iter()
+                .map(|params| params.selector.clone())
+                .collect()
         }
 
         fn record(&self, call: &str) {
@@ -651,7 +929,19 @@ mod tests {
                 .lock()
                 .expect("params")
                 .push(params.clone());
-            self.snapshot.answer().await
+            if params.selector == FRAME_ROOT {
+                return self.snapshot.answer().await;
+            }
+            if let Some((selectors, barrier)) = &self.meet
+                && selectors.contains(&params.selector)
+            {
+                barrier.wait().await;
+            }
+            self.frames
+                .get(&params.selector)
+                .unwrap_or_else(|| panic!("no document scripted for {}", params.selector))
+                .answer()
+                .await
         }
     }
 
@@ -1175,6 +1465,386 @@ mod tests {
             snapshot(&tab, 30_000.0).await,
             Err(PlaywrightError::target_closed().into())
         );
+    }
+
+    /// A node with a ref, and `children` when there are any.
+    fn element(
+        role: AriaRole,
+        name: Option<&str>,
+        aria_ref: &str,
+        children: Vec<AriaNode>,
+    ) -> AriaNode {
+        AriaNode {
+            name: name.map(str::to_string),
+            r#ref: Some(aria_ref.to_string()),
+            children: (!children.is_empty()).then(|| {
+                children
+                    .into_iter()
+                    .map(|child| AriaChild::Node(Box::new(child)))
+                    .collect()
+            }),
+            ..node(role)
+        }
+    }
+
+    /// An `iframe` node as the page gives it, with its fallback text when it has one.
+    fn iframe_node(aria_ref: &str, fallback: Option<&str>) -> AriaNode {
+        AriaNode {
+            r#ref: Some(aria_ref.to_string()),
+            text: fallback.map(str::to_string),
+            ..node(AriaRole::Iframe)
+        }
+    }
+
+    /// One document's answer: its nodes and its rendered iframes as `(ref, depth)`.
+    fn document(nodes: Vec<AriaNode>, iframes: &[(&str, i64)]) -> AriaFrameSnapshot {
+        AriaFrameSnapshot {
+            nodes,
+            iframes: iframes
+                .iter()
+                .map(|(aria_ref, depth)| AriaIframe {
+                    r#ref: (*aria_ref).to_string(),
+                    depth: *depth,
+                })
+                .collect(),
+        }
+    }
+
+    /// The selector of the document behind `path`, one iframe ref per level from the call's
+    /// frame.
+    fn behind(path: &[&str]) -> String {
+        path.iter()
+            .map(|aria_ref| format!("aria-ref={aria_ref}"))
+            .chain(["body,frameset".to_string()])
+            .collect::<Vec<_>>()
+            .join(" >> internal:control=enter-frame >> ")
+    }
+
+    const FALLBACK: &str = "Your browser does not support frames";
+
+    /// `#same`'s document.
+    fn same_document() -> AriaFrameSnapshot {
+        document(
+            vec![element(AriaRole::Button, Some("Same"), "e2", Vec::new())],
+            &[],
+        )
+    }
+
+    /// The page every stitching test reads: a heading, a frame with fallback text (`e3`), and a
+    /// frame (`e4`) whose document holds a frame of its own (its `e3`).
+    fn framed_page() -> FakeReads {
+        let root = document(
+            vec![element(
+                AriaRole::Generic,
+                None,
+                "e1",
+                vec![
+                    AriaNode {
+                        level: Some(1),
+                        ..element(AriaRole::Heading, Some("Top"), "e2", Vec::new())
+                    },
+                    iframe_node("e3", Some(FALLBACK)),
+                    iframe_node("e4", None),
+                ],
+            )],
+            &[("e3", 1), ("e4", 1)],
+        );
+        let cross = document(
+            vec![element(
+                AriaRole::Generic,
+                None,
+                "e1",
+                vec![
+                    element(AriaRole::Textbox, Some("Email"), "e2", Vec::new()),
+                    iframe_node("e3", None),
+                ],
+            )],
+            &[("e3", 1)],
+        );
+        let leaf = document(
+            vec![element(AriaRole::Button, Some("Leaf"), "e2", Vec::new())],
+            &[],
+        );
+        FakeReads::framed(
+            root,
+            [
+                (behind(&["e3"]), Ok(Some(same_document()))),
+                (behind(&["e4"]), Ok(Some(cross))),
+                (behind(&["e4", "e3"]), Ok(Some(leaf))),
+            ],
+        )
+    }
+
+    /// [`framed_page`] with every document stitched in.
+    const FRAMED_YAML: &str = "- generic [ref=e1]:
+  - heading \"Top\" [level=1] [ref=e2]
+  - iframe [ref=e3]:
+    - button \"Same\" [ref=f3e2]
+  - iframe [ref=e4]:
+    - generic [ref=f4e1]:
+      - textbox \"Email\" [ref=f4e2]
+      - iframe [ref=f4e3]:
+        - button \"Leaf\" [ref=f4f3e2]";
+
+    /// [`FRAMED_YAML`] with `e3` as the page gave it.
+    const FRAMED_YAML_WITHOUT_SAME: &str = "- generic [ref=e1]:
+  - heading \"Top\" [level=1] [ref=e2]
+  - iframe [ref=e3]: Your browser does not support frames
+  - iframe [ref=e4]:
+    - generic [ref=f4e1]:
+      - textbox \"Email\" [ref=f4e2]
+      - iframe [ref=f4e3]:
+        - button \"Leaf\" [ref=f4f3e2]";
+
+    fn yaml(snapshot: &str) -> FrameAriaSnapshotResult {
+        FrameAriaSnapshotResult {
+            snapshot: snapshot.to_string(),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_an_ai_snapshot_stitches_each_frames_document_under_its_iframe() {
+        let tab = framed_page();
+        assert_eq!(snapshot(&tab, 30_000.0).await, Ok(yaml(FRAMED_YAML)));
+
+        let selectors = tab.snapshot_selectors();
+        assert_eq!(
+            selectors[0], "body,frameset",
+            "the call's own document first"
+        );
+        let mut frames = selectors[1..].to_vec();
+        frames.sort();
+        assert_eq!(
+            frames,
+            [
+                "aria-ref=e3 >> internal:control=enter-frame >> body,frameset",
+                "aria-ref=e4 >> internal:control=enter-frame >> aria-ref=e3 >> \
+                 internal:control=enter-frame >> body,frameset",
+                "aria-ref=e4 >> internal:control=enter-frame >> body,frameset",
+            ],
+            "each frame is entered through its iframe's ref, once"
+        );
+        let nested = selectors
+            .iter()
+            .position(|selector| *selector == behind(&["e4", "e3"]));
+        let holder = selectors
+            .iter()
+            .position(|selector| *selector == behind(&["e4"]));
+        assert!(
+            nested > holder,
+            "a frame is entered only once the document holding its iframe has answered: \
+             {selectors:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_every_frame_gets_the_callers_mode_and_boxes_and_its_own_depth() {
+        let tab = framed_page();
+        let options = SnapshotOptions {
+            mode: AriaSnapshotMode::Ai,
+            depth: Some(4),
+            boxes: Some(true),
+        };
+        let progress = Progress::for_test(30_000.0);
+        assert!(aria_snapshot(&tab, &options, &progress).await.is_ok());
+
+        let mut params = tab.snapshot_params.lock().expect("params").clone();
+        params.sort_by(|a, b| a.selector.cmp(&b.selector));
+        let seen: Vec<_> = params
+            .iter()
+            .map(|params| (params.selector.as_str(), params.depth))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (behind(&["e3"]).as_str(), Some(2)),
+                (behind(&["e4", "e3"]).as_str(), Some(0)),
+                (behind(&["e4"]).as_str(), Some(2)),
+                ("body,frameset", Some(4)),
+            ],
+            "Playwright's childDepth: the parent's depth less the iframe's depth and one"
+        );
+        assert!(
+            params.iter().all(|params| !params.strict
+                && params.mode == AriaSnapshotMode::Ai
+                && params.boxes == Some(true)),
+            "{params:?}"
+        );
+    }
+
+    #[test]
+    fn tests_that_a_frames_depth_follows_playwrights_child_depth() {
+        let depth_of = |depth: Option<i64>, iframe_depth: i64| {
+            let iframe = AriaIframe {
+                r#ref: "e1".to_string(),
+                depth: iframe_depth,
+            };
+            children(0, "", depth, &[iframe])[0].depth
+        };
+        assert_eq!(depth_of(None, 2), None, "no limit stays none");
+        assert_eq!(depth_of(Some(5), 2), Some(2));
+        assert_eq!(
+            depth_of(Some(3), 2),
+            Some(0),
+            "0 reaches the page, whose renderer reads it as no limit"
+        );
+        assert_eq!(
+            depth_of(Some(2), 2),
+            Some(-1),
+            "an iframe at the limit still has its document read, without a limit, as in \
+             Playwright"
+        );
+        assert_eq!(depth_of(Some(0), 2), None, "JS's falsy 0 is no limit");
+        assert_eq!(
+            depth_of(Some(i64::MIN), 2),
+            Some(i64::MIN),
+            "saturates, never overflows"
+        );
+    }
+
+    #[test]
+    fn tests_that_only_document_local_refs_are_entered() {
+        let iframes: Vec<AriaIframe> = ["e3", "f1e2", "e", "e3x", "x3", "e12"]
+            .into_iter()
+            .map(|aria_ref| AriaIframe {
+                r#ref: aria_ref.to_string(),
+                depth: 0,
+            })
+            .collect();
+        let entered: Vec<String> = children(0, "", None, &iframes)
+            .into_iter()
+            .map(|child| child.hops)
+            .collect();
+        assert_eq!(
+            entered,
+            ["aria-ref=e3", "aria-ref=e12"],
+            "a ref a path ref cannot name is left as the page gave it"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_frame_that_cannot_be_read_leaves_its_iframe_as_the_page_gave_it() {
+        for failure in [
+            Ok(None),
+            Ok(Some(document(Vec::new(), &[]))),
+            Err(PageError::Threw(
+                "Error: the frame's page threw".to_string(),
+            )),
+            Err(PageError::Contract("ariaSnapshot answered 5".to_string())),
+        ] {
+            let mut tab = framed_page();
+            tab.frames
+                .insert(behind(&["e3"]), Step::always(ROUND_TRIP, failure.clone()));
+            assert_eq!(
+                snapshot(&tab, 30_000.0).await,
+                Ok(yaml(FRAMED_YAML_WITHOUT_SAME)),
+                "{failure:?}: its fallback text stays, the other frames are stitched"
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_frame_that_cannot_be_read_hides_the_frames_inside_it() {
+        let mut tab = framed_page();
+        tab.frames.insert(
+            behind(&["e4"]),
+            Step::always(ROUND_TRIP, Err(PageError::Threw("Error: no".to_string()))),
+        );
+        assert_eq!(
+            snapshot(&tab, 30_000.0).await,
+            Ok(yaml(
+                "- generic [ref=e1]:
+  - heading \"Top\" [level=1] [ref=e2]
+  - iframe [ref=e3]:
+    - button \"Same\" [ref=f3e2]
+  - iframe [ref=e4]"
+            ))
+        );
+        assert!(
+            !tab.snapshot_selectors().contains(&behind(&["e4", "e3"])),
+            "nothing is read through a frame that was not read"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_frame_whose_document_went_away_is_read_again() {
+        let mut tab = framed_page();
+        tab.frames.insert(
+            behind(&["e3"]),
+            Step::new(
+                ROUND_TRIP,
+                [Err(PageError::NotConnected), Ok(Some(same_document()))],
+            ),
+        );
+        assert_eq!(snapshot(&tab, 30_000.0).await, Ok(yaml(FRAMED_YAML)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_frame_still_gone_at_the_timeout_is_left_out_and_the_rest_answers() {
+        let mut tab = framed_page();
+        tab.frames.insert(
+            behind(&["e3"]),
+            Step::always(ROUND_TRIP, Err(PageError::NotConnected)),
+        );
+        assert_eq!(
+            snapshot(&tab, 5_000.0).await,
+            Ok(yaml(FRAMED_YAML_WITHOUT_SAME)),
+            "Playwright answers with the frames it read when one keeps failing to the timeout"
+        );
+        let polls = tab
+            .snapshot_selectors()
+            .iter()
+            .filter(|selector| **selector == behind(&["e3"]))
+            .count();
+        assert!(polls > 1, "the gone frame was polled");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_the_tab_closing_while_a_frame_is_read_ends_the_call() {
+        let mut tab = framed_page();
+        tab.frames.insert(
+            behind(&["e4", "e3"]),
+            Step::always(ROUND_TRIP, Err(PageError::Closed)),
+        );
+        assert_eq!(
+            snapshot(&tab, 30_000.0).await,
+            Err(PlaywrightError::target_closed().into())
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_sibling_frames_are_read_concurrently() {
+        let mut tab = framed_page();
+        // Each sibling's read waits until both have started: read one after the other, the
+        // first would wait until the call's timeout and neither would be stitched.
+        tab.meet = Some((vec![behind(&["e3"]), behind(&["e4"])], Barrier::new(2)));
+        assert_eq!(snapshot(&tab, 30_000.0).await, Ok(yaml(FRAMED_YAML)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_default_snapshot_has_no_refs_to_enter_so_its_iframes_render_as_given() {
+        let mut tab = FakeReads::ready();
+        // The glue lists no iframes in the default mode: Playwright gives no node a ref there.
+        tab.snapshot = Step::always(
+            ROUND_TRIP,
+            Ok(Some(document(
+                vec![AriaNode {
+                    text: Some(FALLBACK.to_string()),
+                    ..node(AriaRole::Iframe)
+                }],
+                &[],
+            ))),
+        );
+        let options = SnapshotOptions {
+            mode: AriaSnapshotMode::Default,
+            depth: None,
+            boxes: None,
+        };
+        assert_eq!(
+            aria_snapshot(&tab, &options, &Progress::for_test(30_000.0)).await,
+            Ok(yaml("- iframe: Your browser does not support frames"))
+        );
+        assert_eq!(tab.snapshot_selectors(), ["body,frameset"]);
     }
 
     #[test]
