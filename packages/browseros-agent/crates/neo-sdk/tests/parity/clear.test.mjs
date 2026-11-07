@@ -20,7 +20,7 @@ test('clear returns undefined and empties editable targets', {
       if (voids.length !== 3 || !voids.every(Boolean)) throw new Error('clear must return undefined')
       let invalid = 'resolved'
       try { await page.locator('#text').clear({ force: 'yes' }) } catch (error) { invalid = errorCategory(error) }
-      if (invalid !== 'error') throw new Error('invalid clear force must reject')
+      if (invalid !== 'Error') throw new Error('invalid clear force must reject')
       return { voids, invalid }
     `,
     probe: 'window.__facts()',

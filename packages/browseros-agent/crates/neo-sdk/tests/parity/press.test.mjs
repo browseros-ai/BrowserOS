@@ -34,10 +34,10 @@ test('press returns undefined and types through ordinary key events', {
           invalid.push({ category: errorCategory(error), unknownKey: /Unknown key/.test(error.message) })
         }
       }
-      if (invalid.length !== 3 || !invalid.every(result => result.category === 'error')) throw new Error('invalid keys must reject')
+      if (invalid.length !== 3 || !invalid.every(result => result.category === 'Error')) throw new Error('invalid keys must reject')
       let timeout = 'resolved'
       try { await page.locator('#missing').press('Enter', {timeout:500}) } catch (error) { timeout = errorCategory(error) }
-      if (timeout !== 'timeout') throw new Error('missing press must time out')
+      if (timeout !== 'TimeoutError') throw new Error('missing press must time out')
       return { voids, invalid, timeout }
     `,
     probe: 'window.__facts()',

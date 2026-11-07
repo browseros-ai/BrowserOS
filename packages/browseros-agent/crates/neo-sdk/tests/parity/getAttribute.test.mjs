@@ -43,10 +43,10 @@ test('getAttribute returns strings or null and rejects ambiguous or missing targ
     values: { page: 'Mixed text', frame: 'hidden', empty: '', missing: null },
     types: ['string', 'string', 'string', 'object'],
     errors: {
-      strict: 'strict',
-      missingElement: 'timeout',
-      selectorNotAString: 'error',
-      nameNotAString: 'error',
+      strict: 'Error:strict',
+      missingElement: 'TimeoutError',
+      selectorNotAString: 'Error',
+      nameNotAString: 'Error',
     },
   })
 })

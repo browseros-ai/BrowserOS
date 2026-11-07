@@ -121,11 +121,14 @@ export function startNeo(neoRun, port, targetId, scriptPath) {
   return { connected, outcome }
 }
 
-/** Shared inside each script, so both engines compare failure categories in the same way. */
-function errorCategory(error) {
-  if (error.name === 'TimeoutError') return 'timeout'
-  if (/strict mode violation/.test(error.message)) return 'strict'
-  return 'error'
+/**
+ * A rejection's kind: the error's name, with `:strict` for a strict mode violation (a plain
+ * `Error` in Playwright), never its wording. Shared inside each script, so both engines report
+ * their rejections in the same way and a `TypeError` never passes for an `Error`.
+ */
+export function errorCategory(error) {
+  const strict = /strict mode violation/.test(error.message)
+  return strict ? `${error.name}:strict` : error.name
 }
 
 /** Runs one method's public script on fresh pages and compares its result and browser effect. */
