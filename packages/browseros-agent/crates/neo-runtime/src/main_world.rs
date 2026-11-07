@@ -191,7 +191,10 @@ const OBJECT_GONE: &str = "Could not find object with given id";
 /// count as gone, so a call that may have run is never sent again.
 ///
 /// Playwright: `server/frames.ts` `Frame.contextDestroyed`: `context.contextDestroyed('Execution context was destroyed, most likely because of a navigation');`
-fn replaced_during(events: &mut broadcast::Receiver<CdpEvent>, frame: &FrameContext) -> bool {
+pub(crate) fn replaced_during(
+    events: &mut broadcast::Receiver<CdpEvent>,
+    frame: &FrameContext,
+) -> bool {
     let session = frame.host.session_id();
     loop {
         let event = match events.try_recv() {

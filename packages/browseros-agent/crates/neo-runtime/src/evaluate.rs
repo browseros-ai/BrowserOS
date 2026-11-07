@@ -1242,6 +1242,10 @@ fn evaluate_values(
     Ok(values)
 }
 
+/// Neo: the protocol answer of a call whose document went before it could run, which every caller
+/// reads as the destroyed context it is (`answer`'s `CONTEXT_DESTROYED`; a wait restarts).
+const DOCUMENT_REPLACED: &str = "neo-runtime: the call's document was replaced before it ran";
+
 /// Starts the page's watcher before a main-world call: it reports the frames' commits, as
 /// Playwright's page always hears them, which tell a call whose document went while it was out
 /// from one sent to a document already gone (`main_world.rs` `replaced_during`), so only the
@@ -1270,6 +1274,9 @@ async fn invoke_with(
         Some(handles.group(tab, frame).map_err(page_error)?)
     };
     watch_commits(tab, progress).await?;
+    // The document this call was made for is the frame's as the call starts: a commit of the
+    // frame from now on (socket order) replaced it, during the setup below as during the call.
+    let mut events = frame.host.events();
     let mut attempt = 0;
     loop {
         attempt += 1;
@@ -1286,6 +1293,14 @@ async fn invoke_with(
         } else {
             installed(tab, frame, invocation.receiver, progress).await?
         };
+        // A setup that waited out the call's document (a first call during a pending navigation
+        // installs in the next one): the call fails with its document, never runs in the next.
+        if invocation.context.is_none() && main_world::replaced_during(&mut events, frame) {
+            return Ok((
+                installed.document,
+                Called::Protocol(DOCUMENT_REPLACED.to_string()),
+            ));
+        }
         let wants_injected = invocation
             .extras
             .iter()
@@ -1336,8 +1351,20 @@ async fn invoke_with(
         match called {
             // A pinned call's context is gone with its document: installing in the next one
             // would answer a call that document never made.
-            Called::Stale if attempt == 1 && invocation.context.is_none() => {
+            // An install kept from a document gone before this call began: once more, unless
+            // the call's own document went since it began.
+            Called::Stale
+                if attempt == 1
+                    && invocation.context.is_none()
+                    && !main_world::replaced_during(&mut events, frame) =>
+            {
                 frame.main.invalidate(&installed).await;
+            }
+            Called::Stale if invocation.context.is_none() => {
+                return Ok((
+                    installed.document,
+                    Called::Protocol(DOCUMENT_REPLACED.to_string()),
+                ));
             }
             called => return Ok((installed.document, called)),
         }
