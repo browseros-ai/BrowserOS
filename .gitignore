@@ -42,3 +42,4 @@ packages/browseros/build/extensions/
 .devtools/
 .omc/
 .llm/
+target
