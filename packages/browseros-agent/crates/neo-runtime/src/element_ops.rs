@@ -561,7 +561,11 @@ pub(crate) async fn bounding_box<T: ElementOpsTab>(
 }
 
 /// The element a handle method runs on: the selector's match once it is attached, waited for
-/// with loop A's backoff. Its object group lives as long as the returned value.
+/// with loop A's backoff, each attempt first running the page's action pre-checks (a pending
+/// navigation, the locator handlers), as Playwright's served `waitForSelector` does. Its object
+/// group lives as long as the returned value.
+///
+/// Playwright: `server/frames.ts` `Frame.waitForSelector`: `await this._page.performActionPreChecks(progress);`
 ///
 /// Playwright: `client/locator.ts` `Locator._withElement`: `const result = await this._frame._channel.waitForSelector({ selector: this._selector, strict: true, state: 'attached' }, { signal: options.signal, timeout });`
 /// Playwright: `server/frames.ts` `Frame._retryWithProgressIfNotConnected`: `markTargets: 'all'`
@@ -580,6 +584,7 @@ async fn attached<T: ElementOpsTab>(
         }
         let attempt: Result<Option<Resolved<T::Element>>, Stop> = async {
             progress.race(Tab::prepare(tab)).await??;
+            click::wait_out_pending_navigation(tab, progress).await?;
             if !named {
                 let facts = progress
                     .race(Tab::describe(tab, &target.selector))

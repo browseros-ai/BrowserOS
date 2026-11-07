@@ -122,6 +122,24 @@ pinned(
 )
 
 pinned(
+  "the element commands run the handler first, as their attach is Playwright's waitForSelector",
+  `let handled = 0
+  await page.addLocatorHandler(page.getByText('This interstitial covers the button'), async () => { handled++; await page.locator('#close').click() })
+  const counts = []
+  for (const run of [
+    () => page.locator('#target').scrollIntoViewIfNeeded(),
+    () => page.locator('#target').boundingBox(),
+    () => page.locator('#target').selectText(),
+  ]) {
+    await page.evaluate(() => window.setupAnnoyingInterstitial('none', 1))
+    await run()
+    counts.push(handled)
+  }
+  return { counts, visible: await page.locator('#interstitial').isVisible() }`,
+  { counts: [1, 2, 3], visible: false },
+)
+
+pinned(
   'locator.waitFor and page.waitForSelector run the handler first (LH-007)',
   `let handled = 0
   await page.addLocatorHandler(page.getByText('This interstitial covers the button'), async () => { handled++; await page.locator('#close').click() })

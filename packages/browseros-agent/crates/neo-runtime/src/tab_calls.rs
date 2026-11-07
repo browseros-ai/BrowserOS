@@ -178,36 +178,44 @@ pub(crate) async fn page(
             )
             .into());
         }
-        PageCall::BringToFront(_) => {
-            // Playwright 26137face server/chromium/crPage.ts:207 sends Page.bringToFront.
-            let page = progress.race(tabs.session(entry)).await??;
-            let brought = progress
-                .race(page.send("Page.bringToFront", json!({})))
-                .await?;
-            checked(tabs, entry, progress, brought).await?;
-            let info = progress
-                .race(tabs::tab_info(tabs.cdp(), &entry.id))
-                .await??
-                .ok_or_else(PlaywrightError::target_closed)?;
-            // BrowserOS headless accepts Page.bringToFront without selecting the tab strip
-            // entry. Browser.activateTab changes that selection (see probes-runtime.md).
-            if !info.is_active {
-                let activated = progress
-                    .race(tabs.cdp().send(
-                        "Browser.activateTab",
-                        json!({"targetId":entry.id.as_str()}),
-                        None,
-                    ))
-                    .await?;
-                checked(tabs, entry, progress, activated).await?;
-            }
-        }
+        PageCall::BringToFront(_) => bring_to_front(tabs, entry, progress).await?,
         PageCall::HideHighlight(_) => {
             let page = progress.race(tabs.session(entry)).await??;
             highlight::hide_all(&page, progress).await?;
         }
     }
     Ok(None)
+}
+
+/// `Page.bringToFront`: the tab's own `Page.bringToFront`, then its tab-strip selection.
+async fn bring_to_front(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    // Playwright 26137face server/chromium/crPage.ts:207 sends Page.bringToFront.
+    let page = progress.race(tabs.session(entry)).await??;
+    let brought = progress
+        .race(page.send("Page.bringToFront", json!({})))
+        .await?;
+    checked(tabs, entry, progress, brought).await?;
+    let info = progress
+        .race(tabs::tab_info(tabs.cdp(), &entry.id))
+        .await??
+        .ok_or_else(PlaywrightError::target_closed)?;
+    // BrowserOS headless accepts Page.bringToFront without selecting the tab strip
+    // entry. Browser.activateTab changes that selection (see probes-runtime.md).
+    if !info.is_active {
+        let activated = progress
+            .race(tabs.cdp().send(
+                "Browser.activateTab",
+                json!({"targetId":entry.id.as_str()}),
+                None,
+            ))
+            .await?;
+        checked(tabs, entry, progress, activated).await?;
+    }
+    Ok(())
 }
 
 /// The locator handler commands of `entry`'s session (`locator_handlers.rs`).
