@@ -259,8 +259,11 @@ export async function eventually(check, what, timeoutMs = 15_000) {
 }
 
 /**
- * Serves `pages[path]` for a path it names, and a small page titled with the path otherwise.
- * `/slow` answers after `slowMs`, so a navigation to it stays in flight before it commits.
+ * Serves `pages[path]` for a path it names (with or without a query, so one frame page serves
+ * every `?who=`), and a small page titled with the path otherwise. `/slow` answers after
+ * `slowMs`, so a navigation to it stays in flight before it commits. It listens on 127.0.0.1;
+ * the frame tests also load it as `localhost`, a different site, which BrowserOS neo reaches on
+ * the same address.
  */
 export async function serveFixture(cleanups, { pages = {}, slowMs = 0 } = {}) {
   const server = http.createServer(async (request, response) => {
@@ -268,6 +271,7 @@ export async function serveFixture(cleanups, { pages = {}, slowMs = 0 } = {}) {
     response.setHeader('content-type', 'text/html; charset=utf-8')
     response.end(
       pages[request.url] ??
+        pages[request.url.split('?')[0]] ??
         `<title>${request.url}</title><h1>${request.url}</h1>`,
     )
   })

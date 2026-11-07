@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Frame child</title>
+<style>
+body { margin: 4px; font: 12px sans-serif }
+iframe { width: 420px; height: 130px; border: 1px solid #888 }
+</style>
+</head>
+<!-- One document of tests/pages/frame-top.html's tree. `?who=` names it (each frame reads its
+     own effect as `window.__facts()`, keyed by `who`); `?gen=` counts the documents a control
+     loaded into its frame; `?kids=name[@host],…` adds child iframes, on `host` (default: this
+     frame's own) at this server's port. The widgets repeat in every document with the same ids,
+     so a call routed to the wrong frame changes or reads a decoy. -->
+<body>
+<p><b id="who"></b> <span id="gen"></span></p>
+<label for="email">Email</label> <input id="email">
+<input id="search" placeholder="Search">
+<button id="send" type="button">Send</button>
+<input id="agree" type="checkbox"> <label for="agree">Agree</label>
+<select id="size" aria-label="Size"><option value="s">Small</option><option value="m">Medium</option><option value="l">Large</option></select>
+<img alt="Logo" width="8" height="8" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">
+<span id="tip" title="Tip"></span>
+<span id="card" data-testid="card"></span>
+<ul><li class="item"></li><li class="item"></li><li class="item" hidden></li></ul>
+<script>
+const params = new URLSearchParams(location.search)
+const who = params.get('who') ?? 'unknown'
+const gen = Number(params.get('gen') ?? 1)
+document.title = `Frame ${who}`
+document.querySelector('#who').textContent = who
+document.querySelector('#gen').textContent = `gen ${gen}`
+document.querySelector('#email').value = `${who}@seed.test`
+document.querySelector('#tip').textContent = `tip ${who}`
+document.querySelector('#card').textContent = `card ${who}`
+const items = document.querySelectorAll('.item')
+items[0].textContent = `${who} one`
+items[1].textContent = `${who} two`
+items[2].textContent = `${who} hidden`
+const kids = []
+for (const kid of (params.get('kids') ?? '').split(',').filter(Boolean)) {
+  const [name, host = location.hostname] = kid.split('@')
+  const frame = document.createElement('iframe')
+  frame.id = name
+  frame.name = name
+  frame.title = name
+  frame.src = `http://${host}:${location.port}/frame-child.html?who=${name}`
+  document.body.append(frame)
+  kids.push(frame)
+}
+window.__who = who
+window.__events = []
+for (const type of ['click', 'focus', 'input', 'change']) {
+  document.addEventListener(type, (event) => {
+    window.__events.push({ type, target: event.target.id || event.target.tagName?.toLowerCase(), trusted: event.isTrusted })
+  }, true)
+}
+// The top page's #arm reaches every frame as this message: 500 ms later each document adds
+// #late, so a wait started after the click sees it appear.
+addEventListener('message', ({ data }) => {
+  if (data !== 'arm') return
+  for (const kid of kids) kid.contentWindow?.postMessage('arm', '*')
+  setTimeout(() => {
+    const late = document.createElement('p')
+    late.id = 'late'
+    late.textContent = `late ${who}`
+    document.body.append(late)
+  }, 500)
+})
+window.__facts = () => ({
+  who,
+  gen,
+  email: document.querySelector('#email').value,
+  search: document.querySelector('#search').value,
+  agree: document.querySelector('#agree').checked,
+  size: document.querySelector('#size').value,
+  late: document.querySelector('#late') !== null,
+  events: window.__events,
+})
+</script>
+</body>
+</html>
