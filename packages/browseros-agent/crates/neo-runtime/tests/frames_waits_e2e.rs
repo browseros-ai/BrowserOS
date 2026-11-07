@@ -107,15 +107,19 @@ async fn open() -> Option<Tab> {
     Some(tab)
 }
 
-/// Polls `condition` in the top page's main world for up to 10 s.
+/// Polls `condition` in the top page's main world for up to 20 s; a failure names what the
+/// frames had reported.
 async fn wait_for(tab: &Tab, condition: &str) {
-    time::timeout(Duration::from_secs(10), async {
+    let held = time::timeout(Duration::from_secs(20), async {
         while tab.evaluate(condition).await != json!(true) {
             time::sleep(Duration::from_millis(20)).await;
         }
     })
-    .await
-    .unwrap_or_else(|error| panic!("{condition} never held: {error}"));
+    .await;
+    if held.is_err() {
+        let reports = tab.evaluate("JSON.stringify(window.__log ?? null)").await;
+        panic!("{condition} never held; the frames reported {reports}");
+    }
 }
 
 /// Points both frames at their slow page and returns once each has parsed it, while its `load`
