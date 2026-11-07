@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (46)
+## Deviations (47)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -41,6 +41,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-sdk/src/events.ts | `ChannelOwner.removeAllListeners` | `client/channelOwner.ts` `ChannelOwner.removeListener` | Playwright's removeAllListeners leaves its server subscriptions on; Neo turns off each one left without listeners, so Rust stops producing what nobody hears. |
 | neo-sdk/src/events.ts | `EventEmitter._addListener` | `client/eventEmitter.ts` `EventEmitter._addListener` | Neo runs are never Playwright's own tests, so the warning always goes to the run log. |
 | neo-sdk/src/events.ts | `EventEmitter._callHandler` | `client/eventEmitter.ts` `EventEmitter._callHandler` | There the rethrow is an unhandled rejection, and Node exits; QuickJS ignores one, so Neo hands it to the run, which ends with it. |
+| neo-sdk/src/file-chooser.ts | (file) | `client/fileChooser.ts` `FileChooser.setFiles` | Playwright sets the files through the input's `setInputFiles`, which Neo does not serve yet (med-pw-dom), so `setFiles` throws an Error naming that instead of choosing nothing. |
 | neo-sdk/src/frame.ts | `Frame._querySelector` | `client/timeoutSettings.ts` `kNoTimeout` | Playwright's `$` sends this, so it ignores a caller's signal; Neo refuses one rather than ignore it. |
 | neo-sdk/src/js-handle.ts | `evaluateParams` | `client/jsHandle.ts` `JSHandle.evaluate` | Neo has no realm callback from the page, so it refuses the option rather than ignore it. |
 | neo-sdk/src/js-handle.ts | `evaluateParams` | `client/jsHandle.ts` `JSHandle.evaluate` | Playwright's evaluations send no signal and ignore one; Neo refuses any signal rather than ignore one. |

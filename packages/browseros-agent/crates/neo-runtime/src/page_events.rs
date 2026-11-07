@@ -72,6 +72,9 @@ pub(crate) struct PageEvents {
     /// The arguments of the console messages the run's listeners received, kept until a script
     /// reads them (`ConsoleMessage.args()`).
     pub(crate) args: Arc<ConsoleArgs>,
+    /// The file choosers the page opened while the run listened, until `FileChooser.element()`
+    /// makes their input the run's handle.
+    pub(crate) choosers: Arc<Choosers>,
     pub(crate) console: Arc<ConsoleLog>,
     pub(crate) dialogs: Arc<Dialogs>,
     /// The tab's frames, as the run's frame events see them.
@@ -80,6 +83,16 @@ pub(crate) struct PageEvents {
     /// lifecycle replay of its start ([`Self::lifecycle_replayed`]), or from the start on a page
     /// the run's discovery reported.
     lifecycle_live: Arc<AtomicBool>,
+}
+
+/// CDP's `Page.fileChooserOpened` params.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileChooserOpened {
+    frame_id: String,
+    mode: String,
+    #[serde(default)]
+    backend_node_id: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -111,6 +124,7 @@ impl PageEvents {
             session,
             children: Arc::default(),
             args: Arc::default(),
+            choosers: Arc::default(),
             console: Arc::default(),
             dialogs: Arc::default(),
             frames: Arc::new(Mutex::new(FrameModel::new(target))),
@@ -205,6 +219,7 @@ impl PageEvents {
         match event.method.as_str() {
             "Page.javascriptDialogOpening" => answer = self.dialog_opening(&event.params, answer),
             "Page.javascriptDialogClosed" => self.dialog_closed(),
+            "Page.fileChooserOpened" => self.file_chooser(&event.params),
             _ => self.console_event(event, session),
         }
         if applied.new_document {
@@ -411,6 +426,30 @@ impl PageEvents {
         }
         self.dialogs.answered_by_default(index);
         Some(answer.unwrap_or_else(|| dialogs::default_answer(&opening.kind)))
+    }
+
+    /// Playwright: `server/page.ts` `Page._onFileChooserOpened`: `if (!this.listenerCount(Page.Events.FileChooser)) {`
+    /// A file chooser the page opened while the run intercepts them: Playwright's `fileChooser`
+    /// event on the page when the run listens, else nothing (the chooser stays closed).
+    fn file_chooser(&self, params: &Value) {
+        let Ok(opened) = serde_json::from_value::<FileChooserOpened>(params.clone()) else {
+            return;
+        };
+        let Some(backend) = opened.backend_node_id else {
+            return;
+        };
+        if !self.hub.subscribed(&self.page_guid, "filechooser") {
+            return;
+        }
+        let id = self.choosers.keep(opened.frame_id, backend);
+        self.hub.emit(
+            &self.page_guid,
+            "fileChooser",
+            &json!({
+                "chooser": format!("filechooser@{}:{id}", self.target),
+                "isMultiple": opened.mode == "selectMultiple",
+            }),
+        );
     }
 
     fn dialog_closed(&self) {
@@ -644,12 +683,103 @@ impl ConsoleArgs {
     }
 }
 
+/// Neo: how many file choosers a page keeps for `FileChooser.element()`; an older one's
+/// `element()` throws an Error naming this cap.
+pub(crate) const MAX_KEPT_CHOOSERS: usize = 100;
+
+/// The file choosers a page opened while the run listened: the frame and the input's backend
+/// node, and once read, the `ElementHandle` record made of it (`Tabs::file_chooser_element`).
+#[derive(Default)]
+pub(crate) struct Choosers(Mutex<KeptChoosers>);
+
+#[derive(Default)]
+struct KeptChoosers {
+    next: u64,
+    kept: VecDeque<Chooser>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Chooser {
+    pub(crate) id: u64,
+    pub(crate) frame: String,
+    pub(crate) backend: i64,
+    pub(crate) handle: Option<Value>,
+}
+
+impl Choosers {
+    fn keep(&self, frame: String, backend: i64) -> u64 {
+        let Ok(mut state) = self.0.lock() else {
+            return 0;
+        };
+        state.next += 1;
+        let id = state.next;
+        state.kept.push_back(Chooser {
+            id,
+            frame,
+            backend,
+            handle: None,
+        });
+        while state.kept.len() > MAX_KEPT_CHOOSERS {
+            state.kept.pop_front();
+        }
+        id
+    }
+
+    pub(crate) fn get(&self, id: u64) -> Option<Chooser> {
+        let state = self.0.lock().ok()?;
+        state.kept.iter().find(|chooser| chooser.id == id).cloned()
+    }
+
+    pub(crate) fn made(&self, id: u64, handle: Value) {
+        if let Ok(mut state) = self.0.lock()
+            && let Some(chooser) = state.kept.iter_mut().find(|chooser| chooser.id == id)
+        {
+            chooser.handle = Some(handle);
+        }
+    }
+}
+
 /// Platform: V8 stamps console messages and exceptions with `Runtime.Timestamp`, milliseconds
 /// since the epoch on the browser's clock, which is this machine's for a local BrowserOS.
 fn now_ms() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0.0, |elapsed| elapsed.as_secs_f64() * 1000.0)
+}
+
+/// Playwright: `server/page.ts` `Page._setFileChooserInterceptedBy`: `if (wasIntercepted !== this.fileChooserIntercepted())`
+///
+/// Turns the page's file chooser interception on or off (`Page.setInterceptFileChooserDialog`,
+/// which its session keeps until it detaches), on a run task the page's next call waits for: a
+/// click right after `page.on('filechooser')` must find the chooser intercepted. The SDK
+/// subscribes on the first listener and unsubscribes after the last, so this switches as
+/// Playwright's does, while the client listens.
+pub(crate) fn intercept_file_chooser(tabs: &Tabs, entry: Arc<PageEntry>, enabled: bool) {
+    let enabling = tabs.events().begin_enable(entry.id.as_str());
+    let run_tabs = tabs.clone();
+    tabs.spawn(async move {
+        let _enabling = enabling;
+        let session = match run_tabs.session(&entry).await {
+            Ok(session) => session,
+            Err(error) => {
+                debug!(?error, "a file chooser subscription's page has no session");
+                return;
+            }
+        };
+        if let Err(error) = session.prepare().await {
+            debug!(%error, "a file chooser subscription could not prepare its page");
+            return;
+        }
+        let intercepted = session
+            .send(
+                "Page.setInterceptFileChooserDialog",
+                json!({ "enabled": enabled }),
+            )
+            .await;
+        if let Err(error) = intercepted {
+            debug!(%error, "the page's file chooser interception did not switch");
+        }
+    });
 }
 
 /// Switches on what `needs` asks for in `entry`'s session, on a run task, and makes the page's

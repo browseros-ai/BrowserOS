@@ -1441,6 +1441,37 @@ function escapeForAttributeSelector(value, exact) {
 }
 var ansiRegex = new RegExp("([\\u001B\\u009B][[\\]()#?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]*)*)?\\u0007)|(?:(?:\\d{0,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-ntqry=><~])))", "g");
 
+// src/file-chooser.ts
+var SET_FILES_UNSERVED = "Neo does not serve FileChooser.setFiles yet: it sets the input through setInputFiles, which Neo does not serve yet";
+
+class FileChooser {
+  #page;
+  #chooser;
+  #isMultiple;
+  #connection;
+  #element;
+  constructor(page, chooser, isMultiple, connection) {
+    this.#page = page;
+    this.#chooser = chooser;
+    this.#isMultiple = isMultiple;
+    this.#connection = connection;
+  }
+  element() {
+    if (!this.#element)
+      this.#element = handleFrom(this.#connection, get(this.#chooser, "element"));
+    return this.#element;
+  }
+  isMultiple() {
+    return this.#isMultiple;
+  }
+  page() {
+    return this.#page;
+  }
+  async setFiles(files, options) {
+    throw new Error(SET_FILES_UNSERVED);
+  }
+}
+
 // vendor/playwright/isomorphic/locatorUtils.ts
 function getByAttributeTextSelector(attrName, text, options) {
   return `internal:attr=[${attrName}=${escapeForAttributeSelector(text, options?.exact || false)}]`;
@@ -5585,12 +5616,12 @@ var PAGE_EVENTS = {
     "frameattached",
     "framedetached",
     "framenavigated",
-    "popup"
+    "popup",
+    "filechooser"
   ],
   quiet: [],
   unserved: [
     "download",
-    "filechooser",
     "request",
     "response",
     "requestfailed",
@@ -5674,6 +5705,10 @@ class Page extends ChannelOwner {
       this.#onFrameDetached(params.frame);
     else if (method === "frameNavigated")
       this.#onFrameNavigated(params);
+    else if (method === "fileChooser") {
+      const { chooser, isMultiple } = params;
+      this.emit("filechooser", new FileChooser(this, chooser, isMultiple, this.#connection));
+    }
   }
   #onFrameAttached(record) {
     this.#frameEvent(record, "frameattached", false);

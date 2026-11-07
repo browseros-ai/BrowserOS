@@ -21,6 +21,7 @@ and NOTICE.
 | `packages/playwright-core/src/client/dialog.ts` | `493428ce8b51cef33be1d0fd5b7d8e65ad53ba3e7e357ca055d65517e87937a1` |
 | `packages/playwright-core/src/client/elementHandle.ts` | `b5e6046e19cb08bebba69a816a8d4a451c594463020150aa96eba6fd90cf53bc` |
 | `packages/playwright-core/src/client/eventEmitter.ts` | `1217614d01c9c4986ef61b307672c09ce74db90a46d4880376bc0ec743879f3a` |
+| `packages/playwright-core/src/client/fileChooser.ts` | `b77e1ba334d92af1c2b7c0e6ca9cc096f58eb7daa1fe0465a664c695f13dcd14` |
 | `packages/playwright-core/src/client/frame.ts` | `1b095c3631518860a56b6cbb28af2564909fbb43885c5cb3622b5267a9605464` |
 | `packages/playwright-core/src/client/jsHandle.ts` | `9f26d49fe91b8c9963f9da8272eeeff7515f18916ece89075d104e20409f41d4` |
 | `packages/playwright-core/src/client/locator.ts` | `c1db3374b461c7065b58c426a8bb70ff622388781f3942be6aa46d616e3b7a09` |

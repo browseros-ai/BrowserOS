@@ -88,6 +88,8 @@ export interface GetterReplies {
   opener: CreatedPage | null
   /** On a console message (`console@<targetId>:<n>`): its arguments as the run's handles. */
   args: CreatedHandle[]
+  /** On a file chooser (`filechooser@<targetId>:<n>`): its input as the run's handle. */
+  element: CreatedHandle
 }
 
 export function get<Field extends keyof GetterReplies>(

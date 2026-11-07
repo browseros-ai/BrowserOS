@@ -20,6 +20,7 @@ import {
   targetClosedError,
 } from './errors'
 import { ChannelOwner, type EventTable } from './events'
+import { FileChooser } from './file-chooser'
 import {
   type AriaSnapshotOptions,
   type CheckOptions,
@@ -97,11 +98,11 @@ const PAGE_EVENTS: EventTable = {
     'framedetached',
     'framenavigated',
     'popup',
+    'filechooser',
   ],
   quiet: [],
   unserved: [
     'download',
-    'filechooser',
     'request',
     'response',
     'requestfailed',
@@ -283,6 +284,17 @@ export class Page extends ChannelOwner {
       this.#onFrameDetached((params as FrameEventParams).frame)
     else if (method === 'frameNavigated')
       this.#onFrameNavigated(params as FrameEventParams)
+    else if (method === 'fileChooser') {
+      // Playwright: `client/page.ts` `Page.constructor`: `this._channel.on('fileChooser', ({ element, isMultiple }) => this.emit(Events.Page.FileChooser, new FileChooser(this, ElementHandle.from(element), isMultiple)));`
+      const { chooser, isMultiple } = params as {
+        chooser: string
+        isMultiple: boolean
+      }
+      this.emit(
+        'filechooser',
+        new FileChooser(this, chooser, isMultiple, this.#connection),
+      )
+    }
   }
 
   /** Playwright's `Page._onFrameAttached`: a frame attaches with no name or URL yet. */

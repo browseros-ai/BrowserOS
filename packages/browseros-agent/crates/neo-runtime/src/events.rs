@@ -71,7 +71,7 @@ const REPLAY_WAIT: Duration = Duration::from_secs(5);
 
 /// Neo: the listener events Neo produces on a `Page`, under the names Playwright's client gives
 /// them (`Events.Page`), and what each needs switched on in the page's session.
-const PAGE_EVENTS: [(&str, Needs); 12] = [
+const PAGE_EVENTS: [(&str, Needs); 13] = [
     ("console", Needs::RUNTIME),
     ("pageerror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
@@ -84,6 +84,9 @@ const PAGE_EVENTS: [(&str, Needs); 12] = [
     ("framedetached", Needs::WATCHER),
     ("framenavigated", Needs::WATCHER),
     ("popup", Needs::DISCOVERY),
+    // The watcher reports it once the page intercepts its file chooser (`page_events.rs`
+    // `intercept_file_chooser`).
+    ("filechooser", Needs::WATCHER),
 ];
 
 /// Neo: the listener events Neo produces on the run's `BrowserContext` (`Events.BrowserContext`),

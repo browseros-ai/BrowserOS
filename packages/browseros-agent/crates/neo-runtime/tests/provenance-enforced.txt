@@ -27,6 +27,7 @@ neo-sdk/src/console-message.ts
 neo-sdk/src/dialog.ts
 neo-sdk/src/element-handle.ts
 neo-sdk/src/events.ts
+neo-sdk/src/file-chooser.ts
 neo-sdk/src/js-handle.ts
 neo-sdk/src/url.ts
 neo-sdk/src/vendor-globals.d.ts

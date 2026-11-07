@@ -189,6 +189,13 @@ fn subscribe(tabs: &Tabs, request: &str) -> Result<(), String> {
     if !needs.of_page() {
         return Ok(());
     }
+    if event == "filechooser" {
+        // A page's own event: `pages` is that page alone.
+        for entry in pages {
+            page_events::intercept_file_chooser(tabs, entry, enabled);
+        }
+        return Ok(());
+    }
     for entry in pages {
         if enabled {
             page_events::enable(tabs, entry, needs);
@@ -328,6 +335,8 @@ enum GetterField {
     Opener,
     /// On a console message (`console@<targetId>:<n>`): `args()`'s handle records.
     Args,
+    /// On a file chooser (`filechooser@<targetId>:<n>`): `element()`'s handle record.
+    Element,
 }
 
 #[derive(Deserialize)]
@@ -426,26 +435,8 @@ impl Getters {
                     .map_err(|error| PlaywrightError::error(error.to_string()))
             });
         }
-        if let Some(message) = request.guid.strip_prefix("console@") {
-            if !matches!(request.field, GetterField::Args) {
-                return Err(GetError::BadRequest(
-                    "not a console message getter".to_string(),
-                ));
-            }
-            let Some((target, id)) = message
-                .rsplit_once(':')
-                .and_then(|(target, id)| Some((target, id.parse::<u64>().ok()?)))
-            else {
-                return Err(GetError::BadRequest(format!(
-                    "unknown guid {:?}",
-                    request.guid
-                )));
-            };
-            return self.wait(async {
-                self.tabs
-                    .console_args(&PageId::new(target.to_string()), id, &self.handles)
-                    .await
-            });
+        if let Some(answer) = self.handed_out(&request) {
+            return answer;
         }
         if let Some((kind, _, hop)) = HopId::parse(&request.guid) {
             return self.network(&request.guid, kind, &hop, request.field);
@@ -499,8 +490,44 @@ impl Getters {
             | GetterField::ParentFrame
             | GetterField::ChildFrames
             | GetterField::IsDetached
-            | GetterField::Args => Err(GetError::BadRequest("not a page getter".to_string())),
+            | GetterField::Args
+            | GetterField::Element => Err(GetError::BadRequest("not a page getter".to_string())),
         }
+    }
+
+    /// What a run's event handed out by id, made at its first read: a console message's `args`
+    /// (`console@<targetId>:<n>`) or a file chooser's `element` (`filechooser@<targetId>:<n>`).
+    /// `None` for any other guid.
+    fn handed_out(&self, request: &ObjectRequest) -> Option<Result<Value, GetError>> {
+        let (kind, rest) = request.guid.split_once('@')?;
+        let wanted = match (kind, request.field) {
+            ("console", GetterField::Args) | ("filechooser", GetterField::Element) => true,
+            ("console" | "filechooser", _) => false,
+            _ => return None,
+        };
+        if !wanted {
+            return Some(Err(GetError::BadRequest(format!(
+                "no {:?} on {:?}",
+                request.field, request.guid
+            ))));
+        }
+        let Some((target, id)) = rest.rsplit_once(':').and_then(|(target, id)| {
+            Some((PageId::new(target.to_string()), id.parse::<u64>().ok()?))
+        }) else {
+            return Some(Err(GetError::BadRequest(format!(
+                "unknown guid {:?}",
+                request.guid
+            ))));
+        };
+        Some(self.wait(async {
+            if kind == "console" {
+                self.tabs.console_args(&target, id, &self.handles).await
+            } else {
+                self.tabs
+                    .file_chooser_element(&target, id, &self.handles)
+                    .await
+            }
+        }))
     }
 
     /// A hop's live client state, read from the network log of the session that recorded it.

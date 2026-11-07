@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use browseros_cdp::runtime::RemoteObject;
 use browseros_cdp::{CdpClient, CdpError};
+use neo_runtime_spec::injected::InjectedPreviewNodeParams;
 use neo_runtime_spec::serve::{FrameChannel, FrameInitializer, PageChannel, PageInitializer};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -29,7 +30,7 @@ use crate::frames::FrameScope;
 use crate::getters;
 use crate::network::HopId;
 use crate::page::{FrameTab, PageSession, Session, TabInputs};
-use crate::page_events::{self, MAX_KEPT_ARGS};
+use crate::page_events::{self, MAX_KEPT_ARGS, MAX_KEPT_CHOOSERS};
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunPage};
 
@@ -789,6 +790,62 @@ impl Tabs {
         Ok(records)
     }
 
+    /// `FileChooser.element()`: the run's `ElementHandle` of the input file chooser `id` of page
+    /// `target` opened for, made at the first read and the same record after.
+    pub(crate) async fn file_chooser_element(
+        &self,
+        target: &PageId,
+        id: u64,
+        handles: &Handles,
+    ) -> Result<Value, PlaywrightError> {
+        let entry = self
+            .entry(target)
+            .ok_or_else(|| PlaywrightError::error("neo-runtime: the run has no such page"))?;
+        let session = entry
+            .attached_session()
+            .ok_or_else(PlaywrightError::target_closed)?;
+        let chooser = session.events.choosers.get(id).ok_or_else(|| {
+            PlaywrightError::error(format!(
+                "Neo keeps a page's last {MAX_KEPT_CHOOSERS} file choosers; this one is gone"
+            ))
+        })?;
+        if let Some(record) = chooser.handle {
+            return Ok(record);
+        }
+        let main = session.frames.main();
+        let frame = session
+            .frames
+            .context(&chooser.frame, Some(&main.host))
+            .await
+            .map_err(|error| args_error(&error))?;
+        let tab = FrameTab {
+            page: Arc::clone(&session),
+            scope: FrameScope::Main,
+        };
+        let group = tab.group(&frame, "file chooser");
+        let element = frame
+            .element(group.group(), chooser.backend)
+            .await
+            .map_err(|error| args_error(&error))?;
+        let preview = frame
+            .call(
+                Some(group.group()),
+                &InjectedPreviewNodeParams {
+                    node: element.clone(),
+                },
+            )
+            .await
+            .map_err(|error| args_error(&error))?
+            .preview;
+        let created = evaluate::element_handle_for(&tab, &frame, &element, &preview, handles)
+            .await
+            .map_err(|error| args_error(&error))?;
+        let record = serde_json::to_value(created)
+            .map_err(|error| PlaywrightError::error(error.to_string()))?;
+        session.events.choosers.made(id, record.clone());
+        Ok(record)
+    }
+
     pub(crate) fn outcome(&self) -> Vec<RunPage> {
         self.0.pages.lock().map_or_else(
             |_| Vec::new(),
@@ -856,13 +913,13 @@ pub(crate) async fn tab_info(
     }
 }
 
-/// Why a console message's argument could not become a handle.
+/// Why a console message's argument, or a file chooser's input, could not become a handle.
 fn args_error(error: &PageError) -> PlaywrightError {
     match error {
         PageError::Closed => PlaywrightError::target_closed(),
-        PageError::NotConnected => PlaywrightError::error(
-            "the console message's arguments are gone with the document that logged them",
-        ),
+        PageError::NotConnected => {
+            PlaywrightError::error("the value is gone with the document that held it")
+        }
         PageError::Threw(message) | PageError::Contract(message) => {
             PlaywrightError::error(message.clone())
         }
