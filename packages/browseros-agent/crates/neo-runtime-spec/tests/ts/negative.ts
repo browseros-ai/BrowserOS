@@ -19,6 +19,7 @@ type Handles = {
   HitTargetInterceptor: {
     stop: () => 'done' | { hitTargetDescription: string }
   }
+  ElementList: Element[]
 }
 type Api = InjectedApi<InjectedScript, Handles>
 
@@ -27,6 +28,14 @@ const valid = {
   title: () => ({ value: document.title }),
   selectorState: () => ({}),
   selectorElement: () => ({ count: 0, visible: false }),
+  scopedSelectorElement: () => ({ count: 0, visible: false }),
+  queryAll: () => ({ elements: [] }),
+  scopedQueryAll: (_injected, _params, root) => ({
+    elements: [...root.children],
+  }),
+  listPreviews: (_injected, _params, list) => ({
+    previews: list.map((element) => element.tagName),
+  }),
   document: () => ({ node: document.documentElement }),
   previewNode: (_injected, _params, node) => ({ preview: node.tagName }),
   textContent: () => ({}),
@@ -57,8 +66,6 @@ const valid = {
   focusElement: () => ({ outcome: 'done' }),
   inputValue: () => ({}),
   queryCount: () => ({ value: 0 }),
-  allTextContents: () => ({ values: [] }),
-  allInnerTexts: () => ({ values: [] }),
   blurElement: () => ({ outcome: 'done' }),
   selectText: () => ({ outcome: 'done' }),
   dispatchEvent: () => ({}),

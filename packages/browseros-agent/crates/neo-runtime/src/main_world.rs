@@ -65,6 +65,62 @@ const JSON_VALUE: &str = include_str!(concat!(
     "/../neo-runtime-injected/dist/json-value.js"
 ));
 
+/// Playwright: `server/javascript.ts` `JSHandle._getProperty`
+const GET_PROPERTY: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/get-property.js"
+));
+/// Playwright: `server/frames.ts` `Frame.waitForFunctionExpression`
+const WAIT_FOR_FUNCTION: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/wait-for-function.js"
+));
+/// Playwright: `server/frames.ts` `Frame.waitForFunctionExpression`
+const WAIT_RESULT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/wait-result.js"
+));
+/// Playwright: `server/frames.ts` `Frame.waitForFunctionExpression`
+const WAIT_ABORT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/wait-abort.js"
+));
+
+/// `(object) => object`, run on a page object an event named, with that object as its argument.
+/// Neo: Playwright's handles of console arguments stay in the group CDP put them in; Neo's live
+/// in the run's handle group, which Neo releases at run end (`evaluate::handle_for_remote_object`).
+const RETAIN: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neo-runtime-injected/dist/retain.js"
+));
+
+/// A page function of Playwright's server, built in neo-runtime-injected, that runs as the
+/// `expression` of `UtilityScript.evaluate` (`EVALUATE`), so its arguments arrive parsed with
+/// their handles, primitives included. Agent code never takes this path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BuiltExpression {
+    /// `(object, name) => ({ __proto__: null, [name]: object[name] })`.
+    GetProperty,
+    /// `(utilityScript, expression, isFunction, polling, arg) => { result, abort }`.
+    WaitForFunction,
+    /// `(waiter) => waiter.result`.
+    WaitResult,
+    /// `(waiter) => waiter.abort()`.
+    WaitAbort,
+}
+
+impl BuiltExpression {
+    /// The built source, as `UtilityScript.evaluate`'s `expression`.
+    pub(crate) fn source(self) -> &'static str {
+        match self {
+            Self::GetProperty => GET_PROPERTY,
+            Self::WaitForFunction => WAIT_FOR_FUNCTION,
+            Self::WaitResult => WAIT_RESULT,
+            Self::WaitAbort => WAIT_ABORT,
+        }
+    }
+}
+
 /// Neo: the object group of every document's `UtilityScript` and its anchor document. Never
 /// released by Neo, as `world.rs`'s glue group: Chromium frees it with the run's session, and a
 /// new document's install replaces the old one's dead objects.
@@ -124,6 +180,13 @@ pub(crate) enum Called {
     /// The `UtilityScript`, the document or an argument's object was gone before the call
     /// started: nothing ran, so the caller may install again and retry.
     Stale,
+}
+
+impl Installed {
+    /// The `UtilityScript`'s object id, for an evaluation that hands it to a built page function.
+    pub(crate) fn utility_id(&self) -> &str {
+        self.utility.object_id()
+    }
 }
 
 impl MainWorld {
@@ -324,6 +387,41 @@ impl MainWorld {
             .map_err(|error| frame.host.classify(&error))?;
         serde_json::from_value(reply["object"].clone())
             .map_err(|error| PageError::Contract(format!("DOM.resolveNode answered: {error}")))
+    }
+}
+
+/// `object_id`, a page object an event named (a console message's argument), as the same object
+/// under a new id in `group`: CDP's answer to `RETAIN` run on it with the object as its argument.
+/// The new id lives until `group` is released, whatever becomes of the event's own group.
+///
+/// # Errors
+///
+/// `NotConnected` when the object or its context is gone; `Closed` when the session is.
+pub(crate) async fn retain(
+    frame: &FrameContext,
+    object_id: &str,
+    group: &ObjectGroup,
+) -> Result<RemoteObject, PageError> {
+    let reply = frame
+        .host
+        .send(
+            "Runtime.callFunctionOn",
+            json!({
+                "functionDeclaration": RETAIN,
+                "objectId": object_id,
+                "arguments": [{ "objectId": object_id }],
+                "objectGroup": group.0,
+                "returnByValue": false,
+            }),
+        )
+        .await
+        .map_err(|error| frame.host.classify(&error))?;
+    let answer: CallFunctionOnResult = serde_json::from_value(reply).map_err(|error| {
+        PageError::Contract(format!("Runtime.callFunctionOn answered: {error}"))
+    })?;
+    match answer.exception_details {
+        Some(details) => Err(PageError::Contract(exception_message(details))),
+        None => Ok(answer.result),
     }
 }
 

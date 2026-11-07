@@ -93,6 +93,51 @@ Injected:
         # `InjectedScript.previewNode` of the first match, absent when nothing matches.
         preview: string?
 
+    # `selectorElement` within `root` (`ElementHandle.$`, `$eval`): Playwright's scoped
+    # `querySelectorAll(parsed, root)`, for an element handle adopted into this world.
+    scopedSelectorElement:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+        root: Element
+      returns:
+        element: Element?
+        count: int
+        visible: boolean
+        preview: string?
+
+    # Every match of one frame chunk, in document order, for `Frame.querySelectorAll` and
+    # `evalOnSelectorAll` (Playwright's `queryAll` and `queryArrayInMainWorld`): one object whose
+    # own properties `0`, `1`, … are the elements, which neo-runtime reads with
+    # `Runtime.getProperties` and adopts into the main world.
+    queryAll:
+      internal: true
+      parameters:
+        selector: string
+      returns:
+        elements: ElementList
+
+    # `queryAll` within `root`, for `ElementHandle.$$` and `$$eval`.
+    scopedQueryAll:
+      internal: true
+      parameters:
+        selector: string
+        root: Element
+      returns:
+        elements: ElementList
+
+    # `InjectedScript.previewNode` of each element of a `queryAll` list, in order: the previews of
+    # the `ElementHandle`s `Frame.querySelectorAll` answers, read in one page call.
+    listPreviews:
+      internal: true
+      parameters:
+        list: ElementList
+      returns:
+        previews:
+          type: array
+          items: string
+
     # The document node of this world's frame, for neo-runtime's main-world door
     # (`main_world.rs`), which reads its `backendNodeId` with `DOM.describeNode` and resolves the
     # same node in the frame's main world. A `Document`, carried as the built-in `Element` handle
@@ -494,34 +539,6 @@ Injected:
       returns:
         value: int
 
-    # `locator.ts` `allTextContents`: one snapshot of every match's text in document order.
-    allTextContents:
-      internal: true
-      parameters:
-        selector: string
-      returns:
-        values:
-          type: array
-          items: string
-
-    # `locator.ts` `allInnerTexts`: one snapshot of every match's rendered text in document
-    # order.
-    allInnerTexts:
-      internal: true
-      parameters:
-        selector: string
-      returns:
-        values:
-          type: array
-          items: InnerTextEntry
-
-# One match's `innerText`. An element outside HTML (an `<svg>` element, say) has none, and
-# Playwright's `$$eval` answers `undefined` for it, so the entry carries no value.
-InnerTextEntry:
-  type: object
-  properties:
-    value: string?
-
 # `_fill` returns a string or the first missing state, without mutating when not ready.
 FormFillOutcome:
   type: union
@@ -591,6 +608,10 @@ FormInputValueMatch:
 # The `{stop}` object `setupHitTargetInterceptor` arms: Playwright's
 # `HitTargetInterceptionResult`, bound in the glue's `satisfies` clause.
 HitTargetInterceptor:
+  type: handle
+
+# A null-prototype object holding a query's elements as its own properties `0`, `1`, …
+ElementList:
   type: handle
 
 # Unchanged `InjectedScript.describeIFrameStyle` result.
