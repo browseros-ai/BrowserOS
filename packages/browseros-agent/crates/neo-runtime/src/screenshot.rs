@@ -778,7 +778,7 @@ impl Drop for Cleanup {
         let frame = Arc::clone(&self.frame);
         let handle = self.handle.clone();
         let turn = Arc::clone(&self.turn);
-        self.page.spawn(async move {
+        capture::spawn_while_open(&self.page, async move {
             restore_frame(&frame, &handle).await;
             drop(group);
             drop(turn);
@@ -820,7 +820,7 @@ async fn prepare(
         let page = Arc::clone(&tab.page);
         let turn = Arc::clone(turn);
         let (sent, answer) = oneshot::channel();
-        tab.page.spawn(async move {
+        capture::spawn_while_open(&tab.page, async move {
             match frame.call(Some(group.group()), &params).await {
                 Ok(result) => {
                     if let Some(handle) = result.cleanup {
@@ -869,7 +869,7 @@ impl Prepared {
         }
         let Prepared { page, cleanups } = self;
         let (done, restored) = oneshot::channel();
-        page.spawn(async move {
+        capture::spawn_while_open(&page, async move {
             future::join_all(cleanups.into_iter().map(Cleanup::restore)).await;
             let _sent = done.send(());
         });
@@ -949,7 +949,7 @@ impl Masks {
         let turn = self.turn.take();
         let frames = mem::take(&mut self.frames);
         let (done, hidden) = oneshot::channel();
-        self.page.spawn(async move {
+        capture::spawn_while_open(&self.page, async move {
             hide_highlights(&frames).await;
             let _sent = done.send(());
             drop(turn);
@@ -965,7 +965,7 @@ impl Drop for Masks {
             return;
         };
         let frames = mem::take(&mut self.frames);
-        self.page.spawn(async move {
+        capture::spawn_while_open(&self.page, async move {
             hide_highlights(&frames).await;
             drop(turn);
         });
@@ -1007,7 +1007,7 @@ impl Background {
         let (release, released) = oneshot::channel::<()>();
         let (reset, was_reset) = oneshot::channel();
         let owner = Arc::clone(page);
-        page.spawn(async move {
+        capture::spawn_while_open(page, async move {
             let set = owner
                 .send(
                     "Emulation.setDefaultBackgroundColorOverride",

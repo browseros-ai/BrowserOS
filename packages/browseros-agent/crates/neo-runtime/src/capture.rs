@@ -16,6 +16,7 @@
 //! it next to Playwright's params and only this module reads it.
 
 use std::fmt::Display;
+use std::future::Future;
 use std::sync::Arc;
 
 use browseros_cdp::CdpError;
@@ -217,6 +218,26 @@ async fn session(
     Ok(page)
 }
 
+/// Neo: runs a capture's background task (a restore, a reset, a print, a stream close) on the
+/// run's tracker until it finishes or its tab closes or crashes. A tab that went has nothing left
+/// to undo, and Chromium never answers a command in flight when its target goes (measured on
+/// BrowserOS neo), so a task waiting for that answer would hold the tab's screenshot turn, and a
+/// host's `Runtime::drain`, until browseros-cdp's request timeout. The watcher that sees the tab
+/// go runs from [`session`] on; dropping `task` drops what it holds (its turn, its object group).
+pub(crate) fn spawn_while_open(
+    page: &PageSession,
+    task: impl Future<Output = ()> + Send + 'static,
+) {
+    let closed = page.closed();
+    page.spawn(async move {
+        tokio::select! {
+            biased;
+            () = closed.cancelled() => {}
+            () = task => {}
+        }
+    });
+}
+
 /// Playwright's wording for a failed CDP command; a closed tab is `TargetClosedError`.
 /// Playwright: `server/protocolError.ts` `ProtocolError.setMessage`
 pub(crate) fn protocol_error(method: &str, error: &CdpError) -> CallError {
@@ -235,4 +256,93 @@ pub(crate) fn protocol_error(method: &str, error: &CdpError) -> CallError {
 /// Neo: Playwright's typed CDP client would reject such an answer on its own terms.
 pub(crate) fn malformed(method: &str, error: impl Display) -> CallError {
     PlaywrightError::error(format!("{method} answered: {error}")).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future;
+    use std::time::Duration;
+
+    use tokio::runtime::Handle;
+    use tokio::sync::{Mutex, oneshot};
+    use tokio::time;
+    use tokio_util::sync::CancellationToken;
+    use tokio_util::task::TaskTracker;
+
+    use super::*;
+    use crate::events::EventHub;
+    use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+    use crate::page::Session;
+    use crate::run::PageId;
+
+    async fn page_on(
+        browser: &FakeBrowser,
+        tasks: &TaskTracker,
+        closed: &CancellationToken,
+    ) -> Arc<PageSession> {
+        let id = PageId::new(PAGE.to_string());
+        let session = Session::attach(browser.cdp().await, id.clone(), Handle::current())
+            .await
+            .expect("attach");
+        Arc::new(PageSession::new(
+            session,
+            &id,
+            tasks.clone(),
+            Arc::default(),
+            Arc::new(Mutex::new(())),
+            closed.clone(),
+            EventHub::default(),
+            false,
+        ))
+    }
+
+    /// A cleanup waiting for an answer its gone tab will never send ends when the tab goes, and
+    /// what it held (here a sender standing in for the tab's screenshot turn) goes with it, so
+    /// the run's tracker drains.
+    #[tokio::test]
+    async fn a_background_task_ends_when_its_tab_goes() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let closed = CancellationToken::new();
+        let page = page_on(&browser, &tasks, &closed).await;
+        let (held, released) = oneshot::channel::<()>();
+        spawn_while_open(&page, async move {
+            future::pending::<()>().await;
+            drop(held);
+        });
+        closed.cancel();
+        assert!(
+            time::timeout(Duration::from_secs(5), released)
+                .await
+                .is_ok(),
+            "the task's hold went with the tab"
+        );
+        tasks.close();
+        assert!(
+            time::timeout(Duration::from_secs(5), tasks.wait())
+                .await
+                .is_ok()
+        );
+    }
+
+    /// While the tab stays, the task runs to its end.
+    #[tokio::test]
+    async fn a_background_task_runs_to_its_end_while_its_tab_stays() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let closed = CancellationToken::new();
+        let page = page_on(&browser, &tasks, &closed).await;
+        let (done, finished) = oneshot::channel();
+        spawn_while_open(&page, async move {
+            time::sleep(Duration::from_millis(20)).await;
+            let _sent = done.send("ran");
+        });
+        assert_eq!(
+            time::timeout(Duration::from_secs(5), finished)
+                .await
+                .ok()
+                .and_then(Result::ok),
+            Some("ran")
+        );
+    }
 }
