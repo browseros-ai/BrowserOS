@@ -275,10 +275,6 @@ async fn stop_server(client: &Client, base: &str, process: &mut Process) -> anyh
     process.wait().await
 }
 
-#[expect(
-    clippy::print_stderr,
-    reason = "Report opt-in browser skips and verification steps"
-)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::Result<()> {
     let Some(binary) = env::var_os("NEO_E2E_BROWSER") else {
