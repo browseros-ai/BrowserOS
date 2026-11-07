@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use browseros_cdp::CdpError;
 use browseros_core::viewport::ViewportLease;
 use browseros_core::{CoreError, PageId, TabId, TargetError};
-use browseros_trace::{EpochMillis, OperationId};
+use browseros_trace::{EpochMillis, OperationId, OperationReached};
 use serde_json::Value;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -80,10 +80,12 @@ pub(super) struct OpState {
     /// wins, and nothing unsets it.
     sent_at: OnceLock<EpochMillis>,
     sensitive: AtomicBool,
-    /// The latest `recheck` refusal, until a later recheck passes. If the method then fails in
-    /// any way, this is the op's error, so a refusal survives a crate's own error mapping
-    /// (sdk-playwright returns its own marker type and never names the app's error).
-    refusal: Mutex<Option<OperationError>>,
+    /// The latest `recheck` or `recheck_reach` refusal, until a later check clears it
+    /// ([`StandingRefusal`]). However the method then ends, a value included, this is the op's
+    /// error, so a refusal survives a crate's own error mapping (sdk-playwright returns its own
+    /// marker type and never names the app's error), and one after the send withholds the
+    /// answer even if the crate drops it.
+    refusal: Mutex<Option<StandingRefusal>>,
     /// Call-log lines. `OperationEnded` has no notes field yet, so the guard writes them to
     /// the log at the op's end; when sdk-traces adds the column, only the guard changes.
     notes: Mutex<Vec<String>>,
@@ -91,6 +93,35 @@ pub(super) struct OpState {
     /// Pages whose viewport lease this op holds. Core's leases do not nest, so a child op
     /// inherits its ancestor's lease instead of taking it again and deadlocking.
     viewports: Mutex<Vec<PageId>>,
+    /// Every other tab a main-world script of this op could act on through its page's opener
+    /// links: the union of what each [`OpCtx::recheck_reach`] named, every `waitForFunction` poll
+    /// and `setContent` write included, each tab once, in the order first reached, never the op's
+    /// own tab. It is the set the trace has heard of, so it takes a tab before the rules run on it,
+    /// and keeps a tab a refused send named. The door runs the read rules on each before it
+    /// releases what the script answered, since the script read those tabs as easily as its own;
+    /// a tab only a refused send named can only withhold more there.
+    reached: Mutex<Vec<TabId>>,
+}
+
+/// A refusal of the door's rules during an op, as it stands as the op's error ([`OpState`]) until
+/// a later check clears it. Its error is always the public form the agent may see.
+#[derive(Clone, Debug)]
+pub(crate) enum StandingRefusal {
+    /// A rule refused the op's tab or a tab its script reaches. Only a passing
+    /// [`OpCtx::recheck`] clears it: a rule that refused after the send saw the owner hold a tab
+    /// while the script could act on it, which no later pass undoes.
+    Rule(OperationError),
+    /// `tab`, which [`OpCtx::recheck_reach`] named, was missing from `tab_watch`'s latest listing
+    /// (`neo / unsupported`). It can be transient: a window the script opened a moment ago is
+    /// listed within milliseconds, so the crate tries such a tab again after the send. A later
+    /// `recheck_reach` that names `tab` and passes clears it too, as every tab it named is then
+    /// listed and passes its rules.
+    Unlisted {
+        /// The tab no listing had.
+        tab: TabId,
+        /// The public refusal.
+        error: OperationError,
+    },
 }
 
 /// A page's viewport lease, held or inherited from an ancestor op. A method keeps it for as
@@ -147,7 +178,9 @@ impl<M> OpCtx<M> {
                 Ok(())
             }
             Err(refusal) => {
-                self.core.state.set_refusal(Some(refusal.clone()));
+                self.core
+                    .state
+                    .set_refusal(Some(StandingRefusal::Rule(refusal.clone())));
                 Err(LeafError::definite(refusal))
             }
         }
@@ -163,6 +196,80 @@ impl<M> OpCtx<M> {
             ..self.core.policy_check()
         };
         self.core.dispatcher.check(&check)
+    }
+
+    /// The door's rules again on each of `tabs`: the other tabs a main-world script on this op's
+    /// page can click into, type into and navigate through its opener links (sdk-playwright's
+    /// `OpEnv::recheck_reach`), where `recheck` covers the op's own tab only. The crate calls it
+    /// right after [`OpCtx::recheck`] and before `mark_sent`, with the page's group, and again
+    /// after the send, before it hands back the answer, with the windows and frames the script
+    /// opened since. A refusal before the send leaves the op `not_sent`; one after it withholds
+    /// the answer, and the op is `done`. Each tab is checked as this op acting on it
+    /// ([`OpCtx::check_tab`]), which is a write, since only a write op sends a main-world script:
+    /// so the owner's lock on any of them refuses the script, even a lock that allows reads, and
+    /// so does a CAPTCHA solve's hold. The first refusal stands as the op's error, as `recheck`'s
+    /// does, so the script sees the rule's own owner and code whatever the crate makes of it; the
+    /// crate also learns which kind it was ([`StandingRefusal`]), since it tries an unlisted tab
+    /// again after the send and never a rule.
+    /// Every tab named stays on the op ([`OpState::reached`]), so that the door runs the read
+    /// rules on each again before it releases what the script answered.
+    ///
+    /// The trace hears of each tab the op had not reached yet (`OperationReached`) before any rule
+    /// runs, as it hears of the op's start before the door's rules. A takeover lock's settle
+    /// counts the op as a write in flight on each tab it reached: a lock committed before the
+    /// trace heard is in the table when the rules run, so they refuse the send, and one committed
+    /// after flushes the reach and answers "not settled". Told after the rules instead, a lock
+    /// committed between the two would find nothing in flight while the script ran. A refused
+    /// send's reach stays on the record as what the script tried.
+    ///
+    /// A tab core did not know at the browser link's latest listing is refused `neo /
+    /// unsupported`, never skipped, since no rule can vouch for a tab Neo does not track. The
+    /// run's view is unbound and admits every tab core knows, so such a tab is also the only kind
+    /// outside the view: an extension's page, which core leaves out of its registry, or a tab a
+    /// listing since found closed. A window so new that no listing has it yet is refused too,
+    /// failing closed: `tab_watch` lists as soon as the browser announces a page target, well
+    /// before a script in another page can reach it, but a window the script opened itself, named
+    /// after the send, can be younger than the latest listing. It reads memory only and never
+    /// awaits: it runs at a `waitForFunction`'s poll rate, and time spent here widens the window
+    /// in which a takeover lands unseen.
+    pub(crate) fn recheck_reach(&self, tabs: &[TabId]) -> Result<(), StandingRefusal> {
+        let own = self.core.page.as_ref().map(|page| page.tab);
+        let first_reached = self.core.state.reach(tabs, own);
+        if !first_reached.is_empty() {
+            self.core.dispatcher.op_reached(OperationReached {
+                id: self.id(),
+                tabs: first_reached,
+                at: EpochMillis::now(),
+            });
+        }
+        if let Some(refusal) = tabs.iter().find_map(|&tab| self.check_reach(tab).err()) {
+            self.core.state.set_refusal(Some(refusal.clone()));
+            return Err(refusal);
+        }
+        self.core.state.clear_unlisted(tabs);
+        Ok(())
+    }
+
+    fn check_reach(&self, tab: TabId) -> Result<(), StandingRefusal> {
+        if !self
+            .core
+            .dispatcher
+            .browser()
+            .lists_tab(self.core.run.epoch(), tab)
+        {
+            let error = OperationError::neo(
+                ErrorCode::UNSUPPORTED,
+                format_args!(
+                    "a script in this page can act on tab {} through window.opener (its opener, \
+                     or a window it opened), and Neo does not track that tab: it closed, it is \
+                     an extension's page, or it opened a moment ago and Neo has not listed it \
+                     yet. So Neo cannot check its rules there",
+                    tab.0
+                ),
+            );
+            return Err(StandingRefusal::Unlisted { tab, error });
+        }
+        self.check_tab(tab).map_err(StandingRefusal::Rule)
     }
 
     /// The side effect may happen from now on. Write-once, and it marks every ancestor too:
@@ -347,6 +454,7 @@ impl OpState {
             notes: Mutex::new(Vec::new()),
             reports: Mutex::new(Vec::new()),
             viewports: Mutex::new(Vec::new()),
+            reached: Mutex::new(Vec::new()),
         })
     }
 
@@ -367,9 +475,11 @@ impl OpState {
         self.sensitive.load(Ordering::Relaxed)
     }
 
-    /// The standing `recheck` refusal, if the latest recheck refused.
+    /// The refusal standing as the op's error, if any.
     pub(super) fn refusal(&self) -> Option<OperationError> {
-        lock(&self.refusal).clone()
+        lock(&self.refusal)
+            .as_ref()
+            .map(|refusal| refusal.error().clone())
     }
 
     pub(super) fn take_notes(&self) -> Vec<String> {
@@ -380,6 +490,11 @@ impl OpState {
         mem::take(&mut *lock(&self.reports))
     }
 
+    /// The other tabs this op's main-world script could act on, as of its latest reach.
+    pub(super) fn reached(&self) -> Vec<TabId> {
+        lock(&self.reached).clone()
+    }
+
     fn mark_sent(&self, at: EpochMillis) {
         let mut op = Some(self);
         while let Some(state) = op {
@@ -388,8 +503,32 @@ impl OpState {
         }
     }
 
-    fn set_refusal(&self, refusal: Option<OperationError>) {
+    fn set_refusal(&self, refusal: Option<StandingRefusal>) {
         *lock(&self.refusal) = refusal;
+    }
+
+    /// A `recheck_reach` that named `tabs` passed: an unlisted tab among them is listed now and
+    /// passes its rules, so its refusal no longer stands. A rule's refusal stays.
+    fn clear_unlisted(&self, tabs: &[TabId]) {
+        let mut refusal = lock(&self.refusal);
+        if matches!(*refusal, Some(StandingRefusal::Unlisted { tab, .. }) if tabs.contains(&tab)) {
+            *refusal = None;
+        }
+    }
+
+    /// Adds the tabs a send is about to reach besides the op's `own` tab, and returns those not
+    /// reached before, in the order named. A `waitForFunction` names the same group at each poll,
+    /// so a tab already here is neither added nor returned again.
+    fn reach(&self, tabs: &[TabId], own: Option<TabId>) -> Vec<TabId> {
+        let mut reached = lock(&self.reached);
+        let mut first_reached = Vec::new();
+        for &tab in tabs {
+            if Some(tab) != own && !reached.contains(&tab) {
+                reached.push(tab);
+                first_reached.push(tab);
+            }
+        }
+        first_reached
     }
 
     fn holds_viewport(&self, page: &PageId) -> bool {
@@ -411,6 +550,26 @@ impl Drop for HeldViewport {
         let mut viewports = lock(&self.op.viewports);
         if let Some(index) = viewports.iter().position(|page| *page == self.page) {
             viewports.swap_remove(index);
+        }
+    }
+}
+
+impl StandingRefusal {
+    /// The refusal as the agent may see it.
+    fn error(&self) -> &OperationError {
+        match self {
+            Self::Rule(error) | Self::Unlisted { error, .. } => error,
+        }
+    }
+}
+
+impl From<StandingRefusal> for LeafError {
+    /// A refusal is the rules' answer, never the browser's doubt: definite.
+    fn from(refusal: StandingRefusal) -> Self {
+        match refusal {
+            StandingRefusal::Rule(error) | StandingRefusal::Unlisted { error, .. } => {
+                Self::definite(error)
+            }
         }
     }
 }

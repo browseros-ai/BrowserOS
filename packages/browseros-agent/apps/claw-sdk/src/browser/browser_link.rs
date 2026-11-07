@@ -10,7 +10,7 @@ use browseros_core::sensitive_fields::SensitiveValues;
 use browseros_core::viewport::Viewports;
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, NativeCapabilities, PageId,
-    page_js,
+    TabId, page_js,
 };
 use tokio::sync::{SetOnce, broadcast, watch};
 use tokio::time;
@@ -47,6 +47,10 @@ pub(crate) struct BrowserLink {
     tab_events: broadcast::Sender<TabEvent>,
     /// The watch start `tab_watch` is on: which socket's target events it follows, if any.
     watched: watch::Sender<Option<Watched>>,
+    /// `tab_watch`'s latest listing: core's page registry right after it reconciled with the
+    /// browser, on the socket it was taken on. Read synchronously by [`BrowserLink::lists_tab`],
+    /// on the send path, where core's own registry (behind an async lock) cannot be asked.
+    listed: watch::Sender<Option<TabListing>>,
 }
 
 /// The browser as one run sees it: an unbound view and the CDP connection epoch it was taken
@@ -110,6 +114,7 @@ impl BrowserLink {
             last_error: Mutex::new(None),
             tab_events: broadcast::channel(TAB_EVENTS).0,
             watched: watch::Sender::new(None),
+            listed: watch::Sender::new(None),
         });
         tokio::spawn(connect_loop(Arc::clone(&link), native, tabs, connect));
         link
@@ -151,6 +156,21 @@ impl BrowserLink {
         let view = BrowserView::unbound(Arc::clone(session), None)
             .with_viewports(Arc::clone(&self.viewports));
         Some(RunView { view, epoch })
+    }
+
+    /// Whether core knew `tab` when `tab_watch` last listed the browser on socket `epoch`, with no
+    /// CDP call and no wait: for the door's rules on each tab a main-world script can reach
+    /// (`OpCtx::recheck_reach`), which run at a `waitForFunction`'s poll rate. `tab_watch` lists
+    /// after every page target that opens or closes, so a tab counts from the listing that first
+    /// has it until the first that lacks it. Never for a page core leaves out of its registry (an
+    /// extension's, or the developer tools'), and never from another socket's listing: Chromium
+    /// numbers its tabs from 1 again after a restart, so an old id may name another tab.
+    #[must_use]
+    pub(crate) fn lists_tab(&self, epoch: u64, tab: TabId) -> bool {
+        self.listed
+            .borrow()
+            .as_ref()
+            .is_some_and(|listing| listing.watched.epoch == epoch && listing.open.contains(&tab))
     }
 
     /// The current CDP epoch; `None` before the first connect. A run whose epoch differs was
@@ -245,6 +265,7 @@ impl BrowserLink {
             Arc::clone(&session),
             self.tab_events.clone(),
             self.watched.clone(),
+            self.listed.clone(),
         ));
         // Cannot fail: this is the loop's only success, and nothing else sets the session.
         let _ = self.session.set(session);

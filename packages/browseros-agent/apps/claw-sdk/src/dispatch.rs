@@ -46,7 +46,7 @@ mod tests;
 pub(crate) use dispatcher::{Call, CallSite, Caller, Dispatcher, OpReply, PageFact, PendingReply};
 pub(crate) use held_values::{Held, HeldValues, HeldWatch, WITHHELD};
 pub(crate) use method::{Lifetime, Listing, Method, MethodSpec, Output, PageScript, Visibility};
-pub(crate) use op_ctx::{OpCtx, PageChange};
+pub(crate) use op_ctx::{OpCtx, PageChange, StandingRefusal};
 pub(crate) use operation_error::{Answer, ErrorCode, LeafError, OpFailure, OperationError};
 pub(crate) use page_target::PageTarget;
 pub(crate) use policy::{Policy, PolicyCheck, ResultHold};
