@@ -1,120 +1,161 @@
-// A `signal` on any evaluation or handle method Neo serves is refused with an Error before the
-// page sees the call: Neo cannot honour an abort yet, so it never takes one silently (fleet
-// rule, med-pw-eval fix-a1.md 4 and 6). A page counter that every page function bumps shows
-// whether the call took effect. One case per receiver family: Page, Frame, Locator,
-// JSHandle/ElementHandle. The signal is an already-aborted signal-shaped object, because Neo's
-// realm has no `AbortController`.
+// Playwright's `signal` option through Neo and through Playwright on fresh pages that count their
+// clicks, once per receiver family (`locator.click`, `page.click`, `page.mainFrame().click`), a
+// read (`page.textContent`) and a navigation (`page.goto`).
 //
-// - `signal: null` is no signal: the call runs exactly as without the option, in both engines.
-// - Where Playwright takes a signal (`TimeoutOptions`), it rejects an already-aborted one before
-//   the call runs (tests/page/locator-wait-for-function.spec.ts at 26137face, LO-192 "should abort
-//   via already-aborted signal", with `AbortError`); Neo rejects with an Error. Compared directly:
-//   both reject, the counter stays 0.
-// - Where Playwright reads no signal (`EvaluateOptions` = `{ exposeFunctions }`: the page, frame
-//   and handle evaluations), it ignores one and runs the function; Neo refuses it (`Deviation:`
-//   in js-handle.ts). Each engine's side is asserted.
+// An already-aborted signal: both engines reject before anything is sent, so the page sees no
+// click and stays where it was; Playwright's error is `AbortError`, Neo's an `Error` (Neo refuses
+// every signal, DECIDED S1-1). A live signal: Playwright runs each call; Neo still refuses each
+// and the page sees nothing. `null` is no signal in either engine: both run every call. Each engine's results are asserted against its own contract, and the
+// browser effects compared where both promise the same. Never the error's wording.
+//
+// The scripts build the second URL with a string replace: Neo's realm has no global `URL`.
+//
+// Runs under Node, not Bun, on the shared harness (harness.mjs).
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
-import { compareMethod, skip } from './harness.mjs'
+import {
+  browserBinary,
+  buildNeoRun,
+  chromium,
+  errorCategory,
+  launchBrowser,
+  playwrightVersion,
+  runCleanups,
+  serveFixture,
+  skip,
+  startNeo,
+} from './harness.mjs'
 
-const html =
-  '<title>signal</title><p id="p">text</p><script>window.__count = 0</script>'
+const html = `<!doctype html><meta charset="utf-8"><title>signal</title>
+<button id="target" type="button" onclick="window.__clicks++">Target</button>
+<script>window.__clicks = 0</script>`
+const PROBE = '({ clicks: window.__clicks, path: location.pathname })'
 
-const SIGNAL = `
-const signal = { aborted: true, reason: 'stop', addEventListener() {}, removeEventListener() {} }
-const bump = () => { window.__count++; return 'ran' }
-const attempt = async (call) => {
-  try {
-    await call()
-    return 'resolved'
-  } catch (error) {
-    return error instanceof Error ? 'rejected' : 'threw a non-Error'
+/** Runs each call with `signal` and records how it settled: `resolved` or the error's kind. A
+ * live signal's run leaves out `goto`, which would leave the page that counts the clicks. */
+const script = (
+  signal,
+  { goto = true } = {},
+) => `const errorCategory = ${errorCategory.toString()};
+  const signal = ${signal}
+  const results = {}
+  for (const [name, call] of [
+    ['locator.click', () => page.locator('#target').click({ signal })],
+    ['page.click', () => page.click('#target', { signal })],
+    ['frame.click', () => page.mainFrame().click('#target', { signal })],
+    ['page.textContent', () => page.textContent('#target', { signal })],
+    ${goto ? "['page.goto', () => page.goto(page.url().replace(/[^/]*$/, 'elsewhere'), { signal })]," : ''}
+  ]) {
+    try {
+      await call()
+      results[name] = 'resolved'
+    } catch (error) {
+      results[name] = errorCategory(error)
+    }
   }
-}
+  return results
 `
+const ABORTED = "{ aborted: true, reason: new Error('stop') }"
+const LIVE =
+  '{ aborted: false, addEventListener() {}, removeEventListener() {} }'
+const NAMES = ['locator.click', 'page.click', 'frame.click', 'page.textContent']
+const EVERY = (kind, names = [...NAMES, 'page.goto']) =>
+  Object.fromEntries(names.map((name) => [name, kind]))
 
-test('methods that take a signal refuse an aborted one before the page sees the call', {
+test('a signal is refused before any browser effect', {
   skip,
   timeout: 180_000,
 }, async (t) => {
-  const outcome = await compareMethod(t, {
-    html,
-    source: `${SIGNAL}
-      return {
-        locatorEvaluate: await attempt(() => page.locator('#p').evaluate(bump, undefined, { signal })),
+  t.diagnostic(`Playwright ${playwrightVersion}`)
+  const neoRun = buildNeoRun()
+  const cleanups = []
+  try {
+    const origin = await serveFixture(cleanups, {
+      pages: { '/signal.html': html, '/elsewhere': '<title>elsewhere</title>' },
+    })
+    const url = `${origin}/signal.html`
+    const browser = await launchBrowser(cleanups, browserBinary)
+    const playwright = await chromium.connectOverCDP(
+      `http://127.0.0.1:${browser.port}`,
+    )
+    cleanups.push(() => playwright.close())
+    const [context] = playwright.contexts()
+    const scripts = mkdtempSync(join(tmpdir(), 'neo-signal-parity-'))
+    cleanups.push(() => rmSync(scripts, { recursive: true, force: true }))
+    const viaPlaywright = async (source) => {
+      const page = await context.newPage()
+      try {
+        await page.goto(url)
+        const AsyncFunction = (async () => {}).constructor
+        const value = await new AsyncFunction('page', source)(page)
+        return { value, effect: await page.evaluate(PROBE) }
+      } finally {
+        await page.close()
       }
-    `,
-    probe: 'window.__count',
-  })
-  assert.deepEqual(outcome.value, { locatorEvaluate: 'rejected' })
-})
+    }
+    const viaNeo = async (name, source) => {
+      const page = await context.newPage()
+      try {
+        await page.goto(url)
+        const session = await context.newCDPSession(page)
+        const { targetInfo } = await session.send('Target.getTargetInfo')
+        await session.detach()
+        const path = join(scripts, `${name}.js`)
+        writeFileSync(path, source)
+        const neo = startNeo(neoRun, browser.port, targetInfo.targetId, path)
+        await neo.connected
+        const outcome = await neo.outcome
+        assert.equal(outcome.status, 'ok', JSON.stringify(outcome))
+        return {
+          outcome,
+          value: outcome.value,
+          effect: await page.evaluate(PROBE),
+        }
+      } finally {
+        await page.close()
+      }
+    }
 
-test('evaluations Playwright reads no signal on: Neo refuses one, Playwright runs', {
-  skip,
-  timeout: 180_000,
-}, async (t) => {
-  await compareMethod(t, {
-    html,
-    source: `${SIGNAL}
-      const handle = await page.evaluateHandle(() => document.querySelector('#p'))
-      const frame = page.mainFrame()
-      const outcomes = {
-        pageEvaluate: await attempt(() => page.evaluate(bump, undefined, { signal })),
-        pageEvaluateHandle: await attempt(() => page.evaluateHandle(bump, undefined, { signal })),
-        frameEvaluate: await attempt(() => frame.evaluate(bump, undefined, { signal })),
-        frameEvaluateHandle: await attempt(() => frame.evaluateHandle(bump, undefined, { signal })),
-        handleEvaluate: await attempt(() => handle.evaluate(bump, undefined, { signal })),
-        handleEvaluateHandle: await attempt(() => handle.evaluateHandle(bump, undefined, { signal })),
-      }
-      await page.evaluate((recorded) => { window.__outcomes = recorded }, outcomes)
-      return null
-    `,
-    probe: '({ count: window.__count, outcomes: window.__outcomes })',
-    effects: ({ playwright, neo }) => {
-      const each = (value) =>
-        Object.fromEntries(
-          [
-            'pageEvaluate',
-            'pageEvaluateHandle',
-            'frameEvaluate',
-            'frameEvaluateHandle',
-            'handleEvaluate',
-            'handleEvaluateHandle',
-          ].map((key) => [key, value]),
-        )
-      assert.deepEqual(
-        playwright,
-        { count: 6, outcomes: each('resolved') },
-        'Playwright',
-      )
-      assert.deepEqual(neo, { count: 0, outcomes: each('rejected') }, 'Neo')
-    },
-  })
-})
+    await t.test(
+      'an aborted signal: both reject, the page is untouched',
+      async () => {
+        const reference = await viaPlaywright(script(ABORTED))
+        assert.deepEqual(reference.value, EVERY('AbortError'))
+        assert.deepEqual(reference.effect, { clicks: 0, path: '/signal.html' })
+        const neo = await viaNeo('aborted', script(ABORTED))
+        assert.deepEqual(neo.value, EVERY('Error'))
+        assert.deepEqual(neo.effect, reference.effect, 'what the page saw')
+        assert.deepEqual(neo.outcome.calls, [], 'Neo sent no call')
+      },
+    )
 
-test('a null signal is no signal: the call runs as without the option', {
-  skip,
-  timeout: 180_000,
-}, async (t) => {
-  const outcome = await compareMethod(t, {
-    html,
-    source: `${SIGNAL}
-      const handle = await page.evaluateHandle(() => document.querySelector('#p'))
-      const frame = page.mainFrame()
-      const none = { signal: null }
-      return {
-        locatorEvaluate: await attempt(() => page.locator('#p').evaluate(bump, undefined, none)),
-        pageEvaluate: await attempt(() => page.evaluate(bump, undefined, none)),
-        frameEvaluate: await attempt(() => frame.evaluate(bump, undefined, none)),
-        handleEvaluate: await attempt(() => handle.evaluate(bump, undefined, none)),
-      }
-    `,
-    probe: 'window.__count',
-  })
-  assert.deepEqual(outcome.value, {
-    locatorEvaluate: 'resolved',
-    pageEvaluate: 'resolved',
-    frameEvaluate: 'resolved',
-    handleEvaluate: 'resolved',
-  })
+    await t.test('null is no signal: both engines run the calls', async () => {
+      const none = script('null', { goto: false })
+      const reference = await viaPlaywright(none)
+      assert.deepEqual(reference.value, EVERY('resolved', NAMES))
+      assert.deepEqual(reference.effect, { clicks: 3, path: '/signal.html' })
+      const neo = await viaNeo('null', none)
+      assert.deepEqual(neo.value, reference.value)
+      assert.deepEqual(neo.effect, reference.effect, 'what the page saw')
+    })
+
+    await t.test(
+      'a live signal: Playwright runs the calls, Neo refuses them',
+      async () => {
+        const live = script(LIVE, { goto: false })
+        const reference = await viaPlaywright(live)
+        assert.deepEqual(reference.value, EVERY('resolved', NAMES))
+        assert.deepEqual(reference.effect, { clicks: 3, path: '/signal.html' })
+        const neo = await viaNeo('live', live)
+        assert.deepEqual(neo.value, EVERY('Error', NAMES))
+        assert.deepEqual(neo.effect, { clicks: 0, path: '/signal.html' })
+        assert.deepEqual(neo.outcome.calls, [], 'Neo sent no call')
+      },
+    )
+  } finally {
+    await runCleanups(cleanups)
+  }
 })

@@ -130,6 +130,7 @@ import {
   convertSelectOptionValues,
   type SelectOptionValues,
 } from './select-option'
+import { refuseSignalFor } from './timeout-settings'
 import { type URLPredicate, urlFor } from './url'
 
 /** `click`'s options as a script passes them: the wire params plus `timeout`. */
@@ -389,7 +390,7 @@ export class Frame {
         ...options,
         waitUntil,
       }) as FrameGotoParams,
-      this._page._timeoutSettings.navigationTimeout(options),
+      this._page._timeoutSettings.navigationTimeout(options, apiName),
     )
     const guid = result?.response?.guid
     return guid ? responseFor(this._connection, guid, this) : null
@@ -462,7 +463,7 @@ export class Frame {
       this._guid,
       'neo:waitForURL',
       { url: serialized, waitUntil },
-      this._page._timeoutSettings.navigationTimeout(waitOptions),
+      this._page._timeoutSettings.navigationTimeout(waitOptions, apiName),
     )
   }
 
@@ -712,7 +713,7 @@ export class Frame {
       this._guid,
       'neo:waitForLoadState',
       { state: verified },
-      this._page._timeoutSettings.navigationTimeout(options ?? {}),
+      this._page._timeoutSettings.navigationTimeout(options ?? {}, apiName),
     )
   }
 
@@ -734,7 +735,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameWaitForSelectorParams,
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options, apiName),
     )
   }
 
@@ -874,7 +875,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameTextContentParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )) as FrameTextContentResult
     return result.value === undefined ? null : result.value
   }
@@ -899,7 +900,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameInnerTextParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )) as FrameInnerTextResult
     return result.value
   }
@@ -926,7 +927,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameInnerHTMLParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )) as FrameInnerHTMLResult
     return result.value
   }
@@ -959,7 +960,7 @@ export class Frame {
         name,
         ...options,
       }) as FrameGetAttributeParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )) as FrameGetAttributeResult
     return result.value === undefined ? null : result.value
   }
@@ -1066,7 +1067,7 @@ export class Frame {
         depth: options.depth,
         boxes: options.boxes,
       }) as FrameAriaSnapshotParams,
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options, apiName),
     )) as FrameAriaSnapshotResult
     return result.snapshot
   }
@@ -1090,7 +1091,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameClickParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
   }
 
@@ -1116,7 +1117,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameDblclickParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
   }
 
@@ -1139,7 +1140,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameHoverParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
   }
 
@@ -1162,7 +1163,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameTapParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
   }
 
@@ -1190,7 +1191,7 @@ export class Frame {
         value,
         ...options,
       }) as FrameFillParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
   }
 
@@ -1218,7 +1219,7 @@ export class Frame {
         key,
         ...options,
       }) as FramePressParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
   }
 
@@ -1243,7 +1244,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameInputValueParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
     if (result === undefined)
       throw new Error(
@@ -1265,6 +1266,9 @@ export class Frame {
     selector: string,
     options: IsVisibleOptions,
   ): Promise<boolean> {
+    // An immediate read: Playwright sends it with no timeout (`kNoTimeout`), so none is resolved
+    // here, but a signal is refused as every method refuses it.
+    refuseSignalFor(options ?? {}, apiName)
     const result = await this._connection.send(
       apiName,
       this._guid,
@@ -1294,6 +1298,8 @@ export class Frame {
     selector: string,
     options: IsHiddenOptions,
   ): Promise<boolean> {
+    // An immediate read, as `_isVisible`: no timeout, and a signal refused.
+    refuseSignalFor(options ?? {}, apiName)
     const result = await this._connection.send(
       apiName,
       this._guid,
@@ -1330,7 +1336,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameIsCheckedParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
     if (result === undefined)
       throw new Error('neo-sdk: Frame.isChecked contract error: missing result')
@@ -1358,7 +1364,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameIsEnabledParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
     if (result === undefined)
       throw new Error('neo-sdk: Frame.isEnabled contract error: missing result')
@@ -1386,7 +1392,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameIsDisabledParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
     if (result === undefined)
       throw new Error(
@@ -1417,7 +1423,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameIsEditableParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
     if (result === undefined)
       throw new Error(
@@ -1444,7 +1450,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameCheckParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
   }
 
@@ -1466,7 +1472,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameUncheckParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
   }
 
@@ -1499,7 +1505,7 @@ export class Frame {
         ...convertSelectOptionValues(values),
         ...options,
       }) as FrameSelectOptionParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
     if (result === undefined)
       throw new Error(
