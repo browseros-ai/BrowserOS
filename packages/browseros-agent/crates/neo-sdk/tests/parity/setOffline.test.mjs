@@ -87,6 +87,36 @@ const cases = [
     probe: '[location.pathname, navigator.onLine]',
     effect: ['/setOffline.html', true],
   },
+  {
+    // browsercontext-basic.spec.ts "BC-025 should emulate navigator.onLine", once a popup of the
+    // context has opened and closed: a regression for Neo's setOffline sending to the closed
+    // popup's session and rejecting.
+    name: 'a popup that opened and closed leaves setOffline reaching the open page',
+    path: '/setOffline.html',
+    source: `${NETWORK}const [popup] = await Promise.all([
+      page.waitForEvent('popup'),
+      page.evaluate(() => {
+        window.open('/target.html')
+      }),
+    ])
+    await popup.waitForLoadState()
+    const popupTitle = await popup.title()
+    await popup.close()
+    let offline
+    try {
+      offline = await settle(page.context().setOffline(true).then(() => network()))
+    } finally {
+      await page.context().setOffline(false)
+    }
+    return { popupTitle, offline, after: await network() }`,
+    expected: {
+      popupTitle: 'target',
+      offline: { value: { onLine: false, fetch: 'TypeError' } },
+      after: { onLine: true, fetch: 200 },
+    },
+    probe: 'navigator.onLine',
+    effect: true,
+  },
 ]
 
 test('context.setOffline takes the page offline and back the same way through Neo and Playwright', {

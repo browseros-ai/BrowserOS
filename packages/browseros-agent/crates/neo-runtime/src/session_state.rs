@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use browseros_cdp::{CdpClient, SessionId};
+use browseros_cdp::{CdpClient, CdpError, SessionId};
 use neo_runtime_spec::serve::{
     BrowserContextSetGeolocationParamsGeolocation, BrowserContextSetStorageStateParamsStorageState,
     BrowserContextStorageStateParams, BrowserContextStorageStateResult, NameValue, NetworkCookie,
@@ -36,7 +36,7 @@ use url::{Origin, Url};
 use crate::page::PageSession;
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::run::PageId;
-use crate::tabs::{self, Tabs};
+use crate::tabs::{self, PageEntry, Tabs};
 
 /// Playwright: `server/network.ts` `kMaxCookieExpiresDateInSeconds`: `export const kMaxCookieExpiresDateInSeconds = 253402300799;`
 const MAX_COOKIE_EXPIRES_SECONDS: f64 = 253_402_300_799.0;
@@ -391,12 +391,15 @@ struct Target<'a> {
 }
 
 impl Target<'_> {
+    /// Playwright: `server/chromium/crPage.ts` `CRPage._forAllFrameSessions`: `if (isSessionClosedError(e))`
+    ///
+    /// A session that went away (its frame detached, its tab closed) has nothing left to set,
+    /// so a send to it is a no-op, as Playwright's broadcast to a closed frame's session is.
     async fn send(&self, method: &str, params: Value) -> Result<(), PlaywrightError> {
-        self.cdp
-            .send(method, params, Some(&self.session))
-            .await
-            .map(|_| ())
-            .map_err(|error| tabs::cdp_error(&error))
+        match self.cdp.send(method, params, Some(&self.session)).await {
+            Ok(_) | Err(CdpError::SessionGone) => Ok(()),
+            Err(error) => Err(tabs::cdp_error(&error)),
+        }
     }
 
     /// Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager.addSession`: `session.send('Network.enable'),`
@@ -428,6 +431,14 @@ impl Target<'_> {
     }
 }
 
+/// The run's attached tabs that are still open. A closed one is no page of the context any
+/// more, so a setting for every page passes it by, as Playwright's goes over `pages()`.
+fn open_tabs(tabs: &Tabs) -> impl Iterator<Item = (Arc<PageEntry>, Arc<PageSession>)> {
+    tabs.attached()
+        .into_iter()
+        .filter(|(entry, _)| !entry.closed.is_cancelled())
+}
+
 /// Every session of a tab the run attached: its own, then its out-of-process frames'.
 fn targets_of(page: &PageSession) -> Vec<Target<'_>> {
     let cdp = page.events.cdp();
@@ -451,7 +462,7 @@ impl Overrides {
     ) -> Result<(), CallError> {
         let mut state = self.0.lock().await;
         state.headers = headers;
-        for (entry, page) in tabs.attached() {
+        for (entry, page) in open_tabs(tabs) {
             let merged = state.headers_of(&entry.id);
             for target in targets_of(&page) {
                 progress.race(target.headers(&merged)).await??;
@@ -489,7 +500,7 @@ impl Overrides {
             return Ok(());
         }
         state.offline = offline;
-        for (_, page) in tabs.attached() {
+        for (_, page) in open_tabs(tabs) {
             for target in targets_of(&page) {
                 progress.race(target.offline(offline)).await??;
             }
@@ -509,7 +520,7 @@ impl Overrides {
         state.geolocation = geolocation;
         // The tab's own session only: its frames, out-of-process ones too, see the tab's
         // override, and a frame session that detaches would take the tab's with it (measured).
-        for (_, page) in tabs.attached() {
+        for (_, page) in open_tabs(tabs) {
             if let Some(own) = targets_of(&page).into_iter().next() {
                 progress.race(own.geolocation(checked.as_ref())).await??;
             }
@@ -523,6 +534,13 @@ impl Overrides {
     /// `page`: it gets what the run set so far, before the call that attached it goes on, a
     /// frame's session all but the geolocation, which the tab's own carries for every frame. A
     /// failure is logged; that session's later requests go without it.
+    ///
+    /// Deviation: `server/chromium/crBrowser.ts` `CRBrowser.connect`: `await session.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });`
+    /// Playwright holds each new page and out-of-process frame paused until its session has the
+    /// context's settings. Neo attaches one when the run first reaches it, so what it requested
+    /// before then went without the run's extra headers, offline mode and geolocation: a popup's
+    /// document, an out-of-process frame's own fetches as it loaded (measured). A frame's
+    /// document request carries them, as the tab's session sends it.
     pub(crate) async fn apply_to_new(
         &self,
         cdp: &CdpClient,
@@ -644,10 +662,7 @@ async fn open_page_of(
     tabs: &Tabs,
     origin: &str,
 ) -> Result<Option<Arc<PageSession>>, PlaywrightError> {
-    for (entry, page) in tabs.attached() {
-        if entry.closed.is_cancelled() {
-            continue;
-        }
+    for (entry, page) in open_tabs(tabs) {
         let Some(url) = tabs.url(&entry).await? else {
             continue;
         };
@@ -731,12 +746,7 @@ pub(crate) async fn storage_state(
         let Some(url) = progress.race(tabs.url(entry)).await?? else {
             continue;
         };
-        let Some(origin) = Url::parse(&url)
-            .ok()
-            .map(|url| url.origin())
-            .filter(Origin::is_tuple)
-            .map(|origin| origin.ascii_serialization())
-        else {
+        let Some(origin) = origin_of(&url) else {
             continue;
         };
         if !visited.contains(&origin) || origins.iter().any(|kept| kept.origin == origin) {
