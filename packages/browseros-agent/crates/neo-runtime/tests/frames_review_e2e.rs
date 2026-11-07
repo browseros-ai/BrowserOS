@@ -16,6 +16,7 @@ use std::time::Duration;
 use browser::{Fixture, Tab};
 use neo_runtime::{RunOutcome, RunStatus};
 use serde_json::json;
+use tokio::time;
 
 async fn run(tab: &Tab, source: &str) -> RunOutcome {
     tab.start_run(source.into())
@@ -231,6 +232,80 @@ async fn frame_getters_keep_the_committed_url_while_a_navigation_is_pending() {
     assert_eq!(
         values["frames"],
         json!([values["afterFrames"]]),
+        "{outcome:#?}"
+    );
+}
+
+/// A live frame whose document flips between the page's process and its own (same-site and
+/// cross-site URLs) is never detached: Playwright's `isDetached()` stays `false` and its direct
+/// reads succeed throughout (measured: 0 of ~5000 reads failed). A frame record dropped from one
+/// tree walk while its old target goes away must not read as detached.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_frame_changing_process_stays_attached() {
+    let Some(binary) = browser::e2e_browser() else {
+        return;
+    };
+    let tab = Tab::open(
+        binary,
+        Fixture {
+            pages: vec![
+                (
+                    "/top.html".into(),
+                    "<iframe name=f id=f src=/leaf.html></iframe>".into(),
+                ),
+                ("/leaf.html".into(), "<p>leaf</p>".into()),
+            ],
+            ..Fixture::default()
+        },
+        "/top.html",
+    )
+    .await;
+    let pending = tab
+        .start_run(
+            r"
+            const frame = page.frame('f');
+            const detached = [];
+            const failed = [];
+            const deadline = Date.now() + 4000;
+            for (let calls = 1; Date.now() < deadline; calls++) {
+                try {
+                    if (frame.isDetached()) detached.push(calls);
+                } catch (error) {
+                    failed.push(error.message);
+                }
+                if (calls % 5 === 0) {
+                    try {
+                        await frame.textContent('p', {timeout: 3000});
+                    } catch (error) {
+                        failed.push(error.message);
+                    }
+                }
+            }
+            return {detached: detached.length, failed: [...new Set(failed)]};
+        "
+            .into(),
+        )
+        .await;
+    let cross = tab.origin.replace("127.0.0.1", "localhost");
+    let mut flip = 0;
+    while !pending.is_finished() {
+        let origin = if flip % 2 == 0 { &cross } else { &tab.origin };
+        tab.evaluate(&format!(
+            "document.getElementById('f').src = '{origin}/leaf.html?flip={flip}'"
+        ))
+        .await;
+        flip += 1;
+        time::sleep(Duration::from_millis(60)).await;
+    }
+    let outcome = pending
+        .await
+        .unwrap_or_else(|error| panic!("run task: {error}"));
+    tab.close().await;
+    assert!(flip > 20, "the frame changed process {flip} times");
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:#?}");
+    assert_eq!(
+        outcome.value,
+        Some(json!({"detached": 0, "failed": []})),
         "{outcome:#?}"
     );
 }
