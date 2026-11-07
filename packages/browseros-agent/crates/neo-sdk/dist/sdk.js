@@ -7755,25 +7755,25 @@ class BrowserContext extends ChannelOwner {
   #onRequest({ request, page }) {
     const pageObject = this.#pageFor(page.guid);
     const requestObject = requestFromRecord(this.#connection, request, pageObject);
-    this.emit("request", requestObject);
+    this.#contextOf(pageObject).emit("request", requestObject);
     pageObject.emit("request", requestObject);
   }
   #onResponse({ response, request, page }) {
     const pageObject = this.#pageFor(page.guid);
     const responseObject = responseFromRecord(this.#connection, response, requestFromRecord(this.#connection, request, pageObject));
-    this.emit("response", responseObject);
+    this.#contextOf(pageObject).emit("response", responseObject);
     pageObject.emit("response", responseObject);
   }
   #onRequestFinished({ request, page }) {
     const pageObject = this.#pageFor(page.guid);
     const requestObject = requestFromRecord(this.#connection, request, pageObject);
-    this.emit("requestfinished", requestObject);
+    this.#contextOf(pageObject).emit("requestfinished", requestObject);
     pageObject.emit("requestfinished", requestObject);
   }
   #onRequestFailed({ request, page }) {
     const pageObject = this.#pageFor(page.guid);
     const requestObject = requestFromRecord(this.#connection, request, pageObject);
-    this.emit("requestfailed", requestObject);
+    this.#contextOf(pageObject).emit("requestfailed", requestObject);
     pageObject.emit("requestfailed", requestObject);
   }
   #onPage(created) {
@@ -7800,7 +7800,7 @@ class BrowserContext extends ChannelOwner {
     const page = this.#pageFor(event.page.guid);
     const download = new Download(page, event.url, event.suggestedFilename, event.artifact, this.#connection);
     page.emit("download", download);
-    this.emit("download", download);
+    this.#contextOf(page).emit("download", download);
   }
   #onDialog(record) {
     const dialogObject = this.#dialogFrom(record);

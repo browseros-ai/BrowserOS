@@ -297,7 +297,7 @@ export class BrowserContext extends ChannelOwner {
       request,
       pageObject,
     )
-    this.emit('request', requestObject)
+    this.#contextOf(pageObject).emit('request', requestObject)
     pageObject.emit('request', requestObject)
   }
 
@@ -309,7 +309,7 @@ export class BrowserContext extends ChannelOwner {
       response,
       requestFromRecord(this.#connection, request, pageObject),
     )
-    this.emit('response', responseObject)
+    this.#contextOf(pageObject).emit('response', responseObject)
     pageObject.emit('response', responseObject)
   }
 
@@ -324,7 +324,7 @@ export class BrowserContext extends ChannelOwner {
       request,
       pageObject,
     )
-    this.emit('requestfinished', requestObject)
+    this.#contextOf(pageObject).emit('requestfinished', requestObject)
     pageObject.emit('requestfinished', requestObject)
   }
 
@@ -336,7 +336,7 @@ export class BrowserContext extends ChannelOwner {
       request,
       pageObject,
     )
-    this.emit('requestfailed', requestObject)
+    this.#contextOf(pageObject).emit('requestfailed', requestObject)
     pageObject.emit('requestfailed', requestObject)
   }
 
@@ -391,7 +391,7 @@ export class BrowserContext extends ChannelOwner {
       this.#connection,
     )
     page.emit('download', download)
-    this.emit('download', download)
+    this.#contextOf(page).emit('download', download)
   }
 
   #onDialog(record: DialogRecord): void {
@@ -848,7 +848,8 @@ export class BrowserContext extends ChannelOwner {
   }
 
   /** The context a page's context-level events belong to: its own, for a page of a context the
-   * run created, whose events reach the run's context (Rust names that one). */
+   * run created, whose events reach the run's context (Rust names that one). Every context-level
+   * event goes through it, as each Playwright context hears only its own pages. */
   #contextOf(page: Page | null): BrowserContext {
     return page ? page.context() : this
   }
