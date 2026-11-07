@@ -33,6 +33,7 @@ const valid = {
   isChecked: () => ({}),
   ariaSnapshot: () => ({}),
   frameOwner: () => ({ visible: false }),
+  frameOwnerRef: () => ({}),
   describeSelector: (_injected, { selector }) => ({ locator: selector }),
   resolve: () => ({ count: 0 }),
   checkElementStates: () => ({}),

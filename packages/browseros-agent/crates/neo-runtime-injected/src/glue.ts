@@ -187,6 +187,34 @@ export const glue = {
     }
   },
 
+  /**
+   * The ref an iframe element answers to in this document. The ref the document's last `ai`
+   * snapshot gave it is reused when the `aria-ref` engine still resolves it to this element;
+   * otherwise the document is snapshotted again, which renews only the refs of elements whose
+   * role or name changed. Either way the answer is checked through the engine, so a ref Neo
+   * hands out never names another element.
+   *
+   * Deviation: `injected/src/injectedScript.ts` `InjectedScript.ariaSnapshotJSON`: `refPrefix: this._frameSeq && options.mode === 'ai' ? 'f' + this._frameSeq : ''` Neo names a frame's refs by the refs of the iframes on the way from the main frame instead of a frame number, so an `ai` locator snapshot inside a frame may snapshot an iframe's own document again to give that iframe a ref.
+   */
+  frameOwnerRef: (injected, _params, element) => {
+    const names = (ref: string | undefined): ref is string =>
+      !!ref &&
+      injected.querySelectorAll(
+        injected.parseSelector(`aria-ref=${ref}`),
+        document,
+      )[0] === element
+    // `computeAriaRef` keeps each element's ref on the element itself.
+    const cached = () =>
+      (element as { _ariaRef?: { ref: string } })._ariaRef?.ref
+    const known = cached()
+    if (names(known)) return { ref: known }
+    const [root] = query(injected, 'body,frameset', false)
+    if (!root) return {}
+    injected.ariaSnapshotJSON(root, { mode: 'ai' })
+    const renewed = cached()
+    return names(renewed) ? { ref: renewed } : {}
+  },
+
   describeSelector: (injected, { selector }) => {
     const locator = injected.utils.asLocator('javascript', selector)
     try {

@@ -150,10 +150,13 @@ export class Locator {
 
   /**
    * Playwright: `client/locator.ts` `Locator.ariaSnapshot`: `selector: this._selector,`
-   * The matched subtree as YAML, in the main frame only. Default mode waits for a match;
-   * `mode: 'ai'` adds refs and does not auto-wait: use `waitFor()` first if needed.
-   * `depth` limits tree levels (0 means unlimited). AI refs work with `page.locator('aria-ref=…')`
-   * until the next snapshot or navigation replaces them. Every mode requires one match.
+   * The matched subtree as YAML, in whichever frame the locator reaches. Default mode waits for a
+   * match; `mode: 'ai'` adds refs, puts each iframe's document of the subtree under its `iframe`
+   * node, and does not auto-wait: use `waitFor()` first if needed. `depth` limits tree levels (0
+   * means unlimited). AI refs are page-wide, as `page.ariaSnapshot`'s: `page.getByRef(ref)` and
+   * `page.locator('aria-ref=…')` find the element from any receiver, until that document's next
+   * snapshot or navigation. A subtree inside a frame behind an iframe that has no ref (a hidden
+   * iframe) throws in `ai` mode rather than answer refs. Every mode requires one match.
    */
   async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
     return await this._frame._ariaSnapshot(
@@ -242,7 +245,7 @@ export class Locator {
    *   or the one that does is hidden.
    *
    * Strict: a selector that matches more than one element throws an `Error` at once, as does an
-   * invalid one or one that enters a frame (Neo serves the main frame only). Runs under the action
+   * invalid one. A selector may enter frames, as a frame locator's does. Runs under the action
    * timeout and polls the page. It never takes the tab's input, so a click or typing in the same
    * run can be what satisfies it.
    */

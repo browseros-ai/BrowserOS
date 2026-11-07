@@ -175,6 +175,20 @@ Injected:
         # Visibility of the first iframe owner, false when nothing matched.
         visible: boolean
 
+    # The `aria-ref` an `<iframe>` or `<frame>` element answers to in its own document, so the refs
+    # of an `ai` locator snapshot inside its frame can name that frame from the main frame
+    # (`f<N>e<M>`, which `frame_selector::split` reads back as hops). Reuses the ref this
+    # document's last `ai` snapshot gave the element; otherwise snapshots the document again in
+    # `ai` mode, which keeps the ref of every element whose role and name did not change.
+    frameOwnerRef:
+      internal: true
+      parameters:
+        element: Element
+      returns:
+        # The element's ref (`eN`). Absent when it gets none: a hidden iframe, or one outside the
+        # accessibility tree.
+        ref: string?
+
     # Names a selector the way Playwright's call log does, for a click's first log line
     # `waiting for <locator>`, and reports a selector the page cannot parse. Playwright computes
     # both in Node (`asLocator`, `Selectors.parseSelector`); Neo asks the injected script's own
@@ -220,7 +234,8 @@ Injected:
         states:
           type: array
           items: ElementState
-        # Neo resolves in the main frame only, so neo-runtime always sends `true`.
+        # Playwright's `frameVisible`: whether every iframe the selector entered is visible, `true`
+        # for an element of the call's own frame.
         frameVisible: boolean
       returns:
         # Absent when every state holds.

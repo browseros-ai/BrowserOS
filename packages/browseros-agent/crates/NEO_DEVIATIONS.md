@@ -3,10 +3,12 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (0)
+## Deviations (2)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
+| neo-runtime-injected/src/glue.ts | `glue.frameOwnerRef` | `injected/src/injectedScript.ts` `InjectedScript.ariaSnapshotJSON` | Neo names a frame's refs by the refs of the iframes on the way from the main frame instead of a frame number, so an `ai` locator snapshot inside a frame may snapshot an iframe's own document again to give that iframe a ref. |
+| neo-runtime/src/reads.rs | `UNNAMED_FRAME` | `server/page.ts` `ariaSnapshotJSONForFrame` | Playwright names a frame's refs by its frame number; Neo names them by the refs of the iframes on the way from the main frame, so a frame behind an iframe that gets no ref has no usable refs, and its `ai` locator snapshot throws rather than answer refs that would name elements of another frame. |
 
 ## Unexplained: owner questions (0)
 

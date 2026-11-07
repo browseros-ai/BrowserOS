@@ -105,7 +105,8 @@ pub(crate) trait Tab: Send + Sync {
         strict: bool,
     ) -> impl Future<Output = Result<Option<Resolved<Self::Element>>, PageError>> + Send;
 
-    /// `checkElementStates` with `frameVisible: true` (Neo resolves in the main frame only).
+    /// `checkElementStates` with the element's `frameVisible`: whether every iframe its selector
+    /// entered is visible.
     fn check_states(
         &self,
         element: &Self::Element,
