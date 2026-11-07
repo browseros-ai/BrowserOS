@@ -25,11 +25,15 @@
  *   `waitForNavigation` on a child frame rejects: Neo does not record a child frame's requests.
  *   An unknown `waitUntil` is reported as `waitUntil`, where Playwright names it `state` when a
  *   glob or `RegExp` URL already matches.
- * - `allTextContents` and `allInnerTexts` send `client/locator.ts` source text (the latter
- *   without its TypeScript cast); compiled Playwright clients may format it differently. They
- *   read in Neo's isolated world, so page-defined `textContent` and `innerText` overrides
- *   (prototype patches, custom element classes or per-instance properties) can differ.
+ * - Text collections run as `$$eval` in the page's main world.
  */
+
+/** Playwright's `WaitForFunctionOptions`: `polling` is `'raf'` (default) or an interval in ms. */
+export type WaitForFunctionOptions = {
+  polling?: number | 'raf'
+  timeout?: number
+  signal?: unknown
+}
 
 import type {
   FrameAriaSnapshotParams,
@@ -77,7 +81,7 @@ import {
   getByTitleSelector,
 } from '../vendor/playwright/isomorphic/locatorUtils'
 import type { ApiName, Connection } from './connection'
-import { ElementHandle } from './element-handle'
+import { ElementHandle, elementsFrom } from './element-handle'
 import { TimeoutError } from './errors'
 import { FrameLocator, kAnyFrameSelector } from './frame-locator'
 import {
@@ -88,8 +92,11 @@ import {
   evaluateParams,
   handleFrom,
   type JSHandle,
+  type PageElement,
   type PageFunction,
+  type PageFunctionOn,
   parseResult,
+  serializeArgument,
 } from './js-handle'
 import { Locator, type LocatorOptions, testIdAttributeName } from './locator'
 import {
@@ -827,10 +834,6 @@ export class Frame {
     task: (handle: ElementHandle) => Promise<R>,
     options: { timeout?: number; signal?: unknown },
   ): Promise<R> {
-    // `null` is no signal, as `undefined`.
-    if (options.signal !== undefined && options.signal !== null)
-      // Deviation: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };` Neo refuses a signal rather than ignore it.
-      throw new Error(`${apiName}: Neo does not support signal yet`)
     const result = (await this._connection.send(
       apiName,
       this._guid,
@@ -995,69 +998,220 @@ export class Frame {
     apiName: ApiName,
     selector: string,
   ): Promise<string[]> {
-    return (await this.#evalOnSelectorAllTexts(
-      apiName,
-      selector,
-      "ee => ee.map(e => e.textContent || '')",
-      false,
-    )) as string[]
-  }
-
-  /** `client/locator.ts`'s `allInnerTexts` page function without its TypeScript cast, the one
-   * expression neo-runtime serves for it. A match without `innerText` (an SVG element) reads
-   * `undefined`, as the page function reads it; the declared `string[]` is Playwright's own. */
-  async _allInnerTexts(apiName: ApiName, selector: string): Promise<string[]> {
-    return (await this.#evalOnSelectorAllTexts(
-      apiName,
-      selector,
-      'ee => ee.map(e => e.innerText)',
-      true,
-    )) as string[]
-  }
-
-  /** Sends one served `$$eval` collection read with `kNoTimeout`, and decodes the serialized
-   * string array Rust answers, with `undefined` entries (`{v: 'undefined'}`) only when
-   * `undefinedAllowed`. Reaches `send` synchronously, so the location is the script's. */
-  async #evalOnSelectorAllTexts(
-    apiName: ApiName,
-    selector: string,
-    expression: string,
-    undefinedAllowed: boolean,
-  ): Promise<(string | undefined)[]> {
-    const result = await this._connection.send(
+    // Playwright's `allTextContents` is this `$$eval` of its own function, in the main world.
+    const result = await this._connection.sendEval(
       apiName,
       this._guid,
       'evalOnSelectorAll',
       {
         selector,
-        expression,
+        expression: "ee => ee.map(e => e.textContent || '')",
         isFunction: true,
-        arg: { value: { v: 'undefined' }, handles: [] },
+        arg: serializeArgument(undefined),
       },
       0,
     )
-    // `protocol/serializers.ts` assigns id 1 to the outer array and encodes each string as {s}.
-    const value = result?.value
-    if (
-      !value ||
-      typeof value !== 'object' ||
-      Object.keys(value).length !== 2 ||
-      value.id !== 1 ||
-      !Array.isArray(value.a)
+    // Playwright answers whatever the page's function returned (a `textContent` getter may give
+    // a number); Neo does not narrow it.
+    return parseResult(result?.value) as string[]
+  }
+
+  /** Playwright's allInnerTexts is $$eval in the main world; undefined entries remain values. */
+  async _allInnerTexts(apiName: ApiName, selector: string): Promise<string[]> {
+    const result = await this._connection.sendEval(
+      apiName,
+      this._guid,
+      'evalOnSelectorAll',
+      {
+        selector,
+        expression: 'ee => ee.map(e => e.innerText)',
+        isFunction: true,
+        arg: serializeArgument(undefined),
+      },
+      0,
     )
-      throw new Error(
-        'neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string array',
-      )
-    return value.a.map((item) => {
-      const single =
-        !!item && typeof item === 'object' && Object.keys(item).length === 1
-      if (single && undefinedAllowed && item.v === 'undefined') return undefined
-      if (!single || typeof item.s !== 'string')
-        throw new Error(
-          'neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string',
-        )
-      return item.s
-    })
+    return parseResult(result?.value) as string[]
+  }
+
+  /** Playwright's `frame.$`: the first match, or `null`, as an `ElementHandle`. */
+  async $(
+    selector: string,
+    options?: { strict?: boolean },
+  ): Promise<ElementHandle | null> {
+    return await this._querySelector('frame.$', selector, options)
+  }
+
+  async _querySelector(
+    apiName: ApiName,
+    selector: string,
+    options: { strict?: boolean; signal?: unknown } | undefined,
+  ): Promise<ElementHandle | null> {
+    // `null` is no signal, as `undefined`.
+    if (options?.signal !== undefined && options.signal !== null)
+      // Deviation: `client/timeoutSettings.ts` `kNoTimeout`: `export const kNoTimeout: channels.TimeoutOptions = { signal: undefined, timeout: 0 };` Playwright's `$` sends this, so it ignores a caller's signal; Neo refuses one rather than ignore it.
+      throw new Error(`${apiName}: Neo does not support signal yet`)
+    // Playwright's validator lets only `undefined` through: `strict: null` rejects before the call.
+    const params = {
+      selector,
+      ...pickParams(['strict'] as const, options ?? {}),
+    } as { selector: string; strict?: boolean }
+    const result = await this._connection.sendEval(
+      apiName,
+      this._guid,
+      'querySelector',
+      params,
+      0,
+    )
+    return ElementHandle.fromNullable(this._connection, result?.element)
+  }
+
+  /** Playwright's `frame.$$`: every match, as `ElementHandle`s. */
+  async $$(selector: string): Promise<ElementHandle[]> {
+    return await this._querySelectorAll('frame.$$', selector)
+  }
+
+  async _querySelectorAll(
+    apiName: ApiName,
+    selector: string,
+  ): Promise<ElementHandle[]> {
+    const result = await this._connection.sendEval(
+      apiName,
+      this._guid,
+      'querySelectorAll',
+      { selector },
+      0,
+    )
+    return elementsFrom(this._connection, result?.elements ?? [])
+  }
+
+  /** Playwright's `frame.$eval`: `pageFunction` on the first match, by value. */
+  async $eval<R, Arg>(
+    selector: string,
+    pageFunction: PageFunctionOn<PageElement, Arg, R>,
+    arg?: Arg,
+  ): Promise<R> {
+    // biome-ignore lint/complexity/noArguments: Playwright counts the arguments the call passed
+    assertMaxArguments(arguments.length, 3)
+    return await this._evalOnSelector(
+      'frame.$eval',
+      selector,
+      pageFunction,
+      arg,
+    )
+  }
+
+  async _evalOnSelector<R>(
+    apiName: ApiName,
+    selector: string,
+    pageFunction: unknown,
+    arg: unknown,
+  ): Promise<R> {
+    const params = evaluateParams(apiName, pageFunction, arg, undefined)
+    const result = await this._connection.sendEval(
+      apiName,
+      this._guid,
+      'evalOnSelector',
+      { selector, ...params },
+      0,
+    )
+    return parseResult(result?.value) as R
+  }
+
+  /** Playwright's `frame.$$eval`: `pageFunction` on the array of every match, by value. */
+  async $$eval<R, Arg>(
+    selector: string,
+    pageFunction: PageFunctionOn<PageElement[], Arg, R>,
+    arg?: Arg,
+  ): Promise<R> {
+    // biome-ignore lint/complexity/noArguments: Playwright counts the arguments the call passed
+    assertMaxArguments(arguments.length, 3)
+    return await this._evalOnSelectorAll(
+      'frame.$$eval',
+      selector,
+      pageFunction,
+      arg,
+    )
+  }
+
+  async _evalOnSelectorAll<R>(
+    apiName: ApiName,
+    selector: string,
+    pageFunction: unknown,
+    arg: unknown,
+  ): Promise<R> {
+    const params = evaluateParams(apiName, pageFunction, arg, undefined)
+    const result = await this._connection.sendEval(
+      apiName,
+      this._guid,
+      'evalOnSelectorAll',
+      { selector, ...params },
+      0,
+    )
+    return parseResult(result?.value) as R
+  }
+
+  /**
+   * Playwright's `frame.waitForFunction`: polls `pageFunction` in the page (every animation
+   * frame, or every `polling` ms) until it returns a truthy value, under the action timeout, and
+   * resolves a handle to that value.
+   */
+  async waitForFunction<R, Arg>(
+    pageFunction: PageFunction<Arg, R>,
+    arg?: Arg,
+    options?: WaitForFunctionOptions,
+  ): Promise<JSHandle<R>> {
+    return await this._waitForFunction(
+      'frame.waitForFunction',
+      pageFunction,
+      arg,
+      options,
+    )
+  }
+
+  async _waitForFunction<R>(
+    apiName: ApiName,
+    pageFunction: unknown,
+    arg: unknown,
+    options: WaitForFunctionOptions = {},
+  ): Promise<JSHandle<R>> {
+    // Playwright: `client/frame.ts` `Frame.waitForFunction`: `assert(options.polling === 'raf', 'Unknown polling option: ' + options.polling);`
+    if (typeof options.polling === 'string' && options.polling !== 'raf')
+      throw new Error(`Unknown polling option: ${options.polling}`)
+    const params = evaluateParams(apiName, pageFunction, arg, undefined)
+    // Playwright's validator lets only `undefined` through: `polling: null` rejects before the call.
+    const { pollingInterval } = pickParams(['pollingInterval'] as const, {
+      pollingInterval: options.polling === 'raf' ? undefined : options.polling,
+    }) as { pollingInterval?: number }
+    const result = await this._connection.sendEval(
+      apiName,
+      this._guid,
+      'waitForFunction',
+      pollingInterval === undefined ? params : { ...params, pollingInterval },
+      this._page._timeoutSettings.timeout(options, apiName),
+    )
+    return handleFrom(this._connection, result.handle) as JSHandle<R>
+  }
+
+  /**
+   * `Frame.waitForSelector` answering its element, as Playwright's `frame.waitForSelector` does
+   * for an attached or visible wait: behind `locator.elementHandle`.
+   */
+  async _waitForSelectorElement(
+    apiName: ApiName,
+    selector: string,
+    options: WaitForSelectorOptions & { strict?: boolean; signal?: unknown },
+  ): Promise<ElementHandle | null> {
+    const result = (await this._connection.send(
+      apiName,
+      this._guid,
+      'waitForSelector',
+      pickParams(FRAME_WAIT_FOR_SELECTOR_KEYS, {
+        selector,
+        ...options,
+      }) as FrameWaitForSelectorParams,
+      this._page._timeoutSettings.timeout(options, apiName),
+    )) as { element?: CreatedHandle } | undefined
+    return ElementHandle.fromNullable(this._connection, result?.element)
   }
 
   /** Playwright: `client/locator.ts` `Locator.ariaSnapshot`: `selector: this._selector,` */

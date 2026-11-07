@@ -307,7 +307,7 @@ test('tests that child-frame actions and reads use their own frame', async () =>
     if (method === 'selectOption') return { result: { values: ['child'] } }
     if (method === 'queryCount') return { result: { value: 2 } }
     if (method === 'evalOnSelectorAll')
-      return { result: { value: { id: 1, a: [{ s: 'child text' }] } } }
+      return { result: { value: { id: 1, a: ['child text'] } } }
     return {}
   }
   await child.fill('input', 'alice')
