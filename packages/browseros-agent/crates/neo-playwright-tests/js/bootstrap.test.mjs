@@ -194,6 +194,47 @@ test('pre-aborted browser startup acquires no profile or browser process', async
   assert.deepEqual(await fs.readdir(root), [])
 })
 
+test('forced helper cleanup reports final survivors separately from processes it killed', {
+  timeout: 15_000,
+}, async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'neo-bootstrap-helper-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const executable = path.join(root, 'fake-browser')
+  const helperFile = path.join(root, 'helper.pid')
+  const helper = `process.on('SIGTERM', () => {});
+    require('node:fs').writeFileSync(process.argv[1], String(process.pid));
+    setInterval(() => {}, 1000);`
+  await fs.writeFile(
+    executable,
+    `#!/usr/bin/env node
+    const fs = require('node:fs');
+    const {spawn} = require('node:child_process');
+    spawn(process.execPath, ['-e', ${JSON.stringify(helper)}, ${JSON.stringify(helperFile)}], {stdio:'ignore'});
+    const timer = setInterval(() => {
+      if (fs.existsSync(${JSON.stringify(helperFile)})) { clearInterval(timer); process.exit(0); }
+    }, 10);
+  `,
+    { mode: 0o700 },
+  )
+  const outputDir = path.join(root, 'output')
+  await assert.rejects(
+    OwnedBrowser.start({ executable, outputDir }),
+    /Browser exited before publishing/,
+  )
+  const cleanup = JSON.parse(
+    await fs.readFile(path.join(outputDir, 'cleanup.json'), 'utf8'),
+  )
+  const helperPid = Number(await fs.readFile(helperFile, 'utf8'))
+  assert.equal(cleanup.status, 'complete')
+  assert.equal(cleanup.forced, true)
+  assert(cleanup.forcedProcesses.some((process) => process.pid === helperPid))
+  assert.deepEqual(cleanup.survivors, [])
+  assert.throws(
+    () => process.kill(helperPid, 0),
+    (error) => error.code === 'ESRCH',
+  )
+})
+
 test('abort during endpoint discovery reaps an already started owned child before rejecting', {
   timeout: 10_000,
 }, async (t) => {

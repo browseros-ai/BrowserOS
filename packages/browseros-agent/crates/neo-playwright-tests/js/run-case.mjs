@@ -345,7 +345,9 @@ export async function runner(
 
 function publishPair(outputDir, pair) {
   const temporary = path.join(outputDir, 'pair.json.tmp')
-  fs.writeFileSync(temporary, JSON.stringify(pair, null, 2))
+  // Tagged strings and full DOM evidence already expand the payload. Whitespace adds no
+  // information here and can exceed the host string limit on upstream large-DOM cases.
+  fs.writeFileSync(temporary, JSON.stringify(pair))
   fs.renameSync(temporary, path.join(outputDir, 'pair.json'))
 }
 

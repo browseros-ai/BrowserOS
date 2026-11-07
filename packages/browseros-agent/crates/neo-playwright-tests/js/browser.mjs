@@ -417,11 +417,17 @@ function installObserver(binding, stateName) {
   function snapshot() {
     let count = 0
     let characters = 0
-    const tree = {}
-    const pending = [[document, tree]]
+    // A flat preorder table preserves topology without making JSON/codec depth depend on
+    // the website's DOM depth. Original large-DOM cases otherwise overflow serialization.
+    const tree = { roots: [0], nodes: [] }
+    const pending = [[document, null]]
     while (pending.length) {
-      const [node, result] = pending.pop()
+      const [node, parent] = pending.pop()
       if (++count > 50_000) return { incomplete: 'dom-node-budget' }
+      const index = tree.nodes.length
+      const result = { children: [] }
+      tree.nodes.push(result)
+      if (parent !== null) tree.nodes[parent].children.push(index)
       result.type = node.nodeType
       result.name = node.nodeName
       if (node.nodeValue !== null) {
@@ -444,9 +450,8 @@ function installObserver(binding, stateName) {
       const children = Array.from(node.childNodes)
       if (node.nodeType === Node.ELEMENT_NODE && node.shadowRoot)
         children.push(node.shadowRoot)
-      result.children = children.map(() => ({}))
-      for (let index = children.length - 1; index >= 0; index--)
-        pending.push([children[index], result.children[index]])
+      for (let child = children.length - 1; child >= 0; child--)
+        pending.push([children[child], index])
       if (characters > 8 * 1024 * 1024) return { incomplete: 'dom-text-budget' }
     }
     const selection = document.getSelection()
@@ -1490,14 +1495,14 @@ export class OwnedBrowser {
       const roots = []
       for (let index = 0; index < count; index++) {
         const parent = nodes.parentIndex[index]
-        if (parent >= 0) projected[parent].children.push(projected[index])
-        else roots.push(projected[index])
+        if (parent >= 0) projected[parent].children.push(index)
+        else roots.push(index)
       }
       return {
         frame: frame?.ordinal ?? null,
         url: strings[document.documentURL],
         title: strings[document.title],
-        tree: roots,
+        tree: { roots, nodes: projected },
       }
     })
   }
@@ -1634,6 +1639,7 @@ export class OwnedBrowser {
         }))
         if (alive.length) {
           cleanup.forced = true
+          cleanup.forcedProcesses = cleanup.survivors
           killOwned(pid, this.#profile, this.#groupVerified)
           const killedBy = Date.now() + KILL_TIMEOUT_MS
           do {
@@ -1642,6 +1648,12 @@ export class OwnedBrowser {
             await sleep(25)
           } while (Date.now() < killedBy)
         }
+        // Consumers use survivors as the final ownership check, not the list seen before
+        // escalation. Keep those earlier processes separately as diagnostic evidence.
+        cleanup.survivors = alive.map(({ pid: survivor, state }) => ({
+          pid: survivor,
+          state,
+        }))
         if (alive.length)
           throw new Error('Owned browser processes survived SIGKILL')
       })

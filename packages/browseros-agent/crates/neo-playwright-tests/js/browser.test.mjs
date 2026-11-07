@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Cdp, connect, OwnedBrowser } from './browser.mjs'
+import { codecFactory } from './codec.mjs'
 
 /** Implements just enough RFC 6455 for the real built-in WebSocket client, without packages. */
 async function fakeCdp(receive) {
@@ -289,6 +290,110 @@ test('target detachment cancels only that session and preserves the original eve
 // Opt in with an explicit executable. Ordinary Node/Bun checks stay offline and never
 // acquire a user's browser. The live test retains raw evidence and process cleanup proof.
 const liveTest = process.env.NEO_OBSERVER_BROWSER ? test : test.skip
+liveTest(
+  'owned observer transports a deeply nested DOM without recursive wire growth',
+  {
+    timeout: 120_000,
+  },
+  async () => {
+    const root = process.env.NEO_OBSERVER_ARTIFACT_DIR ?? tmpdir()
+    await mkdir(root, { recursive: true })
+    const outputDir = await mkdtemp(join(root, 'observer-deep-dom-'))
+    let browser
+    let actor
+    try {
+      browser = await OwnedBrowser.start({
+        executable: process.env.NEO_OBSERVER_BROWSER,
+        outputDir,
+      })
+      actor = await connect(browser.endpoint)
+      const { sessionId } = await actor.send('Target.attachToTarget', {
+        targetId: browser.pageId,
+        flatten: true,
+      })
+      const evaluated = await actor.send(
+        'Runtime.evaluate',
+        {
+          expression: `(() => {
+            const root = document.body.appendChild(document.createElement('div'));
+            let node = root;
+            for (let i = 0; i < 128; i++) node = node.appendChild(document.createElement('div'));
+            node.id = 'deep-leaf';
+            node.append('first', document.createElement('span'), 'third');
+            node.children[0].textContent = 'middle';
+            for (let i = 0; i < 5000; i++) root.appendChild(document.createElement('i')).textContent = String(i);
+          })()`,
+        },
+        sessionId,
+      )
+      assert.equal(
+        evaluated.exceptionDetails,
+        undefined,
+        JSON.stringify(evaluated),
+      )
+      const observation = await browser.snapshot()
+      const document = observation.pages
+        .flatMap((page) => page.documents)
+        .find((document) =>
+          document.dom?.tree?.nodes?.some((node) =>
+            node.attributes?.some(
+              ([name, value]) => name === 'id' && value === 'deep-leaf',
+            ),
+          ),
+        )
+      assert(document, 'deep document must survive the observer snapshot')
+      assert(document.dom.tree.nodes.length > 5000)
+      const nodes = document.dom.tree.nodes
+      const leaf = nodes.findIndex((node) =>
+        node.attributes?.some(
+          ([name, value]) => name === 'id' && value === 'deep-leaf',
+        ),
+      )
+      const parents = new Map()
+      nodes.forEach((node, index) => {
+        for (const child of node.children) parents.set(child, index)
+      })
+      let depth = 0
+      for (let index = leaf; parents.has(index); index = parents.get(index))
+        depth++
+      assert(depth > 128, 'deep parent links must survive projection')
+      assert.deepEqual(
+        nodes[leaf].children.map((index) => nodes[index].name),
+        ['#text', 'SPAN', '#text'],
+      )
+      assert.equal(nodes[nodes[leaf].children[0]].text, 'first')
+      assert.equal(nodes[nodes[leaf].children[2]].text, 'third')
+      assert(
+        document.dom.tree.nodes.every((node) =>
+          node.children.every(Number.isInteger),
+        ),
+      )
+      assert(observation.pages[0].dom[0].tree.nodes.length > 5000)
+      const codec = codecFactory({
+        identify: () => undefined,
+        resolve: () => assert.fail('no API references'),
+      })
+      const serialized = JSON.stringify(codec.encode(observation))
+      assert(
+        serialized.length < 32 * 1024 * 1024,
+        'wire size stays proportional to the flat DOM',
+      )
+      assert.deepEqual(codec.decode(JSON.parse(serialized)), observation)
+      await writeFile(
+        join(outputDir, 'deep-dom.json'),
+        JSON.stringify(observation, null, 2),
+      )
+    } finally {
+      await actor?.close()
+      await browser?.close()
+    }
+    const cleanup = JSON.parse(
+      await readFile(join(outputDir, 'cleanup.json'), 'utf8'),
+    )
+    assert.equal(cleanup.status, 'complete')
+    assert.deepEqual(cleanup.survivors, [])
+  },
+)
 liveTest(
   'owned browser records empty-document navigation, closure, and explicit observation gaps',
   {
