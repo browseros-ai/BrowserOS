@@ -4951,7 +4951,7 @@ class Frame {
       if (current && url(current))
         return await this._waitForLoadState(apiName, waitOptions.waitUntil, waitOptions);
       const waitUntil2 = verifyWaitState(apiName, "waitUntil", waitOptions.waitUntil === undefined ? "load" : waitOptions.waitUntil);
-      await this._navigationMatching(apiName, url, waitUntil2, this._page._timeoutSettings.navigationTimeout(waitOptions), false);
+      await this._navigationMatching(apiName, url, waitUntil2, this._page._timeoutSettings.navigationTimeout(waitOptions, apiName), false);
       return;
     }
     const serialized = serializeUrlMatch(apiName, url);
@@ -4963,7 +4963,7 @@ class Frame {
   }
   async _waitForNavigation(apiName, options) {
     const waitUntil = verifyWaitState(apiName, "waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
-    const timeout = this._page._timeoutSettings.navigationTimeout(options);
+    const timeout = this._page._timeoutSettings.navigationTimeout(options, apiName);
     const result = typeof options.url === "function" ? await this._navigationMatching(apiName, options.url, waitUntil, timeout, true) : await this._connection.sendNeo(apiName, this._guid, "neo:waitForNavigation", { url: serializeUrlMatch(apiName, options.url), waitUntil }, timeout);
     const guid = result?.response?.guid;
     return guid ? responseFor(this._connection, guid, this) : null;
@@ -5092,7 +5092,7 @@ class Frame {
   async _withElement(apiName, selector, task, options) {
     if (options.signal !== undefined && options.signal !== null)
       throw new Error(`${apiName}: Neo does not support signal yet`);
-    const result = await this._connection.send(apiName, this._guid, "waitForSelector", { selector, strict: true, state: "attached" }, this._page._timeoutSettings.timeout(options));
+    const result = await this._connection.send(apiName, this._guid, "waitForSelector", { selector, strict: true, state: "attached" }, this._page._timeoutSettings.timeout(options, apiName));
     const handle = ElementHandle.fromNullable(this._connection, result?.element);
     if (!handle)
       throw new Error(`Could not resolve ${selector} to DOM Element`);
@@ -5585,7 +5585,7 @@ class Page extends ChannelOwner {
     const result = await this.#connection.sendPage("page.reload", this.#guid, "reload", pickParams(PAGE_RELOAD_KEYS, {
       ...options,
       waitUntil
-    }), this._timeoutSettings.navigationTimeout(options));
+    }), this._timeoutSettings.navigationTimeout(options, "page.reload"));
     return this.#response(result?.response);
   }
   async goBack(options = {}) {
@@ -5593,7 +5593,7 @@ class Page extends ChannelOwner {
     const result = await this.#connection.sendPage("page.goBack", this.#guid, "goBack", pickParams(PAGE_GO_BACK_KEYS, {
       ...options,
       waitUntil
-    }), this._timeoutSettings.navigationTimeout(options));
+    }), this._timeoutSettings.navigationTimeout(options, "page.goBack"));
     return this.#response(result?.response);
   }
   async goForward(options = {}) {
@@ -5601,7 +5601,7 @@ class Page extends ChannelOwner {
     const result = await this.#connection.sendPage("page.goForward", this.#guid, "goForward", pickParams(PAGE_GO_FORWARD_KEYS, {
       ...options,
       waitUntil
-    }), this._timeoutSettings.navigationTimeout(options));
+    }), this._timeoutSettings.navigationTimeout(options, "page.goForward"));
     return this.#response(result?.response);
   }
   #response(response) {

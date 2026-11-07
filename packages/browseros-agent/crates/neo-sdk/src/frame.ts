@@ -447,7 +447,7 @@ export class Frame {
         apiName,
         url,
         waitUntil,
-        this._page._timeoutSettings.navigationTimeout(waitOptions),
+        this._page._timeoutSettings.navigationTimeout(waitOptions, apiName),
         false,
       )
       return
@@ -495,7 +495,10 @@ export class Frame {
       'waitUntil',
       options.waitUntil === undefined ? 'load' : options.waitUntil,
     )
-    const timeout = this._page._timeoutSettings.navigationTimeout(options)
+    const timeout = this._page._timeoutSettings.navigationTimeout(
+      options,
+      apiName,
+    )
     const result =
       typeof options.url === 'function'
         ? await this._navigationMatching(
@@ -827,7 +830,7 @@ export class Frame {
       this._guid,
       'waitForSelector',
       { selector, strict: true, state: 'attached' },
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options, apiName),
     )) as { element?: CreatedHandle } | undefined
     const handle = ElementHandle.fromNullable(this._connection, result?.element)
     if (!handle) throw new Error(`Could not resolve ${selector} to DOM Element`)

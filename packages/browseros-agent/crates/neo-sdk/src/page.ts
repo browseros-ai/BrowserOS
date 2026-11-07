@@ -463,7 +463,7 @@ export class Page extends ChannelOwner {
         ...options,
         waitUntil,
       }) as PageReloadParams,
-      this._timeoutSettings.navigationTimeout(options),
+      this._timeoutSettings.navigationTimeout(options, 'page.reload'),
     )
     return this.#response(result?.response)
   }
@@ -487,7 +487,7 @@ export class Page extends ChannelOwner {
         ...options,
         waitUntil,
       }) as PageGoBackParams,
-      this._timeoutSettings.navigationTimeout(options),
+      this._timeoutSettings.navigationTimeout(options, 'page.goBack'),
     )
     return this.#response(result?.response)
   }
@@ -506,7 +506,7 @@ export class Page extends ChannelOwner {
         ...options,
         waitUntil,
       }) as PageGoForwardParams,
-      this._timeoutSettings.navigationTimeout(options),
+      this._timeoutSettings.navigationTimeout(options, 'page.goForward'),
     )
     return this.#response(result?.response)
   }
