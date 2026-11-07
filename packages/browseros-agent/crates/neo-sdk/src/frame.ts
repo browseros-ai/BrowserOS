@@ -244,7 +244,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameTextContentParams,
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options ?? {}),
     )) as FrameTextContentResult
     return result.value === undefined ? null : result.value
   }
@@ -404,7 +404,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameClickParams,
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options ?? {}),
     )
   }
 

@@ -793,6 +793,8 @@ function pickParams(keys, options) {
   const params = {};
   for (const key of keys) {
     const value = options[key];
+    if (value === null)
+      throw new Error(`${key}: expected a value, got null`);
     if (value !== undefined)
       params[key] = value;
   }
@@ -879,7 +881,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "textContent", pickParams(FRAME_TEXT_CONTENT_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options));
+    }), this._page._timeoutSettings.timeout(options ?? {}));
     return result.value === undefined ? null : result.value;
   }
   async innerText(selector, options = {}) {
@@ -940,7 +942,7 @@ class Frame {
     await this._connection.send(apiName, this._guid, "click", pickParams(FRAME_CLICK_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options));
+    }), this._page._timeoutSettings.timeout(options ?? {}));
   }
   async fill(selector, value, options = {}) {
     return await this._fill("frame.fill", selector, value, options);
