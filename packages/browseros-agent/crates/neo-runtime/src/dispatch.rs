@@ -112,7 +112,7 @@ const MAX_CALLS_IN_FLIGHT: usize = 64;
 /// copies of each outside the realm.
 const MAX_REQUEST_BYTES_IN_FLIGHT: usize = 8 * 1024 * 1024;
 
-/// Neo: `selectOption`'s `elements` (Playwright's ElementHandle values, matched by node identity)
+/// Neo: `selectOption`'s `elements` (Playwright's `ElementHandle` values, matched by node identity)
 /// cannot reach Neo's injected script yet; neo-sdk refuses such values before sending
 /// (`select-option.ts`), and this refuses them on the wire.
 const ELEMENTS_UNSUPPORTED: &str = "Neo does not support ElementHandle values in selectOption yet";
