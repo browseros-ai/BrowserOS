@@ -42,6 +42,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::time;
 use tracing::debug;
+use url::{Origin, Url};
 
 use crate::bridge;
 use crate::console::{
@@ -82,6 +83,9 @@ pub(crate) struct PageEvents {
     /// What the run does with an out-of-process frame's session once [`Self::child_attached`]
     /// is done with it: the run's session state (`session_state.rs`).
     on_child: Arc<OnceLock<ChildSessionHook>>,
+    /// The origins this tab's frames navigated to since the run attached, in the order first
+    /// seen: what `storageState()` reads (`session_state.rs`).
+    visited: Arc<Mutex<Vec<String>>>,
 }
 
 /// What the run does with each out-of-process frame session of a tab it attaches.
@@ -121,6 +125,7 @@ impl PageEvents {
             frames: Arc::new(Mutex::new(FrameModel::new(target))),
             lifecycle_live: Arc::new(AtomicBool::new(discovered)),
             on_child: Arc::default(),
+            visited: Arc::default(),
         }
     }
 
@@ -160,6 +165,36 @@ impl PageEvents {
     /// from now on. Set once, when the tab's session is made.
     pub(crate) fn on_child_session(&self, hook: ChildSessionHook) {
         let _ = self.on_child.set(hook);
+    }
+
+    /// Playwright: `server/page.ts` `Page.frameNavigatedToNewDocument`: `this.browserContext.addVisitedOrigin(origin);`
+    ///
+    /// A frame of the tab committed a new document at `url`: its origin is visited, unless it
+    /// has none (`about:blank`, `data:`). The documents the tab held when the run attached are
+    /// not visits, as Playwright skips its initial ones.
+    fn visit(&self, url: &Value) {
+        let Some(origin) = url
+            .as_str()
+            .and_then(|url| Url::parse(url).ok())
+            .map(|url| url.origin())
+            .filter(Origin::is_tuple)
+            .map(|origin| origin.ascii_serialization())
+        else {
+            return;
+        };
+        if let Ok(mut visited) = self.visited.lock()
+            && !visited.contains(&origin)
+        {
+            visited.push(origin);
+        }
+    }
+
+    /// The origins this tab's frames navigated to since the run attached, first seen first.
+    pub(crate) fn visited_origins(&self) -> Vec<String> {
+        self.visited
+            .lock()
+            .map(|visited| visited.clone())
+            .unwrap_or_default()
     }
 
     /// The client of the tab's sessions.
@@ -251,6 +286,9 @@ impl PageEvents {
                 | "Page.navigatedWithinDocument"
         ) {
             return;
+        }
+        if event.method == "Page.frameNavigated" {
+            self.visit(&event.params["frame"]["url"]);
         }
         let Ok(changes) = self.frames.lock().map(|mut model| model.apply(event)) else {
             return;

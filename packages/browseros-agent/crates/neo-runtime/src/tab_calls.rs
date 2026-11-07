@@ -7,12 +7,12 @@ use std::time::Duration;
 use browseros_cdp::CdpError;
 use neo_runtime_spec::serve::{
     BrowserContextCall, BrowserContextCookiesParams, BrowserContextCookiesResult,
-    BrowserContextNewPageResult, ConsoleMessagesFilter, NameValue, PageCall, PageChannel,
-    PageClearConsoleMessagesParams, PageClearConsoleMessagesResult, PageClearPageErrorsParams,
-    PageClearPageErrorsResult, PageConsoleMessagesParams, PageConsoleMessagesResult,
-    PageGoBackParams, PageGoBackResult, PageGoForwardParams, PageGoForwardResult,
-    PagePageErrorsParams, PagePageErrorsResult, PageReloadParams, PageReloadResult,
-    ResponseChannel,
+    BrowserContextNewPageResult, BrowserContextStorageStateParams, ConsoleMessagesFilter,
+    NameValue, PageCall, PageChannel, PageClearConsoleMessagesParams,
+    PageClearConsoleMessagesResult, PageClearPageErrorsParams, PageClearPageErrorsResult,
+    PageConsoleMessagesParams, PageConsoleMessagesResult, PageGoBackParams, PageGoBackResult,
+    PageGoForwardParams, PageGoForwardResult, PagePageErrorsParams, PagePageErrorsResult,
+    PageReloadParams, PageReloadResult, ResponseChannel,
 };
 use serde_json::{Value, json};
 use tracing::debug;
@@ -114,9 +114,14 @@ pub(crate) async fn context(
             session_state::set_http_credentials()?;
             Ok(None)
         }
-        BrowserContextCall::StorageState(_) | BrowserContextCall::SetStorageState(_) => Err(
-            PlaywrightError::error("neo-runtime: this session-state call is not served yet").into(),
-        ),
+        BrowserContextCall::StorageState(params) => {
+            let state = session_state::storage_state(tabs, &params, progress).await?;
+            encode_result::<BrowserContextStorageStateParams>(&state)
+        }
+        BrowserContextCall::SetStorageState(_) => {
+            session_state::set_storage_state()?;
+            Ok(None)
+        }
     }
 }
 

@@ -22,15 +22,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use browseros_cdp::{CdpClient, SessionId};
 use neo_runtime_spec::serve::{
-    BrowserContextSetGeolocationParamsGeolocation, NameValue, NetworkCookie, NetworkCookieSameSite,
-    SetNetworkCookie,
+    BrowserContextSetGeolocationParamsGeolocation, BrowserContextStorageStateParams,
+    BrowserContextStorageStateResult, NameValue, NetworkCookie, NetworkCookieSameSite,
+    OriginStorage, SetNetworkCookie,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
 use tokio_util::task::TaskTracker;
 use tracing::debug;
-use url::Url;
+use url::{Origin, Url};
 
 use crate::page::PageSession;
 use crate::progress::{CallError, PlaywrightError, Progress};
@@ -557,6 +558,115 @@ const CREDENTIALS_PENDING: &str = "Neo does not serve setHTTPCredentials yet: it
 /// ([`CREDENTIALS_PENDING`]).
 pub(crate) fn set_http_credentials() -> Result<(), CallError> {
     Err(PlaywrightError::error(CREDENTIALS_PENDING).into())
+}
+
+/// Neo: what `storageState` throws for what Neo does not read yet: `IndexedDB`, OPFS and `WebAuthn`
+/// credentials.
+const STORAGE_OPTION_PENDING: &str = "Neo reads cookies and localStorage only: storageState({ indexedDB, opfs, credentials }) is not served yet";
+
+/// Deviation: `server/browserContext.ts` `BrowserContext.setStorageState`: `await progress.race(this.doClearCookies());`
+/// Playwright first clears the browser's whole HTTP cache and every cookie, and the storage of
+/// each origin it saw, then writes the state. Neo's context is the user's browser, where that
+/// would sign the user out of every site and lose their sites' data, so Neo refuses it.
+const SET_STORAGE_STATE_REFUSED: &str = "Neo does not set a storage state on the user's browser: it clears every cookie and each visited origin's storage first, which would sign the user out of every site";
+
+/// `setStorageState`: refused on the user's browser ([`SET_STORAGE_STATE_REFUSED`]).
+pub(crate) fn set_storage_state() -> Result<(), CallError> {
+    Err(PlaywrightError::error(SET_STORAGE_STATE_REFUSED).into())
+}
+
+/// Deviation: `server/browserContext.ts` `BrowserContext.storageState`: `// If there are still origins to save, create a blank page to iterate over origins.`
+/// Playwright reads an origin it saw but has no page on by visiting it in a new tab, every
+/// request answered by a stub. That needs request interception, which Neo's routes do not offer
+/// yet, so Neo reads only the origins of the run's open pages.
+///
+/// Every cookie of the run's context, and the `localStorage` of each origin the run's pages
+/// navigated to whose page is still open there, read in place (`DOMStorage`): Playwright's
+/// state, as far as Neo can read it without loading a page.
+pub(crate) async fn storage_state(
+    tabs: &Tabs,
+    params: &BrowserContextStorageStateParams,
+    progress: &Progress,
+) -> Result<BrowserContextStorageStateResult, CallError> {
+    if [params.indexed_db, params.opfs, params.credentials].contains(&Some(true)) {
+        return Err(PlaywrightError::error(STORAGE_OPTION_PENDING).into());
+    }
+    let cookies = cookies(tabs, &[], progress).await?;
+    let attached = tabs.attached();
+    let mut visited: Vec<String> = Vec::new();
+    for (_, page) in &attached {
+        for origin in page.events.visited_origins() {
+            if !visited.contains(&origin) {
+                visited.push(origin);
+            }
+        }
+    }
+    let mut origins: Vec<OriginStorage> = Vec::new();
+    for (entry, page) in &attached {
+        let Some(url) = progress.race(tabs.url(entry)).await?? else {
+            continue;
+        };
+        let Some(origin) = Url::parse(&url)
+            .ok()
+            .map(|url| url.origin())
+            .filter(Origin::is_tuple)
+            .map(|origin| origin.ascii_serialization())
+        else {
+            continue;
+        };
+        if !visited.contains(&origin) || origins.iter().any(|kept| kept.origin == origin) {
+            continue;
+        }
+        let local_storage = progress.race(local_storage(page, &origin)).await??;
+        // Playwright: `server/browserContext.ts` `BrowserContext.storageState`: `const hasStorage = (storage: SerializedStorage) => !!(storage.localStorage.length || storage.indexedDB?.length || storage.opfs?.length);`
+        if !local_storage.is_empty() {
+            origins.push(OriginStorage {
+                origin,
+                local_storage,
+                indexed_db: None,
+                opfs: None,
+            });
+        }
+    }
+    Ok(BrowserContextStorageStateResult {
+        cookies,
+        origins,
+        credentials: None,
+    })
+}
+
+#[derive(Deserialize)]
+struct StorageItems {
+    entries: Vec<(String, String)>,
+}
+
+/// `origin`'s `localStorage`, read over the tab's own session, where it has a frame.
+async fn local_storage(
+    page: &PageSession,
+    origin: &str,
+) -> Result<Vec<NameValue>, PlaywrightError> {
+    let cdp = page.events.cdp();
+    let session = page.events.sessions().into_iter().next();
+    let send = |method: &'static str, params: Value| {
+        let session = session.clone();
+        async move {
+            cdp.send(method, params, session.as_ref())
+                .await
+                .map_err(|error| tabs::cdp_error(&error))
+        }
+    };
+    send("DOMStorage.enable", json!({})).await?;
+    let items = send(
+        "DOMStorage.getDOMStorageItems",
+        json!({ "storageId": { "securityOrigin": origin, "isLocalStorage": true } }),
+    )
+    .await?;
+    let StorageItems { entries } =
+        serde_json::from_value(items).map_err(|error| PlaywrightError::error(error.to_string()))?;
+    Ok(entries
+        .into_iter()
+        .map(|(name, value)| NameValue { name, value })
+        .collect())
 }
 
 /// Neo: each run's id among the process's runs, for the permission grants it holds.

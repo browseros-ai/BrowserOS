@@ -19,6 +19,9 @@
 
 import type {
   BrowserContextCloseParams,
+  BrowserContextSetStorageStateParams,
+  BrowserContextStorageStateParams,
+  BrowserContextStorageStateResult,
   DialogInitializer,
   HttpCredentials,
   NetworkCookie,
@@ -68,6 +71,10 @@ const CONTEXT_EVENTS: EventTable = {
     'requestfinished',
   ],
 }
+
+/** Neo: why `storageState({ path })` throws: the run has no artifact directory to write it in. */
+const STORAGE_STATE_PATH =
+  'path: this run has no artifact directory, so Neo cannot write the storage state; the host sets one per run'
 
 /** Neo: why `clearCookies()` without a filter throws. */
 const CLEAR_ALL_COOKIES_REFUSED =
@@ -505,6 +512,53 @@ export class BrowserContext extends ChannelOwner {
       this.#guid,
       'setHTTPCredentials',
       list.length ? { httpCredentials: list } : {},
+      0,
+    )
+  }
+
+  /**
+   * Playwright: `client/browserContext.ts` `BrowserContext.storageState`: `const state = await this._channel.storageState({ indexedDB: options.indexedDB, opfs: options.opfs, credentials: options.credentials }, kNoTimeout);`
+   * Every cookie of the user's browser, and the `localStorage` of the origins the run's pages
+   * visited and still have open (neo-runtime `session_state.rs`).
+   *
+   * Deviation: `client/browserContext.ts` `BrowserContext.storageState`: `await fs.promises.writeFile(options.path, JSON.stringify(state, undefined, 2), 'utf8');`
+   * Playwright writes `path` anywhere on its host. Neo writes a script's files only inside the
+   * run's artifact directory, which the host gives the run; without one, `path` throws.
+   */
+  async storageState(
+    options: {
+      path?: string
+      indexedDB?: boolean
+      opfs?: boolean
+      credentials?: boolean
+    } = {},
+  ): Promise<BrowserContextStorageStateResult> {
+    if (options.path !== undefined) throw new Error(STORAGE_STATE_PATH)
+    const params: BrowserContextStorageStateParams = {}
+    if (options.indexedDB !== undefined) params.indexedDB = options.indexedDB
+    if (options.opfs !== undefined) params.opfs = options.opfs
+    if (options.credentials !== undefined)
+      params.credentials = options.credentials
+    return await this.#connection.sendContext(
+      'browserContext.storageState',
+      this.#guid,
+      'storageState',
+      params,
+      0,
+    )
+  }
+
+  /** Playwright: `client/browserContext.ts` `BrowserContext.setStorageState`: `await this._channel.setStorageState({ storageState: state }, kNoTimeout);`
+   * Neo refuses it on the user's browser (neo-runtime `session_state.rs`, Deviation): it would
+   * clear every cookie first. */
+  async setStorageState(
+    storageState: string | BrowserContextSetStorageStateParams['storageState'],
+  ): Promise<void> {
+    await this.#connection.sendContext(
+      'browserContext.setStorageState',
+      this.#guid,
+      'setStorageState',
+      typeof storageState === 'string' || !storageState ? {} : { storageState },
       0,
     )
   }

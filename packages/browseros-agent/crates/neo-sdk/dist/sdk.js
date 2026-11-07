@@ -6430,6 +6430,7 @@ var CONTEXT_EVENTS = {
     "requestfinished"
   ]
 };
+var STORAGE_STATE_PATH = "path: this run has no artifact directory, so Neo cannot write the storage state; the host sets one per run";
 var CLEAR_ALL_COOKIES_REFUSED = "Neo does not clear every cookie of the user's browser, which would sign the user out of every site: pass clearCookies a name, domain or path";
 function clearCookieFilter(options) {
   const kept = (value) => typeof value === "string" || value instanceof RegExp ? value : undefined;
@@ -6620,6 +6621,21 @@ class BrowserContext extends ChannelOwner {
   async setHTTPCredentials(httpCredentials) {
     const list = !httpCredentials ? [] : Array.isArray(httpCredentials) ? httpCredentials : [httpCredentials];
     await this.#connection.sendContext("browserContext.setHTTPCredentials", this.#guid, "setHTTPCredentials", list.length ? { httpCredentials: list } : {}, 0);
+  }
+  async storageState(options = {}) {
+    if (options.path !== undefined)
+      throw new Error(STORAGE_STATE_PATH);
+    const params = {};
+    if (options.indexedDB !== undefined)
+      params.indexedDB = options.indexedDB;
+    if (options.opfs !== undefined)
+      params.opfs = options.opfs;
+    if (options.credentials !== undefined)
+      params.credentials = options.credentials;
+    return await this.#connection.sendContext("browserContext.storageState", this.#guid, "storageState", params, 0);
+  }
+  async setStorageState(storageState) {
+    await this.#connection.sendContext("browserContext.setStorageState", this.#guid, "setStorageState", typeof storageState === "string" || !storageState ? {} : { storageState }, 0);
   }
   setDefaultTimeout(timeout) {
     this._timeoutSettings.setDefaultTimeout(timeout);

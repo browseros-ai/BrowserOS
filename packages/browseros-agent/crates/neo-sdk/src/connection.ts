@@ -129,6 +129,8 @@ export type ApiName =
   | 'browserContext.grantPermissions'
   | 'browserContext.clearPermissions'
   | 'browserContext.setHTTPCredentials'
+  | 'browserContext.storageState'
+  | 'browserContext.setStorageState'
   | 'page.setExtraHTTPHeaders'
   | 'page.close'
   | 'page.bringToFront'
