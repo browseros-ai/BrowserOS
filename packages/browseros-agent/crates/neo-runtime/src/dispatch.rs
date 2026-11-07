@@ -543,50 +543,8 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             (meta, routed)
         }),
         ObjectKind::Frame => {
-            if method == WAIT_FOR_URL_META.method {
-                return Routed {
-                    meta: Some(&WAIT_FOR_URL_META),
-                    route: decode_neo_params::<NeoWaitForUrlParams>(params, &WAIT_FOR_URL_META)
-                        .and_then(|params| WaitForUrlOptions::from_params(&params))
-                        .map(|options| ObjectCall::Frame(Route::FrameWaitForUrl(options))),
-                };
-            }
-            if let Some(routed) = route_element_command(method, params.clone()) {
+            if let Some(routed) = route_frame_extension(method, params.as_ref()) {
                 return routed;
-            }
-            if let Some(routed) = route_navigation_wait(method, params.as_ref()) {
-                return routed;
-            }
-            if let Some((meta, call)) = evaluate::route_frame(method, params.as_ref()) {
-                return Routed {
-                    meta: Some(meta),
-                    route: call.map(|call| ObjectCall::Frame(Route::FrameEval(call))),
-                };
-            }
-            if method == WAIT_FOR_LOAD_STATE_META.method {
-                return Routed {
-                    meta: Some(&WAIT_FOR_LOAD_STATE_META),
-                    route: decode_neo_params::<NeoWaitForLoadStateParams>(
-                        params,
-                        &WAIT_FOR_LOAD_STATE_META,
-                    )
-                    .and_then(WaitForLoadStateOptions::from_params)
-                    .map(|options| ObjectCall::Frame(Route::FrameWaitForLoadState(options))),
-                };
-            }
-            // ElementHandleChannel is uninhabited in Neo, so reject non-empty arrays before
-            // serde tries to decode their members. Keep the method's input flag and title.
-            if method == "selectOption"
-                && params
-                    .as_ref()
-                    .and_then(|params| params.get("elements"))
-                    .and_then(Value::as_array)
-                    .is_some_and(|elements| !elements.is_empty())
-            {
-                return Routed {
-                    meta: Some(FrameSelectOptionParams::META),
-                    route: Err(PlaywrightError::error(ELEMENTS_UNSUPPORTED)),
-                };
             }
             FrameCall::decode(method, params)
                 .map(|call| (call.meta(), route_frame_call(call).map(ObjectCall::Frame)))
@@ -636,6 +594,57 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             route: Err(PlaywrightError::error(error.to_string())),
         },
     }
+}
+
+/// A frame's calls that are not one generated `FrameCall` (Neo's URL and load-state waits,
+/// element commands, navigation waits, evaluation) or that `FrameCall` must not see
+/// (`selectOption` with element handles). `None` hands the call to `FrameCall::decode`.
+fn route_frame_extension(method: &str, params: Option<&Value>) -> Option<Routed> {
+    if method == WAIT_FOR_URL_META.method {
+        return Some(Routed {
+            meta: Some(&WAIT_FOR_URL_META),
+            route: decode_neo_params::<NeoWaitForUrlParams>(params.cloned(), &WAIT_FOR_URL_META)
+                .and_then(|params| WaitForUrlOptions::from_params(&params))
+                .map(|options| ObjectCall::Frame(Route::FrameWaitForUrl(options))),
+        });
+    }
+    if let Some(routed) = route_element_command(method, params.cloned()) {
+        return Some(routed);
+    }
+    if let Some(routed) = route_navigation_wait(method, params) {
+        return Some(routed);
+    }
+    if let Some((meta, call)) = evaluate::route_frame(method, params) {
+        return Some(Routed {
+            meta: Some(meta),
+            route: call.map(|call| ObjectCall::Frame(Route::FrameEval(call))),
+        });
+    }
+    if method == WAIT_FOR_LOAD_STATE_META.method {
+        return Some(Routed {
+            meta: Some(&WAIT_FOR_LOAD_STATE_META),
+            route: decode_neo_params::<NeoWaitForLoadStateParams>(
+                params.cloned(),
+                &WAIT_FOR_LOAD_STATE_META,
+            )
+            .and_then(WaitForLoadStateOptions::from_params)
+            .map(|options| ObjectCall::Frame(Route::FrameWaitForLoadState(options))),
+        });
+    }
+    // ElementHandleChannel is uninhabited in Neo, so reject non-empty arrays before
+    // serde tries to decode their members. Keep the method's input flag and title.
+    if method == "selectOption"
+        && params
+            .and_then(|params| params.get("elements"))
+            .and_then(Value::as_array)
+            .is_some_and(|elements| !elements.is_empty())
+    {
+        return Some(Routed {
+            meta: Some(FrameSelectOptionParams::META),
+            route: Err(PlaywrightError::error(ELEMENTS_UNSUPPORTED)),
+        });
+    }
+    None
 }
 
 /// The Neo element commands (`element_ops.rs`), or `None` for any other method.
@@ -1653,105 +1662,113 @@ mod tests {
             let meta = routed.meta.expect("served method metadata");
             assert_eq!(meta.has(MethodFlag::Input), method != "inputValue");
             assert!(meta.title.is_some());
-            match frame_route(routed.route).expect("served form route") {
-                Route::FrameFill(options) => {
-                    assert_eq!(
-                        options,
-                        FillOptions {
-                            selector: "input".into(),
-                            strict: true,
-                            value: "hello".into(),
-                            force: true
-                        }
-                    );
-                }
-                Route::FramePress(options) => {
-                    assert_eq!(
-                        options,
-                        PressOptions {
-                            selector: "input".into(),
-                            strict: true,
-                            keys: KeyInput::Press("Shift+Enter".into()),
-                            delay: Some(25.0),
-                            wait_after: false
-                        }
-                    );
-                }
-                Route::FrameType(options) => {
-                    assert_eq!(
-                        options,
-                        PressOptions {
-                            selector: "input".into(),
-                            strict: true,
-                            keys: KeyInput::Type("hi".into()),
-                            delay: Some(10.0),
-                            wait_after: false
-                        },
-                        "a type waits for no navigation"
-                    );
-                }
-                Route::FrameInputValue(options) => {
-                    assert_eq!(
-                        options,
-                        InputValueOptions {
-                            selector: "input".into(),
-                            strict: true
-                        }
-                    );
-                }
-                Route::FrameSetChecked(options) => {
-                    assert_eq!(options.checked, method == "check");
-                    assert_eq!(options.click.selector, "input");
-                    assert!(options.click.strict && options.click.force && options.click.trial);
-                    assert!(!options.click.scroll);
-                    assert_eq!(options.click.position, Some(Point { x: 2.0, y: 3.0 }));
-                }
-                Route::FrameSelectOption(options) => {
-                    assert!(options.strict && options.force);
-                    assert_eq!(options.selector, "input");
-                    assert_eq!(
-                        options.options,
-                        [SelectOption {
-                            value_or_label: Some("one".into()),
-                            value: Some("1".into()),
-                            label: Some("One".into()),
-                            index: Some(0)
-                        }]
-                    );
-                }
-                Route::FramePointer(_) => panic!("a form is not a pointer action"),
-                Route::FrameGoto(_)
-                | Route::FrameTitle
-                | Route::FrameTextContent(_)
-                | Route::FrameInnerText(_)
-                | Route::FrameGetAttribute(_)
-                | Route::FrameQueryCount(_)
-                | Route::FrameInnerHtml(_)
-                | Route::FrameIsVisible(_)
-                | Route::FrameIsHidden(_)
-                | Route::FrameIsChecked(_)
-                | Route::FrameIsEnabled(_)
-                | Route::FrameIsDisabled(_)
-                | Route::FrameIsEditable(_)
-                | Route::FrameAriaSnapshot(_)
-                | Route::FrameWaitForSelector(_)
-                | Route::FrameWaitForUrl(_)
-                | Route::FrameWaitForLoadState(_)
-                | Route::FrameFocus(_)
-                | Route::FrameBlur(_)
-                | Route::FrameDispatchEvent(_)
-                | Route::FrameScrollIntoViewIfNeeded(_)
-                | Route::FrameSelectText(..)
-                | Route::FrameBoundingBox(_)
-                | Route::FrameHighlight(_)
-                | Route::FrameHideHighlight(_)
-                | Route::FrameWaitForNavigation(_)
-                | Route::FrameNextNavigation(_)
-                | Route::FrameFinishNavigation(_)
-                | Route::FrameReleaseNavigation(_)
-                | Route::FrameEval(_) => {
-                    panic!("a form is not a navigation, read or wait")
-                }
+            assert_form_route(
+                method,
+                frame_route(routed.route).expect("served form route"),
+            );
+        }
+    }
+
+    /// The options one forms command's route must retain; every other route fails the test.
+    fn assert_form_route(method: &str, route: Route) {
+        match route {
+            Route::FrameFill(options) => {
+                assert_eq!(
+                    options,
+                    FillOptions {
+                        selector: "input".into(),
+                        strict: true,
+                        value: "hello".into(),
+                        force: true
+                    }
+                );
+            }
+            Route::FramePress(options) => {
+                assert_eq!(
+                    options,
+                    PressOptions {
+                        selector: "input".into(),
+                        strict: true,
+                        keys: KeyInput::Press("Shift+Enter".into()),
+                        delay: Some(25.0),
+                        wait_after: false
+                    }
+                );
+            }
+            Route::FrameType(options) => {
+                assert_eq!(
+                    options,
+                    PressOptions {
+                        selector: "input".into(),
+                        strict: true,
+                        keys: KeyInput::Type("hi".into()),
+                        delay: Some(10.0),
+                        wait_after: false
+                    },
+                    "a type waits for no navigation"
+                );
+            }
+            Route::FrameInputValue(options) => {
+                assert_eq!(
+                    options,
+                    InputValueOptions {
+                        selector: "input".into(),
+                        strict: true
+                    }
+                );
+            }
+            Route::FrameSetChecked(options) => {
+                assert_eq!(options.checked, method == "check");
+                assert_eq!(options.click.selector, "input");
+                assert!(options.click.strict && options.click.force && options.click.trial);
+                assert!(!options.click.scroll);
+                assert_eq!(options.click.position, Some(Point { x: 2.0, y: 3.0 }));
+            }
+            Route::FrameSelectOption(options) => {
+                assert!(options.strict && options.force);
+                assert_eq!(options.selector, "input");
+                assert_eq!(
+                    options.options,
+                    [SelectOption {
+                        value_or_label: Some("one".into()),
+                        value: Some("1".into()),
+                        label: Some("One".into()),
+                        index: Some(0)
+                    }]
+                );
+            }
+            Route::FramePointer(_) => panic!("a form is not a pointer action"),
+            Route::FrameGoto(_)
+            | Route::FrameTitle
+            | Route::FrameTextContent(_)
+            | Route::FrameInnerText(_)
+            | Route::FrameGetAttribute(_)
+            | Route::FrameQueryCount(_)
+            | Route::FrameInnerHtml(_)
+            | Route::FrameIsVisible(_)
+            | Route::FrameIsHidden(_)
+            | Route::FrameIsChecked(_)
+            | Route::FrameIsEnabled(_)
+            | Route::FrameIsDisabled(_)
+            | Route::FrameIsEditable(_)
+            | Route::FrameAriaSnapshot(_)
+            | Route::FrameWaitForSelector(_)
+            | Route::FrameWaitForUrl(_)
+            | Route::FrameWaitForLoadState(_)
+            | Route::FrameFocus(_)
+            | Route::FrameBlur(_)
+            | Route::FrameDispatchEvent(_)
+            | Route::FrameScrollIntoViewIfNeeded(_)
+            | Route::FrameSelectText(..)
+            | Route::FrameBoundingBox(_)
+            | Route::FrameHighlight(_)
+            | Route::FrameHideHighlight(_)
+            | Route::FrameWaitForNavigation(_)
+            | Route::FrameNextNavigation(_)
+            | Route::FrameFinishNavigation(_)
+            | Route::FrameReleaseNavigation(_)
+            | Route::FrameEval(_) => {
+                panic!("a form is not a navigation, read or wait")
             }
         }
     }
