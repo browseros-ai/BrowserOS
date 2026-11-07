@@ -30,6 +30,7 @@ import type {
   RequestCommands,
   ResponseCommands,
 } from '@browseros/neo-runtime-spec/serve'
+import type { BindingCommands } from './binding-call'
 import {
   AbortError,
   isTargetClosedError,
@@ -205,6 +206,12 @@ export type ApiName =
   | 'page.addInitScript'
   | 'browserContext.addInitScript'
   | 'disposable.dispose'
+  | 'page.exposeBinding'
+  | 'page.exposeFunction'
+  | 'browserContext.exposeBinding'
+  | 'browserContext.exposeFunction'
+  | 'bindingCall.resolve'
+  | 'bindingCall.reject'
   | 'page.addScriptTag'
   | 'page.addStyleTag'
   | 'frame.addScriptTag'
@@ -480,6 +487,19 @@ export class Connection {
       params,
       timeout,
     )) as EvalFrameCommands[M]['result']
+  }
+
+  /** {@link Connection.send} for a binding command (`binding-call.ts`): `exposeBinding` on a
+   * page or the context, `resolve` / `reject` on a call's `bindingcall@` guid. */
+  async sendBinding<M extends keyof BindingCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: BindingCommands[M]['params'],
+    timeout: number,
+  ): Promise<BindingCommands[M]['result']> {
+    return ((await this.#send(apiName, guid, method, params, timeout)) ??
+      {}) as BindingCommands[M]['result']
   }
 
   /** {@link Connection.send} for an init script command (`init-script.ts`): `addInitScript` on a
