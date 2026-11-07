@@ -316,7 +316,7 @@ impl TextTail {
             return None;
         }
         let rest = self.text.split_off(chunk_end(&self.text));
-        let chunk = std::mem::replace(&mut self.text, rest);
+        let chunk = mem::replace(&mut self.text, rest);
         let mut plan = Plan::default();
         plan_characters(
             &mut plan,

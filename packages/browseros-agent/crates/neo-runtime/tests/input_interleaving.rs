@@ -18,6 +18,7 @@ use std::time::Instant;
 use browser::{Fixture, Tab};
 use neo_runtime::{CallResult, Delivery, PageId, RunOutcome, RunRequest, RunStatus, Runtime};
 use serde_json::{Value, json};
+use tokio::sync::oneshot;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
@@ -427,15 +428,9 @@ async fn review_record(tab: &Tab) {
     .await;
 }
 
-/// One live run keeps Shift and the shared pointer state alive while other runs finish.
-/// A worker's mouse button is released at its end; temporary modifiers restore the first
-/// run's ownership; a later move starts at the previous run's position, crossing the middle
-/// target. No exact mouse coordinates or elapsed timings are compared.
-#[tokio::test(flavor = "multi_thread")]
-async fn review_run_end_keeps_other_owners_and_cross_run_pointer_state() {
-    let Some(tab) = open().await else { return };
-    let runtime = runtime(&tab).await;
-    review_record(&tab).await;
+/// Three targets in a row at y 180 (`start` at x 100, `middle` at 200, `end` at 300), checked
+/// by hit-testing.
+async fn review_targets(tab: &Tab) {
     tab.evaluate(r"(() => {
       for (const [id, left] of [['start',80],['middle',180],['end',280]]) {
         const e = document.createElement('div'); e.id = id;
@@ -450,8 +445,20 @@ async fn review_run_end_keeps_other_owners_and_cross_run_pointer_state() {
         json!(["start", "middle", "end"]),
         "{scene}"
     );
+}
+
+/// One live run keeps Shift and the shared pointer state alive while other runs finish.
+/// A worker's mouse button is released at its end; temporary modifiers restore the first
+/// run's ownership; a later move starts at the previous run's position, crossing the middle
+/// target. No exact mouse coordinates or elapsed timings are compared.
+#[tokio::test(flavor = "multi_thread")]
+async fn review_run_end_keeps_other_owners_and_cross_run_pointer_state() {
+    let Some(tab) = open().await else { return };
+    let runtime = runtime(&tab).await;
+    review_record(&tab).await;
+    review_targets(&tab).await;
     let cancel = CancellationToken::new();
-    let timeout = Duration::from_secs(60);
+    let timeout = Duration::from_mins(1);
     let exercise = async {
         review_wait_for(
             &tab,
@@ -563,7 +570,7 @@ async fn review_partial_device_calls_release_and_remain_unknown() {
             cancel.cancel();
         };
         let (cut, ()) = tokio::join!(
-            runtime.run(request(&tab, code, Duration::from_secs(60), cancel.clone())),
+            runtime.run(request(&tab, code, Duration::from_mins(1), cancel.clone())),
             stopper
         );
         assert_eq!(cut.status, RunStatus::Cancelled, "{cut:#?}");
@@ -617,7 +624,7 @@ async fn review_cancelled_pointer_restores_modifiers_before_run_end() {
     };
     let (cut, ()) = tokio::join!(runtime.run(request(&tab,
         "await page.keyboard.down('Shift'); await page.locator('#c').click({modifiers:[],delay:30000,clickCount:2})",
-        Duration::from_secs(60), cancel.clone())), stopper);
+        Duration::from_mins(1), cancel.clone())), stopper);
     let keys = tab
         .evaluate("__review.filter(e => e.key === 'Shift').map(e => e.type)")
         .await;
@@ -686,7 +693,7 @@ async fn review_stop_during_modifier_setup_uses_the_actual_mask() {
         runtime.run(request(
             &tab,
             "await page.locator('#c').click({modifiers:['Alt','Shift']})",
-            Duration::from_secs(60),
+            Duration::from_mins(1),
             cancel.clone()
         )),
         stopper
@@ -710,14 +717,14 @@ async fn review_stop_during_modifier_setup_uses_the_actual_mask() {
 }
 
 /// An explicit down by a second live run also needs the modifier to stay held when the
-/// first run finishes. Its subsequent KeyA must still carry Shift.
+/// first run finishes. Its subsequent `KeyA` must still carry Shift.
 #[tokio::test(flavor = "multi_thread")]
 async fn review_finishing_first_holder_preserves_the_second_holder() {
     let Some(tab) = open().await else { return };
     let runtime = runtime(&tab).await;
     review_record(&tab).await;
-    let (finished, first_finished) = tokio::sync::oneshot::channel();
-    let timeout = Duration::from_secs(60);
+    let (finished, first_finished) = oneshot::channel();
+    let timeout = Duration::from_mins(1);
     let first = async {
         let outcome = runtime.run(request(&tab,
             "await page.keyboard.down('Shift'); await page.locator('#finishA').waitFor({state:'attached'})",

@@ -905,7 +905,11 @@ mod tests {
         let (written, ()) = tokio::join!(write_plan(&sender, &turn, &plan, &cut_short), stopper);
         assert!(!written.complete, "the rest of the text never went out");
         let sent = sender.sent();
-        assert!(sent.len() < 2000 && sent.len() % 2 == 0, "{}", sent.len());
+        assert!(
+            sent.len() < 2000 && sent.len().is_multiple_of(2),
+            "{}",
+            sent.len()
+        );
         assert_eq!(
             turn.devices(),
             InputDevices::default(),
