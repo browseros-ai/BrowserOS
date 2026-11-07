@@ -3,14 +3,16 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (81)
+## Deviations (85)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
 | neo-runtime-injected/src/add-tag.ts | (file) | `server/frames.ts` `Frame._raceWithCSPError` | Playwright rejects a tag the page's Content Security Policy blocked by watching the console; Neo watches no console, so it waits for the document's `securitypolicyviolation` event instead, one task after the tag (Chromium reports an inline script's violation in a later task), and rejects with an Error naming the policy. |
+| neo-runtime-injected/src/bindings-call.ts | `endRun` | `server/page.ts` `Page.removeExposedBinding` | Playwright's bindings live as long as their page; Neo's end with the run, and a call still waiting on one is refused. |
 | neo-runtime-injected/src/main-injected.ts | `MainWorldInjectedScript` | `injected/src/injectedScript.ts` `InjectedScript.constructor` | Neo's main-world instance adds no window listener or document observer. |
 | neo-runtime/src/abort.rs | `REALM_GLOBALS` | `client/connection.ts` `Connection.sendMessageToServer` | Node's signal is an `EventTarget` whose listeners get an `Event`; the realm has neither class, so a listener gets a plain object with the `Event` fields a listener reads (`type`, `target`, `currentTarget`, `isTrusted`, `stopImmediatePropagation`), and `dispatchEvent` is not served. |
 | neo-runtime/src/artifacts.rs | `MAX_BINARY_RESULT_BYTES` | `client/page.ts` `Page.screenshot` | returns a buffer of any size. A binary result reaches the script as base64 JSON that the 64 MiB realm holds twice while it parses (probes-bin.md B3: 16 MiB fits, 20 MiB ends the run with `InternalError: out of memory`), so a larger one is refused with an Error naming its size. |
+| neo-runtime/src/bindings.rs | `Bindings::close` | `server/page.ts` `Page.removeExposedBinding` | Playwright's bindings live as long as their page or context; Neo's live as long as the run. |
 | neo-runtime/src/capture.rs | `masks` | `server/screenshotter.ts` `Screenshotter._maskElements` | masks a locator of another page in that page, where nothing hides the mask again; Neo skips it, which leaves this page's screenshot the same. |
 | neo-runtime/src/click.rs | `MAX_CLICK_COUNT` | `server/input.ts` `Mouse.click` | Playwright has no cap; every click is two events Neo plans before writing, so a script's `clickCount: 1e9` must not take the server's memory with it. |
 | neo-runtime/src/click.rs | `MAX_STEPS` | `server/input.ts` `Mouse.move` | Playwright has no cap; every step is one event Neo plans before writing, so `steps: 1e9` must not take the server's memory with it. |
@@ -58,6 +60,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/session_state.rs | `set_storage_state` | `server/browserContext.ts` `BrowserContext.setStorageState` | Playwright first clears the browser's whole HTTP cache, every cookie and the storage of each origin it saw, then writes the state through a page of its own. Neo's context is the user's browser, where that would sign the user out of every site, so Neo only adds the state's cookies and replaces the listed origins' `localStorage`, each through the run's open page on it. |
 | neo-runtime/src/session_state.rs | `storage_state` | `server/browserContext.ts` `BrowserContext.storageState` | Playwright reads an origin it saw but has no page on by visiting it in a new tab, every request answered by a stub. That needs request interception, which Neo's routes do not offer yet, so Neo reads only the origins of the run's open pages. |
 | neo-runtime/src/tabs.rs | `Tabs::file_chooser_element` | `server/chromium/crPage.ts` `FrameSession._onFileChooserOpened` | Playwright makes the input's handle in its utility world as the chooser opens; Neo makes it in the main world, where every Neo `ElementHandle` lives (`evaluate.rs`), at the first read, so `element().evaluate` sees the page's own globals. |
+| neo-sdk/src/browser-context.ts | `BrowserContext.#expose` | `client/browserContext.ts` `BrowserContext.exposeBinding` | Playwright sets the callback after its answer; Neo before, as the answer's events, a first page call among them, run before the caller goes on. |
 | neo-sdk/src/browser-context.ts | `BrowserContext.addInitScript` | `client/browserContext.ts` `BrowserContext.addInitScript` | Neo has no page-to-realm callback yet. |
 | neo-sdk/src/browser-context.ts | `BrowserContext.addInitScript` | `client/browserContext.ts` `BrowserContext.addInitScript` | Playwright sends no signal and ignores one; Neo refuses it. |
 | neo-sdk/src/browser-context.ts | `BrowserContext.clearCookies` | `server/browserContext.ts` `BrowserContext.clearCookies` | With no filter Playwright clears every cookie of its context. Neo's context is the user's own browser, where that would sign the user out of every site, so Neo refuses the call without a `name`, `domain` or `path`. |
@@ -74,6 +77,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-sdk/src/frame.ts | `Frame._addTag` | `client/frame.ts` `Frame.addScriptTag` | Neo reads files only from the run's artifact directory. |
 | neo-sdk/src/init-script.ts | `evaluationScript` | `client/clientHelper.ts` `evaluationScript` | Neo reads files only from the run's artifact directory. |
 | neo-sdk/src/js-handle.ts | `evaluateParams` | `client/jsHandle.ts` `JSHandle.evaluate` | Neo has no realm callback from the page, so it refuses the option rather than ignore it. |
+| neo-sdk/src/page.ts | `Page.#expose` | `client/page.ts` `Page.exposeBinding` | Playwright sets the callback after its answer; Neo before, as the answer's events, a first page call among them, run before the caller goes on. |
 | neo-sdk/src/page.ts | `Page.addInitScript` | `client/page.ts` `Page.addInitScript` | Neo has no page-to-realm callback yet. |
 | neo-sdk/src/page.ts | `Page.addInitScript` | `client/page.ts` `Page.addInitScript` | Playwright sends no signal and ignores one; Neo refuses it. |
 | neo-sdk/src/page.ts | `Page.bringToFront` | `server/chromium/crPage.ts` `CRPage.bringToFront` | Playwright sends `Page.bringToFront` alone. Neo also activates the tab in BrowserOS's tab strip when it is not the active one, which `Page.bringToFront` leaves as it was. |
