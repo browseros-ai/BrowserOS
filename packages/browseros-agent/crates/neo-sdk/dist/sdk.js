@@ -5029,6 +5029,24 @@ var FRAME_UNCHECK_KEYS = [
   "position",
   "trial"
 ];
+var FRAME_SET_INPUT_FILES_KEYS = [
+  "selector",
+  "strict",
+  "payloads",
+  "localDirectory",
+  "directoryStream",
+  "localPaths",
+  "streams"
+];
+var FRAME_DROP_KEYS = [
+  "selector",
+  "strict",
+  "position",
+  "payloads",
+  "localPaths",
+  "streams",
+  "data"
+];
 var FRAME_SELECT_OPTION_KEYS = [
   "selector",
   "strict",
@@ -5408,6 +5426,15 @@ class Locator {
   async selectOption(values, options = {}) {
     return await this._frame._selectOption("locator.selectOption", this._selector, values, { strict: true, ...options });
   }
+  async setInputFiles(files, options = {}) {
+    return await this._frame._setInputFiles("locator.setInputFiles", this._selector, files, { strict: true, ...options });
+  }
+  async drop(payload, options = {}) {
+    return await this._frame._drop("locator.drop", this._selector, payload, {
+      strict: true,
+      ...options
+    });
+  }
   async screenshot(options = {}) {
     const result = await this._frame._connection.sendNeo("locator.screenshot", this._frame._guid, "neo:screenshot", locatorScreenshotParams("locator.screenshot", this._selector, options), this._frame._page._timeoutSettings.timeout(options, "locator.screenshot"));
     return resultBuffer(result.binary);
@@ -5763,6 +5790,55 @@ function text(value, index, field) {
   if (typeof value !== "string")
     throw new Error(`options[${index}].${field}: expected string`);
   return value;
+}
+
+// src/set-input-files.ts
+var FILE_UPLOAD_SIZE_LIMIT = 50 * 1024 * 1024;
+function convertInputFiles(files) {
+  const items = Array.isArray(files) ? files.slice() : [files];
+  if (items.some((item) => typeof item === "string")) {
+    if (!items.every((item) => typeof item === "string"))
+      throw new Error("File paths cannot be mixed with buffers");
+    return { localPaths: items };
+  }
+  const payloads = items;
+  if (filePayloadExceedsSizeLimit(payloads))
+    throw new Error("Cannot set buffer larger than 50Mb, please write it to a file and pass its path instead.");
+  return { payloads: payloads.map(wirePayload) };
+}
+function filePayloadExceedsSizeLimit(payloads) {
+  return payloads.reduce((size, item) => size + (item.buffer ? item.buffer.byteLength : 0), 0) >= FILE_UPLOAD_SIZE_LIMIT;
+}
+function wirePayload(payload, index) {
+  const path = `payloads[${index}]`;
+  if (payload === null)
+    throw new Error(`${path}: expected object, got null`);
+  if (typeof payload !== "object")
+    throw new Error(`${path}: expected object, got ${typeof payload}`);
+  const { name, mimeType, buffer } = payload;
+  if (typeof name !== "string")
+    throw new Error(`${path}.name: expected string, got ${typeof name}`);
+  if (mimeType !== undefined && typeof mimeType !== "string")
+    throw new Error(`${path}.mimeType: expected string, got ${typeof mimeType}`);
+  if (!(buffer instanceof Uint8Array))
+    throw new Error(`${path}.buffer: expected Buffer, got ${typeof buffer}`);
+  return mimeType === undefined ? { name, buffer: toBinary(buffer) } : { name, mimeType, buffer: toBinary(buffer) };
+}
+function convertDropPayload(payload) {
+  let fileParams = {};
+  if (payload.files !== undefined) {
+    const converted = convertInputFiles(payload.files);
+    fileParams = {
+      payloads: converted.payloads,
+      localPaths: converted.localPaths
+    };
+  }
+  const data = payload.data ? Object.entries(payload.data).map(([mimeType, value], index) => {
+    if (typeof value !== "string")
+      throw new Error(`data[${index}].value: expected string, got ${typeof value}`);
+    return { mimeType, value };
+  }) : undefined;
+  return { ...fileParams, data };
 }
 
 // src/url.ts
@@ -6581,6 +6657,23 @@ class Frame {
     if (result === undefined)
       throw new Error("neo-sdk: Frame.selectOption contract error: missing result");
     return result.values;
+  }
+  async setInputFiles(selector, files, options = {}) {
+    return await this._setInputFiles("frame.setInputFiles", selector, files, options);
+  }
+  async _setInputFiles(apiName, selector, files, options) {
+    await this._connection.send(apiName, this._guid, "setInputFiles", pickParams(FRAME_SET_INPUT_FILES_KEYS, {
+      selector,
+      ...convertInputFiles(files),
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async _drop(apiName, selector, payload, options) {
+    await this._connection.send(apiName, this._guid, "drop", pickParams(FRAME_DROP_KEYS, {
+      selector,
+      ...convertDropPayload(payload),
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async setChecked(selector, checked, options = {}) {
     if (checked)
@@ -7888,6 +7981,9 @@ class Page extends ChannelOwner {
   }
   async selectOption(selector, values, options = {}) {
     return await this.#mainFrame._selectOption("page.selectOption", selector, values, options);
+  }
+  async setInputFiles(selector, files, options = {}) {
+    return await this.#mainFrame._setInputFiles("page.setInputFiles", selector, files, options);
   }
   async setChecked(selector, checked, options = {}) {
     if (checked)

@@ -65,6 +65,7 @@ import {
   type PressOptions,
   type SelectOptionOptions,
   type SetContentOptions,
+  type SetInputFilesOptions,
   type TagOptions,
   type TapOptions,
   type TextContentOptions,
@@ -130,6 +131,7 @@ import {
   resultBuffer,
 } from './screenshot'
 import type { SelectOptionValues } from './select-option'
+import type { InputFiles } from './set-input-files'
 import { type TimeoutInput, TimeoutSettings } from './timeout-settings'
 import { Waiter, type WaitForEventOptions, wrapApiCall } from './waiter'
 
@@ -1609,6 +1611,19 @@ export class Page extends ChannelOwner {
       'page.selectOption',
       selector,
       values,
+      options,
+    )
+  }
+
+  async setInputFiles(
+    selector: string,
+    files: InputFiles,
+    options: SetInputFilesOptions = {},
+  ): Promise<void> {
+    return await this.#mainFrame._setInputFiles(
+      'page.setInputFiles',
+      selector,
+      files,
       options,
     )
   }

@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Upload</title>
+<input type="file" id="single">
+<input type="file" id="multi" multiple>
+<input type="file" id="folder" webkitdirectory>
+<label for="single" id="label">Pick a file</label>
+<input type="text" id="text">
+<div id="plain">Not an input</div>
+<script>
+  window.__events = []
+  for (const input of document.querySelectorAll('input')) {
+    for (const type of ['input', 'change'])
+      input.addEventListener(type, (event) =>
+        window.__events.push({ id: input.id, type, bubbles: event.bubbles, composed: event.composed }))
+  }
+  const read = (input) => Promise.all([...(input.files ?? [])].map(async (file) => ({
+    name: file.name,
+    type: file.type,
+    size: file.size,
+    text: await file.text(),
+    path: file.webkitRelativePath,
+  })))
+  window.__facts = async () => ({
+    events: window.__events,
+    single: await read(document.getElementById('single')),
+    multi: await read(document.getElementById('multi')),
+    folder: (await read(document.getElementById('folder'))).sort((a, b) => a.path.localeCompare(b.path)),
+    text: document.getElementById('text').value,
+  })
+</script>
