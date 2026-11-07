@@ -142,7 +142,7 @@ impl Tab {
 
     /// Starts `code` as a Neo run against this tab; it reads the tab while the test drives it.
     pub async fn start_run(&self, code: String) -> JoinHandle<RunOutcome> {
-        self.start_run_within(code, Duration::from_secs(30)).await
+        self.start_run_within(code, RUN_TIMEOUT).await
     }
 
     /// [`Tab::start_run`] with the run's own deadline.
@@ -299,6 +299,10 @@ async fn serve_fixture(fixture: Fixture) -> String {
 }
 
 /// How long [`Browser::close`] waits for the browser to exit after `Browser.close` before it
+/// The suite's bound on one run ([`Tab::start_run`]), which a loaded machine needs as much for a
+/// fixture's frames to load as a run needs for its calls.
+pub const RUN_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// SIGKILLs the browser's process group: Playwright's `closeOrKill` timeout
 /// (`DEFAULT_PLAYWRIGHT_TIMEOUT`).
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(30);
