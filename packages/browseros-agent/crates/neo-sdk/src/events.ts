@@ -192,10 +192,9 @@ export class EventEmitter {
       if (m > 0 && existing.length > m && !marked.warned) {
         marked.warned = true
         // No error code for this since it is a Warning
-        // biome-ignore lint/suspicious/noExplicitAny: Node's warning carries extra fields.
         const w = new Error(
           `Possible EventEmitter memory leak detected. ${existing.length} ${String(type)} listeners added. Use emitter.setMaxListeners() to increase limit`,
-        ) as any
+        ) as Error & { emitter?: unknown; type?: EventType; count?: number }
         w.name = 'MaxListenersExceededWarning'
         w.emitter = this
         w.type = type
@@ -494,7 +493,7 @@ export abstract class ChannelOwner extends EventEmitter {
   }
 
   /** Neo: a listener for a Playwright event Neo does not produce yet would never fire. */
-  #refuseUnserved(event: EventType): void {
+  _refuseUnserved(event: EventType): void {
     if (typeof event === 'string' && this.#table.unserved.includes(event))
       throw new Error(
         `Neo does not serve the "${event}" event on ${this.#table.receiver} yet`,
@@ -506,21 +505,21 @@ export abstract class ChannelOwner extends EventEmitter {
   }
 
   override on(event: EventType, listener: Listener): this {
-    this.#refuseUnserved(event)
+    this._refuseUnserved(event)
     if (!this.listenerCount(event)) this.#updateSubscription(event, true)
     super.on(event, listener)
     return this
   }
 
   override addListener(event: EventType, listener: Listener): this {
-    this.#refuseUnserved(event)
+    this._refuseUnserved(event)
     if (!this.listenerCount(event)) this.#updateSubscription(event, true)
     super.addListener(event, listener)
     return this
   }
 
   override prependListener(event: EventType, listener: Listener): this {
-    this.#refuseUnserved(event)
+    this._refuseUnserved(event)
     if (!this.listenerCount(event)) this.#updateSubscription(event, true)
     super.prependListener(event, listener)
     return this

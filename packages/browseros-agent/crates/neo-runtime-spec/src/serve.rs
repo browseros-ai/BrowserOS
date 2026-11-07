@@ -2363,7 +2363,7 @@ pub struct SerializedErrorError {
     pub name: String,
     #[serde(rename = "stack", skip_serializing_if = "Option::is_none")]
     pub stack: Option<String>,
-    /// See https://nodejs.org/api/errors.html#errorcode
+    /// See <https://nodejs.org/api/errors.html#errorcode>
     #[serde(rename = "code", skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
 }

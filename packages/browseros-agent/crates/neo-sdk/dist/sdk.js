@@ -436,7 +436,7 @@ class ChannelOwner extends EventEmitter {
   #served(event) {
     return typeof event === "string" && this.#table.served.includes(event);
   }
-  #refuseUnserved(event) {
+  _refuseUnserved(event) {
     if (typeof event === "string" && this.#table.unserved.includes(event))
       throw new Error(`Neo does not serve the "${event}" event on ${this.#table.receiver} yet`);
   }
@@ -445,21 +445,21 @@ class ChannelOwner extends EventEmitter {
       this.#pipe._subscribe(this._guid, event, enabled);
   }
   on(event, listener) {
-    this.#refuseUnserved(event);
+    this._refuseUnserved(event);
     if (!this.listenerCount(event))
       this.#updateSubscription(event, true);
     super.on(event, listener);
     return this;
   }
   addListener(event, listener) {
-    this.#refuseUnserved(event);
+    this._refuseUnserved(event);
     if (!this.listenerCount(event))
       this.#updateSubscription(event, true);
     super.addListener(event, listener);
     return this;
   }
   prependListener(event, listener) {
-    this.#refuseUnserved(event);
+    this._refuseUnserved(event);
     if (!this.listenerCount(event))
       this.#updateSubscription(event, true);
     super.prependListener(event, listener);
@@ -2071,6 +2071,7 @@ class Page extends ChannelOwner {
   async _waitForEvent(event, optionsOrPredicate, logLine) {
     const options = typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate;
     refuseSignal(options);
+    this._refuseUnserved(event);
     const timeout = this._timeoutSettings.timeout(options);
     const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : optionsOrPredicate.predicate;
     const waiter = Waiter.createForEvent();
@@ -2334,6 +2335,7 @@ class BrowserContext extends ChannelOwner {
     return await wrapApiCall("browserContext.waitForEvent", async () => {
       const options = typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate;
       refuseSignal(options);
+      this._refuseUnserved(event);
       const timeout = this._timeoutSettings.timeout(options);
       const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : optionsOrPredicate.predicate;
       const waiter = Waiter.createForEvent();

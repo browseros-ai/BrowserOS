@@ -97,7 +97,8 @@ pub(crate) fn install<'js>(
     bridge.set(
         "subscribe",
         Func::from(move |ctx: Ctx<'js>, request: String| {
-            subscribe(&subscriptions, &request).map_err(|message| throw_named(&ctx, "Error", &message))
+            subscribe(&subscriptions, &request)
+                .map_err(|message| throw_named(&ctx, "Error", &message))
         }),
     )?;
     let hub = tabs.events().clone();

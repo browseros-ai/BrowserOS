@@ -57,6 +57,10 @@ const MAX_QUEUED_BYTES: usize = 16 * 1024 * 1024;
 /// mutex; past it the reply goes, and events it missed arrive with a later reply or wake.
 const BARRIER_WAIT: Duration = Duration::from_millis(250);
 
+/// Neo: how long the end of `Runtime.enable`'s replay waits for the watchers. Once, per session;
+/// a watcher that applied the replay late would hand its tail to listeners as live messages.
+const REPLAY_WAIT: Duration = Duration::from_secs(5);
+
 /// Neo: the listener events Neo produces on a `Page`, under the names Playwright's client gives
 /// them (`Events.Page`), and what each needs switched on in the page's session.
 const PAGE_EVENTS: [(&str, Needs); 6] = [
@@ -243,7 +247,7 @@ impl EventHub {
 
     /// Queues one Playwright event message for the realm, unless the run is over or the queue is
     /// full. Producers check the subscription first ([`Self::wants`]).
-    pub(crate) fn emit(&self, guid: &str, method: &str, params: Value) -> Emitted {
+    pub(crate) fn emit(&self, guid: &str, method: &str, params: &Value) -> Emitted {
         let emitted = self
             .with(|state| {
                 if state.closed {
@@ -309,10 +313,7 @@ impl EventHub {
             let arrived = self.0.arrived.notified();
             tokio::pin!(arrived);
             arrived.as_mut().enable();
-            if self
-                .with(|state| !state.queue.is_empty())
-                .unwrap_or(false)
-            {
+            if self.with(|state| !state.queue.is_empty()).unwrap_or(false) {
                 return;
             }
             arrived.await;
@@ -331,13 +332,17 @@ impl EventHub {
     /// live watcher applies the events that preceded the call's last CDP reply. Free otherwise.
     pub(crate) async fn barrier(&self) {
         if self.any_subscription() {
-            self.flush().await;
+            self.flush(BARRIER_WAIT).await;
         }
     }
 
-    /// [`Self::barrier`] whatever is subscribed, for a producer that must know its watcher has
-    /// applied everything before a point (the end of `Runtime.enable`'s replay).
-    pub(crate) async fn flush(&self) {
+    /// The barrier whatever is subscribed, for a producer that must know its watcher has applied
+    /// everything before a point: the end of `Runtime.enable`'s replay.
+    pub(crate) async fn replay_barrier(&self) {
+        self.flush(REPLAY_WAIT).await;
+    }
+
+    async fn flush(&self, bound: Duration) {
         let acks = self
             .with(|state| {
                 state.watchers.retain(|watcher| !watcher.is_closed());
@@ -354,11 +359,11 @@ impl EventHub {
         if acks.is_empty() {
             return;
         }
-        if time::timeout(BARRIER_WAIT, future::join_all(acks))
-            .await
-            .is_err()
-        {
-            warn!("a page watcher did not apply its events within the reply barrier");
+        if time::timeout(bound, future::join_all(acks)).await.is_err() {
+            warn!(
+                ?bound,
+                "a page watcher did not apply its events within the barrier"
+            );
         }
     }
 
@@ -444,6 +449,7 @@ fn drop_note(dropped: usize) -> String {
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
+    use tokio::task;
 
     use super::*;
 
@@ -456,7 +462,7 @@ mod tests {
         let hub = EventHub::default();
         for text in ["one", "two", "three"] {
             assert_eq!(
-                hub.emit(CONTEXT_GUID, "console", json!({ "text": text })),
+                hub.emit(CONTEXT_GUID, "console", &json!({ "text": text })),
                 Emitted::Queued
             );
         }
@@ -482,16 +488,19 @@ mod tests {
     fn tests_that_a_full_queue_counts_drops_and_notes_them_once_per_period() {
         let hub = EventHub::default();
         for _ in 0..MAX_QUEUED_EVENTS {
-            assert_eq!(hub.emit("page@T", "close", json!({})), Emitted::Queued);
+            assert_eq!(hub.emit("page@T", "close", &json!({})), Emitted::Queued);
         }
-        assert_eq!(hub.emit("page@T", "close", json!({})), Emitted::Dropped);
-        assert_eq!(hub.emit("page@T", "close", json!({})), Emitted::Dropped);
-        assert!(hub.take_notes().is_empty(), "the period lasts until a drain");
+        assert_eq!(hub.emit("page@T", "close", &json!({})), Emitted::Dropped);
+        assert_eq!(hub.emit("page@T", "close", &json!({})), Emitted::Dropped);
+        assert!(
+            hub.take_notes().is_empty(),
+            "the period lasts until a drain"
+        );
         assert_eq!(drained(&hub, None).len(), MAX_QUEUED_EVENTS);
         let notes = hub.take_notes();
         assert_eq!(notes.len(), 1);
         assert!(notes[0].contains("dropped 2 events"), "{notes:?}");
-        assert_eq!(hub.emit("page@T", "close", json!({})), Emitted::Queued);
+        assert_eq!(hub.emit("page@T", "close", &json!({})), Emitted::Queued);
         assert!(hub.take_notes().is_empty());
     }
 
@@ -500,7 +509,7 @@ mod tests {
         let hub = EventHub::default();
         let big = "x".repeat(MAX_QUEUED_BYTES);
         assert_eq!(
-            hub.emit(CONTEXT_GUID, "console", json!({ "text": big })),
+            hub.emit(CONTEXT_GUID, "console", &json!({ "text": big })),
             Emitted::Dropped
         );
         assert_eq!(hub.seq(), 0, "a dropped event takes no seq");
@@ -535,10 +544,13 @@ mod tests {
     fn tests_that_closing_ends_subscriptions_and_refuses_events() {
         let hub = EventHub::default();
         hub.subscribe("page@T", "dialog", true);
-        hub.emit(CONTEXT_GUID, "dialog", json!({}));
+        hub.emit(CONTEXT_GUID, "dialog", &json!({}));
         hub.close();
         assert!(!hub.wants("page@T", "dialog", "dialog"));
-        assert_eq!(hub.emit(CONTEXT_GUID, "dialog", json!({})), Emitted::Closed);
+        assert_eq!(
+            hub.emit(CONTEXT_GUID, "dialog", &json!({})),
+            Emitted::Closed
+        );
         assert!(drained(&hub, None).is_empty());
         hub.subscribe("page@T", "dialog", true);
         assert!(!hub.subscribed("page@T", "dialog"));
@@ -551,9 +563,9 @@ mod tests {
             let hub = hub.clone();
             async move { hub.next().await }
         });
-        tokio::task::yield_now().await;
+        task::yield_now().await;
         assert!(!waiting.is_finished());
-        hub.emit(CONTEXT_GUID, "console", json!({}));
+        hub.emit(CONTEXT_GUID, "console", &json!({}));
         time::timeout(Duration::from_secs(5), waiting)
             .await
             .unwrap()
@@ -611,7 +623,7 @@ mod tests {
             let hub = hub.clone();
             async move { hub.ready("T").await }
         });
-        tokio::task::yield_now().await;
+        task::yield_now().await;
         assert!(!ready.is_finished());
         drop(enabling);
         time::timeout(Duration::from_secs(5), ready)

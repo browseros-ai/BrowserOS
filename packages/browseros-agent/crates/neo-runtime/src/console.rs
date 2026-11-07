@@ -39,6 +39,12 @@ const CONSOLE_MESSAGES_LIMIT: usize = 200;
 /// Playwright: `server/page.ts` `Page.addPageError`: `ensureArrayLimit(this._pageErrors, 200); // Avoid unbounded memory growth.`
 const PAGE_ERRORS_LIMIT: usize = 200;
 
+/// Deviation: `server/page.ts` `Page.addConsoleMessage`: `ensureArrayLimit(this._consoleMessages, 200); // Avoid unbounded memory growth.`
+/// Playwright bounds the count only. Neo keeps the history in the server for the run, outside the
+/// realm's memory limit, so each list also keeps at most this many bytes of text (a message's,
+/// an error's message and stack), dropping its oldest entries first; the newest always stays.
+const HISTORY_BYTES_LIMIT: usize = 16 * 1024 * 1024;
+
 /// A console message as the protocol carries it, in `Page.consoleMessages` and the context's
 /// `console` event: `{type, text, args, location, timestamp}`.
 pub(crate) type ConsoleRecord = PageConsoleMessagesResultMessagesItem;
@@ -174,9 +180,10 @@ pub(crate) fn arg_preview(object: &RemoteObject) -> String {
     let has_object = object.object_id.as_deref().is_some_and(|id| !id.is_empty());
     if object.subtype.as_deref() == Some("node") {
         // Deviation: `server/dom.ts` `ElementHandle._initializePreview`: `this._setPreview(await utility.evaluate((injected, e) => 'JSHandle@' + injected.previewNode(e), this));`
-        // Playwright then swaps a node's preview for its markup, which a message's text shows
-        // when first read after that lands (a history read with no console listener; a
-        // listener or a `debug` message reads it at once). Neo never runs it: always the first.
+        // Playwright later swaps a node's preview for its markup (`JSHandle@<div id="a">hi</div>`),
+        // which a message's text shows when first read after the swap: a history read with no
+        // console listener (a listener, or a `debug` message, reads the text at once). Neo never
+        // swaps, so the text is always `JSHandle@node`, what a listener sees.
         return if has_object {
             "JSHandle@node"
         } else {
@@ -362,6 +369,7 @@ impl History {
             marked: false,
         });
         ensure_array_limit(&mut self.messages, CONSOLE_MESSAGES_LIMIT);
+        ensure_bytes_limit(&mut self.messages, |message| message.text.len());
     }
 
     /// Playwright: `server/page.ts` `Page.addPageError`: `this._pageErrors.push(pageError);`
@@ -371,6 +379,11 @@ impl History {
             marked: false,
         });
         ensure_array_limit(&mut self.errors, PAGE_ERRORS_LIMIT);
+        ensure_bytes_limit(&mut self.errors, |error| {
+            error.error.error.as_ref().map_or(0, |error| {
+                error.message.len() + error.stack.as_ref().map_or(0, String::len)
+            })
+        });
     }
 
     /// The main frame committed a new document: marks the last message and the last error.
@@ -422,6 +435,21 @@ fn ensure_array_limit<T>(array: &mut Vec<T>, limit: usize) {
     if array.len() > limit {
         array.drain(..limit / 10);
     }
+}
+
+/// Drops the oldest entries until the list's text fits [`HISTORY_BYTES_LIMIT`], keeping the
+/// newest entry whatever its size.
+fn ensure_bytes_limit<T>(entries: &mut Vec<Entry<T>>, bytes: impl Fn(&T) -> usize) {
+    let mut total: usize = entries.iter().map(|entry| bytes(&entry.value)).sum();
+    let mut dropped = 0;
+    for entry in entries.iter().take(entries.len().saturating_sub(1)) {
+        if total <= HISTORY_BYTES_LIMIT {
+            break;
+        }
+        total -= bytes(&entry.value);
+        dropped += 1;
+    }
+    entries.drain(..dropped);
 }
 
 /// Playwright: `server/page.ts` `Page.consoleMessages`: `const marked = this._consoleMessages.findLastIndex(m => (m as any)[navigationMarkSymbol]);`
@@ -578,8 +606,8 @@ fn split_error_message(message: &str) -> (String, String) {
     let message = match rest.next() {
         None => message.to_string(),
         // Deviation: `utils/stackTrace.ts` `splitErrorMessage`: `message.substring(separationIdx + 2)`
-        // cuts a character outside the BMP in half and keeps its low surrogate, which a Rust
-        // string cannot hold; Neo writes U+FFFD there, one UTF-16 unit as in JS.
+        // Playwright cuts a character outside the BMP in half and keeps its low surrogate, which
+        // a Rust string cannot hold; Neo writes U+FFFD there, one UTF-16 unit as in JS.
         Some(skipped) if skipped.len_utf16() == 2 => format!("\u{fffd}{}", rest.as_str()),
         Some(_) => rest.as_str().to_string(),
     };
@@ -691,6 +719,12 @@ mod tests {
         }
     }
 
+    /// A CDP `Runtime.CallFrame`: 0-based line and column.
+    fn frame(function_name: &str, url: &str, line: i64, column: i64) -> Value {
+        json!({"functionName": function_name, "scriptId": "9", "url": url,
+            "lineNumber": line, "columnNumber": column})
+    }
+
     fn nowhere() -> ConsoleLocation {
         ConsoleLocation {
             url: String::new(),
@@ -753,7 +787,8 @@ mod tests {
                 "NaN",
             ),
             (
-                json!({"type": "number", "unserializableValue": "-Infinity", "description": "-Infinity"}),
+                json!({"type": "number", "unserializableValue": "-Infinity",
+                    "description": "-Infinity"}),
                 "-Infinity",
             ),
             // Playwright's `parseUnserializableValue` knows no bigint: the handle holds undefined.
@@ -787,11 +822,12 @@ mod tests {
         // console.log({a: 1, b: 'str', get c() {}}): an accessor previews without a value.
         let plain = json!({
             "type": "object", "className": "Object", "description": "Object", "objectId": "1",
-            "preview": {"type": "object", "description": "Object", "overflow": false, "properties": [
-                {"name": "a", "type": "number", "value": "1"},
-                {"name": "b", "type": "string", "value": "str"},
-                {"name": "c", "type": "accessor"},
-            ]},
+            "preview": {"type": "object", "description": "Object", "overflow": false,
+                "properties": [
+                    {"name": "a", "type": "number", "value": "1"},
+                    {"name": "b", "type": "string", "value": "str"},
+                    {"name": "c", "type": "accessor"},
+                ]},
         });
         assert_eq!(arg_preview(&object(&plain)), "{a: 1, b: str, c: undefined}");
         let array = |properties: Value| {
@@ -820,12 +856,14 @@ mod tests {
     fn tests_that_handles_without_a_preview_fall_back_as_playwright_does() {
         let cases = [
             (
-                json!({"type": "function", "className": "Function", "description": "function f() {}", "objectId": "3"}),
+                json!({"type": "function", "className": "Function",
+                    "description": "function f() {}", "objectId": "3"}),
                 "function f() {}",
             ),
             (
-                json!({"type": "object", "className": "Window", "description": "Window", "objectId": "4",
-                    "preview": {"type": "object", "description": "Window", "overflow": true, "properties": []}}),
+                json!({"type": "object", "className": "Window", "description": "Window",
+                    "objectId": "4", "preview": {"type": "object", "description": "Window",
+                        "overflow": true, "properties": []}}),
                 "Window",
             ),
             (
@@ -861,8 +899,8 @@ mod tests {
             "executionContextId": 3,
             "timestamp": 1_700_000_000_123.5,
             "stackTrace": {"callFrames": [
-                {"functionName": "", "scriptId": "9", "url": "http://x/a.js", "lineNumber": 6, "columnNumber": 12},
-                {"functionName": "outer", "scriptId": "9", "url": "http://x/b.js", "lineNumber": 1, "columnNumber": 0},
+                frame("", "http://x/a.js", 6, 12),
+                frame("outer", "http://x/b.js", 1, 0),
             ]},
         }))
         .expect("a consoleAPICalled payload");
@@ -947,9 +985,7 @@ mod tests {
             "exceptionDetails": {
                 "exceptionId": 1, "text": "Uncaught", "lineNumber": 2, "columnNumber": 8,
                 "scriptId": "5", "url": "http://x/a.js",
-                "stackTrace": {"callFrames": [
-                    {"functionName": "foo", "scriptId": "5", "url": "http://x/a.js", "lineNumber": 2, "columnNumber": 8},
-                ]},
+                "stackTrace": {"callFrames": [frame("foo", "http://x/a.js", 2, 8)]},
                 "exception": {"type": "object", "subtype": "error", "className": "Error",
                     "description": stack, "objectId": "9",
                     "preview": {"type": "object", "subtype": "error", "description": stack,
@@ -986,8 +1022,8 @@ mod tests {
         let syntax = details(&json!({
             "text": "Uncaught SyntaxError: Unexpected token ')'",
             "stackTrace": {"callFrames": [
-                {"functionName": "", "scriptId": "6", "url": "http://x/b.js", "lineNumber": 0, "columnNumber": 4},
-                {"functionName": "load", "scriptId": "6", "url": "http://x/c.js", "lineNumber": 9, "columnNumber": 0},
+                frame("", "http://x/b.js", 0, 4),
+                frame("load", "http://x/c.js", 9, 0),
             ]},
         }));
         assert_eq!(
@@ -995,7 +1031,11 @@ mod tests {
             error(
                 "Unexpected token ')'",
                 "Uncaught SyntaxError",
-                "Uncaught SyntaxError: Unexpected token ')'\n    at <anonymous> (http://x/b.js:1:5)\n    at load (http://x/c.js:10:1)",
+                concat!(
+                    "Uncaught SyntaxError: Unexpected token ')'\n",
+                    "    at <anonymous> (http://x/b.js:1:5)\n",
+                    "    at load (http://x/c.js:10:1)",
+                ),
             )
         );
         // An own `name` property beats the stack's name; one previewed without a value is Error.
@@ -1052,6 +1092,24 @@ mod tests {
         assert_eq!(
             (kept.len(), kept.first(), kept.last()),
             (181, Some(&"20"), Some(&"200"))
+        );
+    }
+
+    #[test]
+    fn tests_that_history_keeps_at_most_its_bytes_and_always_the_newest() {
+        let mut history = History::default();
+        let mebibyte = "x".repeat(1 << 20);
+        for index in 0..20 {
+            history.push_message(message(&format!("{index}{mebibyte}")));
+        }
+        let kept = history.messages(true);
+        assert_eq!(kept.len(), 15, "16 MiB holds 15 of these");
+        assert!(kept[14].text.starts_with("19"), "the newest stays");
+        history.push_message(message(&"y".repeat(20 << 20)));
+        assert_eq!(
+            history.messages(true).len(),
+            1,
+            "a huge newest entry stays alone"
         );
     }
 

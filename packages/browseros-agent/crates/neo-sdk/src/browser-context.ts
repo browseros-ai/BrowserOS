@@ -162,6 +162,7 @@ export class BrowserContext extends ChannelOwner {
       const options =
         typeof optionsOrPredicate === 'function' ? {} : optionsOrPredicate
       refuseSignal(options)
+      this._refuseUnserved(event)
       const timeout = this._timeoutSettings.timeout(options)
       const predicate =
         typeof optionsOrPredicate === 'function'

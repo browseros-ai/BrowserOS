@@ -109,7 +109,7 @@ impl PageEvents {
         let crashed = event.is_some_and(|event| event.method == "Inspector.targetCrashed");
         let name = if crashed { "crash" } else { "close" };
         if self.hub.subscribed(&self.page_guid, name) {
-            self.hub.emit(&self.page_guid, name, json!({}));
+            self.hub.emit(&self.page_guid, name, &json!({}));
         }
     }
 
@@ -156,15 +156,16 @@ impl PageEvents {
     }
 
     fn message(&self, record: ConsoleRecord, timestamp: f64) {
-        let live = self.console.push_message(record.clone(), timestamp);
-        if !live || !self.hub.wants(&self.page_guid, "console", "console") {
-            return;
+        let params = self
+            .hub
+            .wants(&self.page_guid, "console", "console")
+            .then(|| serde_json::to_value(&record).ok())
+            .flatten();
+        let live = self.console.push_message(record, timestamp);
+        if let Some(mut params) = params.filter(|_| live) {
+            params["page"] = json!({ "guid": self.page_guid });
+            self.hub.emit(CONTEXT_GUID, "console", &params);
         }
-        let Ok(mut params) = serde_json::to_value(&record) else {
-            return;
-        };
-        params["page"] = json!({ "guid": self.page_guid });
-        self.hub.emit(CONTEXT_GUID, "console", params);
     }
 
     fn exception(&self, params: &Value) {
@@ -172,24 +173,25 @@ impl PageEvents {
             return;
         };
         let record = console::from_exception(&event);
-        let live = self.console.push_error(record.clone(), event.timestamp);
-        if !live || !self.hub.wants(&self.page_guid, "pageerror", "weberror") {
-            return;
-        }
         // Playwright: `server/dispatchers/browserContextDispatcher.ts` `BrowserContextDispatcher.constructor`: `this._dispatchEvent('pageError', {`
-        self.hub.emit(
-            CONTEXT_GUID,
-            "pageError",
-            json!({
-                "error": record.error,
-                "page": { "guid": self.page_guid },
-                "location": {
-                    "url": record.location.url,
-                    "line": record.location.line_number,
-                    "column": record.location.column_number,
-                },
-            }),
-        );
+        let params = self
+            .hub
+            .wants(&self.page_guid, "pageerror", "weberror")
+            .then(|| {
+                json!({
+                    "error": record.error,
+                    "page": { "guid": self.page_guid },
+                    "location": {
+                        "url": record.location.url,
+                        "line": record.location.line_number,
+                        "column": record.location.column_number,
+                    },
+                })
+            });
+        let live = self.console.push_error(record, event.timestamp);
+        if let Some(params) = params.filter(|_| live) {
+            self.hub.emit(CONTEXT_GUID, "pageError", &params);
+        }
     }
 
     fn dialog_opening(&self, params: &Value, answer: Option<DialogAnswer>) -> Option<DialogAnswer> {
@@ -208,7 +210,7 @@ impl PageEvents {
         if self.hub.wants(&self.page_guid, "dialog", "dialog")
             && self
                 .hub
-                .emit(CONTEXT_GUID, "dialog", json!({ "dialog": record }))
+                .emit(CONTEXT_GUID, "dialog", &json!({ "dialog": record }))
                 == Emitted::Queued
         {
             // The script owns it now: its listener answers, or the SDK gives the default when
@@ -224,9 +226,12 @@ impl PageEvents {
         let Some(record) = self.dialogs.closed() else {
             return;
         };
-        if self.hub.wants(&self.page_guid, "dialogclosed", "dialogclosed") {
+        if self
+            .hub
+            .wants(&self.page_guid, "dialogclosed", "dialogclosed")
+        {
             self.hub
-                .emit(CONTEXT_GUID, "dialogClosed", json!({ "dialog": record }));
+                .emit(CONTEXT_GUID, "dialogClosed", &json!({ "dialog": record }));
         }
     }
 

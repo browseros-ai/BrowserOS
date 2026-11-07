@@ -33,7 +33,9 @@
 //!   frames before, 30 per 500 ms after). The page also sees itself visible and focused while
 //!   attached. A failure is logged and ignored: a foreground tab paints anyway.
 //! - Not `Runtime.enable` (worlds are found by name, `world.rs`) and not `DOM.enable` (quads,
-//!   box models and scrolls by `objectId` need none, probe P2).
+//!   box models and scrolls by `objectId` need none, probe P2). A run that listens to console
+//!   messages or page errors, or reads their history, enables Runtime and Log on its own
+//!   ([`PageSession::enable_runtime`]); the watcher then also feeds `page_events.rs`.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -624,12 +626,12 @@ impl PageSession {
                 self.events.console.request();
                 self.send("Runtime.enable", json!({})).await?;
                 self.send("Log.enable", json!({})).await?;
-                self.events.hub().flush().await;
+                self.events.hub().replay_barrier().await;
                 self.events.console.go_live();
                 Ok::<(), CdpError>(())
             })
             .await
-            .map(|()| ())
+            .copied()
     }
 
     pub(crate) async fn send(&self, method: &str, params: Value) -> Result<Value, CdpError> {
@@ -1078,7 +1080,8 @@ impl Watcher {
         match event {
             Ok(event) => {
                 // Before the Page events that follow it, so a commit never outruns its request.
-                if event.method.starts_with("Network.") && event.session_id.as_ref() == Some(session)
+                if event.method.starts_with("Network.")
+                    && event.session_id.as_ref() == Some(session)
                 {
                     self.network.apply(&event.method, &event.params);
                 }

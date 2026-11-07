@@ -215,9 +215,7 @@ fn answer_error(error: &CdpError) -> PlaywrightError {
         CdpError::Protocol { message, .. } => PlaywrightError::error(format!(
             "Protocol error (Page.handleJavaScriptDialog): {message}"
         )),
-        error if world::classify(error) == PageError::Closed => {
-            PlaywrightError::target_closed()
-        }
+        error if world::classify(error) == PageError::Closed => PlaywrightError::target_closed(),
         error => PlaywrightError::error(error.to_string()),
     }
 }

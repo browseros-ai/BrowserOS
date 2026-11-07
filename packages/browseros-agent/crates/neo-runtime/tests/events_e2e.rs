@@ -235,8 +235,14 @@ return 'kept running'",
         (&async_outcome, "RangeError", "async boom"),
     ] {
         assert_eq!(outcome.status, RunStatus::Error, "{outcome:#?}");
-        let error = outcome.error.as_ref().unwrap_or_else(|| panic!("{outcome:#?}"));
-        assert_eq!((error.name.as_str(), error.message.as_str()), (name, message));
+        let error = outcome
+            .error
+            .as_ref()
+            .unwrap_or_else(|| panic!("{outcome:#?}"));
+        assert_eq!(
+            (error.name.as_str(), error.message.as_str()),
+            (name, message)
+        );
     }
 }
 
@@ -261,7 +267,10 @@ return count",
     .await;
     tab.close().await;
     let count = value(&outcome).as_u64().unwrap_or(0);
-    assert!((1..24).contains(&count), "some delivered, some dropped: {count}");
+    assert!(
+        (1..24).contains(&count),
+        "some delivered, some dropped: {count}"
+    );
     let notes: Vec<&String> = outcome
         .logs
         .iter()
