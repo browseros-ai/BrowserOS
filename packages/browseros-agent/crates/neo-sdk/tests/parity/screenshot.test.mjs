@@ -55,8 +55,15 @@ const prepared = `<!doctype html><title>prepared</title><style>
 const framed = `<!doctype html><title>framed</title><script>window.__frameMutations = []</script>
 <iframe srcdoc="<style>body{margin:0}</style><div id=inner style='width:80px;height:40px;background:purple'></div><script>new MutationObserver((records) => { for (const record of records) { for (const node of record.addedNodes) if (node.nodeName === 'X-PW-GLASS') parent.__frameMutations.push('+glass'); for (const node of record.removedNodes) if (node.nodeName === 'X-PW-GLASS') parent.__frameMutations.push('-glass') } }).observe(document.documentElement, { childList: true })</script>"></iframe>`
 
-// The body removes itself while it parses, so the document has none once loaded.
-const bodiless = `<!doctype html><title>no body</title><body><p>gone</p><script>document.body.remove()</script></body>`
+// The body removes itself while it parses, so the document has none once loaded. The head
+// counts the <style> elements a screenshot's \`style\` option adds.
+const bodiless = `<!doctype html><title>no body</title><script>
+  window.__stylesAdded = 0
+  new MutationObserver((records) => {
+    for (const record of records)
+      for (const node of record.addedNodes) if (node.nodeName === 'STYLE') window.__stylesAdded++
+  }).observe(document.documentElement, { childList: true })
+</script><body><p>gone</p><script>document.body.remove()</script></body>`
 
 /** What a page looks like after a screenshot prepared it: Playwright and Neo restore it all. */
 const RESTORED = `(() => ({
@@ -105,6 +112,13 @@ const cases = [
     source:
       "return describeImage(await page.screenshot({ path: at('shot.jpeg'), quality: 50 }))",
     file: 'shot.jpeg',
+  },
+  {
+    name: 'SS-035 quality changes the JPEG each engine writes',
+    path: '/grid.html',
+    source: `const low = await page.screenshot({ type: 'jpeg', quality: 5 })
+    const high = await page.screenshot({ type: 'jpeg', quality: 95 })
+    return { low: describeImage(low), high: describeImage(high), smaller: low.length < high.length }`,
   },
   {
     name: 'SS-036 should prefer type over extension',
@@ -185,6 +199,18 @@ const cases = [
       return 'taken'
     } catch (error) { return errorKind(error) }`,
     noFile: 'file.txt',
+  },
+  {
+    name: 'a screenshot that times out after preparing still restores the page',
+    path: '/bodiless.html',
+    source: `try {
+      await page.screenshot({ fullPage: true, timeout: 1000, style: 'p { color: red }' })
+      return 'taken'
+    } catch (error) { return errorKind(error) }`,
+    probe:
+      "({ added: window.__stylesAdded, left: document.querySelectorAll('style').length })",
+    expect: { error: { name: 'TimeoutError', strict: false } },
+    expectProbe: { added: 1, left: 0 },
   },
   {
     name: 'fullPage waits for a body and times out without one',
