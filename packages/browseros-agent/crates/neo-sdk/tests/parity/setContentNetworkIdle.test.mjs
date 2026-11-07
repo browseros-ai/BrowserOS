@@ -13,6 +13,8 @@
 //   document creates holds it too.
 // - A child frame's own setContent: the frame's lifecycle clears, and its late fetch holds it.
 // - A fresh page's first setContent with `networkidle`: the call watches the network itself.
+// - The #3216 re-check's out-of-process frame cases (warm and cold, no requests and a slow body):
+//   a deliberate difference, Playwright resolves and Neo refuses before writing.
 //
 // Every fetch reads its body: Chromium reports a fetch whose body is never read as still loading
 // (measured on BrowserOS neo: no `requestfinished` within 3 s, for plain, JSON and HTML bodies),
@@ -29,6 +31,10 @@ import { compareNetwork } from './network.mjs'
 const LATE = `<title>late</title><script>
 setTimeout(() => fetch('/net/slow?ms=700').then((r) => r.text()).then(() => { document.title = 'done' }), 300)
 </script>`
+
+// The written document's fetch, 900 ms, whose body is read; it says when it finished.
+const SLOW_BODY =
+  '<p id="new">New</p><script>window.done = false; fetch("/net/slow?ms=900").then((r) => r.text()).then(() => { window.done = true })</script>'
 
 const cases = [
   {
@@ -91,6 +97,26 @@ const cases = [
     return { result, title: await child.title() }`,
     expected: { result: 'undefined', title: 'done' },
   },
+  ...['warm', 'cold'].flatMap((warmth) =>
+    [false, true].map((slow) => ({
+      // The #3216 re-check (review-delta-995823580.md): Playwright waits for an out-of-process
+      // frame's networkidle as for any frame's. Neo's idle tracker follows the tab's own session
+      // only, so the wait could only time out: Neo refuses it before writing (Deviation).
+      name: `an out-of-process frame's setContent with networkidle, ${warmth}, ${slow ? 'a slow body' : 'no requests'}`,
+      source: `await page.goto(ORIGIN + '/net/oopif-top.html')
+    const frame = page.frame('cross')
+    await frame.waitForSelector('#fetch')
+    ${warmth === 'warm' ? "await frame.waitForLoadState('load', { timeout: 3000 })" : ''}
+    const result = await settle(frame.setContent(${JSON.stringify(slow ? SLOW_BODY : '<p id="new">New</p>')}, { waitUntil: 'networkidle', timeout: 2500 }))
+    return {
+      result,
+      changed: await frame.locator('#new').count(),
+      done: await frame.evaluate(() => window.done ?? null),
+    }`,
+      playwright: { result: 'undefined', changed: 1, done: slow ? true : null },
+      neo: { result: { error: 'Error' }, changed: 0, done: null },
+    })),
+  ),
 ]
 
 test('setContent and networkidle match Playwright', {

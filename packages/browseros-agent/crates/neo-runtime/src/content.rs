@@ -42,6 +42,13 @@ use crate::waits::{WaitObservation, WaitTab};
 const NAVIGATING: &str =
     "Unable to retrieve content because the page is navigating and changing the content.";
 
+/// Deviation: `server/frames.ts` `Frame.setContent`: `const lifecyclePromise = progress.race(tagPromise).then(() => this.waitForLoadState(progress, waitUntil));`
+/// Playwright waits for an out-of-process frame's `networkidle` as for any frame's. Neo's idle
+/// tracker follows the tab's own session only, which such a frame left (`network_idle.rs`), so
+/// the wait could only time out: it is refused before the write.
+const OOPIF_NETWORKIDLE: &str =
+    "Neo does not support waitUntil: \"networkidle\" in an out-of-process frame yet";
+
 /// Neo: the hop between two frame chunks, as Playwright's `resolveSelector` joins them.
 const ENTER_FRAME: &str = " >> internal:control=enter-frame >> ";
 
@@ -204,19 +211,23 @@ pub(crate) async fn set_content(
         .race(Tab::prepare(tab))
         .await?
         .map_err(call_error)?;
-    // `networkidle` is told from the page's requests, which Neo sees once Network is enabled, as
-    // `waitForLoadState`'s: before the write, so the written document's first requests count.
-    if options.wait_until == LifecycleEvent::Networkidle {
-        progress
-            .race(WaitTab::track_network(tab))
-            .await?
-            .map_err(call_error)?;
-    }
     let frame = progress.race(tab.context()).await?.map_err(call_error)?;
     // Before the write: the reopened document fires its first events while the write is in
     // flight, and the frame may go while it waits.
     let events = frame.host.events();
     let mut observation = WaitTab::observe(tab).map_err(call_error)?;
+    if options.wait_until == LifecycleEvent::Networkidle {
+        if frame.host.is_child() {
+            return Err(PlaywrightError::error(OOPIF_NETWORKIDLE).into());
+        }
+        // `networkidle` is told from the page's requests, which Neo sees once Network is
+        // enabled, as `waitForLoadState`'s: before the write, so the written document's first
+        // requests count.
+        progress
+            .race(WaitTab::track_network(tab))
+            .await?
+            .map_err(call_error)?;
+    }
     // Playwright: `server/frames.ts` `Frame.setContent`: `// Clear lifecycle right after document.open() - see 'tag' below.`
     let reopen = tab.page.expect_reopen(&frame.id, true);
     let written = progress
