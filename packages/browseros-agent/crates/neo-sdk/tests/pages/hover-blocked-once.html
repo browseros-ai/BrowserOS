@@ -1,0 +1,20 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>hover blocked once</title>
+<style>#overlay { position: fixed; inset: 0; z-index: 10 }</style>
+<script>
+// The overlay covers the button only once the hover's own pointermove arrives, after the
+// hit-target interceptor's preliminary check passed, so the interceptor's hit check at the
+// mousemove finds the overlay and blocks it (the event's own target is still the button:
+// Chromium hit-tests a move once, before its pointermove). The overlay goes a moment later,
+// and a retried move reaches the button. These capture listeners were registered before the
+// interceptor's, so they see every mousemove, the blocked one included.
+window.__moves = [];
+addEventListener('pointermove', () => {
+  if (window.__covered) return;
+  window.__covered = true;
+  document.getElementById('overlay').hidden = false;
+  setTimeout(() => document.getElementById('overlay').remove(), 50);
+}, true);
+addEventListener('mousemove', (event) => __moves.push(event.target.id || event.target.tagName.toLowerCase()), true);
+</script></head><body>
+<button type="button" id="target">Hover me</button><div id="overlay" hidden></div>
+</body></html>

@@ -1,4 +1,5 @@
-//! `Frame.textContent`, `Frame.innerText`, `Frame.getAttribute` and `Frame.ariaSnapshot`:
+//! `Frame.textContent`, `Frame.innerText`, `Frame.innerHTML`, `Frame.getAttribute` and
+//! `Frame.ariaSnapshot`:
 //! Playwright's page and locator reads, in the structure of its
 //! server. The text reads use `frames.ts` `_waitForFunctionOnSelector` over
 //! `retryWithProgressAndBackoff`; `ariaSnapshot` is `page.ts`
@@ -6,11 +7,12 @@
 //! `frames.ts` `ariaSnapshot` does.
 //!
 //! ```text
-//!  text_content / inner_text / get_attribute           log: waiting for <locator>
+//!  text_content / inner_text / inner_html / get_attribute   log: waiting for <locator>
 //!   wait_for_function_on_selector  waits 0,20,50,100,100,500…  (click's LoopAWaits)
 //!   │ prepare the tab
 //!   │ first time only: describe → name the locator │ invalid selector → Error, at once
-//!   │ glue textContent / innerText / getAttribute {selector, strict, name?}: mark first match
+//!   │ glue textContent / innerText / innerHTML / getAttribute {selector, strict, name?}:
+//!   │   mark first match
 //!   │   matched → log "  locator resolved to <preview>" → {value} (missing attribute → {})
 //!   │   nothing matched, or NotConnected → poll again
 //!   │   Threw (strict mode violation) or Contract → Error with the page's message; Closed → closed
@@ -59,12 +61,12 @@ use futures_util::stream::{FuturesUnordered, StreamExt};
 use neo_runtime_spec::injected::{
     AriaChild, AriaFrameSnapshot, AriaIframe, AriaNode, AriaRole, AriaSnapshotMode, AttributeMatch,
     InjectedAriaSnapshotParams, InjectedAriaSnapshotResult, InjectedGetAttributeParams,
-    InjectedInnerTextParams, InjectedTextContentParams, TextMatch,
+    InjectedInnerHTMLParams, InjectedInnerTextParams, InjectedTextContentParams, TextMatch,
 };
 use neo_runtime_spec::serve::{
     FrameAriaSnapshotParams, FrameAriaSnapshotParamsMode, FrameAriaSnapshotResult,
-    FrameGetAttributeParams, FrameGetAttributeResult, FrameInnerTextParams, FrameInnerTextResult,
-    FrameTextContentParams, FrameTextContentResult,
+    FrameGetAttributeParams, FrameGetAttributeResult, FrameInnerHTMLParams, FrameInnerHTMLResult,
+    FrameInnerTextParams, FrameInnerTextResult, FrameTextContentParams, FrameTextContentResult,
 };
 
 use crate::aria_yaml;
@@ -84,6 +86,9 @@ const FRAME_HOP: &str = " >> internal:control=enter-frame >> ";
 /// The waits before each snapshot attempt: Playwright's `[1000, 2000, 4000, 8000]` after an
 /// immediate first try, the last repeating, and never capped by the call's timeout.
 const SNAPSHOT_WAITS_MS: [u64; 5] = [0, 1000, 2000, 4000, 8000];
+
+/// Deviation: `server/frames.ts` `Frame.ariaSnapshotJSON`: `return { snapshot: await ariaSnapshotJSONForFrame(progress, this, options.selector, options) };` Child-frame scoped AI refs cannot be main-frame paths; use the page snapshot until frame-id-prefixed refs are served.
+const CHILD_AI_SNAPSHOT_UNSERVED: &str = "Neo does not serve scoped AI snapshots inside child frames; use page.ariaSnapshot({ mode: 'ai' })";
 
 // ---------------------------------------------------------------------------------------------
 // The seam.
@@ -121,6 +126,13 @@ pub(crate) trait ReadTab: SelectorTab {
         strict: bool,
     ) -> impl Future<Output = Result<Option<TextMatch>, PageError>> + Send;
 
+    /// The `innerHTML` glue: the first match's markup, any element kind.
+    fn inner_html(
+        &self,
+        selector: &str,
+        strict: bool,
+    ) -> impl Future<Output = Result<Option<TextMatch>, PageError>> + Send;
+
     /// The `getAttribute` glue: `None` while no element matches; a matched element can have
     /// no value for the requested attribute and still ends the read.
     fn get_attribute(
@@ -131,10 +143,13 @@ pub(crate) trait ReadTab: SelectorTab {
     ) -> impl Future<Output = Result<Option<AttributeMatch>, PageError>> + Send;
 
     /// The `ariaSnapshot` glue: the tree and preview of the first match of `params.selector`.
-    /// The snapshot is absent while nothing matches.
+    /// The snapshot is absent while nothing matches. `stitching` permits internal child AI reads:
+    /// their local refs are prefixed before publication. A caller's child-root AI read is refused
+    /// because its local refs would otherwise resolve against the main document.
     fn aria_snapshot(
         &self,
         params: &InjectedAriaSnapshotParams,
+        stitching: bool,
     ) -> impl Future<Output = Result<InjectedAriaSnapshotResult, PageError>> + Send;
 }
 
@@ -150,7 +165,8 @@ pub(crate) struct Matched<R> {
 // The policy.
 // ---------------------------------------------------------------------------------------------
 
-/// One `Frame.textContent` or `Frame.innerText` call's options, decoded once by its route.
+/// One `Frame.textContent`, `Frame.innerText` or `Frame.innerHTML` call's options, decoded once
+/// by its route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReadOptions {
     pub(crate) selector: String,
@@ -167,6 +183,13 @@ impl ReadOptions {
     }
 
     pub(crate) fn from_inner_text(params: FrameInnerTextParams) -> Self {
+        Self {
+            selector: params.selector,
+            strict: params.strict.unwrap_or(false),
+        }
+    }
+
+    pub(crate) fn from_inner_html(params: FrameInnerHTMLParams) -> Self {
         Self {
             selector: params.selector,
             strict: params.strict.unwrap_or(false),
@@ -282,6 +305,22 @@ pub(crate) async fn inner_text<T: ReadTab>(
     Ok(FrameInnerTextResult { value })
 }
 
+/// Serves `Frame.innerHTML`: `{value}`, the first match's markup.
+///
+/// Playwright: `server/frames.ts` `Frame.innerHTML`: `(injected, element) => ({ result: element.innerHTML })`
+pub(crate) async fn inner_html<T: ReadTab>(
+    tab: &T,
+    options: &ReadOptions,
+    progress: &Progress,
+) -> Result<FrameInnerHTMLResult, CallError> {
+    let value = wait_for_function_on_selector(tab, &options.selector, progress, || async {
+        let matched = tab.inner_html(&options.selector, options.strict).await?;
+        Ok(matched.map(|TextMatch { value, preview }| Matched { value, preview }))
+    })
+    .await?;
+    Ok(FrameInnerHTMLResult { value })
+}
+
 /// Serves `Frame.getAttribute`: a missing attribute ends the read with no `value`.
 pub(crate) async fn get_attribute<T: ReadTab>(
     tab: &T,
@@ -367,9 +406,8 @@ where
     Ok(Some(matched.value))
 }
 
-/// Serves `Frame.ariaSnapshot`: with a selector, a locator's subtree; without one, the frame's
-/// document with every rendered iframe's document stitched under its `iframe` node, as
-/// Playwright's YAML.
+/// Serves a document or locator snapshot. AI snapshots rooted in the main frame stitch
+/// rendered iframe documents and prefix their refs with paths from that main frame.
 pub(crate) async fn aria_snapshot<T: ReadTab>(
     tab: &T,
     options: &SnapshotOptions,
@@ -379,10 +417,12 @@ pub(crate) async fn aria_snapshot<T: ReadTab>(
         return locator_aria_snapshot(tab, selector, options, progress).await;
     }
     let root = snapshot_root(tab, options, progress).await?;
-    let nodes = stitch(tab, options, progress, root).await?;
-    let snapshot = aria_yaml::render(&nodes)
-        .map_err(|error| PlaywrightError::error(format!("neo-runtime: {error}")))?;
-    Ok(FrameAriaSnapshotResult { snapshot })
+    let nodes = if options.mode == AriaSnapshotMode::Ai {
+        stitch(tab, options, progress, root).await?
+    } else {
+        root.nodes
+    };
+    render_snapshot(&nodes)
 }
 
 /// The call's own document, polled until it has a body.
@@ -429,10 +469,10 @@ async fn locator_aria_snapshot<T: ReadTab>(
         boxes: options.boxes,
     };
     if options.mode == AriaSnapshotMode::Ai {
-        return locator_ai_snapshot(tab, &params, progress).await;
+        return locator_ai_snapshot(tab, &params, options, progress).await;
     }
     let snapshot = wait_for_function_on_selector(tab, selector, progress, || async {
-        let result = tab.aria_snapshot(&params).await?;
+        let result = tab.aria_snapshot(&params, false).await?;
         let Some(value) = result.snapshot else {
             return Ok(None);
         };
@@ -445,13 +485,14 @@ async fn locator_aria_snapshot<T: ReadTab>(
         Ok(Some(Matched { value, preview }))
     })
     .await?;
-    render_locator_snapshot(&snapshot)
+    render_snapshot(&snapshot.nodes)
 }
 
 /// Playwright: `server/page.ts` `ariaSnapshotJSONForFrame`: `frame.retryWithProgressAndTimeouts(progress, [1000, 2000, 4000, 8000],`
 async fn locator_ai_snapshot<T: ReadTab>(
     tab: &T,
     params: &InjectedAriaSnapshotParams,
+    options: &SnapshotOptions,
     progress: &Progress,
 ) -> Result<FrameAriaSnapshotResult, CallError> {
     let mut attempt: usize = 0;
@@ -462,7 +503,10 @@ async fn locator_ai_snapshot<T: ReadTab>(
             progress.wait(Duration::from_millis(wait)).await?;
         }
         match snapshot_once(tab, params, progress).await {
-            Ok(Some(snapshot)) => return render_locator_snapshot(&snapshot),
+            Ok(Some(snapshot)) => {
+                let nodes = stitch(tab, options, progress, snapshot).await?;
+                return render_snapshot(&nodes);
+            }
             Ok(None) => {
                 // Playwright: `server/page.ts` `ariaSnapshotJSONForFrame`: `throw new NonRecoverableDOMError(`
                 return Err(PlaywrightError::error(format!(
@@ -478,10 +522,8 @@ async fn locator_ai_snapshot<T: ReadTab>(
 }
 
 /// Playwright: `server/frames.ts` `Frame.ariaSnapshot`: `return { snapshot: renderAriaSnapshotAsYaml(snapshot) };`
-fn render_locator_snapshot(
-    snapshot: &AriaFrameSnapshot,
-) -> Result<FrameAriaSnapshotResult, CallError> {
-    let snapshot = aria_yaml::render(&snapshot.nodes)
+fn render_snapshot(nodes: &[AriaNode]) -> Result<FrameAriaSnapshotResult, CallError> {
+    let snapshot = aria_yaml::render(nodes)
         .map_err(|error| PlaywrightError::error(format!("neo-runtime: {error}")))?;
     Ok(FrameAriaSnapshotResult { snapshot })
 }
@@ -493,7 +535,10 @@ async fn snapshot_once<T: ReadTab>(
     progress: &Progress,
 ) -> Result<Option<AriaFrameSnapshot>, Stop> {
     progress.race(tab.prepare()).await??;
-    Ok(progress.race(tab.aria_snapshot(params)).await??.snapshot)
+    Ok(progress
+        .race(tab.aria_snapshot(params, false))
+        .await??
+        .snapshot)
 }
 
 /// One document of a stitched snapshot, in the order its snapshot answered: the root first, a
@@ -636,8 +681,8 @@ async fn snapshot_child<T: ReadTab>(
         {
             break out_of_time(error);
         }
-        match progress.race(tab.aria_snapshot(&params)).await {
-            Ok(Ok(result)) => break Ok(result.snapshot),
+        match progress.race(tab.aria_snapshot(&params, true)).await {
+            Ok(Ok(snapshot)) => break Ok(snapshot.snapshot),
             Ok(Err(PageError::NotConnected)) => {}
             Ok(Err(PageError::Threw(_) | PageError::Contract(_))) => break Ok(None),
             Ok(Err(PageError::Closed)) => break Err(PlaywrightError::target_closed().into()),
@@ -770,6 +815,27 @@ impl ReadTab for FrameTab {
         Ok(read.matched)
     }
 
+    async fn inner_html(
+        &self,
+        selector: &str,
+        strict: bool,
+    ) -> Result<Option<TextMatch>, PageError> {
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok(None);
+        };
+        let read = located
+            .frame
+            .call(
+                None,
+                &InjectedInnerHTMLParams {
+                    selector: located.selector,
+                    strict,
+                },
+            )
+            .await?;
+        Ok(read.matched)
+    }
+
     async fn get_attribute(
         &self,
         selector: &str,
@@ -798,6 +864,7 @@ impl ReadTab for FrameTab {
     async fn aria_snapshot(
         &self,
         params: &InjectedAriaSnapshotParams,
+        stitching: bool,
     ) -> Result<InjectedAriaSnapshotResult, PageError> {
         let Some(located) = frame_selector::locate(self, &params.selector, params.strict).await?
         else {
@@ -806,6 +873,12 @@ impl ReadTab for FrameTab {
                 preview: None,
             });
         };
+        if !stitching
+            && params.mode == AriaSnapshotMode::Ai
+            && located.frame.id != self.frames.main().id
+        {
+            return Err(PageError::Threw(CHILD_AI_SNAPSHOT_UNSERVED.to_string()));
+        }
         let params = InjectedAriaSnapshotParams {
             selector: located.selector,
             ..params.clone()
@@ -872,6 +945,7 @@ mod tests {
         describe: Step<Result<SelectorFacts, PageError>>,
         text: Step<Result<Option<TextMatch>, PageError>>,
         inner: Step<Result<Option<TextMatch>, PageError>>,
+        html: Step<Result<Option<TextMatch>, PageError>>,
         attribute: Step<Result<Option<AttributeMatch>, PageError>>,
         read_params: Mutex<Vec<(String, bool, Option<String>)>>,
         /// The call frame's document, `body,frameset`, and a locator's subtree, `SELECTOR`.
@@ -899,6 +973,7 @@ mod tests {
                 ),
                 text: Step::always(ROUND_TRIP, Ok(Some(apples()))),
                 inner: Step::always(ROUND_TRIP, Ok(Some(apples()))),
+                html: Step::always(ROUND_TRIP, Ok(Some(markup()))),
                 attribute: Step::always(ROUND_TRIP, Ok(Some(attribute(Some("fruit"))))),
                 read_params: Mutex::default(),
                 snapshot: Step::always(ROUND_TRIP, Ok(Some(tree()))),
@@ -980,6 +1055,19 @@ mod tests {
             self.inner.answer().await
         }
 
+        async fn inner_html(
+            &self,
+            selector: &str,
+            strict: bool,
+        ) -> Result<Option<TextMatch>, PageError> {
+            self.record("innerHTML");
+            self.read_params
+                .lock()
+                .expect("params")
+                .push((selector.to_string(), strict, None));
+            self.html.answer().await
+        }
+
         async fn get_attribute(
             &self,
             selector: &str,
@@ -998,6 +1086,7 @@ mod tests {
         async fn aria_snapshot(
             &self,
             params: &InjectedAriaSnapshotParams,
+            _stitching: bool,
         ) -> Result<InjectedAriaSnapshotResult, PageError> {
             self.record("ariaSnapshot");
             self.snapshot_params
@@ -1006,7 +1095,8 @@ mod tests {
                 .push(params.clone());
             // The call frame's document and a locator's own subtree answer from `snapshot`; every
             // other selector reaches an iframe's document and must be scripted in `frames`.
-            let snapshot = if params.selector == FRAME_ROOT || params.selector == SELECTOR {
+            let snapshot = if params.selector == FRAME_ROOT || !params.selector.contains(FRAME_HOP)
+            {
                 self.snapshot.answer().await?
             } else {
                 if let Some((selectors, barrier)) = &self.meet
@@ -1030,6 +1120,28 @@ mod tests {
             value: "Apples".to_string(),
             preview: "<li>Apples</li>".to_string(),
         }
+    }
+
+    fn markup() -> TextMatch {
+        TextMatch {
+            value: "<b>Apples</b> &amp; pears".to_string(),
+            preview: "<li>Apples &amp; pears</li>".to_string(),
+        }
+    }
+
+    async fn read_html(
+        tab: &FakeReads,
+        timeout_ms: f64,
+    ) -> Result<FrameInnerHTMLResult, CallError> {
+        inner_html(
+            tab,
+            &ReadOptions {
+                selector: SELECTOR.to_string(),
+                strict: true,
+            },
+            &Progress::for_test(timeout_ms),
+        )
+        .await
     }
 
     fn attribute(value: Option<&str>) -> AttributeMatch {
@@ -1356,6 +1468,55 @@ mod tests {
                 value: "Apples".to_string()
             })
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_inner_html_reads_the_match_and_its_strictness() {
+        let tab = FakeReads::ready();
+        assert_eq!(
+            read_html(&tab, 30_000.0).await,
+            Ok(FrameInnerHTMLResult {
+                value: "<b>Apples</b> &amp; pears".to_string()
+            })
+        );
+        assert_eq!(tab.calls(), ["describe", "innerHTML"]);
+        assert_eq!(
+            *tab.read_params.lock().expect("params"),
+            [(SELECTOR.to_string(), true, None)]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_inner_html_waits_for_a_later_element_and_times_out_without_one() {
+        let mut later = FakeReads::ready();
+        later.html = Step::new(
+            ROUND_TRIP,
+            [Ok(None), Err(PageError::NotConnected), Ok(Some(markup()))],
+        );
+        assert_eq!(
+            read_html(&later, 30_000.0).await,
+            Ok(FrameInnerHTMLResult {
+                value: "<b>Apples</b> &amp; pears".to_string()
+            })
+        );
+        let mut never = FakeReads::ready();
+        never.html = Step::always(ROUND_TRIP, Ok(None));
+        assert_eq!(read_html(&never, 500.0).await, Err(timeout(500.0)));
+        assert!(never.count("innerHTML") > 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_inner_html_fails_at_once_for_a_strict_violation() {
+        let mut tab = FakeReads::ready();
+        tab.html = Step::always(
+            ROUND_TRIP,
+            Err(PageError::Threw("Error: strict mode violation".to_string())),
+        );
+        assert_eq!(
+            read_html(&tab, 30_000.0).await,
+            Err(PlaywrightError::error("Error: strict mode violation").into())
+        );
+        assert_eq!(tab.count("innerHTML"), 1);
     }
 
     #[tokio::test(start_paused = true)]

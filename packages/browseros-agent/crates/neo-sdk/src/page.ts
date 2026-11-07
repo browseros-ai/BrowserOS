@@ -1,26 +1,42 @@
 import type {
   LifecycleEvent,
   PageCloseParams,
+  PageConsoleMessagesParams,
+  PagePageErrorsParams,
 } from '@browseros/neo-runtime-spec/serve'
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
 import { isString } from '../vendor/playwright/isomorphic/stringUtils'
 import type { BrowserContext } from './browser-context'
 import type { Connection } from './connection'
-import { isTargetClosedError } from './errors'
+import { ConsoleMessage } from './console-message'
+import {
+  isTargetClosedError,
+  parseSerializedError,
+  targetClosedError,
+} from './errors'
+import { ChannelOwner, type EventTable } from './events'
 import {
   type AriaSnapshotOptions,
   type CheckOptions,
   type ClickOptions,
+  type DblclickOptions,
   type FillOptions,
   Frame,
   type GetAttributeOptions,
   type GotoOptions,
+  type HoverOptions,
+  type InnerHTMLOptions,
   type InnerTextOptions,
   type InputValueOptions,
   type IsCheckedOptions,
+  type IsDisabledOptions,
+  type IsEditableOptions,
+  type IsEnabledOptions,
+  type IsHiddenOptions,
   type IsVisibleOptions,
   type PressOptions,
   type SelectOptionOptions,
+  type TapOptions,
   type TextContentOptions,
   type UncheckOptions,
   type URLMatch,
@@ -37,15 +53,58 @@ import {
 import type { Locator, LocatorOptions } from './locator'
 import { serializeUrlMatch } from './neo-commands'
 import type { Response } from './network'
-import { PAGE_CLOSE_KEYS, pickParams } from './protocol'
+import {
+  PAGE_CLOSE_KEYS,
+  PAGE_CONSOLE_MESSAGES_KEYS,
+  PAGE_PAGE_ERRORS_KEYS,
+  pickParams,
+} from './protocol'
 import { type CreatedFrame, get, matchesURL } from './runtime-bridge'
 import type { SelectOptionValues } from './select-option'
 import { TimeoutSettings } from './timeout-settings'
+import {
+  refuseSignal,
+  Waiter,
+  type WaitForEventOptions,
+  wrapApiCall,
+} from './waiter'
+
+/**
+ * Neo: the page's listener events, by Playwright's names (`Events.Page`): what Neo produces,
+ * and Playwright's others, which other slices of this build add.
+ */
+const PAGE_EVENTS: EventTable = {
+  receiver: 'Page',
+  served: ['console', 'pageerror', 'dialog', 'dialogclosed', 'close', 'crash'],
+  quiet: [],
+  unserved: [
+    'download',
+    'filechooser',
+    'domcontentloaded',
+    'request',
+    'response',
+    'requestfailed',
+    'requestfinished',
+    'frameattached',
+    'framedetached',
+    'framenavigated',
+    'load',
+    'popup',
+    'websocket',
+    'worker',
+  ],
+}
+
+/** `consoleMessages` and `pageErrors`' options: Playwright's `ConsoleMessagesFilter`. */
+export interface ConsoleMessagesOptions {
+  filter?: 'all' | 'since-navigation'
+}
 
 /**
  * Playwright's `Page`, backed by live reads from its own tab, which its guid names. Its
- * selector builders, `goto`, `title`, `textContent`, `innerText`, `getAttribute`, browser actions,
- * `waitForURL` and `waitForLoadState` forward to the main frame, as Playwright's do
+ * selector builders, `goto`, `title`, `textContent`, `innerText`, `innerHTML`, `getAttribute`,
+ * state reads, browser actions, `waitForURL` and `waitForLoadState` forward to the main frame, as
+ * Playwright's do
  * (`client/page.ts`); `ariaSnapshot` snapshots the main frame's document. Only the run's
  * `BrowserContext` builds one, once per guid.
  *
@@ -54,8 +113,13 @@ import { TimeoutSettings } from './timeout-settings'
  * script calls `url()` again, and `url()` returns `/a`; Playwright returns `/final`. No CDP
  * source answers after a close, so matching Playwright here needs event tracking, which the
  * no-cache design leaves out (sync-getters-design.md, "Known limitation").
+ *
+ * Deviation: `client/page.ts` `Page.constructor`: `this.once(Events.Page.Close, () => this._closedOrCrashedScope.close(this._closeErrorWithReason()));`
+ * Playwright's page holds a `close` and a `crash` listener of its own from its first moment,
+ * which `eventNames()` and `listenerCount` report; Neo's holds none, so a page nobody listens to
+ * costs the run nothing.
  */
-export class Page {
+export class Page extends ChannelOwner {
   readonly #guid: string
   /**
    * The only tab state a `Page` keeps. Playwright still answers `url()` after the page closes,
@@ -81,6 +145,7 @@ export class Page {
     context: BrowserContext,
     connection: Connection,
   ) {
+    super(guid, context._pipe, PAGE_EVENTS)
     this.#guid = guid
     this.#lastUrl = url
     this.#context = context
@@ -149,6 +214,127 @@ export class Page {
 
   isClosed(): boolean {
     return get(this.#guid, 'isClosed')
+  }
+
+  /** Playwright's page channel handlers (`client/page.ts` constructor). */
+  _onEvent(method: string): void {
+    if (method === 'close') this._onClose()
+    else if (method === 'crash') this.emit('crash', this)
+  }
+
+  /** Playwright's `Page._onClose`: the page's `close`, then the context's `pageclose`. */
+  _onClose(): void {
+    this.emit('close', this)
+    this.#context.emit('pageclose', this)
+  }
+
+  /**
+   * Playwright's `Page.waitForEvent`: resolves with the first `event` its predicate (sync or
+   * async) accepts. It rejects at the timeout (the page's default, 30 s unless set), and when
+   * the page crashes or closes first, unless that is the event awaited.
+   */
+  async waitForEvent(
+    event: string,
+    optionsOrPredicate: WaitForEventOptions = {},
+  ): Promise<unknown> {
+    return await wrapApiCall('page.waitForEvent', () =>
+      this._waitForEvent(
+        event,
+        optionsOrPredicate,
+        `waiting for event "${event}"`,
+      ),
+    )
+  }
+
+  /** Playwright's `Page._waitForEvent`, which its `waitFor*` helpers share. */
+  async _waitForEvent(
+    event: string,
+    optionsOrPredicate: WaitForEventOptions,
+    logLine?: string,
+  ): Promise<unknown> {
+    const options =
+      typeof optionsOrPredicate === 'function' ? {} : optionsOrPredicate
+    refuseSignal(options)
+    this._refuseUnserved(event)
+    const timeout = this._timeoutSettings.timeout(options)
+    const predicate =
+      typeof optionsOrPredicate === 'function'
+        ? optionsOrPredicate
+        : optionsOrPredicate.predicate
+    const waiter = Waiter.createForEvent()
+    if (logLine) waiter.log(logLine)
+    waiter.rejectOnTimeout(
+      timeout,
+      `Timeout ${timeout}ms exceeded while waiting for event "${event}"`,
+    )
+    if (event !== 'crash')
+      waiter.rejectOnEvent(this, 'crash', new Error('Page crashed'))
+    if (event !== 'close')
+      waiter.rejectOnEvent(this, 'close', () => targetClosedError())
+    const result = await waiter.waitForEvent(this, event, predicate)
+    waiter.dispose()
+    return result
+  }
+
+  /**
+   * The page's console messages, the last 200 as Playwright keeps them: since the last
+   * main-frame navigation by default, every kept one with `filter: 'all'`. Messages the run's
+   * listeners already saw are included.
+   *
+   * Deviation: `server/page.ts` `Page.addConsoleMessage`: `this._consoleMessages.push(message);`
+   * Playwright's server keeps a page's messages and errors from the page's first moment. Neo
+   * keeps them from the run's first look (a listener, or a read like this one), starting with
+   * what the browser kept of the current document; the browser keeps nothing of a document the
+   * page left before then, so `'all'` does not reach back past it.
+   */
+  async consoleMessages(
+    options?: ConsoleMessagesOptions,
+  ): Promise<ConsoleMessage[]> {
+    const { messages } = await this.#connection.sendPage(
+      'page.consoleMessages',
+      this.#guid,
+      'consoleMessages',
+      pickParams(PAGE_CONSOLE_MESSAGES_KEYS, {
+        filter: options?.filter,
+      }) as PageConsoleMessagesParams,
+      0,
+    )
+    return messages.map((message) => new ConsoleMessage(message, this, null))
+  }
+
+  async clearConsoleMessages(): Promise<void> {
+    await this.#connection.sendPage(
+      'page.clearConsoleMessages',
+      this.#guid,
+      'clearConsoleMessages',
+      {},
+      0,
+    )
+  }
+
+  /** The page's uncaught exceptions as `Error`s, kept as {@link Page.consoleMessages} keeps
+   * messages. */
+  async pageErrors(options?: ConsoleMessagesOptions): Promise<Error[]> {
+    const { errors } = await this.#connection.sendPage(
+      'page.pageErrors',
+      this.#guid,
+      'pageErrors',
+      pickParams(PAGE_PAGE_ERRORS_KEYS, {
+        filter: options?.filter,
+      }) as PagePageErrorsParams,
+      0,
+    )
+    return errors.map((error) => parseSerializedError(error))
+  }
+
+  async clearPageErrors(): Promise<void> {
+    await this.#connection.sendPage(
+      'page.clearPageErrors',
+      this.#guid,
+      'clearPageErrors',
+      {},
+      0,
+    )
   }
 
   mainFrame(): Frame {
@@ -287,6 +473,13 @@ export class Page {
     return await this.#mainFrame._innerText('page.innerText', selector, options)
   }
 
+  async innerHTML(
+    selector: string,
+    options: InnerHTMLOptions = {},
+  ): Promise<string> {
+    return await this.#mainFrame._innerHTML('page.innerHTML', selector, options)
+  }
+
   async getAttribute(
     selector: string,
     name: string,
@@ -301,15 +494,15 @@ export class Page {
   }
 
   /**
-   * The main frame's accessibility tree as YAML. Default mode omits refs and prints iframes
-   * without their content, as Playwright's does. `mode: 'ai'` adds `[ref=eN]` refs that
-   * `page.locator('aria-ref=…')` resolves, in this run or a later one, until that document's
-   * next snapshot or navigation, and puts each rendered iframe's document under its `iframe`
-   * node, as in Playwright. A ref inside a frame is its path from the main frame:
+   * The main frame's accessibility tree as Playwright's YAML. With `mode: 'ai'`, each rendered
+   * iframe's document appears under its `iframe` node, as in Playwright, and nodes carry refs that
+   * `page.locator('aria-ref=…')` resolves, in this run or a later one, until that document's next
+   * snapshot or navigation. A ref inside a frame is its path from the main frame:
    * `- iframe [ref=e7]:` holds `- textbox "Email" [ref=f7e3]`, and a frame inside it adds a step
-   * (`f7f2e1`); Playwright numbers frames instead (`f1e3`). `depth` limits tree levels (0 means
-   * unlimited). For a section, use `locator.ariaSnapshot()`: AI mode does not auto-wait for that
-   * locator, so use `locator.waitFor()` first if needed.
+   * (`f7f2e1`); Playwright numbers frames instead (`f1e3`). The default mode prints iframes without
+   * their content, as Playwright's does. `depth` limits tree levels (0 means unlimited).
+   * For a section, use `locator.ariaSnapshot()`. AI mode does not auto-wait for that locator,
+   * so use `locator.waitFor()` first if needed.
    */
   async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
     return await this.#mainFrame._ariaSnapshot('page.ariaSnapshot', options)
@@ -318,6 +511,24 @@ export class Page {
   /** Not strict, as Playwright's `page.click`, which forwards to the main frame. */
   async click(selector: string, options: ClickOptions = {}): Promise<void> {
     return await this.#mainFrame._click('page.click', selector, options)
+  }
+
+  /** Not strict, as Playwright's `page.dblclick`, which forwards to the main frame. */
+  async dblclick(
+    selector: string,
+    options: DblclickOptions = {},
+  ): Promise<void> {
+    return await this.#mainFrame._dblclick('page.dblclick', selector, options)
+  }
+
+  /** Not strict, as Playwright's `page.hover`, which forwards to the main frame. */
+  async hover(selector: string, options: HoverOptions = {}): Promise<void> {
+    return await this.#mainFrame._hover('page.hover', selector, options)
+  }
+
+  /** Not strict, as Playwright's `page.tap`, which forwards to the main frame. */
+  async tap(selector: string, options: TapOptions = {}): Promise<void> {
+    return await this.#mainFrame._tap('page.tap', selector, options)
   }
 
   async fill(
@@ -361,6 +572,42 @@ export class Page {
     return await this.#mainFrame._isChecked('page.isChecked', selector, options)
   }
 
+  async isHidden(
+    selector: string,
+    options: IsHiddenOptions = {},
+  ): Promise<boolean> {
+    return await this.#mainFrame._isHidden('page.isHidden', selector, options)
+  }
+
+  async isEnabled(
+    selector: string,
+    options: IsEnabledOptions = {},
+  ): Promise<boolean> {
+    return await this.#mainFrame._isEnabled('page.isEnabled', selector, options)
+  }
+
+  async isDisabled(
+    selector: string,
+    options: IsDisabledOptions = {},
+  ): Promise<boolean> {
+    return await this.#mainFrame._isDisabled(
+      'page.isDisabled',
+      selector,
+      options,
+    )
+  }
+
+  async isEditable(
+    selector: string,
+    options: IsEditableOptions = {},
+  ): Promise<boolean> {
+    return await this.#mainFrame._isEditable(
+      'page.isEditable',
+      selector,
+      options,
+    )
+  }
+
   async check(selector: string, options: CheckOptions = {}): Promise<void> {
     return await this.#mainFrame._check('page.check', selector, options)
   }
@@ -394,6 +641,12 @@ export class Page {
 
   locator(selector: string, options?: LocatorOptions): Locator {
     return this.mainFrame().locator(selector, options)
+  }
+
+  /** The element an `ai` snapshot named `ref` (`page.ariaSnapshot({ mode: 'ai' })`), until a
+   * later snapshot of its document or a navigation renames it. */
+  getByRef(ref: string): Locator {
+    return this.locator(`aria-ref=${ref}`)
   }
 
   frameLocator(selector?: string): FrameLocator {

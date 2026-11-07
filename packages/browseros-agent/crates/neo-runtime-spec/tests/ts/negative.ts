@@ -33,7 +33,8 @@ const valid = {
   innerText: () => ({}),
   getAttribute: () => ({}),
   isVisible: () => ({ value: false }),
-  isChecked: () => ({}),
+  elementStateOnSelector: () => ({}),
+  innerHTML: () => ({}),
   ariaSnapshot: () => ({}),
   frameOwner: () => ({ visible: false }),
   describeSelector: (_injected, { selector }) => ({ locator: selector }),
@@ -55,6 +56,16 @@ const valid = {
   inputValue: () => ({}),
   queryCount: () => ({ value: 0 }),
   allTextContents: () => ({ values: [] }),
+  allInnerTexts: () => ({ values: [] }),
+} satisfies Api
+
+export const unknownElementState = {
+  ...valid,
+  elementStateOnSelector: (_injected, { state }) => {
+    // @ts-expect-error a state read asks for checked, enabled, disabled or editable only.
+    if (state === 'visible') return {}
+    return {}
+  },
 } satisfies Api
 
 export const unknownFillOutcome = {
