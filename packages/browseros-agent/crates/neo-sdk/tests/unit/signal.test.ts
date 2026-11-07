@@ -283,6 +283,41 @@ test('tests that waitForEvent rejects with AbortError for an aborted signal and 
   expect(late?.cause).toBe(reason)
 })
 
+test('tests that an aborted predicate wait rejects with AbortError and releases its cursor without the signal', async () => {
+  const { page, fake } = start()
+  let nexts = 0
+  // Rust answers the first next with a navigation the predicate turns down and keeps the
+  // second waiting, as it does until the page navigates again.
+  fake.hold = (message) =>
+    message.method === 'neo:nextNavigation' && nexts++ > 0
+  fake.answer = (message) =>
+    message.method === 'neo:nextNavigation'
+      ? { result: { cursor: 7, index: 0, url: 'https://run.test/elsewhere' } }
+      : message.method === 'neo:releaseNavigation'
+        ? {}
+        : undefined
+  const controller = new AbortController()
+  // `waitForNavigation`'s predicate runs the loop `waitForURL`'s does, without its read of the
+  // current URL first.
+  const waiting = page
+    .waitForNavigation({ url: () => false, signal: controller.signal } as never)
+    .then(
+      () => null,
+      (error: Error) => error,
+    )
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const second = fake.messages.at(-1)
+  expect(second?.method).toBe('neo:nextNavigation')
+  controller.abort('stop')
+  const error = await waiting
+  expect(error?.name).toBe('AbortError')
+  expect(error?.cause).toBe('stop')
+  expect(fake.aborts).toEqual([{ id: second?.id ?? -1, reason: 'stop' }])
+  const release = fake.messages.at(-1)
+  expect(release?.method).toBe('neo:releaseNavigation')
+  expect(release?.params).toEqual({ cursor: 7 })
+})
+
 test('tests that no signal, an undefined one or null still sends the call', async () => {
   const { page, fake } = start()
   const sent = fake.messages.length

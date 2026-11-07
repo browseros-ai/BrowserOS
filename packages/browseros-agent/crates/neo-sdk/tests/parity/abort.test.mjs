@@ -92,7 +92,23 @@ let anyEvents = 0
 any.addEventListener('abort', () => anyEvents++)
 second.abort('second')
 first.abort('first')
+// A listener's own \`signal\` option removes it; \`capture\` tells two registrations apart.
+let removedBySignal = 0
+const listened = new AbortController()
+const remover = new AbortController()
+listened.signal.addEventListener('abort', () => removedBySignal++, { signal: remover.signal })
+listened.signal.addEventListener('abort', () => removedBySignal++, { signal: AbortSignal.abort() })
+remover.abort()
+listened.abort()
+let captured = 0
+const counted = () => captured++
+const captures = new AbortController()
+captures.signal.addEventListener('abort', counted, true)
+captures.signal.addEventListener('abort', counted, false)
+captures.signal.removeEventListener('abort', counted, true)
+captures.abort()
 return {
+  listenerOptions: [removedBySignal, captured],
   types: [typeof AbortController, typeof AbortSignal, Object.prototype.toString.call(signal), signal instanceof AbortSignal],
   before,
   after: [signal.aborted, thrownIsReason],
@@ -149,12 +165,17 @@ const WAITS = `
 const category = (settled) => typeof settled === 'string' ? settled : { name: settled.name, causeIsReason: settled.causeIsReason }
 const urls = new AbortController()
 const url = settle(page.waitForURL('**/never', { signal: urls.signal, timeout: 0 }), 'stop url')
+const predicates = new AbortController()
+const predicate = settle(page.waitForURL((seen) => seen.pathname.endsWith('/nowhere'), { signal: predicates.signal, timeout: 0 }), 'stop predicate')
 const events = new AbortController()
 const event = settle(page.waitForEvent('console', { signal: events.signal, timeout: 0 }), 'stop event')
+// One navigation the predicate sees and turns down, so its wait is mid-loop when aborted.
+await page.goto(page.url().replace(/[^/]*$/, 'elsewhere'))
 await pause(300)
 urls.abort('stop url')
+predicates.abort('stop predicate')
 events.abort('stop event')
-const settled = { url: category(await url), event: category(await event) }
+const settled = { url: category(await url), predicate: category(await predicate), event: category(await event) }
 // The aborted waits are gone: the page navigates to what one waited for and nothing resolves late.
 await page.goto(page.url().replace(/[^/]*$/, 'never'))
 return settled`
@@ -273,6 +294,7 @@ test('signal aborts calls as Playwright does', {
       "the realm's AbortController and AbortSignal behave as Node's",
       async () => {
         const { reference } = await both('realm', REALM)
+        assert.deepEqual(reference.value.listenerOptions, [0, 1])
         assert.deepEqual(reference.value.reason, [
           true,
           true,
@@ -347,7 +369,11 @@ test('signal aborts calls as Playwright does', {
       async () => {
         const { reference } = await both('waits', WAITS)
         const aborted = { name: 'AbortError', causeIsReason: true }
-        assert.deepEqual(reference.value, { url: aborted, event: aborted })
+        assert.deepEqual(reference.value, {
+          url: aborted,
+          predicate: aborted,
+          event: aborted,
+        })
         assert.deepEqual(reference.effect, { ...UNTOUCHED, path: '/never' })
       },
     )
