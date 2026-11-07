@@ -1969,7 +1969,7 @@ class Frame {
     return await this._querySelector("frame.$", selector, options);
   }
   async _querySelector(apiName, selector, options) {
-    if (options?.signal !== undefined)
+    if (options?.signal !== undefined && options.signal !== null)
       throw new Error(`${apiName}: Neo does not support signal yet`);
     const params = { selector };
     if (options?.strict !== undefined)
@@ -2008,7 +2008,7 @@ class Frame {
   async _waitForFunction(apiName, pageFunction, arg, options = {}) {
     if (typeof options.polling === "string" && options.polling !== "raf")
       throw new Error(`Unknown polling option: ${options.polling}`);
-    if (options.signal !== undefined)
+    if (options.signal !== undefined && options.signal !== null)
       throw new Error(`${apiName}: Neo does not support signal yet`);
     const params = evaluateParams(apiName, pageFunction, arg, undefined);
     const pollingInterval = options.polling === "raf" ? undefined : options.polling;
@@ -2016,7 +2016,7 @@ class Frame {
     return handleFrom(this._connection, result.handle);
   }
   async _waitForSelectorElement(apiName, selector, options) {
-    if (options.signal !== undefined)
+    if (options.signal !== undefined && options.signal !== null)
       throw new Error(`${apiName}: Neo does not support signal yet`);
     const result = await this._connection.send(apiName, this._guid, "waitForSelector", pickParams(FRAME_WAIT_FOR_SELECTOR_KEYS, {
       selector,

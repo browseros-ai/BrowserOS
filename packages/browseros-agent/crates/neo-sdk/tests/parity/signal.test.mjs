@@ -123,6 +123,12 @@ test('a null signal is no signal: the call runs as without the option', {
         pageEvaluate: await attempt(() => page.evaluate(bump, undefined, none)),
         frameEvaluate: await attempt(() => frame.evaluate(bump, undefined, none)),
         handleEvaluate: await attempt(() => handle.evaluate(bump, undefined, none)),
+        locatorEvaluateHandle: await attempt(() => page.locator('#p').evaluateHandle(bump, undefined, none)),
+        locatorElementHandle: await attempt(() => page.locator('#p').elementHandle(none)),
+        pageWaitForFunction: await attempt(() => page.waitForFunction(bump, undefined, none)),
+        frameWaitForFunction: await attempt(() => frame.waitForFunction(bump, undefined, none)),
+        pageQuery: await attempt(() => page.$('#p', none)),
+        frameQuery: await attempt(() => frame.$('#p', none)),
       }
     `,
     probe: 'window.__count',
@@ -132,5 +138,11 @@ test('a null signal is no signal: the call runs as without the option', {
     pageEvaluate: 'resolved',
     frameEvaluate: 'resolved',
     handleEvaluate: 'resolved',
+    locatorEvaluateHandle: 'resolved',
+    locatorElementHandle: 'resolved',
+    pageWaitForFunction: 'resolved',
+    frameWaitForFunction: 'resolved',
+    pageQuery: 'resolved',
+    frameQuery: 'resolved',
   })
 })
