@@ -1965,6 +1965,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "neo-trace-store"
+version = "0.1.0"
+dependencies = [
+ "neo-runtime",
+ "sea-orm",
+ "sea-orm-migration",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
 name = "nix"
 version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

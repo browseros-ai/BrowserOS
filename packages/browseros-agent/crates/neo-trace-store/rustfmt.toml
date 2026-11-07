@@ -1,0 +1,6 @@
+# Google Rust style. Stable rustfmt applies `max_width` and warns about the three nightly-only
+# keys, then skips them; apply those three by hand.
+max_width = 100
+imports_granularity = "Module"
+hex_literal_case = "Lower"
+format_macro_matchers = true
