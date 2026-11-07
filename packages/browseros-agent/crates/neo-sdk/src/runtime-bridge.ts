@@ -92,6 +92,8 @@ export interface GetterReplies {
   pausedDetails: PausedDetails | null
   /** On a context: its debugger's guid (`debugger@<context>`). */
   debugger: string
+  /** On a page: the open tab of the run's context that opened it, `null` for none. */
+  opener: CreatedPage | null
 }
 
 export function get<Field extends keyof GetterReplies>(

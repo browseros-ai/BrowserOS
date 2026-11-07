@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use browseros_cdp::{CdpClient, CdpError};
 use neo_runtime_spec::serve::{
-    FrameChannel, FrameInitializer, PageInitializer, PageInitializerViewportSize,
+    FrameChannel, FrameInitializer, PageChannel, PageInitializer, PageInitializerViewportSize,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -24,11 +24,12 @@ use crate::bridge;
 use crate::browser_calls::{self, CreatedContext, CreatedContexts};
 use crate::debugger::Debuggers;
 use crate::dialogs;
-use crate::events::EventHub;
+use crate::discovery::{self, Discovery, TargetInfo};
+use crate::events::{ALL_PAGES, CONTEXT_GUID, Enabling, EventHub, Needs};
 use crate::frames::FrameScope;
 use crate::getters;
 use crate::network::HopId;
-use crate::page::{PageSession, Session, TabInputs};
+use crate::page::{PageSession, PageSetup, Session, TabInputs};
 use crate::page_events;
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunPage};
@@ -55,6 +56,13 @@ struct Inner {
     debuggers: Debuggers,
     /// The test id attribute every page world of the run hands its injected script.
     test_id: Arc<TestIdAttribute>,
+    /// The `Runtime`'s target discovery switch, which this run holds while it listens for new
+    /// pages ([`Tabs::discover`]).
+    discovery: Discovery,
+    /// Set once this run started its discovery.
+    discovering: OnceLock<()>,
+    /// Holds every call of the run until discovery has its baseline ([`ALL_PAGES`]).
+    discovery_enabling: Mutex<Option<Enabling>>,
 }
 
 /// A page can be known without a session. Its closure token precedes the attachment so calls,
@@ -70,6 +78,11 @@ pub(crate) struct PageEntry {
     /// The created context the page belongs to, unset for a tab of the run's own context. Set
     /// once, before the page's session is attached, so the session emulates its options.
     pub(crate) context: OnceLock<Arc<CreatedContext>>,
+    /// Reported by the run's discovery as a new page: its session's first lifecycle replay is
+    /// the page's own new life, not history (`PageEvents`).
+    pub(crate) discovered: AtomicBool,
+    /// The tab that opened this one, as discovery reported it (`targetInfo.openerId`).
+    opener: Mutex<Option<PageId>>,
 }
 
 struct Scope {
@@ -98,6 +111,12 @@ struct TabReply {
 #[derive(Deserialize)]
 struct TabsReply {
     tabs: Vec<TabInfo>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TargetInfoReply {
+    target_info: TargetInfo,
 }
 
 #[derive(Deserialize)]
@@ -130,7 +149,7 @@ impl NewPage {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CreatedPage {
     guid: String,
-    initializer: PageInitializer,
+    pub(crate) initializer: PageInitializer,
     main_frame: CreatedFrame,
 }
 
@@ -145,6 +164,7 @@ impl Tabs {
         cdp: CdpClient,
         tokio: Handle,
         inputs: TabInputs,
+        discovery: Discovery,
         tasks: TaskTracker,
         page: &PageId,
     ) -> Result<(Self, String), PlaywrightError> {
@@ -167,6 +187,9 @@ impl Tabs {
             run_page: page.clone(),
             pages: Mutex::new(Vec::new()),
             events: EventHub::default(),
+            discovery,
+            discovering: OnceLock::new(),
+            discovery_enabling: Mutex::new(None),
         }));
         let entry = tabs.register(page.clone(), false)?;
         // The scope read above already checked this tab. Avoid a second startup read so
@@ -184,6 +207,11 @@ impl Tabs {
 
     pub(crate) fn cdp(&self) -> &CdpClient {
         &self.0.cdp
+    }
+
+    /// The page the run started from.
+    pub(crate) fn run_page(&self) -> &PageId {
+        &self.0.run_page
     }
 
     pub(crate) fn events(&self) -> &EventHub {
@@ -309,6 +337,8 @@ impl Tabs {
             frame_metadata: Mutex::new(getters::FrameMetadata::new(&self.0.cdp)),
             session: OnceCell::new(),
             context: OnceLock::new(),
+            discovered: AtomicBool::new(false),
+            opener: Mutex::new(None),
         });
         pages.push(Arc::clone(&entry));
         Ok(entry)
@@ -382,6 +412,7 @@ impl Tabs {
                 // listener, so a created context's page is not one of them.
                 if let Some(needs) = self.0.events.context_needs()
                     && entry.context.get().is_none()
+                    && needs.of_page()
                     && let Some(entry) = self.entry(&entry.id)
                 {
                     page_events::enable(self, entry, needs);
@@ -423,11 +454,14 @@ impl Tabs {
         Ok(Arc::new(PageSession::new(
             session,
             &entry.id,
-            self.0.tasks.clone(),
-            input,
-            entry.closed.clone(),
-            self.0.events.clone(),
-            Arc::clone(&self.0.test_id),
+            PageSetup {
+                tasks: self.0.tasks.clone(),
+                input,
+                closed: entry.closed.clone(),
+                hub: self.0.events.clone(),
+                test_id: Arc::clone(&self.0.test_id),
+                discovered: entry.discovered.load(Ordering::Acquire),
+            },
         )))
     }
 
@@ -633,6 +667,146 @@ impl Tabs {
         }
     }
 
+    /// Starts the run's target discovery once (`discovery.rs`), for a `page` or `popup`
+    /// listener. Every call of the run waits until it holds its baseline, so no call can open a
+    /// tab the baseline would hide.
+    pub(crate) fn discover(&self) {
+        if self.0.discovering.set(()).is_err() {
+            return;
+        }
+        let enabling = self.0.events.begin_enable(ALL_PAGES);
+        if let Ok(mut held) = self.0.discovery_enabling.lock() {
+            *held = Some(enabling);
+        }
+        self.spawn(discovery::run(self.clone(), self.0.discovery.clone()));
+    }
+
+    /// Discovery has its baseline, or failed to start: the run's calls go on.
+    pub(crate) fn discovery_ready(&self) {
+        if let Ok(mut held) = self.0.discovery_enabling.lock() {
+            held.take();
+        }
+    }
+
+    /// A new page target discovery saw (`discovery.rs`). When the run listens for new pages and
+    /// the target is a tab of the run's context, registers it, emits Playwright's `page` event on
+    /// the context with its record, and starts its watcher, so its events from its first
+    /// document on reach the run. `closed`: it closed before its first document committed,
+    /// which Playwright reports too.
+    pub(crate) async fn report_new(&self, info: &TargetInfo, closed: bool) {
+        let hub = &self.0.events;
+        // The opener is named only when the run knows it, so the SDK can emit its `popup`;
+        // `page.opener()` reads the opener itself.
+        let opener = info
+            .opener_id
+            .as_ref()
+            .and_then(|opener| self.entry(&PageId::new(opener.clone())))
+            .filter(|opener| !opener.closed.is_cancelled());
+        let listening = hub.subscribed(CONTEXT_GUID, "page")
+            || opener
+                .as_ref()
+                .is_some_and(|opener| hub.subscribed(&bridge::page_guid(&opener.id), "popup"));
+        if !listening {
+            return;
+        }
+        let id = PageId::new(info.target_id.clone());
+        let Some(closed) = self.new_tab_state(&id, info, closed).await else {
+            return;
+        };
+        let entry = match self.register(id, false) {
+            Ok(entry) => entry,
+            Err(error) => {
+                debug!(?error, "a new page could not be registered");
+                return;
+            }
+        };
+        entry.discovered.store(true, Ordering::Release);
+        if let Ok(mut known) = entry.opener.lock() {
+            *known = info.opener_id.clone().map(PageId::new);
+        }
+        if closed {
+            entry.closed.cancel();
+        }
+        let mut record = created_page(&entry, info.url.clone(), closed);
+        record.initializer.opener = opener.map(|opener| PageChannel {
+            guid: bridge::page_guid(&opener.id),
+        });
+        match serde_json::to_value(&record) {
+            Ok(record) => {
+                hub.emit(CONTEXT_GUID, "page", &json!({ "page": record }));
+            }
+            Err(error) => debug!(%error, "a new page's record could not be written"),
+        }
+        if !closed {
+            let needs = hub.context_needs().unwrap_or(Needs::WATCHER);
+            page_events::enable(
+                self,
+                entry,
+                Needs {
+                    watcher: true,
+                    ..needs
+                },
+            );
+        }
+    }
+
+    /// Whether a new target is a tab of the run's context, as `pages()` decides, and whether it
+    /// is closed: `None` when it is not the run's. A live target BrowserOS knows no tab for is
+    /// not a tab (an extension's action popup, a developer tools window) and is left out, as is a
+    /// tab that closed between its commit and this read. A target destroyed before its first commit
+    /// is the run's when it belonged to the run's browser context.
+    async fn new_tab_state(&self, id: &PageId, info: &TargetInfo, closed: bool) -> Option<bool> {
+        if !closed {
+            return match tab_info(&self.0.cdp, id).await {
+                Ok(Some(tab)) => self.0.scope.includes(&tab).then_some(false),
+                Ok(None) => None,
+                Err(error) => {
+                    debug!(?error, "a new tab's info could not be read");
+                    None
+                }
+            };
+        }
+        let context = self.0.scope.context.as_ref()?;
+        (info.browser_context_id.as_ref() == Some(context)).then_some(true)
+    }
+
+    /// Playwright's `page.opener()`: the open tab of the run's context that opened `entry`, with
+    /// its record, or `None`. Read live, so a closed opener is `None`, as Playwright's client
+    /// returns `null` for an opener that has closed.
+    pub(crate) async fn opener(
+        &self,
+        entry: &PageEntry,
+    ) -> Result<Option<CreatedPage>, PlaywrightError> {
+        let known = entry.opener.lock().ok().and_then(|opener| opener.clone());
+        let opener = if let Some(opener) = known {
+            opener
+        } else {
+            let reply = self
+                .0
+                .cdp
+                .send_typed::<_, TargetInfoReply>(
+                    "Target.getTargetInfo",
+                    json!({ "targetId": entry.id.as_str() }),
+                    None,
+                )
+                .await;
+            // A closed page names no opener here; Playwright's would still name an open one,
+            // but Neo never saw it.
+            let Some(opener) = reply.ok().and_then(|reply| reply.target_info.opener_id) else {
+                return Ok(None);
+            };
+            PageId::new(opener)
+        };
+        let Some(tab) = tab_info(&self.0.cdp, &opener).await? else {
+            return Ok(None);
+        };
+        if !self.0.scope.includes(&tab) {
+            return Ok(None);
+        }
+        let opener = self.register(opener, false)?;
+        Ok(Some(created_page(&opener, tab.url, false)))
+    }
+
     pub(crate) fn outcome(&self) -> Vec<RunPage> {
         self.0.pages.lock().map_or_else(
             |_| Vec::new(),
@@ -755,6 +929,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            Discovery::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
         )

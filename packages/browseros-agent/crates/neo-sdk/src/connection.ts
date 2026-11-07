@@ -30,7 +30,12 @@ import type {
   RequestCommands,
   ResponseCommands,
 } from '@browseros/neo-runtime-spec/serve'
-import { type PlaywrightError, parseError } from './errors'
+import {
+  isTargetClosedError,
+  type PlaywrightError,
+  parseError,
+  targetClosedError,
+} from './errors'
 import type { EvalFrameCommands, JSHandleCommands } from './js-handle'
 import type { NeoFrameCommands } from './neo-commands'
 import type { Request, Response } from './network'
@@ -97,6 +102,7 @@ export type ApiName =
   | 'frame.setChecked'
   | 'frame.selectOption'
   | 'browserContext.newPage'
+  | 'browserContext.close'
   | 'page.close'
   | 'page.bringToFront'
   | 'locator.waitFor'
@@ -228,9 +234,16 @@ const AGENT_FRAME = /^ {4}at .* \(<input>:(\d+):(\d+)\)$/
 
 export class Connection {
   #nextId = 1
-  /** Set by `browser.close()`: every later call fails as on a closed browser. */
-  #disconnected = false
   readonly #lineOffset: number
+  /** Set once the run disconnected (`browser.close()`, or its own context's `close()`): every
+   * later call fails as closed before it reaches Rust. */
+  #closed = false
+  /** What rejects each call still waiting for its reply, with the context's close reason. */
+  readonly #inFlight = new Set<(reason: string | undefined) => void>()
+  /** The close reason a call's page gave (`page.close({ reason })`), by the call's guid, and
+   * whether that page already reads closed: only the calls its close interrupted get the reason. */
+  _closeReasonFor: (guid: string) => string | undefined = () => undefined
+  _closedFor: (guid: string) => boolean = () => false
   /** Every `Request` and `Response` built so far, by guid, as Playwright's connection keeps its
    * objects: one guid is always one object (`network.ts` `responseFor`). */
   readonly _objects = new Map<string, Request | Response>()
@@ -306,16 +319,6 @@ export class Connection {
       params,
       timeout,
     )) as Resolved<DebuggerCommands[M]['result']>
-  }
-
-  /** Whether `browser.close()` ran: the run's objects read closed from then on. */
-  get _disconnected(): boolean {
-    return this.#disconnected
-  }
-
-  /** Playwright's connection after its browser closed: calls reject without reaching Rust. */
-  _disconnect(): void {
-    this.#disconnected = true
   }
 
   /** {@link Connection.send} for a `BrowserContext` command, to the context's guid. */
@@ -463,32 +466,52 @@ export class Connection {
       location: captureLocation(this.#lineOffset),
       timeout,
     }
-    // Playwright's client rejects a call on a closed connection with its closed-target error.
-    if (this.#disconnected)
-      throw rebuildError(
-        apiName,
-        {
-          name: 'TargetClosedError',
-          message: 'Target page, context or browser has been closed',
-        },
-        [],
-      )
+    if (this.#closed) throw closedError(apiName)
+    const closedBefore = this._closedFor(guid)
     const message = { id: this.#nextId++, guid, method, params, metadata }
-    const reply: Reply = JSON.parse(await call(JSON.stringify(message)))
     // Playwright's connection rejects every call still pending when it closes: a reply that
-    // arrives after `browser.close()` (a `newContext` Rust answered meanwhile) creates nothing.
-    if (this.#disconnected && method !== 'close')
-      throw rebuildError(
-        apiName,
-        {
-          name: 'TargetClosedError',
-          message: 'Target page, context or browser has been closed',
-        },
-        [],
-      )
-    if (reply.error) throw rebuildError(apiName, reply.error.error, reply.log)
+    // arrives after it (a `newContext` Rust answered meanwhile) creates nothing.
+    const text = await new Promise<string>((resolve, reject) => {
+      const abandon = (reason: string | undefined) =>
+        reject(closedError(apiName, reason))
+      this.#inFlight.add(abandon)
+      call(JSON.stringify(message))
+        .then(resolve, reject)
+        .finally(() => this.#inFlight.delete(abandon))
+    })
+    const reply: Reply = JSON.parse(text)
+    if (reply.error) {
+      const error = rebuildError(apiName, reply.error.error, reply.log)
+      // As in Playwright, whose server closes a page's open calls with its close reason, the
+      // reason a page's close gave reaches the calls it interrupted.
+      const reason =
+        isTargetClosedError(error) && !closedBefore
+          ? this._closeReasonFor(guid)
+          : undefined
+      if (reason)
+        error.message = `${apiName}: ${reason}${formatCallLog(reply.log)}`
+      throw error
+    }
     return reply.result
   }
+
+  /**
+   * The run disconnected (`Browser._didClose`): calls still waiting for a reply reject at once,
+   * with `reason` when the close gave one, and every later call fails as closed. A call Rust
+   * was serving finishes there on its own; its record in the run's outcome says what it did.
+   */
+  _close(reason: string | undefined): void {
+    this.#closed = true
+    for (const abandon of this.#inFlight) abandon(reason)
+    this.#inFlight.clear()
+  }
+}
+
+/** Playwright's `TargetClosedError` for a call on a closed context, `<apiName>: ` first. */
+function closedError(apiName: ApiName, reason?: string): PlaywrightError {
+  const error = targetClosedError(reason)
+  error.message = `${apiName}: ${error.message}`
+  return error
 }
 
 /**

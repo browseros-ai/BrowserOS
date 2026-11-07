@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use tracing::debug;
 
 use crate::bridge;
+use crate::browser_calls;
 use crate::dispatch::encode_result;
 use crate::emulation::{self, Size};
 use crate::frames::FrameScope;
@@ -60,12 +61,10 @@ pub(crate) async fn context(
             created.keep();
             Ok(Some(value))
         }
-        // Neo: the run's own context is the user's browser, which a run never closes; a context
-        // the run created closes (`browser_calls.rs`).
-        BrowserContextCall::Close(_) => Err(PlaywrightError::error(
-            "Neo does not close the run's own context: it is the user's browser",
-        )
-        .into()),
+        BrowserContextCall::Close(_) => {
+            browser_calls::disconnect(tabs, progress).await?;
+            Ok(None)
+        }
         // Playwright: `server/dispatchers/browserContextDispatcher.ts` `BrowserContextDispatcher.pause`: `// Debugger will take care of this.`
         // `setTestIdAttributeName`: `Dispatcher::call` applied it before this call started.
         BrowserContextCall::Pause(_) | BrowserContextCall::SetTestIdAttributeName(_) => Ok(None),

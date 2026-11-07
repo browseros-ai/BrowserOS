@@ -168,6 +168,10 @@ fn subscribe(tabs: &Tabs, request: &str) -> Result<(), String> {
     } = serde_json::from_str(request).map_err(|error| format!("bad subscribe request: {error}"))?;
     let needs = events::needs(&guid, &event)
         .ok_or_else(|| format!("Neo does not produce {event:?} events on {guid:?}"))?;
+    // A closed context listens to nothing more, and must not attach to its still-open tabs.
+    if tabs.events().subscriptions_ended() {
+        return Ok(());
+    }
     let pages = if guid.starts_with(debugger::DEBUGGER_PREFIX) {
         // A debugger's event comes from no page.
         Vec::new()
@@ -185,6 +189,12 @@ fn subscribe(tabs: &Tabs, request: &str) -> Result<(), String> {
         vec![entry]
     };
     tabs.events().subscribe(&guid, &event, enabled);
+    if enabled && needs.discovery {
+        tabs.discover();
+    }
+    if !needs.of_page() {
+        return Ok(());
+    }
     for entry in pages {
         if enabled {
             page_events::enable(tabs, entry, needs);
@@ -326,6 +336,8 @@ enum GetterField {
     PausedDetails,
     /// On a context: the guid of its debugger.
     Debugger,
+    /// On a page: `opener()`'s record, `null` when none is open in the run's context.
+    Opener,
 }
 
 #[derive(Deserialize)]
@@ -474,6 +486,10 @@ impl Getters {
                 .map(|closed| json!(closed)),
             GetterField::Initializer => self.wait(async {
                 serde_json::to_value(self.tabs.initializer(&page).await?)
+                    .map_err(|error| PlaywrightError::error(error.to_string()))
+            }),
+            GetterField::Opener => self.wait(async {
+                serde_json::to_value(self.tabs.opener(&page).await?)
                     .map_err(|error| PlaywrightError::error(error.to_string()))
             }),
             GetterField::Pages => Err(GetError::BadRequest(

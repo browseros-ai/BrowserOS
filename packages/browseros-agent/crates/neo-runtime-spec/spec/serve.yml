@@ -13,8 +13,9 @@
 interfaces:
   BrowserContext:
     - newPage
-    # (platform) Closes a context `browser.newContext` created (neo-runtime `browser_calls.rs`);
-    # the run's own context refuses it.
+    # The run's own context's close disconnects the run, as its browser's does, its tabs left
+    # open; (platform) a context `browser.newContext` created closes with its pages (neo-runtime
+    # `browser_calls.rs`).
     - close
     # (platform) `page.pause()`: Playwright's server handler does nothing itself; the context's
     # debugger holds the call once it is enabled (neo-runtime `debugger.rs`).

@@ -11,7 +11,9 @@
 //!                         emulation::prepare (the context's options) → URL committed
 //!  context@<id>.pages     Target.getTargets, the context's pages in first-seen order
 //!  context@<id>.close     Target.disposeBrowserContext; its pages read closed
-//!  browser.close()        disposes every context the run created; BrowserOS stays open
+//!  browser.close(),       disconnect: no more creations, subscriptions end, the run's other
+//!  context@default.close  calls stop, every context the run created is disposed; every tab of
+//!                         the run's own context and BrowserOS stay open
 //!  run end                Dispatcher::finish → dispose_all; a dropped run → Drop disposes
 //! ```
 //!
@@ -36,6 +38,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
 use tokio::sync::{OnceCell, oneshot};
+use tokio_util::task::TaskTracker;
 use tracing::debug;
 
 use crate::bridge;
@@ -77,6 +80,8 @@ pub(crate) struct CreatedContexts {
     tokio: Handle,
     registry: Mutex<Registry>,
     version: OnceCell<Version>,
+    /// The creations still waiting for the browser's answer, which [`disconnect`] settles.
+    creating: TaskTracker,
 }
 
 #[derive(Default)]
@@ -84,8 +89,8 @@ struct Registry {
     contexts: Vec<Arc<CreatedContext>>,
     /// Set when the run disposes its contexts: a creation answered later disposes its own.
     finished: bool,
-    /// Set by `browser.close()`: the run creates no context after it.
-    browser_closed: bool,
+    /// Set once the run disconnected ([`disconnect`]): it creates no context after that.
+    disconnected: bool,
 }
 
 /// One context `browser.newContext` created.
@@ -148,6 +153,7 @@ impl CreatedContexts {
             tokio,
             registry: Mutex::default(),
             version: OnceCell::new(),
+            creating: TaskTracker::new(),
         }
     }
 
@@ -238,14 +244,7 @@ pub(crate) async fn browser(
     match call {
         BrowserCall::NewContext(params) => new_context(tabs, &params, progress).await,
         BrowserCall::Close(_) => {
-            // Playwright's connected-browser close (`Browser.close` with a connection it did not
-            // launch): the contexts it created go, the browser stays.
-            if let Ok(mut registry) = tabs.created().registry.lock() {
-                registry.browser_closed = true;
-            }
-            for context in tabs.created().live() {
-                close_context(tabs, &context, progress).await?;
-            }
+            disconnect(tabs, progress).await?;
             Ok(None)
         }
     }
@@ -281,7 +280,7 @@ async fn new_context(
     if created
         .registry
         .lock()
-        .map_or(true, |registry| registry.browser_closed)
+        .map_or(true, |registry| registry.disconnected)
     {
         return Err(PlaywrightError::target_closed().into());
     }
@@ -293,8 +292,8 @@ async fn new_context(
     let owner = tabs.clone();
     // The browser owns the context once it receives the command. This task reads the answer and
     // registers the context even after the waiting call is cancelled, so the run still disposes
-    // it; one answered after the run disposed its contexts disposes itself.
-    tabs.spawn(async move {
+    // it; one answered after the run disposed its contexts, or disconnected, disposes itself.
+    tabs.spawn(created.creating.track_future(async move {
         // Playwright: `server/chromium/crBrowser.ts` `CRBrowser.doCreateNewContext`: `disposeOnDetach: true,`
         let sent = cdp
             .send_typed::<_, CreatedContextReply>(
@@ -308,7 +307,7 @@ async fn new_context(
             Err(error) => Err(tabs::cdp_error(&error)),
         };
         let _waiting = reply.send(result);
-    });
+    }));
     let context = progress
         .race(answer)
         .await?
@@ -321,8 +320,8 @@ async fn new_context(
 }
 
 /// Records a created context in the run, or disposes it when the run already disposed its own or
-/// the script closed the browser: Playwright's connected browser rejects a creation still
-/// pending at its close, and no context outlives it.
+/// disconnected: Playwright's connected browser rejects a creation still pending at its close,
+/// and no context outlives it.
 async fn register(
     tabs: &Tabs,
     id: String,
@@ -336,7 +335,7 @@ async fn register(
     });
     let late = match tabs.created().registry.lock() {
         Ok(mut registry) => {
-            let late = registry.finished || registry.browser_closed;
+            let late = registry.finished || registry.disconnected;
             registry.contexts.push(Arc::clone(&context));
             late
         }
@@ -414,6 +413,57 @@ async fn close_context(
         page.closed_by_run();
     }
     disposed.map_err(CallError::from)
+}
+
+/// Playwright's close of its connected browser, which closing the run's own context is too: a
+/// connectOverCDP default context closes by closing its browser (`CRBrowserContext.doClose`), and
+/// that close only disconnects, every tab left open (measured on BrowserOS neo,
+/// a2-mapping-evidence.md §2). The run lets go of what it holds in the browser, in this order:
+/// it creates no context from now on (a creation still pending disposes its own, [`register`]); a
+/// `beforeunload` dialog a listener holds is dismissed, so its tab stays; every subscription ends
+/// with target discovery; every other call of the run stops, as Playwright's calls stop with its
+/// connection; a creation still pending settles, disposing its own context; and every context the
+/// run created closes with its pages. The SDK closes the run's objects as the script sees them;
+/// the reason stays there.
+///
+/// Never half-closed: a context the browser fails to dispose is left to the run's end, which
+/// disposes it again ([`dispose_all`]).
+pub(crate) async fn disconnect(tabs: &Tabs, progress: &Progress) -> Result<(), CallError> {
+    if let Ok(mut registry) = tabs.created().registry.lock() {
+        registry.disconnected = true;
+    }
+    for (_, session) in tabs.attached() {
+        if session.events.dialogs.take_open_beforeunload() {
+            let dismissed = progress
+                .race(session.send("Page.handleJavaScriptDialog", json!({ "accept": false })))
+                .await?;
+            if let Err(error) = dismissed {
+                debug!(%error, "dismissing a beforeunload dialog as the run disconnected failed");
+            }
+        }
+    }
+    tabs.events().end_subscriptions();
+    // The script's promises for them have rejected (the SDK); this stops the calls themselves
+    // before the close resolves, so none writes input to a tab the run let go of.
+    progress.stop_the_runs_calls();
+    let created = tabs.created();
+    created.creating.close();
+    progress.race(created.creating.wait()).await?;
+    let contexts = created.live();
+    let closes = contexts
+        .iter()
+        .map(|context| close_context(tabs, context, progress));
+    for (context, closed) in contexts.iter().zip(future::join_all(closes).await) {
+        match closed {
+            Ok(()) => {}
+            Err(CallError::Playwright(error)) => {
+                context.disposed.store(false, Ordering::Release);
+                debug!(error = %error.message, "disposing a context as the run disconnected failed");
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 /// Disposes every context the run created and not yet closed, once its realm is gone

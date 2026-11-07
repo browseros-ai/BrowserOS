@@ -67,7 +67,7 @@ use crate::click::{self, PointerOptions};
 use crate::debugger::{CallToGate, DEBUGGER_PREFIX, DEFAULT_CONTEXT};
 use crate::dialogs;
 use crate::evaluate::{self, EvalCall};
-use crate::events::EventHub;
+use crate::events::{ALL_PAGES, EventHub};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
 use crate::frames::FrameScope;
@@ -417,16 +417,8 @@ impl Dispatcher {
             input: meta.is_some_and(|meta| meta.has(MethodFlag::Input)),
         }));
         inner.trace.push(Arc::clone(&entry));
-        let admitted = route.and_then(|route| {
-            let ending = ending_cursor(&route).and_then(|id| inner.cursors.begin_ending(id));
-            let share = if ending.is_some() {
-                None
-            } else {
-                Some(inner.in_flight.admit(message.len())?)
-            };
-            Ok((route, share, ending))
-        });
-        let (route, share, ending) = match admitted {
+        let (route, share, ending) = match route.and_then(|route| self.admit(route, message.len()))
+        {
             Ok(admitted) => admitted,
             Err(error) => {
                 entry.finish(error.to_result());
@@ -444,18 +436,9 @@ impl Dispatcher {
                 .as_ref()
                 .map_or_else(CancellationToken::new, |(page, _)| page.closed.clone())
         };
-        // In call order too: every call the script makes after `setTestIdAttribute` sees the
-        // new attribute, however the call tasks interleave.
-        if let ObjectCall::Context(BrowserContextCall::SetTestIdAttributeName(params))
-        | ObjectCall::CreatedContext(_, BrowserContextCall::SetTestIdAttributeName(params)) =
-            &route
-        {
-            inner.tabs.test_id().set(&params.test_id_attribute_name);
-        }
-        // The debugger decides here, in call order, whether this call waits before it starts.
-        let held = meta
-            .zip(debugged)
-            .and_then(|(meta, context)| self.hold(meta, &context, &metadata, &entry));
+        let held = self.in_call_order(&route, meta.zip(debugged), &metadata, &entry);
+        // The run's disconnection outlives the stop it gives every other call of the run.
+        let disconnecting = disconnects(&route);
         let (reply, receiver) = oneshot::channel();
         let call_reply = CallReply {
             entry: Arc::clone(&entry),
@@ -471,17 +454,56 @@ impl Dispatcher {
         let tabs = inner.tabs.clone();
         let cursors = Arc::clone(&inner.cursors);
         inner.run.tasks.spawn(async move {
-            // A call the run ended while the debugger held it never started: nobody waits for
-            // its reply, and dropping it gives back its share of the in-flight caps.
             if let Some(resumed) = held
-                && !released(&run, resumed).await
+                && let Err(stopped) = released(&run, resumed).await
             {
+                if let Some(error) = stopped {
+                    finish_reply(Err(error), call_reply).await;
+                }
                 return;
             }
             let progress = Progress::new(entry, timeout, run, closed);
+            let progress = if disconnecting {
+                progress.closing_the_context()
+            } else {
+                progress
+            };
             serve_call(tabs, cursors, target, route, progress, call_reply).await;
         });
         PendingReply(PendingInner::Waiting(receiver))
+    }
+
+    /// Takes a routed call's share of the run's in-flight caps. A navigation's release and the
+    /// run's disconnection end calls in flight: the cap never refuses them, or a full run could
+    /// not let go.
+    fn admit(&self, route: ObjectCall, bytes: usize) -> Result<Admission, PlaywrightError> {
+        let ending = ending_cursor(&route).and_then(|id| self.0.cursors.begin_ending(id));
+        let share = if ending.is_some() || disconnects(&route) {
+            None
+        } else {
+            Some(self.0.in_flight.admit(bytes)?)
+        };
+        Ok((route, share, ending))
+    }
+
+    /// What a call settles in call order, before its task starts, however the call tasks
+    /// interleave: every call after `setTestIdAttribute` sees the new attribute, and the
+    /// debugger of the call's context decides whether it waits before it starts.
+    fn in_call_order(
+        &self,
+        route: &ObjectCall,
+        debugged: Option<(&'static MethodMeta, String)>,
+        metadata: &Metadata,
+        entry: &CallEntry,
+    ) -> Option<oneshot::Receiver<()>> {
+        if let ObjectCall::Context(BrowserContextCall::SetTestIdAttributeName(params))
+        | ObjectCall::CreatedContext(_, BrowserContextCall::SetTestIdAttributeName(params)) =
+            route
+        {
+            self.0.tabs.test_id().set(&params.test_id_attribute_name);
+        }
+        let (meta, context) = debugged?;
+        self.hold(meta, &context, metadata, entry)
     }
 
     /// The run's browser, a context it created or a context's debugger, by guid
@@ -549,18 +571,34 @@ impl Dispatcher {
     }
 }
 
-/// Whether a call the debugger holds may go on: `true` once something resumed it, `false` when
-/// the run ended first (nobody waits for its reply then).
+/// Whether a call the debugger holds may go on: `Ok` once something resumed it. Otherwise it
+/// never starts: the run's disconnection stopped it, and it fails as every call that stopped
+/// (`Some`), or the run ended first and nobody waits for its reply (`None`).
 ///
 /// Deviation: `server/progress.ts` `ProgressController.run`: `if (this.metadata.pauseStartTime && !this.metadata.pauseEndTime)`
 /// Playwright's timeout already runs while its debugger holds a call (one that fires meanwhile is
 /// dropped); Neo starts the call, and its own timeout, once the debugger lets it go.
-async fn released(run: &RunScope, resumed: oneshot::Receiver<()>) -> bool {
+///
+/// Deviation: `server/debugger.ts` `Debugger._pause`: `const result = new Promise<void>(resolve => {`
+/// Playwright's held call waits for a resume even after its browser disconnected, and never
+/// settles (measured on BrowserOS neo with pinned Playwright); Neo's fails as closed, as every
+/// call the disconnection stopped does, and never runs.
+async fn released(run: &RunScope, resumed: oneshot::Receiver<()>) -> Result<(), Option<CallError>> {
     tokio::select! {
         biased;
-        _ = run.deadline.reached() => false,
-        () = run.ended.cancelled() => false,
-        resumed = resumed => resumed.is_ok(),
+        _ = run.deadline.reached() => Err(None),
+        () = run.ended.cancelled() => Err(None),
+        () = run.context_closed.cancelled() => Err(Some(PlaywrightError::target_closed().into())),
+        resumed = resumed => resumed.map_err(|_| None),
+    }
+}
+
+/// The calls that disconnect the run: the close of its own context, and of its browser.
+fn disconnects(route: &ObjectCall) -> bool {
+    match route {
+        ObjectCall::Context(call) => matches!(call, BrowserContextCall::Close(_)),
+        ObjectCall::Browser(call) => matches!(**call, BrowserCall::Close(_)),
+        _ => false,
     }
 }
 
@@ -819,6 +857,9 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
     }
 }
 
+/// An admitted call: its route, its share of the in-flight caps, and the wait it ends.
+type Admission = (ObjectCall, Option<Admitted>, Option<Ending<FrameCursor>>);
+
 struct CallReply {
     entry: Arc<CallEntry>,
     trace: Trace,
@@ -843,13 +884,18 @@ async fn serve_call(
     reply: CallReply,
 ) {
     // A page's call waits for what the run's subscriptions switched on there (console messages,
-    // the dialog watcher), so the call cannot cause an event before its producer listens. A
-    // dialog's answer never waits: an open dialog can hold that very enable, and only the answer
-    // frees the page.
-    if let Some((page, _)) = &target
-        && !matches!(route, ObjectCall::Context(_) | ObjectCall::Dialog(..))
-        && reply.events.enabling(page.id.as_str())
-        && let Err(error) = progress.race(reply.events.ready(page.id.as_str())).await
+    // the dialog watcher), so the call cannot cause an event before its producer listens; a
+    // context call (`newPage`) waits for target discovery's baseline. A dialog's answer never
+    // waits: an open dialog can hold that very enable, and only the answer frees the page.
+    let gate = match (&route, &target) {
+        (ObjectCall::Dialog(..), _) => None,
+        (ObjectCall::Context(_), _) => Some(ALL_PAGES),
+        (_, Some((page, _))) => Some(page.id.as_str()),
+        (_, None) => None,
+    };
+    if let Some(gate) = gate
+        && reply.events.enabling(gate)
+        && let Err(error) = progress.race(reply.events.ready(gate)).await
     {
         finish_reply(Err(error), reply).await;
         return;
@@ -1355,6 +1401,7 @@ mod tests {
 
     use crate::click::tests::FakeTab;
     use crate::deadline::Deadline;
+    use crate::discovery::Discovery;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::forms::SelectOption;
     use crate::page::TabInputs;
@@ -1374,6 +1421,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            Discovery::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1449,6 +1497,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            Discovery::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )

@@ -1,17 +1,20 @@
 /**
  * Playwright's `BrowserContext` (`client/browserContext.ts` at 26137face), cut to what a run
  * needs: its pages, `newPage`, the default timeout its pages fall back to, and the events Rust
- * sends on it (`console`, `pageError`, `dialog`, `dialogClosed`), which it fans out to the page
- * each names and to its own listeners in Playwright's order. Scripts receive it as `context`.
+ * sends on it (`page`, `console`, `pageError`, `dialog`, `dialogClosed`), which it fans out to
+ * the page each names and to its own listeners in Playwright's order. Its `pageload`,
+ * `pageclose` and frame events come from its pages. Scripts receive it as `context`.
  *
- * Its listeners cover the pages the run has a session on: Neo does not attach to the user's
- * other tabs just to listen (med-pw-net design, Decisions).
+ * Its page-level listeners cover the pages the run has a session on, which include every page a
+ * `page` event handed out: Neo does not attach to the user's other tabs just to listen
+ * (med-pw-net design, Decisions).
  *
- * Playwright keeps its page list current from the server's `page` and `close` events. Neo has
- * no events, so `pages()` reads the context's open tabs live, and this class keeps one `Page`
- * per guid across reads. That map is what makes a page the same object every time it comes
- * back (`===`, `includes`, `indexOf`), and what binds each `Page` to its own tab: a `Page` and
- * its main frame are built once, from the record Rust minted their guids in.
+ * Playwright keeps its page list current from the server's `page` and `close` events. Neo sends
+ * `page` only while the run listens for new pages, so `pages()` reads the context's open tabs
+ * live, and this class keeps one `Page` per guid across reads and events. That map is what
+ * makes a page the same object every time it comes back (`===`, `includes`, `indexOf`, the
+ * `page` event's page and the `popup` event's), and what binds each `Page` to its own tab: a
+ * `Page` and its main frame are built once, from the record Rust minted their guids in.
  */
 
 import type {
@@ -28,33 +31,34 @@ import { Dialog } from './dialog'
 import { parseSerializedError, targetClosedError } from './errors'
 import { ChannelOwner, type EventPipe, type EventTable } from './events'
 import { Page } from './page'
-import { pickParams } from './protocol'
+import { BROWSER_CONTEXT_CLOSE_KEYS, pickParams } from './protocol'
 import { type CreatedPage, get } from './runtime-bridge'
 import { TimeoutSettings } from './timeout-settings'
-import {
-  refuseSignal,
-  Waiter,
-  type WaitForEventOptions,
-  wrapApiCall,
-} from './waiter'
+import { Waiter, type WaitForEventOptions, wrapApiCall } from './waiter'
 import { WebError, type WebErrorLocation } from './web-error'
 
 /**
- * Neo: the context's listener events, by Playwright's names (`Events.BrowserContext`). `close`
- * never happens: the run's context is the user's browser, which outlives the run.
+ * Neo: the context's listener events, by Playwright's names (`Events.BrowserContext`). The SDK
+ * emits `close` itself, when the context closes.
  */
 const CONTEXT_EVENTS: EventTable = {
   receiver: 'BrowserContext',
-  served: ['console', 'weberror', 'dialog', 'dialogclosed'],
-  quiet: ['close', 'backgroundpage'],
-  unserved: [
-    'download',
-    'frameattached',
-    'framedetached',
-    'framenavigated',
+  served: [
+    'console',
+    'weberror',
+    'dialog',
+    'dialogclosed',
     'page',
     'pageclose',
     'pageload',
+    'frameattached',
+    'framedetached',
+    'framenavigated',
+  ],
+  local: ['close'],
+  quiet: ['backgroundpage'],
+  unserved: [
+    'download',
     'serviceworker',
     'request',
     'response',
@@ -62,9 +66,6 @@ const CONTEXT_EVENTS: EventTable = {
     'requestfinished',
   ],
 }
-
-/** Neo: `BrowserContext.close`'s params (`spec/playwright/browserContext.yml`). */
-const BROWSER_CONTEXT_CLOSE_KEYS = ['reason'] as const
 
 /** A dialog record Rust sends: Playwright's `{guid, initializer}`. */
 interface DialogRecord {
@@ -94,8 +95,9 @@ export class BrowserContext extends ChannelOwner {
   _browser: Browser | null = null
   /** Playwright's `BrowserContext._ownerPage`: the page `browser.newPage` made this context for. */
   _ownerPage: Page | undefined
-  /** Playwright's `BrowserContext._closingStatus`. */
+  /** Playwright's `_closingStatus`: `closing` from `close()`'s call, `closed` once done. */
   #closingStatus: 'none' | 'closing' | 'closed' = 'none'
+  #closeReason: string | undefined
   #debugger: Debugger | undefined
 
   constructor(guid: string, connection: Connection, pipe: EventPipe) {
@@ -105,15 +107,91 @@ export class BrowserContext extends ChannelOwner {
     this._pipe = pipe
   }
 
+  /** Playwright's `BrowserContext.isClosed`: true from the moment `close()` is called. */
+  isClosed(): boolean {
+    return this.#closingStatus !== 'none'
+  }
+
+  /** Playwright's `_effectiveCloseReason`: the reason `close()` was given, else the one its
+   * browser's `close()` was. */
+  _closeReason(): string | undefined {
+    return this.#closeReason ?? this._browser?._closeReason
+  }
+
+  /**
+   * Playwright's `BrowserContext.close`. A second call resolves at once; a close that failed
+   * leaves the context open, to close again.
+   *
+   * The run's own context is a connectOverCDP default context, whose close closes its browser
+   * (`CRBrowserContext.doClose`), and that close only disconnects: no tab closes (measured on
+   * BrowserOS neo with pinned Playwright: every tab stays open, the one its own client opened
+   * too). So it is the browser's disconnection, as `browser.close()` is (`Browser._disconnect`):
+   * Rust lets go of the run's listeners, stops its other calls and disposes the contexts
+   * `browser.newContext` created; every page of the run closes as the script sees it
+   * (its `close`, then its context's `pageclose`), then each created context and this one fire
+   * `close`, and the browser reads disconnected and fires `disconnected`. From then on `pages()`
+   * is empty, every page reads closed, calls fail as closed, and the waits and calls the close
+   * interrupted reject with `reason` when given; Rust stops those calls before the close
+   * resolves, so none writes input after it.
+   *
+   * A context `browser.newContext` created closes with its pages, which leave the browser; the
+   * run and its other contexts stay.
+   */
+  async close(options: { reason?: string } = {}): Promise<void> {
+    if (this.isClosed()) return
+    this.#closeReason = options.reason
+    this.#closingStatus = 'closing'
+    const send = () =>
+      this.#connection.sendContext(
+        'browserContext.close',
+        this.#guid,
+        'close',
+        pickParams(BROWSER_CONTEXT_CLOSE_KEYS, {
+          reason: options.reason,
+        }) as BrowserContextCloseParams,
+        0,
+      )
+    try {
+      if (this._browser && this._browser._runContext() === this)
+        await this._browser._disconnect(send, options.reason)
+      else {
+        const open = this._openPages()
+        await send()
+        for (const page of open) page._onClose()
+        this._onClose()
+      }
+    } catch (error) {
+      // Never half-closed: a close Rust did not do leaves the context open, to close again.
+      this.#closingStatus = 'none'
+      this.#closeReason = undefined
+      throw error
+    }
+  }
+
   /** Playwright's context channel handlers (`client/browserContext.ts` constructor). */
   _onEvent(method: string, params: unknown): void {
-    if (method === 'console') this.#onConsole(params as ConsoleEventParams)
+    if (method === 'page') this.#onPage((params as { page: CreatedPage }).page)
+    else if (method === 'console') this.#onConsole(params as ConsoleEventParams)
     else if (method === 'pageError')
       this.#onPageError(params as PageErrorEventParams)
     else if (method === 'dialog')
       this.#onDialog((params as { dialog: DialogRecord }).dialog)
     else if (method === 'dialogClosed')
       this.#onDialogClosed((params as { dialog: DialogRecord }).dialog)
+  }
+
+  /**
+   * Playwright's `BrowserContext._onPage`: the context's `page`, then the opener's `popup`. Rust
+   * names the opener only when the run knows it and has not seen it close, the check Playwright
+   * makes here.
+   */
+  #onPage(created: CreatedPage): void {
+    const page = this._pageFrom(created)
+    this.emit('page', page)
+    const opener = created.initializer.opener
+      ? this.#pages.get(created.initializer.opener.guid)
+      : undefined
+    if (opener) opener.emit('popup', page)
   }
 
   #onConsole(event: ConsoleEventParams): void {
@@ -172,8 +250,8 @@ export class BrowserContext extends ChannelOwner {
 
   /**
    * Playwright's `BrowserContext.waitForEvent`: resolves with the first `event` its predicate
-   * accepts, or rejects at the timeout (the context's default, 30 s unless set). The context
-   * never closes during a run, so only the timeout or the predicate ends it otherwise.
+   * accepts, or rejects at the timeout (the context's default, 30 s unless set) or when the
+   * context closes.
    */
   async waitForEvent(
     event: string,
@@ -182,10 +260,10 @@ export class BrowserContext extends ChannelOwner {
     return await wrapApiCall('browserContext.waitForEvent', async () => {
       const options =
         typeof optionsOrPredicate === 'function' ? {} : optionsOrPredicate
-      refuseSignal(options)
-      this._refuseUnserved(event)
-      // Inside `wrapApiCall`, which prefixes the api name.
+      // Refuses a signal first (TimeoutSettings), inside `wrapApiCall`, which prefixes the
+      // api name.
       const timeout = this._timeoutSettings.timeout(options, null)
+      this._refuseUnserved(event)
       const predicate =
         typeof optionsOrPredicate === 'function'
           ? optionsOrPredicate
@@ -196,22 +274,29 @@ export class BrowserContext extends ChannelOwner {
         `Timeout ${timeout}ms exceeded while waiting for event "${event}"`,
       )
       if (event !== 'close')
-        waiter.rejectOnEvent(this, 'close', () => targetClosedError())
+        waiter.rejectOnEvent(this, 'close', () =>
+          targetClosedError(this._closeReason()),
+        )
       const result = await waiter.waitForEvent(this, event, predicate)
       waiter.dispose()
       return result
     })
   }
 
-  /** Every open tab of the context, in the order Rust first saw them, the run page first; a
-   * page seen before keeps its object. A live read, like every Neo getter. A closed context
-   * (or one whose browser was closed) has none. */
+  /**
+   * Every open tab of the context, in the order Rust first saw them, the run page first; a
+   * page seen before keeps its object. A live read, like every Neo getter, so it can list a new
+   * tab before that tab's `page` event has run; after the context closed, nothing.
+   *
+   * Deviation: `client/browserContext.ts` `BrowserContext.pages`: `return [...this._pages];`
+   * Playwright lists the pages its client was told of, in that order. Neo lists the context's
+   * tabs as the browser reports them, the run page first.
+   */
   pages(): Page[] {
-    if (this.#closingStatus === 'closed' || this.#connection._disconnected)
-      return []
-    return get(this.#guid, 'pages').map(
-      (created) => this.#pages.get(created.guid) ?? this.#add(created),
-    )
+    if (this.#closingStatus === 'closed') return []
+    return get(this.#guid, 'pages')
+      .map((created) => this.#pages.get(created.guid) ?? this.#add(created))
+      .filter((page) => !page._isClosedLocally())
   }
 
   /** Playwright's `BrowserContext.debugger`: the context's own debugger (`debugger.ts`), made
@@ -231,10 +316,16 @@ export class BrowserContext extends ChannelOwner {
     return this._browser
   }
 
-  /** Opens a tab on `about:blank` and resolves with its `Page` once the tab answers that URL.
-   * Neo opens it in the background, by design: the active tab stays active until a script
-   * calls `bringToFront`. A context `browser.newContext` created opens a tab of its own
-   * context, with the context's options emulated before the page resolves. */
+  /**
+   * Opens a tab on `about:blank` and resolves with its `Page` once the tab answers that URL; a
+   * `page` listener has run for it by then. A context `browser.newContext` created opens a tab
+   * of its own context, with the context's options emulated before the page resolves.
+   *
+   * Deviation: `server/chromium/crBrowser.ts` `CRBrowserContext.doCreateNewPage`: `const { targetId } = await this._browser._session.send('Target.createTarget', { url: 'about:blank', browserContextId: this._browserContextId });`
+   * Playwright's new page takes the window's focus. Neo opens it in the background of the run
+   * page's window, by design: the user's active tab stays active until a script calls
+   * `bringToFront`.
+   */
   async newPage(): Promise<Page> {
     // Playwright: `client/browserContext.ts` `BrowserContext.newPage`: `throw new Error('Please use browser.newContext()');`
     if (this._ownerPage) throw new Error('Please use browser.newContext()')
@@ -256,33 +347,6 @@ export class BrowserContext extends ChannelOwner {
     this._timeoutSettings.setDefaultNavigationTimeout(timeout)
   }
 
-  /**
-   * Playwright's `BrowserContext.close` for a context `browser.newContext` created: its pages
-   * close, then the context; closing it again does nothing. The run's own context is the user's
-   * browser and refuses.
-   */
-  async close(options: { reason?: string } = {}): Promise<void> {
-    if (this.#closingStatus !== 'none') return
-    this.#closingStatus = 'closing'
-    const open = this._openPages()
-    try {
-      await this.#connection.sendContext(
-        'browserContext.close',
-        this.#guid,
-        'close',
-        pickParams(BROWSER_CONTEXT_CLOSE_KEYS, {
-          reason: options.reason,
-        }) as BrowserContextCloseParams,
-        0,
-      )
-    } catch (error) {
-      this.#closingStatus = 'none'
-      throw error
-    }
-    for (const page of open) page._onClose()
-    this._onClose()
-  }
-
   /** Playwright's `BrowserContext._onClose`: the context reads closed, leaves its browser's
    * list, and fires `close`. */
   _onClose(): void {
@@ -292,10 +356,16 @@ export class BrowserContext extends ChannelOwner {
     this.emit('close', this)
   }
 
-  /** Neo: the pages of this context that are open now, read before a close that ends them. */
+  /**
+   * Neo: the pages a close of this context ends, read before it, since a created context's tabs
+   * are gone once Rust answers: every tab the context lists and every page the run holds of it
+   * that is still open.
+   */
   _openPages(): Page[] {
-    if (this.#connection._disconnected) return []
-    return [...this.#pages.values()].filter((page) => !page.isClosed())
+    const pages = this.pages()
+    for (const page of this.#pages.values())
+      if (!pages.includes(page) && !page.isClosed()) pages.push(page)
+    return pages
   }
 
   /** Neo: this context's `Page` for `guid`, if it was handed one. */
@@ -320,6 +390,12 @@ export class BrowserContext extends ChannelOwner {
     const page = new Page(guid, mainFrameGuid, url, this, this.#connection)
     this.#pages.set(guid, page)
     return page
+  }
+
+  /** The `Page` for a record Rust handed out: the object this guid already has, else one
+   * built from the record. */
+  _pageFrom(created: CreatedPage): Page {
+    return this.#pages.get(created.guid) ?? this.#add(created)
   }
 
   /** The `Page` for a guid Rust just handed out: the object a `pages()` read made while the
@@ -358,4 +434,11 @@ interface PageErrorEventParams {
   error: SerializedError
   page: PageChannel
   location: WebErrorLocation
+}
+
+/** The page guid (`page@T`) a call's guid belongs to: its own, its frames' (`frame@T`,
+ * `frame@T/F`), and its requests' and responses' (`request@T:…`). */
+export function pageGuidOf(guid: string): string {
+  const target = guid.slice(guid.indexOf('@') + 1).split(/[/:]/)[0]
+  return `page@${target}`
 }
