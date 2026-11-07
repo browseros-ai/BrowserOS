@@ -142,6 +142,24 @@ class Locator {
       ...options
     });
   }
+  async dblclick(options = {}) {
+    await this._frame._dblclick("locator.dblclick", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
+  async hover(options = {}) {
+    return await this._frame._hover("locator.hover", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
+  async tap(options = {}) {
+    return await this._frame._tap("locator.tap", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
   async textContent(options) {
     return await this._frame._textContent("locator.textContent", this._selector, { strict: true, ...options });
   }
@@ -884,6 +902,36 @@ var FRAME_CLICK_KEYS = [
   "trial",
   "steps"
 ];
+var FRAME_DBLCLICK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "modifiers",
+  "position",
+  "delay",
+  "button",
+  "trial",
+  "steps"
+];
+var FRAME_HOVER_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "modifiers",
+  "position",
+  "trial"
+];
+var FRAME_TAP_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "modifiers",
+  "position",
+  "trial"
+];
 var FRAME_FILL_KEYS = ["selector", "strict", "value", "force"];
 var FRAME_PRESS_KEYS = [
   "selector",
@@ -1138,6 +1186,33 @@ class Frame {
   }
   async _click(apiName, selector, options) {
     await this._connection.send(apiName, this._guid, "click", pickParams(FRAME_CLICK_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}));
+  }
+  async dblclick(selector, options = {}) {
+    return await this._dblclick("frame.dblclick", selector, options);
+  }
+  async _dblclick(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "dblclick", pickParams(FRAME_DBLCLICK_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}));
+  }
+  async hover(selector, options = {}) {
+    return await this._hover("frame.hover", selector, options);
+  }
+  async _hover(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "hover", pickParams(FRAME_HOVER_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}));
+  }
+  async tap(selector, options = {}) {
+    return await this._tap("frame.tap", selector, options);
+  }
+  async _tap(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "tap", pickParams(FRAME_TAP_KEYS, {
       selector,
       ...options
     }), this._page._timeoutSettings.timeout(options ?? {}));
@@ -1413,6 +1488,15 @@ class Page {
   }
   async click(selector, options = {}) {
     return await this.#mainFrame._click("page.click", selector, options);
+  }
+  async dblclick(selector, options = {}) {
+    return await this.#mainFrame._dblclick("page.dblclick", selector, options);
+  }
+  async hover(selector, options = {}) {
+    return await this.#mainFrame._hover("page.hover", selector, options);
+  }
+  async tap(selector, options = {}) {
+    return await this.#mainFrame._tap("page.tap", selector, options);
   }
   async fill(selector, value, options = {}) {
     return await this.#mainFrame._fill("page.fill", selector, value, options);

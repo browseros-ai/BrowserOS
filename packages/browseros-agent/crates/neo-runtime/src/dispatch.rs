@@ -35,13 +35,14 @@ use std::time::Duration;
 
 use neo_runtime_spec::serve::{
     BrowserContextCall, FrameAriaSnapshotParams, FrameCall, FrameCheckParams, FrameCheckResult,
-    FrameClickParams, FrameEvalOnSelectorAllParams, FrameFillParams, FrameFillResult,
-    FrameGetAttributeParams, FrameGotoParams, FrameInnerTextParams, FrameInputValueParams,
-    FrameInputValueResult, FrameIsCheckedParams, FrameIsCheckedResult, FrameIsVisibleParams,
-    FrameIsVisibleResult, FramePressParams, FramePressResult, FrameQueryCountParams,
-    FrameSelectOptionParams, FrameSelectOptionResult, FrameTextContentParams, FrameTitleParams,
-    FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
-    Metadata, PageCall, RequestCall, ResponseCall,
+    FrameClickParams, FrameDblclickParams, FrameEvalOnSelectorAllParams, FrameFillParams,
+    FrameFillResult, FrameGetAttributeParams, FrameGotoParams, FrameHoverParams,
+    FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams,
+    FrameIsCheckedResult, FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams,
+    FramePressResult, FrameQueryCountParams, FrameSelectOptionParams, FrameSelectOptionResult,
+    FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameUncheckParams,
+    FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult, Metadata, PageCall,
+    RequestCall, ResponseCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -53,7 +54,7 @@ use tokio::time::Instant;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::check::{self, CheckOptions};
-use crate::click::{self, ClickOptions};
+use crate::click::{self, PointerOptions};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
 use crate::frames::FrameScope;
@@ -123,12 +124,15 @@ static WAIT_FOR_LOAD_STATE_META: MethodMeta = MethodMeta {
 const EVAL_ON_SELECTOR_ALL_UNSERVED: &str =
     "Neo serves Frame.evalOnSelectorAll only for locator.allTextContents";
 
-// `serve` replies to a click with `{id}` and no `result`, which is right only while
-// Playwright's spec declares no `returns` for `Frame.click`. A spec that gives it a result stops
-// this compiling.
+// `serve` replies to a pointer action with `{id}` and no `result`, which is right only while
+// Playwright's spec declares no `returns` for `Frame.click`, `dblclick`, `hover` and `tap`. A
+// spec that gives one a result stops this compiling.
 const _: () = assert!(
-    <FrameClickParams as Command>::VOID_RESULT,
-    "Frame.click gained a result: reply with it in dispatch::serve",
+    <FrameClickParams as Command>::VOID_RESULT
+        && <FrameDblclickParams as Command>::VOID_RESULT
+        && <FrameHoverParams as Command>::VOID_RESULT
+        && <FrameTapParams as Command>::VOID_RESULT,
+    "a pointer action gained a result: reply with it in dispatch::serve",
 );
 
 /// Owns every browser call of one run. Cheap to clone: the bridge holds one, `Runtime::run`
@@ -236,7 +240,8 @@ enum ObjectCall {
     reason = "Routes name their protocol interface and method"
 )]
 enum Route {
-    FrameClick(ClickOptions),
+    /// `Frame.click`, `dblclick`, `hover` and `tap`: one policy (`click.rs`).
+    FramePointer(PointerOptions),
     FrameGoto(GotoOptions),
     FrameTitle,
     FrameTextContent(ReadOptions),
@@ -483,7 +488,12 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::IsChecked(params) => {
             Ok(Route::FrameIsChecked(StateOptions::from_is_checked(params)))
         }
-        FrameCall::Click(params) => ClickOptions::from_params(params).map(Route::FrameClick),
+        FrameCall::Click(params) => PointerOptions::from_click(params).map(Route::FramePointer),
+        FrameCall::Dblclick(params) => {
+            PointerOptions::from_dblclick(params).map(Route::FramePointer)
+        }
+        FrameCall::Hover(params) => PointerOptions::from_hover(params).map(Route::FramePointer),
+        FrameCall::Tap(params) => PointerOptions::from_tap(params).map(Route::FramePointer),
         FrameCall::Goto(params) => GotoOptions::from_params(params).map(Route::FrameGoto),
         FrameCall::Title(_) => Ok(Route::FrameTitle),
         FrameCall::TextContent(params) => {
@@ -718,7 +728,9 @@ async fn serve_route<T: FormTab + KeyboardTab>(
     progress: &Progress,
 ) -> Result<Option<Value>, CallError> {
     match route {
-        Route::FrameClick(options) => click::click(tab, &options, progress).await.map(|()| None),
+        Route::FramePointer(options) => click::pointer_action(tab, &options, progress)
+            .await
+            .map(|()| None),
         Route::FrameFill(options) => fill::fill(tab, &options, progress)
             .await
             .and_then(|()| encode_result::<FrameFillParams>(&FrameFillResult {})),
@@ -1155,7 +1167,7 @@ mod tests {
                         }]
                     );
                 }
-                Route::FrameClick(_) => panic!("a form is not a click"),
+                Route::FramePointer(_) => panic!("a form is not a pointer action"),
                 Route::FrameGoto(_)
                 | Route::FrameTitle
                 | Route::FrameTextContent(_)
@@ -1260,10 +1272,31 @@ mod tests {
     fn a_frame_click_routes_with_its_options_and_title() {
         let routed = route_frame("click", json!({ "selector": "#go", "strict": true }));
         assert_eq!(routed.meta.and_then(|meta| meta.title), Some("Click"));
-        let Ok(ObjectCall::Frame(Route::FrameClick(options))) = routed.route else {
+        let Ok(ObjectCall::Frame(Route::FramePointer(options))) = routed.route else {
             panic!("a click on the run's frame routes to Frame.click");
         };
         assert_eq!((options.selector.as_str(), options.strict), ("#go", true));
+    }
+
+    #[test]
+    fn tests_that_dblclick_hover_and_tap_route_to_the_pointer_policy() {
+        for (method, title, name) in [
+            ("dblclick", "Double click", "dblclick"),
+            ("hover", "Hover", "hover"),
+            ("tap", "Tap", "tap"),
+        ] {
+            let routed = route_frame(method, json!({ "selector": "#go", "noWaitAfter": true }));
+            assert_eq!(routed.meta.and_then(|meta| meta.title), Some(title));
+            assert!(
+                routed.meta.is_some_and(|meta| meta.has(MethodFlag::Input)),
+                "{method} is an input method with a delivery cell"
+            );
+            let Ok(ObjectCall::Frame(Route::FramePointer(options))) = routed.route else {
+                panic!("{method} routes to the pointer policy");
+            };
+            assert_eq!(options.action.name(), name);
+            assert!(!options.wait_after, "{method} waits for no navigation");
+        }
     }
 
     #[test]
@@ -1666,9 +1699,9 @@ mod tests {
     fn unserved_methods_and_objects_reply_as_playwrights_dispatcher_would() {
         let cases = [
             (
-                route_frame("dblclick", json!({ "selector": "#go" })),
+                route_frame("expect", json!({ "selector": "#go" })),
                 None,
-                PlaywrightError::error("Neo does not serve Frame.dblclick"),
+                PlaywrightError::error("Neo does not serve Frame.expect"),
             ),
             (
                 route_frame(

@@ -3,10 +3,13 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (0)
+## Deviations (3)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
+| neo-runtime/src/click.rs | `PointerOptions::from_tap` | `server/frames.ts` `Frame.tap` | Neo's run attaches to the user's BrowserOS context, which has no hasTouch option, and its tab answers Input.dispatchTouchEvent with the events of a hasTouch context, so Neo taps where Playwright refuses. |
+| neo-runtime/src/click.rs | `refuse_unserved` | `server/dom.ts` `ElementHandle._performPointerAction` | Neo's tab keeps no keyboard state yet to press and restore them with, so it refuses them before any work. |
+| neo-runtime/src/click.rs | `refuse_unserved` | `server/dom.ts` `ElementHandle._performPointerAction` | Playwright moves in `steps` from the page's last mouse position, which Neo's tab does not keep yet, so it refuses other steps before any work. |
 
 ## Unexplained: owner questions (0)
 

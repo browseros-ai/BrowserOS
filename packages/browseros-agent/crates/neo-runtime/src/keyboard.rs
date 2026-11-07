@@ -261,7 +261,7 @@ async fn insert_text(
     report(&outcomes, ticket)
 }
 
-/// The mouse writer's rule (`page.rs` `write_mouse`): every written event acknowledged →
+/// The pointer writers' rule (`page.rs` `pointer_report`): every written event acknowledged →
 /// `ticket.acked()`; nothing sent, or every send refused with `ConnectionEpochChanged` →
 /// `ticket.unsent()`; otherwise the ticket drops (`Unknown`) and the first error is reported.
 fn report(outcomes: &[Result<(), CdpError>], ticket: InputTicket) -> PressReport {

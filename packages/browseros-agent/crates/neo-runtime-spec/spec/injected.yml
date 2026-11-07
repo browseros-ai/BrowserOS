@@ -272,13 +272,15 @@ Injected:
       returns:
         outcome: HitTargetOutcome
 
-    # `InjectedScript.setupHitTargetInterceptor(element, 'mouse', hitPoint, blockAllEvents)`.
+    # `InjectedScript.setupHitTargetInterceptor(element, action, hitPoint, blockAllEvents)`.
     # It retargets to the closest button or link, checks the hit point once, and arms the
-    # injected script's single hit-target slot for the coming mouse events.
+    # injected script's single hit-target slot for the coming input of `action`.
     setupHitTargetInterceptor:
       internal: true
       parameters:
         element: Element
+        # Which events the interceptor judges: Playwright's `actionType` (`dom.ts`).
+        action: HitTargetAction
         # The click point; absent skips the preliminary hit check.
         hitPoint: Point?
         # Playwright's `trial`: block every intercepted event, hit or not.
@@ -492,6 +494,17 @@ ScrollAlignment:
   - center
   - end
   - nearest
+
+# The input a hit-target interceptor judges, as `InjectedScript.setupHitTargetInterceptor` takes
+# it: `hover` judges `mousemove`, `tap` the pointer and touch events, `mouse` the presses and
+# clicks, and `drag` arms nothing.
+HitTargetAction:
+  type: enum
+  literals:
+  - hover
+  - tap
+  - mouse
+  - drag
 
 # Not armed, or armed. Not armed is a string: `error:notconnected`, or the `previewNode` of the
 # element covering the point (`<div id="overlay"></div>`), exactly as Playwright's
