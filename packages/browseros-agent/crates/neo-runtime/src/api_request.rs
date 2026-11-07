@@ -593,7 +593,7 @@ struct MultipartFormData {
 impl MultipartFormData {
     /// `generateUniqueBoundaryString`: `return '----WebKitFormBoundary' + String.fromCharCode(...charCodes);`
     fn new() -> Self {
-        /// Neo: the 64 characters a WebKit form boundary picks its 16 from.
+        /// Neo: the 64 characters a form boundary picks its 16 from, as `WebKit` does.
         const ALPHABET: &[u8; 64] =
             b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB";
         let seed = RandomState::new().hash_one(SystemTime::now());
