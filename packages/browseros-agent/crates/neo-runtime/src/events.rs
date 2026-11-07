@@ -111,6 +111,10 @@ const CONTEXT_EVENTS: [(&str, Needs); 14] = [
 
 /// What a subscription switches on in a page's session before that page's next call runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent switch a subscription may need, combined with ||"
+)]
 pub(crate) struct Needs {
     /// `PageSession::prepare`: the watcher, which is the producer, with `Page.enable`.
     pub(crate) watcher: bool,

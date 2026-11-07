@@ -311,6 +311,13 @@ impl PageState {
         }
     }
 
+    /// A new document's commit: none of its lifecycle events has fired yet.
+    fn clear_lifecycle(&mut self) {
+        self.dom_content_loaded = false;
+        self.load = false;
+        self.network_idle = false;
+    }
+
     /// `networkidle` added (`true`) or removed for the current document. Whether it changed.
     fn set_network_idle(&mut self, fired: bool) -> bool {
         if self.network_idle == fired {
@@ -1864,9 +1871,7 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                     }
                     Some(PendingDocument::Requested) | None => false,
                 };
-                state.dom_content_loaded = false;
-                state.load = false;
-                state.network_idle = false;
+                state.clear_lifecycle();
                 if kind.as_deref() == Some("BackForwardCacheRestore") {
                     // Deviation: `server/chromium/chromiumSwitches.ts` `chromiumSwitches`: `'--disable-back-forward-cache',`
                     // Playwright's Chromium never restores a cached document, and one it met

@@ -75,7 +75,7 @@ pub(crate) const MAX_REQUESTS: usize = 1000;
 pub(crate) const MAX_LIVE_REQUESTS: usize = 10_000;
 
 /// Playwright: `server/network.ts` `Request._failFromDetachedDocument`: `'net::ERR_ABORTED');`
-/// Chromium's branch: Firefox and WebKit name the failure their own way.
+/// Chromium's branch: the other browsers name the failure their own way.
 const DETACHED_FAILURE: &str = "net::ERR_ABORTED";
 
 /// Playwright: `server/page.ts` `Page.addNetworkRequest`: `ensureArrayLimit(this._networkRequests, 100);`
