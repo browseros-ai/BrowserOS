@@ -48,6 +48,7 @@ use tracing::debug;
 
 use crate::capture;
 use crate::click::{self, NotReady, PageError, Scroll, StatesCheck, Tab};
+use crate::evaluate::HandleEntry;
 use crate::frame_selector;
 use crate::frames::{FrameContext, FrameScope};
 use crate::page::{FrameTab, GroupGuard, PageSession, ResolvedElement};
@@ -344,6 +345,37 @@ pub(crate) async fn screenshot_locator(
             Err(error) => return Err(page_error(error)),
         }
     };
+    screenshot_element(tab, element, options, progress).await
+}
+
+/// Serves `ElementHandle.screenshot`: `Screenshotter.screenshotElement` on the handle's own
+/// node, never a selector resolved again. Its steps run in the frame's utility world, where
+/// Playwright's `ElementHandle.evaluateInUtility` adopts the node; a node gone with its document
+/// is not attached, as there.
+/// Playwright: `server/dom.ts` `ElementHandle.screenshot`
+pub(crate) async fn screenshot_handle(
+    tab: &FrameTab,
+    handle: &HandleEntry,
+    options: &ScreenshotOptions,
+    progress: &Progress,
+) -> Result<Vec<u8>, CallError> {
+    let frame = Arc::clone(handle.frame());
+    let group = tab.group(&frame, "screenshot");
+    let element = progress
+        .race(handle.utility_element(&group))
+        .await?
+        .map_err(element_error)?;
+    // The iframe owners above the handle's frame, as a selector's resolution keeps them
+    // (`frame_selector::locate`): the stability step scrolls an offscreen OOPIF's owners first.
+    let owners = if matches!(tab.scope, FrameScope::Frame(_)) {
+        progress
+            .race(frame_selector::direct_owners(tab, &frame.id))
+            .await?
+            .map_err(element_error)?
+    } else {
+        Vec::new()
+    };
+    let element = ResolvedElement::adopted(element, Arc::new(group), frame, owners);
     screenshot_element(tab, element, options, progress).await
 }
 

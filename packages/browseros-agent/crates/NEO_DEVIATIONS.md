@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (105)
+## Deviations (103)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -105,9 +105,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-sdk/src/route.ts | `Route.#innerFulfill` | `client/network.ts` `Route._innerFulfill` | Neo's response carries its body, which goes back as the fulfill's body. |
 | neo-sdk/src/route.ts | `Route.#raceWithTargetClose` | `client/network.ts` `Route._raceWithTargetClose` | Playwright resolves the call as soon as the page closes; Neo's call itself ends with `TargetClosedError` when the tab goes, which this turns into the same quiet resolve. |
 | neo-sdk/src/route.ts | `Route.fetch` | `client/network.ts` `Route.fetch` | The browser sends the routed request itself, once (neo-runtime `routes.rs` `fetch`); `maxRetries` is checked as Playwright's and leaves retries to the browser. |
-| neo-sdk/src/screenshot.ts | (file) | `client/page.ts` `Page.pdf` | `page.screenshot` and `locator.screenshot` resolve their timeout through `TimeoutSettings`, so their `signal` aborts the capture as Playwright's does (slice S). `page.pdf`, which Playwright sends with no signal, refuses one before anything reaches the page instead of ignoring it (med-pw-eval DECIDED). `undefined` and `null` are no signal. |
 | neo-sdk/src/screenshot.ts | (file) | `client/page.ts` `Page.screenshot` | A Neo script has no file system: `path` travels with the call and neo-runtime writes the bytes into the run's artifact directory (`artifacts.rs`), relative paths only. A run without one refuses `path` with an Error naming the option. |
-| neo-sdk/src/screenshot.ts | `refuseSignal` | `client/page.ts` `Page.pdf` | until Neo can abort a call, a signal is refused rather than ignored. |
 | neo-sdk/src/set-input-files.ts | `FILE_UPLOAD_SIZE_LIMIT` | `client/elementHandle.ts` `convertInputFiles` | Playwright sends buffers up to this limit; Neo's dispatcher holds at most 8 MiB of a run's requests in flight (neo-runtime `dispatch.rs` `MAX_REQUEST_BYTES_IN_FLIGHT`), so buffers past about 6 MiB (base64 grows them by a third) are refused with its Error naming that bound; a path in the artifact directory takes any size. |
 | neo-sdk/src/url.ts | (file) | `isomorphic/urlMatch.ts` `urlMatches` | Playwright passes a URL predicate a WHATWG `URL`. The realm has no `URL`, so Neo passes this read-only one, built from Rust's WHATWG parser: every getter and `toString`/`toJSON` read as `URL`'s do, and `searchParams` reads as `URLSearchParams`; setters and `searchParams`' mutators throw, and `instanceof URL` cannot hold. |
 | neo-sdk/src/url.ts | `READ_ONLY` | `isomorphic/urlMatch.ts` `urlMatches` | the error a write to Neo's read-only `URL` throws, where Playwright's predicate gets a writable WHATWG `URL`. |

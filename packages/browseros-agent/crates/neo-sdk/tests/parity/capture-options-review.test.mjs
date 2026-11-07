@@ -1,7 +1,7 @@
-// B1 regressions. Since slice S the screenshot signal cases compare with Playwright like the rest
-// (an aborted signal rejects AbortError before any browser effect). page.pdf keeps Neo's own
-// refusal (med-pw-eval DECIDED): Playwright reads no signal there and prints, so that case
-// asserts Neo's refusal and its lack of effect. `signal: null` is no signal (DECIDED 01:27).
+// B1 regressions, every case compared with Playwright. Since slice S an aborted signal on a
+// screenshot rejects AbortError before any browser effect. page.pdf ignores a signal as
+// Playwright's does, whose print carries none (`kNoTimeout`), so it prints (med-pw-eval DECIDED,
+// B2 review). `signal: null` is no signal (DECIDED 01:27).
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { withEngines } from './capture.mjs'
@@ -11,7 +11,7 @@ const html = `<!doctype html><input style="caret-color:red"><div id=box style="w
 const probe = `({prints:window.prints,styleAdds:window.styleAdds,styles:document.querySelectorAll('style').length,caret:document.querySelector('input').style.caretColor,scrollY,masks:document.querySelectorAll('x-pw-glass').length})`
 test('B1 independent option probes', { skip, timeout: 600000 }, async (t) => {
   await withEngines(t, { pages: { '/case': html } }, async (run) => {
-    for (const [name, source, contract] of [
+    for (const [name, source] of [
       [
         'page signal',
         `try {await page.screenshot({signal:{aborted:true},style:'body{color:red}',path:at('signal.png')});return 'captured'}catch(e){return {name:e.name,signal:/signal/.test(e.message)}}`,
@@ -35,7 +35,6 @@ test('B1 independent option probes', { skip, timeout: 600000 }, async (t) => {
       [
         'pdf signal',
         `try {await page.pdf({signal:{aborted:true},path:at('signal.pdf')});return 'printed'}catch(e){return {name:e.name,signal:/signal/.test(e.message)}}`,
-        'signal',
       ],
       [
         'zero clip',
@@ -73,21 +72,8 @@ test('B1 independent option probes', { skip, timeout: 600000 }, async (t) => {
           ]),
         )
         t.diagnostic(JSON.stringify({ name, ...record }))
-        if (contract === 'signal') {
-          assert.deepEqual(
-            r.neo.value,
-            { name: 'Error', signal: true },
-            'Neo refuses a signal on page.pdf',
-          )
-          assert.equal(r.neo.probe.prints, 0)
-          assert.equal(r.neo.probe.styleAdds, 0)
-          assert.equal(r.neo.probe.scrollY, 0)
-          assert.equal(r.neo.file('signal.pdf'), null)
-          assert.equal(r.neo.file('signal.png'), null)
-        } else {
-          assert.deepEqual(r.neo.value, r.playwright.value)
-          assert.deepEqual(r.neo.probe, r.playwright.probe)
-        }
+        assert.deepEqual(r.neo.value, r.playwright.value)
+        assert.deepEqual(r.neo.probe, r.playwright.probe)
       })
   })
 })

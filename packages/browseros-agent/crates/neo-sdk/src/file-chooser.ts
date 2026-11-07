@@ -43,9 +43,11 @@ export class FileChooser {
   /** The input the chooser opened for, the same object at every read. */
   element(): ElementHandle {
     if (!this.#element)
+      // Timed by the chooser's page, as every frame of a page shares its `TimeoutSettings`.
       this.#element = handleFrom(
         this.#connection,
         get(this.#chooser, 'element'),
+        this.#page.mainFrame(),
       ) as ElementHandle
     return this.#element
   }

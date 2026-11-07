@@ -1404,7 +1404,7 @@ export class Page extends ChannelOwner {
       'page.pdf',
       this.#guid,
       'pdf',
-      pdfParams('page.pdf', options),
+      pdfParams(options),
       0,
     )
     return resultBuffer(result.pdf)

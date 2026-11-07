@@ -424,7 +424,11 @@ pub(crate) async fn locate(
     Ok(located)
 }
 
-async fn direct_owners(tab: &FrameTab, frame: &str) -> Result<Vec<FrameOwner>, PageError> {
+/// The iframe owners above `frame`, outermost first, each in its parent's utility world.
+pub(crate) async fn direct_owners(
+    tab: &FrameTab,
+    frame: &str,
+) -> Result<Vec<FrameOwner>, PageError> {
     let mut owners = Vec::new();
     for (parent, child) in tab.frames.owners(frame).await? {
         let group = tab.group(&parent, "direct-frame-owner");

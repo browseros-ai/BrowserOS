@@ -91,11 +91,15 @@ export type NeoWaitForLoadStateParams = { state: LifecycleEvent }
  * has no element handles yet, so one call carries the selector, `ElementHandle.screenshot`'s
  * params, and Neo's `path` (relative to the run's artifact directory). Rust: `capture.rs`
  * `NeoScreenshotParams`; the reply is `ElementHandle.screenshot`'s `{binary}`. */
-export type NeoScreenshotParams = Omit<
+export type NeoScreenshotParams = ElementScreenshotParams & { selector: string }
+
+/** `elementHandle.screenshot`'s params: `ElementHandle.screenshot`'s
+ * (`spec/playwright/handles.yml`, `PageScreenshotParams` without `fullPage` and `clip`) and
+ * Neo's `path`. The reply is `{binary}`. */
+export type ElementScreenshotParams = Omit<
   PageScreenshotParams,
   'fullPage' | 'clip'
 > & {
-  selector: string
   path?: string
 }
 

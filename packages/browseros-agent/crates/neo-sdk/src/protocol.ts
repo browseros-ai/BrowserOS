@@ -71,7 +71,10 @@ import type {
   PageTouchscreenTapParams,
   PageUnregisterLocatorHandlerParams,
 } from '@browseros/neo-runtime-spec/serve'
-import type { NeoScreenshotParams } from './neo-commands'
+import type {
+  ElementScreenshotParams,
+  NeoScreenshotParams,
+} from './neo-commands'
 
 /** `Frame.goto`'s params in Playwright's schema order (`spec/playwright/frame.yml`). */
 export const FRAME_GOTO_KEYS = ['url', 'waitUntil', 'referer'] as const
@@ -693,10 +696,9 @@ export const PAGE_PDF_KEYS = [
   'outline',
 ] as const
 
-/** `neo:screenshot`: the selector, then `ElementHandle.screenshot` in Playwright schema order
- * (`spec/playwright/handles.yml`); Neo's `path` is added after. */
-export const NEO_SCREENSHOT_KEYS = [
-  'selector',
+/** `ElementHandle.screenshot` in Playwright schema order (`spec/playwright/handles.yml`);
+ * Neo's `path` is added after. */
+export const ELEMENT_SCREENSHOT_KEYS = [
   'type',
   'quality',
   'omitBackground',
@@ -706,6 +708,12 @@ export const NEO_SCREENSHOT_KEYS = [
   'mask',
   'maskColor',
   'style',
+] as const
+
+/** `neo:screenshot`: the selector, then `ElementHandle.screenshot`'s params. */
+export const NEO_SCREENSHOT_KEYS = [
+  'selector',
+  ...ELEMENT_SCREENSHOT_KEYS,
 ] as const
 
 /** `Page.registerLocatorHandler` in Playwright schema order. */
@@ -822,6 +830,12 @@ type _PagePdfKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof PAGE_PDF_KEYS)[number], true>,
     Required<PagePdfParams>
+  >
+>
+type _ElementScreenshotKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof ELEMENT_SCREENSHOT_KEYS)[number] | 'path', true>,
+    Required<ElementScreenshotParams>
   >
 >
 type _NeoScreenshotKeysMatchSpec = Assert<

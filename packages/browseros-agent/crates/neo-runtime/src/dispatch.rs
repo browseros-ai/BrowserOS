@@ -70,7 +70,10 @@ use tracing::debug;
 
 use crate::abort::{Aborts, Registration};
 use crate::bindings::{self, BindingRoute, Outcome};
-use crate::capture::{self, Capture, NEO_SCREENSHOT_META, NeoScreenshotParams};
+use crate::capture::{
+    self, Capture, ELEMENT_HANDLE_SCREENSHOT_META, ElementScreenshotParams, NEO_SCREENSHOT_META,
+    NeoScreenshotParams,
+};
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::content::{self, SetContentOptions, WriteOrder, WriteTurn};
@@ -845,6 +848,9 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
                 )
             }),
         ObjectKind::Handle(guid) => {
+            if let Some(routed) = route_handle_screenshot(&guid, method, params.as_ref()) {
+                return routed;
+            }
             let (meta, call) = evaluate::route_handle(&guid, method, params.as_ref());
             return Routed {
                 meta,
@@ -902,6 +908,23 @@ fn route_neo_screenshot(method: &str, params: Option<&Value>) -> Option<Routed> 
         meta: Some(&NEO_SCREENSHOT_META),
         route: decode_neo_params::<NeoScreenshotParams>(params.cloned(), &NEO_SCREENSHOT_META)
             .map(|params| ObjectCall::Capture(Capture::Locator(Box::new(params)))),
+    })
+}
+
+/// `ElementHandle.screenshot` on a handle guid (`capture.rs`), or `None` for another method.
+fn route_handle_screenshot(guid: &str, method: &str, params: Option<&Value>) -> Option<Routed> {
+    (method == ELEMENT_HANDLE_SCREENSHOT_META.method).then(|| Routed {
+        meta: Some(&ELEMENT_HANDLE_SCREENSHOT_META),
+        route: decode_neo_params::<ElementScreenshotParams>(
+            params.cloned(),
+            &ELEMENT_HANDLE_SCREENSHOT_META,
+        )
+        .map(|params| {
+            ObjectCall::Capture(Capture::Element {
+                guid: guid.to_string(),
+                params: Box::new(params),
+            })
+        }),
     })
 }
 
@@ -3060,12 +3083,42 @@ mod tests {
         match locator.route {
             Ok(ObjectCall::Capture(Capture::Locator(params))) => {
                 assert_eq!(params.selector, "#a");
-                assert_eq!(params.path.as_deref(), Some("a.png"));
-                assert_eq!(params.omit_background, Some(true));
+                assert_eq!(params.screenshot.path.as_deref(), Some("a.png"));
+                assert_eq!(params.screenshot.omit_background, Some(true));
             }
             Ok(_) => panic!("expected a locator screenshot"),
             Err(error) => panic!("expected a locator screenshot, got {error:?}"),
         }
+        let handle = route(
+            ObjectKind::Handle("handle@run.1".to_string()),
+            "screenshot",
+            Some(json!({"type": "jpeg", "quality": 50, "path": "a.jpg"})),
+        );
+        assert_eq!(
+            handle
+                .meta
+                .map(|meta| (meta.interface, meta.method, meta.title)),
+            Some(("ElementHandle", "screenshot", Some("Screenshot")))
+        );
+        match handle.route {
+            Ok(ObjectCall::Capture(Capture::Element { guid, params })) => {
+                assert_eq!(guid, "handle@run.1");
+                assert_eq!(params.quality, Some(50));
+                assert_eq!(params.path.as_deref(), Some("a.jpg"));
+            }
+            Ok(_) => panic!("expected an element handle screenshot"),
+            Err(error) => panic!("expected an element handle screenshot, got {error:?}"),
+        }
+        // Every other handle method is still the handle's evaluation (`evaluate.rs`).
+        assert!(matches!(
+            route(
+                ObjectKind::Handle("handle@run.1".to_string()),
+                "jsonValue",
+                Some(json!({})),
+            )
+            .route,
+            Ok(ObjectCall::Frame(Route::FrameEval(_)))
+        ));
         let no_selector = error_of(route_frame("neo:screenshot", json!({})));
         assert!(
             no_selector.message.contains("neo:screenshot"),
