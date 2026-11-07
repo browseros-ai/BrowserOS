@@ -1857,6 +1857,9 @@ class Connection {
   async sendRoute(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
+  async sendRouteFetch(apiName, guid, params, timeout) {
+    return await this.#send(apiName, guid, "neo:fetch", params, timeout);
+  }
   async sendDialog(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
@@ -5889,6 +5892,56 @@ class Touchscreen {
   }
 }
 
+// src/api-response.ts
+var DISPOSED = "Response has been disposed";
+
+class APIResponse {
+  #url;
+  #status;
+  #statusText;
+  #headers;
+  #body;
+  constructor(record) {
+    this.#url = record.url;
+    this.#status = record.status;
+    this.#statusText = record.statusText;
+    this.#headers = new RawHeaders(record.headers);
+    this.#body = Buffer.fromBinary(record.body);
+  }
+  ok() {
+    return this.#status >= 200 && this.#status <= 299;
+  }
+  url() {
+    return this.#url;
+  }
+  status() {
+    return this.#status;
+  }
+  statusText() {
+    return this.#statusText;
+  }
+  headers() {
+    return this.#headers.headers();
+  }
+  headersArray() {
+    return this.#headers.headersArray();
+  }
+  async body() {
+    if (!this.#body)
+      throw new Error(DISPOSED);
+    return this.#body;
+  }
+  async text() {
+    return (await this.body()).toString("utf8");
+  }
+  async json() {
+    return JSON.parse(await this.text());
+  }
+  async dispose() {
+    this.#body = null;
+  }
+}
+
 // src/waiter.ts
 async function wrapApiCall(apiName, body) {
   try {
@@ -6032,6 +6085,15 @@ var BODY_TOO_LARGE = "route.fulfill: Neo carries a body of at most 6291456 bytes
 var ROUTE_HANDLED = "Route is already handled!";
 var BODY_AND_JSON = "Can specify either body or json parameters";
 var NO_PATH = `route.fulfill: Neo cannot read a file for "path" yet (it reads only inside the run's artifact directory, which this build lacks); pass "body" instead`;
+function postDataBytes(postData) {
+  if (postData === undefined || postData === null)
+    return;
+  if (typeof postData === "string")
+    return encodeUtf8(postData);
+  if (postData instanceof Uint8Array)
+    return postData;
+  return encodeUtf8(JSON.stringify(postData));
+}
 function deferred() {
   let resolve = () => {};
   const promise = new Promise((done) => {
@@ -6059,12 +6121,14 @@ class Route {
   _guid;
   #request;
   #connection;
+  #timeoutSettings;
   #handlingPromise = null;
   _didThrow = false;
-  constructor(guid, request, connection) {
+  constructor(guid, request, connection, timeoutSettings) {
     this._guid = guid;
     this.#request = request;
     this.#connection = connection;
+    this.#timeoutSettings = timeoutSettings;
   }
   request() {
     return this.#request;
@@ -6092,6 +6156,27 @@ class Route {
       await this.#raceWithTargetClose(this.#connection.sendRoute("route.abort", this._guid, "abort", { errorCode }, 0));
     });
   }
+  async fetch(options = {}) {
+    await wrapApiCall("route.fetch", async () => {
+      if (options.maxRedirects !== undefined && options.maxRedirects < 0)
+        throw new Error(`'maxRedirects' must be greater than or equal to '0'`);
+      if (options.maxRetries !== undefined && options.maxRetries < 0)
+        throw new Error(`'maxRetries' must be greater than or equal to '0'`);
+    });
+    {
+      const overrides = this.#request._fallbackOverridesForContinue();
+      const headers = options.headers ?? overrides.headers;
+      const postData = postDataBytes(options.postData) ?? overrides.postDataBuffer;
+      const result = await this.#connection.sendRouteFetch("route.fetch", this._guid, {
+        url: options.url ?? overrides.url,
+        method: options.method ?? overrides.method,
+        headers: headers ? headersObjectToArray(headers) : undefined,
+        postData: postData ? encodeBase64(postData) : undefined,
+        maxRedirects: options.maxRedirects
+      }, this.#timeoutSettings.timeout(options, "route.fetch"));
+      return new APIResponse(result);
+    }
+  }
   async fulfill(options = {}) {
     await this.#handleRoute(async () => {
       await this.#innerFulfill(options);
@@ -6113,6 +6198,12 @@ class Route {
       if (options.body !== undefined)
         throw new Error(BODY_AND_JSON);
       body = JSON.stringify(options.json);
+    }
+    if (options.response instanceof APIResponse) {
+      statusOption ??= options.response.status();
+      headersOption ??= options.response.headers();
+      if (body === undefined && options.path === undefined)
+        body = await options.response.body();
     }
     if (options.path !== undefined)
       throw new Error(NO_PATH);
@@ -6418,7 +6509,7 @@ class Page extends ChannelOwner {
       this.#onRouteEvent(params);
   }
   #onRouteEvent({ route, request }) {
-    const routed = new Route(route.guid, requestFromRecord(this.#connection, request, this), this.#connection);
+    const routed = new Route(route.guid, requestFromRecord(this.#connection, request, this), this.#connection, this.#context._timeoutSettings);
     this._onRoute(routed).catch(reportUncaught);
   }
   async _onRoute(route) {
@@ -6442,27 +6533,24 @@ class Page extends ChannelOwner {
     await this.#context._onRoute(route);
   }
   async route(url, handler, options = {}) {
-    return await wrapApiCall("page.route", async () => {
-      this._routes.unshift(new RouteHandler(url, handler, options.times));
-      await this.#updateInterceptionPatterns("page.route");
-      return new DisposableStub(() => this.unroute(url, handler));
-    });
+    const routeHandler = await wrapApiCall("page.route", async () => new RouteHandler(url, handler, options.times));
+    this._routes.unshift(routeHandler);
+    await this.#updateInterceptionPatterns("page.route");
+    return new DisposableStub(() => this.unroute(url, handler));
   }
   async unrouteAll(options) {
-    await wrapApiCall("page.unrouteAll", () => this.#unrouteInternal("page.unrouteAll", this._routes, [], options?.behavior));
+    await this.#unrouteInternal("page.unrouteAll", this._routes, [], options?.behavior);
   }
   async unroute(url, handler) {
-    await wrapApiCall("page.unroute", async () => {
-      const removed = [];
-      const remaining = [];
-      for (const route of this._routes) {
-        if (urlMatchesEqual(route.url, url) && (!handler || route.handler === handler))
-          removed.push(route);
-        else
-          remaining.push(route);
-      }
-      await this.#unrouteInternal("page.unroute", removed, remaining, "default");
-    });
+    const removed = [];
+    const remaining = [];
+    for (const route of this._routes) {
+      if (urlMatchesEqual(route.url, url) && (!handler || route.handler === handler))
+        removed.push(route);
+      else
+        remaining.push(route);
+    }
+    await this.#unrouteInternal("page.unroute", removed, remaining, "default");
   }
   async#unrouteInternal(apiName, removed, remaining, behavior) {
     this._routes = remaining;
@@ -6938,7 +7026,7 @@ class BrowserContext extends ChannelOwner {
   }
   #onRouteEvent({ route, request, page }) {
     const pageObject = this.#pageFor(page.guid);
-    const routed = new Route(route.guid, requestFromRecord(this.#connection, request, pageObject), this.#connection);
+    const routed = new Route(route.guid, requestFromRecord(this.#connection, request, pageObject), this.#connection, this._timeoutSettings);
     this._onRoute(routed, pageObject).catch(reportUncaught);
   }
   async _onRoute(route, page) {
@@ -6962,27 +7050,24 @@ class BrowserContext extends ChannelOwner {
     await route._innerContinue(true).catch(() => {});
   }
   async route(url, handler, options = {}) {
-    return await wrapApiCall("browserContext.route", async () => {
-      this._routes.unshift(new RouteHandler(url, handler, options.times));
-      await this.#updateInterceptionPatterns();
-      return new DisposableStub(() => this.unroute(url, handler));
-    });
+    const routeHandler = await wrapApiCall("browserContext.route", async () => new RouteHandler(url, handler, options.times));
+    this._routes.unshift(routeHandler);
+    await this.#updateInterceptionPatterns();
+    return new DisposableStub(() => this.unroute(url, handler));
   }
   async unrouteAll(options) {
-    await wrapApiCall("browserContext.unrouteAll", () => this.#unrouteInternal(this._routes, [], options?.behavior));
+    await this.#unrouteInternal(this._routes, [], options?.behavior);
   }
   async unroute(url, handler) {
-    await wrapApiCall("browserContext.unroute", async () => {
-      const removed = [];
-      const remaining = [];
-      for (const route of this._routes) {
-        if (urlMatchesEqual(route.url, url) && (!handler || route.handler === handler))
-          removed.push(route);
-        else
-          remaining.push(route);
-      }
-      await this.#unrouteInternal(removed, remaining, "default");
-    });
+    const removed = [];
+    const remaining = [];
+    for (const route of this._routes) {
+      if (urlMatchesEqual(route.url, url) && (!handler || route.handler === handler))
+        removed.push(route);
+      else
+        remaining.push(route);
+    }
+    await this.#unrouteInternal(removed, remaining, "default");
   }
   async#unrouteInternal(removed, remaining, behavior) {
     this._routes = remaining;

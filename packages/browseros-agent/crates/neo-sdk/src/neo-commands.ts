@@ -48,6 +48,25 @@ import type {
 import { isString } from '../vendor/playwright/isomorphic/stringUtils'
 import type { ApiName } from './connection'
 
+/** `neo:fetch` on a route's guid: `route.fetch`'s overrides, as Rust reads them (neo-runtime
+ * `routes.rs`). `postData` is base64. */
+export type NeoRouteFetchParams = {
+  url?: string
+  method?: string
+  headers?: { name: string; value: string }[]
+  postData?: string
+  maxRedirects?: number
+}
+
+/** `neo:fetch`'s answer: the fetched response, its body base64. */
+export type NeoRouteFetchResult = {
+  url: string
+  status: number
+  statusText: string
+  headers: { name: string; value: string }[]
+  body: string
+}
+
 /** Playwright's `SerializedURLMatch` (`isomorphic/urlMatch.ts`) without `urlPattern`. A glob of
  * `''` matches every URL. */
 export type NeoSerializedUrlMatch =

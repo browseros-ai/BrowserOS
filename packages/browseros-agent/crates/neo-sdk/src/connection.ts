@@ -38,7 +38,11 @@ import {
   targetClosedError,
 } from './errors'
 import type { EvalFrameCommands, JSHandleCommands } from './js-handle'
-import type { NeoFrameCommands } from './neo-commands'
+import type {
+  NeoFrameCommands,
+  NeoRouteFetchParams,
+  NeoRouteFetchResult,
+} from './neo-commands'
 import type { Request, Response } from './network'
 import { abort, call } from './runtime-bridge'
 import type { SignalLike, TimeoutOptions } from './timeout-settings'
@@ -388,6 +392,22 @@ export class Connection {
       params,
       timeout,
     )) as Resolved<RouteCommands[M]['result']>
+  }
+
+  /** `route.fetch`'s `neo:fetch`, to a `route@…` guid (neo-runtime `routes.rs`). */
+  async sendRouteFetch(
+    apiName: ApiName,
+    guid: string,
+    params: NeoRouteFetchParams,
+    timeout: number | TimeoutOptions,
+  ): Promise<NeoRouteFetchResult> {
+    return (await this.#send(
+      apiName,
+      guid,
+      'neo:fetch',
+      params,
+      timeout,
+    )) as NeoRouteFetchResult
   }
 
   /** {@link Connection.send} for a `Dialog` command, to a `dialog@…` guid. */

@@ -1591,6 +1591,15 @@ impl Watcher {
                     routes.forget_session(&SessionId::from(child));
                 }
             }
+            // A fetch waits on its request: a failure on the network ends it.
+            "Network.loadingFailed" => {
+                if from().is_some()
+                    && let Some(request) = event.params["requestId"].as_str()
+                {
+                    let error = event.params["errorText"].as_str().unwrap_or_default();
+                    routes.fetch_failed(request, error);
+                }
+            }
             _ => {}
         }
     }

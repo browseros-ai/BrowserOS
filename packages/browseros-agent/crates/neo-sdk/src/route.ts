@@ -10,6 +10,7 @@
  * answers it once on its `route@<targetId>:<n>` guid.
  */
 
+import { APIResponse } from './api-response'
 import type { ApiName, Connection } from './connection'
 import { isTargetClosedError } from './errors'
 import type { NeoSerializedUrlMatch } from './neo-commands'
@@ -22,8 +23,9 @@ import {
   type Request,
 } from './network'
 import { matchesURL } from './runtime-bridge'
+import type { TimeoutInput, TimeoutSettings } from './timeout-settings'
 import { type URLPredicate, urlFor } from './url'
-import { rewriteErrorMessage } from './waiter'
+import { rewriteErrorMessage, wrapApiCall } from './waiter'
 
 /** Playwright's `URLMatch` without `URLPattern`, which QuickJS lacks. */
 export type RouteURLMatch = string | RegExp | URLPredicate
@@ -41,6 +43,12 @@ export type FulfillOptions = {
   json?: unknown
   path?: string
 }
+
+/** Playwright's `route.fetch` options. */
+export type FetchOptions = FallbackOverrides & {
+  maxRedirects?: number
+  maxRetries?: number
+} & TimeoutInput
 
 /** Playwright's `page.unrouteAll` options. */
 export type UnrouteBehavior = 'wait' | 'ignoreErrors' | 'default'
@@ -70,6 +78,14 @@ const BODY_AND_JSON = 'Can specify either body or json parameters'
  */
 const NO_PATH =
   'route.fulfill: Neo cannot read a file for "path" yet (it reads only inside the run\'s artifact directory, which this build lacks); pass "body" instead'
+
+/** Playwright: `client/network.ts` `Request._applyFallbackOverrides`: `this._fallbackOverrides.postDataBuffer = Buffer.from(JSON.stringify(overrides.postData), 'utf-8');` */
+function postDataBytes(postData: unknown): Uint8Array | undefined {
+  if (postData === undefined || postData === null) return undefined
+  if (typeof postData === 'string') return encodeUtf8(postData)
+  if (postData instanceof Uint8Array) return postData
+  return encodeUtf8(JSON.stringify(postData))
+}
 
 /** Neo: a promise resolved from outside, as Playwright's `ManualPromise` is used here. */
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -112,13 +128,21 @@ export class Route {
   readonly _guid: string
   readonly #request: Request
   readonly #connection: Connection
+  /** The context's, as Playwright's `context.request` shares them. */
+  readonly #timeoutSettings: TimeoutSettings
   #handlingPromise: ReturnType<typeof deferred<boolean>> | null = null
   _didThrow = false
 
-  constructor(guid: string, request: Request, connection: Connection) {
+  constructor(
+    guid: string,
+    request: Request,
+    connection: Connection,
+    timeoutSettings: TimeoutSettings,
+  ) {
     this._guid = guid
     this.#request = request
     this.#connection = connection
+    this.#timeoutSettings = timeoutSettings
   }
 
   request(): Request {
@@ -164,6 +188,40 @@ export class Route {
     })
   }
 
+  /**
+   * Deviation: `client/network.ts` `Route.fetch`: `return await this._context.request._innerFetch({ request: this.request(), data: options.postData, ...options });`
+   * The browser sends the routed request itself, once (neo-runtime `routes.rs` `fetch`);
+   * `maxRetries` is checked as Playwright's and leaves retries to the browser.
+   */
+  async fetch(options: FetchOptions = {}): Promise<APIResponse> {
+    // The checks run here; the call's own errors come back prefixed already.
+    await wrapApiCall('route.fetch', async () => {
+      if (options.maxRedirects !== undefined && options.maxRedirects < 0)
+        throw new Error(`'maxRedirects' must be greater than or equal to '0'`)
+      if (options.maxRetries !== undefined && options.maxRetries < 0)
+        throw new Error(`'maxRetries' must be greater than or equal to '0'`)
+    })
+    {
+      const overrides = this.#request._fallbackOverridesForContinue()
+      const headers = options.headers ?? overrides.headers
+      const postData =
+        postDataBytes(options.postData) ?? overrides.postDataBuffer
+      const result = await this.#connection.sendRouteFetch(
+        'route.fetch',
+        this._guid,
+        {
+          url: options.url ?? overrides.url,
+          method: options.method ?? overrides.method,
+          headers: headers ? headersObjectToArray(headers) : undefined,
+          postData: postData ? encodeBase64(postData) : undefined,
+          maxRedirects: options.maxRedirects,
+        },
+        this.#timeoutSettings.timeout(options, 'route.fetch'),
+      )
+      return new APIResponse(result)
+    }
+  }
+
   async fulfill(options: FulfillOptions = {}): Promise<void> {
     await this.#handleRoute(async () => {
       await this.#innerFulfill(options)
@@ -186,6 +244,14 @@ export class Route {
     if (options.json !== undefined) {
       if (options.body !== undefined) throw new Error(BODY_AND_JSON)
       body = JSON.stringify(options.json)
+    }
+    if (options.response instanceof APIResponse) {
+      statusOption ??= options.response.status()
+      headersOption ??= options.response.headers()
+      // Deviation: `client/network.ts` `Route._innerFulfill`: `fetchResponseUid = (options.response as APIResponse)._fetchUid();`
+      // Neo's response carries its body, which goes back as the fulfill's body.
+      if (body === undefined && options.path === undefined)
+        body = await options.response.body()
     }
     if (options.path !== undefined) throw new Error(NO_PATH)
     let isBase64 = false

@@ -29,9 +29,11 @@ use std::sync::{Arc, Mutex};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use browseros_cdp::{CdpError, SessionId};
+use neo_runtime_spec::MethodMeta;
 use neo_runtime_spec::serve::{NameValue, RouteCall, RouteContinueParams, RouteFulfillParams};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-
+use tokio::sync::mpsc;
 use tracing::debug;
 
 use crate::click::PageError;
@@ -77,6 +79,84 @@ const MAX_PARKED: usize = 256;
 
 /// Neo: a poisoned lock (a panic elsewhere while holding it), which no script can cause.
 const ROUTES_UNREADABLE: &str = "neo-runtime: the tab's routes cannot be read";
+
+/// Playwright: `server/fetch.ts` `APIRequestContext.fetch`: `let maxRedirects = params.maxRedirects ?? (defaults.maxRedirects ?? 20);`
+const DEFAULT_MAX_REDIRECTS: i64 = 20;
+
+/// Playwright: `server/fetch.ts` `APIRequestContext._sendRequest`: `reject(new Error('Max redirect count exceeded'));`
+const MAX_REDIRECTS: &str = "Max redirect count exceeded";
+
+/// Deviation: `client/network.ts` `Route.fetch`: `return await this._context.request._innerFetch({ request: this.request(), data: options.postData, ...options });`
+/// Neo's fetch sends the paused request itself, which goes out once: a second fetch of the
+/// same route is refused.
+const FETCH_ONCE: &str = "route.fetch: Neo fetches a route's request once: the request itself goes out, so its response is the one fetch";
+
+/// Deviation: `client/network.ts` `Route.continue`: `await this._innerContinue(false /* isFallback */);`
+/// After a fetch the request has its response already: a continue delivers that response, and
+/// Neo refuses overrides it can no longer send.
+const FETCHED_CONTINUE: &str = "route.continue: the route's request was fetched already, so a continue delivers that response; Neo cannot change its url, method, headers or post data now";
+
+/// Neo: `route.fetch` on a route's guid. Playwright's client performs it in Node; Neo's browser
+/// sends the routed request itself ([`fetch`]).
+pub(crate) static FETCH_META: MethodMeta = MethodMeta {
+    interface: "Route",
+    method: "neo:fetch",
+    title: Some("Fetch request"),
+    subtitle: None,
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[],
+};
+
+/// `route.fetch`'s overrides and redirect bound, as the SDK sends them.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct NeoRouteFetchParams {
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    method: Option<String>,
+    #[serde(default)]
+    headers: Option<Vec<NameValue>>,
+    /// Base64, as Playwright's `binary`.
+    #[serde(default)]
+    post_data: Option<String>,
+    #[serde(default)]
+    max_redirects: Option<i64>,
+}
+
+/// What `route.fetch` answers: the `APIResponse` fields the SDK builds it from.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Fetched {
+    url: String,
+    status: i64,
+    status_text: String,
+    headers: Vec<NameValue>,
+    /// Base64.
+    body: String,
+}
+
+/// One step of a fetch in flight, as the tab's watcher sees it.
+#[derive(Debug)]
+pub(crate) enum FetchStep {
+    /// A pause of the fetched request: a redirect's next hop, or its response.
+    Paused {
+        session: Option<SessionId>,
+        params: Value,
+    },
+    /// `Network.loadingFailed`: the request failed on the network.
+    Failed(String),
+}
+
+/// Where a pause stands: before its request goes out, or with its response (after a fetch).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Stage {
+    #[default]
+    Request,
+    Response,
+}
 
 /// Playwright: `server/chromium/crNetworkManager.ts` `errorReasons`
 #[rustfmt::skip]
@@ -331,6 +411,9 @@ struct Paused {
     headers: Vec<NameValue>,
     /// Queued as the run's event, so the script owes the answer.
     emitted: bool,
+    stage: Stage,
+    /// `route.fetch` sent it out.
+    fetched: bool,
 }
 
 /// A pause that came before its `requestWillBeSent`.
@@ -350,6 +433,8 @@ struct State {
     paused: HashMap<u64, Paused>,
     /// The pauses whose one answer was taken, by the script or a release.
     answered: HashSet<u64>,
+    /// The fetches in flight, by `networkId`: their request's pauses and failure go to them.
+    fetching: HashMap<String, mpsc::UnboundedSender<FetchStep>>,
     /// Playwright: `server/chromium/crNetworkManager.ts` `RouteImpl.continue`: `this._alreadyContinuedParams = {`
     ///
     /// Each continued request's params (without its interception id), by `networkId`: its
@@ -444,6 +529,25 @@ impl Routes {
         let Some(network_id) = params["networkId"].as_str().filter(|id| !id.is_empty()) else {
             return Pause::Answer(go_on(session, request_id, Map::new()));
         };
+        if let Some(steps) = self
+            .with(|state| state.fetching.get(network_id).cloned())
+            .ok()
+            .flatten()
+        {
+            let _sent = steps.send(FetchStep::Paused {
+                session: session.cloned(),
+                params: params.clone(),
+            });
+            return Pause::Parked;
+        }
+        // Neo asks for a response stage only in a fetch; one that outlived its fetch (a
+        // timeout) is that route's to answer now.
+        if is_response_stage(params) {
+            if self.adopt_response(network_id, session, request_id) {
+                return Pause::Parked;
+            }
+            return Pause::Answer(go_on(session, request_id, Map::new()));
+        }
         // Before the request's record: Chromium reports a preflight with no frame, which the log
         // keeps no record of, as Playwright answers it before its own frame check.
         if is_preflight(params) {
@@ -572,6 +676,8 @@ impl Routes {
                         url,
                         headers,
                         emitted: false,
+                        stage: Stage::Request,
+                        fetched: false,
                     },
                 );
                 index
@@ -587,6 +693,78 @@ impl Routes {
                 "page": { "guid": format!("page@{}", self.target) },
             }),
         }
+    }
+
+    /// A fetch that gave up waiting left its route at this pause, which the route answers now.
+    fn adopt_response(
+        &self,
+        network_id: &str,
+        session: Option<&SessionId>,
+        request_id: &str,
+    ) -> bool {
+        self.with(|state| {
+            state
+                .paused
+                .values_mut()
+                .find(|paused| paused.fetched && paused.network_id == network_id)
+                .map(|paused| {
+                    paused.request_id = request_id.to_string();
+                    paused.session = session.cloned();
+                    paused.stage = Stage::Response;
+                })
+                .is_some()
+        })
+        .unwrap_or(false)
+    }
+
+    /// `Network.loadingFailed` of a request: a fetch waiting on it ends with its error.
+    pub(crate) fn fetch_failed(&self, network_id: &str, error_text: &str) {
+        if let Some(steps) = self
+            .with(|state| state.fetching.get(network_id).cloned())
+            .ok()
+            .flatten()
+        {
+            let _sent = steps.send(FetchStep::Failed(error_text.to_string()));
+        }
+    }
+
+    /// Claims pause `index` for a fetch: its request's next pauses go to the returned receiver.
+    fn begin_fetch(
+        &self,
+        index: u64,
+    ) -> Result<(Paused, mpsc::UnboundedReceiver<FetchStep>), PlaywrightError> {
+        self.with(|state| {
+            if state.answered.contains(&index) {
+                return Err(PlaywrightError::error(ROUTE_HANDLED));
+            }
+            let paused = state
+                .paused
+                .get_mut(&index)
+                .ok_or_else(|| PlaywrightError::error(ROUTE_HANDLED))?;
+            if paused.fetched {
+                return Err(PlaywrightError::error(FETCH_ONCE));
+            }
+            paused.fetched = true;
+            let paused = paused.clone();
+            let (steps, receiver) = mpsc::unbounded_channel();
+            state.fetching.insert(paused.network_id.clone(), steps);
+            Ok((paused, receiver))
+        })?
+    }
+
+    fn end_fetch(&self, network_id: &str) {
+        let _ended = self.with(|state| state.fetching.remove(network_id));
+    }
+
+    /// The fetched response's pause, where the route answers from now on.
+    fn fetched_response(&self, index: u64, session: Option<SessionId>, request_id: &str) {
+        let _moved = self.with(|state| {
+            if let Some(paused) = state.paused.get_mut(&index) {
+                paused.request_id = request_id.to_string();
+                paused.session = session;
+                paused.stage = Stage::Response;
+            }
+        });
     }
 
     /// The run's event for pause `index` is queued: the script owes its answer.
@@ -667,6 +845,19 @@ impl Routes {
                 "Fetch.failRequest",
                 abort_params(&paused, params.error_code)?,
             ),
+            RouteCall::Continue(params) if paused.stage == Stage::Response => {
+                if params.url.is_some()
+                    || params.method.is_some()
+                    || params.headers.is_some()
+                    || params.post_data.is_some()
+                {
+                    return Err(PlaywrightError::error(FETCHED_CONTINUE));
+                }
+                (
+                    "Fetch.continueRequest",
+                    json!({ "requestId": paused.request_id }),
+                )
+            }
             RouteCall::Continue(params) => {
                 let continued = continue_params(&paused, params)?;
                 let _kept = self.with(|state| {
@@ -710,6 +901,211 @@ pub(crate) async fn serve(
         .await?;
     answered(answer.method, sent)?;
     Ok(None)
+}
+
+/// Deviation: `client/network.ts` `Route.fetch`: `return await this._context.request._innerFetch({ request: this.request(), data: options.postData, ...options });`
+/// Playwright makes the routed request again from Node and leaves the browser's paused. Neo
+/// has no Node, and `Network.loadNetworkResource` takes GETs only (measured), so the paused
+/// request itself goes out with the overrides (`interceptResponse`), and pauses again with its
+/// response, which this reads; redirects are followed hop by hop up to `maxRedirects`. So a
+/// route fetches once, the page sees the redirect hops followed, and a network failure fails
+/// the page's request too.
+///
+/// # Errors
+///
+/// As a continue's for the overrides; the network's failure; Playwright's error past
+/// `maxRedirects`; the call's timeout, after which the route still answers at its response.
+pub(crate) async fn fetch(
+    page: &PageSession,
+    index: u64,
+    params: NeoRouteFetchParams,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let (paused, mut steps) = page.routes.begin_fetch(index)?;
+    let _done = FetchDone {
+        routes: &page.routes,
+        network_id: paused.network_id.clone(),
+    };
+    let mut first = continue_params(
+        &paused,
+        RouteContinueParams {
+            url: params.url,
+            method: params.method,
+            headers: params.headers,
+            post_data: params.post_data,
+            is_fallback: false,
+        },
+    )?;
+    let overrides = first
+        .get("headers")
+        .and_then(|headers| serde_json::from_value::<Vec<NameValue>>(headers.clone()).ok());
+    first.insert("requestId".into(), json!(paused.request_id));
+    first.insert("interceptResponse".into(), json!(true));
+    step(
+        page,
+        paused.session.as_ref(),
+        "Fetch.continueRequest",
+        Value::Object(first),
+        progress,
+    )
+    .await?;
+    let follow = params.max_redirects != Some(0);
+    let mut redirects = params.max_redirects.unwrap_or(DEFAULT_MAX_REDIRECTS);
+    loop {
+        let next = progress
+            .race(steps.recv())
+            .await?
+            .ok_or_else(PlaywrightError::target_closed)?;
+        let (session, pause) = match next {
+            FetchStep::Failed(error) => return Err(PlaywrightError::error(error).into()),
+            FetchStep::Paused { session, params } => (session, params),
+        };
+        let request_id = pause["requestId"].as_str().unwrap_or_default().to_string();
+        if !is_response_stage(&pause) {
+            continue_hop(page, session.as_ref(), &pause, overrides.clone(), progress).await?;
+            continue;
+        }
+        if let Some(reason) = pause["responseErrorReason"].as_str() {
+            return Err(PlaywrightError::error(reason).into());
+        }
+        let status = pause["responseStatusCode"].as_i64().unwrap_or_default();
+        let headers: Vec<NameValue> =
+            serde_json::from_value(pause["responseHeaders"].clone()).unwrap_or_default();
+        let redirect = (300..400).contains(&status)
+            && headers
+                .iter()
+                .any(|header| header.name.eq_ignore_ascii_case("location"));
+        if redirect && follow {
+            if redirects == 0 {
+                return Err(PlaywrightError::error(MAX_REDIRECTS).into());
+            }
+            redirects -= 1;
+            step(
+                page,
+                session.as_ref(),
+                "Fetch.continueRequest",
+                json!({ "requestId": request_id }),
+                progress,
+            )
+            .await?;
+            continue;
+        }
+        // The route answers at this pause from now on, whatever the body read does.
+        page.routes
+            .fetched_response(index, session.clone(), &request_id);
+        let body = if redirect {
+            // Platform: Chromium keeps no body for a redirect paused at its response ("Can
+            // only get response body on requests captured after headers received").
+            String::new()
+        } else {
+            response_body(page, session.as_ref(), &request_id, progress).await?
+        };
+        let status_text = pause["responseStatusText"]
+            .as_str()
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| status_text(status))
+            .to_string();
+        let fetched = Fetched {
+            url: pause["request"]["url"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            status,
+            status_text,
+            headers,
+            body,
+        };
+        return serde_json::to_value(fetched)
+            .map(Some)
+            .map_err(|error| PlaywrightError::error(error.to_string()).into());
+    }
+}
+
+/// Neo: a redirect's next hop of a fetch goes out too, with the first hop's header overrides,
+/// and pauses with its response.
+async fn continue_hop(
+    page: &PageSession,
+    session: Option<&SessionId>,
+    pause: &Value,
+    overrides: Option<Vec<NameValue>>,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let mut hop = Map::new();
+    if let Some(overrides) = overrides {
+        let original = headers_array(&pause["request"]["headers"]);
+        hop.insert(
+            "headers".into(),
+            json!(remove_cookie_header(apply_headers_overrides(
+                &original, overrides
+            ))),
+        );
+    }
+    hop.insert("requestId".into(), pause["requestId"].clone());
+    hop.insert("interceptResponse".into(), json!(true));
+    step(
+        page,
+        session,
+        "Fetch.continueRequest",
+        Value::Object(hop),
+        progress,
+    )
+    .await
+}
+
+/// Neo: a fetched response's body, base64, read where it paused.
+async fn response_body(
+    page: &PageSession,
+    session: Option<&SessionId>,
+    request_id: &str,
+    progress: &Progress,
+) -> Result<String, CallError> {
+    let read = progress
+        .race(page.send_to(
+            session,
+            "Fetch.getResponseBody",
+            json!({ "requestId": request_id }),
+        ))
+        .await?
+        .map_err(|error| cdp_error(&error))?;
+    let text = read["body"].as_str().unwrap_or_default();
+    Ok(if read["base64Encoded"].as_bool().unwrap_or(false) {
+        text.to_string()
+    } else {
+        STANDARD.encode(text.as_bytes())
+    })
+}
+
+/// Neo: one `Fetch` command of a fetch, which fails the fetch when the browser refuses it.
+async fn step(
+    page: &PageSession,
+    session: Option<&SessionId>,
+    method: &str,
+    params: Value,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    progress
+        .race(page.send_to(session, method, params))
+        .await?
+        .map(|_| ())
+        .map_err(|error| cdp_error(&error).into())
+}
+
+/// Neo: ends a fetch's claim on its request's pauses, however the fetch ends.
+struct FetchDone<'a> {
+    routes: &'a Routes,
+    network_id: String,
+}
+
+/// Neo: the claim ends with the fetch.
+impl Drop for FetchDone<'_> {
+    fn drop(&mut self) {
+        self.routes.end_fetch(&self.network_id);
+    }
+}
+
+/// Neo: whether a pause is at its response (`interceptResponse`).
+fn is_response_stage(params: &Value) -> bool {
+    params.get("responseStatusCode").is_some() || params.get("responseErrorReason").is_some()
 }
 
 /// Neo: `Page.setNetworkInterceptionPatterns`: the page's patterns, the pauses its handlers
@@ -1127,6 +1523,8 @@ mod tests {
             request_id: "interception-1".into(),
             network_id: "R1".into(),
             channel: Channel::Page,
+            stage: Stage::Request,
+            fetched: false,
             url: url.into(),
             headers: headers
                 .iter()

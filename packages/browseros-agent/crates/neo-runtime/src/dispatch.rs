@@ -325,6 +325,8 @@ enum ObjectCall {
     Network(NetworkCall),
     Dialog(u64, DialogCall),
     Intercepted(u64, RouteCall),
+    /// `route.fetch` (`neo:fetch`) on a paused request.
+    InterceptedFetch(u64, routes::NeoRouteFetchParams),
 }
 
 /// What a message asks for. One variant per served (object, method).
@@ -606,6 +608,16 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         }
         ObjectKind::Dialog(index) => DialogCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
+        ObjectKind::Intercepted(index) if method == routes::FETCH_META.method => {
+            return Routed {
+                meta: Some(&routes::FETCH_META),
+                route: decode_neo_params::<routes::NeoRouteFetchParams>(
+                    params,
+                    &routes::FETCH_META,
+                )
+                .map(|params| ObjectCall::InterceptedFetch(index, params)),
+            };
+        }
         ObjectKind::Intercepted(index) => RouteCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Intercepted(index, call)))),
         ObjectKind::Unknown => {
@@ -876,7 +888,10 @@ async fn serve_call(
     let gate = match (&route, &target) {
         // A route's answer never waits either: the paused request may be what the page's
         // enable, or the script's goto, waits for.
-        (ObjectCall::Dialog(..) | ObjectCall::Intercepted(..), _) => None,
+        (
+            ObjectCall::Dialog(..) | ObjectCall::Intercepted(..) | ObjectCall::InterceptedFetch(..),
+            _,
+        ) => None,
         (ObjectCall::Context(_), _) => Some(ALL_PAGES),
         (_, Some((page, _))) => Some(page.id.as_str()),
         (_, None) => None,
@@ -952,6 +967,12 @@ async fn serve_call(
             Some(session) => routes::serve(&session, index, call, &progress).await,
             None => Err(PlaywrightError::target_closed().into()),
         },
+        (ObjectCall::InterceptedFetch(index, params), Some((page, _))) => {
+            match page.attached_session() {
+                Some(session) => routes::fetch(&session, index, params, &progress).await,
+                None => Err(PlaywrightError::target_closed().into()),
+            }
+        }
         _ => Err(PlaywrightError::target_closed().into()),
     };
     finish_reply(result, reply).await;
@@ -1624,7 +1645,8 @@ mod tests {
             | ObjectCall::Device(_)
             | ObjectCall::Network(_)
             | ObjectCall::Dialog(..)
-            | ObjectCall::Intercepted(..) => {
+            | ObjectCall::Intercepted(..)
+            | ObjectCall::InterceptedFetch(..) => {
                 panic!("a Frame message routed to another object")
             }
         })

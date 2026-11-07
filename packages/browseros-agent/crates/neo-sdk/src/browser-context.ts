@@ -201,6 +201,7 @@ export class BrowserContext extends ChannelOwner {
       route.guid,
       requestFromRecord(this.#connection, request, pageObject),
       this.#connection,
+      this._timeoutSettings,
     )
     this._onRoute(routed, pageObject).catch(reportUncaught)
   }
@@ -232,18 +233,19 @@ export class BrowserContext extends ChannelOwner {
     handler: RouteHandlerCallback,
     options: { times?: number } = {},
   ): Promise<DisposableStub> {
-    return await wrapApiCall('browserContext.route', async () => {
-      this._routes.unshift(new RouteHandler(url, handler, options.times))
-      await this.#updateInterceptionPatterns()
-      return new DisposableStub(() => this.unroute(url, handler))
-    })
+    // A bad glob throws here, prefixed; the call's own errors come back prefixed already.
+    const routeHandler = await wrapApiCall(
+      'browserContext.route',
+      async () => new RouteHandler(url, handler, options.times),
+    )
+    this._routes.unshift(routeHandler)
+    await this.#updateInterceptionPatterns()
+    return new DisposableStub(() => this.unroute(url, handler))
   }
 
   /** Playwright's `BrowserContext.unrouteAll`. */
   async unrouteAll(options?: { behavior?: UnrouteBehavior }): Promise<void> {
-    await wrapApiCall('browserContext.unrouteAll', () =>
-      this.#unrouteInternal(this._routes, [], options?.behavior),
-    )
+    await this.#unrouteInternal(this._routes, [], options?.behavior)
   }
 
   /** Playwright's `BrowserContext.unroute`. */
@@ -251,19 +253,17 @@ export class BrowserContext extends ChannelOwner {
     url: RouteURLMatch,
     handler?: RouteHandlerCallback,
   ): Promise<void> {
-    await wrapApiCall('browserContext.unroute', async () => {
-      const removed: RouteHandler[] = []
-      const remaining: RouteHandler[] = []
-      for (const route of this._routes) {
-        if (
-          urlMatchesEqual(route.url, url) &&
-          (!handler || route.handler === handler)
-        )
-          removed.push(route)
-        else remaining.push(route)
-      }
-      await this.#unrouteInternal(removed, remaining, 'default')
-    })
+    const removed: RouteHandler[] = []
+    const remaining: RouteHandler[] = []
+    for (const route of this._routes) {
+      if (
+        urlMatchesEqual(route.url, url) &&
+        (!handler || route.handler === handler)
+      )
+        removed.push(route)
+      else remaining.push(route)
+    }
+    await this.#unrouteInternal(removed, remaining, 'default')
   }
 
   async #unrouteInternal(
