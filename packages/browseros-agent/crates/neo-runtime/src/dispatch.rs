@@ -96,7 +96,7 @@ use crate::history::{
     NeoWaitForNavigationParams, WaitForNavigationOptions,
 };
 use crate::init_scripts::{
-    self, CONTEXT_ADD_INIT_SCRIPT_META, DISPOSABLE_DISPOSE_META, InitRoute,
+    self, CONTEXT_ADD_INIT_SCRIPT_META, DISPOSABLE_DISPOSE_META, InitRoute, InitScripts,
     PAGE_ADD_INIT_SCRIPT_META,
 };
 use crate::keyboard::KeyboardTab;
@@ -479,7 +479,7 @@ impl Dispatcher {
         let object = self
             .platform_object(&guid)
             .unwrap_or_else(|| object_kind(&guid, target.is_some()));
-        let debugged = debugger_context(&object, target.as_ref());
+        let debugged = debugger_context(&object, target.as_ref(), &inner.run.init_scripts);
         let Routed { meta, route } = route(object, &method, params.clone());
         let route = route.map(|call| inner.ordered(&guid, call));
         let metadata = metadata.unwrap_or(Metadata {
@@ -624,7 +624,8 @@ impl Dispatcher {
             &CallToGate {
                 context,
                 meta,
-                internal: metadata.internal == Some(true),
+                // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection.dispatch`: `if (metainfo?.internal) {`
+                internal: metadata.internal == Some(true) || meta.internal,
                 location: metadata.location.as_ref(),
                 params: entry.params(),
                 title: metadata.title.as_deref(),
@@ -690,6 +691,20 @@ impl Dispatcher {
     }
 }
 
+/// Shows the run's init scripts of `entry`'s context on its `session` (`init_scripts.rs`), before
+/// a call that may navigate it or reach its frames.
+async fn show_scripts(
+    tabs: &Tabs,
+    entry: &PageEntry,
+    session: &Arc<PageSession>,
+    progress: &Progress,
+) {
+    progress
+        .init_scripts()
+        .ensure(tabs.cdp(), session, &entry.context_id())
+        .await;
+}
+
 /// An init script command: `addInitScript` answers its `Disposable`, as Playwright's
 /// `{ disposable }`; `dispose` answers nothing.
 async fn init_call(
@@ -704,17 +719,19 @@ async fn init_call(
             let (page, _) = target.ok_or_else(PlaywrightError::target_closed)?;
             let session = progress.race(tabs.session(&page)).await??;
             progress
-                .race(scripts.add(tabs.cdp(), Some(&session), &source))
+                .race(scripts.add(tabs.cdp(), Some(&session), &page.context_id(), &source))
                 .await??
         }
-        InitRoute::Context(source) => {
+        InitRoute::Context { context, source } => {
             let guid = progress
-                .race(scripts.add(tabs.cdp(), None, &source))
+                .race(scripts.add(tabs.cdp(), None, &context, &source))
                 .await??;
-            // Every page the run has a session on shows it from its next document, a reload
-            // included, not only those a later call touches.
-            for (_, session) in tabs.attached() {
-                scripts.ensure(tabs.cdp(), &session).await;
+            // Every page of the context the run has a session on shows it from its next
+            // document, a reload included, not only those a later call touches.
+            for (entry, session) in tabs.attached() {
+                if entry.context_id() == context {
+                    scripts.ensure(tabs.cdp(), &session, &context).await;
+                }
             }
             guid
         }
@@ -726,6 +743,20 @@ async fn init_call(
     Ok(Some(json!({ "disposable": { "guid": guid } })))
 }
 
+/// `BrowserContext.addInitScript` on `context`, the run's own or one it created: its scripts
+/// reach that context's pages only, as each Playwright context keeps its own.
+fn context_init_script(context: &str, params: Option<Value>) -> Routed {
+    Routed {
+        meta: Some(&CONTEXT_ADD_INIT_SCRIPT_META),
+        route: init_scripts::source_of(&CONTEXT_ADD_INIT_SCRIPT_META, params).map(|source| {
+            ObjectCall::Init(InitRoute::Context {
+                context: context.to_string(),
+                source,
+            })
+        }),
+    }
+}
+
 /// The init script commands (`init_scripts.rs`), served by name ahead of the spec's own; the
 /// object and params back when the message is another command.
 fn route_init(
@@ -734,11 +765,14 @@ fn route_init(
     params: Option<Value>,
 ) -> Result<Routed, (ObjectKind, Option<Value>)> {
     match object {
-        ObjectKind::Context if method == CONTEXT_ADD_INIT_SCRIPT_META.method => Ok(Routed {
-            meta: Some(&CONTEXT_ADD_INIT_SCRIPT_META),
-            route: init_scripts::source_of(&CONTEXT_ADD_INIT_SCRIPT_META, params)
-                .map(|source| ObjectCall::Init(InitRoute::Context(source))),
-        }),
+        ObjectKind::Context if method == CONTEXT_ADD_INIT_SCRIPT_META.method => {
+            Ok(context_init_script(DEFAULT_CONTEXT, params))
+        }
+        ObjectKind::Platform(PlatformObject::CreatedContext(context))
+            if method == CONTEXT_ADD_INIT_SCRIPT_META.method =>
+        {
+            Ok(context_init_script(&context.id, params))
+        }
         ObjectKind::Page if method == PAGE_ADD_INIT_SCRIPT_META.method => Ok(Routed {
             meta: Some(&PAGE_ADD_INIT_SCRIPT_META),
             route: init_scripts::source_of(&PAGE_ADD_INIT_SCRIPT_META, params)
@@ -797,6 +831,7 @@ fn disconnects(route: &ObjectCall) -> bool {
 fn debugger_context(
     object: &ObjectKind,
     target: Option<&(Arc<PageEntry>, FrameScope)>,
+    scripts: &InitScripts,
 ) -> Option<String> {
     match object {
         // A download is the run's own context's: the run's download watcher reports only its
@@ -805,15 +840,13 @@ fn debugger_context(
         ObjectKind::Platform(PlatformObject::CreatedContext(context)) => Some(context.id.clone()),
         ObjectKind::Platform(PlatformObject::Debugger(context)) => Some(context.clone()),
         ObjectKind::Platform(PlatformObject::Browser) | ObjectKind::Unknown => None,
+        // An init script's `Disposable` is its page's or its context's (`init_scripts.rs`).
+        ObjectKind::Disposable(guid) => scripts.owner_context(guid),
         ObjectKind::Page
         | ObjectKind::Frame
         | ObjectKind::Network(..)
         | ObjectKind::Handle(_)
-        | ObjectKind::Dialog(_) => target.map(|(page, _)| {
-            page.context
-                .get()
-                .map_or_else(|| DEFAULT_CONTEXT.to_string(), |context| context.id.clone())
-        }),
+        | ObjectKind::Dialog(_) => target.map(|(page, _)| page.context_id()),
     }
 }
 
@@ -1300,7 +1333,7 @@ async fn serve_call(
             if progress.init_scripts().has_scripts()
                 && let Ok(Ok(session)) = progress.race(tabs.session(&page)).await
             {
-                progress.init_scripts().ensure(tabs.cdp(), &session).await;
+                show_scripts(&tabs, &page, &session, &progress).await;
             }
             tab_calls::page(&tabs, &page, call, &progress).await
         }
@@ -1308,6 +1341,7 @@ async fn serve_call(
             capture::serve(&tabs, &page, scope, call, &progress).await
         }
         (ObjectCall::Frame(route), Some((page, scope))) => {
+            let entry = Arc::clone(&page);
             let session = match page.attached_session() {
                 Some(session) => Ok(session),
                 None => match progress.race(tabs.session(&page)).await {
@@ -1318,7 +1352,7 @@ async fn serve_call(
             match session {
                 Ok(page) => {
                     // A page the run's init scripts have not reached yet gets them first.
-                    progress.init_scripts().ensure(tabs.cdp(), &page).await;
+                    show_scripts(&tabs, &entry, &page, &progress).await;
                     // A page attached just now may have started a context subscription's
                     // enable; the call waits for that too.
                     if reply.events.enabling(page_id(&page))

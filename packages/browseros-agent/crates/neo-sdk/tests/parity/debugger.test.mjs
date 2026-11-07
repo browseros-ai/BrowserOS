@@ -5,7 +5,9 @@
 // resuming a debugger that holds nothing fails.
 //
 // Playwright cases (pin 26137face): `tests/library/debugger.spec.ts` "DB-001 should pause at
-// next and resume" and "DB-002 should pause at pause call"; the not-paused errors are
+// next and resume" and "DB-002 should pause at pause call"; an internal call (an init script's
+// dispose) passes a requested pause as `server/debugger.ts` `Debugger.onBeforeCall` lets it; the
+// not-paused errors are
 // `server/debugger.ts` `Debugger.doResume` and `Debugger.next`. The held call's location names
 // each engine's own script file, so only its shape is compared.
 
@@ -82,6 +84,43 @@ return { own, held, ownDebugger, title }`,
       ownDebugger: null,
       title: 'debugger',
     },
+  },
+  {
+    // `Disposable.dispose` is a protocol-internal method (`protocol/spec/core.yml`), which
+    // Playwright's dispatcher marks internal and its debugger never holds; the pause stays
+    // requested for the next pausable call.
+    name: "an init script's dispose is not held while a pause is requested",
+    source: `${changed}const dbg = context.debugger
+const script = await context.addInitScript(() => { window.disposed = false })
+await dbg.requestPause()
+const disposed = await Promise.race([
+  script.dispose().then(() => 'disposed'),
+  new Promise((resolve) => setTimeout(() => resolve('held'), 3000)),
+])
+const whileDisposed = dbg.pausedDetails()
+const clicked = page.click('button')
+await changed(dbg)
+const held = dbg.pausedDetails().title.startsWith('Click')
+await Promise.all([dbg.resume(), changed(dbg), clicked])
+return { disposed, whileDisposed, held }`,
+    expected: { disposed: 'disposed', whileDisposed: null, held: true },
+  },
+  {
+    // A pause on the dispose call's own line (`runTo`) does not hold it either: Playwright's
+    // debugger returns before matching any location for an internal call. The line is found
+    // from the click the requested pause held, five lines above the dispose.
+    name: "an init script's dispose passes a pause at its own line",
+    source: `${changed}const dbg = context.debugger
+const script = await context.addInitScript(() => { window.disposed = false })
+await dbg.requestPause()
+const clicked = page.click('button')
+await changed(dbg)
+const { file, line } = dbg.pausedDetails().location
+await Promise.all([dbg.runTo({ file, line: line + 5 }), clicked])
+const timer = new Promise((resolve) => setTimeout(() => resolve('held'), 3000))
+const disposed = await Promise.race([script.dispose().then(() => 'disposed'), timer])
+return { disposed, after: dbg.pausedDetails() }`,
+    expected: { disposed: 'disposed', after: null },
   },
   {
     name: 'resuming a debugger that holds nothing fails',

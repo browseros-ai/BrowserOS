@@ -21,6 +21,7 @@ use tracing::debug;
 
 use crate::bridge;
 use crate::browser_calls;
+use crate::debugger::DEFAULT_CONTEXT;
 use crate::dispatch::encode_result;
 use crate::emulation::{self, Size};
 use crate::frames::FrameScope;
@@ -61,7 +62,7 @@ pub(crate) async fn context(
             if scripts.has_scripts() {
                 let session = progress.race(tabs.session(entry)).await??;
                 progress
-                    .race(scripts.show_new(tabs.cdp(), &session))
+                    .race(scripts.show_new(tabs.cdp(), &session, DEFAULT_CONTEXT))
                     .await?;
             }
             let result = BrowserContextNewPageResult {

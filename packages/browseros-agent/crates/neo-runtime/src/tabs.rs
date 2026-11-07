@@ -25,7 +25,7 @@ use tracing::debug;
 use crate::bridge;
 use crate::browser_calls::{self, CreatedContext, CreatedContexts};
 use crate::click::PageError;
-use crate::debugger::Debuggers;
+use crate::debugger::{DEFAULT_CONTEXT, Debuggers};
 use crate::dialogs;
 use crate::discovery::{self, TargetInfo};
 use crate::downloads::{self, Downloads, Opened};
@@ -1199,6 +1199,14 @@ impl Tabs {
 }
 
 impl PageEntry {
+    /// The id of the context the page belongs to: a created context's, or the run's own
+    /// (`debugger::DEFAULT_CONTEXT`).
+    pub(crate) fn context_id(&self) -> String {
+        self.context
+            .get()
+            .map_or_else(|| DEFAULT_CONTEXT.to_string(), |context| context.id.clone())
+    }
+
     pub(crate) fn request_close(&self) {
         if let Ok(mut metadata) = self.frame_metadata.lock() {
             metadata.closing();

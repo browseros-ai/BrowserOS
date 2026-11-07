@@ -373,7 +373,7 @@ async fn new_page(
     // A tab created under a cancelled call stays registered, so the run's outcome lists it and
     // the context's disposal closes it.
     let entry = tabs.register_in_context(PageId::new(created.target_id), true, context)?;
-    progress.race(tabs.session(&entry)).await??;
+    let session = progress.race(tabs.session(&entry)).await??;
     let mut backoff = URL_BACKOFF_START;
     loop {
         let url = progress
@@ -385,6 +385,14 @@ async fn new_page(
         }
         progress.wait(backoff).await?;
         backoff = (backoff * 2).min(URL_BACKOFF_MAX);
+    }
+    // The context's init scripts reach the page's first document before the page is handed
+    // out, as a new page's `FrameSession` runs them in Playwright.
+    let scripts = progress.init_scripts();
+    if scripts.has_scripts() {
+        progress
+            .race(scripts.show_new(tabs.cdp(), &session, &context.id))
+            .await?;
     }
     encode(&BrowserContextNewPageResult {
         page: PageChannel {

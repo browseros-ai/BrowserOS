@@ -1,6 +1,8 @@
 //! Neo: a run's init scripts (`page.addInitScript`, `browserContext.addInitScript`): Playwright's
 //! `Page.addScriptToEvaluateOnNewDocument` on every session that shows a page the run touched,
-//! the tab's own and each out-of-process iframe's. Chromium attaches an iframe of another
+//! the tab's own and each out-of-process iframe's. A script belongs to one context, the run's own
+//! or one `browser.newContext` created, and reaches only that context's pages (a page's script,
+//! only its page), as each Playwright context keeps its own. Chromium attaches an iframe of another
 //! process as it starts and holds it until its scripts are in (`Target.setAutoAttach` with
 //! `waitForDebuggerOnStart`, then `Page.enable`, the scripts and `Runtime.runIfWaitingForDebugger`;
 //! probe C1, `probes-c1.md`), as Playwright's `FrameSession` does. Scripts run in the page's own
@@ -81,8 +83,8 @@ pub(crate) static DISPOSABLE_DISPOSE_META: MethodMeta = MethodMeta {
 pub(crate) enum InitRoute {
     /// `Page.addInitScript`, on the call's page.
     Page(String),
-    /// `BrowserContext.addInitScript`.
-    Context(String),
+    /// `BrowserContext.addInitScript` on `context`, the run's own or one it created.
+    Context { context: String, source: String },
     /// `Disposable.dispose` of the script with this guid.
     Dispose(String),
 }
@@ -125,6 +127,9 @@ pub(crate) struct InitScripts {
     cdp: OnceLock<CdpClient>,
     /// Whether the run added a script, so a call need not touch the pages before.
     any: AtomicBool,
+    /// The context each live script belongs to, by `Disposable` guid, for the dispatcher's
+    /// synchronous choice of the debugger that sees its `dispose`.
+    owners: SyncMutex<HashMap<String, String>>,
     /// Every session that shows a page the run touched, by id: the page's target and the token
     /// its detach cancels. The event reader keeps it without waiting, so a plain lock.
     sessions: SyncMutex<HashMap<String, Watched>>,
@@ -170,11 +175,14 @@ struct Script {
     source: String,
     /// The page's target id for `page.addInitScript`; `None` for the context's.
     page: Option<String>,
+    /// The context the script belongs to: the page's for a page's script.
+    context: String,
 }
 
 impl Script {
-    fn reaches(&self, target: &str) -> bool {
-        self.page.as_deref().is_none_or(|page| page == target)
+    /// Whether the script runs in `target`, a page of `context`.
+    fn reaches(&self, target: &str, context: &str) -> bool {
+        self.context == context && self.page.as_deref().is_none_or(|page| page == target)
     }
 }
 
@@ -182,6 +190,8 @@ impl Script {
 /// out-of-process iframe Chromium attached for it.
 struct ShownPage {
     target: String,
+    /// The context the page belongs to.
+    context: String,
     sessions: Vec<Link>,
 }
 
@@ -203,6 +213,7 @@ impl Default for InitScripts {
             registry: Arc::default(),
             cdp: OnceLock::new(),
             any: AtomicBool::new(false),
+            owners: SyncMutex::default(),
             sessions: SyncMutex::default(),
             stop: CancellationToken::new(),
             ending: CancellationToken::new(),
@@ -220,9 +231,10 @@ impl Drop for InitScripts {
 static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
 
 impl InitScripts {
-    /// `page.addInitScript` (with `page`) or `browserContext.addInitScript` (without): the new
-    /// script's `Disposable` guid. A page's script reaches that page, a context's every page the
-    /// run touches, each from its next document on, as Playwright's do.
+    /// `page.addInitScript` (with `page`) or `browserContext.addInitScript` (without) in
+    /// `context`, the page's for a page's script: the new script's `Disposable` guid. A page's
+    /// script reaches that page, a context's every page of that context the run touches, each
+    /// from its next document on, as Playwright's do.
     ///
     /// # Errors
     ///
@@ -231,13 +243,14 @@ impl InitScripts {
         self: &Arc<Self>,
         cdp: &CdpClient,
         page: Option<&Arc<PageSession>>,
+        context: &str,
         source: &str,
     ) -> Result<String, PlaywrightError> {
         if self.closed() {
             return Err(PlaywrightError::target_closed());
         }
         if let Some(page) = page {
-            self.show(cdp, page, true, false).await?;
+            self.show(cdp, page, context, true, false).await?;
         }
         let guid = format!(
             "{DISPOSABLE_PREFIX}{}.{}",
@@ -248,11 +261,15 @@ impl InitScripts {
             guid: guid.clone(),
             source: wrap(source),
             page: page.map(|page| target_of(page)),
+            context: context.to_string(),
         };
         let mut state = self.state.lock().await;
         self.any.store(true, Ordering::Relaxed);
+        if let Ok(mut owners) = self.owners.lock() {
+            owners.insert(guid.clone(), context.to_string());
+        }
         for shown_page in &state.pages {
-            if !script.reaches(&shown_page.target) {
+            if !script.reaches(&shown_page.target, &shown_page.context) {
                 continue;
             }
             for (index, link) in shown_page.sessions.iter().enumerate() {
@@ -275,24 +292,41 @@ impl InitScripts {
         self.any.load(Ordering::Relaxed)
     }
 
-    /// Shows the run's scripts on `page` once a call touches it: its session gets every script
-    /// that reaches it, and Chromium attaches its out-of-process iframes as they start. Nothing
-    /// happens while the run has no script; every failure leaves the call as it was.
-    pub(crate) async fn ensure(self: &Arc<Self>, cdp: &CdpClient, page: &Arc<PageSession>) {
-        let _shown = self.show(cdp, page, false, false).await;
+    /// The context the live script `guid` belongs to, whose debugger sees its `dispose`.
+    pub(crate) fn owner_context(&self, guid: &str) -> Option<String> {
+        self.owners.lock().ok()?.get(guid).cloned()
+    }
+
+    /// Shows the run's scripts on `page`, of `context`, once a call touches it: its session gets
+    /// every script that reaches it, and Chromium attaches its out-of-process iframes as they
+    /// start. Nothing happens while the run has no script; every failure leaves the call as it
+    /// was.
+    pub(crate) async fn ensure(
+        self: &Arc<Self>,
+        cdp: &CdpClient,
+        page: &Arc<PageSession>,
+        context: &str,
+    ) {
+        let _shown = self.show(cdp, page, context, false, false).await;
     }
 
     /// [`Self::ensure`] for a page the run just opened: its first document already exists, so
     /// each script runs there too, as Playwright's `FrameSession` of a new page runs them
     /// (`runImmediately`).
-    pub(crate) async fn show_new(self: &Arc<Self>, cdp: &CdpClient, page: &Arc<PageSession>) {
-        let _shown = self.show(cdp, page, false, true).await;
+    pub(crate) async fn show_new(
+        self: &Arc<Self>,
+        cdp: &CdpClient,
+        page: &Arc<PageSession>,
+        context: &str,
+    ) {
+        let _shown = self.show(cdp, page, context, false, true).await;
     }
 
     async fn show(
         self: &Arc<Self>,
         cdp: &CdpClient,
         page: &Arc<PageSession>,
+        context: &str,
         always: bool,
         run_immediately: bool,
     ) -> Result<(), PlaywrightError> {
@@ -320,7 +354,7 @@ impl InitScripts {
         for script in state
             .scripts
             .iter()
-            .filter(|script| script.reaches(&target))
+            .filter(|script| script.reaches(&target, context))
         {
             self.install(cdp, &link, &script.guid, &script.source, run_immediately)
                 .await;
@@ -328,6 +362,7 @@ impl InitScripts {
         self.attach_iframes(cdp, &link).await;
         state.pages.push(ShownPage {
             target,
+            context: context.to_string(),
             sessions: vec![link],
         });
         Ok(())
@@ -434,6 +469,9 @@ impl InitScripts {
             return Err(PlaywrightError::target_closed());
         }
         drop(state);
+        if let Ok(mut owners) = self.owners.lock() {
+            owners.remove(guid);
+        }
         let Some(cdp) = self.cdp.get() else {
             return Ok(());
         };
@@ -505,12 +543,16 @@ impl InitScripts {
             let mut state = self.state.lock().await;
             let State { scripts, pages } = &mut *state;
             if let Some(page) = pages.iter_mut().find(|page| page.target == target) {
+                let context = page.context.clone();
                 let _enabled = until_gone(
                     &link.gone,
                     cdp.send("Page.enable", json!({}), Some(&link.session)),
                 )
                 .await;
-                for script in scripts.iter().filter(|script| script.reaches(&target)) {
+                for script in scripts
+                    .iter()
+                    .filter(|script| script.reaches(&target, &context))
+                {
                     self.install(&cdp, &link, &script.guid, &script.source, held)
                         .await;
                 }
@@ -757,18 +799,31 @@ mod tests {
     }
 
     #[test]
-    fn a_page_script_reaches_its_page_and_a_context_script_every_page() {
+    fn a_page_script_reaches_its_page_and_a_context_script_every_page_of_its_context() {
         let page = Script {
             guid: "a".into(),
             source: String::new(),
             page: Some("T1".into()),
+            context: "default".into(),
         };
         let context = Script {
             guid: "b".into(),
             source: String::new(),
             page: None,
+            context: "default".into(),
         };
-        assert!(page.reaches("T1") && !page.reaches("T2"));
-        assert!(context.reaches("T1") && context.reaches("T2"));
+        let created = Script {
+            guid: "c".into(),
+            source: String::new(),
+            page: None,
+            context: "C1".into(),
+        };
+        assert!(page.reaches("T1", "default") && !page.reaches("T2", "default"));
+        assert!(context.reaches("T1", "default") && context.reaches("T2", "default"));
+        assert!(
+            !context.reaches("T3", "C1"),
+            "the run's own context's script stays in it"
+        );
+        assert!(created.reaches("T3", "C1") && !created.reaches("T1", "default"));
     }
 }
