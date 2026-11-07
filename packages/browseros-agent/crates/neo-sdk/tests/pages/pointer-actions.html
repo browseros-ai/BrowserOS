@@ -1,0 +1,44 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Pointer actions</title>
+<style>
+  body { margin: 0; }
+  button { display: block; width: 120px; height: 32px; margin: 8px; }
+  #hidden { display: none; }
+  .cover { position: relative; width: 136px; height: 48px; }
+  #overlay { position: absolute; inset: 0; z-index: 2; }
+</style>
+<button id="target" type="button">Target</button>
+<button id="other" type="button">Other</button>
+<button id="disabled" type="button" disabled>Disabled</button>
+<button id="hidden" type="button">Hidden</button>
+<div class="cover"><button id="covered" type="button">Covered</button><div id="overlay"></div></div>
+<button class="dup" id="first" type="button">Twin</button>
+<button class="dup" id="second" type="button">Twin</button>
+<script>
+// Every pointer, mouse and touch event the page sees, without coordinates or timing, so two
+// engines' runs compare by what reached which element.
+window.__events = []
+const types = [
+  'mouseover', 'mouseenter', 'mousemove', 'mousedown', 'mouseup', 'click', 'dblclick',
+  'contextmenu', 'auxclick', 'pointerdown', 'pointerup', 'touchstart', 'touchend',
+]
+for (const type of types) {
+  document.addEventListener(type, (event) => {
+    window.__events.push({
+      type,
+      target: event.target.id || event.target.nodeName.toLowerCase(),
+      isTrusted: event.isTrusted,
+      button: event.button ?? null,
+      detail: event.detail,
+      pointerType: event.pointerType ?? null,
+    })
+  }, true)
+}
+// Keep the context menu of a right button out of the way of later input.
+document.addEventListener('contextmenu', (event) => event.preventDefault())
+window.__facts = () => ({
+  hovered: [...document.querySelectorAll(':hover')].map((element) => element.id).filter(Boolean),
+  events: window.__events,
+})
+</script>

@@ -1,0 +1,18 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>dialogs</title>
+<script>
+// dialog.test.mjs serves this page. Each button opens one dialog and writes what it returned
+// into #result as JSON (`"undefined"` for alert's undefined), so the test reads how the dialog
+// was answered; window.__answers lists every answer.
+window.__answers = [];
+window.__show = (value) => {
+  const json = JSON.stringify(value === undefined ? 'undefined' : value);
+  __answers.push(json);
+  document.querySelector('#result').textContent = json;
+};
+</script></head><body>
+<button type="button" id="alert" onclick="__show(alert('yo'))">Alert</button>
+<button type="button" id="confirm" onclick="__show(confirm('boolean?'))">Confirm</button>
+<button type="button" id="prompt" onclick="__show(prompt('question?', 'yes.'))">Prompt</button>
+<button type="button" id="prompt-bare" onclick="__show(prompt('question?'))">Bare prompt</button>
+<output id="result"></output>
+</body></html>

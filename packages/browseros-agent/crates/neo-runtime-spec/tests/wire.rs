@@ -53,9 +53,9 @@ fn served_calls_decode_by_method_name() {
     assert!(matches!(title, FrameCall::Title(_)), "{title:?}");
     assert_eq!(title.meta().group, Some(MethodGroup::Getter));
 
-    let unknown = FrameCall::decode("dblclick", Some(json!({"selector": "#a"}))).unwrap_err();
+    let unknown = FrameCall::decode("expect", Some(json!({"selector": "#a"}))).unwrap_err();
     assert!(
-        matches!(&unknown, CallDecodeError::UnknownMethod { interface: "Frame", method } if method == "dblclick"),
+        matches!(&unknown, CallDecodeError::UnknownMethod { interface: "Frame", method } if method == "expect"),
         "{unknown:?}"
     );
     let invalid = FrameCall::decode("goto", Some(json!({"url": "x", "waitUntil": "later"})));

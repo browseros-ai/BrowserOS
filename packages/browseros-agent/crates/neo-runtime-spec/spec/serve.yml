@@ -22,6 +22,21 @@ interfaces:
     - close
     - runBeforeUnload
     - bringToFront
+    # History navigations answer the new document's `Response` as `Frame.goto` does, or `{}`
+    # where Playwright's has none: no history entry, a same-document entry, a restored document.
+    - reload
+    - goBack
+    - goForward
+    # The page's console and page-error history (`page.consoleMessages()`, `page.pageErrors()`).
+    # A message's `args` are JSHandles, which are not a key here, so they always travel empty.
+    - consoleMessages
+    - pageErrors
+    - clearConsoleMessages
+    - clearPageErrors
+  # A JavaScript dialog the run's `dialog` event handed out.
+  Dialog:
+    - accept
+    - dismiss
   # The objects behind `goto`'s answer: its request, every redirect hop, and their responses.
   Request:
     - response
@@ -39,6 +54,10 @@ interfaces:
     - textContent
     - ariaSnapshot
     - click
+    # Pointer actions over click's policy (neo-runtime `click.rs`), each with its own name.
+    - dblclick
+    - hover
+    - tap
     - fill
     - press
     - inputValue
@@ -54,7 +73,13 @@ interfaces:
     - innerText
     - getAttribute
     - queryCount
-    - evalOnSelectorAll
+    # Element reads and states (states.rs, reads.rs): Playwright's `_elementState`,
+    # `isHidden` (`!isVisible`, one read) and `innerHTML`.
+    - isEnabled
+    - isDisabled
+    - isEditable
+    - isHidden
+    - innerHTML
 
 # Named Playwright types the call bridge needs outside any command. `Metadata` is the `metadata`
 # of every protocol call; it carries the call's timeout, which is never a command parameter.

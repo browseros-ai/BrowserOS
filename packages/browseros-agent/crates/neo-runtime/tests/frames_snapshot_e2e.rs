@@ -556,3 +556,173 @@ async fn tests_that_same_process_frame_refs_act_in_a_later_run() {
     );
     tab.close().await;
 }
+
+/// Neo: A scoped main-frame section contains a remote form, with decoys outside the section.
+const SCOPED_TOP: &str = r#"<!doctype html><title>Scoped frames</title>
+<h1>Parent</h1><label>Email<input id=parent-email value=parent></label>
+<button onclick="document.getElementById('parent-status').textContent='changed'">Outside action</button>
+<output id=parent-status>idle</output>
+<main id=section><h2>Account</h2><iframe id=embedded width=520 height=260></iframe></main>
+<script>
+window.__log=[];
+addEventListener('message',event=>window.__log.push(event.data));
+document.getElementById('embedded').src='http://localhost:'+location.port+'/snapshot-form.html';
+</script>"#;
+
+/// Neo: Snapshotting the form excludes its sibling text; only a ref click changes its output.
+const SCOPED_CHILD: &str = r#"<!doctype html><title>Scoped child</title>
+<form aria-label="Remote account"><label>Email<input value=seed></label>
+<button type=button onclick="document.getElementById('result').textContent='Remote clicked';parent.postMessage('scoped:click','*')">Remote action</button></form>
+<p id=result>idle</p><aside>Excluded child text</aside>"#;
+
+async fn open_scoped() -> Option<Tab> {
+    let binary = browser::e2e_browser()?;
+    let tab = Tab::open(
+        binary,
+        Fixture {
+            pages: vec![
+                ("/scoped.html".into(), SCOPED_TOP.into()),
+                ("/snapshot-form.html".into(), SCOPED_CHILD.into()),
+            ],
+            ..Fixture::default()
+        },
+        "/scoped.html",
+    )
+    .await;
+    wait_for(&tab, "document.readyState === 'complete'").await;
+    Some(tab)
+}
+
+async fn assert_scoped_parent_untouched(tab: &Tab) {
+    assert_eq!(
+        tab.evaluate("[document.getElementById('parent-email').value,document.getElementById('parent-status').textContent]").await,
+        json!(["parent", "idle"]),
+        "the parent decoy controls keep their values",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_scoped_default_snapshots_enter_an_oopif_without_touching_the_parent() {
+    let Some(tab) = open_scoped().await else {
+        return;
+    };
+    let outcome = run(
+        &tab,
+        r"
+        return await page.frameLocator('#embedded').locator('form').ariaSnapshot();
+    ",
+    )
+    .await;
+    let snapshot = value(&outcome);
+    let yaml = snapshot.as_str().unwrap();
+    assert!(
+        yaml.contains("Remote account")
+            && yaml.contains("textbox \"Email\"")
+            && yaml.contains("button \"Remote action\""),
+        "{yaml}"
+    );
+    assert!(
+        !yaml.contains("Parent")
+            && !yaml.contains("Outside")
+            && !yaml.contains("Excluded")
+            && !yaml.contains("[ref="),
+        "{yaml}"
+    );
+    assert_scoped_parent_untouched(&tab).await;
+    assert!(reports(&tab).await.is_empty());
+    let targets = tab
+        .cdp
+        .send(
+            "Target.getTargets",
+            json!({"filter":[{"type":"iframe"}]}),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        targets["targetInfos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|target| target["type"] == "iframe"
+                && target["url"]
+                    .as_str()
+                    .is_some_and(|url| url.ends_with("/snapshot-form.html"))),
+        "{targets}"
+    );
+    tab.close().await;
+}
+
+/// A scoped AI snapshot inside a child frame answers refs behind the iframe's path from the main
+/// frame, as Playwright's answers page-wide refs: its button's ref clicks that button, and the
+/// parent's refs from an earlier page snapshot keep resolving.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_scoped_ai_snapshots_inside_a_child_frame_answer_page_wide_refs() {
+    let Some(tab) = open_scoped().await else {
+        return;
+    };
+    let outcome = run(&tab, r#"
+        const refOf = (yaml, text) => /\[ref=([a-z0-9]+)\]/.exec(yaml.split('\n').find(line=>line.includes(text)) ?? '')?.[1];
+        const full = await page.ariaSnapshot({mode:'ai'});
+        const outside = refOf(full, 'button "Outside action"');
+        const iframe = refOf(full, '- iframe ');
+        const yaml = await page.frameLocator('#embedded').locator('form').ariaSnapshot({mode:'ai'});
+        const remote = refOf(yaml, 'button "Remote action"');
+        if (!remote) throw new Error('The scoped snapshot omitted the remote control');
+        await page.locator('aria-ref='+remote).click();
+        return {
+          yaml, iframe,
+          outside: await page.locator('aria-ref='+outside).count(),
+          result: await page.frameLocator('#embedded').locator('#result').textContent(),
+        };
+    "#).await;
+    let result = value(&outcome);
+    let yaml = result["yaml"].as_str().unwrap();
+    assert!(
+        yaml.contains("Remote account") && !yaml.contains("Excluded child text"),
+        "{yaml}"
+    );
+    let prefix = path_prefix(result["iframe"].as_str().unwrap());
+    for line in yaml.lines().filter(|line| line.contains("[ref=")) {
+        assert!(
+            line.contains(&format!("[ref={prefix}e")),
+            "{line:?} lacks the frame's path {prefix}:\n{yaml}"
+        );
+    }
+    assert_eq!(
+        result["outside"], 1,
+        "the parent's refs keep their lifetime"
+    );
+    assert_eq!(result["result"], "Remote clicked");
+    assert_scoped_parent_untouched(&tab).await;
+    wait_for(&tab, "window.__log.includes('scoped:click')").await;
+    assert_eq!(reports(&tab).await, ["scoped:click"]);
+    tab.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_scoped_main_ai_snapshots_stitch_frames_and_their_refs_act() {
+    let Some(tab) = open_scoped().await else {
+        return;
+    };
+    let outcome = run(&tab, r#"
+        const yaml = await page.locator('#section').ariaSnapshot({mode:'ai'});
+        const line = yaml.split('\n').find(line=>line.includes('button "Remote action"'));
+        const ref = /\[ref=([a-z0-9]+)\]/.exec(line ?? '')?.[1];
+        if (!ref) throw new Error('The scoped snapshot omitted the remote control');
+        await page.locator('aria-ref='+ref).click();
+        return {yaml, ref, result:await page.frameLocator('#embedded').locator('#result').textContent()};
+    "#).await;
+    let result = value(&outcome);
+    let yaml = result["yaml"].as_str().unwrap();
+    assert!(
+        yaml.contains("Account") && !yaml.contains("Outside action"),
+        "{yaml}"
+    );
+    assert!(assert_path_refs(yaml) > 0, "{yaml}");
+    assert_eq!(result["result"], "Remote clicked");
+    assert_scoped_parent_untouched(&tab).await;
+    wait_for(&tab, "window.__log.includes('scoped:click')").await;
+    assert_eq!(reports(&tab).await, ["scoped:click"]);
+    tab.close().await;
+}

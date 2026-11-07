@@ -202,16 +202,30 @@ Injected:
       returns:
         value: boolean
 
-    # Resolves and marks the first match, then reads its checked state following labels,
-    # for `Frame.isChecked`. Throws for anything other than a checkbox or radio control.
-    isChecked:
+    # `frames.ts` `_elementState`: resolves and marks the first match, then reads one state with
+    # `InjectedScript.elementState`, following labels, for `Frame.isChecked`, `Frame.isEnabled`,
+    # `Frame.isDisabled` and `Frame.isEditable`. Throws, as Playwright's page code does, for a
+    # state the element cannot have: `checked` on anything but a checkbox or radio control,
+    # `editable` on an element that is not a text control and has no role allowing
+    # `aria-readonly`.
+    elementStateOnSelector:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+        state: ReadableElementState
+      returns:
+        # Absent while nothing matches; neo-runtime keeps polling until the deadline.
+        matched: ElementStateMatch?
+
+    # `frames.ts` `innerHTML`: resolve and mark the first match, read its `innerHTML`.
+    innerHTML:
       internal: true
       parameters:
         selector: string
         strict: boolean
       returns:
-        # Absent while nothing matches; neo-runtime keeps polling until the deadline.
-        matched: CheckedStateMatch?
+        matched: TextMatch?
 
     # Resolves one frame chunk and snapshots its first match with
     # `InjectedScript.ariaSnapshotJSON`, for `Frame.ariaSnapshot`, which also records the tree
@@ -253,6 +267,35 @@ Injected:
         element: Element?
         # Visibility of the first iframe owner, false when nothing matched.
         visible: boolean
+
+    # Finds the `<iframe>` or `<frame>` whose aria ref is `ref`, for one hop of a main-rooted
+    # path ref (`aria-ref=f7e2` enters the frame of the owner named `e7`). The ref is the one
+    # Playwright's snapshots keep on the element (`_ariaRef`), so the hop does not depend on the
+    # document's last snapshot: a later snapshot of another part of that document leaves the
+    # path routable, as a Playwright frame-numbered ref stays. An owner `frameOwnerRef` named is
+    # found even where no selector reaches (inside a closed shadow root).
+    frameOwnerByRef:
+      internal: true
+      parameters:
+        ref: string
+      returns:
+        # The owner, in the caller's object group. Absent when no owner has that ref.
+        element: Element?
+        # Visibility of the owner, false when none matched.
+        visible: boolean
+
+    # The aria ref of one iframe owner, for the path in front of a child frame's AI snapshot
+    # refs: the ref its document's snapshots give it (kept on the element, or given now by
+    # building the aria tree of the owner alone). The document's last snapshot is left as it
+    # was, so no ref of the caller's own snapshots changes lifetime.
+    frameOwnerRef:
+      internal: true
+      parameters:
+        element: Element
+      returns:
+        # Absent when Playwright's AI snapshots give the owner no ref: it is not visible or
+        # receives no pointer events.
+        ref: string?
 
     # Names a selector the way Playwright's call log does, for a click's first log line
     # `waiting for <locator>`, and reports a selector the page cannot parse. Playwright computes
@@ -299,7 +342,7 @@ Injected:
         states:
           type: array
           items: ElementState
-        # Neo resolves in the main frame only, so neo-runtime always sends `true`.
+        # True when every iframe owner crossed by the selector is visible; true without hops.
         frameVisible: boolean
       returns:
         # Absent when every state holds.
@@ -351,13 +394,15 @@ Injected:
       returns:
         outcome: HitTargetOutcome
 
-    # `InjectedScript.setupHitTargetInterceptor(element, 'mouse', hitPoint, blockAllEvents)`.
+    # `InjectedScript.setupHitTargetInterceptor(element, action, hitPoint, blockAllEvents)`.
     # It retargets to the closest button or link, checks the hit point once, and arms the
-    # injected script's single hit-target slot for the coming mouse events.
+    # injected script's single hit-target slot for the coming input of `action`.
     setupHitTargetInterceptor:
       internal: true
       parameters:
         element: Element
+        # Which events the interceptor judges: Playwright's `actionType` (`dom.ts`).
+        action: HitTargetAction
         # The click point; absent skips the preliminary hit check.
         hitPoint: Point?
         # Playwright's `trial`: block every intercepted event, hit or not.
@@ -443,16 +488,6 @@ Injected:
         selector: string
       returns:
         value: int
-
-    # `locator.ts` `allTextContents`: one snapshot of every match's text in document order.
-    allTextContents:
-      internal: true
-      parameters:
-        selector: string
-      returns:
-        values:
-          type: array
-          items: string
 
 # `_fill` returns a string or the first missing state, without mutating when not ready.
 FormFillOutcome:
@@ -576,6 +611,17 @@ ScrollAlignment:
   - end
   - nearest
 
+# The input a hit-target interceptor judges, as `InjectedScript.setupHitTargetInterceptor` takes
+# it: `hover` judges `mousemove`, `tap` the pointer and touch events, `mouse` the presses and
+# clicks, and `drag` arms nothing.
+HitTargetAction:
+  type: enum
+  literals:
+  - hover
+  - tap
+  - mouse
+  - drag
+
 # Not armed, or armed. Not armed is a string: `error:notconnected`, or the `previewNode` of the
 # element covering the point (`<div id="overlay"></div>`), exactly as Playwright's
 # `setupHitTargetInterceptor` returns it; Playwright's `dom.ts` compares the same literal.
@@ -613,12 +659,22 @@ SelectorMatch:
     visible: boolean
     preview: string
 
-# The first match's checked state and preview, for `isChecked`.
-CheckedStateMatch:
+# The states `frames.ts` `_elementState` reads, one per `Frame.is*` command that waits for a
+# match.
+ReadableElementState:
+  type: enum
+  literals:
+  - checked
+  - enabled
+  - disabled
+  - editable
+
+# The first match's `ElementStateQueryResult` for one state, and its preview.
+ElementStateMatch:
   type: object
   properties:
-    # `ElementStateQueryResult.matches` for `checked`.
-    checked: boolean
+    # Whether the element is in the state asked for.
+    matches: boolean
     # `error:notconnected` ends the call as Playwright's `throwElementIsNotAttached` does.
     received: string?
     preview: string

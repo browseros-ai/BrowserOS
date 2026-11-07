@@ -9,6 +9,7 @@
 
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { createRun } from '../../src/index'
+import { eventless } from './bridge-stub'
 
 type Sent = {
   id: number
@@ -25,14 +26,14 @@ let replies: Reply[] = []
 beforeEach(() => {
   sent = []
   replies = []
-  ;(globalThis as Record<string, unknown>).__neo_runtime = {
+  ;(globalThis as Record<string, unknown>).__neo_runtime = eventless({
     get: () => JSON.stringify(null),
     call: async (message: string) => {
       const parsed: Sent = JSON.parse(message)
       sent.push(parsed)
       return JSON.stringify({ id: parsed.id, result: {}, ...replies.shift() })
     },
-  }
+  })
 })
 
 function run() {
@@ -193,19 +194,24 @@ describe('waitForURL', () => {
     expect(sent).toEqual([])
   })
 
-  test('a predicate function is refused before anything is sent, naming the limit', async () => {
+  test('a predicate function steps a navigation cursor (tests/unit/history.test.ts)', async () => {
     const { page } = run()
+    replies.push({ result: { cursor: 1, index: 0, url: 'http://a.test/done' } })
+    // The stub parses no URL, so no navigation is accepted before the timeout's step fails.
+    replies.push({
+      error: {
+        error: { name: 'TimeoutError', message: 'Timeout 1ms exceeded.' },
+      },
+    })
     const error = await page
-      .waitForURL(((url: URL) => url.pathname === '/done') as never)
+      .waitForURL(() => true, { timeout: 1000 })
       .catch((e) => e)
-    expect(error.name).toBe('Error')
-    expect(error.message).toContain('predicate')
-    const frameError = await page
-      .mainFrame()
-      .waitForURL((() => true) as never)
-      .catch((e) => e)
-    expect(frameError.name).toBe('Error')
-    expect(sent).toEqual([])
+    expect(error.name).toBe('TimeoutError')
+    expect(sent.map(({ method }) => method)).toEqual([
+      'neo:nextNavigation',
+      'neo:nextNavigation',
+      'neo:releaseNavigation',
+    ])
   })
 
   test('any other url is refused before anything is sent', async () => {
