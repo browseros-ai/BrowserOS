@@ -2541,3 +2541,87 @@ mod tests {
         assert_eq!(reply, json!({"id": 7, "result": {"value": 3}}));
     }
 }
+
+#[cfg(test)]
+mod review_abort_priority {
+    use super::*;
+    use crate::deadline::Deadline;
+    use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+    use crate::discovery::Discovery;
+    use crate::page::TabInputs;
+    use crate::run::PageId;
+    use tokio::runtime::Handle;
+    use tokio_util::task::TaskTracker;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_run_end_wins_over_an_abort_before_the_handler_starts() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let run = RunScope::new(
+            Deadline::new(Duration::from_secs(30), CancellationToken::new()),
+            tasks.clone(),
+        );
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            Discovery::default(),
+            tasks,
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("opening the fake tab: {error:?}"));
+        let (page, scope) = tabs
+            .resolve(&format!("frame@{PAGE}"))
+            .unwrap_or_else(|| panic!("the fake tab must have a main frame"));
+        let entry = Arc::new(CallEntry::new(CallStart {
+            call_id: 1,
+            guid: format!("frame@{PAGE}"),
+            method: "click".to_string(),
+            title: Some("Click"),
+            params: json!({"selector":"#nothing"}),
+            location: None,
+            input: true,
+        }));
+        let trace = Trace::default();
+        trace.push(Arc::clone(&entry));
+        let progress = Progress::new(Arc::clone(&entry), 0.0, run.clone(), page.closed.clone());
+        let route = route(
+            ObjectKind::Frame,
+            "click",
+            Some(json!({"selector":"#nothing"})),
+        )
+        .route
+        .unwrap_or_else(|error| panic!("decoding the click: {error:?}"));
+        let (reply, _receiver) = oneshot::channel();
+        let call = serve_call(
+            tabs,
+            Arc::default(),
+            Some((page, scope)),
+            route,
+            progress,
+            CallReply {
+                entry: Arc::clone(&entry),
+                trace: trace.clone(),
+                id: json!(1),
+                reply,
+                events: EventHub::default(),
+                share: None,
+                ending: None,
+                abortable: None,
+            },
+        );
+        // Neither stop can race scheduling: the handler future has never been polled.
+        entry.abort("stop call".to_string());
+        run.end(RunEnd::Settled);
+        call.await;
+        let (records, _) = trace.take(RunEnd::Settled);
+        assert_eq!(
+            records[0].result,
+            CallResult::Unfinished {
+                reason: RunEnd::Settled
+            },
+            "run end has priority over the signal abort at admission"
+        );
+    }
+}
