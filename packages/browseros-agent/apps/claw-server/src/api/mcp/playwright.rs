@@ -202,10 +202,10 @@ impl PlaywrightService {
         }
         // The runtime receives the remaining budget after connect/create. Keep the public
         // timeout message in terms of the whole request's budget.
-        if outcome.status == RunStatus::Timeout {
-            if let Some(error) = &mut outcome.error {
-                error.message = format!("Timeout {timeout_ms}ms exceeded.");
-            }
+        if outcome.status == RunStatus::Timeout
+            && let Some(error) = &mut outcome.error
+        {
+            error.message = format!("Timeout {timeout_ms}ms exceeded.");
         }
         let mut result = report(outcome);
         // Best effort, bounded to 500 ms; cancellation must not start another CDP read.
