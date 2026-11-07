@@ -9029,7 +9029,10 @@ var glue = {
         throw injected.createStacklessError(`Selector "${selector}" resolved to ${injected.previewNode(element2)}, <iframe> was expected`);
     }
     const element = elements[0];
-    return { element, visible: !!element && injected.utils.isElementVisible(element) };
+    return {
+      element,
+      visible: !!element && injected.utils.isElementVisible(element)
+    };
   },
   describeSelector: (injected, { selector }) => {
     const locator = injected.utils.asLocator("javascript", selector);

@@ -4,6 +4,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use neo_runtime_spec::injected::InjectedFrameOwnerParams;
+use neo_runtime_spec::{Element, Handle};
 use serde_json::{Value, json};
 
 use crate::click::PageError;
@@ -231,6 +232,15 @@ pub(crate) struct Located<C = Arc<FrameContext>> {
     pub(crate) frame: C,
     pub(crate) selector: String,
     pub(crate) frame_visible: bool,
+    pub(crate) owners: Vec<FrameOwner>,
+}
+
+/// A resolved owner stays in its parent world until the action has finished using its geometry.
+#[derive(Clone)]
+pub(crate) struct FrameOwner {
+    pub(crate) frame: Arc<FrameContext>,
+    pub(crate) element: Handle<Element>,
+    _group: Arc<GroupGuard>,
 }
 
 pub(crate) async fn locate(
@@ -244,16 +254,15 @@ pub(crate) async fn locate(
     } else {
         tab.context().await?
     };
-    follow(
-        &mut Resolver {
-            tab,
-            groups: Vec::new(),
-        },
-        initial,
-        chunks,
-        strict,
-    )
-    .await
+    let mut resolver = Resolver {
+        tab,
+        owners: Vec::new(),
+    };
+    let mut located = follow(&mut resolver, initial, chunks, strict).await?;
+    if let Some(located) = &mut located {
+        located.owners = resolver.owners;
+    }
+    Ok(located)
 }
 
 /// The hop seam keeps the traversal's retry/error rules testable without CDP or a browser.
@@ -286,12 +295,13 @@ async fn follow<T: Hops>(
         frame,
         selector: chunks.last,
         frame_visible,
+        owners: Vec::new(),
     }))
 }
 
 struct Resolver<'a> {
     tab: &'a FrameTab,
-    groups: Vec<GroupGuard>,
+    owners: Vec<FrameOwner>,
 }
 
 impl Hops for Resolver<'_> {
@@ -313,7 +323,6 @@ impl Hops for Resolver<'_> {
                 },
             )
             .await?;
-        self.groups.push(group);
         let Some(element) = owner.element else {
             return Ok(None);
         };
@@ -335,6 +344,11 @@ impl Hops for Resolver<'_> {
             return Ok(None);
         };
         let child = self.tab.frames.context(id, Some(&frame.host)).await?;
+        self.owners.push(FrameOwner {
+            frame,
+            element,
+            _group: Arc::new(group),
+        });
         Ok(Some((child, owner.visible)))
     }
 }

@@ -7,9 +7,13 @@
 #[path = "support/browser.rs"]
 mod browser;
 
+use std::time::Duration;
+
 use browser::{Fixture, Tab};
+use browseros_cdp::SessionId;
 use neo_runtime::{RunOutcome, RunStatus};
-use serde_json::json;
+use serde_json::{Value, json};
+use tokio::time;
 
 const CONTROLS: &str = r#"
 <title>Frame form</title>
@@ -26,29 +30,35 @@ async fn open() -> Option<Tab> {
     let binary = browser::e2e_browser()?;
     let top = format!(
         r"{CONTROLS}<iframe id=same name=same src=/same.html></iframe><iframe id=sibling src=/leaf.html></iframe><iframe id=cross name=cross></iframe>
-<script>cross.src = 'http://localhost:' + location.port + '/cross.html'</script>"
+<script>document.getElementById('cross').src = 'http://localhost:' + location.port + '/cross.html'</script>"
     );
     let same = format!("{CONTROLS}<iframe id=nested src=/leaf.html></iframe>");
     let cross = format!(
         r"{CONTROLS}<iframe id=nested name=nested></iframe><iframe id=local src=/leaf.html></iframe>
-<script>nested.src = 'http://127.0.0.1:' + location.port + '/leaf.html'</script>"
+<script>document.getElementById('nested').src = 'http://127.0.0.1:' + location.port + '/leaf.html'</script>"
     );
-    Some(
-        Tab::open(
-            binary,
-            Fixture {
-                pages: vec![
-                    ("/top.html".into(), top),
-                    ("/same.html".into(), same),
-                    ("/cross.html".into(), cross),
-                    ("/leaf.html".into(), CONTROLS.into()),
-                ],
-                ..Fixture::default()
-            },
-            "/top.html",
-        )
-        .await,
+    let tab = Tab::open(
+        binary,
+        Fixture {
+            pages: vec![
+                ("/top.html".into(), top),
+                ("/same.html".into(), same),
+                ("/cross.html".into(), cross),
+                ("/leaf.html".into(), CONTROLS.into()),
+            ],
+            ..Fixture::default()
+        },
+        "/top.html",
     )
+    .await;
+    time::timeout(Duration::from_secs(10), async {
+        while tab.evaluate("document.readyState").await != "complete" {
+            time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|error| panic!("fixture did not finish loading: {error}"));
+    Some(tab)
 }
 
 async fn run(tab: &Tab, source: &str) -> RunOutcome {
@@ -68,7 +78,7 @@ async fn exercise(tab: &Tab, scope: &str) {
     let outcome = run(tab, &format!(r#"
         const inFrame = selector => page.locator({prefix} + selector);
         const email = inFrame('internal:label="Email"i');
-        await email.fill('alice@example.com');
+        await email.fill('alice@example.com', {{timeout:3000}});
         await email.press('End');
         await email.press('!');
         const value = await email.inputValue();
@@ -141,4 +151,74 @@ async fn hop_errors_are_errors_and_missing_iframes_wait() {
         outcome.value,
         Some(json!(["Error", "Error", "TimeoutError"]))
     );
+}
+
+async fn iframe_targets(tab: &Tab) -> Vec<Value> {
+    let targets = tab
+        .cdp
+        .send("Target.getTargets", json!({"filter":[{}]}), None)
+        .await
+        .unwrap_or_else(|error| panic!("targets: {error}"));
+    targets["targetInfos"]
+        .as_array()
+        .unwrap_or_else(|| panic!("targets: {targets}"))
+        .iter()
+        .filter(|target| target["type"] == "iframe")
+        .cloned()
+        .collect()
+}
+
+async fn cross_target(tab: &Tab) -> Value {
+    time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(target) = iframe_targets(tab).await.into_iter().find(|target| {
+                target["url"]
+                    .as_str()
+                    .is_some_and(|url| url.ends_with("/cross.html"))
+            }) {
+                return target;
+            }
+            time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|error| panic!("OOPIF target did not appear: {error}"))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn oopifs_and_nested_mixed_hosts_use_every_existing_operation() {
+    let Some(tab) = open().await else { return };
+    let target = cross_target(&tab).await;
+    assert!(
+        target["url"]
+            .as_str()
+            .unwrap()
+            .starts_with("http://localhost:")
+    );
+    exercise(&tab, "#cross").await;
+    exercise(&tab, &format!("#cross{HOP}#nested")).await;
+    exercise(&tab, &format!("#cross{HOP}#local")).await;
+    let untouched = tab.evaluate("[document.querySelector('#email').value, document.querySelector('#same').contentDocument.querySelector('#email').value, document.querySelector('#sibling').contentDocument.querySelector('#email').value]").await;
+    let attached = tab
+        .cdp
+        .send(
+            "Target.attachToTarget",
+            json!({"targetId":target["targetId"],"flatten":true}),
+            None,
+        )
+        .await
+        .expect("driver child attach");
+    let driver = SessionId::from(attached["sessionId"].as_str().unwrap());
+    let edited = tab
+        .cdp
+        .send(
+            "Runtime.evaluate",
+            json!({"expression":"document.querySelector('#email').value","returnByValue":true}),
+            Some(&driver),
+        )
+        .await
+        .expect("read OOPIF edit");
+    tab.close().await;
+    assert_eq!(edited["result"]["value"], "alice@example.com!");
+    assert_eq!(untouched, json!(["seed", "seed", "seed"]));
 }

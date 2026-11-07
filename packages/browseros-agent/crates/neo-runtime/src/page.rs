@@ -68,7 +68,7 @@ use crate::click::{
     Arming, Geometry, MouseButton, MouseClick, NotReady, PageError, PressReport, Resolved, Scroll,
     SelectorFacts, StatesCheck, Tab, Verdict,
 };
-use crate::frame_selector;
+use crate::frame_selector::{self, FrameOwner};
 use crate::frames::{FrameContext, FrameScope, Frames};
 use crate::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
@@ -315,6 +315,7 @@ impl PageSession {
             Arc::clone(&session),
             page.as_str().to_string(),
             Arc::clone(&world),
+            tasks.clone(),
         ));
         let (state_updates, state) = watch::channel(PageState::default());
         let (navigations, _) = broadcast::channel(4096);
@@ -980,6 +981,7 @@ pub(crate) struct ResolvedElement {
     _group: Arc<GroupGuard>,
     pub(crate) frame: Arc<FrameContext>,
     frame_visible: bool,
+    owners: Vec<FrameOwner>,
 }
 
 impl ResolvedElement {
@@ -1142,6 +1144,7 @@ impl Tab for FrameTab {
                 _group: Arc::new(group),
                 frame: located.frame,
                 frame_visible: located.frame_visible,
+                owners: located.owners,
             },
             count: u32::try_from(resolved.count).unwrap_or(u32::MAX),
             preview: resolved.preview.unwrap_or_default(),
@@ -1247,55 +1250,91 @@ impl Tab for FrameTab {
         element: &ResolvedElement,
         position: Option<&Point>,
     ) -> Result<Geometry, PageError> {
-        let object_id = Some(element.handle.id().object_id().to_string());
-        let session = Some(&self.session.id);
+        // Scrolling a remote descendant also scrolls its owners. Its own local rect can
+        // stay still while those parent documents are moving; wait for those rects before
+        // combining coordinates from separate renderer sessions.
+        if !element.owners.is_empty() {
+            for owner in &element.owners {
+                let states = owner
+                    .frame
+                    .call(
+                        None,
+                        &InjectedCheckElementStatesParams {
+                            element: owner.element.clone(),
+                            states: vec![ElementState::Stable],
+                            frame_visible: true,
+                        },
+                    )
+                    .await?;
+                if states.outcome.is_some() {
+                    return Err(PageError::NotConnected);
+                }
+            }
+            let states = element
+                .frame
+                .call(
+                    None,
+                    &InjectedCheckElementStatesParams {
+                        element: element.handle.clone(),
+                        states: vec![ElementState::Stable],
+                        frame_visible: element.frame_visible,
+                    },
+                )
+                .await?;
+            if states.outcome.is_some() {
+                return Err(PageError::NotConnected);
+            }
+        }
+        let params = json!({"objectId":element.handle.id().object_id()});
         if position.is_some() {
-            let model = self.session.cdp.send_typed::<_, dom::GetBoxModelResult>(
-                "DOM.getBoxModel",
-                dom::GetBoxModelParams {
-                    object_id,
-                    ..dom::GetBoxModelParams::default()
-                },
-                session,
-            );
+            let model = element.frame.host.send("DOM.getBoxModel", params);
             let border_params = InjectedGetElementBorderWidthParams {
                 element: element.handle.clone(),
             };
             let border = element.frame.call(None, &border_params);
             let (model, border) = tokio::join!(model, border);
             let model = match model {
-                Ok(model) => model.model,
-                Err(error) => return no_geometry(&world::classify(&error)),
+                Ok(model) => model,
+                Err(error) => return no_geometry(&element.frame.host.classify(&error)),
             };
             let border = match border {
                 Ok(border) => border,
                 Err(error) => return no_geometry(&error),
             };
+            let model: dom::GetBoxModelResult = serde_json::from_value(model)
+                .map_err(|error| PageError::Contract(error.to_string()))?;
+            let offset = self
+                .frames
+                .offset(&element.frame.host)
+                .await?
+                .unwrap_or_default();
             return Ok(Geometry::Offset {
-                border_box: quad(model.border)?,
+                border_box: translate(quad(model.model.border)?, offset),
                 border: (border.left, border.top),
             });
         }
-        let quads = self
-            .session
-            .cdp
-            .send_typed::<_, dom::GetContentQuadsResult>(
-                "DOM.getContentQuads",
-                dom::GetContentQuadsParams {
-                    object_id,
-                    ..dom::GetContentQuadsParams::default()
-                },
-                session,
-            );
-        let viewport = self.world.call(None, &InjectedViewportSizeParams {});
+        let quads = element.frame.host.send("DOM.getContentQuads", params);
+        let viewport_frame = self.frames.main();
+        let viewport = viewport_frame.call(None, &InjectedViewportSizeParams {});
         let (quads, viewport) = tokio::join!(quads, viewport);
         let viewport = viewport?;
         let quads = match quads {
-            Ok(quads) => quads.quads,
-            Err(error) => return no_geometry(&world::classify(&error)),
+            Ok(quads) => quads,
+            Err(error) => return no_geometry(&element.frame.host.classify(&error)),
         };
+        let quads: dom::GetContentQuadsResult = serde_json::from_value(quads)
+            .map_err(|error| PageError::Contract(error.to_string()))?;
+        let offset = self
+            .frames
+            .offset(&element.frame.host)
+            .await?
+            .unwrap_or_default();
         Ok(Geometry::Quads {
-            quads: quads.into_iter().map(quad).collect::<Result<_, _>>()?,
+            quads: quads
+                .quads
+                .into_iter()
+                .map(|points| quad(points).map(|quad| translate(quad, offset)))
+                .collect::<Result<_, _>>()?,
             viewport: (pixels(viewport.width), pixels(viewport.height)),
         })
     }
@@ -1534,6 +1573,14 @@ fn no_geometry(error: &PageError) -> Result<Geometry, PageError> {
 }
 
 /// A CDP `DOM.Quad`, which is always eight numbers.
+fn translate(mut quad: [f64; 8], (x, y): (f64, f64)) -> [f64; 8] {
+    for point in quad.chunks_exact_mut(2) {
+        point[0] += x;
+        point[1] += y;
+    }
+    quad
+}
+
 fn quad(points: Vec<f64>) -> Result<[f64; 8], PageError> {
     <[f64; 8]>::try_from(points)
         .map_err(|points| PageError::Contract(format!("a DOM quad of {} numbers", points.len())))
