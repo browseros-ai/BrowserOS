@@ -12,6 +12,8 @@ use serde_json::{Value, json};
 use tracing::debug;
 
 use crate::bridge;
+use crate::capture::{self, Capture};
+use crate::frames::FrameScope;
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::tabs::{self, PageEntry, Tabs};
 
@@ -77,6 +79,22 @@ pub(crate) async fn page(
                 Err(CallError::Playwright(error)) if error == PlaywrightError::target_closed() => {}
                 Err(error) => return Err(error),
             }
+        }
+        // `dispatch::route` hands these to `capture.rs` with Neo's `path`; one built without
+        // a path is the same call writing no file.
+        PageCall::Screenshot(params) => {
+            let capture = Capture::Page {
+                params: Box::new(params),
+                path: None,
+            };
+            return capture::serve(tabs, entry, FrameScope::Main, capture, progress).await;
+        }
+        PageCall::Pdf(params) => {
+            let capture = Capture::Pdf {
+                params: Box::new(params),
+                path: None,
+            };
+            return capture::serve(tabs, entry, FrameScope::Main, capture, progress).await;
         }
         PageCall::BringToFront(_) => {
             // Playwright 26137face server/chromium/crPage.ts:207 sends Page.bringToFront.

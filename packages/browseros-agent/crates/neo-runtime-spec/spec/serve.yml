@@ -22,6 +22,9 @@ interfaces:
     - close
     - runBeforeUnload
     - bringToFront
+    # `binary` results: neo-runtime answers `neo_runtime_spec::Binary`, the SDK a `Buffer`.
+    - screenshot
+    - pdf
   # The objects behind `goto`'s answer: its request, every redirect hop, and their responses.
   Request:
     - response

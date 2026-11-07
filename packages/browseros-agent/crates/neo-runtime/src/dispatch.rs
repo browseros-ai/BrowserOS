@@ -52,6 +52,7 @@ use tokio::time;
 use tokio::time::Instant;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
+use crate::capture::{self, Capture, NEO_SCREENSHOT_META, NeoScreenshotParams};
 use crate::check::{self, CheckOptions};
 use crate::click::{self, ClickOptions};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
@@ -227,6 +228,8 @@ enum ObjectCall {
     Page(PageCall),
     Frame(Route),
     Network(NetworkCall),
+    /// `Page.screenshot`, `Page.pdf` and `neo:screenshot`, with Neo's `path` (`capture.rs`).
+    Capture(Capture),
 }
 
 /// What a message asks for. One variant per served (object, method).
@@ -384,9 +387,17 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         ObjectKind::Context => BrowserContextCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Context(call)))),
         ObjectKind::Page => {
-            PageCall::decode(method, params).map(|call| (call.meta(), Ok(ObjectCall::Page(call))))
+            let path = neo_path(params.as_ref());
+            PageCall::decode(method, params).map(|call| (call.meta(), page_call(call, path)))
         }
         ObjectKind::Frame => {
+            if method == NEO_SCREENSHOT_META.method {
+                return Routed {
+                    meta: Some(&NEO_SCREENSHOT_META),
+                    route: decode_neo_params::<NeoScreenshotParams>(params, &NEO_SCREENSHOT_META)
+                        .map(|params| ObjectCall::Capture(Capture::Locator(Box::new(params)))),
+                };
+            }
             if method == WAIT_FOR_URL_META.method {
                 return Routed {
                     meta: Some(&WAIT_FOR_URL_META),
@@ -459,6 +470,49 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             route: Err(PlaywrightError::error(error.to_string())),
         },
     }
+}
+
+/// Neo's `path` beside Playwright's params of a page call (`capture.rs`); Playwright's own
+/// decode ignores the key.
+fn neo_path(params: Option<&Value>) -> Result<Option<String>, PlaywrightError> {
+    match params.and_then(|params| params.get("path")) {
+        None => Ok(None),
+        Some(Value::String(path)) => Ok(Some(path.clone())),
+        Some(other) => Err(PlaywrightError::error(format!(
+            "path: expected string, got {}",
+            json_kind(other)
+        ))),
+    }
+}
+
+/// The JSON kind of `value`, as a validator names it.
+fn json_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// A decoded page call: the ones that answer bytes go to `capture.rs` with their `path`.
+fn page_call(
+    call: PageCall,
+    path: Result<Option<String>, PlaywrightError>,
+) -> Result<ObjectCall, PlaywrightError> {
+    Ok(match call {
+        PageCall::Screenshot(params) => ObjectCall::Capture(Capture::Page {
+            params: Box::new(params),
+            path: path?,
+        }),
+        PageCall::Pdf(params) => ObjectCall::Capture(Capture::Pdf {
+            params: Box::new(params),
+            path: path?,
+        }),
+        call => ObjectCall::Page(call),
+    })
 }
 
 fn decode_neo_params<T: DeserializeOwned>(
@@ -546,6 +600,9 @@ async fn serve_call(
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
         (ObjectCall::Page(call), Some((page, _))) => {
             tab_calls::page(&tabs, &page, call, &progress).await
+        }
+        (ObjectCall::Capture(call), Some((page, scope))) => {
+            capture::serve(&tabs, &page, scope, call, &progress).await
         }
         (ObjectCall::Frame(route), Some((page, scope))) => {
             let session = match page.attached_session() {
@@ -1019,7 +1076,10 @@ mod tests {
     fn frame_route(route: Result<ObjectCall, PlaywrightError>) -> Result<Route, PlaywrightError> {
         route.map(|call| match call {
             ObjectCall::Frame(route) => route,
-            ObjectCall::Context(_) | ObjectCall::Page(_) | ObjectCall::Network(_) => {
+            ObjectCall::Context(_)
+            | ObjectCall::Page(_)
+            | ObjectCall::Network(_)
+            | ObjectCall::Capture(_) => {
                 panic!("a Frame message routed to another object")
             }
         })

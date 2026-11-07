@@ -18,6 +18,8 @@
 //!                       │                ariaSnapshot;
 //!                       │                aria_yaml.rs renders the snapshot as Playwright's YAML
 //!                       ├─ waits         waits.rs: selector, URL and lifecycle waits; no input lock
+//!                       ├─ capture       capture.rs: screenshot (screenshot.rs) and pdf (pdf.rs);
+//!                       │                `path` writes into the run's artifacts.rs directory
 //!                       └─ FrameTab      one frame scope over PageSession
 //!                            ├─ PageSession: shared input, watcher and navigation
 //!                            │    └─ NetworkLog  network.rs: the main frame's navigation requests
@@ -47,7 +49,9 @@ extern crate self as neo_runtime;
 mod fake_browser;
 
 mod aria_yaml;
+mod artifacts;
 mod bridge;
+mod capture;
 mod check;
 mod click;
 mod deadline;
@@ -62,6 +66,7 @@ mod lists;
 mod navigate;
 mod network;
 mod page;
+mod pdf;
 mod press;
 mod progress;
 mod reads;
@@ -69,6 +74,7 @@ mod realm;
 mod responses;
 mod run;
 mod runtime;
+mod screenshot;
 mod states;
 mod tab_calls;
 mod tabs;
@@ -76,6 +82,7 @@ mod url_match;
 mod waits;
 mod world;
 
+pub use artifacts::RunArtifact;
 pub use run::{
     CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, PageId, RunEnd, RunError,
     RunOutcome, RunPage, RunRequest, RunStatus,

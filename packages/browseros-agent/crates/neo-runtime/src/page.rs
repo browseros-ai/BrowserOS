@@ -189,6 +189,9 @@ pub(crate) struct PageSession {
     pub(crate) network: Arc<NetworkLog>,
     /// `Network.enable`, sent on this session's first goto and kept for the run.
     network_enabled: OnceCell<()>,
+    /// Playwright's `Screenshotter` task queue: one screenshot at a time on this tab, so one's
+    /// background override, masks and page preparation never overlap another's.
+    pub(crate) screenshots: Mutex<()>,
 }
 
 /// One call's frame scope over the tab's shared input, navigation and lifetime.
@@ -513,6 +516,7 @@ impl PageSession {
             input,
             network: Arc::new(NetworkLog::new(page.as_str().to_string())),
             network_enabled: OnceCell::new(),
+            screenshots: Mutex::new(()),
         }
     }
 

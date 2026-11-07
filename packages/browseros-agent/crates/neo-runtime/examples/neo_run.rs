@@ -3,6 +3,8 @@
 //!
 //! ```sh
 //! cargo run -p neo-runtime --example neo_run -- --cdp-port 9222 --page <targetId> script.js
+//! cargo run -p neo-runtime --example neo_run -- --cdp-port 9222 --page <targetId> \
+//!   --artifacts /tmp/run-artifacts script.js   # page.screenshot({ path: 'a.png' }) writes here
 //! ```
 //!
 //! Once connected it writes `connected` on stderr, so a harness driving the tab knows the run
@@ -29,6 +31,10 @@ struct Args {
     page: String,
     #[arg(long, default_value_t = 30_000)]
     timeout_ms: u64,
+    /// The run's artifact directory: where `path` options (`page.screenshot({ path })`,
+    /// `page.pdf({ path })`) write, relative to it. Without it they are refused.
+    #[arg(long)]
+    artifacts: Option<PathBuf>,
     /// A file holding the body of an async function of `(page, context)`.
     script: PathBuf,
 }
@@ -69,6 +75,7 @@ async fn run(args: Args) -> Result<RunStatus, String> {
             page: PageId::new(args.page),
             timeout: Duration::from_millis(args.timeout_ms),
             cancel: CancellationToken::new(),
+            artifacts: args.artifacts,
         })
         .await;
     cdp.disconnect().await;

@@ -27,6 +27,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::info;
 
+use crate::artifacts::Artifacts;
 use crate::deadline::{Deadline, Stop};
 use crate::run::{CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd};
 
@@ -120,6 +121,8 @@ pub(crate) struct RunScope {
     /// The run's call tasks, and every task they start. `Dispatcher::finish` waits on it,
     /// bounded, so records read final deliveries.
     pub(crate) tasks: TaskTracker,
+    /// Where the run's `path` options write, and what they wrote (`artifacts.rs`).
+    pub(crate) artifacts: Arc<Artifacts>,
 }
 
 impl RunScope {
@@ -129,7 +132,13 @@ impl RunScope {
             ended: CancellationToken::new(),
             end_reason: Arc::default(),
             tasks,
+            artifacts: Arc::default(),
         }
+    }
+
+    /// The run's artifact directory and its record of written files.
+    pub(crate) fn with_artifacts(self, artifacts: Arc<Artifacts>) -> Self {
+        Self { artifacts, ..self }
     }
 
     /// Records `reason` (the first one wins) and cancels `ended`.
@@ -267,6 +276,11 @@ impl Progress {
     /// The call's delivery cell; `None` for a method the spec does not flag `input`.
     pub(crate) fn delivery(&self) -> Option<&Arc<DeliveryCell>> {
         self.entry.delivery.as_ref()
+    }
+
+    /// The run's artifact directory, where a `path` option writes.
+    pub(crate) fn artifacts(&self) -> &Artifacts {
+        &self.run.artifacts
     }
 }
 
