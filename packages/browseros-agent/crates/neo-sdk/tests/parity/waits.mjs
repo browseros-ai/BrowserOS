@@ -15,11 +15,10 @@ import { join } from 'node:path'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
-  connectCdp,
   eventually,
-  launchBrowser,
+  launchReference,
   playwrightVersion,
+  referenceHalf,
   runCleanups,
   serveFixture,
   startNeo,
@@ -50,12 +49,11 @@ export async function withBoth(t, { pages, slowMs = 0 }, body) {
   const cleanups = []
   try {
     const origin = await serveFixture(cleanups, { pages, slowMs })
-    const browser = await launchBrowser(cleanups, browserBinary)
-    const cdp = await connectCdp(cleanups, browser.port)
-    const playwright = await chromium.connectOverCDP(
-      `http://127.0.0.1:${browser.port}`,
+    const { playwright, cdp, ...browser } = await launchReference(
+      cleanups,
+      browserBinary,
+      { cdp: true },
     )
-    cleanups.push(() => playwright.close())
     const [context] = playwright.contexts()
     const scripts = mkdtempSync(join(tmpdir(), 'neo-wait-parity-'))
     cleanups.push(() => rmSync(scripts, { recursive: true, force: true }))
@@ -64,7 +62,9 @@ export async function withBoth(t, { pages, slowMs = 0 }, body) {
       const url = `${origin}${c.path}`
       const source = SETTLE + c.source
       return {
-        playwright: await viaPlaywright(context, url, source, c),
+        playwright: await referenceHalf(() =>
+          viaPlaywright(context, url, source, c),
+        ),
         neo: await viaNeo(cdp, browser.port, neoRun, scripts, next++, {
           url,
           source,

@@ -7,9 +7,7 @@ import { test } from 'node:test'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
-  connectCdp,
-  launchBrowser,
+  launchReference,
   playwrightVersion,
   runCleanups,
   serveFixture,
@@ -31,10 +29,11 @@ test('title returns the same string with a tiny action timeout', {
       'utf8',
     )
     const origin = await serveFixture(cleanups, { pages: { '/dialog': html } })
-    const { port } = await launchBrowser(cleanups, browserBinary)
-    const cdp = await connectCdp(cleanups, port)
-    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
-    cleanups.push(() => browser.close())
+    const {
+      port,
+      cdp,
+      playwright: browser,
+    } = await launchReference(cleanups, browserBinary, { cdp: true })
     const page = await browser.contexts()[0].newPage()
     await page.goto(`${origin}/dialog`)
     const source =

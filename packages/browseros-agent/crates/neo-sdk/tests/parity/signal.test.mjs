@@ -19,9 +19,8 @@ import { test } from 'node:test'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
   errorCategory,
-  launchBrowser,
+  launchReference,
   playwrightVersion,
   runCleanups,
   serveFixture,
@@ -77,11 +76,10 @@ test('a signal is honoured on every receiver family', {
       pages: { '/signal.html': html, '/elsewhere': '<title>elsewhere</title>' },
     })
     const url = `${origin}/signal.html`
-    const browser = await launchBrowser(cleanups, browserBinary)
-    const playwright = await chromium.connectOverCDP(
-      `http://127.0.0.1:${browser.port}`,
+    const { playwright, ...browser } = await launchReference(
+      cleanups,
+      browserBinary,
     )
-    cleanups.push(() => playwright.close())
     const [context] = playwright.contexts()
     const scripts = mkdtempSync(join(tmpdir(), 'neo-signal-parity-'))
     cleanups.push(() => rmSync(scripts, { recursive: true, force: true }))

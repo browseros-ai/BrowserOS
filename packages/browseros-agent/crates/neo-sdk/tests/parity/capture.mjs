@@ -23,10 +23,9 @@ import { join } from 'node:path'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
-  connectCdp,
-  launchBrowser,
+  launchReference,
   playwrightVersion,
+  referenceHalf,
   runCleanups,
   serveFixture,
   startNeo,
@@ -112,12 +111,11 @@ export async function withEngines(t, { pages, browserArgs = [] }, body) {
   const cleanups = []
   try {
     const origin = await serveFixture(cleanups, { pages })
-    const browser = await launchBrowser(cleanups, browserBinary, browserArgs)
-    const cdp = await connectCdp(cleanups, browser.port)
-    const playwright = await chromium.connectOverCDP(
-      `http://127.0.0.1:${browser.port}`,
+    const { playwright, cdp, ...browser } = await launchReference(
+      cleanups,
+      browserBinary,
+      { args: browserArgs, cdp: true },
     )
-    cleanups.push(() => playwright.close())
     const [context] = playwright.contexts()
     const scratch = mkdtempSync(join(tmpdir(), 'neo-capture-parity-'))
     cleanups.push(() => rmSync(scratch, { recursive: true, force: true }))
@@ -126,12 +124,8 @@ export async function withEngines(t, { pages, browserArgs = [] }, body) {
       const dir = join(scratch, String(++runs))
       const url = `${origin}${path}`
       return {
-        playwright: await viaPlaywright(
-          context,
-          url,
-          source,
-          probe,
-          join(dir, 'playwright'),
+        playwright: await referenceHalf(() =>
+          viaPlaywright(context, url, source, probe, join(dir, 'playwright')),
         ),
         neo: await viaNeo(cdp, browser.port, neoRun, url, source, probe, dir),
       }

@@ -15,9 +15,8 @@ import { test } from 'node:test'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
   errorCategory,
-  launchBrowser,
+  launchReference,
   playwrightVersion,
   runCleanups,
   serveFixture,
@@ -64,11 +63,10 @@ test('touchscreen.tap sends the touch input of a hasTouch context', {
       pages: { '/touch.html': html },
     })
     const url = `${origin}/touch.html`
-    const browser = await launchBrowser(cleanups, browserBinary)
-    const playwright = await chromium.connectOverCDP(
-      `http://127.0.0.1:${browser.port}`,
+    const { playwright, ...browser } = await launchReference(
+      cleanups,
+      browserBinary,
     )
-    cleanups.push(() => playwright.close())
     const [context] = playwright.contexts()
     const touch = await playwright.newContext({ hasTouch: true })
     cleanups.push(() => touch.close())

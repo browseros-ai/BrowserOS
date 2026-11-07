@@ -21,9 +21,7 @@ import {
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
-  connectCdp,
-  launchBrowser,
+  launchReference,
   playwrightVersion,
   runCleanups,
   serveFixture,
@@ -64,10 +62,11 @@ test('textContent returns the same values and rejects the same calls', {
       'utf8',
     )
     const origin = await serveFixture(cleanups, { pages: { '/dialog': html } })
-    const { port } = await launchBrowser(cleanups, browserBinary)
-    const cdp = await connectCdp(cleanups, port)
-    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
-    cleanups.push(() => browser.close())
+    const {
+      port,
+      cdp,
+      playwright: browser,
+    } = await launchReference(cleanups, browserBinary, { cdp: true })
     const page = await browser.contexts()[0].newPage()
     await page.goto(`${origin}/dialog`)
     const reference = await new (async () => {}).constructor('page', source)(

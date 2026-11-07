@@ -9,8 +9,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   browserBinary,
-  chromium,
-  launchBrowser,
+  launchReference,
   runCleanups,
   serveFixture,
   skip,
@@ -30,9 +29,7 @@ test('pinned Playwright keeps a new B highlight while main-frame hide is pending
         '/b': '<button id="old">Old</button><button id="new">New</button>',
       },
     })
-    const browser = await launchBrowser(cleanups, browserBinary)
-    const pw = await chromium.connectOverCDP(`http://127.0.0.1:${browser.port}`)
-    cleanups.push(() => pw.close())
+    const { playwright: pw } = await launchReference(cleanups, browserBinary)
     const [context] = pw.contexts(),
       page = await context.newPage()
     await page.goto(origin + '/main')

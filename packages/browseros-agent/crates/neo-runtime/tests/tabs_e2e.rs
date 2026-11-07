@@ -29,9 +29,8 @@ const WIRE: &str = r"
 ";
 
 async fn run(tab: &Tab, target: &str, code: &str) -> RunOutcome {
-    Runtime::connect(tab.cdp.clone())
+    tab.runtime()
         .await
-        .unwrap_or_else(|error| panic!("browser command failed: {error}"))
         .run(RunRequest {
             code: format!("{WIRE}\n{code}"),
             page: PageId::new(target.to_string()),

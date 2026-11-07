@@ -11,8 +11,8 @@ import { test } from 'node:test'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
   connectCdp,
+  connectReference,
   launchBrowser,
   openTab,
   runCleanups,
@@ -114,9 +114,7 @@ test('waitForFunction cleans up after a delayed setup reply', {
           server.close(resolve)
         }),
     )
-    const playwright = await chromium.connectOverCDP(
-      `http://127.0.0.1:${server.address().port}`,
-    )
+    const playwright = await connectReference(server.address().port)
     cleanups.push(() => playwright.close())
     const context = playwright.contexts()[0]
     for (const enabled of [false, true])

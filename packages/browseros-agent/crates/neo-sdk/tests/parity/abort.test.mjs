@@ -24,8 +24,7 @@ import { test } from 'node:test'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
-  launchBrowser,
+  launchReference,
   playwrightVersion,
   runCleanups,
   serveFixture,
@@ -264,11 +263,10 @@ test('signal aborts calls as Playwright does', {
       },
     })
     const url = `${origin}/abort.html`
-    const browser = await launchBrowser(cleanups, browserBinary)
-    const playwright = await chromium.connectOverCDP(
-      `http://127.0.0.1:${browser.port}`,
+    const { playwright, ...browser } = await launchReference(
+      cleanups,
+      browserBinary,
     )
-    cleanups.push(() => playwright.close())
     const [context] = playwright.contexts()
     const scripts = mkdtempSync(join(tmpdir(), 'neo-abort-parity-'))
     cleanups.push(() => rmSync(scripts, { recursive: true, force: true }))

@@ -7,9 +7,8 @@ import test from 'node:test'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
   connectCdp,
-  launchBrowser,
+  launchReference,
   openTab,
   playwrightVersion,
   runCleanups,
@@ -162,11 +161,10 @@ test('retained frame getters match Playwright after page close', {
         '/remote-next': `<p>New remote document</p><script>parent.postMessage('remote-ready','*')</script>`,
       },
     })
-    const browser = await launchBrowser(cleanups, browserBinary)
-    const playwright = await chromium.connectOverCDP(
-      `http://127.0.0.1:${browser.port}`,
+    const { playwright, ...browser } = await launchReference(
+      cleanups,
+      browserBinary,
     )
-    cleanups.push(() => playwright.close())
     const context = playwright.contexts()[0]
     const cdp = await connectCdp(cleanups, browser.port)
     const scripts = mkdtempSync(join(tmpdir(), 'neo-retained-frames-'))
