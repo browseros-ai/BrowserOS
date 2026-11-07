@@ -1,4 +1,4 @@
-//! One fresh QuickJS runtime per run: the script's whole world. It holds the host globals a
+//! Neo: One fresh QuickJS runtime per run: the script's whole world. It holds the host globals a
 //! Playwright script expects (`console`, `setTimeout`, `setInterval` and their `clear…`,
 //! `AbortController`, `AbortSignal`, and neo-quickjs-injected's `URL`, `URLSearchParams`, `Buffer`,
 //! `TextEncoder`, `TextDecoder`, `structuredClone` and `crypto`), `__neo_runtime`, and the `page`,

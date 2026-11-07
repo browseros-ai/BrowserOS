@@ -95,3 +95,6 @@ neo-runtime/src/playwright_methods/network_idle.rs
 neo-runtime/src/playwright_methods/pdf.rs
 neo-runtime/src/playwright_methods/screenshot.rs
 neo-runtime/src/playwright_methods/set_input_files.rs
+neo-runtime/src/trace.rs
+neo-runtime/src/trace/redact.rs
+neo-runtime/src/trace/tap.rs

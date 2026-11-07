@@ -12,6 +12,7 @@
 //! Once connected it writes `connected` on stderr, so a harness driving the tab knows the run
 //! is about to start.
 
+use neo_runtime::RunOrigin;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -87,7 +88,7 @@ async fn run(args: Args) -> Result<RunStatus, String> {
 
     let outcome = runtime
         .run(RunRequest {
-            origin: Default::default(),
+            origin: RunOrigin::default(),
             code,
             page: PageId::new(args.page),
             timeout: Duration::from_millis(args.timeout_ms),

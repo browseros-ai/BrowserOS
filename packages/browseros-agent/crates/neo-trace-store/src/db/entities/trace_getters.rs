@@ -1,4 +1,4 @@
-//! `trace_getters`: one row per synchronous getter (`page.url()`, `page.isClosed()`,
+//! Neo: `trace_getters`: one row per synchronous getter (`page.url()`, `page.isClosed()`,
 //! `context.pages()`, a page's initializer), keyed `(run_id, getter_no)`. Getters have their own
 //! numbers, so call numbers stay dense; a timeline orders the two by `offset_us`.
 
@@ -14,7 +14,8 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub getter_no: i64,
     pub object: String,
-    /// The serialized name of neo_runtime::GetterField; the runtime owns the vocabulary.
+    /// The runtime enum's serde name. A second active enum here would need updating for every
+    /// getter and could drift from the bridge; query.rs decodes this back into the one enum.
     pub field: String,
     pub page_id: Option<String>,
     pub tab_id: Option<i64>,

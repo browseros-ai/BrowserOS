@@ -1,4 +1,4 @@
-//! `trace_runs`: one row per run, keyed by its ULID, which sorts by start time, so the run id is
+//! Neo: `trace_runs`: one row per run, keyed by its ULID, which sorts by start time, so the run id is
 //! also the list order, the cursor and the retention cut. Written by any of the run's events: a
 //! placeholder from the ULID's time if its `RunStarted` was shed, the end columns once, the
 //! settle columns last.

@@ -1,4 +1,4 @@
-//! What every test needs: a database path in its own directory, and a plain connection to look
+//! Neo: What every test needs: a database path in its own directory, and a plain connection to look
 //! at what the store wrote.
 
 use std::collections::BTreeSet;

@@ -1,4 +1,4 @@
-//! Replay, reordering, storage budgets and caps are checked at the transactional boundary.
+//! Neo: Replay, reordering, storage budgets and caps are checked at the transactional boundary.
 
 use std::sync::Arc;
 
@@ -10,8 +10,7 @@ use crate::db::entities::{trace_calls, trace_getters, trace_runs};
 use crate::db::kinds;
 use crate::db::migration::{Migrator, run_pending};
 use crate::ingest::Command;
-use crate::{CallQuery, CallState, Detail, StoreConfig, TraceStore};
-use crate::{apply, writer};
+use crate::{CallQuery, CallState, Detail, StoreConfig, TraceStore, apply, writer};
 
 #[tokio::test]
 async fn replay_and_out_of_order_ends_preserve_rows_delivery_and_absolute_losses() {

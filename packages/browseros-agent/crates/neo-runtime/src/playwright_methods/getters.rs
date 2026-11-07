@@ -560,6 +560,7 @@ pub(crate) async fn is_closed(cdp: &CdpClient, page: &PageId) -> Result<bool, Cd
 
 #[cfg(test)]
 mod tests {
+    use crate::trace::RunTap;
     use std::sync::Arc;
 
     use browseros_cdp::{CdpEvent, SessionId};
@@ -638,7 +639,7 @@ mod tests {
             Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
-            crate::trace::RunTap::detached(),
+            RunTap::detached(),
         )
         .await
         .unwrap_or_else(|error| panic!("open fixture: {error:?}"));
@@ -823,7 +824,7 @@ mod tests {
             Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
-            crate::trace::RunTap::detached(),
+            RunTap::detached(),
         )
         .await
         .unwrap();

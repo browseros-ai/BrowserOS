@@ -16,16 +16,15 @@ use std::time::{Duration, Instant};
 
 use fake_browser::{FakeBrowser, PAGE, Replies, Reply};
 use neo_runtime::{
-    CallResult, Delivery, EndCause, GetterField, GetterResult, IdKey, PageId, RunEvent, RunId,
-    RunOrigin, RunRequest, RunSink, RunStarted, RunStatus, Runtime, SessionKey, TraceSink,
+    CallResult, Delivery, EndCause, GetterField, GetterResult, IdKey, PageId, RunEnd, RunEvent,
+    RunId, RunOrigin, RunOutcome, RunRequest, RunSink, RunStarted, RunStatus, Runtime, SessionKey,
+    TraceSink,
 };
-use neo_runtime::{RunEnd, RunOutcome};
 use serde_json::json;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 use tracing::field::{Field, Visit};
-use tracing::{Event, Metadata, Subscriber};
-use tracing::{span, subscriber};
+use tracing::{Event, Metadata, Subscriber, span, subscriber};
 
 /// How long a test waits for a run to settle after its outcome: writers may hold its state a
 /// while longer.
@@ -1225,7 +1224,7 @@ async fn platform_getters_are_recorded_with_their_single_bridge_vocabulary() {
     let runtime = runtime_with(&browser, &[&sink]).await;
     let outcome = runtime
         .run(request(
-            r#"
+            r"
         const get = request => JSON.parse(__neo_runtime.get(JSON.stringify(request)));
         const matched = get({field:'matchesURL',url:'https://a.test/',matcher:{glob:'**'}});
         get({field:'devices'});
@@ -1233,7 +1232,7 @@ async fn platform_getters_are_recorded_with_their_single_bridge_vocabulary() {
         get({field:'setURL',href:'https://a.test/',part:'pathname',value:'/next'});
         get({field:'randomValues',length:1});
         return matched;
-    "#,
+    ",
         ))
         .await;
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
@@ -1257,4 +1256,9 @@ async fn platform_getters_are_recorded_with_their_single_bridge_vocabulary() {
         ]
     );
     assert_eq!(outcome.calls.len(), 0);
+    assert!(
+        !serde_json::to_string(&events)
+            .unwrap()
+            .contains("private-data")
+    );
 }

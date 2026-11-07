@@ -1,4 +1,4 @@
-//! Reads: each one an index range mapped to the public views. A run's rows are primary-key
+//! Neo: Reads: each one an index range mapped to the public views. A run's rows are primary-key
 //! ranges (`run_id` leads every child key), runs list by their ULID, sessions by activity, and a
 //! host's id is one range of `(key, value)`. They run on the read pool, never on the writer's
 //! connection, except the session head, which the writer reads right after its own commit.
@@ -18,8 +18,7 @@ use crate::db::entities::{
     trace_call_artifacts, trace_calls, trace_getters, trace_logs, trace_pages, trace_run_ids,
     trace_runs, trace_sessions,
 };
-use crate::db::kinds;
-use crate::db::{signed, unsigned};
+use crate::db::{kinds, signed, unsigned};
 use crate::views::{
     AfterCall, CallQuery, CallTrace, GetterOutcome, GetterTrace, Listing, Loss, MAX_PAGE, OverCap,
     PageTrace, RunQuery, RunState, RunSummary, RunTrace, SessionQuery, SessionSummary,

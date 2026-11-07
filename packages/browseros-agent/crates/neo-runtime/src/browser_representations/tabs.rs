@@ -1,4 +1,4 @@
-//! A run's ordered page registry and lazy CDP sessions. Handing out a page registers its
+//! Neo: A run's ordered page registry and lazy CDP sessions. Handing out a page registers its
 //! identity; attaching it owns a session until the run and its last writer have let go.
 
 use std::collections::HashMap;
@@ -24,12 +24,11 @@ use tokio_util::task::TaskTracker;
 use tracing::debug;
 
 use crate::browser_representations::cookies_and_storage::{self, Overrides, Permissions};
-use crate::browser_representations::dialogs;
 use crate::browser_representations::downloads::{self, Downloads, Opened};
-use crate::browser_representations::init_scripts;
 use crate::browser_representations::network::HopId;
 use crate::browser_representations::page::{FrameTab, PageSession, PageSetup, Session, TabInputs};
 use crate::browser_representations::routes::{self, ContextRoutes};
+use crate::browser_representations::{dialogs, init_scripts};
 use crate::chromium_bridge::browser_connection_settings::Switches;
 use crate::chromium_bridge::discovery::{self, TargetInfo};
 use crate::chromium_bridge::frames::{FrameContext, FrameScope};
@@ -1554,7 +1553,7 @@ mod tests {
             Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
-            crate::trace::RunTap::detached(),
+            RunTap::detached(),
         )
         .await
         .unwrap();

@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (132)
+## Deviations (150)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -112,6 +112,8 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/debugger.rs | `format_param` | `isomorphic/protocolFormatter.ts` `_formatProtocolParam` | Playwright shows a selector as the JavaScript locator that builds it (`locator('div')`); Rust has no locator generator, so a paused call's title shows the selector itself (`div`). |
 | neo-runtime/src/events.rs | `MAX_QUEUED_BYTES` | `client/connection.ts` `Connection.dispatch` | The same bound in bytes of queued JSON, so a few huge payloads cannot pin the server's memory. |
 | neo-runtime/src/events.rs | `MAX_QUEUED_EVENTS` | `client/connection.ts` `Connection.dispatch` | Playwright's client dispatches every event its server sends; Neo's queue lives outside the realm's memory limit, so a run holds at most this many undelivered events and counts the rest. |
+| neo-runtime/src/method_router.rs | `MAX_CALLS_IN_FLIGHT` | `/packages/protocol/spec/frame.yml` `Frame.commands` | Neo refuses excess concurrent calls to bound host task memory. |
+| neo-runtime/src/method_router.rs | `MAX_REQUEST_BYTES_IN_FLIGHT` | `/packages/protocol/spec/frame.yml` `Frame.commands` | Neo refuses excess in-flight request bytes to bound host memory. |
 | neo-runtime/src/method_router.rs | `released` | `server/debugger.ts` `Debugger._pause` | Playwright's held call waits for a resume even after its browser disconnected, and never settles (measured on BrowserOS neo with pinned Playwright); Neo's fails as closed, as every call the disconnection stopped does, and never runs. |
 | neo-runtime/src/method_router.rs | `released` | `server/progress.ts` `ProgressController.run` | Playwright's timeout already runs while its debugger holds a call (one that fires meanwhile is dropped); Neo starts the call, and its own timeout, once the debugger lets it go. |
 | neo-runtime/src/playwright_methods/browser_methods.rs | (file) | `server/chromium/crBrowser.ts` `CRBrowserContext.doClose` | Playwright keeps a context until the script closes it; a run's realm is gone when it ends, so Neo disposes every context the run created then, with its pages. |
@@ -138,7 +140,23 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/playwright_methods/history.rs | `response_of` | `server/frames.ts` `Frame.waitForNavigation` | Playwright records every request; Neo starts recording a session's requests with its first navigation wait or goto, so a document whose request started before that answers `null`. |
 | neo-runtime/src/playwright_methods/network_idle.rs | (file) | `server/frames.ts` `FrameManager.requestStarted` | Playwright's server sees every request of a page from its first moment; Neo sees a tab's requests only after the run's `Network.enable`, so [`NetworkIdle::restart`] starts every frame's quiet period at that moment, and a frame whose document moved to another process (`Page.frameDetached` with reason `swap`) leaves the tree with its requests, since that process reports its requests on a session the run may never attach. |
 | neo-runtime/src/playwright_methods/screenshot.rs | `screenshot_locator` | `server/frames.ts` `Frame.waitForSelector` | is the element Playwright's wait returns; Neo resolves it again with click's `resolve`, which also marks it as a target (`markTargets: 'all'`), and waits again if it detached in between. |
+| neo-runtime/src/progress.rs | `MAX_CALL_LOG_LINES` | `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` | Neo bounds the per-call in-memory log to protect host memory during unbounded retries. |
+| neo-runtime/src/progress.rs | `MAX_CALL_RECORDS` | `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` | Neo bounds `RunOutcome` calls; trace sinks still receive every call. |
+| neo-runtime/src/progress.rs | `MAX_RECORD_LOG_LINES` | `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` | Neo caps only the recorded folded log; the Playwright reply remains whole. |
+| neo-runtime/src/progress.rs | `MAX_TRACE_BYTES` | `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` | Neo bounds `RunOutcome` record memory; the separate store applies its own detail budget. |
 | neo-runtime/src/quickjs.rs | `RACE_UNCAUGHT` | `client/eventEmitter.ts` `EventEmitter._handleListenerError` | A listener's throw, or its rejection with no `error` listener, is an uncaught exception in Node, which exits. QuickJS has no such exit, so neo-quickjs-injected reports the first one on its `uncaught` promise, and the run ends with that error at once instead of running on. The realm's own `abort` listeners and timer callbacks report theirs the same way (`abort::REALM_GLOBALS`, `HOST_GLOBALS`). |
+| neo-runtime/src/quickjs_bridge.rs | `MAX_LOG_BYTES` | `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` | Neo bounds console bytes retained in the outcome to protect host memory. |
+| neo-runtime/src/quickjs_bridge.rs | `MAX_LOG_LINES` | `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` | Neo bounds console lines retained in the outcome to protect host memory. |
+| neo-runtime/src/trace/redact.rs | `MATCH_CHARS` | `/packages/protocol/spec/frame.yml` `Frame.commands.fill.parameters.value` | Neo bounds pattern matching and removes the rest of a line when a cut secret matches. |
+| neo-runtime/src/trace/redact.rs | `MAX_ERROR_BYTES` | `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` | Neo bounds recorded errors while preserving the full Playwright error in the reply. |
+| neo-runtime/src/trace/redact.rs | `MAX_LINE_BYTES` | `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` | Neo bounds recorded console lines; the script output returned to the caller is unchanged. |
+| neo-runtime/src/trace/redact.rs | `MAX_SCRIPT_BYTES` | `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` | Neo keeps a bounded scrubbed script, independent of Playwright trace source resources. |
+| neo-runtime/src/trace/redact.rs | `MAX_SECRETS` | `/packages/protocol/spec/frame.yml` `Frame.commands.fill.parameters.value` | Neo replaces free text wholesale after saturation so an unregistered secret cannot escape. |
+| neo-runtime/src/trace/redact.rs | `MAX_SUMMARY_BYTES` | `/packages/protocol/spec/frame.yml` `Frame.commands.fill.parameters.value` | Neo caps persisted param summaries; the script still receives the full protocol reply. |
+| neo-runtime/src/trace/redact.rs | `MAX_VALUE_BYTES` | `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` | Neo caps the recorded return value to bound persistence; the caller keeps its full value. |
+| neo-runtime/src/trace/redact.rs | `MIN_SECRET_CHARS` | `/packages/protocol/spec/frame.yml` `Frame.commands.fill.parameters.value` | Neo scrubs record text only for secrets of at least four characters to avoid accidental matches. |
+| neo-runtime/src/trace/redact.rs | `REDACTED` | `/packages/protocol/spec/frame.yml` `Frame.commands.fill.parameters.value` | Neo blanks secrets in records; Playwright trace params keep the original input. |
+| neo-runtime/src/trace/redact.rs | `SUMMARY_LIMITS` | `/packages/protocol/spec/frame.yml` `Frame.commands.fill.parameters.value` | Neo progressively summarizes strings and collections instead of recording raw params. |
 
 ## Unexplained: owner questions (0)
 

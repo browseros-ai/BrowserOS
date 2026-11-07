@@ -1,12 +1,10 @@
-//! Feed-owned after-call captures share the run's lifetime. Privacy is checked inside the
+//! Neo: Feed-owned after-call captures share the run's lifetime. Privacy is checked inside the
 //! writer's transaction, including for a capture that completes after withhold was committed.
 
 use neo_runtime::CallId;
+use sea_orm::ActiveValue::Set;
 use sea_orm::sea_query::{Expr, OnConflict, Query};
-use sea_orm::{
-    ActiveValue::Set, ColumnTrait, DatabaseTransaction, DbErr, EntityTrait, IntoActiveModel,
-    QueryFilter,
-};
+use sea_orm::{ColumnTrait, DatabaseTransaction, DbErr, EntityTrait, IntoActiveModel, QueryFilter};
 
 use crate::db::entities::{trace_call_artifacts, trace_runs, trace_sessions};
 use crate::db::signed;

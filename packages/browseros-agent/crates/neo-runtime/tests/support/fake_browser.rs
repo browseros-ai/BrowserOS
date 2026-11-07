@@ -14,6 +14,7 @@
 //! Test crates include this file with `#[path]`. Cargo builds only top-level `tests/*.rs` files
 //! as test crates, so it is never one on its own.
 
+use neo_runtime::RunOrigin;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -334,7 +335,7 @@ impl Drop for FakeBrowser {
 /// A run of `code` against the fake's tab.
 pub fn run_request(code: &str, timeout: Duration, cancel: CancellationToken) -> RunRequest {
     RunRequest {
-        origin: Default::default(),
+        origin: RunOrigin::default(),
         code: code.to_string(),
         page: PageId::new(PAGE.to_string()),
         timeout,

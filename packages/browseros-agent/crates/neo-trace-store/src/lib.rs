@@ -1,4 +1,4 @@
-//! Keeps neo-runtime's run traces (runs, browser calls, getters, pages, console lines) in one
+//! Neo: Keeps neo-runtime's run traces (runs, browser calls, getters, pages, console lines) in one
 //! SQLite file through SeaORM, and reads them back as typed views.
 //!
 //! ```text

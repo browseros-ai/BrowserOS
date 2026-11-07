@@ -2,6 +2,7 @@
 //! script at `argv[3]` on the tab `argv[2]` over the CDP port `argv[1]`; once the driver writes
 //! `startB`, run B runs `argv[4]` on the same tab. `stopA` and `stopB` cancel each, and the host
 //! prints `outcome <index> <status>` as each ends, then drains.
+use neo_runtime::RunOrigin;
 use std::time::Duration;
 use std::{env, fs, io, thread};
 
@@ -46,7 +47,7 @@ async fn main() {
         runs.push(tokio::spawn(async move {
             let outcome = runtime
                 .run(RunRequest {
-                    origin: Default::default(),
+                    origin: RunOrigin::default(),
                     code,
                     page,
                     timeout: Duration::from_secs(30),

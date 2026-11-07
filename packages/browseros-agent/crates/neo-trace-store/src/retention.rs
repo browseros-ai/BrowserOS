@@ -1,4 +1,4 @@
-//! The writer's incremental cleanup cursor. Every turn deletes at most 10,000 child rows,
+//! Neo: The writer's incremental cleanup cursor. Every turn deletes at most 10,000 child rows,
 //! children before parents, using key-range subqueries instead of a parameter per run. Between
 //! turns the writer can commit incoming events, even when one old run owns 50,000 calls.
 
@@ -15,8 +15,11 @@ use crate::Retention;
 use crate::db::entities::{trace_runs, trace_sessions};
 use crate::db::unsigned;
 
+/// Neo: bounds child deletions per transaction so cleanup cannot monopolize the writer.
 pub(crate) const CHUNK: u64 = 10_000;
+/// Platform: a duration of one day is 86400000 milliseconds (`std::time::Duration::from_hours(24)`).
 const DAY_MS: u64 = 86_400_000;
+/// Neo: child tables and their secondary keys are deleted before their owning run rows.
 const CHILDREN: [(&str, &str); 6] = [
     ("trace_calls", "call_no"),
     ("trace_getters", "getter_no"),

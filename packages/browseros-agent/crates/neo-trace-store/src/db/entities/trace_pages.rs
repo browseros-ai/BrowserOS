@@ -1,4 +1,4 @@
-//! `trace_pages`: one row per page a run touched (its start page, a page it listed, one it
+//! Neo: `trace_pages`: one row per page a run touched (its start page, a page it listed, one it
 //! created), keyed `(run_id, page_id)`, with when the run got it and, if it closed it, when.
 
 use sea_orm::entity::prelude::*;

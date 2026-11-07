@@ -1,4 +1,5 @@
 //! Real Runtime cancellation during init-script setup; the outer browser driver probes the next document.
+use neo_runtime::RunOrigin;
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use neo_runtime::{PageId, RunRequest, RunStatus, Runtime};
 use std::env;
@@ -40,7 +41,7 @@ async fn cancel_during_setup() {
         let cancel = cancel.clone();
         async move {
             runtime.run(RunRequest {
-            origin: Default::default(),
+            origin: RunOrigin::default(),
             code: "await page.context().addInitScript(()=>{window.oldRunInit=17});await page.evaluate(()=>0);await new Promise(()=>{})".into(),
             page: PageId::new(target), timeout: Duration::from_secs(30), cancel, artifacts: None,
         }).await

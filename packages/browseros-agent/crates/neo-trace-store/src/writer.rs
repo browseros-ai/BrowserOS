@@ -1,15 +1,14 @@
-//! One task owns the write connection and the OS file lock. It commits FIFO batches, then
+//! Neo: One task owns the write connection and the OS file lock. It commits FIFO batches, then
 //! publishes heads, then releases permits. Failed batches retain their payloads and permits;
 //! database outages can exhaust the queue but can never make a producer wait.
 //!
 //! Actor shape follows cs/services/audit.rs:149-221; its blocking submit is deliberately absent.
 
 use std::collections::{BTreeSet, HashMap};
-use std::mem;
-use std::slice;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{mem, slice};
 
 use neo_runtime::{RunEvent, RunId};
 use sea_orm::{DatabaseConnection, DbErr, TransactionTrait};
@@ -17,13 +16,15 @@ use tokio::sync::mpsc;
 use tokio::time::{self, Instant};
 use tracing::warn;
 
-use crate::db;
 use crate::ingest::{self, Command, Entry, State};
 use crate::live::Heads;
-use crate::{Retention, StoreError, apply, retention};
+use crate::{Retention, StoreError, apply, db, retention};
 
+/// Neo: caps each FIFO transaction so lifecycle fences and maintenance get a turn.
 const BATCH: usize = 512;
+/// Neo: periodically settles runs whose final runtime event was lost.
 const SWEEP: Duration = Duration::from_secs(1);
+/// Neo: retention runs between writer batches at this interval.
 const HOURLY: Duration = Duration::from_hours(1);
 
 /// Writer-owned state is never consulted from emit. The per-run map records isolated bad

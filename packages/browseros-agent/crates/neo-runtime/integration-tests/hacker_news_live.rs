@@ -16,6 +16,7 @@
 )]
 mod browser;
 
+use neo_runtime::RunOrigin;
 use std::env;
 use std::time::Duration;
 
@@ -58,7 +59,7 @@ const COMMENT_PAGE: &str = r"(() => ({
 async fn run(runtime: &Runtime, page: &PageId, code: &str) -> RunOutcome {
     runtime
         .run(RunRequest {
-            origin: Default::default(),
+            origin: RunOrigin::default(),
             code: code.to_string(),
             page: page.clone(),
             timeout: Duration::from_mins(2),

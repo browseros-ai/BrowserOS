@@ -41,9 +41,8 @@ use neo_runtime_spec::serve::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::fs;
-use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 use tracing::{debug, warn};
 
 use crate::artifacts::Artifacts;
@@ -521,7 +520,9 @@ async fn delete(tabs: &Tabs, guid: &str, progress: &Progress) -> Result<Option<V
 
 #[cfg(test)]
 mod tests {
+    use crate::trace::RunTap;
     use std::fs::{read_to_string, write};
+    use std::sync::Arc;
     use std::time::Duration;
 
     use tokio::runtime::Handle;
@@ -704,7 +705,7 @@ mod tests {
         let run = RunScope::new(
             Deadline::new(Duration::from_mins(1), CancellationToken::new()),
             TaskTracker::new(),
-            Default::default(),
+            Arc::default(),
         );
         Progress::new(entry, 0.0, run, CancellationToken::new())
     }
@@ -728,7 +729,7 @@ mod tests {
             Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
-            crate::trace::RunTap::detached(),
+            RunTap::detached(),
         )
         .await
         .unwrap_or_else(|error| panic!("open: {error:?}"));

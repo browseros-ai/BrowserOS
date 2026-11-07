@@ -1,4 +1,5 @@
 //! Review-only persistent-runtime cancellation probe; launched by the recording browser driver.
+use neo_runtime::RunOrigin;
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use neo_runtime::{PageId, RunRequest, RunStatus, Runtime};
 use serde_json::json;
@@ -33,7 +34,7 @@ async fn cancel_and_reuse_runtime() {
         async move {
             runtime
                 .run(RunRequest {
-                    origin: Default::default(),
+                    origin: RunOrigin::default(),
                     code,
                     page: PageId::new(target),
                     timeout: Duration::from_secs(30),

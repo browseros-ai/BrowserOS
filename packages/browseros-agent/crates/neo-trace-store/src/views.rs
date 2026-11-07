@@ -1,4 +1,4 @@
-//! What the store hands back, and the queries that select it: plain, owned views of runs, calls,
+//! Neo: What the store hands back, and the queries that select it: plain, owned views of runs, calls,
 //! getters and sessions, built from rows by `query.rs`. They reuse neo-runtime's public types
 //! where those say exactly what is stored (`RunId`, `Delivery`, `PageRef`, …) and add their own
 //! for what only the store knows (a call `lost`, a run `interrupted`, a stub). No SeaORM type
@@ -14,6 +14,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 /// The most items one read returns; a larger `limit` reads as this.
+/// Neo: a public read limit bounds returned data independently of retained row counts.
 pub const MAX_PAGE: u32 = 10_000;
 
 /// One page of a list. `more` says whether items past the last one exist; the next page's query

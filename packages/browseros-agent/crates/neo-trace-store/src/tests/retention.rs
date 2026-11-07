@@ -1,4 +1,4 @@
-//! Retention operates on bounded child-row chunks, not a bound per run in the backlog.
+//! Neo: Retention operates on bounded child-row chunks, not a bound per run in the backlog.
 
 use std::time::Duration;
 

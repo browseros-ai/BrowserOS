@@ -1,4 +1,4 @@
-//! What every emitter of one run shares: the run's id, the sinks that listen to it, its clock,
+//! Neo: What every emitter of one run shares: the run's id, the sinks that listen to it, its clock,
 //! its secrets and why it ended. Each place a fact of the run starts holds an `Arc` of it: the
 //! run's guard, its trace and every call entry, every delivery cell, the page registry and its
 //! pages, the getters.

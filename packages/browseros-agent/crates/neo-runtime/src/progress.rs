@@ -1,4 +1,4 @@
-//! One browser call's progress, Playwright's `server/progress.ts` for Neo: the call's own
+//! Neo: One browser call's progress, Playwright's `server/progress.ts` for Neo: the call's own
 //! deadline, the run ending under it, the tab closing, its call log and its delivery cell.
 //!
 //! A call's durable state lives in a [`CallEntry`] that the run's [`Trace`] holds, never in the
@@ -21,14 +21,13 @@
 //! read the same reason.
 
 use std::borrow::Cow;
-use std::fmt;
-use std::future;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(test)]
 use std::thread;
 use std::time::{Duration, SystemTime};
+use std::{fmt, future};
 
 use neo_runtime_spec::ParamShape;
 use serde_json::Value;
@@ -499,8 +498,11 @@ impl Drop for DeliveryCell {
     }
 }
 
+/// Neo: atomic encoding of delivery before an input writer claims its ticket.
 const NOT_SENT: u8 = 0;
+/// Neo: atomic encoding of input claimed without a proven acknowledgement.
 const UNKNOWN: u8 = 1;
+/// Neo: atomic encoding of an acknowledged input write.
 const DONE: u8 = 2;
 
 /// Proof that this attempt may write input: the cell read `NotSent` and now reads `Unknown`.
@@ -609,19 +611,23 @@ impl AckedInput {
 /// The most raw log lines one call keeps. Far above a real click's (a `covered` click retrying
 /// for 1 s logs 33); a call with no timeout retrying for the whole run would otherwise grow
 /// without bound.
+/// Deviation: `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` Neo bounds the per-call in-memory log to protect host memory during unbounded retries.
 const MAX_CALL_LOG_LINES: usize = 1000;
 
 /// Records carry only a bounded copy of the reply's folded log. These limits never change
 /// the raw log returned to JavaScript, which remains Playwright's.
+/// Deviation: `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` Neo caps only the recorded folded log; the Playwright reply remains whole.
 const MAX_RECORD_LOG_LINES: usize = 200;
 
 /// The most call records a run keeps: the first calls to arrive.
+/// Deviation: `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` Neo bounds `RunOutcome` calls; trace sinks still receive every call.
 const MAX_CALL_RECORDS: usize = 1000;
 
 /// The most record bytes (params plus folded log) a run keeps. A record's params are charged
 /// when its call arrives, so a record that would not fit is never held; its log is charged when
 /// the call finishes, or at [`Trace::take`] for one still running, because only then is it
 /// final.
+/// Deviation: `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` Neo bounds `RunOutcome` record memory; the separate store applies its own detail budget.
 const MAX_TRACE_BYTES: usize = 1024 * 1024;
 
 /// The durable state of one call, shared by its `Progress` and the run's `Trace`. Its record
@@ -1341,7 +1347,7 @@ mod tests {
         let run = RunScope::new(
             Deadline::new(Duration::from_hours(1), CancellationToken::new()),
             TaskTracker::new(),
-            Default::default(),
+            Arc::default(),
         );
         let entry = || {
             CallEntry::for_test(CallStart {

@@ -3,6 +3,7 @@
 #[path = "support/fake_browser.rs"]
 mod fake_browser;
 
+use neo_runtime::RunOrigin;
 use std::time::{Duration, Instant};
 
 use fake_browser::{FakeBrowser, Replies};
@@ -168,7 +169,7 @@ async fn tests_that_a_listed_page_forced_click_waits_for_another_runs_trial() {
     }
     let forced = runtime
         .run(neo_runtime::RunRequest {
-            origin: Default::default(),
+            origin: RunOrigin::default(),
             code: format!(
                 "{WIRE}
                  get('context@default','pages');

@@ -1,4 +1,4 @@
-//! One SeaORM entity per table. Every child table's key leads with `run_id` and belongs to its
+//! Neo: One SeaORM entity per table. Every child table's key leads with `run_id` and belongs to its
 //! run, so a run's rows are primary-key ranges and reads use `find_related`. The schema itself is
 //! the migrations' (`db/migration.rs`); a test holds the two to the same columns.
 

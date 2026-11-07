@@ -11,6 +11,7 @@
 #[path = "support/browser.rs"]
 mod browser;
 
+use neo_runtime::RunOrigin;
 use std::time::Duration;
 
 use browser::{Fixture, Tab};
@@ -45,7 +46,7 @@ fn request(tab: &Tab, code: &str) -> RunRequest {
 /// A run of `code` on the tab that `cancel` ends.
 fn cancellable(tab: &Tab, code: &str, cancel: &CancellationToken) -> RunRequest {
     RunRequest {
-        origin: Default::default(),
+        origin: RunOrigin::default(),
         code: code.to_string(),
         page: PageId::new(tab.target_id.clone()),
         timeout: Duration::from_secs(30),

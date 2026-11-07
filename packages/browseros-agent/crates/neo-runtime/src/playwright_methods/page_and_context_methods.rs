@@ -1,4 +1,4 @@
-//! Context and Page wire handlers. Frame handlers stay in `method_router::serve` and receive
+//! Neo: Context and Page wire handlers. Frame handlers stay in `method_router::serve` and receive
 //! their own page's session; these lifecycle calls use the same registry and closure tokens.
 
 use std::sync::Arc;
@@ -31,12 +31,10 @@ use crate::browser_representations::web_storage;
 use crate::chromium_bridge::frames::FrameScope;
 use crate::debugger::DEFAULT_CONTEXT;
 use crate::method_router::encode_result;
-use crate::playwright_methods::browser_methods;
 use crate::playwright_methods::click::PageError;
 use crate::playwright_methods::content::WriteTurn;
-use crate::playwright_methods::highlight;
 use crate::playwright_methods::history::{self, HistoryOptions};
-use crate::playwright_methods::navigate;
+use crate::playwright_methods::{browser_methods, highlight, navigate};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::quickjs_bridge;
 

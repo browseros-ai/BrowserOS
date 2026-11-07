@@ -7,6 +7,7 @@
 )]
 mod browser;
 
+use neo_runtime::RunOrigin;
 use std::time::Duration;
 
 use browser::{Fixture, Tab, e2e_browser};
@@ -47,7 +48,7 @@ async fn run_cleanup_case(drop_future: bool) {
         .unwrap_or_else(|error| panic!("connecting the run: {error}"));
     let cancel = CancellationToken::new();
     let request = RunRequest {
-        origin: Default::default(),
+        origin: RunOrigin::default(),
         code: "const created = await context.browser().newContext();
 const other = await created.newPage();
 await other.goto(page.url().replace('/start', '/created'));

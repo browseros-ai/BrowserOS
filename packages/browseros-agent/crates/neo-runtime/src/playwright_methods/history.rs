@@ -1027,7 +1027,7 @@ mod tests {
         let run = RunScope::new(
             Deadline::new(Duration::from_mins(1), CancellationToken::new()),
             TaskTracker::new(),
-            Default::default(),
+            Arc::default(),
         );
         Progress::new(entry, timeout, run, CancellationToken::new())
     }

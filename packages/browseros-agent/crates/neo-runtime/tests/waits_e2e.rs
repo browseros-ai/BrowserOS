@@ -22,6 +22,7 @@
 #[path = "support/browser.rs"]
 mod browser;
 
+use neo_runtime::RunOrigin;
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
@@ -123,7 +124,7 @@ fn request(
     cancel: CancellationToken,
 ) -> RunRequest {
     RunRequest {
-        origin: Default::default(),
+        origin: RunOrigin::default(),
         code: code.to_string(),
         page: PageId::new(target_id.to_string()),
         timeout,

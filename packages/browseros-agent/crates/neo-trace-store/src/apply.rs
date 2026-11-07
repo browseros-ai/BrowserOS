@@ -1,12 +1,12 @@
-//! Transaction-local projection of typed events onto SeaORM entities. This layer has no queue,
+//! Neo: Transaction-local projection of typed events onto SeaORM entities. This layer has no queue,
 //! clock, live notifications, or retry state: applying an input twice has the same durable effect.
 //! The writer supplies the receipt time and publishes heads only after this transaction commits.
 
 use neo_runtime::{RunEvent, RunId, RunStarted};
+use sea_orm::ActiveValue::Set;
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
-    ActiveValue::Set, ColumnTrait, DatabaseTransaction, DbErr, EntityTrait, IntoActiveModel,
-    Iterable, QueryFilter,
+    ColumnTrait, DatabaseTransaction, DbErr, EntityTrait, IntoActiveModel, Iterable, QueryFilter,
 };
 use ulid::Ulid;
 
@@ -21,8 +21,11 @@ mod lifecycle;
 pub(crate) use artifacts::{forget_chunk, withhold};
 pub(crate) use lifecycle::{reconcile, sweep};
 
+/// Neo: bounds rows per run; overflow remains visible in run counts and worst delivery.
 pub(crate) const CALL_CAP: u64 = 50_000;
+/// Neo: bounds synchronous getter rows independently of browser call numbering.
 pub(crate) const GETTER_CAP: u64 = 10_000;
+/// Neo: bounds per-run detail bytes while retaining later operations as counted stubs.
 pub(crate) const DETAIL_CAP: usize = 16 << 20;
 
 /// Applies one accepted input. A returned session key is dirtied only in the writer's local

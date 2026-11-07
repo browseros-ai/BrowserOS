@@ -1,4 +1,4 @@
-//! `trace_sessions`: one row per session, kept by one upsert per run start and end (never
+//! Neo: `trace_sessions`: one row per session, kept by one upsert per run start and end (never
 //! rebuilt from the runs), and removed with the session's last run.
 
 use sea_orm::entity::prelude::*;

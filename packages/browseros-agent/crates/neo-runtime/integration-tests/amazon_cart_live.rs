@@ -21,10 +21,10 @@
 )]
 mod browser;
 
-use std::env;
-use std::io;
+use neo_runtime::RunOrigin;
 use std::io::Write;
 use std::time::Duration;
+use std::{env, io};
 
 use browser::{Fixture, Tab};
 use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime};
@@ -60,7 +60,7 @@ const CART_STATE: &str = r"(() => {
 async fn run(runtime: &Runtime, page: &PageId, code: &str, timeout: Duration) -> RunOutcome {
     runtime
         .run(RunRequest {
-            origin: Default::default(),
+            origin: RunOrigin::default(),
             code: code.to_string(),
             page: page.clone(),
             timeout,

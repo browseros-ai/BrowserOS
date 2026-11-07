@@ -1,4 +1,5 @@
 //! A held screenshot cleanup must not block another tab or a closed tab's queued capture.
+use neo_runtime::RunOrigin;
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use neo_runtime::{PageId, RunRequest, RunStatus, Runtime};
 use std::env;
@@ -44,7 +45,7 @@ async fn held_cleanup_keeps_other_calls_live() {
         async move {
             runtime
                 .run(RunRequest {
-                    origin: Default::default(),
+                    origin: RunOrigin::default(),
                     code: "await page.screenshot({omitBackground:true,timeout:0})".into(),
                     page: PageId::new(target),
                     timeout: Duration::from_secs(30),
@@ -65,7 +66,7 @@ async fn held_cleanup_keeps_other_calls_live() {
     };
     let second = runtime
         .run(RunRequest {
-            origin: Default::default(),
+            origin: RunOrigin::default(),
             code: code.into(),
             page: PageId::new(if mode == "independent" { other } else { target }),
             timeout: Duration::from_secs(20),

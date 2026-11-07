@@ -13,9 +13,9 @@
 #[path = "support/browser.rs"]
 mod browser;
 
+use neo_runtime::RunOrigin;
 use std::ffi::OsString;
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use browser::{Fixture, Tab};
 use neo_runtime::{CallResult, Delivery, PageId, RunOutcome, RunRequest, RunStatus, Runtime};
@@ -64,7 +64,7 @@ async fn runtime(tab: &Tab) -> Runtime {
 
 fn request(tab: &Tab, code: &str, timeout: Duration, cancel: CancellationToken) -> RunRequest {
     RunRequest {
-        origin: Default::default(),
+        origin: RunOrigin::default(),
         code: code.to_string(),
         page: PageId::new(tab.target_id.clone()),
         timeout,

@@ -7,6 +7,7 @@
 )]
 mod browser;
 
+use neo_runtime::RunOrigin;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
@@ -32,7 +33,7 @@ async fn run(tab: &Tab, target: &str, code: &str) -> RunOutcome {
     tab.runtime()
         .await
         .run(RunRequest {
-            origin: Default::default(),
+            origin: RunOrigin::default(),
             code: format!("{WIRE}\n{code}"),
             page: PageId::new(target.to_string()),
             timeout: Duration::from_secs(15),
@@ -186,7 +187,7 @@ async fn tests_that_sdk_created_pages_keep_their_targets_across_runs() {
         .collect();
     let runtime = Runtime::connect(tab.cdp.clone()).await.unwrap();
     let request = RunRequest {
-        origin: Default::default(),
+        origin: RunOrigin::default(),
         code: r"
           const before = context.pages();
           const first = await context.newPage();
@@ -250,7 +251,7 @@ async fn tests_that_sdk_created_pages_keep_their_targets_across_runs() {
     assert_eq!(tab.evaluate("window.runClicks").await, 0);
 
     let next=runtime.run(RunRequest {
-        origin: Default::default(),
+        origin: RunOrigin::default(),
         code:"await page.locator('html').click(); return {url:page.url(),closed:page.isClosed()};".to_string(),
         page:PageId::new(second.id.clone()), timeout:Duration::from_secs(10), cancel:CancellationToken::new(), artifacts:None,
     }).await;

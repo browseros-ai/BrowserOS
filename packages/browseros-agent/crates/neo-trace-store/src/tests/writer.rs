@@ -1,4 +1,4 @@
-//! FIFO visibility, pressure, database outages, and bounded shutdown through the public store.
+//! Neo: FIFO visibility, pressure, database outages, and bounded shutdown through the public store.
 //! Pause is a writer-only test seam; producers always execute the production synchronous path.
 
 use std::sync::atomic::Ordering;

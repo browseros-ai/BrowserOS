@@ -1,4 +1,4 @@
-//! Run traces: how a host learns what each run did, through one door with a list of listeners.
+//! Neo: Run traces: how a host learns what each run did, through one door with a list of listeners.
 //! A host installs [`TraceSink`]s on the [`Runtime`](crate::Runtime), such as a trace store and
 //! a live feed. Every run asks each sink, before anything can fail, whether it listens, and the
 //! sinks that do get the run's [`RunEvent`]s. Nothing here stores anything: persistence is one
@@ -38,25 +38,31 @@ use crate::run::{CallLocation, CallRecord, Delivery, PageId, RunError, RunReques
 
 /// The version of this module's event vocabulary, for sinks that persist or forward events: a
 /// change that a reader of earlier events must know about bumps it.
+/// Neo: version of the runtime-owned event vocabulary, independent of the browser protocol.
 pub const TRACE_EVENT_VERSION: u16 = 1;
 
 /// The most bytes a host label keeps: a [`SessionKey`], and [`RunOrigin`]'s client and id
 /// values. Every sink queues them and a store keeps them with each run, so a host's labels must
 /// not grow without bound.
+/// Neo: bounds host labels queued with each run; Playwright has no Neo host labels.
 const MAX_LABEL_BYTES: usize = 256;
 
 /// The most host ids one run keeps ([`RunOrigin::ids`]).
+/// Neo: bounds the host correlation labels carried with a Neo run.
 const MAX_RUN_IDS: usize = 16;
 
 /// The longest [`IdKey`].
+/// Neo: bounds keys in Neo host correlation metadata.
 const MAX_ID_KEY_BYTES: usize = 64;
 
 /// The last millisecond a ULID's 48-bit clock holds, in the year 10889.
+/// Platform: ULID timestamps have 48 bits (`ulid::Ulid::TIME_BITS`).
 const MAX_ULID_MS: u64 = (1 << Ulid::TIME_BITS) - 1;
 
 /// The process's one source of run ids. Monotonic: an id minted in the same millisecond as the
 /// one before it, or after the clock stepped back, is that id plus one, so mint order is sort
 /// order across every `Runtime` in the process.
+/// Neo: one process-wide generator keeps run mint order equal to trace listing order.
 static RUN_IDS: Mutex<Generator> = Mutex::new(Generator::new());
 
 /// A listener on every run of a [`Runtime`](crate::Runtime), installed with

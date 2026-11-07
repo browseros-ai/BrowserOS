@@ -1,4 +1,4 @@
-//! The translator's tests: Playwright's real spec through the dialect, and each way a spec is
+//! Neo: The translator's tests: Playwright's real spec through the dialect, and each way a spec is
 //! rejected.
 
 use std::fs;
@@ -173,6 +173,7 @@ fn committed_upstream_pins_the_vendored_files() {
 
 /// A small Playwright file: a `Page` with two commands, a `Frame` that extends it, a `Response`,
 /// and an enum.
+/// Neo: PLAYWRIGHT is a translator fixture independent of the generated protocol.
 const PLAYWRIGHT: &str = "\
 Page:
   type: interface
@@ -197,8 +198,10 @@ Mode:
   - slow
 ";
 
+/// Neo: SERVE is a translator fixture independent of the generated protocol.
 const SERVE: &str = "interfaces:\n  Page: [title]\ntypes: [Mode]\n";
 
+/// Neo: INJECTED is a translator fixture independent of the generated protocol.
 const INJECTED: &str = "\
 Injected:
   type: interface
@@ -605,6 +608,7 @@ fn with_pick(body: &str, defs: &str) -> String {
     format!("{INJECTED}    pick:\n      internal: true\n{body}{defs}")
 }
 
+/// Neo: INTERCEPTOR is a translator fixture independent of the generated protocol.
 const INTERCEPTOR: &str = "Interceptor:\n  type: handle\n";
 
 #[test]
@@ -721,6 +725,7 @@ fn every_handle_definition_is_reachable_from_injected() {
 /// Every place a handle may cross, in one scratch spec: a handle argument, a result that holds an
 /// element next to primitives, a result union of a string and a named handle, and a call that
 /// consumes that handle.
+/// Neo: HANDLES is a translator fixture independent of the generated protocol.
 const HANDLES: &str = "\
 Injected:
   type: interface

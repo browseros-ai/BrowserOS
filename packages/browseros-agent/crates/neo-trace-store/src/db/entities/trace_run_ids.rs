@@ -1,4 +1,4 @@
-//! `trace_run_ids`: the host's own ids for a run (`zuzu.task` → `t_123`), keyed
+//! Neo: `trace_run_ids`: the host's own ids for a run (`zuzu.task` → `t_123`), keyed
 //! `(run_id, key)`, with an index on `(key, value)` so finding runs by an id is one index range.
 //! Every id is text, so a new kind of id is a new key, never a schema change.
 

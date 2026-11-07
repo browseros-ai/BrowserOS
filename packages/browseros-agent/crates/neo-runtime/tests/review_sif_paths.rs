@@ -3,6 +3,7 @@
 #[expect(dead_code, reason = "shared real-browser fixture")]
 mod browser;
 
+use neo_runtime::RunOrigin;
 use std::fs;
 use std::os::unix::fs as unix_fs;
 use std::time::Duration;
@@ -39,7 +40,7 @@ async fn directory_upload_never_reads_through_an_outside_symlink() {
     .await;
     let runtime = Runtime::connect(tab.cdp.clone()).await.expect("runtime");
     let outcome = runtime.run(RunRequest {
-        origin: Default::default(),
+        origin: RunOrigin::default(),
         code: "const upload=await page.locator('#folder').setInputFiles('tree').then(()=> 'resolved',e=>e.name); return {upload,files:await page.evaluate(async()=>Promise.all([...document.querySelector('input').files].map(async f=>({name:f.name,text:await f.text()}))))};".into(),
         page: PageId::new(tab.target_id.clone()),
         timeout: Duration::from_secs(15),

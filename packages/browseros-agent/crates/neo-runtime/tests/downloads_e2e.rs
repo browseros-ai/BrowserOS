@@ -14,6 +14,7 @@
 #[path = "support/browser.rs"]
 mod browser;
 
+use neo_runtime::RunOrigin;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -51,7 +52,7 @@ async fn open() -> Option<Tab> {
 
 fn request(target: &str, code: &str) -> RunRequest {
     RunRequest {
-        origin: Default::default(),
+        origin: RunOrigin::default(),
         code: code.to_string(),
         page: PageId::new(target.to_string()),
         timeout: Duration::from_secs(30),

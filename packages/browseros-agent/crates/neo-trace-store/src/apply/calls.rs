@@ -1,4 +1,4 @@
-//! Call and getter projections. Call ends and delivery are separate guarded upserts: replaying
+//! Neo: Call and getter projections. Call ends and delivery are separate guarded upserts: replaying
 //! an older end must never overwrite a delivery acknowledged after that end was published.
 
 use neo_runtime::{CallResult, GetterResult, RunEvent};

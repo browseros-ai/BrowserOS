@@ -1,4 +1,4 @@
-//! `__neo_runtime`, the only door from a run's JS into Rust. neo-quickjs-injected's
+//! Neo: `__neo_runtime`, the only door from a run's JS into Rust. neo-quickjs-injected's
 //! `runtime-bridge.ts` calls `get` for every synchronous Playwright getter and `call` for every
 //! browser call, and the realm's `console` calls `log`.
 //!
@@ -52,7 +52,6 @@ use crate::browser_representations::network::{HopId, LogError, ObjectKind as Net
 use crate::browser_representations::tabs::Tabs;
 use crate::chromium_bridge::page_events;
 use crate::deadline::{Deadline, Stop};
-use crate::debugger;
 use crate::events::{self, CONTEXT_GUID};
 use crate::method_router::Dispatcher;
 use crate::playwright_methods::browser_methods::{self, BROWSER_GUID};
@@ -62,10 +61,9 @@ use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunError};
 #[cfg(feature = "test-host")]
 use crate::test_host::TestHost;
-use crate::trace;
-use crate::trace::redact;
-use crate::trace::{ConsoleLine, GetterResult, RunEvent, RunTap};
+use crate::trace::{ConsoleLine, GetterResult, RunEvent, RunTap, redact};
 use crate::url_match::{self, SerializedUrlMatch, UrlPart};
+use crate::{debugger, trace};
 
 /// The guid the realm gives a run's page, in the `<type>@<id>` form Playwright's protocol uses.
 pub(crate) fn page_guid(page: &PageId) -> String {
@@ -327,7 +325,9 @@ const MAX_RANDOM_BYTES: usize = 65_536;
 
 /// The most `console` text and lines a run keeps. Kept lines live in Rust, outside the realm's
 /// memory limit, so without a cap one script could hold any amount of the server's memory.
+/// Deviation: `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` Neo bounds console bytes retained in the outcome to protect host memory.
 const MAX_LOG_BYTES: usize = 1024 * 1024;
+/// Deviation: `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` Neo bounds console lines retained in the outcome to protect host memory.
 const MAX_LOG_LINES: usize = 1000;
 
 /// Lines the script wrote with `console`, each with when it was written. Shared because the
@@ -664,7 +664,7 @@ impl Getters {
         let request: GetRequest = serde_json::from_str(text).map_err(|error| {
             self.throw(
                 ctx,
-                GetError::BadRequest(format!("bad getter request: {error}")),
+                &GetError::BadRequest(format!("bad getter request: {error}")),
             )
         })?;
         let (object, field) = match &request {
@@ -713,7 +713,7 @@ impl Getters {
         });
         match answer {
             Ok(value) => Ok(value.to_string()),
-            Err(error) => Err(self.throw(ctx, error)),
+            Err(error) => Err(self.throw(ctx, &error)),
         }
     }
 
@@ -966,8 +966,8 @@ impl Getters {
         }
     }
 
-    fn throw(&self, ctx: &Ctx<'_>, error: GetError) -> rquickjs::Error {
-        let error = self.error(&error);
+    fn throw(&self, ctx: &Ctx<'_>, error: &GetError) -> rquickjs::Error {
+        let error = self.error(error);
         throw_named(ctx, &error.name, &error.message)
     }
 }

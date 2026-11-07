@@ -1,4 +1,4 @@
-//! The schema and its ledger: an empty file, every older file, a file claw-server also uses, and
+//! Neo: The schema and its ledger: an empty file, every older file, a file claw-server also uses, and
 //! the ways a ledger can disagree with this build.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -13,7 +13,6 @@ use sea_orm_migration::prelude::{
 };
 
 use super::support::{count, exec, inspect, ledger, objects, scratch, texts};
-use crate::db;
 use crate::db::entities::{
     trace_call_artifacts, trace_calls, trace_getters, trace_logs, trace_pages, trace_run_ids,
     trace_runs, trace_sessions,
@@ -23,9 +22,10 @@ use crate::db::migration::{
 };
 use crate::{
     CallQuery, CallState, GetterOutcome, Loss, RunQuery, RunState, SettledBy, StoreConfig,
-    StoreError, Timeline, TraceStore, Unfinished,
+    StoreError, Timeline, TraceStore, Unfinished, db,
 };
 
+/// Neo: the stable run id used by frozen migration-prefix fixtures.
 const FIXTURE_RUN: &str = "01JC8Z3K4R0000000000000001";
 
 async fn open(path: &Path) -> TraceStore {

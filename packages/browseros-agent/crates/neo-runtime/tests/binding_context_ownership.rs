@@ -6,6 +6,7 @@
 #[expect(dead_code, reason = "only the browser fixture is used")]
 mod browser;
 
+use neo_runtime::RunOrigin;
 use std::time::Duration;
 
 use browser::{Fixture, Tab};
@@ -79,7 +80,7 @@ async fn tests_that_a_binding_in_another_browser_context_does_not_keep_an_ended_
         let runtime = runtime.clone();
         tokio::spawn(async move {
             runtime.run(RunRequest {
-                origin: Default::default(),
+                origin: RunOrigin::default(),
                 code: format!("await context.exposeFunction('shared', () => '{label}'); await page.evaluate(() => window.ready = true); await new Promise(() => {{}})"),
                 page,
                 timeout: Duration::from_mins(1),

@@ -35,21 +35,18 @@
 use neo_runtime_spec::{ParamKind, ParamShape};
 use std::collections::hash_map::RandomState;
 use std::collections::{HashMap, HashSet};
-use std::future;
 use std::hash::{BuildHasher, Hasher};
-use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as SyncMutex, Weak};
+use std::{future, mem};
 
 use browseros_cdp::{CdpClient, CdpEvent, SessionId};
 use neo_runtime_spec::{MethodGroup, MethodMeta};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use tokio::sync::broadcast::{
-    self,
-    error::{RecvError, TryRecvError},
-};
+use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+use tokio::sync::broadcast::{self};
 use tokio::sync::{Mutex, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -1465,7 +1462,8 @@ mod test_hooks {
     use std::{env, thread};
 
     use browseros_cdp::CdpEvent;
-    use tokio::sync::broadcast::{self, error::RecvError};
+    use tokio::sync::broadcast::error::RecvError;
+    use tokio::sync::broadcast::{self};
     use tokio::time;
 
     /// Neo: how many binding calls this process has read, which picks each one's delay.

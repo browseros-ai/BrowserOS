@@ -1,4 +1,4 @@
-//! The synchronous boundary from arbitrary runtime threads to the writer. Byte permits travel
+//! Neo: The synchronous boundary from arbitrary runtime threads to the writer. Byte permits travel
 //! with each queued event through retries and are released only after commit (or counted loss).
 //! No path here waits for a runtime, a database, another producer, or a shared run registry.
 

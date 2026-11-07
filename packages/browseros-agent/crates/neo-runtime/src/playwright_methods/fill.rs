@@ -1,4 +1,4 @@
-//! Playwright's fill/selectOption loop B over the shared selector loop A, and inputValue's
+//! Neo: Playwright's fill/selectOption loop B over the shared selector loop A, and inputValue's
 //! read-only selector polling. Each mutating page call owns an input turn and delivery ticket;
 //! only a page-proven no-op permits another attempt.
 
@@ -645,7 +645,7 @@ mod tests {
             let run = RunScope::new(
                 Deadline::new(Duration::from_secs(30), CancellationToken::new()),
                 TaskTracker::new(),
-                Default::default(),
+                Arc::default(),
             );
             let trace = Trace::default();
             let entry = trace.call(CallStart {
@@ -744,7 +744,7 @@ mod tests {
         let run = RunScope::new(
             Deadline::new(run_timeout, CancellationToken::new()),
             TaskTracker::new(),
-            Default::default(),
+            Arc::default(),
         );
         let entry = CallEntry::for_test(CallStart {
             parent: None,

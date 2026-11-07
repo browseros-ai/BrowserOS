@@ -1,4 +1,4 @@
-//! Renders the contract as Rust: `src/serve.rs`, `src/injected.rs` and `src/spec_hash.rs`.
+//! Neo: Renders the contract as Rust: `src/serve.rs`, `src/injected.rs` and `src/spec_hash.rs`.
 //!
 //! `src/lib.rs` mounts these files `#[rustfmt::skip]`, so this printer owns their layout and no
 //! rustfmt version can change what `--check` compares. It writes what rustfmt would anyway:

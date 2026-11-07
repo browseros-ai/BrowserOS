@@ -1,5 +1,5 @@
-//! The closed sets the store keeps as text: a run's status and end, a call's state and delivery,
-//! a getter's field and outcome. Each is a `DeriveActiveEnum` string enum, so no typo can reach a
+//! Neo: The closed sets the store keeps as text: a run's status and end, a call's state and delivery,
+//! a getter's outcome. Each is a `DeriveActiveEnum` string enum, so no typo can reach a
 //! row and every reader matches exhaustively. They stay inside the crate: the public views have
 //! their own enums, so no SeaORM trait reaches the API.
 //!

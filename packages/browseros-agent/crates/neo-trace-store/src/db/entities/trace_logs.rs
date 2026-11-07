@@ -1,4 +1,4 @@
-//! `trace_logs`: the run's console lines, keyed `(run_id, line_no)`, written once with the run's
+//! Neo: `trace_logs`: the run's console lines, keyed `(run_id, line_no)`, written once with the run's
 //! end.
 
 use sea_orm::entity::prelude::*;

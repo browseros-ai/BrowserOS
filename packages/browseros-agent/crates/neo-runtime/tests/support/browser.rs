@@ -28,21 +28,19 @@
 //! Test crates include this file with `#[path]`. Cargo builds only top-level `tests/*.rs` files
 //! as test crates, so it is never one on its own.
 
+use neo_runtime::RunOrigin;
 use std::collections::BTreeSet;
-use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Display;
-use std::fs;
 use std::future::Future;
-use std::io;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::thread;
 use std::time::{Duration, Instant};
+use std::{env, fs, io, thread};
 
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy, SessionId};
 use neo_runtime::{PageId, RunOutcome, RunRequest, Runtime};
@@ -189,7 +187,7 @@ impl Tab {
         tokio::spawn(async move {
             runtime
                 .run(RunRequest {
-                    origin: Default::default(),
+                    origin: RunOrigin::default(),
                     code,
                     page,
                     timeout,

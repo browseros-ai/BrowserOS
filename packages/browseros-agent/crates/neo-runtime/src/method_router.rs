@@ -1,4 +1,4 @@
-//! Browser calls: the server half of Playwright's wire inside one run. Every
+//! Neo: Browser calls: the server half of Playwright's wire inside one run. Every
 //! `__neo_runtime.call` message comes through [`Dispatcher::call`], the only path a browser call
 //! can take. It names the call's target, decodes its params against the spec, opens its trace
 //! entry, runs it on its own tokio task with a [`Progress`], and turns the result into
@@ -74,8 +74,6 @@ use crate::abort::{Aborts, Registration};
 use crate::browser_representations::bindings::{self, Answering, BindingRoute, Outcome};
 use crate::browser_representations::clock::{self, ClockRoute};
 use crate::browser_representations::cookies_and_storage::StateFile;
-use crate::browser_representations::dialogs;
-use crate::browser_representations::downloads;
 use crate::browser_representations::init_scripts::{
     self, CONTEXT_ADD_INIT_SCRIPT_META, DISPOSABLE_DISPOSE_META, InitRoute, InitScripts,
     PAGE_ADD_INIT_SCRIPT_META,
@@ -84,8 +82,8 @@ use crate::browser_representations::locator_handlers::{self, Resolving};
 use crate::browser_representations::network::{HopId, ObjectKind as NetworkObject};
 use crate::browser_representations::page::{DialogAnswer, FrameTab, PageSession};
 use crate::browser_representations::responses::{self, NetworkCall};
-use crate::browser_representations::routes;
 use crate::browser_representations::tabs::{PageEntry, Tabs};
+use crate::browser_representations::{dialogs, downloads, routes};
 use crate::chromium_bridge::frames::FrameScope;
 use crate::chromium_bridge::keyboard_input::KeyboardTab;
 use crate::debugger::{CallToGate, DEBUGGER_PREFIX, DEFAULT_CONTEXT};
@@ -100,7 +98,6 @@ use crate::playwright_methods::click::{self, PointerOptions};
 use crate::playwright_methods::content::{self, SetContentOptions, WriteOrder, WriteTurn};
 use crate::playwright_methods::devices::{self, DeviceCall};
 use crate::playwright_methods::drag::{self, DragOptions};
-use crate::playwright_methods::drop_on;
 use crate::playwright_methods::element_ops::{
     self, BOUNDING_BOX_META, DispatchEventParams, DispatchOptions, ElementTarget, NeoElementParams,
     NeoSelectTextParams, SCROLL_INTO_VIEW_META, SELECT_TEXT_META,
@@ -108,23 +105,22 @@ use crate::playwright_methods::element_ops::{
 use crate::playwright_methods::evaluate::{self, EvalCall};
 use crate::playwright_methods::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::playwright_methods::forms::FormTab;
-use crate::playwright_methods::frame_element;
 use crate::playwright_methods::highlight::{self, HighlightOptions};
 use crate::playwright_methods::history::{
     self, Cursors, Ending, FinishNavigationOptions, FrameCursor, NeoFinishNavigationParams,
     NeoNavigationResult, NeoNextNavigationParams, NeoReleaseNavigationParams,
     NeoWaitForNavigationParams, WaitForNavigationOptions,
 };
-use crate::playwright_methods::lists;
 use crate::playwright_methods::navigate::{self, GotoOptions};
-use crate::playwright_methods::page_and_context_methods;
 use crate::playwright_methods::press::{self, PressOptions};
 use crate::playwright_methods::reads::{self, AttributeOptions, ReadOptions, SnapshotOptions};
-use crate::playwright_methods::set_input_files;
 use crate::playwright_methods::states::{self, StateOptions};
 use crate::playwright_methods::waits::{
     self, NeoWaitForLoadStateParams, NeoWaitForUrlParams, WaitForLoadStateOptions,
     WaitForSelectorOptions, WaitForUrlOptions, WaitTab,
+};
+use crate::playwright_methods::{
+    drop_on, frame_element, lists, page_and_context_methods, set_input_files,
 };
 use crate::progress::{
     CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
@@ -134,6 +130,7 @@ use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
 /// The shared budget for creation settlement, call draining and closing-state reads after
 /// the realm ends. Tasks still running keep their state and records read `Unfinished`.
 /// Unkept creations close their tabs when their late acknowledgements arrive.
+/// Neo: the outcome shares one bounded cleanup budget; `Runtime::drain` waits for remaining effects.
 const RECORDS_WAIT: Duration = Duration::from_secs(1);
 
 /// Neo: how long run end may take removing the run's init scripts, ending its bindings and
@@ -154,15 +151,18 @@ const HIGHLIGHTS_WAIT: Duration = Duration::from_secs(1);
 /// Playwright has no such cap; a script that awaits its calls, or a `Promise.all` over a page's
 /// worth of locators, stays far below it. A call that ends calls in flight skips it with its
 /// claim on what it ends ([`Inner::release_claim`]), so a full run can still let go.
+/// Deviation: `/packages/protocol/spec/frame.yml` `Frame.commands` Neo refuses excess concurrent calls to bound host task memory.
 const MAX_CALLS_IN_FLIGHT: usize = 64;
 
 /// The most request bytes (each call's message as the SDK sent it) one run's unfinished calls
 /// may total, for the same reason: a few calls with huge selectors would otherwise hold several
 /// copies of each outside the realm.
+/// Deviation: `/packages/protocol/spec/frame.yml` `Frame.commands` Neo refuses excess in-flight request bytes to bound host memory.
 const MAX_REQUEST_BYTES_IN_FLIGHT: usize = 8 * 1024 * 1024;
 
 // Playwright implements these on its eventful client. Neo has a call/reply bridge, so its
 // Frame extensions keep the whole wait in Rust. Wire shapes live in waits.rs and neo-commands.ts.
+/// Neo: trace metadata for the SDK navigation wait and its cursor lifecycle.
 static WAIT_FOR_URL_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "neo:waitForURL",
@@ -183,6 +183,7 @@ static WAIT_FOR_URL_META: MethodMeta = MethodMeta {
         },
     ],
 };
+/// Neo: trace metadata for the SDK navigation wait and its cursor lifecycle.
 static WAIT_FOR_LOAD_STATE_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "neo:waitForLoadState",
@@ -197,6 +198,7 @@ static WAIT_FOR_LOAD_STATE_META: MethodMeta = MethodMeta {
 // Playwright's client `waitForNavigation` (`@apiCall({ title: 'Wait for navigation' })`). A
 // glob or RegExp `url` is one call; a predicate is a cursor the realm steps through
 // (`history.rs`), one navigation per `neo:nextNavigation`, closed by `neo:finishNavigation`.
+/// Neo: trace metadata for the SDK navigation wait and its cursor lifecycle.
 static WAIT_FOR_NAVIGATION_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "neo:waitForNavigation",
@@ -217,6 +219,7 @@ static WAIT_FOR_NAVIGATION_META: MethodMeta = MethodMeta {
         },
     ],
 };
+/// Neo: trace metadata for the SDK navigation wait and its cursor lifecycle.
 static NEXT_NAVIGATION_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "neo:nextNavigation",
@@ -228,6 +231,7 @@ static NEXT_NAVIGATION_META: MethodMeta = MethodMeta {
     flags: &[],
     params: &[],
 };
+/// Neo: trace metadata for the SDK navigation wait and its cursor lifecycle.
 static FINISH_NAVIGATION_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "neo:finishNavigation",
@@ -239,6 +243,7 @@ static FINISH_NAVIGATION_META: MethodMeta = MethodMeta {
     flags: &[],
     params: &[],
 };
+/// Neo: trace metadata for the SDK navigation wait and its cursor lifecycle.
 static RELEASE_NAVIGATION_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "neo:releaseNavigation",
@@ -2399,9 +2404,8 @@ fn encode_reply(
 mod tests {
     use crate::playwright_methods::press::KeyInput;
     use std::collections::BTreeMap;
-    use std::env;
-    use std::fs;
     use std::path::PathBuf;
+    use std::{env, fs};
 
     use neo_runtime_spec::injected::AriaSnapshotMode;
     use neo_runtime_spec::serve::FrameWaitForSelectorParamsState;
@@ -2418,8 +2422,7 @@ mod tests {
     use crate::playwright_methods::forms::SelectOption;
     use crate::playwright_methods::screenshot::TabScreenshots;
     use crate::progress::{self, ErrorName};
-    use crate::run::Delivery;
-    use crate::run::PageId;
+    use crate::run::{Delivery, PageId};
     use crate::trace::RunTap;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
@@ -3877,6 +3880,7 @@ mod review_abort_priority {
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::playwright_methods::screenshot::TabScreenshots;
     use crate::run::PageId;
+    use crate::trace::RunTap;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
 
@@ -3887,7 +3891,7 @@ mod review_abort_priority {
         let run = RunScope::new(
             Deadline::new(Duration::from_secs(30), CancellationToken::new()),
             tasks.clone(),
-            Default::default(),
+            Arc::default(),
         );
         let (tabs, _) = Tabs::open(
             browser.cdp().await,
@@ -3898,7 +3902,7 @@ mod review_abort_priority {
             Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
-            crate::trace::RunTap::detached(),
+            RunTap::detached(),
         )
         .await
         .unwrap_or_else(|error| panic!("opening the fake tab: {error:?}"));

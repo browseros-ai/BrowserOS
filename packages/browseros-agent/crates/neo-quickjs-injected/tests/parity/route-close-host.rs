@@ -1,6 +1,7 @@
 //! Runs one script as a Neo run through the CDP port it is given (a proxy in the test), and
 //! cancels it when a line arrives on stdin; then drains. The outer test reads the tab while the
 //! run is still live (routeCloseSlowReply.test.mjs).
+use neo_runtime::RunOrigin;
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use neo_runtime::{PageId, RunRequest, Runtime};
 use std::env;
@@ -28,7 +29,7 @@ async fn main() {
     });
     let outcome = runtime
         .run(RunRequest {
-            origin: Default::default(),
+            origin: RunOrigin::default(),
             code: fs::read_to_string(&args[3]).expect("script"),
             page: PageId::new(args[2].clone()),
             timeout: Duration::from_secs(30),

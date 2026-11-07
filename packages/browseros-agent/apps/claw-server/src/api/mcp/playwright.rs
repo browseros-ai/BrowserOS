@@ -2,6 +2,7 @@
 //! runtime owns browser calls and cleanup, while page ids alone provide continuity. One
 //! shared runtime preserves its per-tab input ordering across MCP transport connections.
 
+use neo_runtime::RunOrigin;
 use std::{
     borrow::Cow,
     path::PathBuf,
@@ -276,7 +277,7 @@ impl PlaywrightService {
         let mut outcome = browser
             .runtime
             .run(RunRequest {
-                origin: Default::default(),
+                origin: RunOrigin::default(),
                 code: args.code,
                 page: PageId::new(page.clone()),
                 timeout: deadline.saturating_duration_since(Instant::now()),

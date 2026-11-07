@@ -1,4 +1,4 @@
-//! Selector, URL and lifecycle waits behind one loop and an input-free tab seam, in the main
+//! Neo: Selector, URL and lifecycle waits behind one loop and an input-free tab seam, in the main
 //! frame or a child frame.
 //!
 //! ```text
@@ -40,9 +40,8 @@ use crate::browser_representations::locator_handlers;
 use crate::browser_representations::page::{
     FrameState, FrameTab, NavigationObservation, PageSession,
 };
-use crate::chromium_bridge::frame_selector;
 use crate::chromium_bridge::frames::{FrameScope, Host};
-use crate::chromium_bridge::playwright_injected_methods;
+use crate::chromium_bridge::{frame_selector, playwright_injected_methods};
 use crate::playwright_methods::click::{LoopAWaits, PageError, SelectorFacts, Tab};
 use crate::playwright_methods::evaluate::{self, CreatedHandle, Handles};
 use crate::playwright_methods::navigate::{
@@ -908,8 +907,7 @@ mod tests {
         FrameWaitForSelectorParamsState as SelectorState, LifecycleEvent,
     };
     use serde_json::json;
-    use tokio::sync::Mutex as AsyncMutex;
-    use tokio::sync::{broadcast, watch};
+    use tokio::sync::{Mutex as AsyncMutex, broadcast, watch};
     use tokio::time::{self, Instant};
     use tokio_util::sync::CancellationToken;
     use tokio_util::task::TaskTracker;
@@ -1170,7 +1168,7 @@ mod tests {
             let scope = RunScope::new(
                 Deadline::new(Duration::from_millis(deadline), cancel.clone()),
                 TaskTracker::new(),
-                Default::default(),
+                Arc::default(),
             );
             let entry = CallEntry::for_test(CallStart {
                 parent: None,

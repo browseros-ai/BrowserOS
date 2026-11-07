@@ -1,4 +1,4 @@
-//! Run/page lifecycle and crash reconciliation. Runtime settlement, timeout, and restart are
+//! Neo: Run/page lifecycle and crash reconciliation. Runtime settlement, timeout, and restart are
 //! distinct durable facts; synthetic settlement marks incomplete capture instead of inventing
 //! a successful end or acknowledging input whose delivery is unknown.
 

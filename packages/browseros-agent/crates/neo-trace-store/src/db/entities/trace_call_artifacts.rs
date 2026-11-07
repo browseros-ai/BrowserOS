@@ -1,4 +1,4 @@
-//! `trace_call_artifacts` (migration 2): neo-feeds' after-call capture, keyed
+//! Neo: `trace_call_artifacts` (migration 2): neo-feeds' after-call capture, keyed
 //! `(run_id, call_no)` like the call it follows, so one retention owns both. The JPEG is NULL once
 //! the session is withheld.
 

@@ -1,4 +1,4 @@
-//! Opening a store: one store per file, a corrupt file set aside, reads refused once closed.
+//! Neo: Opening a store: one store per file, a corrupt file set aside, reads refused once closed.
 
 use std::fs;
 use std::time::Duration;

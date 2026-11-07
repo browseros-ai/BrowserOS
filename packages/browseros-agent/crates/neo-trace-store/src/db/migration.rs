@@ -1,4 +1,4 @@
-//! The store's schema as SeaORM migrations, on the store's own ledger.
+//! Neo: The store's schema as SeaORM migrations, on the store's own ledger.
 //!
 //! - **Its own ledger, `neo_trace_migrations`.** claw-server reads `seaql_migrations` by name and
 //!   takes any row it does not know for a newer build (`cs/db/mod.rs:236-244`), and a neo
@@ -23,10 +23,12 @@ use sea_orm_migration::prelude::*;
 use tracing::warn;
 
 /// The ledger table. Never `seaql_migrations`.
+/// Neo: a private migration ledger prevents collisions with the host database.
 pub(crate) const LEDGER: &str = "neo_trace_migrations";
 
 /// Every migration this build knows, in order. Its length sizes [`Migrator::migrations`] and the
 /// test fixtures, so the three cannot drift apart.
+/// Neo: the ordered schema history also sizes the migration upgrade fixtures.
 pub(crate) const MIGRATION_NAMES: [&str; 2] = ["m0001_trace_tables", "m0002_call_artifacts"];
 
 /// One seed per prefix of [`MIGRATION_NAMES`]: `FIXTURES[k]` is data written by a build that knew
@@ -34,6 +36,7 @@ pub(crate) const MIGRATION_NAMES: [&str; 2] = ["m0001_trace_tables", "m0002_call
 /// migrates each prefix, seeds it, opens the store and reads the seed back. A build's data is the
 /// previous build's plus what its migration added, so each seed extends the one before it.
 #[cfg(test)]
+/// Neo: one frozen database seed per migration prefix proves old files remain readable.
 pub(crate) const FIXTURES: [&str; MIGRATION_NAMES.len() + 1] = [
     "",
     include_str!("fixtures/m0001.sql"),

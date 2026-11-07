@@ -1,4 +1,4 @@
-//! Session change signals for feeds. Only the writer publishes them, after commit; readers
+//! Neo: Session change signals for feeds. Only the writer publishes them, after commit; readers
 //! seeing a new version can immediately read its rows through the independent WAL read pool.
 
 use std::collections::{BTreeSet, HashMap};

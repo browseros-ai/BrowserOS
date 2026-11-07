@@ -29,19 +29,18 @@ use crate::method_router::Dispatcher;
 use crate::playwright_methods::getters::CLOSED_TAB_MESSAGE;
 use crate::playwright_methods::screenshot::TabScreenshots;
 use crate::progress::{ErrorName, RunScope, Trace};
-use crate::quickjs;
 use crate::quickjs::Script;
-use crate::quickjs_bridge;
 use crate::quickjs_bridge::{Getters, Logs};
 use crate::run::{RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
 #[cfg(feature = "test-host")]
 use crate::test_host::TestHost;
-use crate::trace::redact;
 use crate::trace::{
-    ConsoleLine, EndCause, RunEvent, RunId, RunSink, RunStarted, RunTap, TraceSink,
+    ConsoleLine, EndCause, RunEvent, RunId, RunSink, RunStarted, RunTap, TraceSink, redact,
 };
+use crate::{quickjs, quickjs_bridge};
 
 /// A target id no tab can have, used to see how the browser reports a missing tab.
+/// Neo: a nonexistent target tests BrowserOS support before accepting runs.
 const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
 
 /// Runs agent scripts against tabs of one BrowserOS browser. Runs are independent: each gets
@@ -217,7 +216,7 @@ impl Runtime {
         guard.end(outcome, cause)
     }
 
-    /// Every exit returns to the run guard, which owns exactly one RunEnded emission.
+    /// Every exit returns to the run guard, which owns exactly one `RunEnded` emission.
     async fn execute(
         &self,
         guard: &RunGuard,

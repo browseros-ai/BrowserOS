@@ -3,6 +3,7 @@
 #[path = "support/browser.rs"]
 mod browser;
 
+use neo_runtime::RunOrigin;
 use std::time::{Duration, Instant};
 
 use browser::{Fixture, Tab};
@@ -25,7 +26,7 @@ async fn wait(tab: &Tab, expression: &str) {
 
 fn request(tab: &Tab, code: &str) -> RunRequest {
     RunRequest {
-        origin: Default::default(),
+        origin: RunOrigin::default(),
         page: PageId::new(tab.target_id.clone()),
         code: code.to_string(),
         timeout: Duration::from_secs(30),

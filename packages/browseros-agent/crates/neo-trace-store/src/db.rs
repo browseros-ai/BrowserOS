@@ -1,4 +1,4 @@
-//! The store's file: the lock that keeps it to one process, the pragmas, recovery of a corrupt
+//! Neo: The store's file: the lock that keeps it to one process, the pragmas, recovery of a corrupt
 //! file, migrations on the store's own ledger, and the two kinds of connection.
 //!
 //! - **One write connection**, owned by the writer task (`writer.rs`): writes never contend with
@@ -38,13 +38,17 @@ pub(crate) mod migration;
 use migration::{Migrator, Refusal, Schema};
 
 /// The read pool's size.
+/// Neo: a separate bounded WAL read pool keeps queries independent of writer retries.
 const READERS: u32 = 4;
 
 /// How long a connection waits on SQLite's lock before failing (claw-server's value).
+/// Neo: bounds SQLite lock waits on the persistence path, never on runtime emission.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// SQLite's primary result codes, the low byte of an extended code.
+/// Platform: SQLite primary result code `SQLITE_CORRUPT` is 11 (<https://www.sqlite.org/rescode.html>).
 pub(crate) const SQLITE_CORRUPT: i32 = 11;
+/// Platform: SQLite primary result code `SQLITE_NOTADB` is 26 (<https://www.sqlite.org/rescode.html>).
 pub(crate) const SQLITE_NOTADB: i32 = 26;
 
 /// An open store file.

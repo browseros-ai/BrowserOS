@@ -1,4 +1,4 @@
-//! `trace_calls`: one row per browser call or host method, keyed `(run_id, call_no)`. Created by
+//! Neo: `trace_calls`: one row per browser call or host method, keyed `(run_id, call_no)`. Created by
 //! whichever of `BeforeCall` and `AfterCall` arrives first; ended once, guarded, so a replay or a
 //! late duplicate cannot regress it.
 

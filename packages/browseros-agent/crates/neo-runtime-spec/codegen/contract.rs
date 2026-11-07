@@ -1,4 +1,4 @@
-//! What the translator emits, with every Neo decision made once.
+//! Neo: What the translator emits, with every Neo decision made once.
 //!
 //! The Rust and TypeScript printers render a [`Contract`] and decide nothing about names,
 //! shapes, derives or docs, so the two languages cannot disagree. This module owns Neo's rules
@@ -34,7 +34,9 @@ use crate::dialect::{
 use crate::error::{At, SpecError, did_you_mean};
 use crate::yaml::{Node, Value};
 
+/// Neo: the local manifest selecting served protocol commands and trace kind overrides.
 const SERVE: &str = "serve.yml";
+/// Neo: the local typed page glue manifest.
 const INJECTED: &str = "injected.yml";
 
 /// Both generated modules.
@@ -97,6 +99,7 @@ pub enum ParamKind {
 }
 
 impl ParamKind {
+    /// Neo: the closed trace classification vocabulary accepted in serve.yml overrides.
     const ALL: [ParamKind; 6] = [
         ParamKind::Plain,
         ParamKind::Selector,

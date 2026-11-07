@@ -1,4 +1,4 @@
-//! The one redaction policy for what leaves a run as a record. A record (`RunOutcome::calls`,
+//! Neo: The one redaction policy for what leaves a run as a record. A record (`RunOutcome::calls`,
 //! every [`RunEvent`](crate::RunEvent), the `tracing` line per call) can outlive the run in a
 //! store, so nothing an agent typed into a page may reach one by accident. Two rules:
 //!
@@ -27,9 +27,8 @@
 
 use std::borrow::Cow;
 use std::fmt::Write as _;
-use std::io;
-use std::mem;
 use std::sync::{Arc, Mutex};
+use std::{io, mem};
 
 use neo_runtime_spec::{ParamKind, ParamShape};
 use serde_json::{Map, Value, json};
@@ -39,37 +38,47 @@ use crate::quickjs_bridge::GetterField;
 
 /// A secret shorter than this is not searched for in free text: four characters match far too
 /// much text by chance. Its own param is still redacted by kind.
+/// Deviation: `/packages/protocol/spec/frame.yml` `Frame.commands.fill.parameters.value`: `value: string` Neo scrubs record text only for secrets of at least four characters to avoid accidental matches.
 pub(crate) const MIN_SECRET_CHARS: usize = 4;
 
 /// The most secrets one run registers. Past it the run is saturated, and every free text
 /// scrubbed after is replaced whole: a script filling thousands of values must not make each
 /// scrub search thousands of patterns, and an unsearched secret must not slip through.
+/// Deviation: `/packages/protocol/spec/frame.yml` `Frame.commands.fill.parameters.value`: `value: string` Neo replaces free text wholesale after saturation so an unregistered secret cannot escape.
 const MAX_SECRETS: usize = 512;
 
 /// A secret is searched for by its first this many characters. A match of a longer secret's
 /// start takes the rest of its line too, where the rest of the secret would be.
+/// Deviation: `/packages/protocol/spec/frame.yml` `Frame.commands.fill.parameters.value`: `value: string` Neo bounds pattern matching and removes the rest of a line when a cut secret matches.
 const MATCH_CHARS: usize = 256;
 
 /// What a match in free text becomes.
+/// Deviation: `/packages/protocol/spec/frame.yml` `Frame.commands.fill.parameters.value`: `value: string` Neo blanks secrets in records; Playwright trace params keep the original input.
 const REDACTED: &str = "[redacted]";
 
 /// The most bytes a params summary takes as JSON.
+/// Deviation: `/packages/protocol/spec/frame.yml` `Frame.commands.fill.parameters.value`: `value: string` Neo caps persisted param summaries; the script still receives the full protocol reply.
 pub(crate) const MAX_SUMMARY_BYTES: usize = 4 * 1024;
 
 // The caps on a run's own text in its `RunEnded`, Neo policy: the outcome keeps the script's
 // output whole for its caller, while a trace keeps a bounded, scrubbed copy.
 
 /// A return value larger than this as JSON is left out (`value_truncated`).
+/// Deviation: `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` Neo caps the recorded return value to bound persistence; the caller keeps its full value.
 pub(crate) const MAX_VALUE_BYTES: usize = 64 * 1024;
 /// The script is kept up to this many bytes.
+/// Deviation: `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` Neo keeps a bounded scrubbed script, independent of Playwright trace source resources.
 pub(crate) const MAX_SCRIPT_BYTES: usize = 64 * 1024;
 /// Each console line is kept up to this many bytes.
+/// Deviation: `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` Neo bounds recorded console lines; the script output returned to the caller is unchanged.
 pub(crate) const MAX_LINE_BYTES: usize = 8 * 1024;
 /// The run's error message is kept up to this many bytes.
+/// Deviation: `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` Neo bounds recorded errors while preserving the full Playwright error in the reply.
 pub(crate) const MAX_ERROR_BYTES: usize = 4 * 1024;
 
 /// How much of each string and collection a summary keeps, from roomy to tight. Params are
 /// summarized at the first limits whose summary fits [`MAX_SUMMARY_BYTES`].
+/// Deviation: `/packages/protocol/spec/frame.yml` `Frame.commands.fill.parameters.value`: `value: string` Neo progressively summarizes strings and collections instead of recording raw params.
 const SUMMARY_LIMITS: [Limits; 4] = [
     Limits {
         text: 1024,
@@ -86,6 +95,7 @@ const SUMMARY_LIMITS: [Limits; 4] = [
 /// The longest form of a searched secret, in bytes: [`MATCH_CHARS`] characters, each at most
 /// 12 bytes once escaped (`😀` or `%F0%9F%98%80`). Scanning this far past a cut point
 /// finds every match that starts before it.
+/// Platform: a Unicode scalar uses at most four UTF-8 bytes, each three bytes when percent encoded (`url::form_urlencoded`).
 const MAX_PATTERN_BYTES: usize = MATCH_CHARS * 12;
 
 #[derive(Clone, Copy)]
@@ -141,7 +151,12 @@ pub(crate) fn register_secrets(params: &Value, shapes: &[ParamShape], secrets: &
         &mut |text, kind| match kind {
             ParamKind::Secret => secrets.register(text),
             ParamKind::Url => register_url_secrets(text, secrets),
-            ParamKind::Plain | ParamKind::Selector | ParamKind::Key | ParamKind::Binary => {}
+            ParamKind::Key => {
+                if redact_key(text) != text {
+                    secrets.register(text);
+                }
+            }
+            ParamKind::Plain | ParamKind::Selector | ParamKind::Binary => {}
         },
     );
 }
@@ -149,9 +164,26 @@ pub(crate) fn register_secrets(params: &Value, shapes: &[ParamShape], secrets: &
 /// Getter initializers carry live URLs even though their records keep only page ids. Their
 /// discarded URL parts must also stay out of later free text, such as a returned initializer.
 pub(crate) fn register_getter_secrets(field: GetterField, value: &Value, secrets: &RunSecrets) {
-    fn url(page: &Value) -> Option<&str> {
-        page.pointer("/mainFrame/initializer/url")
-            .and_then(Value::as_str)
+    fn urls(value: &Value, secrets: &RunSecrets) {
+        match value {
+            Value::Array(items) => {
+                for item in items {
+                    urls(item, secrets);
+                }
+            }
+            Value::Object(fields) => {
+                for (key, value) in fields {
+                    if matches!(key.as_str(), "url" | "href")
+                        && let Some(url) = value.as_str()
+                    {
+                        register_url_secrets(url, secrets);
+                    } else {
+                        urls(value, secrets);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
     match field {
         GetterField::Url => {
@@ -159,18 +191,15 @@ pub(crate) fn register_getter_secrets(field: GetterField, value: &Value, secrets
                 register_url_secrets(url, secrets);
             }
         }
-        GetterField::Initializer => {
-            if let Some(url) = url(value) {
-                register_url_secrets(url, secrets);
-            }
-        }
-        GetterField::Pages => {
-            for page in value.as_array().into_iter().flatten() {
-                if let Some(url) = url(page) {
-                    register_url_secrets(url, secrets);
-                }
-            }
-        }
+        GetterField::Initializer
+        | GetterField::Pages
+        | GetterField::Frames
+        | GetterField::ParentFrame
+        | GetterField::ChildFrames
+        | GetterField::Opener
+        | GetterField::Chain
+        | GetterField::ParseUrl
+        | GetterField::SetUrl => urls(value, secrets),
         GetterField::Name | GetterField::Failure => {
             if let Some(text) = value.as_str() {
                 secrets.register(text);
@@ -857,6 +886,7 @@ pub(crate) fn json_len(value: &Value) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use crate::playwright_methods::evaluate::FRAME_EVAL_ON_SELECTOR_ALL_META;
     use neo_runtime_spec::Command;
     use neo_runtime_spec::serve::{
         FrameClickParams, FrameFillParams, FrameGetAttributeParams, FrameGotoParams,
@@ -1045,6 +1075,22 @@ mod tests {
             let press = json!({ "selector": "#a", "key": key });
             assert_eq!(summary::<FramePressParams>(&press)["key"], kept, "{key}");
         }
+        let secrets = RunSecrets::default();
+        register_secrets(
+            &json!({"key":"private-key-text"}),
+            FramePressParams::META.params,
+            &secrets,
+        );
+        assert!(
+            !secrets
+                .scrubber()
+                .scrub("Unknown key private-key-text")
+                .contains("private-key-text")
+        );
+        assert_eq!(
+            secrets.scrubber().scrub_protected("private-key-text"),
+            "private-key-text"
+        );
     }
 
     #[test]
@@ -1060,11 +1106,7 @@ mod tests {
             "arg": { "value": { "a": [{ "s": "typed" }, { "n": 1 }], "ta": { "b": "AAAAAA==", "k": "ui8" } }, "handles": [] },
         });
         assert_eq!(
-            summarize(
-                &eval,
-                crate::playwright_methods::evaluate::FRAME_EVAL_ON_SELECTOR_ALL_META.params
-            )
-            .params,
+            summarize(&eval, FRAME_EVAL_ON_SELECTOR_ALL_META.params).params,
             json!({
                 "selector": "li", "expression": "(ss) => ss.map(e => e.textContent)", "isFunction": true,
                 "arg": { "value": { "a": [{ "s": "[redacted 5]" }, { "n": 1 }], "ta": { "b": "[binary 4 bytes]", "k": "ui8" } }, "handles": [] },

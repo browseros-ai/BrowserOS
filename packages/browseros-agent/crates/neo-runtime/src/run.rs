@@ -1,4 +1,4 @@
-//! A script, its starting tab, and the outcome with every created or handed-out page.
+//! Neo: A script, its starting tab, and the outcome with every created or handed-out page.
 
 use std::path::PathBuf;
 use std::time::Duration;

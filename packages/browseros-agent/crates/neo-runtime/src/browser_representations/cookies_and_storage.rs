@@ -1535,6 +1535,7 @@ impl Permissions {
 
 #[cfg(test)]
 mod tests {
+    use crate::trace::RunTap;
     use std::time::Duration;
 
     use tokio::runtime::Handle;
@@ -1570,7 +1571,7 @@ mod tests {
         let run = RunScope::new(
             Deadline::new(Duration::from_mins(1), cancel),
             TaskTracker::new(),
-            Default::default(),
+            Arc::default(),
         );
         Progress::new(entry, 0.0, run, CancellationToken::new())
     }
@@ -1600,7 +1601,7 @@ mod tests {
             Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
-            crate::trace::RunTap::detached(),
+            RunTap::detached(),
         )
         .await
         .unwrap_or_else(|error| panic!("open: {error:?}"));
@@ -1675,7 +1676,7 @@ mod tests {
             Permissions::new(cleanup.clone()),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
-            crate::trace::RunTap::detached(),
+            RunTap::detached(),
         )
         .await
         .unwrap_or_else(|error| panic!("open: {error:?}"));
@@ -1959,7 +1960,7 @@ mod tests {
             Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
-            crate::trace::RunTap::detached(),
+            RunTap::detached(),
         )
         .await
         .unwrap_or_else(|error| panic!("open: {error:?}"));

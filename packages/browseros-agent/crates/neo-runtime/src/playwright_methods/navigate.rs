@@ -1,4 +1,4 @@
-//! Main-frame navigation and title policy. CDP lives in `page.rs` and the navigation's network
+//! Neo: Main-frame navigation and title policy. CDP lives in `page.rs` and the navigation's network
 //! record in `network.rs`; this seam keeps event ordering, lifecycle waits, the response lookup
 //! and cancellation testable without a browser or input turns.
 
@@ -465,7 +465,7 @@ mod tests {
         let run = RunScope::new(
             Deadline::new(Duration::from_mins(1), CancellationToken::new()),
             TaskTracker::new(),
-            Default::default(),
+            Arc::default(),
         );
         (
             Progress::new(entry, timeout, run.clone(), CancellationToken::new()),
