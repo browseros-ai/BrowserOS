@@ -14,11 +14,10 @@
  *   A Neo script has no file system: `path` travels with the call and neo-runtime writes the
  *   bytes into the run's artifact directory (`artifacts.rs`), relative paths only. A run
  *   without one refuses `path` with an Error naming the option.
- * - Deviation: `client/page.ts` `Page.pdf`: `const result = await this._channel.pdf(transportOptions, kNoTimeout);`
- *   The three screenshots resolve their timeout through `TimeoutSettings`, so their `signal`
- *   aborts the capture as Playwright's does (slice S). Playwright sends `page.pdf` with no
- *   signal, so a print never stops for one; Neo refuses one before anything reaches the page
- *   instead of ignoring it (med-pw-eval DECIDED). `undefined` and `null` are no signal.
+ *
+ * The three screenshots resolve their timeout through `TimeoutSettings`, so their `signal` aborts
+ * the capture as Playwright's does (slice S). `page.pdf` sends no timeout and no signal, as
+ * Playwright's `kNoTimeout` print, so a signal does not stop a print.
  */
 
 import type {
@@ -190,26 +189,11 @@ function screenshotFields(
 }
 
 /**
- * `page.pdf`'s refusal of a supplied `signal`, before any option is mapped or sent: it resolves
- * no timeout, so `TimeoutSettings` never hands it a signal to forward. `undefined` and `null`
- * are no signal, as Playwright's client acts only on a truthy one.
- * Deviation: `client/page.ts` `Page.pdf`: `const result = await this._channel.pdf(transportOptions, kNoTimeout);` Playwright's print ignores a signal; Neo refuses one, so a script never takes a print for abortable.
- */
-function refuseSignal(apiName: ApiName, options: { signal?: unknown }): void {
-  if (options.signal !== undefined && options.signal !== null)
-    throw new Error(`${apiName}: Neo does not support signal`)
-}
-
-/**
  * Playwright's `Page.pdf` option mapping: number sizes and margins become `px` strings, and
  * `margin` is copied so the caller's object stays as it was.
  * Playwright: `client/page.ts` `Page.pdf`
  */
-export function pdfParams(
-  apiName: ApiName,
-  options: PDFOptions & { signal?: unknown },
-): WithPath<PagePdfParams> {
-  refuseSignal(apiName, options)
+export function pdfParams(options: PDFOptions): WithPath<PagePdfParams> {
   const transportOptions: Record<string, unknown> = { ...options }
   const margin = options.margin ? { ...options.margin } : undefined
   if (margin) transportOptions.margin = margin

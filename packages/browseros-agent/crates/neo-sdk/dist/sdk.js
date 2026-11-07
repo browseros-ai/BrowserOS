@@ -2804,12 +2804,7 @@ function screenshotFields(apiName, options) {
   }
   return fields;
 }
-function refuseSignal(apiName, options) {
-  if (options.signal !== undefined && options.signal !== null)
-    throw new Error(`${apiName}: Neo does not support signal`);
-}
-function pdfParams(apiName, options) {
-  refuseSignal(apiName, options);
+function pdfParams(options) {
   const transportOptions = { ...options };
   const margin = options.margin ? { ...options.margin } : undefined;
   if (margin)
@@ -7180,7 +7175,7 @@ class Page extends ChannelOwner {
     return resultBuffer(result.binary);
   }
   async pdf(options = {}) {
-    const result = await this.#connection.sendPage("page.pdf", this.#guid, "pdf", pdfParams("page.pdf", options), 0);
+    const result = await this.#connection.sendPage("page.pdf", this.#guid, "pdf", pdfParams(options), 0);
     return resultBuffer(result.pdf);
   }
   async ariaSnapshot(options = {}) {

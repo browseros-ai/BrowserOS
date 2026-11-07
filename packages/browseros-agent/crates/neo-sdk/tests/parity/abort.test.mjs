@@ -14,7 +14,8 @@
 // - The capture rows (slice B2): an already-aborted signal on `page.screenshot`,
 //   `locator.screenshot` and `elementHandle.screenshot` rejects with `AbortError` before the page
 //   is touched; an abort mid-capture rejects and the page is restored. `page.pdf` is not here:
-//   Playwright sends it with no signal, and Neo refuses one (capture-options-review).
+//   Playwright sends it with no signal, so a print ignores one, as Neo's does
+//   (capture-pdf-signal-review).
 //
 // Plus the realm's `AbortController`/`AbortSignal` against Node's, `waitForURL` aborted mid-wait,
 // `AbortSignal.timeout`, a duck-typed signal, and an abort after the call settled. Errors are
