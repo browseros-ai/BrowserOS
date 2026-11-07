@@ -57,6 +57,7 @@ use crate::host::ids::{EpochMs, TabId};
 use crate::host::link::HostLink;
 use crate::host::presence::Presences;
 use crate::host::view::{FollowView, ShownTab};
+use crate::run::PageId;
 use lease::{CaptureKey, FrameDrops, Kind, Lease, RawFrame, Registry};
 pub(crate) use presets::{Preset, Quality};
 
@@ -163,6 +164,14 @@ impl CaptureHub {
         let viewer = Viewer::new();
         tokio::spawn(Arc::clone(self).play(view.clone(), shown.tab, lease, Arc::clone(&viewer)));
         Ok(VideoChunks::new(viewer, view, shown.tab))
+    }
+
+    /// Stops every capture of `target` at once, with no grace period. Withholding taints the
+    /// tabs a session touched for every session (the ledger's `withhold` returns them), and a
+    /// capture of a tainted tab must not linger for a viewer of another session. Its followers
+    /// see the capture end and move on with their views, which no longer show the tab.
+    pub(crate) fn end_captures(&self, target: &PageId) {
+        lease::stop_target(&self.captures, target);
     }
 
     /// Screencast frames dropped instead of forwarded since the hub started.

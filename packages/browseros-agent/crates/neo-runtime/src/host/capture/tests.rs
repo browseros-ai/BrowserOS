@@ -672,6 +672,38 @@ async fn withholding_ends_streams_and_a_waiting_frame_never_leaves() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_tainted_tabs_captures_end_at_once_for_every_session() {
+    let h = harness().await;
+    h.show(live(&[1, 2]));
+    let mut frames = h.screencast(Quality::High, None).await;
+    let first = h.browser.session_of("Page.startScreencast", 0).await;
+
+    // Another session that touched tab 1 was withheld: this view drops the tainted tab, and the
+    // host ends the tab's captures.
+    let tainted = Instant::now();
+    h.show(live(&[2]));
+    h.hub.end_captures(&PageId::new("target-1".to_string()));
+
+    let stops = h.browser.wait_for("Page.stopScreencast", 1).await;
+    assert_eq!(
+        stops[0].session.as_deref(),
+        Some(first.as_str()),
+        "the tainted tab's capture stopped"
+    );
+    assert!(
+        stops[0].at - tainted < STOP_GRACE / 4,
+        "without its grace period"
+    );
+    let second = h.browser.session_of("Page.startScreencast", 1).await;
+    h.browser.frame(&second, b"untainted", Some(1.0));
+    assert_eq!(
+        next(&mut frames).await.map(|frame| (frame.tab, frame.jpeg)),
+        Some((tab_id(2), Bytes::from_static(b"untainted"))),
+        "the follower moved on to the tab its view still shows"
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_stalled_viewer_is_dropped_after_thirty_seconds() {
     let h = harness().await;
     h.show(live(&[1]));

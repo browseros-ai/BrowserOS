@@ -245,6 +245,21 @@ pub(super) fn join_or_start(
     })
 }
 
+/// Stops every capture of `target` now, without a grace period, whoever watches it.
+pub(super) fn stop_target(registry: &Registry, target: &PageId) {
+    let Some(mut captures) = lock(registry) else {
+        return;
+    };
+    let doomed: Vec<Arc<Capture>> = captures
+        .values()
+        .filter(|capture| capture.key.target == *target)
+        .cloned()
+        .collect();
+    for capture in &doomed {
+        stop(&mut captures, capture);
+    }
+}
+
 async fn stop_after_grace(registry: Registry, capture: Arc<Capture>, departure: u64) {
     tokio::select! {
         () = time::sleep(cdp::STOP_GRACE) => {}
