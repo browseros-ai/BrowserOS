@@ -28,9 +28,13 @@ export type TimeoutInput = { timeout?: number; signal?: unknown }
  *
  * `waiter.ts`'s `refuseSignal`, the one refusal, prefixed with `apiName` as Playwright's
  * `_wrapApiCall` prefixes a client-side error; `null` inside a `wrapApiCall` body, which adds
- * the prefix itself.
+ * the prefix itself. Every timeout resolved here passes through it, and the reads that resolve
+ * none (`isVisible`, `isHidden`) call it themselves.
  */
-function refuse(options: TimeoutInput, apiName: ApiName | null): void {
+export function refuseSignalFor(
+  options: TimeoutInput,
+  apiName: ApiName | null,
+): void {
   try {
     refuseSignal(options)
   } catch (error) {
@@ -63,7 +67,7 @@ export class TimeoutSettings {
    * @throws `Error` prefixed with `apiName` (unless `null`) when the options carry a `signal`.
    */
   timeout(options: TimeoutInput, apiName: ApiName | null): number {
-    refuse(options, apiName)
+    refuseSignalFor(options, apiName)
     return this.#timeout(options)
   }
 
@@ -74,7 +78,7 @@ export class TimeoutSettings {
    * @throws `Error` prefixed with `apiName` (unless `null`) when the options carry a `signal`.
    */
   navigationTimeout(options: TimeoutInput, apiName: ApiName | null): number {
-    refuse(options, apiName)
+    refuseSignalFor(options, apiName)
     return this.#navigationTimeout(options)
   }
 

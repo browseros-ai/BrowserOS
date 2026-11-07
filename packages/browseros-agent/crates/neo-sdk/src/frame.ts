@@ -110,6 +110,7 @@ import {
   convertSelectOptionValues,
   type SelectOptionValues,
 } from './select-option'
+import { refuseSignalFor } from './timeout-settings'
 
 /** `click`'s options as a script passes them: the wire params plus `timeout`. */
 export type ClickOptions = Omit<FrameClickParams, 'selector'> & {
@@ -894,6 +895,9 @@ export class Frame {
     selector: string,
     options: IsVisibleOptions,
   ): Promise<boolean> {
+    // An immediate read: Playwright sends it with no timeout (`kNoTimeout`), so none is resolved
+    // here, but a signal is refused as every method refuses it.
+    refuseSignalFor(options ?? {}, apiName)
     const result = await this._connection.send(
       apiName,
       this._guid,
@@ -923,6 +927,8 @@ export class Frame {
     selector: string,
     options: IsHiddenOptions,
   ): Promise<boolean> {
+    // An immediate read, as `_isVisible`: no timeout, and a signal refused.
+    refuseSignalFor(options ?? {}, apiName)
     const result = await this._connection.send(
       apiName,
       this._guid,

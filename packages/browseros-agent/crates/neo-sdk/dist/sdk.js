@@ -3759,6 +3759,191 @@ function convertSelectOptionValues(values) {
   return { options };
 }
 
+// src/waiter.ts
+function refuseSignal(options) {
+  if (options.signal !== undefined && options.signal !== null)
+    throw new Error('Neo does not support the "signal" option yet');
+}
+async function wrapApiCall(apiName, body) {
+  try {
+    return await body();
+  } catch (e) {
+    if (e instanceof Error)
+      e.message = `${apiName}: ${e.message}`;
+    throw e;
+  }
+}
+
+class Waiter {
+  _dispose = [];
+  _failures = [];
+  _immediateError;
+  _logs = [];
+  static createForEvent() {
+    return new Waiter;
+  }
+  async waitForEvent(emitter, event, predicate) {
+    const { promise, dispose } = waitForEvent(emitter, event, predicate);
+    return await this.waitForPromise(promise, dispose);
+  }
+  rejectOnEvent(emitter, event, error, predicate) {
+    const { promise, dispose } = waitForEvent(emitter, event, predicate);
+    this._rejectOn(promise.then(() => {
+      throw typeof error === "function" ? error() : error;
+    }), dispose);
+  }
+  rejectOnTimeout(timeout, timeoutMessage) {
+    if (timeout) {
+      const { promise, dispose } = waitForTimeout(timeout);
+      this._rejectOn(promise.then(() => {
+        throw new TimeoutError(timeoutMessage);
+      }), dispose);
+    }
+  }
+  rejectImmediately(error) {
+    this._immediateError = error;
+  }
+  throwIfImmediatelyRejected() {
+    if (this._immediateError)
+      throw this._immediateError;
+  }
+  dispose() {
+    for (const dispose of this._dispose)
+      dispose();
+  }
+  async waitForPromise(promise, dispose) {
+    try {
+      if (this._immediateError)
+        throw this._immediateError;
+      const result = await Promise.race([promise, ...this._failures]);
+      if (dispose)
+        dispose();
+      return result;
+    } catch (e) {
+      if (dispose)
+        dispose();
+      this.dispose();
+      if (e instanceof Error)
+        rewriteErrorMessage(e, e.message + formatLogRecording(this._logs));
+      throw e;
+    }
+  }
+  log(s) {
+    this._logs.push(s);
+  }
+  _rejectOn(promise, dispose) {
+    this._failures.push(promise);
+    if (dispose)
+      this._dispose.push(dispose);
+  }
+}
+function waitForEvent(emitter, event, predicate) {
+  let listener = () => {};
+  const promise = new Promise((resolve, reject) => {
+    listener = async (eventArg) => {
+      try {
+        if (predicate && !await predicate(eventArg))
+          return;
+        emitter.removeListener(event, listener);
+        resolve(eventArg);
+      } catch (e) {
+        emitter.removeListener(event, listener);
+        reject(e);
+      }
+    };
+    emitter.addListener(event, listener);
+  });
+  const dispose = () => emitter.removeListener(event, listener);
+  return { promise, dispose };
+}
+function waitForTimeout(timeout) {
+  let timeoutId;
+  const promise = new Promise((resolve) => {
+    timeoutId = setTimeout(resolve, timeout);
+  });
+  const dispose = () => clearTimeout(timeoutId);
+  return { promise, dispose };
+}
+function formatLogRecording(log) {
+  if (!log.length)
+    return "";
+  const header = " logs ";
+  const headerLength = 60;
+  const leftLength = (headerLength - header.length) / 2;
+  const rightLength = headerLength - header.length - leftLength;
+  return `
+${"=".repeat(leftLength)}${header}${"=".repeat(rightLength)}
+${log.join(`
+`)}
+${"=".repeat(headerLength)}`;
+}
+function rewriteErrorMessage(e, newMessage) {
+  const lines = (e.stack?.split(`
+`) || []).filter((l) => l.startsWith("    at "));
+  e.message = newMessage;
+  const errorTitle = `${e.name}: ${e.message}`;
+  if (lines.length)
+    e.stack = `${errorTitle}
+${lines.join(`
+`)}`;
+  return e;
+}
+
+// src/timeout-settings.ts
+var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
+function refuseSignalFor(options, apiName) {
+  try {
+    refuseSignal(options);
+  } catch (error) {
+    if (apiName !== null && error instanceof Error)
+      error.message = `${apiName}: ${error.message}`;
+    throw error;
+  }
+}
+
+class TimeoutSettings {
+  #parent;
+  #defaultTimeout;
+  #defaultNavigationTimeout;
+  constructor(parent) {
+    this.#parent = parent;
+  }
+  setDefaultTimeout(timeout) {
+    this.#defaultTimeout = timeout;
+  }
+  setDefaultNavigationTimeout(timeout) {
+    this.#defaultNavigationTimeout = timeout;
+  }
+  timeout(options, apiName) {
+    refuseSignalFor(options, apiName);
+    return this.#timeout(options);
+  }
+  navigationTimeout(options, apiName) {
+    refuseSignalFor(options, apiName);
+    return this.#navigationTimeout(options);
+  }
+  #timeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#timeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+  #navigationTimeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultNavigationTimeout !== undefined)
+      return this.#defaultNavigationTimeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#navigationTimeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+}
+
 // src/frame.ts
 var LIFECYCLE_EVENTS = new Set([
   "load",
@@ -4020,6 +4205,7 @@ class Frame {
     return await this._isVisible("frame.isVisible", selector, options);
   }
   async _isVisible(apiName, selector, options) {
+    refuseSignalFor(options ?? {}, apiName);
     const result = await this._connection.send(apiName, this._guid, "isVisible", pickParams(FRAME_IS_VISIBLE_KEYS, {
       selector,
       ...options
@@ -4032,6 +4218,7 @@ class Frame {
     return await this._isHidden("frame.isHidden", selector, options);
   }
   async _isHidden(apiName, selector, options) {
+    refuseSignalFor(options ?? {}, apiName);
     const result = await this._connection.send(apiName, this._guid, "isHidden", pickParams(FRAME_IS_HIDDEN_KEYS, {
       selector,
       ...options
@@ -4154,191 +4341,6 @@ class Frame {
   }
   toJSON() {
     return { _type: "Frame", _guid: this._guid };
-  }
-}
-
-// src/waiter.ts
-function refuseSignal(options) {
-  if (options.signal !== undefined && options.signal !== null)
-    throw new Error('Neo does not support the "signal" option yet');
-}
-async function wrapApiCall(apiName, body) {
-  try {
-    return await body();
-  } catch (e) {
-    if (e instanceof Error)
-      e.message = `${apiName}: ${e.message}`;
-    throw e;
-  }
-}
-
-class Waiter {
-  _dispose = [];
-  _failures = [];
-  _immediateError;
-  _logs = [];
-  static createForEvent() {
-    return new Waiter;
-  }
-  async waitForEvent(emitter, event, predicate) {
-    const { promise, dispose } = waitForEvent(emitter, event, predicate);
-    return await this.waitForPromise(promise, dispose);
-  }
-  rejectOnEvent(emitter, event, error, predicate) {
-    const { promise, dispose } = waitForEvent(emitter, event, predicate);
-    this._rejectOn(promise.then(() => {
-      throw typeof error === "function" ? error() : error;
-    }), dispose);
-  }
-  rejectOnTimeout(timeout, timeoutMessage) {
-    if (timeout) {
-      const { promise, dispose } = waitForTimeout(timeout);
-      this._rejectOn(promise.then(() => {
-        throw new TimeoutError(timeoutMessage);
-      }), dispose);
-    }
-  }
-  rejectImmediately(error) {
-    this._immediateError = error;
-  }
-  throwIfImmediatelyRejected() {
-    if (this._immediateError)
-      throw this._immediateError;
-  }
-  dispose() {
-    for (const dispose of this._dispose)
-      dispose();
-  }
-  async waitForPromise(promise, dispose) {
-    try {
-      if (this._immediateError)
-        throw this._immediateError;
-      const result = await Promise.race([promise, ...this._failures]);
-      if (dispose)
-        dispose();
-      return result;
-    } catch (e) {
-      if (dispose)
-        dispose();
-      this.dispose();
-      if (e instanceof Error)
-        rewriteErrorMessage(e, e.message + formatLogRecording(this._logs));
-      throw e;
-    }
-  }
-  log(s) {
-    this._logs.push(s);
-  }
-  _rejectOn(promise, dispose) {
-    this._failures.push(promise);
-    if (dispose)
-      this._dispose.push(dispose);
-  }
-}
-function waitForEvent(emitter, event, predicate) {
-  let listener = () => {};
-  const promise = new Promise((resolve, reject) => {
-    listener = async (eventArg) => {
-      try {
-        if (predicate && !await predicate(eventArg))
-          return;
-        emitter.removeListener(event, listener);
-        resolve(eventArg);
-      } catch (e) {
-        emitter.removeListener(event, listener);
-        reject(e);
-      }
-    };
-    emitter.addListener(event, listener);
-  });
-  const dispose = () => emitter.removeListener(event, listener);
-  return { promise, dispose };
-}
-function waitForTimeout(timeout) {
-  let timeoutId;
-  const promise = new Promise((resolve) => {
-    timeoutId = setTimeout(resolve, timeout);
-  });
-  const dispose = () => clearTimeout(timeoutId);
-  return { promise, dispose };
-}
-function formatLogRecording(log) {
-  if (!log.length)
-    return "";
-  const header = " logs ";
-  const headerLength = 60;
-  const leftLength = (headerLength - header.length) / 2;
-  const rightLength = headerLength - header.length - leftLength;
-  return `
-${"=".repeat(leftLength)}${header}${"=".repeat(rightLength)}
-${log.join(`
-`)}
-${"=".repeat(headerLength)}`;
-}
-function rewriteErrorMessage(e, newMessage) {
-  const lines = (e.stack?.split(`
-`) || []).filter((l) => l.startsWith("    at "));
-  e.message = newMessage;
-  const errorTitle = `${e.name}: ${e.message}`;
-  if (lines.length)
-    e.stack = `${errorTitle}
-${lines.join(`
-`)}`;
-  return e;
-}
-
-// src/timeout-settings.ts
-var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
-function refuse(options, apiName) {
-  try {
-    refuseSignal(options);
-  } catch (error) {
-    if (apiName !== null && error instanceof Error)
-      error.message = `${apiName}: ${error.message}`;
-    throw error;
-  }
-}
-
-class TimeoutSettings {
-  #parent;
-  #defaultTimeout;
-  #defaultNavigationTimeout;
-  constructor(parent) {
-    this.#parent = parent;
-  }
-  setDefaultTimeout(timeout) {
-    this.#defaultTimeout = timeout;
-  }
-  setDefaultNavigationTimeout(timeout) {
-    this.#defaultNavigationTimeout = timeout;
-  }
-  timeout(options, apiName) {
-    refuse(options, apiName);
-    return this.#timeout(options);
-  }
-  navigationTimeout(options, apiName) {
-    refuse(options, apiName);
-    return this.#navigationTimeout(options);
-  }
-  #timeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.#timeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
-  }
-  #navigationTimeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultNavigationTimeout !== undefined)
-      return this.#defaultNavigationTimeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.#navigationTimeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
   }
 }
 
