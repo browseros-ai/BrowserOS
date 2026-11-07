@@ -19,6 +19,8 @@ type Handles = {
   HitTargetInterceptor: {
     stop: () => 'done' | { hitTargetDescription: string }
   }
+  ScreenshotCleanup: { restore: () => void }
+  ElementList: Element[]
 }
 type Api = InjectedApi<InjectedScript, Handles>
 
@@ -27,6 +29,14 @@ const valid = {
   title: () => ({ value: document.title }),
   selectorState: () => ({}),
   selectorElement: () => ({ count: 0, visible: false }),
+  scopedSelectorElement: () => ({ count: 0, visible: false }),
+  queryAll: () => ({ elements: [] }),
+  scopedQueryAll: (_injected, _params, root) => ({
+    elements: [...root.children],
+  }),
+  listPreviews: (_injected, _params, list) => ({
+    previews: list.map((element) => element.tagName),
+  }),
   document: () => ({ node: document.documentElement }),
   previewNode: (_injected, _params, node) => ({ preview: node.tagName }),
   textContent: () => ({}),
@@ -57,8 +67,25 @@ const valid = {
   focusElement: () => ({ outcome: 'done' }),
   inputValue: () => ({}),
   queryCount: () => ({ value: 0 }),
-  allTextContents: () => ({ values: [] }),
-  allInnerTexts: () => ({ values: [] }),
+  prepareForScreenshot: () => ({}),
+  restoreAfterScreenshot: (_injected, _params, cleanup) => {
+    cleanup.restore()
+    return {}
+  },
+  fontsReady: () => ({}),
+  fullPageSize: () => ({ size: { width: 1280, height: 720 } }),
+  scrollOffset: () => ({ x: 0, y: 0 }),
+  maskElements: () => ({}),
+  hideHighlight: () => ({}),
+} satisfies Api
+
+export const screenshotCleanupIsNotAnElement = {
+  ...valid,
+  // @ts-expect-error restoreAfterScreenshot takes the cleanup prepareForScreenshot returned.
+  restoreAfterScreenshot: (_injected, _params, cleanup: Element) => {
+    cleanup.remove()
+    return {}
+  },
 } satisfies Api
 
 export const unknownElementState = {

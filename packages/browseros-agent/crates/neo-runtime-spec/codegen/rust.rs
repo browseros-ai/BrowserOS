@@ -49,6 +49,9 @@ pub fn serve(module: &ServeModule, sha256: &str) -> String {
     out.extend(imports);
     if !module.interfaces.is_empty() {
         out.push(String::new());
+        if uses_binary(&module.types) {
+            out.push("use crate::Binary;".to_owned());
+        }
         out.push(format!("use crate::call::{{{}}};", call_items.join(", ")));
     }
 
@@ -857,7 +860,8 @@ fn expecting(union: &Union, types: &[TypeDef]) -> String {
 
 fn rust_type(ty: &FieldType) -> String {
     match ty {
-        FieldType::String | FieldType::Base64 => "String".to_owned(),
+        FieldType::String => "String".to_owned(),
+        FieldType::Base64 => "Binary".to_owned(),
         FieldType::Bool => "bool".to_owned(),
         FieldType::Int => "i64".to_owned(),
         FieldType::Float => "f64".to_owned(),
@@ -874,6 +878,21 @@ fn handle_type(kind: &HandleKindRef) -> String {
         HandleKindRef::Element => "Handle<Element>".to_owned(),
         HandleKindRef::Named(name) => format!("Handle<{name}>"),
     }
+}
+
+/// Whether a struct field anywhere is `binary`, which `serve.rs` then imports `Binary` for.
+fn uses_binary(types: &[TypeDef]) -> bool {
+    fn binary(ty: &FieldType) -> bool {
+        match ty {
+            FieldType::Base64 => true,
+            FieldType::Array(items) => binary(items),
+            _ => false,
+        }
+    }
+    types.iter().any(|ty| match &ty.body {
+        Body::Struct(fields) => fields.fields.iter().any(|field| binary(&field.ty)),
+        Body::Enum(_) | Body::Union(_) | Body::Channel(_) | Body::Handle => false,
+    })
 }
 
 fn uses_json(types: &[TypeDef]) -> bool {

@@ -41,16 +41,16 @@ use futures_util::future;
 use neo_runtime_spec::injected::ReadableElementState;
 use neo_runtime_spec::serve::{
     BrowserContextCall, DialogCall, FrameAriaSnapshotParams, FrameCall, FrameCheckParams,
-    FrameCheckResult, FrameClickParams, FrameDblclickParams, FrameEvalOnSelectorAllParams,
-    FrameFillParams, FrameFillResult, FrameGetAttributeParams, FrameGotoParams, FrameHoverParams,
-    FrameInnerHTMLParams, FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult,
-    FrameIsCheckedParams, FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult,
-    FrameIsEditableParams, FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult,
-    FrameIsHiddenParams, FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult,
-    FramePressParams, FramePressResult, FrameQueryCountParams, FrameSelectOptionParams,
-    FrameSelectOptionResult, FrameTapParams, FrameTextContentParams, FrameTitleParams,
-    FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
-    Metadata, PageCall, RequestCall, ResponseCall,
+    FrameCheckResult, FrameClickParams, FrameDblclickParams, FrameFillParams, FrameFillResult,
+    FrameGetAttributeParams, FrameGotoParams, FrameHoverParams, FrameInnerHTMLParams,
+    FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams,
+    FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult, FrameIsEditableParams,
+    FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult, FrameIsHiddenParams,
+    FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams,
+    FramePressResult, FrameQueryCountParams, FrameSelectOptionParams, FrameSelectOptionResult,
+    FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameUncheckParams,
+    FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult, Metadata, PageCall,
+    RequestCall, ResponseCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -63,6 +63,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
 use crate::abort::{Aborts, Registration};
+use crate::capture::{self, Capture, NEO_SCREENSHOT_META, NeoScreenshotParams};
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::dialogs;
@@ -182,10 +183,6 @@ static RELEASE_NAVIGATION_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[],
 };
-/// Arbitrary page JS remains outside Neo's typed glue boundary.
-const EVAL_ON_SELECTOR_ALL_UNSERVED: &str =
-    "Neo serves Frame.evalOnSelectorAll only for locator.allTextContents";
-
 // `serve` replies to a pointer action with `{id}` and no `result`, which is right only while
 // Playwright's spec declares no `returns` for `Frame.click`, `dblclick`, `hover` and `tap`. A
 // spec that gives one a result stops this compiling.
@@ -305,6 +302,8 @@ enum ObjectCall {
     Page(PageCall),
     Frame(Route),
     Network(NetworkCall),
+    /// `Page.screenshot`, `Page.pdf` and `neo:screenshot`, with Neo's `path` (`capture.rs`).
+    Capture(Capture),
     Dialog(u64, DialogCall),
 }
 
@@ -323,8 +322,6 @@ enum Route {
     FrameInnerText(ReadOptions),
     FrameGetAttribute(AttributeOptions),
     FrameQueryCount(String),
-    FrameAllTextContents(String),
-    FrameAllInnerTexts(String),
     FrameInnerHtml(ReadOptions),
     FrameAriaSnapshot(SnapshotOptions),
     FrameFill(FillOptions),
@@ -502,9 +499,13 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         ObjectKind::Context => BrowserContextCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Context(call)))),
         ObjectKind::Page => {
-            PageCall::decode(method, params).map(|call| (call.meta(), Ok(ObjectCall::Page(call))))
+            let path = neo_path(params.as_ref());
+            PageCall::decode(method, params).map(|call| (call.meta(), page_call(call, path)))
         }
         ObjectKind::Frame => {
+            if let Some(routed) = route_neo_screenshot(method, params.as_ref()) {
+                return routed;
+            }
             if method == WAIT_FOR_URL_META.method {
                 return Routed {
                     meta: Some(&WAIT_FOR_URL_META),
@@ -595,6 +596,59 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             route: Err(PlaywrightError::error(error.to_string())),
         },
     }
+}
+
+/// Neo's `neo:screenshot` on a Frame guid (`locator.screenshot`, `capture.rs`), or `None` for
+/// another method.
+fn route_neo_screenshot(method: &str, params: Option<&Value>) -> Option<Routed> {
+    (method == NEO_SCREENSHOT_META.method).then(|| Routed {
+        meta: Some(&NEO_SCREENSHOT_META),
+        route: decode_neo_params::<NeoScreenshotParams>(params.cloned(), &NEO_SCREENSHOT_META)
+            .map(|params| ObjectCall::Capture(Capture::Locator(Box::new(params)))),
+    })
+}
+
+/// Neo's `path` beside Playwright's params of a page call (`capture.rs`); Playwright's own
+/// decode ignores the key.
+fn neo_path(params: Option<&Value>) -> Result<Option<String>, PlaywrightError> {
+    match params.and_then(|params| params.get("path")) {
+        None => Ok(None),
+        Some(Value::String(path)) => Ok(Some(path.clone())),
+        Some(other) => Err(PlaywrightError::error(format!(
+            "path: expected string, got {}",
+            json_kind(other)
+        ))),
+    }
+}
+
+/// The JSON kind of `value`, as a validator names it.
+fn json_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// A decoded page call: the ones that answer bytes go to `capture.rs` with their `path`.
+fn page_call(
+    call: PageCall,
+    path: Result<Option<String>, PlaywrightError>,
+) -> Result<ObjectCall, PlaywrightError> {
+    Ok(match call {
+        PageCall::Screenshot(params) => ObjectCall::Capture(Capture::Page {
+            params: Box::new(params),
+            path: path?,
+        }),
+        PageCall::Pdf(params) => ObjectCall::Capture(Capture::Pdf {
+            params: Box::new(params),
+            path: path?,
+        }),
+        call => ObjectCall::Page(call),
+    })
 }
 
 /// Neo's navigation-wait commands on a Frame guid (`history.rs`), or `None` for another method.
@@ -690,21 +744,6 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
             AttributeOptions::from_params(params),
         )),
         FrameCall::QueryCount(params) => Ok(Route::FrameQueryCount(params.selector)),
-        FrameCall::EvalOnSelectorAll(params)
-            if params.expression == lists::ALL_TEXT_CONTENTS_EXPRESSION
-                && params.is_function == Some(true) =>
-        {
-            Ok(Route::FrameAllTextContents(params.selector))
-        }
-        FrameCall::EvalOnSelectorAll(params)
-            if params.expression == lists::ALL_INNER_TEXTS_EXPRESSION
-                && params.is_function == Some(true) =>
-        {
-            Ok(Route::FrameAllInnerTexts(params.selector))
-        }
-        FrameCall::EvalOnSelectorAll(_) => {
-            Err(PlaywrightError::error(EVAL_ON_SELECTOR_ALL_UNSERVED))
-        }
         FrameCall::AriaSnapshot(params) => Ok(Route::FrameAriaSnapshot(
             SnapshotOptions::from_params(params),
         )),
@@ -773,6 +812,9 @@ async fn serve_call(
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
         (ObjectCall::Page(call), Some((page, _))) => {
             tab_calls::page(&tabs, &page, call, &progress).await
+        }
+        (ObjectCall::Capture(call), Some((page, scope))) => {
+            capture::serve(&tabs, &page, scope, call, &progress).await
         }
         (ObjectCall::Frame(route), Some((page, scope))) => {
             let session = match page.attached_session() {
@@ -872,14 +914,6 @@ async fn serve(
         Route::FrameQueryCount(selector) => lists::query_count(&page, &selector, &progress)
             .await
             .and_then(|result| encode_result::<FrameQueryCountParams>(&result)),
-        Route::FrameAllTextContents(selector) => {
-            lists::all_text_contents(&page, &selector, &progress)
-                .await
-                .and_then(|result| encode_result::<FrameEvalOnSelectorAllParams>(&result))
-        }
-        Route::FrameAllInnerTexts(selector) => lists::all_inner_texts(&page, &selector, &progress)
-            .await
-            .and_then(|result| encode_result::<FrameEvalOnSelectorAllParams>(&result)),
         Route::FrameInnerHtml(options) => reads::inner_html(&page, &options, &progress)
             .await
             .and_then(|result| encode_result::<FrameInnerHTMLParams>(&result)),
@@ -1077,8 +1111,6 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameInnerText(_)
         | Route::FrameGetAttribute(_)
         | Route::FrameQueryCount(_)
-        | Route::FrameAllTextContents(_)
-        | Route::FrameAllInnerTexts(_)
         | Route::FrameInnerHtml(_)
         | Route::FrameIsVisible(_)
         | Route::FrameIsHidden(_)
@@ -1283,6 +1315,7 @@ mod tests {
     use crate::progress::{self, ErrorName};
     use crate::run::Delivery;
     use crate::run::PageId;
+    use crate::screenshot::TabScreenshots;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
 
@@ -1296,6 +1329,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1372,6 +1406,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1413,6 +1448,7 @@ mod tests {
             ObjectCall::Context(_)
             | ObjectCall::Page(_)
             | ObjectCall::Network(_)
+            | ObjectCall::Capture(_)
             | ObjectCall::Dialog(..) => {
                 panic!("a Frame message routed to another object")
             }
@@ -1556,8 +1592,6 @@ mod tests {
                 | Route::FrameInnerText(_)
                 | Route::FrameGetAttribute(_)
                 | Route::FrameQueryCount(_)
-                | Route::FrameAllTextContents(_)
-                | Route::FrameAllInnerTexts(_)
                 | Route::FrameInnerHtml(_)
                 | Route::FrameIsVisible(_)
                 | Route::FrameIsHidden(_)
@@ -2188,6 +2222,62 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_capture_calls_route_with_neos_path() {
+        let screenshot = route(
+            ObjectKind::Page,
+            "screenshot",
+            Some(json!({"type": "jpeg", "quality": 50, "path": "shots/a.jpg"})),
+        );
+        assert_eq!(screenshot.meta.map(|meta| meta.method), Some("screenshot"));
+        match screenshot.route {
+            Ok(ObjectCall::Capture(Capture::Page { params, path })) => {
+                assert_eq!(params.quality, Some(50));
+                assert_eq!(path.as_deref(), Some("shots/a.jpg"));
+            }
+            Ok(_) => panic!("expected a page screenshot"),
+            Err(error) => panic!("expected a page screenshot, got {error:?}"),
+        }
+        let pdf = route(ObjectKind::Page, "pdf", None);
+        assert_eq!(pdf.meta.map(|meta| meta.title), Some(Some("PDF")));
+        assert!(
+            matches!(
+                pdf.route,
+                Ok(ObjectCall::Capture(Capture::Pdf { path: None, .. }))
+            ),
+            "a pdf without a path writes nothing"
+        );
+        let bad_path = error_of(route(
+            ObjectKind::Page,
+            "screenshot",
+            Some(json!({"path": 5})),
+        ));
+        assert_eq!(bad_path.message, "path: expected string, got number");
+
+        let locator = route_frame(
+            "neo:screenshot",
+            json!({"selector": "#a", "strict": true, "path": "a.png", "omitBackground": true}),
+        );
+        assert_eq!(
+            locator.meta.map(|meta| (meta.method, meta.title)),
+            Some(("neo:screenshot", Some("Screenshot")))
+        );
+        match locator.route {
+            Ok(ObjectCall::Capture(Capture::Locator(params))) => {
+                assert_eq!(params.selector, "#a");
+                assert_eq!(params.path.as_deref(), Some("a.png"));
+                assert_eq!(params.omit_background, Some(true));
+            }
+            Ok(_) => panic!("expected a locator screenshot"),
+            Err(error) => panic!("expected a locator screenshot, got {error:?}"),
+        }
+        let no_selector = error_of(route_frame("neo:screenshot", json!({})));
+        assert!(
+            no_selector.message.contains("neo:screenshot"),
+            "{no_selector:?}"
+        );
+    }
+
+    #[test]
     fn unserved_methods_and_objects_reply_as_playwrights_dispatcher_would() {
         let cases = [
             (
@@ -2422,7 +2512,7 @@ mod tests {
     fn all_text_contents_params(selector: &str) -> Value {
         json!({
             "selector": selector,
-            "expression": lists::ALL_TEXT_CONTENTS_EXPRESSION,
+            "expression": "ee => ee.map(e => e.textContent || '')",
             "isFunction": true,
             "arg": {"value": {"v": "undefined"}, "handles": []},
         })
@@ -2436,16 +2526,24 @@ mod tests {
             panic!("queryCount routes");
         };
         assert_eq!(selector, ".item");
-        let Ok(ObjectCall::Frame(Route::FrameAllTextContents(selector))) =
-            route_frame("evalOnSelectorAll", all_text_contents_params(".item")).route
+        // `allTextContents` is Playwright's `$$eval`: the evaluation route serves it in the main
+        // world.
+        let Ok(ObjectCall::Frame(Route::FrameEval(EvalCall::EvalOnSelectorAll {
+            selector,
+            scope: None,
+            ..
+        }))) = route_frame("evalOnSelectorAll", all_text_contents_params(".item")).route
         else {
-            panic!("allTextContents routes");
+            panic!("allTextContents routes to the evaluation route");
         };
         assert_eq!(selector, ".item");
         let mut inner_texts = all_text_contents_params(".fruit");
-        inner_texts["expression"] = json!(lists::ALL_INNER_TEXTS_EXPRESSION);
-        let Ok(ObjectCall::Frame(Route::FrameAllInnerTexts(selector))) =
-            route_frame("evalOnSelectorAll", inner_texts).route
+        inner_texts["expression"] = json!("ee => ee.map(e => e.innerText)");
+        let Ok(ObjectCall::Frame(Route::FrameEval(EvalCall::EvalOnSelectorAll {
+            selector,
+            scope: None,
+            ..
+        }))) = route_frame("evalOnSelectorAll", inner_texts).route
         else {
             panic!("allInnerTexts routes");
         };
@@ -2475,7 +2573,7 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_collection_eval_refuses_other_expressions_and_non_functions() {
+    fn tests_that_collection_eval_serves_any_expression_as_playwrights_eval_on_selector_all() {
         let mut other_expression = all_text_contents_params(".item");
         other_expression["expression"] = json!("ee => ee.length");
         let mut not_a_function = all_text_contents_params(".item");
@@ -2485,24 +2583,23 @@ mod tests {
             .as_object_mut()
             .expect("params")
             .remove("isFunction");
-        let mut inner_texts_not_a_function = all_text_contents_params(".item");
-        inner_texts_not_a_function["expression"] = json!(lists::ALL_INNER_TEXTS_EXPRESSION);
-        inner_texts_not_a_function["isFunction"] = json!(false);
-        // Playwright's TypeScript body, which is not JavaScript, is not Neo's served expression.
-        let mut typescript_body = all_text_contents_params(".item");
-        typescript_body["expression"] = json!("ee => ee.map(e => (e as HTMLElement).innerText)");
-        for params in [
-            other_expression,
-            not_a_function,
-            absent_function,
-            inner_texts_not_a_function,
-            typescript_body,
-        ] {
-            assert_eq!(
-                error_of(route_frame("evalOnSelectorAll", params)),
-                PlaywrightError::error(EVAL_ON_SELECTOR_ALL_UNSERVED)
+        for params in [other_expression, not_a_function, absent_function] {
+            assert!(
+                matches!(
+                    route_frame("evalOnSelectorAll", params).route,
+                    Ok(ObjectCall::Frame(Route::FrameEval(
+                        EvalCall::EvalOnSelectorAll { .. }
+                    )))
+                ),
+                "every $$eval is served"
             );
         }
+        let mut missing_arg = all_text_contents_params(".item");
+        missing_arg.as_object_mut().expect("params").remove("arg");
+        assert_eq!(
+            error_of(route_frame("evalOnSelectorAll", missing_arg)).name,
+            ErrorName::Error
+        );
     }
 
     #[test]
@@ -2520,46 +2617,33 @@ mod tests {
         );
         let mut params = all_text_contents_params(selector);
         params["expression"] = json!("ee => ee.length");
-        assert_eq!(
-            error_of(route_frame("evalOnSelectorAll", params)),
-            PlaywrightError::error(EVAL_ON_SELECTOR_ALL_UNSERVED)
+        assert!(
+            route_frame("evalOnSelectorAll", params).route.is_ok(),
+            "a frame-crossing $$eval is served"
         );
     }
 
     #[test]
-    fn tests_that_serialized_arguments_accept_no_handles() {
-        assert!(
-            FrameCall::decode("evalOnSelectorAll", Some(all_text_contents_params(".item"))).is_ok()
-        );
-        for handle in [json!({"guid": "handle@1"}), json!("handle@1"), json!(null)] {
+    fn tests_that_collection_evaluation_accepts_handle_guids() {
+        let mut params = all_text_contents_params(".item");
+        params["arg"]["handles"] = json!(["handle@1"]);
+        assert!(route_frame("evalOnSelectorAll", params).route.is_ok());
+        for handle in [json!({"guid": "handle@1"}), json!(null)] {
             let mut params = all_text_contents_params(".item");
             params["arg"]["handles"] = json!([handle]);
-            assert!(FrameCall::decode("evalOnSelectorAll", Some(params)).is_err());
+            assert!(route_frame("evalOnSelectorAll", params).route.is_err());
         }
     }
 
     #[test]
-    fn tests_that_collection_replies_have_playwrights_generated_shapes() {
-        use neo_runtime_spec::serve::{FrameEvalOnSelectorAllResult, FrameQueryCountResult};
+    fn tests_that_count_replies_have_playwrights_generated_shape() {
+        use neo_runtime_spec::serve::FrameQueryCountResult;
 
-        for (result, expected) in [
-            (
-                encode_result::<FrameQueryCountParams>(&FrameQueryCountResult { value: 3 })
-                    .expect("count encodes"),
-                json!({"id": 7, "result": {"value": 3}}),
-            ),
-            (
-                encode_result::<FrameEvalOnSelectorAllParams>(&FrameEvalOnSelectorAllResult {
-                    value: lists::serialize_strings(vec!["x".to_string()]),
-                })
-                .expect("texts encode"),
-                json!({"id": 7, "result": {"value": {"a": [{"s": "x"}], "id": 1}}}),
-            ),
-        ] {
-            let reply: Value =
-                serde_json::from_str(&encode_reply(&json!(7), Ok(result.as_ref()), None))
-                    .expect("reply");
-            assert_eq!(reply, expected);
-        }
+        let result = encode_result::<FrameQueryCountParams>(&FrameQueryCountResult { value: 3 })
+            .expect("count encodes");
+        let reply: Value =
+            serde_json::from_str(&encode_reply(&json!(7), Ok(result.as_ref()), None))
+                .expect("reply");
+        assert_eq!(reply, json!({"id": 7, "result": {"value": 3}}));
     }
 }

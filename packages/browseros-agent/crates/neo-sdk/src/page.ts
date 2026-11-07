@@ -11,8 +11,10 @@ import type {
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
 import { isString } from '../vendor/playwright/isomorphic/stringUtils'
 import type { BrowserContext } from './browser-context'
+import type { Buffer } from './buffer'
 import type { Connection } from './connection'
 import { ConsoleMessage } from './console-message'
+import type { ElementHandle } from './element-handle'
 import {
   isTargetClosedError,
   parseSerializedError,
@@ -46,6 +48,7 @@ import {
   type UncheckOptions,
   type URLMatch,
   verifyLoadState,
+  type WaitForFunctionOptions,
   type WaitForLoadStateOptions,
   type WaitForNavigationOptions,
   type WaitForURLOptions,
@@ -55,7 +58,9 @@ import {
   assertMaxArguments,
   type EvaluateOptions,
   type JSHandle,
+  type PageElement,
   type PageFunction,
+  type PageFunctionOn,
 } from './js-handle'
 import type { Locator, LocatorOptions } from './locator'
 import { serializeUrlMatch } from './neo-commands'
@@ -70,6 +75,13 @@ import {
   pickParams,
 } from './protocol'
 import { type CreatedFrame, get, matchesURL } from './runtime-bridge'
+import {
+  type PageScreenshotOptions,
+  type PDFOptions,
+  pageScreenshotParams,
+  pdfParams,
+  resultBuffer,
+} from './screenshot'
 import type { SelectOptionValues } from './select-option'
 import { TimeoutSettings } from './timeout-settings'
 import { Waiter, type WaitForEventOptions, wrapApiCall } from './waiter'
@@ -402,6 +414,65 @@ export class Page extends ChannelOwner {
     return await this.#mainFrame._goto('page.goto', url, options)
   }
 
+  /** Playwright's `page.$`: `frame.$` in the main frame. */
+  async $(
+    selector: string,
+    options?: { strict?: boolean },
+  ): Promise<ElementHandle | null> {
+    return await this.mainFrame()._querySelector('page.$', selector, options)
+  }
+
+  /** Playwright's `page.$$`: `frame.$$` in the main frame. */
+  async $$(selector: string): Promise<ElementHandle[]> {
+    return await this.mainFrame()._querySelectorAll('page.$$', selector)
+  }
+
+  /** Playwright's `page.$eval`: `frame.$eval` in the main frame. */
+  async $eval<R, Arg>(
+    selector: string,
+    pageFunction: PageFunctionOn<PageElement, Arg, R>,
+    arg?: Arg,
+  ): Promise<R> {
+    // biome-ignore lint/complexity/noArguments: Playwright counts the arguments the call passed
+    assertMaxArguments(arguments.length, 3)
+    return await this.mainFrame()._evalOnSelector(
+      'page.$eval',
+      selector,
+      pageFunction,
+      arg,
+    )
+  }
+
+  /** Playwright's `page.$$eval`: `frame.$$eval` in the main frame. */
+  async $$eval<R, Arg>(
+    selector: string,
+    pageFunction: PageFunctionOn<PageElement[], Arg, R>,
+    arg?: Arg,
+  ): Promise<R> {
+    // biome-ignore lint/complexity/noArguments: Playwright counts the arguments the call passed
+    assertMaxArguments(arguments.length, 3)
+    return await this.mainFrame()._evalOnSelectorAll(
+      'page.$$eval',
+      selector,
+      pageFunction,
+      arg,
+    )
+  }
+
+  /** Playwright's `page.waitForFunction`: `frame.waitForFunction` in the main frame. */
+  async waitForFunction<R, Arg>(
+    pageFunction: PageFunction<Arg, R>,
+    arg?: Arg,
+    options?: WaitForFunctionOptions,
+  ): Promise<JSHandle<R>> {
+    return await this.mainFrame()._waitForFunction(
+      'page.waitForFunction',
+      pageFunction,
+      arg,
+      options,
+    )
+  }
+
   /** Playwright's `page.evaluate`: `frame.evaluate` in the main frame. */
   async evaluate<R, Arg>(
     pageFunction: PageFunction<Arg, R>,
@@ -600,6 +671,37 @@ export class Page extends ChannelOwner {
    * For a section, use `locator.ariaSnapshot()`. AI mode does not auto-wait for that locator,
    * so use `locator.waitFor()` first if needed.
    */
+  /**
+   * Playwright's `Page.screenshot`: the viewport, the full page, or a clip of either, as PNG,
+   * JPEG or WebP bytes. `path` (relative to the run's artifact directory) also writes them
+   * there (`screenshot.ts`).
+   */
+  async screenshot(options: PageScreenshotOptions = {}): Promise<Buffer> {
+    const result = await this.#connection.sendPage(
+      'page.screenshot',
+      this.#guid,
+      'screenshot',
+      pageScreenshotParams('page.screenshot', options),
+      this._timeoutSettings.timeout(options, 'page.screenshot'),
+    )
+    return resultBuffer(result.binary)
+  }
+
+  /**
+   * Playwright's `Page.pdf`: the page printed as PDF bytes, with no timeout, as Playwright's
+   * client calls it. `path` (relative to the run's artifact directory) also writes them there.
+   */
+  async pdf(options: PDFOptions = {}): Promise<Buffer> {
+    const result = await this.#connection.sendPage(
+      'page.pdf',
+      this.#guid,
+      'pdf',
+      pdfParams('page.pdf', options),
+      0,
+    )
+    return resultBuffer(result.pdf)
+  }
+
   async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
     return await this.#mainFrame._ariaSnapshot('page.ariaSnapshot', options)
   }

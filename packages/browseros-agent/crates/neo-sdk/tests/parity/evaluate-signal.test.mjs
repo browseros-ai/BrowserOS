@@ -3,12 +3,13 @@
 // receiver family: Page, Frame, Locator, JSHandle/ElementHandle.
 //
 // - `signal: null` is no signal: the call runs exactly as without the option, in both engines.
-// - Where Playwright takes a signal (`locator.evaluate`, whose element wait sends it), it rejects
-//   an already-aborted one with `AbortError` before the call runs
-//   (tests/page/locator-wait-for-function.spec.ts at 26137face, LO-192 "should abort via
-//   already-aborted signal"). Compared directly: both reject, the counter stays 0.
-// - Where Playwright reads no signal (the page, frame and handle evaluations, sent with
-//   `kNoTimeout`), it ignores one and runs the function; so does Neo. Compared directly.
+// - Where Playwright takes a signal (`locator.evaluate`, `evaluateHandle` and `elementHandle`,
+//   whose element wait sends it, and `waitForFunction`), it rejects an already-aborted one
+//   with `AbortError` before the call runs (tests/page/locator-wait-for-function.spec.ts at
+//   26137face, LO-192 "should abort via already-aborted signal"). Compared directly: both
+//   reject, the counter stays 0.
+// - Where Playwright reads no signal (the page, frame and handle evaluations, and `$`, all sent
+//   with `kNoTimeout`), it ignores one and runs the call; so does Neo. Compared directly.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { compareMethod, skip } from './harness.mjs'
@@ -36,13 +37,25 @@ test('methods that take a signal reject an aborted one before the page sees the 
   const outcome = await compareMethod(t, {
     html,
     source: `${SIGNAL}
+      const frame = page.mainFrame()
+      const locator = page.locator('#p')
       return {
-        locatorEvaluate: await attempt(() => page.locator('#p').evaluate(bump, undefined, { signal })),
+        locatorEvaluate: await attempt(() => locator.evaluate(bump, undefined, { signal })),
+        locatorEvaluateHandle: await attempt(() => locator.evaluateHandle(bump, undefined, { signal })),
+        locatorElementHandle: await attempt(() => locator.elementHandle({ signal })),
+        pageWaitForFunction: await attempt(() => page.waitForFunction(bump, undefined, { signal })),
+        frameWaitForFunction: await attempt(() => frame.waitForFunction(bump, undefined, { signal })),
       }
     `,
     probe: 'window.__count',
   })
-  assert.deepEqual(outcome.value, { locatorEvaluate: 'AbortError' })
+  assert.deepEqual(outcome.value, {
+    locatorEvaluate: 'AbortError',
+    locatorEvaluateHandle: 'AbortError',
+    locatorElementHandle: 'AbortError',
+    pageWaitForFunction: 'AbortError',
+    frameWaitForFunction: 'AbortError',
+  })
 })
 
 test('evaluations Playwright reads no signal on ignore one in both engines', {
@@ -61,6 +74,8 @@ test('evaluations Playwright reads no signal on ignore one in both engines', {
         frameEvaluateHandle: await attempt(() => frame.evaluateHandle(bump, undefined, { signal })),
         handleEvaluate: await attempt(() => handle.evaluate(bump, undefined, { signal })),
         handleEvaluateHandle: await attempt(() => handle.evaluateHandle(bump, undefined, { signal })),
+        pageQuery: await attempt(() => page.$('#p', { signal })),
+        frameQuery: await attempt(() => frame.$('#p', { signal })),
       }
       await page.evaluate((recorded) => { window.__outcomes = recorded }, outcomes)
       return null
@@ -76,6 +91,8 @@ test('evaluations Playwright reads no signal on ignore one in both engines', {
             'frameEvaluateHandle',
             'handleEvaluate',
             'handleEvaluateHandle',
+            'pageQuery',
+            'frameQuery',
           ].map((key) => [key, value]),
         )
       assert.deepEqual(
@@ -103,6 +120,12 @@ test('a null signal is no signal: the call runs as without the option', {
         pageEvaluate: await attempt(() => page.evaluate(bump, undefined, none)),
         frameEvaluate: await attempt(() => frame.evaluate(bump, undefined, none)),
         handleEvaluate: await attempt(() => handle.evaluate(bump, undefined, none)),
+        locatorEvaluateHandle: await attempt(() => page.locator('#p').evaluateHandle(bump, undefined, none)),
+        locatorElementHandle: await attempt(() => page.locator('#p').elementHandle(none)),
+        pageWaitForFunction: await attempt(() => page.waitForFunction(bump, undefined, none)),
+        frameWaitForFunction: await attempt(() => frame.waitForFunction(bump, undefined, none)),
+        pageQuery: await attempt(() => page.$('#p', none)),
+        frameQuery: await attempt(() => frame.$('#p', none)),
       }
     `,
     probe: 'window.__count',
@@ -112,5 +135,11 @@ test('a null signal is no signal: the call runs as without the option', {
     pageEvaluate: 'resolved',
     frameEvaluate: 'resolved',
     handleEvaluate: 'resolved',
+    locatorEvaluateHandle: 'resolved',
+    locatorElementHandle: 'resolved',
+    pageWaitForFunction: 'resolved',
+    frameWaitForFunction: 'resolved',
+    pageQuery: 'resolved',
+    frameQuery: 'resolved',
   })
 })

@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use tracing::debug;
 
 use crate::bridge;
+use crate::capture::{self, Capture};
 use crate::dispatch::encode_result;
 use crate::frames::FrameScope;
 use crate::history::{self, HistoryOptions};
@@ -59,6 +60,32 @@ pub(crate) async fn context(
             created.keep();
             Ok(Some(value))
         }
+    }
+}
+
+/// `Page.runBeforeUnload`'s close: Playwright 26137face server/page.ts:852-861 and
+/// chromium/crPage.ts:264-270. Page.close runs beforeunload; errors are logged and closure is
+/// not awaited.
+async fn run_before_unload(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    let prepared = progress.race(page.prepare()).await?;
+    checked(tabs, entry, progress, prepared).await?;
+    progress.check()?;
+    entry.request_close();
+    tabs.finish_close(Arc::clone(&page), Arc::clone(entry));
+    match progress.race(page.send("Page.close", json!({}))).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(error)) => {
+            debug!(%error, "running beforeunload failed");
+            Ok(())
+        }
+        // The watcher can report closure before Page.close's acknowledgement.
+        Err(CallError::Playwright(error)) if error == PlaywrightError::target_closed() => Ok(()),
+        Err(error) => Err(error),
     }
 }
 
@@ -124,22 +151,22 @@ pub(crate) async fn page(
             return encode_result::<PageClearPageErrorsParams>(&PageClearPageErrorsResult {});
         }
         PageCall::Close(_) => close(tabs, entry, progress).await?,
-        PageCall::RunBeforeUnload(_) => {
-            // Playwright 26137face server/page.ts:852-861 and chromium/crPage.ts:264-270:
-            // Page.close runs beforeunload; errors are logged and closure is not awaited.
-            let page = progress.race(tabs.session(entry)).await??;
-            let prepared = progress.race(page.prepare()).await?;
-            checked(tabs, entry, progress, prepared).await?;
-            progress.check()?;
-            entry.request_close();
-            tabs.finish_close(Arc::clone(&page), Arc::clone(entry));
-            match progress.race(page.send("Page.close", json!({}))).await {
-                Ok(Ok(_)) => {}
-                Ok(Err(error)) => debug!(%error, "running beforeunload failed"),
-                // The watcher can report closure before Page.close's acknowledgement.
-                Err(CallError::Playwright(error)) if error == PlaywrightError::target_closed() => {}
-                Err(error) => return Err(error),
-            }
+        PageCall::RunBeforeUnload(_) => run_before_unload(tabs, entry, progress).await?,
+        // `dispatch::route` hands these to `capture.rs` with Neo's `path`; one built without
+        // a path is the same call writing no file.
+        PageCall::Screenshot(params) => {
+            let capture = Capture::Page {
+                params: Box::new(params),
+                path: None,
+            };
+            return capture::serve(tabs, entry, FrameScope::Main, capture, progress).await;
+        }
+        PageCall::Pdf(params) => {
+            let capture = Capture::Pdf {
+                params: Box::new(params),
+                path: None,
+            };
+            return capture::serve(tabs, entry, FrameScope::Main, capture, progress).await;
         }
         PageCall::BringToFront(_) => {
             // Playwright 26137face server/chromium/crPage.ts:207 sends Page.bringToFront.

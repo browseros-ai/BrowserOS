@@ -78,24 +78,25 @@
 //!   `Worker` is not served, so its reference type has no values.
 //! - An `Option` field decodes a JSON `null` as absent, which Playwright's validator would
 //!   reject. Encoding never writes `null`.
+//! - A protocol `binary` field is [`Binary`] in Rust and `string` (base64) in TypeScript. It
+//!   encodes as standard base64 with padding and decodes only that; the SDK's `buffer.ts` is
+//!   the other end.
 
 // Cargo links this library into the translator (the `codegen` example), which has to run
 // exactly when the freshness check below fails. Regenerating sets `NEO_RUNTIME_SPEC_CODEGEN`,
 // which build.rs turns into this cfg, and the library then builds empty.
 #![cfg(not(neo_runtime_spec_codegen))]
 
+mod binary;
 mod call;
 #[rustfmt::skip]
 pub mod injected;
 #[rustfmt::skip]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "Frame.evalOnSelectorAll carries Playwright's full SerializedArgument wire value"
-)]
 pub mod serve;
 #[rustfmt::skip]
 mod spec_hash;
 
+pub use binary::Binary;
 pub use call::{
     CallDecodeError, Command, Element, Handle, HandleId, HandleKind, InjectedCall, MethodFlag,
     MethodGroup, MethodMeta, PageResult, Properties, ResultDecodeError,

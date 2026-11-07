@@ -42,8 +42,19 @@ type NamedElement = Element & { _ariaRef?: { ref: string } }
  */
 const namedOwners = new Map<string, WeakRef<Element>>()
 
+/**
+ * What `prepareForScreenshot` leaves in a document, as the one function that undoes it.
+ * Playwright stores that function as `window.__pwCleanupScreenshot` in the utility world;
+ * Neo hands it to Rust as a handle instead (NEO_STYLE "Page objects").
+ */
+type ScreenshotCleanup = { restore: () => void }
+
 /** The Playwright page types behind the spec's named handle kinds. */
-type Handles = { HitTargetInterceptor: HitTargetInterceptionResult }
+type Handles = {
+  HitTargetInterceptor: HitTargetInterceptionResult
+  ScreenshotCleanup: ScreenshotCleanup
+  ElementList: Record<string, Element>
+}
 
 /**
  * Parses one frame chunk, queries the document, and applies Playwright's checks in Playwright's
@@ -59,10 +70,13 @@ function query(
   injected: InjectedScript,
   selector: string,
   strict: boolean,
-  { markTargets = 'none' }: { markTargets?: 'all' | 'first' | 'none' } = {},
+  {
+    markTargets = 'none',
+    root = document,
+  }: { markTargets?: 'all' | 'first' | 'none'; root?: Node } = {},
 ): Element[] {
   const parsed = injected.parseSelector(selector)
-  const elements = injected.querySelectorAll(parsed, document)
+  const elements = injected.querySelectorAll(parsed, root)
   // Before the checks, as in Playwright: the page's own listeners see the matches marked even
   // when strict mode then fails the call.
   if (markTargets === 'all') injected.markTargetElements(new Set(elements))
@@ -73,6 +87,13 @@ function query(
   if (strict && elements.length > 1)
     throw injected.strictModeViolationError(parsed, elements)
   return elements
+}
+
+/** Neo: elements as a null-prototype object's own properties `0`, `1`, …, which CDP reports
+ * as a plain object (an array would carry the subtype `array`), so Rust lists them with
+ * `Runtime.getProperties` as handles of the matches. */
+function elementList(elements: Element[]): Record<string, Element> {
+  return Object.assign(Object.create(null), elements)
 }
 
 export const glue = {
@@ -105,6 +126,38 @@ export const glue = {
       preview: injected.previewNode(element),
     }
   },
+
+  /** `selectorElement` within an adopted element handle, for `ElementHandle.$` and `$eval`. */
+  // Playwright: `server/frameSelectors.ts` `FrameSelectors._callOnSelectorInternal`: `const elements = injected.querySelectorAll(params.info.parsed, params.scope || document);`
+  scopedSelectorElement: (injected, { selector, strict }, root) => {
+    const elements = query(injected, selector, strict, { root })
+    const [element] = elements
+    if (!element) return { count: 0, visible: false }
+    return {
+      element,
+      count: elements.length,
+      visible: injected.elementState(element, 'visible', true).matches,
+      preview: injected.previewNode(element),
+    }
+  },
+
+  /** Every match, as Playwright's `queryAll` resolves it: the elements, by index. */
+  // Playwright: `server/frameSelectors.ts` `FrameSelectors.queryAll`: `const resolved = await this.callOnSelectorHandle({ selector, strict: false, scope }, ({ elements }) => elements, {});`
+  queryAll: (injected, { selector }) => ({
+    elements: elementList(query(injected, selector, false)),
+  }),
+
+  // Playwright: `server/frameSelectors.ts` `FrameSelectors.queryAll`: `const resolved = await this.callOnSelectorHandle({ selector, strict: false, scope }, ({ elements }) => elements, {});`
+  scopedQueryAll: (injected, { selector }, root) => ({
+    elements: elementList(query(injected, selector, false, { root })),
+  }),
+
+  // Playwright: `server/dom.ts` `ElementHandle._initializePreview`: `this._setPreview(await utility.evaluate((injected, e) => 'JSHandle@' + injected.previewNode(e), this));`
+  listPreviews: (injected, _params, list) => ({
+    previews: Object.values(list).map((element) =>
+      injected.previewNode(element),
+    ),
+  }),
 
   // Neo: the anchor `main_world.rs` resolves into the page's own world; Playwright's server
   // finds that world by its execution context, which Neo does not watch.
@@ -408,22 +461,191 @@ export const glue = {
   }),
 
   /**
-   * Deviation: `client/locator.ts` `Locator.allTextContents`: `ee => ee.map(e => e.textContent || '')` runs in Neo's isolated world, where Playwright's `$$eval` runs in the page's main world, so a page's own `textContent` override (a prototype patch, a custom element class or a per-instance property) is not seen.
+   * Playwright's page function for screenshots, for one document. Chromium never syncs
+   * animations by toggling a style sheet, so the WebKit-only first step is not here.
+   * Playwright: `server/screenshotter.ts` `inPagePrepareForScreenshots`: `if (!screenshotStyle && !hideCaret && !disableAnimations)`
+   * Playwright: `server/chromium/crPage.ts` `CRPage.shouldToggleStyleSheetToSyncAnimations`: `return false;`
    */
-  allTextContents: (injected, { selector }) => ({
-    values: query(injected, selector, false).map((e) => e.textContent || ''),
-  }),
+  prepareForScreenshot: (
+    _injected,
+    { style, hideCaret, disableAnimations },
+  ) => {
+    if (!style && !hideCaret && !disableAnimations) return {}
+
+    const collectRoots = (
+      root: Document | ShadowRoot,
+      roots: (Document | ShadowRoot)[] = [],
+    ): (Document | ShadowRoot)[] => {
+      roots.push(root)
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT)
+      do {
+        const node = walker.currentNode
+        const shadowRoot = node instanceof Element ? node.shadowRoot : null
+        if (shadowRoot) collectRoots(shadowRoot, roots)
+      } while (walker.nextNode())
+      return roots
+    }
+
+    const roots = collectRoots(document)
+    const cleanupCallbacks: (() => void)[] = []
+
+    if (style) {
+      for (const root of roots) {
+        const styleTag = document.createElement('style')
+        styleTag.textContent = style
+        if (root === document) document.documentElement.append(styleTag)
+        else root.append(styleTag)
+        cleanupCallbacks.push(() => {
+          styleTag.remove()
+        })
+      }
+    }
+
+    if (hideCaret) {
+      const elements = new Map<
+        HTMLElement,
+        { value: string; priority: string }
+      >()
+      for (const root of roots) {
+        root
+          .querySelectorAll('input,textarea,[contenteditable]')
+          .forEach((element) => {
+            elements.set(element as HTMLElement, {
+              value: (element as HTMLElement).style.getPropertyValue(
+                'caret-color',
+              ),
+              priority: (element as HTMLElement).style.getPropertyPriority(
+                'caret-color',
+              ),
+            })
+            ;(element as HTMLElement).style.setProperty(
+              'caret-color',
+              'transparent',
+              'important',
+            )
+          })
+      }
+      cleanupCallbacks.push(() => {
+        for (const [element, value] of elements)
+          element.style.setProperty('caret-color', value.value, value.priority)
+      })
+    }
+
+    if (disableAnimations) {
+      const infiniteAnimationsToResume: Set<Animation> = new Set()
+      const handleAnimations = (root: Document | ShadowRoot): void => {
+        for (const animation of root.getAnimations()) {
+          if (
+            !animation.effect ||
+            animation.playbackRate === 0 ||
+            infiniteAnimationsToResume.has(animation)
+          )
+            continue
+          const endTime = animation.effect.getComputedTiming().endTime
+          if (Number.isFinite(endTime)) {
+            try {
+              animation.finish()
+            } catch {
+              // Playwright's own guard: finish() should not throw for a finite animation.
+            }
+          } else {
+            try {
+              animation.cancel()
+              infiniteAnimationsToResume.add(animation)
+            } catch {
+              // Playwright's own guard: cancel() should not throw for an infinite animation.
+            }
+          }
+        }
+      }
+      for (const root of roots) {
+        const handleRootAnimations: () => void = handleAnimations.bind(
+          null,
+          root,
+        )
+        handleRootAnimations()
+        root.addEventListener('transitionrun', handleRootAnimations)
+        root.addEventListener('animationstart', handleRootAnimations)
+        cleanupCallbacks.push(() => {
+          root.removeEventListener('transitionrun', handleRootAnimations)
+          root.removeEventListener('animationstart', handleRootAnimations)
+        })
+      }
+      cleanupCallbacks.push(() => {
+        for (const animation of infiniteAnimationsToResume) {
+          try {
+            animation.play()
+          } catch {
+            // Playwright's own guard: play() should never throw.
+          }
+        }
+      })
+    }
+
+    return {
+      cleanup: {
+        restore: () => {
+          for (const cleanupCallback of cleanupCallbacks) cleanupCallback()
+        },
+      },
+    }
+  },
+
+  // Playwright: `server/screenshotter.ts` `Screenshotter._restorePageAfterScreenshot`: `window.__pwCleanupScreenshot && window.__pwCleanupScreenshot()`
+  restoreAfterScreenshot: (_injected, _params, cleanup) => {
+    cleanup.restore()
+    return {}
+  },
+
+  // Playwright: `server/screenshotter.ts` `Screenshotter._preparePageForScreenshot`: `frame.nonStallingEvaluateInExistingContext('document.fonts.ready', 'utility')`
+  fontsReady: async () => {
+    await document.fonts.ready
+    return {}
+  },
+
+  // Playwright: `server/screenshotter.ts` `Screenshotter._fullPageSize`: `if (!document.body || !document.documentElement)`
+  fullPageSize: () => {
+    if (!document.body || !document.documentElement) return {}
+    return {
+      size: {
+        width: Math.max(
+          document.body.scrollWidth,
+          document.documentElement.scrollWidth,
+          document.body.offsetWidth,
+          document.documentElement.offsetWidth,
+          document.body.clientWidth,
+          document.documentElement.clientWidth,
+        ),
+        height: Math.max(
+          document.body.scrollHeight,
+          document.documentElement.scrollHeight,
+          document.body.offsetHeight,
+          document.documentElement.offsetHeight,
+          document.body.clientHeight,
+          document.documentElement.clientHeight,
+        ),
+      },
+    }
+  },
+
+  // Playwright: `server/screenshotter.ts` `Screenshotter.screenshotElement`: `({ x: window.scrollX, y: window.scrollY })`
+  scrollOffset: () => ({ x: window.scrollX, y: window.scrollY }),
 
   /**
-   * Deviation: `client/locator.ts` `Locator.allInnerTexts`: `ee => ee.map(e => (e as HTMLElement).innerText)` runs in Neo's isolated world, where Playwright's `$$eval` runs in the page's main world, so a page's own `innerText` override (a prototype patch or a per-instance property) is not seen.
+   * One mask entry, as `callOnSelector` runs its callback: only when something matched.
+   * Playwright: `server/screenshotter.ts` `Screenshotter._maskElements`: `injected.addMaskedElements(elements, color);`
    */
-  allInnerTexts: (injected, { selector }) => ({
-    values: query(injected, selector, false).map((e) => {
-      // Only HTML elements have `innerText`; the page function reads `undefined` for the rest.
-      const value = (e as Partial<HTMLElement>).innerText
-      return value === undefined ? {} : { value }
-    }),
-  }),
+  maskElements: (injected, { selector, color }) => {
+    const elements = query(injected, selector, false)
+    if (elements.length) injected.addMaskedElements(elements, color)
+    return {}
+  },
+
+  // Playwright: `server/highlightController.ts` `HighlightController.hideHighlights`: `await injectedScript?.evaluate(injected => injected.hideHighlight());`
+  hideHighlight: (injected) => {
+    injected.hideHighlight()
+    return {}
+  },
 } satisfies InjectedApi<InjectedScript, Handles>
 
 // Playwright's AriaNodeJSON reaches Rust unchanged, but TypeScript lets a structurally wider

@@ -68,19 +68,50 @@ export type CreatedHandle = {
 /** A by-value answer: the page's JSON, absent for `undefined`. */
 export type EvaluateResult = { value?: unknown }
 
+/** The selector commands a frame and an element handle share (Playwright's `$`, `$$`, `$eval`,
+ * `$$eval`), with the evaluation's `arg` in the page's format. */
+export type SelectorCommands = {
+  querySelector: {
+    params: { selector: string; strict?: boolean }
+    result: { element?: CreatedHandle }
+  }
+  querySelectorAll: {
+    params: { selector: string }
+    result: { elements: CreatedHandle[] }
+  }
+  evalOnSelector: {
+    params: { selector: string; strict?: boolean } & EvaluateParams
+    result: EvaluateResult
+  }
+  evalOnSelectorAll: {
+    params: { selector: string } & EvaluateParams
+    result: EvaluateResult
+  }
+}
+
 /** The evaluation commands on a frame guid, shaped as the generated `FrameCommands`. */
-export type EvalFrameCommands = {
+export type EvalFrameCommands = SelectorCommands & {
   evaluateExpression: { params: EvaluateParams; result: EvaluateResult }
   evaluateExpressionHandle: {
     params: EvaluateParams
     result: { handle: CreatedHandle }
   }
+  waitForFunction: {
+    params: EvaluateParams & { pollingInterval?: number }
+    result: { handle: CreatedHandle }
+  }
 }
 
-/** The `JSHandle` commands on a handle guid (`handle@<n>`). */
+/** The `JSHandle` commands on a handle guid (`handle@<n>`); the selector ones are an
+ * `ElementHandle`'s. */
 export type JSHandleCommands = EvalFrameCommands & {
   jsonValue: { params: Record<string, never>; result: EvaluateResult }
   dispose: { params: Record<string, never>; result: Record<string, never> }
+  getProperty: { params: { name: string }; result: { handle: CreatedHandle } }
+  getPropertyList: {
+    params: Record<string, never>
+    result: { properties: { name: string; value: CreatedHandle }[] }
+  }
 }
 
 /** Playwright's `Unboxed`: a handle in an argument arrives in the page as the value it names. */
@@ -209,6 +240,31 @@ export class JSHandle<T = unknown> {
       0,
     )
     return parseResult(result.value) as T
+  }
+
+  async getProperty(propertyName: string): Promise<JSHandle> {
+    const result = await this._connection.sendHandle(
+      `${this._apiPrefix}.getProperty` as ApiName,
+      this._guid,
+      'getProperty',
+      { name: propertyName },
+      0,
+    )
+    return handleFrom(this._connection, result.handle)
+  }
+
+  async getProperties(): Promise<Map<string, JSHandle>> {
+    const map = new Map<string, JSHandle>()
+    const result = await this._connection.sendHandle(
+      `${this._apiPrefix}.getProperties` as ApiName,
+      this._guid,
+      'getPropertyList',
+      {},
+      0,
+    )
+    for (const { name, value } of result.properties)
+      map.set(name, handleFrom(this._connection, value))
+    return map
   }
 
   asElement(): unknown {

@@ -211,6 +211,32 @@ return {
   fresh: await settle(page.click('#target', { signal: new AbortController().signal }), undefined),
 }`
 
+// A screenshot aborted mid-capture: the element is attached but hidden, so the capture prepares
+// the page (the caret style it injects) and then waits for it to show. The abort rejects it and
+// the page is restored, as Playwright's cleanup restores it.
+const SCREENSHOT = `
+const styles = () => page.evaluate(() => document.querySelectorAll('style').length)
+const before = await styles()
+const controller = new AbortController()
+const pending = settle(page.locator('#hidden').screenshot({ signal: controller.signal, timeout: 0 }), 'stop capture')
+await pause(500)
+const during = await styles()
+controller.abort('stop capture')
+const settled = await pending
+await pause(300)
+return { settled, prepared: during > before, restored: (await styles()) === before }`
+
+// waitForFunction aborted while it polls (tests/page/locator-wait-for-function.spec.ts LO-191
+// "should abort via signal", on the page): it rejects with the reason as cause, and the page
+// still answers afterwards.
+const WAIT_FOR_FUNCTION = `
+const controller = new AbortController()
+const pending = settle(page.waitForFunction(() => window.__never === true, undefined, { signal: controller.signal, timeout: 0 }), 'stop polling')
+await pause(300)
+controller.abort('stop polling')
+const settled = await pending
+return { settled, after: await page.evaluate(() => 1 + 1) }`
+
 // An aborted call ends only itself: a handle the run made before still works.
 const HANDLES = `
 const handle = await page.evaluateHandle(() => document.querySelector('#target'))
@@ -418,6 +444,39 @@ test('signal aborts calls as Playwright does', {
           fresh: 'resolved',
         })
         assert.deepEqual(reference.effect, { ...UNTOUCHED, clicks: 2 })
+      },
+    )
+
+    await t.test(
+      'a screenshot aborted mid-capture rejects and restores the page',
+      async () => {
+        const { reference } = await both('screenshot', SCREENSHOT)
+        assert.deepEqual(reference.value, {
+          settled: {
+            name: 'AbortError',
+            isError: true,
+            causeIsReason: true,
+            namesReason: true,
+          },
+          prepared: true,
+          restored: true,
+        })
+      },
+    )
+
+    await t.test(
+      'waitForFunction aborted while it polls rejects (LO-191)',
+      async () => {
+        const { reference } = await both('wait-for-function', WAIT_FOR_FUNCTION)
+        assert.deepEqual(reference.value, {
+          settled: {
+            name: 'AbortError',
+            isError: true,
+            causeIsReason: true,
+            namesReason: true,
+          },
+          after: 2,
+        })
       },
     )
 

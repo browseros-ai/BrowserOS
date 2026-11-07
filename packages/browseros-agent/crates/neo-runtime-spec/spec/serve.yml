@@ -27,6 +27,9 @@ interfaces:
     - reload
     - goBack
     - goForward
+    # `binary` results: neo-runtime answers `neo_runtime_spec::Binary`, the SDK a `Buffer`.
+    - screenshot
+    - pdf
     # The page's console and page-error history (`page.consoleMessages()`, `page.pageErrors()`).
     # A message's `args` are JSHandles, which are not a key here, so they always travel empty.
     - consoleMessages
@@ -73,7 +76,6 @@ interfaces:
     - innerText
     - getAttribute
     - queryCount
-    - evalOnSelectorAll
     # Element reads and states (states.rs, reads.rs): Playwright's `_elementState`,
     # `isHidden` (`!isVisible`, one read) and `innerHTML`.
     - isEnabled
