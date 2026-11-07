@@ -1,18 +1,20 @@
-//! `Frame.press`, in the structure of Playwright's server: `frames.ts` `press` (loop A with the
-//! action pre-checks, and no loop B) around `dom.ts` `_press` (focus, then `Keyboard.press`,
-//! inside `waitForSignalsCreatedBy` unless `noWaitAfter`).
+//! `Frame.press` and `Frame.type`, in the structure of Playwright's server: `frames.ts` `press`
+//! and `type` (loop A with the action pre-checks, and no loop B) around `dom.ts` `_press`
+//! (focus, then `Keyboard.press`, inside `waitForSignalsCreatedBy` unless `noWaitAfter`) and
+//! `_type` (focus, then `Keyboard.type`, waiting for no navigation).
 //!
 //! ```text
 //!  press(tab, options, progress)               log: waiting for <locator>
 //!   loop A (click.rs): pre-check, describe, resolve → element
 //!   │ the browser's platform, read once per call (ControlOrMeta, the mac editing commands)
-//!   │ log: elementHandle.press("<key>")
-//!   │ wait for the tab's input turn → unless noWaitAfter: watch navigations
+//!   │ log: elementHandle.press("<key>") │ elementHandle.type("<text>")
+//!   │ wait for the tab's input turn → a press unless noWaitAfter: watch navigations
 //!   │ focus (selection reset unless it already had focus)
 //!   │   not connected → turn released; "element was detached from the DOM, retrying"
 //!   │ plan the keys (keyboard.rs) │ an unknown token → Error, no key sent
-//!   │ begin ticket → write_keys (detached writer) → acked: Done │ failed: the call ends, Unknown
-//!   │ turn released → unless noWaitAfter: the barrier, `  navigated to "<url>"` per commit
+//!   │ nothing to type (`type('')`) → done, NotSent
+//!   │ begin ticket → the input writer (detached) → acked: Done │ failed: the call ends, Unknown
+//!   │ turn released → a press unless noWaitAfter: the barrier, `  navigated to "<url>"` per commit
 //! ```
 //!
 //! The input turn runs from the focus to the last key's answer, so no other call's input, from
@@ -27,7 +29,7 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use neo_runtime_spec::serve::FramePressParams;
+use neo_runtime_spec::serve::{FramePressParams, FrameTypeParams};
 
 use crate::click::{self, ActionResult, ElementAction, PageError, PressReport, Stop};
 use crate::forms::{FocusOutcome, FormTab};
@@ -35,11 +37,20 @@ use crate::input_devices::{Devices, Plan};
 use crate::keyboard::{self, KeyboardTab, Platform};
 use crate::progress::{CallError, DeliveryCell, PlaywrightError, Progress};
 
+/// What the call types into its element: one press, or a text.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum KeyInput {
+    /// `Frame.press`'s `key`: `+`-joined tokens, pressed as one chord.
+    Press(String),
+    /// `Frame.type`'s `text`: each character in the layout pressed, the rest inserted.
+    Type(String),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PressOptions {
     pub(crate) selector: String,
     pub(crate) strict: bool,
-    pub(crate) key: String,
+    pub(crate) keys: KeyInput,
     pub(crate) delay: Option<f64>,
     pub(crate) wait_after: bool,
 }
@@ -49,9 +60,28 @@ impl PressOptions {
         Self {
             selector: params.selector,
             strict: params.strict.unwrap_or(false),
-            key: params.key,
+            keys: KeyInput::Press(params.key),
             delay: params.delay,
             wait_after: !params.no_wait_after.unwrap_or(false),
+        }
+    }
+
+    /// Reads `Frame.type`'s params: `dom.ts` `_type` waits for no navigation its keys start.
+    pub(crate) fn from_type(params: FrameTypeParams) -> Self {
+        Self {
+            selector: params.selector,
+            strict: params.strict.unwrap_or(false),
+            keys: KeyInput::Type(params.text),
+            delay: params.delay,
+            wait_after: false,
+        }
+    }
+
+    /// The method, for errors that name the call.
+    fn method(&self) -> &'static str {
+        match self.keys {
+            KeyInput::Press(_) => "press",
+            KeyInput::Type(_) => "type",
         }
     }
 
@@ -64,17 +94,20 @@ impl PressOptions {
     }
 }
 
-/// Serves `Frame.press`. `Ok(())` is Playwright's `{id}` reply; the call log and delivery are
-/// in `progress`.
+/// Serves `Frame.press` and `Frame.type`. `Ok(())` is Playwright's `{id}` reply; the call log
+/// and delivery are in `progress`.
 pub(crate) async fn press<T: FormTab + KeyboardTab>(
     tab: &T,
     options: &PressOptions,
     progress: &Progress,
 ) -> Result<(), CallError> {
-    // Press is an input method in the spec, so dispatch always gives it a cell.
-    let delivery = progress
-        .delivery()
-        .ok_or_else(|| PlaywrightError::error("neo-runtime: Frame.press has no delivery cell"))?;
+    // Both are input methods in the spec, so dispatch always gives them a cell.
+    let delivery = progress.delivery().ok_or_else(|| {
+        PlaywrightError::error(format!(
+            "neo-runtime: Frame.{} has no delivery cell",
+            options.method()
+        ))
+    })?;
     let action = PressAction {
         options,
         delivery,
@@ -114,11 +147,16 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for PressAction<'_> {
             let platform = progress.race(tab.platform()).await??;
             *self.platform.get_or_init(|| platform)
         };
-        progress.log(format!("elementHandle.press(\"{}\")", self.options.key));
+        progress.log(match &self.options.keys {
+            // Playwright: `server/dom.ts` `ElementHandle._press`: `progress.log(`elementHandle.press("${key}")`);`
+            KeyInput::Press(key) => format!("elementHandle.press(\"{key}\")"),
+            // Playwright: `server/dom.ts` `ElementHandle._type`: `progress.log(`elementHandle.type("${text}")`);`
+            KeyInput::Type(text) => format!("elementHandle.type(\"{text}\")"),
+        });
         let input = progress.race(tab.input()).await?;
         // Subscribed once the turn is this press's and before any of its input, as click does:
         // the barrier waits for every navigation this press's input requests, and never for one
-        // that the input it waited behind requested.
+        // that the input it waited behind requested. A type never waits.
         let watched = self.options.wait_after.then(|| tab.watch_navigations());
         match progress
             .race(tab.focus(element, true, input.clone()))
@@ -128,26 +166,41 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for PressAction<'_> {
             // Returning drops `input`: the turn is free while loop A resolves again.
             FocusOutcome::ErrorNotconnected => return Ok(ActionResult::NotConnected),
         }
-        // The whole key is planned before any key goes down, from the tab's keyboard under the
-        // turn (a modifier held by `keyboard.down` reaches it), and an unknown token fails where
-        // Playwright's does, after the focus.
+        // The whole input is planned before any key goes down, from the tab's keyboard under
+        // the turn (a modifier held by `keyboard.down` reaches it), and an unknown token fails
+        // where Playwright's does, after the focus.
         let mut simulated = input.snapshot()?;
         let mut plan = Plan::default();
-        keyboard::plan_press(
-            &mut plan,
-            &mut simulated,
-            &self.options.key,
-            platform,
-            &input.owner(),
-            self.options.key_delay(),
-        )
-        .map_err(|unknown| PlaywrightError::error(unknown.to_string()))?;
+        match &self.options.keys {
+            KeyInput::Press(key) => keyboard::plan_press(
+                &mut plan,
+                &mut simulated,
+                key,
+                platform,
+                &input.owner(),
+                self.options.key_delay(),
+            )
+            .map_err(|unknown| PlaywrightError::error(unknown.to_string()))?,
+            KeyInput::Type(text) => keyboard::plan_type(
+                &mut plan,
+                &mut simulated,
+                text,
+                platform,
+                &input.owner(),
+                self.options.key_delay(),
+            ),
+        }
+        if plan.writes() == 0 {
+            // `type('')`: focused, and nothing to type. The cell stays `NotSent`.
+            return Ok(ActionResult::Done(()));
+        }
         // The last chance to stop before an irreversible step.
         progress.check()?;
         let Ok(ticket) = self.delivery.begin() else {
-            return Err(PlaywrightError::error(
-                "neo-runtime: a press tried to write keys again after input",
-            )
+            return Err(PlaywrightError::error(format!(
+                "neo-runtime: a {} tried to write keys again after input",
+                self.options.method()
+            ))
             .into());
         };
         // A call that stops here drops the report's future: the writer cuts any delay short,
@@ -271,6 +324,62 @@ mod tests {
                 "settle",
             ]
         );
+    }
+
+    fn type_options(text: &str, extra: &serde_json::Value) -> PressOptions {
+        let mut params = serde_json::json!({ "selector": "#name", "strict": true, "text": text });
+        if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
+            params.extend(extra.clone());
+        }
+        PressOptions::from_type(serde_json::from_value(params).expect("type params"))
+    }
+
+    /// `Frame.type` (`dom.ts` `_type`): the focus, then `Keyboard.type` in one turn, each
+    /// character the layout knows pressed and the rest inserted, waiting for no navigation.
+    #[tokio::test(start_paused = true)]
+    async fn a_type_focuses_and_types_its_text_inside_one_turn() {
+        let tab = FakeTab::ready();
+        let progress = Progress::for_test(1000.0);
+        let result = press(&tab, &type_options("hé", &serde_json::json!({})), &progress).await;
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            progress.delivery().expect("an input call").delivery(),
+            Delivery::Done
+        );
+        assert_eq!(
+            tab.calls(),
+            [
+                "describe",
+                "resolve",
+                "platform",
+                "input",
+                "focus true",
+                "keyDown h",
+                "keyUp h",
+                "insertText é",
+                "input released",
+            ],
+            "no watch_navigations and no settle: a type waits for no navigation"
+        );
+        assert!(
+            progress
+                .folded_log()
+                .iter()
+                .any(|line| line.contains("elementHandle.type(\"hé\")")),
+            "{:?}",
+            progress.folded_log()
+        );
+    }
+
+    /// `type('')` focuses and types nothing: it resolves with nothing written.
+    #[tokio::test(start_paused = true)]
+    async fn typing_nothing_focuses_and_writes_nothing() {
+        let tab = FakeTab::ready();
+        let (result, delivery) = run(&tab, &type_options("", &serde_json::json!({})), 1000.0).await;
+        assert_eq!(result, Ok(()));
+        assert_eq!(delivery, Delivery::NotSent);
+        assert!(tab.calls().contains(&"focus true".to_string()));
+        assert_eq!(keys(&tab), Vec::<String>::new());
     }
 
     /// A press that waits for its turn behind other input subscribes to navigations only once
