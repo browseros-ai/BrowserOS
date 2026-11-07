@@ -297,9 +297,10 @@ struct Claims {
 struct State {
     /// Set at run end: nothing is exposed after the run removed its bindings.
     closed: bool,
-    /// Every name the run began to expose, which its end takes off the pages: never another
-    /// run's, which shares the page's controller ([`OWNERS`]).
-    names: HashSet<String>,
+    /// Every binding the run began to expose, by name and page (`None` for the context's), which
+    /// its end takes off the pages each reaches: never a name another live run registered on that
+    /// page, which shares the page's controller ([`OWNERS`]).
+    registered: Vec<Registration>,
     /// The controller's init script is in and the session reader runs.
     started: bool,
     exposed: Vec<Exposed>,
@@ -467,6 +468,33 @@ fn disown_run(run: &str) {
     }
 }
 
+/// One binding a run began to expose: its name and the page's target id (`None` for the
+/// context's, which reaches every page).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Registration {
+    name: String,
+    page: Option<String>,
+}
+
+/// The names `run`'s end takes off the page `target`: the run's registrations that reach it, but
+/// none another live run also exposes to it.
+fn page_names(run: &str, registered: &[Registration], target: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for registration in registered {
+        if registration
+            .page
+            .as_deref()
+            .is_some_and(|page| page != target)
+            || names.contains(&registration.name)
+            || owned_elsewhere(run, &registration.name, target)
+        {
+            continue;
+        }
+        names.push(registration.name.clone());
+    }
+    names
+}
+
 /// Whether a live run other than `run` exposes `name` to the page `target`.
 fn owned_elsewhere(run: &str, name: &str, target: &str) -> bool {
     OWNERS.lock().is_ok_and(|owners| {
@@ -501,12 +529,10 @@ impl Bindings {
         // end takes back.
         let late = {
             let state = self.state.lock().await;
-            state
-                .closed
-                .then(|| state.names.iter().cloned().collect::<Vec<_>>())
+            state.closed.then(|| state.registered.clone())
         };
-        if let Some(names) = late {
-            self.end_pages(tabs, &names).await;
+        if let Some(registered) = late {
+            self.end_pages(tabs, &registered).await;
         }
         exposed
     }
@@ -532,7 +558,12 @@ impl Bindings {
             // Before a page can call it: another run's reader leaves it to this one, and this
             // run's end takes it off the pages, however far this expose gets.
             let mut state = self.state.lock().await;
-            if state.names.insert(name.to_string()) {
+            let registration = Registration {
+                name: name.to_string(),
+                page: target.clone(),
+            };
+            if !state.registered.contains(&registration) {
+                state.registered.push(registration);
                 own(&self.run, name, target.as_deref());
             }
         }
@@ -894,7 +925,9 @@ impl Bindings {
                 .position(|exposed| exposed.disposable == guid)
                 .ok_or_else(PlaywrightError::target_closed)?;
             let exposed = state.exposed.remove(index);
-            state.names.remove(&exposed.name);
+            state.registered.retain(|registered| {
+                registered.name != exposed.name || registered.page != exposed.page
+            });
             exposed
         };
         disown(&self.run, &exposed.name, exposed.page.as_deref());
@@ -922,7 +955,7 @@ impl Bindings {
     /// running, which finds the run ended at its next step.
     /// Deviation: `server/page.ts` `Page.removeExposedBinding`: `await this.delegate.removeInitScripts([binding.initScript]);` Playwright's bindings live as long as their page or context; Neo's live as long as the run.
     pub(crate) async fn close(&self, tabs: &Tabs) {
-        let (started, sessions, names) = {
+        let (started, sessions, registered) = {
             let mut state = self.state.lock().await;
             state.closed = true;
             state.calls.clear();
@@ -930,12 +963,15 @@ impl Bindings {
             if let Ok(mut claims) = self.claims.lock() {
                 *claims = Claims::default();
             }
-            let names: Vec<String> = state.names.iter().cloned().collect();
-            (state.started, mem::take(&mut state.sessions), names)
+            (
+                state.started,
+                mem::take(&mut state.sessions),
+                state.registered.clone(),
+            )
         };
         disown_run(&self.run);
         if started {
-            self.end_pages(tabs, &names).await;
+            self.end_pages(tabs, &registered).await;
         }
         // The iframe sessions went with `init_scripts.rs`'s auto-attach.
         let cdp = tabs.cdp();
@@ -983,24 +1019,24 @@ impl Bindings {
         }
     }
 
-    /// In every frame of the run's pages: each call still waiting on one of `names` rejects and
-    /// each of them goes; the controller and the CDP binding function go once the controller
-    /// holds no name, so another run's names on the same page stay.
-    async fn end_pages(&self, tabs: &Tabs, names: &[String]) {
-        let end = page_object(
-            1,
-            vec![
-                ("names", json!({ "a": names, "id": 2 })),
-                ("message", json!(RUN_ENDED)),
-            ],
-        );
+    /// In every frame of each of the run's pages: each call still waiting on a binding the run
+    /// registered there (a page's own, or the context's) rejects, and each such name goes, unless
+    /// another live run registered it on that page too; the controller and the CDP binding
+    /// function go once the controller holds no name, so another run's bindings stay.
+    async fn end_pages(&self, tabs: &Tabs, registered: &[Registration]) {
         for (_, session) in tabs.attached() {
+            let target = init_scripts::target_of(&session);
+            let names = page_names(&self.run, registered, &target);
+            let end = page_object(
+                1,
+                vec![
+                    ("names", json!({ "a": names, "id": 2 })),
+                    ("message", json!(RUN_ENDED)),
+                ],
+            );
             in_all_frames(
                 &session,
-                &[(
-                    BuiltExpression::BindingsCall,
-                    vec![json!("end"), end.clone()],
-                )],
+                &[(BuiltExpression::BindingsCall, vec![json!("end"), end])],
             )
             .await;
         }
@@ -1467,6 +1503,32 @@ mod tests {
             disposable: String::new(),
             script: String::new(),
         }
+    }
+
+    #[test]
+    fn a_run_ends_only_its_own_registrations_on_each_page() {
+        let registration = |name: &str, page: Option<&str>| Registration {
+            name: name.to_string(),
+            page: page.map(str::to_string),
+        };
+        let mine = [
+            registration("shared", Some("P")),
+            registration("everywhere", None),
+        ];
+        // Another live run registered "shared" on Q, and "everywhere" on P.
+        own("other-run", "shared", Some("Q"));
+        own("other-run", "everywhere", Some("P"));
+        assert_eq!(page_names("my-run", &mine, "P"), vec!["shared".to_string()]);
+        assert_eq!(
+            page_names("my-run", &mine, "Q"),
+            vec!["everywhere".to_string()],
+            "a page the run merely attached keeps another run's same-named binding"
+        );
+        disown_run("other-run");
+        assert_eq!(
+            page_names("my-run", &mine, "P"),
+            vec!["shared".to_string(), "everywhere".to_string()]
+        );
     }
 
     #[test]
