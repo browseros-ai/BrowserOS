@@ -483,3 +483,55 @@ async fn a_shed_end_and_settle_use_the_known_runtime_budget_as_a_backstop() {
         "missing terminal counts remain unknown"
     );
 }
+
+#[tokio::test]
+async fn every_runtime_getter_name_round_trips_without_a_second_store_enum() {
+    use neo_runtime::GetterField;
+    use std::time::Duration;
+    let (_dir, path) = scratch();
+    let store = TraceStore::open(StoreConfig::new(&path)).await.unwrap();
+    let conn = inspect(&path).await;
+    let start = started("getter-vocabulary");
+    let run = start.run.id;
+    let fields = [
+        GetterField::Url,
+        GetterField::IsClosed,
+        GetterField::Pages,
+        GetterField::Initializer,
+        GetterField::Chain,
+        GetterField::RedirectedTo,
+        GetterField::ExistingResponse,
+        GetterField::Timing,
+        GetterField::Failure,
+        GetterField::Finished,
+        GetterField::Frames,
+        GetterField::Name,
+        GetterField::ParentFrame,
+        GetterField::ChildFrames,
+        GetterField::IsDetached,
+        GetterField::Version,
+        GetterField::IsConnected,
+        GetterField::PausedDetails,
+        GetterField::Debugger,
+        GetterField::Opener,
+        GetterField::Args,
+        GetterField::Element,
+        GetterField::MatchesUrl,
+        GetterField::Devices,
+        GetterField::ParseUrl,
+        GetterField::SetUrl,
+        GetterField::RandomValues,
+    ];
+    let mut commands = vec![Command::Started(start)];
+    for (index, field) in fields.iter().enumerate() {
+        let mut read = getter(run, index as u64 + 1);
+        if let RunEvent::Getter { field: saved, .. } = &mut read {
+            *saved = *field;
+        }
+        commands.push(event(read));
+    }
+    apply(&conn, &commands).await;
+    let rows = store.getters(&run).await.unwrap();
+    assert_eq!(rows.iter().map(|row| row.field).collect::<Vec<_>>(), fields);
+    store.close(Duration::from_secs(10)).await;
+}

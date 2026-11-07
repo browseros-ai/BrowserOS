@@ -22,8 +22,14 @@ tokio.workspace = true
 tracing.workspace = true
 ulid.workspace = true
 
-# tempfile gives each test its own database file. tokio's test-util is for tests that pause time.
+# The integration tests reuse neo-runtime's fake and real browser fixtures. Their CDP client,
+# WebSocket server and cancellation types stay dev-only; production consumes runtime events.
+# tempfile gives each test its own database file; test-util supports paused-clock unit tests.
 [dev-dependencies]
+browseros-cdp.workspace = true
+futures-util.workspace = true
+tokio-tungstenite.workspace = true
+tokio-util.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 

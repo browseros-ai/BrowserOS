@@ -766,6 +766,9 @@ impl CallEntry {
         if self.end.get().is_some() {
             return;
         }
+        // Abort is a control frame rather than a browser call. Register its free-text reason
+        // on the existing entry before its raw log/error can become a durable record.
+        self.tap.secrets().register(&reason);
         let line = format!("operation was aborted: {reason}");
         // The abort wakes the call while this holds its log: the call's end folds the log
         // under the same lock, so the reply always carries the line.

@@ -177,13 +177,7 @@ try {
     let [call] = outcome.calls.as_slice() else {
         panic!("one call: {:?}", outcome.calls);
     };
-    assert_eq!(
-        call.result,
-        CallResult::Error {
-            name: "AbortError".to_string(),
-            message: "stop".to_string(),
-        }
-    );
+    assert!(matches!(&call.result, CallResult::Error { name, .. } if name == "AbortError"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

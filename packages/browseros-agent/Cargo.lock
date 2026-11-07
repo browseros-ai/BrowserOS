@@ -1968,6 +1968,8 @@ dependencies = [
 name = "neo-trace-store"
 version = "0.1.0"
 dependencies = [
+ "browseros-cdp",
+ "futures-util",
  "neo-runtime",
  "sea-orm",
  "sea-orm-migration",
@@ -1976,6 +1978,8 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
  "tracing",
  "ulid",
 ]

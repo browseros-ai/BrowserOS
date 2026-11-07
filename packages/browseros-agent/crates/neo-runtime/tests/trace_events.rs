@@ -1262,3 +1262,34 @@ async fn platform_getters_are_recorded_with_their_single_bridge_vocabulary() {
             .contains("private-data")
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn abort_control_frames_scrub_the_existing_call_without_changing_its_reply() {
+    let browser = FakeBrowser::start(Replies::default()).await;
+    let sink = RecordingSink::new(true);
+    let runtime = runtime_with(&browser, &[&sink]).await;
+    let outcome = runtime.run(request(r"
+        const pending = __neo_runtime.call(JSON.stringify({id:1,guid:'frame@fake-page',method:'click',
+            params:{selector:'#missing'},metadata:{timeout:0}}));
+        __neo_runtime.abort(1, 'abort-reason-secret');
+        const answer = JSON.parse(await pending);
+        return [answer.error.error.name, answer.error.error.message.includes('abort-reason-secret')];
+    ")).await;
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    assert_eq!(outcome.value, Some(json!(["AbortError", true])));
+    let events = sink.settled(outcome.run_id).await;
+    assert_eq!(outcome.calls.len(), 1);
+    assert!(
+        matches!(&outcome.calls[0].result, CallResult::Error { name, .. } if name == "AbortError")
+    );
+    assert!(
+        !serde_json::to_string(&events)
+            .unwrap()
+            .contains("abort-reason-secret")
+    );
+    assert!(
+        !serde_json::to_string(&outcome.calls)
+            .unwrap()
+            .contains("abort-reason-secret")
+    );
+}
