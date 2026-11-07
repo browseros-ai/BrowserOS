@@ -1492,9 +1492,11 @@ export class Frame {
       0,
     )
     // Playwright: `client/frame.ts` `Frame.frameElement`: `return ElementHandle.from((await this._channel.frameElement({}, kNoTimeout)).element);`
+    // The owner element lives in the parent frame's document.
     const element = ElementHandle.fromNullable(
       this._connection,
       result?.element,
+      this.parentFrame() ?? this,
     )
     if (!element) throw new Error('neo-sdk: frameElement answered no element')
     return element

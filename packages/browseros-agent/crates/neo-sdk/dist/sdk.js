@@ -931,7 +931,8 @@ class ConsoleMessage {
       if (!connection)
         throw new Error(HISTORY_KEEPS_NO_ARGS);
       const id = this.#event.argsId;
-      this.#args = id ? get(id, "args").map((created) => handleFrom(connection, created)) : [];
+      const frame = this.#page?.mainFrame();
+      this.#args = id ? get(id, "args").map((created) => handleFrom(connection, created, frame)) : [];
     }
     return [...this.#args];
   }
@@ -2051,7 +2052,7 @@ class FileChooser {
   }
   element() {
     if (!this.#element)
-      this.#element = handleFrom(this.#connection, get(this.#chooser, "element"));
+      this.#element = handleFrom(this.#connection, get(this.#chooser, "element"), this.#page.mainFrame());
     return this.#element;
   }
   isMultiple() {
@@ -6184,7 +6185,7 @@ class Frame {
   }
   async frameElement() {
     const result = await this._connection.sendNeo("frame.frameElement", this._guid, "frameElement", {}, 0);
-    const element = ElementHandle.fromNullable(this._connection, result?.element);
+    const element = ElementHandle.fromNullable(this._connection, result?.element, this.parentFrame() ?? this);
     if (!element)
       throw new Error("neo-sdk: frameElement answered no element");
     return element;

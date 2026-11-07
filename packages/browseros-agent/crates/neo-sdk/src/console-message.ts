@@ -72,8 +72,13 @@ export class ConsoleMessage {
       const connection = this.#connection
       if (!connection) throw new Error(HISTORY_KEEPS_NO_ARGS)
       const id = this.#event.argsId
+      // The message names no frame; its page's main frame times the handles' calls, as every
+      // frame of a page shares the page's `TimeoutSettings`.
+      const frame = this.#page?.mainFrame()
       this.#args = id
-        ? get(id, 'args').map((created) => handleFrom(connection, created))
+        ? get(id, 'args').map((created) =>
+            handleFrom(connection, created, frame),
+          )
         : []
     }
     return [...this.#args]
