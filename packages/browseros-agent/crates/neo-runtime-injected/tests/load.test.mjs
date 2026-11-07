@@ -113,6 +113,51 @@ test('the built bundle installs once per document and answers through call.js', 
       'the strict error is stackless, as Playwright throws it',
     )
 
+    // `frames.ts` `_elementState` and `innerHTML` read the first match; a state the element
+    // cannot have throws, as Playwright's page code does; `allInnerTexts` reads every match.
+    const lonePreview = '<p id="lone">Only one</p>'
+    assert.deepEqual(
+      await page('elementStateOnSelector', {
+        selector: '#lone',
+        strict: true,
+        state: 'enabled',
+      }),
+      {
+        value: {
+          matched: { matches: true, received: 'enabled', preview: lonePreview },
+        },
+      },
+    )
+    assert.deepEqual(
+      await page('elementStateOnSelector', {
+        selector: '#missing',
+        strict: true,
+        state: 'disabled',
+      }),
+      { value: {} },
+      'nothing matched yet is a value, not an error',
+    )
+    assert.match(
+      (
+        await page('elementStateOnSelector', {
+          selector: '#lone',
+          strict: true,
+          state: 'editable',
+        })
+      ).exception.description,
+      /^Error: Element is not an <input>, <textarea>, <select> or \[contenteditable\]/,
+    )
+    assert.deepEqual(
+      await page('innerHTML', { selector: '#lone', strict: true }),
+      { value: { matched: { value: 'Only one', preview: lonePreview } } },
+    )
+    assert.deepEqual(await page('allInnerTexts', { selector: '#lone' }), {
+      value: { values: [{ value: 'Only one' }] },
+    })
+    assert.deepEqual(await page('allInnerTexts', { selector: '#missing' }), {
+      value: { values: [] },
+    })
+
     const aria = await page('ariaSnapshot', {
       selector: 'body',
       strict: false,
@@ -151,6 +196,44 @@ test('the built bundle installs once per document and answers through call.js', 
       notFrame.exception.description,
       'Error: Selector "#lone" resolved to <p id="lone">Only one</p>, <iframe> was expected',
     )
+
+    // A path ref's hop finds the iframe by the ref the snapshot above gave it, and the iframe's
+    // ref is read without replacing the document's last snapshot: a later snapshot of another
+    // part of the document kills its refs (as in Playwright), naming the owner revives none, and
+    // the hop still finds the iframe.
+    const countOf = async (selector) =>
+      (
+        await handleCall(cdp, sessionA, glue, 'resolve', {
+          selector,
+          strict: false,
+        })
+      ).count.value
+    const byRef = (ref) =>
+      handleCall(cdp, sessionA, glue, 'frameOwnerByRef', { ref })
+    const iframe = await byRef('e5')
+    assert.equal(iframe.element.className, 'HTMLIFrameElement')
+    assert.equal(iframe.visible.value, true)
+    assert.equal(
+      (await byRef('e1')).element.type,
+      'undefined',
+      "a button's ref names no frame owner",
+    )
+    assert.equal(await countOf('aria-ref=e1'), 1)
+    await page('ariaSnapshot', { selector: '#lone', strict: true, mode: 'ai' })
+    assert.equal(await countOf('aria-ref=e1'), 0)
+    assert.deepEqual(
+      await byValueCall(cdp, sessionA, glue, 'frameOwnerRef', {}, [
+        owner.element,
+      ]),
+      { ref: 'e5' },
+      'the ref the page snapshot gave the iframe',
+    )
+    assert.equal(
+      await countOf('aria-ref=e1'),
+      0,
+      "naming the owner leaves the document's last snapshot as it was",
+    )
+    assert.equal((await byRef('e5')).element.className, 'HTMLIFrameElement')
 
     const lone = await handleCall(cdp, sessionA, glue, 'resolve', {
       selector: '#lone',

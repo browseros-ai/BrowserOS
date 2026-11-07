@@ -359,6 +359,36 @@ async fn tests_that_a_main_frame_button_in_the_scrollbar_gutter_times_out() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn tests_that_scroll_none_does_not_scroll_an_offscreen_oopif_owner() {
+    let Some(tab) = open("#cross{margin-top:3000px}").await else {
+        return;
+    };
+    assert_eq!(tab.evaluate("[scrollX, scrollY]").await, json!([0, 0]));
+    let outcome = run(
+        &tab,
+        r"
+        try {
+            await page.frameLocator('#cross').locator('#go').click({scroll:'none',timeout:1000});
+            return 'clicked';
+        } catch(error) { return error.name; }
+    ",
+    )
+    .await;
+    let offsets = tab.evaluate("[scrollX, scrollY]").await;
+    let events = tab.evaluate("window.events").await;
+    assert_oopifs(&tab).await;
+    tab.close().await;
+    assert_ok(&outcome);
+    assert_eq!(
+        offsets,
+        json!([0, 0]),
+        "scroll:none keeps the owners in place"
+    );
+    assert_eq!(outcome.value, Some(json!("TimeoutError")), "{outcome:#?}");
+    assert_eq!(events, json!([]), "no input reaches the offscreen button");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn tests_that_an_oopif_below_the_fold_scrolls_its_parent_and_receives_the_click() {
     let Some(tab) = open("#cross{margin-top:3000px}").await else {
         return;

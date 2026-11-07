@@ -2,6 +2,7 @@
 //! identity; attaching it owns a session until the run and its last writer have let go.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -18,10 +19,13 @@ use tokio_util::task::TaskTracker;
 use tracing::debug;
 
 use crate::bridge;
+use crate::dialogs;
+use crate::events::EventHub;
 use crate::frames::FrameScope;
 use crate::getters;
 use crate::network::HopId;
 use crate::page::{PageSession, Session, TabInputs};
+use crate::page_events;
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunPage};
 
@@ -38,6 +42,8 @@ struct Inner {
     scope: Scope,
     run_page: PageId,
     pages: Mutex<Vec<Arc<PageEntry>>>,
+    /// The run's event queue and subscriptions, shared with every page session it attaches.
+    events: EventHub,
 }
 
 /// A page can be known without a session. Its closure token precedes the attachment so calls,
@@ -143,6 +149,7 @@ impl Tabs {
             },
             run_page: page.clone(),
             pages: Mutex::new(Vec::new()),
+            events: EventHub::default(),
         }));
         let entry = tabs.register(page.clone(), false)?;
         // The scope read above already checked this tab. Avoid a second startup read so
@@ -160,6 +167,32 @@ impl Tabs {
 
     pub(crate) fn cdp(&self) -> &CdpClient {
         &self.0.cdp
+    }
+
+    pub(crate) fn events(&self) -> &EventHub {
+        &self.0.events
+    }
+
+    /// Runs `task` on the run's tracker, so `Dispatcher::finish` waits for it.
+    pub(crate) fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
+        self.0.tasks.spawn_on(task, &self.0.tokio);
+    }
+
+    /// Every page this run has attached a session to, in first-seen order.
+    pub(crate) fn attached(&self) -> Vec<(Arc<PageEntry>, Arc<PageSession>)> {
+        self.0.pages.lock().map_or_else(
+            |_| Vec::new(),
+            |pages| {
+                pages
+                    .iter()
+                    .filter_map(|entry| {
+                        entry
+                            .attached_session()
+                            .map(|session| (Arc::clone(entry), session))
+                    })
+                    .collect()
+            },
+        )
     }
 
     pub(crate) fn finish_close(&self, page: Arc<PageSession>, entry: Arc<PageEntry>) {
@@ -196,6 +229,8 @@ impl Tabs {
                 Some(_) => return None,
                 None => (frame, FrameScope::Main),
             }
+        } else if let Some((target, _)) = dialogs::parse(guid) {
+            (target, FrameScope::Main)
         } else {
             // A hop is one of the main frame's navigation requests (network.rs).
             let (_, target, _) = HopId::parse(guid)?;
@@ -210,6 +245,17 @@ impl Tabs {
             .find(|entry| entry.id.as_str() == target)
             .cloned()?;
         Some((page, scope))
+    }
+
+    /// The registered page `id`, if the run knows it.
+    fn entry(&self, id: &PageId) -> Option<Arc<PageEntry>> {
+        self.0
+            .pages
+            .lock()
+            .ok()?
+            .iter()
+            .find(|entry| &entry.id == id)
+            .cloned()
     }
 
     fn register(&self, id: PageId, created: bool) -> Result<Arc<PageEntry>, PlaywrightError> {
@@ -248,7 +294,16 @@ impl Tabs {
                 if self.is_closed(entry).await? {
                     return Err(PlaywrightError::target_closed());
                 }
-                self.attach(entry).await
+                let session = self.attach(entry).await?;
+                // A context listener covers every page the run has a session on, this one
+                // from now on. Registered before the call that attached it continues, so that
+                // call waits for the enable (`EventHub::ready`).
+                if let Some(needs) = self.0.events.context_needs()
+                    && let Some(entry) = self.entry(&entry.id)
+                {
+                    page_events::enable(self, entry, needs);
+                }
+                Ok(session)
             })
             .await?;
         if session.closed().is_cancelled() {
@@ -288,6 +343,7 @@ impl Tabs {
             self.0.tasks.clone(),
             input,
             entry.closed.clone(),
+            self.0.events.clone(),
         )))
     }
 

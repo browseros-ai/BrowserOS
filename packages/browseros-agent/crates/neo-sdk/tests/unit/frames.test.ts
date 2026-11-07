@@ -2,6 +2,7 @@
 import { describe, expect, test } from 'bun:test'
 import urlGoldens from '../../../neo-runtime/tests/fixtures/url-match-goldens.json'
 import type { CreatedFrame } from '../../src/runtime-bridge'
+import { eventless } from './bridge-stub'
 import { failure, start } from './fake-runtime'
 
 const MAIN = 'frame@RUN'
@@ -42,7 +43,7 @@ function startFrames(
     ).map((frame) => [frame.guid, frame]),
   )
   Object.assign(globalThis, {
-    __neo_runtime: {
+    __neo_runtime: eventless({
       call: run.fake.call.bind(run.fake),
       get(request: string) {
         const { guid, field, url, matcher } = JSON.parse(request)
@@ -93,7 +94,7 @@ function startFrames(
           )
         return run.fake.get(request)
       },
-    },
+    }),
   })
   return { ...run, records }
 }

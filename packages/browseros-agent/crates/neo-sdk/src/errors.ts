@@ -41,15 +41,33 @@ export function isTargetClosedError(error: unknown): boolean {
 }
 
 /** Playwright's `parseError`: the class by wire `name`; any other name is copied onto a
- * `PlaywrightError`. */
+ * `PlaywrightError`. The stack is the serialized one, or empty, as Playwright sets it. */
 export function parseError(error: {
   name: string
   message: string
+  stack?: string
 }): PlaywrightError {
-  if (error.name === 'TimeoutError') return new TimeoutError(error.message)
-  if (error.name === 'TargetClosedError')
-    return new TargetClosedError(error.message)
-  return Object.assign(new PlaywrightError(error.message), {
-    name: error.name,
-  })
+  let e: PlaywrightError
+  if (error.name === 'TimeoutError') e = new TimeoutError(error.message)
+  else if (error.name === 'TargetClosedError')
+    e = new TargetClosedError(error.message)
+  else
+    e = Object.assign(new PlaywrightError(error.message), {
+      name: error.name,
+    })
+  if (error.stack !== undefined) e.stack = error.stack
+  return e
+}
+
+/**
+ * Playwright's `parseError` of a whole `SerializedError`, the page errors Rust sends
+ * (`pageError` events, `pageErrors()`): always its `error` branch, since Rust builds an `Error`
+ * from every exception as Playwright's server does (`exceptionToError`).
+ */
+export function parseSerializedError(error: {
+  error?: { name: string; message: string; stack?: string }
+}): PlaywrightError {
+  if (!error.error)
+    throw new Error('Serialized error must have either an error or a value')
+  return parseError({ ...error.error, stack: error.error.stack || '' })
 }

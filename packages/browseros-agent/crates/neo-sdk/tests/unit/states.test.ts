@@ -2,6 +2,7 @@
 import { expect, test } from 'bun:test'
 import { BrowserContext } from '../../src/browser-context'
 import { Connection } from '../../src/connection'
+import { EventPipe } from '../../src/events'
 import { Page } from '../../src/page'
 
 function fixture(value: boolean | undefined = true) {
@@ -15,7 +16,7 @@ function fixture(value: boolean | undefined = true) {
     'page@T',
     'frame@T',
     '',
-    new BrowserContext('browser-context@T', connection),
+    new BrowserContext('browser-context@T', connection, new EventPipe()),
     connection,
   )
   return { page, messages, connection }

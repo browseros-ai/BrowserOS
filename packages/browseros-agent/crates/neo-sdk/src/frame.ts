@@ -10,20 +10,22 @@
  * `apiName`. Each runs synchronously into `Connection.send`, so the location it captures is the
  * script's call site.
  *
- * `goto` resolves the navigation's `Response` (`network.ts`), or `null` where Playwright's does:
- * a same-document change, or a document without a network request (`about:blank`, `data:`).
+ * `goto` and `waitForNavigation` resolve the navigation's `Response` (`network.ts`), or `null`
+ * where Playwright's does: a same-document change, or a document without a network request
+ * (`about:blank`, `data:`).
  *
  * What differs from Playwright:
  * - Detached frames retain the last URL and name read by a getter or frame record, as Page
  *   retains its last URL after closure; without frame events, unseen changes are not retained.
- * - `waitForURL` and `waitForLoadState` are one `neo:` call each, which Rust waits out
+ * - `waitForURL`, `waitForLoadState` and `waitForNavigation` are `neo:` calls that Rust waits out
  *   (`neo-commands.ts`), where Playwright's client waits on `navigated` and `loadstate` events.
- *   `waitForURL` takes a glob or a `RegExp`, not a predicate function, and neither takes
- *   `networkidle`. A failed navigation does not reject `waitForURL`, which waits on to its timeout.
- *   An unknown `waitUntil` is reported as `waitUntil`, where Playwright names it `state` when the
- *   URL already matches.
- * - `allTextContents` sends `client/locator.ts` source text; compiled Playwright clients may
- *   format it differently. Like every `$$eval`, it runs in the page's main world, as Playwright's.
+ *   A predicate `url` steps a cursor, one call per navigation, and receives Neo's read-only `URL`
+ *   (`url.ts`). None takes `networkidle`. A failed navigation rejects a main-frame wait, as in
+ *   Playwright, once Neo has seen its request start; a child frame's never does.
+ *   `waitForNavigation` on a child frame rejects: Neo does not record a child frame's requests.
+ *   An unknown `waitUntil` is reported as `waitUntil`, where Playwright names it `state` when a
+ *   glob or `RegExp` URL already matches.
+ * - Text collections run as `$$eval` in the page's main world.
  */
 
 /** Playwright's `WaitForFunctionOptions`: `polling` is `'raf'` (default) or an interval in ms. */
@@ -38,19 +40,28 @@ import type {
   FrameAriaSnapshotResult,
   FrameCheckParams,
   FrameClickParams,
+  FrameDblclickParams,
   FrameFillParams,
   FrameGetAttributeParams,
   FrameGetAttributeResult,
   FrameGotoParams,
+  FrameHoverParams,
   FrameInitializer,
+  FrameInnerHTMLParams,
+  FrameInnerHTMLResult,
   FrameInnerTextParams,
   FrameInnerTextResult,
   FrameInputValueParams,
   FrameIsCheckedParams,
+  FrameIsDisabledParams,
+  FrameIsEditableParams,
+  FrameIsEnabledParams,
+  FrameIsHiddenParams,
   FrameIsVisibleParams,
   FramePressParams,
   FrameQueryCountParams,
   FrameSelectOptionParams,
+  FrameTapParams,
   FrameTextContentParams,
   FrameTextContentResult,
   FrameTitleResult,
@@ -70,6 +81,7 @@ import {
 } from '../vendor/playwright/isomorphic/locatorUtils'
 import type { ApiName, Connection } from './connection'
 import { ElementHandle, elementsFrom } from './element-handle'
+import { TimeoutError } from './errors'
 import { FrameLocator, kAnyFrameSelector } from './frame-locator'
 import {
   assertEvaluateOptions,
@@ -86,23 +98,35 @@ import {
   serializeArgument,
 } from './js-handle'
 import { Locator, type LocatorOptions, testIdAttributeName } from './locator'
-import { serializeUrlMatch } from './neo-commands'
+import {
+  type NeoNavigationResult,
+  type NeoNextNavigationResult,
+  serializeUrlMatch,
+} from './neo-commands'
 import { type Response, responseFor } from './network'
 import type { Page } from './page'
 import {
   FRAME_ARIA_SNAPSHOT_KEYS,
   FRAME_CHECK_KEYS,
   FRAME_CLICK_KEYS,
+  FRAME_DBLCLICK_KEYS,
   FRAME_FILL_KEYS,
   FRAME_GET_ATTRIBUTE_KEYS,
   FRAME_GOTO_KEYS,
+  FRAME_HOVER_KEYS,
+  FRAME_INNER_HTML_KEYS,
   FRAME_INNER_TEXT_KEYS,
   FRAME_INPUT_VALUE_KEYS,
   FRAME_IS_CHECKED_KEYS,
+  FRAME_IS_DISABLED_KEYS,
+  FRAME_IS_EDITABLE_KEYS,
+  FRAME_IS_ENABLED_KEYS,
+  FRAME_IS_HIDDEN_KEYS,
   FRAME_IS_VISIBLE_KEYS,
   FRAME_PRESS_KEYS,
   FRAME_QUERY_COUNT_KEYS,
   FRAME_SELECT_OPTION_KEYS,
+  FRAME_TAP_KEYS,
   FRAME_TEXT_CONTENT_KEYS,
   FRAME_UNCHECK_KEYS,
   FRAME_WAIT_FOR_SELECTOR_KEYS,
@@ -113,10 +137,33 @@ import {
   convertSelectOptionValues,
   type SelectOptionValues,
 } from './select-option'
+import { refuseSignalFor } from './timeout-settings'
+import { type URLPredicate, urlFor } from './url'
 
 /** `click`'s options as a script passes them: the wire params plus `timeout`. */
 export type ClickOptions = Omit<FrameClickParams, 'selector'> & {
   timeout?: number
+}
+
+/**
+ * `dblclick`'s options as a script passes them: the wire params plus `timeout`, and the
+ * deprecated `noWaitAfter`, which Playwright's client accepts and its protocol drops.
+ */
+export type DblclickOptions = Omit<FrameDblclickParams, 'selector'> & {
+  timeout?: number
+  noWaitAfter?: boolean
+}
+
+/** `hover`'s options as a script passes them, with the deprecated `noWaitAfter` (dropped). */
+export type HoverOptions = Omit<FrameHoverParams, 'selector'> & {
+  timeout?: number
+  noWaitAfter?: boolean
+}
+
+/** `tap`'s options as a script passes them, with the deprecated `noWaitAfter` (dropped). */
+export type TapOptions = Omit<FrameTapParams, 'selector'> & {
+  timeout?: number
+  noWaitAfter?: boolean
 }
 
 /** `goto`'s options as a script passes them: the wire params plus `timeout`. */
@@ -129,6 +176,11 @@ export type TextContentOptions = Omit<FrameTextContentParams, 'selector'> & {
 
 /** `innerText`'s options as a script passes them. */
 export type InnerTextOptions = Omit<FrameInnerTextParams, 'selector'> & {
+  timeout?: number
+}
+
+/** `innerHTML`'s options as a script passes them. */
+export type InnerHTMLOptions = Omit<FrameInnerHTMLParams, 'selector'> & {
   timeout?: number
 }
 
@@ -156,12 +208,25 @@ export type WaitForSelectorOptions = Omit<
   'selector'
 > & { timeout?: number }
 
-/** What `waitForURL` matches: a glob string or a `RegExp`, two of Playwright's four `URLMatch`
- * forms. A predicate function is refused (`neo-commands.ts`); QuickJS has no `URLPattern`. */
+/** What `page.frame({ url })` matches: a glob string or a `RegExp`, two of Playwright's four
+ * `URLMatch` forms; a predicate function is refused there (`neo-commands.ts`). */
 export type URLMatch = string | RegExp
+
+/** What `waitForURL` and `waitForNavigation` match: Playwright's `URLMatch` without
+ * `URLPattern`, which QuickJS lacks: a glob string, a `RegExp`, or a predicate on the navigated
+ * `URL` (Neo's read-only one, `url.ts`). */
+export type NavigationURLMatch = URLMatch | URLPredicate
 
 /** `waitForURL`'s options, as Playwright's. */
 export type WaitForURLOptions = { waitUntil?: LifecycleEvent; timeout?: number }
+
+/** Playwright's `WaitForNavigationOptions` (`client/frame.ts`), without `signal`: Neo takes no
+ * `AbortSignal` (`errors.ts`). */
+export type WaitForNavigationOptions = {
+  url?: NavigationURLMatch
+  waitUntil?: LifecycleEvent
+  timeout?: number
+}
 
 /** `waitForLoadState`'s options, as Playwright's `TimeoutOptions`. */
 export type WaitForLoadStateOptions = { timeout?: number }
@@ -222,6 +287,19 @@ export type IsCheckedOptions = Omit<FrameIsCheckedParams, 'selector'> & {
   timeout?: number
 }
 export type IsVisibleOptions = Omit<FrameIsVisibleParams, 'selector'> & {
+  timeout?: number
+}
+/** Playwright's `isHidden` takes `timeout` and ignores it, as `isVisible` does. */
+export type IsHiddenOptions = Omit<FrameIsHiddenParams, 'selector'> & {
+  timeout?: number
+}
+export type IsEnabledOptions = Omit<FrameIsEnabledParams, 'selector'> & {
+  timeout?: number
+}
+export type IsDisabledOptions = Omit<FrameIsDisabledParams, 'selector'> & {
+  timeout?: number
+}
+export type IsEditableOptions = Omit<FrameIsEditableParams, 'selector'> & {
   timeout?: number
 }
 export type CheckOptions = Omit<FrameCheckParams, 'selector'> & {
@@ -319,7 +397,7 @@ export class Frame {
         ...options,
         waitUntil,
       }) as FrameGotoParams,
-      this._page._timeoutSettings.navigationTimeout(options),
+      this._page._timeoutSettings.navigationTimeout(options, apiName),
     )
     const guid = result?.response?.guid
     return guid ? responseFor(this._connection, guid, this) : null
@@ -333,27 +411,54 @@ export class Frame {
    * `history.pushState`) included. Runs under the navigation timeout.
    *
    * `url` is a glob string, where `**` crosses `/` and `{a,b}` alternates (`''` matches every
-   * URL), or a `RegExp`, flags included, tested as Playwright tests it. `waitUntil` is `load`,
-   * `domcontentloaded` or `commit`. Neo limits: a predicate function and `networkidle` throw an
-   * `Error`, and a failed navigation does not reject the wait.
+   * URL), a `RegExp`, flags included, tested as Playwright tests it, or a predicate that receives
+   * the URL as a read-only `URL` and may be async. `waitUntil` is `load`, `domcontentloaded` or
+   * `commit`. A navigation that fails before the URL matched rejects the wait. Neo limit:
+   * `networkidle` throws an `Error`.
    */
   async waitForURL(
-    url: URLMatch,
+    url: NavigationURLMatch,
     options: WaitForURLOptions = {},
   ): Promise<void> {
     return await this._waitForURL('frame.waitForURL', url, options)
   }
 
   /**
-   * Sends `neo:waitForURL` under the navigation timeout. The url is checked first, then
-   * `waitUntil`, and either throws before anything is sent, as Playwright's client does.
+   * Sends `neo:waitForURL` under the navigation timeout, or for a predicate checks the current
+   * URL and then steps a navigation cursor (`_navigationMatching`). The url is checked first,
+   * then `waitUntil`, and either throws before anything is sent, as Playwright's client does.
    */
   async _waitForURL(
     apiName: ApiName,
-    url: URLMatch,
+    url: NavigationURLMatch,
     options: WaitForURLOptions | undefined,
   ): Promise<void> {
     const waitOptions = options ?? {}
+    if (typeof url === 'function') {
+      // Playwright's client `waitForURL`: a current URL the predicate accepts (truthy, not
+      // awaited, as `urlMatches` answers) waits for the load state; otherwise the next
+      // navigation it accepts does, as `waitForNavigation({ url })`.
+      const current = urlFor(this.url())
+      if (current && url(current))
+        return await this._waitForLoadState(
+          apiName,
+          waitOptions.waitUntil,
+          waitOptions,
+        )
+      const waitUntil = verifyWaitState(
+        apiName,
+        'waitUntil',
+        waitOptions.waitUntil === undefined ? 'load' : waitOptions.waitUntil,
+      )
+      await this._navigationMatching(
+        apiName,
+        url,
+        waitUntil,
+        this._page._timeoutSettings.navigationTimeout(waitOptions, apiName),
+        false,
+      )
+      return
+    }
     const serialized = serializeUrlMatch(apiName, url)
     const waitUntil = verifyWaitState(
       apiName,
@@ -365,7 +470,221 @@ export class Frame {
       this._guid,
       'neo:waitForURL',
       { url: serialized, waitUntil },
-      this._page._timeoutSettings.navigationTimeout(waitOptions),
+      this._page._timeoutSettings.navigationTimeout(waitOptions, apiName),
+    )
+  }
+
+  /**
+   * Playwright's deprecated `waitForNavigation`: waits for the frame's next navigation after the
+   * call whose URL matches `url` (any, by default; a glob, a `RegExp` or a predicate on its `URL`),
+   * a same-document one (a hash change, `history.pushState`) included, then for `waitUntil`
+   * (default `load`), and resolves the new document's `Response`, or `null` for a same-document
+   * navigation or a document without a request. A navigation that fails first rejects with its
+   * error. Start it before the action that navigates:
+   * `await Promise.all([page.waitForNavigation(), page.click('a')])`. Runs under the navigation
+   * timeout. Neo limits: `networkidle` throws, and a child frame's wait rejects, because Neo does
+   * not record a child frame's navigation requests.
+   */
+  async waitForNavigation(
+    options: WaitForNavigationOptions = {},
+  ): Promise<Response | null> {
+    return await this._waitForNavigation('frame.waitForNavigation', options)
+  }
+
+  /** Sends `neo:waitForNavigation` (glob, `RegExp` or no `url`) or steps a predicate's cursor,
+   * under the navigation timeout. `waitUntil` and `url` are checked before anything is sent. */
+  async _waitForNavigation(
+    apiName: ApiName,
+    options: WaitForNavigationOptions,
+  ): Promise<Response | null> {
+    const waitUntil = verifyWaitState(
+      apiName,
+      'waitUntil',
+      options.waitUntil === undefined ? 'load' : options.waitUntil,
+    )
+    const timeout = this._page._timeoutSettings.navigationTimeout(
+      options,
+      apiName,
+    )
+    const result =
+      typeof options.url === 'function'
+        ? await this._navigationMatching(
+            apiName,
+            options.url,
+            waitUntil,
+            timeout,
+            true,
+          )
+        : await this._connection.sendNeo(
+            apiName,
+            this._guid,
+            'neo:waitForNavigation',
+            { url: serializeUrlMatch(apiName, options.url), waitUntil },
+            timeout,
+          )
+    const guid = result?.response?.guid
+    return guid ? responseFor(this._connection, guid, this) : null
+  }
+
+  /**
+   * A URL predicate's wait (`neo-commands.ts`, DECIDED 3), as Playwright's waiter runs it: each
+   * navigation's predicate is tested on its own, sync or async, and the first to accept wins,
+   * whatever earlier answers are still pending (a URL the parser rejects is never accepted). One
+   * `neo:nextNavigation` is always waiting, so later navigations keep arriving and the page's
+   * closure or a failed navigation rejects the wait even with no timeout. `respond` asks for the
+   * winning navigation's `Response`. `timeout` (0 for none) bounds the whole wait: each call gets
+   * what is left, and the deadline also rejects while only predicates are pending. However the wait
+   * ends, its cursor ends with it: by the finish, or by a release when the realm ended it. Rust
+   * then answers the next still waiting, and the wait settles only once that answer is in, so a
+   * settled wait holds none of the run's call capacity (neo-runtime `dispatch.rs`
+   * `MAX_CALLS_IN_FLIGHT`) or live-wait capacity (`history.rs` `MAX_CURSORS`).
+   */
+  async _navigationMatching(
+    apiName: ApiName,
+    predicate: URLPredicate,
+    waitUntil: LifecycleEvent,
+    timeout: number,
+    respond: boolean,
+  ): Promise<NeoNavigationResult> {
+    const deadline = timeout ? Date.now() + timeout : 0
+    const left = () => {
+      if (!deadline) return 0
+      const ms = deadline - Date.now()
+      if (ms <= 0) throw navigationTimeout(apiName, timeout)
+      return ms
+    }
+    let cursor: number | undefined
+    /** Set once a finish Rust answered ended the cursor. */
+    let finished = false
+    const finish = async (id: number, index: number) => {
+      const result = await this.#finishNavigation(
+        apiName,
+        id,
+        index,
+        waitUntil,
+        left(),
+      )
+      finished = true
+      return result
+    }
+    const next = () => {
+      const call = this._connection.sendNeo(
+        apiName,
+        this._guid,
+        'neo:nextNavigation',
+        cursor === undefined
+          ? { response: respond }
+          : { cursor, response: respond },
+        left(),
+      )
+      call.catch(() => {})
+      return call
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const expired = new Promise<never>((_, reject) => {
+      if (deadline)
+        timer = setTimeout(
+          () => reject(navigationTimeout(apiName, timeout)),
+          Math.max(0, deadline - Date.now()),
+        )
+    })
+    expired.catch(() => {})
+    /** Each pending predicate's answer, by the index of the navigation it tests. */
+    const verdicts = new Map<number, Promise<Verdict>>()
+    let waiting = next()
+    try {
+      for (;;) {
+        const step: Verdict | { reply: NeoNextNavigationResult } =
+          await Promise.race([
+            waiting.then((reply) => ({ reply })),
+            ...verdicts.values(),
+            expired,
+          ])
+        if ('reply' in step) {
+          const { cursor: id, index, url } = step.reply
+          cursor = id
+          if (index === undefined || url === undefined)
+            throw new Error(
+              'neo-sdk: neo-runtime ended this navigation wait under it',
+            )
+          waiting = next()
+          const parsed = urlFor(url)
+          if (!parsed) continue
+          let verdict: boolean | Promise<boolean>
+          try {
+            verdict = predicate(parsed)
+          } catch (error) {
+            throw prefixed(apiName, error)
+          }
+          if (isPromiseLike(verdict)) {
+            const answer = Promise.resolve(verdict).then(
+              (value) => ({ index, accepted: !!value }),
+              (error) => {
+                throw prefixed(apiName, error)
+              },
+            )
+            answer.catch(() => {})
+            verdicts.set(index, answer)
+            continue
+          }
+          if (!verdict) continue
+          return await finish(id, index)
+        }
+        verdicts.delete(step.index)
+        if (!step.accepted || cursor === undefined) continue
+        return await finish(cursor, step.index)
+      }
+    } catch (error) {
+      // Each step ran under what was left of `timeout`; its message names the whole timeout.
+      if (error instanceof TimeoutError && deadline)
+        error.message = error.message.replace(
+          /Timeout [\d.]+ms exceeded\./,
+          `Timeout ${timeout}ms exceeded.`,
+        )
+      throw error
+    } finally {
+      clearTimeout(timer)
+      await this.#endWait(apiName, cursor, finished, waiting)
+    }
+  }
+
+  /**
+   * Ends a predicate wait's cursor however the wait ended, unless its finish did: a release, which
+   * Rust ignores for a cursor it already ended. Then waits for Rust's answer to the next still
+   * waiting, which comes once the cursor ended; a first next it never answered shares the wait's
+   * own deadline. Only a release that failed (the page closed) leaves that answer unknown.
+   */
+  async #endWait(
+    apiName: ApiName,
+    cursor: number | undefined,
+    finished: boolean,
+    waiting: Promise<NeoNextNavigationResult>,
+  ): Promise<void> {
+    let ended = finished
+    if (cursor !== undefined && !ended)
+      ended = await this._connection
+        .sendNeo(apiName, this._guid, 'neo:releaseNavigation', { cursor }, 0)
+        .then(
+          () => true,
+          () => false,
+        )
+    if (ended || cursor === undefined) await waiting.catch(() => {})
+  }
+
+  /** Sends `neo:finishNavigation` for the navigation the predicate accepted. */
+  async #finishNavigation(
+    apiName: ApiName,
+    cursor: number,
+    index: number,
+    waitUntil: LifecycleEvent,
+    timeout: number,
+  ): Promise<NeoNavigationResult> {
+    return await this._connection.sendNeo(
+      apiName,
+      this._guid,
+      'neo:finishNavigation',
+      { cursor, index, waitUntil },
+      timeout,
     )
   }
 
@@ -404,7 +723,7 @@ export class Frame {
       this._guid,
       'neo:waitForLoadState',
       { state: verified },
-      this._page._timeoutSettings.navigationTimeout(options ?? {}),
+      this._page._timeoutSettings.navigationTimeout(options ?? {}, apiName),
     )
   }
 
@@ -426,7 +745,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameWaitForSelectorParams,
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options, apiName),
     )
   }
 
@@ -509,16 +828,12 @@ export class Frame {
     task: (handle: ElementHandle) => Promise<R>,
     options: { timeout?: number; signal?: unknown },
   ): Promise<R> {
-    // `null` is no signal, as `undefined`.
-    if (options.signal !== undefined && options.signal !== null)
-      // Deviation: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };` Neo refuses a signal rather than ignore it.
-      throw new Error(`${apiName}: Neo does not support signal yet`)
     const result = (await this._connection.send(
       apiName,
       this._guid,
       'waitForSelector',
       { selector, strict: true, state: 'attached' },
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options, apiName),
     )) as { element?: CreatedHandle } | undefined
     const handle = ElementHandle.fromNullable(this._connection, result?.element)
     if (!handle) throw new Error(`Could not resolve ${selector} to DOM Element`)
@@ -566,7 +881,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameTextContentParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )) as FrameTextContentResult
     return result.value === undefined ? null : result.value
   }
@@ -591,8 +906,35 @@ export class Frame {
         selector,
         ...options,
       }) as FrameInnerTextParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )) as FrameInnerTextResult
+    return result.value
+  }
+
+  /** Not strict, as Playwright's `frame.innerHTML`; waits for the first match. */
+  async innerHTML(
+    selector: string,
+    options: InnerHTMLOptions = {},
+  ): Promise<string> {
+    return await this._innerHTML('frame.innerHTML', selector, options)
+  }
+
+  /** Sends `Frame.innerHTML` under the action timeout. */
+  async _innerHTML(
+    apiName: ApiName,
+    selector: string,
+    options: InnerHTMLOptions,
+  ): Promise<string> {
+    const result = (await this._connection.send(
+      apiName,
+      this._guid,
+      'innerHTML',
+      pickParams(FRAME_INNER_HTML_KEYS, {
+        selector,
+        ...options,
+      }) as FrameInnerHTMLParams,
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
+    )) as FrameInnerHTMLResult
     return result.value
   }
 
@@ -624,7 +966,7 @@ export class Frame {
         name,
         ...options,
       }) as FrameGetAttributeParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )) as FrameGetAttributeResult
     return result.value === undefined ? null : result.value
   }
@@ -665,6 +1007,23 @@ export class Frame {
     )
     // Playwright answers whatever the page's function returned (a `textContent` getter may give
     // a number); Neo does not narrow it.
+    return parseResult(result?.value) as string[]
+  }
+
+  /** Playwright's allInnerTexts is $$eval in the main world; undefined entries remain values. */
+  async _allInnerTexts(apiName: ApiName, selector: string): Promise<string[]> {
+    const result = await this._connection.sendEval(
+      apiName,
+      this._guid,
+      'evalOnSelectorAll',
+      {
+        selector,
+        expression: 'ee => ee.map(e => e.innerText)',
+        isFunction: true,
+        arg: serializeArgument(undefined),
+      },
+      0,
+    )
     return parseResult(result?.value) as string[]
   }
 
@@ -812,10 +1171,6 @@ export class Frame {
     // Playwright: `client/frame.ts` `Frame.waitForFunction`: `assert(options.polling === 'raf', 'Unknown polling option: ' + options.polling);`
     if (typeof options.polling === 'string' && options.polling !== 'raf')
       throw new Error(`Unknown polling option: ${options.polling}`)
-    // `null` is no signal, as `undefined`.
-    if (options.signal !== undefined && options.signal !== null)
-      // Deviation: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };` Neo refuses a signal rather than ignore it.
-      throw new Error(`${apiName}: Neo does not support signal yet`)
     const params = evaluateParams(apiName, pageFunction, arg, undefined)
     // Playwright's validator lets only `undefined` through: `polling: null` rejects before the call.
     const { pollingInterval } = pickParams(['pollingInterval'] as const, {
@@ -826,7 +1181,7 @@ export class Frame {
       this._guid,
       'waitForFunction',
       pollingInterval === undefined ? params : { ...params, pollingInterval },
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options, apiName),
     )
     return handleFrom(this._connection, result.handle) as JSHandle<R>
   }
@@ -840,10 +1195,6 @@ export class Frame {
     selector: string,
     options: WaitForSelectorOptions & { strict?: boolean; signal?: unknown },
   ): Promise<ElementHandle | null> {
-    // `null` is no signal, as `undefined`.
-    if (options.signal !== undefined && options.signal !== null)
-      // Deviation: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };` Neo refuses a signal rather than ignore it.
-      throw new Error(`${apiName}: Neo does not support signal yet`)
     const result = (await this._connection.send(
       apiName,
       this._guid,
@@ -852,7 +1203,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameWaitForSelectorParams,
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options, apiName),
     )) as { element?: CreatedHandle } | undefined
     return ElementHandle.fromNullable(this._connection, result?.element)
   }
@@ -873,7 +1224,7 @@ export class Frame {
         depth: options.depth,
         boxes: options.boxes,
       }) as FrameAriaSnapshotParams,
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options, apiName),
     )) as FrameAriaSnapshotResult
     return result.snapshot
   }
@@ -897,7 +1248,79 @@ export class Frame {
         selector,
         ...options,
       }) as FrameClickParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
+    )
+  }
+
+  /** Not strict, as Playwright's `frame.dblclick`. */
+  async dblclick(
+    selector: string,
+    options: DblclickOptions = {},
+  ): Promise<void> {
+    return await this._dblclick('frame.dblclick', selector, options)
+  }
+
+  /** Sends `Frame.dblclick`. */
+  async _dblclick(
+    apiName: ApiName,
+    selector: string,
+    options: DblclickOptions,
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'dblclick',
+      pickParams(FRAME_DBLCLICK_KEYS, {
+        selector,
+        ...options,
+      }) as FrameDblclickParams,
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
+    )
+  }
+
+  /** Not strict, as Playwright's `frame.hover`. */
+  async hover(selector: string, options: HoverOptions = {}): Promise<void> {
+    return await this._hover('frame.hover', selector, options)
+  }
+
+  /** Sends `Frame.hover`. */
+  async _hover(
+    apiName: ApiName,
+    selector: string,
+    options: HoverOptions,
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'hover',
+      pickParams(FRAME_HOVER_KEYS, {
+        selector,
+        ...options,
+      }) as FrameHoverParams,
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
+    )
+  }
+
+  /** Not strict, as Playwright's `frame.tap`. */
+  async tap(selector: string, options: TapOptions = {}): Promise<void> {
+    return await this._tap('frame.tap', selector, options)
+  }
+
+  /** Sends `Frame.tap`. */
+  async _tap(
+    apiName: ApiName,
+    selector: string,
+    options: TapOptions,
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'tap',
+      pickParams(FRAME_TAP_KEYS, {
+        selector,
+        ...options,
+      }) as FrameTapParams,
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
   }
 
@@ -925,7 +1348,7 @@ export class Frame {
         value,
         ...options,
       }) as FrameFillParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
   }
 
@@ -953,7 +1376,7 @@ export class Frame {
         key,
         ...options,
       }) as FramePressParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
   }
 
@@ -978,7 +1401,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameInputValueParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
     if (result === undefined)
       throw new Error(
@@ -1000,6 +1423,9 @@ export class Frame {
     selector: string,
     options: IsVisibleOptions,
   ): Promise<boolean> {
+    // An immediate read: Playwright sends it with no timeout (`kNoTimeout`), so none is resolved
+    // here, but a signal is refused as every method refuses it.
+    refuseSignalFor(options ?? {}, apiName)
     const result = await this._connection.send(
       apiName,
       this._guid,
@@ -1012,6 +1438,37 @@ export class Frame {
     )
     if (result === undefined)
       throw new Error('neo-sdk: Frame.isVisible contract error: missing result')
+    return result.value
+  }
+
+  async isHidden(
+    selector: string,
+    options: IsHiddenOptions = {},
+  ): Promise<boolean> {
+    return await this._isHidden('frame.isHidden', selector, options)
+  }
+
+  /** Playwright's `kNoTimeout`: `isHidden` reads once, as `isVisible`, and ignores
+   * `options.timeout`. */
+  async _isHidden(
+    apiName: ApiName,
+    selector: string,
+    options: IsHiddenOptions,
+  ): Promise<boolean> {
+    // An immediate read, as `_isVisible`: no timeout, and a signal refused.
+    refuseSignalFor(options ?? {}, apiName)
+    const result = await this._connection.send(
+      apiName,
+      this._guid,
+      'isHidden',
+      pickParams(FRAME_IS_HIDDEN_KEYS, {
+        selector,
+        ...options,
+      }) as FrameIsHiddenParams,
+      0,
+    )
+    if (result === undefined)
+      throw new Error('neo-sdk: Frame.isHidden contract error: missing result')
     return result.value
   }
 
@@ -1036,10 +1493,99 @@ export class Frame {
         selector,
         ...options,
       }) as FrameIsCheckedParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
     if (result === undefined)
       throw new Error('neo-sdk: Frame.isChecked contract error: missing result')
+    return result.value
+  }
+
+  async isEnabled(
+    selector: string,
+    options: IsEnabledOptions = {},
+  ): Promise<boolean> {
+    return await this._isEnabled('frame.isEnabled', selector, options)
+  }
+
+  /** Waits for the first match under the caller's action timeout, as `isChecked`. */
+  async _isEnabled(
+    apiName: ApiName,
+    selector: string,
+    options: IsEnabledOptions,
+  ): Promise<boolean> {
+    const result = await this._connection.send(
+      apiName,
+      this._guid,
+      'isEnabled',
+      pickParams(FRAME_IS_ENABLED_KEYS, {
+        selector,
+        ...options,
+      }) as FrameIsEnabledParams,
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
+    )
+    if (result === undefined)
+      throw new Error('neo-sdk: Frame.isEnabled contract error: missing result')
+    return result.value
+  }
+
+  async isDisabled(
+    selector: string,
+    options: IsDisabledOptions = {},
+  ): Promise<boolean> {
+    return await this._isDisabled('frame.isDisabled', selector, options)
+  }
+
+  /** Waits for the first match under the caller's action timeout, as `isChecked`. */
+  async _isDisabled(
+    apiName: ApiName,
+    selector: string,
+    options: IsDisabledOptions,
+  ): Promise<boolean> {
+    const result = await this._connection.send(
+      apiName,
+      this._guid,
+      'isDisabled',
+      pickParams(FRAME_IS_DISABLED_KEYS, {
+        selector,
+        ...options,
+      }) as FrameIsDisabledParams,
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
+    )
+    if (result === undefined)
+      throw new Error(
+        'neo-sdk: Frame.isDisabled contract error: missing result',
+      )
+    return result.value
+  }
+
+  async isEditable(
+    selector: string,
+    options: IsEditableOptions = {},
+  ): Promise<boolean> {
+    return await this._isEditable('frame.isEditable', selector, options)
+  }
+
+  /** Waits for the first match under the caller's action timeout; an element that cannot be
+   * editable rejects at once, as Playwright's page code throws. */
+  async _isEditable(
+    apiName: ApiName,
+    selector: string,
+    options: IsEditableOptions,
+  ): Promise<boolean> {
+    const result = await this._connection.send(
+      apiName,
+      this._guid,
+      'isEditable',
+      pickParams(FRAME_IS_EDITABLE_KEYS, {
+        selector,
+        ...options,
+      }) as FrameIsEditableParams,
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
+    )
+    if (result === undefined)
+      throw new Error(
+        'neo-sdk: Frame.isEditable contract error: missing result',
+      )
     return result.value
   }
 
@@ -1061,7 +1607,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameCheckParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
   }
 
@@ -1083,7 +1629,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameUncheckParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
   }
 
@@ -1116,7 +1662,7 @@ export class Frame {
         ...convertSelectOptionValues(values),
         ...options,
       }) as FrameSelectOptionParams,
-      this._page._timeoutSettings.timeout(options ?? {}),
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
     if (result === undefined)
       throw new Error(
@@ -1181,4 +1727,28 @@ export class Frame {
   toJSON(): { _type: 'Frame'; _guid: string } {
     return { _type: 'Frame', _guid: this._guid }
   }
+}
+
+/** Playwright's waiter timeout (`client/frame.ts` `_setupNavigationWaiter`): a `TimeoutError`
+ * naming the whole timeout, with the API call's prefix. */
+function navigationTimeout(apiName: ApiName, timeout: number): TimeoutError {
+  return new TimeoutError(`${apiName}: Timeout ${timeout}ms exceeded.`)
+}
+
+/** Playwright's `_wrapApiCall`, which prefixes every error thrown inside an API call. */
+function prefixed(apiName: ApiName, error: unknown): unknown {
+  if (error instanceof Error) error.message = `${apiName}: ${error.message}`
+  return error
+}
+
+/** One predicate's answer for the navigation at `index` of its wait. */
+type Verdict = { index: number; accepted: boolean }
+
+/** Whether a predicate answered asynchronously: Playwright's waiter awaits any thenable. */
+function isPromiseLike(value: unknown): value is PromiseLike<boolean> {
+  return (
+    (typeof value === 'object' || typeof value === 'function') &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === 'function'
+  )
 }
