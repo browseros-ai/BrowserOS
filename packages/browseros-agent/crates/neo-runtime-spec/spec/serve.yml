@@ -22,6 +22,18 @@ interfaces:
     - close
     - runBeforeUnload
     - bringToFront
+    # `page.keyboard`, `page.mouse` and `page.touchscreen` (neo-runtime `devices.rs`).
+    - keyboardDown
+    - keyboardUp
+    - keyboardInsertText
+    - keyboardType
+    - keyboardPress
+    - mouseMove
+    - mouseDown
+    - mouseUp
+    - mouseClick
+    - mouseWheel
+    - touchscreenTap
   # The objects behind `goto`'s answer: its request, every redirect hop, and their responses.
   Request:
     - response

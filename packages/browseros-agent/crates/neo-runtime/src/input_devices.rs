@@ -3,18 +3,18 @@
 //! Playwright: `server/chromium/crInput.ts` `RawMouseImpl`
 //! Playwright: `server/chromium/crInput.ts` `RawTouchscreenImpl`
 //! Neo: a tab's keyboard and mouse between calls (the input-device seam of med-pw-dom's
-//! design, §4), the plans every input call makes from them, and the one writer that sends a
-//! plan. Playwright keeps one `Keyboard` and one `Mouse` per page; Neo keeps their state per tab
-//! per `Runtime`, inside the tab's input turn (`page.rs` `TabInputs`), so only a call holding the
-//! turn reads or changes it.
+//! design, section 4), the plans every input call makes from them, and the one writer that
+//! sends a plan. Playwright keeps one `Keyboard` and one `Mouse` per page; Neo keeps their state
+//! per tab per `Runtime`, inside the tab's input turn (`page.rs` `TabInputs`), so only a call
+//! holding the turn reads or changes it.
 //!
 //! ```text
 //!  call holds the turn ─▶ plan from a copy of the devices (each command applied to the copy as
 //!                         it is planned, so every later command sees the held modifiers, the
 //!                         held buttons and the pointer where the earlier ones leave them)
-//!                       ─▶ write_plan: sends the commands in order, applying each one's effect
-//!                         to the real devices as it is written, so the state is what the
-//!                         browser saw however the call ends
+//!                       ─▶ start_writer: a detached task sends the commands in order, applying
+//!                         each one's effect to the real devices as it is written, so the state
+//!                         is what the browser saw however the call ends
 //! ```
 //!
 //! A plan's releases are owed: a release (`keyUp`, `mouseReleased`, `touchEnd`, a modifier
@@ -22,15 +22,18 @@
 //! failed, whenever that command may have been written. Nothing else is written once the writer
 //! stopped. Keys and buttons a call presses without releasing (`keyboard.down`, `mouse.down`)
 //! stay held, tagged with the run that pressed them, until a later `up` or the run's end
-//! (`Dispatcher::finish`, `plan_release`).
+//! (`Dispatcher::finish`). Delivery is `Done` only once every planned command was written and
+//! acknowledged; a call that stopped part-way is `Unknown` (design section 4.7).
 
 use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use browseros_cdp::input::DispatchMouseEventParams;
 use browseros_cdp::{CdpError, SessionId};
 use futures_util::future;
 use serde_json::json;
+use tokio::sync::oneshot;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
@@ -97,6 +100,7 @@ pub(crate) enum Effect {
     },
 }
 
+/// Neo: the effect of each written command on the tab's state, which no script reads directly.
 impl InputDevices {
     /// Applies a command's effect. A press counts from its write, answered or not, since it may
     /// have reached the browser; a release and a move count only once answered, so a key whose
@@ -173,34 +177,7 @@ pub(crate) struct Planned {
     pub(crate) pause: Option<Duration>,
 }
 
-/// The commands of one input call, in order.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct Plan {
-    pub(crate) commands: Vec<Planned>,
-}
-
-impl Plan {
-    /// Plans `command` and applies it to `simulated`, as if written and answered, so the next
-    /// command sees the devices this one leaves. Returns its index, for a later release.
-    pub(crate) fn push(&mut self, simulated: &mut InputDevices, command: Planned) -> usize {
-        simulated.apply(&command.effect, true);
-        self.commands.push(command);
-        self.commands.len() - 1
-    }
-
-    /// Whether the plan writes anything at all.
-    pub(crate) fn writes(&self) -> bool {
-        self.commands.iter().any(|command| command.method.is_some())
-    }
-
-    /// Makes the last command written together with the next one.
-    pub(crate) fn pipeline_last(&mut self) {
-        if let Some(last) = self.commands.last_mut() {
-            last.with_next = true;
-        }
-    }
-}
-
+/// Neo: building a plan, which no script sees.
 impl Planned {
     /// A command written on its own, undoing nothing.
     pub(crate) fn command(method: &'static str, params: String, effect: Effect) -> Self {
@@ -213,13 +190,53 @@ impl Planned {
             pause: None,
         }
     }
+
+    /// A change of state that writes nothing.
+    fn state_only(effect: Effect) -> Self {
+        Self {
+            method: None,
+            ..Self::command("", String::new(), effect)
+        }
+    }
+}
+
+/// The commands of one input call, in order.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct Plan {
+    pub(crate) commands: Vec<Planned>,
+}
+
+/// Neo: building a plan, which no script sees.
+impl Plan {
+    /// Plans `command` and applies it to `simulated`, as if written and answered, so the next
+    /// command sees the devices this one leaves. Returns its index, for a later release.
+    pub(crate) fn push(&mut self, simulated: &mut InputDevices, command: Planned) -> usize {
+        simulated.apply(&command.effect, true);
+        self.commands.push(command);
+        self.commands.len() - 1
+    }
+
+    /// Makes the last command written together with the next one.
+    pub(crate) fn pipeline_last(&mut self) {
+        if let Some(last) = self.commands.last_mut() {
+            last.with_next = true;
+        }
+    }
+
+    /// The number of commands that write something.
+    fn writes(&self) -> usize {
+        self.commands
+            .iter()
+            .filter(|command| command.method.is_some())
+            .count()
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
 // The mouse and the touchscreen, planned from the devices.
 // ---------------------------------------------------------------------------------------------
 
-/// Playwright: `server/chromium/crProtocolHelper.ts` `toButtonsMask`
+/// Playwright: `server/chromium/crProtocolHelper.ts` `toButtonsMask`: `mask |= 1;`
 fn button_mask(button: MouseButton) -> i64 {
     match button {
         MouseButton::Left => 1,
@@ -228,6 +245,7 @@ fn button_mask(button: MouseButton) -> i64 {
     }
 }
 
+/// Neo: the protocol's own names for the three buttons, as Playwright passes them through.
 fn button_name(button: MouseButton) -> &'static str {
     match button {
         MouseButton::Left => "left",
@@ -236,9 +254,9 @@ fn button_name(button: MouseButton) -> &'static str {
     }
 }
 
-/// `Input.dispatchMouseEvent`, as JSON.
+/// Neo: `Input.dispatchMouseEvent`, as JSON. Serializing this plain struct cannot fail; if it
+/// ever did, Chromium would refuse the empty params, and the write counts as failed.
 fn mouse_command(params: &DispatchMouseEventParams, effect: Effect) -> Planned {
-    // Serializing this plain struct cannot fail; an empty object would be refused by Chromium.
     let params = serde_json::to_string(params).unwrap_or_default();
     Planned::command("Input.dispatchMouseEvent", params, effect)
 }
@@ -251,13 +269,9 @@ fn mouse_command(params: &DispatchMouseEventParams, effect: Effect) -> Planned {
 pub(crate) fn plan_move(plan: &mut Plan, simulated: &mut InputDevices, to: (f64, f64), steps: u32) {
     let (from_x, from_y) = (simulated.mouse.x, simulated.mouse.y);
     if steps == 0 {
-        let moved = Effect::Moved { x: to.0, y: to.1 };
         plan.push(
             simulated,
-            Planned {
-                method: None,
-                ..Planned::command("", String::new(), moved)
-            },
+            Planned::state_only(Effect::Moved { x: to.0, y: to.1 }),
         );
         return;
     }
@@ -267,6 +281,7 @@ pub(crate) fn plan_move(plan: &mut Plan, simulated: &mut InputDevices, to: (f64,
         let y = from_y + (to.1 - from_y) * fraction;
         let held = !simulated.mouse.buttons.is_empty();
         // Playwright: `server/chromium/crInput.ts` `RawMouseImpl.move`: `force: buttons.size > 0 ? 0.5 : 0,`
+        let force = if held { 0.5 } else { 0.0 };
         let params = DispatchMouseEventParams {
             r#type: "mouseMoved".to_string(),
             x,
@@ -280,7 +295,7 @@ pub(crate) fn plan_move(plan: &mut Plan, simulated: &mut InputDevices, to: (f64,
                     .to_string(),
             ),
             buttons: Some(simulated.buttons_mask()),
-            force: Some(if held { 0.5 } else { 0.0 }),
+            force: Some(force),
             ..DispatchMouseEventParams::default()
         };
         let command = mouse_command(&params, Effect::Moved { x, y });
@@ -299,15 +314,14 @@ pub(crate) fn plan_down(
     click_count: i64,
     owner: &Owner,
 ) -> usize {
+    let effect = Effect::ButtonDown {
+        button,
+        owner: owner.clone(),
+    };
     let mut pressed = simulated.clone();
-    pressed.apply(
-        &Effect::ButtonDown {
-            button,
-            owner: owner.clone(),
-        },
-        true,
-    );
+    pressed.apply(&effect, true);
     // Playwright: `server/chromium/crInput.ts` `RawMouseImpl.down`: `force: buttons.size > 0 ? 0.5 : 0,`
+    let force = 0.5;
     let params = DispatchMouseEventParams {
         r#type: "mousePressed".to_string(),
         x: simulated.mouse.x,
@@ -316,12 +330,8 @@ pub(crate) fn plan_down(
         button: Some(button_name(button).to_string()),
         buttons: Some(pressed.buttons_mask()),
         click_count: Some(click_count),
-        force: Some(0.5),
+        force: Some(force),
         ..DispatchMouseEventParams::default()
-    };
-    let effect = Effect::ButtonDown {
-        button,
-        owner: owner.clone(),
     };
     plan.push(simulated, mouse_command(&params, effect))
 }
@@ -337,8 +347,9 @@ pub(crate) fn plan_up(
     click_count: i64,
     undoes: Option<usize>,
 ) -> usize {
+    let effect = Effect::ButtonUp { button };
     let mut released = simulated.clone();
-    released.apply(&Effect::ButtonUp { button }, true);
+    released.apply(&effect, true);
     let params = DispatchMouseEventParams {
         r#type: "mouseReleased".to_string(),
         x: simulated.mouse.x,
@@ -351,12 +362,12 @@ pub(crate) fn plan_up(
     };
     let command = Planned {
         undoes,
-        ..mouse_command(&params, Effect::ButtonUp { button })
+        ..mouse_command(&params, effect)
     };
     plan.push(simulated, command)
 }
 
-/// Playwright: `server/input.ts` `Mouse.click`
+/// Playwright: `server/input.ts` `Mouse.click`: `for (let cc = 1; cc <= clickCount; ++cc) {`
 ///
 /// The move (in `steps` from the last position), then a press and a release per click count.
 /// Without `delay` the events are pipelined, the move with them unless it takes more than one
@@ -396,7 +407,12 @@ pub(crate) fn plan_click(
 /// Playwright: `server/chromium/crInput.ts` `RawMouseImpl.wheel`: `type: 'mouseWheel',`
 ///
 /// One wheel event at the pointer's position, with the held modifiers.
-pub(crate) fn plan_wheel(plan: &mut Plan, simulated: &mut InputDevices, delta_x: f64, delta_y: f64) {
+pub(crate) fn plan_wheel(
+    plan: &mut Plan,
+    simulated: &mut InputDevices,
+    delta_x: f64,
+    delta_y: f64,
+) {
     let params = DispatchMouseEventParams {
         r#type: "mouseWheel".to_string(),
         x: simulated.mouse.x,
@@ -409,7 +425,7 @@ pub(crate) fn plan_wheel(plan: &mut Plan, simulated: &mut InputDevices, delta_x:
     plan.push(simulated, mouse_command(&params, Effect::None));
 }
 
-/// Playwright: `server/chromium/crInput.ts` `RawTouchscreenImpl.tap`
+/// Playwright: `server/chromium/crInput.ts` `RawTouchscreenImpl.tap`: `await progress.race(Promise.all([`
 ///
 /// A touch start with one point at `at` and the end with none, pipelined, both with the held
 /// modifiers. Touch moves no mouse pointer in Playwright's state.
@@ -421,7 +437,7 @@ pub(crate) fn plan_tap(plan: &mut Plan, simulated: &mut InputDevices, at: (f64, 
         "modifiers": modifiers,
         "touchPoints": [{ "x": at.0, "y": at.1 }],
     });
-    // Playwright: `server/chromium/crInput.ts` `RawTouchscreenImpl.tap`: `type: 'touchEnd',`
+    // Playwright: `server/chromium/crInput.ts` `RawTouchscreenImpl.tap`: `touchPoints: []`
     let end = json!({ "type": "touchEnd", "modifiers": modifiers, "touchPoints": [] });
     let started = plan.push(
         simulated,
@@ -439,9 +455,7 @@ pub(crate) fn plan_tap(plan: &mut Plan, simulated: &mut InputDevices, at: (f64, 
     );
 }
 
-/// Neo: the mouse half of a run's end. A release per button `owner` left held, oldest first, at
-/// the pointer's last position. Playwright keeps a page's buttons held for its life; Neo's tab
-/// outlives the run, and a held button would drag in the user's tab.
+/// Deviation: `server/input.ts` `Mouse.up`: `this._buttons.delete(button);` Playwright keeps a page's buttons held until its script releases them; Neo releases at a run's end every button the run left held, oldest first at the pointer's last position, because the tab is the user's and outlives the run.
 pub(crate) fn plan_button_releases(plan: &mut Plan, simulated: &mut InputDevices, owner: &Owner) {
     let held: Vec<MouseButton> = simulated
         .mouse
@@ -456,11 +470,11 @@ pub(crate) fn plan_button_releases(plan: &mut Plan, simulated: &mut InputDevices
 }
 
 // ---------------------------------------------------------------------------------------------
-// The writer.
+// The seam a turn provides, and the writer.
 // ---------------------------------------------------------------------------------------------
 
-/// Where a writer's commands go: the run's session at its socket incarnation (`page.rs`), or a
-/// recording fake under paused time in the tests.
+/// Where a writer's commands go: the run's session at its socket incarnation (`page.rs`
+/// `send_input_json`), or a recording fake under paused time in the tests.
 pub(crate) trait InputSender: Send + Sync + 'static {
     /// Sends one `Input.*` command, its params already serialized.
     fn send_input(
@@ -477,32 +491,58 @@ pub(crate) trait EffectSink: Send + Sync {
     fn apply(&self, effect: &Effect, answered: bool);
 }
 
-/// Writes `plan` in order, a batch at a time (a command and every next one it is written with),
-/// applying each written command's effect to `sink`. After `cut_short` (the call stopped) or a
-/// failed write, it writes only the releases it owes: those whose command may have been
-/// written, newest planned last as they come. A refused write (`ConnectionEpochChanged`, raised
-/// before writing) ends everything: the socket that carried the session is gone. A `pause` is
-/// cut short too. Returns every written command's outcome, in order.
+/// What a turn at a tab's input gives a call: the tab's devices, to plan from and to record
+/// into, and who holds the turn. Only a held turn reaches the devices.
+pub(crate) trait Devices: EffectSink + Clone + Send + Sync + 'static {
+    /// A copy of the tab's devices, to plan from.
+    ///
+    /// # Errors
+    ///
+    /// `PageError::Contract` when the state cannot be read.
+    fn snapshot(&self) -> Result<InputDevices, PageError>;
+
+    /// The run that holds the turn.
+    fn owner(&self) -> Owner;
+}
+
+/// A writer's outcome: every written command's answer, in order, and whether every planned
+/// command was written.
+#[derive(Debug, Default)]
+pub(crate) struct Written {
+    pub(crate) outcomes: Vec<Result<(), CdpError>>,
+    pub(crate) complete: bool,
+}
+
+/// Neo: the writer, which writes a plan in order, a batch at a time (a command and every next
+/// one it is written with), applying each written command's effect to `sink`. After `cut_short`
+/// (the call stopped) or a failed write, it writes only the releases it owes: those whose
+/// command may have been written. A refused write (`ConnectionEpochChanged`, raised before
+/// writing) ends everything: the socket that carried the session is gone. A `pause` is cut
+/// short too.
 pub(crate) async fn write_plan(
     sender: &impl InputSender,
     sink: &impl EffectSink,
     plan: &Plan,
     cut_short: &CancellationToken,
-) -> Vec<Result<(), CdpError>> {
+) -> Written {
     let commands = &plan.commands;
     let mut written = vec![false; commands.len()];
     let mut outcomes = Vec::with_capacity(commands.len());
     let mut stopped = false;
+    let mut refused = false;
     let mut index = 0;
-    while index < commands.len() {
+    while index < commands.len() && !refused {
         let mut end = index;
         while commands[end].with_next && end + 1 < commands.len() {
             end += 1;
         }
         let mut batch = Vec::with_capacity(end + 1 - index);
-        for (offset, command) in commands[index..=end].iter().enumerate() {
-            let at = index + offset;
-            let owed = command.undoes.is_some_and(|undone| written[undone]);
+        for (at, command) in commands.iter().enumerate().take(end + 1).skip(index) {
+            // What it undoes went out before, or goes out in this very batch (a pipelined
+            // click's release, a tap's end).
+            let owed = command
+                .undoes
+                .is_some_and(|undone| written[undone] || batch.contains(&undone));
             if command.undoes.is_some() && !owed {
                 // It releases a command that never went out.
                 continue;
@@ -520,23 +560,19 @@ pub(crate) async fn write_plan(
             }
             batch.push(at);
         }
-        let mut sends = Vec::with_capacity(batch.len());
-        for &at in &batch {
+        let sends = batch.iter().map(|&at| {
             let command = &commands[at];
-            match command.method {
-                Some(method) => sends.push((at, Some(sender.send_input(method, command.params.clone())))),
-                None => sends.push((at, None)),
+            let send = command
+                .method
+                .map(|method| sender.send_input(method, command.params.clone()));
+            async move {
+                match send {
+                    Some(send) => (at, Some(send.await)),
+                    None => (at, None),
+                }
             }
-        }
-        let results = future::join_all(sends.into_iter().map(|(at, send)| async move {
-            match send {
-                Some(send) => (at, Some(send.await)),
-                None => (at, None),
-            }
-        }))
-        .await;
-        let mut refused = false;
-        for (at, result) in results {
+        });
+        for (at, result) in future::join_all(sends).await {
             let command = &commands[at];
             let Some(result) = result else {
                 // A change of state alone, never refused or failed.
@@ -554,27 +590,36 @@ pub(crate) async fn write_plan(
             }
             outcomes.push(result);
         }
-        if refused {
-            break;
-        }
         index = end + 1;
     }
-    outcomes
+    let complete = !refused && outcomes.len() == plan.writes();
+    Written { outcomes, complete }
 }
 
-/// What a writer reports: every written command acknowledged → `ticket.acked()`; nothing sent,
-/// or every send refused with `ConnectionEpochChanged` → `ticket.unsent()`; otherwise the ticket
-/// drops (`Unknown`) and the first error is reported.
-pub(crate) fn report(outcomes: &[Result<(), CdpError>], ticket: InputTicket) -> PressReport {
+/// Neo: what every writer reports. The whole plan written and every command acknowledged →
+/// `ticket.acked()`; nothing sent, or every send refused with `ConnectionEpochChanged` →
+/// `ticket.unsent()`; otherwise the ticket drops (`Unknown`: design section 4.7, a call that
+/// stopped part-way, a double click cut short after its first click included) and the first
+/// error, or the cut, is reported.
+pub(crate) fn report(written: &Written, ticket: InputTicket) -> PressReport {
     let refused = |outcome: &Result<(), CdpError>| {
         matches!(outcome, Err(CdpError::ConnectionEpochChanged { .. }))
     };
+    let outcomes = &written.outcomes;
     match outcomes.iter().find_map(|outcome| outcome.as_ref().err()) {
         None if outcomes.is_empty() => {
             ticket.unsent();
             PressReport::NothingWritten
         }
-        None => PressReport::Acked(ticket.acked()),
+        None if written.complete => PressReport::Acked(ticket.acked()),
+        None => {
+            // The call stopped part-way: what was written was answered, the rest never went.
+            drop(ticket);
+            PressReport::Failed {
+                closed: false,
+                message: "the input stopped before its last event".to_string(),
+            }
+        }
         Some(_) if outcomes.iter().all(refused) => {
             ticket.unsent();
             PressReport::NothingWritten
@@ -589,10 +634,684 @@ pub(crate) fn report(outcomes: &[Result<(), CdpError>], ticket: InputTicket) -> 
     }
 }
 
+/// A writer task, boxed so one spawning seam serves the run's tracker and the tests' runtime.
+pub(crate) type WriterTask = Pin<Box<dyn Future<Output = ()> + Send>>;
+
+/// Neo: starts the writer of `plan` *now* through `spawn`, holding `turn` (which also records
+/// the effects) until the last command is answered, and returns a future of its report that
+/// holds a drop guard on the writer's `cut_short` token: dropping the future (the call
+/// stopped) cuts a `delay` short and starts nothing new, while every owed release is still
+/// written and the ticket still marked. `carried` (an armed hit-target interceptor) stays in
+/// the writer until the last command is answered and comes back with the report; a caller that
+/// stopped never gets it back, and it drops there. Starting eagerly matters: a future that
+/// started the writer only when polled could be dropped unpolled by a `Progress::race` that had
+/// already lost, leaving a begun ticket nobody marks.
+pub(crate) fn start_writer<D: Devices, C: Send + 'static>(
+    spawn: impl FnOnce(WriterTask),
+    sender: impl InputSender,
+    plan: Plan,
+    ticket: InputTicket,
+    turn: D,
+    carried: C,
+) -> impl Future<Output = (PressReport, Option<C>)> + Send {
+    let cut_short = CancellationToken::new();
+    let (report_sender, receiver) = oneshot::channel();
+    let writer_cut_short = cut_short.clone();
+    spawn(Box::pin(async move {
+        let written = write_plan(&sender, &turn, &plan, &writer_cut_short).await;
+        let reported = report(&written, ticket);
+        // Every command is answered: the tab's next input may start.
+        drop(turn);
+        // Nobody may be waiting any more; the ticket already holds the outcome.
+        let _waiting = report_sender.send((reported, carried));
+    }));
+    let cut_short = cut_short.drop_guard();
+    async move {
+        let reported = receiver.await.map_or_else(
+            |_| {
+                let failed = PressReport::Failed {
+                    closed: true,
+                    message: "the input writer stopped before reporting".to_string(),
+                };
+                (failed, None)
+            },
+            |(reported, carried)| (reported, Some(carried)),
+        );
+        drop(cut_short);
+        reported
+    }
+}
+
 /// A `delay` sleep that the call stopping ends early.
 async fn pause(delay: Duration, cut_short: &CancellationToken) {
     tokio::select! {
         () = time::sleep(delay) => {}
         () = cut_short.cancelled() => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! The devices' state transitions and the writer, under paused time against a recording
+    //! sender: what each plan carries from the state (held modifiers and buttons, the pointer's
+    //! last position), what a stopped or failed writer still owes, and what a run's end
+    //! releases. Never timings beyond the scripted round trips.
+
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    use serde_json::Value;
+
+    use super::*;
+    use crate::keyboard::{self, Platform, SHIFT};
+    use crate::progress::DeliveryCell;
+    use crate::run::Delivery;
+
+    const ROUND_TRIP: Duration = Duration::from_millis(1);
+
+    fn run(name: &str) -> Owner {
+        SessionId(name.to_string())
+    }
+
+    /// What a command sends, as `(type, key or button, modifiers, buttons, x, y)`.
+    fn sent_events(plan: &Plan) -> Vec<Value> {
+        plan.commands
+            .iter()
+            .filter(|command| command.method.is_some())
+            .map(|command| serde_json::from_str(&command.params).expect("params are JSON"))
+            .collect()
+    }
+
+    #[derive(Clone, Copy)]
+    enum Answer {
+        Ok,
+        Fail,
+        Refuse,
+        Hang,
+    }
+
+    /// Records each command's `type` (or `insertText`) and answers the next scripted outcome
+    /// after a round trip.
+    #[derive(Clone)]
+    struct Sender {
+        sent: Arc<Mutex<Vec<String>>>,
+        answers: Arc<Mutex<VecDeque<Answer>>>,
+    }
+
+    impl Sender {
+        fn answering(answers: impl IntoIterator<Item = Answer>) -> Self {
+            Self {
+                sent: Arc::default(),
+                answers: Arc::new(Mutex::new(answers.into_iter().collect())),
+            }
+        }
+
+        fn sent(&self) -> Vec<String> {
+            self.sent.lock().expect("sent").clone()
+        }
+    }
+
+    impl InputSender for Sender {
+        async fn send_input(&self, method: &'static str, params: String) -> Result<(), CdpError> {
+            let params: Value = serde_json::from_str(&params).expect("params are JSON");
+            let kind = match method {
+                "Input.insertText" => "insertText".to_string(),
+                _ => params["type"].as_str().unwrap_or_default().to_string(),
+            };
+            self.sent.lock().expect("sent").push(kind);
+            let answer = self
+                .answers
+                .lock()
+                .expect("answers")
+                .pop_front()
+                .unwrap_or(Answer::Ok);
+            time::sleep(ROUND_TRIP).await;
+            match answer {
+                Answer::Ok => Ok(()),
+                Answer::Fail => Err(CdpError::Timeout {
+                    method: method.to_string(),
+                }),
+                Answer::Refuse => Err(CdpError::ConnectionEpochChanged {
+                    expected: 1,
+                    actual: 2,
+                }),
+                Answer::Hang => future::pending().await,
+            }
+        }
+    }
+
+    /// A test turn: its devices and the run that holds it.
+    #[derive(Clone)]
+    struct Turn {
+        devices: Arc<Mutex<InputDevices>>,
+        owner: Owner,
+    }
+
+    impl Turn {
+        fn of(devices: InputDevices, owner: &str) -> Self {
+            Self {
+                devices: Arc::new(Mutex::new(devices)),
+                owner: run(owner),
+            }
+        }
+
+        fn devices(&self) -> InputDevices {
+            self.devices.lock().expect("devices").clone()
+        }
+    }
+
+    impl EffectSink for Turn {
+        fn apply(&self, effect: &Effect, answered: bool) {
+            self.devices
+                .lock()
+                .expect("devices")
+                .apply(effect, answered);
+        }
+    }
+
+    impl Devices for Turn {
+        fn snapshot(&self) -> Result<InputDevices, PageError> {
+            Ok(self.devices())
+        }
+
+        fn owner(&self) -> Owner {
+            self.owner.clone()
+        }
+    }
+
+    fn fresh_ticket() -> (Arc<DeliveryCell>, InputTicket) {
+        let cell = Arc::new(DeliveryCell::default());
+        let ticket = cell.begin().expect("a fresh cell");
+        (cell, ticket)
+    }
+
+    fn click(click_count: u32, delay: Option<Duration>) -> MouseClick {
+        MouseClick {
+            button: MouseButton::Left,
+            click_count,
+            delay,
+        }
+    }
+
+    /// A click from a fresh page: Playwright's exact events, a move with no button, then a
+    /// press and release per count with the button's mask and the count.
+    #[test]
+    fn tests_that_a_click_from_a_fresh_page_writes_playwrights_events() {
+        let mut simulated = InputDevices::default();
+        let mut plan = Plan::default();
+        plan_click(
+            &mut plan,
+            &mut simulated,
+            (1.0, 2.0),
+            &click(2, None),
+            1,
+            &run("A"),
+        );
+        let summary: Vec<(String, String, i64, Option<i64>, f64)> = sent_events(&plan)
+            .iter()
+            .map(|event| {
+                (
+                    event["type"].as_str().unwrap_or_default().to_string(),
+                    event["button"].as_str().unwrap_or_default().to_string(),
+                    event["buttons"].as_i64().unwrap_or(-1),
+                    event["clickCount"].as_i64(),
+                    event["force"].as_f64().unwrap_or(-1.0),
+                )
+            })
+            .collect();
+        let row = |kind: &str, button: &str, buttons, count, force| {
+            (kind.to_string(), button.to_string(), buttons, count, force)
+        };
+        assert_eq!(
+            summary,
+            [
+                row("mouseMoved", "none", 0, None, 0.0),
+                row("mousePressed", "left", 1, Some(1), 0.5),
+                row("mouseReleased", "left", 0, Some(1), -1.0),
+                row("mousePressed", "left", 1, Some(2), 0.5),
+                row("mouseReleased", "left", 0, Some(2), -1.0),
+            ]
+        );
+        assert!(
+            plan.commands[..4].iter().all(|command| command.with_next),
+            "without delay the whole click is one pipelined batch"
+        );
+        assert_eq!(simulated.mouse.x, 1.0, "the pointer ends at the click");
+        assert!(simulated.mouse.buttons.is_empty());
+    }
+
+    /// Design section 4.3: a modifier held by an earlier `keyboard.down` reaches every mouse
+    /// and touch event of a later call, and a button held by `mouse.down` reaches a move.
+    #[test]
+    fn tests_that_a_held_modifier_and_button_reach_later_input() {
+        let mut simulated = InputDevices::default();
+        let mut plan = Plan::default();
+        keyboard::plan_key_down(&mut plan, &mut simulated, "Shift", Platform::Mac, &run("A"))
+            .expect("Shift");
+        plan_down(&mut plan, &mut simulated, MouseButton::Right, 1, &run("A"));
+        let mut later = Plan::default();
+        plan_click(
+            &mut later,
+            &mut simulated,
+            (5.0, 5.0),
+            &click(1, None),
+            1,
+            &run("A"),
+        );
+        plan_tap(&mut later, &mut simulated, (6.0, 6.0));
+        for event in sent_events(&later) {
+            assert_eq!(event["modifiers"], i64::from(SHIFT), "{event}");
+        }
+        let moved = &sent_events(&later)[0];
+        assert_eq!(moved["button"], "right", "the last button pressed");
+        assert_eq!(moved["buttons"], 2, "the right button is still held");
+        assert_eq!(moved["force"], 0.5, "a held button moves with force");
+        let pressed = &sent_events(&later)[1];
+        assert_eq!(pressed["buttons"], 3, "left pressed while right is held");
+    }
+
+    /// Design section 4.4: `steps` interpolate from the pointer's last position, as
+    /// Playwright's `Mouse.move` does; no steps moves the pointer without an event.
+    #[test]
+    fn tests_that_steps_start_at_the_last_position() {
+        let mut simulated = InputDevices::default();
+        simulated.mouse.x = 100.0;
+        simulated.mouse.y = 100.0;
+        let mut plan = Plan::default();
+        plan_move(&mut plan, &mut simulated, (200.0, 300.0), 5);
+        let points: Vec<(f64, f64)> = sent_events(&plan)
+            .iter()
+            .map(|event| {
+                (
+                    event["x"].as_f64().unwrap_or(-1.0),
+                    event["y"].as_f64().unwrap_or(-1.0),
+                )
+            })
+            .collect();
+        assert_eq!(
+            points,
+            [
+                (120.0, 140.0),
+                (140.0, 180.0),
+                (160.0, 220.0),
+                (180.0, 260.0),
+                (200.0, 300.0)
+            ],
+            "Playwright's MO-012 tween"
+        );
+        let mut none = Plan::default();
+        plan_move(&mut none, &mut simulated, (5.0, 6.0), 0);
+        assert!(sent_events(&none).is_empty());
+        assert_eq!((simulated.mouse.x, simulated.mouse.y), (5.0, 6.0));
+    }
+
+    /// An action's `modifiers` press the missing ones and release the extra ones around its
+    /// input, then restore the keyboard; a modifier another run held comes back as that run's.
+    #[test]
+    fn tests_that_modifiers_are_ensured_around_the_input_and_restored() {
+        let mut simulated = InputDevices::default();
+        let mut setup = Plan::default();
+        keyboard::plan_key_down(
+            &mut setup,
+            &mut simulated,
+            "Control",
+            Platform::Linux,
+            &run("B"),
+        )
+        .expect("Control");
+        let before = simulated.clone();
+        let mut plan = Plan::default();
+        let changes = keyboard::plan_ensure_modifiers(
+            &mut plan,
+            &mut simulated,
+            SHIFT,
+            Platform::Linux,
+            &run("A"),
+        );
+        plan_click(
+            &mut plan,
+            &mut simulated,
+            (1.0, 1.0),
+            &click(1, None),
+            1,
+            &run("A"),
+        );
+        keyboard::plan_restore_modifiers(
+            &mut plan,
+            &mut simulated,
+            &changes,
+            Platform::Linux,
+            &run("A"),
+        );
+        let kinds: Vec<(String, String)> = sent_events(&plan)
+            .iter()
+            .map(|event| {
+                (
+                    event["type"].as_str().unwrap_or_default().to_string(),
+                    event["key"].as_str().unwrap_or("").to_string(),
+                )
+            })
+            .collect();
+        let row = |kind: &str, key: &str| (kind.to_string(), key.to_string());
+        assert_eq!(
+            kinds,
+            [
+                row("keyUp", "Control"),
+                row("rawKeyDown", "Shift"),
+                row("mouseMoved", ""),
+                row("mousePressed", ""),
+                row("mouseReleased", ""),
+                row("rawKeyDown", "Control"),
+                row("keyUp", "Shift"),
+            ],
+            "Playwright's kModifiers order, for the change and for its restore"
+        );
+        for event in &sent_events(&plan)[2..5] {
+            assert_eq!(
+                event["modifiers"],
+                i64::from(SHIFT),
+                "the click sees Shift only"
+            );
+        }
+        assert_eq!(
+            simulated.keyboard, before.keyboard,
+            "the keyboard is restored, Control still B's"
+        );
+        assert_eq!(
+            plan.commands[5].undoes,
+            Some(0),
+            "the re-press undoes the release"
+        );
+        assert_eq!(
+            plan.commands[6].undoes,
+            Some(1),
+            "the release undoes the press"
+        );
+    }
+
+    /// Design section 4.5: a call stopped mid-input writes only what it owes, the release of
+    /// every press and the restore of every modifier it changed, and reads `Unknown`.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_stopped_writer_still_writes_what_it_owes() {
+        let mut simulated = InputDevices::default();
+        let mut plan = Plan::default();
+        let changes = keyboard::plan_ensure_modifiers(
+            &mut plan,
+            &mut simulated,
+            SHIFT,
+            Platform::Linux,
+            &run("A"),
+        );
+        let delay = Duration::from_millis(50);
+        plan_click(
+            &mut plan,
+            &mut simulated,
+            (1.0, 1.0),
+            &click(2, Some(delay)),
+            1,
+            &run("A"),
+        );
+        keyboard::plan_restore_modifiers(
+            &mut plan,
+            &mut simulated,
+            &changes,
+            Platform::Linux,
+            &run("A"),
+        );
+        let sender = Sender::answering([]);
+        let turn = Turn::of(InputDevices::default(), "A");
+        let (cell, ticket) = fresh_ticket();
+        let report = start_writer(
+            |task| {
+                tokio::spawn(task);
+            },
+            sender.clone(),
+            plan,
+            ticket,
+            turn.clone(),
+            (),
+        );
+        assert!(
+            time::timeout(Duration::from_millis(20), report)
+                .await
+                .is_err()
+        );
+        time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(
+            sender.sent(),
+            [
+                "rawKeyDown",
+                "mouseMoved",
+                "mousePressed",
+                "mouseReleased",
+                "keyUp"
+            ],
+            "the first press released, the second click never started, Shift restored"
+        );
+        assert_eq!(
+            cell.delivery(),
+            Delivery::Unknown,
+            "partial input (design section 4.7)"
+        );
+        assert_eq!(
+            turn.devices(),
+            InputDevices {
+                mouse: MouseState {
+                    x: 1.0,
+                    y: 1.0,
+                    ..MouseState::default()
+                },
+                ..InputDevices::default()
+            },
+            "nothing left held"
+        );
+    }
+
+    /// A pipelined click is one batch: every press and its release go out together, and the
+    /// whole click reads `Done` once every event is answered.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_pipelined_click_writes_its_releases_with_its_presses() {
+        let mut plan = Plan::default();
+        plan_click(
+            &mut plan,
+            &mut InputDevices::default(),
+            (1.0, 2.0),
+            &click(2, None),
+            1,
+            &run("A"),
+        );
+        let sender = Sender::answering([]);
+        let turn = Turn::of(InputDevices::default(), "A");
+        let (cell, ticket) = fresh_ticket();
+        let started = time::Instant::now();
+        let written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        assert!(matches!(report(&written, ticket), PressReport::Acked(_)));
+        assert_eq!(cell.delivery(), Delivery::Done);
+        assert_eq!(
+            sender.sent(),
+            [
+                "mouseMoved",
+                "mousePressed",
+                "mouseReleased",
+                "mousePressed",
+                "mouseReleased"
+            ]
+        );
+        assert_eq!(
+            started.elapsed(),
+            ROUND_TRIP,
+            "written at once, answered together"
+        );
+    }
+
+    /// A press counts from its write, answered or not; a release only once answered, so a key
+    /// whose release failed stays held for the run's end to release again.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_failed_release_leaves_the_key_held() {
+        let mut simulated = InputDevices::default();
+        let mut plan = Plan::default();
+        keyboard::plan_press(
+            &mut plan,
+            &mut simulated,
+            "Shift",
+            Platform::Linux,
+            &run("A"),
+            None,
+        )
+        .expect("Shift");
+        let sender = Sender::answering([Answer::Ok, Answer::Fail]);
+        let turn = Turn::of(InputDevices::default(), "A");
+        let written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        assert!(!written.outcomes.iter().all(Result::is_ok));
+        let devices = turn.devices();
+        assert_eq!(devices.keyboard.modifiers, SHIFT);
+        assert_eq!(devices.keyboard.pressed, [("ShiftLeft", run("A"))]);
+    }
+
+    /// Design section 4.6: a run's end releases what that run left held, newest key first,
+    /// then each of its buttons at the pointer's last position, and leaves another run's.
+    #[test]
+    fn tests_that_a_run_end_releases_only_its_own_input() {
+        let mut simulated = InputDevices::default();
+        let mut setup = Plan::default();
+        for (key, owner) in [("Shift", "A"), ("a", "B"), ("Control", "A")] {
+            keyboard::plan_key_down(
+                &mut setup,
+                &mut simulated,
+                key,
+                Platform::Linux,
+                &run(owner),
+            )
+            .expect("a key");
+        }
+        plan_move(&mut setup, &mut simulated, (30.0, 40.0), 1);
+        plan_down(
+            &mut setup,
+            &mut simulated,
+            MouseButton::Middle,
+            1,
+            &run("A"),
+        );
+        plan_down(&mut setup, &mut simulated, MouseButton::Left, 1, &run("B"));
+        let mut plan = Plan::default();
+        keyboard::plan_key_releases(&mut plan, &mut simulated, &run("A"));
+        plan_button_releases(&mut plan, &mut simulated, &run("A"));
+        let released: Vec<String> = sent_events(&plan)
+            .iter()
+            .map(|event| {
+                format!(
+                    "{} {}",
+                    event["type"].as_str().unwrap_or_default(),
+                    event["key"]
+                        .as_str()
+                        .or(event["button"].as_str())
+                        .unwrap_or_default()
+                )
+            })
+            .collect();
+        assert_eq!(
+            released,
+            ["keyUp Control", "keyUp Shift", "mouseReleased middle"],
+            "A's keys newest first, then A's button"
+        );
+        let up = &sent_events(&plan)[2];
+        assert_eq!(
+            (up["x"].as_f64(), up["y"].as_f64()),
+            (Some(30.0), Some(40.0))
+        );
+        assert_eq!(up["buttons"], 1, "B's left button is still held");
+        assert_eq!(simulated.keyboard.pressed, [("KeyA", run("B"))]);
+        assert_eq!(simulated.mouse.buttons, [(MouseButton::Left, run("B"))]);
+    }
+
+    /// A tap writes its end together with its start: a lost or failed answer still ends the
+    /// touch and reads `Unknown`; a tap whose caller stopped finishes `Done`; a refused tap
+    /// wrote nothing.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_tap_always_ends_its_touch() {
+        let tap = || {
+            let mut plan = Plan::default();
+            plan_tap(&mut plan, &mut InputDevices::default(), (1.0, 2.0));
+            plan
+        };
+        let turn = || Turn::of(InputDevices::default(), "A");
+        let sender = Sender::answering([Answer::Fail, Answer::Fail]);
+        let (cell, ticket) = fresh_ticket();
+        let written = write_plan(&sender, &turn(), &tap(), &CancellationToken::new()).await;
+        assert!(matches!(
+            report(&written, ticket),
+            PressReport::Failed { closed: false, .. }
+        ));
+        assert_eq!(cell.delivery(), Delivery::Unknown);
+        assert_eq!(sender.sent(), ["touchStart", "touchEnd"]);
+
+        let sender = Sender::answering([Answer::Hang, Answer::Ok]);
+        let (cell, ticket) = fresh_ticket();
+        let report_future = start_writer(
+            |task| {
+                tokio::spawn(task);
+            },
+            sender.clone(),
+            tap(),
+            ticket,
+            turn(),
+            (),
+        );
+        // The writer has written the batch before its caller stops.
+        time::sleep(Duration::from_micros(100)).await;
+        drop(report_future);
+        time::sleep(Duration::from_secs(5)).await;
+        assert_eq!(
+            sender.sent(),
+            ["touchStart", "touchEnd"],
+            "written together"
+        );
+        assert_eq!(cell.delivery(), Delivery::Unknown, "an unanswered start");
+
+        let sender = Sender::answering([]);
+        let (cell, ticket) = fresh_ticket();
+        let report_future = start_writer(
+            |task| {
+                tokio::spawn(task);
+            },
+            sender.clone(),
+            tap(),
+            ticket,
+            turn(),
+            (),
+        );
+        time::sleep(Duration::from_micros(100)).await;
+        drop(report_future);
+        time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(
+            cell.delivery(),
+            Delivery::Done,
+            "a stopped caller does not stop a tap"
+        );
+
+        let sender = Sender::answering([]);
+        let (cell, ticket) = fresh_ticket();
+        drop(start_writer(
+            |task| {
+                tokio::spawn(task);
+            },
+            sender.clone(),
+            tap(),
+            ticket,
+            turn(),
+            (),
+        ));
+        time::sleep(Duration::from_millis(10)).await;
+        assert!(sender.sent().is_empty(), "stopped before its writer ran");
+        assert_eq!(cell.delivery(), Delivery::NotSent);
+
+        let sender = Sender::answering([Answer::Refuse, Answer::Refuse]);
+        let (cell, ticket) = fresh_ticket();
+        let written = write_plan(&sender, &turn(), &tap(), &CancellationToken::new()).await;
+        assert!(matches!(
+            report(&written, ticket),
+            PressReport::NothingWritten
+        ));
+        assert_eq!(cell.delivery(), Delivery::NotSent);
     }
 }

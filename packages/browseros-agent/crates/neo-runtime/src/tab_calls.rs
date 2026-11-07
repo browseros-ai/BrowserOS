@@ -78,6 +78,23 @@ pub(crate) async fn page(
                 Err(error) => return Err(error),
             }
         }
+        // The dispatcher serves these over the tab's input devices (`devices.rs`).
+        PageCall::KeyboardDown(_)
+        | PageCall::KeyboardUp(_)
+        | PageCall::KeyboardInsertText(_)
+        | PageCall::KeyboardType(_)
+        | PageCall::KeyboardPress(_)
+        | PageCall::MouseMove(_)
+        | PageCall::MouseDown(_)
+        | PageCall::MouseUp(_)
+        | PageCall::MouseClick(_)
+        | PageCall::MouseWheel(_)
+        | PageCall::TouchscreenTap(_) => {
+            return Err(PlaywrightError::error(
+                "neo-runtime: a device call reached the tab-lifecycle handler",
+            )
+            .into());
+        }
         PageCall::BringToFront(_) => {
             // Playwright 26137face server/chromium/crPage.ts:207 sends Page.bringToFront.
             let page = progress.race(tabs.session(entry)).await??;

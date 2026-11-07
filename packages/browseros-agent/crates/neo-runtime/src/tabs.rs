@@ -479,6 +479,21 @@ impl Tabs {
         self.0.creations.wait().await;
     }
 
+    /// Releases, on every tab this run attached to, the keys and buttons the run left held
+    /// (`PageSession::release_run_input`), one tab at a time. The caller bounds the whole batch.
+    pub(crate) async fn release_input(&self) {
+        let pages = self
+            .0
+            .pages
+            .lock()
+            .map_or_else(|_| Vec::new(), |pages| pages.clone());
+        for page in pages {
+            if let Some(session) = page.attached_session() {
+                session.release_run_input().await;
+            }
+        }
+    }
+
     pub(crate) async fn refresh_closing(&self) {
         let pages = self
             .0

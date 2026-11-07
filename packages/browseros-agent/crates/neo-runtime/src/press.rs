@@ -31,6 +31,7 @@ use neo_runtime_spec::serve::FramePressParams;
 
 use crate::click::{self, ActionResult, ElementAction, PageError, PressReport, Stop};
 use crate::forms::{FocusOutcome, FormTab};
+use crate::input_devices::{Devices, Plan};
 use crate::keyboard::{self, KeyboardTab, Platform};
 use crate::progress::{CallError, DeliveryCell, PlaywrightError, Progress};
 
@@ -127,10 +128,20 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for PressAction<'_> {
             // Returning drops `input`: the turn is free while loop A resolves again.
             FocusOutcome::ErrorNotconnected => return Ok(ActionResult::NotConnected),
         }
-        // The whole key is planned before any key goes down, and an unknown token fails where
+        // The whole key is planned before any key goes down, from the tab's keyboard under the
+        // turn (a modifier held by `keyboard.down` reaches it), and an unknown token fails where
         // Playwright's does, after the focus.
-        let events = keyboard::plan_press(&self.options.key, platform)
-            .map_err(|unknown| PlaywrightError::error(unknown.to_string()))?;
+        let mut simulated = input.snapshot()?;
+        let mut plan = Plan::default();
+        keyboard::plan_press(
+            &mut plan,
+            &mut simulated,
+            &self.options.key,
+            platform,
+            &input.owner(),
+            self.options.key_delay(),
+        )
+        .map_err(|unknown| PlaywrightError::error(unknown.to_string()))?;
         // The last chance to stop before an irreversible step.
         progress.check()?;
         let Ok(ticket) = self.delivery.begin() else {
@@ -142,7 +153,7 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for PressAction<'_> {
         // A call that stops here drops the report's future: the writer cuts any delay short,
         // still releases every key it pressed, and marks the ticket itself.
         let report = progress
-            .race(tab.write_keys(events, self.options.key_delay(), ticket, input.clone()))
+            .race(tab.write(plan, ticket, input.clone()))
             .await?;
         // The last key is answered; the tab's next input may start. The barrier only waits.
         drop(input);

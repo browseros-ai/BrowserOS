@@ -55,6 +55,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
+use crate::devices::{self, DeviceCall};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
 use crate::frames::FrameScope;
@@ -229,6 +230,8 @@ enum ObjectKind {
 enum ObjectCall {
     Context(BrowserContextCall),
     Page(PageCall),
+    /// `page.keyboard`, `page.mouse` and `page.touchscreen` (`devices.rs`).
+    Device(DeviceCall),
     Frame(Route),
     Network(NetworkCall),
 }
@@ -378,6 +381,9 @@ impl Dispatcher {
         let _created = time::timeout_at(deadline, self.0.tabs.finish_creations()).await;
         run.tasks.close();
         let _waited = time::timeout_at(deadline, run.tasks.wait()).await;
+        // Keys and buttons this run left held are released on each tab it touched, under a
+        // turn, inside the same budget (design section 4.6); a closed tab is skipped.
+        let _released = time::timeout_at(deadline, self.0.tabs.release_input()).await;
         let _refreshed = time::timeout_at(deadline, self.0.tabs.refresh_closing()).await;
         self.0.trace.take(reason)
     }
@@ -388,9 +394,14 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
     let decoded = match object {
         ObjectKind::Context => BrowserContextCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Context(call)))),
-        ObjectKind::Page => {
-            PageCall::decode(method, params).map(|call| (call.meta(), Ok(ObjectCall::Page(call))))
-        }
+        ObjectKind::Page => PageCall::decode(method, params).map(|call| {
+            let meta = call.meta();
+            let routed = match DeviceCall::from_page_call(call) {
+                Ok(device) => device.map(ObjectCall::Device),
+                Err(call) => Ok(ObjectCall::Page(call)),
+            };
+            (meta, routed)
+        }),
         ObjectKind::Frame => {
             if method == WAIT_FOR_URL_META.method {
                 return Routed {
@@ -578,6 +589,25 @@ async fn serve_call(
                     )
                     .await;
                     return;
+                }
+                Err(error) => Err(error),
+            }
+        }
+        (ObjectCall::Device(call), Some((page, _))) => {
+            let session = match page.attached_session() {
+                Some(session) => Ok(session),
+                None => match progress.race(tabs.session(&page)).await {
+                    Ok(result) => result.map_err(CallError::from),
+                    Err(error) => Err(error),
+                },
+            };
+            match session {
+                Ok(page) => {
+                    let tab = FrameTab {
+                        page,
+                        scope: FrameScope::Main,
+                    };
+                    devices::serve(&tab, &call, &progress).await.map(|()| None)
                 }
                 Err(error) => Err(error),
             }
@@ -1031,7 +1061,10 @@ mod tests {
     fn frame_route(route: Result<ObjectCall, PlaywrightError>) -> Result<Route, PlaywrightError> {
         route.map(|call| match call {
             ObjectCall::Frame(route) => route,
-            ObjectCall::Context(_) | ObjectCall::Page(_) | ObjectCall::Network(_) => {
+            ObjectCall::Context(_)
+            | ObjectCall::Page(_)
+            | ObjectCall::Device(_)
+            | ObjectCall::Network(_) => {
                 panic!("a Frame message routed to another object")
             }
         })
@@ -1684,14 +1717,11 @@ mod tests {
 
     #[test]
     fn a_click_option_neo_does_not_serve_is_refused_before_any_work() {
-        let routed = route_frame(
-            "click",
-            json!({ "selector": "#go", "modifiers": ["Shift"] }),
-        );
+        let routed = route_frame("click", json!({ "selector": "#go", "clickCount": 1001 }));
         assert_eq!(routed.meta.and_then(|meta| meta.title), Some("Click"));
         assert_eq!(
             error_of(routed),
-            PlaywrightError::error("Neo does not support click modifiers yet")
+            PlaywrightError::error("Neo does not support a clickCount above 1000")
         );
     }
 
