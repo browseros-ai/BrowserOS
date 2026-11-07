@@ -293,6 +293,36 @@ describe('waitForNavigation', () => {
     )
   })
 
+  test('a predicate still pending at the deadline rejects the wait then', async () => {
+    const { page } = run()
+    replies.push({ cursor: 3, url: 'http://a.test/x' })
+    const started = Date.now()
+    const error = await page
+      .waitForNavigation({
+        url: () => new Promise<boolean>(() => {}),
+        timeout: 50,
+      })
+      .catch((e) => e)
+    expect(error.name).toBe('TimeoutError')
+    expect(error.message).toStartWith(
+      'page.waitForNavigation: Timeout 50ms exceeded.',
+    )
+    expect(Date.now() - started).toBeLessThan(5000)
+    expect(sent.map(({ method }) => method)).toEqual(['neo:nextNavigation'])
+  })
+
+  test("an async predicate's rejection rejects with the API prefix", async () => {
+    const { page } = run()
+    replies.push({ cursor: 3, url: 'http://a.test/x' })
+    const error = await page
+      .waitForNavigation({
+        url: async () => Promise.reject(new TypeError('bad')),
+      })
+      .catch((e) => e)
+    expect(error.name).toBe('TypeError')
+    expect(error.message).toBe('page.waitForNavigation: bad')
+  })
+
   test('an unknown waitUntil throws, prefixed, before anything is sent', async () => {
     const { page } = run()
     const error = await page

@@ -1235,14 +1235,16 @@ class Frame {
         const next = await this._connection.sendNeo(apiName, this._guid, "neo:nextNavigation", cursor === undefined ? { response: respond } : { cursor, response: respond }, left());
         cursor = next.cursor;
         const url = urlFor(next.url);
-        let accepted;
+        let verdict = false;
         try {
-          accepted = !!url && !!await predicate(url);
+          if (url)
+            verdict = predicate(url);
         } catch (error) {
-          if (error instanceof Error)
-            error.message = `${apiName}: ${error.message}`;
-          throw error;
+          throw prefixed(apiName, error);
         }
+        const accepted = await verdictBefore(verdict, deadline, () => navigationTimeout(apiName, timeout)).catch((error) => {
+          throw error instanceof TimeoutError ? error : prefixed(apiName, error);
+        });
         if (accepted)
           return await this._connection.sendNeo(apiName, this._guid, "neo:finishNavigation", { cursor, waitUntil }, left());
       }
@@ -1469,6 +1471,30 @@ class Frame {
 }
 function navigationTimeout(apiName, timeout) {
   return new TimeoutError(`${apiName}: Timeout ${timeout}ms exceeded.`);
+}
+function prefixed(apiName, error) {
+  if (error instanceof Error)
+    error.message = `${apiName}: ${error.message}`;
+  return error;
+}
+async function verdictBefore(verdict, deadline, timedOut) {
+  const settled = Promise.resolve(verdict).then((value) => !!value);
+  if (!deadline)
+    return await settled;
+  const ms = deadline - Date.now();
+  if (ms <= 0)
+    throw timedOut();
+  let timer;
+  try {
+    return await Promise.race([
+      settled,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(timedOut()), ms);
+      })
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // src/timeout-settings.ts

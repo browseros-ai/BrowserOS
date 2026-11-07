@@ -447,7 +447,8 @@ export class Frame {
    * frame in order, from a cursor subscribed by the first call; the predicate tests its `URL`,
    * awaited as Playwright's waiter awaits it (a URL the parser rejects is never accepted); the first
    * it accepts is settled for `waitUntil`. `respond` asks for that navigation's `Response`.
-   * `timeout` (0 for none) bounds the whole loop: each call gets what is left.
+   * `timeout` (0 for none) bounds the whole loop: each call gets what is left, and a predicate
+   * still pending at the deadline rejects the wait then, as Playwright's waiter does.
    */
   async _navigationMatching(
     apiName: ApiName,
@@ -456,9 +457,6 @@ export class Frame {
     timeout: number,
     respond: boolean,
   ): Promise<NeoNavigationResult> {
-    // Deviation: `client/frame.ts` `Frame._setupNavigationWaiter` the timeout is checked between
-    // calls, so an async predicate still running when it passes delays the rejection; Playwright's
-    // waiter rejects at the deadline.
     const deadline = timeout ? Date.now() + timeout : 0
     const left = () => {
       if (!deadline) return 0
@@ -480,15 +478,17 @@ export class Frame {
         )
         cursor = next.cursor
         const url = urlFor(next.url)
-        let accepted: boolean
+        let verdict: boolean | Promise<boolean> = false
         try {
-          accepted = !!url && !!(await predicate(url))
+          if (url) verdict = predicate(url)
         } catch (error) {
-          // Playwright's `_wrapApiCall` prefixes every error thrown inside an API call.
-          if (error instanceof Error)
-            error.message = `${apiName}: ${error.message}`
-          throw error
+          throw prefixed(apiName, error)
         }
+        const accepted = await verdictBefore(verdict, deadline, () =>
+          navigationTimeout(apiName, timeout),
+        ).catch((error) => {
+          throw error instanceof TimeoutError ? error : prefixed(apiName, error)
+        })
         if (accepted)
           return await this._connection.sendNeo(
             apiName,
@@ -1059,4 +1059,37 @@ export class Frame {
  * naming the whole timeout, with the API call's prefix. */
 function navigationTimeout(apiName: ApiName, timeout: number): TimeoutError {
   return new TimeoutError(`${apiName}: Timeout ${timeout}ms exceeded.`)
+}
+
+/** Playwright's `_wrapApiCall`, which prefixes every error thrown inside an API call. */
+function prefixed(apiName: ApiName, error: unknown): unknown {
+  if (error instanceof Error) error.message = `${apiName}: ${error.message}`
+  return error
+}
+
+/**
+ * A predicate's verdict, truthy or not, or the waiter's timeout once `deadline` (0 for none)
+ * passes while it is still pending, as Playwright's waiter rejects a wait whose predicate has not
+ * answered by its deadline.
+ */
+async function verdictBefore(
+  verdict: boolean | Promise<boolean>,
+  deadline: number,
+  timedOut: () => TimeoutError,
+): Promise<boolean> {
+  const settled = Promise.resolve(verdict).then((value) => !!value)
+  if (!deadline) return await settled
+  const ms = deadline - Date.now()
+  if (ms <= 0) throw timedOut()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      settled,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(timedOut()), ms)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
 }

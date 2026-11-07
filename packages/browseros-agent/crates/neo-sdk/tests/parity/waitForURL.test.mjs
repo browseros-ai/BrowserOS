@@ -199,8 +199,9 @@ test('page.waitForURL settles the same through Neo and Playwright', {
 
 /**
  * waitForURL on a child Frame (page.frame, page.frames()), on tabs of frame-top.html
- * (frames.mjs): the frame's own URL, for the same-origin frame (a glob) and the cross-site,
- * out-of-process one (a RegExp): already matching, and matched by a navigation a control starts
+ * (frames.mjs): the frame's own URL, for the same-origin frame (a glob, a predicate) and the
+ * cross-site, out-of-process one (a RegExp, a predicate): already matching, and matched by a
+ * navigation a control starts
  * in the frame, which leaves the page's own URL alone (a page wait for it times out). A wait on
  * a frame whose iframe is removed rejects, and it was still pending when the iframe went. The
  * script also waits for each new document through a frame locator, so the page ends the same
@@ -214,10 +215,18 @@ const frameCases = [
     const cross = page.frames().find((frame) => frame.name() === 'cross')
     const already = await settle(() => same.waitForURL('**/frame-child.html?who=same'))
     const sameNavigated = settle(() => same.waitForURL('**/frame-child.html?who=same&gen=2'))
+    const samePredicate = settle(() => same.waitForURL((url) => url.searchParams.get('gen') === '2'))
     await page.click('#reload-same')
     const crossNavigated = settle(() => cross.waitForURL(/who=cross.*&gen=2$/))
+    const crossPredicate = settle(() => cross.waitForURL((url) => url.searchParams.get('gen') === '2'))
     await page.click('#reload-cross')
-    const waits = { already, same: await sameNavigated, cross: await crossNavigated }
+    const waits = {
+      already,
+      same: await sameNavigated,
+      samePredicate: await samePredicate,
+      cross: await crossNavigated,
+      crossPredicate: await crossPredicate,
+    }
     await page.frameLocator('#same').getByText('gen 2').waitFor()
     await page.frameLocator('#login-iframe').getByText('gen 2').waitFor()
     return {
@@ -229,7 +238,9 @@ const frameCases = [
     expected: {
       already: RESOLVED,
       same: RESOLVED,
+      samePredicate: RESOLVED,
       cross: RESOLVED,
+      crossPredicate: RESOLVED,
       urls: [
         '127.0.0.1/frame-child.html?who=same&gen=2',
         'localhost/frame-child.html?who=cross&kids=grandchild%40127.0.0.1&gen=2',

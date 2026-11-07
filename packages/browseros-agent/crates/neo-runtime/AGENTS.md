@@ -15,6 +15,7 @@ Runs one script in a fresh QuickJS realm from a starting BrowserOS tab. Its cont
 - `src/states.rs` waits for visibility's selector context, then reads once (missing/evaluation disconnect → false); `isChecked` polls for a match through `reads.rs`. Both are reads without input delivery.
 - `src/lists.rs` serves Locator collection snapshots (`count`, `allTextContents`): `describe` rejects an invalid selector with Playwright's message, then one non-strict glue read, without waiting, target marks or call-log lines; scripted-tab tests pin values and page steps.
 - `src/waits.rs` owns selector, URL and lifecycle waits over one loop and the input-free `WaitTab` seam; navigation waits use buffered commits and lifecycle counts, DOM waits use loop A's backoff, and `Progress` owns every deadline and cancellation. A child frame's URL and load-state waits run the same loop over that frame's feed (`page.rs` `FrameFeeds`), written by the tab's watcher and by a watcher started on each OOPIF host session; the wait refinds the frame's host after a process swap, and a removed frame (or one gone with the page's document) ends it with `Frame was detached`.
+- `src/history.rs` is Playwright's server `waitForNavigation` and what waits on it: `Page.reload`, `goBack` and `goForward` (served protocol commands) and the `neo:waitForNavigation` / `neo:nextNavigation` / `neo:finishNavigation` frame commands, whose URL-predicate cursors keep their subscription in the run's `Cursors` between calls. The page watcher (`page.rs` `apply_frame`) tracks Playwright's pending document, so a navigation whose request fails is a navigation event with its error, and a back-forward cache restore counts as loaded at its commit. Tested against a scripted tab under paused time, and on a real browser with the cache on in `tests/history_e2e.rs`.
 - `src/click.rs` is `Frame.click`'s policy (Playwright's two retry loops, every call-log line) over the `Tab` seam; `src/page.rs` implements the seam over CDP, and `src/world.rs` calls the injected glue. Click policy is tested against a scripted `FakeTab` under paused time (what a click calls, in which order, and what it delivers; never log wording or retry counts); the mechanism against `tests/support/fake_browser.rs` (`tests/click_lifecycle.rs`).
 - A tab has one mouse and one hit-target slot, shared by every call and run on it. Input to a tab takes a turn (`Tab::input`, `src/page.rs` `TabInputs`, per `Runtime` and tab) from the interceptor's setup until its stop has answered, mouse writes included; never wait for an element while holding one.
 
@@ -25,7 +26,8 @@ Checks, from `packages/browseros-agent`: `scripts/neo-check.sh`. The end-to-end 
 ```sh
 export NEO_E2E_BROWSER="/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo"
 cargo test -p neo-runtime --test tabs_e2e --test sync_getters --test click_e2e --test navigation_e2e \
-  --test reads_e2e --test states_e2e --test acceptance_e2e --test waits_e2e --test frames_snapshot_e2e --test frames_waits_e2e -- --nocapture
+  --test reads_e2e --test states_e2e --test acceptance_e2e --test waits_e2e --test frames_snapshot_e2e --test frames_waits_e2e \
+  --test history_e2e -- --nocapture
 ```
 
 Try a script by hand with `cargo run -p neo-runtime --example neo_run -- --help`.
