@@ -236,3 +236,55 @@ test('page.close settles null options as in Playwright, on a page of its own', {
     closedAtEnd: true,
   })
 })
+
+test('a null default timeout rejects timed calls as in Playwright, and untimed ones run', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  const outcome = await compareMethod(t, {
+    html,
+    source: `
+      ${SETTLE}
+      const timed = async (label) => {
+        await settle(label + ' textContent', () => page.textContent('#plain'))
+        await settle(label + ' click', () => page.locator('#plain').click())
+        await settle(label + ' isVisible', () => page.isVisible('#plain'))
+        await settle(label + ' title', () => page.title())
+        await settle(label + ' goto', () => page.goto(page.url() + '#same'))
+      }
+      page.setDefaultTimeout(null)
+      await timed('page')
+      page.setDefaultTimeout(undefined)
+      page.context().setDefaultTimeout(null)
+      await timed('context')
+      page.context().setDefaultTimeout(undefined)
+      page.setDefaultNavigationTimeout(null)
+      await timed('navigation')
+      return results
+    `,
+    probe: 'location.hash',
+  })
+  const kinds = Object.fromEntries(
+    Object.entries(outcome.value).map(([call, settled]) => [
+      call,
+      settled.startsWith('resolved') ? 'resolved' : settled,
+    ]),
+  )
+  assert.deepEqual(kinds, {
+    'page textContent': 'rejected Error',
+    'page click': 'rejected Error',
+    'page isVisible': 'resolved',
+    'page title': 'resolved',
+    'page goto': 'rejected Error',
+    'context textContent': 'rejected Error',
+    'context click': 'rejected Error',
+    'context isVisible': 'resolved',
+    'context title': 'resolved',
+    'context goto': 'rejected Error',
+    'navigation textContent': 'resolved',
+    'navigation click': 'resolved',
+    'navigation isVisible': 'resolved',
+    'navigation title': 'resolved',
+    'navigation goto': 'rejected Error',
+  })
+})

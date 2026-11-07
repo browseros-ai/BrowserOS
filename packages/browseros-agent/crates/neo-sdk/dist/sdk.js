@@ -1307,6 +1307,8 @@ class Connection {
     return await this.#send(apiName, guid, method, params, timeout);
   }
   async#send(apiName, guid, method, params, timeout) {
+    if (typeof timeout !== "number")
+      throw new Error(`timeout: expected float, got ${timeout === null ? "object" : typeof timeout}`);
     const metadata = {
       location: captureLocation(this.#lineOffset),
       timeout

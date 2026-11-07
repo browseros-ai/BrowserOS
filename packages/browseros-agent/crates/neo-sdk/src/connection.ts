@@ -236,6 +236,13 @@ export class Connection {
     params: unknown,
     timeout: number,
   ): Promise<unknown> {
+    // Playwright's server validates every call's metadata (`dispatcher.ts`, `tOptional(tFloat)`):
+    // `setDefaultTimeout(null)` resolves a timeout to `null`, which rejects the call before it
+    // runs. Rust's serde would read it as no timeout and run the call.
+    if (typeof timeout !== 'number')
+      throw new Error(
+        `timeout: expected float, got ${timeout === null ? 'object' : typeof timeout}`,
+      )
     const metadata: Metadata = {
       location: captureLocation(this.#lineOffset),
       timeout,

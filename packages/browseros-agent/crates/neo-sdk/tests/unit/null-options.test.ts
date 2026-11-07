@@ -202,3 +202,33 @@ test('tests that pickParams rejects null like the validator, drops undefined and
     }),
   ).toEqual({ selector: '#go' })
 })
+
+/**
+ * Playwright's server validates every call's metadata (`dispatcher.ts`, `tOptional(tFloat)` for
+ * `timeout`): after `setDefaultTimeout(null)` a timed call resolves its timeout to `null` and
+ * rejects with a plain `Error` before it runs; a call without a timeout still runs.
+ */
+test('tests that a null default timeout rejects timed calls before they run', async () => {
+  for (const reset of [
+    (page: ReturnType<typeof start>['page']) =>
+      page.setDefaultTimeout(null as never),
+    (page: ReturnType<typeof start>['page']) =>
+      page.context().setDefaultTimeout(null as never),
+  ]) {
+    const { page, fake } = start()
+    reset(page)
+    fake.answer = ({ method }) =>
+      method === 'title' ? { result: { value: 'Title' } } : {}
+    expect(await rejection(() => page.textContent('#go'))).toBe('Error')
+    expect(await rejection(() => page.locator('#go').click())).toBe('Error')
+    expect(await rejection(() => page.goto('http://a.test/'))).toBe('Error')
+    expect(await page.title()).toBe('Title')
+    expect(fake.messages.map(({ method }) => method)).toEqual(['title'])
+  }
+  const { page, fake } = start()
+  page.setDefaultNavigationTimeout(null as never)
+  fake.answer = () => ({})
+  expect(await rejection(() => page.goto('http://a.test/'))).toBe('Error')
+  expect(await page.locator('#go').click()).toBeUndefined()
+  expect(fake.messages.map(({ method }) => method)).toEqual(['click'])
+})
