@@ -12,6 +12,8 @@
 //! so sessions detach once the realm, dispatcher and their writers are gone, also when a
 //! caller drops the run's future. Browser tabs themselves survive the run.
 
+use std::sync::Arc;
+
 use browseros_cdp::{CdpClient, CdpError, browser};
 use serde_json::Value;
 use tokio::runtime::{Handle, RuntimeFlavor};
@@ -176,8 +178,13 @@ impl Runtime {
         };
         // One tracker for the run: call tasks, and the writer, interceptor-stop and
         // group-release tasks the page spawns, so `finish` waits for them all.
-        let getters = Getters::new(tabs.clone(), deadline.clone(), tokio);
         let run = RunScope::new(deadline.clone(), tasks);
+        let getters = Getters::new(
+            tabs.clone(),
+            deadline.clone(),
+            tokio,
+            Arc::clone(&run.handles),
+        );
         let dispatcher = Dispatcher::new(tabs.clone(), run);
         let events = tabs.events().clone();
         let outcome = realm::run(script, getters, dispatcher.clone(), deadline, events).await;

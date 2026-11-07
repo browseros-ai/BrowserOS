@@ -40,6 +40,7 @@ use tokio::task;
 
 use crate::deadline::{Deadline, Stop};
 use crate::dispatch::Dispatcher;
+use crate::evaluate::Handles;
 use crate::events::{self, CONTEXT_GUID};
 use crate::getters::{self, FrameField};
 use crate::network::{HopId, LogError, ObjectKind as NetworkObject};
@@ -299,6 +300,8 @@ pub(crate) struct Getters {
     tabs: Tabs,
     deadline: Deadline,
     tokio: Handle,
+    /// The run's handles, which `ConsoleMessage.args()` adds its message's arguments to.
+    handles: Arc<Handles>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -323,6 +326,8 @@ enum GetterField {
     IsDetached,
     /// On a page: `opener()`'s record, `null` when none is open in the run's context.
     Opener,
+    /// On a console message (`console@<targetId>:<n>`): `args()`'s handle records.
+    Args,
 }
 
 #[derive(Deserialize)]
@@ -379,11 +384,17 @@ enum GetError {
 }
 
 impl Getters {
-    pub(crate) fn new(tabs: Tabs, deadline: Deadline, tokio: Handle) -> Self {
+    pub(crate) fn new(
+        tabs: Tabs,
+        deadline: Deadline,
+        tokio: Handle,
+        handles: Arc<Handles>,
+    ) -> Self {
         Self {
             tabs,
             deadline,
             tokio,
+            handles,
         }
     }
 
@@ -413,6 +424,27 @@ impl Getters {
             return self.wait(async {
                 serde_json::to_value(self.tabs.pages().await?)
                     .map_err(|error| PlaywrightError::error(error.to_string()))
+            });
+        }
+        if let Some(message) = request.guid.strip_prefix("console@") {
+            if !matches!(request.field, GetterField::Args) {
+                return Err(GetError::BadRequest(
+                    "not a console message getter".to_string(),
+                ));
+            }
+            let Some((target, id)) = message
+                .rsplit_once(':')
+                .and_then(|(target, id)| Some((target, id.parse::<u64>().ok()?)))
+            else {
+                return Err(GetError::BadRequest(format!(
+                    "unknown guid {:?}",
+                    request.guid
+                )));
+            };
+            return self.wait(async {
+                self.tabs
+                    .console_args(&PageId::new(target.to_string()), id, &self.handles)
+                    .await
             });
         }
         if let Some((kind, _, hop)) = HopId::parse(&request.guid) {
@@ -466,7 +498,8 @@ impl Getters {
             GetterField::Name
             | GetterField::ParentFrame
             | GetterField::ChildFrames
-            | GetterField::IsDetached => Err(GetError::BadRequest("not a page getter".to_string())),
+            | GetterField::IsDetached
+            | GetterField::Args => Err(GetError::BadRequest("not a page getter".to_string())),
         }
     }
 

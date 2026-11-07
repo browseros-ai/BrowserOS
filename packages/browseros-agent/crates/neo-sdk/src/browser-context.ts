@@ -181,7 +181,12 @@ export class BrowserContext extends ChannelOwner {
 
   #onConsole(event: ConsoleEventParams): void {
     const page = event.page ? this.#pageFor(event.page.guid) : null
-    const consoleMessage = new ConsoleMessage(event, page, null)
+    const consoleMessage = new ConsoleMessage(
+      event,
+      page,
+      null,
+      this.#connection,
+    )
     page?.emit('console', consoleMessage)
     this.emit('console', consoleMessage)
   }

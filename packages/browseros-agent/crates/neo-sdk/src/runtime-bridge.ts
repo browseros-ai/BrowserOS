@@ -18,6 +18,7 @@ import type {
   PageInitializer,
 } from '@browseros/neo-runtime-spec/serve'
 import type { RawEvent } from './events'
+import type { CreatedHandle } from './js-handle'
 import type { NeoSerializedUrlMatch } from './neo-commands'
 import type { CreatedChain, Timing } from './network'
 
@@ -85,6 +86,8 @@ export interface GetterReplies {
   isDetached: boolean
   /** On a page: the open tab of the run's context that opened it, `null` for none. */
   opener: CreatedPage | null
+  /** On a console message (`console@<targetId>:<n>`): its arguments as the run's handles. */
+  args: CreatedHandle[]
 }
 
 export function get<Field extends keyof GetterReplies>(

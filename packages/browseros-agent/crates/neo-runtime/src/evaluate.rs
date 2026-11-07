@@ -1745,10 +1745,6 @@ async fn abort_waiter(tab: FrameTab, frame: Arc<FrameContext>, waiter: String) {
 /// # Errors
 ///
 /// `NotConnected` when the object or its frame's document is gone; `Closed` once the run ended.
-#[expect(
-    dead_code,
-    reason = "the seam med-pw-net's ConsoleMessage.args() calls; remove this once it does"
-)]
 pub(crate) async fn handle_for_remote_object(
     tab: &FrameTab,
     frame: &Arc<FrameContext>,

@@ -138,6 +138,11 @@ impl Host {
         &self.session.id
     }
 
+    /// The child target this host attached, an out-of-process frame's id; `None` for the tab.
+    pub(crate) fn target_id(&self) -> Option<&str> {
+        self.target_id.as_deref()
+    }
+
     pub(crate) fn classify(&self, error: &CdpError) -> PageError {
         world::classify_host(error, self.is_child())
     }

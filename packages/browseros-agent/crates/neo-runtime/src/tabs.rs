@@ -7,10 +7,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use browseros_cdp::runtime::RemoteObject;
 use browseros_cdp::{CdpClient, CdpError};
 use neo_runtime_spec::serve::{FrameChannel, FrameInitializer, PageChannel, PageInitializer};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::runtime::Handle;
 use tokio::sync::{OnceCell, oneshot};
 use tokio::time;
@@ -19,16 +20,22 @@ use tokio_util::task::TaskTracker;
 use tracing::debug;
 
 use crate::bridge;
+use crate::click::PageError;
 use crate::dialogs;
 use crate::discovery::{self, Discovery, TargetInfo};
+use crate::evaluate::{self, Handles};
 use crate::events::{ALL_PAGES, CONTEXT_GUID, Enabling, EventHub, Needs};
 use crate::frames::FrameScope;
 use crate::getters;
 use crate::network::HopId;
-use crate::page::{PageSession, Session, TabInputs};
-use crate::page_events;
+use crate::page::{FrameTab, PageSession, Session, TabInputs};
+use crate::page_events::{self, MAX_KEPT_ARGS};
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunPage};
+
+/// Neo: how long `ConsoleMessage.args()` waits for its arguments' handles. A page a dialog holds
+/// answers no call until the dialog is answered, which the script may be about to do.
+const ARGS_WAIT: Duration = Duration::from_secs(5);
 
 /// Cheap clones share the run's registry, context boundary, and session ownership.
 #[derive(Clone)]
@@ -721,6 +728,67 @@ impl Tabs {
         Ok(Some(created_page(&opener, tab.url, false)))
     }
 
+    /// `ConsoleMessage.args()`: the run's handles of console message `id`'s arguments on page
+    /// `target`, made at the first read (eval's `handle_for_remote_object`) and the same records
+    /// after. The message's arguments are kept from when its event was produced.
+    pub(crate) async fn console_args(
+        &self,
+        target: &PageId,
+        id: u64,
+        handles: &Handles,
+    ) -> Result<Value, PlaywrightError> {
+        let entry = self
+            .entry(target)
+            .ok_or_else(|| PlaywrightError::error("neo-runtime: the run has no such page"))?;
+        let session = entry
+            .attached_session()
+            .ok_or_else(PlaywrightError::target_closed)?;
+        let kept = session.events.args.get(id).ok_or_else(|| {
+            PlaywrightError::error(format!(
+                "Neo keeps the arguments of a page's last {MAX_KEPT_ARGS} console messages \
+                 a listener received; this message's are gone"
+            ))
+        })?;
+        if let Some(records) = kept.handles {
+            return Ok(records);
+        }
+        let frame = match &kept.frame {
+            None => session.frames.main(),
+            Some(frame) => session
+                .frames
+                .cached(frame)
+                .ok_or_else(PlaywrightError::target_closed)?,
+        };
+        let tab = FrameTab {
+            page: Arc::clone(&session),
+            scope: FrameScope::Main,
+        };
+        let mut records = Vec::with_capacity(kept.objects.len());
+        for object in kept.objects {
+            let object: RemoteObject = serde_json::from_value(object)
+                .map_err(|error| PlaywrightError::error(error.to_string()))?;
+            let made = time::timeout(
+                ARGS_WAIT,
+                evaluate::handle_for_remote_object(&tab, &frame, object, handles),
+            )
+            .await
+            .map_err(|_| {
+                PlaywrightError::error(
+                    "Neo could not take the console message's arguments in time: a dialog may \
+                     hold the page",
+                )
+            })?
+            .map_err(|error| args_error(&error))?;
+            records.push(
+                serde_json::to_value(made)
+                    .map_err(|error| PlaywrightError::error(error.to_string()))?,
+            );
+        }
+        let records = Value::Array(records);
+        session.events.args.made(id, records.clone());
+        Ok(records)
+    }
+
     pub(crate) fn outcome(&self) -> Vec<RunPage> {
         self.0.pages.lock().map_or_else(
             |_| Vec::new(),
@@ -785,6 +853,19 @@ pub(crate) async fn tab_info(
             Ok(None)
         }
         Err(error) => Err(cdp_error(&error)),
+    }
+}
+
+/// Why a console message's argument could not become a handle.
+fn args_error(error: &PageError) -> PlaywrightError {
+    match error {
+        PageError::Closed => PlaywrightError::target_closed(),
+        PageError::NotConnected => PlaywrightError::error(
+            "the console message's arguments are gone with the document that logged them",
+        ),
+        PageError::Threw(message) | PageError::Contract(message) => {
+            PlaywrightError::error(message.clone())
+        }
     }
 }
 

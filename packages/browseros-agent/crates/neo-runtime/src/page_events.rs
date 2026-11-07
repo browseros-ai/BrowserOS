@@ -29,7 +29,7 @@
 //! on there before the call that attached it goes on ([`PageEvents::child_attached`]), and the
 //! session's own replay is history only, as the tab's.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -67,8 +67,11 @@ pub(crate) struct PageEvents {
     cdp: CdpClient,
     session: SessionId,
     /// The out-of-process frame sessions of this tab the run attached, whose console events the
-    /// tab's watcher takes as the tab's.
-    children: Arc<Mutex<HashSet<SessionId>>>,
+    /// tab's watcher takes as the tab's, with the frame each hosts.
+    children: Arc<Mutex<HashMap<SessionId, Option<String>>>>,
+    /// The arguments of the console messages the run's listeners received, kept until a script
+    /// reads them (`ConsoleMessage.args()`).
+    pub(crate) args: Arc<ConsoleArgs>,
     pub(crate) console: Arc<ConsoleLog>,
     pub(crate) dialogs: Arc<Dialogs>,
     /// The tab's frames, as the run's frame events see them.
@@ -107,6 +110,7 @@ impl PageEvents {
             cdp,
             session,
             children: Arc::default(),
+            args: Arc::default(),
             console: Arc::default(),
             dialogs: Arc::default(),
             frames: Arc::new(Mutex::new(FrameModel::new(target))),
@@ -136,7 +140,10 @@ impl PageEvents {
     /// call that attached the frame goes on, so that call's messages are live, not replayed.
     pub(crate) async fn child_attached(&self, host: &Arc<Host>) {
         if let Ok(mut children) = self.children.lock() {
-            children.insert(host.session_id().clone());
+            children.insert(
+                host.session_id().clone(),
+                host.target_id().map(str::to_string),
+            );
         }
         if self.console.requested(&self.session) {
             self.enable_child(host).await;
@@ -187,7 +194,7 @@ impl PageEvents {
             if self
                 .children
                 .lock()
-                .is_ok_and(|children| children.contains(session))
+                .is_ok_and(|children| children.contains_key(session))
             {
                 self.console_event(event, session);
                 self.frame_event(event);
@@ -287,7 +294,8 @@ impl PageEvents {
         let Some(record) = console::from_console_api(&event) else {
             return;
         };
-        self.message(record, event.timestamp, session);
+        let args = params["args"].as_array().cloned().unwrap_or_default();
+        self.message(record, event.timestamp, session, args);
     }
 
     fn log_entry(&self, params: &Value, session: &SessionId) {
@@ -312,12 +320,21 @@ impl PageEvents {
                 }
             });
         }
+        // Playwright: `server/chromium/crPage.ts` `FrameSession._onLogEntryAdded`: `this._page.addConsoleMessage(null, level, [], location, text, event.entry.timestamp);`
         if let Some(record) = console::from_log_entry(&entry) {
-            self.message(record, entry.timestamp, session);
+            self.message(record, entry.timestamp, session, Vec::new());
         }
     }
 
-    fn message(&self, record: ConsoleRecord, timestamp: f64, session: &SessionId) {
+    /// A console message, or a log entry with no `args`. A listened message with arguments
+    /// names them by an id (`argsId`), which `ConsoleMessage.args()` reads (`Tabs::console_args`).
+    fn message(
+        &self,
+        record: ConsoleRecord,
+        timestamp: f64,
+        session: &SessionId,
+        args: Vec<Value>,
+    ) {
         let params = self
             .hub
             .wants(&self.page_guid, "console", "console")
@@ -326,6 +343,18 @@ impl PageEvents {
         let live = self.console.push_message(record, timestamp, session);
         if let Some(mut params) = params.filter(|_| live) {
             params["page"] = json!({ "guid": self.page_guid });
+            if !args.is_empty() {
+                let frame = if session == &self.session {
+                    None
+                } else {
+                    self.children
+                        .lock()
+                        .ok()
+                        .and_then(|children| children.get(session).cloned().flatten())
+                };
+                let id = self.args.keep(frame, args);
+                params["argsId"] = json!(format!("console@{}:{id}", self.target));
+            }
             self.hub.emit(CONTEXT_GUID, "console", &params);
         }
     }
@@ -398,12 +427,16 @@ impl PageEvents {
     }
 
     /// Frees the objects the tab's console events hold in the page (V8's `console` object
-    /// group, on the tab's session and each frame session's), once nothing listens to them: Neo
-    /// hands no console argument out as a handle yet.
+    /// group, on the tab's session and each frame session's), once nothing listens to them and
+    /// every argument a listener received was read (a read made the run's handles of them).
     pub(crate) fn release_console_objects(&self) {
+        // Arguments a listener received and the script has not read yet live in this group.
+        if self.args.unread() {
+            return;
+        }
         let mut sessions = vec![self.session.clone()];
         if let Ok(children) = self.children.lock() {
-            sessions.extend(children.iter().cloned());
+            sessions.extend(children.keys().cloned());
         }
         for session in sessions {
             if !self.console.requested(&session) {
@@ -537,6 +570,77 @@ impl ConsoleLog {
         if let Ok(mut state) = self.0.lock() {
             state.history.clear_errors();
         }
+    }
+}
+
+/// Deviation: `client/consoleMessage.ts` `ConsoleMessage.args`: `return this._event.args.map(JSHandle.from);`
+/// Playwright's server makes every argument a handle as the message arrives. Neo keeps the
+/// arguments of a page's last this-many listened messages and makes their handles when the script
+/// first reads them; an older message's `args()` throws an Error naming this cap.
+pub(crate) const MAX_KEPT_ARGS: usize = 1000;
+
+/// The arguments of the console messages a page's listeners received, as CDP sent them, until
+/// `ConsoleMessage.args()` makes them the run's handles (`Tabs::console_args`).
+#[derive(Default)]
+pub(crate) struct ConsoleArgs(Mutex<KeptArgs>);
+
+#[derive(Default)]
+struct KeptArgs {
+    next: u64,
+    kept: VecDeque<Kept>,
+}
+
+/// One message's arguments: the out-of-process frame whose session they belong to (`None`: the
+/// tab's own session, whose main frame owns them), CDP's `RemoteObject`s, and once read, the
+/// handle records made from them.
+#[derive(Clone, Debug)]
+pub(crate) struct Kept {
+    pub(crate) id: u64,
+    pub(crate) frame: Option<String>,
+    pub(crate) objects: Vec<Value>,
+    pub(crate) handles: Option<Value>,
+}
+
+impl ConsoleArgs {
+    /// Keeps one message's arguments and returns its id, dropping the oldest past the cap.
+    fn keep(&self, frame: Option<String>, objects: Vec<Value>) -> u64 {
+        let Ok(mut state) = self.0.lock() else {
+            return 0;
+        };
+        state.next += 1;
+        let id = state.next;
+        state.kept.push_back(Kept {
+            id,
+            frame,
+            objects,
+            handles: None,
+        });
+        while state.kept.len() > MAX_KEPT_ARGS {
+            state.kept.pop_front();
+        }
+        id
+    }
+
+    /// Message `id`'s arguments, `None` once the cap dropped them.
+    pub(crate) fn get(&self, id: u64) -> Option<Kept> {
+        let state = self.0.lock().ok()?;
+        state.kept.iter().find(|kept| kept.id == id).cloned()
+    }
+
+    /// Records the handles made from message `id`'s arguments: a later `args()` gets them again.
+    pub(crate) fn made(&self, id: u64, handles: Value) {
+        if let Ok(mut state) = self.0.lock()
+            && let Some(kept) = state.kept.iter_mut().find(|kept| kept.id == id)
+        {
+            kept.handles = Some(handles);
+        }
+    }
+
+    /// Whether some kept arguments still have no handles: they live in V8's `console` group.
+    fn unread(&self) -> bool {
+        self.0
+            .lock()
+            .is_ok_and(|state| state.kept.iter().any(|kept| kept.handles.is_none()))
     }
 }
 
