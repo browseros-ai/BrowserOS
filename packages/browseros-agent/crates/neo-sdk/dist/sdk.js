@@ -899,10 +899,11 @@ class Page {
     const url = typeof frameSelector === "object" ? frameSelector.url : undefined;
     if (!name && !url)
       throw new Error("Either name or url matcher should be specified");
-    if (name)
-      return this.frames().find((frame) => frame.name() === name) ?? null;
-    const matcher = serializeUrlMatch("page.frame", url);
-    return this.frames().find((frame) => matchesURL(frame.url(), matcher)) ?? null;
+    const matcher = name ? undefined : serializeUrlMatch("page.frame", url);
+    const records = get(this.#guid, "frames");
+    const frames = records.map((record) => this._frameFrom(record));
+    const index = records.findIndex(({ initializer }) => matcher ? matchesURL(initializer.url, matcher) : initializer.name === name);
+    return frames[index] ?? null;
   }
   context() {
     return this.#context;

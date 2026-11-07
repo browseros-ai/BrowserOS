@@ -26,7 +26,10 @@ function record(
   }
 }
 
-function startFrames(initial?: CreatedFrame[]) {
+function startFrames(
+  initial?: CreatedFrame[],
+  afterFramesRead?: (records: Map<string, CreatedFrame>) => void,
+) {
   const run = start()
   const records = new Map(
     (
@@ -63,8 +66,11 @@ function startFrames(initial?: CreatedFrame[]) {
             )
           return JSON.stringify(match[1])
         }
-        if (guid === 'page@RUN' && field === 'frames')
-          return JSON.stringify([...records.values()])
+        if (guid === 'page@RUN' && field === 'frames') {
+          const reply = JSON.stringify([...records.values()])
+          afterFramesRead?.(records)
+          return reply
+        }
         if (field === 'isDetached') return JSON.stringify(!records.has(guid))
         const frame = records.get(guid)
         if (!frame) {
@@ -194,6 +200,37 @@ describe('direct frame identity', () => {
 })
 
 describe('Page.frame URL matching', () => {
+  for (const [kind, selector, missUrl] of [
+    ['string', 'target', 'http://a.test/undone.html'],
+    ['name', { name: 'target' }, 'http://a.test/undone.html'],
+    ['glob', { url: '**/done.html' }, 'http://a.test/undone.html'],
+    ['regexp', { url: /done\.html$/ }, 'http://a.test/done.htm'],
+  ] as const) {
+    test(`tests that ${kind} lookup uses one frame snapshot and returns the canonical frame`, () => {
+      const { page } = startFrames(
+        [
+          record(MAIN, '', missUrl),
+          record(PAY, 'target', 'http://a.test/done.html', MAIN),
+        ],
+        (records) => {
+          for (const [guid, frame] of records)
+            records.set(guid, {
+              ...frame,
+              initializer: {
+                ...frame.initializer,
+                name: 'changed',
+                url: missUrl,
+              },
+            })
+        },
+      )
+      const [target] = page.mainFrame().childFrames()
+      expect(target).toBeDefined()
+      expect(page.frame(selector)).toBe(target)
+      expect(page.frame(selector)).toBeNull()
+    })
+  }
+
   for (const golden of urlGoldens.globs) {
     const urls = golden.urls
     if (!urls) continue
