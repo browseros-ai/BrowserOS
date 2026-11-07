@@ -1461,6 +1461,14 @@ impl Watcher {
             Err(RecvError::Lagged(skipped)) => {
                 warn!(%session, skipped, "the run's event watcher lagged; answering any dialog");
                 self.network.lagged();
+                // A lost end would hold `networkidle` forever: the requests seen so far are
+                // forgotten, and every frame's quiet period starts again.
+                let changes = self
+                    .idle
+                    .as_ref()
+                    .and_then(|idle| idle.with(|idle| idle.forget_requests(Instant::now())))
+                    .unwrap_or_default();
+                self.apply_idle(changes);
                 self.state
                     .send_if_modified(|state| state.pending_url.take().is_some());
                 if let Some(producer) = &self.producer {

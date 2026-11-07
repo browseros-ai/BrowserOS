@@ -288,6 +288,18 @@ impl NetworkIdle {
         changes
     }
 
+    /// The watcher lost events (its queue overflowed): any request's end may be among them, so
+    /// every request is forgotten and the frames start over from `now`, as after a
+    /// [`Self::restart`], rather than hold `networkidle` for an end that never comes.
+    pub(crate) fn forget_requests(&mut self, now: Instant) -> Vec<IdleChange> {
+        self.requests.clear();
+        for state in self.frames.values_mut() {
+            state.inflight.clear();
+            state.idle_requests.clear();
+        }
+        self.restart(now)
+    }
+
     fn children(&self, frame: &str) -> Vec<String> {
         self.frames
             .iter()
@@ -507,6 +519,22 @@ mod tests {
         assert_eq!(idle.restart(enabled), [lost("M")]);
         assert_eq!(idle.deadline(), Some(enabled + QUIET));
         assert_eq!(idle.tick(enabled + QUIET), [fired("M")]);
+    }
+
+    #[test]
+    fn tests_that_a_lag_forgets_requests_whose_end_may_be_lost() {
+        let start = Instant::now();
+        let mut idle = NetworkIdle::new("M", start);
+        idle.started(hop("1"), "M", false);
+        assert_eq!(idle.deadline(), None);
+        let lagged = start + QUIET;
+        assert!(idle.forget_requests(lagged).is_empty());
+        assert_eq!(idle.tick(lagged + QUIET), [fired("M")]);
+        idle.ended(&hop("1"), lagged + QUIET * 2);
+        assert!(
+            idle.fired("M"),
+            "a late end of a forgotten request changes nothing"
+        );
     }
 
     #[test]
