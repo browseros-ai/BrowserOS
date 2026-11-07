@@ -2,8 +2,9 @@
 //! call takes the tab's input turn (`page.rs` `TabInputs`, shared by the runs of one `Runtime`),
 //! so fills, key presses, checks, selections and clicks never split one another's input, turns
 //! go in arrival order, a call that stops waiting for its turn sends nothing, a press cut short
-//! still releases its keys, and a fill cut short mid-insertText still inserts its whole value
-//! before the next input. Behaviour only: page-seen events, values and delivery records.
+//! still releases its keys, a fill cut short mid-insertText still inserts its whole value
+//! before the next input, and a run's end releases its keys while a frame of the tab is busy.
+//! Behaviour only: page-seen events, values and delivery records.
 
 #[expect(
     dead_code,
@@ -12,6 +13,7 @@
 #[path = "support/browser.rs"]
 mod browser;
 
+use std::ffi::OsString;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -818,4 +820,177 @@ async fn review_a3a_cancelled_type_releases_its_key_and_stays_unknown() {
     assert_eq!(released, json!(["keydown", "keyup"]));
     assert_eq!(held, json!([]));
     assert_eq!(partial, json!("a"));
+}
+
+/// A field, the key events the page sees (`__keys`) and the keys it saw go down and not come up
+/// yet (`__held`), as its own handlers would track them, and a cross-site, so out-of-process,
+/// child frame. `__recovered` is set once a document's busy work is over.
+const BUSY_TOP: &str = r"<!doctype html><html><body>
+<input id='field'><iframe name='child'></iframe>
+<script>
+window.__keys = []; window.__held = new Set();
+for (const type of ['keydown', 'keyup'])
+  addEventListener(type, e => {
+    __keys.push({ type, key: e.key, shift: e.shiftKey });
+    if (type === 'keydown') __held.add(e.key); else __held.delete(e.key);
+  }, true);
+addEventListener('message', e => { if (e.data === 'recovered') window.__recovered = true });
+document.querySelector('iframe').src = 'http://localhost:' + location.port + '/busy-child.html';
+</script>
+</body></html>";
+
+const BUSY_CHILD: &str =
+    "<!doctype html><html><body><button id='child' type='button'>Child</button></body></html>";
+
+/// Holds `{keys}` in the top field and returns while `{busy}`, a document of the tab, runs three
+/// seconds of synchronous work, from just after the call that starts it answers.
+const HOLD_THEN_BUSY: &str = r"const frame = page.frame({ name: 'child' })
+await frame.waitForURL('**/busy-child.html')
+{setup}
+await page.locator('#field').focus()
+for (const key of [{keys}]) await page.keyboard.down(key)
+await {busy}.evaluate(ms => {
+  setTimeout(() => {
+    const end = Date.now() + ms
+    while (Date.now() < end) {}
+    top.postMessage('recovered', '*')
+  }, 10)
+}, 3000)
+await new Promise(resolve => setTimeout(resolve, 100))
+return 'busy'";
+
+/// Says it is running, waits for the test's `#go`, types `a`, then reads what the top document
+/// saw. The press takes the tab's input turn, so it lands after any release an earlier run is
+/// still writing.
+const TYPE_THEN_READ: &str = r"await page.evaluate(() => { window.__waiting = true })
+await page.locator('#go').waitFor({ state: 'attached', timeout: 20000 })
+await page.locator('#field').press('a')
+return await page.evaluate(() => ({
+  held: Array.from(window.__held),
+  value: document.querySelector('#field').value,
+  typed: window.__keys.filter(key => key.type === 'keydown' && key.key.toLowerCase() === 'a'),
+}))";
+
+/// A run holding keys ends while a frame of its tab is busy: a child frame with the run's
+/// highlight, whose removal waits for it while the releases must not, or the focused page,
+/// whose releases wait for it past the run's outcome. Either way the page sees every key come
+/// up, and the next run on the tab through the same `Runtime` types an unshifted `a`, also when
+/// it was already running (so the tab's input state outlives the first run).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_busy_frame_never_leaves_an_ended_runs_keys_held() {
+    let Some(binary) = browser::e2e_browser() else {
+        return;
+    };
+    let highlight = "await frame.locator('#child').highlight()";
+    let both = "'Shift', 'Control'";
+    let mut seen = Vec::new();
+    for (case, setup, busy, keys, waiting) in [
+        ("highlighted child", highlight, "frame", both, false),
+        ("focused page", "", "page", both, false),
+        (
+            "highlighted child, next run waiting",
+            highlight,
+            "frame",
+            "'Shift'",
+            true,
+        ),
+    ] {
+        let hold = HOLD_THEN_BUSY
+            .replace("{setup}", setup)
+            .replace("{busy}", busy)
+            .replace("{keys}", keys);
+        let (first, next) = busy_frame_case(binary.clone(), case, &hold, waiting).await;
+        seen.push((case, first, next));
+    }
+    let unshifted = Some(json!({
+        "held": [],
+        "value": "a",
+        "typed": [{ "type": "keydown", "key": "a", "shift": false }],
+    }));
+    let busy = Some(json!("busy"));
+    assert_eq!(
+        seen,
+        [
+            ("highlighted child", busy.clone(), unshifted.clone()),
+            ("focused page", busy.clone(), unshifted.clone()),
+            ("highlighted child, next run waiting", busy, unshifted),
+        ],
+        "every key came up at the first run's end, and the next run's typing is unshifted"
+    );
+}
+
+/// One case of [`a_busy_frame_never_leaves_an_ended_runs_keys_held`] on a fresh browser: runs
+/// `hold`, waits for the busy document to recover, and answers both runs' values. The next run
+/// starts after that, or, when `waiting`, before the first run and waits for the test's `#go`.
+async fn busy_frame_case(
+    binary: OsString,
+    case: &str,
+    hold: &str,
+    waiting: bool,
+) -> (Option<Value>, Option<Value>) {
+    let tab = Tab::open(
+        binary,
+        Fixture {
+            pages: vec![
+                ("/busy-top.html".into(), BUSY_TOP.into()),
+                ("/busy-child.html".into(), BUSY_CHILD.into()),
+            ],
+            ..Fixture::default()
+        },
+        "/busy-top.html",
+    )
+    .await;
+    let runtime = runtime(&tab).await;
+    let timeout = Duration::from_secs(30);
+    let next_run = || {
+        runtime.run(request(
+            &tab,
+            TYPE_THEN_READ,
+            timeout,
+            CancellationToken::new(),
+        ))
+    };
+    // The first run, the busy document's recovery, then the next run's go.
+    let first_run = async {
+        if waiting {
+            review_wait_for(&tab, "window.__waiting === true").await;
+        }
+        let first = runtime
+            .run(request(&tab, hold, timeout, CancellationToken::new()))
+            .await;
+        let targets = tab
+            .cdp
+            .send("Target.getTargets", json!({}), None)
+            .await
+            .unwrap_or_else(|error| panic!("Target.getTargets: {error}"));
+        review_wait_for(&tab, "window.__recovered === true").await;
+        tab.evaluate(
+            "document.body.append(Object.assign(document.createElement('p'), { id: 'go' })); true",
+        )
+        .await;
+        (first, targets)
+    };
+    let ((first, targets), next) = if waiting {
+        tokio::join!(first_run, next_run())
+    } else {
+        let first = first_run.await;
+        (first, next_run().await)
+    };
+    tab.close().await;
+
+    assert_ok(&first);
+    assert_ok(&next);
+    let out_of_process = targets["targetInfos"].as_array().is_some_and(|targets| {
+        targets.iter().any(|target| {
+            target["type"] == "iframe"
+                && target["url"]
+                    .as_str()
+                    .is_some_and(|url| url.starts_with("http://localhost:"))
+        })
+    });
+    assert!(
+        out_of_process,
+        "{case}: the child runs out of process: {targets}"
+    );
+    (first.value, next.value)
 }
