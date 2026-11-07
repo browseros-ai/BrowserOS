@@ -45,25 +45,24 @@ function serialize(
   if (value instanceof RegExp) return { r: { p: value.source, f: value.flags } }
   // Deviation: `protocol/src/serializers.ts` `innerSerializeValue`: `const typedArrayKind = constructorToTypedArrayKind.get(value.constructor);` Playwright sends a typed array's bytes; the realm has no `Buffer` to write them with, so Neo refuses one here.
   if (ArrayBuffer.isView(value)) refuseTypedArray()
-  if (typeof value === 'object' && value !== null) {
-    const seen = visitorInfo.visited.get(value)
+  // `null` returned above, so any object left is a real one.
+  if (typeof value === 'object') {
+    const object = value as Record<string, unknown>
+    const seen = visitorInfo.visited.get(object)
     if (seen) return { ref: seen }
-    if (Array.isArray(value)) {
+    if (Array.isArray(object)) {
       const id = ++visitorInfo.lastId
-      visitorInfo.visited.set(value, id)
-      const a = value.map((item, i) =>
+      visitorInfo.visited.set(object, id)
+      const a = object.map((item, i) =>
         serialize(item, visitorInfo, [...accessChain, i]),
       )
       return { a, id }
     }
     const id = ++visitorInfo.lastId
-    visitorInfo.visited.set(value, id)
-    const o = Object.keys(value).map((name) => ({
+    visitorInfo.visited.set(object, id)
+    const o = Object.keys(object).map((name) => ({
       k: name,
-      v: serialize((value as Record<string, unknown>)[name], visitorInfo, [
-        ...accessChain,
-        name,
-      ]),
+      v: serialize(object[name], visitorInfo, [...accessChain, name]),
     }))
     return { o, id }
   }

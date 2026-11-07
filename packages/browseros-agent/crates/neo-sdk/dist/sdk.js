@@ -4497,24 +4497,22 @@ function serialize2(value, visitorInfo, accessChain) {
     return { r: { p: value.source, f: value.flags } };
   if (ArrayBuffer.isView(value))
     refuseTypedArray();
-  if (typeof value === "object" && value !== null) {
-    const seen = visitorInfo.visited.get(value);
+  if (typeof value === "object") {
+    const object = value;
+    const seen = visitorInfo.visited.get(object);
     if (seen)
       return { ref: seen };
-    if (Array.isArray(value)) {
+    if (Array.isArray(object)) {
       const id2 = ++visitorInfo.lastId;
-      visitorInfo.visited.set(value, id2);
-      const a = value.map((item, i) => serialize2(item, visitorInfo, [...accessChain, i]));
+      visitorInfo.visited.set(object, id2);
+      const a = object.map((item, i) => serialize2(item, visitorInfo, [...accessChain, i]));
       return { a, id: id2 };
     }
     const id = ++visitorInfo.lastId;
-    visitorInfo.visited.set(value, id);
-    const o = Object.keys(value).map((name) => ({
+    visitorInfo.visited.set(object, id);
+    const o = Object.keys(object).map((name) => ({
       k: name,
-      v: serialize2(value[name], visitorInfo, [
-        ...accessChain,
-        name
-      ])
+      v: serialize2(object[name], visitorInfo, [...accessChain, name])
     }));
     return { o, id };
   }
