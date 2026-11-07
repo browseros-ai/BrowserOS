@@ -27,6 +27,7 @@ import {
   type WaitForURLOptions,
 } from './frame'
 import type { Locator, LocatorOptions } from './locator'
+import type { Response } from './network'
 import { PAGE_CLOSE_KEYS, pickParams } from './protocol'
 import { get } from './runtime-bridge'
 import type { SelectOptionValues } from './select-option'
@@ -151,8 +152,8 @@ export class Page {
     this._timeoutSettings.setDefaultNavigationTimeout(timeout)
   }
 
-  /** Resolves `null`: Neo creates no `Response` objects yet. */
-  async goto(url: string, options: GotoOptions = {}): Promise<null> {
+  /** The navigation's `Response`, or `null` where Playwright's has none. */
+  async goto(url: string, options: GotoOptions = {}): Promise<Response | null> {
     return await this.#mainFrame._goto('page.goto', url, options)
   }
 
@@ -337,5 +338,11 @@ export class Page {
 
   getByRole(role: string, options: ByRoleOptions = {}): Locator {
     return this.mainFrame().getByRole(role, options)
+  }
+
+  /** Playwright's `ChannelOwner.toJSON`: `JSON.stringify(page)`, and a script that returns its
+   * page, give its type and guid only, never this object's internals. */
+  toJSON(): { _type: 'Page'; _guid: string } {
+    return { _type: 'Page', _guid: this.#guid }
   }
 }

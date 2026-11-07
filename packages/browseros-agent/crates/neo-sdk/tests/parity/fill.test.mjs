@@ -24,10 +24,10 @@ test('fill returns undefined and uses ordinary input events', {
       if (voids.length !== 5 || !voids.every(Boolean)) throw new Error('fill must return undefined')
       let invalid = 'resolved'
       try { await page.locator('#text').fill(123) } catch (error) { invalid = errorCategory(error) }
-      if (invalid !== 'error') throw new Error('invalid fill value must reject')
+      if (invalid !== 'Error') throw new Error('invalid fill value must reject')
       let timeout = 'resolved'
       try { await page.locator('#disabled').fill('x', {timeout:500}) } catch (error) { timeout = errorCategory(error) }
-      if (timeout !== 'timeout') throw new Error('disabled fill must time out')
+      if (timeout !== 'TimeoutError') throw new Error('disabled fill must time out')
       return { voids, invalid, timeout }
     `,
     probe: 'window.__facts()',

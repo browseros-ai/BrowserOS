@@ -2,10 +2,10 @@
  * The client half of Playwright's wire inside the realm (Playwright's `client/connection.ts`
  * and `channelOwner.ts` `_wrapApiCall` at 26137face, cut to what a run needs). Every browser
  * call goes through a `Connection` method typed by the interface its guid names (`send` for a
- * `Frame`, `sendPage`, `sendContext`, and `sendNeo` for Neo's own `neo:` frame commands,
- * `neo-commands.ts`): it captures the caller's location synchronously, builds Playwright's
- * `{id, guid, method, params, metadata}`, hands it to `runtime-bridge.ts`, and turns the reply
- * into a value or a Playwright-shaped error.
+ * `Frame`, `sendPage`, `sendContext`, `sendRequest`, `sendResponse`, and `sendNeo` for Neo's own
+ * `neo:` frame commands, `neo-commands.ts`): it captures the caller's location synchronously,
+ * builds Playwright's `{id, guid, method, params, metadata}`, hands it to `runtime-bridge.ts`,
+ * and turns the reply into a value or a Playwright-shaped error.
  *
  * ```text
  *  locator.click() → frame._click('locator.click', …) → send(): location, message
@@ -24,9 +24,12 @@ import type {
   FrameCommands,
   Metadata,
   PageCommands,
+  RequestCommands,
+  ResponseCommands,
 } from '@browseros/neo-runtime-spec/serve'
 import { type PlaywrightError, parseError } from './errors'
 import type { NeoFrameCommands } from './neo-commands'
+import type { Request, Response } from './network'
 import { call } from './runtime-bridge'
 
 /** The public methods that send a browser call, named as Playwright's client names them. */
@@ -86,6 +89,21 @@ export type ApiName =
   | 'frame.waitForURL'
   | 'page.waitForLoadState'
   | 'frame.waitForLoadState'
+  | 'request.response'
+  | 'request.allHeaders'
+  | 'request.headersArray'
+  | 'request.headerValue'
+  | 'request.sizes'
+  | 'response.allHeaders'
+  | 'response.headersArray'
+  | 'response.headerValue'
+  | 'response.headerValues'
+  | 'response.body'
+  | 'response.text'
+  | 'response.json'
+  | 'response.serverAddr'
+  | 'response.securityDetails'
+  | 'response.httpVersion'
 
 /** Playwright's wire error, `{error: {name, message}}`'s inner object. */
 export type WireError = { name: string; message: string }
@@ -117,6 +135,9 @@ const AGENT_FRAME = /^ {4}at .* \(<input>:(\d+):(\d+)\)$/
 export class Connection {
   #nextId = 1
   readonly #lineOffset: number
+  /** Every `Request` and `Response` built so far, by guid, as Playwright's connection keeps its
+   * objects: one guid is always one object (`network.ts` `responseFor`). */
+  readonly _objects = new Map<string, Request | Response>()
 
   /** `lineOffset`: lines the realm's `AsyncFunction` wrapper puts before the agent's line 1. */
   constructor(lineOffset: number) {
@@ -174,6 +195,40 @@ export class Connection {
     )) as Resolved<BrowserContextCommands[M]['result']>
   }
 
+  /** {@link Connection.send} for a `Request` command, to a hop's `request@…` guid. */
+  async sendRequest<M extends keyof RequestCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: RequestCommands[M]['params'],
+    timeout: number,
+  ): Promise<RequestCommands[M]['result']> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as RequestCommands[M]['result']
+  }
+
+  /** {@link Connection.send} for a `Response` command, to a hop's `response@…` guid. */
+  async sendResponse<M extends keyof ResponseCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: ResponseCommands[M]['params'],
+    timeout: number,
+  ): Promise<ResponseCommands[M]['result']> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as ResponseCommands[M]['result']
+  }
+
   /**
    * {@link Connection.send} for one of Neo's own commands on a frame guid (`neo-commands.ts`):
    * not Playwright protocol, but the same message, reply and error rebuild. `timeout` bounds the
@@ -209,6 +264,13 @@ export class Connection {
     params: unknown,
     timeout: number,
   ): Promise<unknown> {
+    // Playwright's server validates every call's metadata (`dispatcher.ts`, `tOptional(tFloat)`):
+    // `setDefaultTimeout(null)` resolves a timeout to `null`, which rejects the call before it
+    // runs. Rust's serde would read it as no timeout and run the call.
+    if (typeof timeout !== 'number')
+      throw new Error(
+        `timeout: expected float, got ${timeout === null ? 'object' : typeof timeout}`,
+      )
     const metadata: Metadata = {
       location: captureLocation(this.#lineOffset),
       timeout,

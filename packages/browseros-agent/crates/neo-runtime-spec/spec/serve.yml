@@ -7,10 +7,9 @@
 # then every type they reference, with Playwright's exact wire shapes.
 #
 # A reference to an interface that is not a key here gets an uninhabited type, so Rust cannot
-# produce one. `Frame.goto` returns `response: Response?`; Neo creates no `Response` objects
-# yet, so its result is always `{}`, which Playwright's client reads as a navigation without a
-# response (`page.goto` resolves to `null`). To serve responses, add `Response: []` (and
-# `Request: []`, which its initializer requires) and regenerate.
+# produce one. `Frame.goto` returns `response: Response?`: the main frame's navigation response,
+# as Playwright's server finds it, or `{}` where Playwright's has none (`page.goto` resolves to
+# `null`). A `Request`'s `serviceWorker: Worker?` stays uninhabited: Neo has no workers.
 interfaces:
   BrowserContext:
     - newPage
@@ -23,6 +22,17 @@ interfaces:
     - close
     - runBeforeUnload
     - bringToFront
+  # The objects behind `goto`'s answer: its request, every redirect hop, and their responses.
+  Request:
+    - response
+    - rawRequestHeaders
+  Response:
+    - body
+    - securityDetails
+    - serverAddr
+    - rawResponseHeaders
+    - httpVersion
+    - sizes
   Frame:
     - goto
     - title

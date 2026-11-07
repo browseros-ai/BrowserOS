@@ -64,6 +64,11 @@ export class BrowserContext {
     this._timeoutSettings.setDefaultNavigationTimeout(timeout)
   }
 
+  /** Playwright's `ChannelOwner.toJSON`: the context's type and guid only. */
+  toJSON(): { _type: 'BrowserContext'; _guid: string } {
+    return { _type: 'BrowserContext', _guid: this.#guid }
+  }
+
   /** `createRun`'s: registers the run's page before the script starts, so the first `pages()`
    * returns it instead of a second object for the same tab. */
   _addRunPage(guid: string, mainFrameGuid: string, url: string): Page {

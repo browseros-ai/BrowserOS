@@ -30,7 +30,7 @@ test('allTextContents returns the textContent of every match, at once', {
       if (JSON.stringify(lists) !== JSON.stringify(expected)) throw new Error('lists: ' + JSON.stringify(lists))
       let invalid = 'resolved'
       try { await page.locator('.fruit >>').allTextContents() } catch (error) { invalid = errorCategory(error) }
-      if (invalid !== 'error') throw new Error('an invalid selector must reject')
+      if (invalid !== 'Error') throw new Error('an invalid selector must reject')
       return { lists, invalid }
     `,
     // The DOM's own textContent, which Playwright's page function returns as is.

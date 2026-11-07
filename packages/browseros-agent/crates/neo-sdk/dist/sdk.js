@@ -18,6 +18,9 @@ class TargetClosedError extends PlaywrightError {
     super(cause || "Target page, context or browser has been closed");
   }
 }
+function targetClosedError() {
+  return new TargetClosedError;
+}
 function isTargetClosedError(error) {
   return error instanceof TargetClosedError;
 }
@@ -104,6 +107,7 @@ function getByRoleSelector(role, options = {}) {
 class Locator {
   _frame;
   _selector;
+  _apiName = "Locator";
   constructor(frame, selector, options) {
     this._frame = frame;
     this._selector = selector;
@@ -310,6 +314,473 @@ function isRegExp(value) {
   return value instanceof RegExp || Object.prototype.toString.call(value) === "[object RegExp]";
 }
 
+// src/runtime-bridge.ts
+function get(guid, field) {
+  return JSON.parse(__neo_runtime.get(JSON.stringify({ guid, field })));
+}
+function call(message) {
+  return __neo_runtime.call(message);
+}
+
+// src/network.ts
+class RawHeaders {
+  #headersArray;
+  #headersMap = new Map;
+  constructor(headers) {
+    this.#headersArray = headers;
+    for (const header of headers) {
+      const name = header.name.toLowerCase();
+      const values = this.#headersMap.get(name);
+      if (values)
+        values.push(header.value);
+      else
+        this.#headersMap.set(name, [header.value]);
+    }
+  }
+  get(name) {
+    const values = this.getAll(name);
+    if (!values.length)
+      return null;
+    return values.join(name.toLowerCase() === "set-cookie" ? `
+` : ", ");
+  }
+  getAll(name) {
+    return [...this.#headersMap.get(name.toLowerCase()) ?? []];
+  }
+  headers() {
+    const result = {};
+    for (const name of this.#headersMap.keys())
+      result[name] = this.get(name) ?? "";
+    return result;
+  }
+  headersArray() {
+    return this.#headersArray;
+  }
+}
+
+class Request {
+  _guid;
+  #initializer;
+  #frame;
+  #connection;
+  #redirectedFrom;
+  _redirectedTo = null;
+  _response = null;
+  #provisionalHeaders;
+  #actualHeadersPromise;
+  #timing = {
+    startTime: 0,
+    domainLookupStart: -1,
+    domainLookupEnd: -1,
+    connectStart: -1,
+    secureConnectionStart: -1,
+    connectEnd: -1,
+    requestStart: -1,
+    responseStart: -1,
+    responseEnd: -1
+  };
+  constructor(guid, initializer, frame, redirectedFrom, connection) {
+    this._guid = guid;
+    this.#initializer = initializer;
+    this.#frame = frame;
+    this.#connection = connection;
+    this.#redirectedFrom = redirectedFrom;
+    if (redirectedFrom)
+      redirectedFrom._redirectedTo = this;
+    this.#provisionalHeaders = new RawHeaders(initializer.headers);
+  }
+  url() {
+    return this.#initializer.url;
+  }
+  resourceType() {
+    return this.#initializer.resourceType;
+  }
+  method() {
+    return this.#initializer.method;
+  }
+  postData() {
+    return this.postDataBuffer()?.toString("utf-8") ?? null;
+  }
+  postDataBuffer() {
+    const data = this.#initializer.postData;
+    return data ? Buffer.fromBinary(data) : null;
+  }
+  postDataJSON() {
+    const postData = this.postData();
+    if (!postData)
+      return null;
+    const contentType = this.headers()["content-type"];
+    if (contentType?.includes("application/x-www-form-urlencoded"))
+      return parseFormBody(postData);
+    try {
+      return JSON.parse(postData);
+    } catch {
+      throw new Error(`POST data is not a valid JSON object: ${postData}`);
+    }
+  }
+  headers() {
+    return this.#provisionalHeaders.headers();
+  }
+  async allHeaders() {
+    return (await this.#actualHeaders("request.allHeaders")).headers();
+  }
+  async headersArray() {
+    return (await this.#actualHeaders("request.headersArray")).headersArray();
+  }
+  async headerValue(name) {
+    return (await this.#actualHeaders("request.headerValue")).get(name);
+  }
+  async response() {
+    return await this.#response("request.response");
+  }
+  existingResponse() {
+    return this._response;
+  }
+  frame() {
+    return this.#frame;
+  }
+  serviceWorker() {
+    return null;
+  }
+  isNavigationRequest() {
+    return this.#initializer.isNavigationRequest;
+  }
+  redirectedFrom() {
+    return this.#redirectedFrom;
+  }
+  redirectedTo() {
+    return this._redirectedTo;
+  }
+  failure() {
+    const errorText = get(this._guid, "failure");
+    return errorText ? { errorText } : null;
+  }
+  timing() {
+    return Object.assign(this.#timing, get(this._guid, "timing"));
+  }
+  async sizes() {
+    const response = await this.#response("request.sizes");
+    if (!response)
+      throw new Error("Unable to fetch sizes for failed request");
+    return await response._sizes("request.sizes");
+  }
+  toJSON() {
+    return { _type: "Request", _guid: this._guid };
+  }
+  async#response(apiName) {
+    const { response } = await this.#connection.sendRequest(apiName, this._guid, "response", {}, 0);
+    return response ? responseFor(this.#connection, response.guid, this.#frame) : null;
+  }
+  #actualHeaders(apiName) {
+    this.#actualHeadersPromise ??= this.#connection.sendRequest(apiName, this._guid, "rawRequestHeaders", {}, 0).then(({ headers }) => new RawHeaders(headers));
+    return this.#actualHeadersPromise;
+  }
+}
+
+class Response {
+  _guid;
+  #initializer;
+  #request;
+  #connection;
+  #provisionalHeaders;
+  #actualHeadersPromise;
+  constructor(guid, initializer, request, connection) {
+    this._guid = guid;
+    this.#initializer = initializer;
+    this.#request = request;
+    this.#connection = connection;
+    this.#provisionalHeaders = new RawHeaders(initializer.headers);
+    request._response = this;
+  }
+  url() {
+    return this.#initializer.url;
+  }
+  ok() {
+    const status = this.#initializer.status;
+    return status === 0 || status >= 200 && status <= 299;
+  }
+  status() {
+    return this.#initializer.status;
+  }
+  statusText() {
+    return this.#initializer.statusText;
+  }
+  fromServiceWorker() {
+    return this.#initializer.fromServiceWorker;
+  }
+  headers() {
+    return this.#provisionalHeaders.headers();
+  }
+  async allHeaders() {
+    return (await this.#actualHeaders("response.allHeaders")).headers();
+  }
+  async headersArray() {
+    return (await this.#actualHeaders("response.headersArray")).headersArray().slice();
+  }
+  async headerValue(name) {
+    return (await this.#actualHeaders("response.headerValue")).get(name);
+  }
+  async headerValues(name) {
+    return (await this.#actualHeaders("response.headerValues")).getAll(name);
+  }
+  async finished() {
+    for (let delay = 0;; delay = Math.min(delay * 2 || 4, 100)) {
+      const state = get(this._guid, "finished");
+      if (state === "finished")
+        return null;
+      if (state === "closed")
+        throw targetClosedError();
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  async body() {
+    return await this.#body("response.body");
+  }
+  async text() {
+    return (await this.#body("response.text")).toString("utf8");
+  }
+  async json() {
+    return JSON.parse((await this.#body("response.json")).toString("utf8"));
+  }
+  request() {
+    return this.#request;
+  }
+  frame() {
+    return this.#request.frame();
+  }
+  async serverAddr() {
+    const { value } = await this.#connection.sendResponse("response.serverAddr", this._guid, "serverAddr", {}, 0);
+    return value || null;
+  }
+  async securityDetails() {
+    const { value } = await this.#connection.sendResponse("response.securityDetails", this._guid, "securityDetails", {}, 0);
+    return value || null;
+  }
+  async httpVersion() {
+    const { value } = await this.#connection.sendResponse("response.httpVersion", this._guid, "httpVersion", {}, 0);
+    return value;
+  }
+  toJSON() {
+    return { _type: "Response", _guid: this._guid };
+  }
+  async _sizes(apiName) {
+    const { sizes } = await this.#connection.sendResponse(apiName, this._guid, "sizes", {}, 0);
+    return sizes;
+  }
+  async#body(apiName) {
+    const { binary } = await this.#connection.sendResponse(apiName, this._guid, "body", {}, 0);
+    return Buffer.fromBinary(binary);
+  }
+  #actualHeaders(apiName) {
+    this.#actualHeadersPromise ??= this.#connection.sendResponse(apiName, this._guid, "rawResponseHeaders", {}, 0).then(({ headers }) => new RawHeaders(headers));
+    return this.#actualHeadersPromise;
+  }
+}
+function responseFor(connection, guid, frame) {
+  const known = connection._objects.get(guid);
+  if (known instanceof Response)
+    return known;
+  const chain = get(guid, "chain");
+  let previous = null;
+  for (const [index, created] of chain.requests.entries()) {
+    let request = connection._objects.get(created.guid);
+    if (!(request instanceof Request)) {
+      request = new Request(created.guid, created.initializer, frame, previous, connection);
+      connection._objects.set(created.guid, request);
+    }
+    const response = chain.responses[index];
+    if (response && !connection._objects.has(response.guid))
+      connection._objects.set(response.guid, new Response(response.guid, response.initializer, request, connection));
+    previous = request;
+  }
+  const built = connection._objects.get(guid);
+  if (!(built instanceof Response))
+    throw new Error(`neo-sdk: Rust's chain for ${guid} has no such response`);
+  return built;
+}
+function parseFormBody(body) {
+  const entries = {};
+  for (const pair of body.split("&")) {
+    if (!pair)
+      continue;
+    const at = pair.indexOf("=");
+    const decode = (text) => decodeURIComponent(text.replace(/\+/g, " "));
+    const name = decode(at < 0 ? pair : pair.slice(0, at));
+    entries[name] = at < 0 ? "" : decode(pair.slice(at + 1));
+  }
+  return entries;
+}
+var BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+var BASE64_INDEX = new Map([...BASE64].map((char, index) => [char, index]));
+
+class Buffer extends Uint8Array {
+  static fromBinary(text) {
+    const clean = text.replace(/=+$/, "");
+    const bytes = new Buffer(Math.floor(clean.length * 3 / 4));
+    let bits = 0;
+    let value = 0;
+    let at = 0;
+    for (const char of clean) {
+      const index = BASE64_INDEX.get(char);
+      if (index === undefined)
+        throw new Error("neo-sdk: invalid base64 from Rust");
+      value = value << 6 | index;
+      bits += 6;
+      if (bits >= 8) {
+        bits -= 8;
+        bytes[at++] = value >> bits & 255;
+      }
+    }
+    return bytes;
+  }
+  toString(...args) {
+    if (args.length === 0)
+      return decodeUtf8(this);
+    const [encoding, start, end] = args;
+    const length = this.length;
+    let from;
+    if (start <= 0)
+      from = 0;
+    else if (start >= length)
+      return "";
+    else
+      from = Math.trunc(start) || 0;
+    const to = end === undefined || end > length ? length : Math.trunc(end) || 0;
+    if (to <= from)
+      return "";
+    const bytes = this.subarray(from, to);
+    if (encoding === undefined)
+      return decodeUtf8(bytes);
+    switch (String(encoding).toLowerCase()) {
+      case "utf8":
+      case "utf-8":
+        return decodeUtf8(bytes);
+      case "ucs2":
+      case "ucs-2":
+      case "utf16le":
+      case "utf-16le":
+        return fromCodeUnits(utf16Units(bytes), (unit) => unit);
+      case "latin1":
+      case "binary":
+        return fromCodeUnits(bytes, (byte) => byte);
+      case "ascii":
+        return fromCodeUnits(bytes, (byte) => byte & 127);
+      case "base64":
+        return encodeBase64(bytes);
+      case "base64url":
+        return encodeBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      case "hex":
+        return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+      default:
+        throw new TypeError(`Unknown encoding: ${encoding}`);
+    }
+  }
+  toJSON() {
+    return { type: "Buffer", data: [...this] };
+  }
+  equals(other) {
+    return this.length === other.length && this.every((byte, i) => byte === other[i]);
+  }
+}
+function utf8Lead(byte) {
+  if (byte >= 194 && byte <= 223)
+    return { needed: 1, codePoint: byte & 31, lower: 128, upper: 191 };
+  if (byte >= 224 && byte <= 239)
+    return {
+      needed: 2,
+      codePoint: byte & 15,
+      lower: byte === 224 ? 160 : 128,
+      upper: byte === 237 ? 159 : 191
+    };
+  if (byte >= 240 && byte <= 244)
+    return {
+      needed: 3,
+      codePoint: byte & 7,
+      lower: byte === 240 ? 144 : 128,
+      upper: byte === 244 ? 143 : 191
+    };
+  return null;
+}
+function decodeUtf8(bytes) {
+  const units = new CodeUnits;
+  let lead = null;
+  for (let i = 0;i < bytes.length; i++) {
+    const byte = bytes[i];
+    if (!lead) {
+      lead = byte <= 127 ? null : utf8Lead(byte);
+      if (byte <= 127)
+        units.push(byte);
+      else if (!lead)
+        units.push(65533);
+      continue;
+    }
+    if (byte < lead.lower || byte > lead.upper) {
+      lead = null;
+      units.push(65533);
+      i--;
+      continue;
+    }
+    lead.codePoint = lead.codePoint << 6 | byte & 63;
+    lead.lower = 128;
+    lead.upper = 191;
+    lead.needed--;
+    if (lead.needed === 0) {
+      units.push(lead.codePoint);
+      lead = null;
+    }
+  }
+  if (lead)
+    units.push(65533);
+  return units.text();
+}
+
+class CodeUnits {
+  #units = [];
+  #out = "";
+  push(codePoint) {
+    if (codePoint > 65535) {
+      const offset = codePoint - 65536;
+      this.#units.push(55296 + (offset >> 10), 56320 + (offset & 1023));
+    } else {
+      this.#units.push(codePoint);
+    }
+    if (this.#units.length >= 4096)
+      this.#flush();
+  }
+  text() {
+    this.#flush();
+    return this.#out;
+  }
+  #flush() {
+    this.#out += String.fromCharCode(...this.#units);
+    this.#units = [];
+  }
+}
+function utf16Units(bytes) {
+  const units = new Uint16Array(bytes.length >> 1);
+  for (let i = 0;i < units.length; i++)
+    units[i] = bytes[2 * i] | bytes[2 * i + 1] << 8;
+  return units;
+}
+function fromCodeUnits(bytes, unit) {
+  let out = "";
+  for (let i = 0;i < bytes.length; i += 4096)
+    out += String.fromCharCode(...[...bytes.subarray(i, i + 4096)].map(unit));
+  return out;
+}
+function encodeBase64(bytes) {
+  let out = "";
+  for (let i = 0;i < bytes.length; i += 3) {
+    const [a = 0, b = 0, c = 0] = [bytes[i], bytes[i + 1], bytes[i + 2]];
+    const triple = a << 16 | b << 8 | c;
+    out += BASE64[triple >> 18 & 63];
+    out += BASE64[triple >> 12 & 63];
+    out += i + 1 < bytes.length ? BASE64[triple >> 6 & 63] : "=";
+    out += i + 2 < bytes.length ? BASE64[triple & 63] : "=";
+  }
+  return out;
+}
+
 // src/protocol.ts
 var FRAME_GOTO_KEYS = ["url", "waitUntil", "referer"];
 var FRAME_TEXT_CONTENT_KEYS = ["selector", "strict"];
@@ -381,6 +852,8 @@ function pickParams(keys, options) {
   const params = {};
   for (const key of keys) {
     const value = options[key];
+    if (value === null)
+      throw new Error(`${key}: expected a value, got null`);
     if (value !== undefined)
       params[key] = value;
   }
@@ -454,12 +927,13 @@ class Frame {
   }
   async _goto(apiName, url, options) {
     const waitUntil = verifyLoadState("waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
-    await this._connection.send(apiName, this._guid, "goto", pickParams(FRAME_GOTO_KEYS, {
+    const result = await this._connection.send(apiName, this._guid, "goto", pickParams(FRAME_GOTO_KEYS, {
       url,
       ...options,
       waitUntil
     }), this._page._timeoutSettings.navigationTimeout(options));
-    return null;
+    const guid = result?.response?.guid;
+    return guid ? responseFor(this._connection, guid, this) : null;
   }
   async waitForURL(url, options = {}) {
     return await this._waitForURL("frame.waitForURL", url, options);
@@ -497,7 +971,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "textContent", pickParams(FRAME_TEXT_CONTENT_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options));
+    }), this._page._timeoutSettings.timeout(options ?? {}));
     return result.value === undefined ? null : result.value;
   }
   async innerText(selector, options = {}) {
@@ -558,7 +1032,7 @@ class Frame {
     await this._connection.send(apiName, this._guid, "click", pickParams(FRAME_CLICK_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options));
+    }), this._page._timeoutSettings.timeout(options ?? {}));
   }
   async fill(selector, value, options = {}) {
     return await this._fill("frame.fill", selector, value, options);
@@ -677,14 +1151,9 @@ class Frame {
   getByRole(role, options = {}) {
     return this.locator(getByRoleSelector(role, options));
   }
-}
-
-// src/runtime-bridge.ts
-function get(guid, field) {
-  return JSON.parse(__neo_runtime.get(JSON.stringify({ guid, field })));
-}
-function call(message) {
-  return __neo_runtime.call(message);
+  toJSON() {
+    return { _type: "Frame", _guid: this._guid };
+  }
 }
 
 // src/timeout-settings.ts
@@ -860,6 +1329,9 @@ class Page {
   getByRole(role, options = {}) {
     return this.mainFrame().getByRole(role, options);
   }
+  toJSON() {
+    return { _type: "Page", _guid: this.#guid };
+  }
 }
 
 // src/browser-context.ts
@@ -885,6 +1357,9 @@ class BrowserContext {
   setDefaultNavigationTimeout(timeout) {
     this._timeoutSettings.setDefaultNavigationTimeout(timeout);
   }
+  toJSON() {
+    return { _type: "BrowserContext", _guid: this.#guid };
+  }
   _addRunPage(guid, mainFrameGuid, url) {
     const page = new Page(guid, mainFrameGuid, url, this, this.#connection);
     this.#pages.set(guid, page);
@@ -907,6 +1382,7 @@ var AGENT_FRAME = /^ {4}at .* \(<input>:(\d+):(\d+)\)$/;
 class Connection {
   #nextId = 1;
   #lineOffset;
+  _objects = new Map;
   constructor(lineOffset) {
     this.#lineOffset = lineOffset;
   }
@@ -919,10 +1395,18 @@ class Connection {
   async sendContext(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
+  async sendRequest(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendResponse(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
   async sendNeo(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
   async#send(apiName, guid, method, params, timeout) {
+    if (typeof timeout !== "number")
+      throw new Error(`timeout: expected float, got ${timeout === null ? "object" : typeof timeout}`);
     const metadata = {
       location: captureLocation(this.#lineOffset),
       timeout

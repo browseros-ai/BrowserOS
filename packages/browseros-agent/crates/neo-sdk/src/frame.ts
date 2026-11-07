@@ -10,16 +10,16 @@
  * `apiName`. Each runs synchronously into `Connection.send`, so the location it captures is the
  * script's call site.
  *
+ * `goto` resolves the navigation's `Response` (`network.ts`), or `null` where Playwright's does:
+ * a same-document change, or a document without a network request (`about:blank`, `data:`).
+ *
  * What differs from Playwright:
- * - `goto` resolves `null` for every navigation, because Neo creates no `Response` objects yet
- *   (Playwright returns `null` only for navigations without one, such as `about:blank` or a
- *   same-document change).
  * - `waitForURL` and `waitForLoadState` are one `neo:` call each, which Rust waits out
  *   (`neo-commands.ts`), where Playwright's client waits on `navigated` and `loadstate` events.
  *   `waitForURL` takes a glob or a `RegExp`, not a predicate function, and neither takes
- *   `networkidle`. A failed navigation does not reject `waitForURL`, which waits on to its timeout
- *   (Neo tracks no network). An unknown `waitUntil` is reported as `waitUntil`, where Playwright
- *   names it `state` when the URL already matches.
+ *   `networkidle`. A failed navigation does not reject `waitForURL`, which waits on to its timeout.
+ *   An unknown `waitUntil` is reported as `waitUntil`, where Playwright names it `state` when the
+ *   URL already matches.
  * - `allTextContents` sends `client/locator.ts` source text; compiled Playwright clients may
  *   format it differently. It reads in Neo's isolated world, so page-defined `textContent`
  *   overrides (prototype patches, custom element classes or per-instance properties) can differ.
@@ -62,6 +62,7 @@ import {
 import type { ApiName, Connection } from './connection'
 import { Locator, type LocatorOptions, testIdAttributeName } from './locator'
 import { serializeUrlMatch } from './neo-commands'
+import { type Response, responseFor } from './network'
 import type { Page } from './page'
 import {
   FRAME_ARIA_SNAPSHOT_KEYS,
@@ -224,22 +225,22 @@ export class Frame {
     return this._page
   }
 
-  /** Resolves `null`: Neo creates no `Response` objects yet. */
-  async goto(url: string, options: GotoOptions = {}): Promise<null> {
+  async goto(url: string, options: GotoOptions = {}): Promise<Response | null> {
     return await this._goto('frame.goto', url, options)
   }
 
-  /** Sends `Frame.goto` under the navigation timeout, `waitUntil` defaulting to `load`. */
+  /** Sends `Frame.goto` under the navigation timeout, `waitUntil` defaulting to `load`, and
+   * resolves the navigation's `Response`, built once per guid. */
   async _goto(
     apiName: ApiName,
     url: string,
     options: GotoOptions,
-  ): Promise<null> {
+  ): Promise<Response | null> {
     const waitUntil = verifyLoadState(
       'waitUntil',
       options.waitUntil === undefined ? 'load' : options.waitUntil,
     )
-    await this._connection.send(
+    const result = await this._connection.send(
       apiName,
       this._guid,
       'goto',
@@ -250,7 +251,8 @@ export class Frame {
       }) as FrameGotoParams,
       this._page._timeoutSettings.navigationTimeout(options),
     )
-    return null
+    const guid = result?.response?.guid
+    return guid ? responseFor(this._connection, guid, this) : null
   }
 
   /**
@@ -395,7 +397,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameTextContentParams,
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options ?? {}),
     )) as FrameTextContentResult
     return result.value === undefined ? null : result.value
   }
@@ -555,7 +557,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameClickParams,
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options ?? {}),
     )
   }
 
@@ -825,5 +827,11 @@ export class Frame {
 
   getByRole(role: string, options: ByRoleOptions = {}): Locator {
     return this.locator(getByRoleSelector(role, options))
+  }
+
+  /** Playwright's `ChannelOwner.toJSON`: the frame's type and guid only, also inside a
+   * serialized locator. */
+  toJSON(): { _type: 'Frame'; _guid: string } {
+    return { _type: 'Frame', _guid: this._guid }
   }
 }

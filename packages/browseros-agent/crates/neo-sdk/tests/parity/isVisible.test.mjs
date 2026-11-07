@@ -41,8 +41,8 @@ test('isVisible returns booleans at once and rejects ambiguous or invalid target
     atOnce: false,
     later: true,
     types: Array(9).fill('boolean'),
-    strict: 'strict',
-    invalid: 'error',
+    strict: 'Error:strict',
+    invalid: 'Error',
   })
   const reads = outcome.calls.filter((c) => c.method === 'isVisible')
   assert.equal(reads.length, 11)
