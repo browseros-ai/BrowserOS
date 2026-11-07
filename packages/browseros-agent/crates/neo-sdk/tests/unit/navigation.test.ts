@@ -7,6 +7,7 @@
 
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { createRun } from '../../src/index'
+import { eventless } from './bridge-stub'
 
 type Sent = {
   id: number
@@ -22,7 +23,7 @@ let results: unknown[] = []
 beforeEach(() => {
   sent = []
   results = []
-  ;(globalThis as Record<string, unknown>).__neo_runtime = {
+  ;(globalThis as Record<string, unknown>).__neo_runtime = eventless({
     get: () => JSON.stringify(null),
     call: async (message: string) => {
       const parsed: Sent = JSON.parse(message)
@@ -32,7 +33,7 @@ beforeEach(() => {
         result === undefined ? { id: parsed.id } : { id: parsed.id, result },
       )
     },
-  }
+  })
 })
 
 function run() {
@@ -225,7 +226,7 @@ describe('ariaSnapshot', () => {
 describe('errors', () => {
   test('a failed read rebuilds the error with its apiName', async () => {
     const { page } = run()
-    ;(globalThis as Record<string, unknown>).__neo_runtime = {
+    ;(globalThis as Record<string, unknown>).__neo_runtime = eventless({
       get: () => 'null',
       call: async (message: string) =>
         JSON.stringify({
@@ -236,7 +237,7 @@ describe('errors', () => {
           // Rust folds the log before it replies (`progress::compress_call_log`).
           log: ["  - waiting for locator('#x')"],
         }),
-    }
+    })
     const error = await page
       .locator('#x')
       .textContent({ timeout: 5 })

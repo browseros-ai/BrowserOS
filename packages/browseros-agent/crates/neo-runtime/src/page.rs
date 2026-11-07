@@ -33,7 +33,9 @@
 //!   frames before, 30 per 500 ms after). The page also sees itself visible and focused while
 //!   attached. A failure is logged and ignored: a foreground tab paints anyway.
 //! - Not `Runtime.enable` (worlds are found by name, `world.rs`) and not `DOM.enable` (quads,
-//!   box models and scrolls by `objectId` need none, probe P2).
+//!   box models and scrolls by `objectId` need none, probe P2). A run that listens to console
+//!   messages or page errors, or reads their history, enables Runtime and Log on its own
+//!   ([`PageSession::enable_runtime`]); the watcher then also feeds `page_events.rs`.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -71,6 +73,7 @@ use crate::click::{
     Arming, Geometry, NotReady, PageError, PressReport, Resolved, Scroll, SelectorFacts,
     StatesCheck, Tab, Verdict,
 };
+use crate::events::{EventHub, Flushes};
 use crate::frame_selector::{self, FrameOwner};
 use crate::frames::{FrameContext, FrameScope, Frames, Host, local_tree};
 use crate::input_devices::{
@@ -81,6 +84,7 @@ use crate::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
 };
 use crate::network::{Lookup, NetworkLog};
+use crate::page_events::PageEvents;
 use crate::progress::InputTicket;
 use crate::progress::PlaywrightError;
 use crate::run::PageId;
@@ -192,6 +196,11 @@ pub(crate) struct PageSession {
     pub(crate) network: Arc<NetworkLog>,
     /// `Network.enable`, sent on this session's first goto and kept for the run.
     network_enabled: OnceCell<()>,
+    /// What the watcher turns into the run's events, and the tab's console history and dialogs.
+    pub(crate) events: PageEvents,
+    /// `Runtime.enable` and `Log.enable`, sent once a run listens to console messages or page
+    /// errors (or reads their history) and kept for the run.
+    runtime_enabled: OnceCell<()>,
 }
 
 /// One call's frame scope over the tab's shared input, navigation and lifetime.
@@ -232,6 +241,9 @@ struct PageUpdates<S> {
     /// Where the child frames' events go; `None` in tests of the main frame alone.
     feeds: Option<Arc<FrameFeeds>>,
     initial_url: S,
+    /// The run's events from this tab, and the hub's flushes; `None` in tests of navigation
+    /// alone.
+    producer: Option<(PageEvents, Flushes)>,
 }
 
 /// What the run's session has reported since `prepare`. Counters only grow, so a caller takes
@@ -483,7 +495,10 @@ impl PageSession {
         tasks: TaskTracker,
         input: Arc<TabInput>,
         closed: CancellationToken,
+        hub: EventHub,
     ) -> Self {
+        let events = PageEvents::new(hub, page.as_str(), session.cdp.clone(), session.id.clone());
+        let child_events = events.clone();
         let world = World::new(
             session.cdp.clone(),
             session.id.clone(),
@@ -497,6 +512,12 @@ impl PageSession {
             Arc::clone(&world),
             tasks.clone(),
         ));
+        // An out-of-process frame's console is this tab's: it turns on when the frame's session
+        // is attached, if the run wants the tab's console by then.
+        frames.on_child_host(Arc::new(move |host| {
+            let events = child_events.clone();
+            Box::pin(async move { events.child_attached(&host).await })
+        }));
         let (state_updates, state) = watch::channel(PageState::default());
         let (navigations, _) = broadcast::channel(4096);
         Self {
@@ -516,6 +537,8 @@ impl PageSession {
             input,
             network: Arc::new(NetworkLog::new(page.as_str().to_string())),
             network_enabled: OnceCell::new(),
+            events,
+            runtime_enabled: OnceCell::new(),
         }
     }
 
@@ -567,6 +590,7 @@ impl PageSession {
                         frames: Some(Arc::clone(&self.frames)),
                         feeds: Some(Arc::clone(&self.frame_feeds)),
                         initial_url,
+                        producer: Some((self.events.clone(), self.events.hub().watcher())),
                     },
                     self.closed.clone(),
                     stop,
@@ -592,6 +616,37 @@ impl PageSession {
             })
             .await
             .map(|_| ())
+    }
+
+    /// `Runtime.enable` and `Log.enable`, once per session and after [`Self::prepare`]: what
+    /// reports console messages and page errors to the watcher (`page_events.rs`). Neo sends
+    /// them only for a run that listens to those events or reads their history.
+    ///
+    /// The enable replays what V8 kept for the tab's live documents before it replies. The hub's
+    /// flush then makes the watcher apply everything that came before the replies, so that
+    /// replay lands in the history before the console log goes live.
+    ///
+    /// # Errors
+    ///
+    /// The CDP error of `Page.enable` or of a setup command here.
+    pub(crate) async fn enable_runtime(&self) -> Result<(), CdpError> {
+        self.prepare().await?;
+        self.runtime_enabled
+            .get_or_try_init(|| async {
+                self.events.console.request(self.session_id());
+                self.send("Runtime.enable", json!({})).await?;
+                self.send("Log.enable", json!({})).await?;
+                self.events.hub().replay_barrier().await;
+                self.events.console.go_live(self.session_id());
+                // The out-of-process frames this run already attached report on their own
+                // sessions; later ones turn on when they attach (`PageEvents::child_attached`).
+                for host in self.frames.child_hosts() {
+                    self.events.enable_child(&host).await;
+                }
+                Ok::<(), CdpError>(())
+            })
+            .await
+            .copied()
     }
 
     pub(crate) async fn send(&self, method: &str, params: Value) -> Result<Value, CdpError> {
@@ -983,7 +1038,22 @@ async fn watch_events(
         frames,
         feeds,
         initial_url,
+        producer,
     } = updates;
+    let (producer, mut flushes) = producer.unzip();
+    let mut watcher = Watcher {
+        cdp,
+        session,
+        main_frame,
+        state,
+        navigations,
+        world,
+        network,
+        frames,
+        feeds,
+        producer,
+        closed,
+    };
     tokio::pin!(initial_url);
     let mut seed_pending = true;
     loop {
@@ -993,11 +1063,29 @@ async fn watch_events(
             biased;
             () = stop.cancelled() => return,
             event = events.recv() => event,
+            // A reply barrier (`events.rs`): every event already in the ring preceded the reply
+            // that asked for it, so apply them all before answering. Selected after the events,
+            // so it never jumps ahead of one that was ready.
+            Some(ack) = next_flush(&mut flushes) => {
+                loop {
+                    let drained = match events.try_recv() {
+                        Ok(event) => Ok(event),
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Lagged(skipped)) => Err(RecvError::Lagged(skipped)),
+                        Err(TryRecvError::Closed) => Err(RecvError::Closed),
+                    };
+                    if !watcher.on(drained) {
+                        return;
+                    }
+                }
+                let _waiter = ack.send(());
+                continue;
+            }
             seed = &mut initial_url, if seed_pending => {
                 seed_pending = false;
                 match seed {
                     Ok(Some(url)) => {
-                        state.send_if_modified(|state| {
+                        watcher.state.send_if_modified(|state| {
                             if state.committed_url.is_some() {
                                 return false;
                             }
@@ -1005,65 +1093,117 @@ async fn watch_events(
                             true
                         });
                     }
-                    Ok(None) => debug!(%session, "initial page URL empty; waiting for a commit"),
-                    Err(error) => debug!(%session, %error, "initial page URL unavailable; waiting for a commit"),
+                    Ok(None) => debug!(session = %watcher.session, "initial page URL empty; waiting for a commit"),
+                    Err(error) => debug!(session = %watcher.session, %error, "initial page URL unavailable; waiting for a commit"),
                 }
                 continue;
             }
         };
+        if !watcher.on(event) {
+            return;
+        }
+    }
+}
+
+/// The hub's next flush for a watcher that has one; never for one that has none.
+async fn next_flush(flushes: &mut Option<Flushes>) -> Option<oneshot::Sender<()>> {
+    match flushes {
+        Some(flushes) => flushes.recv().await,
+        None => future::pending().await,
+    }
+}
+
+/// What [`watch_events`] applies each event to.
+struct Watcher {
+    cdp: CdpClient,
+    session: SessionId,
+    main_frame: String,
+    state: watch::Sender<PageState>,
+    navigations: broadcast::Sender<Navigation>,
+    world: Arc<World>,
+    network: Arc<NetworkLog>,
+    frames: Option<Arc<Frames>>,
+    feeds: Option<Arc<FrameFeeds>>,
+    producer: Option<PageEvents>,
+    closed: CancellationToken,
+}
+
+impl Watcher {
+    /// Applies one event, or the ring's lag or end. Returns `false` once the session is gone.
+    fn on(&mut self, event: Result<CdpEvent, RecvError>) -> bool {
+        let session = &self.session;
         match event {
             Ok(event) => {
                 // Before the Page events that follow it, so a commit never outruns its request.
                 if event.method.starts_with("Network.")
-                    && event.session_id.as_ref() == Some(&session)
+                    && event.session_id.as_ref() == Some(session)
                 {
-                    network.apply(&event.method, &event.params);
+                    self.network.apply(&event.method, &event.params);
                 }
                 if event.method == "Page.frameNavigated"
-                    && event.session_id.as_ref() == Some(&session)
+                    && event.session_id.as_ref() == Some(session)
                     && let Some(frame) = event.params["frame"]["id"].as_str()
-                    && frame != main_frame
-                    && let Some(frames) = &frames
+                    && frame != self.main_frame
+                    && let Some(frames) = &self.frames
                 {
                     frames.committed(frame);
                 }
                 let mut applied = Applied::default();
-                state.send_if_modified(|state| {
-                    applied = apply(state, &event, &session, &main_frame);
+                let world = &self.world;
+                let main_frame = &self.main_frame;
+                self.state.send_if_modified(|state| {
+                    applied = apply(state, &event, session, main_frame);
                     if applied.new_document {
                         // Before notifying readers: no in-flight read may return old-document data.
                         world.document_committed();
                     }
                     applied.changed
                 });
-                if let Some(navigation) = applied.navigation {
-                    let _listeners = navigations.send(navigation);
+                if let Some(navigation) = applied.navigation.clone() {
+                    let _listeners = self.navigations.send(navigation);
                 }
-                if let Some(feeds) = &feeds {
+                if let Some(feeds) = &self.feeds {
                     if applied.new_document {
                         feeds.detach_all();
                     }
-                    feeds.apply(&event, &session, Some(&main_frame));
+                    feeds.apply(&event, session, Some(&self.main_frame));
                 }
-                if let Some(answer) = applied.dialog {
-                    answer_dialog(&cdp, &session, answer);
+                // The run's events from this one, after the page state they may describe. A
+                // dialog a listener owns is the script's to answer.
+                let answer = match &self.producer {
+                    Some(producer) => producer.apply(&event, &applied),
+                    None => applied.dialog,
+                };
+                if let Some(answer) = answer {
+                    answer_dialog(&self.cdp, session, answer);
                 }
                 if applied.closed {
-                    closed.cancel();
-                    return;
+                    if let Some(producer) = &self.producer {
+                        producer.closing(Some(&event));
+                    }
+                    self.closed.cancel();
+                    return false;
                 }
             }
             Err(RecvError::Lagged(skipped)) => {
                 warn!(%session, skipped, "the run's event watcher lagged; answering any dialog");
-                network.lagged();
-                state.send_if_modified(|state| state.pending_url.take().is_some());
-                answer_dialog(&cdp, &session, DialogAnswer::Dismiss);
+                self.network.lagged();
+                self.state
+                    .send_if_modified(|state| state.pending_url.take().is_some());
+                if let Some(producer) = &self.producer {
+                    producer.lagged();
+                }
+                answer_dialog(&self.cdp, session, DialogAnswer::Dismiss);
             }
             Err(RecvError::Closed) => {
-                closed.cancel();
-                return;
+                if let Some(producer) = &self.producer {
+                    producer.closing(None);
+                }
+                self.closed.cancel();
+                return false;
             }
         }
+        true
     }
 }
 
@@ -2722,6 +2862,7 @@ mod tests {
                 frames: None,
                 feeds: None,
                 initial_url,
+                producer: None,
             };
             let watcher = watch_events(
                 receiver,
@@ -2766,6 +2907,7 @@ mod tests {
             TaskTracker::new(),
             Arc::default(),
             CancellationToken::new(),
+            EventHub::default(),
         ));
         let tab = FrameTab {
             page: Arc::clone(&page),
@@ -2818,6 +2960,7 @@ mod tests {
                 frames: None,
                 feeds: None,
                 initial_url,
+                producer: None,
             },
             closed.clone(),
             stop.clone(),

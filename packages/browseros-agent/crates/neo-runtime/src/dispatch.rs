@@ -13,10 +13,13 @@
 //!         ├─ early failure → reply now, no call log (Playwright's dispatcher does the same)
 //!         ├─ admit against the in-flight caps   past them → an early failure too
 //!         └─ run.tasks.spawn(serve)             runs while JS spins, outlives the realm
+//!              ├─ events.ready(page)            what the page's subscriptions switched on
 //!              ├─ click::click(&page, &options, &progress)   prepares the tab first
-//!              └─ entry.finish(…); reply {id} | {id, error:{error:{message,name}}, log}
+//!              ├─ entry.finish(…)
+//!              └─ events.barrier(); reply ({id} | {id, error:{error:{message,name}}, log}, W)
 //!  run end: Dispatcher::finish(reason)
-//!    record the reason → cancel `ended` → wait for the run's tasks (≤ RECORDS_WAIT) → records
+//!    record the reason → cancel `ended` → close the events, answer dialogs left open
+//!    → wait for the run's tasks (≤ RECORDS_WAIT) → records
 //! ```
 //!
 //! Why a task per call and not the realm's scheduler, where `setTimeout` runs: rquickjs polls
@@ -33,11 +36,12 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use futures_util::future;
 use neo_runtime_spec::injected::ReadableElementState;
 use neo_runtime_spec::serve::{
-    BrowserContextCall, FrameAriaSnapshotParams, FrameCall, FrameCheckParams, FrameCheckResult,
-    FrameClickParams, FrameDblclickParams, FrameEvalOnSelectorAllParams, FrameFillParams,
-    FrameFillResult, FrameGetAttributeParams, FrameGotoParams, FrameHoverParams,
+    BrowserContextCall, DialogCall, FrameAriaSnapshotParams, FrameCall, FrameCheckParams,
+    FrameCheckResult, FrameClickParams, FrameDblclickParams, FrameEvalOnSelectorAllParams,
+    FrameFillParams, FrameFillResult, FrameGetAttributeParams, FrameGotoParams, FrameHoverParams,
     FrameInnerHTMLParams, FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult,
     FrameIsCheckedParams, FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult,
     FrameIsEditableParams, FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult,
@@ -55,10 +59,13 @@ use tokio::sync::oneshot;
 use tokio::time;
 use tokio::time::Instant;
 use tokio_util::sync::{CancellationToken, DropGuard};
+use tracing::debug;
 
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::devices::{self, DeviceCall};
+use crate::dialogs;
+use crate::events::EventHub;
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
 use crate::frames::FrameScope;
@@ -66,7 +73,7 @@ use crate::keyboard::KeyboardTab;
 use crate::lists;
 use crate::navigate::{self, GotoOptions};
 use crate::network::{HopId, ObjectKind as NetworkObject};
-use crate::page::FrameTab;
+use crate::page::{DialogAnswer, FrameTab, PageSession};
 use crate::press::{self, PressOptions};
 use crate::progress::{
     CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
@@ -182,24 +189,28 @@ pub(crate) enum BridgeError {
     NoReply,
 }
 
-/// The reply text a call resolves the script's promise with: ready at once for an early
-/// failure, or a oneshot the call's task fills. A dropped sender means the run ended under the
-/// call; nobody sees that error, because the realm is going away too.
+/// The reply text a call resolves the script's promise with, and the event watermark W the SDK
+/// delivers up to before the caller continues (`events.rs`): ready at once for an early failure,
+/// or a oneshot the call's task fills. A dropped sender means the run ended under the call;
+/// nobody sees that error, because the realm is going away too.
 pub(crate) struct PendingReply(PendingInner);
 
+/// A reply's text and its event watermark.
+type Reply = (String, u64);
+
 enum PendingInner {
-    Ready(Option<Result<String, BridgeError>>),
-    Waiting(oneshot::Receiver<String>),
+    Ready(Option<Result<Reply, BridgeError>>),
+    Waiting(oneshot::Receiver<Reply>),
 }
 
 impl PendingReply {
-    fn ready(reply: Result<String, BridgeError>) -> Self {
+    fn ready(reply: Result<Reply, BridgeError>) -> Self {
         Self(PendingInner::Ready(Some(reply)))
     }
 }
 
 impl Future for PendingReply {
-    type Output = Result<String, BridgeError>;
+    type Output = Result<Reply, BridgeError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match &mut self.0 {
@@ -227,6 +238,8 @@ enum ObjectKind {
     Frame,
     /// A hop's `Request` or `Response`, behind `goto`'s answer.
     Network(NetworkObject, HopId),
+    /// A JavaScript dialog the run's `dialog` event handed out, by its index on the tab.
+    Dialog(u64),
     Unknown,
 }
 
@@ -237,6 +250,7 @@ enum ObjectCall {
     Device(DeviceCall),
     Frame(Route),
     Network(NetworkCall),
+    Dialog(u64, DialogCall),
 }
 
 /// What a message asks for. One variant per served (object, method).
@@ -312,6 +326,8 @@ impl Dispatcher {
             ObjectKind::Frame
         } else if let Some((kind, _, hop)) = HopId::parse(&guid) {
             ObjectKind::Network(kind, hop)
+        } else if let Some((_, index)) = dialogs::parse(&guid) {
+            ObjectKind::Dialog(index)
         } else {
             ObjectKind::Page
         };
@@ -341,7 +357,8 @@ impl Dispatcher {
             Err(error) => {
                 entry.finish(error.to_result());
                 inner.trace.finished(&entry);
-                return PendingReply::ready(Ok(encode_reply(&id, Err(&error), None)));
+                let watermark = inner.tabs.events().seq();
+                return PendingReply::ready(Ok((encode_reply(&id, Err(&error), None), watermark)));
             }
         };
         // Close must finish its own acknowledgement after cancelling this page's other
@@ -370,6 +387,7 @@ impl Dispatcher {
                 trace: inner.trace.clone(),
                 id,
                 reply,
+                events: inner.tabs.events().clone(),
             },
         );
         inner.run.tasks.spawn(async move {
@@ -387,6 +405,11 @@ impl Dispatcher {
         let deadline = Instant::now() + RECORDS_WAIT;
         let run = &self.0.run;
         run.end(reason);
+        // The realm is gone with its listeners: from now on the watchers answer dialogs
+        // themselves, and a dialog a listener left open gets the default answer before the
+        // sessions detach (`Dialogs::left_open`).
+        self.0.tabs.events().close();
+        let _answered = time::timeout_at(deadline, answer_left_open(&self.0.tabs)).await;
         let _created = time::timeout_at(deadline, self.0.tabs.finish_creations()).await;
         run.tasks.close();
         let _waited = time::timeout_at(deadline, run.tasks.wait()).await;
@@ -464,6 +487,8 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
                     Ok(ObjectCall::Network(NetworkCall::Response(hop, call))),
                 )
             }),
+        ObjectKind::Dialog(index) => DialogCall::decode(method, params)
+            .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
         ObjectKind::Unknown => {
             return Routed {
                 meta: None,
@@ -587,7 +612,9 @@ struct CallReply {
     entry: Arc<CallEntry>,
     trace: Trace,
     id: Value,
-    reply: oneshot::Sender<String>,
+    reply: oneshot::Sender<Reply>,
+    /// The run's events, whose barrier the reply waits for.
+    events: EventHub,
 }
 
 /// Attachment can block or be cancelled independently of a frame handler. Once attached,
@@ -599,6 +626,18 @@ async fn serve_call(
     progress: Progress,
     reply: CallReply,
 ) {
+    // A page's call waits for what the run's subscriptions switched on there (console messages,
+    // the dialog watcher), so the call cannot cause an event before its producer listens. A
+    // dialog's answer never waits: an open dialog can hold that very enable, and only the answer
+    // frees the page.
+    if let Some((page, _)) = &target
+        && !matches!(route, ObjectCall::Context(_) | ObjectCall::Dialog(..))
+        && reply.events.enabling(page.id.as_str())
+        && let Err(error) = progress.race(reply.events.ready(page.id.as_str())).await
+    {
+        finish_reply(Err(error), reply).await;
+        return;
+    }
     let result = match (route, target) {
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
         (ObjectCall::Page(call), Some((page, _))) => {
@@ -614,16 +653,15 @@ async fn serve_call(
             };
             match session {
                 Ok(page) => {
-                    serve(
-                        FrameTab { page, scope },
-                        route,
-                        progress,
-                        reply.entry,
-                        reply.trace,
-                        reply.id,
-                        reply.reply,
-                    )
-                    .await;
+                    // A page attached just now may have started a context subscription's
+                    // enable; the call waits for that too.
+                    if reply.events.enabling(page_id(&page))
+                        && let Err(error) = progress.race(reply.events.ready(page_id(&page))).await
+                    {
+                        finish_reply(Err(error), reply).await;
+                        return;
+                    }
+                    serve(FrameTab { page, scope }, route, progress, reply).await;
                     return;
                 }
                 Err(error) => Err(error),
@@ -654,36 +692,47 @@ async fn serve_call(
             Some(session) => responses::serve(&session, call, &progress).await,
             None => Err(PlaywrightError::target_closed().into()),
         },
+        // A dialog exists only after its tab's watcher saw it open on this run's session.
+        (ObjectCall::Dialog(index, call), Some((page, _))) => match page.attached_session() {
+            Some(session) => dialogs::serve(&session, index, call, &progress).await,
+            None => Err(PlaywrightError::target_closed().into()),
+        },
         _ => Err(PlaywrightError::target_closed().into()),
     };
-    finish_reply(result, reply);
+    finish_reply(result, reply).await;
+}
+
+fn page_id(page: &PageSession) -> &str {
+    page.events.target()
+}
+
+/// Gives every dialog the run handed to a listener and nobody answered its default answer, and
+/// waits for the browser to take each, so the tab is not left frozen when its session detaches.
+async fn answer_left_open(tabs: &Tabs) {
+    let answers = tabs.attached().into_iter().filter_map(|(_, session)| {
+        let answer = session.events.dialogs.left_open()?;
+        Some(async move {
+            let accept = answer == DialogAnswer::Accept;
+            let answered = session
+                .send("Page.handleJavaScriptDialog", json!({ "accept": accept }))
+                .await;
+            if let Err(error) = answered {
+                debug!(%error, "answering a dialog left open at run end failed");
+            }
+        })
+    });
+    future::join_all(answers).await;
 }
 
 /// One call's task: serves the route, ends the trace entry and sends the reply. A call the run
 /// ended leaves its entry open, so its record reads `Unfinished`, and sends nothing: nobody
 /// waits for it. The task holds the page, so the session stays attached while it runs.
-async fn serve(
-    page: FrameTab,
-    route: Route,
-    progress: Progress,
-    entry: Arc<CallEntry>,
-    trace: Trace,
-    id: Value,
-    reply: oneshot::Sender<String>,
-) {
+async fn serve(page: FrameTab, route: Route, progress: Progress, reply: CallReply) {
     // Navigation and page reads need the real page's navigation/read seams, which the
     // forms tests' fake does not implement, so they are answered here; every other route goes
     // through `serve_route`.
     if let Some(error) = unsupported_child_call(&page.scope, &route) {
-        finish_reply(
-            Err(error.into()),
-            CallReply {
-                entry,
-                trace,
-                id,
-                reply,
-            },
-        );
+        finish_reply(Err(error.into()), reply).await;
         return;
     }
     let result = match route {
@@ -745,15 +794,7 @@ async fn serve(
         | Route::FrameIsEditable(_)) => serve_state(&page, route, &progress).await,
         route => serve_route(&page, route, &progress).await,
     };
-    finish_reply(
-        result,
-        CallReply {
-            entry,
-            trace,
-            id,
-            reply,
-        },
-    );
+    finish_reply(result, reply).await;
 }
 
 /// The state reads `serve` answers on the call's page (`states.rs`): `isVisible` and `isHidden`
@@ -819,12 +860,15 @@ fn unsupported_child_call(scope: &FrameScope, route: &Route) -> Option<Playwrigh
     )))
 }
 
-fn finish_reply(result: Result<Option<Value>, CallError>, target: CallReply) {
+/// Ends the call's trace entry, then replies once every event that preceded the reply has
+/// reached the queue (`EventHub::barrier`), with the watermark the SDK delivers up to.
+async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallReply) {
     let CallReply {
         entry,
         trace,
         id,
         reply,
+        events,
     } = target;
     let (record, answer) = match result {
         Err(CallError::RunEnded(_)) => return,
@@ -834,9 +878,11 @@ fn finish_reply(result: Result<Option<Value>, CallError>, target: CallReply) {
     let log = entry.finish(record);
     trace.finished(&entry);
     let answer = answer.as_ref().map(Option::as_ref);
+    let text = encode_reply(&id, answer, Some(&log));
+    events.barrier().await;
     // The script may have stopped waiting (the realm is gone); the record already holds the
     // outcome.
-    let _sent = reply.send(encode_reply(&id, answer, Some(&log)));
+    let _sent = reply.send((text, events.seq()));
 }
 
 /// The typed handler dispatch, also used by the skeleton's tests with click's existing fake.
@@ -1080,6 +1126,7 @@ mod tests {
                 trace: trace.clone(),
                 id: json!(1),
                 reply,
+                events: EventHub::default(),
             },
         );
         run.end(RunEnd::Settled);
@@ -1158,7 +1205,8 @@ mod tests {
             ObjectCall::Context(_)
             | ObjectCall::Page(_)
             | ObjectCall::Device(_)
-            | ObjectCall::Network(_) => {
+            | ObjectCall::Network(_)
+            | ObjectCall::Dialog(..) => {
                 panic!("a Frame message routed to another object")
             }
         })

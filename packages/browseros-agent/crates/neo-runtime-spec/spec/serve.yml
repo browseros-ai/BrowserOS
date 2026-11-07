@@ -34,6 +34,16 @@ interfaces:
     - mouseClick
     - mouseWheel
     - touchscreenTap
+    # The page's console and page-error history (`page.consoleMessages()`, `page.pageErrors()`).
+    # A message's `args` are JSHandles, which are not a key here, so they always travel empty.
+    - consoleMessages
+    - pageErrors
+    - clearConsoleMessages
+    - clearPageErrors
+  # A JavaScript dialog the run's `dialog` event handed out.
+  Dialog:
+    - accept
+    - dismiss
   # The objects behind `goto`'s answer: its request, every redirect hop, and their responses.
   Request:
     - response
