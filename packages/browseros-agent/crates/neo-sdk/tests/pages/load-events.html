@@ -1,0 +1,11 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>load events</title></head><body>
+<!-- loadEvents.test.mjs serves this page at every query. #next links to its next document
+     (?next), #section to a place in this one (a same-document navigation), and #navigate-frame
+     moves its iframe, #child, to the next document; every child document is the fixture
+     server's page titled with its path: /child-1, /child-2, ... -->
+<a id="next" href="?next">Next</a>
+<a id="section" href="#section">Section</a>
+<button type="button" id="navigate-frame" onclick="const child = document.getElementById('child'); child.src = `/child-${Number(child.src.split('-').pop()) + 1}`">Navigate frame</button>
+<iframe id="child" name="child" title="Child" src="/child-1"></iframe>
+<p id="section">Section</p>
+</body></html>

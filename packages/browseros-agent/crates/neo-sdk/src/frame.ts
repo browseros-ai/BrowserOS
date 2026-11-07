@@ -344,6 +344,13 @@ export type SelectTextOptions = { force?: boolean; timeout?: number }
 /** The options of the `Locator` methods Playwright serves through an `ElementHandle`. */
 export type ElementTimeoutOptions = { timeout?: number }
 
+/** What a frame event says of its frame (`Frame._during`). */
+export interface FrameEventState {
+  url: string
+  name: string
+  detached: boolean
+}
+
 export class Frame {
   /** The opaque guid neo-runtime routes this frame's browser calls by. */
   readonly _guid: string
@@ -351,6 +358,8 @@ export class Frame {
   readonly _connection: Connection
   #lastUrl: string
   #lastName: string
+  /** While the listeners of an event about this frame run, what the event says of it. */
+  #during: FrameEventState | undefined
 
   constructor(
     guid: string,
@@ -377,13 +386,30 @@ export class Frame {
     return this._page
   }
 
+  /**
+   * Runs `emit`, the listeners of an event about this frame, with the frame answering `url()`,
+   * `name()` and `isDetached()` as the event describes it: what Playwright's client frame
+   * answers then, its state updated event by event. A listener's reads after an `await` are live.
+   */
+  _during(state: FrameEventState, emit: () => void): void {
+    const outer = this.#during
+    this.#during = state
+    try {
+      emit()
+    } finally {
+      this.#during = outer
+    }
+  }
+
   url(): string {
+    if (this.#during) return this.#during.url
     const url = get(this._guid, 'url')
     if (url !== null) this.#lastUrl = url
     return this.#lastUrl
   }
 
   name(): string {
+    if (this.#during) return this.#during.name
     const name = get(this._guid, 'name')
     if (name !== null) this.#lastName = name
     return this.#lastName
@@ -401,6 +427,7 @@ export class Frame {
   }
 
   isDetached(): boolean {
+    if (this.#during) return this.#during.detached
     return get(this._guid, 'isDetached')
   }
 

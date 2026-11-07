@@ -686,6 +686,7 @@ fn answer(
             (json!({"result":{}}), now)
         }
         "Browser.getVersion"
+        | "Target.setDiscoverTargets"
         | "Page.close"
         | "Page.enable"
         | "Network.enable"

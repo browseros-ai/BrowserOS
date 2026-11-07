@@ -3,10 +3,12 @@
 // the message the click logs, on the page and on the context, and takes its listener away; a
 // predicate (a function, `options.predicate`, or an async function) skips the events it
 // rejects; and a wait rejects by kind on its own timeout, on the default timeout, when its
-// predicate throws, and when its page closes, while a wait for 'close' gets the page itself.
+// predicate throws, and when its page closes, while a wait for 'close' gets the page itself; a
+// null signal is no signal, and any other is refused before the wait listens (Neo only).
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs, events.mjs).
 
+import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { compareEvents, fixture } from './events.mjs'
 import { skip } from './harness.mjs'
@@ -113,6 +115,33 @@ const cases = [
     },
     probe: 'window.__logged',
     effect: 3,
+  },
+  {
+    // client/waiter.ts `Waiter.rejectOnTimeout` (`if (signal) {`): a null signal is no signal,
+    // on the page and on the context.
+    name: 'a null signal is no signal',
+    path: '/console.html',
+    source: `const [fromPage] = await Promise.all([page.waitForEvent('console', { signal: null }), page.click('#log')])
+    const [fromContext] = await Promise.all([page.context().waitForEvent('console', { signal: null, timeout: 5000 }), page.click('#log')])
+    return [fromPage.text(), fromContext.text()]`,
+    expected: ['click 1', 'click 2'],
+    probe: 'window.__logged',
+    effect: 4,
+  },
+  {
+    // Neo only: Playwright takes an AbortSignal, which QuickJS has none of. Any other signal is
+    // refused before the wait listens, on the page and on the context (waiter.ts refuseSignal).
+    name: 'a signal is refused before the wait listens',
+    path: '/console.html',
+    source: `const page_ = await settle(page.waitForEvent('console', { signal: {} }))
+    const context_ = await settle(page.context().waitForEvent('page', { signal: {} }))
+    return { page_, context_, listeners: page.listenerCount('console') + page.context().listenerCount('page') }`,
+    neo: (outcome) =>
+      assert.deepEqual(outcome.value, {
+        page_: { error: 'Error' },
+        context_: { error: 'Error' },
+        listeners: 0,
+      }),
   },
 ]
 
