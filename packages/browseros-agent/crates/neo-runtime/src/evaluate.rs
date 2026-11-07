@@ -40,7 +40,7 @@ use neo_runtime_spec::injected::{
     InjectedSelectorElementParams,
 };
 use neo_runtime_spec::{Element, Handle, HandleId, MethodFlag, MethodGroup, MethodMeta};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use tokio::time;
 
@@ -269,11 +269,11 @@ struct WaitForFunctionParams {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AddScriptTagParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "given")]
     url: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "given")]
     content: Option<String>,
-    #[serde(default, rename = "type")]
+    #[serde(default, rename = "type", deserialize_with = "given")]
     kind: Option<String>,
 }
 
@@ -281,10 +281,17 @@ struct AddScriptTagParams {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AddStyleTagParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "given")]
     url: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "given")]
     content: Option<String>,
+}
+
+/// Neo: an optional string field that is absent (`None`, by `#[serde(default)]`) or a string:
+/// `null` is refused before any effect, as Playwright's validator refuses it (`tOptional` lets
+/// only `undefined` through), where a plain `Option` would read it as absent.
+fn given<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
 }
 
 /// `ElementHandle.dispatchEvent`'s params.
@@ -2748,6 +2755,24 @@ mod tests {
         let (_, call) = route_frame("querySelector", Some(&json!({"selector": "#a", "x": 1})))
             .expect("a frame query");
         assert!(call.is_err(), "unknown params are refused");
+    }
+
+    #[test]
+    fn a_tags_null_field_is_refused_where_an_absent_one_is_none() {
+        for (method, params) in [
+            ("addScriptTag", json!({"url": null, "content": "x"})),
+            ("addScriptTag", json!({"content": null, "url": "data:,"})),
+            ("addScriptTag", json!({"content": "x", "type": null})),
+            ("addStyleTag", json!({"url": null, "content": "x"})),
+            ("addStyleTag", json!({"content": null, "url": "data:,"})),
+        ] {
+            let (_, call) = route_frame(method, Some(&params)).expect("a tag");
+            assert!(call.is_err(), "{method} {params}: null is refused");
+        }
+        for method in ["addScriptTag", "addStyleTag"] {
+            let (_, call) = route_frame(method, Some(&json!({"content": "x"}))).expect("a tag");
+            assert!(call.is_ok(), "{method}: absent fields are none");
+        }
     }
 
     #[test]

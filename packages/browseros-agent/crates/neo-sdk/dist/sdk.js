@@ -1818,6 +1818,10 @@ function convertSelectOptionValues(values) {
 }
 
 // src/frame.ts
+var TAG_KEYS = {
+  script: ["url", "content", "type"],
+  style: ["url", "content"]
+};
 var LIFECYCLE_EVENTS = new Set([
   "load",
   "domcontentloaded",
@@ -2013,13 +2017,14 @@ class Frame {
   async _addTag(apiName, method, options) {
     if (options.path)
       throw new Error(`${apiName}: path: this run has no artifact directory, so Neo cannot read "${options.path}"`);
-    const params = {};
-    if (options.url !== undefined)
-      params.url = options.url;
-    if (options.content !== undefined)
-      params.content = options.content;
-    if (method === "addScriptTag" && options.type !== undefined)
-      params.type = options.type;
+    let params;
+    try {
+      params = pickParams(method === "addScriptTag" ? TAG_KEYS.script : TAG_KEYS.style, options);
+    } catch (error) {
+      if (error instanceof Error)
+        error.message = `${apiName}: ${error.message}`;
+      throw error;
+    }
     const result = await this._connection.sendEval(apiName, this._guid, method, params, 0);
     const handle = ElementHandle.fromNullable(this._connection, result.element);
     if (!handle)

@@ -30,6 +30,13 @@
 /** Playwright's `addScriptTag` / `addStyleTag` options. */
 export type TagOptions = { url?: string; path?: string; content?: string }
 
+/** The tags' protocol fields, in Playwright's schema order (`protocol.yml` `Frame.addScriptTag`,
+ * `Frame.addStyleTag`). */
+const TAG_KEYS = {
+  script: ['url', 'content', 'type'],
+  style: ['url', 'content'],
+} as const
+
 export type WaitForFunctionOptions = {
   polling?: number | 'raf'
   timeout?: number
@@ -696,11 +703,19 @@ export class Frame {
       throw new Error(
         `${apiName}: path: this run has no artifact directory, so Neo cannot read "${options.path}"`,
       )
-    const params: { url?: string; content?: string; type?: string } = {}
-    if (options.url !== undefined) params.url = options.url
-    if (options.content !== undefined) params.content = options.content
-    if (method === 'addScriptTag' && options.type !== undefined)
-      params.type = options.type
+    // Playwright's validator refuses a `null` field (`tOptional(tString)`) inside the call, so
+    // its message names the call; `path` and a style's `type` are no protocol field, so it
+    // drops them.
+    let params: { url?: string; content?: string; type?: string }
+    try {
+      params = pickParams(
+        method === 'addScriptTag' ? TAG_KEYS.script : TAG_KEYS.style,
+        options,
+      ) as typeof params
+    } catch (error) {
+      if (error instanceof Error) error.message = `${apiName}: ${error.message}`
+      throw error
+    }
     const result = await this._connection.sendEval(
       apiName,
       this._guid,
