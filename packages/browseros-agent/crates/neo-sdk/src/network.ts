@@ -17,7 +17,8 @@
  *
  * What differs from Playwright:
  * - `body()` resolves a `Uint8Array` subclass named `Buffer` with Node's `toString(encoding)`,
- *   `toJSON()` and `equals()`; QuickJS has no `Buffer`, and the SDK defines no globals.
+ *   `toJSON()` and `equals()` (`buffer.ts`); QuickJS has no `Buffer`, and the SDK defines no
+ *   globals.
  * - `finished()` polls Rust's record (every few to 100 ms) instead of waiting for an event.
  * - `serviceWorker()` is always `null`: Neo records no worker's requests.
  */
@@ -31,6 +32,7 @@ import type {
   ResponseInitializer,
   SecurityDetails,
 } from '@browseros/neo-runtime-spec/serve'
+import { Buffer } from './buffer'
 import type { ApiName, Connection } from './connection'
 import { targetClosedError } from './errors'
 import type { Frame } from './frame'
@@ -54,6 +56,23 @@ export type CreatedChain = {
 }
 
 /** Playwright's `RawHeaders` (`client/network.ts`). */
+/** Playwright's `FallbackOverrides` (`client/network.ts`): what a route's `fallback()` or
+ * `continue()` may change. */
+export type FallbackOverrides = {
+  url?: string
+  method?: string
+  headers?: Headers
+  postData?: unknown
+}
+
+/** Playwright's `SerializedFallbackOverrides`. */
+export type SerializedFallbackOverrides = {
+  url?: string
+  method?: string
+  headers?: Headers
+  postDataBuffer?: Buffer
+}
+
 export class RawHeaders {
   readonly #headersArray: NameValue[]
   readonly #headersMap = new Map<string, string[]>()
@@ -66,6 +85,16 @@ export class RawHeaders {
       if (values) values.push(header.value)
       else this.#headersMap.set(name, [header.value])
     }
+  }
+
+  /** Playwright's `RawHeaders._fromHeadersObjectLossy`: an object's headers, `undefined` values
+   * left out. */
+  static _fromHeadersObjectLossy(headers: Headers): RawHeaders {
+    return new RawHeaders(
+      Object.entries(headers)
+        .filter(([, value]) => value !== undefined)
+        .map(([name, value]) => ({ name, value })),
+    )
   }
 
   get(name: string): string | null {
@@ -100,6 +129,9 @@ export class Request {
   _response: Response | null = null
   readonly #provisionalHeaders: RawHeaders
   #actualHeadersPromise: Promise<RawHeaders> | undefined
+  /** Playwright's `_fallbackOverrides`: what a route's `fallback()` and `continue()` changed,
+   * which this request then reports and the final continue sends. */
+  readonly #fallbackOverrides: SerializedFallbackOverrides = {}
   /** Playwright's `_timing`: one object, refreshed from Rust on every `timing()` read. */
   readonly #timing: Timing = {
     startTime: 0,
@@ -130,7 +162,7 @@ export class Request {
   }
 
   url(): string {
-    return this.#initializer.url
+    return this.#fallbackOverrides.url || this.#initializer.url
   }
 
   resourceType(): string {
@@ -138,7 +170,7 @@ export class Request {
   }
 
   method(): string {
-    return this.#initializer.method
+    return this.#fallbackOverrides.method || this.#initializer.method
   }
 
   postData(): string | null {
@@ -146,6 +178,8 @@ export class Request {
   }
 
   postDataBuffer(): Buffer | null {
+    if (this.#fallbackOverrides.postDataBuffer)
+      return this.#fallbackOverrides.postDataBuffer
     const data = this.#initializer.postData
     return data ? Buffer.fromBinary(data) : null
   }
@@ -163,9 +197,37 @@ export class Request {
     }
   }
 
-  /** The provisional headers, as Playwright's deprecated `headers()`. */
+  /** The provisional headers, as Playwright's deprecated `headers()`; a route's header
+   * overrides once it gave some. */
   headers(): Headers {
+    if (this.#fallbackOverrides.headers)
+      return RawHeaders._fromHeadersObjectLossy(
+        this.#fallbackOverrides.headers,
+      ).headers()
     return this.#provisionalHeaders.headers()
+  }
+
+  /** Playwright's `Request._applyFallbackOverrides`: a route's overrides, kept for the final
+   * continue; headers replace the whole set. */
+  _applyFallbackOverrides(overrides: FallbackOverrides): void {
+    if (overrides.url) this.#fallbackOverrides.url = overrides.url
+    if (overrides.method) this.#fallbackOverrides.method = overrides.method
+    if (overrides.headers) this.#fallbackOverrides.headers = overrides.headers
+    if (typeof overrides.postData === 'string')
+      this.#fallbackOverrides.postDataBuffer = encodeUtf8(overrides.postData)
+    else if (overrides.postData instanceof Uint8Array) {
+      const bytes = new Buffer(overrides.postData.length)
+      bytes.set(overrides.postData)
+      this.#fallbackOverrides.postDataBuffer = bytes
+    } else if (overrides.postData)
+      this.#fallbackOverrides.postDataBuffer = encodeUtf8(
+        JSON.stringify(overrides.postData),
+      )
+  }
+
+  /** Playwright's `Request._fallbackOverridesForContinue`. */
+  _fallbackOverridesForContinue(): SerializedFallbackOverrides {
+    return this.#fallbackOverrides
   }
 
   async allHeaders(): Promise<Headers> {
@@ -255,7 +317,13 @@ export class Request {
       : null
   }
 
+  /** Playwright's `Request._actualHeaders`: a route's header overrides once it gave some, else
+   * the headers the browser sent. */
   #actualHeaders(apiName: ApiName): Promise<RawHeaders> {
+    if (this.#fallbackOverrides.headers)
+      return Promise.resolve(
+        RawHeaders._fromHeadersObjectLossy(this.#fallbackOverrides.headers),
+      )
     this.#actualHeadersPromise ??= this.#connection
       .sendRequest(apiName, this._guid, 'rawRequestHeaders', {}, 0)
       .then(({ headers }) => new RawHeaders(headers))
@@ -550,209 +618,36 @@ function parseFormBody(body: string): Record<string, string> {
   return entries
 }
 
-const BASE64 =
-  'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-const BASE64_INDEX = new Map([...BASE64].map((char, index) => [char, index]))
-
-/**
- * The part of Node's `Buffer` a body needs: a `Uint8Array` whose `toString` decodes as Node's
- * does (UTF-8 by default), whose JSON is Node's `{ type: 'Buffer', data }`, and `equals`.
- */
-export class Buffer extends Uint8Array {
-  /** The bytes of the wire's `binary`, a base64 string. Not `Uint8Array.fromBase64`, which
-   * QuickJS lacks. */
-  static fromBinary(text: string): Buffer {
-    const clean = text.replace(/=+$/, '')
-    const bytes = new Buffer(Math.floor((clean.length * 3) / 4))
-    let bits = 0
-    let value = 0
-    let at = 0
-    for (const char of clean) {
-      const index = BASE64_INDEX.get(char)
-      if (index === undefined)
-        throw new Error('neo-sdk: invalid base64 from Rust')
-      value = (value << 6) | index
-      bits += 6
-      if (bits >= 8) {
-        bits -= 8
-        bytes[at++] = (value >> bits) & 0xff
-      }
-    }
-    return bytes
+/** Neo: `Buffer.from(text, 'utf-8')`, which QuickJS lacks; a lone surrogate becomes U+FFFD,
+ * as Node's encoder makes it. */
+export function encodeUtf8(text: string): Buffer {
+  const bytes: number[] = []
+  for (let index = 0; index < text.length; index++) {
+    let code = text.charCodeAt(index)
+    if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length) {
+      const next = text.charCodeAt(index + 1)
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        code = 0x10000 + ((code - 0xd800) << 10) + (next - 0xdc00)
+        index++
+      } else code = 0xfffd
+    } else if (code >= 0xd800 && code <= 0xdfff) code = 0xfffd
+    if (code < 0x80) bytes.push(code)
+    else if (code < 0x800) bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f))
+    else if (code < 0x10000)
+      bytes.push(
+        0xe0 | (code >> 12),
+        0x80 | ((code >> 6) & 0x3f),
+        0x80 | (code & 0x3f),
+      )
+    else
+      bytes.push(
+        0xf0 | (code >> 18),
+        0x80 | ((code >> 12) & 0x3f),
+        0x80 | ((code >> 6) & 0x3f),
+        0x80 | (code & 0x3f),
+      )
   }
-
-  /**
-   * Node's `Buffer.prototype.toString` (`lib/buffer.js`): with no argument the whole buffer as
-   * UTF-8. Otherwise the range is clamped and truncated first, so an empty range is `''` whatever
-   * the encoding; then the encoding is read case-insensitively, an unknown one a `TypeError`.
-   */
-  override toString(
-    ...args: [encoding?: string | null, start?: number, end?: number]
-  ): string {
-    if (args.length === 0) return decodeUtf8(this)
-    const [encoding, start, end] = args
-    const length = this.length
-    let from: number
-    if ((start as number) <= 0) from = 0
-    else if ((start as number) >= length) return ''
-    else from = Math.trunc(start as number) || 0
-    const to = end === undefined || end > length ? length : Math.trunc(end) || 0
-    if (to <= from) return ''
-    const bytes = this.subarray(from, to)
-    if (encoding === undefined) return decodeUtf8(bytes)
-    switch (String(encoding).toLowerCase()) {
-      case 'utf8':
-      case 'utf-8':
-        return decodeUtf8(bytes)
-      case 'ucs2':
-      case 'ucs-2':
-      case 'utf16le':
-      case 'utf-16le':
-        return fromCodeUnits(utf16Units(bytes), (unit) => unit)
-      case 'latin1':
-      case 'binary':
-        return fromCodeUnits(bytes, (byte) => byte)
-      case 'ascii':
-        return fromCodeUnits(bytes, (byte) => byte & 0x7f)
-      case 'base64':
-        return encodeBase64(bytes)
-      case 'base64url':
-        return encodeBase64(bytes)
-          .replace(/\+/g, '-')
-          .replace(/\//g, '_')
-          .replace(/=+$/, '')
-      case 'hex':
-        return [...bytes]
-          .map((byte) => byte.toString(16).padStart(2, '0'))
-          .join('')
-      default:
-        throw new TypeError(`Unknown encoding: ${encoding}`)
-    }
-  }
-
-  toJSON(): { type: 'Buffer'; data: number[] } {
-    return { type: 'Buffer', data: [...this] }
-  }
-
-  equals(other: Uint8Array): boolean {
-    return (
-      this.length === other.length && this.every((byte, i) => byte === other[i])
-    )
-  }
-}
-
-/** A UTF-8 lead byte's sequence: continuation bytes still needed, its payload bits, and the
- * range its first continuation byte must fall in (the WHATWG decoder's bounds). */
-type Lead = { needed: number; codePoint: number; lower: number; upper: number }
-
-function utf8Lead(byte: number): Lead | null {
-  if (byte >= 0xc2 && byte <= 0xdf)
-    return { needed: 1, codePoint: byte & 0x1f, lower: 0x80, upper: 0xbf }
-  if (byte >= 0xe0 && byte <= 0xef)
-    return {
-      needed: 2,
-      codePoint: byte & 0xf,
-      lower: byte === 0xe0 ? 0xa0 : 0x80,
-      upper: byte === 0xed ? 0x9f : 0xbf,
-    }
-  if (byte >= 0xf0 && byte <= 0xf4)
-    return {
-      needed: 3,
-      codePoint: byte & 0x7,
-      lower: byte === 0xf0 ? 0x90 : 0x80,
-      upper: byte === 0xf4 ? 0x8f : 0xbf,
-    }
-  return null
-}
-
-/**
- * The WHATWG UTF-8 decoder, which Node's `buffer.toString('utf8')` follows: each maximal
- * invalid subsequence becomes one U+FFFD. QuickJS has no `TextDecoder`.
- */
-export function decodeUtf8(bytes: Uint8Array): string {
-  const units = new CodeUnits()
-  let lead: Lead | null = null
-  for (let i = 0; i < bytes.length; i++) {
-    const byte = bytes[i] as number
-    if (!lead) {
-      lead = byte <= 0x7f ? null : utf8Lead(byte)
-      if (byte <= 0x7f) units.push(byte)
-      else if (!lead) units.push(0xfffd)
-      continue
-    }
-    if (byte < lead.lower || byte > lead.upper) {
-      // The sequence ends here; this byte starts over.
-      lead = null
-      units.push(0xfffd)
-      i--
-      continue
-    }
-    lead.codePoint = (lead.codePoint << 6) | (byte & 0x3f)
-    lead.lower = 0x80
-    lead.upper = 0xbf
-    lead.needed--
-    if (lead.needed === 0) {
-      units.push(lead.codePoint)
-      lead = null
-    }
-  }
-  if (lead) units.push(0xfffd)
-  return units.text()
-}
-
-/** UTF-16 code units collected in chunks, so a long body never spreads one huge array. */
-class CodeUnits {
-  #units: number[] = []
-  #out = ''
-
-  push(codePoint: number): void {
-    if (codePoint > 0xffff) {
-      const offset = codePoint - 0x10000
-      this.#units.push(0xd800 + (offset >> 10), 0xdc00 + (offset & 0x3ff))
-    } else {
-      this.#units.push(codePoint)
-    }
-    if (this.#units.length >= 4096) this.#flush()
-  }
-
-  text(): string {
-    this.#flush()
-    return this.#out
-  }
-
-  #flush(): void {
-    this.#out += String.fromCharCode(...this.#units)
-    this.#units = []
-  }
-}
-
-/** Little-endian 16-bit code units; an odd last byte is dropped, as Node drops it. */
-function utf16Units(bytes: Uint8Array): Uint16Array {
-  const units = new Uint16Array(bytes.length >> 1)
-  for (let i = 0; i < units.length; i++)
-    units[i] = (bytes[2 * i] as number) | ((bytes[2 * i + 1] as number) << 8)
-  return units
-}
-
-function fromCodeUnits(
-  bytes: Uint8Array | Uint16Array,
-  unit: (byte: number) => number,
-): string {
-  let out = ''
-  for (let i = 0; i < bytes.length; i += 4096)
-    out += String.fromCharCode(...[...bytes.subarray(i, i + 4096)].map(unit))
-  return out
-}
-
-function encodeBase64(bytes: Uint8Array): string {
-  let out = ''
-  for (let i = 0; i < bytes.length; i += 3) {
-    const [a = 0, b = 0, c = 0] = [bytes[i], bytes[i + 1], bytes[i + 2]]
-    const triple = (a << 16) | (b << 8) | c
-    out += BASE64[(triple >> 18) & 63]
-    out += BASE64[(triple >> 12) & 63]
-    out += i + 1 < bytes.length ? BASE64[(triple >> 6) & 63] : '='
-    out += i + 2 < bytes.length ? BASE64[triple & 63] : '='
-  }
-  return out
+  const buffer = new Buffer(bytes.length)
+  buffer.set(bytes)
+  return buffer
 }

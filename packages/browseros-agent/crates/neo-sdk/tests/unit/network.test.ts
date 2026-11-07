@@ -6,8 +6,8 @@
  */
 
 import { beforeEach, describe, expect, test } from 'bun:test'
+import { Buffer as BodyBuffer, decodeUtf8 } from '../../src/buffer'
 import { createRun } from '../../src/index'
-import { Buffer as BodyBuffer, decodeUtf8 } from '../../src/network'
 import { eventless } from './bridge-stub'
 
 type Sent = { guid: string; method: string; params: unknown; timeout: number }

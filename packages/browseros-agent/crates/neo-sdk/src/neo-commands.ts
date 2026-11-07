@@ -43,11 +43,31 @@
 
 import type {
   LifecycleEvent,
+  PageScreenshotParams,
   ResponseChannel,
 } from '@browseros/neo-runtime-spec/serve'
 import { isString } from '../vendor/playwright/isomorphic/stringUtils'
 import type { ApiName } from './connection'
 import type { CreatedHandle } from './js-handle'
+
+/** `neo:fetch` on a route's guid: `route.fetch`'s overrides, as Rust reads them (neo-runtime
+ * `routes.rs`). `postData` is base64. */
+export type NeoRouteFetchParams = {
+  url?: string
+  method?: string
+  headers?: { name: string; value: string }[]
+  postData?: string
+  maxRedirects?: number
+}
+
+/** `neo:fetch`'s answer: the fetched response, its body base64. */
+export type NeoRouteFetchResult = {
+  url: string
+  status: number
+  statusText: string
+  headers: { name: string; value: string }[]
+  body: string
+}
 
 /** Playwright's `SerializedURLMatch` (`isomorphic/urlMatch.ts`) without `urlPattern`. A glob of
  * `''` matches every URL. */
@@ -65,6 +85,19 @@ export type NeoWaitForURLParams = {
 /** `neo:waitForLoadState`: resolves once `state` fired for the main frame's current document,
  * or for the next one. */
 export type NeoWaitForLoadStateParams = { state: LifecycleEvent }
+
+/** `neo:screenshot`: `locator.screenshot`. Playwright's client resolves the locator to an
+ * element (`waitForSelector`, strict, `attached`) and calls `ElementHandle.screenshot` on it; Neo
+ * has no element handles yet, so one call carries the selector, `ElementHandle.screenshot`'s
+ * params, and Neo's `path` (relative to the run's artifact directory). Rust: `capture.rs`
+ * `NeoScreenshotParams`; the reply is `ElementHandle.screenshot`'s `{binary}`. */
+export type NeoScreenshotParams = Omit<
+  PageScreenshotParams,
+  'fullPage' | 'clip'
+> & {
+  selector: string
+  path?: string
+}
 
 /** `neo:scrollIntoViewIfNeeded` and `neo:boundingBox`: Playwright's `Locator` methods that its
  * client reaches through an `ElementHandle` (`_withElement`), which Rust serves whole
@@ -141,6 +174,10 @@ export type NeoFrameCommands = {
   'neo:waitForLoadState': {
     params: NeoWaitForLoadStateParams
     result: Record<string, never>
+  }
+  'neo:screenshot': {
+    params: NeoScreenshotParams
+    result: { binary: string }
   }
   'neo:waitForNavigation': {
     params: NeoWaitForNavigationParams

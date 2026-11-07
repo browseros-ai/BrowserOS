@@ -72,7 +72,7 @@ const REPLAY_WAIT: Duration = Duration::from_secs(5);
 /// Neo: the listener events Neo produces on a `Page`, under the names Playwright's client gives
 /// them (`Events.Page`), and what each needs switched on in the page's session; and the one
 /// channel event the SDK handles itself, `locatorHandlerTriggered` (`locator_handlers.rs`).
-const PAGE_EVENTS: [(&str, Needs); 19] = [
+const PAGE_EVENTS: [(&str, Needs); 20] = [
     ("console", Needs::RUNTIME),
     ("pageerror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
@@ -93,12 +93,15 @@ const PAGE_EVENTS: [(&str, Needs); 19] = [
     ("response", Needs::NETWORK),
     ("requestfinished", Needs::NETWORK),
     ("requestfailed", Needs::NETWORK),
+    // A paused request of a route (`routes.rs`): Playwright's channel event, which the SDK
+    // listens to while the page has routes. Its request's record needs the network log.
+    ("route", Needs::NETWORK),
     ("locatorHandlerTriggered", Needs::NOTHING),
 ];
 
 /// Neo: the listener events Neo produces on the run's `BrowserContext` (`Events.BrowserContext`),
 /// for every page the run has a session on; `page` for every new tab of the context.
-const CONTEXT_EVENTS: [(&str, Needs); 15] = [
+const CONTEXT_EVENTS: [(&str, Needs); 16] = [
     ("console", Needs::RUNTIME),
     ("weberror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
@@ -114,6 +117,7 @@ const CONTEXT_EVENTS: [(&str, Needs); 15] = [
     ("response", Needs::NETWORK),
     ("requestfinished", Needs::NETWORK),
     ("requestfailed", Needs::NETWORK),
+    ("route", Needs::NETWORK),
 ];
 
 /// What a subscription switches on in a page's session before that page's next call runs.

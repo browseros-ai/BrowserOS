@@ -31,8 +31,10 @@
 //! session's own replay is history only, as the tab's.
 
 use std::collections::{HashMap, VecDeque};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use browseros_cdp::{CdpClient, CdpEvent, SessionId};
@@ -42,6 +44,7 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time;
 use tracing::debug;
+use url::{Origin, Url};
 
 use crate::bridge;
 use crate::console::{
@@ -54,6 +57,7 @@ use crate::frames::{self, Host};
 use crate::network::{Happening, NetworkLog};
 use crate::network_events;
 use crate::page::{Applied, DialogAnswer};
+use crate::routes::Channel;
 use crate::run::PageId;
 use crate::tabs::{PageEntry, Tabs};
 
@@ -95,7 +99,17 @@ pub(crate) struct PageEvents {
     /// lifecycle replay of its start ([`Self::lifecycle_replayed`]), or from the start on a page
     /// the run's discovery reported.
     lifecycle_live: Arc<AtomicBool>,
+    /// What the run does with an out-of-process frame's session once [`Self::child_attached`]
+    /// is done with it: the run's session state (`session_state.rs`).
+    on_child: Arc<OnceLock<ChildSessionHook>>,
+    /// The origins this tab's frames navigated to since the run attached, in the order first
+    /// seen: what `storageState()` reads (`session_state.rs`).
+    visited: Arc<Mutex<Vec<String>>>,
 }
+
+/// What the run does with each out-of-process frame session of a tab it attaches.
+pub(crate) type ChildSessionHook =
+    Arc<dyn Fn(SessionId) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// CDP's `Page.fileChooserOpened` params.
 #[derive(Deserialize)]
@@ -160,6 +174,8 @@ impl PageEvents {
             dialogs: Arc::default(),
             frames: Arc::new(Mutex::new(FrameModel::new(target))),
             lifecycle_live: Arc::new(AtomicBool::new(discovered)),
+            on_child: Arc::default(),
+            visited: Arc::default(),
         }
     }
 
@@ -192,6 +208,9 @@ impl PageEvents {
         }
         if self.console.requested(&self.session) {
             self.enable_child(host).await;
+        }
+        if let Some(hook) = self.on_child.get() {
+            hook(host.session_id().clone()).await;
         }
         // Under the switches' lock, so a switch-off running meanwhile cannot miss this frame.
         let _switching = self.intercepting.lock().await;
@@ -273,6 +292,56 @@ impl PageEvents {
         }
     }
 
+    /// Sets what the run does with each out-of-process frame session of this tab it attaches,
+    /// from now on. Set once, when the tab's session is made.
+    pub(crate) fn on_child_session(&self, hook: ChildSessionHook) {
+        let _ = self.on_child.set(hook);
+    }
+
+    /// Playwright: `server/page.ts` `Page.frameNavigatedToNewDocument`: `this.browserContext.addVisitedOrigin(origin);`
+    ///
+    /// A frame of the tab committed a new document at `url`: its origin is visited, unless it
+    /// has none (`about:blank`, `data:`). The documents the tab held when the run attached are
+    /// not visits, as Playwright skips its initial ones.
+    fn visit(&self, url: &Value) {
+        let Some(origin) = url
+            .as_str()
+            .and_then(|url| Url::parse(url).ok())
+            .map(|url| url.origin())
+            .filter(Origin::is_tuple)
+            .map(|origin| origin.ascii_serialization())
+        else {
+            return;
+        };
+        if let Ok(mut visited) = self.visited.lock()
+            && !visited.contains(&origin)
+        {
+            visited.push(origin);
+        }
+    }
+
+    /// The origins this tab's frames navigated to since the run attached, first seen first.
+    pub(crate) fn visited_origins(&self) -> Vec<String> {
+        self.visited
+            .lock()
+            .map(|visited| visited.clone())
+            .unwrap_or_default()
+    }
+
+    /// The client of the tab's sessions.
+    pub(crate) fn cdp(&self) -> &CdpClient {
+        &self.cdp
+    }
+
+    /// The tab's own session, then each out-of-process frame session of it the run attached.
+    pub(crate) fn sessions(&self) -> Vec<SessionId> {
+        let mut sessions = vec![self.session.clone()];
+        if let Ok(children) = self.children.lock() {
+            sessions.extend(children.keys().cloned());
+        }
+        sessions
+    }
+
     /// `Runtime.enable` and `Log.enable` on an out-of-process frame's session, its replay applied
     /// as history before the session goes live, as `PageSession::enable_runtime` does for the
     /// tab's own session. Bounded by [`CHILD_ENABLE_WAIT`]; a failure is logged.
@@ -305,6 +374,18 @@ impl PageEvents {
         if !happenings.is_empty() {
             network_events::emit(&self.hub, &self.page_guid, log, happenings);
         }
+    }
+
+    /// The run's `route` event for a pause of this tab (`routes.rs`): on the page, whose handlers
+    /// come first, or on the context. Whether it was queued for the script, which then owes the
+    /// pause its answer.
+    pub(crate) fn route(&self, channel: Channel, params: &Value) -> bool {
+        let guid = match channel {
+            Channel::Page => self.page_guid.as_str(),
+            Channel::Context => CONTEXT_GUID,
+        };
+        self.hub.subscribed(guid, "route")
+            && self.hub.emit(guid, "route", params) == Emitted::Queued
     }
 
     /// The tab's target id.
@@ -406,6 +487,9 @@ impl PageEvents {
                 | "Page.navigatedWithinDocument"
         ) {
             return;
+        }
+        if event.method == "Page.frameNavigated" {
+            self.visit(&event.params["frame"]["url"]);
         }
         let Ok(changes) = self.frames.lock().map(|mut model| model.apply(event)) else {
             return;

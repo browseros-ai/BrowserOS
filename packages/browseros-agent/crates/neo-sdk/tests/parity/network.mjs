@@ -94,7 +94,8 @@ sessionStorage.setItem('loads', String(Number(sessionStorage.getItem('loads')) +
 
 /**
  * The fixture server: `PAGES`, JSON at `*.json`, a PNG at `/net/img.png`, a 302 at
- * `/net/redirect` (to `/net/data.json`), a 204 at `/net/204`, a 404 at `/net/404`, a connection
+ * `/net/redirect` (to `?to=`, else `/net/data.json`), `/net/headers` echoing the request's method,
+ * headers and body as JSON, a 204 at `/net/204`, a 404 at `/net/404`, a connection
  * dropped before any response at `/net/hangup`, `/net/slow?ms=N` after N ms, an event stream
  * that never ends at `/net/sse`, `/net/echo` answering a POST's body, and `/net/hold?id=X`, which
  * sends `first` (with `&type=html`, the start of an HTML document a frame can stream) and holds the
@@ -140,8 +141,22 @@ export async function serveNetwork(cleanups) {
       return
     }
     if (pathname === '/net/redirect') {
-      response.writeHead(302, { location: '/net/data.json' })
+      const to = new URLSearchParams(query).get('to') ?? '/net/data.json'
+      response.writeHead(302, { location: to })
       response.end()
+      return
+    }
+    if (pathname === '/net/headers') {
+      let body = ''
+      for await (const chunk of request) body += chunk
+      response.setHeader('content-type', 'application/json')
+      response.end(
+        JSON.stringify({
+          method: request.method,
+          headers: request.headers,
+          body,
+        }),
+      )
       return
     }
     if (pathname === '/net/204') {

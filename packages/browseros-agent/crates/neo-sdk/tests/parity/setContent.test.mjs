@@ -101,3 +101,62 @@ test('setContent waits for load unless told otherwise, under its timeout', {
     load: 'TimeoutError',
   })
 })
+
+// Review (delta 995823580, F2): an out-of-process frame's lifecycle events flow only once its
+// host's events are enabled. Neo enables them before writing, as its frame waits do, so `load`
+// and `domcontentloaded` resolve on a cross-site frame as on a same-origin one. The controls: a
+// same-origin frame, `commit`, and a cross-site frame whose events a load wait enabled first.
+// Each case loads fresh pages, so the cross-site frame's events start disabled.
+const FRAMES = `<body>${ISOLATE}<script>
+  if (location.search === '?child') document.body.innerHTML = '<button id="old">Old</button>'
+  else for (const [name, origin] of [['same', location.origin], ['cross', location.origin.replace('127.0.0.1', 'localhost')]]) {
+    const frame = document.createElement('iframe')
+    frame.id = frame.name = name
+    frame.src = origin + '/method.html?child'
+    document.body.append(frame)
+  }
+</script></body>`
+
+test('setContent on an out-of-process frame waits for its lifecycle events', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  for (const [name, warm, waitUntil] of [
+    ['cross', false, 'load'],
+    ['cross', false, 'domcontentloaded'],
+    ['cross', true, 'load'],
+    ['cross', false, 'commit'],
+    ['same', false, 'load'],
+  ]) {
+    await t.test(
+      `${name} ${waitUntil}${warm ? ' after a load wait' : ''}`,
+      async (t) => {
+        const outcome = await compareMethod(t, {
+          html: FRAMES,
+          source: `
+          const frame = page.frame(${JSON.stringify(name)})
+          await frame.waitForSelector('#old')
+          ${warm ? "await frame.waitForLoadState('load')" : ''}
+          const result = await frame
+            .setContent('<!doctype html><h2>Written</h2><button id="new">New</button>', {
+              waitUntil: ${JSON.stringify(waitUntil)},
+              timeout: 5000,
+            })
+            .then(() => 'resolved', errorCategory)
+          return {
+            result,
+            written: await frame.locator('#new').count(),
+            owner: await (await frame.frameElement()).evaluate((element) => element.id),
+          }
+        `,
+          probe: 'document.querySelectorAll("iframe").length',
+        })
+        assert.deepEqual(outcome.value, {
+          result: 'resolved',
+          written: 1,
+          owner: name,
+        })
+      },
+    )
+  }
+})

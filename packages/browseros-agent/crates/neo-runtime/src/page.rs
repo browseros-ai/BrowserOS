@@ -90,6 +90,7 @@ use crate::network_idle::{IdleChange, SharedIdle};
 use crate::page_events::PageEvents;
 use crate::progress::InputTicket;
 use crate::progress::{PlaywrightError, Progress};
+use crate::routes::{Answer, ContextRoutes, Pause, Routes};
 use crate::run::PageId;
 use crate::world::{self, ObjectGroup, World};
 
@@ -206,8 +207,15 @@ pub(crate) struct PageSession {
     input: Arc<TabInput>,
     /// The main frame's navigation requests, fed by the watcher once Network is enabled.
     pub(crate) network: Arc<NetworkLog>,
+    /// The run's routed requests on this tab (`routes.rs`).
+    pub(crate) routes: Arc<Routes>,
     /// `Network.enable`, sent on this session's first goto and kept for the run.
     network_enabled: OnceCell<()>,
+    /// Playwright's `Screenshotter` task queue: one screenshot at a time on this tab, so one's
+    /// background override, masks and page preparation never overlap another's. Its cleanup
+    /// tasks hold the turn too, until they have undone their part. The turn is the tab's, shared
+    /// with every other run of the `Runtime` on it (`screenshot.rs` `TabScreenshots`).
+    pub(crate) screenshots: Arc<Mutex<()>>,
     /// The tab's frames' `networkidle`, fed and timed by the watcher.
     idle: Arc<SharedIdle>,
     /// The run's highlights on this tab, hidden when the run ends (`highlight.rs`).
@@ -264,6 +272,8 @@ struct PageUpdates<S> {
     producer: Option<(PageEvents, Flushes)>,
     /// The tab's `networkidle` bookkeeping; `None` in tests of navigation alone.
     idle: Option<Arc<SharedIdle>>,
+    /// The tab's routed requests; `None` in tests of navigation alone.
+    routes: Option<Arc<Routes>>,
 }
 
 /// What the run's session has reported since `prepare`. Counters only grow, so a caller takes
@@ -624,18 +634,28 @@ impl Fired {
 }
 
 impl PageSession {
-    /// `input` is the tab's lock and devices from the `Runtime`'s [`TabInputs`].
+    /// `input` is the tab's lock and devices from the `Runtime`'s [`TabInputs`], `screenshots` its
+    /// screenshot turn from the `Runtime`'s `TabScreenshots`.
     /// `discovered`: the run's discovery reported the page as new (`Tabs::report_new`), so the
     /// first lifecycle replay is the page's own new life ([`PageEvents::new`]).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the tab's turns come from the Runtime, and the rest (its input, closure, event hub \
+                  and context routes) from the run; each is one field"
+    )]
     pub(crate) fn new(
         session: Session,
         page: &PageId,
         tasks: TaskTracker,
         input: Arc<TabInput>,
+        screenshots: Arc<Mutex<()>>,
         closed: CancellationToken,
         hub: EventHub,
         discovered: bool,
+        context_routes: Arc<ContextRoutes>,
     ) -> Self {
+        let routes = Arc::new(Routes::new(page.as_str(), context_routes));
+        let child_routes = Arc::clone(&routes);
         let events = PageEvents::new(
             hub,
             page.as_str(),
@@ -664,10 +684,21 @@ impl PageSession {
         frames.on_child_host(Arc::new(move |host| {
             let events = child_events.clone();
             let network = Arc::clone(&child_network);
+            let routes = Arc::clone(&child_routes);
             Box::pin(async move {
                 events.child_attached(&host).await;
                 if network.enabled() {
                     enable_child_network(&network, &host).await;
+                    // Playwright gives a new frame session the page's interception before it
+                    // runs (`FrameSession._initialize`); Neo's is attached lazily, so its
+                    // requests pause from now on.
+                    if routes.intercepting() {
+                        for (method, params) in interception(true) {
+                            if let Err(error) = host.send(method, params).await {
+                                debug!(%error, "pausing a frame session's requests failed");
+                            }
+                        }
+                    }
                 }
             })
         }));
@@ -689,7 +720,9 @@ impl PageSession {
             next_group: AtomicU64::new(1),
             input,
             network,
+            routes,
             network_enabled: OnceCell::new(),
+            screenshots,
             idle: Arc::new(SharedIdle::new(page.as_str(), Instant::now())),
             highlights: Highlights::default(),
             events,
@@ -753,6 +786,7 @@ impl PageSession {
                         initial_url,
                         producer: Some((self.events.clone(), self.events.hub().watcher())),
                         idle: Some(Arc::clone(&self.idle)),
+                        routes: Some(Arc::clone(&self.routes)),
                     },
                     self.closed.clone(),
                     stop,
@@ -841,6 +875,26 @@ impl PageSession {
             .copied()
     }
 
+    /// Turns the pausing of every request on or off on the tab's session and on every
+    /// out-of-process frame session attached (`routes.rs`); the network log first, as a pause's
+    /// route carries its request's record.
+    pub(crate) async fn intercept(&self, on: bool) -> Result<(), CdpError> {
+        if on {
+            self.enable_network().await?;
+        }
+        for (method, params) in interception(on) {
+            self.send(method, params).await?;
+        }
+        for host in self.frames.child_hosts() {
+            for (method, params) in interception(on) {
+                if let Err(error) = host.send(method, params).await {
+                    debug!(%error, "turning a frame session's request pausing over failed");
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The requests seen from now on are the tab's whole traffic: `networkidle` starts over
     /// (`NetworkIdle::restart`), over the frames this session reports, which a frame-tree read
     /// adds to the ones the watcher saw attach. A failed read leaves the tree as the watcher knows
@@ -897,6 +951,25 @@ impl PageSession {
     /// handle because it may be called from a `Drop`.
     pub(crate) fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
         self.tasks.spawn_on(task, &self.session.tokio);
+    }
+
+    /// Neo: [`Self::spawn`] for page-side work that matters only while the tab is open (a
+    /// capture's restore or reset, an object group's release); browser-side cleanup such as a
+    /// PDF stream's close (`pdf.rs`) does not use it. It ends when the tab closes or crashes,
+    /// and dropping it drops what it holds (a screenshot turn, an object group): a gone tab has
+    /// nothing left to undo, and a crashed one does not answer what is sent to it (BrowserOS
+    /// neo, the crashed case of `capture-turn-liveness-review`), so the task would otherwise
+    /// hold those, and a host's `Runtime::drain`, until browseros-cdp's request timeout. Only a
+    /// prepared session's watcher sees the tab go ([`Self::prepare`]).
+    pub(crate) fn spawn_while_open(&self, task: impl Future<Output = ()> + Send + 'static) {
+        let closed = self.closed.clone();
+        self.spawn(async move {
+            tokio::select! {
+                biased;
+                () = closed.cancelled() => {}
+                () = task => {}
+            }
+        });
     }
 
     fn state(&self) -> Option<watch::Receiver<PageState>> {
@@ -1354,6 +1427,7 @@ async fn watch_events(
         initial_url,
         producer,
         idle,
+        routes,
     } = updates;
     let (producer, mut flushes) = producer.unzip();
     let mut watcher = Watcher {
@@ -1369,6 +1443,7 @@ async fn watch_events(
         producer,
         closed,
         idle,
+        routes,
     };
     tokio::pin!(initial_url);
     let mut seed_pending = true;
@@ -1489,6 +1564,7 @@ struct Watcher {
     producer: Option<PageEvents>,
     closed: CancellationToken,
     idle: Option<Arc<SharedIdle>>,
+    routes: Option<Arc<Routes>>,
 }
 
 impl Watcher {
@@ -1556,6 +1632,78 @@ impl Watcher {
             })
             .unwrap_or_default();
         self.apply_idle(changes);
+    }
+
+    /// The tab's routes' share of one event (`routes.rs`): a pause of the tab's session or of an
+    /// attached frame session's; a `requestWillBeSent` a parked pause waited for, its `request`
+    /// event just gone, so its `route` event follows it; a frame session gone with its pauses.
+    fn route_event(&self, event: &CdpEvent) {
+        let Some(routes) = &self.routes else {
+            return;
+        };
+        let from = || match event.session_id.as_ref() {
+            Some(from) if from == &self.session => Some(None),
+            Some(from) if self.network.has_child(from) => Some(Some(from)),
+            _ => None,
+        };
+        match event.method.as_str() {
+            "Fetch.requestPaused" => {
+                if let Some(from) = from() {
+                    let pause = routes.paused(from, &event.params, &self.network);
+                    self.apply_pause(pause);
+                }
+            }
+            "Network.requestWillBeSent" => {
+                if from().is_some()
+                    && let Some(request) = event.params["requestId"].as_str()
+                    && let Some(pause) = routes.unpark(request, &self.network)
+                {
+                    self.apply_pause(pause);
+                }
+            }
+            "Target.detachedFromTarget" => {
+                if let Some(child) = event.params["sessionId"].as_str() {
+                    routes.forget_session(&SessionId::from(child));
+                }
+            }
+            // A fetch waits on its request: a failure on the network ends it.
+            "Network.loadingFailed" => {
+                if from().is_some()
+                    && let Some(request) = event.params["requestId"].as_str()
+                {
+                    let error = event.params["errorText"].as_str().unwrap_or_default();
+                    routes.fetch_failed(request, error);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Carries out what the tab's routes made of a pause: an answer at once, nothing yet, or the
+    /// run's `route` event, whose pause goes on untouched when nobody takes it.
+    fn apply_pause(&self, pause: Pause) {
+        match pause {
+            Pause::Answer(answer) => send_answer(&self.cdp, &self.session, answer),
+            Pause::Parked => {}
+            Pause::Route {
+                index,
+                channel,
+                params,
+            } => {
+                let Some(routes) = &self.routes else {
+                    return;
+                };
+                if self
+                    .producer
+                    .as_ref()
+                    .is_some_and(|producer| producer.route(channel, &params))
+                {
+                    routes.emitted(index);
+                } else if let Some(answer) = routes.release(index) {
+                    send_answer(&self.cdp, &self.session, answer);
+                }
+            }
+        }
     }
 
     /// `Frame._failInflightRequests` for a frame the tab's session reports removed
@@ -1649,6 +1797,7 @@ impl Watcher {
                         }
                     }
                 }
+                self.route_event(&event);
                 // A frame removed from the page, or an out-of-process frame session gone, ends
                 // its requests still loading: no later event of theirs can arrive.
                 let detached = self.detached_requests(&event);
@@ -1757,6 +1906,39 @@ async fn enable_child_network(network: &NetworkLog, host: &Arc<Host>) {
         Ok(Err(error)) => debug!(%session, %error, "a frame's network did not turn on"),
         Err(_) => debug!(%session, "a frame's network did not turn on in time"),
     }
+}
+
+/// Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager._updateProtocolRequestInterceptionForSession`: `fetchPromise = info.session.send('Fetch.enable', { handleAuthRequests: true, patterns: [{ urlPattern: '*', requestStage: 'Request' }] });`
+///
+/// Deviation: `server/chromium/crNetworkManager.ts` `CRNetworkManager._onAuthRequired`: `authChallengeResponse: { response, username, password },`
+/// Neo pauses requests without taking their auth challenges (`handleAuthRequests: false`):
+/// with no credentials Playwright answers `Default`, which is Chromium's own handling.
+fn interception(on: bool) -> [(&'static str, Value); 2] {
+    let fetch = if on {
+        (
+            "Fetch.enable",
+            json!({ "handleAuthRequests": false, "patterns": [{ "urlPattern": "*", "requestStage": "Request" }] }),
+        )
+    } else {
+        ("Fetch.disable", json!({}))
+    };
+    [
+        // Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager._updateProtocolRequestInterceptionForSession`: `const cachePromise = info.session.send('Network.setCacheDisabled', { cacheDisabled: enabled });`
+        ("Network.setCacheDisabled", json!({ "cacheDisabled": on })),
+        fetch,
+    ]
+}
+
+/// Sends a pause's answer without waiting for it (`_sendMayFail`): the request may already be
+/// gone, which only the page sees.
+fn send_answer(cdp: &CdpClient, tab: &SessionId, answer: Answer) {
+    let cdp = cdp.clone();
+    let session = answer.session.unwrap_or_else(|| tab.clone());
+    tokio::spawn(async move {
+        if let Err(error) = cdp.send(answer.method, answer.params, Some(&session)).await {
+            debug!(%session, %error, "answering a paused request failed");
+        }
+    });
 }
 
 /// Sends a dialog answer without waiting for it: the renderer is blocked until it lands, and
@@ -2177,7 +2359,9 @@ fn apply_lifecycle(state: &mut PageState, event: &LifecycleEvent) -> bool {
 /// An object group this session holds. Dropping it releases the group
 /// (`Runtime.releaseObjectGroup`) on a tracked task holding the page, fire and forget: a
 /// renderer stuck on a dialog must not hold the dropping call. One release frees the result
-/// object and every handle `getProperties` read out of it (probe P1).
+/// object and every handle `getProperties` read out of it (probe P1). A tab that closed or
+/// crashed took its groups with it, so no release waits on it
+/// ([`PageSession::spawn_while_open`]).
 pub(crate) struct GroupGuard {
     page: Arc<PageSession>,
     frame: Arc<FrameContext>,
@@ -2194,7 +2378,7 @@ impl Drop for GroupGuard {
     fn drop(&mut self) {
         let frame = Arc::clone(&self.frame);
         let ObjectGroup(group) = self.group.clone();
-        self.page.spawn(async move {
+        self.page.spawn_while_open(async move {
             let released = frame
                 .host
                 .send(
@@ -3935,6 +4119,7 @@ mod tests {
                 initial_url,
                 producer: None,
                 idle: None,
+                routes: None,
             };
             let watcher = watch_events(
                 receiver,
@@ -3978,9 +4163,11 @@ mod tests {
             &id,
             TaskTracker::new(),
             Arc::default(),
+            Arc::new(Mutex::new(())),
             CancellationToken::new(),
             EventHub::default(),
             false,
+            Arc::default(),
         ));
         let tab = FrameTab {
             page: Arc::clone(&page),
@@ -4006,6 +4193,134 @@ mod tests {
         drop(navigation);
         assert_eq!(page.navigations.receiver_count(), 0);
         assert_eq!(page.state_updates.receiver_count(), 1);
+    }
+
+    /// A session on the fake's tab with its own tracker and closed token.
+    async fn tracked_page(
+        cdp: CdpClient,
+        tasks: &TaskTracker,
+        closed: &CancellationToken,
+    ) -> Arc<PageSession> {
+        use crate::fake_browser::PAGE;
+
+        let id = PageId::new(PAGE.to_string());
+        let session = Session::attach(cdp, id.clone(), TokioHandle::current())
+            .await
+            .expect("attach");
+        Arc::new(PageSession::new(
+            session,
+            &id,
+            tasks.clone(),
+            Arc::default(),
+            Arc::new(Mutex::new(())),
+            closed.clone(),
+            EventHub::default(),
+            false,
+            Arc::default(),
+        ))
+    }
+
+    /// A task waiting for an answer its gone tab will never send ends when the tab goes, and
+    /// what it held (here a sender standing in for the tab's screenshot turn) goes with it, so
+    /// the run's tracker drains.
+    #[tokio::test]
+    async fn a_background_task_ends_when_its_tab_goes() {
+        use std::future;
+
+        use crate::fake_browser::{FakeBrowser, Replies};
+
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let closed = CancellationToken::new();
+        let page = tracked_page(browser.cdp().await, &tasks, &closed).await;
+        let (held, released) = oneshot::channel::<()>();
+        page.spawn_while_open(async move {
+            future::pending::<()>().await;
+            drop(held);
+        });
+        closed.cancel();
+        assert!(
+            time::timeout(Duration::from_secs(5), released)
+                .await
+                .is_ok(),
+            "the task's hold went with the tab"
+        );
+        tasks.close();
+        assert!(
+            time::timeout(Duration::from_secs(5), tasks.wait())
+                .await
+                .is_ok()
+        );
+    }
+
+    /// While the tab stays, the task runs to its end.
+    #[tokio::test]
+    async fn a_background_task_runs_to_its_end_while_its_tab_stays() {
+        use crate::fake_browser::{FakeBrowser, Replies};
+
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let closed = CancellationToken::new();
+        let page = tracked_page(browser.cdp().await, &tasks, &closed).await;
+        let (done, finished) = oneshot::channel();
+        page.spawn_while_open(async move {
+            time::sleep(Duration::from_millis(20)).await;
+            let _sent = done.send("ran");
+        });
+        assert_eq!(
+            time::timeout(Duration::from_secs(5), finished)
+                .await
+                .ok()
+                .and_then(Result::ok),
+            Some("ran")
+        );
+    }
+
+    /// A dropped group is released while its tab is open, and not once the tab went: the tab
+    /// took the group with it, and a crashed one would never answer the release.
+    #[tokio::test]
+    async fn a_group_is_released_only_while_its_tab_is_open() {
+        use crate::fake_browser::{FakeBrowser, Replies};
+
+        fn released(browser: &FakeBrowser) -> Vec<String> {
+            browser
+                .exchanges()
+                .iter()
+                .filter(|exchange| exchange.method() == "Runtime.releaseObjectGroup")
+                .filter_map(|exchange| {
+                    exchange.command["params"]["objectGroup"]
+                        .as_str()
+                        .map(str::to_string)
+                })
+                .collect()
+        }
+
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let closed = CancellationToken::new();
+        let page = tracked_page(browser.cdp().await, &tasks, &closed).await;
+        let tab = FrameTab {
+            page: Arc::clone(&page),
+            scope: FrameScope::Main,
+        };
+        let frame = tab.context().await.expect("the main frame");
+        drop(tab.group(&frame, "open"));
+        time::timeout(Duration::from_secs(5), async {
+            while released(&browser).is_empty() {
+                time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the open tab's group is released");
+        closed.cancel();
+        drop(tab.group(&frame, "gone"));
+        tasks.close();
+        time::timeout(Duration::from_secs(5), tasks.wait())
+            .await
+            .expect("the tracker drains");
+        let groups = released(&browser);
+        assert_eq!(groups.len(), 1, "{groups:?}");
+        assert!(groups[0].starts_with("neo-open-"), "{groups:?}");
     }
 
     async fn assert_seed_keeps_watcher_open(
@@ -4035,6 +4350,7 @@ mod tests {
                 initial_url,
                 producer: None,
                 idle: None,
+                routes: None,
             },
             closed.clone(),
             stop.clone(),
