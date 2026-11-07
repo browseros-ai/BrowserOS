@@ -740,7 +740,8 @@ async fn serve_call(
     reply: CallReply,
 ) {
     // A call the script aborted before its task first ran never starts its handler, even one
-    // that would not race its progress first.
+    // that would not race its progress first. A run that ended meanwhile outranks the abort
+    // (`Progress::race`'s order): the handler starts and its first race reports the end.
     if let Err(error) = progress.pending_abort() {
         finish_reply(Err(error), reply).await;
         return;
@@ -2546,8 +2547,8 @@ mod tests {
 mod review_abort_priority {
     use super::*;
     use crate::deadline::Deadline;
-    use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::discovery::Discovery;
+    use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::page::TabInputs;
     use crate::run::PageId;
     use tokio::runtime::Handle;

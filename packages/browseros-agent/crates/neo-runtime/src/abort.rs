@@ -128,6 +128,9 @@ pub(crate) const REALM_GLOBALS: &str = r#"() => {
         handler: null,
         handlerEntry: null,
         dependents: [],
+        // `AbortSignal.any`'s: its sources, never themselves composite (WHATWG flattens them).
+        dependent: false,
+        sources: [],
       })
     }
     get aborted() {
@@ -218,7 +221,18 @@ pub(crate) const REALM_GLOBALS: &str = r#"() => {
         state.reason = signals.get(already).reason
         return signal
       }
-      for (const source of list) signals.get(source).dependents.push(signal)
+      // WHATWG's 'create a dependent abort signal': a composite source contributes its own
+      // sources, so every composite hangs directly off the signals that abort, and one abort
+      // reaches every level of nesting with the same reason before any listener runs.
+      state.dependent = true
+      for (const source of list) {
+        const sourceState = signals.get(source)
+        const roots = sourceState.dependent ? sourceState.sources : [source]
+        for (const root of roots) {
+          state.sources.push(root)
+          signals.get(root).dependents.push(signal)
+        }
+      }
       return signal
     }
   }

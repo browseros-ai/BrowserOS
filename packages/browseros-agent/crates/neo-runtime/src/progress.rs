@@ -277,11 +277,8 @@ impl Progress {
     /// The checks of [`Self::race`] without waiting, for right before an irreversible step, so
     /// no input starts after the call has to stop.
     pub(crate) fn check(&self) -> Result<(), CallError> {
-        if let Some(stop) = self.run.deadline.stop() {
-            return Err(CallError::RunEnded(run_end(stop)));
-        }
-        if self.run.ended.is_cancelled() {
-            return Err(CallError::RunEnded(self.run.end_reason()));
+        if let Some(stop) = self.run_stop() {
+            return Err(stop);
         }
         self.pending_abort()?;
         if self.page_closed.is_cancelled() || self.context_closed.is_cancelled() {
@@ -293,10 +290,27 @@ impl Progress {
         Ok(())
     }
 
-    /// The call's `AbortError` if the script aborted it already. The dispatcher asks before the
-    /// handler starts, as Playwright's `run` throws `_pendingAbortError` before its task: an
-    /// abort can arrive between the call's admission and its task's first poll.
+    /// The run-level stops, first in [`Self::race`]'s precedence: the run's deadline or
+    /// cancellation, then the run ending otherwise. Each outranks the script's abort.
+    fn run_stop(&self) -> Option<CallError> {
+        if let Some(stop) = self.run.deadline.stop() {
+            return Some(CallError::RunEnded(run_end(stop)));
+        }
+        if self.run.ended.is_cancelled() {
+            return Some(CallError::RunEnded(self.run.end_reason()));
+        }
+        None
+    }
+
+    /// The call's `AbortError` if the script aborted it already, unless the run has stopped,
+    /// which outranks it. The dispatcher asks before the handler starts, as Playwright's `run`
+    /// throws `_pendingAbortError` before its task: an abort can arrive between the call's
+    /// admission and its task's first poll. When the run has stopped as well, the handler starts
+    /// as any call first polled after the run's end does, and its first race reports the end.
     pub(crate) fn pending_abort(&self) -> Result<(), CallError> {
+        if self.run_stop().is_some() {
+            return Ok(());
+        }
         match self.entry.abort.error() {
             Some(error) => Err(error.into()),
             None => Ok(()),
@@ -1170,6 +1184,33 @@ mod tests {
             Err(CallError::Playwright(PlaywrightError::aborted("stop")))
         );
         run.end(RunEnd::Settled);
+        assert_eq!(
+            progress.race(future::pending::<()>()).await,
+            Err(CallError::RunEnded(RunEnd::Settled))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_run_stop_outranks_a_pending_abort() {
+        let run = scope(Duration::from_secs(30));
+        let entry = entry(1, true);
+        let progress = Progress::new(
+            Arc::clone(&entry),
+            0.0,
+            run.clone(),
+            CancellationToken::new(),
+        );
+        entry.abort("stop".to_string());
+        let aborted = CallError::Playwright(PlaywrightError::aborted("stop"));
+        assert_eq!(progress.pending_abort(), Err(aborted.clone()));
+        assert_eq!(progress.check(), Err(aborted));
+        run.end(RunEnd::Settled);
+        assert_eq!(
+            progress.pending_abort(),
+            Ok(()),
+            "the handler starts, and its first race reports the run's end"
+        );
+        assert_eq!(progress.check(), Err(CallError::RunEnded(RunEnd::Settled)));
         assert_eq!(
             progress.race(future::pending::<()>()).await,
             Err(CallError::RunEnded(RunEnd::Settled))
