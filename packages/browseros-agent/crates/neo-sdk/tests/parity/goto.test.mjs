@@ -290,3 +290,66 @@ test('goto answers the same Response, Request chain and nulls as Playwright', {
     await runCleanups(cleanups)
   }
 })
+
+test('a response whose page closes before its body finished rejects body() and finished()', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  t.diagnostic(`Playwright reference: ${playwrightVersion}`)
+  const binary = buildNeoRun()
+  const cleanups = []
+  try {
+    const server = http.createServer((_request, response) => {
+      response.sendDate = false
+      noStore(response)
+      response.writeHead(200, {
+        'content-type': 'text/html',
+        'content-length': 64,
+      })
+      response.write('<title>slow</title>')
+      // The rest arrives only after the script closed its page.
+      setTimeout(() => response.end('x'.repeat(45)), 3_000)
+    })
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    cleanups.push(() => {
+      server.closeAllConnections()
+      server.close()
+    })
+    const origin = `http://127.0.0.1:${server.address().port}`
+    const script = `
+      const response = await page.goto(${JSON.stringify(`${origin}/slow`)}, { waitUntil: 'commit' })
+      const settled = (promise) => promise.then(() => 'resolved', (error) => error.name)
+      const body = settled(response.body())
+      const finished = settled(response.finished())
+      await page.close()
+      return { status: response.status(), body: await body, finished: await finished }
+    `
+    const { port } = await launchBrowser(cleanups, browserBinary)
+    const cdp = await connectCdp(cleanups, port)
+    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
+    cleanups.push(() => browser.close())
+    const page = await browser.contexts()[0].newPage()
+    const reference = await new (async () => {}).constructor('page', script)(
+      page,
+    )
+    assert.deepEqual(reference, {
+      status: 200,
+      body: 'Error',
+      finished: 'Error',
+    })
+
+    const { targetId } = await cdp.send('Target.createTarget', {
+      url: 'about:blank',
+    })
+    const scripts = mkdtempSync(join(tmpdir(), 'neo-goto-close-'))
+    cleanups.push(() => rmSync(scripts, { recursive: true, force: true }))
+    const path = join(scripts, 'close.js')
+    writeFileSync(path, script)
+    const outcome = await startNeo(binary, port, targetId, path).outcome
+    assert.equal(outcome.status, 'ok', JSON.stringify(outcome))
+    assert.deepEqual(outcome.value, reference, 'Neo vs Playwright')
+  } finally {
+    await runCleanups(cleanups)
+  }
+})
