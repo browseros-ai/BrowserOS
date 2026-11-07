@@ -6,6 +6,9 @@
 // receiver, Locator.page, FrameLocator.owner and FrameLocator.first/last/nth; then a strict mode
 // violation and an invalid selector. Matches are read with count() and evaluateAll in document
 // order, so both engines are compared on the same elements; a few key matches are also pinned.
+// Each scoped or optioned case has a contrasting element outside its scope or option (the
+// fixture's "outside" elements, a second heading, two iframe holders), so a builder that loses
+// its receiver, its frame or an option matches more and fails the comparison.
 //
 // From Playwright's specs at the pin (26137face): tests/page/selectors-get-by.spec.ts 'SE-076
 // getByText should work', tests/page/locator-query.spec.ts 'LO-177 should support
@@ -109,6 +112,17 @@ test('every getBy builder matches the same elements on Page, Frame, Locator and 
     'buy-cherry',
   ])
   assert.deepEqual(ids(value, 'page.getByLabel nested'), ['email'])
+  assert.deepEqual(ids(value, 'locator.getByLabel'), ['name'])
+  // Each also matches outside the form, so a Locator builder that loses its scope fails.
+  for (const [name, expected] of [
+    ['locator.getByText', ['special']],
+    ['locator.getByPlaceholder', ['email']],
+    ['locator.getByAltText', ['logo']],
+    ['locator.getByTitle', ['hint']],
+    ['locator.getByTestId', ['special']],
+  ])
+    assert.deepEqual(ids(value, name), expected, name)
+  assert.deepEqual(ids(value, 'page.getByRole level'), ['heading'])
   assert.deepEqual(ids(value, 'frameLocator.getByTestId'), ['inner-special'])
   assert.deepEqual(ids(value, 'page.locator'), [
     'apple',
@@ -170,13 +184,16 @@ test('frameLocator on every receiver, FrameLocator.first/last/nth/owner, and the
       const cases = await all({
         'page.frameLocator': page.frameLocator('#first-frame').locator('#inner-text'),
         'frame.frameLocator': page.mainFrame().frameLocator('#second-frame').locator('p'),
-        'locator.frameLocator': page.locator('#main').frameLocator('#first-frame').getByRole('button'),
+        'frame.frameLocator child': page.frame('first-frame').frameLocator('#deep').locator('p'),
+        'locator.frameLocator': page.locator('#second-holder').frameLocator('iframe').getByRole('button'),
         'frameLocator.frameLocator': page.frameLocator('#first-frame').frameLocator('#deep').locator('p'),
         'frameLocator.locator': page.frameLocator('#second-frame').locator('button'),
+        'frameLocator.locator Locator': page.frameLocator('#second-frame').locator(page.locator('#second-button')),
         'frameLocator.first': frames.first().locator('button'),
         'frameLocator.last': frames.last().locator('button'),
         'frameLocator.nth': frames.nth(1).locator('button'),
         'frameLocator.owner': page.frameLocator('#second-frame').owner(),
+        'frameLocator.owner nested': page.frameLocator('#first-frame').frameLocator('#deep').owner(),
       })
       const strict = await page.getByRole('button', { name: 'Buy' }).click({ timeout: 1000 })
         .then(() => 'resolved', errorCategory)
@@ -190,6 +207,13 @@ test('frameLocator on every receiver, FrameLocator.first/last/nth/owner, and the
   assert.deepEqual(ids(value, 'frameLocator.first'), ['inner-button'])
   assert.deepEqual(ids(value, 'frameLocator.last'), ['second-button'])
   assert.deepEqual(ids(value, 'frameLocator.owner'), ['second-frame'])
+  // A frame or scope the builder lost would reach the other iframe, or none.
+  assert.deepEqual(ids(value, 'frame.frameLocator child'), ['p:Deep'])
+  assert.deepEqual(ids(value, 'locator.frameLocator'), ['second-button'])
+  assert.deepEqual(ids(value, 'frameLocator.owner nested'), ['deep'])
+  assert.deepEqual(ids(value, 'frameLocator.locator Locator'), [
+    'second-button',
+  ])
   assert.equal(value.strict, 'Error:strict')
   assert.equal(value.invalid, 'Error')
 })
