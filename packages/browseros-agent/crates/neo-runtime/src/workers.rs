@@ -72,6 +72,7 @@ struct Readiness {
     loaded: bool,
 }
 
+/// Neo: a tab's workers, kept as Playwright's page keeps them (each method names its source).
 impl Workers {
     pub(crate) fn new(
         hub: EventHub,
@@ -253,6 +254,7 @@ impl Workers {
     }
 }
 
+/// Neo: one worker's record, readiness and close, as Playwright's server `Worker` keeps them.
 impl Worker {
     fn new(guid: String, url: String, session: SessionId, cdp: CdpClient) -> Self {
         Self {

@@ -58,6 +58,7 @@ pub(crate) static WORKER_EVALUATE_HANDLE_META: MethodMeta = MethodMeta {
 const WORKER_CLOSED: &str = "Worker was closed";
 
 /// A message on a worker guid: Playwright's two worker evaluations.
+/// Neo: the spec's `Worker` commands are routed by hand (`neo-runtime-spec/spec/serve.yml`).
 pub(crate) fn route(
     method: &str,
     params: Option<&Value>,
@@ -117,6 +118,7 @@ pub(crate) async fn serve(
 /// `JSHandle` methods in the worker, run in the context the handle was made in. A worker's handle
 /// is never an element, so a selector or element call is refused as Playwright's dispatcher
 /// refuses it on a `JSHandle`.
+/// Playwright: `server/javascript.ts` `JSHandle.evaluateExpression`
 ///
 /// # Errors
 ///
@@ -343,6 +345,7 @@ fn argument(
 /// Playwright's reading of a worker evaluation's answer, as `evaluate.rs`'s `answer` reads a
 /// frame's: a by-handle result becomes the worker's handle, and a protocol error is
 /// Playwright's `rewriteError`'s.
+/// Playwright: `server/chromium/crExecutionContext.ts` `rewriteError`
 fn answer(
     worker: &Arc<Worker>,
     called: Called,
@@ -370,7 +373,7 @@ fn in_flight(error: PageError) -> CallError {
     }
 }
 
-/// The page's main frame guid of `worker`, `frame@<T>`: what routes its handles' calls.
+/// Neo: the page's main frame guid of `worker`, `frame@<T>`: what routes its handles' calls.
 fn page_frame_guid(worker: &Worker) -> String {
     let target = worker
         .guid()
@@ -380,7 +383,7 @@ fn page_frame_guid(worker: &Worker) -> String {
     format!("frame@{target}")
 }
 
-/// The protocol method a refused element call names.
+/// Neo: the protocol method a refused element call names.
 fn element_method(call: &EvalCall) -> &'static str {
     match call {
         EvalCall::Query { .. } => "querySelector",
@@ -392,7 +395,7 @@ fn element_method(call: &EvalCall) -> &'static str {
     }
 }
 
-/// An evaluation's result as its reply, as `evaluate::serve` encodes a frame's.
+/// Neo: an evaluation's result as its reply, as `evaluate::serve` encodes a frame's.
 fn encode(result: EvalResult) -> Value {
     match result {
         EvalResult::Value(Some(value)) => json!({ "value": value }),
