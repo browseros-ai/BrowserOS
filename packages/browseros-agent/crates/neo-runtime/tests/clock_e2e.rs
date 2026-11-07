@@ -15,6 +15,7 @@ mod browser;
 use std::time::Duration;
 
 use browser::{Fixture, Tab};
+use browseros_cdp::SessionId;
 use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime};
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
@@ -106,8 +107,11 @@ async fn tests_that_a_runs_clock_ends_with_the_run() {
     tab.close().await;
 }
 
-/// A page with a same-origin frame, so run end reaches more than the main frame.
-const FRAMES: &str = "<!doctype html><title>Clock frames</title><iframe src=/clock/child></iframe>";
+/// A page with a same-origin frame and a cross-site one (`localhost`, an out-of-process frame),
+/// so run end reaches more than the main frame.
+const FRAMES: &str = "<!doctype html><title>Clock frames</title><iframe src=/clock/child></iframe>
+<script>const remote = document.createElement('iframe');
+remote.src = 'http://localhost:' + location.port + '/clock/remote'; document.body.append(remote)</script>";
 const CHILD: &str = "<!doctype html><title>Clock child</title>";
 
 /// The run's probe, on an element so it adds no global: the page's own `Date.now`, kept before
@@ -146,6 +150,26 @@ const CHANGED: &str = r"function () {
   return changed;
 }";
 
+/// What of the clock's replacements is not the browser's own in a frame no other realm can read,
+/// by name: its globals, `performance`'s accessor, `AbortSignal.timeout` and `Event`'s
+/// `timeStamp` getter; `clock` while `__pwClock` is there.
+const NOT_NATIVE: &str = r"(() => {
+  const native = (fn) => typeof fn === 'function' && /\{\s*\[native code\]\s*\}$/.test(Function.prototype.toString.call(fn));
+  const own = (object, key) => Object.getOwnPropertyDescriptor(object, key);
+  const checks = {
+    clock: globalThis.__pwClock === undefined,
+    timers: [setTimeout, clearTimeout, setInterval, clearInterval, requestAnimationFrame,
+      cancelAnimationFrame, requestIdleCallback, cancelIdleCallback].every(native),
+    Date: native(Date) && native(Date.now),
+    performance: native(own(window, 'performance')?.get),
+    Intl: native(Intl.DateTimeFormat),
+    'AbortSignal.timeout': native(AbortSignal) && native(own(AbortSignal, 'timeout')?.value),
+    'Event.prototype.timeStamp': native(own(Event.prototype, 'timeStamp')?.get),
+    Temporal: typeof Temporal === 'undefined' || native(Temporal.Now.instant),
+  };
+  return Object.keys(checks).filter((name) => !checks[name]);
+})()";
+
 /// Waits until `expression` is `true` in the page.
 async fn wait_for(tab: &Tab, expression: &str) {
     time::timeout(Duration::from_secs(15), async {
@@ -157,26 +181,100 @@ async fn wait_for(tab: &Tab, expression: &str) {
     .unwrap_or_else(|error| panic!("{expression}: {error}"));
 }
 
-/// Sends `method` on the tab's driver session.
-async fn send(tab: &Tab, method: &str, params: Value) -> Value {
+/// Sends `method` on `session`.
+async fn send(tab: &Tab, session: &SessionId, method: &str, params: Value) -> Value {
     let reply = tab
         .cdp
-        .send(method, params, Some(&tab.driver))
+        .send(method, params, Some(session))
         .await
         .unwrap_or_else(|error| panic!("{method}: {error}"));
     assert!(reply.get("exceptionDetails").is_none(), "{method}: {reply}");
     reply
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn tests_that_nothing_of_a_runs_clock_outlives_it() {
-    let Some(binary) = browser::e2e_browser() else {
-        return;
-    };
+/// A session of the driver's own on the cross-site frame, attached once the run reached it.
+async fn remote_frame(tab: &Tab) -> SessionId {
+    let reply = tab
+        .cdp
+        .send(
+            "Target.getTargets",
+            json!({ "filter": [{ "type": "iframe" }] }),
+            None,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("Target.getTargets: {error}"));
+    let target = reply["targetInfos"]
+        .as_array()
+        .and_then(|targets| {
+            targets.iter().find(|target| {
+                target["url"]
+                    .as_str()
+                    .is_some_and(|url| url.ends_with("/clock/remote"))
+            })
+        })
+        .unwrap_or_else(|| panic!("an out-of-process frame: {reply}"));
+    let attached = tab
+        .cdp
+        .send(
+            "Target.attachToTarget",
+            json!({ "targetId": target["targetId"], "flatten": true }),
+            None,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("attach to the cross-site frame: {error}"));
+    SessionId::from(
+        attached["sessionId"]
+            .as_str()
+            .unwrap_or_else(|| panic!("Target.attachToTarget answered {attached}")),
+    )
+}
+
+/// Evaluates `expression` on `session`, by value.
+async fn value_in(tab: &Tab, session: &SessionId, expression: &str) -> Value {
+    let reply = send(
+        tab,
+        session,
+        "Runtime.evaluate",
+        json!({ "expression": expression, "returnByValue": true }),
+    )
+    .await;
+    reply["result"]["value"].clone()
+}
+
+/// The run: it resumes the paused clock and leaves a `runFor` running, which resumes it again
+/// on its way out, then waits until the test cancels it.
+const RUN_FOR_LEFT_RUNNING: &str = r"await page.waitForLoadState('load')
+await page.clock.install({ time: 0 })
+await page.clock.pauseAt(1000)
+await page.evaluate(() => {
+  const probe = document.documentElement.probe
+  probe.kept = setTimeout
+  setInterval(() => probe.ticks++, 1)
+})
+await page.clock.resume()
+page.clock.runFor(10000000).catch(() => {})
+await new Promise(() => {})";
+
+/// Every name [`NOT_NATIVE`] reports while the run's clock is on a frame.
+const CLOCKED: [&str; 8] = [
+    "clock",
+    "timers",
+    "Date",
+    "performance",
+    "Intl",
+    "AbortSignal.timeout",
+    "Event.prototype.timeStamp",
+    "Temporal",
+];
+
+/// The page with its frames loaded and the probe set, and what [`RECORD`] kept, by CDP id.
+async fn open_frames() -> Option<(Tab, Value)> {
+    let binary = browser::e2e_browser()?;
     let fixture = Fixture {
         pages: vec![
             ("/clock/frames".to_string(), FRAMES.to_string()),
             ("/clock/child".to_string(), CHILD.to_string()),
+            ("/clock/remote".to_string(), CHILD.to_string()),
         ],
         ..Fixture::default()
     };
@@ -187,36 +285,46 @@ async fn tests_that_nothing_of_a_runs_clock_outlives_it() {
     )
     .await;
     tab.evaluate(PROBE).await;
-    let recorded = send(&tab, "Runtime.evaluate", json!({ "expression": RECORD })).await;
+    let recorded = send(
+        &tab,
+        &tab.driver,
+        "Runtime.evaluate",
+        json!({ "expression": RECORD }),
+    )
+    .await;
     let recorded = recorded["result"]["objectId"].clone();
+    Some((tab, recorded))
+}
 
-    // The run resumes the paused clock and leaves a `runFor` running, which resumes it again on
-    // its way out; it ends by cancellation while that call runs.
+/// Starts `code` against the tab on a runtime of its own, which the test drains, with a
+/// cancellation token the test holds.
+fn start(tab: &Tab, runtime: &Runtime, code: &str) -> (CancellationToken, JoinHandle<RunOutcome>) {
+    let cancel = CancellationToken::new();
+    let request = RunRequest {
+        code: code.to_string(),
+        page: PageId::new(tab.target_id.clone()),
+        timeout: Duration::from_secs(30),
+        cancel: cancel.clone(),
+    };
+    let runtime = runtime.clone();
+    (
+        cancel,
+        tokio::spawn(async move { runtime.run(request).await }),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_nothing_of_a_runs_clock_outlives_it() {
+    let Some((tab, recorded)) = open_frames().await else {
+        return;
+    };
     let runtime = Runtime::connect(tab.cdp.clone())
         .await
         .unwrap_or_else(|error| panic!("Runtime::connect: {error}"));
-    let cancel = CancellationToken::new();
-    let request = RunRequest {
-        code: r"await page.clock.install({ time: 0 })
-               await page.clock.pauseAt(1000)
-               await page.evaluate(() => {
-                 const probe = document.documentElement.probe
-                 probe.kept = setTimeout
-                 setInterval(() => probe.ticks++, 1)
-               })
-               await page.clock.resume()
-               page.clock.runFor(10000000).catch(() => {})
-               await new Promise(() => {})"
-            .to_string(),
-        page: PageId::new(tab.target_id.clone()),
-        timeout: Duration::from_secs(60),
-        cancel: cancel.clone(),
-    };
-    let run = tokio::spawn({
-        let runtime = runtime.clone();
-        async move { runtime.run(request).await }
-    });
+    let (cancel, run) = start(&tab, &runtime, RUN_FOR_LEFT_RUNNING);
     wait_for(&tab, RUNNING_FOR).await;
+    let remote = remote_frame(&tab).await;
+    let remote_during = value_in(&tab, &remote, NOT_NATIVE).await;
     cancel.cancel();
     let outcome = finish(run).await;
     time::timeout(Duration::from_secs(10), runtime.drain())
@@ -234,8 +342,10 @@ async fn tests_that_nothing_of_a_runs_clock_outlives_it() {
             "[document.documentElement.probe.ticks, document.documentElement.probe.late ?? false]",
         )
         .await;
+    let remote_after = value_in(&tab, &remote, NOT_NATIVE).await;
     let changed = send(
         &tab,
+        &tab.driver,
         "Runtime.callFunctionOn",
         json!({ "objectId": recorded, "functionDeclaration": CHANGED, "returnByValue": true }),
     )
@@ -243,6 +353,11 @@ async fn tests_that_nothing_of_a_runs_clock_outlives_it() {
     tab.close().await;
 
     assert_eq!(outcome.status, RunStatus::Cancelled, "{outcome:?}");
+    assert_eq!(
+        remote_during,
+        json!(CLOCKED),
+        "the run's clock reached the cross-site frame"
+    );
     assert_eq!(
         later,
         json!([ticks, false]),
@@ -253,5 +368,10 @@ async fn tests_that_nothing_of_a_runs_clock_outlives_it() {
         changed["result"]["value"],
         json!([]),
         "every property the clock replaced, in the page and its frame, is as it was before"
+    );
+    assert_eq!(
+        remote_after,
+        json!([]),
+        "the cross-site frame has the browser's own timing APIs back"
     );
 }
