@@ -4906,29 +4906,65 @@ function pickParams(keys, options) {
 }
 
 // src/select-option.ts
+var ELEMENT_VALUES_UNSUPPORTED = "Neo does not support ElementHandle values in selectOption yet";
 function convertSelectOptionValues(values) {
   if (values === null)
     return {};
-  if (!Array.isArray(values))
-    values = [values];
-  if (!values.length)
+  const list = snapshot(values);
+  if (!list.length)
     return {};
-  for (let i = 0;i < values.length; i++) {
-    if (values[i] === null)
+  for (let i = 0;i < list.length; i++) {
+    if (list[i] === null)
       throw new Error(`options[${i}]: expected object, got null`);
   }
-  const options = isString(values[0]) ? values.map((valueOrLabel) => ({ valueOrLabel })) : values;
-  for (const [index, option] of options.entries()) {
-    if (typeof option !== "object" || option === null)
-      throw new Error(`options[${index}]: expected object`);
-    for (const field of ["valueOrLabel", "value", "label"]) {
-      if (option[field] !== undefined && typeof option[field] !== "string")
-        throw new Error(`options[${index}].${field}: expected string`);
-    }
-    if (option.index !== undefined && !Number.isInteger(option.index))
-      throw new Error(`options[${index}].index: expected integer`);
+  for (let i = 0;i < list.length; i++) {
+    if (list[i] instanceof JSHandle)
+      throw new Error(ELEMENT_VALUES_UNSUPPORTED);
+  }
+  const strings = isString(list[0]);
+  const options = [];
+  for (let i = 0;i < list.length; i++) {
+    options[i] = copyOption(strings ? { valueOrLabel: list[i] } : list[i], i);
   }
   return { options };
+}
+function snapshot(values) {
+  if (!Array.isArray(values))
+    return [values];
+  const length = values.length;
+  if (typeof length !== "number" || !Number.isSafeInteger(length) || length < 0)
+    throw new Error("options: expected array");
+  const list = [];
+  for (let i = 0;i < length; i++)
+    list[i] = values[i];
+  return list;
+}
+function copyOption(option, index) {
+  if (typeof option !== "object" || option === null)
+    throw new Error(`options[${index}]: expected object`);
+  const source = option;
+  const valueOrLabel = source.valueOrLabel;
+  const value = source.value;
+  const label = source.label;
+  const position = source.index;
+  const copy = {};
+  if (valueOrLabel !== undefined)
+    copy.valueOrLabel = text(valueOrLabel, index, "valueOrLabel");
+  if (value !== undefined)
+    copy.value = text(value, index, "value");
+  if (label !== undefined)
+    copy.label = text(label, index, "label");
+  if (position !== undefined) {
+    if (typeof position !== "number" || !Number.isInteger(position))
+      throw new Error(`options[${index}].index: expected integer`);
+    copy.index = position;
+  }
+  return copy;
+}
+function text(value, index, field) {
+  if (typeof value !== "string")
+    throw new Error(`options[${index}].${field}: expected string`);
+  return value;
 }
 
 // src/url.ts
@@ -5071,8 +5107,8 @@ function urlFor(url) {
   const parts = parseURL(url);
   return parts ? new URL3(parts) : null;
 }
-function formEncode(text) {
-  return encodeURIComponent(text).replace(/%20/g, "+").replace(/[!'()~]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+function formEncode(text2) {
+  return encodeURIComponent(text2).replace(/%20/g, "+").replace(/[!'()~]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 // src/frame.ts
@@ -5522,13 +5558,13 @@ class Frame {
       ...options
     }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
-  async type(selector, text, options = {}) {
-    return await this._type("frame.type", selector, text, options);
+  async type(selector, text2, options = {}) {
+    return await this._type("frame.type", selector, text2, options);
   }
-  async _type(apiName, selector, text, options) {
+  async _type(apiName, selector, text2, options) {
     await this._connection.send(apiName, this._guid, "type", pickParams(FRAME_TYPE_KEYS, {
       selector,
-      text,
+      text: text2,
       ...options
     }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
@@ -5715,20 +5751,20 @@ class Frame {
   getByTestId(testId) {
     return this.locator(getByTestIdSelector(testIdAttributeName(), testId));
   }
-  getByAltText(text, options) {
-    return this.locator(getByAltTextSelector(text, options));
+  getByAltText(text2, options) {
+    return this.locator(getByAltTextSelector(text2, options));
   }
-  getByLabel(text, options) {
-    return this.locator(getByLabelSelector(text, options));
+  getByLabel(text2, options) {
+    return this.locator(getByLabelSelector(text2, options));
   }
-  getByPlaceholder(text, options) {
-    return this.locator(getByPlaceholderSelector(text, options));
+  getByPlaceholder(text2, options) {
+    return this.locator(getByPlaceholderSelector(text2, options));
   }
-  getByText(text, options) {
-    return this.locator(getByTextSelector(text, options));
+  getByText(text2, options) {
+    return this.locator(getByTextSelector(text2, options));
   }
-  getByTitle(text, options) {
-    return this.locator(getByTitleSelector(text, options));
+  getByTitle(text2, options) {
+    return this.locator(getByTitleSelector(text2, options));
   }
   getByRole(role, options = {}) {
     return this.locator(getByRoleSelector(role, options));
@@ -5761,14 +5797,14 @@ class Keyboard {
   async up(key) {
     await this.#page._sendInput("keyboard.up", "keyboardUp", pickParams(PAGE_KEYBOARD_UP_KEYS, { key }));
   }
-  async insertText(text) {
+  async insertText(text2) {
     await this.#page._sendInput("keyboard.insertText", "keyboardInsertText", pickParams(PAGE_KEYBOARD_INSERT_TEXT_KEYS, {
-      text
+      text: text2
     }));
   }
-  async type(text, options = {}) {
+  async type(text2, options = {}) {
     await this.#page._sendInput("keyboard.type", "keyboardType", pickParams(PAGE_KEYBOARD_TYPE_KEYS, {
-      text,
+      text: text2,
       ...options
     }));
   }
@@ -6350,8 +6386,8 @@ class Page extends ChannelOwner {
   async press(selector, key, options = {}) {
     return await this.#mainFrame._press("page.press", selector, key, options);
   }
-  async type(selector, text, options = {}) {
-    return await this.#mainFrame._type("page.type", selector, text, options);
+  async type(selector, text2, options = {}) {
+    return await this.#mainFrame._type("page.type", selector, text2, options);
   }
   async inputValue(selector, options = {}) {
     return await this.#mainFrame._inputValue("page.inputValue", selector, options);
@@ -6401,20 +6437,20 @@ class Page extends ChannelOwner {
   getByTestId(testId) {
     return this.mainFrame().getByTestId(testId);
   }
-  getByAltText(text, options) {
-    return this.mainFrame().getByAltText(text, options);
+  getByAltText(text2, options) {
+    return this.mainFrame().getByAltText(text2, options);
   }
-  getByLabel(text, options) {
-    return this.mainFrame().getByLabel(text, options);
+  getByLabel(text2, options) {
+    return this.mainFrame().getByLabel(text2, options);
   }
-  getByPlaceholder(text, options) {
-    return this.mainFrame().getByPlaceholder(text, options);
+  getByPlaceholder(text2, options) {
+    return this.mainFrame().getByPlaceholder(text2, options);
   }
-  getByText(text, options) {
-    return this.mainFrame().getByText(text, options);
+  getByText(text2, options) {
+    return this.mainFrame().getByText(text2, options);
   }
-  getByTitle(text, options) {
-    return this.mainFrame().getByTitle(text, options);
+  getByTitle(text2, options) {
+    return this.mainFrame().getByTitle(text2, options);
   }
   getByRole(role, options = {}) {
     return this.mainFrame().getByRole(role, options);
