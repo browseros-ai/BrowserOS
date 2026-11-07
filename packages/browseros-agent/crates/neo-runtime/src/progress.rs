@@ -32,6 +32,7 @@ use tokio_util::task::TaskTracker;
 use tracing::info;
 
 use crate::abort::CallAbort;
+use crate::auto_attach::AutoAttach;
 use crate::deadline::{Deadline, Stop};
 use crate::evaluate::Handles;
 use crate::init_scripts::InitScripts;
@@ -144,6 +145,9 @@ pub(crate) struct RunScope {
     pub(crate) handles: Arc<Handles>,
     /// The run's init scripts (`init_scripts.rs`); removed from every session at run end.
     pub(crate) init_scripts: Arc<InitScripts>,
+    /// The run's one auto-attach setting per session (`auto_attach.rs`), shared by the init
+    /// scripts and `workers.rs`.
+    pub(crate) auto_attach: Arc<AutoAttach>,
     /// Cancelled when the script closes the run's context (`tab_calls.rs` `close_context`):
     /// every call still running stops at its next await or check, as Playwright's calls stop
     /// with its connection, and none writes input after.
@@ -152,13 +156,15 @@ pub(crate) struct RunScope {
 
 impl RunScope {
     pub(crate) fn new(deadline: Deadline, tasks: TaskTracker) -> Self {
+        let auto_attach = Arc::new(AutoAttach::default());
         Self {
             deadline,
             ended: CancellationToken::new(),
             end_reason: Arc::default(),
             tasks,
             handles: Arc::default(),
-            init_scripts: Arc::default(),
+            init_scripts: Arc::new(InitScripts::with_auto_attach(Arc::clone(&auto_attach))),
+            auto_attach,
             context_closed: CancellationToken::new(),
         }
     }

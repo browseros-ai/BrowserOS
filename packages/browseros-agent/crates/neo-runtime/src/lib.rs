@@ -51,6 +51,7 @@ mod fake_browser;
 
 mod abort;
 mod aria_yaml;
+mod auto_attach;
 mod bridge;
 mod check;
 mod click;
