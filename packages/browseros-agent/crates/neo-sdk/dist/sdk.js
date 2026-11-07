@@ -5015,7 +5015,6 @@ function pickParams(keys, options) {
 }
 
 // src/select-option.ts
-var ELEMENT_VALUES_UNSUPPORTED = "Neo does not support ElementHandle values in selectOption yet";
 function convertSelectOptionValues(values) {
   if (values === null)
     return {};
@@ -5026,16 +5025,24 @@ function convertSelectOptionValues(values) {
     if (list[i] === null)
       throw new Error(`options[${i}]: expected object, got null`);
   }
-  for (let i = 0;i < list.length; i++) {
-    if (list[i] instanceof JSHandle)
-      throw new Error(ELEMENT_VALUES_UNSUPPORTED);
-  }
+  if (list[0] instanceof ElementHandle)
+    return { elements: elementsOf(list) };
   const strings = isString(list[0]);
   const options = [];
   for (let i = 0;i < list.length; i++) {
     options[i] = copyOption(strings ? { valueOrLabel: list[i] } : list[i], i);
   }
   return { options };
+}
+function elementsOf(list) {
+  const elements = [];
+  for (let i = 0;i < list.length; i++) {
+    const value = list[i];
+    if (!(value instanceof ElementHandle))
+      throw new TypeError(`elements[${i}]: expected channel ElementHandle, got ${typeof value}`);
+    elements[i] = { guid: value._guid };
+  }
+  return elements;
 }
 function snapshot(values) {
   if (!Array.isArray(values))

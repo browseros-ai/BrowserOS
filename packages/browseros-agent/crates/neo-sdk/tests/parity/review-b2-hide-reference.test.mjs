@@ -1,3 +1,10 @@
+// Pinned Playwright's reference for review-b2-recheck.test.mjs 'review: an older hide-all keeps
+// a newer highlight in another document', which holds Neo to this count: a main-frame hide still
+// pending does not erase a highlight that frame B drew after B's own hide.
+//
+// Playwright's setHighlights draws on the frame's next animation frame (injected highlight.ts
+// _ensureElementHighlightRaf), so locator.highlight() resolves before the element exists. The
+// counts below come after B's animation frames, never after a timer.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
@@ -55,24 +62,48 @@ test('pinned Playwright keeps a new B highlight while main-frame hide is pending
       if (String(fn).includes('hideHighlight')) onChildHidden()
       return result
     }
-    const hiding = page.hideHighlight()
-    await Promise.all([blocked, childHidden])
-    await page.frame('B').locator('#new').highlight()
-    releaseMain()
-    await hiding
-    mainGlue.evaluate = mainEvaluate
-    childGlue.evaluate = childEvaluate
-    const cdp = await context.newCDPSession(page.frame('B'))
+    const b = page.frame('B')
+    const cdp = await context.newCDPSession(b)
     const walk = (n) => [
       n,
       ...(n.children ?? []).flatMap(walk),
       ...(n.shadowRoots ?? []).flatMap(walk),
     ]
-    const count = walk(
-      (await cdp.send('DOM.getDocument', { depth: -1, pierce: true })).root,
-    ).filter((n) => n.nodeName === 'X-PW-HIGHLIGHT').length
-    t.diagnostic(JSON.stringify({ afterOldHide: count }))
-    assert.equal(count, 1)
+    const count = async () =>
+      walk(
+        (await cdp.send('DOM.getDocument', { depth: -1, pierce: true })).root,
+      ).filter((n) => n.nodeName === 'X-PW-HIGHLIGHT').length
+    const nextFrame = () =>
+      b.evaluate(
+        () => new Promise((resolve) => requestAnimationFrame(() => resolve())),
+      )
+    const hiding = page.hideHighlight()
+    await Promise.all([blocked, childHidden])
+    await b.locator('#new').highlight()
+    // The new highlight is drawn while the main-frame hide is still pending.
+    let drawn = 0
+    for (let frames = 0; !drawn && frames < 60; frames++) {
+      await nextFrame()
+      drawn = await count()
+    }
+    releaseMain()
+    await hiding
+    mainGlue.evaluate = mainEvaluate
+    childGlue.evaluate = childEvaluate
+    // Whatever the old hide did to B has landed by B's next frame.
+    await nextFrame()
+    const afterOldHide = await count()
+    t.diagnostic(JSON.stringify({ drawn, afterOldHide }))
+    assert.equal(
+      drawn,
+      1,
+      'the new B highlight is drawn before the old hide ends',
+    )
+    assert.equal(
+      afterOldHide,
+      1,
+      'the old main-frame hide keeps the new B highlight',
+    )
   } finally {
     releaseMain()
     await runCleanups(cleanups)
