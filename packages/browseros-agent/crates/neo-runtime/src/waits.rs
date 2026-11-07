@@ -132,7 +132,7 @@ pub(crate) struct WaitForUrlOptions {
 
 impl WaitForUrlOptions {
     pub(crate) fn from_params(params: &NeoWaitForUrlParams) -> Result<Self, PlaywrightError> {
-        let wait_until = supported_lifecycle(params.wait_until, "waitUntil")?;
+        let wait_until = params.wait_until.unwrap_or(LifecycleEvent::Load);
         Ok(Self {
             matcher: UrlMatcher::new(&params.url)?,
             wait_until,
@@ -146,23 +146,12 @@ pub(crate) struct WaitForLoadStateOptions {
 }
 
 impl WaitForLoadStateOptions {
-    pub(crate) fn from_params(params: NeoWaitForLoadStateParams) -> Result<Self, PlaywrightError> {
-        Ok(Self {
-            state: supported_lifecycle(params.state, "state")?,
-        })
+    /// Every lifecycle event Playwright waits for is served, `load` when absent.
+    pub(crate) fn from_params(params: NeoWaitForLoadStateParams) -> Self {
+        Self {
+            state: params.state.unwrap_or(LifecycleEvent::Load),
+        }
     }
-}
-
-pub(crate) fn supported_lifecycle(
-    state: Option<LifecycleEvent>,
-    name: &str,
-) -> Result<LifecycleEvent, PlaywrightError> {
-    if state == Some(LifecycleEvent::Networkidle) {
-        return Err(PlaywrightError::error(format!(
-            "Neo does not support {name}: \"networkidle\" yet"
-        )));
-    }
-    Ok(state.unwrap_or(LifecycleEvent::Load))
 }
 
 /// The three public waits share deadline, cancellation and disposal here. A condition's
@@ -363,6 +352,13 @@ pub(crate) async fn wait_for_load_state<T: WaitTab>(
         progress.log("  not waiting, \"commit\" event already fired");
         return Ok(());
     }
+    // `networkidle` is told from the page's requests, which Neo sees once Network is enabled.
+    if options.state == LifecycleEvent::Networkidle {
+        progress
+            .race(tab.track_network())
+            .await?
+            .map_err(page_error)?;
+    }
     let events = tab.observe().map_err(page_error)?;
     let since = events.state().lifecycle;
     wait_until(
@@ -517,7 +513,7 @@ fn lifecycle_fired(lifecycle: Lifecycle, state: LifecycleEvent) -> bool {
         LifecycleEvent::Commit => true,
         LifecycleEvent::Domcontentloaded => lifecycle.dom_content_loaded,
         LifecycleEvent::Load => lifecycle.load,
-        LifecycleEvent::Networkidle => false,
+        LifecycleEvent::Networkidle => lifecycle.network_idle,
     }
 }
 
@@ -533,7 +529,10 @@ pub(crate) fn lifecycle_reached(
                 || current.dom_content_loaded_count > since.dom_content_loaded_count
         }
         LifecycleEvent::Load => since.load || current.load_count > since.load_count,
-        LifecycleEvent::Networkidle => false,
+        // Playwright: `server/frames.ts` `Frame.waitForLoadState`: `if (!this._firedLifecycleEvents.has(waitUntil))`
+        LifecycleEvent::Networkidle => {
+            since.network_idle || current.network_idle_count > since.network_idle_count
+        }
     }
 }
 
@@ -1052,7 +1051,6 @@ mod tests {
 
     fn load(state: LifecycleEvent) -> WaitForLoadStateOptions {
         WaitForLoadStateOptions::from_params(NeoWaitForLoadStateParams { state: Some(state) })
-            .expect("load options")
     }
 
     struct Run {

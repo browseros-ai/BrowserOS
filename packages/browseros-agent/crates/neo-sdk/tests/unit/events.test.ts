@@ -116,13 +116,13 @@ test('tests that the first listener subscribes and the last one unsubscribes', (
 
 test('tests that an unserved Playwright event refuses a listener instead of never firing', async () => {
   const { page, context } = run()
-  expect(() => page.on('request', () => {})).toThrow(
-    'Neo does not serve the "request" event on Page yet',
+  expect(() => page.on('filechooser', () => {})).toThrow(
+    'Neo does not serve the "filechooser" event on Page yet',
   )
   expect(() => context.once('serviceworker', () => {})).toThrow(
     /BrowserContext/,
   )
-  expect(page.listenerCount('request')).toBe(0)
+  expect(page.listenerCount('filechooser')).toBe(0)
   await expect(page.waitForEvent('download')).rejects.toThrow(
     'page.waitForEvent: Neo does not serve the "download" event on Page yet',
   )

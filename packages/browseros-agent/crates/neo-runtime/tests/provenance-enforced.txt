@@ -27,6 +27,8 @@ neo-runtime/src/highlight.rs
 neo-runtime/src/history.rs
 neo-runtime/src/input_devices.rs
 neo-runtime/src/main_world.rs
+neo-runtime/src/network_events.rs
+neo-runtime/src/network_idle.rs
 neo-runtime/src/page_events.rs
 neo-sdk/src/console-message.ts
 neo-sdk/src/dialog.ts
