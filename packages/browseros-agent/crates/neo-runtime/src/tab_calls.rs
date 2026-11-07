@@ -108,10 +108,6 @@ async fn close_context(tabs: &Tabs, progress: &Progress) -> Result<(), CallError
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "one arm per Page call Neo serves outside the frame, each a line or a helper"
-)]
 pub(crate) async fn page(
     tabs: &Tabs,
     entry: &Arc<PageEntry>,
