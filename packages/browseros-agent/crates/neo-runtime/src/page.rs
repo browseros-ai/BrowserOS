@@ -194,6 +194,10 @@ pub(crate) struct PageSession {
     pub(crate) network: Arc<NetworkLog>,
     /// `Network.enable`, sent on this session's first goto and kept for the run.
     network_enabled: OnceCell<()>,
+    /// Playwright's `Screenshotter` task queue: one screenshot at a time on this tab, so one's
+    /// background override, masks and page preparation never overlap another's. Its cleanup
+    /// tasks hold the turn too, until they have undone their part (`screenshot.rs`).
+    pub(crate) screenshots: Arc<Mutex<()>>,
     /// What the watcher turns into the run's events, and the tab's console history and dialogs.
     pub(crate) events: PageEvents,
     /// `Runtime.enable` and `Log.enable`, sent once a run listens to console messages or page
@@ -547,6 +551,7 @@ impl PageSession {
             input,
             network: Arc::new(NetworkLog::new(page.as_str().to_string())),
             network_enabled: OnceCell::new(),
+            screenshots: Arc::new(Mutex::new(())),
             events,
             runtime_enabled: OnceCell::new(),
         }

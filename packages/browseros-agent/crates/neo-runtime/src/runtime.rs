@@ -12,11 +12,14 @@
 //! so sessions detach once the realm, dispatcher and their writers are gone, also when a
 //! caller drops the run's future. Browser tabs themselves survive the run.
 
+use std::sync::Arc;
+
 use browseros_cdp::{CdpClient, CdpError, browser};
 use serde_json::Value;
 use tokio::runtime::{Handle, RuntimeFlavor};
 use tokio_util::task::TaskTracker;
 
+use crate::artifacts::Artifacts;
 use crate::bridge;
 use crate::bridge::Getters;
 use crate::deadline::Deadline;
@@ -124,6 +127,7 @@ impl Runtime {
             page,
             timeout,
             cancel,
+            artifacts,
         } = request;
         let deadline = Deadline::new(timeout, cancel);
         let tokio = match Handle::try_current() {
@@ -167,7 +171,8 @@ impl Runtime {
         // One tracker for the run: call tasks, and the writer, interceptor-stop and
         // group-release tasks the page spawns, so `finish` waits for them all.
         let getters = Getters::new(tabs.clone(), deadline.clone(), tokio);
-        let run = RunScope::new(deadline.clone(), tasks);
+        let artifacts = Arc::new(Artifacts::new(artifacts));
+        let run = RunScope::new(deadline.clone(), tasks).with_artifacts(Arc::clone(&artifacts));
         let dispatcher = Dispatcher::new(tabs.clone(), run);
         let events = tabs.events().clone();
         let outcome = realm::run(script, getters, dispatcher.clone(), deadline, events).await;
@@ -175,6 +180,7 @@ impl Runtime {
         outcome
             .with_calls(calls, dropped)
             .with_pages(tabs.outcome())
+            .with_artifacts(artifacts.written())
     }
 }
 

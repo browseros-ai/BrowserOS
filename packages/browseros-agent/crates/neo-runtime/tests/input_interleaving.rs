@@ -65,6 +65,7 @@ fn request(tab: &Tab, code: &str, timeout: Duration, cancel: CancellationToken) 
         page: PageId::new(tab.target_id.clone()),
         timeout,
         cancel,
+        artifacts: None,
     }
 }
 

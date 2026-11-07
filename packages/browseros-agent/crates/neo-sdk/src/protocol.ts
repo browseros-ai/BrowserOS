@@ -38,8 +38,11 @@ import type {
   PageGoBackParams,
   PageGoForwardParams,
   PagePageErrorsParams,
+  PagePdfParams,
   PageReloadParams,
+  PageScreenshotParams,
 } from '@browseros/neo-runtime-spec/serve'
+import type { NeoScreenshotParams } from './neo-commands'
 
 /** `Frame.goto`'s params in Playwright's schema order (`spec/playwright/frame.yml`). */
 export const FRAME_GOTO_KEYS = ['url', 'waitUntil', 'referer'] as const
@@ -348,6 +351,55 @@ type _FrameWaitForSelectorKeysMatchSpec = Assert<
 /** `Page.close`'s params (`spec/playwright/page.yml`). */
 export const PAGE_CLOSE_KEYS = ['reason'] as const
 
+/** `Page.screenshot` in Playwright schema order (`spec/playwright/page.yml`, then the
+ * `CommonScreenshotOptions` mixin). */
+export const PAGE_SCREENSHOT_KEYS = [
+  'type',
+  'quality',
+  'fullPage',
+  'clip',
+  'omitBackground',
+  'caret',
+  'animations',
+  'scale',
+  'mask',
+  'maskColor',
+  'style',
+] as const
+
+/** `Page.pdf` in Playwright schema order. */
+export const PAGE_PDF_KEYS = [
+  'scale',
+  'displayHeaderFooter',
+  'headerTemplate',
+  'footerTemplate',
+  'printBackground',
+  'landscape',
+  'pageRanges',
+  'format',
+  'width',
+  'height',
+  'preferCSSPageSize',
+  'margin',
+  'tagged',
+  'outline',
+] as const
+
+/** `neo:screenshot`: the selector, then `ElementHandle.screenshot` in Playwright schema order
+ * (`spec/playwright/handles.yml`); Neo's `path` is added after. */
+export const NEO_SCREENSHOT_KEYS = [
+  'selector',
+  'type',
+  'quality',
+  'omitBackground',
+  'caret',
+  'animations',
+  'scale',
+  'mask',
+  'maskColor',
+  'style',
+] as const
+
 type _PageCloseKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof PAGE_CLOSE_KEYS)[number], true>,
@@ -421,3 +473,21 @@ export function pickParams<Keys extends readonly string[]>(
   }
   return params
 }
+type _PageScreenshotKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_SCREENSHOT_KEYS)[number], true>,
+    Required<PageScreenshotParams>
+  >
+>
+type _PagePdfKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_PDF_KEYS)[number], true>,
+    Required<PagePdfParams>
+  >
+>
+type _NeoScreenshotKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof NEO_SCREENSHOT_KEYS)[number] | 'path', true>,
+    Required<NeoScreenshotParams>
+  >
+>

@@ -211,6 +211,21 @@ return {
   fresh: await settle(page.click('#target', { signal: new AbortController().signal }), undefined),
 }`
 
+// A screenshot aborted mid-capture: the element is attached but hidden, so the capture prepares
+// the page (the caret style it injects) and then waits for it to show. The abort rejects it and
+// the page is restored, as Playwright's cleanup restores it.
+const SCREENSHOT = `
+const styles = () => page.evaluate(() => document.querySelectorAll('style').length)
+const before = await styles()
+const controller = new AbortController()
+const pending = settle(page.locator('#hidden').screenshot({ signal: controller.signal, timeout: 0 }), 'stop capture')
+await pause(500)
+const during = await styles()
+controller.abort('stop capture')
+const settled = await pending
+await pause(300)
+return { settled, prepared: during > before, restored: (await styles()) === before }`
+
 // An aborted call ends only itself: a handle the run made before still works.
 const HANDLES = `
 const handle = await page.evaluateHandle(() => document.querySelector('#target'))
@@ -418,6 +433,23 @@ test('signal aborts calls as Playwright does', {
           fresh: 'resolved',
         })
         assert.deepEqual(reference.effect, { ...UNTOUCHED, clicks: 2 })
+      },
+    )
+
+    await t.test(
+      'a screenshot aborted mid-capture rejects and restores the page',
+      async () => {
+        const { reference } = await both('screenshot', SCREENSHOT)
+        assert.deepEqual(reference.value, {
+          settled: {
+            name: 'AbortError',
+            isError: true,
+            causeIsReason: true,
+            namesReason: true,
+          },
+          prepared: true,
+          restored: true,
+        })
       },
     )
 
