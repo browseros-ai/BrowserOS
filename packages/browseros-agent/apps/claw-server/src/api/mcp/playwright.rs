@@ -245,14 +245,33 @@ async fn add_page_urls(cdp: &CdpClient, result: &mut Value) {
         return;
     };
     if let (Some(pages), Some(tabs)) = (result["pages"].as_array_mut(), reply["tabs"].as_array()) {
-        for page in pages.iter_mut().filter(|page| page["closed"] != true) {
-            if let Some(url) = tabs
-                .iter()
-                .find(|tab| tab["targetId"] == page["id"])
-                .and_then(|tab| tab["url"].as_str())
-            {
-                page["url"] = json!(url);
-            }
+        set_page_urls(pages, tabs);
+    }
+}
+
+/// URL bytes one result may add to `pages`. The bounded output keeps `pages` whole, so long
+/// URLs (data: URLs, every tab `context.pages()` listed) must not crowd out the run's value.
+const PAGE_URL_BUDGET: usize = 4_096;
+
+/// Sets each open page's tab URL within [`PAGE_URL_BUDGET`]: the run's tab and the tabs it
+/// created first, since later runs resume those. A URL that does not fit is left out.
+fn set_page_urls(pages: &mut [Value], tabs: &[Value]) {
+    let (first, rest): (Vec<usize>, Vec<usize>) =
+        (0..pages.len()).partition(|&index| index == 0 || pages[index]["created"] == true);
+    let mut left = PAGE_URL_BUDGET;
+    for index in first.into_iter().chain(rest) {
+        let page = &mut pages[index];
+        if page["closed"] == true {
+            continue;
+        }
+        if let Some(url) = tabs
+            .iter()
+            .find(|tab| tab["targetId"] == page["id"])
+            .and_then(|tab| tab["url"].as_str())
+            && let Some(remaining) = left.checked_sub(url.len())
+        {
+            left = remaining;
+            page["url"] = json!(url);
         }
     }
 }
@@ -505,5 +524,40 @@ impl ServerHandler for PlaywrightService {
             CallToolResult::structured_error(result)
         }
         .into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::set_page_urls;
+    use crate::api::mcp::output::{BUDGET, Store};
+
+    /// Long tab URLs must not push a small value out of the bounded reply: ids stay complete,
+    /// the run's tab keeps its URL, and a URL that does not fit is left out.
+    #[test]
+    fn tests_that_long_tab_urls_keep_the_value_within_the_output_budget() {
+        let mut pages = vec![
+            json!({"id":"run", "created":false, "closed":false}),
+            json!({"id":"new", "created":true, "closed":false}),
+        ];
+        let mut tabs = vec![
+            json!({"targetId":"run", "url":"https://news.example/"}),
+            json!({"targetId":"new", "url":format!("data:text/html,{}", "y".repeat(30_000))}),
+        ];
+        for index in 0..60 {
+            pages.push(json!({"id":format!("t{index}"), "created":false, "closed":false}));
+            tabs.push(json!({"targetId":format!("t{index}"),
+                "url":format!("https://example.com/{index}/{}", "z".repeat(430))}));
+        }
+        set_page_urls(&mut pages, &tabs);
+        let bounded = Store::default()
+            .limit(json!({"status":"ok", "value":62, "logs":[], "calls":[], "pages":pages}));
+        assert!(bounded.to_string().len() <= BUDGET);
+        assert_eq!(bounded["value"], 62);
+        assert_eq!(bounded["pages"].as_array().map(Vec::len), Some(62));
+        assert_eq!(bounded["pages"][0]["url"], "https://news.example/");
+        assert!(bounded["pages"][1].get("url").is_none());
     }
 }
