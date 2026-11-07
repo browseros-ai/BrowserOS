@@ -46,7 +46,7 @@ const once = () => order.push('once')
 signal.addEventListener('abort', once, { once: true })
 signal.addEventListener('abort', once, { once: true })
 signal.onabort = function (event) { order.push(`onabort ${event.type} ${this === signal}`) }
-signal.addEventListener('abort', { handleEvent: (event) => order.push(`object ${event.target === signal}`) })
+signal.addEventListener('abort', { handleEvent: (event) => order.push(`object ${event.target === signal} ${event.currentTarget === signal}`) })
 const removed = () => order.push('removed')
 signal.addEventListener('abort', removed)
 signal.removeEventListener('abort', removed)
@@ -93,7 +93,7 @@ return {
                 "name": "AbortError",
                 "message": "This operation was aborted",
             },
-            "order": ["once", "onabort abort true", "object true"],
+            "order": ["once", "onabort abort true", "object true true"],
             "illegal": "TypeError",
             "preset": [true, "why", "AbortError"],
             "timed": [true, "TimeoutError", "The operation was aborted due to timeout"],

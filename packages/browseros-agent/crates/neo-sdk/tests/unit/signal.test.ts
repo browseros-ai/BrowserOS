@@ -283,6 +283,31 @@ test('tests that waitForEvent rejects with AbortError for an aborted signal and 
   expect(late?.cause).toBe(reason)
 })
 
+test('tests that browserContext.waitForEvent rejects with AbortError for an aborted signal and when one aborts', async () => {
+  const { context } = start()
+  const reason = new Error('stop')
+  const early = await context
+    .waitForEvent('console', { signal: { aborted: true, reason } } as never)
+    .then(
+      () => null,
+      (error: Error) => error,
+    )
+  expect(early?.name).toBe('AbortError')
+  expect(early?.message.startsWith('browserContext.waitForEvent: ')).toBe(true)
+  expect(early?.cause).toBe(reason)
+  const controller = new AbortController()
+  const waiting = context
+    .waitForEvent('console', { signal: controller.signal } as never)
+    .then(
+      () => null,
+      (error: Error) => error,
+    )
+  controller.abort(reason)
+  const late = await waiting
+  expect(late?.name).toBe('AbortError')
+  expect(late?.cause).toBe(reason)
+})
+
 test('tests that an aborted predicate wait rejects with AbortError and releases its cursor without the signal', async () => {
   const { page, fake } = start()
   let nexts = 0
