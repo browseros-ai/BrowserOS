@@ -48,9 +48,11 @@
 //! stay. Playwright numbers its frames instead (`f1e3`), which a later run could not rebuild. An
 //! `ai` snapshot taken inside a child frame names its refs the same way: the iframes on the way
 //! from the main frame each give their ref (`frameOwnerRef`, which also keeps the owner, so one
-//! inside a closed shadow root still routes), and an iframe that gets none (hidden) makes it
-//! throw before the frame is snapshotted ([`UNNAMED_FRAME`]). The `default` mode gives no node a ref, so, as in
-//! Playwright, its iframe nodes keep only what the page gave them.
+//! inside a closed shadow root still routes). Behind an iframe that gets none (it is not visible
+//! or receives no pointer events) the path starts again at that iframe's frame, named by its id
+//! (`- button [ref=fi35f6…b0f5e1]`, [`frame_selector::identity_hop`]), which any later run
+//! enters directly, as Playwright enters a frame by its number. The `default` mode gives no node a
+//! ref, so, as in Playwright, its iframe nodes keep only what the page gave them.
 //!
 //! Neo-only: a lone surrogate (a truncated emoji) in any page call's answer or thrown message
 //! reads as U+FFFD (`neo-runtime-injected/src/well-formed.ts`); Rust strings are UTF-8, and a CDP
@@ -96,9 +98,6 @@ const FRAME_HOP: &str = " >> internal:control=enter-frame >> ";
 /// The waits before each snapshot attempt: Playwright's `[1000, 2000, 4000, 8000]` after an
 /// immediate first try, the last repeating, and never capped by the call's timeout.
 const SNAPSHOT_WAITS_MS: [u64; 5] = [0, 1000, 2000, 4000, 8000];
-
-/// Deviation: `server/page.ts` `ariaSnapshotJSONForFrame`: `return { ...resolved.result, resolvedFrame: resolved.frame };` Playwright names a child frame's refs by the frame's number, which needs no ref on its `<iframe>`; Neo's refs inside a frame are the path of iframe refs from the main frame, and an iframe that is not visible or receives no pointer events gets no ref unless an earlier snapshot gave it one. So an AI snapshot inside a frame behind such an iframe throws, before that frame is snapshotted, rather than answer refs no selector could route.
-const UNNAMED_FRAME: &str = "Neo cannot name refs inside a frame whose <iframe> gets no ref (it is not visible or receives no pointer events); snapshot without mode: 'ai'";
 
 // ---------------------------------------------------------------------------------------------
 // The seam.
@@ -883,12 +882,14 @@ fn prefix_refs(nodes: &mut [AriaNode], prefix: &str) {
     }
 }
 
-/// Neo: the main-rooted path of the document behind `owners` (main frame first): `f<N>` for each
-/// iframe, `N` the number of the ref its document's snapshots give it (`frameOwnerRef`, which
-/// leaves that document's last snapshot, and so every ref the caller holds there, as it was).
-async fn owner_path(owners: &[FrameOwner]) -> Result<String, PageError> {
+/// Neo: the main-rooted path of `frame`, the document behind `owners` (main frame first): `f<N>`
+/// for each iframe, `N` the number of the ref its document's snapshots give it (`frameOwnerRef`,
+/// which leaves that document's last snapshot, and so every ref the caller holds there, as it
+/// was). An iframe that gets no ref (not visible, or receiving no pointer events) starts the path
+/// again at its frame, named by the frame's id (`fi…`), which needs no hop before it.
+async fn owner_path(owners: &[FrameOwner], frame: &str) -> Result<String, PageError> {
     let mut path = String::new();
-    for owner in owners {
+    for (index, owner) in owners.iter().enumerate() {
         let named = owner
             .frame
             .call(
@@ -903,11 +904,19 @@ async fn owner_path(owners: &[FrameOwner]) -> Result<String, PageError> {
             .as_deref()
             .and_then(|aria_ref| aria_ref.strip_prefix('e'))
             .filter(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()));
-        let Some(number) = number else {
-            return Err(PageError::Threw(UNNAMED_FRAME.to_string()));
-        };
-        path.push('f');
-        path.push_str(number);
+        if let Some(number) = number {
+            path.push('f');
+            path.push_str(number);
+            continue;
+        }
+        let child = owners
+            .get(index + 1)
+            .map_or(frame, |next| next.frame.id.as_str());
+        path = frame_selector::identity_hop(child).ok_or_else(|| {
+            PageError::Contract(format!(
+                "neo-runtime: frame id {child:?} is not a devtools frame token"
+            ))
+        })?;
     }
     Ok(path)
 }
@@ -1052,13 +1061,12 @@ impl ReadTab for FrameTab {
                 base: String::new(),
             });
         };
-        // The path first: behind an iframe that gets no ref, the call throws before the frame's
-        // document is snapshotted, so its refs keep their lifetime.
+        // The path first, so a call that fails naming it leaves the frame's refs as they were.
         let base = if !stitching
             && params.mode == AriaSnapshotMode::Ai
             && located.frame.id != self.frames.main().id
         {
-            owner_path(&located.owners).await?
+            owner_path(&located.owners, &located.frame.id).await?
         } else {
             String::new()
         };

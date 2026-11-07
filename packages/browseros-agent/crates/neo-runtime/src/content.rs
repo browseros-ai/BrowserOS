@@ -35,12 +35,19 @@ use crate::frame_selector;
 use crate::navigate::{self, Observation};
 use crate::page::FrameTab;
 use crate::progress::{CallError, PlaywrightError, Progress};
-use crate::waits::WaitTab;
+use crate::waits::{WaitObservation, WaitTab};
 
 /// Neo: Playwright's `Frame._content` error, word for word, for a document that changed under
 /// the read.
 const NAVIGATING: &str =
     "Unable to retrieve content because the page is navigating and changing the content.";
+
+/// Deviation: `server/frames.ts` `Frame.setContent`: `const lifecyclePromise = progress.race(tagPromise).then(() => this.waitForLoadState(progress, waitUntil));`
+/// Playwright waits for an out-of-process frame's `networkidle` as for any frame's. Neo's idle
+/// tracker follows the tab's own session only, which such a frame left (`network_idle.rs`), so
+/// the wait could only time out: it is refused before the write.
+const OOPIF_NETWORKIDLE: &str =
+    "Neo does not support waitUntil: \"networkidle\" in an out-of-process frame yet";
 
 /// Neo: the hop between two frame chunks, as Playwright's `resolveSelector` joins them.
 const ENTER_FRAME: &str = " >> internal:control=enter-frame >> ";
@@ -141,19 +148,14 @@ impl Drop for WriteTurn {
     }
 }
 
-/// Neo: decodes `Frame.setContent`, refusing `networkidle` before any page call, as `goto` does.
+/// Neo: decodes `Frame.setContent`.
 impl SetContentOptions {
-    pub(crate) fn from_params(params: FrameSetContentParams) -> Result<Self, PlaywrightError> {
-        if params.wait_until == Some(LifecycleEvent::Networkidle) {
-            return Err(PlaywrightError::error(
-                "Neo does not support waitUntil: \"networkidle\" yet",
-            ));
-        }
-        Ok(Self {
+    pub(crate) fn from_params(params: FrameSetContentParams) -> Self {
+        Self {
             html: params.html,
             // Playwright: `server/frames.ts` `Frame.setContent`: `const waitUntil = options.waitUntil === undefined ? 'load' : options.waitUntil;`
             wait_until: params.wait_until.unwrap_or(LifecycleEvent::Load),
-        })
+        }
     }
 }
 
@@ -184,8 +186,10 @@ pub(crate) async fn content(
 /// counts. Chromium reads `readyState` as `complete` at `document.close()`, before the content's
 /// images load, so the events decide. At that `init` the page watcher clears the frame's shared
 /// lifecycle too, as Playwright's `_onClearLifecycle` (for its own `setContent` only), so a later
-/// `waitForLoadState` waits for the written document. A removed frame or a closed page ends the
-/// wait, as Playwright's `raceNavigationAction` rejects.
+/// `waitForLoadState` waits for the written document. `networkidle`, which Playwright computes
+/// itself, is the frame's own state after this write's reopen (`network_idle.rs`), which the
+/// watcher clears at that `init` too. A removed frame or a closed page ends the wait, as
+/// Playwright's `raceNavigationAction` rejects.
 ///
 /// Playwright: `server/frames.ts` `Frame.setContent`: `document.write(html);`
 pub(crate) async fn set_content(
@@ -220,8 +224,20 @@ pub(crate) async fn set_content(
     // flight, and the frame may go while it waits.
     let events = frame.host.events();
     let mut observation = WaitTab::observe(tab).map_err(call_error)?;
+    if options.wait_until == LifecycleEvent::Networkidle {
+        if frame.host.is_child() {
+            return Err(PlaywrightError::error(OOPIF_NETWORKIDLE).into());
+        }
+        // `networkidle` is told from the page's requests, which Neo sees once Network is
+        // enabled, as `waitForLoadState`'s: before the write, so the written document's first
+        // requests count.
+        progress
+            .race(WaitTab::track_network(tab))
+            .await?
+            .map_err(call_error)?;
+    }
     // Playwright: `server/frames.ts` `Frame.setContent`: `// Clear lifecycle right after document.open() - see 'tag' below.`
-    tab.page.expect_reopen(&frame.id, true);
+    let reopen = tab.page.expect_reopen(&frame.id, true);
     let written = progress
         .race(frame.call(
             None,
@@ -242,6 +258,12 @@ pub(crate) async fn set_content(
     written?.map_err(call_error)?;
     if options.wait_until == LifecycleEvent::Commit {
         return Ok(());
+    }
+    if options.wait_until == LifecycleEvent::Networkidle {
+        return progress
+            .race(idle_after_reopen(&mut observation, reopen))
+            .await?
+            .map_err(call_error);
     }
     // A removed frame (or a closed page) ends the wait, as Playwright's rejects at detach; a
     // navigation is no end: the next document's events count.
@@ -305,6 +327,26 @@ async fn reopened(
             Some("load") if opened => return Ok(()),
             _ => {}
         }
+    }
+}
+
+/// Neo: waits until the frame's `networkidle` fires after this write's reopen, the frame's
+/// `reopen`th: the watcher counts a reopen as it clears the frame's lifecycle at its `init`, in
+/// socket order before any request the written document starts, so only an idleness the written
+/// document reached counts, never the old document's. A removed frame or a closed page ends the
+/// wait; a navigation does not, the next document's idleness counts, as Playwright's wait goes on.
+///
+/// Playwright: `server/frames.ts` `Frame.setContent`: `const lifecyclePromise = progress.race(tagPromise).then(() => this.waitForLoadState(progress, waitUntil));`
+async fn idle_after_reopen(
+    observation: &mut WaitObservation,
+    reopen: u64,
+) -> Result<(), PageError> {
+    loop {
+        let lifecycle = observation.state().lifecycle;
+        if lifecycle.reopens >= reopen && lifecycle.network_idle {
+            return Ok(());
+        }
+        let _navigation = observation.next().await?;
     }
 }
 
@@ -456,28 +498,23 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_set_content_waits_for_load_unless_told_and_refuses_networkidle() {
+    fn tests_that_set_content_waits_for_load_unless_told() {
         let params = |wait_until| FrameSetContentParams {
             html: "<p>x</p>".to_string(),
             wait_until,
         };
         assert_eq!(
-            SetContentOptions::from_params(params(None))
-                .expect("load")
-                .wait_until,
+            SetContentOptions::from_params(params(None)).wait_until,
             LifecycleEvent::Load
         );
         assert_eq!(
-            SetContentOptions::from_params(params(Some(LifecycleEvent::Commit)))
-                .expect("commit")
-                .wait_until,
+            SetContentOptions::from_params(params(Some(LifecycleEvent::Commit))).wait_until,
             LifecycleEvent::Commit
         );
-        assert!(
-            SetContentOptions::from_params(params(Some(LifecycleEvent::Networkidle)))
-                .expect_err("networkidle")
-                .message
-                .contains("networkidle")
+        assert_eq!(
+            SetContentOptions::from_params(params(Some(LifecycleEvent::Networkidle))).wait_until,
+            LifecycleEvent::Networkidle,
+            "networkidle is served after the write's reopen (network_idle.rs)"
         );
     }
 }

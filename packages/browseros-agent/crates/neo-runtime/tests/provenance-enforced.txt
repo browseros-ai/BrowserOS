@@ -7,6 +7,8 @@
 # One path per line, relative to crates/, sorted. Add a file in the commit that makes it pass;
 # the list grows until it holds every neo source.
 neo-runtime-injected/src/add-tag.ts
+neo-runtime-injected/src/bindings-call.ts
+neo-runtime-injected/src/bindings-controller.ts
 neo-runtime-injected/src/call-on-element.ts
 neo-runtime-injected/src/evaluate.ts
 neo-runtime-injected/src/get-property.ts
@@ -20,10 +22,12 @@ neo-runtime-injected/src/wait-result.ts
 neo-runtime-spec/src/binary.rs
 neo-runtime/src/abort.rs
 neo-runtime/src/artifacts.rs
+neo-runtime/src/bindings.rs
 neo-runtime/src/browser_calls.rs
 neo-runtime/src/capture.rs
 neo-runtime/src/console.rs
 neo-runtime/src/content.rs
+neo-runtime/src/contexts.rs
 neo-runtime/src/debugger.rs
 neo-runtime/src/devices.rs
 neo-runtime/src/dialogs.rs
@@ -49,6 +53,7 @@ neo-runtime/src/pdf.rs
 neo-runtime/src/screenshot.rs
 neo-runtime/src/session_state.rs
 neo-runtime/src/switch.rs
+neo-sdk/src/binding-call.ts
 neo-sdk/src/browser-type.ts
 neo-sdk/src/browser.ts
 neo-sdk/src/buffer.ts

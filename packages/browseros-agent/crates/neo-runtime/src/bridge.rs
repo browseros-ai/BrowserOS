@@ -66,6 +66,16 @@ pub(crate) fn frame_guid(page: &PageId) -> String {
     format!("frame@{}", page.as_str())
 }
 
+/// The guid the realm gives the frame `frame` of a run's page: its main frame's, or
+/// `frame@<targetId>/<frameId>` for a child (`getters.rs` names frames so).
+pub(crate) fn frame_guid_of(page: &PageId, frame: &str) -> String {
+    if frame == page.as_str() {
+        frame_guid(page)
+    } else {
+        format!("frame@{}/{frame}", page.as_str())
+    }
+}
+
 /// Installs `__neo_runtime` as a global of the realm `ctx`.
 pub(crate) fn install<'js>(
     ctx: &Ctx<'js>,

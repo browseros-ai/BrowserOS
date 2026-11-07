@@ -1,9 +1,10 @@
 /**
  * Keeps `vendor/playwright/` an unchanged copy of Playwright's injected script at the pinned
- * commit. The file list is not hand-kept: it is the import closure of
+ * commit. The file list is not hand-kept: it is the import closure of `ROOT_ENTRIES`,
  * `packages/injected/src/injectedScript.ts` (which pulls in `utilityScript.ts`, the
- * `@isomorphic/*` files it names, the type-only `@protocol/*` files and `highlight.css`), plus
- * Playwright's LICENSE and NOTICE. Each file keeps its path under Playwright's `packages/`, so
+ * `@isomorphic/*` files it names, the type-only `@protocol/*` files and `highlight.css`) and
+ * `bindingsController.ts` (the page half of `exposeBinding`), plus Playwright's LICENSE and
+ * NOTICE. Each file keeps its path under Playwright's `packages/`, so
  * relative imports between vendored files resolve unchanged and tsconfig's `paths` map the
  * `@injected`, `@isomorphic` and `@protocol` aliases. The generated VENDOR.md names the commit
  * and lists every file with its sha256.
@@ -31,7 +32,10 @@ import {
 import { dirname, join, posix, relative } from 'node:path'
 
 const PINNED_COMMIT = '26137face0500cacddf90c767dc1364da7262559'
-const ROOT_ENTRY = 'packages/injected/src/injectedScript.ts'
+const ROOT_ENTRIES = [
+  'packages/injected/src/injectedScript.ts',
+  'packages/injected/src/bindingsController.ts',
+]
 const LEGAL_FILES = ['LICENSE', 'NOTICE']
 /** Playwright's tsconfig `paths` for the injected closure, as checkout paths. */
 const ALIASES: Record<string, string> = {
@@ -82,7 +86,7 @@ function importSpecifiers(source: string): string[] {
 }
 
 /**
- * Follows imports from `ROOT_ENTRY` through the files of `commit`, resolving Playwright's
+ * Follows imports from `ROOT_ENTRIES` through the files of `commit`, resolving Playwright's
  * aliases and dropping a `?inline` query (the CSS stays a file; build.ts inlines it). Bare
  * specifiers are npm packages: the closure has only `import type * as yamlTypes from 'yaml'`,
  * which the workspace's own `yaml` satisfies for `tsc` and the bundle never loads.
@@ -111,7 +115,7 @@ function importClosure(checkout: string, commit: string): string[] {
   }
 
   const closure = new Set<string>()
-  const pending = [ROOT_ENTRY]
+  const pending = [...ROOT_ENTRIES]
   for (let file = pending.pop(); file; file = pending.pop()) {
     if (closure.has(file)) continue
     closure.add(file)

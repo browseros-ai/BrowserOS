@@ -435,19 +435,9 @@ impl Target<'_> {
 /// The run's attached tabs that are still open. A closed one is no page of the context any
 /// more, so a setting for every page passes it by, as Playwright's goes over `pages()`.
 fn open_tabs(tabs: &Tabs) -> impl Iterator<Item = (Arc<PageEntry>, Arc<PageSession>)> {
-    own_tabs(tabs)
+    tabs.own_attached()
         .into_iter()
         .filter(|(entry, _)| !entry.closed.is_cancelled())
-}
-
-/// (platform) The run's attached tabs of its own context. A tab of a context `browser.newContext`
-/// created is a page of that context: the run's own settings and storage never reach it
-/// (`browser_calls.rs`).
-fn own_tabs(tabs: &Tabs) -> Vec<(Arc<PageEntry>, Arc<PageSession>)> {
-    tabs.attached()
-        .into_iter()
-        .filter(|(entry, _)| entry.context.get().is_none())
-        .collect()
 }
 
 /// Every session of a tab the run attached: its own, then its out-of-process frames'.
@@ -743,7 +733,7 @@ pub(crate) async fn storage_state(
         return Err(PlaywrightError::error(STORAGE_OPTION_PENDING).into());
     }
     let cookies = cookies(tabs, &[], progress).await?;
-    let attached = own_tabs(tabs);
+    let attached = tabs.own_attached();
     let mut visited: Vec<String> = Vec::new();
     for (_, page) in &attached {
         for origin in page.events.visited_origins() {

@@ -276,19 +276,19 @@ pub(crate) async fn context(
         | BrowserContextCall::SetOffline(_)
         | BrowserContextCall::SetHTTPCredentials(_)
         | BrowserContextCall::GrantPermissions(_)
-        | BrowserContextCall::ClearPermissions(_)) => Err(created_state(call.meta().method)),
+        | BrowserContextCall::ClearPermissions(_)) => Err(created_state(call.meta().method).into()),
     }
 }
 
-/// Neo: session state on a context the run created, which Neo does not serve yet: the run's own
-/// context's cookies, storage, headers, offline mode, geolocation and permissions never reach
-/// a created context's pages, and the call fails instead of answering with them.
-pub(crate) fn created_state(method: &str) -> CallError {
+/// Neo: session state and bindings on a context the run created, which Neo does not serve yet:
+/// the run's own context's cookies, storage, headers, offline mode, geolocation, permissions and
+/// bindings never reach a created context's pages, and the call fails instead of answering
+/// with them.
+pub(crate) fn created_state(method: &str) -> PlaywrightError {
     PlaywrightError::error(format!(
         "neo-runtime: {method} is not served yet for a context browser.newContext created, \
          only for the run's own context"
     ))
-    .into()
 }
 
 /// Playwright's `Browser.newContext`: validates the options, creates the context and answers

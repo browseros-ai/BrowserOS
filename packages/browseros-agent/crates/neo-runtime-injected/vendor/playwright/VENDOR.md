@@ -11,6 +11,7 @@ paths under Playwright's `packages/`, plus its LICENSE and NOTICE.
 | --- | --- |
 | `injected/src/ariaSnapshot.ts` | `93ae07dcc276e44dd4aded64c02c42e47a87ae538e82d5f5ed19429e5d9c7c70` |
 | `injected/src/ariaSnapshotDistiller.ts` | `10c699020d5c97111a860f140f39e3a05cca700ce3d23436202178902788fbeb` |
+| `injected/src/bindingsController.ts` | `668ab9da3763d49cb213fbabc1dbba9634e83a4c356530b3ee4796ddf26ee0dc` |
 | `injected/src/consoleApi.ts` | `2aca9faf50f3b0e6495e681661492a46d938b7c741b04c02d5f7a65dedb31b5e` |
 | `injected/src/domUtils.ts` | `a34199b6815641a087691032344fc896cd9affc8ce9323bdda9271ec3524920c` |
 | `injected/src/highlight.css` | `64a3cd3e3ab7bf90a268517dd6b72ed7a86b643185d8b60da7c170a730ba498c` |

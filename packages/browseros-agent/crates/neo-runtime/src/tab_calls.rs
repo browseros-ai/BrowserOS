@@ -152,7 +152,7 @@ async fn set_page_headers(
 ) -> Result<(), CallError> {
     // (platform) The page's own headers go over its context's: the run's own context's.
     if entry.context.get().is_some() {
-        return Err(browser_calls::created_state("setExtraHTTPHeaders"));
+        return Err(browser_calls::created_state("setExtraHTTPHeaders").into());
     }
     let page = progress.race(tabs.session(entry)).await??;
     tabs.overrides()

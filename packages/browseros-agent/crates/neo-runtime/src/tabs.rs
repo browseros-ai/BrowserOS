@@ -277,6 +277,16 @@ impl Tabs {
     }
 
     /// Every page this run has attached a session to, in first-seen order.
+    /// (platform) [`Self::attached`] of the run's own context: a tab of a context
+    /// `browser.newContext` created is a page of that context, which the run's own bindings and
+    /// session state never reach (`bindings.rs`, `session_state.rs`).
+    pub(crate) fn own_attached(&self) -> Vec<(Arc<PageEntry>, Arc<PageSession>)> {
+        self.attached()
+            .into_iter()
+            .filter(|(entry, _)| entry.context.get().is_none())
+            .collect()
+    }
+
     pub(crate) fn attached(&self) -> Vec<(Arc<PageEntry>, Arc<PageSession>)> {
         self.0.pages.lock().map_or_else(
             |_| Vec::new(),

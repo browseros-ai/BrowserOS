@@ -37,6 +37,8 @@ use tokio::sync::Mutex;
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio_util::sync::CancellationToken;
 
+use crate::bindings::Bindings;
+use crate::debugger::DEFAULT_CONTEXT;
 use crate::page::PageSession;
 use crate::progress::PlaywrightError;
 
@@ -138,6 +140,9 @@ pub(crate) struct InitScripts {
     /// Cancelled as run end starts: a setup still waiting on a reply stops waiting, while the
     /// request's own task keeps the reply and undoes it.
     ending: CancellationToken,
+    /// The run's bindings once it exposed one: each session this file shows a page on then gets
+    /// the CDP binding before the page runs (`bindings.rs`).
+    bindings: OnceLock<Weak<Bindings>>,
 }
 
 #[derive(Clone)]
@@ -177,6 +182,7 @@ struct Script {
     page: Option<String>,
     /// The context the script belongs to: the page's for a page's script.
     context: String,
+    rank: Rank,
 }
 
 impl Script {
@@ -184,6 +190,32 @@ impl Script {
     fn reaches(&self, target: &str, context: &str) -> bool {
         self.context == context && self.page.as_deref().is_none_or(|page| page == target)
     }
+}
+
+/// Where a script runs in a session that starts with every script in: Playwright's order. A
+/// session that is already showing a page gets each script after the ones it has, in call order.
+/// Playwright: `server/page.ts` `Page.allInitScripts`: `return [...bindings, ...this.browserContext.initScripts, ...this.initScripts];`
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Rank {
+    /// Playwright's `BindingsController` (`bindings.rs`).
+    Controller,
+    /// A context's binding, then a page's (`bindings.rs`).
+    ContextBinding,
+    PageBinding,
+    /// `browserContext.addInitScript`, then `page.addInitScript`.
+    Context,
+    Page,
+}
+
+/// The scripts a session that starts showing `target`, a page of `context`, gets, in [`Rank`]
+/// order, each rank's in the order the run added them.
+fn for_new_session<'a>(scripts: &'a [Script], target: &str, context: &str) -> Vec<&'a Script> {
+    let mut reaching: Vec<&Script> = scripts
+        .iter()
+        .filter(|script| script.reaches(target, context))
+        .collect();
+    reaching.sort_by_key(|script| script.rank);
+    reaching
 }
 
 /// A page the run touched, with every session that shows it: the tab's own first, then each
@@ -197,9 +229,9 @@ struct ShownPage {
 
 /// A session that shows a page the run touched, with the token its detach cancels.
 #[derive(Clone)]
-struct Link {
-    session: SessionId,
-    gone: CancellationToken,
+pub(crate) struct Link {
+    pub(crate) session: SessionId,
+    pub(crate) gone: CancellationToken,
 }
 
 impl Default for InitScripts {
@@ -217,6 +249,7 @@ impl Default for InitScripts {
             sessions: SyncMutex::default(),
             stop: CancellationToken::new(),
             ending: CancellationToken::new(),
+            bindings: OnceLock::new(),
         }
     }
 }
@@ -246,6 +279,27 @@ impl InitScripts {
         context: &str,
         source: &str,
     ) -> Result<String, PlaywrightError> {
+        let rank = if page.is_some() {
+            Rank::Page
+        } else {
+            Rank::Context
+        };
+        self.add_ranked(cdp, page, context, source, rank).await
+    }
+
+    /// [`Self::add`] for a script of `rank`, as `bindings.rs` adds its own.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::add`].
+    pub(crate) async fn add_ranked(
+        self: &Arc<Self>,
+        cdp: &CdpClient,
+        page: Option<&Arc<PageSession>>,
+        context: &str,
+        source: &str,
+        rank: Rank,
+    ) -> Result<String, PlaywrightError> {
         if self.closed() {
             return Err(PlaywrightError::target_closed());
         }
@@ -262,6 +316,7 @@ impl InitScripts {
             source: wrap(source),
             page: page.map(|page| target_of(page)),
             context: context.to_string(),
+            rank,
         };
         let mut state = self.state.lock().await;
         self.any.store(true, Ordering::Relaxed);
@@ -351,11 +406,7 @@ impl InitScripts {
             session: page.session_id().clone(),
             gone: self.watched(page.session_id(), &target),
         };
-        for script in state
-            .scripts
-            .iter()
-            .filter(|script| script.reaches(&target, context))
-        {
+        for script in for_new_session(&state.scripts, &target, context) {
             self.install(cdp, &link, &script.guid, &script.source, run_immediately)
                 .await;
         }
@@ -365,7 +416,35 @@ impl InitScripts {
             context: context.to_string(),
             sessions: vec![link],
         });
+        drop(state);
+        // Bindings are the run's own context's (`bindings.rs`): a created context's page never
+        // gets the CDP binding.
+        if context == DEFAULT_CONTEXT
+            && let Some(bindings) = self.bindings()
+        {
+            bindings.prepare_tab(cdp, page).await;
+        }
         Ok(())
+    }
+
+    /// From now on every session this file shows a page on gets `bindings`' CDP binding.
+    pub(crate) fn attach_bindings(&self, bindings: &Arc<Bindings>) {
+        let _set = self.bindings.set(Arc::downgrade(bindings));
+    }
+
+    fn bindings(&self) -> Option<Arc<Bindings>> {
+        self.bindings.get().and_then(Weak::upgrade)
+    }
+
+    /// The out-of-process iframe sessions this file holds for `target`'s page, tab excluded.
+    pub(crate) async fn child_links(&self, target: &str) -> Vec<Link> {
+        let state = self.state.lock().await;
+        state
+            .pages
+            .iter()
+            .find(|page| page.target == target)
+            .map(|page| page.sessions.iter().skip(1).cloned().collect())
+            .unwrap_or_default()
     }
 
     fn closed(&self) -> bool {
@@ -539,6 +618,9 @@ impl InitScripts {
             iframe,
         } = attach;
         let mut shown_here = false;
+        // Bindings are the run's own context's (`bindings.rs`): a created context's iframe gets
+        // none.
+        let mut binds_here = false;
         if iframe && !self.closed() {
             let mut state = self.state.lock().await;
             let State { scripts, pages } = &mut *state;
@@ -549,18 +631,21 @@ impl InitScripts {
                     cdp.send("Page.enable", json!({}), Some(&link.session)),
                 )
                 .await;
-                for script in scripts
-                    .iter()
-                    .filter(|script| script.reaches(&target, &context))
-                {
+                for script in for_new_session(scripts, &target, &context) {
                     self.install(&cdp, &link, &script.guid, &script.source, held)
                         .await;
                 }
                 if !link.gone.is_cancelled() {
                     page.sessions.push(link.clone());
                     shown_here = true;
+                    binds_here = context == DEFAULT_CONTEXT;
                 }
             }
+        }
+        // Its CDP binding too, before it runs, once the run exposed one (checked after the push,
+        // so a binding exposed meanwhile reaches this session one way or the other).
+        if binds_here && let Some(bindings) = self.bindings() {
+            bindings.prepare_child(&cdp, &link, &target).await;
         }
         // Sent together, in this order, as Playwright's `FrameSession` sends its batch: a target
         // held at its start may answer `Target.setAutoAttach` only once it runs.
@@ -689,7 +774,7 @@ impl InitScripts {
 }
 
 /// `request`'s answer, or `None` once `gone` (its session detached) or on a CDP error.
-async fn until_gone<T>(
+pub(crate) async fn until_gone<T>(
     gone: &CancellationToken,
     request: impl Future<Output = Result<T, CdpError>>,
 ) -> Option<T> {
@@ -707,7 +792,7 @@ fn wrap(source: &str) -> String {
 }
 
 /// The page's target id, which is its main frame's id.
-fn target_of(page: &PageSession) -> String {
+pub(crate) fn target_of(page: &PageSession) -> String {
     page.frames.main().id.clone()
 }
 
@@ -800,23 +885,11 @@ mod tests {
 
     #[test]
     fn a_page_script_reaches_its_page_and_a_context_script_every_page_of_its_context() {
-        let page = Script {
-            guid: "a".into(),
-            source: String::new(),
-            page: Some("T1".into()),
-            context: "default".into(),
-        };
-        let context = Script {
-            guid: "b".into(),
-            source: String::new(),
-            page: None,
-            context: "default".into(),
-        };
+        let page = script("a", Some("T1"), Rank::Page);
+        let context = script("b", None, Rank::Context);
         let created = Script {
-            guid: "c".into(),
-            source: String::new(),
-            page: None,
             context: "C1".into(),
+            ..script("c", None, Rank::Context)
         };
         assert!(page.reaches("T1", "default") && !page.reaches("T2", "default"));
         assert!(context.reaches("T1", "default") && context.reaches("T2", "default"));
@@ -825,5 +898,45 @@ mod tests {
             "the run's own context's script stays in it"
         );
         assert!(created.reaches("T3", "C1") && !created.reaches("T1", "default"));
+    }
+
+    fn script(guid: &str, page: Option<&str>, rank: Rank) -> Script {
+        Script {
+            guid: guid.into(),
+            source: String::new(),
+            page: page.map(Into::into),
+            context: "default".into(),
+            rank,
+        }
+    }
+
+    #[test]
+    fn a_new_session_gets_bindings_first_then_context_then_page_scripts_each_in_call_order() {
+        let scripts = [
+            script("page-1", Some("T1"), Rank::Page),
+            script("context-1", None, Rank::Context),
+            script("controller", None, Rank::Controller),
+            script("page-binding", Some("T1"), Rank::PageBinding),
+            script("other-page", Some("T2"), Rank::Page),
+            script("context-binding", None, Rank::ContextBinding),
+            script("page-2", Some("T1"), Rank::Page),
+            script("context-2", None, Rank::Context),
+        ];
+        let order: Vec<&str> = for_new_session(&scripts, "T1", "default")
+            .into_iter()
+            .map(|script| script.guid.as_str())
+            .collect();
+        assert_eq!(
+            order,
+            [
+                "controller",
+                "context-binding",
+                "page-binding",
+                "context-1",
+                "context-2",
+                "page-1",
+                "page-2"
+            ]
+        );
     }
 }
