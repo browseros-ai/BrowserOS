@@ -198,41 +198,39 @@ test('review: child snapshots do not revive stale parent refs', {
   })
 })
 
-// Deviation UNNAMED_FRAME (neo-runtime/src/reads.rs): Neo names a frame's refs by the iframe refs
-// from the main frame, and a `visibility: hidden` iframe gets none, so its document's AI snapshot
-// throws where Playwright, which numbers frames, answers refs. The default mode is the same.
-test('review: ai snapshots through a direct Frame behind a hidden iframe', {
+const refHelper = `const refOf = snapshot => snapshot.match(/\\[ref=([^\\]]+)\\]/)?.[1];`
+
+// A `visibility: hidden` iframe gets no ref, so Neo names its frame by identity (`fi…`), as
+// Playwright names it by number; both answer refs that route.
+test('review: ai snapshots through a direct Frame behind a hidden iframe answer routable refs', {
   skip,
   timeout: 120_000,
 }, async (t) => {
-  await compareMethod(t, {
-    values: ({ playwright, neo }) => {
-      assert.deepEqual(playwright, {
-        plainHasButton: true,
-        ai: { hasButton: true, hasRef: true },
-      })
-      assert.deepEqual(neo, { plainHasButton: true, ai: { error: 'Error' } })
-    },
+  const outcome = await compareMethod(t, {
     html: '<iframe name="hidden" style="visibility:hidden" srcdoc="<button>Hidden</button>"></iframe>',
-    source: `
+    source:
+      refHelper +
+      `
       const target = page.frame('hidden').locator('button')
       const plain = await target.ariaSnapshot()
-      const ai = await target.ariaSnapshot({ mode: 'ai' }).then(
-        snapshot => ({ hasButton: snapshot.includes('Hidden'), hasRef: snapshot.includes('[ref=') }),
-        error => ({ error: errorCategory(error) }))
-      return { plainHasButton: plain.includes('Hidden'), ai }
+      const ai = await target.ariaSnapshot({ mode: 'ai' })
+      const routed = page.locator('aria-ref=' + refOf(ai))
+      return {
+        plainHasButton: plain.includes('Hidden'),
+        ai: { hasButton: ai.includes('Hidden'), hasRef: !!refOf(ai) },
+        routed: { count: await routed.count(), text: await routed.textContent() },
+      }
     `,
     probe: 'document.querySelector("iframe").style.visibility',
   })
+  assert.deepEqual(outcome.value.routed, { count: 1, text: 'Hidden' })
 })
 
-const refHelper = `const refOf = snapshot => snapshot.match(/\\[ref=([^\\]]+)\\]/)?.[1];`
-
-test('fresh hidden-owner refusal preserves parent refs and page state', {
+test('a fresh hidden owner keeps parent refs and its frame answers refs that route', {
   skip,
   timeout: 120_000,
 }, async (t) => {
-  await compareMethod(t, {
+  const outcome = await compareMethod(t, {
     html: `<button>Outer</button><output id="effect">untouched</output>
       <iframe name="hidden" style="visibility:hidden" srcdoc="<button onclick=&quot;parent.document.getElementById('effect').textContent='changed'&quot;>Inner</button>"></iframe>`,
     source:
@@ -242,20 +240,76 @@ test('fresh hidden-owner refusal preserves parent refs and page state', {
       const before = await page.locator('aria-ref=' + refOf(top)).count();
       const frame = page.frame('hidden');
       await frame.locator('button').waitFor({state:'attached'});
-      const result = await frame.locator('button').ariaSnapshot({mode:'ai'}).then(
-        s => ({text:s.includes('Inner'),ref:!!refOf(s)}),
-        error => ({error:errorCategory(error)}));
-      return {before, after:await page.locator('aria-ref=' + refOf(top)).count(), result};
+      const snapshot = await frame.locator('button').ariaSnapshot({mode:'ai'});
+      const inner = page.locator('aria-ref=' + refOf(snapshot));
+      return {
+        before,
+        after: await page.locator('aria-ref=' + refOf(top)).count(),
+        text: snapshot.includes('Inner'),
+        routed: await inner.textContent(),
+        // The hidden iframe takes no pointer: a click through the ref never lands.
+        click: await inner.click({ timeout: 1000 }).then(() => 'clicked', errorCategory),
+      };
     `,
-    values: ({ playwright, neo }) => {
-      assert.deepEqual(playwright, {
-        before: 1,
-        after: 1,
-        result: { text: true, ref: true },
-      })
-      assert.deepEqual(neo, { before: 1, after: 1, result: { error: 'Error' } })
-    },
     probe: 'document.querySelector("#effect").textContent',
+  })
+  assert.deepEqual(outcome.value, {
+    before: 1,
+    after: 1,
+    text: true,
+    routed: 'Inner',
+    click: 'TimeoutError',
+  })
+})
+
+// The frame of a hidden cross-site (out-of-process) iframe: its refs route; after the frame
+// navigates, the old document's refs match nothing and a new snapshot's refs name the same frame;
+// once the iframe is gone, a ref naming its frame fails at once.
+test('a hidden out-of-process frame answers refs through navigation and fails them once gone', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  const outcome = await compareMethod(t, {
+    html: `<iframe name="remote" style="visibility:hidden"></iframe><script>
+      if (location.search.startsWith('?inner')) document.body.innerHTML = '<button>Remote</button>'
+      else document.querySelector('iframe').src = 'http://localhost:' + location.port + '/method.html?inner'
+    </script>`,
+    source:
+      refHelper +
+      `
+      const button = page.frameLocator('iframe[name=remote]').locator('button')
+      await button.waitFor({ state: 'attached' })
+      const first = refOf(await page.frame('remote').locator('button').ariaSnapshot({ mode: 'ai' }))
+      const routed = await page.locator('aria-ref=' + first).textContent()
+      await page.evaluate(() => {
+        document.querySelector('iframe').src = 'http://localhost:' + location.port + '/method.html?inner-again'
+      })
+      await page.frame('remote').waitForURL(/inner-again/)
+      await button.waitFor({ state: 'attached' })
+      const afterNavigation = await page.locator('aria-ref=' + first).count()
+      const second = refOf(await page.frame('remote').locator('button').ariaSnapshot({ mode: 'ai' }))
+      const frameOf = (ref) => ref.replace(/e\\d+$/, '')
+      const result = {
+        routed,
+        afterNavigation,
+        sameFrame: frameOf(first) === frameOf(second),
+        again: await page.locator('aria-ref=' + second).textContent(),
+      }
+      await page.evaluate(() => document.querySelector('iframe').remove())
+      // Once the page knows the frame is gone (before, Playwright's jump still finds it, and the
+      // query in the dying frame counts 0), the ref is an invalid selector.
+      while (page.frame('remote')) await new Promise((resolve) => setTimeout(resolve, 20))
+      result.gone = await page.locator('aria-ref=' + second).count().then(String, errorCategory)
+      return result
+    `,
+    probe: 'document.querySelectorAll("iframe").length',
+  })
+  assert.deepEqual(outcome.value, {
+    routed: 'Remote',
+    afterNavigation: 0,
+    sameFrame: true,
+    again: 'Remote',
+    gone: 'Error',
   })
 })
 
@@ -313,4 +367,34 @@ test('a direct Frame in a closed shadow root returns a routable AI ref', {
     `,
     probe: 'document.querySelector("#host").shadowRoot === null',
   })
+})
+
+// Playwright's `performActionPreChecks` runs before a default-mode locator snapshot: a pending
+// main-frame navigation is waited out and logged, then the snapshot reads the next document.
+// `/slow` answers after 2 s; the old page has an `h1` of its own. The navigation is the run's
+// first browser call, a `page.evaluate`, so Neo follows it from its request as Playwright does.
+// Neo read the next document before too (its reads of the old one poll again), so the value
+// alone cannot tell; Neo's call log shows the pre-check's wait, in Playwright's words.
+test('a locator snapshot waits out a pending navigation first, as Playwright does', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  const outcome = await compareMethod(t, {
+    html: '<!doctype html><html><body><h1>old</h1></body></html>',
+    slowMs: 2000,
+    source: `
+      await page.evaluate(() => { location.href = '/slow' })
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      return await page.locator('h1').ariaSnapshot()
+    `,
+    probe: 'document.querySelector("h1").textContent',
+  })
+  assert.equal(outcome.value, '- heading "/slow" [level=1]')
+  const [snapshot] = outcome.calls.filter((c) => c.method === 'ariaSnapshot')
+  assert.ok(
+    snapshot.log.some((line) =>
+      /waiting for ".*\/slow" navigation to finish\.\.\./.test(line),
+    ),
+    JSON.stringify(snapshot.log),
+  )
 })

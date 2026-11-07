@@ -726,3 +726,117 @@ async fn tests_that_scoped_main_ai_snapshots_stitch_frames_and_their_refs_act() 
     assert_eq!(reports(&tab).await, ["scoped:click"]);
     tab.close().await;
 }
+
+/// Neo: a `visibility: hidden` same-origin iframe and a hidden cross-site (out-of-process) one,
+/// each holding a button that reports its clicks to the top page. Neither iframe gets a ref.
+const HIDDEN_TOP: &str = r#"<!doctype html><title>Hidden frames</title>
+<h1>Hidden frames</h1>
+<iframe name=local style="visibility:hidden" srcdoc="<button onclick=&quot;top.postMessage('local:click','*')&quot;>Local</button>"></iframe>
+<iframe name=remote style="visibility:hidden"></iframe>
+<script>
+window.__log=[];
+addEventListener('message',event=>window.__log.push(event.data));
+document.querySelector('[name=remote]').src='http://localhost:'+location.port+'/hidden-remote.html';
+</script>"#;
+
+/// Neo: the hidden cross-site frame's page.
+const HIDDEN_REMOTE: &str = r#"<!doctype html><title>Hidden remote</title>
+<button onclick="top.postMessage('remote:click','*')">Remote</button>"#;
+
+async fn open_hidden() -> Option<Tab> {
+    let binary = browser::e2e_browser()?;
+    let tab = Tab::open(
+        binary,
+        Fixture {
+            pages: vec![
+                ("/hidden.html".into(), HIDDEN_TOP.into()),
+                ("/hidden-remote.html".into(), HIDDEN_REMOTE.into()),
+            ],
+            ..Fixture::default()
+        },
+        "/hidden.html",
+    )
+    .await;
+    wait_for(&tab, "document.readyState === 'complete'").await;
+    Some(tab)
+}
+
+/// The frame id an identity ref names: `fi`, 32 lowercase hex digits, then a local `eN`.
+fn identity_frame(aria_ref: &str) -> &str {
+    let rest = aria_ref
+        .strip_prefix("fi")
+        .filter(|rest| rest.len() > 32)
+        .unwrap_or_else(|| panic!("{aria_ref} does not name a frame by identity"));
+    let (id, element) = rest.split_at(32);
+    assert!(
+        id.bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        "{aria_ref}: {id} is not a lowercase frame id"
+    );
+    assert!(
+        element
+            .strip_prefix('e')
+            .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())),
+        "{aria_ref} does not end in eN"
+    );
+    id
+}
+
+/// An `ai` snapshot inside a frame behind an iframe that gets no ref names that frame by its
+/// identity, and the refs act in a later run with fresh JS state, into a same-process frame and an
+/// out-of-process one alike, each in its own frame.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_refs_inside_hidden_frames_name_their_frame_and_act_in_a_later_run() {
+    let Some(tab) = open_hidden().await else {
+        return;
+    };
+    let first = run(
+        &tab,
+        r"
+        const refOf = (yaml) => /\[ref=([a-z0-9]+)\]/.exec(yaml)?.[1] ?? null;
+        await page.frameLocator('[name=remote]').locator('button').waitFor({ state: 'attached' });
+        return {
+          local: refOf(await page.frame('local').locator('button').ariaSnapshot({ mode: 'ai' })),
+          remote: refOf(await page.frame('remote').locator('button').ariaSnapshot({ mode: 'ai' })),
+        };
+    ",
+    )
+    .await;
+    let refs = value(&first);
+    let frame_of = |name: &str| {
+        identity_frame(
+            refs[name]
+                .as_str()
+                .unwrap_or_else(|| panic!("no {name} ref: {refs}")),
+        )
+        .to_string()
+    };
+    assert_ne!(frame_of("local"), frame_of("remote"), "{refs}");
+    assert!(reports(&tab).await.is_empty(), "a snapshot touches nothing");
+
+    // A new run: only the refs carry over, as text, the way an agent hands them on.
+    let second = run(
+        &tab,
+        &format!(
+            "const refs = {refs};
+             const ref = (name) => page.locator('aria-ref=' + refs[name]);
+             await ref('local').dispatchEvent('click');
+             await ref('remote').dispatchEvent('click');
+             return {{ local: await ref('local').textContent(), remote: await ref('remote').textContent() }};"
+        ),
+    )
+    .await;
+    assert_eq!(
+        value(&second),
+        json!({ "local": "Local", "remote": "Remote" })
+    );
+    wait_for_reports(&tab, 2, None).await;
+    let mut clicks = reports(&tab).await;
+    clicks.sort();
+    assert_eq!(
+        clicks,
+        ["local:click", "remote:click"],
+        "each ref reached its own frame's button, once"
+    );
+    tab.close().await;
+}
