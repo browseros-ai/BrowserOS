@@ -93,6 +93,7 @@ use crate::history::{
 };
 use crate::keyboard::KeyboardTab;
 use crate::lists;
+use crate::locator_handlers::{self, Resolving};
 use crate::navigate::{self, GotoOptions};
 use crate::network::{HopId, ObjectKind as NetworkObject};
 use crate::page::{DialogAnswer, FrameTab, PageSession};
@@ -237,7 +238,45 @@ struct Inner {
     _ending: DropGuard,
 }
 
+/// What admitted one call ([`Inner::admit`]): its share of the in-flight caps, and the claim of
+/// a call that ends calls in flight.
+struct Admission {
+    share: Option<Admitted>,
+    ending: Option<Ending<FrameCursor>>,
+    resolving: Option<Resolving>,
+}
+
 impl Inner {
+    /// Admits `route`: a share of the in-flight caps, or none for a call that ends calls in
+    /// flight, with its claim. A navigation's release, a running locator handler's completion
+    /// (which frees the action waiting on it) and the context's close: the cap never refuses
+    /// them, or a full run could not let go.
+    fn admit(
+        &self,
+        route: &ObjectCall,
+        target: Option<&(Arc<PageEntry>, FrameScope)>,
+        bytes: usize,
+    ) -> Result<Admission, PlaywrightError> {
+        let ending = ending_cursor(route).and_then(|id| self.cursors.begin_ending(id));
+        let resolving = completed_handler(route).and_then(|uid| {
+            let page = target?.0.attached_session()?;
+            locator_handlers::begin_resolving(&page, uid)
+        });
+        let releases = ending.is_some()
+            || resolving.is_some()
+            || matches!(route, ObjectCall::Context(BrowserContextCall::Close(_)));
+        let share = if releases {
+            None
+        } else {
+            Some(self.in_flight.admit(bytes)?)
+        };
+        Ok(Admission {
+            share,
+            ending,
+            resolving,
+        })
+    }
+
     /// A `setContent` call takes its place in its frame's write order as it arrives.
     fn ordered(&self, guid: &str, mut call: ObjectCall) -> ObjectCall {
         if let ObjectCall::Frame(Route::FrameSetContent(_, turn)) = &mut call {
@@ -461,19 +500,10 @@ impl Dispatcher {
         }));
         inner.trace.push(Arc::clone(&entry));
         let admitted = route.and_then(|route| {
-            let ending = ending_cursor(&route).and_then(|id| inner.cursors.begin_ending(id));
-            // A navigation's release, and the context's close, end calls in flight: the cap
-            // never refuses them, or a full run could not let go.
-            let releases = ending.is_some()
-                || matches!(route, ObjectCall::Context(BrowserContextCall::Close(_)));
-            let share = if releases {
-                None
-            } else {
-                Some(inner.in_flight.admit(message.len())?)
-            };
-            Ok((route, share, ending))
+            let admission = inner.admit(&route, target.as_ref(), message.len())?;
+            Ok((route, admission))
         });
-        let (route, share, ending) = match admitted {
+        let (route, admission) = match admitted {
             Ok(admitted) => admitted,
             Err(error) => {
                 entry.finish(error.to_result());
@@ -520,8 +550,9 @@ impl Dispatcher {
                 id,
                 reply,
                 events: inner.tabs.events().clone(),
-                share,
-                ending,
+                share: admission.share,
+                ending: admission.ending,
+                resolving: admission.resolving,
                 abortable,
             },
         );
@@ -924,6 +955,9 @@ struct CallReply {
     share: Option<Admitted>,
     /// A wait's finish or release: its claim on the wait it ends (`Cursors::begin_ending`).
     ending: Option<Ending<FrameCursor>>,
+    /// A running locator handler's completion: its claim on that handler
+    /// (`locator_handlers::begin_resolving`).
+    resolving: Option<Resolving>,
     /// The call's place in the abort registry; `None` for an id that is not an integer.
     abortable: Option<Registration>,
 }
@@ -1326,6 +1360,7 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
         events,
         share,
         ending,
+        resolving,
         abortable,
     } = target;
     // The outcome is decided: an abort from now on is ignored, as Playwright drops a call's
@@ -1343,7 +1378,7 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
     events.barrier().await;
     // Given back before the reply leaves, so a script that awaited this call can start another
     // at once. A call that never replies gives them back as its task ends.
-    drop((share, ending));
+    drop((share, ending, resolving));
     // The script may have stopped waiting (the realm is gone); the record already holds the
     // outcome.
     let _sent = reply.send((text, events.seq()));
@@ -1500,6 +1535,14 @@ fn route_frame_element(method: &str) -> Option<Routed> {
 /// The cursor a URL-predicate wait's finish or release names. Each skips the in-flight caps for
 /// the one call that claims its open cursor (`Cursors::begin_ending`): the wait it ends may hold
 /// that capacity, and the claim counts against the cursor cap instead.
+/// The locator handler a `Page.resolveLocatorHandlerNoReply` completes.
+fn completed_handler(call: &ObjectCall) -> Option<i64> {
+    match call {
+        ObjectCall::Page(PageCall::ResolveLocatorHandlerNoReply(params)) => Some(params.uid),
+        _ => None,
+    }
+}
+
 fn ending_cursor(call: &ObjectCall) -> Option<u64> {
     match call {
         ObjectCall::Frame(Route::FrameFinishNavigation(options)) => Some(options.cursor),
@@ -1683,6 +1726,7 @@ mod tests {
                 events: EventHub::default(),
                 share: None,
                 ending: None,
+                resolving: None,
                 abortable: None,
             },
         );
@@ -2705,6 +2749,7 @@ mod tests {
                 events: EventHub::default(),
                 share: Some(in_flight.admit(10).expect("under the caps")),
                 ending: None,
+                resolving: None,
                 abortable: None,
             },
         ));
@@ -3041,6 +3086,7 @@ mod review_abort_priority {
                 events: EventHub::default(),
                 share: None,
                 ending: None,
+                resolving: None,
                 abortable: None,
             },
         );
