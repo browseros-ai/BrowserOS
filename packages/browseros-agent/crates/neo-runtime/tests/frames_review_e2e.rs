@@ -183,6 +183,8 @@ async fn frame_getters_survive_unrelated_oopif_churn() {
 
 /// Playwright's `page.url()` is `mainFrame().url()`, and both keep the committed URL until a
 /// navigation commits. Neo's `page.url()` does (navigation history); the frame getters must agree.
+/// Neo's tree enumeration can wait until commit, so compare its URLs with the committed page
+/// URL when enumeration returns, without requiring that enumeration finish before commit.
 #[tokio::test(flavor = "multi_thread")]
 async fn frame_getters_keep_the_committed_url_while_a_navigation_is_pending() {
     let Some(binary) = browser::e2e_browser() else {
@@ -203,15 +205,23 @@ async fn frame_getters_keep_the_committed_url_while_a_navigation_is_pending() {
         r"
         await page.locator('#go').click({noWaitAfter: true});
         const pageUrl = page.url();
-        return {pageUrl, mainUrl: page.mainFrame().url(), frames: page.frames().map(frame => frame.url())};
+        const mainUrl = page.mainFrame().url();
+        const frames = page.frames().map(frame => frame.url());
+        return {pageUrl, mainUrl, frames, afterFrames: page.url()};
     ",
     )
     .await;
     tab.close().await;
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:#?}");
+    let values = outcome
+        .value
+        .as_ref()
+        .expect("the script returns URL observations");
+    assert_eq!(values["pageUrl"], start, "{outcome:#?}");
+    assert_eq!(values["mainUrl"], start, "{outcome:#?}");
     assert_eq!(
-        outcome.value,
-        Some(json!({"pageUrl": start, "mainUrl": start, "frames": [start]})),
+        values["frames"],
+        json!([values["afterFrames"]]),
         "{outcome:#?}"
     );
 }

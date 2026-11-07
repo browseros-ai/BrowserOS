@@ -3,7 +3,9 @@
 //! `sync-getters-design.md`). A read is normally one CDP call. The exception is a `url` read
 //! that lands in the few milliseconds of a cross-document commit, when BrowserOS refuses
 //! navigation history: it checks the tab is still open and retries until the new document
-//! answers.
+//! answers. The main frame's URL uses that same history source, including in frame records.
+//! Frame-tree getters still call Page.getFrameTree, which can block until a pending main-frame
+//! navigation commits; their main-frame URL is read from history after the tree answers.
 
 use std::time::Duration;
 
@@ -16,12 +18,13 @@ use tokio::time::Instant;
 
 use crate::bridge;
 use crate::click::PageError;
-use crate::frames::{FrameInfo, FrameScope, Frames};
+use crate::frames::{FrameInfo, FrameScope};
 use crate::progress::PlaywrightError;
 use crate::run::PageId;
+use crate::tabs::{PageEntry, Tabs};
 use crate::url_match::{SerializedUrlMatch, UrlMatcher};
 
-/// Frame-only fields, all read from one fresh tree per getter call.
+/// Frame fields. The main URL comes directly from history; other fields read a fresh tree.
 #[derive(Clone, Copy)]
 pub(crate) enum FrameField {
     Url,
@@ -40,21 +43,39 @@ pub(crate) fn matches_url(
 }
 
 /// Every current frame, in the core's tree order. Rust alone mints the SDK's opaque guids.
-pub(crate) async fn frames(frames: &Frames, page: &PageId) -> Result<Value, PlaywrightError> {
-    let tree = frames.tree().await.map_err(frame_tree_error)?;
-    frame_records(page, &tree, tree.iter())
+/// This can wait for a pending main-frame navigation to commit before the tree answers.
+pub(crate) async fn frames(tabs: &Tabs, page: &PageEntry) -> Result<Value, PlaywrightError> {
+    let tree = frame_tree(tabs, page).await?;
+    frame_records(&page.id, &tree, tree.iter())
 }
 
 /// A direct frame's live field. Detached metadata is null so the SDK can return its last
-/// observed URL/name; a removed frame has no parent or children.
+/// observed URL/name; a removed frame has no parent or children. Only the main URL avoids
+/// Page.getFrameTree's possible wait for a pending main-frame navigation to commit.
 pub(crate) async fn frame(
-    frames: &Frames,
-    page: &PageId,
+    tabs: &Tabs,
+    page: &PageEntry,
     scope: &FrameScope,
     field: FrameField,
 ) -> Result<Value, PlaywrightError> {
-    let tree = frames.tree().await.map_err(frame_tree_error)?;
-    frame_value(page, &tree, scope, field)
+    if matches!((scope, field), (FrameScope::Main, FrameField::Url)) {
+        return tabs.url(page).await.map(|url| json!(url));
+    }
+    let tree = frame_tree(tabs, page).await?;
+    frame_value(&page.id, &tree, scope, field)
+}
+
+/// Neo: Keeps frame records on the same committed-URL source as the page getter.
+async fn frame_tree(tabs: &Tabs, page: &PageEntry) -> Result<Vec<FrameInfo>, PlaywrightError> {
+    let session = tabs.session(page).await?;
+    let mut tree = session.frames.tree().await.map_err(frame_tree_error)?;
+    if let Some(main) = tree.first_mut() {
+        main.url = tabs
+            .url(page)
+            .await?
+            .ok_or_else(PlaywrightError::target_closed)?;
+    }
+    Ok(tree)
 }
 
 fn frame_value(

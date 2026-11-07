@@ -277,10 +277,7 @@ impl Getters {
                 GetterField::IsDetached => FrameField::IsDetached,
                 _ => return Err(GetError::BadRequest("not a frame getter".to_string())),
             };
-            return self.wait(async {
-                let session = self.tabs.session(&page).await?;
-                getters::frame(&session.frames, &page.id, &scope, field).await
-            });
+            return self.wait(async { getters::frame(&self.tabs, &page, &scope, field).await });
         }
         if !request.guid.starts_with("page@") {
             return Err(GetError::BadRequest(format!(
@@ -300,10 +297,7 @@ impl Getters {
             GetterField::Pages => Err(GetError::BadRequest(
                 "pages is a context getter".to_string(),
             )),
-            GetterField::Frames => self.wait(async {
-                let session = self.tabs.session(&page).await?;
-                getters::frames(&session.frames, &page.id).await
-            }),
+            GetterField::Frames => self.wait(async { getters::frames(&self.tabs, &page).await }),
             GetterField::Name
             | GetterField::ParentFrame
             | GetterField::ChildFrames
