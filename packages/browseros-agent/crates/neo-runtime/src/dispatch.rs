@@ -383,21 +383,7 @@ impl Dispatcher {
                 .frame_guid(&guid)
                 .and_then(|frame| inner.tabs.resolve(&frame))
         });
-        let object = if guid == "context@default" {
-            ObjectKind::Context
-        } else if target.is_none() {
-            ObjectKind::Unknown
-        } else if guid.starts_with(evaluate::HANDLE_PREFIX) {
-            ObjectKind::Handle(guid.clone())
-        } else if guid.starts_with("frame@") {
-            ObjectKind::Frame
-        } else if let Some((kind, _, hop)) = HopId::parse(&guid) {
-            ObjectKind::Network(kind, hop)
-        } else if let Some((_, index)) = dialogs::parse(&guid) {
-            ObjectKind::Dialog(index)
-        } else {
-            ObjectKind::Page
-        };
+        let object = object_kind(&guid, target.is_some());
         let Routed { meta, route } = route(object, &method, params.clone());
         let metadata = metadata.unwrap_or(Metadata {
             location: None,
@@ -1082,6 +1068,26 @@ async fn serve_route<T: FormTab + KeyboardTab>(
             "neo-runtime: navigation and page reads are served by `serve`",
         )
         .into()),
+    }
+}
+
+/// What a message's `guid` names: the context, an object of a resolved tab (a JS handle, a frame,
+/// a network hop, a dialog, or the page itself), or nothing Neo knows.
+fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
+    if guid == "context@default" {
+        ObjectKind::Context
+    } else if !resolved {
+        ObjectKind::Unknown
+    } else if guid.starts_with(evaluate::HANDLE_PREFIX) {
+        ObjectKind::Handle(guid.to_owned())
+    } else if guid.starts_with("frame@") {
+        ObjectKind::Frame
+    } else if let Some((kind, _, hop)) = HopId::parse(guid) {
+        ObjectKind::Network(kind, hop)
+    } else if let Some((_, index)) = dialogs::parse(guid) {
+        ObjectKind::Dialog(index)
+    } else {
+        ObjectKind::Page
     }
 }
 
