@@ -420,11 +420,16 @@ async fn new_page(
             .race(scripts.show_new(tabs.cdp(), &session, &context.id))
             .await?;
     }
-    encode(&BrowserContextNewPageResult {
+    let result = encode(&BrowserContextNewPageResult {
         page: PageChannel {
             guid: quickjs_bridge::page_guid(&entry.id),
         },
-    })
+    })?;
+    // Neo: this creation commits here, after readiness and encoding, like `NewPage::keep`
+    // for the run's own context. Target.createTarget has no BrowserOS tab id in its reply;
+    // the host directory supplies it when discovery catches up, without adding a script await.
+    progress.page_created(&entry.id, None);
+    Ok(result)
 }
 
 /// Playwright's `BrowserContext.close` of a created context (`CRBrowserContext.doClose`): the

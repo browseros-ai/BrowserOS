@@ -14,7 +14,7 @@ use neo_runtime_spec::injected::InjectedPreviewNodeParams;
 use neo_runtime_spec::serve::{
     FrameChannel, FrameInitializer, PageChannel, PageInitializer, PageInitializerViewportSize,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
 use tokio::sync::{OnceCell, oneshot};
@@ -37,13 +37,14 @@ use crate::chromium_bridge::page_events::{self, Kept, MAX_KEPT_ARGS, MAX_KEPT_CH
 use crate::chromium_bridge::playwright_injected_methods::TestIdAttribute;
 use crate::debugger::{DEFAULT_CONTEXT, Debuggers};
 use crate::events::{ALL_PAGES, CONTEXT_GUID, Enabling, EventHub, Needs};
+use crate::host::TabId;
 use crate::method_router::PAGE_END_WAIT;
 use crate::playwright_methods::browser_methods::{self, CreatedContext, CreatedContexts};
 use crate::playwright_methods::click::PageError;
 use crate::playwright_methods::evaluate::{self, Handles};
 use crate::playwright_methods::getters;
 use crate::playwright_methods::screenshot::TabScreenshots;
-use crate::progress::{PlaywrightError, RunScope};
+use crate::progress::{PlaywrightError, Progress, RunScope};
 use crate::quickjs_bridge;
 use crate::run::{PageId, RunPage};
 
@@ -127,6 +128,8 @@ struct Scope {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TabInfo {
     target_id: String,
+    #[serde(default, deserialize_with = "deserialize_tab_id")]
+    tab_id: Option<TabId>,
     url: String,
     window_id: Option<i64>,
     live_browser_context_id: Option<String>,
@@ -165,13 +168,17 @@ struct CreatedWindow {
 /// new tab unless the handler has committed a successful result with `keep`.
 pub(crate) struct NewPage {
     pub(crate) entry: Arc<PageEntry>,
+    tab: Option<TabId>,
     accepted: Arc<AtomicBool>,
     _finished: DropGuard,
 }
 
 impl NewPage {
-    pub(crate) fn keep(self) {
+    pub(crate) fn keep(self, progress: &Progress) {
         self.accepted.store(true, Ordering::Release);
+        // Registration precedes readiness and can still roll back. Only this commit reports the
+        // page to the host, before the creating call can finish on the same emitter.
+        progress.page_created(&self.entry.id, self.tab);
     }
 }
 
@@ -665,8 +672,8 @@ impl Tabs {
         // the task alive through readiness, and releases it to cleanup on every failure.
         let work = async move {
             match tabs.create_registered().await {
-                Ok(entry) => {
-                    let _sent = reply.send(Ok(Arc::clone(&entry)));
+                Ok((entry, tab)) => {
+                    let _sent = reply.send(Ok((Arc::clone(&entry), tab)));
                     finished.cancelled().await;
                     if !kept.load(Ordering::Acquire) {
                         tabs.close_failed_creation(&entry).await;
@@ -680,17 +687,18 @@ impl Tabs {
         self.0
             .tasks
             .spawn_on(self.0.creations.track_future(work), &self.0.tokio);
-        let entry = receiver
+        let (entry, tab) = receiver
             .await
             .map_err(|error| PlaywrightError::error(format!("creating a page: {error}")))??;
         Ok(NewPage {
             entry,
+            tab,
             accepted,
             _finished: guard,
         })
     }
 
-    async fn create_registered(&self) -> Result<Arc<PageEntry>, PlaywrightError> {
+    async fn create_registered(&self) -> Result<(Arc<PageEntry>, Option<TabId>), PlaywrightError> {
         let mut params = json!({ "url": "about:blank", "background": true });
         let run_tab = tab_info(&self.0.cdp, &self.0.run_page).await?;
         let window = match run_tab {
@@ -718,7 +726,8 @@ impl Tabs {
                 .into_iter()
                 .find(|info| info.window_id == Some(window.window.window_id))
                 .ok_or_else(|| PlaywrightError::error("the new window has no initial tab"))?;
-            return self.register(PageId::new(info.target_id), true);
+            let entry = self.register(PageId::new(info.target_id), true)?;
+            return Ok((entry, info.tab_id));
         } else {
             // A context with no surviving window and no routable identity cannot safely
             // create a tab: omitting both would let BrowserOS choose another profile.
@@ -730,7 +739,8 @@ impl Tabs {
             .send_typed("Browser.createTab", params, None)
             .await
             .map_err(|error| cdp_error(&error))?;
-        self.register(PageId::new(reply.tab.target_id), true)
+        let entry = self.register(PageId::new(reply.tab.target_id), true)?;
+        Ok((entry, reply.tab.tab_id))
     }
 
     async fn close_failed_creation(&self, entry: &PageEntry) {
@@ -1408,6 +1418,14 @@ impl Scope {
     }
 }
 
+/// Older replies may omit the id; non-tab targets report zero or negative ids. Validate at
+/// the CDP boundary so every later host event carries either a real BrowserOS tab id or none.
+fn deserialize_tab_id<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<TabId>, D::Error> {
+    Ok(Option::<i64>::deserialize(deserializer)?.and_then(TabId::parse))
+}
+
 pub(crate) async fn tab_info(
     cdp: &CdpClient,
     page: &PageId,
@@ -1530,6 +1548,144 @@ mod tests {
             "element@fake-page".to_string(),
         ] {
             assert!(tabs.resolve(&guid).is_none(), "{guid}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod host_tests {
+    use std::time::SystemTime;
+
+    use super::*;
+    use crate::deadline::Deadline;
+    use crate::fake_browser::{FakeBrowser, Replies};
+    use crate::host::{Host, HostEvent, HostOptions, RunEmitter, SessionKey};
+    use crate::progress::{CallEntry, CallStart, RunScope};
+    use crate::run::{CallResult, RunId, RunStatus};
+
+    fn pending_creation(cdp: &CdpClient) -> (NewPage, Arc<AtomicBool>, CancellationToken) {
+        let accepted = Arc::new(AtomicBool::new(false));
+        let finished = CancellationToken::new();
+        let created = NewPage {
+            entry: Arc::new(PageEntry {
+                id: PageId::new("created".to_string()),
+                created: AtomicBool::new(true),
+                closed_by_run: AtomicBool::new(false),
+                close_requested: AtomicBool::new(false),
+                closed: CancellationToken::new(),
+                frame_metadata: Mutex::new(getters::FrameMetadata::new(cdp)),
+                session: OnceCell::new(),
+                context: OnceLock::new(),
+                discovered: AtomicBool::new(false),
+                opener: Mutex::new(None),
+            }),
+            tab: TabId::parse(1734),
+            accepted: Arc::clone(&accepted),
+            _finished: finished.clone().drop_guard(),
+        };
+        (created, accepted, finished)
+    }
+
+    /// The transaction's synchronous commit boundary: dropping an initialized
+    /// creation only releases cleanup; keeping it also supplies the creating call's page before
+    /// either the call or the run can end.
+    #[tokio::test]
+    async fn only_a_kept_creation_reports_its_page_to_the_creating_call() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let cdp = browser.cdp().await;
+        for keep in [false, true] {
+            let host = Host::new(HostOptions::new(9222, 1));
+            let session = SessionKey::new("s");
+            let run = RunId::mint();
+            let emitter = RunEmitter::new(Some(&host), Some(&session), &run);
+            let ending = emitter.run_started(&PageId::new("initial".to_string()));
+            let entry = Arc::new(CallEntry::new(CallStart {
+                call_id: 7,
+                guid: "context@default".to_string(),
+                method: "newPage".to_string(),
+                title: None,
+                params: json!({}),
+                location: None,
+                input: false,
+                page: None,
+                snapshot: false,
+            }));
+            let scope = RunScope::new(
+                Deadline::new(Duration::from_secs(5), CancellationToken::new()),
+                TaskTracker::new(),
+                emitter.clone(),
+            );
+            let progress = Progress::new(entry, 0.0, scope, CancellationToken::new());
+            emitter.call_started(7, None, false, SystemTime::now());
+            assert_eq!(host.tap().drain().len(), 2);
+
+            let (created, accepted, finished) = pending_creation(&cdp);
+            let page = created.entry.id.clone();
+            assert!(host.tap().drain().is_empty());
+            if keep {
+                created.keep(&progress);
+            } else {
+                drop(created);
+            }
+            assert_eq!(accepted.load(Ordering::Acquire), keep);
+            assert!(finished.is_cancelled(), "cleanup is released on both paths");
+            emitter.call_ended(7, &CallResult::Ok);
+            ending.ended(RunStatus::Ok);
+
+            let mut events = host.tap().drain();
+            if keep {
+                assert_eq!(
+                    events.remove(0),
+                    HostEvent::PageCreated {
+                        session: session.clone(),
+                        run: run.clone(),
+                        page: page.clone(),
+                        tab: TabId::parse(1734),
+                        call_id: Some(7),
+                    }
+                );
+            }
+            assert_eq!(events.len(), 2, "{events:?}");
+            assert_eq!(
+                events[0],
+                HostEvent::CallEnded {
+                    session,
+                    run,
+                    call_id: 7,
+                    page: keep.then_some(page),
+                    result: CallResult::Ok,
+                }
+            );
+            assert!(matches!(
+                events[1],
+                HostEvent::RunEnded {
+                    status: RunStatus::Ok,
+                    ..
+                }
+            ));
+        }
+    }
+
+    /// getTabInfo and createTab return `tab`; getTabs (including a new window's initial tab)
+    /// returns `tabs`. Both boundaries accept only positive BrowserOS ids, including old replies
+    /// that omit the field entirely.
+    #[test]
+    fn tab_replies_keep_only_positive_browseros_ids() {
+        for (raw, expected) in [
+            (Some(json!(1734)), Some(1734)),
+            (Some(json!(0)), None),
+            (Some(json!(-1)), None),
+            (Some(json!(null)), None),
+            (None, None),
+        ] {
+            let mut info = json!({"targetId":"T","url":"about:blank","windowId":7});
+            if let Some(raw) = raw {
+                info["tabId"] = raw;
+            }
+            let single: TabReply = serde_json::from_value(json!({"tab":info})).unwrap();
+            let list: TabsReply = serde_json::from_value(json!({"tabs":[info]})).unwrap();
+            assert_eq!(single.tab.tab_id.map(TabId::get), expected);
+            assert_eq!(list.tabs[0].tab_id.map(TabId::get), expected);
         }
     }
 }

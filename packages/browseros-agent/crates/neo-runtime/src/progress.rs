@@ -46,7 +46,7 @@ use crate::browser_representations::bindings::Bindings;
 use crate::browser_representations::clock::Clock;
 use crate::browser_representations::init_scripts::InitScripts;
 use crate::deadline::{Deadline, Stop};
-use crate::host::RunEmitter;
+use crate::host::{RunEmitter, TabId};
 use crate::playwright_methods::evaluate::Handles;
 use crate::run::{CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, PageId, RunEnd};
 
@@ -415,6 +415,12 @@ impl Progress {
     /// The call's delivery cell; `None` for a method the spec does not flag `input`.
     pub(crate) fn delivery(&self) -> Option<&Arc<DeliveryCell>> {
         self.entry.delivery.as_ref()
+    }
+
+    /// Commits a `newPage` to this call on the run's emitter. Its open-call state is independent
+    /// of the record caps, so even a call whose record was dropped carries its created page.
+    pub(crate) fn page_created(&self, page: &PageId, tab: Option<TabId>) {
+        self.run.emitter.page_created(self.entry.call_id, page, tab);
     }
 
     /// The run's artifact directory, where a `path` option writes.

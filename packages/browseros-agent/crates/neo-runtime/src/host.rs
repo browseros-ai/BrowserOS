@@ -42,13 +42,6 @@ mod cdp;
 )]
 mod directory;
 mod emit;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "scaffold: the host ledger consumes these, the run path emits them"
-    )
-)]
 mod events;
 mod ids;
 #[cfg_attr(
@@ -81,10 +74,10 @@ mod view;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::host::events::HostEvent;
 use crate::host::tap::Tap;
 
 pub(crate) use emit::RunEmitter;
+pub(crate) use events::HostEvent;
 pub use ids::{EpochMs, SessionKey, TabId};
 
 /// How long a session stays live after its last run unless the server says otherwise:

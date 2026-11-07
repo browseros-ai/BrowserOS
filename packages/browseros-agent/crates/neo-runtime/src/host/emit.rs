@@ -5,6 +5,8 @@
 //!  Runtime::run ── run_started ──────────▶ RunStarted   before the tab check: a run whose tab
 //!       │                                               is already closed is still a run
 //!       ├─ Trace::push ──────────────────▶ CallStarted  inside the native call
+//!       ├─ NewPage::keep ────────────────▶ PageCreated  readiness succeeded; gives the creating
+//!       │                                               call's end its page
 //!       ├─ Trace::finished ──────────────▶ CallEnded    the call replied
 //!       ├─ Trace::take ──────────────────▶ CallEnded    the run ended under it: as its record
 //!       │                                               reads, else `Unfinished`
@@ -25,7 +27,7 @@ use std::time::SystemTime;
 
 use crate::host::Host;
 use crate::host::events::HostEvent;
-use crate::host::ids::{EpochMs, SessionKey};
+use crate::host::ids::{EpochMs, SessionKey, TabId};
 use crate::host::tap::Tap;
 use crate::run::{CallRecord, CallResult, PageId, RunEnd, RunId, RunStatus};
 
@@ -124,6 +126,25 @@ impl RunEmitter {
             if let Some(index) = open.iter().position(|call| call.call_id == call_id) {
                 emission.push(emission.call_ended(open.remove(index), result.clone()));
             }
+        });
+    }
+
+    /// `NewPage::keep`: the creation succeeded. Update the open call and queue the lifecycle
+    /// event under the same lock that ends calls and runs, so the ledger always sees the
+    /// creation before its `CallEnded`. A call already ended by the run stays silent.
+    pub(crate) fn page_created(&self, call_id: u64, page: &PageId, tab: Option<TabId>) {
+        self.with_open(|emission, open| {
+            let Some(call) = open.iter_mut().find(|call| call.call_id == call_id) else {
+                return;
+            };
+            call.page = Some(page.clone());
+            emission.push(HostEvent::PageCreated {
+                session: emission.session.clone(),
+                run: emission.run.clone(),
+                page: page.clone(),
+                tab,
+                call_id: Some(call_id),
+            });
         });
     }
 
@@ -244,6 +265,8 @@ mod tests {
     /// Two calls: `Frame.title`, which Playwright's spec does not flag `snapshot`, then
     /// `Frame.click`, which it does.
     const TWO_CALLS: &str = "await page.title(); await page.click('#go'); return page.url()";
+
+    const NEW_PAGE: &str = "const created = await context.newPage(); return created.url()";
 
     async fn hosted(browser: &FakeBrowser) -> Runtime {
         let options = RuntimeOptions {
@@ -432,10 +455,11 @@ mod tests {
     }
 
     /// A trace whose calls report to a fresh host, as a hosted run's trace does.
-    fn traced() -> (Host, Trace) {
+    fn traced() -> (Host, Trace, RunEmitter) {
         let host = Host::new(HostOptions::new(9222, 1));
         let emitter = RunEmitter::new(Some(&host), Some(&SessionKey::new(SESSION)), &RunId::mint());
-        (host, Trace::new(emitter))
+        let trace = Trace::new(emitter.clone());
+        (host, trace, emitter)
     }
 
     fn click(call_id: u64) -> Arc<CallEntry> {
@@ -450,6 +474,229 @@ mod tests {
             page: Some(PageId::new(PAGE.to_string())),
             snapshot: true,
         }))
+    }
+
+    fn new_page(call_id: u64) -> Arc<CallEntry> {
+        Arc::new(CallEntry::new(CallStart {
+            call_id,
+            guid: "context@default".to_string(),
+            method: "newPage".to_string(),
+            title: None,
+            params: Value::Null,
+            location: None,
+            input: false,
+            page: None,
+            snapshot: false,
+        }))
+    }
+
+    fn context_started(run: &RunId, call_id: u64) -> HostEvent {
+        HostEvent::CallStarted {
+            session: SessionKey::new(SESSION),
+            run: run.clone(),
+            call_id,
+            page: None,
+            snapshot: false,
+            at: EpochMs::MIN,
+        }
+    }
+
+    fn creation(run: &RunId, call_id: u64) -> HostEvent {
+        HostEvent::PageCreated {
+            session: SessionKey::new(SESSION),
+            run: run.clone(),
+            page: PageId::new("new-page-1".to_string()),
+            tab: TabId::parse(1001),
+            call_id: Some(call_id),
+        }
+    }
+
+    fn creation_ended(
+        run: &RunId,
+        call_id: u64,
+        page: Option<PageId>,
+        result: CallResult,
+    ) -> HostEvent {
+        HostEvent::CallEnded {
+            session: SessionKey::new(SESSION),
+            run: run.clone(),
+            call_id,
+            page,
+            result,
+        }
+    }
+
+    /// The fake has registered and attached the new tab, but its committed URL is still empty.
+    /// Waiting on that effect, rather than a delay, pins the transaction before `keep`.
+    async fn initializing(browser: &FakeBrowser) {
+        until(browser, |exchanges| {
+            exchanges.iter().any(|exchange| {
+                exchange.method() == "Page.getNavigationHistory"
+                    && exchange
+                        .reply
+                        .as_ref()
+                        .is_some_and(|reply| reply["result"]["entries"][0]["url"] == "")
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_new_page_is_reported_only_when_its_initialization_is_kept() {
+        let browser = FakeBrowser::start(Replies {
+            new_page_url: Some(""),
+            ..Replies::default()
+        })
+        .await;
+        let runtime = hosted(&browser).await;
+        let running = tokio::spawn({
+            let runtime = runtime.clone();
+            async move { runtime.run(request(NEW_PAGE)).await }
+        });
+        initializing(&browser).await;
+        let before = events(tap(&runtime));
+        let run = run_of(&before);
+        assert_eq!(before, [started(&run, PAGE), context_started(&run, 1)]);
+        {
+            let mut page = browser.page.lock().unwrap();
+            let tab = page
+                .tabs
+                .iter_mut()
+                .find(|tab| tab["targetId"] == "new-page-1")
+                .unwrap();
+            assert_eq!(tab["tabId"], 1001);
+            tab["url"] = json!("about:blank");
+        }
+        let outcome = running.await.unwrap();
+        detached(&browser).await;
+
+        assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+        assert_eq!(outcome.value, Some(json!("about:blank")));
+        assert_eq!(outcome.calls.len(), 1);
+        assert_eq!(
+            events(tap(&runtime)),
+            [
+                creation(&run, 1),
+                creation_ended(
+                    &run,
+                    1,
+                    Some(PageId::new("new-page-1".to_string())),
+                    CallResult::Ok
+                ),
+                ended(&run, RunStatus::Ok),
+            ]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_new_windows_initial_page_carries_its_browseros_id_and_creating_call() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let runtime = hosted(&browser).await;
+        let outcome = runtime
+            .run(request(&format!("await page.close(); {NEW_PAGE}")))
+            .await;
+        detached(&browser).await;
+
+        assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+        assert_eq!(outcome.calls.len(), 2);
+        let commands = methods(&browser);
+        assert!(
+            commands
+                .iter()
+                .any(|method| method == "Browser.createWindow")
+        );
+        assert!(!commands.iter().any(|method| method == "Browser.createTab"));
+        let events = events(tap(&runtime));
+        let run = &outcome.run_id;
+        assert_eq!(events.len(), 7, "{events:#?}");
+        assert_eq!(
+            events[3..],
+            [
+                context_started(run, 2),
+                creation(run, 2),
+                creation_ended(
+                    run,
+                    2,
+                    Some(PageId::new("new-page-1".to_string())),
+                    CallResult::Ok
+                ),
+                ended(run, RunStatus::Ok),
+            ]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_creation_reports_no_created_page() {
+        let browser = FakeBrowser::start(Replies {
+            create_tab_error: Some("creation refused"),
+            ..Replies::default()
+        })
+        .await;
+        let runtime = hosted(&browser).await;
+        let outcome = runtime.run(request(NEW_PAGE)).await;
+        detached(&browser).await;
+
+        assert_eq!(outcome.status, RunStatus::Error, "{outcome:?}");
+        assert_eq!(outcome.calls.len(), 1);
+        assert!(matches!(outcome.calls[0].result, CallResult::Error { .. }));
+        let run = &outcome.run_id;
+        assert_eq!(
+            events(tap(&runtime)),
+            [
+                started(run, PAGE),
+                context_started(run, 1),
+                creation_ended(run, 1, None, outcome.calls[0].result.clone()),
+                ended(run, RunStatus::Error),
+            ]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unkept_creation_is_closed_without_reporting_a_page() {
+        let browser = FakeBrowser::start(Replies {
+            new_page_url: Some(""),
+            ..Replies::default()
+        })
+        .await;
+        let runtime = hosted(&browser).await;
+        let cancel = CancellationToken::new();
+        let running = tokio::spawn({
+            let runtime = runtime.clone();
+            let cancel = cancel.clone();
+            async move {
+                runtime
+                    .run(RunRequest {
+                        cancel,
+                        ..request(NEW_PAGE)
+                    })
+                    .await
+            }
+        });
+        initializing(&browser).await;
+        cancel.cancel();
+        let outcome = running.await.unwrap();
+        detached(&browser).await;
+
+        assert_eq!(outcome.status, RunStatus::Cancelled, "{outcome:?}");
+        let result = CallResult::Unfinished {
+            reason: RunEnd::Cancelled,
+        };
+        assert_eq!(outcome.calls.len(), 1);
+        assert_eq!(outcome.calls[0].result, result);
+        assert!(browser.exchanges().iter().any(|exchange| {
+            exchange.method() == "Target.closeTarget"
+                && exchange.command["params"]["targetId"] == "new-page-1"
+        }));
+        let run = &outcome.run_id;
+        assert_eq!(
+            events(tap(&runtime)),
+            [
+                started(run, PAGE),
+                context_started(run, 1),
+                creation_ended(run, 1, None, result),
+                ended(run, RunStatus::Cancelled),
+            ]
+        );
     }
 
     /// Each call's `CallEnded` results, by call id, in tap order.
@@ -628,10 +875,11 @@ mod tests {
 
     #[test]
     fn a_call_that_ends_after_the_records_were_taken_ends_once() {
-        let (host, trace) = traced();
+        let (host, trace, emitter) = traced();
         let entry = click(1);
         trace.push(Arc::clone(&entry));
         let (records, _) = trace.take(RunEnd::Settled);
+        emitter.page_created(1, &PageId::new("late-page".to_string()), TabId::parse(1001));
         entry.finish(CallResult::Ok);
         trace.finished(&entry);
 
@@ -650,13 +898,14 @@ mod tests {
         let run = RunId::mint();
         let emitter = RunEmitter::new(Some(&host), Some(&SessionKey::new(SESSION)), &run);
         let ending = emitter.run_started(&PageId::new(PAGE.to_string()));
-        let trace = Trace::new(emitter);
+        let trace = Trace::new(emitter.clone());
         let entry = click(1);
         trace.push(Arc::clone(&entry));
         drop(ending);
         entry.finish(CallResult::Ok);
         trace.finished(&entry);
         trace.push(click(2));
+        emitter.page_created(2, &PageId::new("late-page".to_string()), TabId::parse(1001));
 
         let cancelled = CallResult::Unfinished {
             reason: RunEnd::Cancelled,
@@ -676,7 +925,7 @@ mod tests {
     /// so does the host side, whichever of the two reports it first.
     #[test]
     fn a_call_that_ended_as_the_records_were_taken_reads_the_same_on_both_sides() {
-        let (host, trace) = traced();
+        let (host, trace, _) = traced();
         let entry = click(1);
         trace.push(Arc::clone(&entry));
         entry.finish(CallResult::Ok);
@@ -691,10 +940,21 @@ mod tests {
     /// end once, the last one cut off by the run's end with no record to read.
     #[test]
     fn calls_past_the_record_caps_still_start_and_end_once_each() {
-        let (host, trace) = traced();
+        let (host, trace, emitter) = traced();
         for call_id in 1..=1002 {
-            let entry = click(call_id);
+            let entry = if call_id <= 1000 {
+                click(call_id)
+            } else {
+                new_page(call_id)
+            };
             trace.push(Arc::clone(&entry));
+            if call_id > 1000 {
+                emitter.page_created(
+                    call_id,
+                    &PageId::new(format!("created-{call_id}")),
+                    TabId::parse(1001),
+                );
+            }
             if call_id < 1002 {
                 entry.finish(CallResult::Ok);
                 trace.finished(&entry);
@@ -710,6 +970,30 @@ mod tests {
             .filter(|event| matches!(event, HostEvent::CallStarted { .. }))
             .count();
         assert_eq!(starts, 1002);
+        let created: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                HostEvent::PageCreated { call_id, page, .. } => Some((*call_id, page.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            created,
+            [(Some(1001), "created-1001"), (Some(1002), "created-1002")]
+        );
+        let ended_pages: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                HostEvent::CallEnded { call_id, page, .. } if *call_id > 1000 => {
+                    Some((*call_id, page.as_ref().map(PageId::as_str)))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ended_pages,
+            [(1001, Some("created-1001")), (1002, Some("created-1002"))]
+        );
         let expected: Vec<(u64, CallResult)> = (1..=1001)
             .map(|call_id| (call_id, CallResult::Ok))
             .chain([(
@@ -807,32 +1091,45 @@ mod tests {
     async fn a_run_without_a_session_tells_the_host_nothing() {
         let browser = FakeBrowser::start(Replies::default()).await;
         let runtime = hosted(&browser).await;
-        let outcome = runtime
-            .run(RunRequest {
-                session: None,
-                ..request(TWO_CALLS)
-            })
-            .await;
+        for code in [TWO_CALLS, NEW_PAGE] {
+            let outcome = runtime
+                .run(RunRequest {
+                    session: None,
+                    ..request(code)
+                })
+                .await;
 
-        assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
-        assert!(tap(&runtime).drain().is_empty());
+            assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+            assert!(tap(&runtime).drain().is_empty());
+        }
     }
 
     /// The host side sends no CDP command of its own: a tracked run on a runtime with a host
     /// sends exactly what the same run sends on a runtime without one.
     #[tokio::test(flavor = "multi_thread")]
     async fn the_host_side_adds_no_cdp_traffic_to_a_run() {
-        let plain = FakeBrowser::start(Replies::default()).await;
-        let untracked = plain.runtime().await.run(request(TWO_CALLS)).await;
-        let tracked_browser = FakeBrowser::start(Replies::default()).await;
-        let runtime = hosted(&tracked_browser).await;
-        let tracked = runtime.run(request(TWO_CALLS)).await;
+        for (code, count) in [(TWO_CALLS, 6), (NEW_PAGE, 5)] {
+            let plain = FakeBrowser::start(Replies::default()).await;
+            let plain_runtime = plain.runtime().await;
+            assert!(plain_runtime.host().is_none());
+            let untracked = plain_runtime.run(request(code)).await;
+            let tracked_browser = FakeBrowser::start(Replies::default()).await;
+            let runtime = hosted(&tracked_browser).await;
+            let tracked = runtime.run(request(code)).await;
 
-        assert_eq!(untracked.status, RunStatus::Ok, "{untracked:?}");
-        assert_eq!(tracked.status, RunStatus::Ok, "{tracked:?}");
-        assert_eq!(events(tap(&runtime)).len(), 6, "the tracked run reported");
-        detached(&plain).await;
-        detached(&tracked_browser).await;
-        assert_eq!(methods(&tracked_browser), methods(&plain));
+            assert_eq!(untracked.status, RunStatus::Ok, "{untracked:?}");
+            assert_eq!(
+                comparable(&tracked, &untracked.run_id),
+                comparable(&untracked, &untracked.run_id)
+            );
+            assert_eq!(
+                events(tap(&runtime)).len(),
+                count,
+                "the tracked run reported"
+            );
+            detached(&plain).await;
+            detached(&tracked_browser).await;
+            assert_eq!(methods(&tracked_browser), methods(&plain));
+        }
     }
 }

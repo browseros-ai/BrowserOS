@@ -88,6 +88,8 @@ pub struct Replies {
     pub new_page_url: Option<&'static str>,
     /// The tab exists immediately, but its creation acknowledgement arrives later.
     pub create_tab_delay: Option<Duration>,
+    /// A protocol error instead of creating the tab.
+    pub create_tab_error: Option<&'static str>,
     /// Closing removes the tab immediately, before acknowledging the request.
     pub close_tab_delay: Option<Duration>,
     /// Beforeunload completes after the Page.close acknowledgement, provided its watcher
@@ -195,7 +197,7 @@ impl Default for Page {
         Self {
             drag_listeners: false,
             tabs: vec![json!({
-                "targetId": PAGE, "url": PAGE_URL, "windowId": 1,
+                "targetId": PAGE, "tabId": 41, "url": PAGE_URL, "windowId": 1,
                 "liveBrowserContextId": "profile", "isActive": true,
             })],
             frames: None,
@@ -215,7 +217,8 @@ impl Page {
     fn add_tab(&mut self, window: i64, url: &str) -> Value {
         self.next_tab += 1;
         let tab = json!({
-            "targetId":format!("new-page-{}",self.next_tab), "url":url, "windowId":window,
+            "targetId":format!("new-page-{}",self.next_tab), "tabId":1000+self.next_tab,
+            "url":url, "windowId":window,
             "liveBrowserContextId":"profile", "isActive":false,
         });
         self.tabs.push(tab.clone());
@@ -949,6 +952,9 @@ fn tab_command(
             (json!({ "result": { "tabs": tabs } }), now)
         }
         "Browser.createTab" => {
+            if let Some(message) = replies.create_tab_error {
+                return Some((json!({"error":{"code":-32000,"message":message}}), now));
+            }
             let mut page = lock(page);
             let window = command["params"]["windowId"]
                 .as_i64()
