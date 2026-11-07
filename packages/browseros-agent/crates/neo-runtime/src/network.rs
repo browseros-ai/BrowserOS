@@ -773,6 +773,14 @@ impl Chain {
         let end = (timestamp - hop.timestamp) * 1000.0;
         hop.request_finished(end);
         hop.finished = true;
+        // `_requestFinished` starts an unmeasured request at its end, and a redirect's response
+        // reaches the client only after it (`_handleRequestRedirect`), so its snapshot has that.
+        let end = hop.response_end;
+        if let Some(response) = &mut hop.response
+            && is_unset(response.timing.request_start)
+        {
+            response.timing.request_start = end;
+        }
     }
 
     /// `_createResponse` and the tracker's `processResponse` for the hop at `index`.
@@ -1937,6 +1945,54 @@ mod tests {
             waiting.await.expect("waiter"),
             Ok(Lookup::Response(_))
         ));
+    }
+
+    /// A redirect response without network timing (an internal or cached redirect). Playwright
+    /// creates its client object after `_requestFinished`, which starts an unmeasured request at
+    /// its end, so the redirect's `requestStart` reads its `responseEnd`.
+    #[test]
+    fn tests_that_an_unmeasured_redirect_starts_its_request_at_its_end() {
+        let redirect = event(
+            "Network.requestWillBeSent",
+            json!({
+                "requestId": "N", "loaderId": "N", "type": "Document", "frameId": "MAIN",
+                "request": {"url": "https://a.test/next", "method": "GET", "headers": {}},
+                "timestamp": 10.25, "wallTime": 1000.25,
+                "redirectResponse": {"url": "https://a.test/", "status": 307,
+                                     "statusText": "Internal Redirect",
+                                     "headers": {"Location": "/next"}},
+            }),
+        );
+        let log = replay(
+            "MAIN",
+            &[
+                navigation("N", "MAIN", "Document", "https://a.test/"),
+                redirect,
+            ],
+        );
+        let hop = HopId {
+            request: "N".to_string(),
+            hop: 0,
+        };
+        let chain = log.chain(&hop).expect("chain");
+        let initializer = &chain.responses[0].as_ref().expect("a response").initializer;
+        assert_eq!(
+            (
+                initializer.timing.request_start,
+                initializer.timing.response_start
+            ),
+            (250.0, -1.0),
+            "the initializer carries the server's rewritten requestStart"
+        );
+        let timing = log.timing(&hop).expect("hop");
+        assert_eq!(
+            (
+                timing.request_start,
+                timing.response_start,
+                timing.response_end
+            ),
+            (250.0, 250.0, 250.0)
+        );
     }
 
     #[test]
