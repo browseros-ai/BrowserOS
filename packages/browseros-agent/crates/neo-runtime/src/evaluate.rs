@@ -593,13 +593,18 @@ pub(crate) async fn evaluate(
     }
 }
 
-/// Playwright's `JSHandle.jsonValue`: the page's `UtilityScript.jsonValue(true, handle)`.
+/// Playwright's `JSHandle.jsonValue`: the page's `UtilityScript.jsonValue(true, handle)`, or for a
+/// primitive the value the handle keeps, without its frame: it answers after the frame is gone.
 async fn json_value(
     tab: &FrameTab,
     receiver: &HandleEntry,
     handles: &Handles,
     progress: &Progress,
 ) -> Result<EvalResult, CallError> {
+    // Playwright: `server/javascript.ts` `JSHandle._jsonValue`: `if (!this._objectId)`
+    if let Remote::Value(argument) = &receiver.remote {
+        return Ok(EvalResult::Value(Some(page_value(argument))));
+    }
     let frame = Arc::clone(&receiver.frame);
     let mut attempt = 0;
     loop {
@@ -626,6 +631,18 @@ async fn json_value(
                 return answer(tab, &frame, installed.document, called, handles, progress).await;
             }
         }
+    }
+}
+
+/// A primitive handle's kept `CallArgument` (`{value}`, `{unserializableValue}` or `{}`) in the
+/// page's own encoding, as `UtilityScript.jsonValue` answers the same value: `null`, `undefined`
+/// and the numbers JSON cannot carry as `{v}`, everything else as itself.
+fn page_value(argument: &Value) -> Value {
+    match (argument.get("value"), argument.get("unserializableValue")) {
+        (Some(Value::Null), _) => json!({ "v": "null" }),
+        (Some(value), _) => value.clone(),
+        (None, Some(Value::String(special))) => json!({ "v": special }),
+        _ => json!({ "v": "undefined" }),
     }
 }
 
@@ -955,6 +972,21 @@ mod tests {
                 (argument, preview.to_string()),
                 "{object}"
             );
+        }
+    }
+
+    #[test]
+    fn a_primitive_handle_answers_its_value_in_the_page_encoding() {
+        for (argument, value) in [
+            (json!({"value": 42}), json!(42)),
+            (json!({"value": "a"}), json!("a")),
+            (json!({"value": false}), json!(false)),
+            (json!({"value": null}), json!({"v": "null"})),
+            (json!({"unserializableValue": "-0"}), json!({"v": "-0"})),
+            (json!({"unserializableValue": "NaN"}), json!({"v": "NaN"})),
+            (json!({}), json!({"v": "undefined"})),
+        ] {
+            assert_eq!(page_value(&argument), value, "{argument}");
         }
     }
 
