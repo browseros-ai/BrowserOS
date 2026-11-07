@@ -29,7 +29,11 @@ use crate::{
 const FIXTURE_RUN: &str = "01JC8Z3K4R0000000000000001";
 
 async fn open(path: &Path) -> TraceStore {
-    TraceStore::open(StoreConfig::new(path)).await.unwrap()
+    {
+        let mut config = StoreConfig::new(path);
+        config.retention.max_age = Duration::MAX;
+        TraceStore::open(config).await.unwrap()
+    }
 }
 
 async fn close(store: TraceStore) {
