@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (60)
+## Deviations (59)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
