@@ -12,11 +12,14 @@
 //! so sessions detach once the realm, dispatcher and their writers are gone, also when a
 //! caller drops the run's future. Browser tabs themselves survive the run.
 
+use std::sync::Arc;
+
 use browseros_cdp::{CdpClient, CdpError, browser};
 use serde_json::Value;
 use tokio::runtime::{Handle, RuntimeFlavor};
 use tokio_util::task::TaskTracker;
 
+use crate::artifacts::Artifacts;
 use crate::bridge;
 use crate::bridge::Getters;
 use crate::deadline::Deadline;
@@ -28,6 +31,7 @@ use crate::progress::{ErrorName, RunScope};
 use crate::realm;
 use crate::realm::Script;
 use crate::run::{RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
+use crate::screenshot::TabScreenshots;
 use crate::tabs::Tabs;
 
 /// A target id no tab can have, used to see how the browser reports a missing tab.
@@ -35,8 +39,10 @@ const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
 
 /// Runs agent scripts against tabs of one BrowserOS browser. Runs are independent: each gets
 /// its own CDP session and its own QuickJS realm, so one `Runtime` serves any number of
-/// concurrent runs. Runs on one tab share only its input: their clicks take turns at it, from
-/// interceptor setup to stop (`page.rs` `TabInputs`). Clones share those turns too.
+/// concurrent runs. Runs on one tab share only its input and its screenshots: their clicks take
+/// turns at its input, from interceptor setup to stop (`page.rs` `TabInputs`), and their
+/// screenshots at its capture, cleanup included (`screenshot.rs` `TabScreenshots`). Clones share
+/// those turns too.
 ///
 /// Runs also share the connection's target discovery, on while any of them listens for new
 /// pages (`discovery.rs`), which the `Runtime` counts. Give a `CdpClient` one `Runtime` (clones
@@ -46,6 +52,7 @@ const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
 pub struct Runtime {
     cdp: CdpClient,
     inputs: TabInputs,
+    screenshots: TabScreenshots,
     /// Target discovery on `cdp`, on while any run listens for new pages (`discovery.rs`).
     discovery: Discovery,
     cleanup: TaskTracker,
@@ -98,6 +105,7 @@ impl Runtime {
                 Ok(Self {
                     cdp,
                     inputs: TabInputs::default(),
+                    screenshots: TabScreenshots::default(),
                     discovery: Discovery::new(cleanup.clone()),
                     cleanup,
                 })
@@ -135,6 +143,7 @@ impl Runtime {
             page,
             timeout,
             cancel,
+            artifacts,
         } = request;
         let deadline = Deadline::new(timeout, cancel);
         let tokio = match Handle::try_current() {
@@ -155,7 +164,7 @@ impl Runtime {
             stop = deadline.reached() => {
                 return RunOutcome::stopped(stop, deadline.timeout(), Vec::new());
             }
-            opened = Tabs::open(self.cdp.clone(), tokio.clone(), self.inputs.clone(), self.discovery.clone(), tasks.clone(), &page) => opened,
+            opened = Tabs::open(self.cdp.clone(), tokio.clone(), self.inputs.clone(), self.screenshots.clone(), self.discovery.clone(), tasks.clone(), &page) => opened,
         };
         let (tabs, url) = match opened {
             Ok(opened) => opened,
@@ -178,7 +187,8 @@ impl Runtime {
         // One tracker for the run: call tasks, and the writer, interceptor-stop and
         // group-release tasks the page spawns, so `finish` waits for them all.
         let getters = Getters::new(tabs.clone(), deadline.clone(), tokio);
-        let run = RunScope::new(deadline.clone(), tasks);
+        let artifacts = Arc::new(Artifacts::new(artifacts));
+        let run = RunScope::new(deadline.clone(), tasks).with_artifacts(Arc::clone(&artifacts));
         let dispatcher = Dispatcher::new(tabs.clone(), run);
         let events = tabs.events().clone();
         let outcome = realm::run(script, getters, dispatcher.clone(), deadline, events).await;
@@ -186,6 +196,7 @@ impl Runtime {
         outcome
             .with_calls(calls, dropped)
             .with_pages(tabs.outcome())
+            .with_artifacts(artifacts.written())
     }
 }
 

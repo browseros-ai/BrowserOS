@@ -322,6 +322,7 @@ pub fn run_request(code: &str, timeout: Duration, cancel: CancellationToken) -> 
         page: PageId::new(PAGE.to_string()),
         timeout,
         cancel,
+        artifacts: None,
     }
 }
 

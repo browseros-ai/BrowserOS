@@ -91,6 +91,14 @@ async fn close_context(tabs: &Tabs, progress: &Progress) -> Result<(), CallError
     Ok(())
 }
 
+/// Neo: `dispatch::route` hands every `Page.screenshot` and `Page.pdf` to `capture.rs`, so one
+/// reaching the tab-lifecycle handler is a routing bug, reported as such.
+const CAPTURE_MISROUTED: &str = "neo-runtime: a capture reached the tab-lifecycle handler";
+
+fn misrouted_capture() -> CallError {
+    PlaywrightError::error(CAPTURE_MISROUTED).into()
+}
+
 pub(crate) async fn page(
     tabs: &Tabs,
     entry: &Arc<PageEntry>,
@@ -154,6 +162,7 @@ pub(crate) async fn page(
         }
         PageCall::Close(_) => close(tabs, entry, progress).await?,
         PageCall::RunBeforeUnload(_) => run_before_unload(tabs, entry, progress).await?,
+        PageCall::Screenshot(_) | PageCall::Pdf(_) => return Err(misrouted_capture()),
         // The dispatcher serves these over the tab's input devices (`devices.rs`).
         PageCall::KeyboardDown(_)
         | PageCall::KeyboardUp(_)

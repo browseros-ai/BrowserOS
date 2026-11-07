@@ -37,6 +37,7 @@ async fn run(tab: &Tab, target: &str, code: &str) -> RunOutcome {
             page: PageId::new(target.to_string()),
             timeout: Duration::from_secs(15),
             cancel: CancellationToken::new(),
+            artifacts: None,
         })
         .await
 }
@@ -153,6 +154,10 @@ async fn tests_that_new_pages_open_in_background_with_distinct_initializers() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one scenario across two runs; each RunRequest names its artifact directory"
+)]
 async fn tests_that_sdk_created_pages_keep_their_targets_across_runs() {
     let Some(binary) = browser::e2e_browser() else {
         return;
@@ -199,6 +204,7 @@ async fn tests_that_sdk_created_pages_keep_their_targets_across_runs() {
         page: PageId::new(tab.target_id.clone()),
         timeout: Duration::from_secs(15),
         cancel: CancellationToken::new(),
+        artifacts: None,
     };
     let running = tokio::spawn({
         let runtime = runtime.clone();
@@ -244,7 +250,7 @@ async fn tests_that_sdk_created_pages_keep_their_targets_across_runs() {
 
     let next=runtime.run(RunRequest {
         code:"await page.locator('html').click(); return {url:page.url(),closed:page.isClosed()};".to_string(),
-        page:PageId::new(second.id.clone()), timeout:Duration::from_secs(10), cancel:CancellationToken::new(),
+        page:PageId::new(second.id.clone()), timeout:Duration::from_secs(10), cancel:CancellationToken::new(), artifacts:None,
     }).await;
     assert_eq!(next.status, RunStatus::Ok, "{next:?}");
     assert_eq!(

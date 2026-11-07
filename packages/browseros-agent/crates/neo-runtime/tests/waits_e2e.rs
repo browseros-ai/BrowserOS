@@ -127,6 +127,7 @@ fn request(
         page: PageId::new(target_id.to_string()),
         timeout,
         cancel,
+        artifacts: None,
     }
 }
 

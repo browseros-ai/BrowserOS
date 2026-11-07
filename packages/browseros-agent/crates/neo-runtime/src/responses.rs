@@ -12,6 +12,7 @@ use std::sync::Arc;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use browseros_cdp::CdpError;
+use neo_runtime_spec::Binary;
 use neo_runtime_spec::serve::{
     RequestCall, RequestRawRequestHeadersParams, RequestRawRequestHeadersResult,
     RequestResponseParams, RequestResponseResult, ResponseBodyParams, ResponseBodyResult,
@@ -123,11 +124,11 @@ struct ResponseBody {
     base64_encoded: bool,
 }
 
-/// The body as the wire's `binary` (base64), as `createResponseBodyCallback` builds the
-/// `Buffer`: base64 bodies as sent, text bodies as their UTF-8 bytes. An empty body stays empty
-/// whatever its `content-length`: Playwright refetches only static subresources and prefetches,
-/// and a navigation's document is neither.
-fn body(reply: Value) -> Result<String, PlaywrightError> {
+/// The body as the wire's `binary`, as `createResponseBodyCallback` builds the `Buffer`: base64
+/// bodies decoded, text bodies as their UTF-8 bytes. An empty body stays empty whatever its
+/// `content-length`: Playwright refetches only static subresources and prefetches, and a
+/// navigation's document is neither.
+fn body(reply: Value) -> Result<Binary, PlaywrightError> {
     let ResponseBody {
         body,
         base64_encoded,
@@ -135,13 +136,13 @@ fn body(reply: Value) -> Result<String, PlaywrightError> {
         PlaywrightError::error(format!("Network.getResponseBody answered: {error}"))
     })?;
     if base64_encoded {
-        // Re-encoded, so a body Chromium encodes differently still reaches the SDK as one form.
+        // Decoded here, so a body Chromium encodes differently still reaches the SDK as one form.
         let bytes = STANDARD
             .decode(body.as_bytes())
             .map_err(|error| PlaywrightError::error(format!("response body: {error}")))?;
-        return Ok(STANDARD.encode(bytes));
+        return Ok(Binary(bytes));
     }
-    Ok(STANDARD.encode(body.as_bytes()))
+    Ok(Binary(body.into_bytes()))
 }
 
 fn body_error(error: CdpError) -> PlaywrightError {
@@ -162,7 +163,7 @@ mod tests {
     fn tests_that_text_bodies_cross_as_their_utf8_bytes() {
         let binary = body(json!({"body": "héllo", "base64Encoded": false})).expect("a body");
         assert_eq!(
-            STANDARD.decode(binary).expect("base64"),
+            binary.as_bytes(),
             "héllo".as_bytes(),
             "Buffer.from(body, 'utf8')"
         );
@@ -171,16 +172,13 @@ mod tests {
     #[test]
     fn tests_that_base64_bodies_keep_their_bytes() {
         let binary = body(json!({"body": "//5BAMM=", "base64Encoded": true})).expect("a body");
-        assert_eq!(
-            STANDARD.decode(binary).expect("base64"),
-            [0xff, 0xfe, 0x41, 0x00, 0xc3]
-        );
+        assert_eq!(binary.as_bytes(), [0xff, 0xfe, 0x41, 0x00, 0xc3]);
     }
 
     #[test]
     fn tests_that_an_empty_document_body_stays_empty() {
         let binary = body(json!({"body": "", "base64Encoded": false})).expect("a body");
-        assert_eq!(binary, "");
+        assert!(binary.is_empty(), "{binary:?}");
     }
 
     #[test]
