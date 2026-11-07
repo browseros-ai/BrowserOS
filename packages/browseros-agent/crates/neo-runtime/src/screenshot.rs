@@ -276,12 +276,11 @@ pub(crate) async fn screenshot_locator(
     let element = loop {
         waits::wait_for_selector(tab, &attached, progress).await?;
         // Deviation: `server/frames.ts` `Frame.waitForSelector`: `const element: Element | undefined  = elements[0];` is the element Playwright's wait returns; Neo resolves it again with click's `resolve`, which also marks it as a target (`markTargets: 'all'`), and waits again if it detached in between.
-        let resolved = progress
-            .race(tab.resolve(selector, true))
-            .await?
-            .map_err(page_error)?;
-        if let Some(resolved) = resolved {
-            break resolved.element;
+        match progress.race(tab.resolve(selector, true)).await? {
+            Ok(Some(resolved)) => break resolved.element,
+            // Gone, or its document replaced, since the wait: wait again, as the wait would.
+            Ok(None) | Err(PageError::NotConnected) => {}
+            Err(error) => return Err(page_error(error)),
         }
     };
     screenshot_element(tab, element, options, progress).await
@@ -735,7 +734,7 @@ async fn prepare(
                 }
             }
             Err(error) => {
-                debug!(?error, frame = %frame.id, "preparing a frame for a screenshot failed")
+                debug!(?error, frame = %frame.id, "preparing a frame for a screenshot failed");
             }
         }
     }
