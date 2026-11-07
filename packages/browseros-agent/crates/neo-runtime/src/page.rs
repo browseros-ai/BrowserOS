@@ -38,6 +38,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::iter;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -67,6 +68,7 @@ use crate::click::{
     Arming, Geometry, MouseButton, MouseClick, NotReady, PageError, PressReport, Resolved, Scroll,
     SelectorFacts, StatesCheck, Tab, Verdict,
 };
+use crate::frames::FrameScope;
 use crate::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
 };
@@ -171,6 +173,30 @@ pub(crate) struct PageSession {
     /// The tab's input lock, shared with every other run of the `Runtime` on this tab
     /// ([`TabInputs`]). [`Tab::input`] waits for a turn at it.
     input: Arc<Mutex<()>>,
+}
+
+/// One call's frame scope over the tab's shared input, navigation and lifetime.
+#[derive(Clone)]
+pub(crate) struct FrameTab {
+    pub(crate) page: Arc<PageSession>,
+    pub(crate) scope: FrameScope,
+}
+
+// Input, preparation and top-level navigation always belong to the shared tab.
+impl Deref for FrameTab {
+    type Target = Arc<PageSession>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.page
+    }
+}
+
+impl FrameTab {
+    pub(crate) fn world(&self) -> &World {
+        match self.scope {
+            FrameScope::Main => &self.page.world,
+        }
+    }
 }
 
 struct PageUpdates<S> {
@@ -287,11 +313,6 @@ impl PageSession {
             next_group: AtomicU64::new(1),
             input,
         }
-    }
-
-    /// The typed utility-world calls used by sibling action seams.
-    pub(crate) fn world(&self) -> &World {
-        &self.world
     }
 
     pub(crate) fn session_id(&self) -> &SessionId {
@@ -464,7 +485,7 @@ impl Observation for NavigationObservation {
     }
 }
 
-impl NavigationTab for Arc<PageSession> {
+impl NavigationTab for FrameTab {
     type Observation = NavigationObservation;
 
     async fn prepare(&self) -> Result<(), PageError> {
@@ -1027,7 +1048,7 @@ impl Barrier {
 // The tab, for click.
 // ---------------------------------------------------------------------------------------------
 
-impl Tab for Arc<PageSession> {
+impl Tab for FrameTab {
     type Element = ResolvedElement;
     type Armed = ArmedInterceptor;
     type Input = InputPermit;
@@ -2111,9 +2132,13 @@ mod tests {
             Arc::new(Mutex::new(())),
             CancellationToken::new(),
         ));
-        let mut events = WaitTab::observe(&page).expect("wait observer before prepare");
+        let tab = FrameTab {
+            page: Arc::clone(&page),
+            scope: FrameScope::Main,
+        };
+        let mut events = WaitTab::observe(&tab).expect("wait observer before prepare");
         let mut navigation =
-            NavigationTab::observe(&page).expect("navigation observer before prepare");
+            NavigationTab::observe(&tab).expect("navigation observer before prepare");
         PageSession::prepare(&page).await.expect("prepare");
         time::timeout(Duration::from_secs(1), async {
             while !events.state().lifecycle.load {

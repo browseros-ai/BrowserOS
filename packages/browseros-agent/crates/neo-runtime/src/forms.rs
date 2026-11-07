@@ -20,7 +20,7 @@ pub(crate) use neo_runtime_spec::injected::{
 };
 
 use crate::click::{PageError, Tab};
-use crate::page::{InputPermit, PageSession, ResolvedElement};
+use crate::page::{FrameTab, InputPermit, PageSession, ResolvedElement};
 use crate::progress::InputTicket;
 
 /// The result of the one fill evaluation. `NeedsInput` retains the original ticket for the
@@ -84,7 +84,7 @@ pub(crate) trait FormTab: Tab {
     ) -> impl Future<Output = Result<Option<InputValueMatch>, PageError>> + Send;
 }
 
-impl FormTab for Arc<PageSession> {
+impl FormTab for FrameTab {
     fn fill(
         &self,
         element: &ResolvedElement,
@@ -100,7 +100,7 @@ impl FormTab for Arc<PageSession> {
         self.spawn(async move {
             let _input = input;
             let result = page
-                .world()
+                .world
                 .call(
                     None,
                     &InjectedFillParams {
@@ -131,7 +131,7 @@ impl FormTab for Arc<PageSession> {
         page_step(self, async move {
             let _input = input;
             let result = page
-                .world()
+                .world
                 .call(
                     None,
                     &InjectedSelectOptionsParams {
@@ -147,7 +147,7 @@ impl FormTab for Arc<PageSession> {
     }
 
     async fn checked_state(&self, element: &ResolvedElement) -> Result<CheckedState, PageError> {
-        self.world()
+        self.world
             .call(
                 None,
                 &InjectedElementStateParams {
@@ -169,7 +169,7 @@ impl FormTab for Arc<PageSession> {
         page_step(self, async move {
             let _input = input;
             let result = page
-                .world()
+                .world
                 .call(
                     None,
                     &InjectedFocusElementParams {
@@ -188,7 +188,7 @@ impl FormTab for Arc<PageSession> {
         selector: &str,
         strict: bool,
     ) -> Result<Option<InputValueMatch>, PageError> {
-        self.world()
+        self.world
             .call(
                 None,
                 &InjectedInputValueParams {

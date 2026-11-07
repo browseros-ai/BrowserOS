@@ -16,7 +16,6 @@
 //! retain intermediate URLs, and lifecycle counters retain events across watch coalescing.
 
 use std::future::{self, Future};
-use std::sync::Arc;
 
 use neo_runtime_spec::injected::{
     InjectedDescribeSelectorParams, InjectedSelectorStateParams, SelectorMatch,
@@ -29,7 +28,7 @@ use tokio::time;
 
 use crate::click::{LoopAWaits, PageError, SelectorFacts};
 use crate::navigate::{Lifecycle, Navigation, Observation};
-use crate::page::{NavigationObservation, PageSession};
+use crate::page::{FrameTab, NavigationObservation, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::url_match::{SerializedUrlMatch, UrlMatcher};
 use crate::world;
@@ -454,7 +453,7 @@ fn page_error(error: PageError) -> PlaywrightError {
     }
 }
 
-impl WaitTab for Arc<PageSession> {
+impl WaitTab for FrameTab {
     type Observation = NavigationObservation;
 
     async fn prepare(&self) -> Result<(), PageError> {

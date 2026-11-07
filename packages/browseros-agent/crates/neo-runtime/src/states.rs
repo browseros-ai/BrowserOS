@@ -10,7 +10,6 @@
 //! Both reads use the main frame's utility world without an input turn or delivery ticket.
 
 use std::future::Future;
-use std::sync::Arc;
 
 use neo_runtime_spec::injected::{
     CheckedStateMatch, InjectedIsCheckedParams, InjectedIsVisibleParams,
@@ -18,7 +17,7 @@ use neo_runtime_spec::injected::{
 use neo_runtime_spec::serve::{FrameIsCheckedParams, FrameIsVisibleParams};
 
 use crate::click::{LoopAWaits, PageError, SelectorFacts, Stop};
-use crate::page::PageSession;
+use crate::page::FrameTab;
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::reads::{self, Matched, SelectorTab};
 
@@ -135,7 +134,7 @@ pub(crate) async fn is_checked<T: StateTab>(
 }
 
 /// By-value reads: neither result retains a page object or needs an object group.
-impl StateTab for Arc<PageSession> {
+impl StateTab for FrameTab {
     async fn is_visible(&self, selector: &str, strict: bool) -> Result<bool, PageError> {
         Ok(self
             .world()

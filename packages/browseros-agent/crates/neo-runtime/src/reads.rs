@@ -43,7 +43,6 @@
 //! News, Wikipedia and MDN pages measured 11 to 16 levels).
 
 use std::future::Future;
-use std::sync::Arc;
 use std::time::Duration;
 
 use neo_runtime_spec::injected::{
@@ -58,7 +57,7 @@ use neo_runtime_spec::serve::{
 
 use crate::aria_yaml;
 use crate::click::{self, LoopAWaits, PageError, SelectorFacts};
-use crate::page::PageSession;
+use crate::page::FrameTab;
 use crate::progress::{CallError, PlaywrightError, Progress};
 
 /// The selector Playwright snapshots a frame's document by when the caller gave none
@@ -404,7 +403,7 @@ async fn snapshot_once<T: ReadTab>(
 // ---------------------------------------------------------------------------------------------
 
 /// The same steps click takes, so a read and a click prepare the tab and name a selector alike.
-impl SelectorTab for Arc<PageSession> {
+impl SelectorTab for FrameTab {
     fn prepare(&self) -> impl Future<Output = Result<(), PageError>> + Send {
         click::Tab::prepare(self)
     }
@@ -418,7 +417,7 @@ impl SelectorTab for Arc<PageSession> {
 }
 
 /// By value, with no object group: none of these results holds a page object.
-impl ReadTab for Arc<PageSession> {
+impl ReadTab for FrameTab {
     async fn text_content(
         &self,
         selector: &str,

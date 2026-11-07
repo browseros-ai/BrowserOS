@@ -57,10 +57,11 @@ use crate::click::{self, ClickOptions};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
 use crate::frame_selector::enters_frame;
+use crate::frames::FrameScope;
 use crate::keyboard::KeyboardTab;
 use crate::lists;
 use crate::navigate::{self, GotoOptions};
-use crate::page::PageSession;
+use crate::page::FrameTab;
 use crate::press::{self, PressOptions};
 use crate::progress::{
     CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
@@ -585,7 +586,10 @@ async fn serve_call(
             match session {
                 Ok(page) => {
                     serve(
-                        page,
+                        FrameTab {
+                            page,
+                            scope: FrameScope::Main,
+                        },
                         route,
                         progress,
                         reply.entry,
@@ -608,7 +612,7 @@ async fn serve_call(
 /// ended leaves its entry open, so its record reads `Unfinished`, and sends nothing: nobody
 /// waits for it. The task holds the page, so the session stays attached while it runs.
 async fn serve(
-    page: Arc<PageSession>,
+    page: FrameTab,
     route: Route,
     progress: Progress,
     entry: Arc<CallEntry>,
