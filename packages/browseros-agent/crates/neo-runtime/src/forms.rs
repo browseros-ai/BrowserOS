@@ -107,6 +107,7 @@ impl FormTab for FrameTab {
                         element: element.handle().clone(),
                         value,
                         force,
+                        frame_visible: element.frame_visible,
                     },
                 )
                 .await;
@@ -137,6 +138,7 @@ impl FormTab for FrameTab {
                         element: element.handle().clone(),
                         options,
                         force,
+                        frame_visible: element.frame_visible,
                     },
                 )
                 .await;

@@ -1,4 +1,4 @@
-//! Real frame input: ancestor hit targets, process-local geometry, focus, dialogs and tab turns.
+//! Neo: Real frame input tests cover ancestor hit targets, geometry, focus, dialogs and tab turns.
 
 #[expect(dead_code, reason = "shared browser fixture serves other e2e suites")]
 #[path = "support/browser.rs"]
@@ -301,18 +301,57 @@ async fn tests_that_an_overlay_inside_an_oopif_blocks_its_nested_frames() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_transformed_iframes_use_the_event_interceptor() {
-    let Some(tab) = open("#cross{transform:translate(9px,11px)}").await else {
+    let Some(tab) = open("#same{width:300px;height:240px;transform:rotate(30deg)}").await else {
         return;
     };
-    let outcome = run(&tab,r"
-        const frame=selector=>page.locator('#cross >> internal:control=enter-frame >> #nested >> internal:control=enter-frame >> '+selector);
+    let outcome = run(
+        &tab,
+        r"
+        const frame=selector=>page.locator('#same >> internal:control=enter-frame >> '+selector);
         await frame('#go').click({timeout:5000});
         return await frame('#result').textContent();
-    ").await;
+    ",
+    )
+    .await;
     assert_oopifs(&tab).await;
     tab.close().await;
     assert_ok(&outcome);
     assert_eq!(outcome.value, Some(json!("clicked")), "{outcome:#?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_main_frame_button_in_the_scrollbar_gutter_times_out() {
+    let Some(tab) = open("html{overflow-x:hidden}body{min-height:3000px}").await else {
+        return;
+    };
+    tab.evaluate(r"{
+        const button=document.createElement('button');button.id='gutter';
+        button.style='position:fixed;top:100px;left:calc(100vw - 20px);width:30px;height:40px;padding:0;border:0';
+        button.textContent='G';
+        button.onclick=()=>document.querySelector('#result').textContent='gutter clicked';
+        document.body.append(button);
+    }").await;
+    assert_eq!(
+        tab.evaluate("innerWidth>document.documentElement.clientWidth")
+            .await,
+        json!(true),
+        "fixture has a scrollbar gutter"
+    );
+    let outcome = run(
+        &tab,
+        r"
+        try {await page.locator('#gutter').click({timeout:1000});return 'clicked';}
+        catch(error) {return error.name;}
+    ",
+    )
+    .await;
+    let parent = tab
+        .evaluate("document.querySelector('#result').textContent")
+        .await;
+    tab.close().await;
+    assert_ok(&outcome);
+    assert_eq!(outcome.value, Some(json!("TimeoutError")), "{outcome:#?}");
+    assert_eq!(parent, "idle");
 }
 
 #[tokio::test(flavor = "multi_thread")]

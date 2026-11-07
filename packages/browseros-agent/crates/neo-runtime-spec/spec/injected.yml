@@ -300,6 +300,7 @@ Injected:
         element: Element
         value: string
         force: boolean
+        frameVisible: boolean
       returns:
         outcome: FormFillOutcome
 
@@ -312,6 +313,7 @@ Injected:
           type: array
           items: FormSelectOption
         force: boolean
+        frameVisible: boolean
       returns:
         # Present on success, including an empty selection.
         values:

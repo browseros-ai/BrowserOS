@@ -213,18 +213,8 @@ export const glue = {
     return {}
   },
 
-  // Scrollbar gutters cannot receive content clicks. The root client size is the layout
-  // viewport without those gutters, including documents in quirks mode.
-  viewportSize: () => {
-    const root =
-      document.compatMode === 'BackCompat'
-        ? document.body
-        : document.documentElement
-    return {
-      width: root?.clientWidth ?? innerWidth,
-      height: root?.clientHeight ?? innerHeight,
-    }
-  },
+  // Playwright: `server/dom.ts` `ElementHandle._clickablePoint`: `({ width: innerWidth, height: innerHeight })`
+  viewportSize: () => ({ width: innerWidth, height: innerHeight }),
 
   getElementBorderWidth: (injected, _params, element) =>
     injected.getElementBorderWidth(element),
@@ -255,12 +245,12 @@ export const glue = {
   }),
 
   /** `dom.ts` `_fill`'s single page evaluation, without its server-side retry loop. */
-  fill: async (injected, { value, force }, element) => {
+  fill: async (injected, { value, force, frameVisible }, element) => {
     if (!force) {
       const outcome = await injected.checkElementStates(
         element,
         ['visible', 'enabled', 'editable', 'non-inert'],
-        true,
+        frameVisible,
       )
       if (outcome) return { outcome }
     }
@@ -268,12 +258,16 @@ export const glue = {
   },
 
   /** `dom.ts` `_selectOption`'s single page evaluation. */
-  selectOptions: async (injected, { options, force }, element) => {
+  selectOptions: async (
+    injected,
+    { options, force, frameVisible },
+    element,
+  ) => {
     if (!force) {
       const outcome = await injected.checkElementStates(
         element,
         ['visible', 'enabled', 'non-inert'],
-        true,
+        frameVisible,
       )
       if (outcome) return { outcome }
     }

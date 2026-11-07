@@ -1291,7 +1291,7 @@ pub(crate) struct ResolvedElement {
     handle: Handle<Element>,
     _group: Arc<GroupGuard>,
     pub(crate) frame: Arc<FrameContext>,
-    frame_visible: bool,
+    pub(crate) frame_visible: bool,
     owners: Vec<FrameOwner>,
 }
 
