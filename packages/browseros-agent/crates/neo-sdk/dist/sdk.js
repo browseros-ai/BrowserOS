@@ -4555,6 +4555,7 @@ function pickParams(keys, options) {
 }
 
 // src/select-option.ts
+var ELEMENT_VALUES_UNSUPPORTED = "Neo does not support ElementHandle values in selectOption yet";
 function convertSelectOptionValues(values) {
   if (values === null)
     return {};
@@ -4566,6 +4567,8 @@ function convertSelectOptionValues(values) {
     if (values[i] === null)
       throw new Error(`options[${i}]: expected object, got null`);
   }
+  if (values.some((value) => value instanceof JSHandle))
+    throw new Error(ELEMENT_VALUES_UNSUPPORTED);
   const options = isString(values[0]) ? values.map((valueOrLabel) => ({ valueOrLabel })) : values;
   for (const [index, option] of options.entries()) {
     if (typeof option !== "object" || option === null)

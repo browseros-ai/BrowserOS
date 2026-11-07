@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (40)
+## Deviations (41)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -42,6 +42,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-sdk/src/js-handle.ts | `evaluateParams` | `client/jsHandle.ts` `JSHandle.evaluate` | Playwright's evaluations send no signal and ignore one; Neo refuses any signal rather than ignore one. |
 | neo-sdk/src/page.ts | `Page.consoleMessages` | `server/page.ts` `Page.addConsoleMessage` | Playwright's server keeps a page's messages and errors from the page's first moment. Neo keeps them from the run's first look (a listener, or a read like this one), starting with what the browser kept of the current document; the browser keeps nothing of a document the page left before then, so `'all'` does not reach back past it. |
 | neo-sdk/src/page.ts | `Page` | `client/page.ts` `Page.constructor` | Playwright's page holds a `close` and a `crash` listener of its own from its first moment, which `eventNames()` and `listenerCount` report; Neo's holds none, so a page nobody listens to costs the run nothing. |
+| neo-sdk/src/select-option.ts | `ELEMENT_VALUES_UNSUPPORTED` | `client/elementHandle.ts` `convertSelectOptionValues` | Playwright selects the very option nodes ElementHandle values name; Neo refuses an ElementHandle (or any JSHandle) value before anything is sent, where it would otherwise travel as an option object matching the first option. |
 | neo-sdk/src/timeout-settings.ts | `refuseSignalFor` | `client/timeoutSettings.ts` `TimeoutSettings.timeout` | Playwright hands the signal to the call, which aborts when it aborts; Neo has no way to abort a sent call yet, so it refuses any signal, an aborted one included, before sending anything; null and undefined are none. |
 | neo-sdk/src/url.ts | (file) | `isomorphic/urlMatch.ts` `urlMatches` | Playwright passes a URL predicate a WHATWG `URL`. The realm has no `URL`, so Neo passes this read-only one, built from Rust's WHATWG parser: every getter and `toString`/`toJSON` read as `URL`'s do, and `searchParams` reads as `URLSearchParams`; setters and `searchParams`' mutators throw, and `instanceof URL` cannot hold. |
 | neo-sdk/src/url.ts | `READ_ONLY` | `isomorphic/urlMatch.ts` `urlMatches` | the error a write to Neo's read-only `URL` throws, where Playwright's predicate gets a writable WHATWG `URL`. |

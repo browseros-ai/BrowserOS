@@ -2,10 +2,15 @@
 import { expect, test } from 'bun:test'
 import { BrowserContext } from '../../src/browser-context'
 import { Connection } from '../../src/connection'
+import { ElementHandle } from '../../src/element-handle'
 import { EventPipe } from '../../src/events'
+import { JSHandle } from '../../src/js-handle'
 import { Page } from '../../src/page'
 import * as protocol from '../../src/protocol'
-import { convertSelectOptionValues } from '../../src/select-option'
+import {
+  convertSelectOptionValues,
+  ELEMENT_VALUES_UNSUPPORTED,
+} from '../../src/select-option'
 
 test('tests that select values preserve Playwright conversion and null errors', () => {
   expect(convertSelectOptionValues(null)).toEqual({})
@@ -121,6 +126,45 @@ test('tests that invalid select fields reject before sending anything', async ()
     await expect(
       page.locator('select').selectOption(value as never),
     ).rejects.toThrow()
+  }
+  expect(calls).toBe(0)
+})
+
+test('tests that ElementHandle and JSHandle selectOption values are refused before sending', async () => {
+  const connection = new Connection(0)
+  let calls = 0
+  connection.send = async () => {
+    calls++
+    return { values: ['unexpected'] } as never
+  }
+  const page = new Page(
+    'page@T',
+    'frame@T',
+    '',
+    new BrowserContext('browser-context@T', connection, new EventPipe()),
+    connection,
+  )
+  const element = new ElementHandle(connection, 'handle@run.1', {
+    preview: 'JSHandle@<option value="two">Second</option>',
+  })
+  const object = new JSHandle(connection, 'handle@run.2', {
+    preview: 'JSHandle@object',
+  })
+  for (const values of [
+    element,
+    [element],
+    [element, element],
+    ['one', element],
+    [{ value: 'one' }, element],
+    object,
+  ]) {
+    for (const call of [
+      () => page.selectOption('select', values as never),
+      () => page.mainFrame().selectOption('select', values as never),
+      () => page.locator('select').selectOption(values as never),
+    ]) {
+      await expect(call()).rejects.toThrow(ELEMENT_VALUES_UNSUPPORTED)
+    }
   }
   expect(calls).toBe(0)
 })
