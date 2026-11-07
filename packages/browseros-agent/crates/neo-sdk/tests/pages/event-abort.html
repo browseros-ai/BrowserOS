@@ -1,0 +1,11 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>event abort</title></head><body>
+<!-- eventAbort.test.mjs serves this page: a file input that counts the `cancel` events of the
+     browser's own file dialog (headless BrowserOS cancels it at once when nothing intercepts the
+     chooser), and a link that downloads a data: URL. -->
+<input type="file" id="single">
+<a id="data" href="data:text/plain,hello%20data" download="data.txt">Data</a>
+<script>
+window.__cancels = 0;
+document.getElementById('single').addEventListener('cancel', () => window.__cancels++);
+</script>
+</body></html>

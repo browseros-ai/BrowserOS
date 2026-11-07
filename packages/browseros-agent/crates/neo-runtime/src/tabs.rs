@@ -7,10 +7,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use browseros_cdp::runtime::RemoteObject;
 use browseros_cdp::{CdpClient, CdpError};
+use neo_runtime_spec::injected::InjectedPreviewNodeParams;
 use neo_runtime_spec::serve::{FrameChannel, FrameInitializer, PageChannel, PageInitializer};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::runtime::Handle;
 use tokio::sync::{OnceCell, oneshot};
 use tokio::time;
@@ -19,17 +21,25 @@ use tokio_util::task::TaskTracker;
 use tracing::debug;
 
 use crate::bridge;
+use crate::click::PageError;
 use crate::dialogs;
-use crate::discovery::{self, Discovery, TargetInfo};
+use crate::discovery::{self, TargetInfo};
+use crate::downloads::{self, Downloads, Opened};
+use crate::evaluate::{self, Handles};
 use crate::events::{ALL_PAGES, CONTEXT_GUID, Enabling, EventHub, Needs};
-use crate::frames::FrameScope;
+use crate::frames::{FrameContext, FrameScope};
 use crate::getters;
 use crate::network::HopId;
-use crate::page::{PageSession, Session, TabInputs};
-use crate::page_events;
+use crate::page::{FrameTab, PageSession, Session, TabInputs};
+use crate::page_events::{self, Kept, MAX_KEPT_ARGS, MAX_KEPT_CHOOSERS};
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunPage};
 use crate::session_state::{self, Overrides, Permissions};
+use crate::switch::Switches;
+
+/// Neo: how long `ConsoleMessage.args()` waits for its arguments' handles. A page a dialog holds
+/// answers no call until the dialog is answered, which the script may be about to do.
+const ARGS_WAIT: Duration = Duration::from_secs(5);
 
 /// Cheap clones share the run's registry, context boundary, and session ownership.
 #[derive(Clone)]
@@ -46,13 +56,19 @@ struct Inner {
     pages: Mutex<Vec<Arc<PageEntry>>>,
     /// The run's event queue and subscriptions, shared with every page session it attaches.
     events: EventHub,
-    /// The `Runtime`'s target discovery switch, which this run holds while it listens for new
-    /// pages ([`Tabs::discover`]).
-    discovery: Discovery,
+    /// The `Runtime`'s shared switches: target discovery, which this run holds while it listens
+    /// for new pages ([`Tabs::discover`]), and download reports ([`Tabs::watch_downloads`]).
+    switches: Switches,
     /// Set once this run started its discovery.
     discovering: OnceLock<()>,
     /// Holds every call of the run until discovery has its baseline ([`ALL_PAGES`]).
     discovery_enabling: Mutex<Option<Enabling>>,
+    /// Set once this run started watching downloads.
+    watching_downloads: OnceLock<()>,
+    /// Holds every call of the run until the download reports are on ([`ALL_PAGES`]).
+    downloads_enabling: Mutex<Option<Enabling>>,
+    /// The downloads the run's `download` events handed out.
+    downloads: Downloads,
     /// The run's session-scoped state, which each session it attaches gets (`session_state.rs`).
     overrides: Arc<Overrides>,
     /// The `Runtime`'s permission grants, and this run's id among them.
@@ -156,7 +172,7 @@ impl Tabs {
         cdp: CdpClient,
         tokio: Handle,
         inputs: TabInputs,
-        discovery: Discovery,
+        switches: Switches,
         permissions: Permissions,
         tasks: TaskTracker,
         page: &PageId,
@@ -177,9 +193,12 @@ impl Tabs {
             run_page: page.clone(),
             pages: Mutex::new(Vec::new()),
             events: EventHub::default(),
-            discovery,
+            switches,
             discovering: OnceLock::new(),
             discovery_enabling: Mutex::new(None),
+            watching_downloads: OnceLock::new(),
+            downloads_enabling: Mutex::new(None),
+            downloads: Downloads::default(),
             overrides: Arc::default(),
             permissions,
             run_id: session_state::next_run(),
@@ -658,7 +677,10 @@ impl Tabs {
         if let Ok(mut held) = self.0.discovery_enabling.lock() {
             *held = Some(enabling);
         }
-        self.spawn(discovery::run(self.clone(), self.0.discovery.clone()));
+        self.spawn(discovery::run(
+            self.clone(),
+            self.0.switches.discovery.clone(),
+        ));
     }
 
     /// Discovery has its baseline, or failed to start: the run's calls go on.
@@ -668,9 +690,98 @@ impl Tabs {
         }
     }
 
+    /// Starts watching the browser's download reports once (`downloads.rs`), for a `download`
+    /// listener. Every call of the run waits until the reports are on, so no call can start a
+    /// download before the run hears of it.
+    pub(crate) fn watch_downloads(&self) {
+        if self.0.watching_downloads.set(()).is_err() {
+            return;
+        }
+        let enabling = self.0.events.begin_enable(ALL_PAGES);
+        if let Ok(mut held) = self.0.downloads_enabling.lock() {
+            *held = Some(enabling);
+        }
+        self.spawn(downloads::run(self.clone(), self.0.switches.clone()));
+    }
+
+    /// The download reports are on, or failed to turn on: the run's calls go on.
+    pub(crate) fn downloads_ready(&self) {
+        if let Ok(mut held) = self.0.downloads_enabling.lock() {
+            held.take();
+        }
+    }
+
+    /// The downloads the run's `download` events handed out.
+    pub(crate) fn downloads(&self) -> &Downloads {
+        &self.0.downloads
+    }
+
     /// The browser context of the run's tabs, when BrowserOS names it.
     pub(crate) fn context_id(&self) -> Option<&str> {
         self.0.scope.context.as_deref()
+    }
+
+    /// Playwright: `server/chromium/crBrowser.ts` `CRBrowser._onDownloadWillBegin`: `// If it's a new window download, report it on the opener page.`
+    ///
+    /// The tab of the run's context that a download's frame belongs to, as Playwright's
+    /// `_findOwningPage` finds it: a tab by its own id (a tab's main frame has its target id,
+    /// measured), by a frame of a tab the run watches, or a tab of the context the run has not
+    /// met yet, which it registers. A tab whose first document never committed reports on the
+    /// tab that opened it: a link with `target=_blank` to an attachment opens a tab that begins
+    /// the download and closes, often before this asks of it (measured), so what discovery
+    /// reported of it (`opened`) decides. A frame of a tab the run knows but does not watch is
+    /// not found, nor is anything that is no tab (an extension page, a developer tools window).
+    pub(crate) async fn download_page(
+        &self,
+        frame: &str,
+        opened: Option<&Opened>,
+    ) -> Option<Arc<PageEntry>> {
+        let id = PageId::new(frame.to_string());
+        if let Some(entry) = self.entry(&id) {
+            return Some(entry);
+        }
+        if let Some((entry, _)) = self
+            .attached()
+            .into_iter()
+            .find(|(_, session)| session.events.has_frame(frame))
+        {
+            return Some(entry);
+        }
+        let info = self
+            .0
+            .cdp
+            .send_typed::<_, TargetInfoReply>(
+                "Target.getTargetInfo",
+                json!({ "targetId": frame }),
+                None,
+            )
+            .await
+            .ok()
+            .map(|reply| reply.target_info);
+        let owner = match (info, opened) {
+            (Some(info), _) if info.kind != "page" => return None,
+            // Discovery saw the tab open and never commit. Its target names the URL it navigates
+            // to by now (measured), so only discovery's report tells.
+            (info, Some(opened)) if !opened.committed => PageId::new(
+                opened
+                    .opener
+                    .clone()
+                    .or_else(|| info.and_then(|info| info.opener_id))?,
+            ),
+            (Some(info), None) if discovery::is_initial_empty(&info.url) => {
+                PageId::new(info.opener_id?)
+            }
+            (Some(_), _) => id,
+            (None, _) => return None,
+        };
+        if let Some(entry) = self.entry(&owner) {
+            return Some(entry);
+        }
+        let tab = tab_info(&self.0.cdp, &owner).await.ok()??;
+        if !self.0.scope.includes(&tab) {
+            return None;
+        }
+        self.register(owner, false).ok()
     }
 
     /// The run's session-scoped state (`session_state.rs`).
@@ -807,6 +918,219 @@ impl Tabs {
         Ok(Some(created_page(&opener, tab.url, false)))
     }
 
+    /// `ConsoleMessage.args()`: the run's handles of console message `id`'s arguments on page
+    /// `target`, made at the first read (eval's `handle_for_remote_object`) in the frame that
+    /// logged the message, and the same records after. The message's arguments are kept from when
+    /// its event was produced, so a page closed by then still answers: its handles are made
+    /// without the browser, and fail on use as on a closed page.
+    pub(crate) async fn console_args(
+        &self,
+        target: &PageId,
+        id: u64,
+        handles: &Handles,
+    ) -> Result<Value, PlaywrightError> {
+        let entry = self
+            .entry(target)
+            .ok_or_else(|| PlaywrightError::error("neo-runtime: the run has no such page"))?;
+        let session = entry
+            .attached_session()
+            .ok_or_else(PlaywrightError::target_closed)?;
+        let kept = session.events.args.get(id).ok_or_else(|| {
+            PlaywrightError::error(format!(
+                "Neo keeps the arguments of a page's last {MAX_KEPT_ARGS} console messages \
+                 a listener received; this message's are gone"
+            ))
+        })?;
+        if let Some(records) = kept.handles.clone() {
+            return Ok(records);
+        }
+        let tab = FrameTab {
+            page: Arc::clone(&session),
+            scope: FrameScope::Main,
+        };
+        let objects = kept
+            .objects
+            .iter()
+            .map(|object| serde_json::from_value::<RemoteObject>(object.clone()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| PlaywrightError::error(error.to_string()))?;
+        // A page closed before or while the script read them still has them: Playwright made its
+        // handles as the message arrived. Using an object's handle then fails.
+        let made = if entry.closed.is_cancelled() {
+            Self::gone_args(&tab, &session, &kept, &objects, handles)?
+        } else {
+            match Self::live_args(&tab, &session, &kept, &objects, handles).await {
+                Ok(made) => made,
+                Err(_) if entry.closed.is_cancelled() => {
+                    Self::gone_args(&tab, &session, &kept, &objects, handles)?
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        let records = Value::Array(
+            made.into_iter()
+                .map(serde_json::to_value)
+                .collect::<Result<_, _>>()
+                .map_err(|error| PlaywrightError::error(error.to_string()))?,
+        );
+        session.events.args.made(id, records.clone());
+        Ok(records)
+    }
+
+    /// The frame a message's arguments live in: the frame that logged it, inside the
+    /// out-of-process frame whose session reported it, else that frame, else the main frame.
+    async fn args_frame(
+        session: &Arc<PageSession>,
+        kept: &Kept,
+    ) -> Result<Arc<FrameContext>, PlaywrightError> {
+        let main = session.frames.main();
+        let parent = match &kept.host {
+            Some(host) => {
+                let root = session
+                    .frames
+                    .context(host, Some(&main.host))
+                    .await
+                    .map_err(|error| args_error(&error))?;
+                Arc::clone(&root.host)
+            }
+            None => Arc::clone(&main.host),
+        };
+        match kept.frame.as_ref().or(kept.host.as_ref()) {
+            None => Ok(main),
+            Some(frame) => session
+                .frames
+                .context(frame, Some(&parent))
+                .await
+                .map_err(|error| args_error(&error)),
+        }
+    }
+
+    /// The arguments' handles, each retained in the run's handle group of its frame's session.
+    async fn live_args(
+        tab: &FrameTab,
+        session: &Arc<PageSession>,
+        kept: &Kept,
+        objects: &[RemoteObject],
+        handles: &Handles,
+    ) -> Result<Vec<evaluate::CreatedHandle>, PlaywrightError> {
+        let frame = Self::args_frame(session, kept).await?;
+        let mut made = Vec::with_capacity(objects.len());
+        for object in objects {
+            let handle = time::timeout(
+                ARGS_WAIT,
+                evaluate::handle_for_remote_object(tab, &frame, object.clone(), handles),
+            )
+            .await
+            .map_err(|_| {
+                PlaywrightError::error(
+                    "Neo could not take the console message's arguments in time: a dialog may \
+                     hold the page",
+                )
+            })?
+            .map_err(|error| args_error(&error))?;
+            made.push(handle);
+        }
+        Ok(made)
+    }
+
+    /// The arguments' handles after their page closed ([`evaluate::handle_for_gone_object`]),
+    /// in the frame the run knew them in, else the main frame.
+    fn gone_args(
+        tab: &FrameTab,
+        session: &Arc<PageSession>,
+        kept: &Kept,
+        objects: &[RemoteObject],
+        handles: &Handles,
+    ) -> Result<Vec<evaluate::CreatedHandle>, PlaywrightError> {
+        let frame = kept
+            .frame
+            .as_ref()
+            .or(kept.host.as_ref())
+            .and_then(|frame| session.frames.cached(frame))
+            .unwrap_or_else(|| session.frames.main());
+        objects
+            .iter()
+            .map(|object| {
+                evaluate::handle_for_gone_object(tab, &frame, object, handles)
+                    .map_err(|error| args_error(&error))
+            })
+            .collect()
+    }
+
+    /// Deviation: `server/chromium/crPage.ts` `FrameSession._onFileChooserOpened`: `const utilityContext = await frame.utilityContext();`
+    /// Playwright makes the input's handle in its utility world as the chooser opens; Neo makes it
+    /// in the main world, where every Neo `ElementHandle` lives (`evaluate.rs`), at the first
+    /// read, so `element().evaluate` sees the page's own globals.
+    ///
+    /// `FileChooser.element()`: the run's `ElementHandle` of the input file chooser `id` of page
+    /// `target` opened for, made at the first read and the same record after.
+    pub(crate) async fn file_chooser_element(
+        &self,
+        target: &PageId,
+        id: u64,
+        handles: &Handles,
+    ) -> Result<Value, PlaywrightError> {
+        let entry = self
+            .entry(target)
+            .ok_or_else(|| PlaywrightError::error("neo-runtime: the run has no such page"))?;
+        let session = entry
+            .attached_session()
+            .ok_or_else(PlaywrightError::target_closed)?;
+        let chooser = session.events.choosers.get(id).ok_or_else(|| {
+            PlaywrightError::error(format!(
+                "Neo keeps a page's last {MAX_KEPT_CHOOSERS} file choosers; this one is gone"
+            ))
+        })?;
+        if let Some(record) = chooser.handle {
+            return Ok(record);
+        }
+        let main = session.frames.main();
+        // A frame inside an out-of-process frame lives on that frame's session, which the run
+        // attached before it reported the chooser.
+        let parent = match &chooser.host {
+            Some(host) => {
+                let root = session
+                    .frames
+                    .context(host, Some(&main.host))
+                    .await
+                    .map_err(|error| args_error(&error))?;
+                Arc::clone(&root.host)
+            }
+            None => Arc::clone(&main.host),
+        };
+        let frame = session
+            .frames
+            .context(&chooser.frame, Some(&parent))
+            .await
+            .map_err(|error| args_error(&error))?;
+        let tab = FrameTab {
+            page: Arc::clone(&session),
+            scope: FrameScope::Main,
+        };
+        let group = tab.group(&frame, "file chooser");
+        let element = frame
+            .element(group.group(), chooser.backend)
+            .await
+            .map_err(|error| args_error(&error))?;
+        let preview = frame
+            .call(
+                Some(group.group()),
+                &InjectedPreviewNodeParams {
+                    node: element.clone(),
+                },
+            )
+            .await
+            .map_err(|error| args_error(&error))?
+            .preview;
+        let created = evaluate::element_handle_for(&tab, &frame, &element, &preview, handles)
+            .await
+            .map_err(|error| args_error(&error))?;
+        let record = serde_json::to_value(created)
+            .map_err(|error| PlaywrightError::error(error.to_string()))?;
+        session.events.choosers.made(id, record.clone());
+        Ok(record)
+    }
+
     pub(crate) fn outcome(&self) -> Vec<RunPage> {
         self.0.pages.lock().map_or_else(
             |_| Vec::new(),
@@ -874,6 +1198,19 @@ pub(crate) async fn tab_info(
     }
 }
 
+/// Why a console message's argument, or a file chooser's input, could not become a handle.
+fn args_error(error: &PageError) -> PlaywrightError {
+    match error {
+        PageError::Closed => PlaywrightError::target_closed(),
+        PageError::NotConnected => {
+            PlaywrightError::error("the value is gone with the document that held it")
+        }
+        PageError::Threw(message) | PageError::Contract(message) => {
+            PlaywrightError::error(message.clone())
+        }
+    }
+}
+
 pub(crate) fn cdp_error(error: &CdpError) -> PlaywrightError {
     PlaywrightError::error(error.to_string())
 }
@@ -915,7 +1252,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
-            Discovery::default(),
+            Switches::default(),
             Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),

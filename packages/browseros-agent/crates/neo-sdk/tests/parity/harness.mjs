@@ -10,10 +10,17 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import http from 'node:http'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // Playwright dims the call log in error messages whenever the environment suggests colour
@@ -138,7 +145,7 @@ export function errorCategory(error) {
  */
 export async function compareMethod(
   t,
-  { html, source, probe, effects, values },
+  { html, source, probe, effects, values, slowMs = 0 },
 ) {
   t.diagnostic(
     `Playwright ${playwrightVersion}; ${playwrightDir ?? 'npm playwright-core'}`,
@@ -149,6 +156,7 @@ export async function compareMethod(
   try {
     const origin = await serveFixture(cleanups, {
       pages: { '/method.html': html },
+      slowMs,
     })
     const browser = await launchBrowser(cleanups, browserBinary)
     const playwright = await chromium.connectOverCDP(
@@ -311,13 +319,53 @@ export async function serveFixture(cleanups, { pages = {}, slowMs = 0 } = {}) {
 }
 
 /**
+ * A serveFixture page answering with the file at `?path=`, such as a download's `path()`, so a
+ * script reads the file back through its page: no engine's script reads files. 404 when there is
+ * none, and 403 for a file outside the temporary directory, which holds Playwright's artifacts
+ * and every test profile: a download saved anywhere else, as in the user's ~/Downloads, reads as
+ * refused.
+ */
+export function fileContent(request, response) {
+  const file = new URL(request.url, 'http://fixture').searchParams.get('path')
+  let status = 404
+  let body = ''
+  try {
+    const real = realpathSync(file)
+    status = real.startsWith(realpathSync(tmpdir()) + sep) ? 200 : 403
+    if (status === 200) body = readFileSync(real)
+  } catch {}
+  response.statusCode = status
+  response.setHeader('content-type', 'text/plain; charset=utf-8')
+  response.end(body)
+}
+
+/**
  * Launches a headless BrowserOS neo on a throwaway profile, leading a process group of its own.
  * Every helper it starts (GPU, utility, renderers) joins that group (`ps -o pid,pgid` on
  * 155.0.8318.26), so one signal to the group reaches them all. Its cleanup is `closeBrowser`.
  * `args` go before the first URL, such as Playwright's own `--disable-back-forward-cache`.
+ *
+ * The profile's download folder is its own `downloads` directory, returned as `downloads`: a
+ * download the browser saves itself (Neo's `behavior: 'default'`) goes to the profile's default
+ * folder, which a fresh profile puts at the user's ~/Downloads. "Ask where to save each file" is
+ * off, as a headless browser cancels a download that asks.
  */
 export async function launchBrowser(cleanups, binary, args = []) {
   const profile = mkdtempSync(join(tmpdir(), 'neo-parity-'))
+  const downloads = join(profile, 'downloads')
+  mkdirSync(downloads)
+  mkdirSync(join(profile, 'Default'))
+  writeFileSync(
+    join(profile, 'Default', 'Preferences'),
+    JSON.stringify({
+      download: {
+        default_directory: downloads,
+        prompt_for_download: false,
+        directory_upgrade: true,
+      },
+      savefile: { default_directory: downloads },
+    }),
+  )
   const child = spawn(
     binary,
     [
@@ -360,7 +408,7 @@ export async function launchBrowser(cleanups, binary, args = []) {
       ).split('\n')
       if (Number(port) > 0 && path) {
         browser.endpoint = `ws://127.0.0.1:${port}${path}`
-        return { port: Number(port) }
+        return { port: Number(port), downloads }
       }
     } catch {}
     assert.ok(Date.now() < deadline, 'the browser never opened its CDP port')

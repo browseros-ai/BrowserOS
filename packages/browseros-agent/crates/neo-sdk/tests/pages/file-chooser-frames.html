@@ -1,0 +1,12 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>file chooser frames</title>
+<script>
+// fileChooserFrames.test.mjs serves this page: a same-origin frame holding a file input, and a
+// cross-site one, loaded from localhost at the fixture server's port (another site than the
+// page's 127.0.0.1, so Chromium runs it out of process), holding /chooser-input.html's input.
+</script></head><body>
+<iframe id="same" srcdoc="<input type=file id=inner>"></iframe>
+<iframe id="cross"></iframe>
+<script>
+document.getElementById('cross').src = `http://localhost:${location.port}/chooser-input.html`;
+</script>
+</body></html>

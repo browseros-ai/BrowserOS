@@ -1,0 +1,9 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>download</title></head><body>
+<!-- download.test.mjs and downloadCancel.test.mjs serve this page. Each link starts one
+     download: #data a data: URL, saved under its download attribute's name; #attachment a
+     response the fixture server sends as an attachment with a filename; #slow an attachment
+     whose body the server never finishes. -->
+<a id="data" href="data:text/plain,hello%20data" download="data.txt">Data</a>
+<a id="attachment" href="/attachment">Attachment</a>
+<a id="slow" href="/slow-download">Slow</a>
+</body></html>

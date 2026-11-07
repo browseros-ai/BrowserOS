@@ -29,6 +29,7 @@ use neo_runtime_spec::serve::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio_util::task::TaskTracker;
 use tracing::debug;
 use url::{Origin, Url};
@@ -852,6 +853,10 @@ fn grant_origin(origin: Option<&str>) -> Result<String, PlaywrightError> {
     Ok(url.origin().ascii_serialization())
 }
 
+/// Neo: what `clearPermissions` throws when its reset task ended before it finished (a panic, the
+/// `Runtime` shutting down).
+const RESET_STOPPED: &str = "Neo's permission reset stopped before it finished";
+
 /// The runs' permission grants, the `Runtime`'s: on the user's profile a grant is an override of
 /// its browser context, which every run and client of the browser shares, so Neo keeps each
 /// run's own and gives the browser their union, origin by origin. A run's grants go with its
@@ -1010,39 +1015,51 @@ impl Permissions {
     /// Playwright: `server/browserContext.ts` `BrowserContext.clearPermissions`: `this._permissions.clear();`
     ///
     /// Run `run`'s `clearPermissions`: its grants go; the other runs' stay. A run that granted
-    /// nothing changes nothing, so the user's browser keeps every other client's overrides.
+    /// nothing changes nothing, so the user's browser keeps every other client's overrides. The
+    /// call may end before the reset does (cancelled, timed out); the reset still finishes.
     pub(crate) async fn clear(
         &self,
         tabs: &Tabs,
         run: u64,
         progress: &Progress,
     ) -> Result<(), CallError> {
-        let mut grants = self.grants.lock().await;
-        let Some(held) = grants.remove(&run) else {
-            return Ok(());
-        };
         progress
-            .race(reset_context(tabs.cdp(), &grants, held.context.as_deref()))
-            .await??;
+            .race(self.let_go(tabs.cdp().clone(), run))
+            .await?
+            .map_err(|error| PlaywrightError::error(format!("{RESET_STOPPED}: {error}")))??;
         Ok(())
     }
 
-    /// The run's end: its grants go, as [`Self::clear`]; a failure is logged.
+    /// The run's end: its grants go, as [`Self::clear`]'s do, before the run's outcome returns.
     pub(crate) async fn release(&self, cdp: &CdpClient, run: u64) {
-        let mut grants = self.grants.lock().await;
-        let Some(held) = grants.remove(&run) else {
-            return;
-        };
-        if let Err(error) = reset_context(cdp, &grants, held.context.as_deref()).await {
-            debug!(?error, "the run's permission grants were not reset");
+        if let Err(error) = self.let_go(cdp.clone(), run).await {
+            debug!(?error, "the run's permission reset stopped");
         }
     }
 
-    /// [`Self::release`] on the `Runtime`'s cleanup tracker, for a run whose future was dropped.
+    /// [`Self::release`] without waiting, for a run whose future was dropped.
     pub(crate) fn release_later(&self, cdp: CdpClient, run: u64) {
-        let permissions = self.clone();
-        self.cleanup
-            .spawn(async move { permissions.release(&cdp, run).await });
+        drop(self.let_go(cdp, run));
+    }
+
+    /// Run `run`'s grants leave the registry and the browser is reset to the other runs', as one
+    /// task on the `Runtime`'s cleanup tracker. Whoever waits may stop waiting (a cancelled call,
+    /// a dropped run); the task never stops halfway, which would leave the browser between the
+    /// reset and the other runs' grants, or holding this run's once its record is gone. A
+    /// failure is logged.
+    fn let_go(&self, cdp: CdpClient, run: u64) -> JoinHandle<Result<(), PlaywrightError>> {
+        let grants = Arc::clone(&self.grants);
+        self.cleanup.spawn(async move {
+            let mut grants = grants.lock().await;
+            let Some(held) = grants.remove(&run) else {
+                return Ok(());
+            };
+            let reset = reset_context(&cdp, &grants, held.context.as_deref()).await;
+            if let Err(error) = &reset {
+                debug!(?error, "the run's permission grants were not reset");
+            }
+            reset
+        })
     }
 }
 
@@ -1055,12 +1072,17 @@ mod tests {
 
     use super::*;
     use crate::deadline::Deadline;
-    use crate::discovery::Discovery;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::page::TabInputs;
     use crate::progress::{CallEntry, CallStart, RunScope};
+    use crate::switch::Switches;
 
     fn call_progress() -> Progress {
+        progress_ending_with(CancellationToken::new())
+    }
+
+    /// A call's progress whose run ends once `cancel` is.
+    fn progress_ending_with(cancel: CancellationToken) -> Progress {
         let entry = Arc::new(CallEntry::new(CallStart {
             call_id: 1,
             guid: "context@default".to_string(),
@@ -1071,10 +1093,23 @@ mod tests {
             input: false,
         }));
         let run = RunScope::new(
-            Deadline::new(Duration::from_mins(1), CancellationToken::new()),
+            Deadline::new(Duration::from_mins(1), cancel),
             TaskTracker::new(),
         );
         Progress::new(entry, 0.0, run, CancellationToken::new())
+    }
+
+    /// The permission commands the browser got: each method with its origin and permissions.
+    fn permission_commands(browser: &FakeBrowser) -> Vec<Value> {
+        browser
+            .exchanges()
+            .into_iter()
+            .filter(|exchange| exchange.method().ends_with("Permissions"))
+            .map(|exchange| {
+                let params = &exchange.command["params"];
+                json!([exchange.method(), params["origin"], params["permissions"]])
+            })
+            .collect()
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1084,7 +1119,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
-            Discovery::default(),
+            Switches::default(),
             Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
@@ -1125,17 +1160,8 @@ mod tests {
         ok(permissions.clear(&tabs, 3, &progress).await);
         ok(permissions.clear(&tabs, 1, &progress).await);
         permissions.release(tabs.cdp(), 2).await;
-        let sent: Vec<Value> = browser
-            .exchanges()
-            .into_iter()
-            .filter(|exchange| exchange.method().ends_with("Permissions"))
-            .map(|exchange| {
-                let params = &exchange.command["params"];
-                json!([exchange.method(), params["origin"], params["permissions"]])
-            })
-            .collect();
         assert_eq!(
-            sent,
+            permission_commands(&browser),
             [
                 json!(["Browser.grantPermissions", "http://a.test", ["geolocation"]]),
                 json!([
@@ -1152,6 +1178,60 @@ mod tests {
                 json!(["Browser.resetPermissions", null, null]),
             ],
             "a run with no grant clears nothing; the others' grants stay until the last goes"
+        );
+    }
+
+    /// Review C1 P2: run 2's `clearPermissions`, cancelled as it starts, still resets the
+    /// context and grants run 1's again, on the `Runtime`'s cleanup tracker; no cancellation
+    /// point leaves the browser without run 1's grant or with run 2's.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_a_cancelled_clear_still_resets_and_grants_the_other_runs_again() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let cleanup = TaskTracker::new();
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            Switches::default(),
+            Permissions::new(cleanup.clone()),
+            TaskTracker::new(),
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("open: {error:?}"));
+        let permissions = tabs.permissions().clone();
+        let progress = call_progress();
+        let ok = |result: Result<(), CallError>| result.unwrap_or_else(|error| panic!("{error:?}"));
+        for (run, name) in [(1, "geolocation"), (2, "notifications")] {
+            ok(permissions
+                .grant(
+                    &tabs,
+                    run,
+                    Some("http://a.test"),
+                    &[name.to_string()],
+                    &progress,
+                )
+                .await);
+        }
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let cleared = permissions
+            .clear(&tabs, 2, &progress_ending_with(cancel))
+            .await;
+        assert!(
+            matches!(cleared, Err(CallError::RunEnded(_))),
+            "the call ends with its run: {cleared:?}"
+        );
+        permissions.release(tabs.cdp(), 2).await;
+        cleanup.close();
+        cleanup.wait().await;
+        assert_eq!(
+            permission_commands(&browser)[2..],
+            [
+                json!(["Browser.resetPermissions", null, null]),
+                json!(["Browser.grantPermissions", "http://a.test", ["geolocation"]]),
+            ],
+            "the reset and run 1's grant again, run 2's gone"
         );
     }
 

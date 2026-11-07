@@ -1,7 +1,8 @@
 //! Session state on a real BrowserOS neo (`src/session_state.rs`): what a run sets on its
 //! sessions (extra HTTP headers, offline mode, geolocation) ends with it, so the next run on the
 //! same tab finds none of it; a cookie it adds is browser data and stays; a permission it grants
-//! is reset once it ends, back to what the profile had before.
+//! is reset once it ends, back to what the profile had before, and one run's clearing, even
+//! cancelled halfway, never takes another run's grants.
 
 #[expect(
     dead_code,
@@ -15,6 +16,7 @@ use std::time::Duration;
 use browser::{Fixture, Tab};
 use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime};
 use serde_json::{Value, json};
+use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 const PAGE: &str =
@@ -36,11 +38,16 @@ async fn open() -> Option<Tab> {
 }
 
 fn request(tab: &Tab, code: &str) -> RunRequest {
+    cancellable(tab, code, &CancellationToken::new())
+}
+
+/// A run of `code` on the tab that `cancel` ends.
+fn cancellable(tab: &Tab, code: &str, cancel: &CancellationToken) -> RunRequest {
     RunRequest {
         code: code.to_string(),
         page: PageId::new(tab.target_id.clone()),
         timeout: Duration::from_secs(30),
-        cancel: CancellationToken::new(),
+        cancel: cancel.clone(),
     }
 }
 
@@ -49,22 +56,39 @@ fn value(outcome: &RunOutcome) -> &Value {
     outcome.value.as_ref().unwrap_or(&Value::Null)
 }
 
-/// The page's geolocation permission state, read over the test's own session.
-async fn geolocation_state(tab: &Tab) -> Value {
+/// What `expression` settles to on the page, read over the test's own session.
+async fn settled(tab: &Tab, expression: &str) -> Value {
     let reply = tab
         .cdp
         .send(
             "Runtime.evaluate",
-            json!({
-                "expression": "navigator.permissions.query({ name: 'geolocation' }).then((status) => status.state)",
-                "awaitPromise": true,
-                "returnByValue": true,
-            }),
+            json!({ "expression": expression, "awaitPromise": true, "returnByValue": true }),
             Some(&tab.driver),
         )
         .await
-        .unwrap_or_else(|error| panic!("query the permission: {error}"));
+        .unwrap_or_else(|error| panic!("evaluate {expression}: {error}"));
+    assert!(reply.get("exceptionDetails").is_none(), "{reply}");
     reply["result"]["value"].clone()
+}
+
+/// The page's geolocation permission state, read over the test's own session.
+async fn geolocation_state(tab: &Tab) -> Value {
+    settled(
+        tab,
+        "navigator.permissions.query({ name: 'geolocation' }).then((status) => status.state)",
+    )
+    .await
+}
+
+/// Waits, a bounded while, until `expression` is true on the page.
+async fn until(tab: &Tab, expression: &str) {
+    time::timeout(Duration::from_secs(15), async {
+        while tab.evaluate(expression).await != json!(true) {
+            time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the page never reached {expression}"));
 }
 
 /// A script's read of where the page is, `"error"` when it learns nothing in a second.
@@ -176,4 +200,103 @@ return await page.evaluate(() => navigator.permissions.query({ name: 'geolocatio
         "the profile's own state once the run ended"
     );
     tab.close().await;
+}
+
+/// Review C1 P2: run B's `clearPermissions` resets the browser's overrides, then grants the
+/// other runs' again. B cancelled right after the reset must still finish that, so run A, still
+/// going, keeps its grant. A grants many origins first, so its grants take a while to come
+/// back; the page's own origin sorts after them.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_cancelling_a_runs_clear_keeps_another_live_runs_grant() {
+    let Some(tab) = open().await else {
+        return;
+    };
+    let runtime = Runtime::connect(tab.cdp.clone())
+        .await
+        .unwrap_or_else(|error| panic!("Runtime::connect: {error}"));
+    let first_cancel = CancellationToken::new();
+    let first = {
+        let runtime = runtime.clone();
+        let request = cancellable(
+            &tab,
+            r"for (let i = 0; i < 80; i++) {
+  await context.grantPermissions(['geolocation'], { origin: 'http://0-a' + String(i).padStart(3, '0') + '.localhost' })
+}
+await context.grantPermissions(['geolocation'], { origin: page.url() })
+await page.evaluate(() => { window.firstReady = true })
+await new Promise(() => {})",
+            &first_cancel,
+        );
+        tokio::spawn(async move { runtime.run(request).await })
+    };
+    until(&tab, "window.firstReady === true").await;
+    for (method, params) in [
+        ("Runtime.enable", json!({})),
+        ("Runtime.addBinding", json!({ "name": "permissionReset" })),
+    ] {
+        tab.cdp
+            .send(method, params, Some(&tab.driver))
+            .await
+            .unwrap_or_else(|error| panic!("{method}: {error}"));
+    }
+    let mut events = tab.cdp.events();
+    assert_eq!(
+        settled(
+            &tab,
+            r"navigator.permissions.query({ name: 'geolocation' }).then((status) => {
+  window.watched = status
+  status.onchange = () => { if (status.state !== 'granted') permissionReset(status.state) }
+  return status.state
+})"
+        )
+        .await,
+        json!("granted"),
+        "run A's grant, before B clears"
+    );
+    let second_cancel = CancellationToken::new();
+    let second = {
+        let runtime = runtime.clone();
+        let request = cancellable(
+            &tab,
+            r"await context.grantPermissions(['notifications'], { origin: page.url() })
+await context.clearPermissions()
+return 'cleared'",
+            &second_cancel,
+        );
+        tokio::spawn(async move { runtime.run(request).await })
+    };
+    time::timeout(Duration::from_secs(15), async {
+        loop {
+            let event = events
+                .recv()
+                .await
+                .unwrap_or_else(|error| panic!("events: {error}"));
+            if event.method == "Runtime.bindingCalled" && event.params["name"] == "permissionReset"
+            {
+                second_cancel.cancel();
+                return;
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the page never saw B's reset"));
+    let second = second
+        .await
+        .unwrap_or_else(|error| panic!("run B: {error}"));
+    let after = geolocation_state(&tab).await;
+    first_cancel.cancel();
+    let first = first.await.unwrap_or_else(|error| panic!("run A: {error}"));
+    runtime.drain().await;
+    tab.close().await;
+    assert_eq!(
+        second.status,
+        RunStatus::Cancelled,
+        "B's clear was cut short"
+    );
+    assert_eq!(first.status, RunStatus::Cancelled, "{first:#?}");
+    assert_eq!(
+        after,
+        json!("granted"),
+        "run A, still going, keeps its grant"
+    );
 }
