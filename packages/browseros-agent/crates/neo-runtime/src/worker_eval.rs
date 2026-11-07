@@ -54,9 +54,6 @@ pub(crate) static WORKER_EVALUATE_HANDLE_META: MethodMeta = MethodMeta {
     flags: &[],
 };
 
-/// Playwright: `server/page.ts` `Worker.didClose`: `this.existingExecutionContext.contextDestroyed(error?.message ?? 'Worker was closed');`
-const WORKER_CLOSED: &str = "Worker was closed";
-
 /// A message on a worker guid: Playwright's two worker evaluations.
 /// Neo: the spec's `Worker` commands are routed by hand (`neo-runtime-spec/spec/serve.yml`).
 pub(crate) fn route(
@@ -90,8 +87,8 @@ pub(crate) fn route(
 ///
 /// # Errors
 ///
-/// TargetClosedError when the worker closed before the call or before it was ready; Playwright's
-/// `Worker was closed` when it closes during the call; the evaluation's own error otherwise.
+/// TargetClosedError when the worker closed before the call, before it was ready or during it;
+/// the evaluation's own error otherwise.
 pub(crate) async fn serve(
     page: &PageSession,
     guid: &str,
@@ -122,7 +119,7 @@ pub(crate) async fn serve(
 ///
 /// # Errors
 ///
-/// `Worker was closed` once the worker closes; the call's own error otherwise.
+/// TargetClosedError once the worker closes; the call's own error otherwise.
 pub(crate) async fn serve_handle(
     receiver: &Arc<WorkerHandle>,
     call: EvalCall,
@@ -363,14 +360,11 @@ fn answer(
     }
 }
 
-/// A worker call's page error once it was sent: the worker closing under it ends it as
-/// Playwright's `Worker.didClose` ends its context's calls.
-/// Playwright: `server/page.ts` `Worker.didClose`: `this.existingExecutionContext.contextDestroyed(error?.message ?? 'Worker was closed');`
+/// A worker call's page error once it was sent: the worker closing under it, its page's close
+/// included, is Playwright's TargetClosedError, as its server reads the worker session's close.
+/// Playwright: `server/errors.ts` `rewriteErrorForClosedTarget`: `return new TargetClosedError(closeReason, error.browserLogMessage());`
 fn in_flight(error: PageError) -> CallError {
-    match error {
-        PageError::Closed => PlaywrightError::error(WORKER_CLOSED).into(),
-        error => evaluate::page_error(error).into(),
-    }
+    evaluate::page_error(error).into()
 }
 
 /// Neo: the page's main frame guid of `worker`, `frame@<T>`: what routes its handles' calls.

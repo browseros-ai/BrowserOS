@@ -20,6 +20,7 @@ use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio::time;
 use tokio::time::Instant;
+use tracing::debug;
 
 use crate::bridge;
 use crate::click::PageError;
@@ -28,7 +29,7 @@ use crate::page;
 use crate::page::PageState;
 use crate::progress::PlaywrightError;
 use crate::run::PageId;
-use crate::tabs::{self, PageEntry, Tabs};
+use crate::tabs::{PageEntry, Tabs};
 use crate::url_match::{SerializedUrlMatch, UrlMatcher};
 
 /// Frame fields. The main URL comes directly from history; other fields read a fresh tree.
@@ -306,20 +307,21 @@ pub(crate) fn matches_url(
 /// This can wait for a pending main-frame navigation to commit before the tree answers.
 /// `page.workers()`: the tab's open dedicated workers' records, in attach order. The first read
 /// starts the tab's worker tracking (`workers.rs`); the workers already running attach before
-/// the setting answers, and the barrier lets the watcher apply them first.
+/// the setting answers, and the barrier lets the watcher apply them first. A page that closed,
+/// or never let Neo look, has none: Playwright's `workers()` never throws.
 /// Playwright: `client/page.ts` `Page.workers`
 pub(crate) async fn workers(tabs: &Tabs, page: &PageEntry) -> Result<Value, PlaywrightError> {
-    let session = tabs.session(page).await?;
-    session
-        .prepare()
-        .await
-        .map_err(|error| tabs::cdp_error(&error))?;
-    session
-        .events
-        .workers
-        .track()
-        .await
-        .map_err(|error| tabs::cdp_error(&error))?;
+    let Ok(session) = tabs.session(page).await else {
+        return Ok(json!([]));
+    };
+    if let Err(error) = session.prepare().await {
+        debug!(%error, "page.workers() found no page to watch");
+        return Ok(json!([]));
+    }
+    if let Err(error) = session.events.workers.track().await {
+        debug!(%error, "page.workers() could not track the page's workers");
+        return Ok(json!([]));
+    }
     tabs.events().replay_barrier().await;
     Ok(Value::Array(session.events.workers.records()))
 }
