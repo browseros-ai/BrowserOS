@@ -208,6 +208,14 @@ pub(crate) async fn set_content(
         .await?
         .map_err(call_error)?;
     let frame = progress.race(tab.context()).await?.map_err(call_error)?;
+    // An out-of-process frame's lifecycle events flow only once its host's watcher has enabled
+    // them, which every frame wait does first (`FrameObservation::try_locate`). Before the write,
+    // so the reopened document's `init` is sent, and before subscribing below, so the replay of
+    // the old document's lifecycle that the enable causes is not taken for the new one's.
+    progress
+        .race(tab.watch_host(&frame.host))
+        .await?
+        .map_err(call_error)?;
     // Before the write: the reopened document fires its first events while the write is in
     // flight, and the frame may go while it waits.
     let events = frame.host.events();

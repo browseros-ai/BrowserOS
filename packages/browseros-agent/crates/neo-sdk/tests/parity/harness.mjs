@@ -96,9 +96,10 @@ export function buildNeoRun() {
 
 /**
  * Runs the script file at `scriptPath` through Neo against `targetId`. `connected` settles once
- * neo_run has a CDP connection; `outcome` is the `RunOutcome` it prints.
+ * neo_run has a CDP connection; `outcome` is the `RunOutcome` it prints. `extraArgs` go before
+ * the script, such as `['--artifacts', dir]`.
  */
-export function startNeo(neoRun, port, targetId, scriptPath) {
+export function startNeo(neoRun, port, targetId, scriptPath, extraArgs = []) {
   const child = spawn(neoRun, [
     '--cdp-port',
     String(port),
@@ -106,6 +107,7 @@ export function startNeo(neoRun, port, targetId, scriptPath) {
     targetId,
     '--timeout-ms',
     '60000',
+    ...extraArgs,
     scriptPath,
   ])
   let stdout = ''

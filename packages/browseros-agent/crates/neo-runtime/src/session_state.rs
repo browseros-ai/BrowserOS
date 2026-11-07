@@ -1171,6 +1171,7 @@ mod tests {
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::page::TabInputs;
     use crate::progress::{CallEntry, CallStart, RunScope};
+    use crate::screenshot::TabScreenshots;
     use crate::switch::Switches;
 
     fn call_progress() -> Progress {
@@ -1215,6 +1216,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             Switches::default(),
             Permissions::default(),
             TaskTracker::new(),
@@ -1288,6 +1290,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             Switches::default(),
             Permissions::new(cleanup.clone()),
             TaskTracker::new(),
@@ -1427,6 +1430,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            TabScreenshots::default(),
             Switches::default(),
             Permissions::default(),
             TaskTracker::new(),

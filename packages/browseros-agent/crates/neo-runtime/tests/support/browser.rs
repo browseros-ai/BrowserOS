@@ -163,6 +163,7 @@ impl Tab {
                     page,
                     timeout,
                     cancel: CancellationToken::new(),
+                    artifacts: None,
                 })
                 .await
         })
