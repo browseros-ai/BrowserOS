@@ -57,6 +57,9 @@ interfaces:
     - tap
     - fill
     - press
+    # `Locator.pressSequentially` and the deprecated `type`s: focus, then `Keyboard.type`
+    # (neo-runtime `press.rs`).
+    - type
     - inputValue
     - isChecked
     - isVisible

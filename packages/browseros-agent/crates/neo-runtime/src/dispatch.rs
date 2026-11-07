@@ -44,8 +44,9 @@ use neo_runtime_spec::serve::{
     FrameIsHiddenParams, FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult,
     FramePressParams, FramePressResult, FrameQueryCountParams, FrameSelectOptionParams,
     FrameSelectOptionResult, FrameTapParams, FrameTextContentParams, FrameTitleParams,
-    FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
-    Metadata, PageCall, RequestCall, ResponseCall,
+    FrameTypeParams, FrameTypeResult, FrameUncheckParams, FrameUncheckResult,
+    FrameWaitForSelectorParams, FrameWaitForSelectorResult, Metadata, PageCall, RequestCall,
+    ResponseCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -67,7 +68,7 @@ use crate::lists;
 use crate::navigate::{self, GotoOptions};
 use crate::network::{HopId, ObjectKind as NetworkObject};
 use crate::page::FrameTab;
-use crate::press::{self, PressOptions};
+use crate::press::{self, KeyInput, PressOptions};
 use crate::progress::{
     CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
 };
@@ -260,6 +261,8 @@ enum Route {
     FrameAriaSnapshot(SnapshotOptions),
     FrameFill(FillOptions),
     FramePress(PressOptions),
+    /// `Frame.type`, served by press's policy.
+    FrameType(PressOptions),
     FrameInputValue(InputValueOptions),
     FrameIsVisible(StateOptions),
     FrameIsHidden(StateOptions),
@@ -567,6 +570,7 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         )),
         FrameCall::Fill(params) => Ok(Route::FrameFill(FillOptions::from_params(params))),
         FrameCall::Press(params) => Ok(Route::FramePress(PressOptions::from_params(params))),
+        FrameCall::Type(params) => Ok(Route::FrameType(PressOptions::from_type(params))),
         FrameCall::InputValue(params) => Ok(Route::FrameInputValue(
             InputValueOptions::from_params(params),
         )),
@@ -855,6 +859,9 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         Route::FramePress(options) => press::press(tab, &options, progress)
             .await
             .and_then(|()| encode_result::<FramePressParams>(&FramePressResult {})),
+        Route::FrameType(options) => press::press(tab, &options, progress)
+            .await
+            .and_then(|()| encode_result::<FrameTypeParams>(&FrameTypeResult {})),
         Route::FrameSetChecked(options) => {
             let checked = options.checked;
             check::set_checked(tab, &options, progress)
@@ -1259,7 +1266,7 @@ mod tests {
                         PressOptions {
                             selector: "input".into(),
                             strict: true,
-                            key: "Shift+Enter".into(),
+                            keys: KeyInput::Press("Shift+Enter".into()),
                             delay: Some(25.0),
                             wait_after: false
                         }

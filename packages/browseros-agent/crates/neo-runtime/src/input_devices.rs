@@ -224,7 +224,7 @@ impl Plan {
     }
 
     /// The number of commands that write something.
-    fn writes(&self) -> usize {
+    pub(crate) fn writes(&self) -> usize {
         self.commands
             .iter()
             .filter(|command| command.method.is_some())
