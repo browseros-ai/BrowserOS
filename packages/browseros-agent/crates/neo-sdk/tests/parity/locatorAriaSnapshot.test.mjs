@@ -225,3 +225,92 @@ test('review: ai snapshots through a direct Frame behind a hidden iframe', {
     probe: 'document.querySelector("iframe").style.visibility',
   })
 })
+
+const refHelper = `const refOf = snapshot => snapshot.match(/\\[ref=([^\\]]+)\\]/)?.[1];`
+
+test('fresh hidden-owner refusal preserves parent refs and page state', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  await compareMethod(t, {
+    html: `<button>Outer</button><output id="effect">untouched</output>
+      <iframe name="hidden" style="visibility:hidden" srcdoc="<button onclick=&quot;parent.document.getElementById('effect').textContent='changed'&quot;>Inner</button>"></iframe>`,
+    source:
+      refHelper +
+      `
+      const top = await page.locator('body > button').ariaSnapshot({mode:'ai'});
+      const before = await page.locator('aria-ref=' + refOf(top)).count();
+      const frame = page.frame('hidden');
+      await frame.locator('button').waitFor({state:'attached'});
+      const result = await frame.locator('button').ariaSnapshot({mode:'ai'}).then(
+        s => ({text:s.includes('Inner'),ref:!!refOf(s)}),
+        error => ({error:errorCategory(error)}));
+      return {before, after:await page.locator('aria-ref=' + refOf(top)).count(), result};
+    `,
+    values: ({ playwright, neo }) => {
+      assert.deepEqual(playwright, {
+        before: 1,
+        after: 1,
+        result: { text: true, ref: true },
+      })
+      assert.deepEqual(neo, { before: 1, after: 1, result: { error: 'Error' } })
+    },
+    probe: 'document.querySelector("#effect").textContent',
+  })
+})
+
+test('named owners can become hidden and pointer-events-none owners remain routable', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  await compareMethod(t, {
+    html: `<button id="hide" onclick="document.querySelector('#warm').style.visibility='hidden'">Hide</button>
+      <iframe id="warm" name="warm" srcdoc="<button>Warm</button>"></iframe>
+      <iframe name="passive" style="pointer-events:none" srcdoc="<button>Passive</button>"></iframe>`,
+    source:
+      refHelper +
+      `
+      const warm = page.frame('warm').locator('button');
+      await warm.waitFor();
+      await warm.ariaSnapshot({mode:'ai'});
+      await page.locator('#hide').click();
+      const hidden = await warm.ariaSnapshot({mode:'ai'});
+      const passive = await page.frame('passive').locator('button').ariaSnapshot({mode:'ai'});
+      return {
+        hidden:await page.locator('aria-ref=' + refOf(hidden)).textContent(),
+        passive:await page.locator('aria-ref=' + refOf(passive)).textContent()
+      };
+    `,
+    probe: 'document.querySelector("#warm").style.visibility',
+  })
+})
+
+test('a direct Frame in a closed shadow root returns a routable AI ref', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  await compareMethod(t, {
+    html: `<div id="host"></div><script>
+      const shadow = document.querySelector('#host').attachShadow({mode:'closed'});
+      const iframe = document.createElement('iframe');
+      iframe.name = 'closed'; iframe.srcdoc = '<button>Closed child</button>';
+      shadow.appendChild(iframe);
+    </script>`,
+    source:
+      refHelper +
+      `
+      const frame = page.frame('closed');
+      if (!frame) throw new Error('missing closed-shadow frame');
+      const button = frame.locator('button');
+      await button.waitFor();
+      const snapshot = await button.ariaSnapshot({mode:'ai'});
+      return {
+        direct:await button.textContent(),
+        frameScoped:/^f/.test(refOf(snapshot) ?? ''),
+        ownerMatches:await page.locator('iframe').count(),
+        routed:await page.locator('aria-ref=' + refOf(snapshot)).count(),
+      };
+    `,
+    probe: 'document.querySelector("#host").shadowRoot === null',
+  })
+})
