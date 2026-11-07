@@ -1,0 +1,39 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>frame events</title></head><body>
+<!-- frameEvents.test.mjs serves this page, which holds one iframe from the start, #first. The
+     controls add an iframe named "same" (this origin) or "cross" (http://localhost at this
+     server's port: another site, so Chromium runs it out of process), move it to its next
+     document, or remove it; #leave navigates the page itself away. Every child document is the
+     fixture server's page titled with its path: /first-1, /same-1, /same-2, /cross-1, ... -->
+<p>
+<button type="button" id="add-same">Add same</button>
+<button type="button" id="navigate-same">Navigate same</button>
+<button type="button" id="remove-same">Remove same</button>
+<button type="button" id="add-cross">Add cross</button>
+<button type="button" id="navigate-cross">Navigate cross</button>
+<button type="button" id="remove-cross">Remove cross</button>
+<a id="leave" href="/left">Leave</a>
+</p>
+<iframe id="first" name="first" title="First" src="/first-1"></iframe>
+<script>
+const hosts = { same: location.host, cross: `localhost:${location.port}` };
+const controls = {
+  add: (name) => {
+    const frame = document.createElement('iframe');
+    frame.id = name;
+    frame.name = name;
+    frame.title = name;
+    frame.src = `http://${hosts[name]}/${name}-1`;
+    document.body.append(frame);
+  },
+  navigate: (name) => {
+    const frame = document.getElementById(name);
+    frame.src = `http://${hosts[name]}/${name}-${Number(frame.src.split('-').pop()) + 1}`;
+  },
+  remove: (name) => document.getElementById(name).remove(),
+};
+document.addEventListener('click', ({ target }) => {
+  const [action, name] = target.id.split('-');
+  controls[action]?.(name);
+});
+</script>
+</body></html>

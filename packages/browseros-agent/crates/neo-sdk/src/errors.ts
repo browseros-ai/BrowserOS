@@ -28,9 +28,10 @@ class TargetClosedError extends PlaywrightError {
 }
 
 /** Playwright's `TargetClosedError` for a page that closed under a wait the SDK runs itself
- * (`response.finished()`), with its default message. */
-export function targetClosedError(): PlaywrightError {
-  return new TargetClosedError()
+ * (`response.finished()`, `waitForEvent`): the close's reason as its message when the close
+ * gave one, else the default message. */
+export function targetClosedError(reason?: string): PlaywrightError {
+  return new TargetClosedError(reason)
 }
 
 /** Playwright's `isTargetClosedError`: whether a call failed because its page was already
