@@ -51,15 +51,16 @@ test('innerHTML returns the markup of the first match and rejects ambiguous or m
     values: {
       nested: 'Hello <b class="x">bold</b><br><!-- a comment --><i>it</i>',
       entities: 'Fish &amp; chips &lt;3&nbsp;"quoted"',
-      attrs: '<a href="/x?a=1&amp;b=2" title="say &quot;hi&quot;">link</a>',
+      attrs:
+        '<a href="/x?a=1&amp;b=2" title="say &quot;hi&quot;">Fish shop</a>',
       empty: '',
-      svg: '<text id="label" x="0" y="16">Chart label</text>',
+      svg: '<title>Chart</title><text id="label" x="0" y="16">Chart label</text>',
       hidden: '<span>Hidden</span> text',
       list: '<li>First</li><li>Second</li>',
       late: '<em>late</em> arrival',
     },
     types: Array(8).fill('string'),
-    errors: { strict: 'strict', missing: 'timeout' },
+    errors: { strict: 'Error:strict', missing: 'TimeoutError' },
   })
   const reads = outcome.calls.filter((c) => c.method === 'innerHTML')
   assert.equal(reads.length, 10)

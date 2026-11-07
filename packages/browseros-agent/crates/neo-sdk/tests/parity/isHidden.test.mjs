@@ -42,8 +42,8 @@ test('isHidden returns booleans at once and rejects ambiguous or invalid targets
     atOnce: true,
     later: false,
     types: Array(9).fill('boolean'),
-    strict: 'strict',
-    invalid: 'error',
+    strict: 'Error:strict',
+    invalid: 'Error',
   })
   const reads = outcome.calls.filter((c) => c.method === 'isHidden')
   assert.equal(reads.length, 11)

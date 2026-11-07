@@ -113,6 +113,51 @@ test('the built bundle installs once per document and answers through call.js', 
       'the strict error is stackless, as Playwright throws it',
     )
 
+    // `frames.ts` `_elementState` and `innerHTML` read the first match; a state the element
+    // cannot have throws, as Playwright's page code does; `allInnerTexts` reads every match.
+    const lonePreview = '<p id="lone">Only one</p>'
+    assert.deepEqual(
+      await page('elementStateOnSelector', {
+        selector: '#lone',
+        strict: true,
+        state: 'enabled',
+      }),
+      {
+        value: {
+          matched: { matches: true, received: 'enabled', preview: lonePreview },
+        },
+      },
+    )
+    assert.deepEqual(
+      await page('elementStateOnSelector', {
+        selector: '#missing',
+        strict: true,
+        state: 'disabled',
+      }),
+      { value: {} },
+      'nothing matched yet is a value, not an error',
+    )
+    assert.match(
+      (
+        await page('elementStateOnSelector', {
+          selector: '#lone',
+          strict: true,
+          state: 'editable',
+        })
+      ).exception.description,
+      /^Error: Element is not an <input>, <textarea>, <select> or \[contenteditable\]/,
+    )
+    assert.deepEqual(
+      await page('innerHTML', { selector: '#lone', strict: true }),
+      { value: { matched: { value: 'Only one', preview: lonePreview } } },
+    )
+    assert.deepEqual(await page('allInnerTexts', { selector: '#lone' }), {
+      value: { values: ['Only one'] },
+    })
+    assert.deepEqual(await page('allInnerTexts', { selector: '#missing' }), {
+      value: { values: [] },
+    })
+
     const aria = await page('ariaSnapshot', {
       selector: 'body',
       strict: false,

@@ -41,7 +41,7 @@ test('allInnerTexts returns the innerText of every match, at once', {
       missing: [],
       chained: ['Kale', 'Leek'],
     },
-    invalid: 'error',
+    invalid: 'Error',
   })
   assert.ok(outcome.calls.every((c) => c.delivery === undefined))
 })

@@ -41,7 +41,7 @@ test('isEnabled waits for a match, reads its state, and rejects ambiguous or mis
     values: [true, false, true, false, false, false, true],
     late: false,
     types: Array(8).fill('boolean'),
-    errors: ['strict', 'timeout', 'error'],
+    errors: ['Error:strict', 'TimeoutError', 'Error'],
   })
   const reads = outcome.calls.filter((c) => c.method === 'isEnabled')
   assert.equal(reads.length, 11)

@@ -106,6 +106,24 @@ export type ApiName =
   | 'response.serverAddr'
   | 'response.securityDetails'
   | 'response.httpVersion'
+  // Element reads and states (B1).
+  | 'locator.isEnabled'
+  | 'page.isEnabled'
+  | 'frame.isEnabled'
+  | 'locator.isDisabled'
+  | 'page.isDisabled'
+  | 'frame.isDisabled'
+  | 'locator.isEditable'
+  | 'page.isEditable'
+  | 'frame.isEditable'
+  | 'locator.isHidden'
+  | 'page.isHidden'
+  | 'frame.isHidden'
+  | 'locator.innerHTML'
+  | 'page.innerHTML'
+  | 'frame.innerHTML'
+  | 'locator.allInnerTexts'
+  | 'locator.all'
 
 /** Playwright's wire error, `{error: {name, message}}`'s inner object. */
 export type WireError = { name: string; message: string }

@@ -38,7 +38,7 @@ test('isDisabled mirrors isEnabled and waits for a match', {
     values: [false, true, false, true, true, true],
     late: true,
     types: Array(7).fill('boolean'),
-    errors: ['strict', 'timeout'],
+    errors: ['Error:strict', 'TimeoutError'],
   })
   const reads = outcome.calls.filter((c) => c.method === 'isDisabled')
   assert.equal(reads.length, 9)

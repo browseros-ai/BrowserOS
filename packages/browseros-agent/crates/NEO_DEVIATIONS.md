@@ -3,10 +3,12 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (0)
+## Deviations (2)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
+| neo-runtime-injected/src/glue.ts | `glue.allInnerTexts` | `client/locator.ts` `Locator.allInnerTexts` | runs in Neo's isolated world, where Playwright's `$$eval` runs in the page's main world, so a page's own `innerText` override (a prototype patch or a per-instance property) is not seen. |
+| neo-runtime-injected/src/glue.ts | `glue.allTextContents` | `client/locator.ts` `Locator.allTextContents` | runs in Neo's isolated world, where Playwright's `$$eval` runs in the page's main world, so a page's own `textContent` override (a prototype patch, a custom element class or a per-instance property) is not seen. |
 
 ## Unexplained: owner questions (0)
 

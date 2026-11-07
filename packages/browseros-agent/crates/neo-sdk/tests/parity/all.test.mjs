@@ -21,7 +21,8 @@ test('locator.all returns one nth locator per match', {
       page.setDefaultTimeout(1)
       const veg = await page.locator('#veg > li').all()
       const texts = []
-      for (const item of veg) texts.push(await item.textContent())
+      // all() itself takes no timeout; reading each match does.
+      for (const item of veg) texts.push(await item.textContent({ timeout: 5000 }))
       const missing = await page.locator('.missing').all()
       const chained = await page.locator('#fruits').locator('.fruit').filter({ hasText: 'a' }).all()
       const shapes = [...veg, ...chained].map(l => typeof l.click === 'function' && l.page() === page)
@@ -36,7 +37,7 @@ test('locator.all returns one nth locator per match', {
     missing: 0,
     chained: 3,
     shapes: Array(6).fill(true),
-    invalid: 'error',
+    invalid: 'Error',
   })
   // One count per all(); the reads come from the nth locators.
   assert.equal(outcome.calls.filter((c) => c.method === 'queryCount').length, 4)

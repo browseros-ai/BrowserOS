@@ -8,7 +8,6 @@
 <button id="enabled-button" type="button">Enabled button</button>
 <button id="disabled-button" type="button" disabled>Disabled button</button>
 <div id="plain">Plain div</div>
-<span id="aria-disabled" role="button" aria-disabled="true">ARIA disabled</span>
 <fieldset id="fieldset" disabled><input id="fieldset-input"></fieldset>
 <label id="label">Name <input id="labelled" disabled></label>
 <input id="text-input">
@@ -16,10 +15,21 @@
 <input id="readonly-input" readonly>
 <textarea id="readonly-area" readonly></textarea>
 <div id="editable" contenteditable="true"></div>
-<span id="aria-readonly" role="textbox" aria-readonly="true"></span>
-<span id="aria-textbox" role="textbox"></span>
 <input class="dup">
 <input class="dup" disabled>
+<script>
+// Non-semantic ARIA controls are what some cases read; built here so the markup stays
+// lint-clean, inside #content before the page records how it loaded.
+for (const [id, role, attribute] of [['aria-disabled', 'button', 'aria-disabled'],
+  ['aria-readonly', 'textbox', 'aria-readonly'], ['aria-textbox', 'textbox', null]]) {
+  const control = document.createElement('span')
+  control.id = id
+  control.setAttribute('role', role)
+  if (attribute) control.setAttribute(attribute, 'true')
+  if (role === 'button') control.textContent = 'ARIA disabled'
+  document.currentScript.before(control)
+}
+</script>
 </main>
 <script>
 // The click starts the timer, never page load: Neo's half starts seconds after its page loads.

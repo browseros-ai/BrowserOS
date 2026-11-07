@@ -47,7 +47,7 @@ test('getByRef resolves a ref from an ai snapshot', {
   assert.deepEqual(outcome.value, {
     text: 'Two',
     count: 0,
-    missing: 'timeout',
+    missing: 'TimeoutError',
     selector: true,
   })
 })

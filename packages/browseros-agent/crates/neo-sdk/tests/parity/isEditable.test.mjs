@@ -37,7 +37,7 @@ test('isEditable reads text controls and refuses elements that cannot be editabl
   })
   assert.deepEqual(outcome.value, {
     values: [true, false, false, false, true, false, true, false],
-    errors: ['error', 'error', 'strict', 'timeout'],
+    errors: ['Error', 'Error', 'Error:strict', 'TimeoutError'],
   })
   const reads = outcome.calls.filter((c) => c.method === 'isEditable')
   assert.equal(reads.length, 12)
