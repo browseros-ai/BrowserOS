@@ -50,5 +50,6 @@ and NOTICE.
 | `packages/playwright-core/src/server/input.ts` | `dd1a2025bf3e04f52079a9ed0669f77b99a91a9746be452627de389b9539dfcc` |
 | `packages/playwright-core/src/server/javascript.ts` | `2fc52119a81b92929aa5e292e76fde967d56cfacf16aadc27b7a96e6e880c788` |
 | `packages/playwright-core/src/server/page.ts` | `c17ffdb5133c507085447a5914b8a38992b83c65985b9b5b06ee65ce68c975bf` |
+| `packages/playwright-core/src/server/progress.ts` | `0770a2b225b77df82f0aefea8ca89b699ebb3e58eb4274771d5e0c0cf43aed01` |
 | `packages/playwright-core/src/server/protocolError.ts` | `b6d54500d5764b973f93504d7c21126e8176266c8ddfa4da47d218f8ec88bb04` |
 | `packages/utils/stackTrace.ts` | `fd74bd690ad37498ad3b676025129b38c08c5bffb190c8d96f228a2be7b5210b` |

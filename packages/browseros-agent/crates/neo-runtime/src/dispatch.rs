@@ -12,6 +12,7 @@
 //!         ├─ Trace += CallEntry                 every message with an id leaves a record
 //!         ├─ early failure → reply now, no call log (Playwright's dispatcher does the same)
 //!         ├─ admit against the in-flight caps   past them → an early failure too
+//!         ├─ Aborts += message id               `__neo_runtime.abort(id, reason)` reaches it
 //!         └─ run.tasks.spawn(serve)             runs while JS spins, outlives the realm
 //!              ├─ events.ready(page)            what the page's subscriptions switched on
 //!              ├─ click::click(&page, &options, &progress)   prepares the tab first
@@ -61,6 +62,7 @@ use tokio::time::Instant;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
+use crate::abort::{Aborts, Registration};
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::devices::{self, DeviceCall};
@@ -213,6 +215,8 @@ struct Inner {
     in_flight: Arc<InFlight>,
     /// The URL-predicate navigation waits open between their calls.
     cursors: Arc<Cursors<FrameCursor>>,
+    /// The admitted calls a script's `signal` can still abort, by message id (`abort.rs`).
+    aborts: Arc<Aborts>,
     next_call_id: AtomicU64,
     /// Cancels `run.ended` when the last `Dispatcher` drops. A reason `finish` recorded first
     /// wins; otherwise calls read [`RunEnd::Cancelled`].
@@ -367,6 +371,7 @@ impl Dispatcher {
             trace: Trace::default(),
             in_flight: Arc::default(),
             cursors: Arc::default(),
+            aborts: Arc::default(),
             next_call_id: AtomicU64::new(1),
         }))
     }
@@ -456,6 +461,11 @@ impl Dispatcher {
         } else {
             progress
         };
+        // Registered before the call returns to JS, so the abort listener the SDK adds right
+        // after always finds it. The SDK's ids are integers; any other id cannot be aborted.
+        let abortable = id
+            .as_u64()
+            .map(|message_id| inner.aborts.register(message_id, &entry));
         let (reply, receiver) = oneshot::channel();
         let served = serve_call(
             inner.tabs.clone(),
@@ -471,10 +481,18 @@ impl Dispatcher {
                 events: inner.tabs.events().clone(),
                 share,
                 ending,
+                abortable,
             },
         );
         inner.run.tasks.spawn(served);
         PendingReply(PendingInner::Waiting(receiver))
+    }
+
+    /// `__neo_runtime.abort`: the script's `signal` aborted the call it sent as message `id`.
+    /// The call stops at its next race or check and replies `AbortError` with `reason`; an id
+    /// no call holds any more (it replied already) is ignored, as Playwright ignores one.
+    pub(crate) fn abort(&self, id: u64, reason: String) {
+        self.0.aborts.abort(id, reason);
     }
 
     /// Ends the run's calls after the realm is gone: records why the run ended (the first
@@ -787,6 +805,8 @@ struct CallReply {
     share: Option<Admitted>,
     /// A wait's finish or release: its claim on the wait it ends (`Cursors::begin_ending`).
     ending: Option<Ending<FrameCursor>>,
+    /// The call's place in the abort registry; `None` for an id that is not an integer.
+    abortable: Option<Registration>,
 }
 
 /// Attachment can block or be cancelled independently of a frame handler. Once attached,
@@ -799,6 +819,13 @@ async fn serve_call(
     progress: Progress,
     reply: CallReply,
 ) {
+    // A call the script aborted before its task first ran never starts its handler, even one
+    // that would not race its progress first. A run that ended meanwhile outranks the abort
+    // (`Progress::race`'s order): the handler starts and its first race reports the end.
+    if let Err(error) = progress.pending_abort() {
+        finish_reply(Err(error), reply).await;
+        return;
+    }
     // A page's call waits for what the run's subscriptions switched on there (console messages,
     // the dialog watcher), so the call cannot cause an event before its producer listens; a
     // context call (`newPage`) waits for target discovery's baseline. A dialog's answer never
@@ -1123,7 +1150,11 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
         events,
         share,
         ending,
+        abortable,
     } = target;
+    // The outcome is decided: an abort from now on is ignored, as Playwright drops a call's
+    // controller before it replies.
+    drop(abortable);
     let (record, answer) = match result {
         Err(CallError::RunEnded(_)) => return,
         Ok(value) => (CallResult::Ok, Ok(value)),
@@ -1456,6 +1487,7 @@ mod tests {
                 events: EventHub::default(),
                 share: None,
                 ending: None,
+                abortable: None,
             },
         );
         run.end(RunEnd::Settled);
@@ -2489,6 +2521,7 @@ mod tests {
                 events: EventHub::default(),
                 share: Some(in_flight.admit(10).expect("under the caps")),
                 ending: None,
+                abortable: None,
             },
         ));
         let _reply = receiver.await.expect("the call replied");
@@ -2755,5 +2788,89 @@ mod tests {
             serde_json::from_str(&encode_reply(&json!(7), Ok(result.as_ref()), None))
                 .expect("reply");
         assert_eq!(reply, json!({"id": 7, "result": {"value": 3}}));
+    }
+}
+
+#[cfg(test)]
+mod review_abort_priority {
+    use super::*;
+    use crate::deadline::Deadline;
+    use crate::discovery::Discovery;
+    use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+    use crate::page::TabInputs;
+    use crate::run::PageId;
+    use tokio::runtime::Handle;
+    use tokio_util::task::TaskTracker;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_run_end_wins_over_an_abort_before_the_handler_starts() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let run = RunScope::new(
+            Deadline::new(Duration::from_secs(30), CancellationToken::new()),
+            tasks.clone(),
+        );
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            Discovery::default(),
+            tasks,
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("opening the fake tab: {error:?}"));
+        let (page, scope) = tabs
+            .resolve(&format!("frame@{PAGE}"))
+            .unwrap_or_else(|| panic!("the fake tab must have a main frame"));
+        let entry = Arc::new(CallEntry::new(CallStart {
+            call_id: 1,
+            guid: format!("frame@{PAGE}"),
+            method: "click".to_string(),
+            title: Some("Click"),
+            params: json!({"selector":"#nothing"}),
+            location: None,
+            input: true,
+        }));
+        let trace = Trace::default();
+        trace.push(Arc::clone(&entry));
+        let progress = Progress::new(Arc::clone(&entry), 0.0, run.clone(), page.closed.clone());
+        let route = route(
+            ObjectKind::Frame,
+            "click",
+            Some(json!({"selector":"#nothing"})),
+        )
+        .route
+        .unwrap_or_else(|error| panic!("decoding the click: {error:?}"));
+        let (reply, _receiver) = oneshot::channel();
+        let call = serve_call(
+            tabs,
+            Arc::default(),
+            Some((page, scope)),
+            route,
+            progress,
+            CallReply {
+                entry: Arc::clone(&entry),
+                trace: trace.clone(),
+                id: json!(1),
+                reply,
+                events: EventHub::default(),
+                share: None,
+                ending: None,
+                abortable: None,
+            },
+        );
+        // Neither stop can race scheduling: the handler future has never been polled.
+        entry.abort("stop call".to_string());
+        run.end(RunEnd::Settled);
+        call.await;
+        let (records, _) = trace.take(RunEnd::Settled);
+        assert_eq!(
+            records[0].result,
+            CallResult::Unfinished {
+                reason: RunEnd::Settled
+            },
+            "run end has priority over the signal abort at admission"
+        );
     }
 }

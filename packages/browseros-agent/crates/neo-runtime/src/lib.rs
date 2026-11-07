@@ -49,6 +49,7 @@ extern crate self as neo_runtime;
 )]
 mod fake_browser;
 
+mod abort;
 mod aria_yaml;
 mod bridge;
 mod check;

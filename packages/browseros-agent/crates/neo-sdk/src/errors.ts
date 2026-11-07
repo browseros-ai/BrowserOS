@@ -1,7 +1,7 @@
 /**
  * Playwright's client error classes (`client/errors.ts` at 26137face), with the same names and
- * `name` behaviour. Left out: `AbortError` (Neo takes no `signal`) and the serialized-value
- * branch of `parseError` (Neo's server only ever replies with an Error).
+ * `name` behaviour. Left out: the serialized-value branch of `parseError` (Neo's server only
+ * ever replies with an Error).
  *
  * The one surprise is Playwright's own: `TargetClosedError` never sets `name`, so a page closed
  * mid-call surfaces as `e.name === 'Error'`. Scripts compare `e.name`, never the class, which
@@ -16,6 +16,19 @@ export class TimeoutError extends PlaywrightError {
   constructor(message: string) {
     super(message)
     this.name = 'TimeoutError'
+  }
+}
+
+/**
+ * What a call whose `signal` aborted rejects with: `connection.ts` throws it before sending a
+ * call whose signal already aborted, and rebuilds an aborted call's reply as it, both with the
+ * signal's `reason` as `cause`. Scripts read `e.name === 'AbortError'`; Playwright's public
+ * `errors` (`client/playwright.ts`) does not name the class either.
+ */
+export class AbortError extends PlaywrightError {
+  constructor(message = 'The operation was aborted', options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'AbortError'
   }
 }
 
@@ -52,6 +65,7 @@ export function parseError(error: {
   if (error.name === 'TimeoutError') e = new TimeoutError(error.message)
   else if (error.name === 'TargetClosedError')
     e = new TargetClosedError(error.message)
+  else if (error.name === 'AbortError') e = new AbortError(error.message)
   else
     e = Object.assign(new PlaywrightError(error.message), {
       name: error.name,

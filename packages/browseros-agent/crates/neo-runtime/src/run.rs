@@ -233,8 +233,8 @@ pub struct CallLocation {
 pub enum CallResult {
     Ok,
     /// The Playwright error the call replied with: its wire `name` (`TimeoutError`,
-    /// `TargetClosedError`, `Error`) and message, without the client's `apiName` prefix or the
-    /// call log.
+    /// `TargetClosedError`, `AbortError`, `Error`) and message, without the client's `apiName`
+    /// prefix or the call log.
     Error {
         name: String,
         message: String,

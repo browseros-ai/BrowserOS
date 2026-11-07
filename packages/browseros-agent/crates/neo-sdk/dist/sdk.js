@@ -48,6 +48,13 @@ class TimeoutError extends PlaywrightError {
   }
 }
 
+class AbortError extends PlaywrightError {
+  constructor(message = "The operation was aborted", options) {
+    super(message, options);
+    this.name = "AbortError";
+  }
+}
+
 class TargetClosedError extends PlaywrightError {
   constructor(cause) {
     super(cause || "Target page, context or browser has been closed");
@@ -65,6 +72,8 @@ function parseError(error) {
     e = new TimeoutError(error.message);
   else if (error.name === "TargetClosedError")
     e = new TargetClosedError(error.message);
+  else if (error.name === "AbortError")
+    e = new AbortError(error.message);
   else
     e = Object.assign(new PlaywrightError(error.message), {
       name: error.name
@@ -97,6 +106,9 @@ async function call(message) {
   const { reply, events } = await __neo_runtime.callWithEvents(message);
   deliverEvents?.(events);
   return reply;
+}
+function abort(id, reason) {
+  __neo_runtime.abort(id, reason);
 }
 function subscribe(guid, event, enabled) {
   __neo_runtime.subscribe(JSON.stringify({ guid, event, enabled }));
@@ -1255,25 +1267,43 @@ class Connection {
   async sendHandle(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout) ?? {};
   }
-  async#send(apiName, guid, method, params, timeout) {
+  async#send(apiName, guid, method, params, options) {
+    const { timeout, signal } = typeof options === "number" ? { timeout: options, signal: undefined } : options;
+    if (this.#closed)
+      throw closedError(apiName);
+    if (signal?.aborted)
+      throw prefixed(apiName, new AbortError(undefined, { cause: signal.reason }));
     if (typeof timeout !== "number")
       throw new Error(`timeout: expected float, got ${timeout === null ? "object" : typeof timeout}`);
     const metadata = {
       location: captureLocation(this.#lineOffset),
       timeout
     };
-    if (this.#closed)
-      throw closedError(apiName);
     const closedBefore = this._closedFor(guid);
-    const message = { id: this.#nextId++, guid, method, params, metadata };
-    const text = await new Promise((resolve, reject) => {
+    const id = this.#nextId++;
+    const message = { id, guid, method, params, metadata };
+    const pending = new Promise((resolve, reject) => {
       const abandon = (reason) => reject(closedError(apiName, reason));
       this.#inFlight.add(abandon);
       call(JSON.stringify(message)).then(resolve, reject).finally(() => this.#inFlight.delete(abandon));
     });
+    let listener;
+    try {
+      listener = signal ? listenForAbort(apiName, id, signal) : undefined;
+    } catch (error) {
+      pending.catch(() => {});
+      throw error;
+    }
+    let text;
+    try {
+      text = await pending;
+    } finally {
+      if (signal && listener)
+        signal.removeEventListener("abort", listener);
+    }
     const reply = JSON.parse(text);
     if (reply.error) {
-      const error = rebuildError(apiName, reply.error.error, reply.log);
+      const error = rebuildError(apiName, reply.error.error, reply.log, signal);
       const reason = isTargetClosedError(error) && !closedBefore ? this._closeReasonFor(guid) : undefined;
       if (reason)
         error.message = `${apiName}: ${reason}${formatCallLog(reply.log)}`;
@@ -1291,6 +1321,23 @@ class Connection {
 function closedError(apiName, reason) {
   const error = targetClosedError(reason);
   error.message = `${apiName}: ${error.message}`;
+  return error;
+}
+function listenForAbort(apiName, id, signal) {
+  const listener = () => {
+    const reason = signal.reason instanceof Error ? signal.reason.message : String(signal.reason);
+    abort(id, reason);
+  };
+  try {
+    signal.addEventListener("abort", listener, { once: true });
+  } catch (error) {
+    throw prefixed(apiName, error);
+  }
+  return listener;
+}
+function prefixed(apiName, error) {
+  if (error instanceof Error)
+    error.message = `${apiName}: ${error.message}`;
   return error;
 }
 function captureLocation(lineOffset) {
@@ -1313,8 +1360,10 @@ function agentLocation(stack, lineOffset) {
   }
   return { file: SCRIPT_FILE };
 }
-function rebuildError(apiName, error, log) {
+function rebuildError(apiName, error, log, signal) {
   const rebuilt = parseError(error);
+  if (signal?.aborted && rebuilt instanceof AbortError)
+    rebuilt.cause = signal.reason;
   rebuilt.log = log || [];
   rebuilt.message = `${apiName}: ${rebuilt.message}${formatCallLog(log)}`;
   return rebuilt;
@@ -1407,10 +1456,6 @@ function handleFrom(connection, created) {
   return new JSHandle(connection, created.guid, created.initializer);
 }
 function evaluateParams(apiName, pageFunction, arg, options) {
-  const signal = options?.signal;
-  if (signal !== undefined && signal !== null) {
-    throw new Error(`${apiName}: Neo does not support signal yet`);
-  }
   if (options?.exposeFunctions) {
     throw new Error(`${apiName}: Neo does not support exposeFunctions yet`);
   }
@@ -4790,191 +4835,6 @@ function convertSelectOptionValues(values) {
   return { options };
 }
 
-// src/waiter.ts
-function refuseSignal(options) {
-  if (options.signal !== undefined && options.signal !== null)
-    throw new Error('Neo does not support the "signal" option yet');
-}
-async function wrapApiCall(apiName, body) {
-  try {
-    return await body();
-  } catch (e) {
-    if (e instanceof Error)
-      e.message = `${apiName}: ${e.message}`;
-    throw e;
-  }
-}
-
-class Waiter {
-  _dispose = [];
-  _failures = [];
-  _immediateError;
-  _logs = [];
-  static createForEvent() {
-    return new Waiter;
-  }
-  async waitForEvent(emitter, event, predicate) {
-    const { promise, dispose } = waitForEvent(emitter, event, predicate);
-    return await this.waitForPromise(promise, dispose);
-  }
-  rejectOnEvent(emitter, event, error, predicate) {
-    const { promise, dispose } = waitForEvent(emitter, event, predicate);
-    this._rejectOn(promise.then(() => {
-      throw typeof error === "function" ? error() : error;
-    }), dispose);
-  }
-  rejectOnTimeout(timeout, timeoutMessage) {
-    if (timeout) {
-      const { promise, dispose } = waitForTimeout(timeout);
-      this._rejectOn(promise.then(() => {
-        throw new TimeoutError(timeoutMessage);
-      }), dispose);
-    }
-  }
-  rejectImmediately(error) {
-    this._immediateError = error;
-  }
-  throwIfImmediatelyRejected() {
-    if (this._immediateError)
-      throw this._immediateError;
-  }
-  dispose() {
-    for (const dispose of this._dispose)
-      dispose();
-  }
-  async waitForPromise(promise, dispose) {
-    try {
-      if (this._immediateError)
-        throw this._immediateError;
-      const result = await Promise.race([promise, ...this._failures]);
-      if (dispose)
-        dispose();
-      return result;
-    } catch (e) {
-      if (dispose)
-        dispose();
-      this.dispose();
-      if (e instanceof Error)
-        rewriteErrorMessage(e, e.message + formatLogRecording(this._logs));
-      throw e;
-    }
-  }
-  log(s) {
-    this._logs.push(s);
-  }
-  _rejectOn(promise, dispose) {
-    this._failures.push(promise);
-    if (dispose)
-      this._dispose.push(dispose);
-  }
-}
-function waitForEvent(emitter, event, predicate) {
-  let listener = () => {};
-  const promise = new Promise((resolve, reject) => {
-    listener = async (eventArg) => {
-      try {
-        if (predicate && !await predicate(eventArg))
-          return;
-        emitter.removeListener(event, listener);
-        resolve(eventArg);
-      } catch (e) {
-        emitter.removeListener(event, listener);
-        reject(e);
-      }
-    };
-    emitter.addListener(event, listener);
-  });
-  const dispose = () => emitter.removeListener(event, listener);
-  return { promise, dispose };
-}
-function waitForTimeout(timeout) {
-  let timeoutId;
-  const promise = new Promise((resolve) => {
-    timeoutId = setTimeout(resolve, timeout);
-  });
-  const dispose = () => clearTimeout(timeoutId);
-  return { promise, dispose };
-}
-function formatLogRecording(log) {
-  if (!log.length)
-    return "";
-  const header = " logs ";
-  const headerLength = 60;
-  const leftLength = (headerLength - header.length) / 2;
-  const rightLength = headerLength - header.length - leftLength;
-  return `
-${"=".repeat(leftLength)}${header}${"=".repeat(rightLength)}
-${log.join(`
-`)}
-${"=".repeat(headerLength)}`;
-}
-function rewriteErrorMessage(e, newMessage) {
-  const lines = (e.stack?.split(`
-`) || []).filter((l) => l.startsWith("    at "));
-  e.message = newMessage;
-  const errorTitle = `${e.name}: ${e.message}`;
-  if (lines.length)
-    e.stack = `${errorTitle}
-${lines.join(`
-`)}`;
-  return e;
-}
-
-// src/timeout-settings.ts
-var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
-function refuseSignalFor(options, apiName) {
-  try {
-    refuseSignal(options);
-  } catch (error) {
-    if (apiName !== null && error instanceof Error)
-      error.message = `${apiName}: ${error.message}`;
-    throw error;
-  }
-}
-
-class TimeoutSettings {
-  #parent;
-  #defaultTimeout;
-  #defaultNavigationTimeout;
-  constructor(parent) {
-    this.#parent = parent;
-  }
-  setDefaultTimeout(timeout) {
-    this.#defaultTimeout = timeout;
-  }
-  setDefaultNavigationTimeout(timeout) {
-    this.#defaultNavigationTimeout = timeout;
-  }
-  timeout(options, apiName) {
-    refuseSignalFor(options, apiName);
-    return this.#timeout(options);
-  }
-  navigationTimeout(options, apiName) {
-    refuseSignalFor(options, apiName);
-    return this.#navigationTimeout(options);
-  }
-  #timeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.#timeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
-  }
-  #navigationTimeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultNavigationTimeout !== undefined)
-      return this.#defaultNavigationTimeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.#navigationTimeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
-  }
-}
-
 // src/url.ts
 var READ_ONLY = "Neo's URL is read-only: build a new URL string instead";
 
@@ -5236,12 +5096,12 @@ class Frame {
   }
   async _waitForNavigation(apiName, options) {
     const waitUntil = verifyWaitState(apiName, "waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
-    const timeout = this._page._timeoutSettings.navigationTimeout(options, apiName);
-    const result = typeof options.url === "function" ? await this._navigationMatching(apiName, options.url, waitUntil, timeout, true) : await this._connection.sendNeo(apiName, this._guid, "neo:waitForNavigation", { url: serializeUrlMatch(apiName, options.url), waitUntil }, timeout);
+    const timeoutOptions = this._page._timeoutSettings.navigationTimeout(options, apiName);
+    const result = typeof options.url === "function" ? await this._navigationMatching(apiName, options.url, waitUntil, timeoutOptions, true) : await this._connection.sendNeo(apiName, this._guid, "neo:waitForNavigation", { url: serializeUrlMatch(apiName, options.url), waitUntil }, timeoutOptions);
     const guid = result?.response?.guid;
     return guid ? responseFor(this._connection, guid, this) : null;
   }
-  async _navigationMatching(apiName, predicate, waitUntil, timeout, respond) {
+  async _navigationMatching(apiName, predicate, waitUntil, { timeout, signal }, respond) {
     const deadline = timeout ? Date.now() + timeout : 0;
     const left = () => {
       if (!deadline)
@@ -5254,12 +5114,12 @@ class Frame {
     let cursor;
     let finished = false;
     const finish = async (id, index) => {
-      const result = await this.#finishNavigation(apiName, id, index, waitUntil, left());
+      const result = await this.#finishNavigation(apiName, id, index, waitUntil, { timeout: left(), signal });
       finished = true;
       return result;
     };
     const next = () => {
-      const call2 = this._connection.sendNeo(apiName, this._guid, "neo:nextNavigation", cursor === undefined ? { response: respond } : { cursor, response: respond }, left());
+      const call2 = this._connection.sendNeo(apiName, this._guid, "neo:nextNavigation", cursor === undefined ? { response: respond } : { cursor, response: respond }, { timeout: left(), signal });
       call2.catch(() => {});
       return call2;
     };
@@ -5291,11 +5151,11 @@ class Frame {
           try {
             verdict = predicate(parsed);
           } catch (error) {
-            throw prefixed(apiName, error);
+            throw prefixed2(apiName, error);
           }
           if (isPromiseLike(verdict)) {
             const answer = Promise.resolve(verdict).then((value) => ({ index, accepted: !!value }), (error) => {
-              throw prefixed(apiName, error);
+              throw prefixed2(apiName, error);
             });
             answer.catch(() => {});
             verdicts.set(index, answer);
@@ -5449,8 +5309,6 @@ class Frame {
     return await this._querySelector("frame.$", selector, options);
   }
   async _querySelector(apiName, selector, options) {
-    if (options?.signal !== undefined && options.signal !== null)
-      throw new Error(`${apiName}: Neo does not support signal yet`);
     const params = {
       selector,
       ...pickParams(["strict"], options ?? {})
@@ -5594,7 +5452,6 @@ class Frame {
     return await this._isVisible("frame.isVisible", selector, options);
   }
   async _isVisible(apiName, selector, options) {
-    refuseSignalFor(options ?? {}, apiName);
     const result = await this._connection.send(apiName, this._guid, "isVisible", pickParams(FRAME_IS_VISIBLE_KEYS, {
       selector,
       ...options
@@ -5607,7 +5464,6 @@ class Frame {
     return await this._isHidden("frame.isHidden", selector, options);
   }
   async _isHidden(apiName, selector, options) {
-    refuseSignalFor(options ?? {}, apiName);
     const result = await this._connection.send(apiName, this._guid, "isHidden", pickParams(FRAME_IS_HIDDEN_KEYS, {
       selector,
       ...options
@@ -5788,7 +5644,7 @@ class Frame {
 function navigationTimeout(apiName, timeout) {
   return new TimeoutError(`${apiName}: Timeout ${timeout}ms exceeded.`);
 }
-function prefixed(apiName, error) {
+function prefixed2(apiName, error) {
   if (error instanceof Error)
     error.message = `${apiName}: ${error.message}`;
   return error;
@@ -5878,6 +5734,187 @@ class Touchscreen {
       y
     }));
   }
+}
+
+// src/timeout-settings.ts
+var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
+
+class TimeoutSettings {
+  #parent;
+  #defaultTimeout;
+  #defaultNavigationTimeout;
+  constructor(parent) {
+    this.#parent = parent;
+  }
+  setDefaultTimeout(timeout) {
+    this.#defaultTimeout = timeout;
+  }
+  setDefaultNavigationTimeout(timeout) {
+    this.#defaultNavigationTimeout = timeout;
+  }
+  timeout(options, _apiName) {
+    return { signal: options.signal, timeout: this.#timeout(options) };
+  }
+  navigationTimeout(options, _apiName) {
+    return { signal: options.signal, timeout: this.#navigationTimeout(options) };
+  }
+  #timeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#timeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+  #navigationTimeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultNavigationTimeout !== undefined)
+      return this.#defaultNavigationTimeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#navigationTimeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+}
+
+// src/waiter.ts
+async function wrapApiCall(apiName, body) {
+  try {
+    return await body();
+  } catch (e) {
+    if (e instanceof Error)
+      e.message = `${apiName}: ${e.message}`;
+    throw e;
+  }
+}
+
+class Waiter {
+  _dispose = [];
+  _failures = [];
+  _immediateError;
+  _logs = [];
+  static createForEvent() {
+    return new Waiter;
+  }
+  async waitForEvent(emitter, event, predicate) {
+    const { promise, dispose } = waitForEvent(emitter, event, predicate);
+    return await this.waitForPromise(promise, dispose);
+  }
+  rejectOnEvent(emitter, event, error, predicate) {
+    const { promise, dispose } = waitForEvent(emitter, event, predicate);
+    this._rejectOn(promise.then(() => {
+      throw typeof error === "function" ? error() : error;
+    }), dispose);
+  }
+  rejectOnTimeout({ timeout, signal }, timeoutMessage) {
+    if (signal) {
+      if (signal.aborted)
+        return this.rejectImmediately(new AbortError(undefined, { cause: signal.reason }));
+      let rejectPromise = () => {};
+      const promise = new Promise((_, reject) => {
+        rejectPromise = reject;
+      });
+      const listener = () => rejectPromise(new AbortError(undefined, { cause: signal.reason }));
+      signal.addEventListener("abort", listener, { once: true });
+      this._rejectOn(promise, () => signal.removeEventListener("abort", listener));
+    }
+    if (timeout) {
+      const { promise, dispose } = waitForTimeout(timeout);
+      this._rejectOn(promise.then(() => {
+        throw new TimeoutError(timeoutMessage);
+      }), dispose);
+    }
+  }
+  rejectImmediately(error) {
+    this._immediateError = error;
+  }
+  throwIfImmediatelyRejected() {
+    if (this._immediateError)
+      throw this._immediateError;
+  }
+  dispose() {
+    for (const dispose of this._dispose)
+      dispose();
+  }
+  async waitForPromise(promise, dispose) {
+    try {
+      if (this._immediateError)
+        throw this._immediateError;
+      const result = await Promise.race([promise, ...this._failures]);
+      if (dispose)
+        dispose();
+      return result;
+    } catch (e) {
+      if (dispose)
+        dispose();
+      this.dispose();
+      if (e instanceof Error)
+        rewriteErrorMessage(e, e.message + formatLogRecording(this._logs));
+      throw e;
+    }
+  }
+  log(s) {
+    this._logs.push(s);
+  }
+  _rejectOn(promise, dispose) {
+    this._failures.push(promise);
+    if (dispose)
+      this._dispose.push(dispose);
+  }
+}
+function waitForEvent(emitter, event, predicate) {
+  let listener = () => {};
+  const promise = new Promise((resolve, reject) => {
+    listener = async (eventArg) => {
+      try {
+        if (predicate && !await predicate(eventArg))
+          return;
+        emitter.removeListener(event, listener);
+        resolve(eventArg);
+      } catch (e) {
+        emitter.removeListener(event, listener);
+        reject(e);
+      }
+    };
+    emitter.addListener(event, listener);
+  });
+  const dispose = () => emitter.removeListener(event, listener);
+  return { promise, dispose };
+}
+function waitForTimeout(timeout) {
+  let timeoutId;
+  const promise = new Promise((resolve) => {
+    timeoutId = setTimeout(resolve, timeout);
+  });
+  const dispose = () => clearTimeout(timeoutId);
+  return { promise, dispose };
+}
+function formatLogRecording(log) {
+  if (!log.length)
+    return "";
+  const header = " logs ";
+  const headerLength = 60;
+  const leftLength = (headerLength - header.length) / 2;
+  const rightLength = headerLength - header.length - leftLength;
+  return `
+${"=".repeat(leftLength)}${header}${"=".repeat(rightLength)}
+${log.join(`
+`)}
+${"=".repeat(headerLength)}`;
+}
+function rewriteErrorMessage(e, newMessage) {
+  const lines = (e.stack?.split(`
+`) || []).filter((l) => l.startsWith("    at "));
+  e.message = newMessage;
+  const errorTitle = `${e.name}: ${e.message}`;
+  if (lines.length)
+    e.stack = `${errorTitle}
+${lines.join(`
+`)}`;
+  return e;
 }
 
 // src/page.ts
@@ -6036,13 +6073,13 @@ class Page extends ChannelOwner {
   }
   async _waitForEvent(event, optionsOrPredicate, logLine) {
     const options = typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate;
-    const timeout = this._timeoutSettings.timeout(options, null);
+    const timeoutOptions = this._timeoutSettings.timeout(options, null);
     this._refuseUnserved(event);
     const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : optionsOrPredicate.predicate;
     const waiter = Waiter.createForEvent();
     if (logLine)
       waiter.log(logLine);
-    waiter.rejectOnTimeout(timeout, `Timeout ${timeout}ms exceeded while waiting for event "${event}"`);
+    waiter.rejectOnTimeout(timeoutOptions, `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`);
     if (event !== "crash")
       waiter.rejectOnEvent(this, "crash", new Error("Page crashed"));
     if (event !== "close")
@@ -6442,11 +6479,11 @@ class BrowserContext extends ChannelOwner {
   async waitForEvent(event, optionsOrPredicate = {}) {
     return await wrapApiCall("browserContext.waitForEvent", async () => {
       const options = typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate;
-      const timeout = this._timeoutSettings.timeout(options, null);
+      const timeoutOptions = this._timeoutSettings.timeout(options, null);
       this._refuseUnserved(event);
       const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : optionsOrPredicate.predicate;
       const waiter = Waiter.createForEvent();
-      waiter.rejectOnTimeout(timeout, `Timeout ${timeout}ms exceeded while waiting for event "${event}"`);
+      waiter.rejectOnTimeout(timeoutOptions, `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`);
       if (event !== "close")
         waiter.rejectOnEvent(this, "close", () => targetClosedError(this.#closeReason));
       const result = await waiter.waitForEvent(this, event, predicate);

@@ -403,9 +403,8 @@ export class Page extends ChannelOwner {
   ): Promise<unknown> {
     const options =
       typeof optionsOrPredicate === 'function' ? {} : optionsOrPredicate
-    // Refuses a signal first (TimeoutSettings), inside its callers' `wrapApiCall`, which
-    // prefixes the api name.
-    const timeout = this._timeoutSettings.timeout(options, null)
+    // Inside its callers' `wrapApiCall`, which prefixes the api name.
+    const timeoutOptions = this._timeoutSettings.timeout(options, null)
     this._refuseUnserved(event)
     const predicate =
       typeof optionsOrPredicate === 'function'
@@ -414,8 +413,8 @@ export class Page extends ChannelOwner {
     const waiter = Waiter.createForEvent()
     if (logLine) waiter.log(logLine)
     waiter.rejectOnTimeout(
-      timeout,
-      `Timeout ${timeout}ms exceeded while waiting for event "${event}"`,
+      timeoutOptions,
+      `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`,
     )
     if (event !== 'crash')
       waiter.rejectOnEvent(this, 'crash', new Error('Page crashed'))
