@@ -210,6 +210,16 @@ pub(crate) trait Tab: Send + Sync {
     /// Resolves when no navigation is pending, with the URL it committed to, if any.
     fn navigation_settled(&self) -> impl Future<Output = Result<Option<String>, PageError>> + Send;
 
+    /// Playwright's `performActionPreChecks` locator-handler checkpoint (`page.ts`
+    /// `_performLocatorHandlersCheckpoint`), between its two navigation checks and before the
+    /// attempt takes the input turn. A tab without handlers has none to run.
+    fn locator_handlers_checkpoint(
+        &self,
+        _progress: &Progress,
+    ) -> impl Future<Output = Result<(), Stop>> + Send {
+        async { Ok(()) }
+    }
+
     /// Starts recording navigation requests. Called before `press`, so none of the input's own
     /// requests can be missed.
     fn watch_navigations(&self) -> Self::Navigations;
@@ -353,6 +363,10 @@ pub(crate) enum PointerInput {
     Click(MouseClick),
     /// Playwright: `server/dom.ts` `ElementHandle._tap`: `perform: (progress, point) => this._page.touchscreen.tap(progress, point.x, point.y),`
     Tap,
+    /// Playwright: `server/frames.ts` `Frame.dragAndDrop`: `await this._page.mouse.down(progress);`
+    MoveAndDown,
+    /// Playwright: `server/frames.ts` `Frame.dragAndDrop`: `await this._page.mouse.up(progress);`
+    MoveAndUp,
 }
 
 /// Playwright's `PointerAction` (`dom.ts`): the action loop B performs once the element is
@@ -366,6 +380,11 @@ pub(crate) enum PointerAction {
     Dblclick(MouseClick),
     Hover,
     Tap,
+    /// `dragAndDrop`'s first half, on the source: a move, then a left press.
+    MoveAndDown,
+    /// `dragAndDrop`'s second half, on the target: a move in `steps`, then the release, which
+    /// drops when the press started a drag.
+    MoveAndUp,
 }
 
 impl PointerAction {
@@ -377,13 +396,15 @@ impl PointerAction {
             Self::Dblclick(_) => "dblclick",
             Self::Hover => "hover",
             Self::Tap => "tap",
+            Self::MoveAndDown => "move and down",
+            Self::MoveAndUp => "move and up",
         }
     }
 
     /// Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `const elementStates: ElementState[] = action.waitForEnabled ? ['visible', 'enabled', 'stable', 'non-inert'] : ['visible', 'stable'];`
     fn states(self) -> &'static [ElementState] {
         match self {
-            Self::Hover => &HOVER_STATES,
+            Self::Hover | Self::MoveAndDown | Self::MoveAndUp => &HOVER_STATES,
             Self::Click(_) | Self::Dblclick(_) | Self::Tap => &CLICK_STATES,
         }
     }
@@ -391,7 +412,7 @@ impl PointerAction {
     /// Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `action.waitForEnabled ? 'visible, enabled and stable' : 'visible and stable'`
     fn states_text(self) -> &'static str {
         match self {
-            Self::Hover => "visible and stable",
+            Self::Hover | Self::MoveAndDown | Self::MoveAndUp => "visible and stable",
             Self::Click(_) | Self::Dblclick(_) | Self::Tap => "visible, enabled and stable",
         }
     }
@@ -401,7 +422,8 @@ impl PointerAction {
         match self {
             Self::Hover => HitTargetAction::Hover,
             Self::Tap => HitTargetAction::Tap,
-            Self::Click(_) | Self::Dblclick(_) => HitTargetAction::Mouse,
+            Self::MoveAndUp => HitTargetAction::Drag,
+            Self::Click(_) | Self::Dblclick(_) | Self::MoveAndDown => HitTargetAction::Mouse,
         }
     }
 
@@ -410,6 +432,8 @@ impl PointerAction {
             Self::Click(click) | Self::Dblclick(click) => PointerInput::Click(click),
             Self::Hover => PointerInput::Move,
             Self::Tap => PointerInput::Tap,
+            Self::MoveAndDown => PointerInput::MoveAndDown,
+            Self::MoveAndUp => PointerInput::MoveAndUp,
         }
     }
 }
@@ -681,7 +705,7 @@ pub(crate) fn click_delay(delay: Option<f64>) -> Option<Duration> {
 
 /// The wire's `Point` and the page call's are two generated types of one shape.
 /// Neo: a copy between two generated types, which no script can see.
-fn point(position: &WirePoint) -> Point {
+pub(crate) fn point(position: &WirePoint) -> Point {
     Point {
         x: position.x,
         y: position.y,
@@ -1067,7 +1091,13 @@ async fn act<T: Tab>(
         }
         (None, armed)
     } else {
-        let Ok(ticket) = delivery.begin() else {
+        // A drag's second half writes after its first: its ticket keeps the cell `Unknown`.
+        let ticket = if options.action == PointerAction::MoveAndUp {
+            delivery.begin_more()
+        } else {
+            delivery.begin()
+        };
+        let Ok(ticket) = ticket else {
             return Err(PlaywrightError::error(format!(
                 "neo-runtime: a {name} tried to write its input again"
             ))
@@ -1166,7 +1196,17 @@ fn plan_pointer_input<D: Devices>(
     let to = (point.x, point.y);
     match options.action.input() {
         PointerInput::Move => {
-            input_devices::plan_move(&mut plan, &mut simulated, to, options.steps);
+            input_devices::plan_free_move(&mut plan, &mut simulated, to, options.steps);
+        }
+        PointerInput::MoveAndDown => {
+            // Playwright: `server/frames.ts` `Frame.dragAndDrop`: `await this._page.mouse.move(progress, point.x, point.y);`
+            input_devices::plan_free_move(&mut plan, &mut simulated, to, 1);
+            input_devices::plan_down(&mut plan, &mut simulated, MouseButton::Left, 1, &owner);
+        }
+        PointerInput::MoveAndUp => {
+            // Playwright: `server/frames.ts` `Frame.dragAndDrop`: `await this._page.mouse.move(progress, point.x, point.y, { steps: options.steps });`
+            input_devices::plan_free_move(&mut plan, &mut simulated, to, options.steps);
+            input_devices::plan_up(&mut plan, &mut simulated, MouseButton::Left, 1, None);
         }
         PointerInput::Click(click) => {
             input_devices::plan_click(&mut plan, &mut simulated, to, &click, options.steps, &owner);
@@ -1192,13 +1232,23 @@ fn platform_error(error: PageError) -> CallError {
     }
 }
 
-/// `performActionPreChecks`' navigation half (`page.ts` `_performWaitForNavigationCheck`):
-/// when a requested main-frame navigation has not settled, log, wait for it, and log where it
-/// went.
+/// Playwright's `performActionPreChecks` (`page.ts`): waits out a pending main-frame
+/// navigation, runs the locator handlers' checkpoint, then waits once more, in case a handler
+/// navigated. Every caller runs it before the attempt takes the input turn, so a handler's own
+/// actions can take it.
 pub(crate) async fn wait_out_pending_navigation<T: Tab>(
     tab: &T,
     progress: &Progress,
 ) -> Result<(), Stop> {
+    navigation_check(tab, progress).await?;
+    tab.locator_handlers_checkpoint(progress).await?;
+    navigation_check(tab, progress).await
+}
+
+/// `performActionPreChecks`' navigation half (`page.ts` `_performWaitForNavigationCheck`):
+/// when a requested main-frame navigation has not settled, log, wait for it, and log where it
+/// went.
+async fn navigation_check<T: Tab>(tab: &T, progress: &Progress) -> Result<(), Stop> {
     let Some(url) = tab.pending_navigation() else {
         return Ok(());
     };

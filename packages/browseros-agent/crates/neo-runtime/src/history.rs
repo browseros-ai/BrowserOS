@@ -87,25 +87,23 @@ pub(crate) struct HistoryOptions {
 
 /// Playwright: `server/frames.ts` `Frame.waitForNavigation`: `const waitUntil = verifyLifecycle('waitUntil', options.waitUntil === undefined ? 'load' : options.waitUntil);`
 impl HistoryOptions {
-    pub(crate) fn reload(params: &PageReloadParams) -> Result<Self, PlaywrightError> {
+    pub(crate) fn reload(params: &PageReloadParams) -> Self {
         Self::new(HistoryStep::Reload, params.wait_until)
     }
 
-    pub(crate) fn back(params: &PageGoBackParams) -> Result<Self, PlaywrightError> {
+    pub(crate) fn back(params: &PageGoBackParams) -> Self {
         Self::new(HistoryStep::Back, params.wait_until)
     }
 
-    pub(crate) fn forward(params: &PageGoForwardParams) -> Result<Self, PlaywrightError> {
+    pub(crate) fn forward(params: &PageGoForwardParams) -> Self {
         Self::new(HistoryStep::Forward, params.wait_until)
     }
 
-    // Deviation: `server/page.ts` `Page.reload` Neo refuses `waitUntil: 'networkidle'`, as its
-    // goto does: it records no subresource requests to tell network idleness by.
-    fn new(step: HistoryStep, wait_until: Option<LifecycleEvent>) -> Result<Self, PlaywrightError> {
-        Ok(Self {
+    fn new(step: HistoryStep, wait_until: Option<LifecycleEvent>) -> Self {
+        Self {
             step,
-            wait_until: waits::supported_lifecycle(wait_until, "waitUntil")?,
-        })
+            wait_until: wait_until.unwrap_or(LifecycleEvent::Load),
+        }
     }
 }
 
@@ -190,7 +188,7 @@ impl WaitForNavigationOptions {
         params: &NeoWaitForNavigationParams,
     ) -> Result<Self, PlaywrightError> {
         Ok(Self {
-            wait_until: waits::supported_lifecycle(params.wait_until, "waitUntil")?,
+            wait_until: params.wait_until.unwrap_or(LifecycleEvent::Load),
             matcher: UrlMatcher::new(&params.url)?,
         })
     }
@@ -206,7 +204,22 @@ pub(crate) async fn wait_for_navigation(
     options: &WaitForNavigationOptions,
     progress: &Progress,
 ) -> Result<Option<ResponseChannel>, CallError> {
-    let mut events = tab.observe().map_err(navigate::page_error)?;
+    let events = tab.observe().map_err(navigate::page_error)?;
+    wait_for_navigation_on(tab, events, options, progress).await
+}
+
+/// [`wait_for_navigation`] over `events`, a child frame's navigations (`waits::FrameObservation`)
+/// or the main frame's: subscribed by the caller before anything here runs. A child frame's
+/// `Response` is the network log's answer for its document, as the main frame's: Neo records
+/// every frame's requests (`network.rs`).
+///
+/// Playwright: `server/frames.ts` `Frame.waitForNavigation`: `if (!this._firedLifecycleEvents.has(waitUntil))`
+pub(crate) async fn wait_for_navigation_on(
+    tab: &impl NavigationTab,
+    mut events: impl Observation,
+    options: &WaitForNavigationOptions,
+    progress: &Progress,
+) -> Result<Option<ResponseChannel>, CallError> {
     progress
         .race(tab.prepare())
         .await?
@@ -292,12 +305,12 @@ pub(crate) struct FinishNavigationOptions {
 
 /// Neo: decodes Neo's own `neo:finishNavigation`; Playwright has no such command.
 impl FinishNavigationOptions {
-    pub(crate) fn from_params(params: &NeoFinishNavigationParams) -> Result<Self, PlaywrightError> {
-        Ok(Self {
+    pub(crate) fn from_params(params: &NeoFinishNavigationParams) -> Self {
+        Self {
             cursor: params.cursor,
             index: params.index,
-            wait_until: waits::supported_lifecycle(params.wait_until, "waitUntil")?,
-        })
+            wait_until: params.wait_until.unwrap_or(LifecycleEvent::Load),
+        }
     }
 }
 
@@ -818,6 +831,7 @@ mod tests {
                     load: true,
                     dom_content_loaded_count: 1,
                     load_count: 1,
+                    ..Lifecycle::default()
                 },
                 ..NavigationState::default()
             });
@@ -1334,11 +1348,10 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_networkidle_is_refused_before_any_step() {
-        let error = HistoryOptions::back(&PageGoBackParams {
+    fn tests_that_networkidle_is_a_wait_like_the_others() {
+        let options = HistoryOptions::back(&PageGoBackParams {
             wait_until: Some(LifecycleEvent::Networkidle),
-        })
-        .unwrap_err();
-        assert!(error.message.contains("networkidle"));
+        });
+        assert_eq!(options.wait_until, LifecycleEvent::Networkidle);
     }
 }

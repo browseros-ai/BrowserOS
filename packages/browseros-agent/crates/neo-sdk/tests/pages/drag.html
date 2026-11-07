@@ -1,0 +1,62 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Drag</title>
+<style>
+  body { margin: 0; font: 14px sans-serif; }
+  #source { position: absolute; left: 20px; top: 20px; width: 80px; height: 40px; background: #9cf; }
+  #target { position: absolute; left: 200px; top: 20px; width: 200px; height: 80px; display: flex; }
+  #target div { flex: 1; background: #fc9; } #target #right { background: #f96; }
+  #track { position: absolute; left: 20px; top: 160px; width: 300px; height: 20px; background: #ddd; }
+  #knob { position: absolute; left: 0; top: 0; width: 20px; height: 20px; background: #333; touch-action: none; }
+  .dup { position: absolute; top: 220px; width: 30px; height: 30px; background: #ccc; }
+</style>
+<div id="source" draggable="true">Drag me</div>
+<div id="target"><div id="left">Left</div><div id="right">Right</div></div>
+<div id="track"><div id="knob"></div></div>
+<div class="dup" style="left: 20px" draggable="true"></div><div class="dup" style="left: 80px" draggable="true"></div>
+<script>
+  // Every drag event the page sees, consecutive repeats collapsed (Chromium may repeat a
+  // `dragover`), with what the drop carried; and the slider's moves while its knob is held.
+  window.__events = []
+  const record = (entry) => {
+    const last = window.__events.at(-1)
+    if (!last || JSON.stringify(last) !== JSON.stringify(entry)) window.__events.push(entry)
+  }
+  for (const type of ['dragstart', 'dragenter', 'dragover', 'dragleave', 'drop', 'dragend']) {
+    document.addEventListener(type, (event) => {
+      record({
+        type,
+        target: event.target.id || event.target.className || event.target.nodeName.toLowerCase(),
+        data: type === 'drop' ? event.dataTransfer.getData('text/plain') : null,
+        dropEffect: type === 'dragend' ? event.dataTransfer.dropEffect : null,
+      })
+    }, true)
+  }
+  document.querySelector('#source').addEventListener('dragstart', (event) => {
+    event.dataTransfer.setData('text/plain', 'payload')
+  })
+  for (const zone of document.querySelectorAll('#target div')) {
+    zone.addEventListener('dragover', (event) => event.preventDefault())
+    zone.addEventListener('drop', (event) => event.preventDefault())
+  }
+  // A pointer-event slider: the knob follows the pointer while it is held.
+  window.__slider = { held: false, moves: 0, released: false }
+  const knob = document.querySelector('#knob')
+  knob.addEventListener('pointerdown', (event) => {
+    knob.setPointerCapture(event.pointerId)
+    window.__slider.held = true
+  })
+  knob.addEventListener('pointermove', (event) => {
+    if (!window.__slider.held) return
+    window.__slider.moves++
+    knob.style.left = `${Math.max(0, Math.min(280, event.clientX - 30))}px`
+  })
+  knob.addEventListener('pointerup', () => {
+    window.__slider.held = false
+    window.__slider.released = true
+  })
+  window.__facts = () => ({
+    events: window.__events,
+    slider: { ...window.__slider, right: parseFloat(knob.style.left || '0') > 200 },
+  })
+</script>

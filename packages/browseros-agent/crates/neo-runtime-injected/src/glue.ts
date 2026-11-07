@@ -81,6 +81,10 @@ function query(
   return elements
 }
 
+/** The listeners `setupDragListeners` armed in this document, until `cleanupDrag` reads them.
+ * Playwright keeps it as `window.__cleanupDrag`; the glue's own scope keeps it from the page. */
+let cleanupDrag: (() => Promise<boolean>) | undefined
+
 /** Neo: elements as a null-prototype object's own properties `0`, `1`, …, which CDP reports
  * as a plain object (an array would carry the subtype `array`), so Rust lists them with
  * `Runtime.getProperties` as handles of the matches. */
@@ -459,6 +463,33 @@ export const glue = {
     return { ref }
   },
 
+  /** Playwright: `server/frames.ts` `Frame._content`: `return await injected.evaluate((injected, includeShadow) => injected.documentContent(includeShadow), !!options.includeShadow);` */
+  documentContent: (injected, { includeShadow }) => ({
+    value: injected.documentContent(includeShadow),
+  }),
+
+  /** Playwright: `server/frames.ts` `Frame.setContent`: `document.write(html);` */
+  writeContent: (_injected, { html }) => {
+    // No console tag marks the open: neo-runtime waits for the reopened document's lifecycle
+    // events, from its `init`, on the frame's own session.
+    document.open()
+    document.write(html)
+    document.close()
+    return {}
+  },
+
+  /** Playwright: `server/frames.ts` `Frame.resolveSelector`: `return injected.generateSelectorSimple(node as unknown as Element);` */
+  generateSelector: (injected, { selector }) => {
+    const [element] = query(injected, selector, false)
+    if (!element) return {}
+    return { generated: injected.generateSelectorSimple(element) }
+  },
+
+  /** Playwright: `server/frames.ts` `Frame.resolveSelector`: `return injected.generateSelectorSimple(node as unknown as Element);` */
+  generateOwnerSelector: (injected, _params, element) => ({
+    generated: injected.generateSelectorSimple(element),
+  }),
+
   describeSelector: (injected, { selector }) => {
     const locator = injected.utils.asLocator('javascript', selector)
     try {
@@ -522,6 +553,44 @@ export const glue = {
       hitPoint,
       blockAllEvents,
     ),
+  }),
+
+  // Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `window.addEventListener('mousemove', mouseListener, { once: true, capture: true });`
+  setupDragListeners: () => {
+    let didStartDrag = Promise.resolve(false)
+    let dragEvent: Event | null = null
+    const dragListener = (event: Event) => {
+      dragEvent = event
+    }
+    const mouseListener = () => {
+      didStartDrag = new Promise<boolean>((callback) => {
+        window.addEventListener('dragstart', dragListener, {
+          once: true,
+          capture: true,
+        })
+        setTimeout(
+          () => callback(dragEvent ? !dragEvent.defaultPrevented : false),
+          0,
+        )
+      })
+    }
+    window.addEventListener('mousemove', mouseListener, {
+      once: true,
+      capture: true,
+    })
+    cleanupDrag = async () => {
+      const started = await didStartDrag
+      window.removeEventListener('mousemove', mouseListener, { capture: true })
+      window.removeEventListener('dragstart', dragListener, { capture: true })
+      cleanupDrag = undefined
+      return started
+    }
+    return { armed: true }
+  },
+
+  // Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `const val = await didStartDrag;`
+  cleanupDrag: async () => ({
+    started: cleanupDrag ? await cleanupDrag() : false,
   }),
 
   stopHitTargetInterceptor: (_injected, _params, interceptor) => ({

@@ -70,8 +70,9 @@ const READY_WAIT: Duration = Duration::from_secs(10);
 const REPLAY_WAIT: Duration = Duration::from_secs(5);
 
 /// Neo: the listener events Neo produces on a `Page`, under the names Playwright's client gives
-/// them (`Events.Page`), and what each needs switched on in the page's session.
-const PAGE_EVENTS: [(&str, Needs); 12] = [
+/// them (`Events.Page`), and what each needs switched on in the page's session; and the one
+/// channel event the SDK handles itself, `locatorHandlerTriggered` (`locator_handlers.rs`).
+const PAGE_EVENTS: [(&str, Needs); 19] = [
     ("console", Needs::RUNTIME),
     ("pageerror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
@@ -84,11 +85,20 @@ const PAGE_EVENTS: [(&str, Needs); 12] = [
     ("framedetached", Needs::WATCHER),
     ("framenavigated", Needs::WATCHER),
     ("popup", Needs::DISCOVERY),
+    // The watcher reports it once the page intercepts its file chooser (`page_events.rs`
+    // `intercept_file_chooser`).
+    ("filechooser", Needs::WATCHER),
+    ("download", Needs::DOWNLOADS),
+    ("request", Needs::NETWORK),
+    ("response", Needs::NETWORK),
+    ("requestfinished", Needs::NETWORK),
+    ("requestfailed", Needs::NETWORK),
+    ("locatorHandlerTriggered", Needs::NOTHING),
 ];
 
 /// Neo: the listener events Neo produces on the run's `BrowserContext` (`Events.BrowserContext`),
 /// for every page the run has a session on; `page` for every new tab of the context.
-const CONTEXT_EVENTS: [(&str, Needs); 10] = [
+const CONTEXT_EVENTS: [(&str, Needs); 15] = [
     ("console", Needs::RUNTIME),
     ("weberror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
@@ -99,43 +109,89 @@ const CONTEXT_EVENTS: [(&str, Needs); 10] = [
     ("framedetached", Needs::WATCHER),
     ("framenavigated", Needs::WATCHER),
     ("page", Needs::DISCOVERY),
+    ("download", Needs::DOWNLOADS),
+    ("request", Needs::NETWORK),
+    ("response", Needs::NETWORK),
+    ("requestfinished", Needs::NETWORK),
+    ("requestfailed", Needs::NETWORK),
 ];
 
 /// What a subscription switches on in a page's session before that page's next call runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one flag per producer a subscription may switch on, combined with ||"
+)]
 pub(crate) struct Needs {
     /// `PageSession::prepare`: the watcher, which is the producer, with `Page.enable`.
     pub(crate) watcher: bool,
     /// `Runtime.enable` and `Log.enable`, which report console messages and page errors.
     pub(crate) runtime: bool,
+    /// `Network.enable` (`PageSession::enable_network`), which reports the tab's requests.
+    pub(crate) network: bool,
     /// The run's target discovery (`discovery.rs`), which reports new tabs. Not a page's: every
     /// call of the run waits for it ([`ALL_PAGES`]).
     pub(crate) discovery: bool,
+    /// The run's download reports (`downloads.rs`). Not a page's either: every call of the run
+    /// waits for them ([`ALL_PAGES`]).
+    pub(crate) downloads: bool,
 }
 
 impl Needs {
+    /// Neo: an event an action's own call produces (`locatorHandlerTriggered`), with nothing to
+    /// switch on.
+    const NOTHING: Self = Self {
+        watcher: false,
+        runtime: false,
+        network: false,
+        discovery: false,
+        downloads: false,
+    };
     /// Neo: an event the page watcher produces from the domains it always enables.
     pub(crate) const WATCHER: Self = Self {
         watcher: true,
         runtime: false,
+        network: false,
         discovery: false,
+        downloads: false,
     };
     /// Neo: an event only `Runtime.enable` and `Log.enable` report.
     const RUNTIME: Self = Self {
         watcher: true,
         runtime: true,
+        network: false,
         discovery: false,
+        downloads: false,
+    };
+    /// Neo: an event only `Network.enable` reports: a request's.
+    const NETWORK: Self = Self {
+        watcher: true,
+        runtime: false,
+        network: true,
+        discovery: false,
+        downloads: false,
     };
     /// Neo: an event the run's target discovery produces, about a page no session watches yet.
     const DISCOVERY: Self = Self {
         watcher: false,
         runtime: false,
+        network: false,
         discovery: true,
+        downloads: false,
+    };
+    /// Neo: an event the run's download watcher produces from the browser's reports, for any
+    /// tab of the run's context.
+    const DOWNLOADS: Self = Self {
+        watcher: false,
+        runtime: false,
+        network: false,
+        discovery: false,
+        downloads: true,
     };
 
     /// Whether a page's session has anything to switch on for it.
     pub(crate) fn of_page(self) -> bool {
-        self.watcher || self.runtime
+        self.watcher || self.runtime || self.network
     }
 }
 
@@ -282,7 +338,9 @@ impl EventHub {
                 .reduce(|left, right| Needs {
                     watcher: left.watcher || right.watcher,
                     runtime: left.runtime || right.runtime,
+                    network: left.network || right.network,
                     discovery: left.discovery || right.discovery,
+                    downloads: left.downloads || right.downloads,
                 })
         })
         .flatten()
@@ -626,7 +684,8 @@ mod tests {
         assert_eq!(needs("page@T", "dialog"), Some(Needs::WATCHER));
         assert_eq!(needs(CONTEXT_GUID, "weberror"), Some(Needs::RUNTIME));
         assert_eq!(needs(CONTEXT_GUID, "pageerror"), None);
-        assert_eq!(needs("page@T", "request"), None);
+        assert_eq!(needs("page@T", "request"), Some(Needs::NETWORK));
+        assert_eq!(needs(CONTEXT_GUID, "requestfailed"), Some(Needs::NETWORK));
         assert_eq!(needs("frame@T", "console"), None);
         assert_eq!(needs("page@T", "popup"), Some(Needs::DISCOVERY));
         assert_eq!(needs(CONTEXT_GUID, "page"), Some(Needs::DISCOVERY));

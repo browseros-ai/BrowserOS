@@ -167,12 +167,12 @@ async fn tests_that_invalid_urls_reject_with_an_invalid_url_error() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn tests_that_unsupported_and_invalid_wait_until_do_not_navigate() {
+async fn tests_that_an_invalid_wait_until_does_not_navigate_and_networkidle_does() {
     let Some(tab) = open().await else { return };
-    let result = value(run(&tab, "const errors=[]; for (const waitUntil of ['networkidle','bogus']) { try { await page.goto('https://example.test/', {waitUntil}); } catch(e) { errors.push(e.name); } } return {errors,url:page.url()}").await);
+    let result = value(run(&tab, &format!("const errors=[]; try {{ await page.goto('https://example.test/', {{waitUntil: 'bogus'}}); }} catch(e) {{ errors.push(e.name); }} const kept = page.url(); const response = await page.goto({:?}, {{waitUntil: 'networkidle'}}); return {{errors,kept,status:response.status(),title:await page.title()}}", format!("{}/two", tab.origin))).await);
     assert_eq!(
         result,
-        json!({"errors":["Error", "Error"], "url":format!("{}/one", tab.origin)})
+        json!({"errors":["Error"], "kept":format!("{}/one", tab.origin), "status":200, "title":"Second"})
     );
     tab.close().await;
 }

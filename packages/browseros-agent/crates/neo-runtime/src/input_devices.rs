@@ -33,7 +33,7 @@ use std::time::Duration;
 use browseros_cdp::input::DispatchMouseEventParams;
 use browseros_cdp::{CdpError, SessionId};
 use futures_util::future;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -59,6 +59,18 @@ pub(crate) struct InputDevices {
     /// ([`InputDevices::forget_ended`]): within a turn, a late answer to a write the run had
     /// started, or a restore planned from a hold it had, records its hold the same way.
     pub(crate) ended: Vec<Owner>,
+    /// Chromium's drag manager (Playwright's `DragManager`): the drag the browser handed
+    /// over, while one runs.
+    pub(crate) drag: Option<DragState>,
+}
+
+/// A drag Chromium intercepted (`Input.dragIntercepted`): its data, which every later drag
+/// event carries, and where its last one went (`_lastPosition`, for a cancel).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct DragState {
+    pub(crate) data: Value,
+    pub(crate) x: f64,
+    pub(crate) y: f64,
 }
 
 /// Playwright's `Keyboard` state.
@@ -124,6 +136,19 @@ pub(crate) enum Effect {
         button: MouseButton,
         owner: Owner,
     },
+    /// The page started a drag Chromium handed over, at the move's point.
+    DragStarted {
+        data: Value,
+        x: f64,
+        y: f64,
+    },
+    /// A `dragOver` went to the point.
+    DragMoved {
+        x: f64,
+        y: f64,
+    },
+    /// A `drop` or a `dragCancel` ended the drag.
+    DragEnded,
     /// A run ended: what it holds, now or once a write it started answers, is held by no live
     /// run any more, only possibly down (`InputDevices::ended`). Writes nothing.
     Retire {
@@ -211,6 +236,26 @@ impl InputDevices {
                     .buttons
                     .retain(|(held, holder)| (held, holder) != (button, owner));
             }
+            Effect::DragStarted { data, x, y } => {
+                self.drag = Some(DragState {
+                    data: data.clone(),
+                    x: *x,
+                    y: *y,
+                });
+            }
+            Effect::DragMoved { x, y } => {
+                if let Some(drag) = self.drag.as_mut()
+                    && answered
+                {
+                    (drag.x, drag.y) = (*x, *y);
+                }
+            }
+            Effect::DragEnded => {
+                // Playwright clears its drag state only once the drop or cancel was answered.
+                if answered {
+                    self.drag = None;
+                }
+            }
             Effect::Retire { owner } => self.mark_ended(owner),
         }
     }
@@ -278,6 +323,28 @@ pub(crate) struct Planned {
     /// Written even after the writer stopped: a run's end releases every key and button it can,
     /// each independent of the others.
     pub(crate) always: bool,
+    /// What Chromium's drag manager makes of the command, decided as it is written.
+    pub(crate) drag: DragStep,
+}
+
+/// Neo: how a command meets a drag, decided as it is written (Playwright's `RawMouseImpl`,
+/// `RawKeyboardImpl`), since a move may start one in the middle of a plan.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum DragStep {
+    /// Written as planned: a click's own move (`forClick`) and every other command.
+    #[default]
+    None,
+    /// A move that is not a click's: `dragOver` while a drag runs, the intercept protocol while
+    /// the left button is held, else the move.
+    Move,
+    /// A mouse press: skipped while a drag runs.
+    Down,
+    /// A mouse release: `drop` while a drag runs.
+    Up,
+    /// A run end's mouse release: `dragCancel` while a drag runs.
+    Cancel,
+    /// An Escape keyDown: `dragCancel` in its place while a drag runs.
+    Escape,
 }
 
 /// Neo: building a plan, which no script sees.
@@ -292,6 +359,7 @@ impl Planned {
             with_next: false,
             pause: None,
             always: false,
+            drag: DragStep::None,
         }
     }
 
@@ -411,6 +479,25 @@ pub(crate) fn plan_move(plan: &mut Plan, simulated: &mut InputDevices, to: (f64,
     }
 }
 
+/// Playwright: `server/chromium/crInput.ts` `RawMouseImpl.move`: `await this._dragManager.interceptDragCausedByMove(progress, x, y, button, buttons, modifiers, actualMove);`
+///
+/// A move that is not a click's (`hover`, a drag's two moves, `mouse.move`): as [`plan_move`],
+/// each step meeting Chromium's drag manager as it is written.
+pub(crate) fn plan_free_move(
+    plan: &mut Plan,
+    simulated: &mut InputDevices,
+    to: (f64, f64),
+    steps: u32,
+) {
+    let first = plan.commands.len();
+    plan_move(plan, simulated, to, steps);
+    for command in &mut plan.commands[first..] {
+        if command.method.is_some() {
+            command.drag = DragStep::Move;
+        }
+    }
+}
+
 /// Playwright: `server/input.ts` `Mouse.down`: `this._buttons.add(button);`
 ///
 /// A press at the pointer's position, with every held button and modifier. Returns its index,
@@ -441,7 +528,12 @@ pub(crate) fn plan_down(
         force: Some(force),
         ..DispatchMouseEventParams::default()
     };
-    plan.push(simulated, mouse_command(&params, effect))
+    // Playwright: `server/chromium/crInput.ts` `RawMouseImpl.down`: `if (this._dragManager.isDragging())`
+    let command = Planned {
+        drag: DragStep::Down,
+        ..mouse_command(&params, effect)
+    };
+    plan.push(simulated, command)
 }
 
 /// Playwright: `server/input.ts` `Mouse.up`: `this._buttons.delete(button);`
@@ -468,8 +560,10 @@ pub(crate) fn plan_up(
         click_count: Some(click_count),
         ..DispatchMouseEventParams::default()
     };
+    // Playwright: `server/chromium/crInput.ts` `RawMouseImpl.up`: `await this._dragManager.drop(progress, x, y, modifiers);`
     let command = Planned {
         undoes,
+        drag: DragStep::Up,
         ..mouse_command(&params, effect)
     };
     plan.push(simulated, command)
@@ -592,7 +686,16 @@ pub(crate) fn plan_button_releases(plan: &mut Plan, simulated: &mut InputDevices
                 }),
             )
         } else {
-            plan_up(plan, simulated, button, 1, None)
+            let at = plan_up(plan, simulated, button, 1, None);
+            // Only the left button holds a drag: its release cancels the drag, never drops it.
+            // Another button's release neither drops nor cancels a running drag, which belongs
+            // to whichever run holds the left button.
+            plan.commands[at].drag = if button == MouseButton::Left {
+                DragStep::Cancel
+            } else {
+                DragStep::None
+            };
+            at
         };
         plan.commands[at].always = true;
     }
@@ -629,6 +732,20 @@ pub(crate) trait InputSender: Send + Sync + 'static {
         method: &'static str,
         params: String,
     ) -> impl Future<Output = Result<(), CdpError>> + Send;
+
+    /// Playwright's `DragManager.interceptDragCausedByMove` around one `mouseMoved` (`params`)
+    /// made with the left button held: the drag Chromium handed over when the move started one
+    /// the page did not prevent, else `None`. A sender that cannot see the page just moves.
+    fn move_intercepting_drag(
+        &self,
+        params: String,
+    ) -> impl Future<Output = Result<Option<Value>, CdpError>> + Send {
+        async move {
+            self.send_input("Input.dispatchMouseEvent", params)
+                .await
+                .map(|()| None)
+        }
+    }
 }
 
 /// Neo: where a writer records what it wrote, the tab's devices through the call's input turn,
@@ -721,6 +838,14 @@ struct Writer {
     refused: bool,
 }
 
+/// Neo: one command as the writer sends it: as planned (its params patched after a stop),
+/// replaced by a drag event, or written as nothing (a press while a drag runs).
+enum Outgoing {
+    Planned(Option<String>),
+    Drag { params: String, ends: bool },
+    Skipped,
+}
+
 /// Neo: writing a plan's commands and its tail's chunks, each chunk's `undoes` its own.
 impl Writer {
     /// Writes `commands`, whose `undoes` indices are their own.
@@ -744,13 +869,26 @@ impl Writer {
                 index += 1;
                 continue;
             }
+            if commands[index].drag == DragStep::Move && !commands[index].with_next {
+                // A move that is not a click's goes alone: it may start a drag. A move is never
+                // owed, so nothing moves once the writer stopped.
+                if cut_short.is_cancelled() || sink.run_ended() {
+                    self.stopped = true;
+                }
+                if !self.stopped {
+                    written[index] = self.free_move(sender, sink, &commands[index]).await;
+                }
+                index += 1;
+                continue;
+            }
             let mut end = index;
             while commands[end].with_next && end + 1 < commands.len() {
                 end += 1;
             }
-            let mut batch: Vec<(usize, Option<String>)> = Vec::with_capacity(end + 1 - index);
-            // What the tab holds after the batch so far, for releases after a stop.
-            let mut actual = None;
+            let mut batch: Vec<(usize, Outgoing)> = Vec::with_capacity(end + 1 - index);
+            // What the tab holds after the batch so far, for releases after a stop and for a
+            // drag the batch's commands meet.
+            let mut actual: Option<InputDevices> = None;
             for (at, command) in commands.iter().enumerate().take(end + 1).skip(index) {
                 // What it undoes went out before, or goes out in this very batch (a pipelined
                 // click's release, a tap's end).
@@ -773,48 +911,192 @@ impl Writer {
                 if self.stopped && !owed {
                     continue;
                 }
-                let params = if self.stopped {
-                    let devices = actual.get_or_insert_with(|| sink.devices());
-                    devices.apply(&command.effect, true);
-                    actual_params(command, devices)
-                } else {
-                    None
-                };
-                batch.push((at, params));
-            }
-            let sends = batch.into_iter().map(|(at, params)| {
-                let command = &commands[at];
-                let send = command.method.map(|method| {
-                    sender.send_input(method, params.unwrap_or_else(|| command.params.clone()))
+                let devices = actual.get_or_insert_with(|| sink.devices());
+                let outgoing = drag_outgoing(command, devices).unwrap_or_else(|| {
+                    Outgoing::Planned(
+                        self.stopped
+                            .then(|| {
+                                let mut after = devices.clone();
+                                after.apply(&command.effect, true);
+                                actual_params(command, &after)
+                            })
+                            .flatten(),
+                    )
                 });
+                devices.apply(&command.effect, true);
+                if let Outgoing::Drag { ends: true, .. } = outgoing {
+                    devices.apply(&Effect::DragEnded, true);
+                }
+                batch.push((at, outgoing));
+            }
+            let sends = batch.into_iter().map(|(at, outgoing)| {
+                let command = &commands[at];
+                let (send, ends) = match outgoing {
+                    Outgoing::Skipped => (None, false),
+                    Outgoing::Drag { params, ends } => (
+                        Some(sender.send_input("Input.dispatchDragEvent", params)),
+                        ends,
+                    ),
+                    Outgoing::Planned(params) => (
+                        command.method.map(|method| {
+                            sender.send_input(
+                                method,
+                                params.unwrap_or_else(|| command.params.clone()),
+                            )
+                        }),
+                        false,
+                    ),
+                };
                 async move {
                     match send {
-                        Some(send) => (at, Some(send.await)),
-                        None => (at, None),
+                        Some(send) => (at, Some(send.await), ends),
+                        None => (at, None, ends),
                     }
                 }
             });
-            for (at, result) in future::join_all(sends).await {
-                let command = &commands[at];
-                let Some(result) = result else {
-                    // A change of state alone, never refused or failed.
-                    sink.apply(&command.effect, true);
-                    continue;
-                };
-                if matches!(result, Err(CdpError::ConnectionEpochChanged { .. })) {
-                    self.refused = true;
-                } else {
-                    written[at] = true;
-                    sink.apply(&command.effect, result.is_ok());
-                }
-                if result.is_err() {
-                    self.stopped = true;
-                }
-                self.outcomes.push(result);
+            for (at, result, ends) in future::join_all(sends).await {
+                written[at] = self.record(sink, &commands[at], result, ends);
             }
             index = end + 1;
         }
     }
+
+    /// One batch command's answer, `None` for one that wrote nothing: a change of state alone,
+    /// or a press a drag skipped, never refused or failed, answered and its release owed as if
+    /// it went out. Whether it counts as written.
+    fn record(
+        &mut self,
+        sink: &impl EffectSink,
+        command: &Planned,
+        result: Option<Result<(), CdpError>>,
+        ends: bool,
+    ) -> bool {
+        let Some(result) = result else {
+            sink.apply(&command.effect, true);
+            if command.method.is_none() {
+                return false;
+            }
+            // Playwright: `server/chromium/crInput.ts` `RawMouseImpl.down`: `if (this._dragManager.isDragging())`
+            // A press a running drag skipped returns as if answered, and counts as written.
+            self.outcomes.push(Ok(()));
+            return true;
+        };
+        let refused = matches!(result, Err(CdpError::ConnectionEpochChanged { .. }));
+        if refused {
+            self.refused = true;
+        } else {
+            sink.apply(&command.effect, result.is_ok());
+            if ends {
+                sink.apply(&Effect::DragEnded, result.is_ok());
+            }
+        }
+        if result.is_err() {
+            self.stopped = true;
+        }
+        self.outcomes.push(result);
+        !refused
+    }
+
+    /// Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `if (this._dragState) {`
+    ///
+    /// One move that is not a click's: `dragOver` while a drag runs, the intercept protocol
+    /// with the left button held (and `dragEnter` when it started a drag), else the move.
+    /// Whether it went out (a refused write did not).
+    async fn free_move(
+        &mut self,
+        sender: &impl InputSender,
+        sink: &impl EffectSink,
+        command: &Planned,
+    ) -> bool {
+        let (Some(method), Effect::Moved { x, y }) = (command.method, &command.effect) else {
+            return false;
+        };
+        let (x, y) = (*x, *y);
+        let devices = sink.devices();
+        let modifiers = i64::from(devices.keyboard.modifiers);
+        let planned: Value = serde_json::from_str(&command.params).unwrap_or_default();
+        let result = if let Some(drag) = &devices.drag {
+            let params = drag_event("dragOver", x, y, &drag.data, modifiers);
+            let result = sender.send_input("Input.dispatchDragEvent", params).await;
+            sink.apply(&command.effect, result.is_ok());
+            sink.apply(&Effect::DragMoved { x, y }, result.is_ok());
+            result
+        } else if planned["button"] == "left" {
+            match sender.move_intercepting_drag(command.params.clone()).await {
+                Ok(Some(data)) => {
+                    sink.apply(&command.effect, true);
+                    let params = drag_event("dragEnter", x, y, &data, modifiers);
+                    sink.apply(&Effect::DragStarted { data, x, y }, true);
+                    sender.send_input("Input.dispatchDragEvent", params).await
+                }
+                Ok(None) => {
+                    sink.apply(&command.effect, true);
+                    Ok(())
+                }
+                Err(error) => {
+                    sink.apply(&command.effect, false);
+                    Err(error)
+                }
+            }
+        } else {
+            let result = sender.send_input(method, command.params.clone()).await;
+            sink.apply(&command.effect, result.is_ok());
+            result
+        };
+        let refused = matches!(result, Err(CdpError::ConnectionEpochChanged { .. }));
+        if refused {
+            self.refused = true;
+        }
+        if result.is_err() {
+            self.stopped = true;
+        }
+        self.outcomes.push(result);
+        !refused
+    }
+}
+
+/// Neo: what a drag makes of a press, a release or an Escape while one runs (Playwright's
+/// `RawMouseImpl.down`/`up`, `RawKeyboardImpl.keydown`): the press is skipped, the release
+/// drops, a run end's release and the Escape cancel; `None` writes the command as planned.
+fn drag_outgoing(command: &Planned, devices: &InputDevices) -> Option<Outgoing> {
+    let drag = devices.drag.as_ref()?;
+    let modifiers = i64::from(devices.keyboard.modifiers);
+    let planned = || serde_json::from_str::<Value>(&command.params).unwrap_or_default();
+    match command.drag {
+        DragStep::Down => Some(Outgoing::Skipped),
+        DragStep::Up => {
+            let planned = planned();
+            let (x, y) = (
+                planned["x"].as_f64().unwrap_or(drag.x),
+                planned["y"].as_f64().unwrap_or(drag.y),
+            );
+            Some(Outgoing::Drag {
+                params: drag_event("drop", x, y, &drag.data, modifiers),
+                ends: true,
+            })
+        }
+        DragStep::Cancel | DragStep::Escape => Some(Outgoing::Drag {
+            // Playwright: `server/chromium/crDragDrop.ts` `DragManager.cancelDrag`: `type: 'dragCancel',`
+            params: json!({
+                "type": "dragCancel",
+                "x": drag.x,
+                "y": drag.y,
+                "data": { "items": [], "dragOperationsMask": DRAG_OPERATIONS_ALL },
+            })
+            .to_string(),
+            ends: true,
+        }),
+        DragStep::None | DragStep::Move => None,
+    }
+}
+
+/// Playwright: `server/chromium/crDragDrop.ts` `DragManager.cancelDrag`: `dragOperationsMask: 0xFFFF,`
+const DRAG_OPERATIONS_ALL: i64 = 0xFFFF;
+
+/// Neo: `Input.dispatchDragEvent`'s params, as Playwright's `DragManager` builds them: the event, its point,
+/// the intercepted drag's data and the held modifiers.
+fn drag_event(kind: &str, x: f64, y: f64, data: &Value, modifiers: i64) -> String {
+    json!({ "type": kind, "x": x, "y": y, "data": data, "modifiers": modifiers }).to_string()
 }
 
 /// Neo: `command`'s params with the modifiers (and, for a mouse event, the buttons) that
@@ -1068,6 +1350,240 @@ mod tests {
         assert!(turn.devices().mouse.buttons.is_empty());
     }
 
+    /// Chromium's drag manager (Playwright's `DragManager`): a move with the left button held that starts
+    /// a drag the page allows is followed by `dragEnter`, every later move is a `dragOver`, and
+    /// the release drops it; a move that starts none is a move.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_drag_starts_moves_and_drops() {
+        let data = serde_json::json!({ "items": [{ "mimeType": "text/plain", "data": "x" }], "dragOperationsMask": 1 });
+        let mut simulated = InputDevices::default();
+        let mut plan = Plan::default();
+        plan_free_move(&mut plan, &mut simulated, (10.0, 10.0), 1);
+        plan_down(&mut plan, &mut simulated, MouseButton::Left, 1, &run("A"));
+        plan_free_move(&mut plan, &mut simulated, (50.0, 50.0), 3);
+        plan_up(&mut plan, &mut simulated, MouseButton::Left, 1, None);
+        let sender = Sender::dragging([Some(data.clone())]);
+        let turn = Turn::of(InputDevices::default(), "A");
+        let written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        assert!(written.complete);
+        assert_eq!(
+            sender.sent(),
+            [
+                "mouseMoved",
+                "mousePressed",
+                "mouseMoved",
+                "intercepted",
+                "dragEnter",
+                "dragOver",
+                "dragOver",
+                "drop"
+            ],
+            "the press's first move starts the drag; the later ones drag it over; the release drops"
+        );
+        let after = turn.devices();
+        assert_eq!(after.drag, None, "the drop ended it");
+        assert!(after.mouse.buttons.is_empty());
+        assert_eq!((after.mouse.x, after.mouse.y), (50.0, 50.0));
+
+        let sender = Sender::dragging([None, None]);
+        let turn = Turn::of(InputDevices::default(), "A");
+        let written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        assert!(written.complete);
+        assert_eq!(
+            sender.sent(),
+            [
+                "mouseMoved",
+                "mousePressed",
+                "mouseMoved",
+                "not dragged",
+                "mouseMoved",
+                "not dragged",
+                "mouseMoved",
+                "not dragged",
+                "mouseReleased"
+            ],
+            "a page that starts no drag sees plain moves and the release"
+        );
+    }
+
+    /// While a drag runs, an Escape keyDown cancels it in place of the key, a click's press is
+    /// skipped and its release drops, and a run end cancels the drag it left running.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_running_drag_meets_escape_clicks_and_run_end() {
+        let running = InputDevices {
+            drag: Some(DragState {
+                data: serde_json::json!({ "items": [], "dragOperationsMask": 1 }),
+                x: 5.0,
+                y: 5.0,
+            }),
+            mouse: MouseState {
+                x: 5.0,
+                y: 5.0,
+                last_button: Some(MouseButton::Left),
+                buttons: vec![(MouseButton::Left, run("A"))],
+            },
+            ..InputDevices::default()
+        };
+        let mut simulated = running.clone();
+        let mut plan = Plan::default();
+        keyboard::plan_press(
+            &mut plan,
+            &mut simulated,
+            "Escape",
+            Platform::Linux,
+            &run("A"),
+            None,
+        )
+        .expect("Escape");
+        let sender = Sender::answering([]);
+        let turn = Turn::of(running.clone(), "A");
+        let _written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        assert_eq!(sender.sent(), ["dragCancel", "keyUp"]);
+        assert_eq!(turn.devices().drag, None);
+
+        let mut simulated = running.clone();
+        let mut plan = Plan::default();
+        plan_click(
+            &mut plan,
+            &mut simulated,
+            (9.0, 9.0),
+            &MouseClick {
+                button: MouseButton::Left,
+                click_count: 1,
+                delay: None,
+            },
+            1,
+            &run("A"),
+        );
+        let sender = Sender::answering([]);
+        let turn = Turn::of(running.clone(), "A");
+        let written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        assert_eq!(
+            sender.sent(),
+            ["mouseMoved", "drop"],
+            "a click's move is never a drag's; its press is skipped and its release drops"
+        );
+        assert!(
+            written.complete,
+            "the click resolves: its skipped press counts as answered"
+        );
+
+        let mut simulated = running.clone();
+        let mut release = Plan::default();
+        plan_button_releases(&mut release, &mut simulated, &run("A"));
+        let sender = Sender::answering([]);
+        let turn = Turn::of(running, "A");
+        let _written = write_plan(&sender, &turn, &release, &CancellationToken::new()).await;
+        assert_eq!(
+            sender.sent(),
+            ["dragCancel"],
+            "a drag the run left running is cancelled"
+        );
+        let after = turn.devices();
+        assert_eq!(after.drag, None);
+        assert!(after.mouse.buttons.is_empty());
+    }
+
+    /// A run end's release of a button other than the left neither drops nor cancels a drag
+    /// another live run holds with the left button: it goes out as a plain release, and the
+    /// drag runs on.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_another_buttons_release_leaves_a_live_runs_drag_running() {
+        let running = InputDevices {
+            drag: Some(DragState {
+                data: serde_json::json!({ "items": [], "dragOperationsMask": 1 }),
+                x: 5.0,
+                y: 5.0,
+            }),
+            mouse: MouseState {
+                x: 5.0,
+                y: 5.0,
+                last_button: Some(MouseButton::Right),
+                buttons: vec![
+                    (MouseButton::Left, run("B")),
+                    (MouseButton::Right, run("A")),
+                ],
+            },
+            ..InputDevices::default()
+        };
+        let mut simulated = running.clone();
+        let mut end_a = Plan::default();
+        plan_button_releases(&mut end_a, &mut simulated, &run("A"));
+        let sender = Sender::answering([]);
+        let turn = Turn::of(running, "observer");
+        let written = write_plan(&sender, &turn, &end_a, &CancellationToken::new()).await;
+        assert!(written.complete);
+        assert_eq!(
+            sender.sent(),
+            ["mouseReleased"],
+            "neither dragCancel nor drop"
+        );
+        let after = turn.devices();
+        assert!(after.drag.is_some(), "B's drag runs on");
+        assert_eq!(after.mouse.buttons, [(MouseButton::Left, run("B"))]);
+    }
+
+    /// A run end whose drag cancel is refused, fails or is dropped mid-write (the run's
+    /// deadline) still ends the run, and leaves the drag running with its button, as the page may
+    /// still have them; the next run's end cancels the drag and lets go of the button.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_drag_cancel_cut_short_is_left_to_the_next_run_end() {
+        let running = InputDevices {
+            drag: Some(DragState {
+                data: serde_json::json!({ "items": [], "dragOperationsMask": 1 }),
+                x: 5.0,
+                y: 5.0,
+            }),
+            mouse: MouseState {
+                x: 5.0,
+                y: 5.0,
+                last_button: Some(MouseButton::Left),
+                buttons: vec![(MouseButton::Left, run("A"))],
+            },
+            ..InputDevices::default()
+        };
+        for (exit, answer) in [
+            ("refused", Answer::Refuse),
+            ("failed", Answer::Fail),
+            ("dropped", Answer::Hang),
+        ] {
+            let mut simulated = running.clone();
+            let mut end_a = Plan::default();
+            keyboard::plan_key_releases(&mut end_a, &mut simulated, &run("A"));
+            plan_button_releases(&mut end_a, &mut simulated, &run("A"));
+            let turn = Turn::of(running.clone(), "observer");
+            let sender = Sender::answering([answer]);
+            let never = CancellationToken::new();
+            let write = write_plan(&sender, &turn, &end_a, &never);
+            if exit == "dropped" {
+                let dropped = time::timeout(Duration::from_secs(1), write).await;
+                assert!(dropped.is_err(), "the run's deadline dropped it");
+            } else {
+                let _written = write.await;
+            }
+            assert_eq!(sender.sent(), ["dragCancel"], "{exit}");
+            let after = turn.devices();
+            assert_eq!(after.ended, [run("A")], "{exit}: A's run is over");
+            assert!(after.drag.is_some(), "{exit}: the page may still drag");
+
+            let mut simulated = after;
+            let mut end_b = Plan::default();
+            keyboard::plan_key_releases(&mut end_b, &mut simulated, &run("B"));
+            plan_button_releases(&mut end_b, &mut simulated, &run("B"));
+            let sender = Sender::answering([]);
+            let _written = write_plan(&sender, &turn, &end_b, &CancellationToken::new()).await;
+            assert_eq!(
+                sender.sent(),
+                ["dragCancel"],
+                "{exit}: B's end cancels A's drag"
+            );
+            let after = turn.devices();
+            assert_eq!(after.drag, None, "{exit}");
+            assert!(after.mouse.buttons.is_empty(), "{exit}");
+            assert!(after.ended.is_empty(), "{exit}");
+        }
+    }
+
     /// Known review issue: one failed run-end release must not prevent independent releases.
     #[tokio::test(start_paused = true)]
     async fn review_run_end_keeps_releasing_after_a_cdp_error() {
@@ -1177,6 +1693,8 @@ mod tests {
     struct Sender {
         sent: Arc<Mutex<Vec<String>>>,
         answers: Arc<Mutex<VecDeque<Answer>>>,
+        /// What each move with the left button held finds: the drag the page started, or none.
+        drags: Arc<Mutex<VecDeque<Option<Value>>>>,
     }
 
     impl Sender {
@@ -1184,6 +1702,15 @@ mod tests {
             Self {
                 sent: Arc::default(),
                 answers: Arc::new(Mutex::new(answers.into_iter().collect())),
+                drags: Arc::default(),
+            }
+        }
+
+        /// A page whose next moves with the left button held start these drags, in order.
+        fn dragging(drags: impl IntoIterator<Item = Option<Value>>) -> Self {
+            Self {
+                drags: Arc::new(Mutex::new(drags.into_iter().collect())),
+                ..Self::answering([])
             }
         }
 
@@ -1219,6 +1746,20 @@ mod tests {
                 Answer::Hang => future::pending().await,
                 Answer::Gone => Err(CdpError::SessionGone),
             }
+        }
+
+        async fn move_intercepting_drag(&self, params: String) -> Result<Option<Value>, CdpError> {
+            self.send_input("Input.dispatchMouseEvent", params).await?;
+            let drag = self.drags.lock().expect("drags").pop_front().flatten();
+            self.sent.lock().expect("sent").push(
+                if drag.is_some() {
+                    "intercepted"
+                } else {
+                    "not dragged"
+                }
+                .to_string(),
+            );
+            Ok(drag)
         }
     }
 

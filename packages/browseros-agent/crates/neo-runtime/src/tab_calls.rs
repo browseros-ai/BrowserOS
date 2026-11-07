@@ -10,8 +10,11 @@ use neo_runtime_spec::serve::{
     PageClearConsoleMessagesParams, PageClearConsoleMessagesResult, PageClearPageErrorsParams,
     PageClearPageErrorsResult, PageConsoleMessagesParams, PageConsoleMessagesResult,
     PageGoBackParams, PageGoBackResult, PageGoForwardParams, PageGoForwardResult,
-    PagePageErrorsParams, PagePageErrorsResult, PageReloadParams, PageReloadResult,
-    ResponseChannel,
+    PagePageErrorsParams, PagePageErrorsResult, PageRegisterLocatorHandlerParams,
+    PageRegisterLocatorHandlerResult, PageReloadParams, PageReloadResult, PageRequestsParams,
+    PageRequestsResult, PageResolveLocatorHandlerNoReplyParams,
+    PageResolveLocatorHandlerNoReplyResult, PageUnregisterLocatorHandlerParams,
+    PageUnregisterLocatorHandlerResult, ResponseChannel,
 };
 use serde_json::{Value, json};
 use tracing::debug;
@@ -144,6 +147,11 @@ pub(crate) async fn page(
                 &PageClearConsoleMessagesResult {},
             );
         }
+        call @ (PageCall::RegisterLocatorHandler(_)
+        | PageCall::ResolveLocatorHandlerNoReply(_)
+        | PageCall::UnregisterLocatorHandler(_)) => {
+            return locator_handler_call(tabs, entry, call, progress).await;
+        }
         PageCall::ClearPageErrors(_) => {
             console_page(tabs, entry, progress)
                 .await?
@@ -152,6 +160,11 @@ pub(crate) async fn page(
                 .clear_errors();
             return encode_result::<PageClearPageErrorsParams>(&PageClearPageErrorsResult {});
         }
+        // Playwright's server keeps a page's last requests from its first moment; Neo keeps
+        // what the run's network log recorded, which starts with the session's
+        // `Network.enable`: the first goto, history step or navigation wait, a network event
+        // listener, or this read, as Chromium replays no earlier request.
+        PageCall::Requests(_) => return requests(tabs, entry, progress).await,
         PageCall::Close(_) => close(tabs, entry, progress).await?,
         PageCall::RunBeforeUnload(_) => run_before_unload(tabs, entry, progress).await?,
         // The dispatcher serves these over the tab's input devices (`devices.rs`).
@@ -171,30 +184,7 @@ pub(crate) async fn page(
             )
             .into());
         }
-        PageCall::BringToFront(_) => {
-            // Playwright 26137face server/chromium/crPage.ts:207 sends Page.bringToFront.
-            let page = progress.race(tabs.session(entry)).await??;
-            let brought = progress
-                .race(page.send("Page.bringToFront", json!({})))
-                .await?;
-            checked(tabs, entry, progress, brought).await?;
-            let info = progress
-                .race(tabs::tab_info(tabs.cdp(), &entry.id))
-                .await??
-                .ok_or_else(PlaywrightError::target_closed)?;
-            // BrowserOS headless accepts Page.bringToFront without selecting the tab strip
-            // entry. Browser.activateTab changes that selection (see probes-runtime.md).
-            if !info.is_active {
-                let activated = progress
-                    .race(tabs.cdp().send(
-                        "Browser.activateTab",
-                        json!({"targetId":entry.id.as_str()}),
-                        None,
-                    ))
-                    .await?;
-                checked(tabs, entry, progress, activated).await?;
-            }
-        }
+        PageCall::BringToFront(_) => bring_to_front(tabs, entry, progress).await?,
         PageCall::HideHighlight(_) => {
             let page = progress.race(tabs.session(entry)).await??;
             highlight::hide_all(&page, progress).await?;
@@ -203,22 +193,105 @@ pub(crate) async fn page(
     Ok(None)
 }
 
+/// `Page.bringToFront`: the tab's own `Page.bringToFront`, then its tab-strip selection.
+async fn bring_to_front(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    // Playwright 26137face server/chromium/crPage.ts:207 sends Page.bringToFront.
+    let page = progress.race(tabs.session(entry)).await??;
+    let brought = progress
+        .race(page.send("Page.bringToFront", json!({})))
+        .await?;
+    checked(tabs, entry, progress, brought).await?;
+    let info = progress
+        .race(tabs::tab_info(tabs.cdp(), &entry.id))
+        .await??
+        .ok_or_else(PlaywrightError::target_closed)?;
+    // BrowserOS headless accepts Page.bringToFront without selecting the tab strip
+    // entry. Browser.activateTab changes that selection (see probes-runtime.md).
+    if !info.is_active {
+        let activated = progress
+            .race(tabs.cdp().send(
+                "Browser.activateTab",
+                json!({"targetId":entry.id.as_str()}),
+                None,
+            ))
+            .await?;
+        checked(tabs, entry, progress, activated).await?;
+    }
+    Ok(())
+}
+
+/// The locator handler commands of `entry`'s session (`locator_handlers.rs`).
+async fn locator_handler_call(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    call: PageCall,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    match call {
+        PageCall::RegisterLocatorHandler(params) => {
+            let uid = page
+                .locator_handlers
+                .register(params.selector, params.no_wait_after.unwrap_or(false))?;
+            encode_result::<PageRegisterLocatorHandlerParams>(&PageRegisterLocatorHandlerResult {
+                uid,
+            })
+        }
+        PageCall::ResolveLocatorHandlerNoReply(params) => {
+            page.locator_handlers
+                .resolve(params.uid, params.remove.unwrap_or(false))?;
+            encode_result::<PageResolveLocatorHandlerNoReplyParams>(
+                &PageResolveLocatorHandlerNoReplyResult {},
+            )
+        }
+        PageCall::UnregisterLocatorHandler(params) => {
+            page.locator_handlers.unregister(params.uid)?;
+            encode_result::<PageUnregisterLocatorHandlerParams>(
+                &PageUnregisterLocatorHandlerResult {},
+            )
+        }
+        _ => Err(PlaywrightError::error(
+            "neo-runtime: `locator_handler_call` serves the locator handler commands only",
+        )
+        .into()),
+    }
+}
+
 /// `Page.reload`, `goBack` or `goForward` on the main frame of `entry`'s session: the new
 /// document's response, or `None` where Playwright's answer is `null`. An option Neo refuses
 /// (`networkidle`) fails before the session is touched.
 async fn history_step(
     tabs: &Tabs,
     entry: &Arc<PageEntry>,
-    options: Result<HistoryOptions, PlaywrightError>,
+    options: HistoryOptions,
     progress: &Progress,
 ) -> Result<Option<ResponseChannel>, CallError> {
-    let options = options?;
     let page = progress.race(tabs.session(entry)).await??;
     let main = FrameTab {
         page,
         scope: FrameScope::Main,
     };
     history::navigate(&main, &options, progress).await
+}
+
+/// `page.requests()`: what the session's network log recorded, after making sure it records.
+async fn requests(
+    tabs: &Tabs,
+    entry: &PageEntry,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    let enabled = progress.race(page.enable_network()).await?;
+    checked(tabs, entry, progress, enabled).await?;
+    let requests = page
+        .network
+        .requests()
+        .map_err(|error| PlaywrightError::error(error.to_string()))?;
+    encode_result::<PageRequestsParams>(&PageRequestsResult { requests })
 }
 
 /// `entry`'s session with console messages and page errors reported (`PageSession::enable_runtime`).

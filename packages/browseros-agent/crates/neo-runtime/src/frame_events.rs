@@ -124,6 +124,11 @@ impl FrameModel {
 
     /// Applies one `Page` event of the tab's session or of one of its frame sessions, and
     /// returns the frame changes it makes, in Playwright's order.
+    /// Whether `frame` is one of the tab's frames the model knows.
+    pub(crate) fn contains(&self, frame: &str) -> bool {
+        self.frames.contains_key(frame)
+    }
+
     pub(crate) fn apply(&mut self, event: &CdpEvent) -> Vec<FrameChange> {
         let mut changes = Vec::new();
         let params = event.params.clone();
