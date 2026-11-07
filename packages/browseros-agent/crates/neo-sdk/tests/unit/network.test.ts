@@ -393,6 +393,69 @@ describe('Buffer', () => {
       )
   })
 
+  test('tests that toString takes encodings and ranges as Node Buffer does', () => {
+    const bytes = [0x68, 0xc3, 0xa9, 0x6c, 0x6c, 0x6f, 0xff]
+    const ours = BodyBuffer.fromBinary(Buffer.from(bytes).toString('base64'))
+    const bun = Buffer.from(bytes)
+    const settle = (read: () => string) => {
+      try {
+        return read()
+      } catch (error) {
+        return `throws ${(error as Error).name}`
+      }
+    }
+    const ranges = [
+      [],
+      [2],
+      [-2],
+      [1.7, 3.2],
+      [0, -1],
+      [99],
+      [Number.NaN],
+      [0, Number.NaN],
+      [3, 2],
+      [1, 99],
+    ]
+    const empty = (range: number[]) =>
+      [[0, -1], [99], [0, Number.NaN], [3, 2]].some(
+        (one) => JSON.stringify(one) === JSON.stringify(range),
+      )
+    // Bun's Buffer answers every known encoding as Node's does.
+    for (const encoding of [
+      undefined,
+      'UTF-8',
+      'Utf8',
+      'LATIN1',
+      'binary',
+      'ascii',
+      'Base64',
+      'base64url',
+      'HEX',
+      'ucs2',
+      'UCS-2',
+      'utf16le',
+      'utf-16le',
+    ])
+      for (const range of ranges) {
+        const args = [encoding, ...range] as never[]
+        expect(
+          settle(() => ours.toString(...args)),
+          JSON.stringify(args),
+        ).toBe(settle(() => bun.toString(...args)))
+      }
+    // An unknown encoding is a TypeError, but Node reads the range first (lib/buffer.js), so an
+    // empty range is '' whatever the encoding; Bun's Buffer throws there. These are Node 22's.
+    for (const encoding of ['nope', null])
+      for (const range of ranges) {
+        const args = [encoding, ...range] as never[]
+        expect(
+          settle(() => ours.toString(...args)),
+          JSON.stringify(args),
+        ).toBe(empty(range) ? '' : 'throws TypeError')
+      }
+    expect(ours.toString()).toBe(bun.toString())
+  })
+
   test('tests that toString encodings match Node Buffer', () => {
     const bytes = [0x00, 0x41, 0x7f, 0x80, 0xc3, 0xa9, 0xff]
     const ours = BodyBuffer.fromBinary(Buffer.from(bytes).toString('base64'))

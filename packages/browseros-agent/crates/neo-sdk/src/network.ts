@@ -467,15 +467,6 @@ const BASE64 =
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 const BASE64_INDEX = new Map([...BASE64].map((char, index) => [char, index]))
 
-type Encoding =
-  | 'utf8'
-  | 'utf-8'
-  | 'latin1'
-  | 'binary'
-  | 'ascii'
-  | 'base64'
-  | 'hex'
-
 /**
  * The part of Node's `Buffer` a body needs: a `Uint8Array` whose `toString` decodes as Node's
  * does (UTF-8 by default), whose JSON is Node's `{ type: 'Buffer', data }`, and `equals`.
@@ -503,16 +494,34 @@ export class Buffer extends Uint8Array {
     return bytes
   }
 
+  /**
+   * Node's `Buffer.prototype.toString` (`lib/buffer.js`): with no argument the whole buffer as
+   * UTF-8. Otherwise the range is clamped and truncated first, so an empty range is `''` whatever
+   * the encoding; then the encoding is read case-insensitively, an unknown one a `TypeError`.
+   */
   override toString(
-    encoding: Encoding = 'utf8',
-    start = 0,
-    end = this.length,
+    ...args: [encoding?: string | null, start?: number, end?: number]
   ): string {
-    const bytes = this.subarray(start, end)
-    switch (encoding) {
+    if (args.length === 0) return decodeUtf8(this)
+    const [encoding, start, end] = args
+    const length = this.length
+    let from: number
+    if ((start as number) <= 0) from = 0
+    else if ((start as number) >= length) return ''
+    else from = Math.trunc(start as number) || 0
+    const to = end === undefined || end > length ? length : Math.trunc(end) || 0
+    if (to <= from) return ''
+    const bytes = this.subarray(from, to)
+    if (encoding === undefined) return decodeUtf8(bytes)
+    switch (String(encoding).toLowerCase()) {
       case 'utf8':
       case 'utf-8':
         return decodeUtf8(bytes)
+      case 'ucs2':
+      case 'ucs-2':
+      case 'utf16le':
+      case 'utf-16le':
+        return fromCodeUnits(utf16Units(bytes), (unit) => unit)
       case 'latin1':
       case 'binary':
         return fromCodeUnits(bytes, (byte) => byte)
@@ -520,6 +529,11 @@ export class Buffer extends Uint8Array {
         return fromCodeUnits(bytes, (byte) => byte & 0x7f)
       case 'base64':
         return encodeBase64(bytes)
+      case 'base64url':
+        return encodeBase64(bytes)
+          .replace(/\+/g, '-')
+          .replace(/\//g, '_')
+          .replace(/=+$/, '')
       case 'hex':
         return [...bytes]
           .map((byte) => byte.toString(16).padStart(2, '0'))
@@ -625,8 +639,16 @@ class CodeUnits {
   }
 }
 
+/** Little-endian 16-bit code units; an odd last byte is dropped, as Node drops it. */
+function utf16Units(bytes: Uint8Array): Uint16Array {
+  const units = new Uint16Array(bytes.length >> 1)
+  for (let i = 0; i < units.length; i++)
+    units[i] = (bytes[2 * i] as number) | ((bytes[2 * i + 1] as number) << 8)
+  return units
+}
+
 function fromCodeUnits(
-  bytes: Uint8Array,
+  bytes: Uint8Array | Uint16Array,
   unit: (byte: number) => number,
 ): string {
   let out = ''

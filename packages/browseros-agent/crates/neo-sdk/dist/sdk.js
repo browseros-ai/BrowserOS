@@ -633,12 +633,33 @@ class Buffer extends Uint8Array {
     }
     return bytes;
   }
-  toString(encoding = "utf8", start = 0, end = this.length) {
-    const bytes = this.subarray(start, end);
-    switch (encoding) {
+  toString(...args) {
+    if (args.length === 0)
+      return decodeUtf8(this);
+    const [encoding, start, end] = args;
+    const length = this.length;
+    let from;
+    if (start <= 0)
+      from = 0;
+    else if (start >= length)
+      return "";
+    else
+      from = Math.trunc(start) || 0;
+    const to = end === undefined || end > length ? length : Math.trunc(end) || 0;
+    if (to <= from)
+      return "";
+    const bytes = this.subarray(from, to);
+    if (encoding === undefined)
+      return decodeUtf8(bytes);
+    switch (String(encoding).toLowerCase()) {
       case "utf8":
       case "utf-8":
         return decodeUtf8(bytes);
+      case "ucs2":
+      case "ucs-2":
+      case "utf16le":
+      case "utf-16le":
+        return fromCodeUnits(utf16Units(bytes), (unit) => unit);
       case "latin1":
       case "binary":
         return fromCodeUnits(bytes, (byte) => byte);
@@ -646,6 +667,8 @@ class Buffer extends Uint8Array {
         return fromCodeUnits(bytes, (byte) => byte & 127);
       case "base64":
         return encodeBase64(bytes);
+      case "base64url":
+        return encodeBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
       case "hex":
         return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
       default:
@@ -732,6 +755,12 @@ class CodeUnits {
     this.#out += String.fromCharCode(...this.#units);
     this.#units = [];
   }
+}
+function utf16Units(bytes) {
+  const units = new Uint16Array(bytes.length >> 1);
+  for (let i = 0;i < units.length; i++)
+    units[i] = bytes[2 * i] | bytes[2 * i + 1] << 8;
+  return units;
 }
 function fromCodeUnits(bytes, unit) {
   let out = "";
