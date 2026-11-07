@@ -162,10 +162,7 @@ pub(crate) async fn state_file(
         }
         StateFile::Import(params) => {
             let state = match path {
-                Some(path) => {
-                    let path = artifacts.check("path", &path)?;
-                    Some(session_state::read_state(artifacts, &path).await?)
-                }
+                Some(path) => Some(session_state::read_state(artifacts, &path).await?),
                 None => params.storage_state,
             };
             session_state::set_storage_state(tabs, state, progress).await?;

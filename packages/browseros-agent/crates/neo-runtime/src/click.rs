@@ -459,7 +459,8 @@ pub(crate) enum Scroll {
     Start,
 }
 
-const SCROLLS: [Scroll; 4] = [Scroll::Protocol, Scroll::End, Scroll::Center, Scroll::Start];
+pub(crate) const SCROLLS: [Scroll; 4] =
+    [Scroll::Protocol, Scroll::End, Scroll::Center, Scroll::Start];
 
 /// Loop A's backoff after its immediate first try (`frames.ts` `retryWithProgressAndBackoff`).
 const LOOP_A_BACKOFF_MS: [u32; 5] = [20, 50, 100, 100, 500];
@@ -475,7 +476,7 @@ const CLICK_STATES: [ElementState; 4] = [
 ];
 /// Hover's states: it never waits for an enabled element (`waitForEnabled: false`).
 /// Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `['visible', 'stable']`
-const HOVER_STATES: [ElementState; 2] = [ElementState::Visible, ElementState::Stable];
+pub(crate) const HOVER_STATES: [ElementState; 2] = [ElementState::Visible, ElementState::Stable];
 /// The longest URL Playwright's navigation pre-check prints.
 const LOGGED_URL_CHARS: usize = 200;
 /// Deviation: `server/input.ts` `Mouse.click`: `for (let cc = 1; cc <= clickCount; ++cc) {` Playwright has no cap; every click is two events Neo plans before writing, so a script's `clickCount: 1e9` must not take the server's memory with it.
@@ -1331,7 +1332,10 @@ pub(crate) fn loop_b_wait(retry: usize) -> Duration {
 /// each quad to the viewport, keep quads whose area is over 0.99, take the middle of the first
 /// survivor; no quads → `NotVisible`, none left → `NotInViewport`. For `Offset`, the border
 /// box's top-left plus the border widths plus `position`.
-fn click_point(geometry: &Geometry, position: Option<&Point>) -> Result<Point, NotReady> {
+pub(crate) fn click_point(
+    geometry: &Geometry,
+    position: Option<&Point>,
+) -> Result<Point, NotReady> {
     match geometry {
         Geometry::NoQuads => Err(NotReady::NotVisible),
         Geometry::Quads { quads, .. } if quads.is_empty() => Err(NotReady::NotVisible),
@@ -1394,7 +1398,7 @@ fn quad_middle(quad: &[f64; 8]) -> Point {
 }
 
 /// `roundPoint`: truncation to two decimals, `(x * 100 | 0) / 100`.
-fn round_point(point: &Point) -> Point {
+pub(crate) fn round_point(point: &Point) -> Point {
     Point {
         x: f64::from(to_int32(point.x * 100.0)) / 100.0,
         y: f64::from(to_int32(point.y * 100.0)) / 100.0,

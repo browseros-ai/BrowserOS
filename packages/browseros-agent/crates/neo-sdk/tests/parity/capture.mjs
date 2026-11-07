@@ -19,7 +19,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   browserBinary,
   buildNeoRun,
@@ -114,17 +114,29 @@ export async function withEngines(t, { pages, browserArgs = [] }, body) {
     const origin = await serveFixture(cleanups, { pages })
     const browser = await launchBrowser(cleanups, browserBinary, browserArgs)
     const cdp = await connectCdp(cleanups, browser.port)
+    // `isLocal`: the browser shares this machine, as Neo's always does, so Playwright sets an
+    // upload's paths as paths (`DOM.setFileInputFiles`) rather than reading them into buffers
+    // for a remote browser (`fileUploadUtils.ts`); nothing else reads it.
     const playwright = await chromium.connectOverCDP(
       `http://127.0.0.1:${browser.port}`,
+      { isLocal: true },
     )
     cleanups.push(() => playwright.close())
     const [context] = playwright.contexts()
     const scratch = mkdtempSync(join(tmpdir(), 'neo-capture-parity-'))
     cleanups.push(() => rmSync(scratch, { recursive: true, force: true }))
     let runs = 0
-    await body(async (path, source, probe) => {
+    await body(async (path, source, probe, files = {}) => {
       const dir = join(scratch, String(++runs))
       const url = `${origin}${path}`
+      // Files the script reads: the same ones in each engine's directory (`at(name)`).
+      for (const root of [join(dir, 'playwright'), join(dir, 'neo')]) {
+        for (const [name, content] of Object.entries(files)) {
+          const file = join(root, name)
+          mkdirSync(dirname(file), { recursive: true })
+          writeFileSync(file, content)
+        }
+      }
       return {
         playwright: await viaPlaywright(
           context,
@@ -206,7 +218,8 @@ async function viaNeo(cdp, port, neoRun, url, source, probe, dir) {
     if (probe) {
       const reply = await cdp.send(
         'Runtime.evaluate',
-        { expression: probe, returnByValue: true },
+        // A probe may answer a promise, as Playwright's `page.evaluate` awaits.
+        { expression: probe, returnByValue: true, awaitPromise: true },
         sessionId,
       )
       after = reply.result.value

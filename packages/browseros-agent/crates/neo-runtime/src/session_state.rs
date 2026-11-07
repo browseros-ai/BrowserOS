@@ -30,6 +30,7 @@ use neo_runtime_spec::serve::{
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use tokio::fs;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
@@ -1029,12 +1030,20 @@ const NOT_A_STATE: &str = "Error reading storage state from";
 /// artifact directory (`artifacts.rs`), at a relative path without `..`.
 pub(crate) async fn read_state(
     artifacts: &Artifacts,
-    path: &ArtifactPath,
+    path: &str,
 ) -> Result<BrowserContextSetStorageStateParamsStorageState, PlaywrightError> {
-    let bytes = artifacts.read(path).await?;
-    serde_json::from_slice(&bytes).map_err(|error| {
-        PlaywrightError::error(format!("{NOT_A_STATE} {}: {error}", path.display()))
-    })
+    let file = artifacts.existing("path", path).await?;
+    if file.is_dir {
+        return Err(PlaywrightError::error(format!(
+            "{NOT_A_STATE} {}: it is a directory",
+            file.display
+        )));
+    }
+    let bytes = fs::read(&file.path).await.map_err(|error| {
+        PlaywrightError::error(format!("{NOT_A_STATE} {}: {error}", file.display))
+    })?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| PlaywrightError::error(format!("{NOT_A_STATE} {}: {error}", file.display)))
 }
 
 /// Neo: what `storageState` throws for what Neo does not read yet: `IndexedDB`, OPFS and `WebAuthn`
