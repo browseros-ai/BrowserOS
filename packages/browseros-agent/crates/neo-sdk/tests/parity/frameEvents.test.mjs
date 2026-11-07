@@ -9,9 +9,9 @@
 // iframe, which Chromium runs in a process of its own, goes the same way once the script has
 // reached it.
 //
-// BrowserOS's own content script (claw-app's takeover.content.ts) adds and removes two
-// about:blank iframes on some loads and not others, at a moment of its own, so the cases follow
-// their frames by identity and never count frames.
+// BrowserOS adds and removes short-lived about:blank frames on some loads and not others, at a
+// moment of its own (seen in pinned Playwright's frame events; the injector is not identified),
+// so the cases follow their frames by identity and never count frames.
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs, events.mjs).
 
