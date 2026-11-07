@@ -644,8 +644,17 @@ impl CallEntry {
             return;
         }
         let line = format!("operation was aborted: {reason}");
-        if self.abort.abort(reason) {
-            self.update_log(|log| log.push(line));
+        // The abort wakes the call while this holds its log: the call's end folds the log
+        // under the same lock, so the reply always carries the line.
+        match self.log.lock() {
+            Ok(mut log) => {
+                if self.abort.abort(reason) {
+                    log.push(line);
+                }
+            }
+            Err(_) => {
+                let _aborted = self.abort.abort(reason);
+            }
         }
     }
 
