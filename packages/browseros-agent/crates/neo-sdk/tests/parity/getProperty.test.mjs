@@ -9,7 +9,8 @@
 // JH-013 "getProperties should work", JH-014 "getProperties should return empty map for
 // non-objects", JH-015 "getProperties should return properties inhertied from super class", JH-016
 // "getProperties should return own enumerable properties only", JH-017 "getProperties should work
-// with elements" (read through `evaluate`: ElementHandle.textContent is another ledger row).
+// with elements" (read through `evaluate`: ElementHandle.textContent is another ledger row). Neo's
+// own case: a disposed handle's getProperty and getProperties reject as Playwright's do.
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
@@ -61,6 +62,16 @@ test('getProperty and getProperties read handles as Playwright reads them', {
           A.prototype.inherited = 3
           return new A()
         }))),
+        disposed: await outcome(async () => {
+          const handle = await page.evaluateHandle(() => ({ a: 1 }))
+          await handle.dispose()
+          return handle.getProperty('a')
+        }),
+        disposedList: await outcome(async () => {
+          const handle = await page.evaluateHandle(() => ({ a: 1 }))
+          await handle.dispose()
+          return handle.getProperties()
+        }),
         collection: await outcome(async () => keys(await page.evaluateHandle(() => document.querySelector('#list').children))),
         elements: await outcome(async () => {
           const body = (await (await page.evaluateHandle(() => ({ body: document.body }))).getProperties()).get('body')
