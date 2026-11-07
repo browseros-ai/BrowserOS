@@ -578,6 +578,33 @@ export const glue = {
     return {}
   },
 
+  /** Playwright: `server/overlay.ts` `Overlay._doAdd`: `return injected.addUserOverlay(id, html);` */
+  addUserOverlay: (injected, { id, html }) => {
+    injected.addUserOverlay(id, html)
+    return {}
+  },
+
+  /** Playwright: `server/overlay.ts` `Overlay.remove`: `injected.removeUserOverlay(id);` */
+  removeUserOverlay: (injected, { id }) => {
+    injected.removeUserOverlay(id)
+    return {}
+  },
+
+  /** Playwright: `server/overlay.ts` `Overlay.setVisible`: `injected.setUserOverlaysVisible(visible);` */
+  setUserOverlaysVisible: (injected, { visible }) => {
+    injected.setUserOverlaysVisible(visible)
+    return {}
+  },
+
+  /** Playwright: `server/overlay.ts` `Overlay.chapter`: `bg.classList.add('fade-out');` */
+  fadeOutUserOverlay: (injected, { id }) => {
+    injected
+      .getUserOverlay(id)
+      ?.querySelector('#background')
+      ?.classList.add('fade-out')
+    return {}
+  },
+
   inputValue: (injected, { selector, strict }) => {
     const [node] = query(injected, selector, strict, { markTargets: 'first' })
     if (!node) return {}
