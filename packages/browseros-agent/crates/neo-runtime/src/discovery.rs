@@ -4,7 +4,7 @@
 //! each new tab of the run's context the same way, as the `page` event on the context.
 //!
 //! ```text
-//!  Runtime: Discovery  holders 0 → 1: Target.setDiscoverTargets {discover: true, page filter}
+//!  Runtime: Switch     holders 0 → 1: Target.setDiscoverTargets {discover: true, page filter}
 //!                      holders 1 → 0: {discover: false}             shared by the Runtime's runs
 //!  run: Tabs::discover ─▶ events receiver ─▶ baseline = Target.getTargets ─▶ lease ─▶ watch
 //!    Target.targetCreated / targetInfoChanged, url ""  ─▶ pending: the initial empty document
@@ -26,19 +26,16 @@
 //! before the run's tasks finish.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
-use browseros_cdp::{CdpClient, CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::runtime::Handle;
-use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
-use tokio_util::task::TaskTracker;
-use tracing::{debug, warn};
+use tracing::warn;
 
 use crate::events::{EventHub, Flushes};
+use crate::switch::{Setting, Switch};
 use crate::tabs::Tabs;
 
 /// Neo: the target types discovery reports. Tabs are `page` targets; without the filter, every
@@ -47,104 +44,18 @@ fn page_filter() -> Value {
     json!([{ "type": "page" }])
 }
 
-/// The `Runtime`'s discovery switch: how many of its runs listen for new pages. Discovery is a
-/// setting of the browser connection, which every run of a `Runtime` shares, so it is on while
-/// any run holds a [`Lease`] and off once the last lets go.
-#[derive(Clone)]
-pub(crate) struct Discovery {
-    holders: Arc<Mutex<usize>>,
-    /// The `Runtime`'s cleanup tracker, for a lease dropped without [`Lease::release`].
-    cleanup: TaskTracker,
-}
+/// Neo: target discovery as a setting the `Runtime`'s runs share (`switch.rs`): on for page
+/// targets while any run listens for new pages, off once the last lets go.
+pub(crate) static DISCOVERY: Setting = Setting {
+    method: "Target.setDiscoverTargets",
+    params: discovery_params,
+};
 
-impl Default for Discovery {
-    fn default() -> Self {
-        Self::new(TaskTracker::new())
-    }
-}
-
-/// One run's hold on discovery. [`Lease::release`] lets go; dropping an unreleased one lets go on
-/// the `Runtime`'s cleanup tracker.
-pub(crate) struct Lease {
-    discovery: Discovery,
-    cdp: CdpClient,
-    released: bool,
-}
-
-impl Discovery {
-    pub(crate) fn new(cleanup: TaskTracker) -> Self {
-        Self {
-            holders: Arc::default(),
-            cleanup,
-        }
-    }
-
-    /// Takes a hold, turning discovery on for the first holder. The lock spans the CDP call, so
-    /// a concurrent run's acquire returns only once discovery is on, and a release's `false`
-    /// can never land after a later acquire's `true`.
-    ///
-    /// # Errors
-    ///
-    /// The CDP error of `Target.setDiscoverTargets`; the hold is not taken.
-    pub(crate) async fn acquire(&self, cdp: &CdpClient) -> Result<Lease, CdpError> {
-        let mut holders = self.holders.lock().await;
-        if *holders == 0 {
-            cdp.send(
-                "Target.setDiscoverTargets",
-                json!({ "discover": true, "filter": page_filter() }),
-                None,
-            )
-            .await?;
-        }
-        *holders += 1;
-        Ok(Lease {
-            discovery: self.clone(),
-            cdp: cdp.clone(),
-            released: false,
-        })
-    }
-
-    /// How many runs hold discovery now.
-    #[cfg(test)]
-    pub(crate) async fn holders(&self) -> usize {
-        *self.holders.lock().await
-    }
-}
-
-impl Lease {
-    /// Lets go, turning discovery off when this was the last hold. A failed switch-off is
-    /// logged: the next acquire turns it on again either way.
-    pub(crate) async fn release(mut self) {
-        self.released = true;
-        let_go(Arc::clone(&self.discovery.holders), self.cdp.clone()).await;
-    }
-}
-
-impl Drop for Lease {
-    fn drop(&mut self) {
-        if self.released || Handle::try_current().is_err() {
-            return;
-        }
-        self.discovery.cleanup.spawn(let_go(
-            Arc::clone(&self.discovery.holders),
-            self.cdp.clone(),
-        ));
-    }
-}
-
-async fn let_go(holders: Arc<Mutex<usize>>, cdp: CdpClient) {
-    let mut holders = holders.lock().await;
-    *holders = holders.saturating_sub(1);
-    if *holders == 0
-        && let Err(error) = cdp
-            .send(
-                "Target.setDiscoverTargets",
-                json!({ "discover": false }),
-                None,
-            )
-            .await
-    {
-        debug!(%error, "turning target discovery off failed");
+fn discovery_params(on: bool, _scope: Option<&str>) -> Value {
+    if on {
+        json!({ "discover": true, "filter": page_filter() })
+    } else {
+        json!({ "discover": false })
     }
 }
 
@@ -185,13 +96,13 @@ struct TargetInfos {
 
 /// Playwright: `server/chromium/crPage.ts` `FrameSession._initialize`: `const isInitialEmptyPage = this._isMainFrame() && (this._page.mainFrame().url() === ':' || this._page.mainFrame().url() === '');`
 /// A target's url is `""` until its first document commits (measured).
-fn is_initial_empty(url: &str) -> bool {
+pub(crate) fn is_initial_empty(url: &str) -> bool {
     url.is_empty() || url == ":"
 }
 
 /// Turns the run's discovery on and watches it until the run's events end. Runs on the run's
 /// task tracker, so `Dispatcher::finish` waits for the lease's release.
-pub(crate) async fn run(tabs: Tabs, discovery: Discovery) {
+pub(crate) async fn run(tabs: Tabs, discovery: Switch) {
     let hub = tabs.events().clone();
     let cdp = tabs.cdp().clone();
     // Subscribed first: every target event from here on reaches this receiver, the replay too.
@@ -205,7 +116,7 @@ pub(crate) async fn run(tabs: Tabs, discovery: Discovery) {
                 None,
             )
             .await?;
-        let lease = discovery.acquire(&cdp).await?;
+        let lease = discovery.acquire(&cdp, None).await?;
         Ok::<_, CdpError>((baseline, lease))
     };
     let started = started.await;
@@ -353,6 +264,8 @@ impl Targets {
 
 #[cfg(test)]
 mod tests {
+    use tokio_util::task::TaskTracker;
+
     use super::*;
     use crate::fake_browser::{FakeBrowser, Replies};
 
@@ -505,9 +418,9 @@ mod tests {
     async fn tests_that_discovery_is_on_while_any_run_holds_it() {
         let browser = FakeBrowser::start(Replies::default()).await;
         let cdp = browser.cdp().await;
-        let discovery = Discovery::default();
-        let first = discovery.acquire(&cdp).await.unwrap();
-        let second = discovery.acquire(&cdp).await.unwrap();
+        let discovery = Switch::new(&DISCOVERY, TaskTracker::new());
+        let first = discovery.acquire(&cdp, None).await.unwrap();
+        let second = discovery.acquire(&cdp, None).await.unwrap();
         assert_eq!(discovery.holders().await, 2);
         first.release().await;
         assert_eq!(discovery.holders().await, 1);

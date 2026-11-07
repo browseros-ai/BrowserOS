@@ -282,7 +282,7 @@ fn plan<D: Devices>(
             keyboard::plan_insert_text(&mut plan, &mut simulated, text);
         }
         DeviceCall::MouseMove { x, y, steps } => {
-            input_devices::plan_move(&mut plan, &mut simulated, (*x, *y), *steps);
+            input_devices::plan_free_move(&mut plan, &mut simulated, (*x, *y), *steps);
         }
         DeviceCall::MouseDown {
             button,
