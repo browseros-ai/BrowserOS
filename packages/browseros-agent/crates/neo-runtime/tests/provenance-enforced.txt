@@ -47,9 +47,11 @@ neo-runtime/src/network_events.rs
 neo-runtime/src/network_idle.rs
 neo-runtime/src/page_events.rs
 neo-runtime/src/pdf.rs
+neo-runtime/src/routes.rs
 neo-runtime/src/screenshot.rs
 neo-runtime/src/session_state.rs
 neo-runtime/src/switch.rs
+neo-sdk/src/api-response.ts
 neo-sdk/src/binding-call.ts
 neo-sdk/src/buffer.ts
 neo-sdk/src/console-message.ts
@@ -64,6 +66,7 @@ neo-sdk/src/init-script.ts
 neo-sdk/src/input.ts
 neo-sdk/src/js-handle.ts
 neo-sdk/src/plain-argument.ts
+neo-sdk/src/route.ts
 neo-sdk/src/screenshot.ts
 neo-sdk/src/url.ts
 neo-sdk/src/vendor-globals.d.ts

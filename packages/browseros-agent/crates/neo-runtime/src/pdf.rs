@@ -413,6 +413,7 @@ mod tests {
             closed.clone(),
             EventHub::default(),
             false,
+            Arc::default(),
         ))
     }
 

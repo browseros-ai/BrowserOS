@@ -99,6 +99,7 @@ mod progress;
 mod reads;
 mod realm;
 mod responses;
+mod routes;
 mod run;
 mod runtime;
 mod screenshot;

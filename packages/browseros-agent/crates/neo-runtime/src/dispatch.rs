@@ -55,7 +55,7 @@ use neo_runtime_spec::serve::{
     FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameTypeParams, FrameTypeResult,
     FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
     FrameWaitForTimeoutParams, FrameWaitForTimeoutResult, Metadata, PageCall, RequestCall,
-    ResponseCall,
+    ResponseCall, RouteCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -109,6 +109,7 @@ use crate::progress::{
 };
 use crate::reads::{self, AttributeOptions, ReadOptions, SnapshotOptions};
 use crate::responses::{self, NetworkCall};
+use crate::routes;
 use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
 use crate::states::{self, StateOptions};
 use crate::tab_calls;
@@ -377,6 +378,9 @@ enum ObjectKind {
     BindingCall(String),
     /// A JavaScript dialog the run's `dialog` event handed out, by its index on the tab.
     Dialog(u64),
+    /// A paused request the run's `route` event handed out (Playwright's `Route`), by its index
+    /// on the tab; named apart from this module's call-routing `Route`.
+    Intercepted(u64),
     /// A download the run's `download` event handed out, by the browser's guid
     /// (`downloads.rs`). It belongs to the run, not to its tab, which may close first.
     Download(String),
@@ -397,6 +401,8 @@ enum ObjectCall {
     /// A binding command (`bindings.rs`).
     Binding(BindingRoute),
     Dialog(u64, DialogCall),
+    /// A paused request's answer or `route.fetch` (`routes.rs`).
+    Intercepted(u64, routes::InterceptedCall),
     Download(String, ArtifactCall),
 }
 
@@ -613,6 +619,13 @@ impl Dispatcher {
         // sessions detach (`Dialogs::left_open`).
         self.0.tabs.events().close();
         let _answered = time::timeout_at(deadline, answer_left_open(&self.0.tabs)).await;
+        // Every request a route handler left paused goes on, and no tab keeps pausing requests
+        // for a run that is over (`routes.rs`).
+        let _routed = time::timeout_at(deadline, async {
+            let sessions = self.0.tabs.attached_sessions();
+            future::join_all(sessions.iter().map(|session| routes::finish(session))).await;
+        })
+        .await;
         // Keys and buttons this run left held are released on each tab it touched, under a
         // turn (design section 4.6), once the dialogs it left open are answered. Each tab's
         // release is a task of the run's tracker, started before the tracker closes, so the
@@ -829,6 +842,23 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         }
         ObjectKind::Dialog(index) => DialogCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
+        ObjectKind::Intercepted(index) if method == routes::FETCH_META.method => {
+            return Routed {
+                meta: Some(&routes::FETCH_META),
+                route: decode_neo_params::<routes::NeoRouteFetchParams>(
+                    params,
+                    &routes::FETCH_META,
+                )
+                .map(|params| {
+                    ObjectCall::Intercepted(index, routes::InterceptedCall::Fetch(params))
+                }),
+            };
+        }
+        ObjectKind::Intercepted(index) => RouteCall::decode(method, params).map(|call| {
+            let meta = call.meta();
+            let route = ObjectCall::Intercepted(index, routes::InterceptedCall::Answer(call));
+            (meta, Ok(route))
+        }),
         ObjectKind::Download(guid) => ArtifactCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Download(guid, call)))),
         // `route_init` answers every Disposable and BindingCall message.
@@ -1213,8 +1243,12 @@ async fn serve_call(
     // context call (`newPage`) waits for target discovery's baseline. A dialog's answer never
     // waits: an open dialog can hold that very enable, and only the answer frees the page.
     let gate = match (&route, &target) {
-        // A download's calls start nothing in a page; `cancel` must not wait for a page's enables.
-        (ObjectCall::Dialog(..) | ObjectCall::Download(..), _) => None,
+        // A route's answer never waits either: the paused request may be what the page's
+        // enable, or the script's goto, waits for. A download's calls start nothing in a page;
+        // `cancel` must not wait for a page's enables.
+        (ObjectCall::Dialog(..) | ObjectCall::Download(..) | ObjectCall::Intercepted(..), _) => {
+            None
+        }
         (ObjectCall::Context(_), _) => Some(ALL_PAGES),
         (_, Some((page, _))) => Some(page.id.as_str()),
         (_, None) => None,
@@ -1297,6 +1331,11 @@ async fn serve_call(
         // A dialog exists only after its tab's watcher saw it open on this run's session.
         (ObjectCall::Dialog(index, call), Some((page, _))) => match page.attached_session() {
             Some(session) => dialogs::serve(&session, index, call, &progress).await,
+            None => Err(PlaywrightError::target_closed().into()),
+        },
+        // A paused request exists only after its tab's watcher handed it to this run.
+        (ObjectCall::Intercepted(index, call), Some((page, _))) => match page.attached_session() {
+            Some(session) => routes::serve_intercepted(&session, index, call, &progress).await,
             None => Err(PlaywrightError::target_closed().into()),
         },
         (ObjectCall::Download(guid, call), _) => {
@@ -1735,6 +1774,8 @@ fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
         ObjectKind::Network(kind, hop)
     } else if let Some((_, index)) = dialogs::parse(guid) {
         ObjectKind::Dialog(index)
+    } else if let Some((_, index)) = routes::parse(guid) {
+        ObjectKind::Intercepted(index)
     } else {
         ObjectKind::Page
     }
@@ -2065,6 +2106,7 @@ mod tests {
             | ObjectCall::Capture(_)
             | ObjectCall::Binding(_)
             | ObjectCall::Dialog(..)
+            | ObjectCall::Intercepted(..)
             | ObjectCall::Download(..) => {
                 panic!("a Frame message routed to another object")
             }
