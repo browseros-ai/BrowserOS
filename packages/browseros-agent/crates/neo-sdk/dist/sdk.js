@@ -2048,6 +2048,210 @@ function trimStringWithEllipsis(input, cap) {
 }
 var ansiRegex = new RegExp("([\\u001B\\u009B][[\\]()#?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]*)*)?\\u0007)|(?:(?:\\d{0,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-ntqry=><~])))", "g");
 
+// src/protocol.ts
+var FRAME_GOTO_KEYS = ["url", "waitUntil", "referer"];
+var FRAME_TEXT_CONTENT_KEYS = ["selector", "strict"];
+var FRAME_INNER_TEXT_KEYS = ["selector", "strict"];
+var FRAME_GET_ATTRIBUTE_KEYS = ["selector", "strict", "name"];
+var FRAME_QUERY_COUNT_KEYS = ["selector"];
+var FRAME_CONTENT_KEYS = ["includeShadow"];
+var FRAME_SET_CONTENT_KEYS = ["html", "waitUntil"];
+var FRAME_WAIT_FOR_TIMEOUT_KEYS = ["waitTimeout"];
+var FRAME_RESOLVE_SELECTOR_KEYS = ["selector", "sdkLanguage"];
+var FRAME_ARIA_SNAPSHOT_JSON_KEYS = [
+  "mode",
+  "selector",
+  "depth",
+  "boxes"
+];
+var FRAME_ARIA_SNAPSHOT_KEYS = [
+  "mode",
+  "selector",
+  "depth",
+  "boxes"
+];
+var FRAME_CLICK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "noWaitAfter",
+  "modifiers",
+  "position",
+  "delay",
+  "button",
+  "clickCount",
+  "trial",
+  "steps"
+];
+var FRAME_DBLCLICK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "modifiers",
+  "position",
+  "delay",
+  "button",
+  "trial",
+  "steps"
+];
+var FRAME_HOVER_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "modifiers",
+  "position",
+  "trial"
+];
+var FRAME_TAP_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "modifiers",
+  "position",
+  "trial"
+];
+var PAGE_KEYBOARD_DOWN_KEYS = ["key"];
+var PAGE_KEYBOARD_UP_KEYS = ["key"];
+var PAGE_KEYBOARD_INSERT_TEXT_KEYS = ["text"];
+var PAGE_KEYBOARD_TYPE_KEYS = ["text", "delay"];
+var PAGE_KEYBOARD_PRESS_KEYS = ["key", "delay"];
+var PAGE_MOUSE_MOVE_KEYS = ["x", "y", "steps"];
+var PAGE_MOUSE_DOWN_KEYS = ["button", "clickCount"];
+var PAGE_MOUSE_UP_KEYS = ["button", "clickCount"];
+var PAGE_MOUSE_CLICK_KEYS = [
+  "x",
+  "y",
+  "delay",
+  "button",
+  "clickCount"
+];
+var PAGE_MOUSE_WHEEL_KEYS = ["deltaX", "deltaY"];
+var PAGE_TOUCHSCREEN_TAP_KEYS = ["x", "y"];
+var FRAME_FILL_KEYS = ["selector", "strict", "value", "force"];
+var FRAME_PRESS_KEYS = [
+  "selector",
+  "strict",
+  "key",
+  "delay",
+  "noWaitAfter"
+];
+var FRAME_TYPE_KEYS = ["selector", "strict", "text", "delay"];
+var FRAME_DRAG_AND_DROP_KEYS = [
+  "source",
+  "target",
+  "force",
+  "scroll",
+  "trial",
+  "sourcePosition",
+  "targetPosition",
+  "strict",
+  "steps"
+];
+var FRAME_INPUT_VALUE_KEYS = ["selector", "strict"];
+var FRAME_IS_CHECKED_KEYS = ["selector", "strict"];
+var FRAME_IS_VISIBLE_KEYS = ["selector", "strict"];
+var FRAME_IS_HIDDEN_KEYS = ["selector", "strict"];
+var FRAME_IS_ENABLED_KEYS = ["selector", "strict"];
+var FRAME_IS_DISABLED_KEYS = ["selector", "strict"];
+var FRAME_IS_EDITABLE_KEYS = ["selector", "strict"];
+var FRAME_INNER_HTML_KEYS = ["selector", "strict"];
+var FRAME_CHECK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "position",
+  "trial"
+];
+var FRAME_UNCHECK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "position",
+  "trial"
+];
+var FRAME_SELECT_OPTION_KEYS = [
+  "selector",
+  "strict",
+  "elements",
+  "options",
+  "force"
+];
+var FRAME_WAIT_FOR_SELECTOR_KEYS = [
+  "selector",
+  "strict",
+  "state",
+  "omitReturnValue"
+];
+var FRAME_FOCUS_KEYS = ["selector", "strict"];
+var FRAME_BLUR_KEYS = ["selector", "strict"];
+var FRAME_DISPATCH_EVENT_KEYS = [
+  "selector",
+  "strict",
+  "type",
+  "eventInit"
+];
+var FRAME_HIGHLIGHT_KEYS = ["selector", "style"];
+var FRAME_HIDE_HIGHLIGHT_KEYS = ["selector"];
+var BROWSER_CONTEXT_CLOSE_KEYS = ["reason"];
+var PAGE_CLOSE_KEYS = ["reason"];
+var PAGE_REGISTER_LOCATOR_HANDLER_KEYS = [
+  "selector",
+  "noWaitAfter"
+];
+var PAGE_RESOLVE_LOCATOR_HANDLER_KEYS = ["uid", "remove"];
+var PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS = ["uid"];
+var PAGE_RELOAD_KEYS = ["waitUntil"];
+var PAGE_GO_BACK_KEYS = ["waitUntil"];
+var PAGE_GO_FORWARD_KEYS = ["waitUntil"];
+var PAGE_CONSOLE_MESSAGES_KEYS = ["filter"];
+var PAGE_START_JS_COVERAGE_KEYS = [
+  "resetOnNavigation",
+  "reportAnonymousScripts"
+];
+var PAGE_START_CSS_COVERAGE_KEYS = ["resetOnNavigation"];
+var PAGE_PAGE_ERRORS_KEYS = ["filter"];
+function pickParams(keys, options) {
+  const params = {};
+  for (const key of keys) {
+    const value = options[key];
+    if (value === null)
+      throw new Error(`${key}: expected a value, got null`);
+    if (value !== undefined)
+      params[key] = value;
+  }
+  return params;
+}
+
+// src/coverage.ts
+class Coverage {
+  #connection;
+  #guid;
+  constructor(connection, guid) {
+    this.#connection = connection;
+    this.#guid = guid;
+  }
+  async startJSCoverage(options = {}) {
+    await this.#connection.sendPage("coverage.startJSCoverage", this.#guid, "startJSCoverage", pickParams(PAGE_START_JS_COVERAGE_KEYS, options), 0);
+  }
+  async stopJSCoverage() {
+    const { entries } = await this.#connection.sendPage("coverage.stopJSCoverage", this.#guid, "stopJSCoverage", {}, 0);
+    return entries;
+  }
+  async startCSSCoverage(options = {}) {
+    await this.#connection.sendPage("coverage.startCSSCoverage", this.#guid, "startCSSCoverage", pickParams(PAGE_START_CSS_COVERAGE_KEYS, options), 0);
+  }
+  async stopCSSCoverage() {
+    const { entries } = await this.#connection.sendPage("coverage.stopCSSCoverage", this.#guid, "stopCSSCoverage", {}, 0);
+    return entries;
+  }
+}
+
 // src/file-chooser.ts
 var SET_FILES_UNSERVED = "Neo does not serve FileChooser.setFiles yet: it sets the input through setInputFiles, which Neo does not serve yet";
 
@@ -4820,181 +5024,6 @@ function accessChainToDisplayString2(accessChain) {
   return chainString.length > 0 ? ` at position "${chainString}"` : "";
 }
 
-// src/protocol.ts
-var FRAME_GOTO_KEYS = ["url", "waitUntil", "referer"];
-var FRAME_TEXT_CONTENT_KEYS = ["selector", "strict"];
-var FRAME_INNER_TEXT_KEYS = ["selector", "strict"];
-var FRAME_GET_ATTRIBUTE_KEYS = ["selector", "strict", "name"];
-var FRAME_QUERY_COUNT_KEYS = ["selector"];
-var FRAME_CONTENT_KEYS = ["includeShadow"];
-var FRAME_SET_CONTENT_KEYS = ["html", "waitUntil"];
-var FRAME_WAIT_FOR_TIMEOUT_KEYS = ["waitTimeout"];
-var FRAME_RESOLVE_SELECTOR_KEYS = ["selector", "sdkLanguage"];
-var FRAME_ARIA_SNAPSHOT_JSON_KEYS = [
-  "mode",
-  "selector",
-  "depth",
-  "boxes"
-];
-var FRAME_ARIA_SNAPSHOT_KEYS = [
-  "mode",
-  "selector",
-  "depth",
-  "boxes"
-];
-var FRAME_CLICK_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "noWaitAfter",
-  "modifiers",
-  "position",
-  "delay",
-  "button",
-  "clickCount",
-  "trial",
-  "steps"
-];
-var FRAME_DBLCLICK_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "modifiers",
-  "position",
-  "delay",
-  "button",
-  "trial",
-  "steps"
-];
-var FRAME_HOVER_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "modifiers",
-  "position",
-  "trial"
-];
-var FRAME_TAP_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "modifiers",
-  "position",
-  "trial"
-];
-var PAGE_KEYBOARD_DOWN_KEYS = ["key"];
-var PAGE_KEYBOARD_UP_KEYS = ["key"];
-var PAGE_KEYBOARD_INSERT_TEXT_KEYS = ["text"];
-var PAGE_KEYBOARD_TYPE_KEYS = ["text", "delay"];
-var PAGE_KEYBOARD_PRESS_KEYS = ["key", "delay"];
-var PAGE_MOUSE_MOVE_KEYS = ["x", "y", "steps"];
-var PAGE_MOUSE_DOWN_KEYS = ["button", "clickCount"];
-var PAGE_MOUSE_UP_KEYS = ["button", "clickCount"];
-var PAGE_MOUSE_CLICK_KEYS = [
-  "x",
-  "y",
-  "delay",
-  "button",
-  "clickCount"
-];
-var PAGE_MOUSE_WHEEL_KEYS = ["deltaX", "deltaY"];
-var PAGE_TOUCHSCREEN_TAP_KEYS = ["x", "y"];
-var FRAME_FILL_KEYS = ["selector", "strict", "value", "force"];
-var FRAME_PRESS_KEYS = [
-  "selector",
-  "strict",
-  "key",
-  "delay",
-  "noWaitAfter"
-];
-var FRAME_TYPE_KEYS = ["selector", "strict", "text", "delay"];
-var FRAME_DRAG_AND_DROP_KEYS = [
-  "source",
-  "target",
-  "force",
-  "scroll",
-  "trial",
-  "sourcePosition",
-  "targetPosition",
-  "strict",
-  "steps"
-];
-var FRAME_INPUT_VALUE_KEYS = ["selector", "strict"];
-var FRAME_IS_CHECKED_KEYS = ["selector", "strict"];
-var FRAME_IS_VISIBLE_KEYS = ["selector", "strict"];
-var FRAME_IS_HIDDEN_KEYS = ["selector", "strict"];
-var FRAME_IS_ENABLED_KEYS = ["selector", "strict"];
-var FRAME_IS_DISABLED_KEYS = ["selector", "strict"];
-var FRAME_IS_EDITABLE_KEYS = ["selector", "strict"];
-var FRAME_INNER_HTML_KEYS = ["selector", "strict"];
-var FRAME_CHECK_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "position",
-  "trial"
-];
-var FRAME_UNCHECK_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "position",
-  "trial"
-];
-var FRAME_SELECT_OPTION_KEYS = [
-  "selector",
-  "strict",
-  "elements",
-  "options",
-  "force"
-];
-var FRAME_WAIT_FOR_SELECTOR_KEYS = [
-  "selector",
-  "strict",
-  "state",
-  "omitReturnValue"
-];
-var FRAME_FOCUS_KEYS = ["selector", "strict"];
-var FRAME_BLUR_KEYS = ["selector", "strict"];
-var FRAME_DISPATCH_EVENT_KEYS = [
-  "selector",
-  "strict",
-  "type",
-  "eventInit"
-];
-var FRAME_HIGHLIGHT_KEYS = ["selector", "style"];
-var FRAME_HIDE_HIGHLIGHT_KEYS = ["selector"];
-var BROWSER_CONTEXT_CLOSE_KEYS = ["reason"];
-var PAGE_CLOSE_KEYS = ["reason"];
-var PAGE_REGISTER_LOCATOR_HANDLER_KEYS = [
-  "selector",
-  "noWaitAfter"
-];
-var PAGE_RESOLVE_LOCATOR_HANDLER_KEYS = ["uid", "remove"];
-var PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS = ["uid"];
-var PAGE_RELOAD_KEYS = ["waitUntil"];
-var PAGE_GO_BACK_KEYS = ["waitUntil"];
-var PAGE_GO_FORWARD_KEYS = ["waitUntil"];
-var PAGE_CONSOLE_MESSAGES_KEYS = ["filter"];
-var PAGE_PAGE_ERRORS_KEYS = ["filter"];
-function pickParams(keys, options) {
-  const params = {};
-  for (const key of keys) {
-    const value = options[key];
-    if (value === null)
-      throw new Error(`${key}: expected a value, got null`);
-    if (value !== undefined)
-      params[key] = value;
-  }
-  return params;
-}
-
 // src/select-option.ts
 function convertSelectOptionValues(values) {
   if (values === null)
@@ -6262,6 +6291,7 @@ class Page extends ChannelOwner {
   #mainFrame;
   #frames = new Map;
   _timeoutSettings;
+  coverage;
   keyboard;
   mouse;
   touchscreen;
@@ -6279,6 +6309,7 @@ class Page extends ChannelOwner {
       name: ""
     });
     this.#frames.set(mainFrameGuid, this.#mainFrame);
+    this.coverage = new Coverage(this.#connection, this.#guid);
     this.keyboard = new Keyboard(this);
     this.mouse = new Mouse(this);
     this.touchscreen = new Touchscreen(this);
