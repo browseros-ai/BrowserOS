@@ -141,6 +141,8 @@ mod tests {
         assert!(guide.content().starts_with("---\nname: browseros-neo\n"));
         assert!(guide.content().contains("Write Playwright JavaScript"));
         assert!(guide.content().contains("{code, page?, timeout?}"));
+        assert!(guide.content().contains("context.newPage()"));
+        assert!(guide.content().contains("waitUntil: 'domcontentloaded'"));
         assert!(!guide.content().contains("name_session"));
         assert!(!guide.content().contains("snapshot -> act"));
         Ok(())

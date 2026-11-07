@@ -207,7 +207,34 @@ impl PlaywrightService {
                 error.message = format!("Timeout {timeout_ms}ms exceeded.");
             }
         }
-        report(outcome)
+        let mut result = report(outcome);
+        // Best effort, bounded to 500 ms; cancellation must not start another CDP read.
+        if result["status"] != "cancelled" {
+            add_page_urls(&browser.cdp, &mut result).await;
+        }
+        result
+    }
+}
+
+async fn add_page_urls(cdp: &CdpClient, result: &mut Value) {
+    let Ok(Ok(reply)) = tokio::time::timeout(
+        Duration::from_millis(500),
+        cdp.send("Browser.getTabs", json!({}), None),
+    )
+    .await
+    else {
+        return;
+    };
+    if let (Some(pages), Some(tabs)) = (result["pages"].as_array_mut(), reply["tabs"].as_array()) {
+        for page in pages.iter_mut().filter(|page| page["closed"] != true) {
+            if let Some(url) = tabs
+                .iter()
+                .find(|tab| tab["targetId"] == page["id"])
+                .and_then(|tab| tab["url"].as_str())
+            {
+                page["url"] = json!(url);
+            }
+        }
     }
 }
 
