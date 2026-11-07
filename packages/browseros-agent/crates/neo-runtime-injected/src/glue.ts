@@ -238,14 +238,15 @@ export const glue = {
     outcome: injected.expectHitTarget(point, element),
   }),
 
+  /** Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `injected.setupHitTargetInterceptor(node, actionType, hitPoint, trial)` */
   setupHitTargetInterceptor: (
     injected,
-    { hitPoint, blockAllEvents },
+    { action, hitPoint, blockAllEvents },
     element,
   ) => ({
     outcome: injected.setupHitTargetInterceptor(
       element,
-      'mouse',
+      action,
       hitPoint,
       blockAllEvents,
     ),

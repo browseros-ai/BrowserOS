@@ -44,15 +44,18 @@ import type {
   AriaSnapshotOptions,
   CheckOptions,
   ClickOptions,
+  DblclickOptions,
   FillOptions,
   Frame,
   GetAttributeOptions,
+  HoverOptions,
   InnerTextOptions,
   InputValueOptions,
   IsCheckedOptions,
   IsVisibleOptions,
   PressOptions,
   SelectOptionOptions,
+  TapOptions,
   TextContentOptions,
   UncheckOptions,
   WaitForSelectorOptions,
@@ -116,6 +119,27 @@ export class Locator {
 
   async click(options: ClickOptions = {}): Promise<void> {
     return await this._frame._click('locator.click', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async dblclick(options: DblclickOptions = {}): Promise<void> {
+    await this._frame._dblclick('locator.dblclick', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async hover(options: HoverOptions = {}): Promise<void> {
+    return await this._frame._hover('locator.hover', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async tap(options: TapOptions = {}): Promise<void> {
+    return await this._frame._tap('locator.tap', this._selector, {
       strict: true,
       ...options,
     })
