@@ -5,10 +5,39 @@
  * the exports, which also keeps every top-level name out of the realm's globals.
  */
 
+import { dirname, relative } from 'node:path'
+import type { BunPlugin } from 'bun'
+
+/**
+ * Playwright's value serializers name globals QuickJS lacks (`URL`, `Buffer`, `atob`, `btoa`).
+ * This binds them, inside those two vendored modules only, to `src/vendor-shims.ts` by
+ * prepending one import while bundling: the files on disk stay byte-identical (`vendor.test.ts`)
+ * and the realm gains no global.
+ */
+const SHIMMED =
+  /\/vendor\/playwright\/(protocol\/src\/serializers|isomorphic\/utilityScriptSerializers)\.ts$/
+const vendorShims: BunPlugin = {
+  name: 'vendor-shims',
+  setup(build) {
+    build.onLoad({ filter: SHIMMED }, async (args) => {
+      const shims = relative(
+        dirname(args.path),
+        `${import.meta.dir}/src/vendor-shims`,
+      )
+      const source = await Bun.file(args.path).text()
+      return {
+        contents: `import { URL, Buffer, atob, btoa } from '${shims}';\n${source}`,
+        loader: 'ts',
+      }
+    })
+  },
+}
+
 const result = await Bun.build({
   entrypoints: [`${import.meta.dir}/src/index.ts`],
   format: 'esm',
   target: 'browser',
+  plugins: [vendorShims],
 })
 const [output] = result.outputs
 if (!result.success || result.outputs.length !== 1 || !output) {
