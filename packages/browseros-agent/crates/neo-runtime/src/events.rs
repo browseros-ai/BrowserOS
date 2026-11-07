@@ -37,6 +37,7 @@ use futures_util::future;
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::time;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 /// Neo: the guid of the run's one context, where Playwright's server sends console, dialog and
@@ -68,22 +69,34 @@ const REPLAY_WAIT: Duration = Duration::from_secs(5);
 
 /// Neo: the listener events Neo produces on a `Page`, under the names Playwright's client gives
 /// them (`Events.Page`), and what each needs switched on in the page's session.
-const PAGE_EVENTS: [(&str, Needs); 6] = [
+const PAGE_EVENTS: [(&str, Needs); 12] = [
     ("console", Needs::RUNTIME),
     ("pageerror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
     ("dialogclosed", Needs::WATCHER),
     ("close", Needs::WATCHER),
     ("crash", Needs::WATCHER),
+    ("load", Needs::WATCHER),
+    ("domcontentloaded", Needs::WATCHER),
+    ("frameattached", Needs::WATCHER),
+    ("framedetached", Needs::WATCHER),
+    ("framenavigated", Needs::WATCHER),
+    ("popup", Needs::DISCOVERY),
 ];
 
 /// Neo: the listener events Neo produces on the run's `BrowserContext` (`Events.BrowserContext`),
-/// for every page the run has a session on.
-const CONTEXT_EVENTS: [(&str, Needs); 4] = [
+/// for every page the run has a session on; `page` for every new tab of the context.
+const CONTEXT_EVENTS: [(&str, Needs); 10] = [
     ("console", Needs::RUNTIME),
     ("weberror", Needs::RUNTIME),
     ("dialog", Needs::WATCHER),
     ("dialogclosed", Needs::WATCHER),
+    ("pageclose", Needs::WATCHER),
+    ("pageload", Needs::WATCHER),
+    ("frameattached", Needs::WATCHER),
+    ("framedetached", Needs::WATCHER),
+    ("framenavigated", Needs::WATCHER),
+    ("page", Needs::DISCOVERY),
 ];
 
 /// What a subscription switches on in a page's session before that page's next call runs.
@@ -93,20 +106,41 @@ pub(crate) struct Needs {
     pub(crate) watcher: bool,
     /// `Runtime.enable` and `Log.enable`, which report console messages and page errors.
     pub(crate) runtime: bool,
+    /// The run's target discovery (`discovery.rs`), which reports new tabs. Not a page's: every
+    /// call of the run waits for it ([`ALL_PAGES`]).
+    pub(crate) discovery: bool,
 }
 
 impl Needs {
     /// Neo: an event the page watcher produces from the domains it always enables.
-    const WATCHER: Self = Self {
+    pub(crate) const WATCHER: Self = Self {
         watcher: true,
         runtime: false,
+        discovery: false,
     };
     /// Neo: an event only `Runtime.enable` and `Log.enable` report.
     const RUNTIME: Self = Self {
         watcher: true,
         runtime: true,
+        discovery: false,
     };
+    /// Neo: an event the run's target discovery produces, about a page no session watches yet.
+    const DISCOVERY: Self = Self {
+        watcher: false,
+        runtime: false,
+        discovery: true,
+    };
+
+    /// Whether a page's session has anything to switch on for it.
+    pub(crate) fn of_page(self) -> bool {
+        self.watcher || self.runtime
+    }
 }
+
+/// Neo: the [`EventHub::begin_enable`] key of an enable every call of the run waits for, a
+/// page's or the context's: target discovery, which must hold its baseline before any call can
+/// open a tab.
+pub(crate) const ALL_PAGES: &str = "*";
 
 /// What a listener event on `guid` needs, or `None` when Neo does not produce it there. `guid`
 /// is the context's or a page's (`page@<targetId>`).
@@ -135,6 +169,8 @@ struct Inner {
     state: Mutex<State>,
     /// Wakes the realm's pending `nextEvents()` when an event is queued.
     arrived: Notify,
+    /// Cancelled by [`EventHub::close`]: producers that run on their own (target discovery) end.
+    ended: CancellationToken,
 }
 
 #[derive(Default)]
@@ -229,7 +265,7 @@ impl EventHub {
         self.subscribed(page_guid, page_event) || self.subscribed(CONTEXT_GUID, context_event)
     }
 
-    /// Whether the context listens to an event that needs `runtime` on every page with a session.
+    /// What the context's listeners need on every page with a session, if it listens at all.
     pub(crate) fn context_needs(&self) -> Option<Needs> {
         self.with(|state| {
             state
@@ -240,6 +276,7 @@ impl EventHub {
                 .reduce(|left, right| Needs {
                     watcher: left.watcher || right.watcher,
                     runtime: left.runtime || right.runtime,
+                    discovery: left.discovery || right.discovery,
                 })
         })
         .flatten()
@@ -388,15 +425,18 @@ impl EventHub {
     /// before its handler starts.
     pub(crate) fn enabling(&self, page: &str) -> bool {
         self.with(|state| {
-            state
-                .enables
-                .get(page)
-                .is_some_and(|pending| pending.iter().any(|enable| !*enable.borrow()))
+            [page, ALL_PAGES].iter().any(|key| {
+                state
+                    .enables
+                    .get(*key)
+                    .is_some_and(|pending| pending.iter().any(|enable| !*enable.borrow()))
+            })
         })
         .unwrap_or(false)
     }
 
-    /// Resolves once every enable started on `page` so far is done, or after [`READY_WAIT`]. The
+    /// Resolves once every enable started on `page` (or on [`ALL_PAGES`]) so far is done, or after
+    /// [`READY_WAIT`]. The
     /// caller races it with its call's progress, so a call's own timeout still ends it first.
     pub(crate) async fn ready(&self, page: &str) {
         if time::timeout(READY_WAIT, self.enabled(page)).await.is_err() {
@@ -407,12 +447,15 @@ impl EventHub {
     async fn enabled(&self, page: &str) {
         let pending = self
             .with(|state| {
-                state.enables.get_mut(page).map(|pending| {
-                    pending.retain(|enable| !*enable.borrow());
-                    pending.clone()
-                })
+                let mut pending = Vec::new();
+                for key in [page, ALL_PAGES] {
+                    if let Some(enables) = state.enables.get_mut(key) {
+                        enables.retain(|enable| !*enable.borrow());
+                        pending.extend(enables.iter().cloned());
+                    }
+                }
+                pending
             })
-            .flatten()
             .unwrap_or_default();
         for mut enable in pending {
             let _done = enable.wait_for(|done| *done).await;
@@ -432,7 +475,13 @@ impl EventHub {
                 state.notes.push(drop_note(dropped));
             }
         });
+        self.0.ended.cancel();
         self.0.arrived.notify_waiters();
+    }
+
+    /// Cancelled once the run's events end ([`Self::close`]).
+    pub(crate) fn ended(&self) -> CancellationToken {
+        self.0.ended.clone()
     }
 
     /// Run-log lines the hub owes the script's log, oldest first.

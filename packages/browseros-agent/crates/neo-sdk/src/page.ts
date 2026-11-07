@@ -69,24 +69,39 @@ import {
  */
 const PAGE_EVENTS: EventTable = {
   receiver: 'Page',
-  served: ['console', 'pageerror', 'dialog', 'dialogclosed', 'close', 'crash'],
+  served: [
+    'console',
+    'pageerror',
+    'dialog',
+    'dialogclosed',
+    'close',
+    'crash',
+    'load',
+    'domcontentloaded',
+    'frameattached',
+    'framedetached',
+    'framenavigated',
+    'popup',
+  ],
   quiet: [],
   unserved: [
     'download',
     'filechooser',
-    'domcontentloaded',
     'request',
     'response',
     'requestfailed',
     'requestfinished',
-    'frameattached',
-    'framedetached',
-    'framenavigated',
-    'load',
-    'popup',
     'websocket',
     'worker',
   ],
+}
+
+/** A frame event's params from Rust (`frame_events.rs`): the frame's record, and for a
+ * navigation the URL and name it committed, as Playwright's `navigated` event carries them. */
+interface FrameEventParams {
+  frame: CreatedFrame
+  url?: string
+  name?: string
 }
 
 /** `consoleMessages` and `pageErrors`' options: Playwright's `ConsoleMessagesFilter`. */
@@ -210,10 +225,67 @@ export class Page extends ChannelOwner {
     return get(this.#guid, 'isClosed')
   }
 
-  /** Playwright's page channel handlers (`client/page.ts` constructor). */
-  _onEvent(method: string): void {
+  /** Playwright's page channel handlers (`client/page.ts` constructor), and its main frame's
+   * `loadstate` and every frame's `navigated` (`client/frame.ts` constructor), which Neo sends
+   * on the page. */
+  _onEvent(method: string, params: unknown): void {
     if (method === 'close') this._onClose()
     else if (method === 'crash') this.emit('crash', this)
+    else if (method === 'load') {
+      this.emit('load', this)
+      this.#context.emit('pageload', this)
+    } else if (method === 'domcontentloaded')
+      this.emit('domcontentloaded', this)
+    else if (method === 'frameAttached')
+      this.#onFrameAttached((params as FrameEventParams).frame)
+    else if (method === 'frameDetached')
+      this.#onFrameDetached((params as FrameEventParams).frame)
+    else if (method === 'frameNavigated')
+      this.#onFrameNavigated(params as FrameEventParams)
+  }
+
+  /** Playwright's `Page._onFrameAttached`. */
+  #onFrameAttached(record: CreatedFrame): void {
+    const frame = this._frameFrom(record)
+    this.emit('frameattached', frame)
+    this.#context.emit('frameattached', frame)
+  }
+
+  /** Playwright's `Page._onFrameDetached`. */
+  #onFrameDetached(record: CreatedFrame): void {
+    const frame = this._frameFrom(record)
+    this.emit('framedetached', frame)
+    this.#context.emit('framedetached', frame)
+  }
+
+  /** Playwright's `Frame` `navigated` handler: the frame takes the committed URL and name, then
+   * the page's and the context's `framenavigated` run. */
+  #onFrameNavigated({ frame, url, name }: FrameEventParams): void {
+    const frameObject = this._frameFrom({
+      guid: frame.guid,
+      initializer: {
+        ...frame.initializer,
+        url: url ?? frame.initializer.url,
+        name: name ?? frame.initializer.name,
+      },
+    })
+    this.emit('framenavigated', frameObject)
+    this.#context.emit('framenavigated', frameObject)
+  }
+
+  /**
+   * The tab that opened this page, if it is still open in the run's context, else `null`: a
+   * `newPage` page, a tab the user opened, and a page whose opener closed have none. A popup
+   * opened with `noopener` names its opener, as Playwright's does on Chromium, whose target
+   * reports it.
+   *
+   * Deviation: `client/page.ts` `Page.opener`: `if (!this._opener || this._opener.isClosed())`
+   * Playwright's page keeps the opener its server named when it reported the page. Neo reads the
+   * tab's opener when asked, so the run page and a `pages()` page name theirs too.
+   */
+  async opener(): Promise<Page | null> {
+    const record = get(this.#guid, 'opener')
+    return record ? this.#context._pageFrom(record) : null
   }
 
   /** Playwright's `Page._onClose`: the page's `close`, then the context's `pageclose`. */

@@ -41,16 +41,21 @@ import { WebError, type WebErrorLocation } from './web-error'
  */
 const CONTEXT_EVENTS: EventTable = {
   receiver: 'BrowserContext',
-  served: ['console', 'weberror', 'dialog', 'dialogclosed'],
-  quiet: ['close', 'backgroundpage'],
-  unserved: [
-    'download',
-    'frameattached',
-    'framedetached',
-    'framenavigated',
+  served: [
+    'console',
+    'weberror',
+    'dialog',
+    'dialogclosed',
     'page',
     'pageclose',
     'pageload',
+    'frameattached',
+    'framedetached',
+    'framenavigated',
+  ],
+  quiet: ['close', 'backgroundpage'],
+  unserved: [
+    'download',
     'serviceworker',
     'request',
     'response',
@@ -92,13 +97,28 @@ export class BrowserContext extends ChannelOwner {
 
   /** Playwright's context channel handlers (`client/browserContext.ts` constructor). */
   _onEvent(method: string, params: unknown): void {
-    if (method === 'console') this.#onConsole(params as ConsoleEventParams)
+    if (method === 'page') this.#onPage((params as { page: CreatedPage }).page)
+    else if (method === 'console') this.#onConsole(params as ConsoleEventParams)
     else if (method === 'pageError')
       this.#onPageError(params as PageErrorEventParams)
     else if (method === 'dialog')
       this.#onDialog((params as { dialog: DialogRecord }).dialog)
     else if (method === 'dialogClosed')
       this.#onDialogClosed((params as { dialog: DialogRecord }).dialog)
+  }
+
+  /**
+   * Playwright's `BrowserContext._onPage`: the context's `page`, then the opener's `popup`. Rust
+   * names the opener only when the run knows it and has not seen it close, the check Playwright
+   * makes here.
+   */
+  #onPage(created: CreatedPage): void {
+    const page = this._pageFrom(created)
+    this.emit('page', page)
+    const opener = created.initializer.opener
+      ? this.#pages.get(created.initializer.opener.guid)
+      : undefined
+    if (opener) opener.emit('popup', page)
   }
 
   #onConsole(event: ConsoleEventParams): void {
@@ -222,6 +242,12 @@ export class BrowserContext extends ChannelOwner {
     const page = new Page(guid, mainFrameGuid, url, this, this.#connection)
     this.#pages.set(guid, page)
     return page
+  }
+
+  /** The `Page` for a record Rust handed out: the object this guid already has, else one
+   * built from the record. */
+  _pageFrom(created: CreatedPage): Page {
+    return this.#pages.get(created.guid) ?? this.#add(created)
   }
 
   /** The `Page` for a guid Rust just handed out: the object a `pages()` read made while the

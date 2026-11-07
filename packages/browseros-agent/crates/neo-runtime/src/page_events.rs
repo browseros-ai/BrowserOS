@@ -9,7 +9,14 @@
 //!  Page.javascriptDialogOpening ─▶ dialog record ─▶ dialog (listener) | default answer (none)
 //!  Page.javascriptDialogClosed ──▶ dialogClosed
 //!  detach, Inspector.detached / targetCrashed ─▶ close | crash        on the page
+//!  the main frame's DOMContentLoaded / load ──▶ domcontentloaded | load
+//!  Page.frameAttached / frameDetached / frameNavigated / navigatedWithinDocument
+//!                                       ─▶ frame_events.rs ─▶ frameAttached | frameDetached | frameNavigated
 //! ```
+//!
+//! `Page.setLifecycleEventsEnabled` replays the current document's lifecycle when the watcher
+//! starts. That replay is history, except on a page the run's discovery just reported, whose
+//! document is new to the run: the page events go live once the watcher has applied it.
 //!
 //! Console messages and page errors exist only once `Runtime.enable` has been sent, which Neo
 //! does only for a run that listens to them or reads their history ([`ConsoleLog`]). The enable
@@ -23,6 +30,7 @@
 //! session's own replay is history only, as the tab's.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -39,7 +47,8 @@ use crate::console::{
 };
 use crate::dialogs::{self, Dialogs};
 use crate::events::{CONTEXT_GUID, Emitted, EventHub, Needs};
-use crate::frames::Host;
+use crate::frame_events::FrameModel;
+use crate::frames::{self, Host};
 use crate::page::{Applied, DialogAnswer};
 use crate::run::PageId;
 use crate::tabs::{PageEntry, Tabs};
@@ -62,6 +71,12 @@ pub(crate) struct PageEvents {
     children: Arc<Mutex<HashSet<SessionId>>>,
     pub(crate) console: Arc<ConsoleLog>,
     pub(crate) dialogs: Arc<Dialogs>,
+    /// The tab's frames, as the run's frame events see them.
+    frames: Arc<Mutex<FrameModel>>,
+    /// Whether the main frame's lifecycle reaches listeners: once the watcher has applied the
+    /// lifecycle replay of its start ([`Self::lifecycle_replayed`]), or from the start on a page
+    /// the run's discovery reported.
+    lifecycle_live: Arc<AtomicBool>,
 }
 
 #[derive(Deserialize)]
@@ -76,7 +91,15 @@ struct DialogOpening {
 }
 
 impl PageEvents {
-    pub(crate) fn new(hub: EventHub, target: &str, cdp: CdpClient, session: SessionId) -> Self {
+    /// `discovered`: the run's discovery reported the tab as new, so its first lifecycle replay
+    /// is the page's own new life and reaches listeners.
+    pub(crate) fn new(
+        hub: EventHub,
+        target: &str,
+        cdp: CdpClient,
+        session: SessionId,
+        discovered: bool,
+    ) -> Self {
         Self {
             hub,
             page_guid: bridge::page_guid(&PageId::new(target.to_string())),
@@ -86,7 +109,26 @@ impl PageEvents {
             children: Arc::default(),
             console: Arc::default(),
             dialogs: Arc::default(),
+            frames: Arc::new(Mutex::new(FrameModel::new(target))),
+            lifecycle_live: Arc::new(AtomicBool::new(discovered)),
         }
+    }
+
+    /// The watcher's start read the tab's frame tree (`None` when the read failed): the frame
+    /// model takes the frames no event has reported yet.
+    pub(crate) fn seeded(&self, tree: Option<&Value>) {
+        let Some(tree) = tree.and_then(|tree| frames::local_tree(tree).ok()) else {
+            return;
+        };
+        if let Ok(mut model) = self.frames.lock() {
+            model.seed(&tree);
+        }
+    }
+
+    /// The watcher has applied the lifecycle replay of its start: the main frame's lifecycle
+    /// events from now on are live.
+    pub(crate) fn lifecycle_replayed(&self) {
+        self.lifecycle_live.store(true, Ordering::Release);
     }
 
     /// An out-of-process frame of this tab got a session: from now on its console events are
@@ -148,6 +190,7 @@ impl PageEvents {
                 .is_ok_and(|children| children.contains(session))
             {
                 self.console_event(event, session);
+                self.frame_event(event);
             }
             return applied.dialog;
         }
@@ -160,14 +203,58 @@ impl PageEvents {
         if applied.new_document {
             self.console.mark_navigation();
         }
+        self.frame_event(event);
+        self.lifecycle(applied);
         answer
     }
 
-    /// The session ended: the tab closed or crashed. Emits `close` or `crash` on the page.
+    /// A frame change of the tab, for the page's and the context's frame listeners.
+    fn frame_event(&self, event: &CdpEvent) {
+        if !event.method.starts_with("Page.") {
+            return;
+        }
+        let Ok(changes) = self.frames.lock().map(|mut model| model.apply(event)) else {
+            return;
+        };
+        for change in changes {
+            if self
+                .hub
+                .wants(&self.page_guid, change.listener, change.listener)
+            {
+                self.hub
+                    .emit(&self.page_guid, change.method, &change.params);
+            }
+        }
+    }
+
+    /// Client: `client/frame.ts` `Frame.constructor`: `if (!this._parentFrame && event.add === 'load' && this._page) {`
+    /// The main frame's `domcontentloaded` and `load`; the context's `pageload` comes with `load`.
+    fn lifecycle(&self, applied: &Applied) {
+        if !self.lifecycle_live.load(Ordering::Acquire) {
+            return;
+        }
+        if applied.fired.dom_content_loaded
+            && self.hub.subscribed(&self.page_guid, "domcontentloaded")
+        {
+            self.hub
+                .emit(&self.page_guid, "domcontentloaded", &json!({}));
+        }
+        if applied.fired.load && self.hub.wants(&self.page_guid, "load", "pageload") {
+            self.hub.emit(&self.page_guid, "load", &json!({}));
+        }
+    }
+
+    /// The session ended: the tab closed or crashed. Emits `close` or `crash` on the page; the
+    /// SDK's `close` also runs the context's `pageclose` listeners.
     pub(crate) fn closing(&self, event: Option<&CdpEvent>) {
         let crashed = event.is_some_and(|event| event.method == "Inspector.targetCrashed");
-        let name = if crashed { "crash" } else { "close" };
-        if self.hub.subscribed(&self.page_guid, name) {
+        let wanted = if crashed {
+            self.hub.subscribed(&self.page_guid, "crash")
+        } else {
+            self.hub.wants(&self.page_guid, "close", "pageclose")
+        };
+        if wanted {
+            let name = if crashed { "crash" } else { "close" };
             self.hub.emit(&self.page_guid, name, &json!({}));
         }
     }

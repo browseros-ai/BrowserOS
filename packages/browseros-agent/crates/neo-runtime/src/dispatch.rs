@@ -64,7 +64,7 @@ use tracing::debug;
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
 use crate::dialogs;
-use crate::events::EventHub;
+use crate::events::{ALL_PAGES, EventHub};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
 use crate::frames::FrameScope;
@@ -616,13 +616,18 @@ async fn serve_call(
     reply: CallReply,
 ) {
     // A page's call waits for what the run's subscriptions switched on there (console messages,
-    // the dialog watcher), so the call cannot cause an event before its producer listens. A
-    // dialog's answer never waits: an open dialog can hold that very enable, and only the answer
-    // frees the page.
-    if let Some((page, _)) = &target
-        && !matches!(route, ObjectCall::Context(_) | ObjectCall::Dialog(..))
-        && reply.events.enabling(page.id.as_str())
-        && let Err(error) = progress.race(reply.events.ready(page.id.as_str())).await
+    // the dialog watcher), so the call cannot cause an event before its producer listens; a
+    // context call (`newPage`) waits for target discovery's baseline. A dialog's answer never
+    // waits: an open dialog can hold that very enable, and only the answer frees the page.
+    let gate = match (&route, &target) {
+        (ObjectCall::Dialog(..), _) => None,
+        (ObjectCall::Context(_), _) => Some(ALL_PAGES),
+        (_, Some((page, _))) => Some(page.id.as_str()),
+        (_, None) => None,
+    };
+    if let Some(gate) = gate
+        && reply.events.enabling(gate)
+        && let Err(error) = progress.race(reply.events.ready(gate)).await
     {
         finish_reply(Err(error), reply).await;
         return;
@@ -1043,6 +1048,7 @@ mod tests {
 
     use crate::click::tests::FakeTab;
     use crate::deadline::Deadline;
+    use crate::discovery::Discovery;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::forms::SelectOption;
     use crate::page::TabInputs;
@@ -1062,6 +1068,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            Discovery::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1134,6 +1141,7 @@ mod tests {
             browser.cdp().await,
             Handle::current(),
             TabInputs::default(),
+            Discovery::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )

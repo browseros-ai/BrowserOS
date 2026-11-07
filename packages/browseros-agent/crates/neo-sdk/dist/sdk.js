@@ -4328,21 +4328,28 @@ ${lines.join(`
 // src/page.ts
 var PAGE_EVENTS = {
   receiver: "Page",
-  served: ["console", "pageerror", "dialog", "dialogclosed", "close", "crash"],
+  served: [
+    "console",
+    "pageerror",
+    "dialog",
+    "dialogclosed",
+    "close",
+    "crash",
+    "load",
+    "domcontentloaded",
+    "frameattached",
+    "framedetached",
+    "framenavigated",
+    "popup"
+  ],
   quiet: [],
   unserved: [
     "download",
     "filechooser",
-    "domcontentloaded",
     "request",
     "response",
     "requestfailed",
     "requestfinished",
-    "frameattached",
-    "framedetached",
-    "framenavigated",
-    "load",
-    "popup",
     "websocket",
     "worker"
   ]
@@ -4395,11 +4402,48 @@ class Page extends ChannelOwner {
   isClosed() {
     return get(this.#guid, "isClosed");
   }
-  _onEvent(method) {
+  _onEvent(method, params) {
     if (method === "close")
       this._onClose();
     else if (method === "crash")
       this.emit("crash", this);
+    else if (method === "load") {
+      this.emit("load", this);
+      this.#context.emit("pageload", this);
+    } else if (method === "domcontentloaded")
+      this.emit("domcontentloaded", this);
+    else if (method === "frameAttached")
+      this.#onFrameAttached(params.frame);
+    else if (method === "frameDetached")
+      this.#onFrameDetached(params.frame);
+    else if (method === "frameNavigated")
+      this.#onFrameNavigated(params);
+  }
+  #onFrameAttached(record) {
+    const frame = this._frameFrom(record);
+    this.emit("frameattached", frame);
+    this.#context.emit("frameattached", frame);
+  }
+  #onFrameDetached(record) {
+    const frame = this._frameFrom(record);
+    this.emit("framedetached", frame);
+    this.#context.emit("framedetached", frame);
+  }
+  #onFrameNavigated({ frame, url, name }) {
+    const frameObject = this._frameFrom({
+      guid: frame.guid,
+      initializer: {
+        ...frame.initializer,
+        url: url ?? frame.initializer.url,
+        name: name ?? frame.initializer.name
+      }
+    });
+    this.emit("framenavigated", frameObject);
+    this.#context.emit("framenavigated", frameObject);
+  }
+  async opener() {
+    const record = get(this.#guid, "opener");
+    return record ? this.#context._pageFrom(record) : null;
   }
   _onClose() {
     this.emit("close", this);
@@ -4619,16 +4663,21 @@ class WebError {
 // src/browser-context.ts
 var CONTEXT_EVENTS = {
   receiver: "BrowserContext",
-  served: ["console", "weberror", "dialog", "dialogclosed"],
-  quiet: ["close", "backgroundpage"],
-  unserved: [
-    "download",
-    "frameattached",
-    "framedetached",
-    "framenavigated",
+  served: [
+    "console",
+    "weberror",
+    "dialog",
+    "dialogclosed",
     "page",
     "pageclose",
     "pageload",
+    "frameattached",
+    "framedetached",
+    "framenavigated"
+  ],
+  quiet: ["close", "backgroundpage"],
+  unserved: [
+    "download",
     "serviceworker",
     "request",
     "response",
@@ -4651,7 +4700,9 @@ class BrowserContext extends ChannelOwner {
     this._pipe = pipe;
   }
   _onEvent(method, params) {
-    if (method === "console")
+    if (method === "page")
+      this.#onPage(params.page);
+    else if (method === "console")
       this.#onConsole(params);
     else if (method === "pageError")
       this.#onPageError(params);
@@ -4659,6 +4710,13 @@ class BrowserContext extends ChannelOwner {
       this.#onDialog(params.dialog);
     else if (method === "dialogClosed")
       this.#onDialogClosed(params.dialog);
+  }
+  #onPage(created) {
+    const page = this._pageFrom(created);
+    this.emit("page", page);
+    const opener = created.initializer.opener ? this.#pages.get(created.initializer.opener.guid) : undefined;
+    if (opener)
+      opener.emit("popup", page);
   }
   #onConsole(event) {
     const page = event.page ? this.#pageFor(event.page.guid) : null;
@@ -4734,6 +4792,9 @@ class BrowserContext extends ChannelOwner {
     const page = new Page(guid, mainFrameGuid, url, this, this.#connection);
     this.#pages.set(guid, page);
     return page;
+  }
+  _pageFrom(created) {
+    return this.#pages.get(created.guid) ?? this.#add(created);
   }
   #pageFor(guid) {
     return this.#pages.get(guid) ?? this.#add(get(guid, "initializer"));
