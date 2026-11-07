@@ -47,6 +47,7 @@ import {
   type SelectOptionOptions,
   type TapOptions,
   type TextContentOptions,
+  type TypeOptions,
   type UncheckOptions,
   type URLMatch,
   verifyLoadState,
@@ -875,6 +876,15 @@ export class Page extends ChannelOwner {
     options: PressOptions = {},
   ): Promise<void> {
     return await this.#mainFrame._press('page.press', selector, key, options)
+  }
+
+  /** Deprecated in Playwright for `Locator.pressSequentially`, and served the same way. */
+  async type(
+    selector: string,
+    text: string,
+    options: TypeOptions = {},
+  ): Promise<void> {
+    return await this.#mainFrame._type('page.type', selector, text, options)
   }
 
   async inputValue(

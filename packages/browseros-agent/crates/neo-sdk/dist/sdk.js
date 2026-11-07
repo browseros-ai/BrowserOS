@@ -3807,6 +3807,15 @@ class Locator {
       ...options
     });
   }
+  async pressSequentially(text, options = {}) {
+    return await this._frame._type("locator.pressSequentially", this._selector, text, { strict: true, ...options });
+  }
+  async type(text, options = {}) {
+    return await this._frame._type("locator.type", this._selector, text, {
+      strict: true,
+      ...options
+    });
+  }
   async inputValue(options = {}) {
     return await this._frame._inputValue("locator.inputValue", this._selector, {
       strict: true,
@@ -4688,6 +4697,7 @@ var FRAME_PRESS_KEYS = [
   "delay",
   "noWaitAfter"
 ];
+var FRAME_TYPE_KEYS = ["selector", "strict", "text", "delay"];
 var FRAME_INPUT_VALUE_KEYS = ["selector", "strict"];
 var FRAME_IS_CHECKED_KEYS = ["selector", "strict"];
 var FRAME_IS_VISIBLE_KEYS = ["selector", "strict"];
@@ -5558,6 +5568,16 @@ class Frame {
       ...options
     }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
+  async type(selector, text, options = {}) {
+    return await this._type("frame.type", selector, text, options);
+  }
+  async _type(apiName, selector, text, options) {
+    await this._connection.send(apiName, this._guid, "type", pickParams(FRAME_TYPE_KEYS, {
+      selector,
+      text,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
   async inputValue(selector, options = {}) {
     return await this._inputValue("frame.inputValue", selector, options);
   }
@@ -6192,6 +6212,9 @@ class Page extends ChannelOwner {
   }
   async press(selector, key, options = {}) {
     return await this.#mainFrame._press("page.press", selector, key, options);
+  }
+  async type(selector, text, options = {}) {
+    return await this.#mainFrame._type("page.type", selector, text, options);
   }
   async inputValue(selector, options = {}) {
     return await this.#mainFrame._inputValue("page.inputValue", selector, options);

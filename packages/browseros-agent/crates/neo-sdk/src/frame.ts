@@ -70,6 +70,7 @@ import type {
   FrameTextContentParams,
   FrameTextContentResult,
   FrameTitleResult,
+  FrameTypeParams,
   FrameUncheckParams,
   FrameWaitForSelectorParams,
   LifecycleEvent,
@@ -142,6 +143,7 @@ import {
   FRAME_SELECT_OPTION_KEYS,
   FRAME_TAP_KEYS,
   FRAME_TEXT_CONTENT_KEYS,
+  FRAME_TYPE_KEYS,
   FRAME_UNCHECK_KEYS,
   FRAME_WAIT_FOR_SELECTOR_KEYS,
   pickParams,
@@ -292,6 +294,10 @@ export type FillOptions = Omit<FrameFillParams, 'selector' | 'value'> & {
   timeout?: number
 }
 export type PressOptions = Omit<FramePressParams, 'selector' | 'key'> & {
+  timeout?: number
+}
+/** `Locator.pressSequentially`'s and the deprecated `type`s' options. */
+export type TypeOptions = Omit<FrameTypeParams, 'selector' | 'text'> & {
   timeout?: number
 }
 export type InputValueOptions = Omit<FrameInputValueParams, 'selector'> & {
@@ -1434,6 +1440,35 @@ export class Frame {
         key,
         ...options,
       }) as FramePressParams,
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
+    )
+  }
+
+  /** Deprecated in Playwright for `Locator.pressSequentially`, and served the same way. */
+  async type(
+    selector: string,
+    text: string,
+    options: TypeOptions = {},
+  ): Promise<void> {
+    return await this._type('frame.type', selector, text, options)
+  }
+
+  /** Synchronously reaches `send` so it captures the script's call site. */
+  async _type(
+    apiName: ApiName,
+    selector: string,
+    text: string,
+    options: TypeOptions,
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'type',
+      pickParams(FRAME_TYPE_KEYS, {
+        selector,
+        text,
+        ...options,
+      }) as FrameTypeParams,
       this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
   }

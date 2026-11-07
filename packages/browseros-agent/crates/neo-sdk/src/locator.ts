@@ -71,6 +71,7 @@ import type {
   SelectTextOptions,
   TapOptions,
   TextContentOptions,
+  TypeOptions,
   UncheckOptions,
   WaitForSelectorOptions,
 } from './frame'
@@ -332,6 +333,27 @@ export class Locator {
 
   async press(key: string, options: PressOptions = {}): Promise<void> {
     return await this._frame._press('locator.press', this._selector, key, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  /** Playwright's `pressSequentially`: focus, then each character typed as `keyboard.type`. */
+  async pressSequentially(
+    text: string,
+    options: TypeOptions = {},
+  ): Promise<void> {
+    return await this._frame._type(
+      'locator.pressSequentially',
+      this._selector,
+      text,
+      { strict: true, ...options },
+    )
+  }
+
+  /** Deprecated in Playwright for {@link pressSequentially}, and served the same way. */
+  async type(text: string, options: TypeOptions = {}): Promise<void> {
+    return await this._frame._type('locator.type', this._selector, text, {
       strict: true,
       ...options,
     })

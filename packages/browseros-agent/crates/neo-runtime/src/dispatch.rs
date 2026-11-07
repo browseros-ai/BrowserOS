@@ -47,9 +47,9 @@ use neo_runtime_spec::serve::{
     FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult, FrameIsHiddenParams,
     FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams,
     FramePressResult, FrameQueryCountParams, FrameSelectOptionParams, FrameSelectOptionResult,
-    FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameUncheckParams,
-    FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult, Metadata, PageCall,
-    RequestCall, ResponseCall,
+    FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameTypeParams, FrameTypeResult,
+    FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
+    Metadata, PageCall, RequestCall, ResponseCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -327,6 +327,8 @@ enum Route {
     FrameAriaSnapshot(SnapshotOptions),
     FrameFill(FillOptions),
     FramePress(PressOptions),
+    /// `Frame.type`, served by press's policy.
+    FrameType(PressOptions),
     FrameInputValue(InputValueOptions),
     FrameIsVisible(StateOptions),
     FrameIsHidden(StateOptions),
@@ -746,6 +748,7 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         )),
         FrameCall::Fill(params) => Ok(Route::FrameFill(FillOptions::from_params(params))),
         FrameCall::Press(params) => Ok(Route::FramePress(PressOptions::from_params(params))),
+        FrameCall::Type(params) => Ok(Route::FrameType(PressOptions::from_type(params))),
         FrameCall::InputValue(params) => Ok(Route::FrameInputValue(
             InputValueOptions::from_params(params),
         )),
@@ -1155,6 +1158,9 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         Route::FramePress(options) => press::press(tab, &options, progress)
             .await
             .and_then(|()| encode_result::<FramePressParams>(&FramePressResult {})),
+        Route::FrameType(options) => press::press(tab, &options, progress)
+            .await
+            .and_then(|()| encode_result::<FrameTypeParams>(&FrameTypeResult {})),
         Route::FrameSetChecked(options) => {
             let checked = options.checked;
             check::set_checked(tab, &options, progress)
@@ -1377,6 +1383,7 @@ fn encode_reply(
 
 #[cfg(test)]
 mod tests {
+    use crate::press::KeyInput;
     use std::collections::BTreeMap;
     use std::env;
     use std::fs;
@@ -1585,6 +1592,7 @@ mod tests {
             "press" => {
                 json!({ "selector": selector, "strict": true, "key": "Shift+Enter", "delay": 25.0, "noWaitAfter": true })
             }
+            "type" => json!({ "selector": selector, "strict": true, "text": "hi", "delay": 10.0 }),
             "inputValue" => json!({ "selector": selector, "strict": true }),
             "check" | "uncheck" => {
                 json!({ "selector": selector, "strict": true, "force": true, "scroll": "none", "position": { "x": 2, "y": 3 }, "trial": true })
@@ -1596,9 +1604,10 @@ mod tests {
         }
     }
 
-    const FORMS: [&str; 6] = [
+    const FORMS: [&str; 7] = [
         "fill",
         "press",
+        "type",
         "inputValue",
         "check",
         "uncheck",
@@ -1630,10 +1639,23 @@ mod tests {
                         PressOptions {
                             selector: "input".into(),
                             strict: true,
-                            key: "Shift+Enter".into(),
+                            keys: KeyInput::Press("Shift+Enter".into()),
                             delay: Some(25.0),
                             wait_after: false
                         }
+                    );
+                }
+                Route::FrameType(options) => {
+                    assert_eq!(
+                        options,
+                        PressOptions {
+                            selector: "input".into(),
+                            strict: true,
+                            keys: KeyInput::Type("hi".into()),
+                            delay: Some(10.0),
+                            wait_after: false
+                        },
+                        "a type waits for no navigation"
                     );
                 }
                 Route::FrameInputValue(options) => {

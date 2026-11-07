@@ -37,6 +37,7 @@ import type {
   FrameSelectOptionParams,
   FrameTapParams,
   FrameTextContentParams,
+  FrameTypeParams,
   FrameUncheckParams,
   FrameWaitForSelectorParams,
   PageCloseParams,
@@ -183,6 +184,9 @@ export const FRAME_PRESS_KEYS = [
   'delay',
   'noWaitAfter',
 ] as const
+
+/** `Frame.type` in Playwright schema order. */
+export const FRAME_TYPE_KEYS = ['selector', 'strict', 'text', 'delay'] as const
 
 /** `Frame.inputValue` in Playwright schema order. */
 export const FRAME_INPUT_VALUE_KEYS = ['selector', 'strict'] as const
@@ -392,6 +396,12 @@ type _FramePressKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_PRESS_KEYS)[number], true>,
     Required<FramePressParams>
+  >
+>
+type _FrameTypeKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_TYPE_KEYS)[number], true>,
+    Required<FrameTypeParams>
   >
 >
 type _FrameInputValueKeysMatchSpec = Assert<
