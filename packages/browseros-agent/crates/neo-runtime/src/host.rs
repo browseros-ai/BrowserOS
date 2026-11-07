@@ -17,57 +17,28 @@
 //! hosted contract; nothing here serves HTTP. Design: `designs/neo-host-events/design.md` in
 //! the claw-sdk-v2 notes.
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "runtime wiring starts the after-call worker next")
-)]
 mod after_call;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "live views open once Runtime is built with host options"
-    )
-)]
 mod capture;
 mod cdp;
 mod directory;
 mod emit;
 mod events;
 mod ids;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the host link opens once Runtime is built with host options"
-    )
-)]
 mod link;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "presences start once Runtime is built with host options"
-    )
-)]
 mod presence;
 mod sessions;
 mod store;
 mod tap;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "runtime wiring starts the host task next")
-)]
 mod task;
 mod view;
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
-
 use std::time::Duration;
+
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{self, Instant};
-use tokio_util::sync::CancellationToken;
+use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::host::capture::CaptureHub;
 use crate::host::tap::Tap;
@@ -135,6 +106,7 @@ struct Inner {
     published: Arc<Mutex<Published>>,
     captures: Option<Arc<CaptureHub>>,
     shutdown: CancellationToken,
+    stopped: CancellationToken,
 }
 
 /// The current tab's two identities and live directory facts, for the server's `/v1` adapter.
@@ -167,11 +139,41 @@ pub enum HostError {
     Stopped,
     #[error(transparent)]
     Store(#[from] StoreError),
+    #[error("{0}")]
+    Browser(String),
 }
 
 impl Host {
+    #[cfg(test)]
     pub(crate) fn new(options: HostOptions) -> Self {
         Self::build(options, None, CancellationToken::new()).0
+    }
+
+    pub(crate) async fn connect(options: HostOptions) -> Result<Self, HostError> {
+        let shutdown = CancellationToken::new();
+        let link = link::HostLink::connect(options.cdp_port, shutdown.clone())
+            .await
+            .map_err(|error| HostError::Browser(error.to_string()))?;
+        let presences = Arc::new(presence::Presences::new(Arc::clone(&link)));
+        let hub = CaptureHub::new(Arc::clone(&link), Arc::clone(&presences), shutdown.clone());
+        let started = task::start(
+            options,
+            Arc::clone(&link),
+            Arc::clone(&presences),
+            hub,
+            shutdown.clone(),
+        )
+        .await;
+        match started {
+            Ok((host, jobs)) => {
+                after_call::spawn(link, presences, jobs, shutdown);
+                Ok(host)
+            }
+            Err(error) => {
+                shutdown.cancel();
+                Err(error)
+            }
+        }
     }
 
     fn build(
@@ -188,6 +190,7 @@ impl Host {
                 published: Arc::new(Mutex::new(Published::default())),
                 captures,
                 shutdown,
+                stopped: CancellationToken::new(),
             })),
             receiver,
         )
@@ -238,8 +241,14 @@ impl Host {
                     hub.end_captures(&target);
                 }
             }
-            if first {
-                let _ = self.0.commands.send(Command::Withhold(session.clone()));
+            if first
+                && self
+                    .0
+                    .commands
+                    .send(Command::Withhold(session.clone()))
+                    .is_err()
+            {
+                published.withhold_failed(session);
             }
             receiver
         });
@@ -318,13 +327,17 @@ impl Host {
         hub.video(view, quality, tab).await
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "runtime shutdown wiring follows")
-    )]
     pub(crate) fn shutdown(&self) {
         self.0.shutdown.cancel();
         self.0.tap.close();
+    }
+
+    pub(crate) async fn stopped(&self) {
+        self.0.stopped.cancelled().await;
+    }
+
+    pub(crate) fn lifetime(&self) -> DropGuard {
+        self.0.shutdown.clone().drop_guard()
     }
 
     /// The pass for one admitted run of `session`. Only admission (with the session ledger)

@@ -150,13 +150,6 @@ impl Tap {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "scaffold: the session ledger's task consumes the tap"
-    )
-)]
 impl Tap {
     /// The oldest queued event, waiting for one while the queue is empty; `None` once the tap
     /// is closed and drained. For the one consumer only: two would split the FIFO. Cancel-safe:
@@ -186,6 +179,7 @@ impl Tap {
         self.ready.notify_one();
     }
 
+    #[cfg(test)]
     pub(crate) fn refused(&self) -> Refused {
         self.queue
             .lock()

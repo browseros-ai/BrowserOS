@@ -21,6 +21,7 @@ use std::sync::Arc;
 use browseros_cdp::{CdpClient, CdpError, browser};
 use serde_json::Value;
 use tokio::runtime::{Handle, RuntimeFlavor};
+use tokio_util::sync::DropGuard;
 use tokio_util::task::TaskTracker;
 
 use crate::artifacts::{AbsolutePaths, Artifacts};
@@ -29,7 +30,7 @@ use crate::browser_representations::page::TabInputs;
 use crate::browser_representations::tabs::Tabs;
 use crate::chromium_bridge::browser_connection_settings::Switches;
 use crate::deadline::Deadline;
-use crate::host::{Host, HostOptions, RunEmitter};
+use crate::host::{Host, HostError, HostOptions, RunEmitter};
 use crate::method_router::Dispatcher;
 use crate::playwright_methods::getters::CLOSED_TAB_MESSAGE;
 use crate::playwright_methods::screenshot::TabScreenshots;
@@ -68,6 +69,9 @@ pub struct Runtime {
     absolute_paths: AbsolutePaths,
     cleanup: TaskTracker,
     host: Option<Host>,
+    // The host task owns a Host handle itself; a separate lifetime guard lets the last Runtime
+    // clone cancel that task instead of leaving a socket cycle when callers omit shutdown.
+    _host_lifetime: Option<Arc<DropGuard>>,
 }
 
 /// Close the run's tracker on every exit, including a dropped future or failed tab open.
@@ -90,6 +94,8 @@ pub struct RuntimeOptions {
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
+    #[error(transparent)]
+    Host(#[from] HostError),
     #[error(transparent)]
     Cdp(#[from] CdpError),
     /// `page.isClosed()` reads BrowserOS's `Browser.getTabInfo`; a browser that lacks it, or
@@ -133,6 +139,11 @@ impl Runtime {
             .await;
         match probe {
             Err(CdpError::Protocol { message, .. }) if message.contains(CLOSED_TAB_MESSAGE) => {
+                let host = match options.host {
+                    Some(options) => Some(Host::connect(options).await?),
+                    None => None,
+                };
+                let lifetime = host.as_ref().map(|host| Arc::new(host.lifetime()));
                 let cleanup = TaskTracker::new();
                 Ok(Self {
                     cdp,
@@ -142,7 +153,8 @@ impl Runtime {
                     permissions: Permissions::new(cleanup.clone()),
                     absolute_paths: AbsolutePaths::default(),
                     cleanup,
-                    host: options.host.map(Host::new),
+                    host,
+                    _host_lifetime: lifetime,
                 })
             }
             Err(CdpError::Protocol { message, .. }) => {
@@ -172,6 +184,25 @@ impl Runtime {
     pub async fn drain(&self) {
         self.cleanup.close();
         self.cleanup.wait().await;
+    }
+
+    /// Cancels the host side and waits for its ledger writer to stop. The run client belongs to
+    /// the caller; shutting down the optional host connection does not disconnect that client.
+    /// Stop admission, cancel and await active runs, then call [`Self::drain`] before this, so
+    /// late browser work reaches the host ledger before its consumer stops.
+    pub async fn shutdown(&self) {
+        if let Some(host) = &self.host {
+            host.shutdown();
+            host.stopped().await;
+        }
+    }
+
+    /// Emitter tests deliberately leave the FIFO undrained to prove overflow cannot affect a
+    /// run. Production startup always connects the host link and starts its consumer instead.
+    #[cfg(test)]
+    pub(crate) fn with_undrained_host(mut self, options: HostOptions) -> Self {
+        self.host = Some(Host::new(options));
+        self
     }
 
     /// The host side, when the runtime was built with one.
@@ -324,10 +355,14 @@ impl Drop for Grants {
 
 #[cfg(test)]
 mod tests {
+    use crate::fake_host_cdp::FakeHostCdp;
     use crate::host::MemoryStore;
-    use std::sync::Arc;
     use std::time::Duration;
 
+    use crate::host::HostStore;
+    use tokio::task;
+    use tokio::time;
+    use tokio::time::Instant;
     use tokio_util::sync::CancellationToken;
     use ulid::Ulid;
 
@@ -339,13 +374,20 @@ mod tests {
     async fn only_a_runtime_given_host_options_has_a_host_side() {
         let browser = FakeBrowser::start(Replies::default()).await;
         assert!(browser.runtime().await.host().is_none());
+        let host_browser = FakeHostCdp::start().await;
         let options = RuntimeOptions {
-            host: Some(HostOptions::new(9222, 1, Arc::new(MemoryStore::default()))),
+            host: Some(HostOptions::new(
+                host_browser.port(),
+                1,
+                Arc::new(MemoryStore::default()),
+            )),
         };
         let hosted = Runtime::connect_with(browser.cdp().await, options)
             .await
             .unwrap();
         assert!(hosted.host().is_some());
+        host_browser.wait_for("Browser.getTabs", 1).await;
+        hosted.shutdown().await;
     }
 
     /// A run that never reaches its tab is a run too: it gets an id of its own, and the outcome's
@@ -370,5 +412,75 @@ mod tests {
             assert!(Ulid::from_string(id).is_ok(), "{id} is a ULID");
             assert_eq!(serde_json::to_value(outcome).unwrap()["runId"], id);
         }
+    }
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_dropped_run_completes_through_the_host_task_and_after_call_worker() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let host_browser = FakeHostCdp::start().await;
+        host_browser.set_tabs(vec![FakeHostCdp::tab(
+            fake_browser::PAGE,
+            41,
+            fake_browser::PAGE_URL,
+        )]);
+        let store = Arc::new(MemoryStore::default());
+        let runtime = Runtime::connect_with(
+            browser.cdp().await,
+            RuntimeOptions {
+                host: Some(HostOptions::new(
+                    host_browser.port(),
+                    1,
+                    Arc::clone(&store) as Arc<dyn HostStore>,
+                )),
+            },
+        )
+        .await
+        .unwrap();
+        let host = runtime.host().unwrap();
+        let pass = host.admit_run(None).await;
+        let key = pass.session().clone();
+        let running = tokio::spawn({
+            let runtime = runtime.clone();
+            let key = key.clone();
+            async move {
+                let mut request = fake_browser::run_request(
+                    "await page.click('#go', {delay:5000})",
+                    Duration::from_secs(10),
+                    CancellationToken::new(),
+                );
+                request.session = Some(key);
+                runtime.run(request).await
+            }
+        });
+        time::timeout(Duration::from_secs(5), async {
+            while !browser
+                .exchanges()
+                .iter()
+                .any(|exchange| exchange.command["params"]["type"] == "mousePressed")
+            {
+                task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        host.end_session(&key);
+        assert!(!host.view(&key).unwrap().complete);
+        running.abort();
+        assert!(running.await.unwrap_err().is_cancelled());
+        drop(pass);
+        let view = host
+            .wait_complete(&key, Instant::now() + Duration::from_secs(10))
+            .await
+            .unwrap();
+        assert!(
+            view.complete,
+            "cancelled run and call jobs settled before the store fence"
+        );
+        assert!(!view.live);
+        assert!(!host_browser.sent("Browser.getTabInfo").is_empty());
+        runtime.shutdown().await;
+        assert!(
+            browser.cdp().await.is_connected(),
+            "host shutdown leaves the run client alone"
+        );
     }
 }

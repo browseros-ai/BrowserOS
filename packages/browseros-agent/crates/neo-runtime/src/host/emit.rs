@@ -253,7 +253,7 @@ mod tests {
     use crate::host::tap::{Refused, TAP_QUEUE};
     use crate::progress::{CallEntry, CallStart, Trace};
     use crate::run::{RunOutcome, RunRequest};
-    use crate::runtime::{Runtime, RuntimeOptions};
+    use crate::runtime::Runtime;
 
     const SESSION: &str = "7f3a9c21";
 
@@ -270,12 +270,10 @@ mod tests {
     const NEW_PAGE: &str = "const created = await context.newPage(); return created.url()";
 
     async fn hosted(browser: &FakeBrowser) -> Runtime {
-        let options = RuntimeOptions {
-            host: Some(HostOptions::new(9222, 1, Arc::new(MemoryStore::default()))),
-        };
-        Runtime::connect_with(browser.cdp().await, options)
+        browser
+            .runtime()
             .await
-            .unwrap()
+            .with_undrained_host(HostOptions::new(9222, 1, Arc::new(MemoryStore::default())))
     }
 
     fn request(code: &str) -> RunRequest {

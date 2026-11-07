@@ -67,16 +67,19 @@ pub(crate) struct FrameDrops {
 impl FrameDrops {
     /// Frames without a positive `metadata.timestamp`: arrival time cannot be correlated with
     /// a browser action, so none is ever stamped with it.
+    #[cfg(test)]
     pub(crate) fn untimed(&self) -> u64 {
         self.untimed.load(Ordering::Relaxed)
     }
 
     /// Frames over [`cdp::MAX_FRAME_BYTES`], which the main host rejects.
+    #[cfg(test)]
     pub(crate) fn oversized(&self) -> u64 {
         self.oversized.load(Ordering::Relaxed)
     }
 
     /// Frames whose event or JPEG could not be read.
+    #[cfg(test)]
     pub(crate) fn undecodable(&self) -> u64 {
         self.undecodable.load(Ordering::Relaxed)
     }

@@ -134,7 +134,16 @@ impl Published {
         (receiver, true, targets)
     }
 
+    pub(super) fn withhold_failed(&self, key: &SessionKey) {
+        if let Some(durability) = self.withholds.get(key) {
+            durability.send_replace(Some(Err(HostError::Stopped)));
+        }
+    }
+
     fn revoke_targets(&mut self, targets: &[PageId]) {
+        if targets.is_empty() {
+            return;
+        }
         for target in targets {
             self.taint.insert(target.clone());
             self.gates.entry(target.clone()).or_default().cancel();
@@ -284,7 +293,8 @@ impl Task {
                     self.tabs.apply(input, Instant::now());
                 },
                 command = self.commands.recv() => if let Some(command) = command {
-                    self.command(command).await;
+                    let shutdown = self.host.0.shutdown.clone();
+                    tokio::select! { () = shutdown.cancelled() => break, () = self.command(command) => {} }
                 },
                 artifacts = self.artifacts.recv(), if self.writes.len() < 8 => if let Some(artifacts) = artifacts {
                     self.persist(artifacts);
@@ -319,6 +329,7 @@ impl Task {
             }
         }
         self.presences.prune(|_| false).await;
+        self.host.0.stopped.cancel();
     }
 
     fn event(&mut self, event: HostEvent) {
@@ -530,7 +541,7 @@ impl Task {
         let tainted: Vec<_> = keys
             .iter()
             .flat_map(|key| self.ledger.touched(key))
-            .filter(|target| self.ledger.tainted(target))
+            .filter(|target| self.ledger.tainted(target) && !published.taint.contains(target))
             .collect();
         published.revoke_targets(&tainted);
         if let Some(hub) = &self.host.0.captures {
@@ -634,7 +645,9 @@ impl Task {
             .values()
             .filter_map(|fence| match fence {
                 Fence::Retry(at) => Some(*at),
-                Fence::Complete(at) => Some(*at + RETAIN_SETTLED),
+                Fence::Complete(at) => {
+                    Some((*at + RETAIN_SETTLED).max(Instant::now() + Duration::from_mins(1)))
+                }
                 Fence::Flushing => None,
             })
             .filter(|at| *at > Instant::now())

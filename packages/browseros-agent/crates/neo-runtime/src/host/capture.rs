@@ -180,6 +180,7 @@ impl CaptureHub {
     }
 
     /// Screencast frames dropped instead of forwarded since the hub started.
+    #[cfg(test)]
     pub(crate) fn dropped_frames(&self) -> &FrameDrops {
         &self.drops
     }
