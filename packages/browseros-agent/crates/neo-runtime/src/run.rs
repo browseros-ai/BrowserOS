@@ -98,6 +98,19 @@ pub enum RunStatus {
     Cancelled,
 }
 
+impl RunStatus {
+    /// Why a run that ended this way ended its calls still running. The realm reports `Timeout`
+    /// or `Cancelled` whenever the deadline or cancellation fired, even when the script caught
+    /// the error and returned, so the status is the one source for it.
+    pub(crate) fn run_end(self) -> RunEnd {
+        match self {
+            Self::Timeout => RunEnd::Timeout,
+            Self::Cancelled => RunEnd::Cancelled,
+            Self::Ok | Self::Error => RunEnd::Settled,
+        }
+    }
+}
+
 /// A script failure, named the way Playwright names it where Playwright has a name
 /// (`TargetClosedError`, `TimeoutError`), and otherwise by the JS error's own `name`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

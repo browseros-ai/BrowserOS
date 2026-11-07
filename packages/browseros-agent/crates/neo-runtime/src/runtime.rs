@@ -38,7 +38,7 @@ use crate::quickjs;
 use crate::quickjs::Script;
 use crate::quickjs_bridge;
 use crate::quickjs_bridge::Getters;
-use crate::run::{RunEnd, RunError, RunId, RunOutcome, RunRequest, RunStatus};
+use crate::run::{RunError, RunId, RunOutcome, RunRequest};
 
 /// A target id no tab can have, used to see how the browser reports a missing tab.
 const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
@@ -198,12 +198,17 @@ impl Runtime {
         let run_id = RunId::mint();
         let emitter = RunEmitter::new(self.host.as_ref(), request.session.as_ref(), &run_id);
         let ending = emitter.run_started(&request.page);
-        let outcome = self.run_script(run_id, request).await;
+        let outcome = self.run_script(run_id, request, emitter).await;
         ending.ended(outcome.status);
         outcome
     }
 
-    async fn run_script(&self, run_id: RunId, request: RunRequest) -> RunOutcome {
+    async fn run_script(
+        &self,
+        run_id: RunId,
+        request: RunRequest,
+        emitter: RunEmitter,
+    ) -> RunOutcome {
         let RunRequest {
             code,
             page,
@@ -255,7 +260,8 @@ impl Runtime {
         // group-release tasks the page spawns, so `finish` waits for them all.
         let artifacts =
             Arc::new(Artifacts::new(artifacts).with_absolute_paths(self.absolute_paths));
-        let run = RunScope::new(deadline.clone(), tasks).with_artifacts(Arc::clone(&artifacts));
+        let run =
+            RunScope::new(deadline.clone(), tasks, emitter).with_artifacts(Arc::clone(&artifacts));
         let getters = Getters::new(
             tabs.clone(),
             deadline.clone(),
@@ -280,7 +286,7 @@ impl Runtime {
             events,
         )
         .await;
-        let (calls, dropped) = dispatcher.finish(run_end_of(&outcome)).await;
+        let (calls, dropped) = dispatcher.finish(outcome.status.run_end()).await;
         // `Dispatcher::finish` let go of the grants (`Tabs::release_run_scoped`).
         grants.disarm();
         outcome
@@ -316,17 +322,6 @@ impl Drop for Grants {
     }
 }
 
-/// Why the run ended, for calls still running then. The realm reports `Timeout` or `Cancelled`
-/// whenever the deadline or cancellation fired, even when the script caught the error and
-/// returned, so the outcome's status is the one source for it.
-fn run_end_of(outcome: &RunOutcome) -> RunEnd {
-    match outcome.status {
-        RunStatus::Timeout => RunEnd::Timeout,
-        RunStatus::Cancelled => RunEnd::Cancelled,
-        RunStatus::Ok | RunStatus::Error => RunEnd::Settled,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -336,7 +331,7 @@ mod tests {
 
     use super::*;
     use crate::fake_browser::{self, FakeBrowser, Replies};
-    use crate::run::PageId;
+    use crate::run::{PageId, RunStatus};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn only_a_runtime_given_host_options_has_a_host_side() {

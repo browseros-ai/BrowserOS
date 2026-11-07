@@ -571,8 +571,8 @@ impl Dispatcher {
         Self(Arc::new(Inner {
             tabs,
             _ending: run.ended.clone().drop_guard(),
+            trace: Trace::new(run.emitter.clone()),
             run,
-            trace: Trace::default(),
             in_flight: Arc::default(),
             cursors: Arc::default(),
             aborts: Arc::default(),
@@ -627,6 +627,8 @@ impl Dispatcher {
             params: params.unwrap_or_else(|| json!({})),
             location: call_location(&metadata),
             input: meta.is_some_and(|meta| meta.has(MethodFlag::Input)),
+            page: target.as_ref().map(|(page, _)| page.id.clone()),
+            snapshot: meta.is_some_and(|meta| meta.has(MethodFlag::Snapshot)),
         }));
         inner.trace.push(Arc::clone(&entry));
         let admitted = route.and_then(|route| {
@@ -681,7 +683,12 @@ impl Dispatcher {
             } else {
                 progress
             };
-            serve_call(tabs, cursors, target, route, progress, call_reply).await;
+            // The router carries every method's state. Box it at the owned-task boundary
+            // so growth of the shared run context does not inflate this task's future.
+            Box::pin(serve_call(
+                tabs, cursors, target, route, progress, call_reply,
+            ))
+            .await;
         });
         PendingReply(PendingInner::Waiting(receiver))
     }
@@ -2384,6 +2391,7 @@ mod tests {
     use crate::chromium_bridge::browser_connection_settings::Switches;
     use crate::deadline::Deadline;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+    use crate::host::RunEmitter;
     use crate::playwright_methods::click::tests::FakeTab;
     use crate::playwright_methods::forms::SelectOption;
     use crate::playwright_methods::screenshot::TabScreenshots;
@@ -2398,7 +2406,7 @@ mod tests {
         let browser = FakeBrowser::start(Replies::default()).await;
         let tasks = TaskTracker::new();
         let deadline = Deadline::new(Duration::from_secs(5), CancellationToken::new());
-        let run = RunScope::new(deadline, tasks.clone());
+        let run = RunScope::new(deadline, tasks.clone(), RunEmitter::default());
         let (tabs, _) = Tabs::open(
             browser.cdp().await,
             Handle::current(),
@@ -2420,6 +2428,8 @@ mod tests {
             params: json!({"selector":"#nothing"}),
             location: None,
             input: true,
+            page: None,
+            snapshot: false,
         }));
         let trace = Trace::default();
         trace.push(Arc::clone(&entry));
@@ -2448,7 +2458,7 @@ mod tests {
             },
         );
         run.end(RunEnd::Settled);
-        call.await;
+        Box::pin(call).await;
         let (records, _) = trace.take(RunEnd::Settled);
         assert!(
             records[0]
@@ -2477,6 +2487,7 @@ mod tests {
         let run = RunScope::new(
             Deadline::new(Duration::from_secs(10), CancellationToken::new()),
             tasks.clone(),
+            RunEmitter::default(),
         );
         let (tabs, _) = Tabs::open(
             browser.cdp().await,
@@ -3551,6 +3562,8 @@ mod tests {
             params: json!({"response":false}),
             location: None,
             input: false,
+            page: None,
+            snapshot: false,
         }));
         let trace = Trace::default();
         trace.push(Arc::clone(&entry));
@@ -3843,6 +3856,7 @@ mod review_abort_priority {
     use crate::chromium_bridge::browser_connection_settings::Switches;
     use crate::deadline::Deadline;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+    use crate::host::RunEmitter;
     use crate::playwright_methods::screenshot::TabScreenshots;
     use crate::run::PageId;
     use tokio::runtime::Handle;
@@ -3855,6 +3869,7 @@ mod review_abort_priority {
         let run = RunScope::new(
             Deadline::new(Duration::from_secs(30), CancellationToken::new()),
             tasks.clone(),
+            RunEmitter::default(),
         );
         let (tabs, _) = Tabs::open(
             browser.cdp().await,
@@ -3879,6 +3894,8 @@ mod review_abort_priority {
             params: json!({"selector":"#nothing"}),
             location: None,
             input: true,
+            page: None,
+            snapshot: false,
         }));
         let trace = Trace::default();
         trace.push(Arc::clone(&entry));
@@ -3911,7 +3928,7 @@ mod review_abort_priority {
         // Neither stop can race scheduling: the handler future has never been polled.
         entry.abort("stop call".to_string());
         run.end(RunEnd::Settled);
-        call.await;
+        Box::pin(call).await;
         let (records, _) = trace.take(RunEnd::Settled);
         assert_eq!(
             records[0].result,

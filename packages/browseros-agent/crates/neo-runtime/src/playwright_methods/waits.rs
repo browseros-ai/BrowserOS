@@ -916,6 +916,7 @@ mod tests {
 
     use super::*;
     use crate::deadline::Deadline;
+    use crate::host::RunEmitter;
     use crate::playwright_methods::navigate::{Navigation, NavigationState, Observation};
     use crate::progress::{CallEntry, CallStart, ErrorName, RunScope};
     use crate::run::RunEnd;
@@ -1170,6 +1171,7 @@ mod tests {
             let scope = RunScope::new(
                 Deadline::new(Duration::from_millis(deadline), cancel.clone()),
                 TaskTracker::new(),
+                RunEmitter::default(),
             );
             let entry = Arc::new(CallEntry::new(CallStart {
                 call_id: 1,
@@ -1179,6 +1181,8 @@ mod tests {
                 params: json!({}),
                 location: None,
                 input: false,
+                page: None,
+                snapshot: false,
             }));
             let progress = Progress::new(entry, timeout, scope.clone(), closed.clone());
             Self {

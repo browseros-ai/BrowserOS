@@ -787,6 +787,7 @@ mod tests {
 
     use super::*;
     use crate::deadline::Deadline;
+    use crate::host::RunEmitter;
     use crate::playwright_methods::navigate::{NavigateReply, NavigationState};
     use crate::progress::{CallEntry, CallStart, ErrorName, RunScope};
 
@@ -1020,10 +1021,13 @@ mod tests {
             params: json!({}),
             location: None,
             input: false,
+            page: None,
+            snapshot: false,
         }));
         let run = RunScope::new(
             Deadline::new(Duration::from_mins(1), CancellationToken::new()),
             TaskTracker::new(),
+            RunEmitter::default(),
         );
         Progress::new(entry, timeout, run, CancellationToken::new())
     }

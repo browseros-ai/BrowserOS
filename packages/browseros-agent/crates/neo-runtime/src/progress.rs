@@ -8,8 +8,9 @@
 //! entry when the run reads it ([`Trace::take`]), never assembled by whoever ended the call.
 //!
 //! ```text
-//!   dispatch ──creates──▶ CallEntry ◀──holds── Trace (run)          read once, after `finish`'s wait
-//!       │                    ▲   ▲
+//!   method_router ──creates──▶ CallEntry ◀──holds── Trace (run)          read once, after `finish`'s wait
+//!       │                    ▲   ▲               └─▶ RunEmitter      every call's start and end,
+//!       │                    │   │                                   for the host side
 //!       └──▶ Progress ───────┘   └── DeliveryCell ◀── InputTicket / AckedInput (input writer)
 //!              race(work): run deadline or cancel │ run ended │ aborted │ tab closed │ own deadline
 //! ```
@@ -17,6 +18,10 @@
 //! An abort (`abort.rs`) is the script's `signal` reaching the call: the dispatcher's registry
 //! finds the call's entry by its message id and aborts it there, so the `Progress` and the record
 //! read the same reason.
+//!
+//! The trace is also the host side's door for calls: `push`, `finished` and `take` tell the
+//! run's [`RunEmitter`], which ends each call there exactly once, whether or not the record caps
+//! kept the call's record.
 
 use std::future;
 use std::future::Future;
@@ -41,8 +46,9 @@ use crate::browser_representations::bindings::Bindings;
 use crate::browser_representations::clock::Clock;
 use crate::browser_representations::init_scripts::InitScripts;
 use crate::deadline::{Deadline, Stop};
+use crate::host::RunEmitter;
 use crate::playwright_methods::evaluate::Handles;
-use crate::run::{CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd};
+use crate::run::{CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, PageId, RunEnd};
 
 /// How a call ends early: a Playwright error the script sees, or the run ending under it.
 /// Every handler returns this; `?` on [`Progress::race`] is how a handler gives up.
@@ -161,10 +167,13 @@ pub(crate) struct RunScope {
     pub(crate) bindings: Arc<Bindings>,
     /// The run's fake clock (`clock.rs`); uninstalled in every frame at run end.
     pub(crate) clock: Arc<Clock>,
+    /// Who the run is for the host side; the run's trace reports its calls through it. A no-op
+    /// for a run no host tracks.
+    pub(crate) emitter: RunEmitter,
 }
 
 impl RunScope {
-    pub(crate) fn new(deadline: Deadline, tasks: TaskTracker) -> Self {
+    pub(crate) fn new(deadline: Deadline, tasks: TaskTracker, emitter: RunEmitter) -> Self {
         Self {
             deadline,
             ended: CancellationToken::new(),
@@ -176,6 +185,7 @@ impl RunScope {
             artifacts: Arc::default(),
             bindings: Arc::default(),
             clock: Arc::default(),
+            emitter,
         }
     }
 
@@ -426,10 +436,13 @@ impl Progress {
             params: Value::Null,
             location: None,
             input: true,
+            page: None,
+            snapshot: true,
         }));
         let run = RunScope::new(
             Deadline::new(Duration::from_hours(1), CancellationToken::new()),
             TaskTracker::new(),
+            RunEmitter::default(),
         );
         Self::new(entry, timeout_ms, run, CancellationToken::new())
     }
@@ -593,6 +606,8 @@ pub(crate) struct CallEntry {
     /// Test-only: how long `abort` holds between waking the call and logging, in ms.
     #[cfg(test)]
     abort_pause_ms: AtomicU64,
+    page: Option<PageId>,
+    snapshot: bool,
 }
 
 /// A call's raw log, Playwright's `metadata.log`.
@@ -622,6 +637,12 @@ pub(crate) struct CallStart {
     pub(crate) location: Option<CallLocation>,
     /// Whether the method writes input, so its delivery is tracked.
     pub(crate) input: bool,
+    /// The tab the dispatcher resolved the call's guid to; `None` for a context call or an
+    /// unknown guid. The host side's events name it, so no consumer parses guids.
+    pub(crate) page: Option<PageId>,
+    /// Whether Playwright's spec flags the method `snapshot`, its own rule for when a trace
+    /// captures the page: the host side takes a screenshot after such a call.
+    pub(crate) snapshot: bool,
 }
 
 impl CallEntry {
@@ -634,6 +655,8 @@ impl CallEntry {
             params,
             location,
             input,
+            page,
+            snapshot,
         } = start;
         Self {
             call_id,
@@ -651,6 +674,8 @@ impl CallEntry {
             end: OnceLock::new(),
             #[cfg(test)]
             abort_pause_ms: AtomicU64::new(0),
+            page,
+            snapshot,
         }
     }
 
@@ -793,8 +818,14 @@ impl CallLog {
 ///
 /// Calls that are kept but unfinished hold logs not yet charged; the dispatcher's in-flight cap
 /// bounds how many there are.
+///
+/// The caps bound records only. Every call, kept or not, starts and ends on the host side
+/// through `emitter`.
 #[derive(Clone, Default)]
-pub(crate) struct Trace(Arc<Mutex<TraceInner>>);
+pub(crate) struct Trace {
+    records: Arc<Mutex<TraceInner>>,
+    emitter: RunEmitter,
+}
 
 #[derive(Default)]
 struct TraceInner {
@@ -814,10 +845,24 @@ struct TraceInner {
 }
 
 impl Trace {
+    /// The trace of a run whose calls `emitter` reports to the host side.
+    pub(crate) fn new(emitter: RunEmitter) -> Self {
+        Self {
+            records: Arc::default(),
+            emitter,
+        }
+    }
+
     /// Registers a call that just arrived: kept, its params charged, while the caps allow;
-    /// otherwise counted.
+    /// otherwise counted. Either way the host side learns it started.
     pub(crate) fn push(&self, entry: Arc<CallEntry>) {
-        let Ok(mut trace) = self.0.lock() else {
+        self.emitter.call_started(
+            entry.call_id,
+            entry.page.as_ref(),
+            entry.snapshot,
+            entry.started_at,
+        );
+        let Ok(mut trace) = self.records.lock() else {
             return;
         };
         trace.arrived += 1;
@@ -831,11 +876,18 @@ impl Trace {
         }
     }
 
-    /// Charges a kept call's log when it finishes. Called right after [`CallEntry::finish`].
+    /// Charges a kept call's log when it finishes, and ends the call on the host side. Called
+    /// right after [`CallEntry::finish`].
     pub(crate) fn finished(&self, entry: &Arc<CallEntry>) {
-        let Ok(mut trace) = self.0.lock() else {
+        let Ok(mut trace) = self.records.lock() else {
             return;
         };
+        // Under the records' lock, which `take` holds while it reads the records and ends the
+        // calls still open. So a call that ends as the run ends reads the same both ways: either
+        // this ends it first, or `take` ends it with whatever its record says.
+        if let Some(end) = entry.end.get() {
+            self.emitter.call_ended(entry.call_id, &end.result);
+        }
         if let Some(index) = trace
             .kept
             .iter()
@@ -847,9 +899,10 @@ impl Trace {
 
     /// The run's records, in arrival order, and the dropped calls. A call with no end is
     /// `Unfinished { reason }`, its duration runs to now, and its delivery is whatever its cell
-    /// proves at this moment. Logs one `tracing` event per record.
+    /// proves at this moment. Every call the host side still has open ends there now, as its
+    /// record reads. Logs one `tracing` event per record.
     pub(crate) fn take(&self, reason: RunEnd) -> (Vec<CallRecord>, Option<DroppedCalls>) {
-        let Ok(mut trace) = self.0.lock() else {
+        let Ok(mut trace) = self.records.lock() else {
             return (Vec::new(), None);
         };
         let mut index = 0;
@@ -863,6 +916,7 @@ impl Trace {
             .drain(..)
             .map(|(entry, _)| entry.record(reason))
             .collect();
+        self.emitter.unfinished(reason, &records);
         for record in &records {
             info!(
                 call_id = record.call_id,
@@ -884,7 +938,9 @@ impl Trace {
     /// How many dropped calls' cells the trace still holds.
     #[cfg(test)]
     fn dropped_cells_held(&self) -> usize {
-        self.0.lock().map_or(0, |trace| trace.dropped_live.len())
+        self.records
+            .lock()
+            .map_or(0, |trace| trace.dropped_live.len())
     }
 }
 
@@ -1021,6 +1077,7 @@ mod tests {
         let run = RunScope::new(
             Deadline::new(Duration::from_hours(1), CancellationToken::new()),
             TaskTracker::new(),
+            RunEmitter::default(),
         );
         let entry = || {
             Arc::new(CallEntry::new(CallStart {
@@ -1031,6 +1088,8 @@ mod tests {
                 params: Value::Null,
                 location: None,
                 input: true,
+                page: None,
+                snapshot: false,
             }))
         };
         let waiting = Progress::new(entry(), 0.0, run.clone(), CancellationToken::new());
@@ -1067,6 +1126,8 @@ mod tests {
             params,
             location: None,
             input,
+            page: None,
+            snapshot: false,
         }))
     }
 
@@ -1074,6 +1135,7 @@ mod tests {
         RunScope::new(
             Deadline::new(run_timeout, CancellationToken::new()),
             TaskTracker::new(),
+            RunEmitter::default(),
         )
     }
 

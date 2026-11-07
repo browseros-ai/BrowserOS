@@ -378,6 +378,8 @@ mod tests {
             params: Value::Null,
             location: None,
             input: true,
+            page: None,
+            snapshot: false,
         }))
     }
 

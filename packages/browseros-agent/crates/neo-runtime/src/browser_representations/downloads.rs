@@ -535,6 +535,7 @@ mod tests {
     use crate::browser_representations::page::TabInputs;
     use crate::deadline::Deadline;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+    use crate::host::RunEmitter;
     use crate::playwright_methods::screenshot::TabScreenshots;
     use crate::progress::{CallEntry, CallStart, RunScope};
     use crate::run::PageId;
@@ -698,10 +699,13 @@ mod tests {
             params: json!({}),
             location: None,
             input: false,
+            page: None,
+            snapshot: false,
         }));
         let run = RunScope::new(
             Deadline::new(Duration::from_mins(1), CancellationToken::new()),
             TaskTracker::new(),
+            RunEmitter::default(),
         );
         Progress::new(entry, 0.0, run, CancellationToken::new())
     }

@@ -449,6 +449,7 @@ mod tests {
 
     use super::*;
     use crate::deadline::Deadline;
+    use crate::host::RunEmitter;
     use crate::playwright_methods::click::tests::{FakeTab, Step, Writes};
     use crate::playwright_methods::forms::InputValueMatch;
     use crate::progress::{CallEntry, CallStart, ErrorName, RunScope, Trace};
@@ -645,6 +646,7 @@ mod tests {
             let run = RunScope::new(
                 Deadline::new(Duration::from_secs(30), CancellationToken::new()),
                 TaskTracker::new(),
+                RunEmitter::default(),
             );
             let entry = Arc::new(CallEntry::new(CallStart {
                 call_id: 1,
@@ -654,6 +656,8 @@ mod tests {
                 params: serde_json::Value::Null,
                 location: None,
                 input: true,
+                page: None,
+                snapshot: false,
             }));
             let trace = Trace::default();
             trace.push(Arc::clone(&entry));
@@ -741,6 +745,7 @@ mod tests {
         let run = RunScope::new(
             Deadline::new(run_timeout, CancellationToken::new()),
             TaskTracker::new(),
+            RunEmitter::default(),
         );
         let entry = Arc::new(CallEntry::new(CallStart {
             call_id: 1,
@@ -750,6 +755,8 @@ mod tests {
             params: serde_json::Value::Null,
             location: None,
             input,
+            page: None,
+            snapshot: false,
         }));
         (
             Progress::new(entry, timeout, run.clone(), CancellationToken::new()),
