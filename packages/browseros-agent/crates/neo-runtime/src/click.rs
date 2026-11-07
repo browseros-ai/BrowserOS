@@ -118,11 +118,14 @@ pub(crate) trait Tab: Send + Sync {
         strict: bool,
     ) -> impl Future<Output = Result<Option<Resolved<Self::Element>>, PageError>> + Send;
 
-    /// `checkElementStates` with `frameVisible: true` (Neo resolves in the main frame only).
+    /// `checkElementStates` with the element's `frameVisible`. With `scroll` (not Playwright's
+    /// `scroll: 'none'`), an element in a child frame first has its frames' owners scrolled
+    /// into view, so an offscreen frame paints and `stable` can resolve.
     fn check_states(
         &self,
         element: &Self::Element,
         states: &[ElementState],
+        scroll: bool,
     ) -> impl Future<Output = Result<StatesCheck, PageError>> + Send;
 
     /// [`Scroll::Protocol`]: CDP `DOM.scrollIntoViewIfNeeded` (`position` as a zero rect); the
@@ -363,6 +366,7 @@ pub(crate) enum PointerAction {
 
 impl PointerAction {
     /// `action.name`, as the call log says it (`attempting hover action`).
+    /// Playwright: `server/dom.ts` `ElementHandle._retryPointerAction`: `return await this._retryAction(progress, action.name, async (progress, retry) => {`
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Click(_) => "click",
@@ -646,6 +650,7 @@ fn refuse_unserved(
 
 /// `if (delay)`: zero takes the pipelined path; any other number the sequential one, sleeping
 /// zero for a negative delay, as `setTimeout` treats it.
+/// Playwright: `server/input.ts` `Mouse.click`: `if (delay) {`
 fn click_delay(delay: Option<f64>) -> Option<Duration> {
     delay
         .filter(|delay| *delay != 0.0)
@@ -653,6 +658,7 @@ fn click_delay(delay: Option<f64>) -> Option<Duration> {
 }
 
 /// The wire's `Point` and the page call's are two generated types of one shape.
+/// Neo: a copy between two generated types, which no script can see.
 fn point(position: &WirePoint) -> Point {
     Point {
         x: position.x,
@@ -916,7 +922,7 @@ async fn attempt<T: Tab>(
             action.states_text()
         ));
         match progress
-            .race(tab.check_states(element, action.states()))
+            .race(tab.check_states(element, action.states(), options.scroll))
             .await??
         {
             StatesCheck::Ready => {}
@@ -1504,9 +1510,14 @@ pub(crate) mod tests {
             &self,
             _element: &u32,
             states: &[ElementState],
+            scroll: bool,
         ) -> Result<StatesCheck, PageError> {
             self.states.lock().expect("states").push(states.to_vec());
-            self.record("check_states");
+            self.record(if scroll {
+                "check_states"
+            } else {
+                "check_states without scrolling"
+            });
             self.check_states.answer().await
         }
 
@@ -2353,6 +2364,28 @@ pub(crate) mod tests {
             "{:?}",
             tab.calls()
         );
+    }
+
+    /// `scroll: 'none'` reaches the states check, so an element in an offscreen frame is not
+    /// scrolled into view there either; Playwright scrolls nothing under it.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_scroll_none_checks_states_without_scrolling_frames() {
+        for method in ["click", "dblclick", "hover", "tap"] {
+            let tab = FakeTab::ready();
+            let options = decoded(
+                method,
+                serde_json::json!({ "selector": SELECTOR, "scroll": "none" }),
+            )
+            .expect("served");
+            let (result, _, _) = run(&tab, &options, 30_000.0).await;
+            assert_eq!(result, Ok(()), "{method}");
+            let calls = tab.calls();
+            assert!(
+                calls.contains(&"check_states without scrolling".to_string())
+                    && !calls.iter().any(|call| call.starts_with("scroll ")),
+                "{method}: {calls:?}"
+            );
+        }
     }
 
     #[test]

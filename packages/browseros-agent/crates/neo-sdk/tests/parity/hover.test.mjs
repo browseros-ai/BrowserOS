@@ -125,3 +125,48 @@ test('hover inside frames moves onto the same element through Neo and Playwright
 }, async (t) => {
   await compareFrameCases(t, frameCases)
 })
+
+// Review regression: scroll:none must also constrain the containing OOPIF.
+test('review: hover with scroll none leaves an offscreen frame offscreen', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  await compareMethod(t, {
+    html: `<!doctype html><style>body { margin: 0 }</style><script>
+      if (location.hostname === '127.0.0.1') {
+        document.write('<div style="height:2000px"></div><iframe id="frame" src="http://localhost:' + location.port + '/method.html"></iframe>')
+      } else {
+        document.write('<button id="target">Target</button>')
+      }
+    </script>`,
+    source: `
+      try {
+        await page.frameLocator('#frame').locator('#target').hover({ scroll: 'none', timeout: 1500 })
+        return 'hovered'
+      } catch (error) {
+        return errorCategory(error)
+      }
+    `,
+    probe: '({ scrolled: scrollY > 0 })',
+  })
+})
+
+test('review: hover rejects an invalid position before sending input', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  const outcome = await compareMethod(t, {
+    html: '<button id="target" onmousemove="this.dataset.moved = 1">Target</button>',
+    source: `
+      try {
+        await page.locator('#target').hover({ position: { x: 'bad', y: 0 } })
+        return 'hovered'
+      } catch (error) {
+        return errorCategory(error)
+      }
+    `,
+    probe: 'document.querySelector("#target").dataset.moved ?? null',
+  })
+  assert.equal(outcome.value, 'Error')
+  assert.equal(outcome.calls[0].delivery, 'notSent')
+})

@@ -126,9 +126,10 @@ impl KeyboardTab for FrameTab {
     }
 }
 
-/// Where a writer's commands go: the run's session (`page.rs` `send_input_json`, at the
-/// session's socket incarnation), or a recording fake under paused time in the tests.
-trait InputSender: Send + Sync + 'static {
+/// Where a writer's commands go, keys here and the mouse and touch writers in `page.rs`: the
+/// run's session (`page.rs` `send_input_json`, at the session's socket incarnation), or a
+/// recording fake under paused time in the tests.
+pub(crate) trait InputSender: Send + Sync + 'static {
     /// Sends one `Input.*` command, its params already serialized.
     fn send_input(
         &self,
@@ -187,7 +188,9 @@ async fn write_keys(
     cut_short: CancellationToken,
 ) -> PressReport {
     let outcomes = send_keys(&sender, &events, delay, &cut_short).await;
-    report(&outcomes, ticket)
+    // Every planned event goes out unless the writer stopped early: then the press is partial.
+    let complete = outcomes.len() == events.len();
+    report(&outcomes, complete, ticket)
 }
 
 /// Playwright's sequential `Keyboard.press`: each event is answered before the next is sent,
@@ -258,19 +261,34 @@ async fn insert_text(
         let params = json!({ "text": text }).to_string();
         outcomes.push(sender.send_input("Input.insertText", params).await);
     }
-    report(&outcomes, ticket)
+    let complete = !outcomes.is_empty();
+    report(&outcomes, complete, ticket)
 }
 
-/// The pointer writers' rule (`page.rs` `pointer_report`): every written event acknowledged →
-/// `ticket.acked()`; nothing sent, or every send refused with `ConnectionEpochChanged` →
-/// `ticket.unsent()`; otherwise the ticket drops (`Unknown`) and the first error is reported.
-fn report(outcomes: &[Result<(), CdpError>], ticket: InputTicket) -> PressReport {
+/// Every input writer's rule, keys here and the mouse and touch writers in `page.rs`: the whole
+/// planned sequence written (`complete`) and every event acknowledged → `ticket.acked()`; nothing
+/// sent, or every send refused with `ConnectionEpochChanged` → `ticket.unsent()`; otherwise the
+/// ticket drops (`Unknown`, design §4.7: a call that stopped part-way, a double click cut short
+/// after its first click included) and the first error, or the cut, is reported.
+pub(crate) fn report(
+    outcomes: &[Result<(), CdpError>],
+    complete: bool,
+    ticket: InputTicket,
+) -> PressReport {
     match outcomes.iter().find_map(|outcome| outcome.as_ref().err()) {
         None if outcomes.is_empty() => {
             ticket.unsent();
             PressReport::NothingWritten
         }
-        None => PressReport::Acked(ticket.acked()),
+        None if complete => PressReport::Acked(ticket.acked()),
+        None => {
+            // The call stopped part-way: what was written was answered, the rest never went.
+            drop(ticket);
+            PressReport::Failed {
+                closed: false,
+                message: "the input stopped before its last event".to_string(),
+            }
+        }
         Some(_) if outcomes.iter().all(refused) => {
             ticket.unsent();
             PressReport::NothingWritten
@@ -1688,7 +1706,11 @@ mod tests {
         );
         time::sleep(Duration::from_secs(1)).await;
         assert_eq!(sender.sent(), ["0 keyDown a", "10 keyUp a"]);
-        assert_eq!(cell.delivery(), Delivery::Done);
+        assert_eq!(
+            cell.delivery(),
+            Delivery::Unknown,
+            "the second press never went out: partial input (design section 4.7), not Done"
+        );
     }
 
     /// A keyDown whose send failed may still have reached the browser, so it is released too;
