@@ -314,25 +314,20 @@ class Context:
     @property
     def required_extension_ids(self) -> tuple[tuple[str, str], ...]:
         """Return bundled-extension requirements for the current build."""
-        if self.build_type != "debug":
-            return self.product.required_extension_ids
-
-        from ..products import PRODUCTS
-
-        required: Dict[str, str] = {}
-        for product in PRODUCTS.values():
-            for extension_id, name in product.required_extension_ids:
-                required.setdefault(extension_id, name)
-        return tuple(required.items())
+        return self.product.required_extension_ids
 
     def get_product_gn_args(self) -> list[str]:
-        """Product GN args: release bakes identity; debug keeps the runtime
-        product switch working (it needs both server resource sets)."""
-        dev_build = "true" if self.build_type == "debug" else "false"
+        """Product GN args: every build bakes the product identity.
+
+        The patches default both switches to true, and with either on the
+        GN graph also requires the original BrowserOS agent CRX and Bun
+        server resources. Those left with that product, and bos_build no
+        longer stages them, so debug builds must turn the switches off too.
+        """
         return [
             f'browseros_product = "{self.product.gn_product}"',
-            f"browseros_allow_runtime_product_override = {dev_build}",
-            f"browseros_package_all_server_resources = {dev_build}",
+            "browseros_allow_runtime_product_override = false",
+            "browseros_package_all_server_resources = false",
         ]
 
     def get_features_yaml_path(self) -> Path:

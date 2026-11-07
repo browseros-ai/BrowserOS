@@ -16,7 +16,7 @@ MODULE = "bos_build.release.extensions.build"
 
 class ExtensionBuildTest(unittest.TestCase):
     def test_builds_and_packs_without_stamping_candidate_checkout(self) -> None:
-        spec = spec_by_name("agent")
+        spec = spec_by_name("browserclaw")
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             source = root / "packages/browseros-agent"
@@ -33,7 +33,7 @@ class ExtensionBuildTest(unittest.TestCase):
                     }
                 )
             )
-            output = root / "agent.crx"
+            output = root / "browserclaw.crx"
 
             with (
                 patch(f"{MODULE}.resolve_source", return_value=source),
@@ -111,7 +111,7 @@ class ExtensionBuildTest(unittest.TestCase):
             )
 
     def test_refuses_version_drift_before_build(self) -> None:
-        spec = spec_by_name("agent")
+        spec = spec_by_name("browserclaw")
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             source = root / "packages/browseros-agent"
@@ -124,7 +124,7 @@ class ExtensionBuildTest(unittest.TestCase):
                     build_extension_crx(
                         spec=spec,
                         version="0.0.101.0",
-                        output_path=root / "agent.crx",
+                        output_path=root / "browserclaw.crx",
                         monorepo_root=root,
                         work_root=root / "work",
                         chrome_binary="chrome",

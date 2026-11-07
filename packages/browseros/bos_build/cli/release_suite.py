@@ -85,14 +85,9 @@ def _write_outputs(path: Optional[Path], record: SuiteRecord) -> None:
         "branch": record.branch,
         "browser_version": record.browser_version,
         "build_offset": str(record.build_offset),
-        "server_version": versions.get("server", ""),
-        "agent_version": versions.get("agent", ""),
         "claw_server_version": versions.get("claw-server-rust", ""),
         "browserclaw_version": versions.get("browserclaw", ""),
-        # The historical output name belongs to BrowserOS neo. BrowserOS has a
-        # separate onboarding app and therefore needs its own workflow output.
         "onboarding_version": versions.get("claw-onboard", ""),
-        "app_onboarding_version": versions.get("app-onboard", ""),
         "component_versions": json.dumps(dict(versions), sort_keys=True),
         "pull_request_number": str(record.pull_request_number),
         "pull_request_url": record.pull_request_url,
@@ -207,7 +202,7 @@ def reconcile_rolling_release_command(
 @app.command("inspect")
 def inspect(
     product: str = typer.Option(
-        "", "--product", help="Product scope; omit only for legacy family recovery"
+        "", "--product", help="Product scope (browserclaw)"
     ),
     mode: str = typer.Option(..., "--mode", help="Suite mode: nightly or full"),
     source_sha: str = typer.Option(..., "--source-sha"),
@@ -236,7 +231,7 @@ def inspect(
 @app.command("reconcile")
 def reconcile(
     product: str = typer.Option(
-        "", "--product", help="Product scope; omit only for legacy family recovery"
+        "", "--product", help="Product scope (browserclaw)"
     ),
     mode: str = typer.Option(..., "--mode", help="Suite mode: nightly or full"),
     source_sha: str = typer.Option(..., "--source-sha"),

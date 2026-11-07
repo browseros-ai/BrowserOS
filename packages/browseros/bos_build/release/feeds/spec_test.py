@@ -21,14 +21,12 @@ from .spec import (
     update_manifest_feed,
 )
 
-# Every key a shipped client polls (chromium_patches ground truth).
+# Every key a shipped neo client polls (chromium_patches ground truth).
 CLIENT_POLLED_KEYS = [
-    "appcast.xml",
-    "appcast-x86_64.xml",
-    "appcast-win.xml",
-    "appcast-win-arm64.xml",
-    "appcast-server.xml",
-    "appcast-server.alpha.xml",
+    "appcast-claw.xml",
+    "appcast-claw-x86_64.xml",
+    "appcast-claw-win.xml",
+    "appcast-claw-win-arm64.xml",
     "appcast-claw-server.xml",
     "appcast-claw-server.alpha.xml",
     "extensions/update-manifest.xml",
@@ -38,12 +36,38 @@ CLIENT_POLLED_KEYS = [
     "extensions/bundled-manifest.xml",
 ]
 
+# Keys installed original-BrowserOS clients poll. browseros-human publishes
+# them to the same CDN keys, so nothing in this repo may write, prune or
+# overwrite them.
+BROWSEROS_HUMAN_KEYS = (
+    "appcast.xml",
+    "appcast-x86_64.xml",
+    "appcast-win.xml",
+    "appcast-win-arm64.xml",
+    "appcast-server.xml",
+    "appcast-server.alpha.xml",
+)
+
 
 class FeedTableTest(unittest.TestCase):
     def test_every_client_polled_key_exists_exactly_once(self):
         keys = [feed.key for feed in all_feeds()]
         for key in CLIENT_POLLED_KEYS:
             self.assertEqual(keys.count(key), 1, key)
+
+    def test_original_browseros_feed_keys_are_never_writable_here(self):
+        # Absent from FEEDS, every writer here (publisher, appcast, OTA) fails
+        # closed on these keys instead of touching browseros-human's feeds.
+        keys = {feed.key for feed in all_feeds()}
+        for key in BROWSEROS_HUMAN_KEYS:
+            with self.subTest(key=key):
+                self.assertNotIn(key, keys)
+                with self.assertRaisesRegex(ValueError, "Unknown feed key"):
+                    feed_by_key(key)
+        self.assertEqual(browser_feeds_for_product("browseros"), ())
+        for channel in ("prod", "alpha"):
+            with self.assertRaisesRegex(ValueError, "No server feed"):
+                server_feed("browseros-server", channel)
 
     def test_no_key_appears_twice(self):
         keys = [feed.key for feed in all_feeds()]
@@ -85,27 +109,21 @@ class FeedTableTest(unittest.TestCase):
             ],
         )
 
-    def test_browseros_browser_feeds_are_publishable(self):
-        feeds = browser_feeds_for_product("browseros")
-        self.assertTrue(all(feed.publishable for feed in feeds))
+    def test_browserclaw_browser_feed_derivation(self):
+        by_key = {feed.key: feed for feed in browser_feeds_for_product("browserclaw")}
 
-    def test_browseros_browser_feed_derivation(self):
-        by_key = {feed.key: feed for feed in browser_feeds_for_product("browseros")}
-
-        mac = by_key["appcast.xml"]
+        mac = by_key["appcast-claw.xml"]
         self.assertEqual(mac.platform, "macos")
         self.assertEqual(mac.artifact_keys, ("universal", "arm64"))
-        self.assertEqual(mac.title, "BrowserOS")
 
-        mac_x64 = by_key["appcast-x86_64.xml"]
+        mac_x64 = by_key["appcast-claw-x86_64.xml"]
         self.assertEqual(mac_x64.artifact_keys, ("x64", "universal"))
 
-        win = by_key["appcast-win.xml"]
+        win = by_key["appcast-claw-win.xml"]
         self.assertEqual(win.platform, "win")
         self.assertEqual(win.artifact_keys, ("x64_installer",))
-        self.assertEqual(win.title, "BrowserOS Windows Updates")
 
-        win_arm = by_key["appcast-win-arm64.xml"]
+        win_arm = by_key["appcast-claw-win-arm64.xml"]
         self.assertEqual(win_arm.artifact_keys, ("arm64_installer",))
 
     def test_feed_links_point_at_their_own_key(self):
@@ -114,10 +132,10 @@ class FeedTableTest(unittest.TestCase):
                 self.assertEqual(feed.link, f"{CDN_BASE_URL}/{feed.key}", feed.key)
 
     def test_server_feed_lookup_and_titles(self):
-        prod = server_feed("browseros-server", "prod")
-        self.assertEqual(prod.key, "appcast-server.xml")
-        self.assertEqual(prod.title, "BrowserOS Server")
-        self.assertEqual(prod.product, "browseros")
+        prod = server_feed("browserclaw-server", "prod")
+        self.assertEqual(prod.key, "appcast-claw-server.xml")
+        self.assertEqual(prod.title, "BrowserOS Claw Server")
+        self.assertEqual(prod.product, "browserclaw")
 
         alpha = server_feed("browserclaw-server", "alpha")
         self.assertEqual(alpha.key, "appcast-claw-server.alpha.xml")
@@ -166,6 +184,11 @@ class ExtensionRegistryTest(unittest.TestCase):
         self.assertTrue(by_name["agent"].in_update_feed)
         self.assertTrue(by_name["bugreporter"].in_update_feed)
         self.assertTrue(by_name["browserclaw"].in_update_feed)
+
+    def test_only_the_original_agent_entry_is_frozen(self):
+        self.assertEqual(
+            {ext.name for ext in EXTENSIONS if ext.frozen}, {"agent"}
+        )
 
     def test_crx_url_scheme(self):
         agent = extension_by_name("agent")

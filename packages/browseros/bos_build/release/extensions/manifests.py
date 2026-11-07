@@ -83,9 +83,14 @@ class ExtensionsFeedModule(Step):
 
         for name, version in self.set_versions.items():
             try:
-                extension_by_name(name)
+                extension = extension_by_name(name)
             except ValueError as e:
                 raise ValidationError(str(e))
+            if extension.frozen:
+                raise ValidationError(
+                    f"--set {name}= is not allowed: '{name}' is frozen and keeps "
+                    "its live/committed manifest entry"
+                )
             if not version:
                 raise ValidationError(f"--set {name}= is missing a version")
 
@@ -237,16 +242,20 @@ class ExtensionsFeedModule(Step):
         An alpha run legitimately pushes bundled past prod's versions; a
         later prod run must not need --allow-downgrade (which would disable
         the guard on the client-facing manifest too) just to get through.
-        --allow-downgrade remains the explicit path to force bundled down.
+        --allow-downgrade remains the explicit path to force bundled down,
+        except for frozen entries: those keep their bundled pin under every
+        flag, since nothing in this repo may move them.
         """
-        if self.allow_downgrade:
-            return dict(versions)
-
+        frozen = {ext.name for ext in EXTENSIONS if ext.frozen}
         merged = {}
         for name, version in versions.items():
             previous = previous_bundled.get(name)
             keep_previous = previous and (
-                parse_dotted_version(previous) > parse_dotted_version(version)
+                name in frozen
+                or (
+                    not self.allow_downgrade
+                    and parse_dotted_version(previous) > parse_dotted_version(version)
+                )
             )
             merged[name] = previous if keep_previous else version
         return merged

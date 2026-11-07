@@ -13,18 +13,17 @@ import (
 )
 
 type Ports struct {
-	CDP       int `yaml:"cdp"`
-	Server    int `yaml:"server"`
-	Extension int `yaml:"extension"`
+	CDP    int `yaml:"cdp"`
+	Server int `yaml:"server"`
 }
 
-type Target string
+// ClawTarget names BrowserOS neo's section of the config file (targets.claw) and its run
+// directory (<config dir>/claw). Keeping that layout leaves existing dogfood profiles,
+// locks and logs where they already are.
+const ClawTarget = "claw"
 
-const (
-	TargetBrowserOS Target = "browseros"
-	TargetClaw      Target = "claw"
-)
-
+// TargetConfig is one section under targets: the copied profile, the state root and the
+// ports a dogfood run uses.
 type TargetConfig struct {
 	DevUserDataDir string `yaml:"dev_user_data_dir"`
 	DevProfileDir  string `yaml:"dev_profile_dir"`
@@ -32,38 +31,25 @@ type TargetConfig struct {
 	Ports          Ports  `yaml:"ports"`
 }
 
-type ProductionEnv struct {
-	Server map[string]string `yaml:"server"`
-	CLI    map[string]string `yaml:"cli"`
-}
-
+// Config is the dogfood config file plus a flat runtime view of its claw section. The
+// runtime fields are never written as top-level keys. Resolve copies them out of
+// Targets[ClawTarget], and Save copies them back first.
 type Config struct {
 	RepoPath          string                  `yaml:"repo_path"`
 	BrowserOSAppPath  string                  `yaml:"browseros_app_path"`
 	SourceUserDataDir string                  `yaml:"source_user_data_dir"`
 	SourceProfileDir  string                  `yaml:"source_profile_dir"`
-	DevUserDataDir    string                  `yaml:"dev_user_data_dir"`
-	DevProfileDir     string                  `yaml:"dev_profile_dir"`
-	BrowserOSDir      string                  `yaml:"browseros_dir"`
 	Branch            string                  `yaml:"branch"`
-	Ports             Ports                   `yaml:"ports"`
-	Target            Target                  `yaml:"-"`
 	Targets           map[string]TargetConfig `yaml:"targets"`
-	ProductionEnv     ProductionEnv           `yaml:"production_env"`
+
+	DevUserDataDir string `yaml:"-"`
+	DevProfileDir  string `yaml:"-"`
+	BrowserOSDir   string `yaml:"-"`
+	Ports          Ports  `yaml:"-"`
 }
 
 type packageJSON struct {
 	Name string `json:"name"`
-}
-
-type fileConfig struct {
-	RepoPath          string                  `yaml:"repo_path"`
-	BrowserOSAppPath  string                  `yaml:"browseros_app_path"`
-	SourceUserDataDir string                  `yaml:"source_user_data_dir"`
-	SourceProfileDir  string                  `yaml:"source_profile_dir"`
-	Branch            string                  `yaml:"branch"`
-	Targets           map[string]TargetConfig `yaml:"targets"`
-	ProductionEnv     ProductionEnv           `yaml:"production_env"`
 }
 
 const (
@@ -104,64 +90,51 @@ func Defaults(home string) Config {
 		SourceProfileDir:  "Default",
 		Branch:            DefaultBranch,
 		Targets:           DefaultTargets(home),
-		ProductionEnv:     DefaultProductionEnv(),
 	}
-	_ = cfg.ApplyTarget(TargetBrowserOS)
+	cfg.applyClaw()
 	return cfg
 }
 
-// ResolveBrowserAppPath chooses the app binary for a target without freezing discovered defaults into config.
-func ResolveBrowserAppPath(target Target, configuredPath string, exists func(string) bool) BrowserAppResolution {
+// ResolveBrowserAppPath chooses the app binary at launch without freezing discovered
+// defaults into config. The default prefers BrowserOS neo and falls back to BrowserOS when
+// neo is not installed. A missing custom path falls back the same way.
+func ResolveBrowserAppPath(configuredPath string, exists func(string) bool) BrowserAppResolution {
 	configuredPath = strings.TrimSpace(configuredPath)
 	if configuredPath == "" {
 		configuredPath = DefaultBrowserOSAppPath
 	}
 	if isCustomBrowserAppPath(configuredPath) {
-		if target != TargetClaw {
-			return BrowserAppResolution{Path: configuredPath, PreferredPath: configuredPath}
-		}
 		if exists == nil || exists(configuredPath) {
 			return BrowserAppResolution{Path: configuredPath, PreferredPath: configuredPath}
 		}
 		return BrowserAppResolution{
-			Path:          fallbackBrowserAppPath(target, exists),
+			Path:          fallbackBrowserAppPath(exists),
 			PreferredPath: configuredPath,
 			MissingPath:   configuredPath,
 			Fallback:      true,
 		}
 	}
-	if target == TargetClaw {
-		if exists != nil && exists(DefaultBrowserClawAppPath) {
-			return BrowserAppResolution{
-				Path:          DefaultBrowserClawAppPath,
-				PreferredPath: DefaultBrowserClawAppPath,
-			}
-		}
+	if exists != nil && exists(DefaultBrowserClawAppPath) {
 		return BrowserAppResolution{
-			Path:          DefaultBrowserOSAppPath,
+			Path:          DefaultBrowserClawAppPath,
 			PreferredPath: DefaultBrowserClawAppPath,
-			MissingPath:   DefaultBrowserClawAppPath,
-			Fallback:      true,
 		}
 	}
 	return BrowserAppResolution{
 		Path:          DefaultBrowserOSAppPath,
-		PreferredPath: DefaultBrowserOSAppPath,
+		PreferredPath: DefaultBrowserClawAppPath,
+		MissingPath:   DefaultBrowserClawAppPath,
+		Fallback:      true,
 	}
 }
 
-// DefaultTargets returns isolated BrowserOS and BrowserOS neo runtime settings.
+// DefaultTargets returns the BrowserOS neo runtime settings, kept apart from the source
+// profile and from the installed app's own state.
 func DefaultTargets(home string) map[string]TargetConfig {
 	cfgDir := DefaultConfigDir(home)
 	return map[string]TargetConfig{
-		string(TargetBrowserOS): {
-			DevUserDataDir: filepath.Join(cfgDir, "browseros", "profile"),
-			DevProfileDir:  "Default",
-			BrowserOSDir:   filepath.Join(home, ".browseros-dogfood"),
-			Ports:          Ports{CDP: 9015, Server: 9115, Extension: 9315},
-		},
-		string(TargetClaw): {
-			DevUserDataDir: filepath.Join(cfgDir, "claw", "profile"),
+		ClawTarget: {
+			DevUserDataDir: filepath.Join(cfgDir, ClawTarget, "profile"),
 			DevProfileDir:  "Default",
 			BrowserOSDir:   filepath.Join(home, ".browseros-claw-dogfood"),
 			Ports:          Ports{CDP: 49337, Server: 9200},
@@ -183,39 +156,20 @@ func Load(path string) (Config, error) {
 }
 
 func Save(path string, cfg Config) error {
-	target := cfg.Target
-	cfg.FillProductionEnvDefaults()
-	cfg.CaptureTarget()
+	cfg.captureClaw()
 	cfg.Resolve()
-	if target != "" {
-		if err := cfg.ApplyTarget(target); err != nil {
-			return err
-		}
-	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	data, err := yaml.Marshal(fileConfig{
-		RepoPath:          cfg.RepoPath,
-		BrowserOSAppPath:  cfg.BrowserOSAppPath,
-		SourceUserDataDir: cfg.SourceUserDataDir,
-		SourceProfileDir:  cfg.SourceProfileDir,
-		Branch:            cfg.Branch,
-		Targets:           cfg.Targets,
-		ProductionEnv:     cfg.ProductionEnv,
-	})
+	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return err
 	}
-	header := "# browseros-dogfood configuration\n# Run: browseros-dogfood --browseros init or browseros-dogfood --claw init to reconfigure\n\n"
+	header := "# browseros-dogfood configuration\n# Run: browseros-dogfood init to reconfigure\n\n"
 	return os.WriteFile(path, append([]byte(header), data...), 0644)
 }
 
 func (c *Config) Resolve() {
-	target := c.Target
-	if target == "" {
-		target = TargetBrowserOS
-	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = ""
@@ -228,10 +182,12 @@ func (c *Config) Resolve() {
 		c.Branch = DefaultBranch
 	}
 	c.Targets = c.resolveTargets(home)
-	_ = c.ApplyTarget(target)
-	c.FillProductionEnvDefaults()
+	c.applyClaw()
 }
 
+// resolveTargets fills the claw section's defaults. It keeps any other section too, minus
+// fields TargetConfig does not know, so a save here does not delete the sections another
+// dogfood build reads from the same file.
 func (c Config) resolveTargets(home string) map[string]TargetConfig {
 	defaults := DefaultTargets(home)
 	targets := map[string]TargetConfig{}
@@ -241,23 +197,14 @@ func (c Config) resolveTargets(home string) map[string]TargetConfig {
 	for key, value := range c.Targets {
 		targets[key] = mergeTargetConfig(value, targets[key], home)
 	}
-	if len(c.Targets) == 0 {
-		legacy := TargetConfig{
-			DevUserDataDir: c.DevUserDataDir,
-			DevProfileDir:  c.DevProfileDir,
-			BrowserOSDir:   c.BrowserOSDir,
-			Ports:          c.Ports,
-		}
-		targets[string(TargetBrowserOS)] = mergeTargetConfig(legacy, targets[string(TargetBrowserOS)], home)
-	}
 	for key, value := range targets {
-		targets[key] = mergeTargetConfig(value, defaultsForTarget(defaults, Target(key)), home)
+		targets[key] = mergeTargetConfig(value, defaultsForTarget(defaults, key), home)
 	}
 	return targets
 }
 
-func defaultsForTarget(defaults map[string]TargetConfig, target Target) TargetConfig {
-	if cfg, ok := defaults[string(target)]; ok {
+func defaultsForTarget(defaults map[string]TargetConfig, target string) TargetConfig {
+	if cfg, ok := defaults[target]; ok {
 		return cfg
 	}
 	return TargetConfig{DevProfileDir: "Default"}
@@ -280,35 +227,24 @@ func mergeTargetConfig(value TargetConfig, fallback TargetConfig, home string) T
 	if value.Ports.Server != 0 {
 		out.Ports.Server = value.Ports.Server
 	}
-	if value.Ports.Extension != 0 {
-		out.Ports.Extension = value.Ports.Extension
-	}
 	return out
 }
 
-// ApplyTarget projects one target's runtime settings onto the active config view.
-func (c *Config) ApplyTarget(target Target) error {
-	settings, ok := c.Targets[string(target)]
-	if !ok {
-		return fmt.Errorf("unknown dogfood target %q", target)
-	}
-	c.Target = target
+// applyClaw projects the claw section onto the runtime view.
+func (c *Config) applyClaw() {
+	settings := c.Targets[ClawTarget]
 	c.DevUserDataDir = settings.DevUserDataDir
 	c.DevProfileDir = settings.DevProfileDir
 	c.BrowserOSDir = settings.BrowserOSDir
 	c.Ports = settings.Ports
-	return nil
 }
 
-// CaptureTarget stores the active runtime settings back under their selected target.
-func (c *Config) CaptureTarget() {
-	if c.Target == "" {
-		return
-	}
+// captureClaw stores the runtime view back under the claw section.
+func (c *Config) captureClaw() {
 	if c.Targets == nil {
 		c.Targets = map[string]TargetConfig{}
 	}
-	c.Targets[string(c.Target)] = TargetConfig{
+	c.Targets[ClawTarget] = TargetConfig{
 		DevUserDataDir: c.DevUserDataDir,
 		DevProfileDir:  c.DevProfileDir,
 		BrowserOSDir:   c.BrowserOSDir,
@@ -336,6 +272,8 @@ func (c Config) LogPath(name string) string {
 	return filepath.Join(c.LogDir(), name)
 }
 
+// Validate checks the saved settings. Start resolves and checks the browser app instead,
+// because the default path moves to BrowserOS neo once neo is installed.
 func (c Config) Validate() error {
 	if c.RepoPath == "" {
 		return fmt.Errorf("repo_path is required")
@@ -352,28 +290,15 @@ func (c Config) Validate() error {
 	if fspath.IsSameOrChild(c.DevUserDataDir, c.SourceUserDataDir) {
 		return fmt.Errorf("dev_user_data_dir must not equal or live inside source_user_data_dir")
 	}
-	if err := validateRepo(c.AgentRoot()); err != nil {
-		return err
-	}
-	if c.Target != TargetClaw {
-		if c.BrowserOSAppPath == "" {
-			return fmt.Errorf("browseros_app_path is required")
-		}
-		if info, err := os.Stat(c.BrowserOSAppPath); err != nil {
-			return fmt.Errorf("browseros_app_path: %w", err)
-		} else if info.IsDir() || info.Mode()&0111 == 0 {
-			return fmt.Errorf("browseros_app_path is not an executable file: %s", c.BrowserOSAppPath)
-		}
-	}
-	return nil
+	return validateRepo(c.AgentRoot())
 }
 
 func isCustomBrowserAppPath(path string) bool {
 	return path != "" && path != DefaultBrowserOSAppPath
 }
 
-func fallbackBrowserAppPath(target Target, exists func(string) bool) string {
-	if target == TargetClaw && exists != nil && exists(DefaultBrowserClawAppPath) {
+func fallbackBrowserAppPath(exists func(string) bool) string {
+	if exists != nil && exists(DefaultBrowserClawAppPath) {
 		return DefaultBrowserClawAppPath
 	}
 	return DefaultBrowserOSAppPath
@@ -402,47 +327,4 @@ func ExpandTilde(path string, home string) string {
 		return filepath.Join(home, path[2:])
 	}
 	return path
-}
-
-func DefaultProductionEnv() ProductionEnv {
-	return ProductionEnv{
-		Server: map[string]string{
-			"BROWSEROS_CONFIG_URL": "https://llm.browseros.com/api/browseros-server/config",
-			"POSTHOG_API_KEY":      "",
-			"SENTRY_DSN":           "",
-			"R2_ACCOUNT_ID":        "",
-			"R2_ACCESS_KEY_ID":     "",
-			"R2_SECRET_ACCESS_KEY": "",
-			"R2_BUCKET":            "",
-			"NODE_ENV":             "production",
-			"LOG_LEVEL":            "debug",
-		},
-		CLI: map[string]string{
-			"POSTHOG_API_KEY":      "",
-			"R2_ACCOUNT_ID":        "",
-			"R2_ACCESS_KEY_ID":     "",
-			"R2_SECRET_ACCESS_KEY": "",
-			"R2_BUCKET":            "browseros",
-		},
-	}
-}
-
-func (c *Config) FillProductionEnvDefaults() {
-	defaults := DefaultProductionEnv()
-	if c.ProductionEnv.Server == nil {
-		c.ProductionEnv.Server = map[string]string{}
-	}
-	if c.ProductionEnv.CLI == nil {
-		c.ProductionEnv.CLI = map[string]string{}
-	}
-	for key, value := range defaults.Server {
-		if _, ok := c.ProductionEnv.Server[key]; !ok {
-			c.ProductionEnv.Server[key] = value
-		}
-	}
-	for key, value := range defaults.CLI {
-		if _, ok := c.ProductionEnv.CLI[key]; !ok {
-			c.ProductionEnv.CLI[key] = value
-		}
-	}
 }

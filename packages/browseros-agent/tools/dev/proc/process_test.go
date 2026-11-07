@@ -54,19 +54,19 @@ func TestWatchRunPathsStableAndSharedAcrossPortChanges(t *testing.T) {
 	}
 }
 
-func TestBrowserProfilePIDsFromPSSelectsOnlyDevAndTestProfiles(t *testing.T) {
+func TestBrowserProfilePIDsFromPSSelectsBrowserAppsOnGivenProfiles(t *testing.T) {
 	output := `
   111  111 /Applications/BrowserOS.app/Contents/MacOS/BrowserOS --user-data-dir=/tmp/browseros-dev
   222  222 /Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo --user-data-dir=/tmp/browseros-dev-abcd
-  333  333 /Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo --user-data-dir=/var/folders/x/browseros-test-abcd
+  333  333 /Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo --user-data-dir=/var/folders/x/browseros-dev-other
   444  444 /Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo --user-data-dir=/Users/me/Library/Application Support/BrowserOS
-  555  555 rg browseros-test-
+  555  555 rg --user-data-dir=/tmp/browseros-dev-abcd
 `
 
-	pids := browserProfilePIDsFromPS(output)
+	pids := browserProfilePIDsFromPSForUserDataDirs(output, []string{"/tmp/browseros-dev", "/tmp/browseros-dev-abcd"})
 
-	if len(pids) != 3 || pids[0] != 111 || pids[1] != 222 || pids[2] != 333 {
-		t.Fatalf("expected dev/test browser pids, got %#v", pids)
+	if len(pids) != 2 || pids[0] != 111 || pids[1] != 222 {
+		t.Fatalf("expected the BrowserOS and BrowserOS neo pids on the given profiles, got %#v", pids)
 	}
 }
 

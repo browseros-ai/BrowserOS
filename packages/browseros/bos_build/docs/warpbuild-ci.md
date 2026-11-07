@@ -108,7 +108,7 @@ leaves `queued`:
 Smoke test the platform whose runner configuration changed:
 
 ```bash
-gh workflow run release-linux.yml -f products=browseros -f upload_to_r2=false
+gh workflow run release-linux.yml -f products=browserclaw -f upload_to_r2=false
 gh workflow run release-windows.yml \
   -f products=browserclaw \
   -f sign=false \
@@ -120,8 +120,8 @@ Only dispatch one when you intentionally want to spend Azure compute time.
 
 ## Release lane flow
 
-`release-linux.yml` and `release-windows.yml` select products (`browseros`,
-`browserclaw`, or `all`) and call
+`release-linux.yml` and `release-windows.yml` take a `products` input whose
+only value is `browserclaw` and call
 `.github/workflows/build-browseros.yml` with `profile=release-ci`. Full product
 releases set `resource-mode=published`, pass the frozen dispatch SHA, and build
 one product after its server and extension workflows publish their `latest`
@@ -136,9 +136,9 @@ wall-clock rather than two. Both architectures merge one product/version's
 (`If-Match`/`If-None-Match`), re-reading and re-merging on a 412, so concurrent
 lanes cannot drop each other's keys. Two parallel lanes need 64 vCPUs of
 Dalsv7-family quota in East US. Published resources support both targets;
-source mode is limited to x64. A dual-architecture standalone build requires one
-product and exact `server_version`, `extension_version`, and `onboarding_version`
-inputs; full product releases supply those pins. See [Linux arm64](linux-arm64.md).
+source mode is limited to x64. A dual-architecture standalone build requires
+exact `server_version`, `extension_version`, and `onboarding_version` inputs;
+full product releases supply those pins. See [Linux arm64](linux-arm64.md).
 
 The reusable workflow performs the per-platform recipe:
 
@@ -162,8 +162,7 @@ The reusable workflow performs the per-platform recipe:
 6. Preparation failure stops before cache publication or product patching.
 7. Save the cache (only when the restore missed, i.e. first run per pin).
 8. In source mode, download and validate the prepared common-resource artifact.
-   Set up Bun for the BrowserOS server or the native Rust target for the
-   BrowserOS neo server.
+   Set up the native Rust target for the BrowserOS neo server.
 9. Invoke `uv run browseros build` once with the selected profile, product,
    architecture, resource mode, Chromium path, signing/upload switches, and
    prepared directory. `bos_build` builds the native server, stages validated
@@ -239,9 +238,9 @@ acceleration on WarpCache for Linux and the R2 tarball for Windows; do not add
 ## Operating release lanes
 
 ```bash
-# BrowserOS Linux build from intentionally published component resources.
+# BrowserOS neo Linux build from intentionally published component resources.
 gh workflow run release-linux.yml \
-  -f products=browseros \
+  -f products=browserclaw \
   -f upload_to_r2=false
 
 # BrowserClaw unsigned Windows verification without R2 upload.
@@ -251,7 +250,6 @@ gh workflow run release-windows.yml \
   -f upload_to_r2=false
 
 # Full releases publish components before building the native matrices.
-gh workflow run release-browseros.yml --ref main
 gh workflow run release-browserclaw.yml --ref main
 ```
 

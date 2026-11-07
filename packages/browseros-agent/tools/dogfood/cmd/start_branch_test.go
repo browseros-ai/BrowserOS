@@ -100,15 +100,11 @@ func TestPrepareStartCheckoutWrapsCleanSwitchFailure(t *testing.T) {
 			"git switch dogfood": errors.New("fatal: invalid reference: dogfood"),
 		},
 	}
-	cfg := config.Config{
-		Target:   config.TargetClaw,
-		RepoPath: "/repo",
-		Branch:   "dogfood",
-	}
+	cfg := config.Config{RepoPath: "/repo", Branch: "dogfood"}
 
 	_, err := prepareStartCheckout(context.Background(), cfg, r)
 
-	if err == nil || !strings.Contains(err.Error(), "run `browseros-dogfood --claw pull` first") {
+	if err == nil || !strings.Contains(err.Error(), "run `browseros-dogfood pull` first") {
 		t.Fatalf("error got %v", err)
 	}
 }

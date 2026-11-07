@@ -1,26 +1,27 @@
 # Browser release CI
 
-The full BrowserOS and BrowserOS neo workflows orchestrate the existing
-component release workflows before building the browser. Component workflows
-own component versions and publication. Native browser lanes consume the
-normal published-resource manifests and `latest` aliases.
+The full BrowserOS neo workflow orchestrates the existing component release
+workflows before building the browser. The original BrowserOS product releases
+from `browseros-human`. Component workflows own component versions and
+publication. Native browser lanes consume the normal published-resource
+manifests and `latest` aliases.
 
 Signed nightlies use independent product transactions through
-`nightly-macos-browseros.yml` and `nightly-macos-browserclaw.yml`. Each freezes its
-source and resource pins, builds one signed browser, and merges only its product
-state before publishing its immutable browser artifacts and rolling prerelease.
+`nightly-macos-browserclaw.yml`. It freezes its source and resource pins, builds
+one signed browser, and merges only its product state before publishing its
+immutable browser artifacts and rolling prerelease.
 The shared allocation and publication locks protect versions and sibling feed
-entries. Historical family transactions remain recoverable; see
+entries. Historical family transactions are allocation history only; see
 [nightly-macos-ci.md](nightly-macos-ci.md) for ownership and cutover details.
 
-The existing `release-browseros.yml` and `release-browserclaw.yml` full-release
-entrypoints retain their native lane orchestration. Nightly browser jobs build
-the exact reservation commit (the frozen source plus its deterministic version
-overlay); later state commits and squash merges are never browser build inputs.
+The `release-browserclaw.yml` full-release entrypoint retains its native lane
+orchestration. Nightly browser jobs build the exact reservation commit (the
+frozen source plus its deterministic version overlay); later state commits and
+squash merges are never browser build inputs.
 
 ## Full-release graph
 
-Both products use the same fixed sequence:
+The release runs one fixed sequence:
 
 ```text
 dispatch from main
@@ -33,9 +34,8 @@ dispatch from main
      macOS universal ─┘
 ```
 
-BrowserOS calls `release-server.yml` and releases the `agent` extension.
-BrowserOS neo calls `release-claw-server.yml` and releases the `browserclaw`
-extension. Each reusable component workflow must finish successfully before
+It calls `release-claw-server.yml` and releases the `browserclaw` extension.
+Each reusable component workflow must finish successfully before
 the next stage starts. A failed component release prevents every native
 browser lane from starting.
 
@@ -59,11 +59,9 @@ while a native browser lane waits for a runner.
 A dispatch without inputs is a full release: it publishes the product's server
 and extension, updates alpha, builds signed Windows x64 and signed macOS
 universal, uploads browser deliverables, and creates a draft browser GitHub
-release. Neo builds both Linux x64 and arm64 by default; BrowserOS builds Linux
-x64. `release-browseros.yml` has no release-shape inputs.
+release. Neo builds both Linux x64 and arm64 by default.
 
 ```bash
-gh workflow run release-browseros.yml --ref main
 gh workflow run release-browserclaw.yml --ref main
 ```
 
@@ -125,9 +123,7 @@ The component workflows remain independently dispatchable and use main by
 default:
 
 ```bash
-gh workflow run release-server.yml --ref main
 gh workflow run release-claw-server.yml --ref main
-gh workflow run release-extensions.yml --ref main -f extension=agent
 gh workflow run release-extensions.yml --ref main -f extension=browserclaw
 ```
 
@@ -146,7 +142,6 @@ Production promotion remains explicit:
 
 ```bash
 cd packages/browseros
-uv run browseros ota server promote --product browseros --publish
 uv run browseros ota server promote --product browserclaw --publish
 ```
 
@@ -165,8 +160,8 @@ matching release for the same source SHA instead of silently allocating a new
 version. Successful earlier stages are not rebuilt, and downstream browser
 lanes stay gated until the failed stage succeeds.
 
-For the combined signed nightly, rerun failed jobs in the original run when
-possible. The stable transaction identity is `nightly-<source-sha>`. Browser
+For the signed nightly, rerun failed jobs in the original run when possible.
+The stable transaction identity is `nightly-<product>-<source-sha>`. Browser
 jobs fetch the transaction branch before merge, or
 `refs/pull/<PR_NUMBER>/head` after branch deletion, only to make the proven
 transaction history reachable. They verify that history contains the recorded
@@ -192,7 +187,7 @@ local build is:
 cd /path/to/BrowserOS/packages/browseros
 uv run browseros build \
   --preset release \
-  --product browseros \
+  --product browserclaw \
   --arch x64 \
   --resource-mode published \
   --no-sign \
@@ -200,9 +195,8 @@ uv run browseros build \
   --chromium-src /path/to/chromium/src
 ```
 
-Use `--product browserclaw` for BrowserOS neo. Published mode resolves mutable
-component aliases, so publish the intended component releases before starting
-the browser build.
+Published mode resolves mutable component aliases, so publish the intended
+component releases before starting the browser build.
 
 ## Local source build
 
@@ -217,7 +211,7 @@ SOURCE_SHA="$(git rev-parse HEAD)"
 
 uv run browseros build \
   --preset release \
-  --product browseros \
+  --product browserclaw \
   --arch x64 \
   --resource-mode source \
   --source-sha "$SOURCE_SHA" \
@@ -226,9 +220,9 @@ uv run browseros build \
   --chromium-src /path/to/chromium/src
 ```
 
-Chrome, Bun, and the product's build-time secrets must be available. BrowserOS
-neo additionally needs the native Rust toolchain. Source mode does not bump
-versions, commit, push, or open a PR.
+Chrome, Bun, the native Rust toolchain, and the product's build-time secrets
+must be available. Source mode does not bump versions, commit, push, or open a
+PR.
 
 ## Publication boundary
 
@@ -238,37 +232,31 @@ browser appcast. Inspect the browser draft before promotion.
 
 | Workflow | Owned publication |
 | --- | --- |
-| `release-server.yml` | BrowserOS server release, versioned/`latest` resources, alpha OTA, version reflection |
 | `release-claw-server.yml` | BrowserOS neo server release, versioned/`latest` resources, alpha OTA, version reflection |
 | `release-claw-onboard.yml` | onboarding release and resources |
 | `release-extensions.yml` | extension CRX release, versioned object, alpha/bundled manifests, version reflection |
 | `release-extension-feeds.yml` | explicit extension manifest preview or publication |
-| `nightly-macos-browseros.yml` | BrowserOS nightly transaction, product alpha snapshots, and `nightly-browseros` |
 | `nightly-macos-browserclaw.yml` | BrowserOS neo nightly transaction, product alpha snapshots, and `nightly-browserclaw` |
-| `release-browseros.yml` | ordered BrowserOS component releases, native builds, browser draft |
 | `release-browserclaw.yml` | ordered BrowserOS neo component releases, native builds, browser draft |
 
 ## Required configuration
 
 Component publication and browser uploads use the `R2_*` secrets. BrowserOS
-server builds need `BROWSEROS_CONFIG_URL`, `POSTHOG_API_KEY`, and `SENTRY_DSN`;
-BrowserOS neo server builds need `CLAW_POSTHOG_KEY`. Extension builds need the
-matching signing key and build-time secrets.
+neo server builds need `CLAW_POSTHOG_KEY`. Extension builds need the matching
+signing key and build-time secrets.
 
 Windows signing needs the eSigner secrets and `SPARKLE_PRIVATE_KEY`. macOS uses
 repository variables `BROWSEROS_REPO_PATH` and `BROWSEROS_CHROMIUM_SRC` plus
 the signing and notarization secrets on the persistent builder. Signed macOS
-releases require separate base64-encoded Developer ID provisioning profiles:
-`PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64` for `com.browseros.BrowserOS` and
-`PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64` for
-`com.browseros.BrowserClaw`. Each profile must authorize team `8YMKWU47S5`, its
-bundle-specific keychain groups, and
+releases require a base64-encoded Developer ID provisioning profile in
+`PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64` for `com.browseros.BrowserClaw`.
+It must authorize team `8YMKWU47S5`, the bundle-specific keychain groups, and
 `com.apple.developer.web-browser.public-key-credential`; the build validates
-those claims before signing. The profiles are not interchangeable because
-Apple assigns the managed capability to an exact App ID.
-Until Apple approves a profile, its secret may remain unset: the corresponding
-browser still builds, signs, and runs with the standard entitlements, but macOS
-platform passkeys are unavailable. Once a secret is configured, a missing,
+those claims before signing. Apple assigns the managed capability to an exact
+App ID, so a profile for another bundle cannot stand in.
+Until Apple approves the profile, the secret may remain unset: the browser
+still builds, signs, and runs with the standard entitlements, but macOS
+platform passkeys are unavailable. Once the secret is configured, a missing,
 wrong, or malformed profile is a hard release error.
 `BROWSEROS_CHROMIUM_SRC` is a dedicated, CI-owned APFS clone base. Setup keeps
 its pinned Chromium identity strict but repairs local Git changes and

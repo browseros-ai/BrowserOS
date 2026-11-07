@@ -85,16 +85,16 @@ class ConfigureModule(Step):
         log_success("Build configured")
 
     def _warn_missing_server_resources(self, ctx: Context) -> None:
-        # Debug sets browseros_package_all_server_resources, so ninja needs
-        # every product's server resources staged; a missing set otherwise
-        # surfaces much later as a cryptic missing-input error.
+        # Debug runs often skip the resources step, but ninja still needs the
+        # product's server resources staged; a missing set otherwise surfaces
+        # much later as a cryptic missing-input error.
         for bundle in all_server_bundles():
             resources_dir = ctx.chromium_src / bundle.chromium_resources_root
             if not resources_dir.exists():
                 log_warning(
-                    f"⚠️  {bundle.id}: {resources_dir} not staged — debug "
-                    "builds package all server resources; run the resources "
-                    "step first or ninja will fail on missing inputs"
+                    f"⚠️  {bundle.id}: {resources_dir} not staged — run the "
+                    "resources step first or ninja will fail on missing server "
+                    "resources inputs"
                 )
 
     def _ensure_linux_sysroot(self, ctx: Context) -> None:

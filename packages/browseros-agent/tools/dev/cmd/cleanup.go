@@ -20,14 +20,13 @@ var cleanupCmd = &cobra.Command{
 }
 
 var (
-	cleanupOnlyPorts          bool
-	cleanupOnlyTemps          bool
-	cleanupQuick              bool
-	cleanupYes                bool
-	cleanupTarget             string
-	cleanupBrowserOSDir       string
-	cleanupPortsValue         string
-	cleanupBrowserUserDataDir string
+	cleanupOnlyPorts    bool
+	cleanupOnlyTemps    bool
+	cleanupQuick        bool
+	cleanupYes          bool
+	cleanupTarget       string
+	cleanupBrowserOSDir string
+	cleanupPortsValue   string
 )
 
 type safeCleanupOptions struct {
@@ -36,10 +35,9 @@ type safeCleanupOptions struct {
 }
 
 func init() {
-	cleanupCmd.Flags().StringVar(&cleanupTarget, "target", targetDev, "Cleanup target: dev, dogfood, or prod")
+	cleanupCmd.Flags().StringVar(&cleanupTarget, "target", targetDev, "Cleanup target: dev or prod")
 	cleanupCmd.Flags().StringVar(&cleanupBrowserOSDir, "browseros-dir", "", "Override target BrowserOS state directory")
 	cleanupCmd.Flags().StringVar(&cleanupPortsValue, "ports", "", "Override ports as cdp,server,extension")
-	cleanupCmd.Flags().StringVar(&cleanupBrowserUserDataDir, "browser-user-data-dir", "", "Override BrowserOS user-data dir to stop")
 	cleanupCmd.Flags().BoolVar(&cleanupOnlyPorts, "only-ports", false, "Only kill port processes")
 	cleanupCmd.Flags().BoolVar(&cleanupOnlyTemps, "only-temps", false, "Only remove temp directories (stop watch owners first)")
 	cleanupCmd.Flags().BoolVar(&cleanupQuick, "quick", false, "Run safe cleanup only")
@@ -55,10 +53,9 @@ func runCleanup(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	target, err := resolveResetTarget(root, resetTargetOptions{
-		Target:             cleanupTarget,
-		BrowserOSDir:       cleanupBrowserOSDir,
-		Ports:              cleanupPortsValue,
-		BrowserUserDataDir: cleanupBrowserUserDataDir,
+		Target:       cleanupTarget,
+		BrowserOSDir: cleanupBrowserOSDir,
+		Ports:        cleanupPortsValue,
 	})
 	if err != nil {
 		return err
@@ -76,9 +73,6 @@ func runCleanup(cmd *cobra.Command, args []string) error {
 			fmt.Fprintln(out, dimStyle.Sprint("Skipped."))
 			return nil
 		}
-	}
-	if err := ensureTargetStopped(out, target); err != nil {
-		return err
 	}
 	return runSafeCleanup(out, target, safeCleanupOptions{
 		ports: !cleanupOnlyTemps || cleanupOnlyPorts,

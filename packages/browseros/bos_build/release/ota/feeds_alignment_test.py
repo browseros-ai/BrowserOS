@@ -30,7 +30,7 @@ def _artifact(platform="darwin_arm64", os="macos", arch="arm64"):
     )
 
 
-def _alpha_content(bundle_id="browseros-server"):
+def _alpha_content(bundle_id="browserclaw-server"):
     return render_server_appcast(
         server_feed(bundle_id, "alpha"),
         "0.0.9",
@@ -44,16 +44,16 @@ def _alpha_content(bundle_id="browseros-server"):
 
 
 class BundleDerivationTest(unittest.TestCase):
-    def test_browseros_defaults_keep_todays_literals(self):
+    def test_defaults_select_the_neo_server_bundle(self):
         module = ServerOTAModule(version="0.0.9", channel="alpha")
 
         self.assertEqual(
             module.artifact_key("darwin-arm64"),
-            "artifacts/server/0.0.9/browseros-server-resources-darwin-arm64.zip",
+            "claw-server-rust/prod-resources/0.0.9/browseros-claw-server-rust-resources-darwin-arm64.zip",
         )
         self.assertEqual(
             module.zip_filename("darwin_arm64"),
-            "browseros_server_0.0.9_darwin_arm64.zip",
+            "browserclaw_server_0.0.9_darwin_arm64.zip",
         )
 
     def test_browserclaw_derives_claw_keys(self):
@@ -88,9 +88,9 @@ class BundleDerivationTest(unittest.TestCase):
         root = get_package_root().parent.parent / "updates" / "server"
 
         self.assertEqual(
-            get_appcast_path("alpha"), root / "appcast-server.alpha.xml"
+            get_appcast_path("alpha"), root / "appcast-claw-server.alpha.xml"
         )
-        self.assertEqual(get_appcast_path("prod"), root / "appcast-server.xml")
+        self.assertEqual(get_appcast_path("prod"), root / "appcast-claw-server.xml")
         self.assertEqual(
             get_appcast_path("prod", "browserclaw-server"),
             root / "appcast-claw-server.xml",
@@ -144,9 +144,9 @@ class MergeBaseAppcastTest(unittest.TestCase):
             return self.live
 
     def test_live_feed_wins_over_staging_file(self):
-        spec = server_feed("browseros-server", "alpha")
+        spec = server_feed("browserclaw-server", "alpha")
         with tempfile.TemporaryDirectory() as tmp:
-            staging = Path(tmp) / "appcast-server.alpha.xml"
+            staging = Path(tmp) / "appcast-claw-server.alpha.xml"
             staging.write_text(_alpha_content())
 
             base = merge_base_appcast(
@@ -158,9 +158,9 @@ class MergeBaseAppcastTest(unittest.TestCase):
         self.assertEqual(base.version, "0.0.12")
 
     def test_staging_file_is_fallback_when_no_live(self):
-        spec = server_feed("browseros-server", "alpha")
+        spec = server_feed("browserclaw-server", "alpha")
         with tempfile.TemporaryDirectory() as tmp:
-            staging = Path(tmp) / "appcast-server.alpha.xml"
+            staging = Path(tmp) / "appcast-claw-server.alpha.xml"
             staging.write_text(_alpha_content())
 
             base = merge_base_appcast(self._FakePublisher(live=None), spec, staging)
@@ -168,7 +168,7 @@ class MergeBaseAppcastTest(unittest.TestCase):
         self.assertEqual(base.version, "0.0.9")
 
     def test_no_live_and_no_staging_returns_none(self):
-        spec = server_feed("browseros-server", "alpha")
+        spec = server_feed("browserclaw-server", "alpha")
         base = merge_base_appcast(
             self._FakePublisher(live=None), spec, Path("/nonexistent/appcast.xml")
         )
@@ -177,30 +177,30 @@ class MergeBaseAppcastTest(unittest.TestCase):
 
 class PromoteContentTest(unittest.TestCase):
     def test_promote_rerenders_with_prod_metadata(self):
-        prod_spec = server_feed("browseros-server", "prod")
+        prod_spec = server_feed("browserclaw-server", "prod")
 
         promoted = promote_appcast_content(_alpha_content(), prod_spec)
 
-        self.assertIn("<title>BrowserOS Server</title>", promoted)
+        self.assertIn("<title>BrowserOS Claw Server</title>", promoted)
         self.assertIn(
-            "<link>https://cdn.browseros.com/appcast-server.xml</link>", promoted
+            "<link>https://cdn.browseros.com/appcast-claw-server.xml</link>", promoted
         )
         self.assertNotIn("(Alpha)", promoted)
-        self.assertNotIn("appcast-server.alpha.xml", promoted)
+        self.assertNotIn("appcast-claw-server.alpha.xml", promoted)
         self.assertIn("<sparkle:version>0.0.9</sparkle:version>", promoted)
         self.assertIn("Thu, 16 Apr 2026 18:58:59 +0000", promoted)
         self.assertIn("ALPHASIG==", promoted)
-        self.assertIn("browseros_server_0.0.9_darwin_arm64.zip", promoted)
+        self.assertIn("browserclaw_server_0.0.9_darwin_arm64.zip", promoted)
 
     def test_promote_refuses_malformed_source(self):
         with self.assertRaises(ValueError):
             promote_appcast_content(
-                "<rss><channel>", server_feed("browseros-server", "prod")
+                "<rss><channel>", server_feed("browserclaw-server", "prod")
             )
 
     def test_promote_refuses_source_without_enclosures(self):
         empty = render_server_appcast(
-            server_feed("browseros-server", "alpha"),
+            server_feed("browserclaw-server", "alpha"),
             "0.0.9",
             [],
             ExistingAppcast(
@@ -211,7 +211,7 @@ class PromoteContentTest(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "enclosure"):
-            promote_appcast_content(empty, server_feed("browseros-server", "prod"))
+            promote_appcast_content(empty, server_feed("browserclaw-server", "prod"))
 
 
 if __name__ == "__main__":

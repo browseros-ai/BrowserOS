@@ -68,7 +68,6 @@ class ReleaseAppcastCliTest(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name)
         self.paths = {
-            "browseros-server": self.root / "appcast-server.xml",
             "browserclaw-server": self.root / "appcast-claw-server.xml",
         }
 
@@ -89,10 +88,9 @@ class ReleaseAppcastCliTest(unittest.TestCase):
             app, ["ota", "server", "release-appcast", "--channel", "prod", *args]
         )
 
-    def test_empty_default_feed_names_selection_and_hints_browserclaw(self):
-        self.paths["browseros-server"].write_text(_appcast("browseros-server", "prod"))
+    def test_empty_default_feed_names_selection_without_product_hint(self):
         self.paths["browserclaw-server"].write_text(
-            _appcast("browserclaw-server", "prod", "0.0.12")
+            _appcast("browserclaw-server", "prod")
         )
 
         with (
@@ -106,38 +104,28 @@ class ReleaseAppcastCliTest(unittest.TestCase):
         output = _combined_output(result)
         self.assertEqual(result.exit_code, 1, output)
         self.assertIn(
-            "Resolved appcast: product=browseros bundle=browseros-server "
-            "channel=prod spec=appcast-server.xml "
-            f"source={self.paths['browseros-server'].resolve()}",
+            "Resolved appcast: product=browserclaw bundle=browserclaw-server "
+            "channel=prod spec=appcast-claw-server.xml "
+            f"source={self.paths['browserclaw-server'].resolve()}",
             output,
         )
         self.assertIn(
-            f"appcast-server.xml has no <item> entries: "
-            f"{self.paths['browseros-server'].resolve()}",
+            f"appcast-claw-server.xml has no <item> entries: "
+            f"{self.paths['browserclaw-server'].resolve()}",
             output,
         )
-        self.assertIn(
-            "Did you mean --product browserclaw? "
-            "appcast-claw-server.xml carries 0.0.12",
-            output,
-        )
+        # No other product owns a server feed, so there is nothing to suggest.
+        self.assertNotIn("Did you mean --product", output)
         publisher_factory.assert_not_called()
 
-    def test_missing_sibling_feed_does_not_mask_empty_error(self):
-        self.paths["browseros-server"].write_text(_appcast("browseros-server", "prod"))
-
-        with (
-            mock.patch.object(
-                ota_cli, "get_appcast_path", side_effect=self._get_appcast_path
-            ),
-            mock.patch.object(ota_cli, "_feed_publisher") as publisher_factory,
-        ):
-            result = self._invoke()
+    def test_original_browseros_product_has_no_writable_server_feed(self):
+        # appcast-server(.alpha).xml belong to browseros-human now.
+        with mock.patch.object(ota_cli, "_feed_publisher") as publisher_factory:
+            result = self._invoke("--product", "browseros", "--publish")
 
         output = _combined_output(result)
         self.assertEqual(result.exit_code, 1, output)
-        self.assertIn("appcast-server.xml has no <item> entries", output)
-        self.assertNotIn("Did you mean --product", output)
+        self.assertIn("Product 'browseros' has no server bundle", output)
         publisher_factory.assert_not_called()
 
     def test_explicit_browserclaw_uses_versioned_claw_feed(self):
@@ -165,7 +153,7 @@ class ReleaseAppcastCliTest(unittest.TestCase):
 
     def test_custom_empty_file_does_not_suggest_another_product(self):
         custom = self.root / "custom.xml"
-        custom.write_text(_appcast("browseros-server", "prod"))
+        custom.write_text(_appcast("browserclaw-server", "prod"))
         self.paths["browserclaw-server"].write_text(
             _appcast("browserclaw-server", "prod", "0.0.12")
         )
@@ -185,7 +173,7 @@ class AssembleServerAppcastTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name)
-        self.output = self.root / "appcast-server.alpha.xml"
+        self.output = self.root / "appcast-claw-server.alpha.xml"
         self.publisher = FeedPublisher(
             env=SimpleNamespace(r2_bucket="browseros"),
             r2_client=_MissingR2Client(),
@@ -197,7 +185,7 @@ class AssembleServerAppcastTest(unittest.TestCase):
         self,
         platform_name: str,
         version: str = "0.0.129",
-        bundle_id: str = "browseros-server",
+        bundle_id: str = "browserclaw-server",
     ) -> str:
         platform = next(
             item for item in SERVER_PLATFORMS if item["name"] == platform_name
@@ -225,7 +213,7 @@ class AssembleServerAppcastTest(unittest.TestCase):
 
         result = ota_cli._assemble_server_appcast(
             version="0.0.129",
-            bundle_id="browseros-server",
+            bundle_id="browserclaw-server",
             channel="alpha",
             fragments=fragments,
             publisher=self.publisher,
@@ -252,7 +240,7 @@ class AssembleServerAppcastTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Missing appcast fragments"):
             ota_cli._assemble_server_appcast(
                 version="0.0.129",
-                bundle_id="browseros-server",
+                bundle_id="browserclaw-server",
                 channel="alpha",
                 fragments=fragments,
                 publisher=self.publisher,
@@ -266,7 +254,7 @@ class AssembleServerAppcastTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "does not contain darwin_arm64"):
             ota_cli._assemble_server_appcast(
                 version="0.0.129",
-                bundle_id="browseros-server",
+                bundle_id="browserclaw-server",
                 channel="alpha",
                 fragments=[f"darwin_arm64={path}"],
                 publisher=self.publisher,
@@ -285,7 +273,7 @@ class AssembleServerAppcastTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "carries version 0.0.128"):
             ota_cli._assemble_server_appcast(
                 version="0.0.129",
-                bundle_id="browseros-server",
+                bundle_id="browserclaw-server",
                 channel="alpha",
                 fragments=fragments,
                 publisher=self.publisher,

@@ -17,7 +17,7 @@ func TestPrintLogsShowsDirectoryAndFiles(t *testing.T) {
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"server.log", "chromium.log"} {
+	for _, name := range []string{"claw-app.log", "claw-server.log"} {
 		if err := os.WriteFile(filepath.Join(logDir, name), []byte("log"), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -31,8 +31,8 @@ func TestPrintLogsShowsDirectoryAndFiles(t *testing.T) {
 	got := stripANSI(out.String())
 	for _, want := range []string{
 		"Log directory: " + logDir,
-		filepath.Join(logDir, "chromium.log"),
-		filepath.Join(logDir, "server.log"),
+		filepath.Join(logDir, "claw-app.log"),
+		filepath.Join(logDir, "claw-server.log"),
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in\n%s", want, got)

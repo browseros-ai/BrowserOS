@@ -16,9 +16,9 @@ fi
 case "${1:-}" in
   setup)
     base_src="${2:-${CHROMIUM_SRC:-}}"
-    products="${3:-browseros}"
+    products="${3:-browserclaw}"
     if [ -z "$base_src" ]; then
-      echo "usage: $0 setup <persistent-chromium-src> [browseros|browserclaw|all]" >&2
+      echo "usage: $0 setup <persistent-chromium-src> [browserclaw|all]" >&2
       exit 2
     fi
     exec uv run --project "$package_root" browseros source workspace \
@@ -29,15 +29,15 @@ case "${1:-}" in
       --run-tag "$run_tag"
     ;;
   cleanup)
-    # Discover both product-qualified ledgers even if setup failed before it
-    # could publish any step outputs, or the second product only partly copied.
+    # Discover every product-qualified ledger even if setup failed before it
+    # could publish any step outputs.
     exec uv run --project "$package_root" browseros source cleanup-workspaces \
       --runner-temp "$RUNNER_TEMP" \
       --run-tag "$run_tag" \
       --products "${2:-all}"
     ;;
   *)
-    echo "usage: $0 setup <persistent-chromium-src> [browseros|browserclaw|all]|cleanup" >&2
+    echo "usage: $0 setup <persistent-chromium-src> [browserclaw|all]|cleanup" >&2
     exit 2
     ;;
 esac

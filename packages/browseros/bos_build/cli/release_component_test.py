@@ -21,11 +21,11 @@ runner = CliRunner()
 class ComponentReleaseCliTest(unittest.TestCase):
     def test_resolve_writes_workflow_outputs_and_summary(self) -> None:
         record = StandaloneReleaseRecord(
-            component="server",
+            component="claw-onboard",
             version="0.0.128",
-            tag="agent-server/v0.0.128",
+            tag="claw-onboard/v0.0.128",
             release_sha="1" * 40,
-            previous_tag="agent-server/v0.0.127",
+            previous_tag="claw-onboard/v0.0.127",
             reservation="create",
         )
         with tempfile.TemporaryDirectory() as tmp:
@@ -48,7 +48,7 @@ class ComponentReleaseCliTest(unittest.TestCase):
                         "component",
                         "resolve",
                         "--component",
-                        "server",
+                        "claw-onboard",
                         "--event-name",
                         "workflow_dispatch",
                         "--default-branch",
@@ -69,17 +69,17 @@ class ComponentReleaseCliTest(unittest.TestCase):
                 line.split("=", 1) for line in output.read_text().splitlines()
             )
             self.assertEqual(values["version"], "0.0.128")
-            self.assertEqual(values["tag"], "agent-server/v0.0.128")
-            self.assertEqual(values["names"], "server")
-            self.assertIn("BrowserOS server release", summary.read_text())
+            self.assertEqual(values["tag"], "claw-onboard/v0.0.128")
+            self.assertEqual(values["names"], "claw-onboard")
+            self.assertIn("BrowserOS neo onboarding release", summary.read_text())
 
     def test_resolve_can_include_immutable_r2_allocations(self) -> None:
         record = StandaloneReleaseRecord(
-            component="server",
+            component="claw-onboard",
             version="0.0.130",
-            tag="agent-server/v0.0.130",
+            tag="claw-onboard/v0.0.130",
             release_sha="1" * 40,
-            previous_tag="agent-server/v0.0.128",
+            previous_tag="claw-onboard/v0.0.128",
             reservation="create",
         )
         env = mock.Mock(r2_bucket="browseros")
@@ -104,7 +104,7 @@ class ComponentReleaseCliTest(unittest.TestCase):
                     "component",
                     "resolve",
                     "--component",
-                    "server",
+                    "claw-onboard",
                     "--event-name",
                     "workflow_dispatch",
                     "--default-branch",
@@ -142,19 +142,19 @@ class ComponentReleaseCliTest(unittest.TestCase):
     def test_stamp_updates_only_selected_component_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            manifest = root / "packages/browseros-agent/apps/server/package.json"
+            manifest = root / "packages/browseros-agent/apps/claw-onboard/package.json"
             lockfile = root / "packages/browseros-agent/bun.lock"
             manifest.parent.mkdir(parents=True)
             manifest.write_text(
-                json.dumps({"name": "@browseros/server", "version": "0.0.127"})
+                json.dumps({"name": "@browseros/claw-onboard", "version": "0.0.127"})
                 + "\n"
             )
             lockfile.parent.mkdir(parents=True, exist_ok=True)
             lockfile.write_text(
                 "{\n"
                 '  "workspaces": {\n'
-                '    "apps/server": {\n'
-                '      "name": "@browseros/server",\n'
+                '    "apps/claw-onboard": {\n'
+                '      "name": "@browseros/claw-onboard",\n'
                 '      "version": "0.0.127",\n'
                 "    },\n"
                 "  },\n"
@@ -167,7 +167,7 @@ class ComponentReleaseCliTest(unittest.TestCase):
                     "component",
                     "stamp",
                     "--component",
-                    "server",
+                    "claw-onboard",
                     "--version",
                     "0.0.128",
                     "--repo-root",
@@ -182,7 +182,7 @@ class ComponentReleaseCliTest(unittest.TestCase):
     def test_read_decodes_semver_safe_chrome_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            manifest = root / "packages/browseros-agent/apps/app/package.json"
+            manifest = root / "packages/browseros-agent/apps/claw-app/package.json"
             manifest.parent.mkdir(parents=True)
             manifest.write_text(json.dumps({"version": "0.0.126+7"}))
 
@@ -193,7 +193,7 @@ class ComponentReleaseCliTest(unittest.TestCase):
                     "component",
                     "read",
                     "--component",
-                    "agent",
+                    "browserclaw",
                     "--repo-root",
                     str(root),
                 ],

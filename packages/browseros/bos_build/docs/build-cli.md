@@ -75,7 +75,7 @@ profiles stay switch-based, and a golden test keeps them from drifting.
 The same escape hatch exists on the command line for one-off runs:
 
 ```bash
-browseros build --modules clean,compile,sign_macos --product browseros
+browseros build --modules clean,compile,sign_macos --product browserclaw
 browseros build --list                                # every available step
 ```
 

@@ -22,7 +22,7 @@ class DotenvParserTest(unittest.TestCase):
             "line-one\n"
             "line-two\n"
             '-----END PRIVATE KEY-----"\n'
-            "BROWSEROS_AGENT_V2_KEY='-----BEGIN KEY-----\n"
+            "BROWSERCLAW_KEY='-----BEGIN KEY-----\n"
             "agent-line\n"
             "-----END KEY-----'\n"
         )
@@ -33,7 +33,7 @@ class DotenvParserTest(unittest.TestCase):
         )
         self.assertEqual(
             "-----BEGIN KEY-----\nagent-line\n-----END KEY-----",
-            parsed["BROWSEROS_AGENT_V2_KEY"],
+            parsed["BROWSERCLAW_KEY"],
         )
         verify_dotenv_round_trip(parsed)
 
@@ -80,6 +80,16 @@ class WorkflowSecretScannerTest(unittest.TestCase):
         )
 
         self.assertEqual({"BAR_BAZ", "FOO", "QUX"}, refs)
+
+    def test_allowlist_tracks_only_scanned_workflows_that_reference_it(self):
+        # A workflow deletion must take its consumer names and any secret
+        # left without a reference out of the allowlist with it.
+        scanned = {path.name for path in RELEASE_WORKFLOW_FILES}
+        referenced = scan_workflow_secret_refs(REPO_ROOT)
+        for spec in ALLOWLIST:
+            with self.subTest(secret=spec.name):
+                self.assertLessEqual(set(spec.consumers), scanned)
+                self.assertIn(spec.name, referenced)
 
     def test_extension_feed_workflow_uses_only_r2_allowlisted_secrets(self):
         workflow = "release-extension-feeds.yml"

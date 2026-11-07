@@ -18,11 +18,11 @@ from ..feeds.render import (
 from ..feeds.spec import FeedSpec, server_feed
 
 SERVER_PLATFORMS = [
-    {"name": "darwin_arm64", "binary": "browseros-server-darwin-arm64", "target": "darwin-arm64", "os": "macos", "arch": "arm64"},
-    {"name": "darwin_x64", "binary": "browseros-server-darwin-x64", "target": "darwin-x64", "os": "macos", "arch": "x86_64"},
-    {"name": "linux_arm64", "binary": "browseros-server-linux-arm64", "target": "linux-arm64", "os": "linux", "arch": "arm64"},
-    {"name": "linux_x64", "binary": "browseros-server-linux-x64", "target": "linux-x64", "os": "linux", "arch": "x86_64"},
-    {"name": "windows_x64", "binary": "browseros-server-windows-x64.exe", "target": "windows-x64", "os": "windows", "arch": "x86_64"},
+    {"name": "darwin_arm64", "target": "darwin-arm64", "os": "macos", "arch": "arm64"},
+    {"name": "darwin_x64", "target": "darwin-x64", "os": "macos", "arch": "x86_64"},
+    {"name": "linux_arm64", "target": "linux-arm64", "os": "linux", "arch": "arm64"},
+    {"name": "linux_x64", "target": "linux-x64", "os": "linux", "arch": "x86_64"},
+    {"name": "windows_x64", "target": "windows-x64", "os": "windows", "arch": "x86_64"},
 ]
 
 
@@ -38,7 +38,7 @@ def generate_server_appcast(
     artifacts: List[SignedArtifact],
     channel: str = "alpha",
     existing: Optional[ExistingAppcast] = None,
-    bundle_id: str = "browseros-server",
+    bundle_id: str = "browserclaw-server",
 ) -> str:
     """Render a server appcast for a bundle+channel via its FeedSpec."""
     spec = server_feed(bundle_id, channel)
@@ -91,6 +91,6 @@ def create_server_bundle_zip(resources_dir: Path, output_zip: Path) -> bool:
         return False
 
 
-def get_appcast_path(channel: str = "alpha", bundle_id: str = "browseros-server") -> Path:
+def get_appcast_path(channel: str = "alpha", bundle_id: str = "browserclaw-server") -> Path:
     """Return the tracked staging path for a server appcast."""
     return FeedPublisher().staging_path(server_feed(bundle_id, channel))

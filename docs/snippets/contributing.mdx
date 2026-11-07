@@ -1,9 +1,9 @@
-BrowserOS has two main parts you can contribute to:
+BrowserOS neo has two main parts you can contribute to:
 
-- **Agent** — The AI features, UI, and browser automation (TypeScript/React)
+- **Agent platform** — The cockpit new tab, the MCP endpoint agents connect to, and session replay (TypeScript/React/Rust)
 - **Browser** — The custom Chromium build (C++/Python)
 
-Most contributors work on the Agent since it's much easier to set up.
+Most contributors work on the agent platform since it's much easier to set up.
 
 ## Quick Links
 
@@ -21,21 +21,19 @@ Most contributors work on the Agent since it's much easier to set up.
 
 ---
 
-## Path 1: Agent Development
+## Path 1: Agent Platform Development
 
-The Agent is a monorepo with 3 components:
+The agent platform lives in `packages/browseros-agent`. The full guide is [`packages/browseros-agent/CONTRIBUTING.md`](https://github.com/browseros-ai/BrowserOS/blob/main/packages/browseros-agent/CONTRIBUTING.md).
 
 | Component | Path | What it does |
 |-----------|------|--------------|
-| **Agent UI** | `apps/app` | Chrome extension — chat interface, settings, side panel |
-| **Server** | `apps/server` | Bun server — agent loop, MCP tools, API endpoints |
-| **Controller** | `apps/controller-ext` | Chrome extension — bridges `chrome.*` APIs to the server |
-
-### Architecture
-
-<img src="/images/contributing--architecture.png" alt="BrowserOS Agent architecture diagram" />
+| **Cockpit** | `apps/claw-app` | WXT + React extension: the new tab where you watch agents work, replay sessions, and manage connections |
+| **Server** | `apps/claw-server` | Rust backend: the MCP endpoint agents connect to, plus the API behind the cockpit |
+| **Onboarding** | `apps/claw-onboard` | First-run onboarding flow |
 
 ### Setup
+
+You need Bun, Go, Rust, and BrowserOS neo installed. The dev loop runs on macOS today.
 
 ```bash
 # Clone the repo
@@ -45,38 +43,28 @@ cd BrowserOS/packages/browseros-agent
 # Install dependencies
 bun install
 
-# Copy environment files
-cp apps/server/.env.example apps/server/.env.development
-cp apps/app/.env.example apps/app/.env.development
+# Copy the environment file (every value in it is optional for a first run)
+cp .env.development.example .env.development
 ```
 
 ### Running Locally
 
 ```bash
-# Terminal 1: Start the server
-bun run start:server
-
-# Terminal 2: Start the agent extension (dev mode)
-bun run start:agent
+bun run dev:claw:watch:new
 ```
 
-Then load the extension in BrowserOS:
-1. Go to `chrome://extensions/`
-2. Enable **Developer mode**
-3. Click **Load unpacked** and select the `apps/app/dist/` folder
+This starts the cockpit with hot reload, its web preview, and `claw-server` under cargo, then launches BrowserOS neo against them. Stop everything with `bun run dev:stop`.
 
 ### Commands
 
 | Command | Description |
 |---------|-------------|
-| `bun run start:server` | Start the server |
-| `bun run start:agent` | Start agent extension (dev mode) |
-| `bun run build:server` | Build server for production |
-| `bun run build:agent` | Build agent extension |
-| `bun run build:ext` | Build controller extension |
-| `bun run test` | Run tests |
-| `bun run lint` | Check with Biome |
-| `bun run typecheck` | TypeScript check |
+| `bun run dev:claw:watch` | Run the dev loop with your saved profile and state |
+| `bun run dev:claw-onboard` | Run the onboarding flow on its own |
+| `bun run check` | Lint, typecheck, and Fallow |
+| `bun run test` | Run the TypeScript test suites |
+| `bun run test:rust` | Run the Rust workspace tests |
+| `bun run lint:rust` | Clippy, warnings are errors |
 
 ---
 
@@ -152,40 +140,17 @@ The `--setup` and `--prep` flags are only needed for the first build. After that
 uv run browseros build --chromium-src <path> --build --build-type debug
 ```
 
-**4. Run BrowserOS**
+**4. Run BrowserOS neo**
 
-<Tabs>
-  <Tab title="macOS (ARM64)">
-    ```bash
-    <chromium-src>/out/Default_arm64/BrowserOS\ Dev.app/Contents/MacOS/BrowserOS\ Dev \
-      --enable-logging=stderr \
-      --use-mock-keychain \
-      --user-data-dir=/tmp/test-profile
-    ```
-  </Tab>
-  <Tab title="macOS (x64)">
-    ```bash
-    <chromium-src>/out/Default_x64/BrowserOS\ Dev.app/Contents/MacOS/BrowserOS\ Dev \
-      --enable-logging=stderr \
-      --use-mock-keychain \
-      --user-data-dir=/tmp/test-profile
-    ```
-  </Tab>
-  <Tab title="Windows">
-    ```bash
-    <chromium-src>\out\Default_x64\BrowserOS Dev.exe \
-      --enable-logging=stderr \
-      --user-data-dir=%TEMP%\test-profile
-    ```
-  </Tab>
-  <Tab title="Linux">
-    ```bash
-    <chromium-src>/out/Default_x64/browseros \
-      --enable-logging=stderr \
-      --user-data-dir=/tmp/test-profile
-    ```
-  </Tab>
-</Tabs>
+The debug build lands in `<chromium-src>/out/Default_<arch>/` (on macOS, `BrowserOS neo Dev.app`). Launch it with a throwaway profile:
+
+```bash
+<path-to-built-binary> \
+  --enable-logging=stderr \
+  --user-data-dir=/tmp/test-profile
+```
+
+On macOS, also pass `--use-mock-keychain`.
 
 ### Build Flags
 

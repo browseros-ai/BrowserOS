@@ -44,7 +44,7 @@ def _complete_appcast(version: str = "0.0.9") -> str:
         for platform in SERVER_PLATFORMS
     ]
     return render_server_appcast(
-        server_feed("browseros-server", "alpha"),
+        server_feed("browserclaw-server", "alpha"),
         version,
         artifacts,
         ExistingAppcast(
@@ -59,7 +59,7 @@ class LiveReleaseReuseTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        self.output = Path(self._tmp.name) / "appcast-server.alpha.xml"
+        self.output = Path(self._tmp.name) / "appcast-claw-server.alpha.xml"
         self.registry = SimpleNamespace(add=mock.Mock())
         self.ctx = cast(
             Context,
@@ -92,7 +92,7 @@ class LiveReleaseReuseTest(unittest.TestCase):
 
     def test_refuses_to_replace_incomplete_same_version_live_payloads(self):
         live = render_server_appcast(
-            server_feed("browseros-server", "alpha"),
+            server_feed("browserclaw-server", "alpha"),
             "0.0.9",
             [],
             ExistingAppcast(
@@ -119,7 +119,7 @@ class LiveReleaseReuseTest(unittest.TestCase):
             release_sha=SOURCE_SHA,
         )
         client = object()
-        pin = ResourcePin("browseros_server", "0.0.9", ())
+        pin = ResourcePin("browserclaw_server", "0.0.9", ())
 
         with (
             mock.patch.object(ota_server, "get_r2_client", return_value=client),
@@ -138,7 +138,7 @@ class LiveReleaseReuseTest(unittest.TestCase):
         verify.assert_called_once_with(
             client,
             "browseros",
-            "browseros_server",
+            "browserclaw_server",
             "0.0.9",
             SOURCE_SHA,
         )
@@ -166,9 +166,9 @@ class ImmutableSourceDownloadTest(unittest.TestCase):
             output.writestr("artifact-metadata.json", json.dumps(metadata))
             output.writestr("resources/bin/browseros-server", server)
         self.data = self.archive.read_bytes()
-        self.key = "artifacts/server/0.0.9/browseros-server-resources-linux-x64.zip"
+        self.key = "claw-server-rust/prod-resources/0.0.9/browseros-claw-server-rust-resources-linux-x64.zip"
         self.pin = ResourcePin(
-            "browseros_server",
+            "browserclaw_server",
             "0.0.9",
             (
                 ResourceObjectPin(
@@ -253,7 +253,7 @@ class BoundPayloadUploadTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name)
-        self.path = self.root / "browseros_server_0.0.9_linux_x64.zip"
+        self.path = self.root / "browserclaw_server_0.0.9_linux_x64.zip"
         self.path.write_bytes(b"signed-payload")
         self.artifact = SignedArtifact(
             platform="linux_x64",
@@ -275,7 +275,7 @@ class BoundPayloadUploadTest(unittest.TestCase):
     def _metadata(self, data: bytes, signature: str) -> dict[str, str]:
         return {
             "binding-schema": "browseros-server-ota-v1",
-            "bundle-id": "browseros-server",
+            "bundle-id": "browserclaw-server",
             "version": "0.0.9",
             "release-sha": SOURCE_SHA,
             "platform": "linux_x64",
@@ -354,7 +354,7 @@ class BoundPayloadUploadTest(unittest.TestCase):
             os="linux",
             arch="x86_64",
         )
-        output = self.root / "appcast-server.alpha.xml"
+        output = self.root / "appcast-claw-server.alpha.xml"
         publisher = SimpleNamespace(fetch_live=lambda _: None)
         ctx = cast(
             Context,

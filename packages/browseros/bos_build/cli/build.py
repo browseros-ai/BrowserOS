@@ -73,7 +73,7 @@ def main(
         None,
         "--product",
         "-p",
-        help="Product to build (browseros, browserclaw)",
+        help="Product to build (browserclaw)",
     ),
     modules: Optional[str] = typer.Option(
         None,
@@ -219,7 +219,7 @@ def main(
 
     \b
     Presets (Recommended - one pipeline definition, switches select):
-      browseros build --preset release --product browseros --arch arm64
+      browseros build --preset release --product browserclaw --arch arm64
       browseros build --preset release --product browserclaw --no-upload
       browseros build --profile nightly-ci --arch x64
       browseros build --preset debug
@@ -631,6 +631,10 @@ def _resolve_preset(
                 switches, skip=tuple(dict.fromkeys((*switches.skip, *cli_skip)))
             )
         switches = switches.resolved()
+        # --show-plan returns before any context is built, so resolve the
+        # product here; an unregistered id (e.g. the retired "browseros")
+        # must fail instead of printing a plan nothing can run.
+        get_product_descriptor(switches.product)
         if prepared_resources is not None and switches.resource_mode != "source":
             raise ValueError("--prepared-resources requires source mode")
         if source_sha is not None and switches.resource_mode != "source":

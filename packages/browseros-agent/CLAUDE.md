@@ -1,6 +1,6 @@
 # BrowserOS Agent contributor ground rules
 
-A Bun-workspaces monorepo for the BrowserOS MCP server, agent extension UI, and shared packages.
+A Bun-workspaces and Cargo monorepo for BrowserOS neo: the cockpit extension (`apps/claw-app`), the Rust server (`apps/claw-server`), onboarding (`apps/claw-onboard`), shared crates, and shared packages.
 
 ## Before you push
 
@@ -20,16 +20,12 @@ bun run test
 - Use kebab-case for folders and multi-word non-component files; app-specific framework exceptions live in the app CLAUDE files.
 - Keep shared constants in `@browseros/shared` instead of scattering magic values:
   - `@browseros/shared/constants/ports`
-  - `@browseros/shared/constants/timeouts`
   - `@browseros/shared/constants/limits`
   - `@browseros/shared/constants/urls`
-  - `@browseros/shared/constants/paths`
-  - `@browseros/shared/types/logger`
 - Logger messages should not include `[prefix]` tags; development logging already adds file, line, and function.
 - Keep comments minimal. Comment hidden constraints, subtle invariants, critical warnings, or surprising behavior; do not restate obvious code.
 - New packages go in `packages/`; apps go in `apps/`. Avoid package-wide `index.ts` barrels and expose narrow files with both `types` and `default` entries in `package.json`.
 
 ## Where to look
 
-- For server-specific guidance, see `apps/server/CLAUDE.md`.
-- For extension/app UI specifics, see `apps/app/CLAUDE.md`.
+- For setup, the dev loop, and where things live, see `CONTRIBUTING.md`.

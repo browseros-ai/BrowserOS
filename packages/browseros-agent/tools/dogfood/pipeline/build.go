@@ -2,13 +2,7 @@ package pipeline
 
 import "context"
 
-func Build(ctx context.Context, agentRoot string, r Runner) error {
-	if err := Setup(ctx, agentRoot, r); err != nil {
-		return err
-	}
-	return r.Run(ctx, agentRoot, "bun", "--cwd", "apps/app", "--env-file=../../.env.development", "wxt", "build", "--mode", "development")
-}
-
+// Setup installs the checkout's dependencies through the dev CLI before a dogfood start.
 func Setup(ctx context.Context, agentRoot string, r Runner) error {
 	return r.Run(ctx, agentRoot, "./tools/dev/setup.sh")
 }

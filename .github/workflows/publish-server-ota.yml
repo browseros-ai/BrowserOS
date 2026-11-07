@@ -70,7 +70,6 @@ jobs:
         run: |
           set -euo pipefail
           case "$PRODUCT:$SNAPSHOT_PATH" in
-            browseros:updates/server/appcast-server.alpha.xml) ;;
             browserclaw:updates/server/appcast-claw-server.alpha.xml) ;;
             *)
               echo "::error::Invalid product snapshot ownership"
@@ -301,8 +300,8 @@ jobs:
             --product "$PRODUCT" \
             --platform "$PLATFORM"
 
-      # Both products share a nightly run's artifact namespace. Include the
-      # product so each publisher downloads only its own appcast fragments.
+      # Fragment names carry the product so a publisher downloads only its
+      # own appcast fragments from the run's shared artifact namespace.
       - name: Upload platform appcast fragment
         uses: actions/upload-artifact@v7
         with:

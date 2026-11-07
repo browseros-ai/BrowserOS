@@ -28,7 +28,6 @@ const defaultMonitorPollInterval = 250 * time.Millisecond
 
 type daemonMonitor struct {
 	Paths        runPaths
-	Target       config.Target
 	Out          io.Writer
 	Filter       string
 	FromStart    bool
@@ -44,11 +43,7 @@ var statusCmd = &cobra.Command{
 	Short:   "Show dogfood background daemon status",
 	GroupID: groupInspect,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		target, err := selectedRequiredTarget()
-		if err != nil {
-			return err
-		}
-		resp, err := sendControl(target, ipc.Request{Command: ipc.CmdStatus})
+		resp, err := sendControl(ipc.Request{Command: ipc.CmdStatus})
 		if err != nil {
 			return err
 		}
@@ -62,14 +57,10 @@ var stopCmd = &cobra.Command{
 	Short:   "Stop the dogfood background daemon",
 	GroupID: groupRun,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		target, err := selectedRequiredTarget()
-		if err != nil {
+		if _, err := sendControl(ipc.Request{Command: ipc.CmdStop}); err != nil {
 			return err
 		}
-		if _, err := sendControl(target, ipc.Request{Command: ipc.CmdStop}); err != nil {
-			return err
-		}
-		fmt.Printf("%s %s background daemon\n", successStyle.Sprint("Stopping:"), targetLabel(target))
+		fmt.Printf("%s %s background daemon\n", successStyle.Sprint("Stopping:"), productLabel)
 		return nil
 	},
 }
@@ -79,19 +70,15 @@ var restartCmd = &cobra.Command{
 	Short:   "Rebuild/restart current checkout; --pull updates, --pull --force resets",
 	GroupID: groupRun,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		target, err := selectedRequiredTarget()
-		if err != nil {
-			return err
-		}
 		request, err := buildRestartRequest(restartPull, restartForce)
 		if err != nil {
 			return err
 		}
-		paths, err := defaultTargetRunPaths(target)
+		paths, err := defaultRunPaths()
 		if err != nil {
 			return err
 		}
-		if _, err := sendControlWithPaths(paths, target, request); err != nil {
+		if _, err := sendControlWithPaths(paths, request); err != nil {
 			return err
 		}
 		fmt.Fprintln(os.Stdout, successStyle.Sprint("Restart requested."))
@@ -100,7 +87,6 @@ var restartCmd = &cobra.Command{
 		detached := false
 		if err := monitorDaemonUntilRunning(cmd.Context(), daemonMonitor{
 			Paths:    paths,
-			Target:   target,
 			Out:      os.Stdout,
 			Detach:   detach,
 			Detached: &detached,
@@ -108,7 +94,7 @@ var restartCmd = &cobra.Command{
 			return err
 		}
 		if !detached {
-			fmt.Printf("%s %s background environment is healthy\n", successStyle.Sprint("Ready:"), targetLabel(target))
+			fmt.Printf("%s %s background environment is healthy\n", successStyle.Sprint("Ready:"), productLabel)
 		}
 		return nil
 	},
@@ -116,17 +102,13 @@ var restartCmd = &cobra.Command{
 
 var logsTailCmd = &cobra.Command{
 	Use:   "tail",
-	Short: "Tail daemon, chromium, and server logs from the background daemon",
+	Short: "Tail daemon, app, and server logs from the background daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		target, err := selectedRequiredTarget()
+		paths, err := defaultRunPaths()
 		if err != nil {
 			return err
 		}
-		paths, err := defaultTargetRunPaths(target)
-		if err != nil {
-			return err
-		}
-		resp, err := sendControlWithPaths(paths, target, ipc.Request{Command: ipc.CmdStatus})
+		resp, err := sendControlWithPaths(paths, ipc.Request{Command: ipc.CmdStatus})
 		if err != nil {
 			return err
 		}
@@ -147,7 +129,7 @@ var logsTailCmd = &cobra.Command{
 func init() {
 	restartCmd.Flags().BoolVar(&restartPull, "pull", false, "Pull latest upstream changes before rebuilding and restarting")
 	restartCmd.Flags().BoolVar(&restartForce, "force", false, "With --pull, reset to upstream before rebuilding and restarting")
-	logsTailCmd.Flags().StringVar(&logsFilter, "filter", "", "Only show daemon, chromium, or server logs")
+	logsTailCmd.Flags().StringVar(&logsFilter, "filter", "", "Only show daemon or server logs")
 	logsTailCmd.Flags().IntVarP(&logsLines, "lines", "n", 80, "Number of existing log lines to show before following")
 	logsCmd.AddCommand(logsTailCmd)
 	rootCmd.AddCommand(statusCmd, stopCmd, restartCmd)
@@ -170,18 +152,18 @@ func buildRestartRequest(pull bool, force bool) (ipc.Request, error) {
 	return request, nil
 }
 
-func sendControl(target config.Target, req ipc.Request) (ipc.Response, error) {
-	paths, err := defaultTargetRunPaths(target)
+func sendControl(req ipc.Request) (ipc.Response, error) {
+	paths, err := defaultRunPaths()
 	if err != nil {
 		return ipc.Response{}, err
 	}
-	return sendControlWithPaths(paths, target, req)
+	return sendControlWithPaths(paths, req)
 }
 
-func sendControlWithPaths(paths runPaths, target config.Target, req ipc.Request) (ipc.Response, error) {
+func sendControlWithPaths(paths runPaths, req ipc.Request) (ipc.Response, error) {
 	resp, err := ipc.NewClient(paths.Socket).Send(req)
 	if err != nil {
-		return ipc.Response{}, daemonUnavailableError(paths, target, err)
+		return ipc.Response{}, daemonUnavailableError(paths, err)
 	}
 	if resp.Error != "" {
 		return ipc.Response{}, errors.New(resp.Error)
@@ -189,13 +171,13 @@ func sendControlWithPaths(paths runPaths, target config.Target, req ipc.Request)
 	return resp, nil
 }
 
-func daemonUnavailableError(paths runPaths, target config.Target, cause error) error {
+func daemonUnavailableError(paths runPaths, cause error) error {
 	lock, err := dogfoodruntime.AcquireLock(paths.Lock)
 	if err == nil {
 		_ = lock.Close()
 		_ = dogfoodruntime.CleanupStaleRunFiles(paths.State)
 		if errors.Is(cause, ipc.ErrDaemonNotRunning) {
-			return fmt.Errorf("%w; start it with `browseros-dogfood %s start-background`", cause, targetFlagOrDefault(target))
+			return fmt.Errorf("%w; start it with `browseros-dogfood start-background`", cause)
 		}
 		return cause
 	}
@@ -204,8 +186,7 @@ func daemonUnavailableError(paths runPaths, target config.Target, cause error) e
 		if stateErr == nil && state.Mode == "foreground" {
 			return fmt.Errorf("browseros-dogfood is running in foreground mode (pid %d); background daemon commands are unavailable", state.PID)
 		}
-		targetFlag := targetFlagOrDefault(target)
-		return fmt.Errorf("browseros-dogfood background daemon is not responding; try `browseros-dogfood %s stop` if it is stuck, then `browseros-dogfood %s start-background`", targetFlag, targetFlag)
+		return fmt.Errorf("browseros-dogfood background daemon is not responding; try `browseros-dogfood stop` if it is stuck, then `browseros-dogfood start-background`")
 	}
 	return err
 }
@@ -229,7 +210,7 @@ func monitorDaemonUntilRunning(ctx context.Context, monitor daemonMonitor) error
 	status := monitor.Status
 	if status == nil {
 		status = func() (ipc.Response, error) {
-			return sendControlWithPaths(monitor.Paths, monitor.Target, ipc.Request{Command: ipc.CmdStatus})
+			return sendControlWithPaths(monitor.Paths, ipc.Request{Command: ipc.CmdStatus})
 		}
 	}
 	follow := monitor.Follow
@@ -246,7 +227,7 @@ func monitorDaemonUntilRunning(ctx context.Context, monitor daemonMonitor) error
 		})
 	}()
 
-	if done, err := daemonReachedTerminalState(status, monitor.Target); done || err != nil {
+	if done, err := daemonReachedTerminalState(status); done || err != nil {
 		return err
 	}
 	ticker := time.NewTicker(pollInterval)
@@ -259,22 +240,21 @@ func monitorDaemonUntilRunning(ctx context.Context, monitor daemonMonitor) error
 			if monitor.Detached != nil {
 				*monitor.Detached = true
 			}
-			targetFlag := targetFlagOrDefault(monitor.Target)
-			fmt.Fprintf(out, "%s daemon still running. Run %s to reattach.\n", warnStyle.Sprint("Detached;"), commandStyle.Sprintf("browseros-dogfood %s logs tail", targetFlag))
+			fmt.Fprintf(out, "%s daemon still running. Run %s to reattach.\n", warnStyle.Sprint("Detached;"), commandStyle.Sprint("browseros-dogfood logs tail"))
 			return nil
 		case err := <-followErr:
 			if err != nil && ctx.Err() == nil {
 				return err
 			}
 		case <-ticker.C:
-			if done, err := daemonReachedTerminalState(status, monitor.Target); done || err != nil {
+			if done, err := daemonReachedTerminalState(status); done || err != nil {
 				return err
 			}
 		}
 	}
 }
 
-func daemonReachedTerminalState(status func() (ipc.Response, error), target config.Target) (bool, error) {
+func daemonReachedTerminalState(status func() (ipc.Response, error)) (bool, error) {
 	resp, err := status()
 	if err != nil {
 		return false, err
@@ -287,8 +267,7 @@ func daemonReachedTerminalState(status func() (ipc.Response, error), target conf
 		if lastError == "" {
 			lastError = "daemon entered error state"
 		}
-		targetFlag := targetFlagOrDefault(target)
-		return true, fmt.Errorf("%s; run `browseros-dogfood %s logs tail` for details", lastError, targetFlag)
+		return true, fmt.Errorf("%s; run `browseros-dogfood logs tail` for details", lastError)
 	default:
 		return false, nil
 	}
@@ -332,22 +311,16 @@ func followRunLog(ctx context.Context, path string, filter string, fromStart boo
 }
 
 func formatRunLogEntry(entry runlog.Entry) string {
-	tag := entry.Tag
-	if tag == "browser" {
-		tag = "chromium"
-	}
 	style := dimStyle
 	switch entry.Tag {
 	case "daemon":
 		style = warnStyle
 	case "agent":
 		style = proc.TagAgent.Color
-	case "browser":
-		style = proc.TagBrowser.Color
 	case "server":
 		style = proc.TagServer.Color
 	}
-	return fmt.Sprintf("%s %s %s", entry.Time.Format("15:04:05"), style.Sprintf("[%s]", tag), entry.Line)
+	return fmt.Sprintf("%s %s %s", entry.Time.Format("15:04:05"), style.Sprintf("[%s]", entry.Tag), entry.Line)
 }
 
 func logPathFromStatusData(data any, fallback string) string {
@@ -385,37 +358,14 @@ func formatStatus(data any) string {
 		fmt.Fprintf(&out, "%s %s\n", warnStyle.Sprint("Last error:"), lastError)
 	}
 	if ports, ok := status["ports"].(map[string]any); ok {
-		target, _ := stringValue(status["target"])
-		if target == string(config.TargetClaw) {
-			fmt.Fprintf(&out, "%s CDP=%d API=%d\n", labelStyle.Sprint("Ports:"), intValue(ports["CDP"]), intValue(ports["Server"]))
-		} else {
-			fmt.Fprintf(
-				&out,
-				"%s CDP=%d Server=%d Extension=%d\n",
-				labelStyle.Sprint("Ports:"),
-				intValue(ports["CDP"]),
-				intValue(ports["Server"]),
-				intValue(ports["Extension"]),
-			)
-		}
+		fmt.Fprintf(&out, "%s %s\n", labelStyle.Sprint("Ports:"), formatPorts(config.Ports{
+			CDP:    intValue(ports["CDP"]),
+			Server: intValue(ports["Server"]),
+		}))
 	}
-	target, _ := stringValue(status["target"])
-	if target == string(config.TargetClaw) {
-		writeStringField(&out, "Claw state", firstStatusValue(status["state_dir"], status["browseros_dir"]))
-	} else {
-		writeStringField(&out, "BrowserOS dir", status["browseros_dir"])
-	}
+	writeStringField(&out, "Claw state", status["state_dir"])
 	writeStringField(&out, "Logs", status["log_path"])
 	return out.String()
-}
-
-func firstStatusValue(values ...any) any {
-	for _, value := range values {
-		if s, ok := stringValue(value); ok && s != "" {
-			return s
-		}
-	}
-	return nil
 }
 
 func writeStringField(out *strings.Builder, label string, value any) {

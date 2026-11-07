@@ -107,10 +107,9 @@ class CleanExecuteTest(unittest.TestCase):
             chromium = MockChromium(Path(chromium_tmp))
             root = MockBrowserOSRoot(Path(root_tmp))
 
-            for product, other_product in (
-                ("browseros", "browserclaw"),
-                ("browserclaw", "browseros"),
-            ):
+            # The original BrowserOS outputs on a shared cache belong to
+            # browseros-human and must survive a neo clean.
+            for product, other_product in (("browserclaw", "browseros"),):
                 with self.subTest(product=product):
                     arm64_out = chromium.with_out_dir("arm64", product=product)
                     x64_out = chromium.with_out_dir("x64", product=product)

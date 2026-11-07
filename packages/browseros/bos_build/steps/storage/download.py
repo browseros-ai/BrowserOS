@@ -29,19 +29,12 @@ ARTIFACT_ZIP_DOWNLOAD = "artifact_zip"
 ARTIFACT_METADATA_NAME = "artifact-metadata.json"
 COPY_CHUNK_SIZE = 1024 * 1024
 RESOURCE_VERSION_FAMILIES = (
-    (("artifacts", "server"), "browseros_server_resource_version"),
     (
         ("claw-server-rust", "prod-resources"),
         "browserclaw_server_resource_version",
     ),
     (
         ("claw-onboard", "prod-resources"),
-        "onboarding_resource_version",
-    ),
-    # One build bakes one onboarding component, so both families read the same
-    # per-build version; the product-gated download key decides which applies.
-    (
-        ("app-onboard", "prod-resources"),
         "onboarding_resource_version",
     ),
 )

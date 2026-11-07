@@ -113,12 +113,12 @@ class SuiteCliTest(unittest.TestCase):
             self.assertEqual(outputs["reservation_sha"], suite_record().reservation_sha)
             self.assertEqual(outputs["state_sha"], STATE_SHA)
             self.assertEqual(outputs["state_ref"], suite_record().branch)
-            self.assertEqual(outputs["server_version"], "0.0.147")
-            self.assertEqual(outputs["agent_version"], "0.0.121.0")
             self.assertEqual(outputs["claw_server_version"], "0.0.46")
             self.assertEqual(outputs["browserclaw_version"], "0.0.83.0")
             self.assertEqual(outputs["onboarding_version"], "0.0.15")
-            self.assertEqual(outputs["app_onboarding_version"], "0.0.0")
+            # The original BrowserOS outputs left with its nightly workflow.
+            for retired in ("server_version", "agent_version", "app_onboarding_version"):
+                self.assertNotIn(retired, outputs)
             self.assertIn("family release transaction", github_summary.read_text())
             reconcile.assert_called_once()
             backend.assert_called_once()
@@ -205,7 +205,7 @@ class SuiteCliTest(unittest.TestCase):
     def test_product_scope_and_current_state_base_reach_reconciler(
         self, reconcile, backend
     ):
-        for product in ("browseros", "browserclaw"):
+        for product in ("browserclaw",):
             reconcile.return_value = product_record(product)
             with (
                 self.subTest(product=product),

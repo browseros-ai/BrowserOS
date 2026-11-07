@@ -81,10 +81,6 @@ class BrowserPasskeyProductConfig:
 
 
 BROWSER_PASSKEY_PRODUCTS = {
-    "browseros": BrowserPasskeyProductConfig(
-        profile_env="PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH",
-        env_attr="macos_browseros_passkey_profile_path",
-    ),
     "browserclaw": BrowserPasskeyProductConfig(
         profile_env="PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_PATH",
         env_attr="macos_browserclaw_passkey_profile_path",

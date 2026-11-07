@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Product release transactions, with recovery for saved family reservations.
 
-The suite is the persistence owner above the BrowserOS and BrowserOS neo
-products. New nightlies own one product; legacy records own both. Async jobs
-add only approved snapshots, and the suite derives the live state head
+The suite is the persistence owner above the BrowserOS neo product. Nightlies
+own one product; an unscoped family record owns every suite product. Async
+jobs add only approved snapshots, and the suite derives the live state head
 from GitHub so an interrupted push never requires an atomic PR-body update.
 """
 
@@ -50,30 +50,32 @@ _GATE_SCHEMA = "browseros-release-suite-gate-v1"
 _MARKER_RE = re.compile(r"<!-- browseros-release-suite-v1\n(.*?)\n-->", re.DOTALL)
 _SHA_RE = re.compile(r"[0-9a-fA-F]{40}")
 _TRANSACTION_BRANCH_RE = re.compile(
-    r"^bot/release-(nightly|full)-(?:(browseros|browserclaw)-)?([0-9a-f]{12})$"
+    r"^bot/release-(nightly|full)-(?:(browserclaw)-)?([0-9a-f]{12})$"
 )
+# Ledger entries written before the original BrowserOS product moved to
+# browseros-human. PR #2534 is a two-product family nightly that pins server,
+# agent and app-onboard, which this repo no longer owns, so neither its marker
+# nor its branch can validate here, and the fail-closed parser would reject
+# every neo allocation. Its neo pins (browserclaw 0.2.20.0, claw-server-rust
+# 0.0.51, claw-onboard 0.0.15, browser 0.50.2 offset 239) all sit below the
+# versions committed at the split, so ignoring it frees no allocatable version.
+_RETIRED_TRANSACTION_BRANCHES = frozenset({"bot/release-nightly-704e7328df92"})
 _BROWSER_VERSION_RE = re.compile(
     r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?"
 )
 
-SUITE_PRODUCTS = ("browseros", "browserclaw")
-SUITE_RELEASE_COMPONENTS = (
-    "server",
-    "agent",
-    "claw-server-rust",
-    "browserclaw",
-)
-# Onboarding SPAs release independently from the family transaction. The suite
-# still freezes both committed versions so each product build receives the
+SUITE_PRODUCTS = ("browserclaw",)
+SUITE_RELEASE_COMPONENTS = ("claw-server-rust", "browserclaw")
+# The onboarding SPA releases independently from the transaction. The suite
+# still freezes its committed version so the product build receives the
 # matching immutable resource pin from the same source snapshot.
-SUITE_ONBOARDING_COMPONENTS = ("app-onboard", "claw-onboard")
+SUITE_ONBOARDING_COMPONENTS = ("claw-onboard",)
 SUITE_COMPONENTS = (*SUITE_RELEASE_COMPONENTS, *SUITE_ONBOARDING_COMPONENTS)
 SUITE_STATE_PATHS = (
     "updates/extensions/bundled-manifest.xml",
     "updates/extensions/extensions.alpha.json",
     "updates/extensions/update-manifest.alpha.xml",
     "updates/server/appcast-claw-server.alpha.xml",
-    "updates/server/appcast-server.alpha.xml",
 )
 
 
@@ -101,11 +103,8 @@ def suite_components(
 
 
 def suite_state_paths(product: str = "") -> tuple[str, ...]:
-    if not product:
-        return SUITE_STATE_PATHS
     suite_products(product)
-    server = "appcast-server" if product == "browseros" else "appcast-claw-server"
-    return (*SUITE_STATE_PATHS[:3], f"updates/server/{server}.alpha.xml")
+    return SUITE_STATE_PATHS
 
 
 @dataclass(frozen=True)
@@ -855,6 +854,8 @@ def suite_allocation_record_from_pull_request(
     """Return a canonical suite allocation or fail on corrupted ledger state."""
     repository = pull_request.get("headRepository")
     branch = pull_request.get("headRefName")
+    if branch in _RETIRED_TRANSACTION_BRANCHES:
+        return None
     canonical = (
         pull_request.get("isCrossRepository") is False
         and isinstance(repository, dict)
@@ -1032,7 +1033,10 @@ class GitHubSuiteBackend:
             if len(fields) != 2 or not fields[1].startswith("refs/heads/"):
                 raise ValueError("Remote suite branch returned invalid metadata")
             branch = fields[1].removeprefix("refs/heads/")
-            if _TRANSACTION_BRANCH_RE.fullmatch(branch) is None:
+            if (
+                branch in _RETIRED_TRANSACTION_BRANCHES
+                or _TRANSACTION_BRANCH_RE.fullmatch(branch) is None
+            ):
                 continue
             _validate_sha(fields[0], "remote suite SHA")
             if branch in advertised:

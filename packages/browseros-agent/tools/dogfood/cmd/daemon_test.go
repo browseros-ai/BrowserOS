@@ -16,7 +16,7 @@ import (
 )
 
 func TestRunPathsLiveBesideConfig(t *testing.T) {
-	paths := newTargetRunPaths(filepath.Join("/tmp", "browseros-dogfood", "config.yaml"), config.TargetClaw)
+	paths := newRunPaths(filepath.Join("/tmp", "browseros-dogfood", "config.yaml"))
 	if paths.Lock != filepath.Join("/tmp", "browseros-dogfood", "claw", "run.lock") {
 		t.Fatalf("lock path got %q", paths.Lock)
 	}
@@ -28,10 +28,11 @@ func TestRunPathsLiveBesideConfig(t *testing.T) {
 	}
 }
 
-func TestDaemonArgsIncludeHeadlessWhenRequested(t *testing.T) {
-	got := daemonArgs(config.TargetClaw, true)
-	want := []string{"--claw", "daemon", "--headless"}
-	if !reflect.DeepEqual(got, want) {
+func TestDaemonArgsForwardRefreshProfile(t *testing.T) {
+	if got, want := daemonArgs(false), []string{"daemon"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v want %#v", got, want)
+	}
+	if got, want := daemonArgs(true), []string{"daemon", "--refresh-profile"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %#v want %#v", got, want)
 	}
 }

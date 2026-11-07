@@ -38,7 +38,7 @@ class BuildMiniInstallerTest(unittest.TestCase):
         self.assertFalse(result)
 
     def test_unsigned_step_leaves_product_alias_for_packaging(self):
-        for product_id in ("browseros", "browserclaw"):
+        for product_id in ("browserclaw",):
             with self.subTest(product=product_id), tempfile.TemporaryDirectory() as tmp:
                 product = get_product_descriptor(product_id)
                 build_output_dir = Path(tmp) / "out" / "Default"
@@ -66,7 +66,7 @@ class BuildMiniInstallerTest(unittest.TestCase):
 
 class WindowsExecutableFinalizationTest(unittest.TestCase):
     def test_product_alias_is_copied_after_installer_outputs(self):
-        for product_id in ("browseros", "browserclaw"):
+        for product_id in ("browserclaw",):
             with self.subTest(product=product_id), tempfile.TemporaryDirectory() as tmp:
                 product = get_product_descriptor(product_id)
                 root = Path(tmp)

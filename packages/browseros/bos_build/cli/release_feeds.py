@@ -23,7 +23,7 @@ feeds_app = typer.Typer(
 )
 
 
-def _create_context(version: str = "", product: str = "browseros") -> Context:
+def _create_context(version: str = "", product: str = "browserclaw") -> Context:
     root = get_package_root()
     try:
         ctx = Context(
@@ -55,7 +55,7 @@ def appcast_command(
         ..., "--version", "-v", help="Release version to feed (e.g., 0.47.0.2)"
     ),
     product: str = typer.Option(
-        "browseros", "--product", help="Product whose browser feeds to generate"
+        "browserclaw", "--product", help="Product whose browser feeds to generate"
     ),
     publish: bool = typer.Option(
         False,

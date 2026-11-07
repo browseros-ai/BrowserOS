@@ -6,11 +6,9 @@ on:
       products:
         description: "Product set to build"
         type: choice
-        default: browseros
+        default: browserclaw
         options:
-          - browseros
           - browserclaw
-          - all
       arch:
         description: "Linux artifact set (each arch builds on its own x64 runner; arm64 cross-compiles)"
         type: choice
@@ -43,10 +41,10 @@ on:
         type: string
         default: x64
       products:
-        description: "Product set to build: browseros, browserclaw, or all"
+        description: "Product set to build: browserclaw"
         required: false
         type: string
-        default: browseros
+        default: browserclaw
       upload_to_r2:
         description: "Upload release metadata/artifacts to R2"
         required: false
@@ -96,12 +94,6 @@ on:
         required: false
       R2_BUCKET:
         required: false
-      BROWSEROS_CONFIG_URL:
-        required: false
-      POSTHOG_API_KEY:
-        required: false
-      SENTRY_DSN:
-        required: false
       CLAW_POSTHOG_KEY:
         required: false
 
@@ -123,7 +115,7 @@ jobs:
         id: plan
         env:
           ARCH: ${{ inputs.arch || 'x64' }}
-          PRODUCTS: ${{ inputs.products || 'browseros' }}
+          PRODUCTS: ${{ inputs.products || 'browserclaw' }}
           RESOURCE_MODE: ${{ inputs.resource_mode || 'published' }}
           SERVER_VERSION: ${{ inputs.server_version || '' }}
           EXTENSION_VERSION: ${{ inputs.extension_version || '' }}
@@ -151,33 +143,25 @@ jobs:
               exit 1
               ;;
           esac
-          if [ "$PRODUCTS" = "all" ] && [ "$RESOURCE_MODE" = "source" ]; then
-            echo "::error::source mode builds one candidate product per lane"
-            exit 1
-          fi
           # Each architecture lane (and any later retry of one) resolves its
           # resources independently, so mutable latest aliases could differ.
           # Freeze all product resources before expanding a multi-arch matrix.
           if [ "$ARCH" = all ]; then
             semver_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
             extension_pattern='^[0-9]+(\.[0-9]+){0,3}$'
-            if [ "$PRODUCTS" = all ] || \
-              ! [[ "$SERVER_VERSION" =~ $semver_pattern && \
-                   "$ONBOARDING_VERSION" =~ $semver_pattern && \
-                   "$EXTENSION_VERSION" =~ $extension_pattern ]]; then
-              echo "::error::arch=all requires one product and numeric server_version, extension_version, and onboarding_version; use the full product release or supply exact release versions"
+            if ! [[ "$SERVER_VERSION" =~ $semver_pattern && \
+                 "$ONBOARDING_VERSION" =~ $semver_pattern && \
+                 "$EXTENSION_VERSION" =~ $extension_pattern ]]; then
+              echo "::error::arch=all requires numeric server_version, extension_version, and onboarding_version; use the full product release or supply exact release versions"
               exit 1
             fi
           fi
           case "$PRODUCTS" in
-            all)
-              matrix='[{"product":"browseros"},{"product":"browserclaw"}]'
-              ;;
-            browseros|browserclaw)
+            browserclaw)
               matrix="$(jq -cn --arg product "$PRODUCTS" '[{product:$product}]')"
               ;;
             *)
-              echo "::error::products must be one of: browseros, browserclaw, all"
+              echo "::error::products must be browserclaw"
               exit 1
               ;;
           esac
@@ -286,7 +270,4 @@ jobs:
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
-      BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
-      POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
-      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
       CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}

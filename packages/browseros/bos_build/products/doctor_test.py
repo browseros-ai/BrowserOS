@@ -30,8 +30,8 @@ def _mock_root(product_ids) -> Path:
 
 class CheckProductTest(unittest.TestCase):
     def test_complete_product_is_healthy(self):
-        root = _mock_root(["browseros"])
-        self.assertEqual(check_product(PRODUCTS["browseros"], root), [])
+        root = _mock_root(["browserclaw"])
+        self.assertEqual(check_product(PRODUCTS["browserclaw"], root), [])
 
     def test_missing_overlay_dir_reported_with_product_id(self):
         root = _mock_root([])
@@ -41,17 +41,17 @@ class CheckProductTest(unittest.TestCase):
         self.assertIn("overlay dir missing", findings[0])
 
     def test_each_missing_branding_file_reported(self):
-        root = _mock_root(["browseros"])
+        root = _mock_root(["browserclaw"])
         (
             root
             / "chromium_files"
             / "products"
-            / "browseros"
+            / "browserclaw"
             / "chrome"
             / "updater"
             / "branding.gni"
         ).unlink()
-        findings = check_product(PRODUCTS["browseros"], root)
+        findings = check_product(PRODUCTS["browserclaw"], root)
         self.assertEqual(len(findings), 1)
         self.assertIn("chrome/updater/branding.gni", findings[0])
 
@@ -80,13 +80,13 @@ class UniquenessTest(unittest.TestCase):
 
     def test_duplicate_bundle_id_detected(self):
         clone = ProductDescriptor.define(
-            id="browseros2",
-            display_name="BrowserOS",  # same display name → same bundle_id
+            id="browserclaw2",
+            display_name="BrowserClaw",  # derives com.browseros.BrowserClaw
             windows_installer_guid="{11111111-2222-3333-4444-555555555555}",
             summary="s",
             description="d",
         )
-        findings = check_uniqueness([PRODUCTS["browseros"], clone])
+        findings = check_uniqueness([PRODUCTS["browserclaw"], clone])
         self.assertTrue(any("duplicate mac bundle_id" in f for f in findings))
 
 

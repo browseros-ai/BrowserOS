@@ -33,7 +33,6 @@ type runPaths struct {
 	RawLog string
 }
 
-var daemonHeadless bool
 var daemonRefreshProfile bool
 
 const (
@@ -49,13 +48,14 @@ var daemonCmd = &cobra.Command{
 }
 
 func init() {
-	daemonCmd.Flags().BoolVar(&daemonHeadless, "headless", false, "Run BrowserOS headless")
 	daemonCmd.Flags().BoolVar(&daemonRefreshProfile, "refresh-profile", false, "Refresh copied BrowserOS profile before launch")
 	rootCmd.AddCommand(daemonCmd)
 }
 
+// newRunPaths keeps the daemon's lock, state, IPC socket and logs under the claw run
+// directory beside the config file.
 func newRunPaths(configPath string) runPaths {
-	dir := filepath.Dir(configPath)
+	dir := filepath.Join(filepath.Dir(configPath), config.ClawTarget)
 	return runPaths{
 		Dir:    dir,
 		Lock:   filepath.Join(dir, "run.lock"),
@@ -74,20 +74,8 @@ func defaultRunPaths() (runPaths, error) {
 	return newRunPaths(path), nil
 }
 
-func daemonArgs(target config.Target, headless bool) []string {
-	targetFlag, err := selectedTargetFlag(target)
-	if err != nil {
-		targetFlag = "--browseros"
-	}
-	args := []string{targetFlag, "daemon"}
-	if headless {
-		args = append(args, "--headless")
-	}
-	return args
-}
-
-func daemonArgsWithOptions(target config.Target, headless bool, refreshProfile bool) []string {
-	args := daemonArgs(target, headless)
+func daemonArgs(refreshProfile bool) []string {
+	args := []string{"daemon"}
 	if refreshProfile {
 		args = append(args, "--refresh-profile")
 	}
@@ -136,7 +124,7 @@ func runningError(paths runPaths) error {
 	return fmt.Errorf("browseros-dogfood is already running")
 }
 
-func startBackgroundProcess(paths runPaths, target config.Target, headless bool, refreshProfile bool) error {
+func startBackgroundProcess(paths runPaths, refreshProfile bool) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -153,7 +141,7 @@ func startBackgroundProcess(paths runPaths, target config.Target, headless bool,
 	}
 	defer rawLog.Close()
 
-	cmd := exec.Command(exe, daemonArgsWithOptions(target, headless, refreshProfile)...)
+	cmd := exec.Command(exe, daemonArgs(refreshProfile)...)
 	cmd.Stdout = rawLog
 	cmd.Stderr = rawLog
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -178,14 +166,13 @@ func startBackgroundProcess(paths runPaths, target config.Target, headless bool,
 			return fmt.Errorf("background daemon did not open its control socket; see %s", paths.RawLog)
 		case <-tick.C:
 			if resp, err := ipc.NewClient(paths.Socket).Send(ipc.Request{Command: ipc.CmdStatus}); err == nil && resp.OK {
-				fmt.Printf("%s %s background daemon %s\n", successStyle.Sprint("Started:"), targetLabel(target), dimStyle.Sprintf("(pid %d)", cmd.Process.Pid))
+				fmt.Printf("%s %s background daemon %s\n", successStyle.Sprint("Started:"), productLabel, dimStyle.Sprintf("(pid %d)", cmd.Process.Pid))
 				fmt.Fprintln(os.Stdout, dimStyle.Sprint("Streaming startup logs until healthy..."))
 				detach, cleanup := newInterruptDetach()
 				defer cleanup()
 				detached := false
 				if err := monitorDaemonUntilRunning(context.Background(), daemonMonitor{
 					Paths:     paths,
-					Target:    target,
 					Out:       os.Stdout,
 					FromStart: true,
 					Detach:    detach,
@@ -196,11 +183,10 @@ func startBackgroundProcess(paths runPaths, target config.Target, headless bool,
 				if detached {
 					return nil
 				}
-				targetFlag, _ := selectedTargetFlag(target)
-				fmt.Printf("%s %s background environment is healthy\n", successStyle.Sprint("Ready:"), targetLabel(target))
-				fmt.Printf("  %s %s\n", labelStyle.Sprint("Status:"), commandStyle.Sprintf("browseros-dogfood %s status", targetFlag))
-				fmt.Printf("  %s   %s\n", labelStyle.Sprint("Logs:"), commandStyle.Sprintf("browseros-dogfood %s logs tail", targetFlag))
-				fmt.Printf("  %s   %s\n", labelStyle.Sprint("Stop:"), commandStyle.Sprintf("browseros-dogfood %s stop", targetFlag))
+				fmt.Printf("%s %s background environment is healthy\n", successStyle.Sprint("Ready:"), productLabel)
+				fmt.Printf("  %s %s\n", labelStyle.Sprint("Status:"), commandStyle.Sprint("browseros-dogfood status"))
+				fmt.Printf("  %s   %s\n", labelStyle.Sprint("Logs:"), commandStyle.Sprint("browseros-dogfood logs tail"))
+				fmt.Printf("  %s   %s\n", labelStyle.Sprint("Stop:"), commandStyle.Sprint("browseros-dogfood stop"))
 				return nil
 			}
 		}
@@ -236,13 +222,11 @@ type dogfoodDaemon struct {
 	mu   sync.RWMutex
 
 	env          *environment
-	target       config.Target
 	state        string
 	operation    string
 	lastError    string
 	ports        config.Ports
 	startedAt    time.Time
-	headless     bool
 	browserOSDir string
 }
 
@@ -264,11 +248,11 @@ type healthResponse struct {
 }
 
 func runDaemon(cmd *cobra.Command, args []string) error {
-	target, cfg, err := loadSelectedTargetConfig()
+	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
-	paths, err := defaultTargetRunPaths(target)
+	paths, err := defaultRunPaths()
 	if err != nil {
 		return err
 	}
@@ -295,10 +279,8 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 		cancel:       cancel,
 		paths:        paths,
 		logWriter:    logWriter,
-		target:       target,
 		state:        "starting",
 		startedAt:    time.Now(),
-		headless:     daemonHeadless,
 		ports:        cfg.Ports,
 		browserOSDir: cfg.BrowserOSDir,
 	}
@@ -354,7 +336,7 @@ func (d *dogfoodDaemon) status() daemonStatus {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return daemonStatus{
-		Target:       string(d.target),
+		Target:       config.ClawTarget,
 		State:        d.state,
 		Operation:    d.operation,
 		LastError:    d.lastError,
@@ -373,7 +355,7 @@ func (d *dogfoodDaemon) scheduleRestart(pull bool, force bool) error {
 	}
 	return d.scheduleOperation("restarting", func() error {
 		if pull {
-			cfg, err := loadTargetConfig(d.target)
+			cfg, err := loadConfig()
 			if err != nil {
 				return err
 			}
@@ -431,15 +413,13 @@ func (d *dogfoodDaemon) scheduleOperation(name string, fn func() error) error {
 }
 
 func (d *dogfoodDaemon) startLocked(refreshProfile bool) error {
-	cfg, err := loadTargetConfig(d.target)
+	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
 	d.stopEnvironment()
 	opts := environmentOptions{
 		RefreshProfile: refreshProfile,
-		Headless:       d.headless,
-		RestartBrowser: true,
 		Runner:         pipeline.ExecRunner{},
 		Progress: func(message string) {
 			d.logLifecycle("%s", message)

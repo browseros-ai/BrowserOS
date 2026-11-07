@@ -27,14 +27,14 @@ class SourceResourcesStepTest(unittest.TestCase):
         self.chromium.mkdir()
         self.prepared = self.root / "prepared"
         self.manifest = PreparedResourcesManifest(
-            product="browseros",
+            product="browserclaw",
             parent_sha="1" * 40,
             source_sha=SOURCE_SHA,
             browser_version="0.31.0",
             component_versions={
-                "server": "0.0.128",
-                "agent": "0.0.101.0",
-                "app-onboard": "0.0.12",
+                "claw-server-rust": "0.0.128",
+                "browserclaw": "0.0.101.0",
+                "claw-onboard": "0.0.12",
             },
             files={},
         )
@@ -80,9 +80,9 @@ class SourceResourcesStepTest(unittest.TestCase):
         self, read_version, prepare
     ) -> None:
         versions = {
-            "server": "0.0.128",
-            "agent": "0.0.101.0",
-            "app-onboard": "0.0.12",
+            "claw-server-rust": "0.0.128",
+            "browserclaw": "0.0.101.0",
+            "claw-onboard": "0.0.12",
         }
         read_version.side_effect = lambda _root, component: versions[component]
         prepare.return_value = self.manifest
@@ -92,14 +92,14 @@ class SourceResourcesStepTest(unittest.TestCase):
             PrepareCommonResourcesModule().execute(ctx)
 
         request = prepare.call_args.args[0]
-        self.assertEqual(request.product, "browseros")
+        self.assertEqual(request.product, "browserclaw")
         self.assertEqual(request.source_sha, SOURCE_SHA)
         self.assertEqual(dict(request.component_versions), versions)
         self.assertEqual(
             request.output_dir,
             (
                 self.root
-                / "packages/browseros/resources/binaries/prepared_common/browseros"
+                / "packages/browseros/resources/binaries/prepared_common/browserclaw"
                 / SOURCE_SHA
                 / "0.31.0"
             ).resolve(),
@@ -110,7 +110,7 @@ class SourceResourcesStepTest(unittest.TestCase):
     def test_supplied_directory_must_match_product_and_source(self, load) -> None:
         self.prepared.mkdir()
         load.return_value = PreparedResourcesManifest(
-            **{**self.manifest.__dict__, "product": "browserclaw"}
+            **{**self.manifest.__dict__, "product": "browseros"}
         )
 
         with self.assertRaisesRegex(ValueError, "product"):
@@ -134,7 +134,7 @@ class SourceResourcesStepTest(unittest.TestCase):
         validate.return_value = self.manifest
         destination = self.root / "server"
         builder_class.return_value.prepare.return_value = ServerResourceResult(
-            product="browseros",
+            product="browserclaw",
             target="linux-x64",
             version="0.0.128",
             source_sha=SOURCE_SHA,
@@ -146,7 +146,7 @@ class SourceResourcesStepTest(unittest.TestCase):
         PrepareServerResourcesModule().execute(ctx)
 
         builder_class.return_value.prepare.assert_called_once_with(
-            product="browseros",
+            product="browserclaw",
             target="linux-x64",
             version="0.0.128",
             source_sha=SOURCE_SHA,

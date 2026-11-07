@@ -17,13 +17,6 @@ class SourceResources:
 
 
 SOURCE_RESOURCES = {
-    "browseros": SourceResources(
-        product_id="browseros",
-        server_component="server",
-        extension_component="agent",
-        extension_name="agent",
-        onboarding_component="app-onboard",
-    ),
     "browserclaw": SourceResources(
         product_id="browserclaw",
         server_component="claw-server-rust",

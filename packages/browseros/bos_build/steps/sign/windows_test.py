@@ -23,18 +23,12 @@ from .windows import (
 
 
 class WindowsSignPathsTest(unittest.TestCase):
-    def test_browseros_and_claw_server_binaries_are_expected_for_signing(self):
+    def test_claw_server_binary_is_expected_for_signing(self):
         build_output_dir = Path("/tmp/out/Default")
 
         self.assertEqual(
             get_browseros_server_binary_paths(build_output_dir),
             [
-                build_output_dir
-                / "BrowserOSServer"
-                / "default"
-                / "resources"
-                / "bin"
-                / "browseros_server.exe",
                 build_output_dir
                 / "BrowserClawServer"
                 / "default"
@@ -47,25 +41,9 @@ class WindowsSignPathsTest(unittest.TestCase):
     def test_missing_optional_claw_binary_is_not_required_before_packaging(self):
         with TemporaryDirectory() as tmp:
             build_output_dir = Path(tmp)
-            self._write_binary(
-                build_output_dir
-                / "BrowserOSServer"
-                / "default"
-                / "resources"
-                / "bin"
-                / "browseros_server.exe"
-            )
 
             self.assertEqual(
-                get_existing_browseros_server_binary_paths(build_output_dir),
-                [
-                    build_output_dir
-                    / "BrowserOSServer"
-                    / "default"
-                    / "resources"
-                    / "bin"
-                    / "browseros_server.exe"
-                ],
+                get_existing_browseros_server_binary_paths(build_output_dir), []
             )
             self.assertEqual(
                 get_missing_required_browseros_server_binary_paths(build_output_dir),
@@ -75,14 +53,6 @@ class WindowsSignPathsTest(unittest.TestCase):
     def test_missing_claw_binary_is_required_once_root_is_packaged(self):
         with TemporaryDirectory() as tmp:
             build_output_dir = Path(tmp)
-            self._write_binary(
-                build_output_dir
-                / "BrowserOSServer"
-                / "default"
-                / "resources"
-                / "bin"
-                / "browseros_server.exe"
-            )
             (
                 build_output_dir / "BrowserClawServer" / "default" / "resources" / "bin"
             ).mkdir(parents=True)
@@ -99,18 +69,8 @@ class WindowsSignPathsTest(unittest.TestCase):
                 ],
             )
 
-    def test_sign_executables_fails_when_required_server_binary_missing(self):
-        with TemporaryDirectory() as tmp:
-            build_output_dir = Path(tmp)
-            self._write_binary(build_output_dir / "chrome.exe")
-
-            with self.assertRaisesRegex(RuntimeError, "browseros_server.exe"):
-                WindowsSignModule()._sign_executables(
-                    build_output_dir, self._ctx("browseros")
-                )
-
     def test_missing_chrome_is_fatal_for_each_product(self):
-        for product_id in ("browseros", "browserclaw"):
+        for product_id in ("browserclaw",):
             with self.subTest(product=product_id), TemporaryDirectory() as tmp:
                 build_output_dir = Path(tmp)
                 for binary in get_browseros_server_binary_paths(

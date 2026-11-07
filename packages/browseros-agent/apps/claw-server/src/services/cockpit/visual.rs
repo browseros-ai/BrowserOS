@@ -139,7 +139,7 @@ async fn main_document_id(browser: &BrowserSession, page_id: u32) -> Option<Docu
         .flatten()
 }
 
-/// Resolves a live session's current owned tab and captures it through browser-core's serialized screenshot path.
+/// Resolves a live session's current owned tab and captures it through browseros-core's serialized screenshot path.
 pub struct SessionVisualService {
     sessions: Arc<Sessions>,
     session_tabs: Arc<SessionTabLedger>,

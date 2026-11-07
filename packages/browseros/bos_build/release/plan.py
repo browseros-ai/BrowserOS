@@ -35,9 +35,6 @@ _HTTPS_ORIGIN_RE = re.compile(
     r"https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?/?"
 )
 _COMPONENTS = {
-    "browseros": frozenset(
-        {"browseros-server", "agent-extension", "browseros-onboard"}
-    ),
     "browserclaw": frozenset(
         {
             "browserclaw-server",
@@ -47,16 +44,12 @@ _COMPONENTS = {
     ),
 }
 _EXTENSION_COMPONENT = {
-    "agent": "agent-extension",
     "browserclaw": "browserclaw-extension",
 }
 _COMPONENT_TAG = {
-    "agent-extension": "ext-agent/v{version}",
     "browserclaw-extension": "ext-browserclaw/v{version}",
-    "browseros-onboard": "app-onboard/v{version}",
     "browserclaw-onboard": "claw-onboard/v{version}",
     "browserclaw-server": "claw-server/v{version}",
-    "browseros-server": "agent-server/v{version}",
 }
 
 

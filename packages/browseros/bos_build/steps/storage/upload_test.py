@@ -28,15 +28,14 @@ def _first_receipt_write(_client, _key, _bucket, update):
 def _upload_ctx(
     dist_dir: Path,
     *,
-    product_id: str = "browseros",
-    display_name: str = "BrowserOS",
-    artifact_prefix: str = "BrowserOS",
+    product_id: str = "browserclaw",
+    display_name: str = "BrowserOS neo",
+    artifact_prefix: str = "BrowserOS_neo",
 ) -> SimpleNamespace:
     return SimpleNamespace(
         env=SimpleNamespace(
             onboarding_resource_version=None,
             browserclaw_server_resource_version=None,
-            browseros_server_resource_version=None,
             bundled_product_extension_version=None,
             r2_bucket="browseros",
             r2_cdn_base_url="https://cdn.browseros.com",
@@ -141,7 +140,7 @@ class UploadMetadataTest(unittest.TestCase):
             ) as upload_file,
         ):
             root = Path(tmp)
-            filename = "BrowserOS_v1.2.3_arm64.dmg"
+            filename = "BrowserOS_neo_v1.2.3_arm64.dmg"
             (root / filename).write_bytes(b"signed-dmg")
             ctx = _upload_ctx(root)
 
@@ -206,7 +205,7 @@ class UploadMetadataTest(unittest.TestCase):
     def test_published_release_json_records_exact_component_versions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ctx = _upload_ctx(Path(tmp))
-            ctx.env.browseros_server_resource_version = "0.0.129"
+            ctx.env.browserclaw_server_resource_version = "0.0.129"
             ctx.env.bundled_product_extension_version = "0.0.125.0"
             ctx.env.onboarding_resource_version = "0.0.15"
 
@@ -219,9 +218,9 @@ class UploadMetadataTest(unittest.TestCase):
         self.assertEqual(
             release["component_versions"],
             {
-                "server": "0.0.129",
-                "agent": "0.0.125.0",
-                "app-onboard": "0.0.15",
+                "claw-server-rust": "0.0.129",
+                "browserclaw": "0.0.125.0",
+                "claw-onboard": "0.0.15",
             },
         )
 
@@ -261,14 +260,14 @@ class UploadMetadataTest(unittest.TestCase):
             ctx.resource_mode = "source"
             ctx.source_sha = "2" * 40
             manifest = PreparedResourcesManifest(
-                product="browseros",
+                product="browserclaw",
                 parent_sha="1" * 40,
                 source_sha="2" * 40,
                 browser_version="1.2.3",
                 component_versions={
-                    "server": "0.0.128",
-                    "agent": "0.0.116.0",
-                    "app-onboard": "0.0.12",
+                    "claw-server-rust": "0.0.128",
+                    "browserclaw": "0.0.116.0",
+                    "claw-onboard": "0.0.12",
                 },
                 files={},
             )
@@ -349,7 +348,7 @@ class UploadMetadataTest(unittest.TestCase):
             ),
         ):
             dist_dir = Path(tmp)
-            dmg_name = "BrowserOS_v1.2.3_arm64.dmg"
+            dmg_name = "BrowserOS_neo_v1.2.3_arm64.dmg"
             (dist_dir / dmg_name).write_bytes(b"dmg")
             ctx = _upload_ctx(dist_dir)
 
@@ -374,13 +373,6 @@ class UploadMetadataTest(unittest.TestCase):
                 "BrowserOS_neo",
                 "BrowserOS_neo_v1.2.3_arm64.dmg",
                 "BrowserOS_v1.2.3_arm64.dmg",
-            ),
-            (
-                "browseros",
-                "BrowserOS",
-                "BrowserOS",
-                "BrowserOS_v1.2.3_arm64.dmg",
-                "BrowserOS_neo_v1.2.3_arm64.dmg",
             ),
         ]
 

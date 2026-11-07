@@ -123,17 +123,7 @@ def server_build_command(
         target = TARGETS[target_id]
     except KeyError as exc:
         raise ValueError(f"Unknown server target {target_id}") from exc
-    bundle = _server_bundle(product)
-    if bundle.source_builder == "bun":
-        return (
-            (
-                "bun",
-                "scripts/build/server.ts",
-                f"--target={target.id}",
-                "--no-upload",
-            ),
-            agent_root / "dist/prod/server" / target.id,
-        )
+    _server_bundle(product)
     suffix = ".exe" if target.os == "windows" else ""
     binary = cargo_target_dir / target.cargo_triple / "release" / (
         f"browseros-claw-server-rs{suffix}"
@@ -287,27 +277,24 @@ class ServerResourceBuilder:
 
     def _preflight(self, product: str, target: ServerTarget) -> ServerBundle:
         bundle = _server_bundle(product)
-        tool = "bun" if bundle.source_builder == "bun" else "cargo"
-        if bundle.source_builder == "cargo" and self.host_platform != target.os:
+        if self.host_platform != target.os:
             raise RuntimeError(
                 f"BrowserOS neo target {target.id} requires host {target.os}; "
                 f"current host is {self.host_platform}"
             )
-        if self.which(tool) is None:
-            action = "install Bun" if tool == "bun" else "install Rust and Cargo"
-            raise RuntimeError(f"Cannot build {target.id}: {action}")
-        if bundle.source_builder == "cargo":
-            if self.which("rustup") is None:
-                raise RuntimeError(f"Cannot build {target.id}: install Rust with rustup")
-            try:
-                installed_targets = self.rust_targets()
-            except (OSError, subprocess.CalledProcessError) as exc:
-                raise RuntimeError("Could not query installed Rust targets") from exc
-            if target.cargo_triple not in installed_targets:
-                raise RuntimeError(
-                    f"Cannot build {target.id}: run rustup target add "
-                    f"{target.cargo_triple}"
-                )
+        if self.which("cargo") is None:
+            raise RuntimeError(f"Cannot build {target.id}: install Rust and Cargo")
+        if self.which("rustup") is None:
+            raise RuntimeError(f"Cannot build {target.id}: install Rust with rustup")
+        try:
+            installed_targets = self.rust_targets()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise RuntimeError("Could not query installed Rust targets") from exc
+        if target.cargo_triple not in installed_targets:
+            raise RuntimeError(
+                f"Cannot build {target.id}: run rustup target add "
+                f"{target.cargo_triple}"
+            )
         return bundle
 
     def preflight(self, *, product: str, target: str) -> None:
@@ -356,57 +343,20 @@ class ServerResourceBuilder:
         )
         environment = {**os.environ, "CARGO_TARGET_DIR": str(self.cargo_target_dir)}
         self.run(command, self.agent_root, environment)
-        if bundle.source_builder == "bun":
-            self._stage_bun(
-                artifact,
-                destination,
-                bundle,
-                target_spec,
-                normalized_version,
-                source_sha,
-            )
-        else:
-            self._stage_rust(
-                artifact,
-                destination,
-                bundle,
-                target_spec,
-                normalized_version,
-                source_sha,
-            )
+        self._stage_rust(
+            artifact,
+            destination,
+            bundle,
+            target_spec,
+            normalized_version,
+            source_sha,
+        )
         return validate_server_resources(
             destination,
             product=product,
             target=target,
             version=normalized_version,
             source_sha=source_sha,
-        )
-
-    def _stage_bun(
-        self,
-        artifact: Path,
-        destination: Path,
-        bundle: ServerBundle,
-        target: ServerTarget,
-        version: str,
-        source_sha: str,
-    ) -> None:
-        if not artifact.is_dir():
-            raise FileNotFoundError(f"Bun server build did not produce {artifact}")
-        document = _read_metadata(artifact)
-        if document.get("version") != version or document.get("target") != target.id:
-            raise ValueError("Bun server artifact identity does not match the request")
-        shutil.copytree(artifact, destination)
-        suffix = ".exe" if target.os == "windows" else ""
-        runtime = destination / "resources/bin" / f"{bundle.runtime_binary_name}{suffix}"
-        if not runtime.is_file():
-            raise FileNotFoundError(f"Bun server artifact is missing {runtime}")
-        if target.os != "windows":
-            runtime.chmod(runtime.stat().st_mode | 0o755)
-        document["sourceSha"] = source_sha
-        (destination / "artifact-metadata.json").write_text(
-            json.dumps(document, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
         )
 
     def _stage_rust(

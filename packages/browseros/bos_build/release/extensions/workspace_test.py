@@ -38,7 +38,7 @@ class ResolveSourceTest(unittest.TestCase):
     def test_in_repo_resolves_to_working_tree_without_git(self):
         git = RecordingGit()
         path = resolve_source(
-            spec_by_name("agent"),
+            spec_by_name("browserclaw"),
             monorepo_root=self.monorepo,
             work_root=self.work_root,
             branch_override=None,
@@ -49,7 +49,7 @@ class ResolveSourceTest(unittest.TestCase):
 
     def test_in_repo_missing_path_raises(self):
         broken = dataclasses.replace(
-            spec_by_name("agent"), source=InRepoSource(path="packages/gone")
+            spec_by_name("browserclaw"), source=InRepoSource(path="packages/gone")
         )
         with self.assertRaisesRegex(FileNotFoundError, "packages/gone"):
             resolve_source(

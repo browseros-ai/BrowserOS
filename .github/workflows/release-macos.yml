@@ -6,11 +6,9 @@ on:
       products:
         description: "Product set to build"
         type: choice
-        default: browseros
+        default: browserclaw
         options:
-          - browseros
           - browserclaw
-          - all
       arch:
         description: "macOS architecture"
         type: choice
@@ -33,10 +31,10 @@ on:
   workflow_call:
     inputs:
       products:
-        description: "Product set to build: browseros, browserclaw, or all"
+        description: "Product set to build: browserclaw"
         required: false
         type: string
-        default: browseros
+        default: browserclaw
       arch:
         description: "macOS architecture: arm64 or universal"
         required: false
@@ -98,12 +96,6 @@ on:
         required: false
       R2_BUCKET:
         required: false
-      BROWSEROS_CONFIG_URL:
-        required: false
-      POSTHOG_API_KEY:
-        required: false
-      SENTRY_DSN:
-        required: false
       CLAW_POSTHOG_KEY:
         required: false
       MACOS_CERTIFICATE_NAME:
@@ -119,8 +111,6 @@ on:
       PROD_MACOS_NOTARIZATION_TEAM_ID:
         required: false
       PROD_MACOS_NOTARIZATION_PWD:
-        required: false
-      PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64:
         required: false
       PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64:
         required: false
@@ -162,7 +152,7 @@ jobs:
           set -euo pipefail
           repo="${BROWSEROS_REPO/#\~/$HOME}"
           chromium_src="${CHROMIUM_SRC/#\~/$HOME}"
-          products="${PRODUCTS:-browseros}"
+          products="${PRODUCTS:-browserclaw}"
           arch="${ARCH:-universal}"
           resource_mode="${RESOURCE_MODE:-published}"
           upload_to_r2="${UPLOAD_TO_R2:-true}"
@@ -177,18 +167,11 @@ jobs:
             exit 1
           fi
           case "$products" in
-            browseros|browserclaw)
+            browserclaw)
               product_ids="$products"
               ;;
-            all)
-              if [ "$resource_mode" = "source" ]; then
-                echo "::error::source mode builds one candidate product per lane"
-                exit 1
-              fi
-              product_ids="browseros browserclaw"
-              ;;
             *)
-              echo "::error::products must be browseros, browserclaw, or all"
+              echo "::error::products must be browserclaw"
               exit 1
               ;;
           esac
@@ -277,24 +260,8 @@ jobs:
         id: chromium_workspace
         working-directory: ${{ steps.inputs.outputs.browseros_repo }}
         shell: bash
-        # Prepare once and copy every product before either build applies patches.
+        # Refresh the persistent base once and build in a disposable copy of it.
         run: bash .github/scripts/macos-chromium-workspace.sh setup "${{ steps.inputs.outputs.chromium_src }}" "${{ steps.inputs.outputs.products }}"
-
-      - name: Setup Bun
-        if: steps.inputs.outputs.resource_mode == 'source' && steps.inputs.outputs.products == 'browseros'
-        # Pinned literally rather than read from package.json: this job builds
-        # from the persistent tree at BROWSEROS_REPO_PATH and never checks out
-        # into GITHUB_WORKSPACE, which is where setup-bun resolves a version
-        # file from. A workspace-relative path finds nothing and Bun silently
-        # falls back to latest. Keep in sync with packageManager.
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.2"
-
-      - name: Install BrowserOS server dependencies
-        if: steps.inputs.outputs.resource_mode == 'source' && steps.inputs.outputs.products == 'browseros'
-        working-directory: ${{ steps.inputs.outputs.browseros_repo }}/packages/browseros-agent
-        run: bun ci
 
       - name: Setup BrowserOS neo server toolchain
         if: steps.inputs.outputs.resource_mode == 'source' && steps.inputs.outputs.products == 'browserclaw'
@@ -332,10 +299,6 @@ jobs:
           fi
           for product in $PRODUCT_IDS; do
             case "$product" in
-              browseros)
-                find "$release_dir" -maxdepth 1 -type f \
-                  -name 'BrowserOS_*.dmg' ! -name 'BrowserOS_neo_*.dmg' -delete
-                ;;
               browserclaw)
                 find "$release_dir" -maxdepth 1 -type f \
                   -name 'BrowserOS_neo_*.dmg' -delete
@@ -351,7 +314,6 @@ jobs:
           MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
           MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
           MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
-          PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64: ${{ secrets.PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64 }}
           PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64: ${{ secrets.PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64 }}
         shell: bash
         run: bash .github/scripts/macos-signing-keychain.sh setup
@@ -360,21 +322,16 @@ jobs:
         working-directory: ${{ steps.inputs.outputs.browseros_repo }}/packages/browseros
         env:
           BROWSEROS_BUILD_SOURCE_SHA: ${{ steps.sync.outputs.source_sha }}
-          BROWSEROS_CHROMIUM_SRC: ${{ steps.chromium_workspace.outputs.browseros_chromium_src }}
           BROWSERCLAW_CHROMIUM_SRC: ${{ steps.chromium_workspace.outputs.browserclaw_chromium_src }}
-          BROWSEROS_SERVER_RESOURCE_VERSION: ${{ steps.inputs.outputs.products == 'browseros' && inputs.server_version || '' }}
           BROWSERCLAW_SERVER_RESOURCE_VERSION: ${{ steps.inputs.outputs.products == 'browserclaw' && inputs.server_version || '' }}
           ONBOARDING_RESOURCE_VERSION: ${{ inputs.onboarding_version }}
-          BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
           BUNDLED_EXTENSIONS_MANIFEST_URL: ${{ inputs.extension_version && format('{0}/updates/extensions/bundled-manifest.xml', steps.inputs.outputs.browseros_repo) || '' }}
           BUNDLED_PRODUCT_EXTENSION_VERSION: ${{ inputs.extension_version }}
           CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
           MACOS_CERTIFICATE_NAME: ${{ steps.macos_signing.outputs.codesign_identity }}
           MACOS_KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
           MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
-          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           PROD_MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_APPLE_ID }}
-          PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH: ${{ steps.macos_signing.outputs.browseros_passkey_profile_path }}
           PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_PATH: ${{ steps.macos_signing.outputs.browserclaw_passkey_profile_path }}
           PROD_MACOS_NOTARIZATION_PWD: ${{ secrets.PROD_MACOS_NOTARIZATION_PWD }}
           PROD_MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_TEAM_ID }}
@@ -382,7 +339,6 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           SLACK_NOTIFY: ${{ inputs.notify }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
@@ -394,7 +350,6 @@ jobs:
           fi
           for product in ${{ steps.inputs.outputs.product_ids }}; do
             case "$product" in
-              browseros) chromium_src="$BROWSEROS_CHROMIUM_SRC" ;;
               browserclaw) chromium_src="$BROWSERCLAW_CHROMIUM_SRC" ;;
               *) echo "::error::Unknown product: $product"; exit 1 ;;
             esac
@@ -458,20 +413,8 @@ jobs:
           overwrite: true
           retention-days: 30
 
-      - name: Upload BrowserOS DMG artifact
-        if: always() && (steps.inputs.outputs.products == 'browseros' || steps.inputs.outputs.products == 'all')
-        uses: actions/upload-artifact@v7
-        with:
-          name: BrowserOS_v${{ steps.version.outputs.value }}_${{ steps.inputs.outputs.arch }}
-          path: |
-            ${{ steps.inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.version.outputs.value }}/BrowserOS_*.dmg
-            !${{ steps.inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.version.outputs.value }}/BrowserOS_neo_*.dmg
-          retention-days: 14
-          if-no-files-found: warn
-          overwrite: true
-
       - name: Upload BrowserOS neo DMG artifact
-        if: always() && (steps.inputs.outputs.products == 'browserclaw' || steps.inputs.outputs.products == 'all')
+        if: always() && steps.inputs.outputs.products == 'browserclaw'
         uses: actions/upload-artifact@v7
         with:
           name: BrowserOS_neo_v${{ steps.version.outputs.value }}_${{ steps.inputs.outputs.arch }}

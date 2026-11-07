@@ -49,11 +49,8 @@ def _env(**values):
 
 
 PASSKEY_TEAM_ID = "8YMKWU47S5"
-PASSKEY_BUNDLE_ID = "com.browseros.BrowserOS"
-PASSKEY_BUNDLE_IDS = {
-    "browseros": PASSKEY_BUNDLE_ID,
-    "browserclaw": "com.browseros.BrowserClaw",
-}
+PASSKEY_BUNDLE_ID = "com.browseros.BrowserClaw"
+PASSKEY_BUNDLE_IDS = {"browserclaw": PASSKEY_BUNDLE_ID}
 
 
 def _passkey_profile(
@@ -91,20 +88,6 @@ class MacOSSignDiscoveryTest(unittest.TestCase):
     def test_discovers_registered_server_binaries_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             app_path = Path(tmp) / "BrowserOS.app"
-            server_bin = (
-                app_path
-                / "Contents"
-                / "Resources"
-                / "BrowserOSServer"
-                / "default"
-                / "resources"
-                / "bin"
-            )
-            _write_exec(server_bin / "browseros_server")
-            _write_exec(server_bin / "third_party" / "rg")
-            _write_exec(server_bin / "third_party" / "codex")
-            _write_exec(server_bin / "third_party" / "claude")
-            _write_exec(server_bin / "third_party" / "lima" / "bin" / "limactl")
             claw_bin = (
                 app_path
                 / "Contents"
@@ -119,15 +102,7 @@ class MacOSSignDiscoveryTest(unittest.TestCase):
 
             executables = set(find_components_to_sign(app_path)["executables"])
 
-            self.assertIn(server_bin / "browseros_server", executables)
-            self.assertIn(server_bin / "third_party" / "rg", executables)
             self.assertIn(claw_bin / "browseros-claw-server", executables)
-            self.assertNotIn(server_bin / "third_party" / "codex", executables)
-            self.assertNotIn(server_bin / "third_party" / "claude", executables)
-            self.assertNotIn(
-                server_bin / "third_party" / "lima" / "bin" / "limactl",
-                executables,
-            )
             self.assertNotIn(claw_bin / "not-registered", executables)
 
 
@@ -135,12 +110,12 @@ class VerifyServerResourcesBundleTest(unittest.TestCase):
     def _setup(self, tmp: str) -> tuple[Path, Path, Path, Path]:
         chromium_src = Path(tmp) / "src"
         app_path = Path(tmp) / "out" / "BrowserOS.app"
-        source_root = chromium_src / "chrome" / "browser" / "browseros" / "server" / "resources"
+        source_root = chromium_src / "chrome" / "browser" / "browseros" / "claw_server" / "resources"
         bundle_root = (
             app_path
             / "Contents"
             / "Resources"
-            / "BrowserOSServer"
+            / "BrowserClawServer"
             / "default"
             / "resources"
         )
@@ -149,9 +124,9 @@ class VerifyServerResourcesBundleTest(unittest.TestCase):
     def test_reports_files_missing_from_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
             chromium_src, app_path, source_root, bundle_root = self._setup(tmp)
-            _write_exec(source_root / "bin" / "browseros_server")
+            _write_exec(source_root / "bin" / "browseros-claw-server")
             _write_exec(source_root / "bin" / "third_party" / "rg")
-            _write_exec(bundle_root / "bin" / "browseros_server")
+            _write_exec(bundle_root / "bin" / "browseros-claw-server")
 
             problems = verify_server_resources_bundle(app_path, chromium_src)
 
@@ -173,10 +148,10 @@ class VerifyServerResourcesBundleTest(unittest.TestCase):
     def test_passes_when_bundle_matches_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             chromium_src, app_path, source_root, bundle_root = self._setup(tmp)
-            _write_exec(source_root / "bin" / "browseros_server")
+            _write_exec(source_root / "bin" / "browseros-claw-server")
             _write_exec(source_root / "bin" / "third_party" / "rg")
             _write_file(source_root / "db" / "migrations" / "0000_init.sql")
-            _write_exec(bundle_root / "bin" / "browseros_server")
+            _write_exec(bundle_root / "bin" / "browseros-claw-server")
             _write_exec(bundle_root / "bin" / "third_party" / "rg")
             _write_file(bundle_root / "db" / "migrations" / "0000_init.sql")
 
@@ -237,7 +212,7 @@ class VerifyServerResourcesBundleTest(unittest.TestCase):
     def test_skips_when_source_dir_absent(self):
         with tempfile.TemporaryDirectory() as tmp:
             chromium_src, app_path, _, bundle_root = self._setup(tmp)
-            _write_exec(bundle_root / "bin" / "browseros_server")
+            _write_exec(bundle_root / "bin" / "browseros-claw-server")
 
             self.assertEqual(
                 verify_server_resources_bundle(app_path, chromium_src), []
@@ -246,8 +221,8 @@ class VerifyServerResourcesBundleTest(unittest.TestCase):
     def test_bundle_only_extras_are_not_failures(self):
         with tempfile.TemporaryDirectory() as tmp:
             chromium_src, app_path, source_root, bundle_root = self._setup(tmp)
-            _write_exec(source_root / "bin" / "browseros_server")
-            _write_exec(bundle_root / "bin" / "browseros_server")
+            _write_exec(source_root / "bin" / "browseros-claw-server")
+            _write_exec(bundle_root / "bin" / "browseros-claw-server")
             _write_exec(bundle_root / "bin" / "third_party" / "lima" / "limactl")
 
             self.assertEqual(
@@ -257,9 +232,9 @@ class VerifyServerResourcesBundleTest(unittest.TestCase):
     def test_junk_files_in_source_are_ignored(self):
         with tempfile.TemporaryDirectory() as tmp:
             chromium_src, app_path, source_root, bundle_root = self._setup(tmp)
-            _write_exec(source_root / "bin" / "browseros_server")
+            _write_exec(source_root / "bin" / "browseros-claw-server")
             _write_file(source_root / "bin" / ".DS_Store", "junk")
-            _write_exec(bundle_root / "bin" / "browseros_server")
+            _write_exec(bundle_root / "bin" / "browseros-claw-server")
 
             self.assertEqual(
                 verify_server_resources_bundle(app_path, chromium_src), []
@@ -273,20 +248,13 @@ class VerifyServerResourcesBundleTest(unittest.TestCase):
             Path(__file__).resolve().parents[2] / "config" / "copy_resources.yaml"
         )
         config = yaml.safe_load(config_path.read_text())
-        destinations = {
-            op["destination"]
-            for op in config["copy_operations"]
-            if op["name"].startswith("BrowserOS Server Resources")
-        }
-
-        self.assertEqual(destinations, {SERVER_RESOURCES_SOURCE_REL.as_posix()})
-
         claw_destinations = {
             op["destination"]
             for op in config["copy_operations"]
             if op["name"].startswith("BrowserOS Claw Server Resources")
             or op["name"].startswith("BrowserOS Claw Rust Server Resources")
         }
+        self.assertEqual(claw_destinations, {SERVER_RESOURCES_SOURCE_REL.as_posix()})
         self.assertEqual(
             claw_destinations,
             {"chrome/browser/browseros/claw_server/resources"},
@@ -299,9 +267,17 @@ class SignModuleGuardWiringTest(unittest.TestCase):
             chromium_src = Path(tmp) / "src"
             app_path = Path(tmp) / "out" / "BrowserOS.app"
             source_root = (
-                chromium_src / "chrome" / "browser" / "browseros" / "server" / "resources"
+                chromium_src / "chrome" / "browser" / "browseros" / "claw_server" / "resources"
             )
             _write_exec(source_root / "bin" / "third_party" / "rg")
+            (
+                app_path
+                / "Contents"
+                / "Resources"
+                / "BrowserClawServer"
+                / "default"
+                / "resources"
+            ).mkdir(parents=True)
 
             ctx = Context(
                 chromium_src=chromium_src,
@@ -319,13 +295,13 @@ class SignModuleGuardWiringTest(unittest.TestCase):
             chromium_src = Path(tmp) / "src"
             app_path = Path(tmp) / "out" / "BrowserOS.app"
             source_root = (
-                chromium_src / "chrome" / "browser" / "browseros" / "server" / "resources"
+                chromium_src / "chrome" / "browser" / "browseros" / "claw_server" / "resources"
             )
             bundle_root = (
                 app_path
                 / "Contents"
                 / "Resources"
-                / "BrowserOSServer"
+                / "BrowserClawServer"
                 / "default"
                 / "resources"
             )
@@ -700,7 +676,7 @@ class BrowserPasskeySigningTest(unittest.TestCase):
         self,
         root: Path,
         *,
-        product_id: str = "browseros",
+        product_id: str = "browserclaw",
         build_type: str = "release",
     ) -> Context:
         return cast(
@@ -708,10 +684,7 @@ class BrowserPasskeySigningTest(unittest.TestCase):
             SimpleNamespace(
                 build_type=build_type,
                 chromium_src=root / "chromium",
-                env=_env(
-                    macos_browseros_passkey_profile_path=None,
-                    macos_browserclaw_passkey_profile_path=None,
-                ),
+                env=_env(macos_browserclaw_passkey_profile_path=None),
                 product=get_product_descriptor(product_id),
                 root_dir=root / "browseros",
             ),
@@ -744,14 +717,14 @@ class BrowserPasskeySigningTest(unittest.TestCase):
             profile_path.write_bytes(b"profile")
             ctx = self._context(root)
             ctx.env = _env(
-                macos_browseros_passkey_profile_path=str(profile_path),
+                macos_browserclaw_passkey_profile_path=str(profile_path),
                 macos_notarization_team_id="WRONGTEAM1",
             )
             branding = (
                 ctx.root_dir
                 / "chromium_files"
                 / "products"
-                / "browseros"
+                / "browserclaw"
                 / "chrome"
                 / "app"
                 / "theme"
@@ -921,13 +894,11 @@ class BrowserPasskeySigningTest(unittest.TestCase):
 
     def test_product_profile_path_selection_does_not_cross_app_ids(self):
         env = _env(
-            macos_browseros_passkey_profile_path="/profiles/browseros.provisionprofile",
             macos_browserclaw_passkey_profile_path="/profiles/browserclaw.provisionprofile",
         )
-        self.assertEqual(
-            macos_module.get_browser_passkey_profile_path(env, "browseros"),
-            Path("/profiles/browseros.provisionprofile"),
-        )
+        # The original BrowserOS passkey profile moved to browseros-human.
+        with self.assertRaises(KeyError):
+            macos_module.get_browser_passkey_profile_path(env, "browseros")
         self.assertEqual(
             macos_module.get_browser_passkey_profile_path(env, "browserclaw"),
             Path("/profiles/browserclaw.provisionprofile"),
@@ -976,40 +947,39 @@ class VerifySignatureComponentTest(unittest.TestCase):
 
     def _build_app(self, tmp):
         app_path = Path(tmp) / "BrowserOS.app"
-        rg = (
+        server = (
             app_path
             / "Contents"
             / "Resources"
-            / "BrowserOSServer"
+            / "BrowserClawServer"
             / "default"
             / "resources"
             / "bin"
-            / "third_party"
-            / "rg"
+            / "browseros-claw-server"
         )
-        _write_exec(rg)
-        return app_path, rg
+        _write_exec(server)
+        return app_path, server
 
     def test_fails_when_component_signature_invalid(self):
         with tempfile.TemporaryDirectory() as tmp:
-            app_path, rg = self._build_app(tmp)
+            app_path, server = self._build_app(tmp)
             calls = []
 
             def run(cmd, cwd=None, check=True):
                 calls.append(cmd)
-                returncode = 1 if cmd[-1] == str(rg) else 0
+                returncode = 1 if cmd[-1] == str(server) else 0
                 return _completed(cmd, returncode=returncode)
 
             with mock.patch.object(macos_module, "run_command", run):
                 self.assertFalse(verify_signature(app_path))
 
             self.assertTrue(
-                any(c[0] == "codesign" and c[-1] == str(rg) for c in calls)
+                any(c[0] == "codesign" and c[-1] == str(server) for c in calls)
             )
 
     def test_passes_and_verifies_each_component(self):
         with tempfile.TemporaryDirectory() as tmp:
-            app_path, rg = self._build_app(tmp)
+            app_path, server = self._build_app(tmp)
             calls = []
 
             with mock.patch.object(
@@ -1019,7 +989,7 @@ class VerifySignatureComponentTest(unittest.TestCase):
 
             self.assertTrue(
                 any(
-                    c[0] == "codesign" and "--verify" in c and c[-1] == str(rg)
+                    c[0] == "codesign" and "--verify" in c and c[-1] == str(server)
                     for c in calls
                 )
             )

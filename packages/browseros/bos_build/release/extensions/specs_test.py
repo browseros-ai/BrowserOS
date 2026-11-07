@@ -28,10 +28,12 @@ PRODUCT_IDS = {
 
 
 class SpecTableTest(unittest.TestCase):
-    def test_table_holds_exactly_the_four_extensions(self):
+    def test_table_holds_exactly_the_buildable_extensions(self):
+        # The original BrowserOS agent extension moved to browseros-human; only
+        # its frozen update-feed entry stays in feeds/spec.py.
         self.assertEqual(
             {spec.name for spec in EXTENSION_SPECS},
-            {"agent", "controller", "bugreporter", "browserclaw"},
+            {"controller", "bugreporter", "browserclaw"},
         )
 
     def test_names_ids_and_signing_envs_are_unique(self):
@@ -58,7 +60,7 @@ class SpecTableTest(unittest.TestCase):
 
     def test_monorepo_extensions_are_in_repo_sources(self):
         monorepo_root = get_package_root().parent.parent
-        for name in ("agent", "browserclaw"):
+        for name in ("browserclaw",):
             source = spec_by_name(name).source
             self.assertIsInstance(source, InRepoSource, name)
             self.assertEqual(source.path, "packages/browseros-agent")
@@ -98,7 +100,7 @@ class SpecTableTest(unittest.TestCase):
         for spec in EXTENSION_SPECS:
             for path in (spec.dist_path, spec.manifest_path):
                 self.assertFalse(path.startswith("/"), spec.name)
-        for name in ("agent", "browserclaw"):
+        for name in ("browserclaw",):
             spec = spec_by_name(name)
             self.assertTrue(spec.dist_path.endswith("dist/chrome-mv3"), name)
             self.assertTrue(spec.manifest_path.endswith("package.json"), name)
@@ -118,12 +120,12 @@ class SpecTableTest(unittest.TestCase):
         self.assertEqual(browserclaw.env_dir, "apps/claw-app")
 
     def test_non_claw_extensions_have_no_required_build_env(self):
-        for name in ("agent", "controller", "bugreporter"):
+        for name in ("controller", "bugreporter"):
             self.assertEqual(spec_by_name(name).required_env, (), name)
 
     def test_in_repo_manifest_paths_exist_in_working_tree(self):
         monorepo_root = get_package_root().parent.parent
-        for name in ("agent", "browserclaw"):
+        for name in ("browserclaw",):
             spec = spec_by_name(name)
             source = spec.source
             self.assertIsInstance(source, InRepoSource)
@@ -131,14 +133,16 @@ class SpecTableTest(unittest.TestCase):
             self.assertTrue(manifest.is_file(), str(manifest))
 
     def test_spec_by_name_rejects_unknown_with_valid_names(self):
-        with self.assertRaisesRegex(ValueError, "agent.*browserclaw|browserclaw.*agent"):
+        with self.assertRaisesRegex(ValueError, "browserclaw.*bugreporter"):
             spec_by_name("nope")
+        with self.assertRaisesRegex(ValueError, "Unknown extension 'agent'"):
+            spec_by_name("agent")
 
     def test_select_specs_all_and_single(self):
         self.assertEqual(select_specs(None), EXTENSION_SPECS)
-        self.assertEqual(select_specs("agent"), (spec_by_name("agent"),))
+        self.assertEqual(select_specs("browserclaw"), (spec_by_name("browserclaw"),))
         with self.assertRaises(ValueError):
-            select_specs("agent-v2")
+            select_specs("agent")
 
 
 if __name__ == "__main__":

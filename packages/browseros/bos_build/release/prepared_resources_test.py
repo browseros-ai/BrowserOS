@@ -10,7 +10,7 @@ import zipfile
 from pathlib import Path
 
 from bos_build.core.products import (
-    BROWSEROS_AGENT_EXTENSION_ID,
+    BROWSERCLAW_EXTENSION_ID,
     BROWSEROS_BUG_REPORTER_EXTENSION_ID,
 )
 from bos_build.release.prepared_resources import (
@@ -77,7 +77,7 @@ class FakeOperations:
 
     def build_product_extension(self, request, destination) -> None:
         self.extension_builds.append((request.product, destination))
-        destination.write_bytes(_crx(BROWSEROS_AGENT_EXTENSION_ID, b"agent"))
+        destination.write_bytes(_crx(BROWSERCLAW_EXTENSION_ID, b"browserclaw"))
 
     def fetch_manifest(self, url: str) -> str:
         self.manifest_fetches += 1
@@ -104,14 +104,14 @@ class PreparedResourcesTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.output = self.root / "prepared"
         self.request = PreparationRequest(
-            product="browseros",
+            product="browserclaw",
             parent_sha=PARENT_SHA,
             source_sha=SOURCE_SHA,
             browser_version="0.31.0",
             component_versions={
-                "server": "0.0.128",
-                "agent": "0.0.101.0",
-                "app-onboard": "0.0.12",
+                "claw-server-rust": "0.0.128",
+                "browserclaw": "0.0.101.0",
+                "claw-onboard": "0.0.12",
             },
             output_dir=self.output,
             manifest_url="https://cdn.browseros.com/extensions/bundled-manifest.xml",
@@ -126,13 +126,13 @@ class PreparedResourcesTest(unittest.TestCase):
         self.assertEqual(operations.manifest_fetches, 1)
         self.assertEqual(len(operations.downloads), 1)
         self.assertEqual(operations.onboarding_builds, 1)
-        self.assertEqual(manifest.product, "browseros")
+        self.assertEqual(manifest.product, "browserclaw")
         self.assertEqual(manifest.parent_sha, PARENT_SHA)
         self.assertEqual(manifest.source_sha, SOURCE_SHA)
         self.assertEqual(set(manifest.files), {"product_crx", "bug_reporter_crx", "onboarding"})
         self.assertEqual(
             manifest.files["product_crx"].extension_id,
-            BROWSEROS_AGENT_EXTENSION_ID,
+            BROWSERCLAW_EXTENSION_ID,
         )
         self.assertEqual(
             manifest.files["bug_reporter_crx"].version,
@@ -185,15 +185,15 @@ class PreparedResourcesTest(unittest.TestCase):
         self.output.mkdir()
         (self.output / "stale.bin").write_bytes(b"stale")
         secret = "candidate-signing-secret"
-        previous = os.environ.get("BROWSEROS_AGENT_V2_KEY")
-        os.environ["BROWSEROS_AGENT_V2_KEY"] = secret
+        previous = os.environ.get("BROWSERCLAW_KEY")
+        os.environ["BROWSERCLAW_KEY"] = secret
         try:
             prepare_common_resources(self.request, FakeOperations(), rebuild=True)
         finally:
             if previous is None:
-                os.environ.pop("BROWSEROS_AGENT_V2_KEY", None)
+                os.environ.pop("BROWSERCLAW_KEY", None)
             else:
-                os.environ["BROWSEROS_AGENT_V2_KEY"] = previous
+                os.environ["BROWSERCLAW_KEY"] = previous
 
         self.assertFalse((self.output / "stale.bin").exists())
         for path in self.output.rglob("*"):

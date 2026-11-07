@@ -89,13 +89,11 @@ def bundled_manifest(versions: dict[str, str] | None = None) -> str:
 def resource_pins(components: list[Component]) -> dict[str, ResourcePin]:
     selected = {
         {
-            "browseros-server": "browseros_server",
             "browserclaw-server": "browserclaw_server",
             "browserclaw-onboard": "browserclaw_onboard",
         }[component.name]: component
         for component in components
-        if component.name
-        in {"browseros-server", "browserclaw-server", "browserclaw-onboard"}
+        if component.name in {"browserclaw-server", "browserclaw-onboard"}
     }
     pins = {}
     for index, family in enumerate(RESOURCE_FAMILIES, start=1):
@@ -132,9 +130,9 @@ class ReleasePlanTest(unittest.TestCase):
         self,
         root: Path,
         *,
-        product: str = "browseros",
+        product: str = "browserclaw",
         components: list[Component] | None = None,
-        extension_name: str = "agent",
+        extension_name: str = "browserclaw",
         manifest: str | None = None,
         source_sha: str = SOURCE_SHA,
         run_id: str = "30418029456",
@@ -170,12 +168,12 @@ class ReleasePlanTest(unittest.TestCase):
                 Path(temp_dir),
                 components=[
                     Component(
-                        "browseros-server", "0.0.22", "agent-server/v0.0.22", SOURCE_SHA
+                        "browserclaw-server", "0.0.22", "claw-server/v0.0.22", SOURCE_SHA
                     ),
                     Component(
-                        "agent-extension",
+                        "browserclaw-extension",
                         "0.0.124.0",
-                        "ext-agent/v0.0.124.0",
+                        "ext-browserclaw/v0.0.124.0",
                         SOURCE_SHA,
                     ),
                 ],
@@ -187,14 +185,14 @@ class ReleasePlanTest(unittest.TestCase):
             self.assertEqual(
                 versions,
                 {
-                    extension_by_name("agent").extension_id: "0.0.124.0",
+                    extension_by_name("agent").extension_id: "0.0.123.0",
                     extension_by_name("bugreporter").extension_id: "54.0.0.0",
-                    extension_by_name("browserclaw").extension_id: "0.1.7.0",
+                    extension_by_name("browserclaw").extension_id: "0.0.124.0",
                 },
             )
             urls = extract_enclosure_urls(manifest_bytes.decode())
             self.assertIn(
-                "https://cdn.browseros.com/extensions/agent-0.0.124.0.crx",
+                "https://cdn.browseros.com/extensions/browserclaw-0.0.124.0.crx",
                 urls,
             )
             self.assertNotIn("latest", result.manifest_url)
@@ -207,7 +205,7 @@ class ReleasePlanTest(unittest.TestCase):
                 Path(temp_dir),
                 components=[
                     Component(
-                        "browseros-server", "0.0.22", "agent-server/v0.0.22", SOURCE_SHA
+                        "browserclaw-server", "0.0.22", "claw-server/v0.0.22", SOURCE_SHA
                     )
                 ],
             )
@@ -233,7 +231,7 @@ class ReleasePlanTest(unittest.TestCase):
     def test_plan_bytes_and_keys_are_deterministic_for_one_attempt(self) -> None:
         components = [
             Component(
-                "agent-extension", "0.0.124.0", "ext-agent/v0.0.124.0", SOURCE_SHA
+                "browserclaw-extension", "0.0.124.0", "ext-browserclaw/v0.0.124.0", SOURCE_SHA
             )
         ]
         with (
@@ -278,10 +276,8 @@ class ReleasePlanTest(unittest.TestCase):
             self.assertEqual(
                 result.resource_versions,
                 {
-                    "browserclaw_onboard": "0.0.3",
-                    "browserclaw_server": "0.0.2",
-                    "browseros_onboard": "0.0.4",
-                    "browseros_server": "0.0.1",
+                    "browserclaw_server": "0.0.1",
+                    "browserclaw_onboard": "0.0.2",
                 },
             )
             self.assertEqual(
@@ -383,7 +379,7 @@ class ReleasePlanTest(unittest.TestCase):
             (
                 [
                     Component(
-                        "browseros-server", "0.0.22", "agent-server/v0.0.22", "b" * 40
+                        "browserclaw-server", "0.0.22", "claw-server/v0.0.22", "b" * 40
                     )
                 ],
                 "source",
@@ -391,10 +387,10 @@ class ReleasePlanTest(unittest.TestCase):
             (
                 [
                     Component(
-                        "browseros-server", "0.0.22", "agent-server/v0.0.22", SOURCE_SHA
+                        "browserclaw-server", "0.0.22", "claw-server/v0.0.22", SOURCE_SHA
                     ),
                     Component(
-                        "browseros-server", "0.0.22", "agent-server/v0.0.22", SOURCE_SHA
+                        "browserclaw-server", "0.0.22", "claw-server/v0.0.22", SOURCE_SHA
                     ),
                 ],
                 "duplicate",
@@ -426,7 +422,7 @@ class ReleasePlanTest(unittest.TestCase):
             ),
         }
         component = Component(
-            "agent-extension", "0.0.124.0", "ext-agent/v0.0.124.0", SOURCE_SHA
+            "browserclaw-extension", "0.0.124.0", "ext-browserclaw/v0.0.124.0", SOURCE_SHA
         )
         for error, manifest in mutations.items():
             with self.subTest(error=error), tempfile.TemporaryDirectory() as temp_dir:
@@ -456,9 +452,9 @@ class ReleasePlanTest(unittest.TestCase):
                     Path(temp_dir),
                     components=[
                         Component(
-                            "agent-extension",
+                            "browserclaw-extension",
                             "0.0.124.0",
-                            "ext-agent/v0.0.124.0",
+                            "ext-browserclaw/v0.0.124.0",
                             SOURCE_SHA,
                         )
                     ],
@@ -471,9 +467,9 @@ class ReleasePlanTest(unittest.TestCase):
                     Path(temp_dir),
                     components=[
                         Component(
-                            "browseros-server",
+                            "browserclaw-server",
                             "0.0.22",
-                            "agent-server/v0.0.23",
+                            "claw-server/v0.0.23",
                             SOURCE_SHA,
                         )
                     ],
@@ -489,7 +485,7 @@ class ReleasePlanTest(unittest.TestCase):
             "</gupdate>", "  <metadata/>\n</gupdate>"
         )
         component = Component(
-            "agent-extension", "0.0.124.0", "ext-agent/v0.0.124.0", SOURCE_SHA
+            "browserclaw-extension", "0.0.124.0", "ext-browserclaw/v0.0.124.0", SOURCE_SHA
         )
         for error, manifest in (("nested", nested), ("unexpected", unexpected)):
             with self.subTest(error=error), tempfile.TemporaryDirectory() as temp_dir:
@@ -524,7 +520,7 @@ class ReleasePlanTest(unittest.TestCase):
             ),
         )
         component = Component(
-            "agent-extension", "0.0.124.0", "ext-agent/v0.0.124.0", SOURCE_SHA
+            "browserclaw-extension", "0.0.124.0", "ext-browserclaw/v0.0.124.0", SOURCE_SHA
         )
         for manifest in malformed:
             with (
@@ -553,9 +549,9 @@ class ReleasePlanTest(unittest.TestCase):
                     Path(temp_dir),
                     components=[
                         Component(
-                            "agent-extension",
+                            "browserclaw-extension",
                             "0.0.124.0",
-                            "ext-agent/v0.0.124.0",
+                            "ext-browserclaw/v0.0.124.0",
                             SOURCE_SHA,
                         )
                     ],
@@ -590,9 +586,9 @@ class ReleasePlanTest(unittest.TestCase):
                     Path(temp_dir),
                     components=[
                         Component(
-                            "browseros-server",
+                            "browserclaw-server",
                             "0.0.22.0",
-                            "agent-server/v0.0.22.0",
+                            "claw-server/v0.0.22.0",
                             SOURCE_SHA,
                         )
                     ],
@@ -603,9 +599,9 @@ class ReleasePlanTest(unittest.TestCase):
                     Path(temp_dir),
                     components=[
                         Component(
-                            "agent-extension",
+                            "browserclaw-extension",
                             "0.0.124",
-                            "ext-agent/v0.0.124",
+                            "ext-browserclaw/v0.0.124",
                             SOURCE_SHA,
                         )
                     ],

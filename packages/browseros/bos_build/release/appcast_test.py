@@ -24,9 +24,9 @@ def _artifact(filename: str) -> dict:
 
 def _macos_release(*artifact_keys: str) -> dict:
     names = {
-        "arm64": "BrowserOS_v0.47.0.2_arm64.dmg",
-        "x64": "BrowserOS_v0.47.0.2_x86_64.dmg",
-        "universal": "BrowserOS_v0.47.0.2_universal.dmg",
+        "arm64": "BrowserOS_neo_v0.47.0.2_arm64.dmg",
+        "x64": "BrowserOS_neo_v0.47.0.2_x86_64.dmg",
+        "universal": "BrowserOS_neo_v0.47.0.2_universal.dmg",
     }
     return {
         "sparkle_version": "10000.0.47.0.2",
@@ -37,8 +37,8 @@ def _macos_release(*artifact_keys: str) -> dict:
 
 def _win_release(*artifact_keys: str) -> dict:
     names = {
-        "x64_installer": "BrowserOS_v0.47.0.2_x64_installer.exe",
-        "arm64_installer": "BrowserOS_v0.47.0.2_arm64_installer.exe",
+        "x64_installer": "BrowserOS_neo_v0.47.0.2_x64_installer.exe",
+        "arm64_installer": "BrowserOS_neo_v0.47.0.2_arm64_installer.exe",
     }
     return {
         "sparkle_version": "10000.0.47.0.2",
@@ -91,8 +91,8 @@ class AppcastModuleTest(unittest.TestCase):
 
         module.execute(self._ctx())
 
-        self.assertEqual([c.key for c in self.publisher.calls], ["appcast.xml"])
-        self.assertIn("BrowserOS_v0.47.0.2_arm64.dmg", self.publisher.calls[0].content)
+        self.assertEqual([c.key for c in self.publisher.calls], ["appcast-claw.xml"])
+        self.assertIn("BrowserOS_neo_v0.47.0.2_arm64.dmg", self.publisher.calls[0].content)
 
     def test_universal_wins_over_arm64_for_appcast_xml(self):
         module = self._module(
@@ -102,15 +102,15 @@ class AppcastModuleTest(unittest.TestCase):
         module.execute(self._ctx())
 
         by_key = {c.key: c for c in self.publisher.calls}
-        self.assertIn("universal.dmg", by_key["appcast.xml"].content)
-        self.assertIn("x86_64.dmg", by_key["appcast-x86_64.xml"].content)
+        self.assertIn("universal.dmg", by_key["appcast-claw.xml"].content)
+        self.assertIn("x86_64.dmg", by_key["appcast-claw-x86_64.xml"].content)
 
     def test_win_feeds_render_per_installer_arch(self):
         module = self._module({"win": _win_release("x64_installer")})
 
         module.execute(self._ctx())
 
-        self.assertEqual([c.key for c in self.publisher.calls], ["appcast-win.xml"])
+        self.assertEqual([c.key for c in self.publisher.calls], ["appcast-claw-win.xml"])
         self.assertIn("x64_installer.exe", self.publisher.calls[0].content)
 
     def test_publish_and_allow_downgrade_thread_through(self):
@@ -132,10 +132,10 @@ class AppcastModuleTest(unittest.TestCase):
     def test_refused_feed_raises_naming_the_key(self):
         module = self._module(
             {"macos": _macos_release("arm64")},
-            publisher=FakePublisher(refuse={"appcast.xml"}),
+            publisher=FakePublisher(refuse={"appcast-claw.xml"}),
         )
 
-        with self.assertRaisesRegex(RuntimeError, "appcast.xml"):
+        with self.assertRaisesRegex(RuntimeError, "appcast-claw.xml"):
             module.execute(self._ctx())
 
     def test_missing_sparkle_signature_fails_the_feed(self):
@@ -143,7 +143,7 @@ class AppcastModuleTest(unittest.TestCase):
         del release["artifacts"]["arm64"]["sparkle_signature"]
         module = self._module({"macos": release})
 
-        with self.assertRaisesRegex(RuntimeError, "appcast.xml"):
+        with self.assertRaisesRegex(RuntimeError, "appcast-claw.xml"):
             module.execute(self._ctx())
 
         self.assertEqual(self.publisher.calls, [])
@@ -228,7 +228,7 @@ class AppcastModuleTest(unittest.TestCase):
         metadata = {
             "win": {
                 **_win_release("x64_installer"),
-                "product": "browseros",
+                "product": "browserclaw",
                 "version": "0.47.0.2",
                 "platform": "win",
                 "source_sha": "old",
@@ -237,7 +237,7 @@ class AppcastModuleTest(unittest.TestCase):
                 "artifacts": {
                     **_win_release("x64_installer")["artifacts"],
                     "x64_zip": _artifact(
-                        "BrowserOS_v0.47.0.2_x64_installer.zip"
+                        "BrowserOS_neo_v0.47.0.2_x64_installer.zip"
                     ),
                 },
             },
@@ -260,9 +260,9 @@ class AppcastModuleTest(unittest.TestCase):
         # feed set to exercise the gate itself.
         unpublishable = tuple(
             replace(feed, publishable=False)
-            for feed in browser_feeds_for_product("browseros")
+            for feed in browser_feeds_for_product("browserclaw")
         )
-        module = AppcastModule(product_id="browseros", publish=True)
+        module = AppcastModule(product_id="browserclaw", publish=True)
 
         with patch(
             "bos_build.release.appcast.browser_feeds_for_product",

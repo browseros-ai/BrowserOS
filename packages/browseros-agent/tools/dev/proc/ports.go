@@ -94,12 +94,6 @@ func IsPortAvailable(port int) bool {
 	return true
 }
 
-func KillPorts(p Ports) {
-	KillPort(p.CDP)
-	KillPort(p.Server)
-	KillPort(p.Extension)
-}
-
 func (r *PortReservations) ReleaseCDP() {
 	if r == nil || r.CDP == nil {
 		return

@@ -53,9 +53,9 @@ def _manifest(
         candidate_sha=CANDIDATE_SHA,
         browser_version="0.31.0",
         component_versions={
-            "server": "0.0.128",
-            "agent": "0.0.116.0",
-            "app-onboard": "0.0.12",
+            "claw-server-rust": "0.0.128",
+            "browserclaw": "0.0.116.0",
+            "claw-onboard": "0.0.12",
         },
         common_manifest_digest=COMMON_DIGEST,
         server_checksums=servers,

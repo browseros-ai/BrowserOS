@@ -11,7 +11,7 @@ import (
 )
 
 func TestAcquireRefreshProfileLockReportsStopCommandWhenRunning(t *testing.T) {
-	paths := newTargetRunPaths(filepath.Join(t.TempDir(), "config.yaml"), config.TargetClaw)
+	paths := newRunPaths(filepath.Join(t.TempDir(), "config.yaml"))
 	lock, err := dogfoodruntime.AcquireLock(paths.Lock)
 	if err != nil {
 		t.Fatal(err)
@@ -24,12 +24,12 @@ func TestAcquireRefreshProfileLockReportsStopCommandWhenRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = acquireRefreshProfileLock(paths, config.TargetClaw)
+	_, err = acquireRefreshProfileLock(paths)
 
 	if err == nil {
 		t.Fatal("expected refresh profile lock error")
 	}
-	for _, want := range []string{"cannot refresh profile", "browseros-dogfood --claw stop", "12345"} {
+	for _, want := range []string{"cannot refresh profile", "browseros-dogfood stop", "12345"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error missing %q: %v", want, err)
 		}
@@ -42,15 +42,12 @@ func TestEnsureDevProfileNotInUseReportsStopCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := ensureDevProfileNotInUse(config.Config{
-		Target:         config.TargetClaw,
-		DevUserDataDir: devUserDataDir,
-	})
+	err := ensureDevProfileNotInUse(config.Config{DevUserDataDir: devUserDataDir})
 
 	if err == nil {
 		t.Fatal("expected dev profile in-use error")
 	}
-	for _, want := range []string{"cannot refresh profile", "browseros-dogfood --claw stop", devUserDataDir} {
+	for _, want := range []string{"cannot refresh profile", "browseros-dogfood stop", devUserDataDir} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error missing %q: %v", want, err)
 		}

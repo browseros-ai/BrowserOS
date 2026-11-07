@@ -29,7 +29,6 @@ from .specs import spec_by_name
 MODULE = "bos_build.release.extensions.release"
 
 ALL_KEYS = {
-    "BROWSEROS_AGENT_V2_KEY": "agent-pem",
     "BROWSEROS_CONTROLLER_KEY": "controller-pem",
     "BUGREPORTER_KEY": "bugreporter-pem",
     "BROWSERCLAW_KEY": "claw-pem",
@@ -227,16 +226,16 @@ class ExtensionVersionResolutionTest(unittest.TestCase):
     def test_different_source_allocates_above_global_maximum(self) -> None:
         self.assertEqual(
             resolve_extension_version(
-                extension="agent",
+                extension="browserclaw",
                 requested_version="",
                 release_sha="new-sha",
                 release_records=[
                     {
-                        "tag_name": "ext-agent/v0.0.123.0",
+                        "tag_name": "ext-browserclaw/v0.0.123.0",
                         "release_sha": "old-sha",
                     }
                 ],
-                manifest_contents=[render_update_manifest({"agent": "0.0.124.4"})],
+                manifest_contents=[render_update_manifest({"browserclaw": "0.0.124.4"})],
             ),
             "0.0.125.0",
         )
@@ -244,7 +243,7 @@ class ExtensionVersionResolutionTest(unittest.TestCase):
     def test_committed_manifest_version_is_an_allocation_floor(self) -> None:
         self.assertEqual(
             resolve_extension_version(
-                extension="agent",
+                extension="browserclaw",
                 requested_version="",
                 release_sha="new-sha",
                 release_records=[],
@@ -257,16 +256,16 @@ class ExtensionVersionResolutionTest(unittest.TestCase):
     def test_malformed_historical_versions_are_ignored(self) -> None:
         self.assertEqual(
             resolve_extension_version(
-                extension="agent",
+                extension="browserclaw",
                 requested_version="",
                 release_sha="new-sha",
                 release_records=[
                     {
-                        "tag_name": "ext-agent/vnot-a-version",
+                        "tag_name": "ext-browserclaw/vnot-a-version",
                         "release_sha": "old-sha",
                     },
                     {
-                        "tag_name": "ext-agent/v0.0.123.0",
+                        "tag_name": "ext-browserclaw/v0.0.123.0",
                         "release_sha": "old-sha",
                     },
                 ],
@@ -383,7 +382,7 @@ class BoundCrxTest(unittest.TestCase):
         for metadata in (
             {},
             _binding("browserclaw", self.version, "b" * 40, b"canonical"),
-            _binding("agent", self.version, SOURCE_SHA, b"canonical"),
+            _binding("bugreporter", self.version, SOURCE_SHA, b"canonical"),
         ):
             with self.subTest(metadata=metadata):
                 client = BoundCrxClient()
@@ -428,7 +427,7 @@ class BoundCrxTest(unittest.TestCase):
 class VerifyVersionedObjectsTest(unittest.TestCase):
     def test_checks_every_selected_versioned_key(self) -> None:
         client = BoundCrxClient()
-        for name in ("agent", "browserclaw"):
+        for name in ("bugreporter", "browserclaw"):
             spec = spec_by_name(name)
             key = spec.crx_key("0.1.7.0")
             data = f"{name}-crx".encode()
@@ -443,14 +442,14 @@ class VerifyVersionedObjectsTest(unittest.TestCase):
                 client,
                 "browseros",
                 "0.1.7.0",
-                ("agent", "browserclaw"),
+                ("bugreporter", "browserclaw"),
                 SOURCE_SHA,
                 output_dir,
             )
 
             self.assertEqual(
-                (output_dir / "agent-0.1.7.0.crx").read_bytes(),
-                b"agent-crx",
+                (output_dir / "bugreporter-0.1.7.0.crx").read_bytes(),
+                b"bugreporter-crx",
             )
             self.assertEqual(
                 (output_dir / "browserclaw-0.1.7.0.crx").read_bytes(),
@@ -460,14 +459,14 @@ class VerifyVersionedObjectsTest(unittest.TestCase):
         self.assertEqual(
             keys,
             (
-                "extensions/agent-0.1.7.0.crx",
+                "extensions/bugreporter-0.1.7.0.crx",
                 "extensions/browserclaw-0.1.7.0.crx",
             ),
         )
         self.assertEqual(
             client.gets,
             [
-                ("browseros", "extensions/agent-0.1.7.0.crx"),
+                ("browseros", "extensions/bugreporter-0.1.7.0.crx"),
                 ("browseros", "extensions/browserclaw-0.1.7.0.crx"),
             ],
         )
@@ -475,12 +474,12 @@ class VerifyVersionedObjectsTest(unittest.TestCase):
     def test_missing_object_fails(self) -> None:
         client = BoundCrxClient()
 
-        with self.assertRaisesRegex(RuntimeError, "agent-0.1.7.0.crx"):
+        with self.assertRaisesRegex(RuntimeError, "browserclaw-0.1.7.0.crx"):
             verify_versioned_crx_objects(
                 client,
                 "browseros",
                 "0.1.7.0",
-                ("agent",),
+                ("browserclaw",),
                 SOURCE_SHA,
             )
 
@@ -517,7 +516,7 @@ class BuildPipelineTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "bugreporter"):
             build_pipeline(
                 version="1.0.0",
-                name="agent-v2",
+                name="browserclaw-v2",
                 branch=None,
                 chrome_binary=None,
                 source_sha=SOURCE_SHA,
@@ -526,7 +525,7 @@ class BuildPipelineTest(unittest.TestCase):
     def test_named_extension_gets_one_release_step(self):
         steps = build_pipeline(
             version="1.2.3",
-            name="agent",
+            name="browserclaw",
             branch=None,
             chrome_binary=None,
             source_sha=SOURCE_SHA,
@@ -534,7 +533,7 @@ class BuildPipelineTest(unittest.TestCase):
         self.assertEqual(len(steps), 1)
         release = steps[0]
         self.assertIsInstance(release, ExtensionReleaseModule)
-        self.assertEqual(release.names, ("agent",))
+        self.assertEqual(release.names, ("browserclaw",))
 
     def test_all_extensions_get_one_release_step(self):
         steps = build_pipeline(
@@ -548,7 +547,7 @@ class BuildPipelineTest(unittest.TestCase):
         release = steps[0]
         self.assertIsInstance(release, ExtensionReleaseModule)
         self.assertEqual(
-            release.names, ("agent", "controller", "bugreporter", "browserclaw")
+            release.names, ("controller", "bugreporter", "browserclaw")
         )
 
     def test_dash_prefixed_branch_rejected_at_assembly(self):
@@ -566,7 +565,7 @@ class BuildPipelineTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "version"):
                 build_pipeline(
                     version=version,
-                    name="agent",
+                    name="browserclaw",
                     branch=None,
                     chrome_binary=None,
                     source_sha=SOURCE_SHA,
@@ -576,7 +575,7 @@ class BuildPipelineTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source commit SHA"):
             build_pipeline(
                 version="1.0.0",
-                name="agent",
+                name="browserclaw",
                 branch=None,
                 chrome_binary=None,
                 source_sha="main",
@@ -584,7 +583,7 @@ class BuildPipelineTest(unittest.TestCase):
 
 
 class ValidateTest(unittest.TestCase):
-    def _module(self, names=("agent",), **kwargs):
+    def _module(self, names=("browserclaw",), **kwargs):
         return ExtensionReleaseModule(
             version="1.0.0", names=names, source_sha=SOURCE_SHA, **kwargs
         )
@@ -593,9 +592,9 @@ class ValidateTest(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=False):
             import os
 
-            os.environ.pop("BROWSEROS_AGENT_V2_KEY", None)
+            os.environ.pop("BROWSERCLAW_KEY", None)
             with patch(f"{MODULE}.find_chrome_binary", return_value="chrome"):
-                with self.assertRaisesRegex(ValidationError, "BROWSEROS_AGENT_V2_KEY"):
+                with self.assertRaisesRegex(ValidationError, "BROWSERCLAW_KEY"):
                     self._module().validate(_ctx())
 
     def test_missing_r2_config_fails(self):
@@ -697,8 +696,8 @@ class ExecuteTest(unittest.TestCase):
             **kwargs,
         )
 
-    def test_agent_flow_order_and_arguments(self):
-        self._module(("agent",)).execute(_ctx())
+    def test_in_repo_flow_order_and_arguments(self):
+        self._module(("browserclaw",)).execute(_ctx())
 
         called = [c[0] for c in self.tracker.mock_calls]
         self.assertEqual(
@@ -713,10 +712,10 @@ class ExecuteTest(unittest.TestCase):
         )
 
         build_kwargs = self.mocks["build_extension_crx"].call_args.kwargs
-        self.assertEqual(build_kwargs["spec"], spec_by_name("agent"))
+        self.assertEqual(build_kwargs["spec"], spec_by_name("browserclaw"))
         self.assertEqual(build_kwargs["version"], "1.0.0")
         self.assertEqual(
-            build_kwargs["output_path"], self.work / "dist" / "agent-1.0.0.crx"
+            build_kwargs["output_path"], self.work / "dist" / "browserclaw-1.0.0.crx"
         )
         self.assertEqual(build_kwargs["monorepo_root"], self.monorepo)
         self.assertEqual(build_kwargs["work_root"], self.work)
@@ -727,10 +726,10 @@ class ExecuteTest(unittest.TestCase):
         self.mocks["upload_bound_extension_crx"].assert_called_once_with(
             "r2-client",
             "browseros",
-            spec_by_name("agent"),
+            spec_by_name("browserclaw"),
             "1.0.0",
             SOURCE_SHA,
-            self.work / "dist" / "agent-1.0.0.crx",
+            self.work / "dist" / "browserclaw-1.0.0.crx",
         )
 
     def test_external_extension_uses_shared_builder(self):
@@ -740,16 +739,16 @@ class ExecuteTest(unittest.TestCase):
 
     def test_upload_failure_stops_later_extensions(self):
         self.mocks["upload_bound_extension_crx"].side_effect = RuntimeError(
-            "binding mismatch for extensions/agent-1.0.0.crx"
+            "binding mismatch for extensions/browserclaw-1.0.0.crx"
         )
-        with self.assertRaisesRegex(RuntimeError, "extensions/agent-1.0.0.crx"):
-            self._module(("agent", "bugreporter")).execute(_ctx())
+        with self.assertRaisesRegex(RuntimeError, "extensions/browserclaw-1.0.0.crx"):
+            self._module(("browserclaw", "bugreporter")).execute(_ctx())
 
         built = [
             call.kwargs["spec"].name
             for call in self.mocks["build_extension_crx"].call_args_list
         ]
-        self.assertEqual(built, ["agent"])
+        self.assertEqual(built, ["browserclaw"])
 
     def test_branch_override_reaches_resolver(self):
         self._module(("bugreporter",), branch_override="canary").execute(_ctx())
@@ -759,7 +758,7 @@ class ExecuteTest(unittest.TestCase):
         )
 
     def test_injected_r2_client_skips_factory(self):
-        self._module(("agent",), r2_client="prebuilt").execute(_ctx())
+        self._module(("browserclaw",), r2_client="prebuilt").execute(_ctx())
         self.mocks["get_r2_client"].assert_not_called()
         self.assertEqual(
             self.mocks["upload_bound_extension_crx"].call_args.args[0], "prebuilt"

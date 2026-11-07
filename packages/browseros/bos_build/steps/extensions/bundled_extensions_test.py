@@ -45,7 +45,7 @@ class BundledExtensionsTest(unittest.TestCase):
         by_id = {extension.id: extension for extension in extensions}
         required = {
             extension_id: name
-            for product in ("browseros", "browserclaw")
+            for product in ("browserclaw",)
             for extension_id, name in get_product_descriptor(
                 product
             ).required_extension_ids
@@ -60,11 +60,8 @@ class BundledExtensionsTest(unittest.TestCase):
             self.assertIn(f"-{extension.version}.crx", extension.codebase)
 
     def test_published_selection_is_product_exact(self) -> None:
+        # The frozen agent entry stays in the manifest but never ships in neo.
         expected = {
-            "browseros": {
-                BROWSEROS_AGENT_EXTENSION_ID,
-                BROWSEROS_BUG_REPORTER_EXTENSION_ID,
-            },
             "browserclaw": {
                 BROWSERCLAW_EXTENSION_ID,
                 BROWSEROS_BUG_REPORTER_EXTENSION_ID,
@@ -78,12 +75,6 @@ class BundledExtensionsTest(unittest.TestCase):
 
     def test_published_selection_pins_product_extension_version(self) -> None:
         cases = (
-            (
-                "browseros",
-                BROWSEROS_AGENT_EXTENSION_ID,
-                "0.0.125.0",
-                "https://cdn.browseros.com/extensions/agent-0.0.125.0.crx",
-            ),
             (
                 "browserclaw",
                 BROWSERCLAW_EXTENSION_ID,
@@ -159,20 +150,19 @@ class BundledExtensionsTest(unittest.TestCase):
                 ) as fetch,
                 patch.object(module, "_download_extension", side_effect=write),
             ):
-                module.execute(self._ctx("browseros", chromium_src=chromium))
+                module.execute(self._ctx("browserclaw", chromium_src=chromium))
 
             fetch.assert_called_once()
             output = module._get_output_dir(
-                self._ctx("browseros", chromium_src=chromium)
+                self._ctx("browserclaw", chromium_src=chromium)
             )
             self.assertEqual(
                 {path.stem for path in output.glob("*.crx")},
-                {BROWSEROS_AGENT_EXTENSION_ID, BROWSEROS_BUG_REPORTER_EXTENSION_ID},
+                {BROWSERCLAW_EXTENSION_ID, BROWSEROS_BUG_REPORTER_EXTENSION_ID},
             )
 
     def test_source_mode_copies_only_validated_common_crxs(self) -> None:
         for product, product_id, product_version in (
-            ("browseros", BROWSEROS_AGENT_EXTENSION_ID, "0.0.116.0"),
             ("browserclaw", BROWSERCLAW_EXTENSION_ID, "0.0.2.0"),
         ):
             with self.subTest(product=product), tempfile.TemporaryDirectory() as temp:
@@ -226,7 +216,7 @@ class BundledExtensionsTest(unittest.TestCase):
             chromium = root / "chromium"
             chromium.mkdir()
             ctx = self._ctx(
-                "browseros",
+                "browserclaw",
                 chromium_src=chromium,
                 resource_mode="source",
                 prepared_resources=root / "prepared",
@@ -248,34 +238,26 @@ class BundledExtensionsTest(unittest.TestCase):
             chromium.mkdir()
             prepared = root / "prepared"
             module = BundledExtensionsModule()
-            manifests = {
-                "browseros": self._prepared_manifest(
-                    prepared, "browseros", BROWSEROS_AGENT_EXTENSION_ID, "0.0.116.0"
-                ),
-                "browserclaw": self._prepared_manifest(
-                    prepared,
-                    "browserclaw",
-                    BROWSERCLAW_EXTENSION_ID,
-                    "0.0.2.0",
-                ),
-            }
-            contexts = [
-                self._ctx(
-                    product,
-                    chromium_src=chromium,
-                    resource_mode="source",
-                    prepared_resources=prepared,
-                )
-                for product in ("browseros", "browserclaw")
-            ]
-            with patch(
-                f"{MODULE}.validated_common_resources",
-                side_effect=[manifests["browseros"], manifests["browserclaw"]],
-            ):
-                for ctx in contexts:
-                    module.execute(ctx)
+            ctx = self._ctx(
+                "browserclaw",
+                chromium_src=chromium,
+                resource_mode="source",
+                prepared_resources=prepared,
+            )
+            # A checkout that last built the original BrowserOS product still
+            # holds its agent extension; the neo build must not ship it.
+            output = module._get_output_dir(ctx)
+            output.mkdir(parents=True)
+            (output / f"{BROWSEROS_AGENT_EXTENSION_ID}.crx").write_bytes(b"stale")
+            (output / "bundled_extensions.json").write_text(
+                json.dumps({BROWSEROS_AGENT_EXTENSION_ID: {"external_version": "0.0.116.0"}})
+            )
+            manifest = self._prepared_manifest(
+                prepared, "browserclaw", BROWSERCLAW_EXTENSION_ID, "0.0.2.0"
+            )
+            with patch(f"{MODULE}.validated_common_resources", return_value=manifest):
+                module.execute(ctx)
 
-            output = module._get_output_dir(contexts[-1])
             self.assertEqual(
                 {path.stem for path in output.glob("*.crx")},
                 {BROWSERCLAW_EXTENSION_ID, BROWSEROS_BUG_REPORTER_EXTENSION_ID},
@@ -308,18 +290,15 @@ class BundledExtensionsTest(unittest.TestCase):
                 extension_id=extension_id,
             )
 
-        component = "agent" if product == "browseros" else "browserclaw"
-        server = "server" if product == "browseros" else "claw-server-rust"
-        onboarding = "app-onboard" if product == "browseros" else "claw-onboard"
         return PreparedResourcesManifest(
             product=product,
             parent_sha="1" * 40,
             source_sha=SOURCE_SHA,
             browser_version="0.0.1",
             component_versions={
-                server: "0.0.1",
-                component: product_version,
-                onboarding: "0.0.1",
+                "claw-server-rust": "0.0.1",
+                "browserclaw": product_version,
+                "claw-onboard": "0.0.1",
             },
             files={
                 "product_crx": prepared(product_path, product_version, product_id),

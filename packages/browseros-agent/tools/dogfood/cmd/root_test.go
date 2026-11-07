@@ -1,11 +1,10 @@
 package cmd
 
 import (
+	"bytes"
 	"regexp"
 	"strings"
 	"testing"
-
-	"browseros-dogfood/config"
 
 	"github.com/spf13/cobra"
 )
@@ -19,8 +18,8 @@ func TestRootUsageUsesCommandGroups(t *testing.T) {
 		"Setup:",
 		"Run:",
 		"Inspect:",
-		"browseros-dogfood --browseros init",
-		"browseros-dogfood --claw start",
+		"browseros-dogfood init",
+		"browseros-dogfood start",
 		"start",
 		"Start dogfooding environment",
 		"Use \"browseros-dogfood [command] --help\" for more information.",
@@ -31,54 +30,27 @@ func TestRootUsageUsesCommandGroups(t *testing.T) {
 	}
 }
 
-func TestResolveTargetFlags(t *testing.T) {
-	tests := []struct {
-		name        string
-		browserOS   bool
-		claw        bool
-		wantTarget  config.Target
-		wantPresent bool
-		wantErr     bool
-	}{
-		{name: "browseros", browserOS: true, wantTarget: config.TargetBrowserOS, wantPresent: true},
-		{name: "claw", claw: true, wantTarget: config.TargetClaw, wantPresent: true},
-		{name: "none"},
-		{name: "both", browserOS: true, claw: true, wantErr: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, present, err := resolveTargetFlags(tt.browserOS, tt.claw)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got != tt.wantTarget || present != tt.wantPresent {
-				t.Fatalf("got target=%q present=%v want target=%q present=%v", got, present, tt.wantTarget, tt.wantPresent)
-			}
-		})
-	}
-}
+func TestRootAcceptsClawAsHiddenNoOp(t *testing.T) {
+	t.Cleanup(func() {
+		rootCmd.SetOut(nil)
+		rootCmd.SetArgs(nil)
+		_ = rootCmd.PersistentFlags().Set("claw", "false")
+		_ = statusCmd.Flags().Set("help", "false")
+	})
+	for _, flag := range []string{"--claw", "-c"} {
+		var out bytes.Buffer
+		rootCmd.SetOut(&out)
+		rootCmd.SetArgs([]string{flag, "status", "--help"})
 
-func TestCommandRequiresTargetForLifecycleCommands(t *testing.T) {
-	root := &cobra.Command{Use: "browseros-dogfood"}
-	logs := &cobra.Command{Use: "logs"}
-	tail := &cobra.Command{Use: "tail"}
-	configCmd := &cobra.Command{Use: "config"}
-	edit := &cobra.Command{Use: "edit"}
-	logs.AddCommand(tail)
-	configCmd.AddCommand(edit)
-	root.AddCommand(logs, configCmd)
-
-	if !commandRequiresTarget(tail) {
-		t.Fatal("logs tail should require target")
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("%s should still parse: %v", flag, err)
+		}
+		if !strings.Contains(out.String(), "browseros-dogfood status") {
+			t.Fatalf("%s: expected status help, got:\n%s", flag, out.String())
+		}
 	}
-	if commandRequiresTarget(edit) {
-		t.Fatal("config edit should not require target")
+	if usage := rootCmd.UsageString(); strings.Contains(usage, "--claw") {
+		t.Fatalf("--claw should stay out of root usage:\n%s", usage)
 	}
 }
 

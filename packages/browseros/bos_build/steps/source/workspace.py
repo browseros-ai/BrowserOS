@@ -19,7 +19,9 @@ from ...lib.utils import log_info, log_warning
 from ..setup.clean import clean_ci_outputs
 from .provision import append_github_file, ensure
 
-PRODUCTS = ("browseros", "browserclaw")
+# Workspaces of the original BrowserOS product (now built by browseros-human)
+# fail validation here, so a shared runner's reaper leaves them to their owner.
+PRODUCTS = ("browserclaw",)
 WORKSPACE_PARENT = "browseros-ci-apfs-workspaces"
 WORKSPACE_PREFIX = "browseros-ci-chromium-"
 MARKER = ".browseros-workspace-state.env"
@@ -57,7 +59,7 @@ def _write_state(path: Path, state: dict[str, str]) -> None:
         pending_path.unlink(missing_ok=True)
 
 
-def _read_state(path: Path, *, allow_legacy: bool = False) -> dict[str, str]:
+def _read_state(path: Path) -> dict[str, str]:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"Missing regular workspace state file: {path}")
     state = {}
@@ -66,16 +68,10 @@ def _read_state(path: Path, *, allow_legacy: bool = False) -> dict[str, str]:
         if not separator or key in state:
             raise ValueError(f"Malformed workspace state: {path}")
         state[key] = value
-    # Previous releases used one unqualified workspace. Accept that exact old
-    # shape only for marker-based reaping; new ledgers always identify products.
-    legacy = allow_legacy and "product" not in state
-    if legacy:
-        state["product"] = "browseros"
     _validate_request([state.get("product", "")], state.get("run_tag", ""))
     base_root = Path(state.get("base_root", ""))
     parent = base_root.parent / WORKSPACE_PARENT
-    suffix = state["run_tag"] if legacy else f"{state['run_tag']}-{state['product']}"
-    root = parent / f"{WORKSPACE_PREFIX}{suffix}"
+    root = parent / f"{WORKSPACE_PREFIX}{state['run_tag']}-{state['product']}"
     expected = {
         "base_root": str(base_root),
         "base_src": str(base_root / "src"),
@@ -105,7 +101,7 @@ def _same_owner(first: dict[str, str], second: dict[str, str]) -> bool:
 def _remove_contents(state: dict[str, str]) -> None:
     """Remove owned files while the caller holds base and destination locks."""
     root = Path(state["workspace_root"])
-    marker_state = _read_state(root / MARKER, allow_legacy=True)
+    marker_state = _read_state(root / MARKER)
     if not _same_owner(state, marker_state):
         raise ValueError(f"Workspace ownership marker does not match: {root}")
     # ChromiumCheckoutLock lives inside the gclient root. Deleting that inode,
@@ -127,7 +123,7 @@ def _reap_stale_workspaces(parent: Path, base_root: Path, run_tag: str) -> None:
         if root.is_symlink() or not root.is_dir():
             continue
         try:
-            state = _read_state(root / MARKER, allow_legacy=True)
+            state = _read_state(root / MARKER)
             if (
                 state["workspace_root"] != str(root)
                 or state["base_root"] != str(base_root)

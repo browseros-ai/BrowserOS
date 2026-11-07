@@ -119,15 +119,15 @@ def clean_ci_outputs(src: Path) -> None:
     out = src / "out"
     if not out.is_dir():
         return
-    for pattern in ("Default_browseros_*", "Default_browserclaw_*"):
-        for path in out.glob(pattern):
-            if path.is_symlink():
-                path.unlink()
-            elif path.is_dir():
-                safe_rmtree(path)
-    for product in ("browseros", "browserclaw"):
-        path = out / ".browseros_resume" / product
+    # Only this repo's product: the original BrowserOS outputs belong to
+    # browseros-human, which may share this runner's source cache.
+    for path in out.glob("Default_browserclaw_*"):
         if path.is_symlink():
             path.unlink()
-        elif path.exists():
+        elif path.is_dir():
             safe_rmtree(path)
+    checkpoints = out / ".browseros_resume" / "browserclaw"
+    if checkpoints.is_symlink():
+        checkpoints.unlink()
+    elif checkpoints.exists():
+        safe_rmtree(checkpoints)

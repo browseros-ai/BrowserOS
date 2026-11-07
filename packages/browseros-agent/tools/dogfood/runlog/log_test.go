@@ -15,8 +15,8 @@ func TestWriterStoresJSONLinesAndFiltersByTag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
-	if err := w.Append("browser", "stdout", "chromium ready"); err != nil {
-		t.Fatalf("append browser: %v", err)
+	if err := w.Append("agent", "stdout", "wxt ready"); err != nil {
+		t.Fatalf("append agent: %v", err)
 	}
 	if err := w.Append("server", "stderr", "server ready"); err != nil {
 		t.Fatalf("append server: %v", err)
@@ -25,35 +25,34 @@ func TestWriterStoresJSONLinesAndFiltersByTag(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	entries, err := ReadLast(path, 10, "chromium")
+	entries, err := ReadLast(path, 10, "server")
 	if err != nil {
 		t.Fatalf("read last: %v", err)
 	}
 	if len(entries) != 1 {
 		t.Fatalf("entries len got %d want 1", len(entries))
 	}
-	if entries[0].Tag != "browser" {
-		t.Fatalf("tag got %q want browser", entries[0].Tag)
+	if entries[0].Tag != "server" {
+		t.Fatalf("tag got %q want server", entries[0].Tag)
 	}
 
 	line := Format(entries[0])
-	if !strings.Contains(line, "[chromium] chromium ready") {
+	if !strings.Contains(line, "[server] server ready") {
 		t.Fatalf("formatted line got %q", line)
 	}
 }
 
 func TestNormalizeFilterRejectsUnknownValues(t *testing.T) {
-	if got, err := NormalizeFilter("chromium"); err != nil || got != "browser" {
-		t.Fatalf("chromium filter got %q %v", got, err)
-	}
 	if got, err := NormalizeFilter("server"); err != nil || got != "server" {
 		t.Fatalf("server filter got %q %v", got, err)
 	}
 	if got, err := NormalizeFilter("daemon"); err != nil || got != "daemon" {
 		t.Fatalf("daemon filter got %q %v", got, err)
 	}
-	if _, err := NormalizeFilter("agent"); err == nil {
-		t.Fatal("expected invalid filter error")
+	for _, filter := range []string{"agent", "chromium"} {
+		if _, err := NormalizeFilter(filter); err == nil {
+			t.Fatalf("expected invalid filter error for %q", filter)
+		}
 	}
 }
 

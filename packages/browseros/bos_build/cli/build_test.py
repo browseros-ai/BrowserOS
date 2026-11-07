@@ -175,6 +175,17 @@ class ShowPlanPresetTest(_ProfileMixin):
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("Valid steps", combined(result))
 
+    def test_unregistered_product_fails_before_printing_a_plan(self):
+        # The original BrowserOS product moved to browseros-human.
+        with scrubbed_env():
+            result = invoke(
+                "--preset", "release", "--product", "browseros", "--show-plan"
+            )
+        output = combined(result)
+        self.assertNotEqual(result.exit_code, 0, output)
+        self.assertIn("Unknown build.product 'browseros'", output)
+        self.assertNotIn("Preset plan:", output)
+
     def test_from_step_not_in_plan_fails(self):
         # debug plans never contain series_patches
         with scrubbed_env():
@@ -671,7 +682,7 @@ class SourceProvenanceTest(unittest.TestCase):
             self.root / "packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET"
         )
         self.component = (
-            self.root / "packages/browseros-agent/apps/server/package.json"
+            self.root / "packages/browseros-agent/apps/claw-app/package.json"
         )
         for path, content in (
             (self.version, "BROWSEROS_MAJOR=0\n"),

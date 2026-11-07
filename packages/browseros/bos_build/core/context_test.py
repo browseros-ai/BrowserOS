@@ -88,7 +88,7 @@ class GetAppPathTest(unittest.TestCase):
         )
 
         expected = Path("/nonexistent-src") / ctx.out_dir / ctx.BROWSEROS_APP_NAME
-        self.assertTrue(str(ctx.out_dir).endswith("Default_browseros_universal"))
+        self.assertTrue(str(ctx.out_dir).endswith("Default_browserclaw_universal"))
         self.assertEqual(ctx.get_app_path(), expected)
 
     def test_browserclaw_context_derives_names_and_paths(self):
@@ -142,7 +142,9 @@ class GetAppPathTest(unittest.TestCase):
         self.assertEqual(ctx.product.id, "browserclaw")
         self.assertEqual(ctx.BROWSEROS_APP_BASE_NAME, "BrowserOS neo")
 
-    def test_debug_gn_args_allow_override_and_package_all(self):
+    def test_debug_gn_args_bake_neo_without_the_original_product_inputs(self):
+        # Either switch on would make GN require the original BrowserOS agent
+        # CRX and server resources, which bos_build no longer stages.
         ctx = Context(
             chromium_src=Path("/nonexistent-src"),
             architecture="x64",
@@ -152,14 +154,14 @@ class GetAppPathTest(unittest.TestCase):
         self.assertEqual(
             ctx.get_product_gn_args(),
             [
-                'browseros_product = "browseros"',
-                "browseros_allow_runtime_product_override = true",
-                "browseros_package_all_server_resources = true",
+                'browseros_product = "browserclaw"',
+                "browseros_allow_runtime_product_override = false",
+                "browseros_package_all_server_resources = false",
             ],
         )
 
     def test_release_gn_args_select_product_for_baked_identity(self):
-        for product in ("browseros", "browserclaw"):
+        for product in ("browserclaw",):
             with self.subTest(product=product):
                 ctx = Context(
                     chromium_src=Path("/nonexistent-src"),
@@ -179,10 +181,6 @@ class GetAppPathTest(unittest.TestCase):
 
     def test_release_required_extensions_follow_active_product(self):
         expected = {
-            "browseros": (
-                (BROWSEROS_AGENT_EXTENSION_ID, "BrowserOS agent"),
-                (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
-            ),
             "browserclaw": (
                 (BROWSERCLAW_EXTENSION_ID, "BrowserOS neo app"),
                 (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
@@ -200,23 +198,23 @@ class GetAppPathTest(unittest.TestCase):
 
                 self.assertEqual(ctx.required_extension_ids, required)
 
-    def test_debug_required_extensions_are_registered_product_union(self):
-        expected = (
-            (BROWSEROS_AGENT_EXTENSION_ID, "BrowserOS agent"),
-            (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
-            (BROWSERCLAW_EXTENSION_ID, "BrowserOS neo app"),
+    def test_debug_required_extensions_match_release(self):
+        release = Context(
+            chromium_src=Path("/nonexistent-src"),
+            architecture="arm64",
+            build_type="release",
+        )
+        debug = Context(
+            chromium_src=Path("/nonexistent-src"),
+            architecture="arm64",
+            build_type="debug",
         )
 
-        for product in ("browseros", "browserclaw"):
-            with self.subTest(product=product):
-                ctx = Context(
-                    chromium_src=Path("/nonexistent-src"),
-                    architecture="arm64",
-                    build_type="debug",
-                    product=get_product_descriptor(product),
-                )
-
-                self.assertEqual(ctx.required_extension_ids, expected)
+        self.assertEqual(debug.required_extension_ids, release.required_extension_ids)
+        self.assertNotIn(
+            BROWSEROS_AGENT_EXTENSION_ID,
+            {extension_id for extension_id, _ in debug.required_extension_ids},
+        )
 
 
 if __name__ == "__main__":

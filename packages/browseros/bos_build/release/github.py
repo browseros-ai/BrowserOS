@@ -12,6 +12,7 @@ from urllib.parse import quote
 from ..core.context import Context
 from ..core.step import Step, ValidationError
 from ..lib.utils import log_info, log_error, log_success, log_warning
+from .feeds.spec import browser_feeds_for_product
 from ..lib.r2 import BOTO3_AVAILABLE
 from .common import (
     PLATFORMS,
@@ -342,10 +343,7 @@ def normalize_version(version: str) -> str:
 
 def github_release_tag(version: str, product_id: str) -> str:
     """Return the product-owned Git tag for a browser release."""
-    normalized = normalize_version(version)
-    if product_id == "browseros":
-        return f"v{normalized}"
-    return f"{product_id}/v{normalized}"
+    return f"{product_id}/v{normalize_version(version)}"
 
 
 def inspect_github_release(tag: str, repo: str) -> Dict:
@@ -770,10 +768,19 @@ class GithubModule(Step):
             sparkle_version = release.get("sparkle_version", "")
             build_date = release.get("build_date", "")
 
+            # Label each arch with the feed that prefers it (spec.artifact_keys
+            # order), so the snippet always names this product's real keys.
+            macos_feeds = [
+                feed
+                for feed in browser_feeds_for_product(ctx.product.id)
+                if feed.platform == "macos"
+            ]
             arch_to_file = {
-                "arm64": "appcast.xml",
-                "x64": "appcast-x86_64.xml",
-                "universal": "appcast.xml",
+                arch: min(
+                    (feed for feed in macos_feeds if arch in feed.artifact_keys),
+                    key=lambda feed: feed.artifact_keys.index(arch),
+                ).key
+                for arch in ("arm64", "x64", "universal")
             }
 
             for arch in ["arm64", "x64", "universal"]:
