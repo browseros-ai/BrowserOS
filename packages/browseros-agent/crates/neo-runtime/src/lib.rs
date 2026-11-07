@@ -49,6 +49,7 @@ mod deadline;
 mod dispatch;
 mod fill;
 mod forms;
+mod frame_selector;
 mod getters;
 mod keyboard;
 mod lists;
