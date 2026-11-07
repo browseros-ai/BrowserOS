@@ -2576,7 +2576,8 @@ impl InputSender for Arc<PageSession> {
 // The run's end, for its input.
 impl PageSession {
     /// Records that this session's run ended (`TabInput::mark_ended`): no wait, no write.
-    /// A run's end records it on every tab before any release waits (`Tabs::release_input`).
+    /// A run's end records it on every tab before any of its cleanup waits
+    /// (`Tabs::mark_input_ended`).
     pub(crate) fn mark_input_ended(&self) {
         self.input.mark_ended(&self.session.id);
     }
@@ -2585,9 +2586,9 @@ impl PageSession {
     /// 4.6): a keyUp per held key, newest first, then a mouseUp per held button at the
     /// pointer's last position, under a turn so no other call's input lands in between. The
     /// run is recorded as ended first, before any wait or write ([`TabInput::mark_ended`]), so
-    /// a release that is refused, fails, or is cut off by the caller's bound (which covers the
-    /// wait for the turn and the writes) leaves what it holds to the next run's end, held by no
-    /// live run. A closed tab writes nothing.
+    /// a release that is refused or fails, or whose future is dropped, leaves what it holds to
+    /// the next run's end, held by no live run. `Tabs::release_input` runs it on a task of its
+    /// own, which no budget cuts off. A closed tab writes nothing.
     pub(crate) async fn release_run_input(self: &Arc<Self>) {
         self.mark_input_ended();
         if self.closed.is_cancelled() {
