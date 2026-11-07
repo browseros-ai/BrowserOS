@@ -9,7 +9,7 @@
 //!    callFunctionOn{executionContextId, ATTACH, [key]}             → glue objectId | undefined
 //!    undefined → callFunctionOn{executionContextId, INSTALL, [key, SPEC_SHA256, initializer]}
 //!  every call                    callFunctionOn{objectId: glue, CALL, [name, params, ...handles]}
-//!  main-frame document commit    → invalidate cached glue before publishing navigation
+//!  frame document commit         → invalidate cached glue before publishing navigation
 //!  a protocol error              → PageError::NotConnected and the cache is cleared; the next
 //!    (context or object gone,       call in the new document attaches again
 //!     navigating)
@@ -89,7 +89,7 @@ const _: () = assert!(
 /// it with the session, and a new document's glue replaces the old one's dead handle.
 const GLUE_GROUP: &str = "neo-glue";
 
-/// The initializer every document gets: main frame (`frameSeq: 0`), [`TEST_ID_ATTRIBUTE`],
+/// The initializer every document gets: local refs (`frameSeq: 0`), [`TEST_ID_ATTRIBUTE`],
 /// `stableRafCount: 1` as Playwright's Chromium passes it (`crPage.ts`
 /// `rafCountForStablePosition`), utility world.
 pub(crate) fn initializer() -> InjectedInitializer {

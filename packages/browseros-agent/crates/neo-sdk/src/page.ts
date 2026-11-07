@@ -3,6 +3,7 @@ import type {
   PageCloseParams,
 } from '@browseros/neo-runtime-spec/serve'
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
+import { isString } from '../vendor/playwright/isomorphic/stringUtils'
 import type { BrowserContext } from './browser-context'
 import type { Connection } from './connection'
 import { isTargetClosedError } from './errors'
@@ -26,9 +27,11 @@ import {
   type WaitForLoadStateOptions,
   type WaitForURLOptions,
 } from './frame'
+import type { FrameLocator } from './frame-locator'
 import type { Locator, LocatorOptions } from './locator'
+import { serializeUrlMatch } from './neo-commands'
 import { PAGE_CLOSE_KEYS, pickParams } from './protocol'
-import { get } from './runtime-bridge'
+import { type CreatedFrame, get, matchesURL } from './runtime-bridge'
 import type { SelectOptionValues } from './select-option'
 import { TimeoutSettings } from './timeout-settings'
 
@@ -58,6 +61,8 @@ export class Page {
   /** Built once: `Locator` throws `… must belong to the same frame.` when two locators hold
    * different `Frame` objects, so `mainFrame()` must always return this one. */
   readonly #mainFrame: Frame
+  /** Stable identity, including detached frames a script may still hold. */
+  readonly #frames = new Map<string, Frame>()
   readonly _timeoutSettings: TimeoutSettings
 
   /** `guid` and `mainFrameGuid` come from one record Rust minted (`page@T`, `frame@T`), so a
@@ -74,7 +79,11 @@ export class Page {
     this.#context = context
     this.#connection = connection
     this._timeoutSettings = new TimeoutSettings(context._timeoutSettings)
-    this.#mainFrame = new Frame(mainFrameGuid, this, connection)
+    this.#mainFrame = new Frame(mainFrameGuid, this, connection, {
+      url,
+      name: '',
+    })
+    this.#frames.set(mainFrameGuid, this.#mainFrame)
   }
 
   url(): string {
@@ -137,6 +146,37 @@ export class Page {
 
   mainFrame(): Frame {
     return this.#mainFrame
+  }
+
+  /** Interns records from every getter so frame comparisons remain valid across reads. */
+  _frameFrom(record: CreatedFrame): Frame {
+    let frame = this.#frames.get(record.guid)
+    if (!frame) {
+      frame = new Frame(record.guid, this, this.#connection, record.initializer)
+      this.#frames.set(record.guid, frame)
+    } else frame._updateInitializer(record.initializer)
+    return frame
+  }
+
+  frames(): Frame[] {
+    return get(this.#guid, 'frames').map((record) => this._frameFrom(record))
+  }
+
+  /** As Playwright, a nonempty name takes precedence when both selectors are given. */
+  frame(
+    frameSelector: string | { name?: string; url?: URLMatch },
+  ): Frame | null {
+    const name = isString(frameSelector) ? frameSelector : frameSelector.name
+    const url =
+      typeof frameSelector === 'object' ? frameSelector.url : undefined
+    if (!name && !url)
+      throw new Error('Either name or url matcher should be specified')
+    if (name)
+      return this.frames().find((frame) => frame.name() === name) ?? null
+    const matcher = serializeUrlMatch('page.frame', url)
+    return (
+      this.frames().find((frame) => matchesURL(frame.url(), matcher)) ?? null
+    )
   }
 
   context(): BrowserContext {
@@ -218,10 +258,13 @@ export class Page {
   }
 
   /**
-   * The main frame's accessibility tree as Playwright's YAML. With `mode: 'ai'`, nodes carry
-   * `[ref=eN]` refs that `page.locator('aria-ref=eN')` resolves in this document until the next
-   * snapshot or navigation. Iframes appear as nodes without their content: Neo serves the main
-   * frame only.
+   * The main frame's accessibility tree as Playwright's YAML. With `mode: 'ai'`, each rendered
+   * iframe's document appears under its `iframe` node, as in Playwright, and nodes carry refs that
+   * `page.locator('aria-ref=…')` resolves, in this run or a later one, until that document's next
+   * snapshot or navigation. A ref inside a frame is its path from the main frame:
+   * `- iframe [ref=e7]:` holds `- textbox "Email" [ref=f7e3]`, and a frame inside it adds a step
+   * (`f7f2e1`); Playwright numbers frames instead (`f1e3`). The default mode prints iframes without
+   * their content, as Playwright's does.
    */
   async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
     return await this.#mainFrame._ariaSnapshot('page.ariaSnapshot', options)
@@ -306,6 +349,10 @@ export class Page {
 
   locator(selector: string, options?: LocatorOptions): Locator {
     return this.mainFrame().locator(selector, options)
+  }
+
+  frameLocator(selector?: string): FrameLocator {
+    return this.mainFrame().frameLocator(selector)
   }
 
   getByTestId(testId: string | RegExp): Locator {

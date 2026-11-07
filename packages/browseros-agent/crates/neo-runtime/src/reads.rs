@@ -29,7 +29,7 @@
 //!
 //! The seam is two traits of their own, [`SelectorTab`] and [`ReadTab`], so the reads never grow
 //! click's `Tab`; `FrameTab` implements both at the bottom of this file, over click's own
-//! `prepare` and `describe` and the call frame's utility world. [`wait_for_function_on_selector`]
+//! `prepare` and `describe` and the selected frame's utility world. [`wait_for_function_on_selector`]
 //! takes the page call as a closure shared by `textContent`, `innerText` and `getAttribute`.
 //! The tests drive both loops against a scripted tab under paused time.
 //!

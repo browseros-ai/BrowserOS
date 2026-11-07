@@ -12,7 +12,7 @@
 //! one: the dispatcher's call tasks, the interceptor setups, the mouse writers, the interceptor
 //! stops and the object-group releases, all spawned on the run's `TaskTracker`. So no release
 //! can find its session gone, and no end-of-run step has to order a drain before a detach; this
-//! also covers a caller that drops the run's future. The watcher holds no `Arc` (it would keep
+//! also covers a caller that drops the run's future. The watcher holds no `Arc<PageSession>` (it would keep
 //! the page alive forever): it holds a CDP client, the session id and a token cancelled when the
 //! page drops. A task stuck past the run (a renderer frozen by a dialog the watcher missed) keeps
 //! the session attached until its own CDP request times out (browseros-cdp's 60 s), then lets
@@ -721,7 +721,12 @@ impl NavigationTab for FrameTab {
     async fn prepare(&self) -> Result<(), PageError> {
         PageSession::prepare(self)
             .await
-            .map_err(|error| world::classify(&error))
+            .map_err(|error| world::classify(&error))?;
+        // Title's navigation fallback must not hide a detached direct frame as an empty title.
+        if matches!(self.scope, FrameScope::Frame(_)) {
+            self.context().await?;
+        }
+        Ok(())
     }
 
     fn observe(&self) -> Result<NavigationObservation, PageError> {
@@ -1814,7 +1819,7 @@ impl Tab for FrameTab {
 /// `setupHitTargetInterceptor` into a fresh group: `error:notconnected` is `NotConnected`, any
 /// other description `Intercepted`, the handle `Armed` with the counters taken just before the
 /// setup was sent and the click's `input` turn. Runs on the run's tracker ([`Tab::arm`] for
-/// `Arc<PageSession>`), so it reads the answer to the end whoever still waits for it.
+/// `FrameTab`), so it reads the answer to the end whoever still waits for it.
 async fn arm_interceptor(
     page: Arc<PageSession>,
     element: ResolvedElement,

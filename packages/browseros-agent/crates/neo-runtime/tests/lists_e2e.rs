@@ -1,7 +1,7 @@
 //! `Locator.count()` and `Locator.allTextContents()` end to end on a real BrowserOS neo, through
 //! neo-sdk, on `neo-sdk/tests/pages/element-lists.html`: one run reads five matches (an empty and
 //! a hidden one among them) and a selector that matches nothing, and gets Playwright's exact
-//! numbers and texts, with no strict mode violation; a selector that enters a frame is refused.
+//! numbers and texts, with no strict mode violation, including within an iframe.
 //! `crates/neo-sdk/tests/parity/count.test.mjs` and `allTextContents.test.mjs` run the same reads
 //! through live Playwright beside Neo.
 //!
@@ -100,9 +100,9 @@ async fn tests_that_count_and_all_text_contents_read_every_match_and_none() {
     );
 }
 
-/// The iframe holds a `.fruit`, so a 0 or [] here would be a wrong answer, not a refusal.
+/// Collection reads stay in the selected iframe, whose list differs from the parent.
 #[tokio::test(flavor = "multi_thread")]
-async fn tests_that_a_selector_entering_a_frame_is_refused() {
+async fn tests_that_collection_reads_enter_the_selected_frame() {
     let Some(tab) = open().await else { return };
     tab.evaluate(
         "document.body.insertAdjacentHTML('beforeend', \
@@ -111,18 +111,11 @@ async fn tests_that_a_selector_entering_a_frame_is_refused() {
     .await;
     let outcome = run(
         &tab,
-        "const caught = (e) => ({ name: e.name, frames: /does not support frames/.test(e.message) });
-         const inner = page.locator('iframe >> internal:control=enter-frame >> .fruit');
-         return {
-           count: await inner.count().catch(caught),
-           texts: await inner.allTextContents().catch(caught),
-         };",
+        "const inner = page.locator('iframe >> internal:control=enter-frame >> .fruit');
+         await inner.waitFor({state:'attached'});
+         return { count: await inner.count(), texts: await inner.allTextContents() };",
     )
     .await;
     tab.close().await;
-    let refused = json!({ "name": "Error", "frames": true });
-    assert_eq!(
-        value(&outcome),
-        json!({ "count": refused, "texts": refused })
-    );
+    assert_eq!(value(&outcome), json!({"count":1,"texts":["Inner"]}));
 }
