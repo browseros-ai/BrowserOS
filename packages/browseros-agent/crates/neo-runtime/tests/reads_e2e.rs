@@ -594,3 +594,107 @@ async fn tests_that_inner_html_reads_markup_on_every_receiver_and_refuses_ambigu
         outcome.calls
     );
 }
+
+/// The page of med-pw-int's probe at `37bd69a24`: two main-frame buttons, then a frame whose only
+/// button is "Inner", and a second, `visibility: hidden` frame, which gets no ref though its own
+/// document shows its button.
+const FRAMED_BUTTONS: &str = r#"<!doctype html><html><body>
+<button>Top</button><button>Top two</button>
+<iframe id="inner" srcdoc="<button>Inner</button>"></iframe>
+<iframe id="hidden" style="visibility: hidden" srcdoc="<button>Hidden</button>"></iframe>
+</body></html>"#;
+
+/// An `ai` locator snapshot inside a frame answers page-wide refs: the ref of "Inner" reads
+/// "Inner" through `page.locator`, where a frame-relative `e2` read the main frame's "Top". A
+/// frame behind an iframe with no ref throws rather than answer refs it cannot route.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_an_ai_locator_snapshot_in_a_frame_answers_refs_that_reach_its_frame() {
+    let Some(binary) = browser::e2e_browser() else {
+        return;
+    };
+    let fixture = Fixture {
+        pages: vec![("/framed-buttons".to_string(), FRAMED_BUTTONS.to_string())],
+        ..Fixture::default()
+    };
+    let tab = Tab::open(binary, fixture, "/framed-buttons").await;
+    let outcome = run(
+        &tab,
+        &format!(
+            "const caught = {CAUGHT};
+             await page.frameLocator('#inner').locator('button').waitFor();
+             const snap = await page.frameLocator('#inner').locator('button').ariaSnapshot({{ mode: 'ai' }});
+             const ref = /\\[ref=([a-z0-9]+)\\]/.exec(snap)?.[1];
+             const body = await page.frameLocator('#inner').locator('body').ariaSnapshot({{ mode: 'ai' }});
+             return {{
+               snap,
+               ref,
+               viaPage: await page.locator('aria-ref=' + ref).textContent({{ timeout: 3000 }}).catch(caught),
+               bodyRef: /\\[ref=([a-z0-9]+)\\]/.exec(body)?.[1],
+               hidden: await page.frameLocator('#hidden').locator('button').ariaSnapshot({{ mode: 'ai' }}).catch(caught),
+               hiddenDefault: await page.frameLocator('#hidden').locator('button').ariaSnapshot(),
+             }};"
+        ),
+    )
+    .await;
+    tab.close().await;
+    let result = value(&outcome);
+    let aria_ref = result["ref"].as_str().unwrap_or_default();
+    assert!(
+        aria_ref.starts_with('f') && aria_ref.contains('e'),
+        "a path ref through the iframe: {result:#}"
+    );
+    assert_eq!(
+        result["snap"],
+        format!("- button \"Inner\" [ref={aria_ref}]")
+    );
+    assert_eq!(
+        result["viaPage"], "Inner",
+        "the ref names the frame's button"
+    );
+    assert!(
+        result["bodyRef"]
+            .as_str()
+            .is_some_and(|body_ref| body_ref.starts_with('f')),
+        "every ref of a frame's subtree is page-wide: {result:#}"
+    );
+    assert_eq!(result["hidden"], kind("Error", false));
+    assert_eq!(
+        result["hiddenDefault"], "- button \"Hidden\"",
+        "the default mode has no refs to route"
+    );
+}
+
+/// After `page.ariaSnapshot({ mode: 'ai' })`, a locator snapshot inside a frame reuses the ref the
+/// page snapshot gave its iframe, so both snapshots' refs keep working together.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_frame_locator_snapshot_reuses_the_page_snapshots_iframe_ref() {
+    let Some(binary) = browser::e2e_browser() else {
+        return;
+    };
+    let fixture = Fixture {
+        pages: vec![("/framed-buttons".to_string(), FRAMED_BUTTONS.to_string())],
+        ..Fixture::default()
+    };
+    let tab = Tab::open(binary, fixture, "/framed-buttons").await;
+    let outcome = run(
+        &tab,
+        "await page.frameLocator('#inner').locator('button').waitFor();
+         const full = await page.ariaSnapshot({ mode: 'ai' });
+         const iframe = /- iframe \\[ref=e(\\d+)\\]/.exec(full)?.[1];
+         const top = /button \"Top\" \\[ref=(e\\d+)\\]/.exec(full)?.[1];
+         const snap = await page.frameLocator('#inner').locator('button').ariaSnapshot({ mode: 'ai' });
+         const inner = /\\[ref=([a-z0-9]+)\\]/.exec(snap)?.[1];
+         return {
+           sameFrame: inner?.startsWith('f' + iframe + 'e'),
+           inner: await page.locator('aria-ref=' + inner).textContent({ timeout: 3000 }),
+           top: await page.locator('aria-ref=' + top).textContent({ timeout: 3000 }),
+         };",
+    )
+    .await;
+    tab.close().await;
+    assert_eq!(
+        value(&outcome),
+        json!({ "sameFrame": true, "inner": "Inner", "top": "Top" }),
+        "the frame's path is the page snapshot's iframe ref, and the page's refs still resolve"
+    );
+}
