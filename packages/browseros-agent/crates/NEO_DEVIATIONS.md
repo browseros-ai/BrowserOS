@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (9)
+## Deviations (10)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -16,6 +16,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/devices.rs | `DeviceCall::from_page_call` | `server/input.ts` `Touchscreen.apiTap` | Neo's run attaches to the user's BrowserOS context, which has no hasTouch option, and its tab answers Input.dispatchTouchEvent with the events of a hasTouch context, so Neo taps where Playwright refuses. |
 | neo-runtime/src/input_devices.rs | `plan_button_releases` | `server/input.ts` `Mouse.up` | Playwright keeps a page's buttons held until its script releases them; Neo releases at a run's end every button the run left held, oldest first at the pointer's last position, because the tab is the user's and outlives the run. |
 | neo-runtime/src/keyboard.rs | `plan_key_releases` | `server/input.ts` `Keyboard.up` | Playwright keeps a page's keys held until its script releases them; Neo releases at a run's end every key the run left held, newest first, because the tab is the user's and outlives the run. A held code is a layout name, so the release needs no platform. |
+| neo-runtime/src/reads.rs | `CHILD_AI_SNAPSHOT_UNSERVED` | `server/frames.ts` `Frame.ariaSnapshotJSON` | Child-frame scoped AI refs cannot be main-frame paths; use the page snapshot until frame-id-prefixed refs are served. |
 
 ## Unexplained: owner questions (0)
 
