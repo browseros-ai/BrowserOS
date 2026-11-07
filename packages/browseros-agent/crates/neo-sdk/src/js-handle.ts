@@ -35,7 +35,7 @@ import {
   parseSerializedValue,
   serializeValue,
 } from '../vendor/playwright/protocol/src/serializers'
-import type { ApiName, Connection } from './connection'
+import { type ApiName, type Connection, rebuildError } from './connection'
 import { isTargetClosedError } from './errors'
 
 /**
@@ -83,8 +83,7 @@ export type JSHandleCommands = EvalFrameCommands & {
   dispose: { params: Record<string, never>; result: Record<string, never> }
 }
 
-/** Playwright's `Unboxed` (`types/structs.d.ts`): a handle in an argument arrives in the page
- * as the value it names. */
+/** Playwright's `Unboxed`: a handle in an argument arrives in the page as the value it names. */
 export type Unboxed<Arg> =
   Arg extends JSHandle<infer T>
     ? T
@@ -106,14 +105,16 @@ export type PageFunctionOn<On, Arg2, R> =
 // biome-ignore lint/suspicious/noExplicitAny: page values are untyped in the realm
 export type PageElement = any
 
-/** Playwright's `EvaluateOptions` (`client/jsHandle.ts`). */
+/** Playwright's `EvaluateOptions`. */
 export type EvaluateOptions = { exposeFunctions?: boolean }
 
-/** Stands for a `JSHandle` between Playwright's server parse and its call-argument step. */
+/** Neo: stands for a `JSHandle` between Playwright's server parse and its call-argument step,
+ * where Playwright's server holds its own `JSHandle` object. */
 class HandleRef {
   constructor(readonly guid: string) {}
 }
 
+/** Playwright: `client/jsHandle.ts` `JSHandle` */
 export class JSHandle<T = unknown> {
   readonly _guid: string
   readonly _connection: Connection
@@ -233,7 +234,7 @@ export class JSHandle<T = unknown> {
   }
 }
 
-/** Builds the handle a `CreatedHandle` record names: an `ElementHandle` for a node. Set by
+/** Neo: builds the handle a `CreatedHandle` record names: an `ElementHandle` for a node. Set by
  * `element-handle.ts`, which extends this file's class (an import back would be a cycle). */
 export const handleFactory: {
   element?: (
@@ -243,7 +244,8 @@ export const handleFactory: {
   ) => JSHandle
 } = {}
 
-/** The `JSHandle` or `ElementHandle` for one record Rust created. */
+/** Neo: the `JSHandle` or `ElementHandle` for one record Rust created, where Playwright's
+ * connection builds the object from its `__create__` message. */
 export function handleFrom(
   connection: Connection,
   created: CreatedHandle,
@@ -254,10 +256,11 @@ export function handleFrom(
 }
 
 /**
- * The params every evaluation sends: Playwright's client `{ expression: String(pageFunction),
- * isFunction: typeof pageFunction === 'function', arg }`, after its server's
- * `normalizeEvaluationExpression` and argument steps. A refusal throws `apiName`-prefixed, as the
- * server's errors read.
+ * Playwright: `client/jsHandle.ts` `JSHandle.evaluate`: `{ expression: String(pageFunction), isFunction: typeof pageFunction === 'function', arg: serializedArg }`
+ *
+ * The params every evaluation sends, after Playwright's server steps
+ * (`normalizeEvaluationExpression`, the argument chain). A refusal throws `apiName`-prefixed, as
+ * the server's errors read.
  */
 export function evaluateParams(
   apiName: ApiName,
@@ -265,20 +268,28 @@ export function evaluateParams(
   arg: unknown,
   options: EvaluateOptions | undefined,
 ): EvaluateParams {
-  // Deviation: `client/jsHandle.ts` `JSHandle.evaluate`: `const serializedArg = options?.exposeFunctions ? await serializeArgumentWithCallbacks(this, this._parentOfType('Page') as Page | undefined, arg) : serializeArgument(arg);` Neo has no realm callback from the page, so it refuses the option rather than ignore it.
-  if (options?.exposeFunctions)
+  if (options?.exposeFunctions) {
+    // Deviation: `client/jsHandle.ts` `JSHandle.evaluate`: `const serializedArg = options?.exposeFunctions ? await serializeArgumentWithCallbacks(this, this._parentOfType('Page') as Page | undefined, arg) : serializeArgument(arg);` Neo has no realm callback from the page, so it refuses the option rather than ignore it.
     throw new Error(`${apiName}: Neo does not support exposeFunctions yet`)
+  }
   const isFunction = typeof pageFunction === 'function'
   let expression: string
   try {
     expression = normalizeEvaluationExpression(String(pageFunction), isFunction)
   } catch (error) {
-    throw new Error(`${apiName}: ${(error as Error).message}`)
+    // Playwright's server error, rebuilt as its client rebuilds every server error.
+    throw rebuildError(
+      apiName,
+      { name: 'Error', message: (error as Error).message },
+      undefined,
+    )
   }
   return { expression, isFunction, arg: serializeArgument(arg) }
 }
 
 /**
+ * Playwright: `client/jsHandle.ts` `serializeArgument`
+ *
  * Playwright's client `serializeArgument` (functions throw "Attempting to serialize unexpected
  * value") followed by its server's `parseArgument` and `serializeAsCallArgument`: the page-format
  * value and the guid of each handle reference, in reference order. This is the encoder every
@@ -304,8 +315,10 @@ export function serializeArgument(arg: unknown): SerializedArgument {
 }
 
 /**
+ * Playwright: `client/jsHandle.ts` `parseResult`
+ *
  * The page's answer, as Playwright's server and client read it: `parseEvaluationResultValue`
- * (`crExecutionContext.ts`), the dispatcher's `serializeResult`, the client's `parseResult`.
+ * (Chromium's execution context), the dispatcher's `serializeResult`, the client's `parseResult`.
  */
 export function parseResult(value: unknown): unknown {
   const live = parseEvaluationResultValue(

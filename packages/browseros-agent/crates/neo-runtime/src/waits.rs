@@ -315,7 +315,8 @@ impl<T: WaitTab> SelectorCondition<'_, T> {
             SelectorState::Hidden => !visible,
         };
         if met && wants_element {
-            // Playwright: `server/frames.ts` `Frame.waitForSelector`: `return await progress.race(element._adoptTo(mainContext));` and on failure `return continuePolling;`
+            // An element that could not be adopted keeps the wait polling.
+            // Playwright: `server/frames.ts` `Frame.waitForSelector`: `return await progress.race(element._adoptTo(mainContext));`
             self.element = element;
             return Ok(self.element.is_some());
         }

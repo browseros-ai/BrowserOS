@@ -1,8 +1,9 @@
 /**
- * The bundle entry `dist/json-value.js`: Playwright's
- * `(utilityScript, ...args) => utilityScript.jsonValue(...args)` (`server/javascript.ts`
- * `JSHandle._jsonValue`), called by neo-runtime's `main_world.rs` with `[true, handle]` for
- * `JSHandle.jsonValue`.
+ * Playwright: `server/javascript.ts` `JSHandle._jsonValue`
+ *
+ * The bundle entry `dist/json-value.js`: `(utilityScript, ...args) =>
+ * utilityScript.jsonValue(...args)`, called by neo-runtime's `main_world.rs` with
+ * `[true, handle]` for `JSHandle.jsonValue`.
  */
 
 import type { UtilityScript } from '../vendor/playwright/injected/src/utilityScript'

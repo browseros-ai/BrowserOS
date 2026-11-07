@@ -47,16 +47,19 @@ use crate::frames::FrameContext;
 use crate::world::ObjectGroup;
 
 /// `() => new UtilityScript(globalThis, false)`.
+/// Playwright: `server/javascript.ts` `ExecutionContext._utilityScript`
 const UTILITY: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../neo-runtime-injected/dist/utility.js"
 ));
 /// `(utilityScript, ...args) => utilityScript.evaluate(...args)`.
+/// Playwright: `server/javascript.ts` `evaluateExpression`
 const EVALUATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../neo-runtime-injected/dist/evaluate.js"
 ));
 /// `(utilityScript, ...args) => utilityScript.jsonValue(...args)`.
+/// Playwright: `server/javascript.ts` `JSHandle._jsonValue`
 const JSON_VALUE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../neo-runtime-injected/dist/json-value.js"
@@ -197,9 +200,9 @@ impl MainWorld {
     }
 
     /// Runs `function` on `installed`'s `UtilityScript` with `arguments` (CDP `CallArgument`s,
-    /// after the `{objectId: UtilityScript}` Playwright passes first), as Playwright's
-    /// `crExecutionContext.ts` `evaluateWithArguments` does: `awaitPromise` and `userGesture`,
-    /// by value or into `group`. Cancel-safe: dropping it loses only the answer.
+    /// after the `{objectId: UtilityScript}` Playwright passes first): `awaitPromise` and
+    /// `userGesture`, by value or into `group`. Cancel-safe: dropping it loses only the answer.
+    /// Playwright: `server/chromium/crExecutionContext.ts` `CRExecutionContext.evaluateWithArguments`
     ///
     /// # Errors
     ///

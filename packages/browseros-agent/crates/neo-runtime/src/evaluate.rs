@@ -74,7 +74,9 @@ const NODE_PREVIEW_PREFIX: &str = "JSHandle@";
 /// Playwright: `server/dom.ts` `ElementHandle.constructor`: `super(context, 'node', undefined, objectId);`
 const NODE_TYPE: &str = "node";
 
-/// Playwright's `Frame.evaluateExpression` (`frame.yml`), served in the frame's main world.
+/// Neo: the trace metadata of Playwright's `Frame.evaluateExpression`, as
+/// `neo-runtime-spec/spec/playwright/frame.yml` declares it; written here because the spec does not
+/// generate this command (its `arg` arrives in the page's format).
 pub(crate) static FRAME_EVALUATE_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "evaluateExpression",
@@ -85,7 +87,8 @@ pub(crate) static FRAME_EVALUATE_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
 };
-/// Playwright's `Frame.evaluateExpressionHandle` (`frame.yml`).
+/// Neo: `Frame.evaluateExpressionHandle`'s trace metadata, as
+/// `neo-runtime-spec/spec/playwright/frame.yml` declares it.
 pub(crate) static FRAME_EVALUATE_HANDLE_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "evaluateExpressionHandle",
@@ -96,7 +99,8 @@ pub(crate) static FRAME_EVALUATE_HANDLE_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
 };
-/// Playwright's `JSHandle.evaluateExpression` (`handles.yml`), also an `ElementHandle`'s.
+/// Neo: `JSHandle.evaluateExpression`'s trace metadata (also an `ElementHandle`'s), as
+/// `neo-runtime-spec/spec/playwright/handles.yml` declares it.
 pub(crate) static HANDLE_EVALUATE_META: MethodMeta = MethodMeta {
     interface: "JSHandle",
     method: "evaluateExpression",
@@ -107,7 +111,8 @@ pub(crate) static HANDLE_EVALUATE_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
 };
-/// Playwright's `JSHandle.evaluateExpressionHandle` (`handles.yml`).
+/// Neo: `JSHandle.evaluateExpressionHandle`'s trace metadata, as
+/// `neo-runtime-spec/spec/playwright/handles.yml` declares it.
 pub(crate) static HANDLE_EVALUATE_HANDLE_META: MethodMeta = MethodMeta {
     interface: "JSHandle",
     method: "evaluateExpressionHandle",
@@ -118,7 +123,8 @@ pub(crate) static HANDLE_EVALUATE_HANDLE_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
 };
-/// Playwright's `JSHandle.jsonValue` (`handles.yml`).
+/// Neo: `JSHandle.jsonValue`'s trace metadata, as `neo-runtime-spec/spec/playwright/handles.yml`
+/// declares it.
 pub(crate) static HANDLE_JSON_VALUE_META: MethodMeta = MethodMeta {
     interface: "JSHandle",
     method: "jsonValue",
@@ -129,7 +135,8 @@ pub(crate) static HANDLE_JSON_VALUE_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[],
 };
-/// Playwright's `JSHandle.dispose` (`handles.yml`), an internal command.
+/// Neo: `JSHandle.dispose`'s trace metadata, an internal command in
+/// `neo-runtime-spec/spec/playwright/handles.yml`.
 pub(crate) static HANDLE_DISPOSE_META: MethodMeta = MethodMeta {
     interface: "JSHandle",
     method: "dispose",
@@ -142,7 +149,7 @@ pub(crate) static HANDLE_DISPOSE_META: MethodMeta = MethodMeta {
 };
 
 /// Playwright's `SerializedArgument` after neo-sdk ran Playwright's client and server steps on
-/// it (`js-handle.ts` `serializeArgument`): `value` is in the page's `UtilityScript` format and
+/// it (`neo-sdk/src/js-handle.ts` `serializeArgument`): `value` is in the page's format and
 /// stays opaque here; `handles` are the guids its `{h: i}` references name, in order.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -197,8 +204,8 @@ pub(crate) enum EvalResult {
 /// Playwright's `__create__` record for the object, `{type, guid, initializer: {preview}}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct CreatedHandle {
-    /// `ElementHandle` for a node, `JSHandle` otherwise (`jsHandleDispatcher.ts`:
-    /// `jsHandle.asElement() ? 'ElementHandle' : 'JSHandle'`).
+    /// `ElementHandle` for a node, `JSHandle` otherwise.
+    /// Playwright: `server/dispatchers/jsHandleDispatcher.ts` `JSHandleDispatcher.constructor`: `jsHandle.asElement() ? 'ElementHandle' : 'JSHandle'`
     #[serde(rename = "type")]
     pub(crate) kind: HandleType,
     pub(crate) guid: String,
@@ -277,7 +284,7 @@ pub(crate) fn route_handle(
             decode::<NoParams>(params, &HANDLE_DISPOSE_META)
                 .map(|NoParams {}| EvalCall::Dispose { guid }),
         ),
-        // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection.dispatch`: `throw new Error(`Mismatching dispatcher: "${dispatcher._type}" does not implement "${method}"`);`
+        // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection.dispatch`: `Mismatching dispatcher: "${dispatcher._type}" does not implement "${method}"`
         _ => {
             return (
                 None,
@@ -476,8 +483,9 @@ pub(crate) async fn serve(
     }))
 }
 
-/// Playwright's `evaluateExpression` (`server/javascript.ts`) in `frame`'s main world, with an
-/// optional handle receiver (`JSHandle.evaluateExpression` passes `this` first).
+/// Playwright's evaluation in `frame`'s main world, with an optional handle receiver
+/// (`JSHandle.evaluateExpression` passes `this` first).
+/// Playwright: `server/javascript.ts` `evaluateExpression`
 ///
 /// # Errors
 ///
@@ -598,7 +606,7 @@ async fn installed(
                     && matches!(receiver.remote, Remote::Object(_))
                     && receiver.document != installed.document
                 {
-                    // Playwright: `server/frames.ts` `FrameManager.contextDestroyed`: `context.contextDestroyed('Execution context was destroyed, most likely because of a navigation');`
+                    // Playwright: `server/frames.ts` `Frame.contextDestroyed`: `context.contextDestroyed('Execution context was destroyed, most likely because of a navigation');`
                     return Err(PlaywrightError::error(
                         "Execution context was destroyed, most likely because of a navigation",
                     )
@@ -631,7 +639,7 @@ fn resolve_args(guids: &[String], handles: &Handles) -> Result<Vec<Arc<HandleEnt
         .enumerate()
         .map(|(index, guid)| {
             handles.entry(guid).ok_or_else(|| {
-                // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection._tChannelImplFromWire`: `throw new ValidationError(`${path}: no object with guid ${guid}`);`
+                // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection._tChannelImplFromWire`: `${path}: no object with guid ${guid}`
                 PlaywrightError::error(format!("arg.handles[{index}]: no object with guid {guid}"))
                     .into()
             })
@@ -694,10 +702,10 @@ async fn answer(
     }
 }
 
-/// Playwright's `crExecutionContext.ts` `createHandle`: a node is an `ElementHandle`, whose
-/// preview is `JSHandle@` plus the utility world's `previewNode` (Playwright fills it in after
-/// creation, `_initializePreview`; Neo before replying); anything else a `JSHandle` with
-/// `renderPreview`'s text.
+/// A by-handle result as a new handle: a node is an `ElementHandle`, whose preview is `JSHandle@`
+/// plus the utility world's `previewNode` (Playwright fills it in after creation; Neo before
+/// replying); anything else a `JSHandle` with `renderPreview`'s text.
+/// Playwright: `server/chromium/crExecutionContext.ts` `createHandle`
 async fn create_handle(
     tab: &FrameTab,
     frame: &Arc<FrameContext>,
@@ -783,7 +791,7 @@ fn render_preview(object: &RemoteObject) -> String {
     } else {
         object.description.clone()
     };
-    // Playwright: `server/javascript.ts` `JSHandle.constructor`: `this._preview = this._objectId ? preview || `JSHandle@${this._objectType}` : String(value);`
+    // Playwright: `server/javascript.ts` `JSHandle.constructor`: `JSHandle@${this._objectType}`
     preview.filter(|preview| !preview.is_empty()).unwrap_or_else(|| {
         format!(
             "JSHandle@{}",

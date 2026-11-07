@@ -629,6 +629,102 @@ var typedArrayKindToConstructor = {
 };
 var constructorToTypedArrayKind = new Map(Object.entries(typedArrayKindToConstructor).map(([k, v]) => [v, k]));
 
+// src/runtime-bridge.ts
+function get(guid, field) {
+  return JSON.parse(__neo_runtime.get(JSON.stringify({ guid, field })));
+}
+function matchesURL(url, matcher) {
+  return JSON.parse(__neo_runtime.get(JSON.stringify({ field: "matchesURL", url, matcher })));
+}
+function call(message) {
+  return __neo_runtime.call(message);
+}
+
+// src/connection.ts
+var SCRIPT_FILE = "run.js";
+var AGENT_FRAME = /^ {4}at .* \(<input>:(\d+):(\d+)\)$/;
+
+class Connection {
+  #nextId = 1;
+  #lineOffset;
+  _objects = new Map;
+  constructor(lineOffset) {
+    this.#lineOffset = lineOffset;
+  }
+  async send(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendPage(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendContext(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendRequest(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendResponse(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendNeo(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendEval(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendHandle(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout) ?? {};
+  }
+  async#send(apiName, guid, method, params, timeout) {
+    if (typeof timeout !== "number")
+      throw new Error(`timeout: expected float, got ${timeout === null ? "object" : typeof timeout}`);
+    const metadata = {
+      location: captureLocation(this.#lineOffset),
+      timeout
+    };
+    const message = { id: this.#nextId++, guid, method, params, metadata };
+    const reply = JSON.parse(await call(JSON.stringify(message)));
+    if (reply.error)
+      throw rebuildError(apiName, reply.error.error, reply.log);
+    return reply.result;
+  }
+}
+function captureLocation(lineOffset) {
+  const stackTraceLimit = Error.stackTraceLimit;
+  Error.stackTraceLimit = 50;
+  const stack = new Error().stack ?? "";
+  Error.stackTraceLimit = stackTraceLimit;
+  return agentLocation(stack, lineOffset);
+}
+function agentLocation(stack, lineOffset) {
+  for (const frame of stack.split(`
+`)) {
+    const match = AGENT_FRAME.exec(frame);
+    if (match)
+      return {
+        file: SCRIPT_FILE,
+        line: Number(match[1]) - lineOffset,
+        column: Number(match[2])
+      };
+  }
+  return { file: SCRIPT_FILE };
+}
+function rebuildError(apiName, error, log) {
+  const rebuilt = parseError(error);
+  rebuilt.log = log || [];
+  rebuilt.message = `${apiName}: ${rebuilt.message}${formatCallLog(log)}`;
+  return rebuilt;
+}
+function formatCallLog(log) {
+  if (!log?.some((line) => !!line))
+    return "";
+  return `
+Call log:
+${log.join(`
+`)}
+`;
+}
+
 // src/js-handle.ts
 class HandleRef {
   guid;
@@ -696,14 +792,15 @@ function handleFrom(connection, created) {
   return new JSHandle(connection, created.guid, created.initializer);
 }
 function evaluateParams(apiName, pageFunction, arg, options) {
-  if (options?.exposeFunctions)
+  if (options?.exposeFunctions) {
     throw new Error(`${apiName}: Neo does not support exposeFunctions yet`);
+  }
   const isFunction = typeof pageFunction === "function";
   let expression;
   try {
     expression = normalizeEvaluationExpression(String(pageFunction), isFunction);
   } catch (error) {
-    throw new Error(`${apiName}: ${error.message}`);
+    throw rebuildError(apiName, { name: "Error", message: error.message }, undefined);
   }
   return { expression, isFunction, arg: serializeArgument(arg) };
 }
@@ -1061,17 +1158,6 @@ function serializeUrlMatch(apiName, url) {
 }
 function isRegExp3(value) {
   return value instanceof RegExp || Object.prototype.toString.call(value) === "[object RegExp]";
-}
-
-// src/runtime-bridge.ts
-function get(guid, field) {
-  return JSON.parse(__neo_runtime.get(JSON.stringify({ guid, field })));
-}
-function matchesURL(url, matcher) {
-  return JSON.parse(__neo_runtime.get(JSON.stringify({ field: "matchesURL", url, matcher })));
-}
-function call(message) {
-  return __neo_runtime.call(message);
 }
 
 // src/network.ts
@@ -2229,91 +2315,6 @@ class BrowserContext {
     this.#pages.set(created.guid, page);
     return page;
   }
-}
-
-// src/connection.ts
-var SCRIPT_FILE = "run.js";
-var AGENT_FRAME = /^ {4}at .* \(<input>:(\d+):(\d+)\)$/;
-
-class Connection {
-  #nextId = 1;
-  #lineOffset;
-  _objects = new Map;
-  constructor(lineOffset) {
-    this.#lineOffset = lineOffset;
-  }
-  async send(apiName, guid, method, params, timeout) {
-    return await this.#send(apiName, guid, method, params, timeout);
-  }
-  async sendPage(apiName, guid, method, params, timeout) {
-    return await this.#send(apiName, guid, method, params, timeout);
-  }
-  async sendContext(apiName, guid, method, params, timeout) {
-    return await this.#send(apiName, guid, method, params, timeout);
-  }
-  async sendRequest(apiName, guid, method, params, timeout) {
-    return await this.#send(apiName, guid, method, params, timeout);
-  }
-  async sendResponse(apiName, guid, method, params, timeout) {
-    return await this.#send(apiName, guid, method, params, timeout);
-  }
-  async sendNeo(apiName, guid, method, params, timeout) {
-    return await this.#send(apiName, guid, method, params, timeout);
-  }
-  async sendEval(apiName, guid, method, params, timeout) {
-    return await this.#send(apiName, guid, method, params, timeout);
-  }
-  async sendHandle(apiName, guid, method, params, timeout) {
-    return await this.#send(apiName, guid, method, params, timeout) ?? {};
-  }
-  async#send(apiName, guid, method, params, timeout) {
-    if (typeof timeout !== "number")
-      throw new Error(`timeout: expected float, got ${timeout === null ? "object" : typeof timeout}`);
-    const metadata = {
-      location: captureLocation(this.#lineOffset),
-      timeout
-    };
-    const message = { id: this.#nextId++, guid, method, params, metadata };
-    const reply = JSON.parse(await call(JSON.stringify(message)));
-    if (reply.error)
-      throw rebuildError(apiName, reply.error.error, reply.log);
-    return reply.result;
-  }
-}
-function captureLocation(lineOffset) {
-  const stackTraceLimit = Error.stackTraceLimit;
-  Error.stackTraceLimit = 50;
-  const stack = new Error().stack ?? "";
-  Error.stackTraceLimit = stackTraceLimit;
-  return agentLocation(stack, lineOffset);
-}
-function agentLocation(stack, lineOffset) {
-  for (const frame of stack.split(`
-`)) {
-    const match = AGENT_FRAME.exec(frame);
-    if (match)
-      return {
-        file: SCRIPT_FILE,
-        line: Number(match[1]) - lineOffset,
-        column: Number(match[2])
-      };
-  }
-  return { file: SCRIPT_FILE };
-}
-function rebuildError(apiName, error, log) {
-  const rebuilt = parseError(error);
-  rebuilt.log = log || [];
-  rebuilt.message = `${apiName}: ${rebuilt.message}${formatCallLog(log)}`;
-  return rebuilt;
-}
-function formatCallLog(log) {
-  if (!log?.some((line) => !!line))
-    return "";
-  return `
-Call log:
-${log.join(`
-`)}
-`;
 }
 
 // src/index.ts

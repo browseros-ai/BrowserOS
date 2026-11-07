@@ -1,10 +1,12 @@
 /**
+ * Playwright: `server/javascript.ts` `evaluateExpression`
+ *
  * The bundle entry `dist/evaluate.js`: the calling convention of every page evaluation,
- * Playwright's `(utilityScript, ...args) => utilityScript.evaluate(...args)` (`server/javascript.ts`
- * `evaluateExpression`). neo-runtime's `main_world.rs` passes it as `Runtime.callFunctionOn`'s
- * `functionDeclaration` on the frame's `UtilityScript`, with the arguments Playwright's
- * `crExecutionContext.ts` `evaluateWithArguments` sends: the utility script, `isFunction`,
- * `returnByValue`, the expression, the argument count, the serialized arguments, then the handles.
+ * `(utilityScript, ...args) => utilityScript.evaluate(...args)`. neo-runtime's `main_world.rs`
+ * passes it as `Runtime.callFunctionOn`'s `functionDeclaration` on the frame's `UtilityScript`,
+ * with the arguments Playwright's Chromium execution context sends: the utility script,
+ * `isFunction`, `returnByValue`, the expression, the argument count, the serialized arguments,
+ * then the handles.
  *
  * The agent's code travels only as the `expression` argument's value; this function is the only
  * thing CDP compiles from Neo for it.

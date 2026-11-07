@@ -1,7 +1,8 @@
 /**
- * The bundle entry `dist/utility.js`: `() => UtilityScript`, Playwright's main-world helper
- * (`server/javascript.ts` `ExecutionContext._utilityScript`: `new (module.exports.UtilityScript())
- * (globalThis, isUnderTest)`), built from the vendored, unchanged `utilityScript.ts`.
+ * Playwright: `server/javascript.ts` `ExecutionContext._utilityScript`
+ *
+ * The bundle entry `dist/utility.js`: `() => UtilityScript`, Playwright's main-world helper,
+ * built from the vendored, unchanged `vendor/playwright/injected/src/utilityScript.ts`.
  *
  * neo-runtime's `main_world.rs` calls it with `Runtime.callFunctionOn` on the frame's main-world
  * `document` (resolved by `DOM.resolveNode` without an execution context), once per document and
