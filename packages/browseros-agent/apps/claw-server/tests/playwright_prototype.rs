@@ -6,6 +6,7 @@
 
 use std::{
     env, fs,
+    io::{self, Write},
     net::TcpListener as StdListener,
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
@@ -167,7 +168,7 @@ async fn rpc(
 fn parse_reply(id: u64, status: reqwest::StatusCode, body: &str) -> anyhow::Result<Value> {
     anyhow::ensure!(status.is_success(), "MCP: HTTP {status}: {body}");
     let reply = if body.trim_start().starts_with('{') {
-        serde_json::from_str(&body)?
+        serde_json::from_str(body)?
     } else {
         body.lines()
             .filter_map(|line| line.strip_prefix("data:"))
@@ -251,10 +252,10 @@ async fn wait_skill(root: &Path, needle: &str) -> anyhow::Result<String> {
     let path = root.join("home/.agents/skills/browseros-neo/SKILL.md");
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if let Ok(content) = fs::read_to_string(&path) {
-            if content.contains(needle) {
-                return Ok(content);
-            }
+        if let Ok(content) = fs::read_to_string(&path)
+            && content.contains(needle)
+        {
+            return Ok(content);
         }
         anyhow::ensure!(
             Instant::now() < deadline,
@@ -277,7 +278,10 @@ async fn stop_server(client: &Client, base: &str, process: &mut Process) -> anyh
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::Result<()> {
     let Some(binary) = env::var_os("NEO_E2E_BROWSER") else {
-        eprintln!("SKIP: set NEO_E2E_BROWSER to a real BrowserOS neo executable");
+        writeln!(
+            io::stderr(),
+            "SKIP: set NEO_E2E_BROWSER to a real BrowserOS neo executable"
+        )?;
         return Ok(());
     };
     let root = TempDir::new()?;
@@ -296,14 +300,13 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
     let deadline = Instant::now() + Duration::from_secs(15);
     let port_file = profile.join("DevToolsActivePort");
     let cdp_port = loop {
-        if let Ok(content) = fs::read_to_string(&port_file) {
-            if let Some(port) = content
+        if let Ok(content) = fs::read_to_string(&port_file)
+            && let Some(port) = content
                 .lines()
                 .next()
                 .and_then(|line| line.parse::<u16>().ok())
-            {
-                break port;
-            }
+        {
+            break port;
         }
         anyhow::ensure!(
             browser.child.try_wait()?.is_none() && Instant::now() < deadline,
@@ -334,7 +337,10 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
     stop_server(&client, &base, &mut legacy).await?;
     let database = root.path().join("state/browserclaw.sqlite");
     let database_before = fs::read(&database)?;
-    eprintln!("PASS flag off: legacy tool catalog, run and skill");
+    writeln!(
+        io::stderr(),
+        "PASS flag off: legacy tool catalog, run and skill"
+    )?;
 
     let (mut prototype, base) = start_server(root.path(), cdp_port, "1", &client).await?;
     assert_eq!(
@@ -410,7 +416,10 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("no page id: {first}"))?;
     assert_eq!(report["pages"][0]["created"], true);
-    eprintln!("PASS real BrowserOS MCP: goto, click, textContent -> clicked; page {page}");
+    writeln!(
+        io::stderr(),
+        "PASS real BrowserOS MCP: goto, click, textContent -> clicked; page {page}"
+    )?;
 
     let second = run(&client, &base, 5, json!({"page":page,"code":"return {text: await page.locator('p').textContent(), url: page.url()};"})).await?;
     assert_eq!(
@@ -420,7 +429,10 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
     assert_eq!(second["structuredContent"]["value"]["url"], fixture_url);
     assert_eq!(second["structuredContent"]["pages"][0]["id"], page);
     assert_eq!(second["structuredContent"]["pages"][0]["created"], false);
-    eprintln!("PASS second independent MCP request continues on the same page id");
+    writeln!(
+        io::stderr(),
+        "PASS second independent MCP request continues on the same page id"
+    )?;
 
     let timeout = run(
         &client,
@@ -435,10 +447,16 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
     );
     assert_eq!(timeout["isError"], true);
     check_cancellation(&client, &base, page).await?;
-    eprintln!("PASS legacy MCP cancellation prevents the script's delayed click");
+    writeln!(
+        io::stderr(),
+        "PASS legacy MCP cancellation prevents the script's delayed click"
+    )?;
     let slow = run(&client, &base, 8, json!({"page":page,"timeout":12000,"code":format!("await page.goto({}); return await page.locator('p').textContent();", serde_json::to_string(&format!("{fixture_url}slow"))?)})).await?;
     assert_eq!(slow["structuredContent"]["value"], "slow page", "{slow}");
-    eprintln!("PASS six-second navigation respects the twelve-second run budget");
+    writeln!(
+        io::stderr(),
+        "PASS six-second navigation respects the twelve-second run budget"
+    )?;
     let error = run(&client, &base, 7, json!({"page":page,"code":"console.log('before error'); throw new Error('expected failure');"})).await?;
     assert_eq!(error["structuredContent"]["status"], "error");
     assert!(
@@ -460,16 +478,17 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
         database_before,
         "prototype touched the legacy database"
     );
-    eprintln!(
+    writeln!(
+        io::stderr(),
         "PASS timeouts/errors; legacy database unchanged, legacy HTTP effects absent, Playwright skill installed"
-    );
+    )?;
     stop_server(&client, &base, &mut prototype).await?;
     fixture.abort();
 
     let (mut restored, base) = start_server(root.path(), cdp_port, "0", &client).await?;
     wait_skill(root.path(), "Core loop: snapshot -> act -> verify").await?;
     stop_server(&client, &base, &mut restored).await?;
-    eprintln!("PASS flag off restores the legacy skill");
+    writeln!(io::stderr(), "PASS flag off restores the legacy skill")?;
     let _ = cdp.send("Browser.close", json!({}), None).await;
     cdp.disconnect().await;
     browser.wait().await?;

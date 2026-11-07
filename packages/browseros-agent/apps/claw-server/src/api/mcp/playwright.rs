@@ -20,7 +20,7 @@ use rmcp::{
     },
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tokio::{sync::OnceCell, time::Instant};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -193,10 +193,10 @@ impl PlaywrightService {
         }
         // The runtime receives the remaining budget after connect/create. Keep the public
         // timeout message in terms of the whole request's budget.
-        if outcome.status == RunStatus::Timeout {
-            if let Some(error) = &mut outcome.error {
-                error.message = format!("Timeout {timeout_ms}ms exceeded.");
-            }
+        if outcome.status == RunStatus::Timeout
+            && let Some(error) = &mut outcome.error
+        {
+            error.message = format!("Timeout {timeout_ms}ms exceeded.");
         }
         report(outcome)
     }
@@ -248,12 +248,12 @@ fn close_late_page(
     creation: tokio::task::JoinHandle<Result<Value, browseros_cdp::CdpError>>,
 ) {
     tasks.spawn(async move {
-        if let Ok(Ok(reply)) = creation.await {
-            if let Some(id) = page_id(&reply) {
-                let _ = cdp
-                    .send("Target.closeTarget", json!({"targetId":id}), None)
-                    .await;
-            }
+        if let Ok(Ok(reply)) = creation.await
+            && let Some(id) = page_id(&reply)
+        {
+            let _ = cdp
+                .send("Target.closeTarget", json!({"targetId":id}), None)
+                .await;
         }
     });
 }
@@ -282,14 +282,16 @@ fn stopped(status: &str, timeout: u64) -> Value {
 }
 
 fn tool() -> Tool {
-    Tool::new("run", INSTRUCTIONS, Arc::new(serde_json::from_value(json!({
-        "type":"object", "additionalProperties":false, "required":["code"],
-        "properties": {
+    Tool::new("run", INSTRUCTIONS, Arc::new(Map::from_iter([
+        ("type".into(), json!("object")),
+        ("additionalProperties".into(), json!(false)),
+        ("required".into(), json!(["code"])),
+        ("properties".into(), json!({
             "code":{"type":"string","description":"Playwright async function body; page and context are provided. Return a value."},
             "page":{"type":"string","minLength":1,"description":"A pages[].id from an earlier result. Omit to open a background tab."},
             "timeout":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT,"default":DEFAULT_TIMEOUT,"description":"Whole-run timeout in milliseconds."}
-        }
-    })).expect("static input schema is an object")))
+        })),
+    ])))
     .with_title("Run Playwright code")
     .with_annotations(ToolAnnotations::new().read_only(false).destructive(true).open_world(true))
 }
