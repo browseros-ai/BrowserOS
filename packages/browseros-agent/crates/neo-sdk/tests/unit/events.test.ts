@@ -77,6 +77,8 @@ function run(): {
     page: 'page@T',
     mainFrame: 'frame@T',
     context: 'context@default',
+    request: 'request-context@default',
+    playwright: 'playwright@default',
     url: 'https://run.test/',
     testIdAttribute: 'data-testid',
     lineOffset: 0,

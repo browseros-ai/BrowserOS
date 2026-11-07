@@ -33,6 +33,8 @@ use crate::network::HopId;
 use crate::page::{FrameTab, PageSession, Session, TabInputs};
 use crate::page_events::{self, Kept, MAX_KEPT_ARGS, MAX_KEPT_CHOOSERS};
 use crate::progress::PlaywrightError;
+use crate::request_contexts::RequestContexts;
+use crate::routes::{self, ContextRoutes};
 use crate::run::{PageId, RunPage};
 use crate::screenshot::TabScreenshots;
 use crate::session_state::{self, Overrides, Permissions};
@@ -66,12 +68,16 @@ struct Inner {
     discovering: OnceLock<()>,
     /// Holds every call of the run until discovery has its baseline ([`ALL_PAGES`]).
     discovery_enabling: Mutex<Option<Enabling>>,
+    /// The run's context routes, which every tab it attaches pauses requests for.
+    routes: Arc<ContextRoutes>,
     /// Set once this run started watching downloads.
     watching_downloads: OnceLock<()>,
     /// Holds every call of the run until the download reports are on ([`ALL_PAGES`]).
     downloads_enabling: Mutex<Option<Enabling>>,
     /// The downloads the run's `download` events handed out.
     downloads: Downloads,
+    /// The run's API request contexts (`request_contexts.rs`).
+    request_contexts: RequestContexts,
     /// The run's session-scoped state, which each session it attaches gets (`session_state.rs`).
     overrides: Arc<Overrides>,
     /// The `Runtime`'s permission grants, and this run's id among them.
@@ -205,9 +211,11 @@ impl Tabs {
             switches,
             discovering: OnceLock::new(),
             discovery_enabling: Mutex::new(None),
+            routes: Arc::default(),
             watching_downloads: OnceLock::new(),
             downloads_enabling: Mutex::new(None),
             downloads: Downloads::default(),
+            request_contexts: RequestContexts::default(),
             overrides: Arc::default(),
             permissions,
             run_id: session_state::next_run(),
@@ -237,6 +245,11 @@ impl Tabs {
 
     pub(crate) fn events(&self) -> &EventHub {
         &self.0.events
+    }
+
+    /// The run's context routes (`context.route`).
+    pub(crate) fn routes(&self) -> &Arc<ContextRoutes> {
+        &self.0.routes
     }
 
     /// Runs `task` on the run's tracker, so `Dispatcher::finish` waits for it.
@@ -296,6 +309,8 @@ impl Tabs {
                 None => (frame, FrameScope::Main),
             }
         } else if let Some((target, _)) = dialogs::parse(guid) {
+            (target, FrameScope::Main)
+        } else if let Some((target, _)) = routes::parse(guid) {
             (target, FrameScope::Main)
         } else {
             // A hop is one of the main frame's navigation requests (network.rs).
@@ -372,6 +387,12 @@ impl Tabs {
                 {
                     page_events::enable(self, entry, needs);
                 }
+                // A context route pauses this tab's requests from its first call on.
+                if session.routes.wants_interception() == Some(true)
+                    && let Err(error) = session.intercept(true).await
+                {
+                    return Err(cdp_error(&error));
+                }
                 Ok(session)
             })
             .await?;
@@ -416,6 +437,7 @@ impl Tabs {
             entry.closed.clone(),
             self.0.events.clone(),
             entry.discovered.load(Ordering::Acquire),
+            Arc::clone(&self.0.routes),
         ));
         // The run's session state reaches this tab's sessions before the call that attached
         // each goes on: the tab's own now, each out-of-process frame's as it attaches.
@@ -723,6 +745,11 @@ impl Tabs {
     }
 
     /// The downloads the run's `download` events handed out.
+    /// The run's API request contexts.
+    pub(crate) fn request_contexts(&self) -> &RequestContexts {
+        &self.0.request_contexts
+    }
+
     pub(crate) fn downloads(&self) -> &Downloads {
         &self.0.downloads
     }

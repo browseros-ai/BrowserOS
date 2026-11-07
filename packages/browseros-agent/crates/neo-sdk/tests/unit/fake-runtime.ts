@@ -199,6 +199,8 @@ export function start(tabs: Tab[] = [RUN_TAB]) {
     page: pageGuid(runTab),
     mainFrame: frameGuid(runTab),
     context: 'context@default',
+    request: 'request-context@default',
+    playwright: 'playwright@default',
     url: runTab.url,
     testIdAttribute: 'data-testid',
     lineOffset: 2,

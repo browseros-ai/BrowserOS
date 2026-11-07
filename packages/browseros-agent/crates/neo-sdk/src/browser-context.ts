@@ -32,6 +32,7 @@ import type {
   SerializedError,
   SetNetworkCookie,
 } from '@browseros/neo-runtime-spec/serve'
+import { APIRequestContext } from './api-request'
 import {
   BindingCall,
   type BindingCallback,
@@ -40,15 +41,29 @@ import {
 import type { ApiName, Connection } from './connection'
 import { ConsoleMessage, type ConsoleMessagePayload } from './console-message'
 import { Dialog } from './dialog'
+import { DisposableStub } from './disposable'
 import { Download } from './download'
 import { parseSerializedError, targetClosedError } from './errors'
-import { ChannelOwner, type EventPipe, type EventTable } from './events'
+import {
+  ChannelOwner,
+  type EventPipe,
+  type EventTable,
+  reportUncaught,
+} from './events'
 import { type Headers, headersObjectToArray, validateHeaders } from './headers'
 import { Disposable, evaluationScript, type InitScript } from './init-script'
 import { assertEvaluateOptions, type EvaluateOptions } from './js-handle'
 import { type Created, requestFromRecord, responseFromRecord } from './network'
 import { Page } from './page'
 import { BROWSER_CONTEXT_CLOSE_KEYS, pickParams } from './protocol'
+import {
+  Route,
+  RouteHandler,
+  type RouteHandlerCallback,
+  type RouteURLMatch,
+  type UnrouteBehavior,
+  urlMatchesEqual,
+} from './route'
 import { type CreatedPage, get } from './runtime-bridge'
 import { TimeoutSettings } from './timeout-settings'
 import { Waiter, type WaitForEventOptions, wrapApiCall } from './waiter'
@@ -91,7 +106,7 @@ const STATE_FILE_PATH =
   'storageState: this run has no artifact directory, so Neo cannot read a state file; the host sets one per run'
 
 /** Neo: why `clearCookies()` without a filter throws. */
-const CLEAR_ALL_COOKIES_REFUSED =
+export const CLEAR_ALL_COOKIES_REFUSED =
   "Neo does not clear every cookie of the user's browser, which would sign the user out of every site: pass clearCookies a name, domain or path"
 
 /** Playwright's `clearCookies` options (`client/network.ts` `ClearNetworkCookieOptions`). */
@@ -103,7 +118,9 @@ export interface ClearCookieOptions {
 
 /** Playwright: `client/network.ts` `toClearCookiesParams`: `name: isString(options.name) ? options.name : undefined,`
  * The filters Playwright's client sends: a string or a `RegExp` each, anything else dropped. */
-function clearCookieFilter(options: ClearCookieOptions): ClearCookieOptions {
+export function clearCookieFilter(
+  options: ClearCookieOptions,
+): ClearCookieOptions {
   const kept = (value: unknown) =>
     typeof value === 'string' || value instanceof RegExp ? value : undefined
   return {
@@ -114,7 +131,7 @@ function clearCookieFilter(options: ClearCookieOptions): ClearCookieOptions {
 }
 
 /** Playwright: `server/network.ts` `hasClearCookiesFilter`: `return options.name !== undefined || options.domain !== undefined || options.path !== undefined;` */
-function hasClearCookieFilter(filter: ClearCookieOptions): boolean {
+export function hasClearCookieFilter(filter: ClearCookieOptions): boolean {
   return (
     filter.name !== undefined ||
     filter.domain !== undefined ||
@@ -123,7 +140,7 @@ function hasClearCookieFilter(filter: ClearCookieOptions): boolean {
 }
 
 /** Playwright: `server/network.ts` `cookieMatchesClearFilter`: `return matches('name', options.name) && matches('domain', options.domain) && matches('path', options.path);` */
-function clearCookieMatches(
+export function clearCookieMatches(
   cookie: NetworkCookie,
   filter: ClearCookieOptions,
 ): boolean {
@@ -155,6 +172,12 @@ export class BrowserContext extends ChannelOwner {
   /** `context@default`, the guid Rust serves this context's getters and calls on. */
   readonly #guid: string
   readonly #connection: Connection
+  /** Playwright's `BrowserContext._routes`: the context's route handlers, newest first. */
+  _routes: RouteHandler[] = []
+  /** Whether the client listens to the context's `route` channel event (`_subscribeChannelEvent`). */
+  #routeListening = false
+  /** The last pattern update sent, which the next one waits for. */
+  #patternsSent: Promise<void> = Promise.resolve()
   /**
    * By guid, every page the run was handed: the run page, every `pages()` record, every
    * `newPage` result. An entry stays for the whole run, so a tab that one read leaves out and
@@ -166,6 +189,13 @@ export class BrowserContext extends ChannelOwner {
   /** Every dialog the run's events handed out, by guid: one object per dialog. */
   readonly #dialogs = new Map<string, Dialog>()
   readonly _timeoutSettings = new TimeoutSettings()
+  /**
+   * Playwright: `client/browserContext.ts` `BrowserContext.request`
+   *
+   * The context's API request context, with the context's cookies and its timeout settings
+   * (`api-request.ts`).
+   */
+  readonly request: APIRequestContext
   /** The context's exposed callbacks, by name (Playwright's `BrowserContext._bindings`). */
   readonly _bindings = new Map<string, BindingCallback>()
   /** The run's event pipe, which this context's pages share. */
@@ -174,8 +204,20 @@ export class BrowserContext extends ChannelOwner {
   #closingStatus: 'none' | 'closing' | 'closed' = 'none'
   #closeReason: string | undefined
 
-  constructor(guid: string, connection: Connection, pipe: EventPipe) {
+  /** `requestGuid`: the context's API request context, `RunInit.request` in a run. */
+  constructor(
+    guid: string,
+    connection: Connection,
+    pipe: EventPipe,
+    requestGuid = 'request-context@default',
+  ) {
     super(guid, pipe, CONTEXT_EVENTS)
+    this.request = new APIRequestContext(
+      requestGuid,
+      connection,
+      this._timeoutSettings,
+      false,
+    )
     this.#guid = guid
     this.#connection = connection
     this._pipe = pipe
@@ -258,6 +300,120 @@ export class BrowserContext extends ChannelOwner {
       this.#onRequestFinished(params as RequestEndEventParams)
     else if (method === 'requestFailed')
       this.#onRequestFailed(params as RequestEndEventParams)
+    else if (method === 'route') this.#onRouteEvent(params as RouteEventParams)
+  }
+
+  /** The context's `route` event: a request only a context route names. */
+  #onRouteEvent({ route, request, page }: RouteEventParams): void {
+    const pageObject = this.#pageFor(page.guid)
+    const routed = new Route(
+      route.guid,
+      requestFromRecord(this.#connection, request, pageObject),
+      this.#connection,
+      this._timeoutSettings,
+    )
+    this._onRoute(routed, pageObject).catch(reportUncaught)
+  }
+
+  /** Playwright's `BrowserContext._onRoute`: the context's handlers, newest first, then the
+   * network, with what their `fallback()` calls changed. */
+  async _onRoute(route: Route, page?: Page): Promise<void> {
+    const routeHandlers = this._routes
+    for (const routeHandler of routeHandlers.slice()) {
+      // A page or context whose close ran stalls its requests at once, as Playwright's does.
+      if (page?._isClosedLocally() || this.isClosed()) return
+      if (!routeHandler.matches(route.request().url())) continue
+      const index = this._routes.indexOf(routeHandler)
+      if (index === -1) continue
+      if (routeHandler.willExpire()) this._routes.splice(index, 1)
+      const handled = await routeHandler.handle(route)
+      // unrouteAll() replaces _routes and updates the patterns after waiting for handlers.
+      if (routeHandlers === this._routes && !this._routes.length)
+        this.#updateInterceptionPatterns().catch(() => {})
+      if (handled) return
+    }
+    // A closed page, or an unrouteAll() that did not wait, makes this throw: silenced.
+    await route._innerContinue(true).catch(() => {})
+  }
+
+  /** Playwright's `BrowserContext.route`: for every page of the run's context. */
+  async route(
+    url: RouteURLMatch,
+    handler: RouteHandlerCallback,
+    options: { times?: number } = {},
+  ): Promise<DisposableStub> {
+    // A bad glob throws here, prefixed; the call's own errors come back prefixed already.
+    const routeHandler = await wrapApiCall(
+      'browserContext.route',
+      async () => new RouteHandler(url, handler, options.times),
+    )
+    this._routes.unshift(routeHandler)
+    await this.#updateInterceptionPatterns()
+    return new DisposableStub(() => this.unroute(url, handler))
+  }
+
+  /** Playwright's `BrowserContext.unrouteAll`. */
+  async unrouteAll(options?: { behavior?: UnrouteBehavior }): Promise<void> {
+    await this.#unrouteInternal(this._routes, [], options?.behavior)
+  }
+
+  /** Playwright's `BrowserContext.unroute`. */
+  async unroute(
+    url: RouteURLMatch,
+    handler?: RouteHandlerCallback,
+  ): Promise<void> {
+    const removed: RouteHandler[] = []
+    const remaining: RouteHandler[] = []
+    for (const route of this._routes) {
+      if (
+        urlMatchesEqual(route.url, url) &&
+        (!handler || route.handler === handler)
+      )
+        removed.push(route)
+      else remaining.push(route)
+    }
+    await this.#unrouteInternal(removed, remaining, 'default')
+  }
+
+  async #unrouteInternal(
+    removed: RouteHandler[],
+    remaining: RouteHandler[],
+    behavior?: UnrouteBehavior,
+  ): Promise<void> {
+    this._routes = remaining
+    if (behavior && behavior !== 'default')
+      await Promise.all(removed.map((handler) => handler.stop(behavior)))
+    await this.#updateInterceptionPatterns()
+  }
+
+  /** Playwright's `BrowserContext._updateInterceptionPatterns`; the client listens to the
+   * context's `route` event while it has routes. The updates queue, as the page's do. */
+  async #updateInterceptionPatterns(): Promise<void> {
+    const update = this.#patternsSent.then(() =>
+      this.#sendInterceptionPatterns(),
+    )
+    this.#patternsSent = update.catch(() => {})
+    await update
+  }
+
+  async #sendInterceptionPatterns(): Promise<void> {
+    const patterns = RouteHandler.prepareInterceptionPatterns(this._routes)
+    const listening = patterns.length > 0
+    if (listening && !this.#routeListening) {
+      this.#routeListening = true
+      this._subscribeChannelEvent('route', true)
+    }
+    await this.#connection.sendContext(
+      'browserContext.route',
+      this._guid,
+      'setNetworkInterceptionPatterns',
+      { patterns },
+      0,
+    )
+    if (!this._routes.length && this.#routeListening) {
+      this.#routeListening = false
+      this._subscribeChannelEvent('route', false)
+    }
   }
 
   /** A call of the context's binding: on its page's frame, answered by the context's callback. */
@@ -837,6 +993,13 @@ interface PageErrorEventParams {
 
 /** Playwright's `request` event params (`spec/playwright/browserContext.yml`), with Neo's full
  * record in place of a `__create__` reference. */
+/** The context's `route` event params from Rust (`routes.rs`), naming the request's page. */
+interface RouteEventParams {
+  route: { guid: string }
+  request: Created<RequestInitializer>
+  page: { guid: string }
+}
+
 interface RequestEventParams {
   request: Created<RequestInitializer>
   page: PageChannel

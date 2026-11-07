@@ -40,7 +40,7 @@ use crate::run::PageId;
 use crate::tabs::{self, PageEntry, Tabs};
 
 /// Playwright: `server/network.ts` `kMaxCookieExpiresDateInSeconds`: `export const kMaxCookieExpiresDateInSeconds = 253402300799;`
-const MAX_COOKIE_EXPIRES_SECONDS: f64 = 253_402_300_799.0;
+pub(crate) const MAX_COOKIE_EXPIRES_SECONDS: f64 = 253_402_300_799.0;
 
 /// Playwright: `server/network.ts` `rewriteCookies`: `assert(c.url || (c.domain && c.path), 'Cookie should have a url or a domain/path pair');`
 const COOKIE_NEEDS_URL_OR_DOMAIN: &str = "Cookie should have a url or a domain/path pair";
@@ -56,7 +56,7 @@ const COOKIE_EXPIRES: &str = "Cookie should have a valid expires, only -1 or a p
 
 /// Neo: what `cookies(urls)` and `addCookies` throw for a URL that does not parse; Playwright's
 /// server throws Node's `TypeError: Invalid URL`, which its client sees as an Error.
-const INVALID_URL: &str = "Invalid URL";
+pub(crate) const INVALID_URL: &str = "Invalid URL";
 
 /// CDP's `Network.Cookie`, as `Storage.getCookies` reports it.
 #[derive(Deserialize)]
@@ -148,7 +148,7 @@ fn network_cookie(cookie: CdpCookie) -> NetworkCookie {
 }
 
 /// Playwright: `server/network.ts` `cookieMatchesURL`: `if (cookie.secure && url.protocol !== 'https:' && !isLocalHostname(url.hostname))`
-fn matches_url(cookie: &NetworkCookie, url: &Url) -> bool {
+pub(crate) fn matches_url(cookie: &NetworkCookie, url: &Url) -> bool {
     let host = url.host_str().unwrap_or_default();
     domain_matches(host, &cookie.domain)
         && path_matches(url.path(), &cookie.path)
@@ -156,7 +156,7 @@ fn matches_url(cookie: &NetworkCookie, url: &Url) -> bool {
 }
 
 /// Playwright: `server/network.ts` `domainMatches`: `return ('.' + hostname).endsWith(cookieDomain);`
-fn domain_matches(hostname: &str, cookie_domain: &str) -> bool {
+pub(crate) fn domain_matches(hostname: &str, cookie_domain: &str) -> bool {
     hostname == cookie_domain
         || (cookie_domain.starts_with('.') && format!(".{hostname}").ends_with(cookie_domain))
 }
@@ -214,7 +214,9 @@ pub(crate) async fn add_cookies(
     clippy::float_cmp,
     reason = "Playwright compares expires to 0 and -1 exactly"
 )]
-fn rewrite_cookie(mut cookie: SetNetworkCookie) -> Result<SetNetworkCookie, PlaywrightError> {
+pub(crate) fn rewrite_cookie(
+    mut cookie: SetNetworkCookie,
+) -> Result<SetNetworkCookie, PlaywrightError> {
     let has_domain_and_path = cookie
         .domain
         .as_ref()
@@ -451,6 +453,12 @@ fn targets_of(page: &PageSession) -> Vec<Target<'_>> {
 }
 
 impl Overrides {
+    /// The context's extra HTTP headers (`context.setExtraHTTPHeaders`), which its API request
+    /// context sends too (`request_contexts.rs`).
+    pub(crate) async fn context_headers(&self) -> Vec<NameValue> {
+        self.0.lock().await.headers.clone()
+    }
+
     /// Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager.setExtraHTTPHeaders`: `if (!this._extraHTTPHeaders.length && !extraHTTPHeaders.length)`
     ///
     /// The context's extra headers, on every session of every tab the run has, each with its

@@ -28,9 +28,30 @@ interfaces:
     - setHTTPCredentials
     - grantPermissions
     - clearPermissions
+    # The run's context routes (`context.route`): which URLs pause for its handlers (`routes.rs`).
+    - setNetworkInterceptionPatterns
   # A BrowserContext initializer requires these three. Neo never sends one (a run receives its
   # context at start) and serves no command on them; listing them keeps the type constructible.
-  APIRequestContext: []
+  # API request contexts (neo-runtime `request_contexts.rs`, `api_request.rs`): `page.request`,
+  # `context.request` and `playwright.request.newContext()`. Neo sends their requests from Rust
+  # as Playwright's server does from Node; a response's body stays there by `fetchUid` until it
+  # is disposed. `clearCookies` is the SDK's, as `BrowserContext`'s: it matches its filter,
+  # `RegExp` included, and expires the matches by `addCookies`.
+  APIRequestContext:
+    - fetch
+    - fetchResponseBody
+    - fetchLog
+    - disposeAPIResponse
+    - dispose
+    - storageState
+    - cookies
+    - addCookies
+  # The top-level object's `request.newContext()`: the one Playwright command Neo serves on it.
+  Playwright:
+    - newRequest
+  Electron: []
+  Android: []
+  BrowserType: []
   Debugger: []
   Tracing: []
   Page:
@@ -74,6 +95,13 @@ interfaces:
     - registerLocatorHandler
     - resolveLocatorHandlerNoReply
     - unregisterLocatorHandler
+    # The page's routes (`page.route`): which URLs pause for its handlers (`routes.rs`).
+    - setNetworkInterceptionPatterns
+  # A paused request the run's `route` event handed out (`routes.rs`): one answer each.
+  Route:
+    - abort
+    - continue
+    - fulfill
   # A JavaScript dialog the run's `dialog` event handed out.
   Dialog:
     - accept

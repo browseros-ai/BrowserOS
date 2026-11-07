@@ -21,6 +21,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { gzipSync } from 'node:zlib'
 import {
   browserBinary,
   buildNeoRun,
@@ -28,6 +29,7 @@ import {
   connectCdp,
   errorCategory,
   launchBrowser,
+  request as playwrightRequest,
   playwrightVersion,
   runCleanups,
   runInNeo,
@@ -93,8 +95,10 @@ sessionStorage.setItem('loads', String(Number(sessionStorage.getItem('loads')) +
 }
 
 /**
- * The fixture server: `PAGES`, JSON at `*.json`, a PNG at `/net/img.png`, a 302 at
- * `/net/redirect` (to `/net/data.json`), a 204 at `/net/204`, a 404 at `/net/404`, a connection
+ * The fixture server: `PAGES`, JSON at `*.json`, a PNG at `/net/img.png`, a 302 (or `&status=`) at
+ * `/net/redirect` (to `?to=`, else `/net/data.json`), `Set-Cookie` of each `?cookie=` at
+ * `/net/set-cookie`, the request's `Cookie` as JSON at `/net/cookies`, gzipped JSON at `/net/gzip`, `/net/headers` echoing the request's method,
+ * headers and body as JSON, a 204 at `/net/204`, a 404 at `/net/404`, a connection
  * dropped before any response at `/net/hangup`, `/net/slow?ms=N` after N ms (readable from
  * any origin), an event stream
  * that never ends at `/net/sse`, `/net/echo` answering a POST's body, and `/net/hold?id=X`, which
@@ -142,8 +146,44 @@ export async function serveNetwork(cleanups) {
       return
     }
     if (pathname === '/net/redirect') {
-      response.writeHead(302, { location: '/net/data.json' })
+      const params = new URLSearchParams(query)
+      const to = params.get('to') ?? '/net/data.json'
+      response.writeHead(Number(params.get('status') ?? 302), { location: to })
       response.end()
+      return
+    }
+    if (pathname === '/net/set-cookie') {
+      response.setHeader(
+        'set-cookie',
+        new URLSearchParams(query).getAll('cookie'),
+      )
+      response.end('set')
+      return
+    }
+    if (pathname === '/net/cookies') {
+      response.setHeader('content-type', 'application/json')
+      response.end(JSON.stringify({ cookie: request.headers.cookie ?? null }))
+      return
+    }
+    if (pathname === '/net/gzip') {
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        'content-encoding': 'gzip',
+      })
+      response.end(gzipSync(JSON.stringify({ zipped: true })))
+      return
+    }
+    if (pathname === '/net/headers') {
+      let body = ''
+      for await (const chunk of request) body += chunk
+      response.setHeader('content-type', 'application/json')
+      response.end(
+        JSON.stringify({
+          method: request.method,
+          headers: request.headers,
+          body,
+        }),
+      )
       return
     }
     if (pathname === '/net/204') {
@@ -246,17 +286,20 @@ ${c.source}`
   }
 }
 
-/** Runs the script as Playwright does, with `page` and `context` in scope, then disconnects. */
+/** Runs the script as Playwright does, with `page`, `context` and `playwright` (its `request`)
+ * in scope, then disconnects. */
 async function viaPlaywright(port, source) {
   const playwright = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
   try {
     const [context] = playwright.contexts()
     const page = await context.newPage()
     const AsyncFunction = (async () => {}).constructor
-    const result = await new AsyncFunction('page', 'context', source)(
-      page,
-      context,
-    ).then(
+    const result = await new AsyncFunction(
+      'page',
+      'context',
+      'playwright',
+      source,
+    )(page, context, { request: playwrightRequest }).then(
       (value) => ({ value }),
       (error) => ({ error: { name: error.name, message: error.message } }),
     )

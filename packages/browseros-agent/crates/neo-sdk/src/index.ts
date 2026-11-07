@@ -1,3 +1,4 @@
+import { APIRequest } from './api-request'
 import { BrowserContext } from './browser-context'
 import { Connection } from './connection'
 import { EventPipe, onUncaughtListenerError } from './events'
@@ -17,6 +18,11 @@ export interface RunInit {
   mainFrame: string
   /** `context@default`: the run's context, which lists its tabs and opens new ones. */
   context: string
+  /** `request-context@default`: the context's API request context (`context.request`). */
+  request: string
+  /** `playwright@default`: the script's `playwright` object, whose `request.newContext()`
+   * makes API request contexts of their own. */
+  playwright: string
   /** The page's URL when the run started. */
   url: string
   /** `world::TEST_ID_ATTRIBUTE`: the attribute `getByTestId` names, the one the page's
@@ -36,6 +42,7 @@ export interface RunInit {
 export function createRun(init: RunInit): {
   page: Page
   context: BrowserContext
+  playwright: { request: APIRequest }
   uncaught: Promise<never>
 } {
   setTestIdAttribute(init.testIdAttribute)
@@ -43,7 +50,14 @@ export function createRun(init: RunInit): {
   const pipe = new EventPipe()
   onReplyEvents((until) => pipe.deliver(until))
   onUncaughtListenerError((error) => pipe.report(error))
-  const context = new BrowserContext(init.context, connection, pipe)
+  const context = new BrowserContext(
+    init.context,
+    connection,
+    pipe,
+    init.request,
+  )
   const page = context._addRunPage(init.page, init.mainFrame, init.url)
-  return { page, context, uncaught: pipe.uncaught }
+  // Playwright's top-level object, of which Neo serves `request` (`api-request.ts`).
+  const playwright = { request: new APIRequest(init.playwright, connection) }
+  return { page, context, playwright, uncaught: pipe.uncaught }
 }

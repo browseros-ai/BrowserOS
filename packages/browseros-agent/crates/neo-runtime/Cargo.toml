@@ -12,8 +12,10 @@ description = "Runs an agent's Playwright-style script in a QuickJS realm agains
 [dependencies]
 base64.workspace = true
 browseros-cdp.workspace = true
+flate2.workspace = true
 futures-util.workspace = true
 neo-runtime-spec.workspace = true
+reqwest.workspace = true
 rquickjs.workspace = true
 serde.workspace = true
 serde_json.workspace = true

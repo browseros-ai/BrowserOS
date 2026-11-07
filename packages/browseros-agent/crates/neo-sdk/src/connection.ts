@@ -21,14 +21,17 @@
  */
 
 import type {
+  APIRequestContextCommands,
   ArtifactCommands,
   BrowserContextCommands,
   DialogCommands,
   FrameCommands,
   Metadata,
   PageCommands,
+  PlaywrightCommands,
   RequestCommands,
   ResponseCommands,
+  RouteCommands,
 } from '@browseros/neo-runtime-spec/serve'
 import type { BindingCommands } from './binding-call'
 import {
@@ -40,7 +43,11 @@ import {
 } from './errors'
 import type { InitScriptCommands } from './init-script'
 import type { EvalFrameCommands, JSHandleCommands } from './js-handle'
-import type { NeoFrameCommands } from './neo-commands'
+import type {
+  NeoFrameCommands,
+  NeoRouteFetchParams,
+  NeoRouteFetchResult,
+} from './neo-commands'
 import type { Request, Response } from './network'
 import { abort, call } from './runtime-bridge'
 import type { SignalLike, TimeoutOptions } from './timeout-settings'
@@ -248,6 +255,34 @@ export type ApiName =
   | 'download.failure'
   | 'download.cancel'
   | 'download.delete'
+  // Routes (B3, `route.ts`).
+  | 'page.route'
+  | 'page.unroute'
+  | 'page.unrouteAll'
+  | 'browserContext.route'
+  | 'browserContext.unroute'
+  | 'browserContext.unrouteAll'
+  | 'route.abort'
+  | 'route.continue'
+  | 'route.fulfill'
+  | 'route.fallback'
+  | 'route.fetch'
+  // API request contexts (C2, `api-request.ts`).
+  | 'apiRequest.newContext'
+  | 'apiRequestContext.fetch'
+  | 'apiRequestContext.get'
+  | 'apiRequestContext.post'
+  | 'apiRequestContext.put'
+  | 'apiRequestContext.patch'
+  | 'apiRequestContext.delete'
+  | 'apiRequestContext.head'
+  | 'apiRequestContext.dispose'
+  | 'apiRequestContext.storageState'
+  | 'apiRequestContext.cookies'
+  | 'apiRequestContext.addCookies'
+  | 'apiRequestContext.clearCookies'
+  | 'apiResponse.body'
+  | 'apiResponse.dispose'
   // Element reads and states (B1).
   | 'locator.isEnabled'
   | 'page.isEnabled'
@@ -413,6 +448,73 @@ export class Connection {
       params,
       timeout,
     )) as ResponseCommands[M]['result']
+  }
+
+  /** {@link Connection.send} for a `Route` command, to a `route@…` guid. */
+  async sendRoute<M extends keyof RouteCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: RouteCommands[M]['params'],
+    timeout: number | TimeoutOptions,
+  ): Promise<Resolved<RouteCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<RouteCommands[M]['result']>
+  }
+
+  /** `route.fetch`'s `neo:fetch`, to a `route@…` guid (neo-runtime `routes.rs`). */
+  async sendRouteFetch(
+    apiName: ApiName,
+    guid: string,
+    params: NeoRouteFetchParams,
+    timeout: number | TimeoutOptions,
+  ): Promise<NeoRouteFetchResult> {
+    return (await this.#send(
+      apiName,
+      guid,
+      'neo:fetch',
+      params,
+      timeout,
+    )) as NeoRouteFetchResult
+  }
+
+  /** {@link Connection.send} for an `APIRequestContext` command, to a `request-context@…` guid. */
+  async sendRequestContext<M extends keyof APIRequestContextCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: APIRequestContextCommands[M]['params'],
+    timeout: number | TimeoutOptions,
+  ): Promise<Resolved<APIRequestContextCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<APIRequestContextCommands[M]['result']>
+  }
+
+  /** {@link Connection.send} for a `Playwright` command, to `playwright@default`. */
+  async sendPlaywright<M extends keyof PlaywrightCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: PlaywrightCommands[M]['params'],
+    timeout: number | TimeoutOptions,
+  ): Promise<Resolved<PlaywrightCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<PlaywrightCommands[M]['result']>
   }
 
   /** {@link Connection.send} for a `Dialog` command, to a `dialog@…` guid. */
