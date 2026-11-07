@@ -91,7 +91,13 @@ export class Cdp {
         this.#pending.delete(id)
         reject(new Error(`${method}: CDP reply timed out`))
       }, this.#timeoutMs)
-      this.#pending.set(id, { method, resolve: resolveReply, reject, timer })
+      this.#pending.set(id, {
+        method,
+        sessionId,
+        resolve: resolveReply,
+        reject,
+        timer,
+      })
       try {
         this.#socket.send(JSON.stringify({ id, method, params, sessionId }))
       } catch (error) {
@@ -158,6 +164,18 @@ export class Cdp {
       }
       if (typeof message.method !== 'string')
         throw new Error('CDP event has no method')
+      if (message.method === 'Target.detachedFromTarget') {
+        // Chromium may drop a command's reply when its flattened target disappears. The
+        // session owns that deadline; unrelated targets keep their connection and requests.
+        for (const [id, pending] of this.#pending) {
+          if (pending.sessionId !== message.params?.sessionId) continue
+          clearTimeout(pending.timer)
+          this.#pending.delete(id)
+          const error = new Error(`${pending.method}: CDP session closed`)
+          error.code = 'CDP_SESSION_CLOSED'
+          pending.reject(error)
+        }
+      }
       for (const listener of this.#listeners) listener(message)
     } catch (error) {
       this.#disconnect(error)
@@ -181,6 +199,7 @@ function installObserver(binding, stateName) {
   let sequence = 0
   let eventCount = 0
   let overflow = false
+  let checkpointed = false
 
   function path(node) {
     const parts = []
@@ -436,6 +455,37 @@ function installObserver(binding, stateName) {
   }
   for (const type of eventTypes)
     globalThis.addEventListener(type, receive, true)
+  // Chromium skips pagehide when it replaces an initial empty document. beforeunload
+  // still runs. Its microtask sees changes from later handlers before navigation commits.
+  // Only an unchanged empty document can use this checkpoint as its final DOM evidence.
+  new MutationObserver(() => {
+    if (checkpointed) {
+      checkpointed = false
+      emit({ kind: 'checkpoint-invalidated' })
+    }
+  }).observe(document, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    characterData: true,
+  })
+  globalThis.addEventListener(
+    'beforeunload',
+    () => {
+      queueMicrotask(() => {
+        emit({
+          kind: 'checkpoint',
+          dom: snapshot(),
+          empty:
+            location.href === 'about:blank' &&
+            document.documentElement?.outerHTML ===
+              '<html><head></head><body></body></html>',
+        })
+        checkpointed = true
+      })
+    },
+    true,
+  )
   globalThis.addEventListener(
     'pagehide',
     (event) => {
@@ -796,7 +846,11 @@ export class OwnedBrowser {
       }
     } else if (method === 'Target.detachedFromTarget') {
       const detached = this.#sessions.get(params.sessionId)
-      if (detached) detached.closed = true
+      if (detached) {
+        detached.closed = true
+        for (const context of detached.contexts.values())
+          this.#retireContext(detached, context.id)
+      }
     } else if (method === 'Target.targetDestroyed') {
       const page = this.#pages.get(params.targetId)
       if (page) {
@@ -841,17 +895,26 @@ export class OwnedBrowser {
     } else if (method === 'Runtime.executionContextsCleared' && session) {
       for (const context of session.contexts.values())
         this.#retireContext(session, context.id)
+    } else if (method === 'DOM.shadowRootPushed' && session?.page) {
+      this.#shadowCoverage(params.root, session.page)
+    } else if (method === 'DOM.documentUpdated' && session?.page) {
+      session.domCoverage = false
+      this.#task(
+        this.#watchDom(session),
+        session.page,
+        'document-shadow-coverage',
+      )
+    } else if (method === 'DOM.childNodeInserted' && session?.page) {
+      this.#shadowCoverage(params.node, session.page)
     } else if (
       method === 'Runtime.bindingCalled' &&
       session &&
       params.name === BINDING
     ) {
       this.#binding(session, params)
-    } else if (
-      (method === 'Inspector.detached' ||
-        method === 'Inspector.targetCrashed') &&
-      session?.page
-    ) {
+    } else if (method === 'Inspector.detached' && session) {
+      session.inspectorDetached = true
+    } else if (method === 'Inspector.targetCrashed' && session?.page) {
       this.#gap('target-observer-detached', session.page)
     }
   }
@@ -859,9 +922,8 @@ export class OwnedBrowser {
   #retireContext(session, contextId) {
     const context = session.contexts.get(contextId)
     if (!context) return
-    if (!context.document?.terminal)
-      this.#gap('document-lost-before-terminal', session.page)
     context.destroyed = true
+    if (context.document) context.document.destroyed = true
   }
 
   #binding(session, params) {
@@ -879,8 +941,7 @@ export class OwnedBrowser {
       let frame = this.#frames.get(context.frameId)
       if (!frame) frame = this.#frame(context.frameId, undefined, session.page)
       const previous = frame.documents.at(-1)
-      if (previous && !previous.terminal)
-        this.#gap('document-replaced-before-terminal', session.page)
+      if (previous) previous.replaced = true
       context.document = {
         frame,
         epoch: frame.documents.length,
@@ -917,6 +978,10 @@ export class OwnedBrowser {
       document.dom = payload.dom
       if (payload.dom?.incomplete)
         this.#gap(payload.dom.incomplete, session.page)
+    } else if (payload.kind === 'checkpoint') {
+      document.checkpoint = payload
+    } else if (payload.kind === 'checkpoint-invalidated') {
+      document.checkpoint = undefined
     } else if (payload.kind === 'gap') this.#gap(payload.reason, session.page)
     else if (payload.kind === 'resume') {
       document.terminal = false
@@ -932,28 +997,32 @@ export class OwnedBrowser {
 
   async #observe(session) {
     try {
-      await this.#cdp.send(
-        'Target.setAutoAttach',
-        {
-          autoAttach: true,
-          waitForDebuggerOnStart: true,
-          flatten: true,
-          filter: FRAME_FILTER,
-        },
-        session.id,
-      )
-      await this.#cdp.send('Runtime.enable', {}, session.id)
-      await this.#cdp.send('Page.enable', {}, session.id)
-      await this.#cdp.send(
-        'Runtime.addBinding',
-        { name: BINDING, executionContextName: WORLD },
-        session.id,
-      )
-      const { frameTree } = await this.#cdp.send(
-        'Page.getFrameTree',
-        {},
-        session.id,
-      )
+      // These independent domain commands must all finish before injecting the listener.
+      // Pipelining them avoids spending several round trips on a page another client can
+      // close immediately. The target pause protects script execution, not target closure.
+      const [, , , , { frameTree }] = await Promise.all([
+        this.#cdp.send(
+          'Target.setAutoAttach',
+          {
+            autoAttach: true,
+            waitForDebuggerOnStart: true,
+            flatten: true,
+            filter: FRAME_FILTER,
+          },
+          session.id,
+        ),
+        this.#cdp.send('Runtime.enable', {}, session.id),
+        this.#cdp.send('Page.enable', {}, session.id),
+        this.#cdp.send(
+          'Runtime.addBinding',
+          {
+            name: BINDING,
+            executionContextName: WORLD,
+          },
+          session.id,
+        ),
+        this.#cdp.send('Page.getFrameTree', {}, session.id),
+      ])
       const frames = []
       const visit = (tree) => {
         this.#frame(tree.frame.id, tree.frame.parentId, session.page)
@@ -970,7 +1039,20 @@ export class OwnedBrowser {
         },
         session.id,
       )
+      // Requesting the tree enables DOM's incremental shadow-root notifications. A window
+      // capture listener cannot see non-composed events inside author shadow roots, even
+      // when DOMSnapshot can read their final nodes. Report that coverage limit explicitly.
+      await this.#watchDom(session)
       for (const frame of frames) {
+        if (
+          [...session.contexts.values()].some(
+            (context) =>
+              context.frameId === frame.id &&
+              !context.destroyed &&
+              context.document,
+          )
+        )
+          continue
         const { executionContextId } = await this.#cdp.send(
           'Page.createIsolatedWorld',
           {
@@ -992,10 +1074,31 @@ export class OwnedBrowser {
         if (result.exceptionDetails)
           throw new Error('Observer installation threw in its isolated world')
       }
+    } catch (error) {
+      // A fully observed document can close while redundant initial-world setup is in
+      // flight. Missing terminal evidence still fails below; closure alone is not a gap.
+      if (
+        !session.closed ||
+        !session.contexts.size ||
+        [...session.contexts.values()].some(
+          (context) => !context.document?.terminal,
+        )
+      )
+        throw error
     } finally {
       // Release even a failed installation. The gap remains evidence, while the test can
       // finish and report it instead of hanging behind our debugger pause.
-      await this.#cdp.send('Runtime.runIfWaitingForDebugger', {}, session.id)
+      if (!session.closed) {
+        try {
+          await this.#cdp.send(
+            'Runtime.runIfWaitingForDebugger',
+            {},
+            session.id,
+          )
+        } catch (error) {
+          if (!session.closed) throw error
+        }
+      }
     }
   }
 
@@ -1071,11 +1174,38 @@ export class OwnedBrowser {
       if (sequence !== document.sequence)
         this.#gap('input-after-document-fence', page)
     for (const page of this.#pages.values()) {
-      if (!page.closed && !page.session) this.#gap('page-not-attached', page)
+      if (!page.session) this.#gap('page-not-attached', page)
+      if (
+        !page.closed &&
+        (page.session?.closed || page.session?.inspectorDetached)
+      )
+        this.#gap('target-observer-detached', page)
+      if (!page.frames.length) this.#gap('page-has-no-observed-document', page)
       for (const frame of page.frames) {
         if (!frame.documents.length)
           this.#gap('frame-has-no-observed-document', page)
         for (const document of frame.documents) {
+          const retired =
+            document.destroyed ||
+            document.replaced ||
+            page.closed ||
+            frame.detached
+          const checkpoint = document.checkpoint
+          if (
+            retired &&
+            !document.terminal &&
+            document.epoch === 0 &&
+            document.url === 'about:blank' &&
+            checkpoint?.empty &&
+            checkpoint.sequence === document.sequence
+          ) {
+            document.terminal = true
+            document.dom = checkpoint.dom
+          }
+          // Context-cleared and binding events can cross on navigation. Decide loss only
+          // after the read fence, when a late terminal binding has had a chance to arrive.
+          if (retired && !document.terminal)
+            this.#gap('document-lost-before-terminal', page)
           if (!document.dom) this.#gap('document-dom-missing', page)
           if ((page.closed || frame.detached) && !document.terminal)
             this.#gap('closed-document-without-terminal', page)
@@ -1115,6 +1245,8 @@ export class OwnedBrowser {
           strings[nodes.shadowRootType.value[entry]],
         ]),
       )
+      for (const shadowRootType of shadowTypes.values())
+        this.#shadowCoverage({ shadowRootType }, page)
       const checked = new Set(nodes.inputChecked?.index ?? [])
       const selected = new Set(nodes.optionSelected?.index ?? [])
       const contentDocuments = new Map(
@@ -1160,6 +1292,40 @@ export class OwnedBrowser {
         tree: roots,
       }
     })
+  }
+
+  #shadowCoverage(node, page) {
+    const pending = [node]
+    while (pending.length) {
+      const current = pending.pop()
+      if (!current) continue
+      if (
+        current.shadowRootType === 'closed' ||
+        current.shadowRootType === 'open'
+      )
+        this.#gap(
+          `${current.shadowRootType}-shadow-root-input-not-observed`,
+          page,
+        )
+      pending.push(...(current.children ?? []), ...(current.shadowRoots ?? []))
+      if (current.contentDocument) pending.push(current.contentDocument)
+    }
+  }
+
+  async #watchDom(session) {
+    try {
+      const { root } = await this.#cdp.send(
+        'DOM.getDocument',
+        { depth: -1, pierce: true },
+        session.id,
+      )
+      this.#shadowCoverage(root, session.page)
+      session.domCoverage = true
+    } catch (error) {
+      if (!session.closed) throw error
+      if (!session.domCoverage)
+        this.#gap('closed-document-shadow-coverage-missing', session.page)
+    }
   }
 
   #view() {

@@ -1,9 +1,12 @@
-/** Offline transport checks. These prove CDP ownership and failure behavior, not browser DOM semantics. */
+/** Offline transport checks and an opt-in owned-browser lifecycle gate. */
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
-import { Cdp, connect } from './browser.mjs'
+import { Cdp, connect, OwnedBrowser } from './browser.mjs'
 
 /** Implements just enough RFC 6455 for the real built-in WebSocket client, without packages. */
 async function fakeCdp(receive) {
@@ -252,3 +255,174 @@ test('malformed protocol traffic rejects pending requests instead of losing evid
   await assert.rejects(cdp.send('Pending.onMalformed'), SyntaxError)
   await assert.rejects(cdp.send('After.malformed'), SyntaxError)
 })
+
+test('target detachment cancels only that session and preserves the original event envelope', async (t) => {
+  let peer
+  const requests = []
+  const server = await fakeCdp((message, client) => {
+    peer = client
+    requests.push(message)
+    if (requests.length === 2) {
+      peer.send({
+        method: 'Target.detachedFromTarget',
+        params: { sessionId: 'gone' },
+      })
+      peer.send({ id: requests[1].id, result: { alive: true } })
+    }
+  })
+  t.after(() => server.close())
+  const cdp = await connect(server.endpoint)
+  t.after(() => cdp.close())
+  const events = []
+  cdp.subscribe((event) => events.push(event))
+  const gone = assert.rejects(
+    cdp.send('Pending.resume', {}, 'gone'),
+    (error) => error.code === 'CDP_SESSION_CLOSED',
+  )
+  assert.deepEqual(await cdp.send('Other.target', {}, 'alive'), { alive: true })
+  await gone
+  assert.deepEqual(events, [
+    { method: 'Target.detachedFromTarget', params: { sessionId: 'gone' } },
+  ])
+})
+
+// Opt in with an explicit executable. Ordinary Node/Bun checks stay offline and never
+// acquire a user's browser. The live test retains raw evidence and process cleanup proof.
+const liveTest = process.env.NEO_OBSERVER_BROWSER ? test : test.skip
+liveTest(
+  'owned browser records empty-document navigation, closure, and explicit observation gaps',
+  {
+    timeout: 90_000,
+  },
+  async () => {
+    const root = process.env.NEO_OBSERVER_ARTIFACT_DIR ?? tmpdir()
+    await mkdir(root, { recursive: true })
+    const outputDir = await mkdtemp(join(root, 'observer-lifecycle-'))
+    const server = createServer((_, response) =>
+      response.end('<html><head></head><body></body></html>'),
+    )
+    await new Promise((ready) => server.listen(0, '127.0.0.1', ready))
+    let browser
+    let actor
+    try {
+      browser = await OwnedBrowser.start({
+        executable: process.env.NEO_OBSERVER_BROWSER,
+        outputDir,
+      })
+      actor = await connect(browser.endpoint)
+      const { sessionId } = await actor.send('Target.attachToTarget', {
+        targetId: browser.pageId,
+        flatten: true,
+      })
+      await actor.send('Page.enable', {}, sessionId)
+      const url = `http://127.0.0.1:${server.address().port}/`
+      const loaded = new Promise((ready, reject) => {
+        const timeout = setTimeout(() => {
+          unsubscribe()
+          reject(new Error('Navigation did not load'))
+        }, 10_000)
+        const unsubscribe = actor.subscribe((event) => {
+          if (
+            event.sessionId === sessionId &&
+            event.method === 'Page.loadEventFired'
+          ) {
+            clearTimeout(timeout)
+            unsubscribe()
+            ready()
+          }
+        })
+      })
+      await actor.send('Page.navigate', { url }, sessionId)
+      await loaded
+      assert.equal(
+        (
+          await actor.send(
+            'Runtime.evaluate',
+            { expression: 'location.href', returnByValue: true },
+            sessionId,
+          )
+        ).result.value,
+        url,
+      )
+      const navigation = await browser.snapshot()
+      await writeFile(
+        join(outputDir, 'navigation.json'),
+        JSON.stringify(navigation, null, 2),
+      )
+      assert.equal(
+        navigation.status,
+        'complete',
+        JSON.stringify(navigation.incomplete),
+      )
+      assert.equal(navigation.pages[0].documents[0].retired, true)
+      assert.ok(navigation.pages[0].documents[0].dom)
+
+      const { targetId } = await actor.send('Target.createTarget', {
+        url: 'about:blank',
+      })
+      const { sessionId: nextSession } = await actor.send(
+        'Target.attachToTarget',
+        { targetId, flatten: true },
+      )
+      await actor.send('Runtime.enable', {}, nextSession)
+      await actor.send(
+        'Runtime.evaluate',
+        { expression: 'location.href', returnByValue: true },
+        nextSession,
+      )
+      assert.equal((await browser.snapshot()).status, 'complete')
+      await actor.send('Target.closeTarget', { targetId })
+      const closed = await browser.snapshot()
+      await writeFile(
+        join(outputDir, 'closed.json'),
+        JSON.stringify(closed, null, 2),
+      )
+      assert.equal(closed.status, 'complete', JSON.stringify(closed.incomplete))
+
+      await actor.send(
+        'Runtime.evaluate',
+        {
+          expression: `const host = document.body.appendChild(document.createElement('div'));
+        const root = host.attachShadow({mode:'closed'});
+        const input = root.appendChild(document.createElement('input'));
+        input.dispatchEvent(new InputEvent('input', {bubbles:true, composed:false, data:'hidden'}));`,
+        },
+        sessionId,
+      )
+      const shadow = await browser.snapshot()
+      await writeFile(
+        join(outputDir, 'shadow.json'),
+        JSON.stringify(shadow, null, 2),
+      )
+      assert.ok(
+        shadow.incomplete.some(
+          (gap) => gap.reason === 'closed-shadow-root-input-not-observed',
+        ),
+      )
+      assert.ok(!shadow.events.some((event) => event.data === 'hidden'))
+
+      await actor.send('Page.crash', {}, sessionId).catch(() => {})
+      await actor.send('Target.closeTarget', { targetId: browser.pageId })
+      const lost = await browser.snapshot()
+      await writeFile(
+        join(outputDir, 'lost.json'),
+        JSON.stringify(lost, null, 2),
+      )
+      assert.ok(
+        lost.incomplete.some(
+          (gap) => gap.reason === 'closed-document-without-terminal',
+        ),
+      )
+    } finally {
+      await actor?.close()
+      await browser?.close()
+      await new Promise((closed) => server.close(closed))
+    }
+    const cleanup = JSON.parse(
+      await readFile(join(outputDir, 'cleanup.json'), 'utf8'),
+    )
+    assert.equal(cleanup.status, 'complete')
+    assert.deepEqual(cleanup.survivors, [])
+    console.log(`Observer lifecycle evidence saved in ${outputDir}`)
+  },
+)
