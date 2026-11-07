@@ -327,7 +327,7 @@ impl Dispatcher {
         } else {
             target
                 .as_ref()
-                .map_or_else(CancellationToken::new, |page| page.closed.clone())
+                .map_or_else(CancellationToken::new, |(page, _)| page.closed.clone())
         };
         let progress = Progress::new(
             Arc::clone(&entry),
@@ -514,17 +514,17 @@ struct CallReply {
 /// `serve` retains its original contract: the `PageSession` always belongs to this call's tab.
 async fn serve_call(
     tabs: Tabs,
-    target: Option<Arc<PageEntry>>,
+    target: Option<(Arc<PageEntry>, FrameScope)>,
     route: ObjectCall,
     progress: Progress,
     reply: CallReply,
 ) {
     let result = match (route, target) {
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
-        (ObjectCall::Page(call), Some(page)) => {
+        (ObjectCall::Page(call), Some((page, _))) => {
             tab_calls::page(&tabs, &page, call, &progress).await
         }
-        (ObjectCall::Frame(route), Some(page)) => {
+        (ObjectCall::Frame(route), Some((page, scope))) => {
             let session = match page.attached_session() {
                 Some(session) => Ok(session),
                 None => match progress.race(tabs.session(&page)).await {
@@ -535,10 +535,7 @@ async fn serve_call(
             match session {
                 Ok(page) => {
                     serve(
-                        FrameTab {
-                            page,
-                            scope: FrameScope::Main,
-                        },
+                        FrameTab { page, scope },
                         route,
                         progress,
                         reply.entry,
@@ -572,6 +569,18 @@ async fn serve(
     // Navigation and page reads need the real page's navigation/read seams, which the
     // forms tests' fake does not implement, so they are answered here; every other route goes
     // through `serve_route`.
+    if let Some(error) = unsupported_child_call(&page.scope, &route) {
+        finish_reply(
+            Err(error.into()),
+            CallReply {
+                entry,
+                trace,
+                id,
+                reply,
+            },
+        );
+        return;
+    }
     let result = match route {
         Route::FrameGoto(options) => navigate::goto(&page, &options, &progress)
             .await
@@ -638,6 +647,21 @@ async fn serve(
             reply,
         },
     );
+}
+
+fn unsupported_child_call(scope: &FrameScope, route: &Route) -> Option<PlaywrightError> {
+    if matches!(scope, FrameScope::Main) {
+        return None;
+    }
+    let method = match route {
+        Route::FrameGoto(_) => "goto",
+        Route::FrameWaitForUrl(_) => "waitForURL",
+        Route::FrameWaitForLoadState(_) => "waitForLoadState",
+        _ => return None,
+    };
+    Some(PlaywrightError::error(format!(
+        "Neo does not serve {method} on child frames yet"
+    )))
 }
 
 fn finish_reply(result: Result<Option<Value>, CallError>, target: CallReply) {
@@ -864,7 +888,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let page = tabs.resolve(&format!("frame@{PAGE}")).unwrap();
+        let (page, scope) = tabs.resolve(&format!("frame@{PAGE}")).unwrap();
         let entry = Arc::new(CallEntry::new(CallStart {
             call_id: 1,
             guid: format!("frame@{PAGE}"),
@@ -885,7 +909,7 @@ mod tests {
         // interleaving can let the call start early and hide the regression.
         let call = serve_call(
             tabs,
-            Some(page),
+            Some((page, scope)),
             route,
             progress,
             CallReply {
@@ -939,6 +963,7 @@ mod tests {
         for target in [PAGE, "other"] {
             tabs.resolve(&format!("page@{target}"))
                 .unwrap()
+                .0
                 .request_close();
         }
         browser.page.lock().unwrap().tab_info_delay = Some(Duration::from_secs(3));

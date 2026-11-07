@@ -194,12 +194,11 @@ impl Deref for FrameTab {
 }
 
 impl FrameTab {
-    pub(crate) fn context(
-        &self,
-    ) -> impl Future<Output = Result<Arc<FrameContext>, PageError>> + Send {
-        future::ready(match &self.scope {
+    pub(crate) async fn context(&self) -> Result<Arc<FrameContext>, PageError> {
+        match &self.scope {
             FrameScope::Main => Ok(self.frames.main()),
-        })
+            FrameScope::Frame(id) => self.frames.context(id, None).await,
+        }
     }
 
     pub(crate) fn group(&self, frame: &Arc<FrameContext>, purpose: &str) -> GroupGuard {

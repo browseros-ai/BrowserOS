@@ -223,3 +223,167 @@ async fn oopifs_and_nested_mixed_hosts_use_every_existing_operation() {
     assert_eq!(edited["result"]["value"], "alice@example.com!");
     assert_eq!(untouched, json!(["seed", "seed", "seed"]));
 }
+
+async fn child_driver(tab: &Tab, target: &Value) -> SessionId {
+    let attached = tab
+        .cdp
+        .send(
+            "Target.attachToTarget",
+            json!({"targetId":target["targetId"],"flatten":true}),
+            None,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("attach child driver: {error}"));
+    SessionId::from(
+        attached["sessionId"]
+            .as_str()
+            .unwrap_or_else(|| panic!("attach answered {attached}")),
+    )
+}
+
+async fn evaluate_child(tab: &Tab, driver: &SessionId, expression: &str) -> Value {
+    let result = tab
+        .cdp
+        .send(
+            "Runtime.evaluate",
+            json!({"expression":expression,"returnByValue":true}),
+            Some(driver),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("child evaluation: {error}"));
+    assert!(result.get("exceptionDetails").is_none(), "{result}");
+    result["result"]["value"].clone()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_an_oopif_interrupts_its_pending_call_and_refinds_the_replacement() {
+    let Some(tab) = open().await else { return };
+    let target = cross_target(&tab).await;
+    let driver = child_driver(&tab, &target).await;
+    let utility = tab.cdp.send("Page.createIsolatedWorld",json!({"frameId":target["targetId"],"worldName":"__neo_utility_world__","grantUniveralAccess":true}),Some(&driver)).await.expect("utility world");
+    // Hold the real checkElementStates call inside its animation-frame promise. The shared
+    // DOM marker proves the call has started before removal; no CPU or renderer is frozen.
+    tab.cdp.send("Runtime.evaluate",json!({"contextId":utility["executionContextId"],"expression":"globalThis.requestAnimationFrame = () => { document.documentElement.setAttribute('data-neo-frame-pending', 'yes'); return 1; }"}),Some(&driver)).await.expect("hold animation frame");
+    let pending = tab.start_run(r"
+        const button = page.locator('#cross >> internal:control=enter-frame >> #go');
+        await button.click({timeout:5000});
+        return await page.locator('#cross >> internal:control=enter-frame >> #result').textContent();
+    ".into()).await;
+    time::timeout(Duration::from_secs(10), async {
+        while evaluate_child(
+            &tab,
+            &driver,
+            "document.documentElement.getAttribute('data-neo-frame-pending')",
+        )
+        .await
+            != "yes"
+        {
+            time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Neo call entered the old OOPIF");
+    tab.evaluate(
+        "{ const old = document.querySelector('#cross'); old.replaceWith(old.cloneNode(false)); }",
+    )
+    .await;
+    let outcome = pending.await.expect("pending run");
+    let main = tab.evaluate("document.querySelector('#email').value").await;
+    tab.close().await;
+    assert_ok(&outcome);
+    assert_eq!(outcome.value, Some(json!("clicked")), "{outcome:#?}");
+    assert_eq!(main, "seed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn direct_frame_guids_serve_local_remote_and_nested_documents() {
+    let Some(tab) = open().await else { return };
+    let cross = cross_target(&tab).await;
+    let tree = tab
+        .cdp
+        .send("Page.getFrameTree", json!({}), Some(&tab.driver))
+        .await
+        .expect("main tree");
+    let local = tree["frameTree"]["childFrames"][0]["frame"]["id"]
+        .as_str()
+        .expect("local id")
+        .to_string();
+    let driver = child_driver(&tab, &cross).await;
+    let remote_tree = tab
+        .cdp
+        .send("Page.getFrameTree", json!({}), Some(&driver))
+        .await
+        .expect("remote tree");
+    let remote_local = remote_tree["frameTree"]["childFrames"][0]["frame"]["id"]
+        .as_str()
+        .expect("local child in OOPIF")
+        .to_string();
+    let targets = iframe_targets(&tab).await;
+    let nested = targets
+        .iter()
+        .find(|target| target["parentFrameId"] == cross["targetId"])
+        .expect("nested OOPIF")["targetId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    for (scope_name, id) in [
+        ("same", local),
+        ("cross", cross["targetId"].as_str().unwrap().to_string()),
+        ("nested", nested),
+        ("cross-local", remote_local),
+    ] {
+        let guid = serde_json::to_string(&format!("frame@{}/{id}", tab.target_id)).expect("guid");
+        let outcome = run(&tab,&format!(r"
+            let next = 0;
+            const call = async (method, params={{}}) => {{
+                const reply = JSON.parse(await __neo_runtime.call(JSON.stringify({{id:++next,guid:{guid},method,params,metadata:{{timeout:5000}}}})));
+                if (reply.error) throw new Error(reply.error.error.message);
+                return reply.result;
+            }};
+            await call('fill', {{selector:'#email',strict:true,value:'direct'}});
+            await call('click', {{selector:'#go',strict:true}});
+            return {{input:(await call('inputValue',{{selector:'#email',strict:true}})).value,
+                text:(await call('textContent',{{selector:'#result',strict:true}})).value,
+                title:(await call('title')).value,
+                visible:(await call('isVisible',{{selector:'#email',strict:true}})).value}};
+        ")).await;
+        assert_ok(&outcome);
+        assert_eq!(
+            outcome.value,
+            Some(json!({"input":"direct","text":"clicked","title":"Frame form","visible":true})),
+            "scope={scope_name}: {outcome:#?}"
+        );
+    }
+    let main = tab.evaluate("document.querySelector('#email').value").await;
+    tab.close().await;
+    assert_eq!(main, "seed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn direct_child_navigation_is_explicitly_unserved_and_missing_scopes_are_detached() {
+    let Some(tab) = open().await else { return };
+    let cross = cross_target(&tab).await;
+    let guid = serde_json::to_string(&format!(
+        "frame@{}/{}",
+        tab.target_id,
+        cross["targetId"].as_str().unwrap()
+    ))
+    .unwrap();
+    let missing = serde_json::to_string(&format!("frame@{}/removed", tab.target_id)).unwrap();
+    let outcome = run(&tab,&format!(r"
+        let id=0;
+        const call = async (guid,method,params={{}}) => JSON.parse(await __neo_runtime.call(JSON.stringify({{id:++id,guid,method,params,metadata:{{timeout:500}}}})));
+        return await Promise.all([
+            call({guid},'goto',{{url:'https://example.test/'}}),
+            call({guid},'neo:waitForURL',{{url:{{glob:'**'}}}}),
+            call({guid},'neo:waitForLoadState',{{state:'load'}}),
+            call({missing},'isVisible',{{selector:'#email'}}),
+        ]).then(replies=>replies.map(reply=>reply.error.error.name));
+    ")).await;
+    tab.close().await;
+    assert_ok(&outcome);
+    assert_eq!(
+        outcome.value,
+        Some(json!(["Error", "Error", "Error", "Error"]))
+    );
+}

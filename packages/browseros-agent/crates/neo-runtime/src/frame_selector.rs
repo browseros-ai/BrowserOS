@@ -3,12 +3,14 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use neo_runtime_spec::injected::InjectedFrameOwnerParams;
+use neo_runtime_spec::injected::{
+    ElementState, ElementStatesOutcome, InjectedCheckElementStatesParams, InjectedFrameOwnerParams,
+};
 use neo_runtime_spec::{Element, Handle};
 use serde_json::{Value, json};
 
 use crate::click::PageError;
-use crate::frames::FrameContext;
+use crate::frames::{FrameContext, FrameScope};
 use crate::page::{FrameTab, GroupGuard};
 
 use crate::progress;
@@ -254,15 +256,59 @@ pub(crate) async fn locate(
     } else {
         tab.context().await?
     };
-    let mut resolver = Resolver {
-        tab,
-        owners: Vec::new(),
+    let owners = if !chunks.from_main && matches!(tab.scope, FrameScope::Frame(_)) {
+        direct_owners(tab, &initial.id).await?
+    } else {
+        Vec::new()
     };
+    let mut visible = true;
+    for owner in &owners {
+        let states = owner
+            .frame
+            .call(
+                None,
+                &InjectedCheckElementStatesParams {
+                    element: owner.element.clone(),
+                    states: vec![ElementState::Visible],
+                    frame_visible: true,
+                },
+            )
+            .await?;
+        match states.outcome {
+            None => {}
+            Some(ElementStatesOutcome::NotConnected(_)) => return Err(PageError::NotConnected),
+            Some(ElementStatesOutcome::Missing(_)) => visible = false,
+        }
+    }
+    let mut resolver = Resolver { tab, owners };
     let mut located = follow(&mut resolver, initial, chunks, strict).await?;
     if let Some(located) = &mut located {
         located.owners = resolver.owners;
+        located.frame_visible &= visible;
     }
     Ok(located)
+}
+
+async fn direct_owners(tab: &FrameTab, frame: &str) -> Result<Vec<FrameOwner>, PageError> {
+    let mut owners = Vec::new();
+    for (parent, child) in tab.frames.owners(frame).await? {
+        let group = tab.group(&parent, "direct-frame-owner");
+        let owner = parent
+            .host
+            .send("DOM.getFrameOwner", json!({"frameId":child}))
+            .await
+            .map_err(|error| parent.host.classify(&error))?;
+        let backend = owner["backendNodeId"].as_i64().ok_or_else(|| {
+            PageError::Contract("DOM.getFrameOwner returned no backendNodeId".to_string())
+        })?;
+        let element = parent.element(group.group(), backend).await?;
+        owners.push(FrameOwner {
+            frame: parent,
+            element,
+            _group: Arc::new(group),
+        });
+    }
+    Ok(owners)
 }
 
 /// The hop seam keeps the traversal's retry/error rules testable without CDP or a browser.

@@ -38,7 +38,9 @@ use browseros_cdp::runtime::{
 };
 use browseros_cdp::{CdpClient, CdpError, SessionId};
 use neo_runtime_spec::injected::InjectedInitializer;
-use neo_runtime_spec::{HandleId, InjectedCall, PageResult, Properties, SPEC_SHA256};
+use neo_runtime_spec::{
+    Element, Handle, HandleId, InjectedCall, PageResult, Properties, SPEC_SHA256,
+};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -132,6 +134,7 @@ pub(crate) struct World {
 struct Attached {
     /// In [`GLUE_GROUP`].
     glue: HandleId,
+    context: i64,
     document: u64,
 }
 
@@ -170,6 +173,38 @@ impl World {
         if let Ok(mut slot) = self.attached.try_lock() {
             *slot = None;
         }
+    }
+
+    /// Bind an iframe owner returned by DOM.getFrameOwner to this parent's utility world.
+    /// A direct scope has no selector for that owner; the typed handle still lives in the
+    /// caller's group and follows the same document checks as a selector result.
+    pub(crate) async fn element(
+        &self,
+        group: &ObjectGroup,
+        backend: i64,
+    ) -> Result<Handle<Element>, PageError> {
+        let attached = self.attached().await?;
+        let result = self.send("DOM.resolveNode", json!({"backendNodeId":backend,"executionContextId":attached.context,"objectGroup":group.0})).await;
+        let reply = match result {
+            Ok(reply) => reply,
+            Err(error) => {
+                if error == PageError::NotConnected {
+                    self.invalidate(&attached).await;
+                }
+                return Err(error);
+            }
+        };
+        if self.document.load(Ordering::SeqCst) != attached.document {
+            return Err(PageError::NotConnected);
+        }
+        let object: RemoteObject = serde_json::from_value(reply["object"].clone())
+            .map_err(|error| PageError::Contract(format!("DOM.resolveNode answered: {error}")))?;
+        let id = object.object_id.ok_or_else(|| {
+            PageError::Contract("DOM.resolveNode returned no objectId".to_string())
+        })?;
+        Handle::new(HandleId::new(id), object.subtype.as_deref()).ok_or_else(|| {
+            PageError::Contract("DOM.resolveNode returned a non-element owner".to_string())
+        })
     }
 
     /// Calls glue function `C::NAME` with `params` and its handles, and decodes the result per
@@ -338,7 +373,11 @@ impl World {
         if self.document.load(Ordering::SeqCst) != document {
             return Err(PageError::NotConnected);
         }
-        let attached = Arc::new(Attached { glue, document });
+        let attached = Arc::new(Attached {
+            glue,
+            context,
+            document,
+        });
         *slot = Some(Arc::clone(&attached));
         Ok(attached)
     }
