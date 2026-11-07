@@ -4958,6 +4958,11 @@ function formEncode(text) {
 }
 
 // src/frame.ts
+function nodeTimerDelay(timeout) {
+  if (typeof timeout !== "number")
+    return timeout;
+  return timeout >= 1 && timeout <= 2 ** 31 - 1 ? timeout : 1;
+}
 var LIFECYCLE_EVENTS = new Set([
   "load",
   "domcontentloaded",
@@ -5382,7 +5387,7 @@ class Frame {
   }
   async _waitForTimeout(apiName, timeout) {
     await this._connection.send(apiName, this._guid, "waitForTimeout", pickParams(FRAME_WAIT_FOR_TIMEOUT_KEYS, {
-      waitTimeout: timeout
+      waitTimeout: nodeTimerDelay(timeout)
     }), 0);
   }
   async _resolveSelector(apiName, selector) {

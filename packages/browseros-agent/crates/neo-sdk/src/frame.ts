@@ -215,8 +215,131 @@ export type SetContentOptions = {
   timeout?: number
 }
 
-/** Playwright's `AriaSnapshotJSON`: the tree `ariaSnapshot` renders as YAML. */
-export type AriaSnapshotJSON = FrameAriaSnapshotJSONResult['snapshot']
+/** Playwright: `isomorphic/ariaSnapshot.ts` `AriaRole` */
+export type AriaRole =
+  | 'alert'
+  | 'alertdialog'
+  | 'application'
+  | 'article'
+  | 'banner'
+  | 'blockquote'
+  | 'button'
+  | 'caption'
+  | 'cell'
+  | 'checkbox'
+  | 'code'
+  | 'columnheader'
+  | 'combobox'
+  | 'complementary'
+  | 'contentinfo'
+  | 'definition'
+  | 'deletion'
+  | 'dialog'
+  | 'directory'
+  | 'document'
+  | 'emphasis'
+  | 'feed'
+  | 'figure'
+  | 'form'
+  | 'generic'
+  | 'grid'
+  | 'gridcell'
+  | 'group'
+  | 'heading'
+  | 'img'
+  | 'insertion'
+  | 'link'
+  | 'list'
+  | 'listbox'
+  | 'listitem'
+  | 'log'
+  | 'main'
+  | 'mark'
+  | 'marquee'
+  | 'math'
+  | 'meter'
+  | 'menu'
+  | 'menubar'
+  | 'menuitem'
+  | 'menuitemcheckbox'
+  | 'menuitemradio'
+  | 'navigation'
+  | 'none'
+  | 'note'
+  | 'option'
+  | 'paragraph'
+  | 'presentation'
+  | 'progressbar'
+  | 'radio'
+  | 'radiogroup'
+  | 'region'
+  | 'row'
+  | 'rowgroup'
+  | 'rowheader'
+  | 'scrollbar'
+  | 'search'
+  | 'searchbox'
+  | 'separator'
+  | 'slider'
+  | 'spinbutton'
+  | 'status'
+  | 'strong'
+  | 'subscript'
+  | 'superscript'
+  | 'switch'
+  | 'tab'
+  | 'table'
+  | 'tablist'
+  | 'tabpanel'
+  | 'term'
+  | 'textbox'
+  | 'time'
+  | 'timer'
+  | 'toolbar'
+  | 'tooltip'
+  | 'tree'
+  | 'treegrid'
+  | 'treeitem'
+
+/** Playwright: `isomorphic/ariaSnapshot.ts` `AriaNodeJSON` */
+export type AriaNodeJSON = {
+  role: AriaRole | 'iframe' | 'text'
+  name?: string
+  checked?: true | 'mixed'
+  disabled?: true
+  expanded?: true
+  active?: true
+  invalid?: true | 'grammar' | 'spelling'
+  level?: number
+  pressed?: true | 'mixed'
+  selected?: true
+  ariaHidden?: true
+  ref?: string
+  cursor?: 'pointer'
+  box?: { x: number; y: number; width: number; height: number }
+  url?: string
+  placeholder?: string
+  text?: string
+  children?: (AriaNodeJSON | string)[]
+}
+
+/**
+ * Playwright: `isomorphic/ariaSnapshot.ts` `AriaSnapshotJSON`
+ *
+ * The tree `ariaSnapshot` renders as YAML.
+ */
+export type AriaSnapshotJSON = AriaNodeJSON[]
+
+/**
+ * Neo: the delay Node's `setTimeout` waits, which Playwright's server waits `waitForTimeout`
+ * with: a number outside [1, 2 ** 31 - 1], `NaN` and `±Infinity` included, waits 1 ms. JSON
+ * carries no `NaN` or `Infinity`, so the SDK settles the number before sending; any other value
+ * goes as given, for the protocol's own refusal.
+ */
+function nodeTimerDelay(timeout: unknown): unknown {
+  if (typeof timeout !== 'number') return timeout
+  return timeout >= 1 && timeout <= 2 ** 31 - 1 ? timeout : 1
+}
 
 export type AriaSnapshotOptions = {
   mode?: 'ai' | 'default'
@@ -1299,7 +1422,7 @@ export class Frame {
       }) as FrameAriaSnapshotJSONParams,
       this._page._timeoutSettings.timeout(options, apiName),
     )) as FrameAriaSnapshotJSONResult
-    return result.snapshot
+    return result.snapshot as AriaSnapshotJSON
   }
 
   /** The frame's markup, its doctype first; with no timeout, as Playwright's (`kNoTimeout`). */
@@ -1366,7 +1489,7 @@ export class Frame {
       this._guid,
       'waitForTimeout',
       pickParams(FRAME_WAIT_FOR_TIMEOUT_KEYS, {
-        waitTimeout: timeout,
+        waitTimeout: nodeTimerDelay(timeout),
       }) as FrameWaitForTimeoutParams,
       0,
     )

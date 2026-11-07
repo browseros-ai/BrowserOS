@@ -27,9 +27,10 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::click::{PageError, Tab};
 use crate::frame_selector;
-use crate::navigate;
+use crate::navigate::{self, Observation};
 use crate::page::FrameTab;
 use crate::progress::{CallError, PlaywrightError, Progress};
+use crate::waits::WaitTab;
 
 /// Neo: Playwright's `Frame._content` error, word for word, for a document that changed under
 /// the read.
@@ -87,8 +88,10 @@ pub(crate) async fn content(
 /// `waitUntil` among the lifecycle events the reopened document fires, read from the frame's own
 /// session: `document.open()` fires `init`, and only a `DOMContentLoaded` or `load` after it
 /// counts. Chromium reads `readyState` as `complete` at `document.close()`, before the content's
-/// images load, so the events decide. The page watcher's state is left as it was: Playwright,
-/// too, clears the frame's lifecycle only for its own `setContent`.
+/// images load, so the events decide. At that `init` the page watcher clears the frame's shared
+/// lifecycle too, as Playwright's `_onClearLifecycle` (for its own `setContent` only), so a later
+/// `waitForLoadState` waits for the written document. A removed frame or a closed page ends the
+/// wait, as Playwright's `raceNavigationAction` rejects.
 ///
 /// Playwright: `server/frames.ts` `Frame.setContent`: `document.write(html);`
 pub(crate) async fn set_content(
@@ -106,27 +109,48 @@ pub(crate) async fn set_content(
         .map_err(call_error)?;
     let frame = progress.race(tab.context()).await?.map_err(call_error)?;
     // Before the write: the reopened document fires its first events while the write is in
-    // flight.
+    // flight, and the frame may go while it waits.
     let events = frame.host.events();
-    progress
+    let mut observation = WaitTab::observe(tab).map_err(call_error)?;
+    // Playwright: `server/frames.ts` `Frame.setContent`: `// Clear lifecycle right after document.open() - see 'tag' below.`
+    tab.page.clear_lifecycle_at_reopen(&frame.id, true);
+    let written = progress
         .race(frame.call(
             None,
             &InjectedWriteContentParams {
                 html: options.html.clone(),
             },
         ))
-        .await?
-        .map_err(call_error)?;
+        .await;
+    if !matches!(written, Ok(Ok(_))) {
+        tab.page.clear_lifecycle_at_reopen(&frame.id, false);
+    }
+    written?.map_err(call_error)?;
     if options.wait_until == LifecycleEvent::Commit {
         return Ok(());
     }
+    // A removed frame (or a closed page) ends the wait, as Playwright's rejects at detach; a
+    // navigation is no end: the next document's events count.
+    let gone = async {
+        loop {
+            if let Err(error) = observation.next().await {
+                return error;
+            }
+        }
+    };
+    let reopened = reopened(
+        events,
+        frame.host.session_id().clone(),
+        frame.id.clone(),
+        options.wait_until,
+    );
     progress
-        .race(reopened(
-            events,
-            frame.host.session_id().clone(),
-            frame.id.clone(),
-            options.wait_until,
-        ))
+        .race(async {
+            tokio::select! {
+                reopened = reopened => reopened,
+                error = gone => Err(error),
+            }
+        })
         .await?
         .map_err(call_error)
 }

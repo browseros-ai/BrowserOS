@@ -271,6 +271,9 @@ pub(crate) struct PageState {
     pending_document: Option<PendingDocument>,
     /// `Page.javascriptDialogOpening` events seen; each was answered.
     pub(crate) dialogs_opened: u64,
+    /// Neo: `setContent` asked to clear this frame's lifecycle at its reopened document's `init`,
+    /// as Playwright's clears it right after `document.open()`. A new document disarms it.
+    pub(crate) clear_at_reopen: bool,
 }
 
 /// The navigation a frame is waiting to commit ([`PageState::pending_document`]).
@@ -313,6 +316,14 @@ impl PageState {
         self.did_dom_content_load();
         self.did_load();
         Fired::between(before, self)
+    }
+
+    /// Playwright's `Frame._onClearLifecycle`, for the document `setContent` reopened: its
+    /// `DOMContentLoaded` and `load` count again, as a new document's do.
+    fn clear_lifecycle(&mut self) {
+        self.clear_at_reopen = false;
+        self.dom_content_loaded = false;
+        self.load = false;
     }
 
     fn did_load(&mut self) {
@@ -360,6 +371,15 @@ pub(crate) struct FrameFeeds {
 }
 
 impl FrameFeeds {
+    /// [`PageSession::clear_lifecycle_at_reopen`] for a child frame.
+    pub(crate) fn clear_lifecycle_at_reopen(&self, frame: &str, armed: bool) {
+        if let Ok(mut frames) = self.frames.lock() {
+            let feed = frames.entry(frame.to_string()).or_insert_with(new_feed);
+            feed.state
+                .send_modify(|state| state.page.clear_at_reopen = armed);
+        }
+    }
+
     /// `frame`'s current state and its commits from now on.
     pub(crate) fn subscribe(
         &self,
@@ -415,6 +435,7 @@ impl FrameFeeds {
                     page.dom_content_loaded = false;
                     page.load = false;
                     page.pending_document = None;
+                    page.clear_at_reopen = false;
                     state.swaps += 1;
                     state.swapped_from = Some(session.clone());
                 } else {
@@ -736,6 +757,18 @@ impl PageSession {
         } else {
             None
         })
+    }
+
+    /// Neo: arms or disarms the clear of `frame`'s lifecycle at its reopened document's `init`:
+    /// `setContent`, as Playwright's `_onClearLifecycle` right after `document.open()`, so a later
+    /// `waitForLoadState` waits for the written document.
+    pub(crate) fn clear_lifecycle_at_reopen(&self, frame: &str, armed: bool) {
+        if frame == self.main_frame {
+            self.state_updates
+                .send_modify(|state| state.clear_at_reopen = armed);
+        } else {
+            self.frame_feeds.clear_lifecycle_at_reopen(frame, armed);
+        }
     }
 
     pub(crate) fn pending_navigation(&self) -> Option<String> {
@@ -1483,6 +1516,7 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                 let fragment = frame.url_fragment.as_deref().unwrap_or("");
                 state.committed_url = Some(format!("{}{fragment}", frame.url));
                 state.document = frame.loader_id;
+                state.clear_at_reopen = false;
                 // server/frames.ts frameCommittedNewDocumentNavigation: the pending document is
                 // this one, with its request, or, with no request known, assumed to be; a later
                 // navigation whose request already started stays pending.
@@ -1618,6 +1652,8 @@ fn apply_lifecycle(state: &mut PageState, event: &LifecycleEvent) -> bool {
     match event.name.as_str() {
         "DOMContentLoaded" => state.did_dom_content_load(),
         "load" => state.did_load(),
+        // Playwright: `server/frames.ts` `Frame.setContent`: `this._onClearLifecycle();`
+        "init" if state.clear_at_reopen => state.clear_lifecycle(),
         _ => return seeded,
     }
     true
@@ -3457,6 +3493,55 @@ mod tests {
         let snapshot = hash.navigation.expect("same-document commit").lifecycle;
         assert!(snapshot.load && snapshot.dom_content_loaded);
         assert_eq!(snapshot.load_count, 2);
+    }
+
+    #[test]
+    fn tests_that_a_reopened_document_clears_its_lifecycle_only_when_set_content_armed_it() {
+        let lifecycle = |state: &mut PageState, name: &str| {
+            applied(
+                state,
+                &event(
+                    "Page.lifecycleEvent",
+                    Some(SESSION),
+                    json!({ "frameId": MAIN, "loaderId": "one", "name": name }),
+                ),
+            )
+        };
+        let mut state = PageState::default();
+        applied(
+            &mut state,
+            &event(
+                "Page.frameNavigated",
+                Some(SESSION),
+                json!({ "frame": {"id": MAIN, "url": "https://a.test/", "loaderId": "one"} }),
+            ),
+        );
+        for name in ["DOMContentLoaded", "load"] {
+            lifecycle(&mut state, name);
+        }
+        // A page's own document.open(), unarmed: Playwright keeps the frame loaded.
+        lifecycle(&mut state, "init");
+        assert!(state.load && state.dom_content_loaded);
+        // setContent's: the reopened document's events count again.
+        state.clear_at_reopen = true;
+        assert!(lifecycle(&mut state, "init").changed);
+        assert!(!state.load && !state.dom_content_loaded && !state.clear_at_reopen);
+        for name in ["DOMContentLoaded", "load"] {
+            lifecycle(&mut state, name);
+        }
+        assert!(state.load && state.dom_content_loaded);
+        assert_eq!((state.dom_content_loaded_count, state.load_count), (2, 2));
+        // A new document disarms a clear nothing consumed.
+        state.clear_at_reopen = true;
+        applied(
+            &mut state,
+            &event(
+                "Page.frameNavigated",
+                Some(SESSION),
+                json!({ "frame": {"id": MAIN, "url": "https://a.test/b", "loaderId": "two"} }),
+            ),
+        );
+        assert!(!state.clear_at_reopen);
     }
 
     #[test]
