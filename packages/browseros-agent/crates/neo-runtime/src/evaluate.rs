@@ -24,8 +24,10 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
+use std::future::Future;
 use std::hash::{BuildHasher, Hasher};
 use std::mem;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -996,6 +998,28 @@ async fn invoke(
     handles: &Handles,
     progress: &Progress,
 ) -> Result<(DocumentId, Called), CallError> {
+    invoke_with(tab, invocation, handles, progress, LateAnswer::Drop).await
+}
+
+/// What becomes of a main-world call's answer when the call stops before it arrives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LateAnswer {
+    /// Dropped: the call leaves nothing running in the page.
+    Drop,
+    /// A waiter (`dist/wait-for-function.js`) that may already poll: awaited in the background
+    /// and aborted once it arrives, so nothing polls after the call returned.
+    AbortWaiter,
+}
+
+/// [`invoke`], with `late` deciding what becomes of an answer that arrives after the call
+/// stopped (a timeout, the run's end).
+async fn invoke_with(
+    tab: &FrameTab,
+    invocation: &Invocation<'_>,
+    handles: &Handles,
+    progress: &Progress,
+    late: LateAnswer,
+) -> Result<(DocumentId, Called), CallError> {
     let frame = invocation.frame;
     let args = resolve_args(&invocation.arg.handles, handles)?;
     let group = if invocation.return_by_value {
@@ -1031,20 +1055,62 @@ async fn invoke(
         values.extend(leading.into_iter().map(|value| json!({ "value": value })));
         values.push(json!({ "value": invocation.arg.value }));
         values.extend(handle_args);
-        let called = progress
-            .race(frame.main.call(
-                frame,
-                &installed,
-                MainFunction::Evaluate,
-                values,
-                invocation.return_by_value,
-                group.as_deref().map(GroupGuard::group),
-            ))
-            .await?
-            .map_err(page_error)?;
+        let call = {
+            let frame = Arc::clone(frame);
+            let installed = Arc::clone(&installed);
+            let group = group.clone();
+            let return_by_value = invocation.return_by_value;
+            Box::pin(async move {
+                frame
+                    .main
+                    .call(
+                        &frame,
+                        &installed,
+                        MainFunction::Evaluate,
+                        values,
+                        return_by_value,
+                        group.as_deref().map(GroupGuard::group),
+                    )
+                    .await
+            })
+        };
+        let called = match late {
+            LateAnswer::Drop => progress.race(call).await?,
+            LateAnswer::AbortWaiter => race_with_cleanup(tab, frame, progress, call).await?,
+        }
+        .map_err(page_error)?;
         match called {
             Called::Stale if attempt == 1 => frame.main.invalidate(&installed).await,
             called => return Ok((installed.document, called)),
+        }
+    }
+}
+
+/// Playwright's `raceUncancellableOperationWithCleanup` for a waiter's setup: a call that stops
+/// first still receives the waiter in the background, then aborts it.
+/// Playwright: `server/frames.ts` `Frame.waitForFunctionExpression`: `await handle.evaluate(h => h.abort()).catch(() => {});`
+async fn race_with_cleanup<F>(
+    tab: &FrameTab,
+    frame: &Arc<FrameContext>,
+    progress: &Progress,
+    mut call: Pin<Box<F>>,
+) -> Result<Result<Called, PageError>, CallError>
+where
+    F: Future<Output = Result<Called, PageError>> + Send + 'static,
+{
+    match progress.race(&mut call).await {
+        Ok(called) => Ok(called),
+        Err(stopped) => {
+            let page = tab.clone();
+            let frame = Arc::clone(frame);
+            tab.spawn(async move {
+                if let Ok(Called::Object(waiter)) = call.await
+                    && let Some(waiter) = waiter.object_id
+                {
+                    abort_waiter(page, frame, waiter).await;
+                }
+            });
+            Err(stopped)
         }
     }
 }
@@ -1558,7 +1624,7 @@ async fn wait_once(
     };
     let polling_value =
         polling.map_or_else(|| json!({ "v": "undefined" }), |polling| json!(polling));
-    let started = invoke(
+    let started = invoke_with(
         tab,
         &Invocation {
             frame,
@@ -1580,6 +1646,7 @@ async fn wait_once(
         },
         handles,
         progress,
+        LateAnswer::AbortWaiter,
     )
     .await;
     let waiter = match started {
