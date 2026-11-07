@@ -368,7 +368,7 @@ while (Date.now() < end) {}
 await clicking
 await new Promise(resolve => setTimeout(resolve, 200))
 return count",
-        Duration::from_secs(60),
+        Duration::from_mins(1),
     )
     .await;
     tab.close().await;
