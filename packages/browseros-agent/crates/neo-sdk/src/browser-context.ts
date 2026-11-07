@@ -230,7 +230,8 @@ export class BrowserContext extends ChannelOwner {
         typeof optionsOrPredicate === 'function' ? {} : optionsOrPredicate
       refuseSignal(options)
       this._refuseUnserved(event)
-      const timeout = this._timeoutSettings.timeout(options)
+      // Inside `wrapApiCall`, which prefixes the api name.
+      const timeout = this._timeoutSettings.timeout(options, null)
       const predicate =
         typeof optionsOrPredicate === 'function'
           ? optionsOrPredicate
