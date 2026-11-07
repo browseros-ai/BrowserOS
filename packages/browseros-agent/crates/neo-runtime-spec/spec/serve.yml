@@ -87,6 +87,11 @@ interfaces:
     - check
     - uncheck
     - selectOption
+    # `payloads` buffers are `binary` (neo-runtime-spec `Binary`); `localPaths` name files inside
+    # the run's artifact directory (neo-runtime `set_input_files.rs`). Neo's SDK sends no streams.
+    - setInputFiles
+    # `Locator.drop`: files or data dropped at the element's point (neo-runtime `drop.rs`).
+    - drop
     # `locator.waitFor` sends it with `omitReturnValue: true`. `element` is an `ElementHandle`, which
     # is not a key here, so its result is always `{}`; neo-runtime refuses any other
     # `omitReturnValue` rather than answer "no element".
