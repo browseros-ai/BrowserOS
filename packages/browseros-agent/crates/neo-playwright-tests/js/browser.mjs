@@ -1,5 +1,4 @@
-/**
- * Owns one private headless browser and its independent evidence connection. The test runner
+/** Neo: Owns one private headless browser and its independent evidence connection. The test runner
  * and Neo worker connect to endpoint themselves. Nothing collected here supplies a test API.
  */
 import { execFileSync, spawn } from 'node:child_process'

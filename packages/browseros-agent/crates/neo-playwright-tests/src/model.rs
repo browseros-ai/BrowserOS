@@ -1,4 +1,4 @@
-//! Evidence is independent of verdict. Missing methods cannot erase an earlier real mismatch.
+//! Neo: Evidence is independent of verdict. Missing methods cannot erase an earlier real mismatch.
 
 use std::collections::{BTreeMap, BTreeSet};
 

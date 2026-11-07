@@ -1,4 +1,4 @@
-//! The optional test transport through the public runtime API and a real QuickJS realm.
+//! Neo: The optional test transport through the public runtime API and a real QuickJS realm.
 //! The existing fake browser owns CDP replies; bounded channels carry opaque test frames and
 //! expose whether a parked receive ended when its owning run did.
 
@@ -23,6 +23,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
+/// Neo: bounds fake-browser test teardown without changing runtime deadlines.
 const SETTLE: Duration = Duration::from_secs(5);
 
 /// One run's bounded transport. Reply never waits for the host test to consume a frame.

@@ -1,4 +1,4 @@
-//! A case's private native process. Bounded stdin/stdout queues feed one hosted runtime run;
+//! Neo: A case's private native process. Bounded stdin/stdout queues feed one hosted runtime run;
 //! browser actions still pass through the real SDK and Dispatcher. EOF cancels the run.
 
 use std::env;
@@ -15,6 +15,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
+/// Neo: bounds the private test transport independently of browser calls.
 const FRAME_LIMIT: usize = 16 * 1024 * 1024;
 
 struct Host {
@@ -122,13 +123,17 @@ async fn run() -> Result<(), String> {
             }),
         )
         .await;
+    // A returned outcome can still own writers and interceptor cleanup. Stop admitting
+    // frames, then settle those tasks while CDP is connected. The independent I/O owner
+    // bounds shutdown and marks a forced termination as incomplete evidence.
+    cancel.cancel();
+    reader.abort();
+    runtime.drain().await;
     outgoing_tx
         .send(json!({ "event": "outcome", "outcome": outcome }).to_string())
         .await
         .map_err(|error| error.to_string())?;
     drop(outgoing_tx);
-    cancel.cancel();
-    reader.abort();
     cdp.disconnect().await;
     writer.await.map_err(|error| error.to_string())??;
     Ok(())

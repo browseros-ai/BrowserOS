@@ -1,4 +1,4 @@
-/** Independent I/O owner. It wakes blocked Atomics.wait callers and reaps its one native child. */
+/** Neo: Independent I/O owner. It wakes blocked Atomics.wait callers and reaps its one native child. */
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import { parentPort, workerData } from 'node:worker_threads'

@@ -1,4 +1,4 @@
-/** Verifies declared bootstrap conditions and tab activation without acquiring a browser. */
+/** Neo: Verifies declared bootstrap conditions and tab activation without acquiring a browser. */
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import os from 'node:os'

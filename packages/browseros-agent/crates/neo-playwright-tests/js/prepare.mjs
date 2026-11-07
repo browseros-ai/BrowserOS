@@ -1,4 +1,4 @@
-/** Materializes and builds the pinned upstream tree without changing the developer's checkout. */
+/** Neo: Materializes and builds the pinned upstream tree without changing the developer's checkout. */
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'

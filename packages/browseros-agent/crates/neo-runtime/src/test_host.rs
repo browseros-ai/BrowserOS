@@ -1,4 +1,4 @@
-//! The optional upstream test runner's opaque transport into one QuickJS run. The servicing
+//! Neo: The optional upstream test runner's opaque transport into one QuickJS run. The servicing
 //! script owns command decoding and native SDK object identity; this transport exposes no
 //! browser operations and keeps no state on `Runtime` or its clones.
 

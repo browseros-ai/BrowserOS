@@ -1,4 +1,4 @@
-/** The body of ONE native run. Reflection invokes actual SDK objects through the usual bridge. */
+/** Neo: The body of ONE native run. Reflection invokes actual SDK objects through the usual bridge. */
 import { codecFactory } from './codec.mjs'
 
 export function nativeLoop(codecFactory, epoch) {

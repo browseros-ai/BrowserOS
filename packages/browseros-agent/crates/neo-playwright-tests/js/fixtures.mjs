@@ -1,5 +1,5 @@
 // biome-ignore-all lint/correctness/noEmptyPattern: Playwright parses fixture dependencies from this required parameter syntax.
-/** Upstream fixtures own test semantics; this seam supplies only engine-backed browser objects. */
+/** Neo: Upstream fixtures own test semantics; this seam supplies only engine-backed browser objects. */
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'

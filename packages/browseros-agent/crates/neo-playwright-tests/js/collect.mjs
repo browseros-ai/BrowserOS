@@ -1,4 +1,4 @@
-/** Runs the pinned upstream collector under the selected host. No browser starts here. */
+/** Neo: Runs the pinned upstream collector under the selected host. No browser starts here. */
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'

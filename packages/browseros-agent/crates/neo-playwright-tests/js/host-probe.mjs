@@ -1,4 +1,4 @@
-/** Reproduces the upstream TestServer reset requirement without changing the upstream server. */
+/** Neo: Reproduces the upstream TestServer reset requirement without changing the upstream server. */
 import http from 'node:http'
 
 const server = http.createServer()

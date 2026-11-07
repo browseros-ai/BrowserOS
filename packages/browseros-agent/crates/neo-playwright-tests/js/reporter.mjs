@@ -1,4 +1,4 @@
-/** Discovery and raw runner outcomes. Expected failures never become compatibility passes. */
+/** Neo: Discovery and raw runner outcomes. Expected failures never become compatibility passes. */
 import fs from 'node:fs'
 import path from 'node:path'
 import { corpus, sha256 } from './prepare.mjs'

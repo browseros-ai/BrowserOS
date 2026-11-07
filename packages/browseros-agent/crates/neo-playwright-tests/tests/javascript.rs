@@ -1,4 +1,4 @@
-//! The default Cargo gate runs the actual JS transport and codec checks under both hosts.
+//! Neo: The default Cargo gate runs the actual JS transport and codec checks under both hosts.
 use std::fs;
 use std::path::Path;
 use std::process::Command;

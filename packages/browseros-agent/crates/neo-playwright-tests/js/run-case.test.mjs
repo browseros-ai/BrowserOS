@@ -1,4 +1,4 @@
-/** Offline lifecycle faults use private child processes and sockets, never upstream API stand-ins. */
+/** Neo: Offline lifecycle faults use private child processes and sockets, never upstream API stand-ins. */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
