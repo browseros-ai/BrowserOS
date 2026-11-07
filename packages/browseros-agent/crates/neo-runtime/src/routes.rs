@@ -886,6 +886,32 @@ impl Routes {
     }
 }
 
+/// Neo: one call on a paused request.
+#[derive(Debug)]
+pub(crate) enum InterceptedCall {
+    /// `Route.abort`, `Route.continue` or `Route.fulfill`.
+    Answer(RouteCall),
+    /// `route.fetch` (`neo:fetch`).
+    Fetch(NeoRouteFetchParams),
+}
+
+/// Neo: serves one call on pause `index` of `page`'s tab.
+///
+/// # Errors
+///
+/// As [`serve`]'s and [`fetch`]'s.
+pub(crate) async fn serve_intercepted(
+    page: &PageSession,
+    index: u64,
+    call: InterceptedCall,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    match call {
+        InterceptedCall::Answer(call) => serve(page, index, call, progress).await,
+        InterceptedCall::Fetch(params) => fetch(page, index, params, progress).await,
+    }
+}
+
 /// Neo: `Route.abort`, `Route.continue` and `Route.fulfill` on pause `index` of `page`'s tab.
 ///
 /// # Errors
