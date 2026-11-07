@@ -46,11 +46,13 @@ import {
 import { DisposableStub } from './disposable'
 import type { ElementHandle } from './element-handle'
 import type {
+  AriaSnapshotJSON,
   AriaSnapshotOptions,
   CheckOptions,
   ClickOptions,
   DblclickOptions,
   DispatchEventOptions,
+  DragAndDropOptions,
   ElementTimeoutOptions,
   FillOptions,
   FocusOptions,
@@ -298,6 +300,27 @@ export class Locator {
     )
   }
 
+  /** The tree `ariaSnapshot` renders, as Playwright's `AriaSnapshotJSON`. */
+  async ariaSnapshotJSON(
+    options: AriaSnapshotOptions = {},
+  ): Promise<AriaSnapshotJSON> {
+    return await this._frame._ariaSnapshotJSON(
+      'locator.ariaSnapshotJSON',
+      options,
+      this._selector,
+    )
+  }
+
+  /** A locator of Playwright's simple selector for the first match (not strict), behind the
+   * selectors of the iframes on the way from the main frame, on this locator's frame. */
+  async normalize(): Promise<Locator> {
+    const resolved = await this._frame._resolveSelector(
+      'locator.normalize',
+      this._selector,
+    )
+    return new Locator(this._frame, resolved)
+  }
+
   async count(): Promise<number> {
     return await this._frame._queryCount('locator.count', this._selector)
   }
@@ -337,6 +360,20 @@ export class Locator {
       strict: true,
       ...options,
     })
+  }
+
+  /** Playwright's `dragTo`: `target`'s selector, resolved in this locator's frame, as
+   * Playwright's client passes it (`this._frame.dragAndDrop(this._selector, target._selector`). */
+  async dragTo(
+    target: Locator,
+    options: DragAndDropOptions = {},
+  ): Promise<void> {
+    return await this._frame._dragAndDrop(
+      'locator.dragTo',
+      this._selector,
+      target._selector,
+      { strict: true, ...options },
+    )
   }
 
   /** Playwright's `pressSequentially`: focus, then each character typed as `keyboard.type`. */
