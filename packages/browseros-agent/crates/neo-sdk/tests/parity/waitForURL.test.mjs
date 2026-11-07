@@ -9,8 +9,8 @@
 // A predicate function sees the current URL, then each navigation's, as a `URL`; a navigation
 // that fails before the URL matched rejects the wait.
 //
-// Known, intended difference, asserted per engine and not counted as parity: Neo refuses
-// `waitUntil: 'networkidle'` with an `Error` (neo-runtime `waits.rs`), where Playwright resolves.
+// `waitUntil: 'networkidle'` resolves once the matched page is quiet, in both (neo-runtime
+// `network_idle.rs`).
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs, waits.mjs).
 
@@ -170,14 +170,13 @@ const cases = [
     expected: { waited: ERROR },
   },
   {
-    name: 'Neo limit: networkidle',
+    name: 'networkidle resolves once the matched page is quiet',
     source: `return {
       networkidle: await settle(
         page.waitForURL('**/wait-for-url.html', { waitUntil: 'networkidle', timeout: 5000 }),
       ),
     }`,
     expected: { networkidle: RESOLVED },
-    neoExpected: { networkidle: ERROR },
   },
 ]
 

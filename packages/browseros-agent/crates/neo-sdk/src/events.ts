@@ -511,6 +511,12 @@ export abstract class ChannelOwner extends EventEmitter {
       )
   }
 
+  /** Neo: a channel event the SDK handles itself, with no public listener (such as Page's
+   * `locatorHandlerTriggered`), subscribed while the SDK needs it. */
+  _subscribeChannelEvent(event: string, enabled: boolean): void {
+    this.#pipe._subscribe(this._guid, event, enabled)
+  }
+
   #updateSubscription(event: EventType, enabled: boolean): void {
     if (this.#served(event)) this.#pipe._subscribe(this._guid, event, enabled)
   }

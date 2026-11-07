@@ -16,6 +16,8 @@
 //!   │   matched → log "  locator resolved to <preview>" → {value} (missing attribute → {})
 //!   │   nothing matched, or NotConnected → poll again
 //!   │   Threw (strict mode violation) or Contract → Error with the page's message; Closed → closed
+//!  locator aria_snapshot (default mode)   retry_on_selector: the same loop, each attempt first
+//!   running the page's action pre-checks after prepare (`_retryWithProgressIfNotConnected`)
 //!  aria_snapshot(tab, options, progress)               no call log at all
 //!   waits 0,1000,2000,4000,8000…  (never capped by the timeout; the last repeats)
 //!   │ prepare → glue ariaSnapshot {selector: 'body,frameset', strict: false, mode, depth, boxes}
@@ -60,7 +62,7 @@
 //! News, Wikipedia and MDN pages measured 11 to 16 levels).
 
 use std::collections::HashMap;
-use std::future::Future;
+use std::future::{self, Future};
 use std::time::Duration;
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -71,6 +73,7 @@ use neo_runtime_spec::injected::{
     InjectedTextContentParams, TextMatch,
 };
 use neo_runtime_spec::serve::{
+    FrameAriaSnapshotJSONParams, FrameAriaSnapshotJSONParamsMode, FrameAriaSnapshotJSONResult,
     FrameAriaSnapshotParams, FrameAriaSnapshotParamsMode, FrameAriaSnapshotResult,
     FrameGetAttributeParams, FrameGetAttributeResult, FrameInnerHTMLParams, FrameInnerHTMLResult,
     FrameInnerTextParams, FrameInnerTextResult, FrameTextContentParams, FrameTextContentResult,
@@ -114,6 +117,16 @@ pub(crate) trait SelectorTab: Send + Sync {
         &self,
         selector: &str,
     ) -> impl Future<Output = Result<SelectorFacts, PageError>> + Send;
+
+    /// Playwright's `performActionPreChecks`, which a read over `_retryWithProgressIfNotConnected`
+    /// (the default-mode locator snapshot) runs before each attempt; none on a tab without them.
+    fn action_pre_checks(
+        &self,
+        progress: &Progress,
+    ) -> impl Future<Output = Result<(), click::Stop>> + Send {
+        let _ = progress;
+        future::ready(Ok(()))
+    }
 }
 
 /// The page reads, one glue call each.
@@ -246,6 +259,25 @@ pub(crate) struct SnapshotOptions {
 
 // Neo: decodes the generated snapshot params once for the runtime route.
 impl SnapshotOptions {
+    /// `Frame.ariaSnapshotJSON` takes `Frame.ariaSnapshot`'s params.
+    pub(crate) fn from_json_params(params: FrameAriaSnapshotJSONParams) -> Self {
+        let FrameAriaSnapshotJSONParams {
+            mode,
+            selector,
+            depth,
+            boxes,
+        } = params;
+        Self::from_params(FrameAriaSnapshotParams {
+            mode: mode.map(|mode| match mode {
+                FrameAriaSnapshotJSONParamsMode::Ai => FrameAriaSnapshotParamsMode::Ai,
+                FrameAriaSnapshotJSONParamsMode::Default => FrameAriaSnapshotParamsMode::Default,
+            }),
+            selector,
+            depth,
+            boxes,
+        })
+    }
+
     /// Playwright: `server/frames.ts` `Frame.ariaSnapshotJSON`: `if (options.selector && options.mode !== 'ai') {`
     pub(crate) fn from_params(params: FrameAriaSnapshotParams) -> Self {
         let FrameAriaSnapshotParams {
@@ -368,6 +400,41 @@ pub(crate) async fn wait_for_function_on_selector<T, R, F, Fut>(
     tab: &T,
     selector: &str,
     progress: &Progress,
+    evaluate: F,
+) -> Result<R, CallError>
+where
+    T: SelectorTab,
+    F: FnMut() -> Fut + Send,
+    Fut: Future<Output = Result<Option<Matched<R>>, PageError>> + Send,
+{
+    poll_selector(tab, selector, progress, false, evaluate).await
+}
+
+/// Playwright's `_retryWithProgressIfNotConnected` for a read (the default-mode locator snapshot):
+/// [`wait_for_function_on_selector`]'s loop, each attempt first running the page's action
+/// pre-checks (a pending main-frame navigation is waited out) once the tab is prepared.
+///
+/// Playwright: `server/frames.ts` `Frame._retryWithProgressIfNotConnected`: `await this._page.performActionPreChecks(progress);`
+pub(crate) async fn retry_on_selector<T, R, F, Fut>(
+    tab: &T,
+    selector: &str,
+    progress: &Progress,
+    evaluate: F,
+) -> Result<R, CallError>
+where
+    T: SelectorTab,
+    F: FnMut() -> Fut + Send,
+    Fut: Future<Output = Result<Option<Matched<R>>, PageError>> + Send,
+{
+    poll_selector(tab, selector, progress, true, evaluate).await
+}
+
+/// The loop of [`wait_for_function_on_selector`] and [`retry_on_selector`].
+async fn poll_selector<T, R, F, Fut>(
+    tab: &T,
+    selector: &str,
+    progress: &Progress,
+    pre_checks: bool,
     mut evaluate: F,
 ) -> Result<R, CallError>
 where
@@ -385,7 +452,16 @@ where
         if !wait.is_zero() {
             progress.wait(wait).await?;
         }
-        match read_once(tab, selector, progress, &mut named, &mut evaluate).await {
+        match read_once(
+            tab,
+            selector,
+            progress,
+            pre_checks,
+            &mut named,
+            &mut evaluate,
+        )
+        .await
+        {
             Ok(Some(value)) => return Ok(value),
             Ok(None) | Err(Stop::Again) => {}
             Err(Stop::End(error)) => return Err(error),
@@ -398,6 +474,7 @@ async fn read_once<T, R, F, Fut>(
     tab: &T,
     selector: &str,
     progress: &Progress,
+    pre_checks: bool,
     named: &mut bool,
     evaluate: &mut F,
 ) -> Result<Option<R>, Stop>
@@ -407,6 +484,14 @@ where
     Fut: Future<Output = Result<Option<Matched<R>>, PageError>> + Send,
 {
     progress.race(tab.prepare()).await??;
+    if pre_checks {
+        tab.action_pre_checks(progress)
+            .await
+            .map_err(|stop| match stop {
+                click::Stop::Retry => Stop::Again,
+                click::Stop::End(error) => Stop::End(error),
+            })?;
+    }
     if !*named {
         let facts = progress.race(tab.describe(selector)).await??;
         progress.name_locator(&facts.locator);
@@ -423,13 +508,39 @@ where
     Ok(Some(matched.value))
 }
 
-/// Serves a document or locator snapshot. AI snapshots rooted in the main frame stitch
-/// rendered iframe documents and prefix their refs with paths from that main frame.
+/// Serves `Frame.ariaSnapshot`: the tree as Playwright's YAML.
+///
+/// Playwright: `server/frames.ts` `Frame.ariaSnapshot`: `return { snapshot: renderAriaSnapshotAsYaml(snapshot) };`
 pub(crate) async fn aria_snapshot<T: ReadTab>(
     tab: &T,
     options: &SnapshotOptions,
     progress: &Progress,
 ) -> Result<FrameAriaSnapshotResult, CallError> {
+    render_snapshot(&aria_nodes(tab, options, progress).await?)
+}
+
+/// Serves `Frame.ariaSnapshotJSON`: the same tree as Playwright's `AriaSnapshotJSON`, the nodes
+/// the YAML renders.
+///
+/// Playwright: `server/frames.ts` `Frame.ariaSnapshotJSON`: `return { snapshot: await ariaSnapshotJSONForFrame(progress, this, options.selector, options) };`
+pub(crate) async fn aria_snapshot_json<T: ReadTab>(
+    tab: &T,
+    options: &SnapshotOptions,
+    progress: &Progress,
+) -> Result<FrameAriaSnapshotJSONResult, CallError> {
+    let nodes = aria_nodes(tab, options, progress).await?;
+    let snapshot = serde_json::to_value(nodes)
+        .map_err(|error| PlaywrightError::error(format!("neo-runtime: {error}")))?;
+    Ok(FrameAriaSnapshotJSONResult { snapshot })
+}
+
+/// Serves a document or locator snapshot. AI snapshots rooted in the main frame stitch
+/// rendered iframe documents and prefix their refs with paths from that main frame.
+async fn aria_nodes<T: ReadTab>(
+    tab: &T,
+    options: &SnapshotOptions,
+    progress: &Progress,
+) -> Result<Vec<AriaNode>, CallError> {
     if let Some(selector) = &options.selector {
         return locator_aria_snapshot(tab, selector, options, progress).await;
     }
@@ -439,7 +550,7 @@ pub(crate) async fn aria_snapshot<T: ReadTab>(
     } else {
         root.nodes
     };
-    render_snapshot(&nodes)
+    Ok(nodes)
 }
 
 /// The call's own document, polled until it has a body, and the path in front of its refs.
@@ -477,7 +588,7 @@ async fn locator_aria_snapshot<T: ReadTab>(
     selector: &str,
     options: &SnapshotOptions,
     progress: &Progress,
-) -> Result<FrameAriaSnapshotResult, CallError> {
+) -> Result<Vec<AriaNode>, CallError> {
     let params = InjectedAriaSnapshotParams {
         selector: selector.to_string(),
         strict: true,
@@ -488,7 +599,7 @@ async fn locator_aria_snapshot<T: ReadTab>(
     if options.mode == AriaSnapshotMode::Ai {
         return locator_ai_snapshot(tab, &params, options, progress).await;
     }
-    let snapshot = wait_for_function_on_selector(tab, selector, progress, || async {
+    let snapshot = retry_on_selector(tab, selector, progress, || async {
         let result = tab.aria_snapshot(&params, false).await?.result;
         let Some(value) = result.snapshot else {
             return Ok(None);
@@ -502,7 +613,7 @@ async fn locator_aria_snapshot<T: ReadTab>(
         Ok(Some(Matched { value, preview }))
     })
     .await?;
-    render_snapshot(&snapshot.nodes)
+    Ok(snapshot.nodes)
 }
 
 /// Playwright: `server/page.ts` `ariaSnapshotJSONForFrame`: `frame.retryWithProgressAndTimeouts(progress, [1000, 2000, 4000, 8000],`
@@ -511,7 +622,7 @@ async fn locator_ai_snapshot<T: ReadTab>(
     params: &InjectedAriaSnapshotParams,
     options: &SnapshotOptions,
     progress: &Progress,
-) -> Result<FrameAriaSnapshotResult, CallError> {
+) -> Result<Vec<AriaNode>, CallError> {
     let mut attempt: usize = 0;
     loop {
         let wait = SNAPSHOT_WAITS_MS[attempt.min(SNAPSHOT_WAITS_MS.len() - 1)];
@@ -521,8 +632,7 @@ async fn locator_ai_snapshot<T: ReadTab>(
         }
         match snapshot_once(tab, params, progress).await {
             Ok(Some((snapshot, base))) => {
-                let nodes = stitch(tab, options, progress, snapshot, &base).await?;
-                return render_snapshot(&nodes);
+                return stitch(tab, options, progress, snapshot, &base).await;
             }
             Ok(None) => {
                 // Playwright: `server/page.ts` `ariaSnapshotJSONForFrame`: `throw new NonRecoverableDOMError(`
@@ -828,6 +938,10 @@ impl SelectorTab for FrameTab {
         selector: &str,
     ) -> impl Future<Output = Result<SelectorFacts, PageError>> + Send {
         click::Tab::describe(self, selector)
+    }
+
+    async fn action_pre_checks(&self, progress: &Progress) -> Result<(), click::Stop> {
+        click::wait_out_pending_navigation(self, progress).await
     }
 }
 
