@@ -428,19 +428,23 @@ async fn snapshot_once<T: ReadTab>(
 /// document always after the one holding its iframe.
 struct Document {
     nodes: Vec<AriaNode>,
-    /// Where this document's iframe node sits: the index of the document holding it, and the
-    /// node's ref there. `None` for the root.
-    owner: Option<(usize, String)>,
+    /// Where it goes; `None` for the root.
+    slot: Option<Slot>,
     /// The documents of this one's iframes, prefixed and ready, by their iframe node's ref.
     stitched: HashMap<String, Vec<AriaNode>>,
 }
 
+/// Where an iframe's document goes: under the iframe node `iframe` (its ref, `eN`) of document
+/// `owner`, an index into the stitched documents, with its refs prefixed by `prefix` (`fN`).
+struct Slot {
+    owner: usize,
+    iframe: String,
+    prefix: String,
+}
+
 /// One iframe's document still to snapshot.
 struct Pending {
-    /// The document holding the iframe, as an index into the stitched documents.
-    owner: usize,
-    /// The iframe node's ref in that document, `eN`.
-    iframe: String,
+    slot: Slot,
     /// The selector of the iframe element from the call's frame: its owner's hops, then its own
     /// ref (`aria-ref=e7 >> internal:control=enter-frame >> aria-ref=e2` one document down).
     hops: String,
@@ -468,7 +472,7 @@ async fn stitch<T: ReadTab>(
 ) -> Result<Vec<AriaNode>, CallError> {
     let mut documents = vec![Document {
         nodes: root.nodes,
-        owner: None,
+        slot: None,
         stitched: HashMap::new(),
     }];
     let mut snapshots = FuturesUnordered::new();
@@ -487,7 +491,7 @@ async fn stitch<T: ReadTab>(
         }
         documents.push(Document {
             nodes: snapshot.nodes,
-            owner: Some((child.owner, child.iframe)),
+            slot: Some(child.slot),
             stitched: HashMap::new(),
         });
     }
@@ -495,15 +499,12 @@ async fn stitch<T: ReadTab>(
     // finishes each document before its own owner takes it.
     while let Some(mut document) = documents.pop() {
         merge_iframes(&mut document.nodes, &mut document.stitched);
-        let Some((owner, iframe)) = document.owner else {
+        let Some(slot) = document.slot else {
             return Ok(document.nodes);
         };
-        let Some(prefix) = ref_number(&iframe) else {
-            continue;
-        };
-        prefix_refs(&mut document.nodes, &format!("f{prefix}"));
-        if let Some(owner) = documents.get_mut(owner) {
-            owner.stitched.insert(iframe, document.nodes);
+        prefix_refs(&mut document.nodes, &slot.prefix);
+        if let Some(owner) = documents.get_mut(slot.owner) {
+            owner.stitched.insert(slot.iframe, document.nodes);
         }
     }
     Err(PlaywrightError::error("neo-runtime: the stitched snapshot lost its root").into())
@@ -515,24 +516,24 @@ async fn stitch<T: ReadTab>(
 fn children(owner: usize, hops: &str, depth: Option<i64>, iframes: &[AriaIframe]) -> Vec<Pending> {
     iframes
         .iter()
-        // A ref outside `eN` cannot become a path ref, so its document could never be acted on.
-        .filter(|iframe| ref_number(&iframe.r#ref).is_some())
-        .map(|iframe| Pending {
-            owner,
-            iframe: iframe.r#ref.clone(),
-            hops: format!("{hops}aria-ref={}", iframe.r#ref),
-            depth: depth
-                .filter(|depth| *depth != 0)
-                .map(|depth| depth.saturating_sub(iframe.depth).saturating_sub(1)),
+        .filter_map(|iframe| {
+            // A ref outside `eN` cannot become a path ref: its document could never be acted on.
+            let number = iframe.r#ref.strip_prefix('e').filter(|number| {
+                !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
+            })?;
+            Some(Pending {
+                slot: Slot {
+                    owner,
+                    iframe: iframe.r#ref.clone(),
+                    prefix: format!("f{number}"),
+                },
+                hops: format!("{hops}aria-ref={}", iframe.r#ref),
+                depth: depth
+                    .filter(|depth| *depth != 0)
+                    .map(|depth| depth.saturating_sub(iframe.depth).saturating_sub(1)),
+            })
         })
         .collect()
-}
-
-/// The `N` of a document-local ref `eN`.
-fn ref_number(aria_ref: &str) -> Option<&str> {
-    aria_ref
-        .strip_prefix('e')
-        .filter(|number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 /// One iframe's document, as Playwright's nested `ariaSnapshotJSONForFrame` reads it with a

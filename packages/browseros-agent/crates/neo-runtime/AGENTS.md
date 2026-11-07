@@ -10,7 +10,7 @@ Runs one script in a fresh QuickJS realm from a starting BrowserOS tab. Its cont
 - Runs need tokio's multi-threaded runtime: a synchronous getter blocks its worker with `block_in_place` while it waits for CDP.
 - `src/realm.rs` embeds `../neo-sdk/dist/sdk.js`; change the SDK in `neo-sdk`, rebuild it, and commit the bundle.
 
-- `src/reads.rs` is `Frame.textContent`, `Frame.innerText` and `Frame.getAttribute` (Playwright's `_waitForFunctionOnSelector` over loop A's backoff) and `Frame.ariaSnapshot` without a selector (polls `body,frameset`), over their own seam traits, tested with a scripted tab under paused time; `src/aria_yaml.rs` renders the snapshot as Playwright's YAML, pinned byte for byte by `../neo-runtime-injected/tests/aria-yaml-goldens.json`.
+- `src/reads.rs` is `Frame.textContent`, `Frame.innerText` and `Frame.getAttribute` (Playwright's `_waitForFunctionOnSelector` over loop A's backoff) and `Frame.ariaSnapshot` without a selector (polls `body,frameset`, then stitches every rendered iframe's document under its node, entered through `aria-ref=eN >> internal:control=enter-frame >> body,frameset`, its refs prefixed with the iframe's path: `f7e3`, `f7f2e1`), over their own seam traits, tested with a scripted tab under paused time; `src/aria_yaml.rs` renders the snapshot as Playwright's YAML, pinned byte for byte by `../neo-runtime-injected/tests/aria-yaml-goldens.json`.
 - `src/states.rs` waits for visibility's selector context, then reads once (missing/evaluation disconnect → false); `isChecked` polls for a match through `reads.rs`. Both are reads without input delivery.
 - `src/lists.rs` serves Locator collection snapshots (`count`, `allTextContents`): `describe` rejects an invalid selector with Playwright's message, then one non-strict glue read, without waiting, target marks or call-log lines; scripted-tab tests pin values and page steps.
 - `src/waits.rs` owns selector, URL and lifecycle waits over one loop and the input-free `WaitTab` seam; navigation waits use buffered commits and lifecycle counts, DOM waits use loop A's backoff, and `Progress` owns every deadline and cancellation.
@@ -22,7 +22,7 @@ Checks, from `packages/browseros-agent`: `scripts/neo-check.sh`. The end-to-end 
 ```sh
 export NEO_E2E_BROWSER="/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo"
 cargo test -p neo-runtime --test tabs_e2e --test sync_getters --test click_e2e --test navigation_e2e \
-  --test reads_e2e --test states_e2e --test acceptance_e2e --test waits_e2e -- --nocapture
+  --test reads_e2e --test states_e2e --test acceptance_e2e --test waits_e2e --test frames_snapshot_e2e -- --nocapture
 ```
 
 Try a script by hand with `cargo run -p neo-runtime --example neo_run -- --help`.
