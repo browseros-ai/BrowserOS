@@ -5,17 +5,25 @@ export function nativeLoop(codecFactory, epoch) {
   class ProtocolError extends Error {}
   const objects = new Map()
   const reverse = new WeakMap()
+  // Methods can be shared across receivers. Send opaque identity plus public metadata,
+  // then invoke the same actual function with the receiver supplied by the Node caller.
+  const functions = new Map()
+  const functionIds = new WeakMap()
+  // Upstream's fixture defaults disable API timeouts. These are actual SDK setters,
+  // applied before the measured body and inherited by pages created later in the run.
+  context.setDefaultTimeout(0)
+  context.setDefaultNavigationTimeout(0)
+  page.setDefaultTimeout(0)
+  page.setDefaultNavigationTimeout(0)
+  const mainFrame = page.mainFrame()
   const seeds = [
-    page,
-    context,
-    page.mainFrame(),
-    page.locator('__neo_capability_probe__'),
+    [page, 'Page'],
+    [context, 'BrowserContext'],
+    [mainFrame, 'Frame'],
+    [page.locator('__neo_capability_probe__'), 'Locator'],
   ]
   const prototypes = new Map(
-    seeds.map((object) => [
-      Object.getPrototypeOf(object),
-      object.constructor.name,
-    ]),
+    seeds.map(([object, family]) => [Object.getPrototypeOf(object), family]),
   )
   const identify = (value) => {
     const family = prototypes.get(Object.getPrototypeOf(value))
@@ -47,7 +55,7 @@ export function nativeLoop(codecFactory, epoch) {
     errorStack: codec.encode(thrown?.stack),
   })
   const capabilities = {}
-  for (const object of seeds) {
+  for (const [object, family] of seeds) {
     const members = new Set()
     for (
       let prototype = object;
@@ -56,11 +64,15 @@ export function nativeLoop(codecFactory, epoch) {
     )
       for (const name of Object.getOwnPropertyNames(prototype))
         if (name !== 'constructor') members.add(name)
-    capabilities[object.constructor.name] = [...members].sort()
+    capabilities[family] = [...members].sort()
   }
   reply({
     event: 'ready',
-    roots: { page: codec.encode(page), context: codec.encode(context) },
+    roots: {
+      page: codec.encode(page),
+      context: codec.encode(context),
+      mainFrame: codec.encode(mainFrame),
+    },
     capabilities,
   })
   // Never await a browser promise in this receive loop. A wait must leave room for the
@@ -91,17 +103,31 @@ export function nativeLoop(codecFactory, epoch) {
             continue
           }
           const value = Reflect.get(object, member, object)
+          if (typeof value === 'function' && !functionIds.has(value)) {
+            const id = functions.size + 1
+            functions.set(id, value)
+            functionIds.set(value, id)
+          }
           reply(
             typeof value === 'function'
-              ? { id: command.id, kind: 'callable' }
+              ? {
+                  id: command.id,
+                  kind: 'callable',
+                  function: {
+                    id: functionIds.get(value),
+                    name: codec.encode(value.name),
+                    length: value.length,
+                  },
+                }
               : { id: command.id, kind: 'value', value: codec.encode(value) },
           )
           continue
         }
-        if (command.op !== 'invoke' || typeof object[member] !== 'function')
+        const callable = functions.get(command.function)
+        if (command.op !== 'invoke' || !callable)
           throw new ProtocolError('Invalid native invocation')
         const value = Reflect.apply(
-          object[member],
+          callable,
           object,
           codec.decode(command.args),
         )
