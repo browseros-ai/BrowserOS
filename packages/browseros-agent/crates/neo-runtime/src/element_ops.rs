@@ -47,7 +47,7 @@ use crate::click::{
 use crate::evaluate::{self, CreatedHandle, EvalCall, MainCallback, SerializedArgument};
 use crate::forms::{FocusOutcome, FormTab};
 use crate::frame_selector;
-use crate::page::{FrameTab, InputPermit, ResolvedElement};
+use crate::page::{FrameTab, GroupGuard, InputPermit, ResolvedElement};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::reads::SelectorTab;
 
@@ -335,7 +335,8 @@ pub(crate) async fn dispatch_event(
 ///
 /// Loop A until the first match resolves there (strict when asked); then eval's element callback
 /// on the run's handle of that element, with `:scope` (Neo's `ElementHandle.dispatchEvent`),
-/// and the handle is released.
+/// and the handle is released. The element's main-world object lives in an object group of this
+/// call from its adoption on, so success, error, timeout and abort all release it.
 async fn dispatch_on_aria_ref(
     page: &FrameTab,
     options: &DispatchOptions,
@@ -345,7 +346,7 @@ async fn dispatch_on_aria_ref(
     progress.name_locator(&options.selector);
     let mut locator = None;
     let mut waits = click::LoopAWaits::new(progress.timeout_ms());
-    let element = loop {
+    let (element, owner) = loop {
         let wait = waits.next_wait();
         if !wait.is_zero() {
             progress.wait(wait).await?;
@@ -370,20 +371,21 @@ async fn dispatch_on_aria_ref(
     if let Some(locator) = &locator {
         progress.name_locator(locator);
     }
-    // The handle was this call's own: released as `JSHandle.dispose` releases one.
+    // The handle was this call's own: released as `JSHandle.dispose` releases one, then its group.
     let _released = evaluate::serve(page, EvalCall::Dispose { guid: element.guid }, progress).await;
+    drop(owner);
     dispatched.map(|_| ())
 }
 
 /// Neo: one attempt of [`dispatch_on_aria_ref`]: the selector's first match in the utility world,
-/// unmarked, as `Frame.querySelector` finds it, adopted into its frame's main world as a handle of
-/// the run; `None` to poll again.
+/// unmarked, as `Frame.querySelector` finds it, adopted into its frame's main world in a group of
+/// this call, whose guard comes back with the run's handle of it; `None` to poll again.
 async fn ref_attempt(
     page: &FrameTab,
     options: &DispatchOptions,
     progress: &Progress,
     locator: &mut Option<String>,
-) -> Result<Option<CreatedHandle>, Stop> {
+) -> Result<Option<(CreatedHandle, GroupGuard)>, Stop> {
     progress.race(Tab::prepare(page)).await??;
     if locator.is_none() {
         let facts = progress
@@ -419,16 +421,26 @@ async fn ref_attempt(
     let (Some(element), Some(preview)) = (found.element, found.preview) else {
         return Ok(None);
     };
-    let created = progress
-        .race(evaluate::element_handle_for(
-            page,
-            &located.frame,
-            &element,
-            &preview,
-            progress.handles(),
-        ))
+    // Chromium allocates the object in this call's group: a timeout or abort that wins before the
+    // reply drops the guard, which releases the group, so no adoption outlives the call.
+    let owner = page.group(&located.frame, "dispatch-ref-main");
+    let (document, object) = progress
+        .race(
+            located
+                .frame
+                .main
+                .adopt(&located.frame, &element, owner.group()),
+        )
         .await??;
-    Ok(Some(created))
+    let created = evaluate::adopted_element_handle(
+        page,
+        &located.frame,
+        document,
+        object,
+        &preview,
+        progress.handles(),
+    )?;
+    Ok(Some((created, owner)))
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -2823,6 +2823,34 @@ pub(crate) async fn element_handle_for(
     )
 }
 
+/// Neo: [`element_handle_for`] for an element the caller already adopted into the main world in
+/// an object group of its own (`MainWorld::adopt`), registered without a page call, so nothing
+/// is allocated between the adoption and the handle. A caller that can be cancelled while
+/// adopting owns the object through its group's guard until it disposes the handle:
+/// `element_ops.rs` `dispatch_on_aria_ref`.
+///
+/// # Errors
+///
+/// `NotConnected` when the adoption answered no object; `Closed` once the run ended.
+pub(crate) fn adopted_element_handle(
+    tab: &FrameTab,
+    frame: &Arc<FrameContext>,
+    document: DocumentId,
+    object: RemoteObject,
+    preview: &str,
+    handles: &Handles,
+) -> Result<CreatedHandle, PageError> {
+    let object_id = object.object_id.ok_or(PageError::NotConnected)?;
+    handles.register(
+        tab,
+        frame,
+        document,
+        Remote::Object(HandleId::new(object_id)),
+        true,
+        format!("{NODE_PREVIEW_PREFIX}{preview}"),
+    )
+}
+
 /// Neo: starts the page's watcher before the caller's page JS runs, once per run, as every action
 /// and read does first (`click::Tab::prepare`), so a navigation that JS requests
 /// (`location.href = …`) is followed from its request on. Playwright, listening since it
