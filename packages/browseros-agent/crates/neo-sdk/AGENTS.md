@@ -5,6 +5,7 @@ The Playwright-shaped objects (`Page`, `Frame`, `Locator`, `BrowserContext`) an 
 - Runs in QuickJS: ES2023 only, no DOM or Node APIs, and the bundle defines no globals.
 - Depends on nothing at runtime; `src/runtime-bridge.ts` is its only link to Rust.
 - `bun run build` writes `dist/sdk.js`, which neo-runtime embeds. Commit it with every `src/` change; `scripts/neo-check.sh` fails on a stale bundle.
+- `src/network.ts` is Playwright's client `Request`, `Response` and `RawHeaders` for `goto`'s answer: `responseFor` builds a whole redirect chain from Rust's `chain` getter, once per guid (`Connection._objects`); `timing()`, `failure()` and `finished()` read Rust's record live, where Playwright's client waits for events. `body()` is a `Uint8Array` subclass with Node `Buffer`'s `toString`, `toJSON` and `equals`.
 - Locators are Playwright's: `src/locator.ts` keeps Playwright's method bodies, and every selector comes from `vendor/playwright/`, an unchanged copy at Playwright 26137face. Never edit vendored files; `bun run test` re-hashes them against `vendor/playwright/VENDOR.md`. `tests/goldens/` holds Playwright's recorded selector strings, which neo-runtime's tests compare against.
 
 Checks: `bun run typecheck` and `bun run test`, then `scripts/neo-check.sh` from `packages/browseros-agent`.

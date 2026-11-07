@@ -21,6 +21,7 @@ import {
   type UncheckOptions,
 } from './frame'
 import type { Locator, LocatorOptions } from './locator'
+import type { Response } from './network'
 import { PAGE_CLOSE_KEYS, pickParams } from './protocol'
 import { get } from './runtime-bridge'
 import type { SelectOptionValues } from './select-option'
@@ -144,8 +145,8 @@ export class Page {
     this._timeoutSettings.setDefaultNavigationTimeout(timeout)
   }
 
-  /** Resolves `null`: Neo creates no `Response` objects yet. */
-  async goto(url: string, options: GotoOptions = {}): Promise<null> {
+  /** The navigation's `Response`, or `null` where Playwright's has none. */
+  async goto(url: string, options: GotoOptions = {}): Promise<Response | null> {
     return await this.#mainFrame._goto('page.goto', url, options)
   }
 

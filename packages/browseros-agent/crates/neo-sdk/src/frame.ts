@@ -9,10 +9,10 @@
  * `apiName`. Each runs synchronously into `Connection.send`, so the location it captures is the
  * script's call site.
  *
- * What differs from Playwright: `goto` resolves `null` for every navigation, because Neo creates
- * no `Response` objects yet (Playwright returns `null` only for navigations without one, such as
- * `about:blank` or a same-document change).
- * `allTextContents` sends `client/locator.ts` source text; compiled Playwright clients may format
+ * `goto` resolves the navigation's `Response` (`network.ts`), or `null` where Playwright's does:
+ * a same-document change, or a document without a network request (`about:blank`, `data:`).
+ *
+ * What differs from Playwright: `allTextContents` sends `client/locator.ts` source text; compiled Playwright clients may format
  * it differently. It reads in Neo's isolated world, so page-defined `textContent` overrides
  * (prototype patches, custom element classes or per-instance properties) can differ.
  */
@@ -52,6 +52,7 @@ import {
 } from '../vendor/playwright/isomorphic/locatorUtils'
 import type { ApiName, Connection } from './connection'
 import { Locator, type LocatorOptions, testIdAttributeName } from './locator'
+import { type Response, responseFor } from './network'
 import type { Page } from './page'
 import {
   FRAME_ARIA_SNAPSHOT_KEYS,
@@ -176,22 +177,22 @@ export class Frame {
     return this._page
   }
 
-  /** Resolves `null`: Neo creates no `Response` objects yet. */
-  async goto(url: string, options: GotoOptions = {}): Promise<null> {
+  async goto(url: string, options: GotoOptions = {}): Promise<Response | null> {
     return await this._goto('frame.goto', url, options)
   }
 
-  /** Sends `Frame.goto` under the navigation timeout, `waitUntil` defaulting to `load`. */
+  /** Sends `Frame.goto` under the navigation timeout, `waitUntil` defaulting to `load`, and
+   * resolves the navigation's `Response`, built once per guid. */
   async _goto(
     apiName: ApiName,
     url: string,
     options: GotoOptions,
-  ): Promise<null> {
+  ): Promise<Response | null> {
     const waitUntil = verifyLoadState(
       'waitUntil',
       options.waitUntil === undefined ? 'load' : options.waitUntil,
     )
-    await this._connection.send(
+    const result = await this._connection.send(
       apiName,
       this._guid,
       'goto',
@@ -202,7 +203,8 @@ export class Frame {
       }) as FrameGotoParams,
       this._page._timeoutSettings.navigationTimeout(options),
     )
-    return null
+    const guid = result?.response?.guid
+    return guid ? responseFor(this._connection, guid, this) : null
   }
 
   async title(): Promise<string> {
