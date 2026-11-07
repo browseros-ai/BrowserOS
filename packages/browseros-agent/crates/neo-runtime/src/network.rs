@@ -23,8 +23,9 @@
 //! Neo-only:
 //! - A session keeps at most [`MAX_CHAINS`] chains, oldest dropped first; an object from a dropped
 //!   chain answers [`LogError::Dropped`].
-//! - A watcher that lagged may have lost any event, so a navigation still incomplete after a lag
-//!   answers [`LogError::Lost`] instead of a guessed response.
+//! - A watcher that lagged may have lost any event, so a navigation still unanswered when a lag
+//!   hit or first seen mid-redirect, and any value still pending after a lag, answer
+//!   [`LogError::Lost`] instead of a guess or a wait that could never end.
 //! - `serde_json` sorts object keys, so a header object Chromium sends unsorted (a request's
 //!   provisional headers) becomes an array in byte order; Chromium sends response headers and
 //!   every raw (extra info) header object sorted already.
@@ -249,6 +250,21 @@ struct Chain {
     /// the i-th one pairs with the i-th request and response extra info.
     expecting: Vec<usize>,
     served_from_cache: bool,
+    /// What a watcher lag since the chain began may have cost it.
+    lag: Lag,
+}
+
+/// A watcher lag that may have lost one of a chain's events.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Lag {
+    #[default]
+    None,
+    /// The watcher lagged after the chain's answer: a value still pending may never arrive.
+    AfterAnswer,
+    /// The chain may miss events before its answer: the watcher lagged while its last hop had
+    /// neither a response nor a failure, or the chain began with a redirect continuation, so a
+    /// lag lost its first hops. Even an answer that arrives later may pair with the wrong hop.
+    BeforeAnswer,
 }
 
 /// One request of a chain: Playwright's server `Request`, plus what its client learned from
@@ -315,10 +331,20 @@ impl NetworkLog {
         }
     }
 
-    /// The watcher lagged: any event may be missing from here on.
+    /// The watcher lagged: any event may be missing from here on, so every value still pending
+    /// may never arrive.
     pub(crate) fn lagged(&self) {
         if let Ok(mut log) = self.log.lock() {
             log.lags += 1;
+            for chain in &mut log.chains {
+                if chain.lag != Lag::BeforeAnswer {
+                    chain.lag = if chain.lookup() == Lookup::Pending {
+                        Lag::BeforeAnswer
+                    } else {
+                        Lag::AfterAnswer
+                    };
+                }
+            }
         }
         self.changes
             .send_modify(|version| *version = version.wrapping_add(1));
@@ -334,10 +360,14 @@ impl NetworkLog {
     /// unanswered lookup into [`LogError::Lost`].
     pub(crate) fn lookup(&self, document: &str, lags_before: u64) -> Result<Lookup, LogError> {
         self.read(|log| {
-            let lookup = log.chain(document).map_or(Lookup::NoRequest, Chain::lookup);
+            let chain = log.chain(document);
+            let lookup = chain.map_or(Lookup::NoRequest, Chain::lookup);
             let lagged = log.lags > lags_before;
             match lookup {
                 Lookup::NoRequest | Lookup::Pending if lagged => Err(LogError::Lost),
+                _ if chain.is_some_and(|chain| chain.lag == Lag::BeforeAnswer) => {
+                    Err(LogError::Lost)
+                }
                 lookup => Ok(lookup),
             }
         })?
@@ -428,13 +458,14 @@ impl NetworkLog {
 
     /// Whether the client's `requestFinished` arrived, which resolves `response.finished()`.
     pub(crate) fn finished(&self, id: &HopId) -> Result<bool, LogError> {
-        self.with_hop(id, "response", |hop| Ok(hop.finished))
+        self.with_pending(id, "response", |hop| Ok(hop.finished.then_some(true)))
+            .map(|finished| finished.unwrap_or(false))
     }
 
     /// `Request.response` once the hop settled: a response arrived, or it failed without one.
     pub(crate) fn response(&self, id: &HopId) -> Result<Option<Settled>, LogError> {
         let target = self.main_frame.clone();
-        self.with_hop(id, "request", |hop| {
+        self.with_pending(id, "request", |hop| {
             Ok(if hop.response.is_some() {
                 Some(Settled::Response(ResponseChannel {
                     guid: id.response_guid(&target),
@@ -452,7 +483,7 @@ impl NetworkLog {
         &self,
         id: &HopId,
     ) -> Result<Option<Vec<NameValue>>, LogError> {
-        self.with_hop(id, "request", |hop| Ok(hop.raw_request_headers.clone()))
+        self.with_pending(id, "request", |hop| Ok(hop.raw_request_headers.clone()))
     }
 
     /// `Response.rawResponseHeaders` once known.
@@ -460,7 +491,12 @@ impl NetworkLog {
         &self,
         id: &HopId,
     ) -> Result<Option<Vec<NameValue>>, LogError> {
-        self.with_response(id, |response| Ok(response.raw_headers.clone()))
+        self.with_pending(id, "response", |hop| {
+            Ok(hop
+                .response
+                .as_ref()
+                .and_then(|response| response.raw_headers.clone()))
+        })
     }
 
     /// `Response.securityDetails`: always an object for Chromium, `{}` without TLS.
@@ -486,13 +522,13 @@ impl NetworkLog {
 
     /// `Response.sizes` (`internalSizes`) once every size it awaits is known.
     pub(crate) fn sizes(&self, id: &HopId) -> Result<Option<RequestSizes>, LogError> {
-        self.with_hop(id, "response", Hop::sizes)
+        self.with_pending(id, "response", Hop::sizes)
     }
 
     /// What `Response.body` reads, once the response is done (`internalBody` awaits its
     /// `_finishedPromise`); a redirect's body is refused as Playwright refuses it.
     pub(crate) fn body(&self, id: &HopId) -> Result<Option<BodyRead>, LogError> {
-        self.with_hop(id, "response", |hop| {
+        self.with_pending(id, "response", |hop| {
             let Some(response) = &hop.response else {
                 return Ok(None);
             };
@@ -539,6 +575,23 @@ impl NetworkLog {
                 .hops
                 .get(id.hop)
                 .map_or(Err(LogError::Dropped(what)), read)
+        })
+    }
+
+    /// A hop's value that may still be pending: `None` waits for the next event, unless the
+    /// watcher lagged since the chain began, which may have lost that event for good.
+    fn with_pending<T>(
+        &self,
+        id: &HopId,
+        what: &'static str,
+        read: impl FnOnce(&Hop) -> Result<Option<T>, LogError>,
+    ) -> Result<Option<T>, LogError> {
+        self.with_chain(id, what, |chain| {
+            let hop = chain.hops.get(id.hop).ok_or(LogError::Dropped(what))?;
+            match read(hop)? {
+                None if chain.lag != Lag::None => Err(LogError::Lost),
+                value => Ok(value),
+            }
         })
     }
 
@@ -626,6 +679,10 @@ impl Log {
             return true;
         }
         let mut chain = Chain::new(event.request_id);
+        if event.redirect_response.is_some() {
+            // A redirect with no chain to continue: the request's start was never seen.
+            chain.lag = Lag::BeforeAnswer;
+        }
         chain.hops.push(hop);
         for orphan in self.take_orphans(&chain.request) {
             chain.extra(orphan);
@@ -742,6 +799,7 @@ impl Chain {
             response_extra: Vec::new(),
             expecting: Vec::new(),
             served_from_cache: false,
+            lag: Lag::None,
         }
     }
 
@@ -1996,11 +2054,52 @@ mod tests {
             "maybe never seen"
         );
         log.apply(response("N", false).0.as_str(), &response("N", false).1);
-        assert!(
-            matches!(log.lookup("N", before), Ok(Lookup::Response(_))),
-            "a complete answer stands"
+        assert_eq!(
+            log.lookup("N", before),
+            Err(LogError::Lost),
+            "a response after the lag may belong to a hop the lag lost"
         );
         assert_eq!(log.lookup("GONE", log.lags()), Ok(Lookup::NoRequest));
+        let answered = replay(
+            "MAIN",
+            &[navigation("A", "MAIN", "Document", "https://a.test/")],
+        );
+        let (method, params) = response("A", false);
+        answered.apply(&method, &params);
+        answered.lagged();
+        assert!(
+            matches!(answered.lookup("A", 0), Ok(Lookup::Response(_))),
+            "an answer that came before the lag stands"
+        );
+    }
+
+    /// A lag that drops a navigation's first request leaves a redirect continuation to start its
+    /// chain, with the hops before it gone: its answer is lost, not a Response whose request has
+    /// no `redirectedFrom`.
+    #[test]
+    fn tests_that_a_chain_continued_from_an_unseen_redirect_is_lost() {
+        let log = NetworkLog::new("MAIN".to_string());
+        let before = log.lags();
+        log.lagged();
+        let (method, params) = event(
+            "Network.requestWillBeSent",
+            json!({
+                "requestId": "N", "loaderId": "N", "type": "Document", "frameId": "MAIN",
+                "request": {"url": "https://a.test/next", "method": "GET", "headers": {}},
+                "timestamp": 10.25, "wallTime": 1000.25,
+                "redirectResponse": {"url": "https://a.test/", "status": 302, "statusText": "Found",
+                                     "headers": {"Location": "/next"}},
+            }),
+        );
+        log.apply(&method, &params);
+        let (method, params) = response("N", false);
+        log.apply(&method, &params);
+        assert_eq!(log.lookup("N", before), Err(LogError::Lost));
+        assert_eq!(
+            log.lookup("N", log.lags()),
+            Err(LogError::Lost),
+            "whenever the lag fell"
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -2173,6 +2272,48 @@ mod tests {
                 log.sizes(&hop)
             );
         }
+    }
+
+    /// After a lag the watcher may have lost the event a value waits for: a value already known
+    /// stands, and a pending one is lost rather than waited for forever.
+    #[test]
+    fn tests_that_a_lag_loses_values_still_pending() {
+        let golden = golden("ok");
+        let (late, early): (Vec<_>, Vec<_>) =
+            golden.events.iter().cloned().partition(|(method, _)| {
+                method == "Network.responseReceivedExtraInfo" || method == "Network.loadingFinished"
+            });
+        let log = replay(&golden.main_frame, &early);
+        let document = committed(&golden).expect("a commit");
+        let hop = HopId {
+            request: document.clone(),
+            hop: 0,
+        };
+        assert_eq!(
+            log.raw_response_headers(&hop),
+            Ok(None),
+            "pending before the lag"
+        );
+        log.lagged();
+        assert!(
+            log.raw_request_headers(&hop).expect("known").is_some(),
+            "known values stand"
+        );
+        assert_eq!(log.raw_response_headers(&hop), Err(LogError::Lost));
+        assert_eq!(log.sizes(&hop), Err(LogError::Lost));
+        assert_eq!(log.body(&hop), Err(LogError::Lost));
+        assert_eq!(log.finished(&hop), Err(LogError::Lost));
+        assert!(
+            matches!(log.lookup(&document, 0), Ok(Lookup::Response(_))),
+            "answered before the lag"
+        );
+        for (method, params) in &late {
+            log.apply(method, params);
+        }
+        assert!(
+            log.raw_response_headers(&hop).expect("arrived").is_some(),
+            "late events count"
+        );
     }
 
     #[test]
