@@ -4026,7 +4026,12 @@ class Frame {
       return ms;
     };
     let cursor;
-    let finishing = false;
+    let finished = false;
+    const finish = async (id, index) => {
+      const result = await this.#finishNavigation(apiName, id, index, waitUntil, left());
+      finished = true;
+      return result;
+    };
     const next = () => {
       const call2 = this._connection.sendNeo(apiName, this._guid, "neo:nextNavigation", cursor === undefined ? { response: respond } : { cursor, response: respond }, left());
       call2.catch(() => {});
@@ -4072,14 +4077,12 @@ class Frame {
           }
           if (!verdict)
             continue;
-          finishing = true;
-          return await this.#finishNavigation(apiName, id, index, waitUntil, left());
+          return await finish(id, index);
         }
         verdicts.delete(step.index);
         if (!step.accepted || cursor === undefined)
           continue;
-        finishing = true;
-        return await this.#finishNavigation(apiName, cursor, step.index, waitUntil, left());
+        return await finish(cursor, step.index);
       }
     } catch (error) {
       if (error instanceof TimeoutError && deadline)
@@ -4087,9 +4090,15 @@ class Frame {
       throw error;
     } finally {
       clearTimeout(timer);
-      if (!finishing && cursor !== undefined)
-        this._connection.sendNeo(apiName, this._guid, "neo:releaseNavigation", { cursor }, 0).catch(() => {});
+      await this.#endWait(apiName, cursor, finished, waiting);
     }
+  }
+  async#endWait(apiName, cursor, finished, waiting) {
+    let ended = finished;
+    if (cursor !== undefined && !ended)
+      ended = await this._connection.sendNeo(apiName, this._guid, "neo:releaseNavigation", { cursor }, 0).then(() => true, () => false);
+    if (ended || cursor === undefined)
+      await waiting.catch(() => {});
   }
   async#finishNavigation(apiName, cursor, index, waitUntil, timeout) {
     return await this._connection.sendNeo(apiName, this._guid, "neo:finishNavigation", { cursor, index, waitUntil }, timeout);

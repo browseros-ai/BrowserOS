@@ -69,7 +69,7 @@ use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
 use crate::frames::FrameScope;
 use crate::history::{
-    self, Cursors, FinishNavigationOptions, FrameCursor, NeoFinishNavigationParams,
+    self, Cursors, Ending, FinishNavigationOptions, FrameCursor, NeoFinishNavigationParams,
     NeoNavigationResult, NeoNextNavigationParams, NeoReleaseNavigationParams,
     NeoWaitForNavigationParams, WaitForNavigationOptions,
 };
@@ -102,7 +102,8 @@ const RECORDS_WAIT: Duration = Duration::from_secs(1);
 /// log and a task in Rust, outside the realm's memory limit, and a script can start calls without
 /// awaiting them, so without a cap one run could hold any amount of the server's memory.
 /// Playwright has no such cap; a script that awaits its calls, or a `Promise.all` over a page's
-/// worth of locators, stays far below it.
+/// worth of locators, stays far below it. A URL-predicate wait's finish and release skip it
+/// (`ending_cursor`): the wait they end may hold some of it, and the cursor cap bounds them.
 const MAX_CALLS_IN_FLIGHT: usize = 64;
 
 /// The most request bytes (each call's message as the SDK sent it) one run's unfinished calls
@@ -401,10 +402,15 @@ impl Dispatcher {
         }));
         inner.trace.push(Arc::clone(&entry));
         let admitted = route.and_then(|route| {
-            let admitted = inner.in_flight.admit(message.len())?;
-            Ok((route, admitted))
+            let ending = ending_cursor(&route).and_then(|id| inner.cursors.begin_ending(id));
+            let share = if ending.is_some() {
+                None
+            } else {
+                Some(inner.in_flight.admit(message.len())?)
+            };
+            Ok((route, share, ending))
         });
-        let (route, admitted) = match admitted {
+        let (route, share, ending) = match admitted {
             Ok(admitted) => admitted,
             Err(error) => {
                 entry.finish(error.to_result());
@@ -441,13 +447,11 @@ impl Dispatcher {
                 id,
                 reply,
                 events: inner.tabs.events().clone(),
+                share,
+                ending,
             },
         );
-        inner.run.tasks.spawn(async move {
-            // The call's share of the in-flight caps, given back however the task ends.
-            let _admitted = admitted;
-            served.await;
-        });
+        inner.run.tasks.spawn(served);
         PendingReply(PendingInner::Waiting(receiver))
     }
 
@@ -695,6 +699,10 @@ struct CallReply {
     reply: oneshot::Sender<Reply>,
     /// The run's events, whose barrier the reply waits for.
     events: EventHub,
+    /// The call's share of the in-flight caps; none for a wait's finish or release.
+    share: Option<Admitted>,
+    /// A wait's finish or release: its claim on the wait it ends (`Cursors::begin_ending`).
+    ending: Option<Ending<FrameCursor>>,
 }
 
 /// Attachment can block or be cancelled independently of a frame handler. Once attached,
@@ -960,6 +968,8 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
         id,
         reply,
         events,
+        share,
+        ending,
     } = target;
     let (record, answer) = match result {
         Err(CallError::RunEnded(_)) => return,
@@ -971,6 +981,9 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
     let answer = answer.as_ref().map(Option::as_ref);
     let text = encode_reply(&id, answer, Some(&log));
     events.barrier().await;
+    // Given back before the reply leaves, so a script that awaited this call can start another
+    // at once. A call that never replies gives them back as its task ends.
+    drop((share, ending));
     // The script may have stopped waiting (the realm is gone); the record already holds the
     // outcome.
     let _sent = reply.send((text, events.seq()));
@@ -1061,6 +1074,17 @@ pub(crate) fn encode_result<C: Command>(result: &C::Result) -> Result<Option<Val
     })
 }
 
+/// The cursor a URL-predicate wait's finish or release names. Each skips the in-flight caps for
+/// the one call that claims its open cursor (`Cursors::begin_ending`): the wait it ends may hold
+/// that capacity, and the claim counts against the cursor cap instead.
+fn ending_cursor(call: &ObjectCall) -> Option<u64> {
+    match call {
+        ObjectCall::Frame(Route::FrameFinishNavigation(options)) => Some(options.cursor),
+        ObjectCall::Frame(Route::FrameReleaseNavigation(params)) => Some(params.cursor),
+        _ => None,
+    }
+}
+
 /// What a run's unfinished calls hold now, against [`MAX_CALLS_IN_FLIGHT`] and
 /// [`MAX_REQUEST_BYTES_IN_FLIGHT`]: admitted in `Dispatcher::call`, given back from whichever
 /// thread ends the call's task.
@@ -1073,8 +1097,9 @@ struct Load {
     bytes: usize,
 }
 
-/// One admitted call's share of [`InFlight`], given back when it drops: when the call's task
-/// ends, whether it replied, the run ended under it, or the runtime dropped it.
+/// One admitted call's share of [`InFlight`], given back when it drops: just before the call's
+/// reply is sent ([`finish_reply`]), or when its task ends without one (the run ended under
+/// it, or the runtime dropped it).
 struct Admitted {
     in_flight: Arc<InFlight>,
     bytes: usize,
@@ -1230,6 +1255,8 @@ mod tests {
                 id: json!(1),
                 reply,
                 events: EventHub::default(),
+                share: None,
+                ending: None,
             },
         );
         run.end(RunEnd::Settled);
@@ -2119,6 +2146,72 @@ mod tests {
                 .starts_with("invalid params for Frame.click: "),
             "{error:?}"
         );
+    }
+
+    #[test]
+    fn tests_that_only_a_waits_finish_and_release_skip_the_in_flight_caps() {
+        let ends = |method: &str, params: Value| {
+            let route = route_frame(method, params)
+                .route
+                .unwrap_or_else(|error| panic!("{method}: {error:?}"));
+            ending_cursor(&route)
+        };
+        assert_eq!(
+            ends(
+                "neo:finishNavigation",
+                json!({"cursor":4,"index":2,"waitUntil":"load"})
+            ),
+            Some(4)
+        );
+        assert_eq!(ends("neo:releaseNavigation", json!({"cursor":5})), Some(5));
+        assert_eq!(
+            ends("neo:nextNavigation", json!({"cursor":4,"response":false})),
+            None,
+            "a next waits like any call"
+        );
+        assert_eq!(ends("click", json!({"selector":"#nothing"})), None);
+        let cursors = Arc::new(Cursors::<FrameCursor>::default());
+        assert!(
+            cursors.begin_ending(4).is_none(),
+            "a cursor that is not open claims nothing, so its call is admitted as any other"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_a_call_gives_its_share_back_before_its_reply_is_sent() {
+        let in_flight = Arc::new(InFlight::default());
+        let entry = Arc::new(CallEntry::new(CallStart {
+            call_id: 1,
+            guid: format!("frame@{PAGE}"),
+            method: "neo:nextNavigation".to_string(),
+            title: Some("Wait for navigation"),
+            params: json!({"response":false}),
+            location: None,
+            input: false,
+        }));
+        let trace = Trace::default();
+        trace.push(Arc::clone(&entry));
+        let (reply, receiver) = oneshot::channel();
+        let replied = tokio::spawn(finish_reply(
+            Ok(None),
+            CallReply {
+                entry,
+                trace,
+                id: json!(1),
+                reply,
+                events: EventHub::default(),
+                share: Some(in_flight.admit(10).expect("under the caps")),
+                ending: None,
+            },
+        ));
+        let _reply = receiver.await.expect("the call replied");
+        let held = in_flight.0.lock().map(|load| load.calls).ok();
+        assert_eq!(
+            held,
+            Some(0),
+            "a script that awaited the reply finds its capacity free"
+        );
+        replied.await.expect("finish_reply");
     }
 
     #[test]

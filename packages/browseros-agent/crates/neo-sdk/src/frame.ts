@@ -511,7 +511,10 @@ export class Frame {
    * closure or a failed navigation rejects the wait even with no timeout. `respond` asks for the
    * winning navigation's `Response`. `timeout` (0 for none) bounds the whole wait: each call gets
    * what is left, and the deadline also rejects while only predicates are pending. However the wait
-   * ends, its cursor ends with it: by the finish, or by a release when the realm ended it.
+   * ends, its cursor ends with it: by the finish, or by a release when the realm ended it. Rust
+   * then answers the next still waiting, and the wait settles only once that answer is in, so a
+   * settled wait holds none of the run's call capacity (neo-runtime `dispatch.rs`
+   * `MAX_CALLS_IN_FLIGHT`) or live-wait capacity (`history.rs` `MAX_CURSORS`).
    */
   async _navigationMatching(
     apiName: ApiName,
@@ -528,8 +531,19 @@ export class Frame {
       return ms
     }
     let cursor: number | undefined
-    /** Set once a finish was sent: Rust ends the cursor itself then. */
-    let finishing = false
+    /** Set once a finish Rust answered ended the cursor. */
+    let finished = false
+    const finish = async (id: number, index: number) => {
+      const result = await this.#finishNavigation(
+        apiName,
+        id,
+        index,
+        waitUntil,
+        left(),
+      )
+      finished = true
+      return result
+    }
     const next = () => {
       const call = this._connection.sendNeo(
         apiName,
@@ -591,25 +605,11 @@ export class Frame {
             continue
           }
           if (!verdict) continue
-          finishing = true
-          return await this.#finishNavigation(
-            apiName,
-            id,
-            index,
-            waitUntil,
-            left(),
-          )
+          return await finish(id, index)
         }
         verdicts.delete(step.index)
         if (!step.accepted || cursor === undefined) continue
-        finishing = true
-        return await this.#finishNavigation(
-          apiName,
-          cursor,
-          step.index,
-          waitUntil,
-          left(),
-        )
+        return await finish(cursor, step.index)
       }
     } catch (error) {
       // Each step ran under what was left of `timeout`; its message names the whole timeout.
@@ -621,11 +621,31 @@ export class Frame {
       throw error
     } finally {
       clearTimeout(timer)
-      if (!finishing && cursor !== undefined)
-        this._connection
-          .sendNeo(apiName, this._guid, 'neo:releaseNavigation', { cursor }, 0)
-          .catch(() => {})
+      await this.#endWait(apiName, cursor, finished, waiting)
     }
+  }
+
+  /**
+   * Ends a predicate wait's cursor however the wait ended, unless its finish did: a release, which
+   * Rust ignores for a cursor it already ended. Then waits for Rust's answer to the next still
+   * waiting, which comes once the cursor ended; a first next it never answered shares the wait's
+   * own deadline. Only a release that failed (the page closed) leaves that answer unknown.
+   */
+  async #endWait(
+    apiName: ApiName,
+    cursor: number | undefined,
+    finished: boolean,
+    waiting: Promise<NeoNextNavigationResult>,
+  ): Promise<void> {
+    let ended = finished
+    if (cursor !== undefined && !ended)
+      ended = await this._connection
+        .sendNeo(apiName, this._guid, 'neo:releaseNavigation', { cursor }, 0)
+        .then(
+          () => true,
+          () => false,
+        )
+    if (ended || cursor === undefined) await waiting.catch(() => {})
   }
 
   /** Sends `neo:finishNavigation` for the navigation the predicate accepted. */

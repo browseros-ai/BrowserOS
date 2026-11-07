@@ -18,8 +18,14 @@ type Sent = {
   timeout: number
 }
 
-/** A reply that never comes, as Rust's answer to a next navigation that has not happened. */
+/** A reply that never comes, as Rust's answer to a next navigation that has not happened. Like
+ * Rust, the stub answers it with no navigation once its cursor's finish or release arrives. */
 const HOLD = Symbol('hold')
+let held: ((cursor: number) => void)[] = []
+/** How late, in ms, the stub answers held calls after their cursor ended; and in what order the
+ * held answers and the waits' settling came. */
+let endDelay = 0
+let order: string[] = []
 
 let sent: Sent[] = []
 let replies: unknown[] = []
@@ -69,6 +75,9 @@ const CHAIN = {
 beforeEach(() => {
   sent = []
   replies = []
+  held = []
+  endDelay = 0
+  order = []
   currentUrl = 'http://a.test/start'
   ;(globalThis as Record<string, unknown>).__neo_runtime = eventless({
     get: (request: string) => {
@@ -105,9 +114,26 @@ beforeEach(() => {
     call: async (message: string) => {
       const { id, guid, method, params, metadata } = JSON.parse(message)
       sent.push({ guid, method, params, timeout: metadata.timeout })
+      if (
+        method === 'neo:finishNavigation' ||
+        method === 'neo:releaseNavigation'
+      ) {
+        const ends = held.splice(0)
+        const answer = () => {
+          for (const end of ends) end(params.cursor)
+        }
+        if (endDelay) setTimeout(answer, endDelay)
+        else answer()
+      }
       const reply = replies.shift()
       // A call Rust keeps waiting, as the next navigation a predicate wait keeps asking for.
-      if (reply === HOLD) return await new Promise<string>(() => {})
+      if (reply === HOLD)
+        return await new Promise<string>((resolve) => {
+          held.push((cursor) => {
+            order.push('answered')
+            resolve(JSON.stringify({ id, result: { cursor } }))
+          })
+        })
       if (reply && typeof reply === 'object' && 'error' in reply)
         return JSON.stringify({ id, ...reply })
       return JSON.stringify({ id, result: reply ?? {} })
@@ -340,6 +366,34 @@ describe('waitForNavigation', () => {
       ['neo:nextNavigation', { cursor: 2, response: true }],
       ['neo:releaseNavigation', { cursor: 2 }],
     ])
+  })
+
+  test('a wait that fails settles only after Rust answered the next its release ended', async () => {
+    const { page } = run()
+    endDelay = 30
+    replies.push({ cursor: 7, index: 0, url: 'http://a.test/x' }, HOLD)
+    const error = await page
+      .waitForNavigation({
+        url: () => {
+          throw new RangeError('nope')
+        },
+      })
+      .catch((e) => e)
+    order.push('settled')
+    expect(error.name).toBe('RangeError')
+    expect(order).toEqual(['answered', 'settled'])
+  })
+
+  test('an accepted wait resolves only after Rust answered the next its finish ended', async () => {
+    const { page } = run()
+    endDelay = 30
+    replies.push({ cursor: 8, index: 0, url: 'http://a.test/x' }, HOLD, {
+      response: { guid: 'response@T:D:0' },
+    })
+    const response = await page.waitForNavigation({ url: () => true })
+    order.push('settled')
+    expect(response?.status()).toBe(200)
+    expect(order).toEqual(['answered', 'settled'])
   })
 
   test('a step that times out names the whole timeout', async () => {

@@ -36,7 +36,7 @@
 //! `neo:finishNavigation`, its `neo:releaseNavigation` (the realm's wait ended otherwise), a failed
 //! step (its timeout included), or the run.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -61,7 +61,8 @@ use crate::world;
 /// Deviation: `client/frame.ts` `Frame.waitForNavigation` the most URL-predicate waits one run
 /// may run at once; Playwright's waiter has no cap. Every wait ends its cursor however it ends
 /// (accepted, released by the realm, failed), so only live waits count, and one past the cap is
-/// refused rather than displacing a live one.
+/// refused rather than displacing a live one. A wait stays live until its finish or release has
+/// replied; the dispatcher admits those two outside its in-flight caps, so this cap bounds them.
 const MAX_CURSORS: usize = 64;
 
 /// Deviation: `client/frame.ts` `Frame.waitForNavigation` the navigations one predicate wait
@@ -422,7 +423,30 @@ impl<T: NavigationTab, O: Observation> Cursor<T, O> {
 /// wait ends: on its finish, its release, or a failed step.
 pub(crate) struct Cursors<C> {
     next: AtomicU64,
-    open: Mutex<BTreeMap<u64, Arc<C>>>,
+    table: Mutex<Table<C>>,
+}
+
+/// Neo: the waits a run holds. A wait is live while its cursor is open or a finish or release
+/// that claimed it ([`Cursors::begin_ending`]) has not replied; live waits count against
+/// [`MAX_CURSORS`].
+struct Table<C> {
+    /// The open cursors, by id.
+    open: BTreeMap<u64, Arc<C>>,
+    /// The ids a finish or release claimed and has not replied for.
+    ending: BTreeSet<u64>,
+}
+
+/// Neo: how many live waits the table holds.
+impl<C> Table<C> {
+    /// Every open cursor, and every claimed one already taken out of `open`.
+    fn live(&self) -> usize {
+        let taken = self
+            .ending
+            .iter()
+            .filter(|id| !self.open.contains_key(id))
+            .count();
+        self.open.len() + taken
+    }
 }
 
 /// Neo: an empty cursor table at run start; no script sees it.
@@ -430,7 +454,10 @@ impl<C> Default for Cursors<C> {
     fn default() -> Self {
         Self {
             next: AtomicU64::new(1),
-            open: Mutex::new(BTreeMap::new()),
+            table: Mutex::new(Table {
+                open: BTreeMap::new(),
+                ending: BTreeSet::new(),
+            }),
         }
     }
 }
@@ -439,23 +466,24 @@ impl<C> Default for Cursors<C> {
 impl<C> Cursors<C> {
     /// Opens `cursor` under a fresh id, refusing one past [`MAX_CURSORS`] live waits.
     pub(crate) fn insert(&self, cursor: C) -> Result<(u64, Arc<C>), PlaywrightError> {
-        let mut open = self.open.lock().map_err(|_| cursors_poisoned())?;
-        if open.len() >= MAX_CURSORS {
+        let mut table = self.table.lock().map_err(|_| cursors_poisoned())?;
+        if table.live() >= MAX_CURSORS {
             return Err(PlaywrightError::error(format!(
                 "neo-runtime: a run may wait on at most {MAX_CURSORS} URL predicates at once"
             )));
         }
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let cursor = Arc::new(cursor);
-        open.insert(id, Arc::clone(&cursor));
+        table.open.insert(id, Arc::clone(&cursor));
         Ok((id, cursor))
     }
 
-    /// Cursor `id`, while its wait is live.
+    /// Cursor `id`, while it is open.
     pub(crate) fn get(&self, id: u64) -> Result<Arc<C>, PlaywrightError> {
-        self.open
+        self.table
             .lock()
             .map_err(|_| cursors_poisoned())?
+            .open
             .get(&id)
             .cloned()
             .ok_or_else(|| {
@@ -466,9 +494,40 @@ impl<C> Cursors<C> {
             })
     }
 
-    /// Takes cursor `id` out of the table; its wait has ended.
+    /// Takes cursor `id` out of the open ones; its wait has ended, or ends with its finish.
     pub(crate) fn remove(&self, id: u64) -> Option<Arc<C>> {
-        self.open.lock().ok()?.remove(&id)
+        self.table.lock().ok()?.open.remove(&id)
+    }
+
+    /// Claims open cursor `id` for the one finish or release call that ends it, which the
+    /// dispatcher then admits outside its in-flight caps. `None` if `id` is not open or another
+    /// call claimed it. The wait stays live until the claim drops, so claimed calls never
+    /// outnumber [`MAX_CURSORS`].
+    pub(crate) fn begin_ending(self: &Arc<Self>, id: u64) -> Option<Ending<C>> {
+        let mut table = self.table.lock().ok()?;
+        if !table.open.contains_key(&id) || !table.ending.insert(id) {
+            return None;
+        }
+        Some(Ending {
+            cursors: Arc::clone(self),
+            id,
+        })
+    }
+}
+
+/// Neo: a finish or release call's claim on its wait ([`Cursors::begin_ending`]), held until the
+/// call replies or its task ends.
+pub(crate) struct Ending<C> {
+    cursors: Arc<Cursors<C>>,
+    id: u64,
+}
+
+/// Neo: gives the claimed wait's place under `MAX_CURSORS` back.
+impl<C> Drop for Ending<C> {
+    fn drop(&mut self) {
+        if let Ok(mut table) = self.cursors.table.lock() {
+            table.ending.remove(&self.id);
+        }
     }
 }
 
@@ -1231,6 +1290,47 @@ mod tests {
         assert!(cursors.remove(ids[0]).is_some());
         assert!(cursors.get(ids[0]).is_err(), "an ended wait is gone");
         assert!(cursors.insert(99).is_ok(), "its slot is free again");
+    }
+
+    #[test]
+    fn tests_that_a_claimed_wait_stays_live_until_its_claim_drops() {
+        let cursors = Arc::new(Cursors::<u64>::default());
+        let ids: Vec<u64> = (0..MAX_CURSORS)
+            .map(|value| cursors.insert(value as u64).expect("under the cap").0)
+            .collect();
+        let finishing = cursors
+            .begin_ending(ids[0])
+            .expect("an open cursor can be claimed");
+        assert!(
+            cursors.begin_ending(ids[0]).is_none(),
+            "one claim per cursor"
+        );
+        let releasing = cursors
+            .begin_ending(ids[1])
+            .expect("another open cursor can be claimed");
+        assert!(
+            cursors.insert(99).is_err(),
+            "a claimed cursor still open counts once"
+        );
+        assert!(cursors.remove(ids[0]).is_some(), "its finish took it out");
+        assert!(
+            cursors.insert(99).is_err(),
+            "a finishing wait is still live"
+        );
+        assert!(
+            cursors.begin_ending(ids[0]).is_none(),
+            "a cursor no longer open cannot be claimed"
+        );
+        drop(finishing);
+        let (spare, _) = cursors.insert(99).expect("a finished wait's place is free");
+        assert!(cursors.insert(100).is_err(), "the cap counts the new wait");
+        drop(releasing);
+        assert!(
+            cursors.insert(100).is_err(),
+            "a claim dropped before its release ran leaves the cursor open and live"
+        );
+        assert!(cursors.remove(spare).is_some());
+        assert!(cursors.insert(100).is_ok());
     }
 
     #[test]

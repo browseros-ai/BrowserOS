@@ -14,6 +14,8 @@
 // ("WA-108 should work on frame") Playwright answers the frame's new document's Response; Neo
 // rejects with an `Error` before waiting, because it does not record a child frame's navigation
 // requests (neo-runtime `dispatch.rs` `unsupported_child_call`). The frame still navigates.
+// And at the live-wait cap: Playwright accepts a 65th URL-predicate wait; Neo refuses it with an
+// `Error` (neo-runtime `history.rs` `MAX_CURSORS`), and everything else in that case matches.
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs, history.mjs).
 
@@ -35,6 +37,12 @@ const REVIEW = `<!doctype html><title>review</title>
 <button id="goal" onclick="history.pushState({}, '', '#goal')">goal</button>
 <button id="chain" onclick="history.pushState({}, '', '/first'); setTimeout(() => history.pushState({}, '', '/goal'), 100)">chain</button>
 <script>window.ticks = 0</script>`
+/** The second review's page: `#schedule` pushes `#arm` after 1 s and `#finish` after 3 s, so no
+ * call of the script's drives those navigations while 64 waits hold the run's capacity. */
+const CAP = `<!doctype html><title>cap</title>
+<button id="again" onclick="history.pushState({}, '', '#again')">again</button>
+<button id="burst" onclick="history.pushState({}, '', '#bad'); history.pushState({}, '', '#commit')">burst</button>
+<button id="schedule" onclick="setTimeout(() => history.pushState({}, '', '#arm'), 1000); setTimeout(() => history.pushState({}, '', '#finish'), 3000)">schedule</button>`
 /** `/slow` (slow-load.html's image) answers this late, so its load trails its DOMContentLoaded. */
 const SLOW_MS = 1500
 const NEXT = { status: 200, ok: true, path: '/next.html?q=a+b' }
@@ -252,6 +260,52 @@ const cases = [
     expected: { wait: null, rejected: 64, hash: 'goal' },
   },
   {
+    name: 'a failed predicate at the live-wait cap releases capacity before the next commit',
+    path: '/cap',
+    source: `await page.click('#schedule')
+    const entered = new Map()
+    const waits = Array.from({ length: 64 }, (_, i) => page.waitForNavigation({ timeout: 15000, url: (url) => {
+      if (url.hash === '#arm') return new Promise((resolve, reject) => entered.set(i, reject))
+      return url.hash === '#finish'
+    } }).then((value) => value, (error) => ({ error: error.name })))
+    const deadline = Date.now() + 10000
+    while (entered.size !== 64) {
+      if (Date.now() > deadline) throw new Error('64 waits were not registered')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    const verdict = (wait) => wait.then(() => 'accepted', (error) => error.name === 'Error' ? 'refused' : error.name)
+    const extra = verdict(page.waitForNavigation({ timeout: 10000, url: (url) => url.hash === '#finish' }))
+    entered.get(0)(new RangeError('release at capacity'))
+    const failedAtCapacity = await waits[0]
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const replacement = verdict(page.waitForNavigation({ timeout: 10000, url: (url) => url.hash === '#finish' }))
+    const existing = (await Promise.all(waits.slice(1))).every((result) => result === null)
+    const overflow = await extra
+    const replacementAfterFailure = await replacement
+    const failed = settle(page.waitForNavigation({ timeout: 3000, url: () => { throw new RangeError('release at commit') } }))
+    await page.click('#burst')
+    const released = await failed
+    const next = page.waitForNavigation({ timeout: 3000, url: () => true })
+    await page.click('#again')
+    return { existing, overflow, failedAtCapacity, replacementAfterFailure, released, next: await next }`,
+    expected: {
+      existing: true,
+      overflow: 'accepted',
+      failedAtCapacity: { error: 'RangeError' },
+      replacementAfterFailure: 'accepted',
+      released: { error: 'RangeError' },
+      next: null,
+    },
+    neoExpected: {
+      existing: true,
+      overflow: 'refused',
+      failedAtCapacity: { error: 'RangeError' },
+      replacementAfterFailure: 'accepted',
+      released: { error: 'RangeError' },
+      next: null,
+    },
+  },
+  {
     name: 'an unknown waitUntil is refused before anything is waited for',
     path: '/history.html',
     source: `return { waited: await settle(page.waitForNavigation({ waitUntil: 'idle' })) }`,
@@ -272,6 +326,7 @@ test('page.waitForNavigation answers the same through Neo and Playwright', {
         'utf8',
       ),
       '/review': REVIEW,
+      '/cap': CAP,
       '/framed.html':
         '<!doctype html><title>framed</title><iframe name="child" src="/history.html"></iframe>',
     },
