@@ -31,7 +31,8 @@ const valid = {
   innerText: () => ({}),
   getAttribute: () => ({}),
   isVisible: () => ({ value: false }),
-  isChecked: () => ({}),
+  elementStateOnSelector: () => ({}),
+  innerHTML: () => ({}),
   ariaSnapshot: () => ({}),
   frameOwner: () => ({ visible: false }),
   describeSelector: (_injected, { selector }) => ({ locator: selector }),
@@ -63,6 +64,7 @@ const valid = {
   scrollOffset: () => ({ x: 0, y: 0 }),
   maskElements: () => ({}),
   hideHighlight: () => ({}),
+  allInnerTexts: () => ({ values: [] }),
 } satisfies Api
 
 export const screenshotCleanupIsNotAnElement = {
@@ -70,6 +72,15 @@ export const screenshotCleanupIsNotAnElement = {
   // @ts-expect-error restoreAfterScreenshot takes the cleanup prepareForScreenshot returned.
   restoreAfterScreenshot: (_injected, _params, cleanup: Element) => {
     cleanup.remove()
+    return {}
+  },
+} satisfies Api
+
+export const unknownElementState = {
+  ...valid,
+  elementStateOnSelector: (_injected, { state }) => {
+    // @ts-expect-error a state read asks for checked, enabled, disabled or editable only.
+    if (state === 'visible') return {}
     return {}
   },
 } satisfies Api

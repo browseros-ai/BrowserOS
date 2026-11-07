@@ -448,7 +448,12 @@ async fn wait_and_scroll_into_view(
         retry += 1;
         progress.log("  waiting for element to be stable");
         let states = progress
-            .race(tab.check_states(element, &[ElementState::Visible, ElementState::Stable]))
+            // A screenshot always scrolls into view (no `scroll: 'none'`), frame owners first.
+            .race(tab.check_states(
+                element,
+                &[ElementState::Visible, ElementState::Stable],
+                true,
+            ))
             .await?;
         let not_ready = match states {
             Ok(StatesCheck::Ready) => {

@@ -551,3 +551,46 @@ async fn tests_that_get_attribute_and_inner_text_wait_for_elements_appended_late
     );
     tab.close().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_inner_html_reads_markup_on_every_receiver_and_refuses_ambiguity() {
+    let Some(tab) = open_element_text().await else {
+        return;
+    };
+    let outcome = run(
+        &tab,
+        &format!(
+            "const caught = {CAUGHT};
+             return {{
+               list: await page.locator('#list').innerHTML(),
+               svg: await page.innerHTML('#chart'),
+               viaFrame: await page.mainFrame().innerHTML('#list > li >> nth=1'),
+               strict: await page.locator('#list > li').innerHTML({{ timeout: 5000 }}).catch(caught),
+               missing: await page.locator('#missing').innerHTML({{ timeout: 300 }}).catch(caught),
+             }};"
+        ),
+    )
+    .await;
+    let dom = tab
+        .evaluate("[document.getElementById('list').innerHTML, document.getElementById('chart').innerHTML]")
+        .await;
+    tab.close().await;
+    let result = value(&outcome);
+    assert_eq!(
+        json!([result["list"], result["svg"]]),
+        dom,
+        "the DOM's own innerHTML, an SVG element's included"
+    );
+    assert_eq!(result["list"], "<li>First</li><li>Second</li>");
+    assert_eq!(result["viaFrame"], "Second");
+    assert_eq!(result["strict"], kind("Error", true));
+    assert_eq!(result["missing"], kind("TimeoutError", false));
+    assert!(
+        outcome
+            .calls
+            .iter()
+            .all(|call| call.method == "innerHTML" && call.delivery.is_none()),
+        "reads that write no input: {:#?}",
+        outcome.calls
+    );
+}

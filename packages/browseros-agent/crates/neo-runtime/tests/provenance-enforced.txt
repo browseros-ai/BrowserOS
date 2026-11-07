@@ -9,7 +9,16 @@
 neo-runtime-spec/src/binary.rs
 neo-runtime/src/artifacts.rs
 neo-runtime/src/capture.rs
+neo-runtime/src/console.rs
+neo-runtime/src/dialogs.rs
+neo-runtime/src/events.rs
+neo-runtime/src/page_events.rs
 neo-runtime/src/pdf.rs
 neo-runtime/src/screenshot.rs
 neo-sdk/src/buffer.ts
+neo-sdk/src/console-message.ts
+neo-sdk/src/dialog.ts
+neo-sdk/src/events.ts
 neo-sdk/src/screenshot.ts
+neo-sdk/src/waiter.ts
+neo-sdk/src/web-error.ts

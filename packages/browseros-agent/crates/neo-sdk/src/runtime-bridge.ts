@@ -3,22 +3,38 @@
  * realm (crates/neo-runtime/src/bridge.rs).
  *
  * - `get` blocks until Rust has read one value live from BrowserOS over CDP.
- * - `call` sends one Playwright protocol message and resolves with Rust's Playwright reply,
+ * - `callWithEvents` sends one Playwright protocol message and resolves with Rust's Playwright reply,
  *   failures included; it rejects only when Rust cannot read the envelope. The call runs on its
  *   own Rust task, so it keeps going while the script spins or blocks in a getter, and a call
- *   the script never awaits still finishes and leaves its trace record.
+ *   the script never awaits still finishes and leaves its trace record. Its reply carries the
+ *   event watermark W: `call` runs the listeners of every event up to W (`events.ts`) before it
+ *   returns the reply text, so they run before the caller continues, Playwright's order.
+ * - `subscribe` turns the run's listening to one event of a page or the context on or off.
+ * - `drain` takes queued events; `nextEvents` resolves once one is queued (the idle wake).
  */
 
 import type {
   FrameInitializer,
   PageInitializer,
 } from '@browseros/neo-runtime-spec/serve'
+import type { RawEvent } from './events'
 import type { NeoSerializedUrlMatch } from './neo-commands'
 import type { CreatedChain, Timing } from './network'
 
 declare const __neo_runtime: {
   get(request: string): string
-  call(message: string): Promise<string>
+  callWithEvents(message: string): Promise<{ reply: string; events: number }>
+  subscribe(request: string): void
+  drain(until: number): string
+  nextEvents(): Promise<void>
+}
+
+/** What runs a reply's events before its caller continues: the run's `EventPipe.deliver`. */
+let deliverEvents: ((until: number) => void) | undefined
+
+/** Sets where `call` delivers each reply's events (`index.ts` `createRun`). */
+export function onReplyEvents(deliver: (until: number) => void): void {
+  deliverEvents = deliver
 }
 
 /**
@@ -89,7 +105,28 @@ export function matchesURL(
   )
 }
 
-/** One browser call: message JSON in, reply JSON out. Only `connection.ts` calls it. */
-export function call(message: string): Promise<string> {
-  return __neo_runtime.call(message)
+/**
+ * One browser call: message JSON in, reply JSON out. Only `connection.ts` calls it. The events
+ * the reply's watermark covers run their listeners here, synchronously in the reaction to
+ * Rust's answer, before the reply text reaches the caller.
+ */
+export async function call(message: string): Promise<string> {
+  const { reply, events } = await __neo_runtime.callWithEvents(message)
+  deliverEvents?.(events)
+  return reply
+}
+
+/** Turns the run's listening to `event` on `guid` on or off; throws for one Neo cannot produce. */
+export function subscribe(guid: string, event: string, enabled: boolean): void {
+  __neo_runtime.subscribe(JSON.stringify({ guid, event, enabled }))
+}
+
+/** Takes every queued event with seq ≤ `until` (all of them for -1), in seq order. */
+export function drain(until: number): RawEvent[] {
+  return JSON.parse(__neo_runtime.drain(until))
+}
+
+/** Resolves once an undelivered event is queued. */
+export function nextEvents(): Promise<void> {
+  return __neo_runtime.nextEvents()
 }

@@ -22,9 +22,10 @@
  *   `networkidle`. A failed navigation does not reject `waitForURL`, which waits on to its timeout.
  *   An unknown `waitUntil` is reported as `waitUntil`, where Playwright names it `state` when the
  *   URL already matches.
- * - `allTextContents` sends `client/locator.ts` source text; compiled Playwright clients may
- *   format it differently. It reads in Neo's isolated world, so page-defined `textContent`
- *   overrides (prototype patches, custom element classes or per-instance properties) can differ.
+ * - `allTextContents` and `allInnerTexts` send `client/locator.ts` source text (the latter
+ *   without its TypeScript cast); compiled Playwright clients may format it differently. They
+ *   read in Neo's isolated world, so page-defined `textContent` and `innerText` overrides
+ *   (prototype patches, custom element classes or per-instance properties) can differ.
  */
 
 import type {
@@ -32,19 +33,28 @@ import type {
   FrameAriaSnapshotResult,
   FrameCheckParams,
   FrameClickParams,
+  FrameDblclickParams,
   FrameFillParams,
   FrameGetAttributeParams,
   FrameGetAttributeResult,
   FrameGotoParams,
+  FrameHoverParams,
   FrameInitializer,
+  FrameInnerHTMLParams,
+  FrameInnerHTMLResult,
   FrameInnerTextParams,
   FrameInnerTextResult,
   FrameInputValueParams,
   FrameIsCheckedParams,
+  FrameIsDisabledParams,
+  FrameIsEditableParams,
+  FrameIsEnabledParams,
+  FrameIsHiddenParams,
   FrameIsVisibleParams,
   FramePressParams,
   FrameQueryCountParams,
   FrameSelectOptionParams,
+  FrameTapParams,
   FrameTextContentParams,
   FrameTextContentResult,
   FrameTitleResult,
@@ -72,16 +82,24 @@ import {
   FRAME_ARIA_SNAPSHOT_KEYS,
   FRAME_CHECK_KEYS,
   FRAME_CLICK_KEYS,
+  FRAME_DBLCLICK_KEYS,
   FRAME_FILL_KEYS,
   FRAME_GET_ATTRIBUTE_KEYS,
   FRAME_GOTO_KEYS,
+  FRAME_HOVER_KEYS,
+  FRAME_INNER_HTML_KEYS,
   FRAME_INNER_TEXT_KEYS,
   FRAME_INPUT_VALUE_KEYS,
   FRAME_IS_CHECKED_KEYS,
+  FRAME_IS_DISABLED_KEYS,
+  FRAME_IS_EDITABLE_KEYS,
+  FRAME_IS_ENABLED_KEYS,
+  FRAME_IS_HIDDEN_KEYS,
   FRAME_IS_VISIBLE_KEYS,
   FRAME_PRESS_KEYS,
   FRAME_QUERY_COUNT_KEYS,
   FRAME_SELECT_OPTION_KEYS,
+  FRAME_TAP_KEYS,
   FRAME_TEXT_CONTENT_KEYS,
   FRAME_UNCHECK_KEYS,
   FRAME_WAIT_FOR_SELECTOR_KEYS,
@@ -98,6 +116,27 @@ export type ClickOptions = Omit<FrameClickParams, 'selector'> & {
   timeout?: number
 }
 
+/**
+ * `dblclick`'s options as a script passes them: the wire params plus `timeout`, and the
+ * deprecated `noWaitAfter`, which Playwright's client accepts and its protocol drops.
+ */
+export type DblclickOptions = Omit<FrameDblclickParams, 'selector'> & {
+  timeout?: number
+  noWaitAfter?: boolean
+}
+
+/** `hover`'s options as a script passes them, with the deprecated `noWaitAfter` (dropped). */
+export type HoverOptions = Omit<FrameHoverParams, 'selector'> & {
+  timeout?: number
+  noWaitAfter?: boolean
+}
+
+/** `tap`'s options as a script passes them, with the deprecated `noWaitAfter` (dropped). */
+export type TapOptions = Omit<FrameTapParams, 'selector'> & {
+  timeout?: number
+  noWaitAfter?: boolean
+}
+
 /** `goto`'s options as a script passes them: the wire params plus `timeout`. */
 export type GotoOptions = Omit<FrameGotoParams, 'url'> & { timeout?: number }
 
@@ -108,6 +147,11 @@ export type TextContentOptions = Omit<FrameTextContentParams, 'selector'> & {
 
 /** `innerText`'s options as a script passes them. */
 export type InnerTextOptions = Omit<FrameInnerTextParams, 'selector'> & {
+  timeout?: number
+}
+
+/** `innerHTML`'s options as a script passes them. */
+export type InnerHTMLOptions = Omit<FrameInnerHTMLParams, 'selector'> & {
   timeout?: number
 }
 
@@ -201,6 +245,19 @@ export type IsCheckedOptions = Omit<FrameIsCheckedParams, 'selector'> & {
   timeout?: number
 }
 export type IsVisibleOptions = Omit<FrameIsVisibleParams, 'selector'> & {
+  timeout?: number
+}
+/** Playwright's `isHidden` takes `timeout` and ignores it, as `isVisible` does. */
+export type IsHiddenOptions = Omit<FrameIsHiddenParams, 'selector'> & {
+  timeout?: number
+}
+export type IsEnabledOptions = Omit<FrameIsEnabledParams, 'selector'> & {
+  timeout?: number
+}
+export type IsDisabledOptions = Omit<FrameIsDisabledParams, 'selector'> & {
+  timeout?: number
+}
+export type IsEditableOptions = Omit<FrameIsEditableParams, 'selector'> & {
   timeout?: number
 }
 export type CheckOptions = Omit<FrameCheckParams, 'selector'> & {
@@ -476,6 +533,33 @@ export class Frame {
     return result.value
   }
 
+  /** Not strict, as Playwright's `frame.innerHTML`; waits for the first match. */
+  async innerHTML(
+    selector: string,
+    options: InnerHTMLOptions = {},
+  ): Promise<string> {
+    return await this._innerHTML('frame.innerHTML', selector, options)
+  }
+
+  /** Sends `Frame.innerHTML` under the action timeout. */
+  async _innerHTML(
+    apiName: ApiName,
+    selector: string,
+    options: InnerHTMLOptions,
+  ): Promise<string> {
+    const result = (await this._connection.send(
+      apiName,
+      this._guid,
+      'innerHTML',
+      pickParams(FRAME_INNER_HTML_KEYS, {
+        selector,
+        ...options,
+      }) as FrameInnerHTMLParams,
+      this._page._timeoutSettings.timeout(options ?? {}),
+    )) as FrameInnerHTMLResult
+    return result.value
+  }
+
   async getAttribute(
     selector: string,
     name: string,
@@ -530,13 +614,42 @@ export class Frame {
     apiName: ApiName,
     selector: string,
   ): Promise<string[]> {
+    return (await this.#evalOnSelectorAllTexts(
+      apiName,
+      selector,
+      "ee => ee.map(e => e.textContent || '')",
+      false,
+    )) as string[]
+  }
+
+  /** `client/locator.ts`'s `allInnerTexts` page function without its TypeScript cast, the one
+   * expression neo-runtime serves for it. A match without `innerText` (an SVG element) reads
+   * `undefined`, as the page function reads it; the declared `string[]` is Playwright's own. */
+  async _allInnerTexts(apiName: ApiName, selector: string): Promise<string[]> {
+    return (await this.#evalOnSelectorAllTexts(
+      apiName,
+      selector,
+      'ee => ee.map(e => e.innerText)',
+      true,
+    )) as string[]
+  }
+
+  /** Sends one served `$$eval` collection read with `kNoTimeout`, and decodes the serialized
+   * string array Rust answers, with `undefined` entries (`{v: 'undefined'}`) only when
+   * `undefinedAllowed`. Reaches `send` synchronously, so the location is the script's. */
+  async #evalOnSelectorAllTexts(
+    apiName: ApiName,
+    selector: string,
+    expression: string,
+    undefinedAllowed: boolean,
+  ): Promise<(string | undefined)[]> {
     const result = await this._connection.send(
       apiName,
       this._guid,
       'evalOnSelectorAll',
       {
         selector,
-        expression: "ee => ee.map(e => e.textContent || '')",
+        expression,
         isFunction: true,
         arg: { value: { v: 'undefined' }, handles: [] },
       },
@@ -555,12 +668,10 @@ export class Frame {
         'neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string array',
       )
     return value.a.map((item) => {
-      if (
-        !item ||
-        typeof item !== 'object' ||
-        Object.keys(item).length !== 1 ||
-        typeof item.s !== 'string'
-      )
+      const single =
+        !!item && typeof item === 'object' && Object.keys(item).length === 1
+      if (single && undefinedAllowed && item.v === 'undefined') return undefined
+      if (!single || typeof item.s !== 'string')
         throw new Error(
           'neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string',
         )
@@ -608,6 +719,78 @@ export class Frame {
         selector,
         ...options,
       }) as FrameClickParams,
+      this._page._timeoutSettings.timeout(options ?? {}),
+    )
+  }
+
+  /** Not strict, as Playwright's `frame.dblclick`. */
+  async dblclick(
+    selector: string,
+    options: DblclickOptions = {},
+  ): Promise<void> {
+    return await this._dblclick('frame.dblclick', selector, options)
+  }
+
+  /** Sends `Frame.dblclick`. */
+  async _dblclick(
+    apiName: ApiName,
+    selector: string,
+    options: DblclickOptions,
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'dblclick',
+      pickParams(FRAME_DBLCLICK_KEYS, {
+        selector,
+        ...options,
+      }) as FrameDblclickParams,
+      this._page._timeoutSettings.timeout(options ?? {}),
+    )
+  }
+
+  /** Not strict, as Playwright's `frame.hover`. */
+  async hover(selector: string, options: HoverOptions = {}): Promise<void> {
+    return await this._hover('frame.hover', selector, options)
+  }
+
+  /** Sends `Frame.hover`. */
+  async _hover(
+    apiName: ApiName,
+    selector: string,
+    options: HoverOptions,
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'hover',
+      pickParams(FRAME_HOVER_KEYS, {
+        selector,
+        ...options,
+      }) as FrameHoverParams,
+      this._page._timeoutSettings.timeout(options ?? {}),
+    )
+  }
+
+  /** Not strict, as Playwright's `frame.tap`. */
+  async tap(selector: string, options: TapOptions = {}): Promise<void> {
+    return await this._tap('frame.tap', selector, options)
+  }
+
+  /** Sends `Frame.tap`. */
+  async _tap(
+    apiName: ApiName,
+    selector: string,
+    options: TapOptions,
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'tap',
+      pickParams(FRAME_TAP_KEYS, {
+        selector,
+        ...options,
+      }) as FrameTapParams,
       this._page._timeoutSettings.timeout(options ?? {}),
     )
   }
@@ -726,6 +909,35 @@ export class Frame {
     return result.value
   }
 
+  async isHidden(
+    selector: string,
+    options: IsHiddenOptions = {},
+  ): Promise<boolean> {
+    return await this._isHidden('frame.isHidden', selector, options)
+  }
+
+  /** Playwright's `kNoTimeout`: `isHidden` reads once, as `isVisible`, and ignores
+   * `options.timeout`. */
+  async _isHidden(
+    apiName: ApiName,
+    selector: string,
+    options: IsHiddenOptions,
+  ): Promise<boolean> {
+    const result = await this._connection.send(
+      apiName,
+      this._guid,
+      'isHidden',
+      pickParams(FRAME_IS_HIDDEN_KEYS, {
+        selector,
+        ...options,
+      }) as FrameIsHiddenParams,
+      0,
+    )
+    if (result === undefined)
+      throw new Error('neo-sdk: Frame.isHidden contract error: missing result')
+    return result.value
+  }
+
   async isChecked(
     selector: string,
     options: IsCheckedOptions = {},
@@ -751,6 +963,95 @@ export class Frame {
     )
     if (result === undefined)
       throw new Error('neo-sdk: Frame.isChecked contract error: missing result')
+    return result.value
+  }
+
+  async isEnabled(
+    selector: string,
+    options: IsEnabledOptions = {},
+  ): Promise<boolean> {
+    return await this._isEnabled('frame.isEnabled', selector, options)
+  }
+
+  /** Waits for the first match under the caller's action timeout, as `isChecked`. */
+  async _isEnabled(
+    apiName: ApiName,
+    selector: string,
+    options: IsEnabledOptions,
+  ): Promise<boolean> {
+    const result = await this._connection.send(
+      apiName,
+      this._guid,
+      'isEnabled',
+      pickParams(FRAME_IS_ENABLED_KEYS, {
+        selector,
+        ...options,
+      }) as FrameIsEnabledParams,
+      this._page._timeoutSettings.timeout(options ?? {}),
+    )
+    if (result === undefined)
+      throw new Error('neo-sdk: Frame.isEnabled contract error: missing result')
+    return result.value
+  }
+
+  async isDisabled(
+    selector: string,
+    options: IsDisabledOptions = {},
+  ): Promise<boolean> {
+    return await this._isDisabled('frame.isDisabled', selector, options)
+  }
+
+  /** Waits for the first match under the caller's action timeout, as `isChecked`. */
+  async _isDisabled(
+    apiName: ApiName,
+    selector: string,
+    options: IsDisabledOptions,
+  ): Promise<boolean> {
+    const result = await this._connection.send(
+      apiName,
+      this._guid,
+      'isDisabled',
+      pickParams(FRAME_IS_DISABLED_KEYS, {
+        selector,
+        ...options,
+      }) as FrameIsDisabledParams,
+      this._page._timeoutSettings.timeout(options ?? {}),
+    )
+    if (result === undefined)
+      throw new Error(
+        'neo-sdk: Frame.isDisabled contract error: missing result',
+      )
+    return result.value
+  }
+
+  async isEditable(
+    selector: string,
+    options: IsEditableOptions = {},
+  ): Promise<boolean> {
+    return await this._isEditable('frame.isEditable', selector, options)
+  }
+
+  /** Waits for the first match under the caller's action timeout; an element that cannot be
+   * editable rejects at once, as Playwright's page code throws. */
+  async _isEditable(
+    apiName: ApiName,
+    selector: string,
+    options: IsEditableOptions,
+  ): Promise<boolean> {
+    const result = await this._connection.send(
+      apiName,
+      this._guid,
+      'isEditable',
+      pickParams(FRAME_IS_EDITABLE_KEYS, {
+        selector,
+        ...options,
+      }) as FrameIsEditableParams,
+      this._page._timeoutSettings.timeout(options ?? {}),
+    )
+    if (result === undefined)
+      throw new Error(
+        'neo-sdk: Frame.isEditable contract error: missing result',
+      )
     return result.value
   }
 

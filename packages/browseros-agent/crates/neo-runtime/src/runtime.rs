@@ -174,7 +174,8 @@ impl Runtime {
         let artifacts = Arc::new(Artifacts::new(artifacts));
         let run = RunScope::new(deadline.clone(), tasks).with_artifacts(Arc::clone(&artifacts));
         let dispatcher = Dispatcher::new(tabs.clone(), run);
-        let outcome = realm::run(script, getters, dispatcher.clone(), deadline).await;
+        let events = tabs.events().clone();
+        let outcome = realm::run(script, getters, dispatcher.clone(), deadline, events).await;
         let (calls, dropped) = dispatcher.finish(run_end_of(&outcome)).await;
         outcome
             .with_calls(calls, dropped)
