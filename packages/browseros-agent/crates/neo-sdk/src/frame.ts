@@ -118,7 +118,7 @@ export type GetAttributeOptions = Omit<
   timeout?: number
 }
 
-/** `page.ariaSnapshot`'s options, as Playwright's `Page.ariaSnapshot` takes them. */
+/** Options shared by Playwright's page and locator snapshots. */
 export type AriaSnapshotOptions = {
   mode?: 'ai' | 'default'
   depth?: number
@@ -566,10 +566,11 @@ export class Frame {
     })
   }
 
-  /** Sends `Frame.ariaSnapshot` for the whole frame: no selector, as `page.ariaSnapshot`. */
+  /** Playwright: `client/locator.ts` `Locator.ariaSnapshot`: `selector: this._selector,` */
   async _ariaSnapshot(
     apiName: ApiName,
     options: AriaSnapshotOptions,
+    selector?: string,
   ): Promise<string> {
     const result = (await this._connection.send(
       apiName,
@@ -577,6 +578,7 @@ export class Frame {
       'ariaSnapshot',
       pickParams(FRAME_ARIA_SNAPSHOT_KEYS, {
         mode: options.mode,
+        selector,
         depth: options.depth,
         boxes: options.boxes,
       }) as FrameAriaSnapshotParams,

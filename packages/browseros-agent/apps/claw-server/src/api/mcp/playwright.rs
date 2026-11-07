@@ -21,13 +21,21 @@ use rmcp::{
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
-use tokio::{sync::OnceCell, time::Instant};
+use tokio::{
+    sync::{Mutex, OnceCell},
+    time::Instant,
+};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+use super::output::Store;
+
 const DEFAULT_TIMEOUT: u64 = 30_000;
 const MAX_TIMEOUT: u64 = 120_000;
-const INSTRUCTIONS: &str = "Write Playwright JavaScript. `page` and `context` are provided; await browser calls and return a value. Send an async function body without imports or a wrapper. Omit `page` to open a background tab; pass a returned `pages[].id` to continue in that tab. `timeout` is milliseconds (default 30000, maximum 120000).";
+const INSTRUCTIONS: &str = concat!(
+    "Write Playwright JavaScript. `page` and `context` are provided; await browser calls and return a value. Send an async function body without imports or a wrapper. Omit `page` to open a background tab; pass a returned `pages[].id` to continue in that tab. `timeout` is milliseconds (default 30000, maximum 120000).",
+    " Scope large reads with locator.ariaSnapshot({mode:'ai'}); responses use a 24000-byte JSON budget and truncated fields include next arguments for run({result,field,offset}) to read the stored original without changing refs."
+);
 
 struct Browser {
     cdp: CdpClient,
@@ -41,6 +49,7 @@ pub struct PlaywrightService {
     browser: Arc<OnceCell<Arc<Browser>>>,
     shutdown: CancellationToken,
     runs: TaskTracker,
+    output: Arc<Mutex<Store>>,
 }
 
 #[derive(Deserialize)]
@@ -51,6 +60,17 @@ struct Arguments {
     timeout: Option<u64>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RequestArguments {
+    code: Option<String>,
+    page: Option<String>,
+    timeout: Option<u64>,
+    result: Option<String>,
+    field: Option<String>,
+    offset: Option<usize>,
+}
+
 impl PlaywrightService {
     #[must_use]
     pub fn new(cdp_port: u16, shutdown: CancellationToken) -> Self {
@@ -59,6 +79,7 @@ impl PlaywrightService {
             browser: Arc::new(OnceCell::new()),
             shutdown,
             runs: TaskTracker::new(),
+            output: Arc::new(Mutex::new(Store::default())),
         }
     }
 
@@ -285,11 +306,17 @@ fn tool() -> Tool {
     Tool::new("run", INSTRUCTIONS, Arc::new(Map::from_iter([
         ("type".into(), json!("object")),
         ("additionalProperties".into(), json!(false)),
-        ("required".into(), json!(["code"])),
+        ("oneOf".into(), json!([
+            {"required":["code"],"not":{"anyOf":[{"required":["result"]},{"required":["field"]},{"required":["offset"]}]}},
+            {"required":["result"],"not":{"anyOf":[{"required":["code"]},{"required":["page"]},{"required":["timeout"]}]}}
+        ])),
         ("properties".into(), json!({
             "code":{"type":"string","description":"Playwright async function body; page and context are provided. Return a value."},
             "page":{"type":"string","minLength":1,"description":"A pages[].id from an earlier result. Omit to open a background tab."},
-            "timeout":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT,"default":DEFAULT_TIMEOUT,"description":"Whole-run timeout in milliseconds."}
+            "timeout":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT,"default":DEFAULT_TIMEOUT,"description":"Whole-run timeout in milliseconds."},
+            "result":{"type":"string","minLength":1,"description":"Stored truncated result ID. Use instead of code, without page or timeout; retrieval never touches the browser. Process-local LRU: 16 results, 64 MiB; cleared on restart."},
+            "field":{"type":"string","enum":["value","logs","calls","error"],"default":"value","description":"Original field to retrieve. Strings are raw text; other values and logs/calls/error use pretty JSON. Follow truncated.next verbatim."},
+            "offset":{"type":"integer","minimum":0,"default":0,"description":"UTF-8 byte offset into the original field text. Prefer the next arguments returned with truncation metadata."}
         })),
     ])))
     .with_title("Run Playwright code")
@@ -351,10 +378,60 @@ impl ServerHandler for PlaywrightService {
             ))
             .into());
         }
-        let args = serde_json::from_value::<Arguments>(Value::Object(
-            request.arguments.unwrap_or_default(),
-        ))
-        .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        let arguments = request.arguments.unwrap_or_default();
+        if arguments.values().any(Value::is_null) {
+            return Err(McpError::invalid_params(
+                "provided run arguments must not be null",
+                None,
+            ));
+        }
+        let args = serde_json::from_value::<RequestArguments>(Value::Object(arguments))
+            .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        if let Some(id) = args.result {
+            if args.code.is_some()
+                || args.page.is_some()
+                || args.timeout.is_some()
+                || id.trim().is_empty()
+            {
+                return Err(McpError::invalid_params(
+                    "use result instead of code, without page or timeout",
+                    None,
+                ));
+            }
+            let result = self
+                .output
+                .lock()
+                .await
+                .retrieve(
+                    &id,
+                    args.field.as_deref().unwrap_or("value"),
+                    args.offset.unwrap_or(0),
+                )
+                .map_err(|error| McpError::invalid_params(error, None))?;
+            return Ok(if result["status"] == "ok" {
+                CallToolResult::structured(result)
+            } else {
+                CallToolResult::structured_error(result)
+            }
+            .into());
+        }
+        let Some(code) = args.code else {
+            return Err(McpError::invalid_params(
+                "exactly one of code or result is required",
+                None,
+            ));
+        };
+        if args.field.is_some() || args.offset.is_some() {
+            return Err(McpError::invalid_params(
+                "field and offset require result",
+                None,
+            ));
+        }
+        let args = Arguments {
+            code,
+            page: args.page,
+            timeout: args.timeout,
+        };
         if args
             .timeout
             .is_some_and(|timeout| timeout == 0 || timeout > MAX_TIMEOUT)
@@ -388,6 +465,7 @@ impl ServerHandler for PlaywrightService {
             })
             .await
             .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        let result = self.output.lock().await.limit(result);
         Ok(if result["status"] == "ok" {
             CallToolResult::structured(result)
         } else {

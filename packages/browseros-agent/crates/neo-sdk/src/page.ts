@@ -268,7 +268,9 @@ export class Page {
    * snapshot or navigation. A ref inside a frame is its path from the main frame:
    * `- iframe [ref=e7]:` holds `- textbox "Email" [ref=f7e3]`, and a frame inside it adds a step
    * (`f7f2e1`); Playwright numbers frames instead (`f1e3`). The default mode prints iframes without
-   * their content, as Playwright's does.
+   * their content, as Playwright's does. `depth` limits tree levels (0 means unlimited).
+   * For a section, use `locator.ariaSnapshot()`. AI mode does not auto-wait for that locator,
+   * so use `locator.waitFor()` first if needed.
    */
   async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
     return await this.#mainFrame._ariaSnapshot('page.ariaSnapshot', options)

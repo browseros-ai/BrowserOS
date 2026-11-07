@@ -155,6 +155,8 @@ Injected:
         # Absent while nothing matches. With the caller's selector that ends the call; for
         # `body,frameset` neo-runtime keeps polling.
         snapshot: AriaFrameSnapshot?
+        # The matched root, for the default locator snapshot's resolution log.
+        preview: string?
 
     # Resolves one frame chunk that must match `<iframe>` or `<frame>` elements, for a selector
     # that enters a frame. Returns the first match; neo-runtime maps it to a frame with CDP

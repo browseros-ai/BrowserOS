@@ -150,6 +150,9 @@ class Locator {
   async getAttribute(name, options) {
     return await this._frame._getAttribute("locator.getAttribute", this._selector, name, { strict: true, ...options });
   }
+  async ariaSnapshot(options = {}) {
+    return await this._frame._ariaSnapshot("locator.ariaSnapshot", options, this._selector);
+  }
   async count() {
     return await this._frame._queryCount("locator.count", this._selector);
   }
@@ -655,9 +658,10 @@ class Frame {
       return item.s;
     });
   }
-  async _ariaSnapshot(apiName, options) {
+  async _ariaSnapshot(apiName, options, selector) {
     const result = await this._connection.send(apiName, this._guid, "ariaSnapshot", pickParams(FRAME_ARIA_SNAPSHOT_KEYS, {
       mode: options.mode,
+      selector,
       depth: options.depth,
       boxes: options.boxes
     }), this._page._timeoutSettings.timeout(options));

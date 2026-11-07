@@ -70,6 +70,7 @@ export type ApiName =
   | 'locator.count'
   | 'locator.allTextContents'
   | 'page.ariaSnapshot'
+  | 'locator.ariaSnapshot'
   | 'frame.fill'
   | 'frame.press'
   | 'frame.inputValue'
