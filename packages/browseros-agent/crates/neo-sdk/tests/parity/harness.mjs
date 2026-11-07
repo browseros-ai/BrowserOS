@@ -29,6 +29,7 @@ import http from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { inspect } from 'node:util'
 
 // Playwright dims the call log in error messages whenever the environment suggests colour
 // (`COLORTERM`, `TERM=xterm-*`, inherited from the terminal even without a TTY), and reads the
@@ -397,14 +398,14 @@ export async function launchBrowser(cleanups, binary, args = []) {
 
 /**
  * `launchBrowser`, with the reference attached in the same try: returns `{ port, downloads,
- * playwright }` (Playwright over connectOverCDP), plus the test's own CDP client as `cdp` when
- * asked, every cleanup among `cleanups`. A browser that hangs while either attaches is replaced
- * before the case begins.
+ * playwright }` (Playwright over connectOverCDP, with `connect` among its options), plus the
+ * test's own CDP client as `cdp` when asked, every cleanup among `cleanups`. A browser that hangs
+ * while either attaches is replaced before the case begins.
  */
 export async function launchReference(
   cleanups,
   binary,
-  { args = [], cdp = false } = {},
+  { args = [], cdp = false, connect = {} } = {},
 ) {
   return await openBrowser(
     cleanups,
@@ -412,7 +413,7 @@ export async function launchReference(
     args,
     async (port, own, deadline) => {
       const client = cdp ? await connectCdp(own, port, deadline) : undefined
-      const playwright = await connectReference(port, deadline)
+      const playwright = await connectReference(port, deadline, connect)
       own.push(() => playwright.close())
       return cdp ? { playwright, cdp: client } : { playwright }
     },
@@ -420,24 +421,23 @@ export async function launchReference(
 }
 
 /**
- * Playwright's connectOverCDP to the browser at `port`, bounded by `deadline`, its failure
- * labelled: a case whose reference cannot attach never reaches Neo. For a browser `launchReference`
- * did not attach, as when a test connects Playwright only for its own turn.
+ * Playwright's connectOverCDP to the browser at `port` with `options`, bounded by `deadline`, its
+ * failure labelled: a case whose reference cannot attach never reaches Neo. For a browser
+ * `launchReference` did not attach, as when a test connects Playwright only for its own turn.
  */
 export async function connectReference(
   port,
   deadline = Date.now() + SETUP_TIMEOUT_MS,
+  options = {},
 ) {
   try {
     return await chromium.connectOverCDP(`http://127.0.0.1:${port}`, {
+      ...options,
       // 0 would disable Playwright's timeout.
       timeout: Math.max(1, deadline - Date.now()),
     })
   } catch (error) {
-    throw new Error(
-      `${REFERENCE_HARNESS} Playwright's connectOverCDP did not attach: ${error.message}`,
-      { cause: error },
-    )
+    throw labelled("Playwright's connectOverCDP did not attach", error)
   }
 }
 
@@ -449,12 +449,24 @@ export async function referenceHalf(step) {
   try {
     return await step()
   } catch (error) {
-    if (error.message.startsWith(REFERENCE_HARNESS)) throw error
-    throw new Error(
-      `${REFERENCE_HARNESS} Playwright's half of the case failed before Neo ran: ${error.message}`,
-      { cause: error },
-    )
+    if (thrownMessage(error).startsWith(REFERENCE_HARNESS)) throw error
+    throw labelled("Playwright's half of the case failed before Neo ran", error)
   }
+}
+
+/**
+ * `thrown`, whatever a step threw (a script may throw a string or a bare object), as this
+ * harness's labelled `Error` saying `what` failed; the thrown value stays its `cause`.
+ */
+function labelled(what, thrown) {
+  return new Error(`${REFERENCE_HARNESS} ${what}: ${thrownMessage(thrown)}`, {
+    cause: thrown,
+  })
+}
+
+/** What any thrown value says: an `Error`'s message, else the value as Node prints it. */
+function thrownMessage(thrown) {
+  return thrown instanceof Error ? thrown.message : inspect(thrown)
 }
 
 /**
@@ -479,7 +491,7 @@ async function openBrowser(cleanups, binary, args, attach) {
     } catch (error) {
       await runCleanups(own).catch(() => {})
       await discardBrowser(browser)
-      const reason = error.message.replace(`${REFERENCE_HARNESS} `, '')
+      const reason = thrownMessage(error).replace(`${REFERENCE_HARNESS} `, '')
       failures.push(reason)
       process.stderr.write(
         `${REFERENCE_HARNESS} try ${attempt} of ${SETUP_TRIES} failed: ${reason}\n`,
@@ -798,10 +810,7 @@ export async function connectCdp(
     await opened(socket, deadline)
   } catch (error) {
     socket?.close()
-    throw new Error(
-      `${REFERENCE_HARNESS} the test's CDP client did not connect: ${error.message}`,
-      { cause: error },
-    )
+    throw labelled("the test's CDP client did not connect", error)
   }
   cleanups.push(() => socket.close())
   const pending = new Map()

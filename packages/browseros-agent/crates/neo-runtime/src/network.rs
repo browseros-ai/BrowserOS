@@ -97,6 +97,10 @@ const MAX_PAGE_REQUESTS: usize = 100;
 /// workers') leave theirs behind.
 const MAX_ORPHANS: usize = 256;
 
+/// Neo: request ids the log saw start and keeps no record of (a `data:` URL, a worker's), kept
+/// for the most recent ones: a pause of one goes on untouched ([`PauseTarget::Skipped`]).
+const MAX_SKIPPED: usize = 256;
+
 /// Statuses whose body Playwright refuses (`internalBody`).
 const REDIRECT_STATUSES: RangeInclusive<i64> = 300..=399;
 
@@ -314,6 +318,19 @@ struct Log {
     /// `page.requests()`: every hop's request in the order it started, favicons left out,
     /// Playwright's last 100 or so.
     started: VecDeque<HopId>,
+    /// The latest request ids the log dropped at their start ([`MAX_SKIPPED`]).
+    skipped: VecDeque<String>,
+}
+
+/// What a `Fetch.requestPaused` names in the log, by its `networkId` ([`NetworkLog::pause_target`]).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PauseTarget {
+    /// The request's latest hop, the one that paused.
+    Hop { hop: HopId, favicon: bool },
+    /// A request the log saw start and keeps no record of (a `data:` URL, a worker's).
+    Skipped,
+    /// No `requestWillBeSent` for it yet.
+    Unknown,
 }
 
 /// Extra info for a request id no chain holds yet.
@@ -668,6 +685,46 @@ impl NetworkLog {
         }
     }
 
+    /// The request a `Fetch.requestPaused` with this `networkId` (the request id) paused: its
+    /// latest hop, or why there is none.
+    pub(crate) fn pause_target(&self, network_id: &str) -> PauseTarget {
+        let Ok(log) = self.log.lock() else {
+            return PauseTarget::Unknown;
+        };
+        if let Some(chain) = log.chain(network_id)
+            && let Some(index) = chain.hops.len().checked_sub(1)
+        {
+            return PauseTarget::Hop {
+                hop: chain.hop_id(index),
+                favicon: chain.hops[index].favicon,
+            };
+        }
+        if log.skipped.iter().any(|request| request == network_id) {
+            return PauseTarget::Skipped;
+        }
+        PauseTarget::Unknown
+    }
+
+    /// Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager._onRequest`: `request.request.setRawRequestHeaders(headersObjectToArray(requestPausedEvent!.request.headers, '\n'));`
+    ///
+    /// A paused hop's raw request headers, from the pause, until Chromium reports the ones it
+    /// sends: a route handler's `allHeaders()` answers while the request waits for it.
+    pub(crate) fn paused_headers(&self, id: &HopId, headers: Vec<NameValue>) {
+        let set = self.log.lock().is_ok_and(|mut log| {
+            log.chain_mut(&id.request)
+                .and_then(|chain| chain.hops.get_mut(id.hop))
+                .is_some_and(|hop| {
+                    let unset = hop.raw_request_headers.is_none();
+                    hop.raw_request_headers.get_or_insert(headers);
+                    unset
+                })
+        });
+        if set {
+            self.changes
+                .send_modify(|version| *version = version.wrapping_add(1));
+        }
+    }
+
     /// The lags counted so far; `goto` takes this before it navigates.
     pub(crate) fn lags(&self) -> u64 {
         self.log.lock().map_or(0, |log| log.lags)
@@ -942,6 +999,14 @@ impl Log {
         happenings
     }
 
+    /// A request dropped at its start: a later pause of it is not the run's to route.
+    fn skip(&mut self, request: &str) {
+        self.skipped.push_back(request.to_string());
+        if self.skipped.len() > MAX_SKIPPED {
+            self.skipped.pop_front();
+        }
+    }
+
     fn chain(&self, request: &str) -> Option<&Chain> {
         // From the newest: a request's events come soon after it starts.
         self.chains
@@ -1013,9 +1078,11 @@ impl Log {
     ) -> bool {
         // `_onRequest` drops `data:` URLs, and a page's request it finds no frame for.
         if event.request.url.starts_with("data:") {
+            self.skip(&event.request_id);
             return false;
         }
         let Some(frame) = event.frame_id.as_deref().filter(|frame| !frame.is_empty()) else {
+            self.skip(&event.request_id);
             return false;
         };
         let navigation =

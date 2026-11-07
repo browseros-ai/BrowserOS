@@ -28,6 +28,8 @@ interfaces:
     - setHTTPCredentials
     - grantPermissions
     - clearPermissions
+    # The run's context routes (`context.route`): which URLs pause for its handlers (`routes.rs`).
+    - setNetworkInterceptionPatterns
   # A BrowserContext initializer requires these three. Neo never sends one (a run receives its
   # context at start) and serves no command on them; listing them keeps the type constructible.
   APIRequestContext: []
@@ -74,6 +76,13 @@ interfaces:
     - registerLocatorHandler
     - resolveLocatorHandlerNoReply
     - unregisterLocatorHandler
+    # The page's routes (`page.route`): which URLs pause for its handlers (`routes.rs`).
+    - setNetworkInterceptionPatterns
+  # A paused request the run's `route` event handed out (`routes.rs`): one answer each.
+  Route:
+    - abort
+    - continue
+    - fulfill
   # A JavaScript dialog the run's `dialog` event handed out.
   Dialog:
     - accept
@@ -122,6 +131,11 @@ interfaces:
     - check
     - uncheck
     - selectOption
+    # `payloads` buffers are `binary` (neo-runtime-spec `Binary`); `localPaths` name files inside
+    # the run's artifact directory (neo-runtime `set_input_files.rs`). Neo's SDK sends no streams.
+    - setInputFiles
+    # `Locator.drop`: files or data dropped at the element's point (neo-runtime `drop_on.rs`).
+    - drop
     # `element` is an `ElementHandle`, which is not a key here: the generated result is always
     # `{}`, and neo-runtime answers a found element as the record the SDK builds its
     # `ElementHandle` from (`dispatch.rs` `wait_for_selector_reply`). `locator.waitFor` sends

@@ -643,6 +643,12 @@ class Connection {
   async sendResponse(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
+  async sendRoute(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendRouteFetch(apiName, guid, params, timeout) {
+    return await this.#send(apiName, guid, "neo:fetch", params, timeout);
+  }
   async sendDialog(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
@@ -1012,6 +1018,12 @@ var DEFAULT_MAX_LISTENERS = 10;
 var uncaughtListenerError;
 function onUncaughtListenerError(report) {
   uncaughtListenerError = report;
+}
+function reportUncaught(error) {
+  if (uncaughtListenerError)
+    uncaughtListenerError(error);
+  else
+    throw error;
 }
 
 class EventEmitter {
@@ -1498,6 +1510,32 @@ class Dialog extends EventEmitter {
   }
 }
 
+// src/disposable.ts
+class DisposableStub {
+  #dispose;
+  constructor(dispose) {
+    this.#dispose = dispose;
+    const asyncDispose = Symbol.asyncDispose;
+    if (asyncDispose)
+      Object.defineProperty(this, asyncDispose, {
+        value: () => this.dispose()
+      });
+  }
+  async dispose() {
+    if (!this.#dispose)
+      return;
+    try {
+      const dispose = this.#dispose;
+      this.#dispose = undefined;
+      await dispose();
+    } catch (e) {
+      if (isTargetClosedError(e))
+        return;
+      throw e;
+    }
+  }
+}
+
 // src/download.ts
 var NO_STREAMS = "Neo cannot stream a download: its scripts have no streams; download.path() names the file";
 
@@ -1769,6 +1807,9 @@ class RawHeaders {
         this.#headersMap.set(name, [header.value]);
     }
   }
+  static _fromHeadersObjectLossy(headers) {
+    return new RawHeaders(Object.entries(headers).filter(([, value]) => value !== undefined).map(([name, value]) => ({ name, value })));
+  }
   get(name) {
     const values = this.getAll(name);
     if (!values.length)
@@ -1800,6 +1841,7 @@ class Request {
   _response = null;
   #provisionalHeaders;
   #actualHeadersPromise;
+  #fallbackOverrides = {};
   #timing = {
     startTime: 0,
     domainLookupStart: -1,
@@ -1822,18 +1864,20 @@ class Request {
     this.#provisionalHeaders = new RawHeaders(initializer.headers);
   }
   url() {
-    return this.#initializer.url;
+    return this.#fallbackOverrides.url || this.#initializer.url;
   }
   resourceType() {
     return this.#initializer.resourceType;
   }
   method() {
-    return this.#initializer.method;
+    return this.#fallbackOverrides.method || this.#initializer.method;
   }
   postData() {
     return this.postDataBuffer()?.toString("utf-8") ?? null;
   }
   postDataBuffer() {
+    if (this.#fallbackOverrides.postDataBuffer)
+      return this.#fallbackOverrides.postDataBuffer;
     const data = this.#initializer.postData;
     return data ? Buffer3.fromBinary(data) : null;
   }
@@ -1851,7 +1895,28 @@ class Request {
     }
   }
   headers() {
+    if (this.#fallbackOverrides.headers)
+      return RawHeaders._fromHeadersObjectLossy(this.#fallbackOverrides.headers).headers();
     return this.#provisionalHeaders.headers();
+  }
+  _applyFallbackOverrides(overrides) {
+    if (overrides.url)
+      this.#fallbackOverrides.url = overrides.url;
+    if (overrides.method)
+      this.#fallbackOverrides.method = overrides.method;
+    if (overrides.headers)
+      this.#fallbackOverrides.headers = overrides.headers;
+    if (typeof overrides.postData === "string")
+      this.#fallbackOverrides.postDataBuffer = encodeUtf8(overrides.postData);
+    else if (overrides.postData instanceof Uint8Array) {
+      const bytes = new Buffer3(overrides.postData.length);
+      bytes.set(overrides.postData);
+      this.#fallbackOverrides.postDataBuffer = bytes;
+    } else if (overrides.postData)
+      this.#fallbackOverrides.postDataBuffer = encodeUtf8(JSON.stringify(overrides.postData));
+  }
+  _fallbackOverridesForContinue() {
+    return this.#fallbackOverrides;
   }
   async allHeaders() {
     return (await this.#actualHeaders("request.allHeaders")).headers();
@@ -1910,6 +1975,8 @@ class Request {
     return response ? networkObject(this.#connection, response.guid, this.#frame._page) : null;
   }
   #actualHeaders(apiName) {
+    if (this.#fallbackOverrides.headers)
+      return Promise.resolve(RawHeaders._fromHeadersObjectLossy(this.#fallbackOverrides.headers));
     this.#actualHeadersPromise ??= this.#connection.sendRequest(apiName, this._guid, "rawRequestHeaders", {}, 0).then(({ headers }) => new RawHeaders(headers));
     return this.#actualHeadersPromise;
   }
@@ -2080,6 +2147,32 @@ function parseFormBody(body) {
     entries[name] = at < 0 ? "" : decode(pair.slice(at + 1));
   }
   return entries;
+}
+function encodeUtf8(text) {
+  const bytes = [];
+  for (let index = 0;index < text.length; index++) {
+    let code = text.charCodeAt(index);
+    if (code >= 55296 && code <= 56319 && index + 1 < text.length) {
+      const next = text.charCodeAt(index + 1);
+      if (next >= 56320 && next <= 57343) {
+        code = 65536 + (code - 55296 << 10) + (next - 56320);
+        index++;
+      } else
+        code = 65533;
+    } else if (code >= 55296 && code <= 57343)
+      code = 65533;
+    if (code < 128)
+      bytes.push(code);
+    else if (code < 2048)
+      bytes.push(192 | code >> 6, 128 | code & 63);
+    else if (code < 65536)
+      bytes.push(224 | code >> 12, 128 | code >> 6 & 63, 128 | code & 63);
+    else
+      bytes.push(240 | code >> 18, 128 | code >> 12 & 63, 128 | code >> 6 & 63, 128 | code & 63);
+  }
+  const buffer = new Buffer3(bytes.length);
+  buffer.set(bytes);
+  return buffer;
 }
 
 // vendor/playwright/isomorphic/stringUtils.ts
@@ -4385,32 +4478,6 @@ function isRegExp3(obj) {
   return obj instanceof RegExp;
 }
 
-// src/disposable.ts
-class DisposableStub {
-  #dispose;
-  constructor(dispose) {
-    this.#dispose = dispose;
-    const asyncDispose = Symbol.asyncDispose;
-    if (asyncDispose)
-      Object.defineProperty(this, asyncDispose, {
-        value: () => this.dispose()
-      });
-  }
-  async dispose() {
-    if (!this.#dispose)
-      return;
-    try {
-      const dispose = this.#dispose;
-      this.#dispose = undefined;
-      await dispose();
-    } catch (e) {
-      if (isTargetClosedError(e))
-        return;
-      throw e;
-    }
-  }
-}
-
 // vendor/playwright/isomorphic/mimeType.ts
 function getMimeTypeForPath(path) {
   const dotIndex = path.lastIndexOf(".");
@@ -4962,6 +5029,24 @@ var FRAME_UNCHECK_KEYS = [
   "position",
   "trial"
 ];
+var FRAME_SET_INPUT_FILES_KEYS = [
+  "selector",
+  "strict",
+  "payloads",
+  "localDirectory",
+  "directoryStream",
+  "localPaths",
+  "streams"
+];
+var FRAME_DROP_KEYS = [
+  "selector",
+  "strict",
+  "position",
+  "payloads",
+  "localPaths",
+  "streams",
+  "data"
+];
 var FRAME_SELECT_OPTION_KEYS = [
   "selector",
   "strict",
@@ -5341,6 +5426,15 @@ class Locator {
   async selectOption(values, options = {}) {
     return await this._frame._selectOption("locator.selectOption", this._selector, values, { strict: true, ...options });
   }
+  async setInputFiles(files, options = {}) {
+    return await this._frame._setInputFiles("locator.setInputFiles", this._selector, files, { strict: true, ...options });
+  }
+  async drop(payload, options = {}) {
+    return await this._frame._drop("locator.drop", this._selector, payload, {
+      strict: true,
+      ...options
+    });
+  }
   async screenshot(options = {}) {
     const result = await this._frame._connection.sendNeo("locator.screenshot", this._frame._guid, "neo:screenshot", locatorScreenshotParams("locator.screenshot", this._selector, options), this._frame._page._timeoutSettings.timeout(options, "locator.screenshot"));
     return resultBuffer(result.binary);
@@ -5696,6 +5790,55 @@ function text(value, index, field) {
   if (typeof value !== "string")
     throw new Error(`options[${index}].${field}: expected string`);
   return value;
+}
+
+// src/set-input-files.ts
+var FILE_UPLOAD_SIZE_LIMIT = 50 * 1024 * 1024;
+function convertInputFiles(files) {
+  const items = Array.isArray(files) ? files.slice() : [files];
+  if (items.some((item) => typeof item === "string")) {
+    if (!items.every((item) => typeof item === "string"))
+      throw new Error("File paths cannot be mixed with buffers");
+    return { localPaths: items };
+  }
+  const payloads = items;
+  if (filePayloadExceedsSizeLimit(payloads))
+    throw new Error("Cannot set buffer larger than 50Mb, please write it to a file and pass its path instead.");
+  return { payloads: payloads.map(wirePayload) };
+}
+function filePayloadExceedsSizeLimit(payloads) {
+  return payloads.reduce((size, item) => size + (item.buffer ? item.buffer.byteLength : 0), 0) >= FILE_UPLOAD_SIZE_LIMIT;
+}
+function wirePayload(payload, index) {
+  const path = `payloads[${index}]`;
+  if (payload === null)
+    throw new Error(`${path}: expected object, got null`);
+  if (typeof payload !== "object")
+    throw new Error(`${path}: expected object, got ${typeof payload}`);
+  const { name, mimeType, buffer } = payload;
+  if (typeof name !== "string")
+    throw new Error(`${path}.name: expected string, got ${typeof name}`);
+  if (mimeType !== undefined && typeof mimeType !== "string")
+    throw new Error(`${path}.mimeType: expected string, got ${typeof mimeType}`);
+  if (!(buffer instanceof Uint8Array))
+    throw new Error(`${path}.buffer: expected Buffer, got ${typeof buffer}`);
+  return mimeType === undefined ? { name, buffer: toBinary(buffer) } : { name, mimeType, buffer: toBinary(buffer) };
+}
+function convertDropPayload(payload) {
+  let fileParams = {};
+  if (payload.files !== undefined) {
+    const converted = convertInputFiles(payload.files);
+    fileParams = {
+      payloads: converted.payloads,
+      localPaths: converted.localPaths
+    };
+  }
+  const data = payload.data ? Object.entries(payload.data).map(([mimeType, value], index) => {
+    if (typeof value !== "string")
+      throw new Error(`data[${index}].value: expected string, got ${typeof value}`);
+    return { mimeType, value };
+  }) : undefined;
+  return { ...fileParams, data };
 }
 
 // src/url.ts
@@ -6515,6 +6658,23 @@ class Frame {
       throw new Error("neo-sdk: Frame.selectOption contract error: missing result");
     return result.values;
   }
+  async setInputFiles(selector, files, options = {}) {
+    return await this._setInputFiles("frame.setInputFiles", selector, files, options);
+  }
+  async _setInputFiles(apiName, selector, files, options) {
+    await this._connection.send(apiName, this._guid, "setInputFiles", pickParams(FRAME_SET_INPUT_FILES_KEYS, {
+      selector,
+      ...convertInputFiles(files),
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async _drop(apiName, selector, payload, options) {
+    await this._connection.send(apiName, this._guid, "drop", pickParams(FRAME_DROP_KEYS, {
+      selector,
+      ...convertDropPayload(payload),
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
   async setChecked(selector, checked, options = {}) {
     if (checked)
       await this._check("frame.setChecked", selector, options);
@@ -6700,47 +6860,53 @@ class Touchscreen {
   }
 }
 
-// src/timeout-settings.ts
-var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
+// src/api-response.ts
+var DISPOSED = "Response has been disposed";
 
-class TimeoutSettings {
-  #parent;
-  #defaultTimeout;
-  #defaultNavigationTimeout;
-  constructor(parent) {
-    this.#parent = parent;
+class APIResponse {
+  #url;
+  #status;
+  #statusText;
+  #headers;
+  #body;
+  constructor(record) {
+    this.#url = record.url;
+    this.#status = record.status;
+    this.#statusText = record.statusText;
+    this.#headers = new RawHeaders(record.headers);
+    this.#body = Buffer3.fromBinary(record.body);
   }
-  setDefaultTimeout(timeout) {
-    this.#defaultTimeout = timeout;
+  ok() {
+    return this.#status >= 200 && this.#status <= 299;
   }
-  setDefaultNavigationTimeout(timeout) {
-    this.#defaultNavigationTimeout = timeout;
+  url() {
+    return this.#url;
   }
-  timeout(options, _apiName) {
-    return { signal: options.signal, timeout: this.#timeout(options) };
+  status() {
+    return this.#status;
   }
-  navigationTimeout(options, _apiName) {
-    return { signal: options.signal, timeout: this.#navigationTimeout(options) };
+  statusText() {
+    return this.#statusText;
   }
-  #timeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.#timeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  headers() {
+    return this.#headers.headers();
   }
-  #navigationTimeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultNavigationTimeout !== undefined)
-      return this.#defaultNavigationTimeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.#navigationTimeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  headersArray() {
+    return this.#headers.headersArray();
+  }
+  async body() {
+    if (!this.#body)
+      throw new Error(DISPOSED);
+    return this.#body;
+  }
+  async text() {
+    return (await this.body()).toString("utf8");
+  }
+  async json() {
+    return JSON.parse(await this.text());
+  }
+  async dispose() {
+    this.#body = null;
   }
 }
 
@@ -6881,6 +7047,314 @@ ${lines.join(`
   return e;
 }
 
+// src/route.ts
+var MAX_FULFILL_BYTES = 6 * 1024 * 1024;
+var BODY_TOO_LARGE = "route.fulfill: Neo carries a body of at most 6291456 bytes (6 MiB) to the browser";
+var ROUTE_HANDLED = "Route is already handled!";
+var BODY_AND_JSON = "Can specify either body or json parameters";
+var NO_PATH = `route.fulfill: Neo cannot read a file for "path" yet (it reads only inside the run's artifact directory, which this build lacks); pass "body" instead`;
+function postDataBytes(postData) {
+  if (postData === undefined || postData === null)
+    return;
+  if (typeof postData === "string")
+    return encodeUtf8(postData);
+  if (postData instanceof Uint8Array)
+    return postData;
+  return encodeUtf8(JSON.stringify(postData));
+}
+function deferred() {
+  let resolve = () => {};
+  const promise = new Promise((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+function headersObjectToArray2(headers) {
+  return Object.entries(headers).filter(([, value]) => value !== undefined).map(([name, value]) => ({ name, value }));
+}
+function serializeURLMatch(match) {
+  if (typeof match === "string")
+    return { glob: match };
+  if (isRegExp4(match))
+    return { regexSource: match.source, regexFlags: match.flags };
+  return null;
+}
+function urlMatchesEqual(match1, match2) {
+  if (isRegExp4(match1) && isRegExp4(match2))
+    return match1.source === match2.source && match1.flags === match2.flags;
+  return match1 === match2;
+}
+
+class Route {
+  _guid;
+  #request;
+  #connection;
+  #timeoutSettings;
+  #handlingPromise = null;
+  _didThrow = false;
+  constructor(guid, request, connection, timeoutSettings) {
+    this._guid = guid;
+    this.#request = request;
+    this.#connection = connection;
+    this.#timeoutSettings = timeoutSettings;
+  }
+  request() {
+    return this.#request;
+  }
+  async#raceWithTargetClose(promise) {
+    try {
+      await promise;
+    } catch (error) {
+      if (isTargetClosedError(error))
+        return;
+      throw error;
+    }
+  }
+  _startHandling() {
+    this.#handlingPromise = deferred();
+    return this.#handlingPromise.promise;
+  }
+  async fallback(options = {}) {
+    this._checkNotHandled();
+    this.#request._applyFallbackOverrides(options);
+    this._reportHandled(false);
+  }
+  async abort(errorCode) {
+    await this.#handleRoute(async () => {
+      await this.#raceWithTargetClose(this.#connection.sendRoute("route.abort", this._guid, "abort", { errorCode }, 0));
+    });
+  }
+  async fetch(options = {}) {
+    await wrapApiCall("route.fetch", async () => {
+      if (options.maxRedirects !== undefined && options.maxRedirects < 0)
+        throw new Error(`'maxRedirects' must be greater than or equal to '0'`);
+      if (options.maxRetries !== undefined && options.maxRetries < 0)
+        throw new Error(`'maxRetries' must be greater than or equal to '0'`);
+    });
+    {
+      const overrides = this.#request._fallbackOverridesForContinue();
+      const headers = options.headers ?? overrides.headers;
+      const postData = postDataBytes(options.postData) ?? overrides.postDataBuffer;
+      const result = await this.#connection.sendRouteFetch("route.fetch", this._guid, {
+        url: options.url ?? overrides.url,
+        method: options.method ?? overrides.method,
+        headers: headers ? headersObjectToArray2(headers) : undefined,
+        postData: postData ? toBinary(postData) : undefined,
+        maxRedirects: options.maxRedirects
+      }, this.#timeoutSettings.timeout(options, "route.fetch"));
+      return new APIResponse(result);
+    }
+  }
+  async fulfill(options = {}) {
+    await this.#handleRoute(async () => {
+      await this.#innerFulfill(options);
+    });
+  }
+  async#handleRoute(callback) {
+    this._checkNotHandled();
+    try {
+      await callback();
+      this._reportHandled(true);
+    } catch (error) {
+      this._didThrow = true;
+      throw error;
+    }
+  }
+  async#innerFulfill(options) {
+    let { status: statusOption, headers: headersOption, body } = options;
+    if (options.json !== undefined) {
+      if (options.body !== undefined)
+        throw new Error(BODY_AND_JSON);
+      body = JSON.stringify(options.json);
+    }
+    if (options.response instanceof APIResponse) {
+      statusOption ??= options.response.status();
+      headersOption ??= options.response.headers();
+      if (body === undefined && options.path === undefined)
+        body = await options.response.body();
+    }
+    if (options.path !== undefined)
+      throw new Error(NO_PATH);
+    let isBase64 = false;
+    let length = 0;
+    let wire;
+    if (typeof body === "string") {
+      length = encodeUtf8(body).length;
+      wire = body;
+    } else if (body instanceof Uint8Array) {
+      length = body.length;
+      wire = toBinary(body);
+      isBase64 = true;
+    }
+    if (length > MAX_FULFILL_BYTES)
+      throw new Error(BODY_TOO_LARGE);
+    const headers = {};
+    for (const header of Object.keys(headersOption || {}))
+      headers[header.toLowerCase()] = String(headersOption[header]);
+    if (options.contentType)
+      headers["content-type"] = String(options.contentType);
+    else if (options.json)
+      headers["content-type"] = "application/json";
+    if (length && !("content-length" in headers))
+      headers["content-length"] = String(length);
+    await this.#raceWithTargetClose(this.#connection.sendRoute("route.fulfill", this._guid, "fulfill", {
+      status: statusOption || 200,
+      headers: headersObjectToArray2(headers),
+      body: wire,
+      isBase64
+    }, 0));
+  }
+  async continue(options = {}) {
+    await this.#handleRoute(async () => {
+      this.#request._applyFallbackOverrides(options);
+      await this._innerContinue(false);
+    });
+  }
+  _checkNotHandled() {
+    if (!this.#handlingPromise)
+      throw new Error(ROUTE_HANDLED);
+  }
+  _reportHandled(done) {
+    const chain = this.#handlingPromise;
+    this.#handlingPromise = null;
+    chain?.resolve(done);
+  }
+  async _innerContinue(isFallback) {
+    const options = this.#request._fallbackOverridesForContinue();
+    await this.#raceWithTargetClose(this.#connection.sendRoute("route.continue", this._guid, "continue", {
+      url: options.url,
+      method: options.method,
+      headers: options.headers ? headersObjectToArray2(options.headers) : undefined,
+      postData: options.postDataBuffer ? toBinary(options.postDataBuffer) : undefined,
+      isFallback
+    }, 0));
+  }
+}
+
+class RouteHandler {
+  #handledCount = 0;
+  #times;
+  url;
+  handler;
+  #ignoreException = false;
+  #activeInvocations = new Set;
+  constructor(url, handler, times = Number.MAX_SAFE_INTEGER) {
+    this.#times = times;
+    this.url = url;
+    this.handler = handler;
+    if (typeof url === "string")
+      matchesURL("about:blank", { glob: url });
+  }
+  static prepareInterceptionPatterns(handlers) {
+    const patterns = [];
+    let all = false;
+    for (const handler of handlers) {
+      const serialized = serializeURLMatch(handler.url);
+      if (serialized)
+        patterns.push(serialized);
+      else
+        all = true;
+    }
+    if (all)
+      return [{ glob: "**/*" }];
+    return patterns;
+  }
+  matches(requestURL) {
+    if (typeof this.url === "function") {
+      const url = urlFor(requestURL);
+      return !!url && !!this.url(url);
+    }
+    const serialized = serializeURLMatch(this.url);
+    return !!serialized && matchesURL(requestURL, serialized);
+  }
+  async handle(route) {
+    const invocation = { complete: deferred(), route };
+    this.#activeInvocations.add(invocation);
+    try {
+      return await this.#handleInternal(route);
+    } catch (error) {
+      if (this.#ignoreException)
+        return false;
+      if (isTargetClosedError(error) && error instanceof Error)
+        rewriteErrorMessage(error, `"${error.message}" while running route callback.
+Consider awaiting \`await page.unrouteAll({ behavior: 'ignoreErrors' })\`
+before the end of the test to ignore remaining routes in flight.`);
+      throw error;
+    } finally {
+      invocation.complete.resolve();
+      this.#activeInvocations.delete(invocation);
+    }
+  }
+  async stop(behavior) {
+    if (behavior === "ignoreErrors") {
+      this.#ignoreException = true;
+      return;
+    }
+    const promises = [];
+    for (const activation of this.#activeInvocations)
+      if (!activation.route._didThrow)
+        promises.push(activation.complete.promise);
+    await Promise.all(promises);
+  }
+  async#handleInternal(route) {
+    ++this.#handledCount;
+    const handledPromise = route._startHandling();
+    const handler = this.handler;
+    const [handled] = await Promise.all([
+      handledPromise,
+      handler(route, route.request())
+    ]);
+    return handled;
+  }
+  willExpire() {
+    return this.#handledCount + 1 >= this.#times;
+  }
+}
+
+// src/timeout-settings.ts
+var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
+
+class TimeoutSettings {
+  #parent;
+  #defaultTimeout;
+  #defaultNavigationTimeout;
+  constructor(parent) {
+    this.#parent = parent;
+  }
+  setDefaultTimeout(timeout) {
+    this.#defaultTimeout = timeout;
+  }
+  setDefaultNavigationTimeout(timeout) {
+    this.#defaultNavigationTimeout = timeout;
+  }
+  timeout(options, _apiName) {
+    return { signal: options.signal, timeout: this.#timeout(options) };
+  }
+  navigationTimeout(options, _apiName) {
+    return { signal: options.signal, timeout: this.#navigationTimeout(options) };
+  }
+  #timeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#timeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+  #navigationTimeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultNavigationTimeout !== undefined)
+      return this.#defaultNavigationTimeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#navigationTimeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+}
+
 // src/page.ts
 var PAGE_EVENTS = {
   receiver: "Page",
@@ -6927,6 +7401,9 @@ class Page extends ChannelOwner {
   mouse;
   touchscreen;
   #closedLocally = false;
+  _routes = [];
+  #routeListening = false;
+  #patternsSent = Promise.resolve();
   #closeReason;
   _bindings = new Map;
   constructor(guid, mainFrameGuid, url, context, connection) {
@@ -7010,7 +7487,8 @@ class Page extends ChannelOwner {
     else if (method === "fileChooser") {
       const { chooser, isMultiple } = params;
       this.emit("filechooser", new FileChooser(this, chooser, isMultiple, this.#connection));
-    }
+    } else if (method === "route")
+      this.#onRouteEvent(params);
   }
   async _onBinding(record) {
     const call2 = new BindingCall(this.#connection, record, this._frameForGuid(record.frame.guid));
@@ -7081,6 +7559,74 @@ class Page extends ChannelOwner {
   #dropLocatorHandler(uid) {
     this.#locatorHandlers.delete(uid);
     this.#syncLocatorHandlerSubscription();
+  }
+  #onRouteEvent({ route, request }) {
+    const routed = new Route(route.guid, requestFromRecord(this.#connection, request, this), this.#connection, this.#context._timeoutSettings);
+    this._onRoute(routed).catch(reportUncaught);
+  }
+  async _onRoute(route) {
+    const routeHandlers = this._routes;
+    for (const routeHandler of routeHandlers.slice()) {
+      if (this.#closedLocally || this.#context.isClosed())
+        return;
+      if (!routeHandler.matches(route.request().url()))
+        continue;
+      const index = this._routes.indexOf(routeHandler);
+      if (index === -1)
+        continue;
+      if (routeHandler.willExpire())
+        this._routes.splice(index, 1);
+      const handled = await routeHandler.handle(route);
+      if (routeHandlers === this._routes && !this._routes.length)
+        this.#updateInterceptionPatterns("page.route").catch(() => {});
+      if (handled)
+        return;
+    }
+    await this.#context._onRoute(route);
+  }
+  async route(url, handler, options = {}) {
+    const routeHandler = await wrapApiCall("page.route", async () => new RouteHandler(url, handler, options.times));
+    this._routes.unshift(routeHandler);
+    await this.#updateInterceptionPatterns("page.route");
+    return new DisposableStub(() => this.unroute(url, handler));
+  }
+  async unrouteAll(options) {
+    await this.#unrouteInternal("page.unrouteAll", this._routes, [], options?.behavior);
+  }
+  async unroute(url, handler) {
+    const removed = [];
+    const remaining = [];
+    for (const route of this._routes) {
+      if (urlMatchesEqual(route.url, url) && (!handler || route.handler === handler))
+        removed.push(route);
+      else
+        remaining.push(route);
+    }
+    await this.#unrouteInternal("page.unroute", removed, remaining, "default");
+  }
+  async#unrouteInternal(apiName, removed, remaining, behavior) {
+    this._routes = remaining;
+    if (behavior && behavior !== "default")
+      await Promise.all(removed.map((handler) => handler.stop(behavior)));
+    await this.#updateInterceptionPatterns(apiName);
+  }
+  async#updateInterceptionPatterns(apiName) {
+    const update = this.#patternsSent.then(() => this.#sendInterceptionPatterns(apiName));
+    this.#patternsSent = update.catch(() => {});
+    await update;
+  }
+  async#sendInterceptionPatterns(apiName) {
+    const patterns = RouteHandler.prepareInterceptionPatterns(this._routes);
+    const listening = patterns.length > 0;
+    if (listening && !this.#routeListening) {
+      this.#routeListening = true;
+      this._subscribeChannelEvent("route", true);
+    }
+    await this.#connection.sendPage(apiName, this.#guid, "setNetworkInterceptionPatterns", { patterns }, 0);
+    if (!this._routes.length && this.#routeListening) {
+      this.#routeListening = false;
+      this._subscribeChannelEvent("route", false);
+    }
   }
   #onFrameAttached(record) {
     this.#frameEvent(record, "frameattached", false);
@@ -7436,6 +7982,9 @@ class Page extends ChannelOwner {
   async selectOption(selector, values, options = {}) {
     return await this.#mainFrame._selectOption("page.selectOption", selector, values, options);
   }
+  async setInputFiles(selector, files, options = {}) {
+    return await this.#mainFrame._setInputFiles("page.setInputFiles", selector, files, options);
+  }
   async setChecked(selector, checked, options = {}) {
     if (checked)
       await this.#mainFrame._check("page.setChecked", selector, options);
@@ -7552,6 +8101,9 @@ function clearCookieMatches(cookie, filter) {
 class BrowserContext extends ChannelOwner {
   #guid;
   #connection;
+  _routes = [];
+  #routeListening = false;
+  #patternsSent = Promise.resolve();
   #pages = new Map;
   #dialogs = new Map;
   _timeoutSettings = new TimeoutSettings;
@@ -7620,6 +8172,77 @@ class BrowserContext extends ChannelOwner {
       this.#onRequestFinished(params);
     else if (method === "requestFailed")
       this.#onRequestFailed(params);
+    else if (method === "route")
+      this.#onRouteEvent(params);
+  }
+  #onRouteEvent({ route, request, page }) {
+    const pageObject = this.#pageFor(page.guid);
+    const routed = new Route(route.guid, requestFromRecord(this.#connection, request, pageObject), this.#connection, this._timeoutSettings);
+    this._onRoute(routed, pageObject).catch(reportUncaught);
+  }
+  async _onRoute(route, page) {
+    const routeHandlers = this._routes;
+    for (const routeHandler of routeHandlers.slice()) {
+      if (page?._isClosedLocally() || this.isClosed())
+        return;
+      if (!routeHandler.matches(route.request().url()))
+        continue;
+      const index = this._routes.indexOf(routeHandler);
+      if (index === -1)
+        continue;
+      if (routeHandler.willExpire())
+        this._routes.splice(index, 1);
+      const handled = await routeHandler.handle(route);
+      if (routeHandlers === this._routes && !this._routes.length)
+        this.#updateInterceptionPatterns().catch(() => {});
+      if (handled)
+        return;
+    }
+    await route._innerContinue(true).catch(() => {});
+  }
+  async route(url, handler, options = {}) {
+    const routeHandler = await wrapApiCall("browserContext.route", async () => new RouteHandler(url, handler, options.times));
+    this._routes.unshift(routeHandler);
+    await this.#updateInterceptionPatterns();
+    return new DisposableStub(() => this.unroute(url, handler));
+  }
+  async unrouteAll(options) {
+    await this.#unrouteInternal(this._routes, [], options?.behavior);
+  }
+  async unroute(url, handler) {
+    const removed = [];
+    const remaining = [];
+    for (const route of this._routes) {
+      if (urlMatchesEqual(route.url, url) && (!handler || route.handler === handler))
+        removed.push(route);
+      else
+        remaining.push(route);
+    }
+    await this.#unrouteInternal(removed, remaining, "default");
+  }
+  async#unrouteInternal(removed, remaining, behavior) {
+    this._routes = remaining;
+    if (behavior && behavior !== "default")
+      await Promise.all(removed.map((handler) => handler.stop(behavior)));
+    await this.#updateInterceptionPatterns();
+  }
+  async#updateInterceptionPatterns() {
+    const update = this.#patternsSent.then(() => this.#sendInterceptionPatterns());
+    this.#patternsSent = update.catch(() => {});
+    await update;
+  }
+  async#sendInterceptionPatterns() {
+    const patterns = RouteHandler.prepareInterceptionPatterns(this._routes);
+    const listening = patterns.length > 0;
+    if (listening && !this.#routeListening) {
+      this.#routeListening = true;
+      this._subscribeChannelEvent("route", true);
+    }
+    await this.#connection.sendContext("browserContext.route", this._guid, "setNetworkInterceptionPatterns", { patterns }, 0);
+    if (!this._routes.length && this.#routeListening) {
+      this.#routeListening = false;
+      this._subscribeChannelEvent("route", false);
+    }
   }
   async#onBindingCall(record) {
     const page = this.#pageFor(record.page.guid);

@@ -29,6 +29,7 @@ import type {
   PageCommands,
   RequestCommands,
   ResponseCommands,
+  RouteCommands,
 } from '@browseros/neo-runtime-spec/serve'
 import type { BindingCommands } from './binding-call'
 import {
@@ -40,7 +41,11 @@ import {
 } from './errors'
 import type { InitScriptCommands } from './init-script'
 import type { EvalFrameCommands, JSHandleCommands } from './js-handle'
-import type { NeoFrameCommands } from './neo-commands'
+import type {
+  NeoFrameCommands,
+  NeoRouteFetchParams,
+  NeoRouteFetchResult,
+} from './neo-commands'
 import type { Request, Response } from './network'
 import { abort, call } from './runtime-bridge'
 import type { SignalLike, TimeoutOptions } from './timeout-settings'
@@ -76,6 +81,8 @@ export type ApiName =
   | 'locator.uncheck'
   | 'locator.setChecked'
   | 'locator.selectOption'
+  | 'locator.setInputFiles'
+  | 'locator.drop'
   | 'locator.clear'
   | 'page.click'
   | 'page.dblclick'
@@ -92,6 +99,7 @@ export type ApiName =
   | 'page.uncheck'
   | 'page.setChecked'
   | 'page.selectOption'
+  | 'page.setInputFiles'
   | 'frame.click'
   | 'frame.dblclick'
   | 'frame.hover'
@@ -134,6 +142,7 @@ export type ApiName =
   | 'frame.uncheck'
   | 'frame.setChecked'
   | 'frame.selectOption'
+  | 'frame.setInputFiles'
   | 'browserContext.newPage'
   | 'browserContext.close'
   | 'browserContext.cookies'
@@ -248,6 +257,18 @@ export type ApiName =
   | 'download.failure'
   | 'download.cancel'
   | 'download.delete'
+  // Routes (B3, `route.ts`).
+  | 'page.route'
+  | 'page.unroute'
+  | 'page.unrouteAll'
+  | 'browserContext.route'
+  | 'browserContext.unroute'
+  | 'browserContext.unrouteAll'
+  | 'route.abort'
+  | 'route.continue'
+  | 'route.fulfill'
+  | 'route.fallback'
+  | 'route.fetch'
   // Element reads and states (B1).
   | 'locator.isEnabled'
   | 'page.isEnabled'
@@ -413,6 +434,39 @@ export class Connection {
       params,
       timeout,
     )) as ResponseCommands[M]['result']
+  }
+
+  /** {@link Connection.send} for a `Route` command, to a `route@…` guid. */
+  async sendRoute<M extends keyof RouteCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: RouteCommands[M]['params'],
+    timeout: number | TimeoutOptions,
+  ): Promise<Resolved<RouteCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<RouteCommands[M]['result']>
+  }
+
+  /** `route.fetch`'s `neo:fetch`, to a `route@…` guid (neo-runtime `routes.rs`). */
+  async sendRouteFetch(
+    apiName: ApiName,
+    guid: string,
+    params: NeoRouteFetchParams,
+    timeout: number | TimeoutOptions,
+  ): Promise<NeoRouteFetchResult> {
+    return (await this.#send(
+      apiName,
+      guid,
+      'neo:fetch',
+      params,
+      timeout,
+    )) as NeoRouteFetchResult
   }
 
   /** {@link Connection.send} for a `Dialog` command, to a `dialog@…` guid. */
