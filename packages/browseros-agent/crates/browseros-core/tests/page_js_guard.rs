@@ -7,7 +7,8 @@
 //! only: `neo-runtime/src/world.rs`, on an object of Neo's own isolated world or on the context
 //! `Page.createIsolatedWorld` returned for it, and `neo-runtime/src/main_world.rs`, the one door to
 //! the page's own world that Playwright's evaluations need (`page.evaluate`, `JSHandle.evaluate`),
-//! on the `UtilityScript` object it built there from a bundled artifact. Neither may send anything
+//! on the `UtilityScript` object it built there from a bundled artifact, or on a page object an
+//! event named, to keep it in a run's handle group. Neither may send anything
 //! else, so a `Runtime.evaluate` still fails here, in Neo as everywhere. Neo's own guard
 //! (`neo-runtime/tests/page_js_guard.rs`) is stricter: it also refuses the other script-running
 //! methods and requires every Neo `functionDeclaration` to be a built artifact.
