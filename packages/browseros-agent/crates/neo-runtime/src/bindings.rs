@@ -1289,7 +1289,9 @@ async fn watch(bindings: Weak<Bindings>, tabs: Tabs, mut events: broadcast::Rece
     let Some(stop) = bindings.upgrade().map(|bindings| bindings.stop.clone()) else {
         return;
     };
-    let mut flushes = Some(tabs.events().watcher());
+    // Reading a binding may prepare a cold frame and wait for its Runtime replay. That replay
+    // must not flush this reader back onto itself; ordinary call barriers still wait for it.
+    let mut flushes = Some(tabs.events().callback_watcher());
     let mut reader = Reader {
         bindings,
         tabs,

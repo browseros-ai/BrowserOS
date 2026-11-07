@@ -268,13 +268,21 @@ struct State {
     /// other page is the run's own context's.
     owners: HashMap<String, String>,
     /// One flush channel per live watcher; a closed one belongs to a watcher that ended.
-    watchers: Vec<mpsc::UnboundedSender<oneshot::Sender<()>>>,
+    watchers: Vec<Watcher>,
     /// Per page (target id): the enables its subscriptions started, done when `true`.
     enables: HashMap<String, Vec<watch::Receiver<bool>>>,
     /// Events dropped since the queue last filled up, until the script next drains.
     dropped: Option<usize>,
     /// Run-log lines waiting for the bridge to write them.
     notes: Vec<String>,
+}
+
+/// Neo: a producer's flush channel, and whether it consumes Runtime.enable's replay.
+/// Callback delivery can prepare a cold frame and wait for replay itself, so replay must not
+/// wait back on it. Ordinary call barriers still flush both kinds of producer.
+struct Watcher {
+    sender: mpsc::UnboundedSender<oneshot::Sender<()>>,
+    replay: bool,
 }
 
 /// One queued event, already in the realm's JSON shape `{seq, guid, method, params}`.
@@ -465,8 +473,18 @@ impl EventHub {
     /// Registers a watcher's flush channel. The watcher selects [`Flushes::recv`] after its CDP
     /// events under `biased;` and drains its ring before answering.
     pub(crate) fn watcher(&self) -> Flushes {
+        self.add_watcher(true)
+    }
+
+    /// Neo: callback delivery participates in call ordering, but not Runtime.enable replay.
+    /// Preparing a callback's cold frame can itself wait for that replay to finish.
+    pub(crate) fn callback_watcher(&self) -> Flushes {
+        self.add_watcher(false)
+    }
+
+    fn add_watcher(&self, replay: bool) -> Flushes {
         let (sender, receiver) = mpsc::unbounded_channel();
-        self.with(|state| state.watchers.push(sender));
+        self.with(|state| state.watchers.push(Watcher { sender, replay }));
         Flushes(receiver)
     }
 
@@ -474,26 +492,27 @@ impl EventHub {
     /// live watcher applies the events that preceded the call's last CDP reply. Free otherwise.
     pub(crate) async fn barrier(&self) {
         if self.any_subscription() {
-            self.flush(BARRIER_WAIT).await;
+            self.flush(BARRIER_WAIT, false).await;
         }
     }
 
-    /// The barrier whatever is subscribed, for a producer that must know its watcher has applied
-    /// everything before a point: the end of `Runtime.enable`'s replay.
+    /// Flushes runtime-event producers through the end of `Runtime.enable`'s replay, whatever
+    /// is subscribed. Callback delivery is excluded because it can be waiting for this replay.
     pub(crate) async fn replay_barrier(&self) {
-        self.flush(REPLAY_WAIT).await;
+        self.flush(REPLAY_WAIT, true).await;
     }
 
-    async fn flush(&self, bound: Duration) {
+    async fn flush(&self, bound: Duration, replay_only: bool) {
         let acks = self
             .with(|state| {
-                state.watchers.retain(|watcher| !watcher.is_closed());
+                state.watchers.retain(|watcher| !watcher.sender.is_closed());
                 state
                     .watchers
                     .iter()
+                    .filter(|watcher| !replay_only || watcher.replay)
                     .filter_map(|watcher| {
                         let (ack, acked) = oneshot::channel();
-                        watcher.send(ack).ok().map(|()| acked)
+                        watcher.sender.send(ack).ok().map(|()| acked)
                     })
                     .collect::<Vec<_>>()
             })
@@ -853,6 +872,40 @@ mod tests {
         time::timeout(Duration::from_millis(100), hub.barrier())
             .await
             .unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_replay_does_not_wait_on_callbacks_but_call_ordering_does() {
+        let hub = EventHub::default();
+        let mut producer = hub.watcher();
+        let mut callbacks = hub.callback_watcher();
+        let replay = tokio::spawn({
+            let hub = hub.clone();
+            async move { hub.replay_barrier().await }
+        });
+        let ack = producer.recv().await.expect("replay flushes its producer");
+        assert!(
+            callbacks.0.try_recv().is_err(),
+            "replay cannot wait for a callback preparing its frame"
+        );
+        ack.send(()).expect("replay still waits for the producer");
+        replay
+            .await
+            .expect("replay finishes without a callback acknowledgement");
+
+        hub.subscribe("page@T", "console", true);
+        let ordered = tokio::spawn({
+            let hub = hub.clone();
+            async move { hub.barrier().await }
+        });
+        let producer_ack = producer.recv().await.expect("call flushes the producer");
+        let callback_ack = callbacks.recv().await.expect("call also flushes callbacks");
+        producer_ack.send(()).expect("producer acknowledges");
+        assert!(!ordered.is_finished(), "call still waits for its callbacks");
+        callback_ack.send(()).expect("callback acknowledges");
+        ordered
+            .await
+            .expect("call ordering finishes after both acknowledgements");
     }
 
     #[tokio::test]
