@@ -34,9 +34,11 @@ struct Contexts {
     deaths: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Context {
     frame: String,
+    /// Chromium's `uniqueId`, which no other process reuses, unlike the numeric id a call names.
+    unique: Option<String>,
     /// The number of its death; `None` while the context lives.
     died: Option<u64>,
 }
@@ -90,6 +92,7 @@ impl ContextFrames {
                         (session.to_string(), id),
                         Context {
                             frame: frame.to_string(),
+                            unique: context["uniqueId"].as_str().map(str::to_string),
                             died: None,
                         },
                     );
@@ -115,14 +118,38 @@ impl ContextFrames {
         }
     }
 
-    /// The frame of `context` on `session` once its creation was applied, destroyed or not.
-    pub(crate) fn frame_of(&self, session: &str, context: i64) -> Option<String> {
+    /// The frame of `context` on `session` and its system-unique id, once its creation was
+    /// applied, destroyed or not.
+    pub(crate) fn context_of(
+        &self,
+        session: &str,
+        context: i64,
+    ) -> Option<(String, Option<String>)> {
         self.0
             .lock()
             .ok()?
             .frames
             .get(&(session.to_string(), context))
-            .map(|context| context.frame.clone())
+            .map(|context| (context.frame.clone(), context.unique.clone()))
+    }
+
+    /// Takes `from`'s live contexts of `session` that this map has not seen: a reader that starts
+    /// on a session after its contexts were created learns them from the producer that saw them.
+    pub(crate) fn seed(&self, from: &Self, session: &str) {
+        let live: Vec<((String, i64), Context)> = match from.0.lock() {
+            Ok(from) => from
+                .frames
+                .iter()
+                .filter(|((owner, _), context)| owner == session && context.died.is_none())
+                .map(|(key, context)| (key.clone(), context.clone()))
+                .collect(),
+            Err(_) => return,
+        };
+        if let Ok(mut contexts) = self.0.lock() {
+            for (key, context) in live {
+                contexts.frames.entry(key).or_insert(context);
+            }
+        }
     }
 
     /// Forgets every context of `session`, which detached.
@@ -131,6 +158,13 @@ impl ContextFrames {
             contexts.frames.retain(|(owner, _), _| owner != session);
             contexts.dead.retain(|((owner, _), _)| owner != session);
         }
+    }
+}
+
+#[cfg(test)]
+impl ContextFrames {
+    fn frame_of(&self, session: &str, context: i64) -> Option<String> {
+        self.context_of(session, context).map(|(frame, _)| frame)
     }
 }
 
@@ -211,5 +245,66 @@ mod tests {
         assert_eq!(contexts.frame_of("tab", 0), None, "the oldest went first");
         assert_eq!(contexts.frame_of("tab", 1).as_deref(), Some("frame"));
         assert_eq!(contexts.frame_of("tab", kept).as_deref(), Some("frame"));
+    }
+}
+
+#[cfg(test)]
+mod unique_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn created(session: &str, id: i64, frame: &str, unique: &str) -> CdpEvent {
+        CdpEvent {
+            method: "Runtime.executionContextCreated".to_string(),
+            params: json!({"context": {
+                "id": id,
+                "uniqueId": unique,
+                "auxData": {"frameId": frame, "isDefault": true},
+            }}),
+            session_id: Some(SessionId::from(session)),
+        }
+    }
+
+    #[test]
+    fn a_context_keeps_its_unique_id_and_a_reused_number_takes_the_new_one() {
+        let contexts = ContextFrames::default();
+        contexts.apply(&created("tab", 1, "main", "old.1"));
+        assert_eq!(
+            contexts.context_of("tab", 1),
+            Some(("main".to_string(), Some("old.1".to_string())))
+        );
+        // Another process numbers its first context 1 again: only its unique id tells them apart.
+        contexts.apply(&CdpEvent {
+            method: "Runtime.executionContextsCleared".to_string(),
+            params: json!({}),
+            session_id: Some(SessionId::from("tab")),
+        });
+        contexts.apply(&created("tab", 1, "main", "new.1"));
+        assert_eq!(
+            contexts.context_of("tab", 1),
+            Some(("main".to_string(), Some("new.1".to_string())))
+        );
+    }
+
+    #[test]
+    fn a_seed_takes_the_live_contexts_the_map_has_not_seen() {
+        let producer = ContextFrames::default();
+        producer.apply(&created("tab", 1, "main", "seen.1"));
+        producer.apply(&created("tab", 2, "child", "seen.2"));
+        producer.apply(&created("other", 1, "elsewhere", "other.1"));
+        let reader = ContextFrames::default();
+        reader.apply(&created("tab", 2, "child", "own.2"));
+        reader.seed(&producer, "tab");
+        assert_eq!(
+            reader.context_of("tab", 1),
+            Some(("main".to_string(), Some("seen.1".to_string())))
+        );
+        assert_eq!(
+            reader.context_of("tab", 2),
+            Some(("child".to_string(), Some("own.2".to_string()))),
+            "its own reading wins"
+        );
+        assert_eq!(reader.context_of("other", 1), None, "only that session");
     }
 }
