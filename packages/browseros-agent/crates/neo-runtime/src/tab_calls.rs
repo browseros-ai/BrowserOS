@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 use tracing::debug;
 
 use crate::bridge;
+use crate::content::WriteTurn;
 use crate::dispatch::encode_result;
 use crate::frames::FrameScope;
 use crate::highlight;
@@ -175,13 +176,13 @@ pub(crate) async fn page(
         // `Network.enable`: the first goto, history step or navigation wait, a network event
         // listener, or this read, as Chromium replays no earlier request.
         PageCall::Requests(_) => return requests(tabs, entry, progress).await,
-        call @ (PageCall::WebStorageItems(_)
+        // `dispatch::route` hands these to [`storage`], in their page's storage order.
+        PageCall::WebStorageItems(_)
         | PageCall::WebStorageGetItem(_)
         | PageCall::WebStorageSetItem(_)
         | PageCall::WebStorageRemoveItem(_)
-        | PageCall::WebStorageClear(_)) => {
-            let page = prepared_page(tabs, entry, progress).await?;
-            return web_storage::serve(page, call, progress).await;
+        | PageCall::WebStorageClear(_) => {
+            return Err(PlaywrightError::error(STORAGE_MISROUTED).into());
         }
         PageCall::Close(_) => close(tabs, entry, progress).await?,
         PageCall::RunBeforeUnload(_) => run_before_unload(tabs, entry, progress).await?,
@@ -322,6 +323,28 @@ async fn console_page(
     let enabled = progress.race(page.enable_runtime()).await?;
     checked(tabs, entry, progress, enabled).await?;
     Ok(page)
+}
+
+/// Neo: a storage call reaching the tab-lifecycle handler, which `dispatch::route` never does.
+const STORAGE_MISROUTED: &str = "neo-runtime: a storage call reached the tab-lifecycle handler";
+
+/// A `page.localStorage` / `page.sessionStorage` call on `entry`'s main frame, in call order:
+/// after the session's one shared preparation, it waits for every earlier storage call of the
+/// page to finish, so no call overtakes an earlier one, as Playwright's server sends them in
+/// order. Its place (`turn`) was taken as it arrived (`dispatch.rs` `Inner::ordered`).
+pub(crate) async fn storage(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    call: PageCall,
+    turn: Option<WriteTurn>,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let page = prepared_page(tabs, entry, progress).await?;
+    let _turn = match turn {
+        Some(turn) => Some(progress.race(turn.ready()).await?),
+        None => None,
+    };
+    web_storage::serve(page, call, progress).await
 }
 
 /// `entry`'s session with its watcher running (`PageSession::prepare`), as a call on its frames

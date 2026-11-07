@@ -240,16 +240,24 @@ struct Inner {
     next_call_id: AtomicU64,
     /// The `setContent` writes into each frame, in arrival order (`content.rs`).
     write_order: WriteOrder,
+    /// Each page's `localStorage` and `sessionStorage` calls, in arrival order (`web_storage.rs`):
+    /// Playwright's server sends them in the order the script made them.
+    storage_order: WriteOrder,
     /// Cancels `run.ended` when the last `Dispatcher` drops. A reason `finish` recorded first
     /// wins; otherwise calls read [`RunEnd::Cancelled`].
     _ending: DropGuard,
 }
 
 impl Inner {
-    /// A `setContent` call takes its place in its frame's write order as it arrives.
+    /// A `setContent` call takes its place in its frame's write order as it arrives, and a
+    /// storage call its place in its page's storage order.
     fn ordered(&self, guid: &str, mut call: ObjectCall) -> ObjectCall {
-        if let ObjectCall::Frame(Route::FrameSetContent(_, turn)) = &mut call {
-            *turn = Some(self.write_order.turn(guid));
+        match &mut call {
+            ObjectCall::Frame(Route::FrameSetContent(_, turn)) => {
+                *turn = Some(self.write_order.turn(guid));
+            }
+            ObjectCall::Storage(_, turn) => *turn = Some(self.storage_order.turn(guid)),
+            _ => {}
         }
         call
     }
@@ -350,6 +358,9 @@ enum ObjectCall {
     Init(InitRoute),
     Dialog(u64, DialogCall),
     Download(String, ArtifactCall),
+    /// `page.localStorage` and `page.sessionStorage` (`web_storage.rs`), with the call's place
+    /// in its page's storage order, taken as it arrives ([`Inner::ordered`]).
+    Storage(PageCall, Option<WriteTurn>),
 }
 
 /// What a message asks for. One variant per served (object, method).
@@ -425,6 +436,7 @@ impl Dispatcher {
             aborts: Arc::default(),
             next_call_id: AtomicU64::new(1),
             write_order: WriteOrder::default(),
+            storage_order: WriteOrder::default(),
         }))
     }
 
@@ -667,6 +679,18 @@ fn route_init(
 }
 
 /// Names a message's target and decodes its params. Pure.
+/// A Page call that is not a device call: a storage call keeps its own route, ordered per page.
+fn storage_or_page(call: PageCall) -> ObjectCall {
+    match call {
+        call @ (PageCall::WebStorageItems(_)
+        | PageCall::WebStorageGetItem(_)
+        | PageCall::WebStorageSetItem(_)
+        | PageCall::WebStorageRemoveItem(_)
+        | PageCall::WebStorageClear(_)) => ObjectCall::Storage(call, None),
+        call => ObjectCall::Page(call),
+    }
+}
+
 fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
     let (object, params) = match route_init(object, method, params) {
         Ok(routed) => return routed,
@@ -679,7 +703,7 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             let meta = call.meta();
             let routed = match DeviceCall::from_page_call(call) {
                 Ok(device) => device.map(ObjectCall::Device),
-                Err(call) => Ok(ObjectCall::Page(call)),
+                Err(call) => Ok(storage_or_page(call)),
             };
             (meta, routed)
         }),
@@ -1057,6 +1081,9 @@ async fn serve_call(
     let result = match (route, target) {
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
         (ObjectCall::Init(route), target) => init_call(&tabs, target, route, &progress).await,
+        (ObjectCall::Storage(call, turn), Some((page, _))) => {
+            tab_calls::storage(&tabs, &page, call, turn, &progress).await
+        }
         (ObjectCall::Page(call), Some((page, _))) => {
             // A page call that navigates (`reload`, `goBack`, …) shows the run's scripts first,
             // as a Frame call does.
@@ -1869,7 +1896,8 @@ mod tests {
             | ObjectCall::Network(_)
             | ObjectCall::Init(_)
             | ObjectCall::Dialog(..)
-            | ObjectCall::Download(..) => {
+            | ObjectCall::Download(..)
+            | ObjectCall::Storage(..) => {
                 panic!("a Frame message routed to another object")
             }
         })

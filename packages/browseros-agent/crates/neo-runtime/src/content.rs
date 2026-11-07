@@ -117,7 +117,7 @@ impl FrameWrites {
 
 impl WriteTurn {
     /// Waits until every earlier live write into the frame is gone, and holds this one's place.
-    async fn ready(self) -> Self {
+    pub(crate) async fn ready(self) -> Self {
         let frame = Arc::clone(&self.frame);
         loop {
             // Registered before the check, so a release between the two is not missed.
