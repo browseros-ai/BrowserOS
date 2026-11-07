@@ -1,8 +1,10 @@
-//! `Locator.count` and `Locator.allTextContents`: non-strict, one-shot collection reads.
+//! `Locator.count`, `Locator.allTextContents` and `Locator.allInnerTexts`: non-strict, one-shot
+//! collection reads.
 //!
 //! ```text
-//! Frame.queryCount / Frame.evalOnSelectorAll (only the allTextContents function)
-//!   dispatch → query_count / all_text_contents
+//! Frame.queryCount / Frame.evalOnSelectorAll (only the allTextContents and allInnerTexts
+//! functions)
+//!   dispatch → query_count / all_text_contents / all_inner_texts
 //!     prepare → describe (invalid selector → Error) → one collection read
 //!       → {value: count} / {value: SerializedValue}
 //!     NotConnected → count 0 / Error; Closed → TargetClosedError
@@ -11,15 +13,17 @@
 //!
 //! No target marks, waiting or call-log lines; `describe` validates without naming the locator.
 //! The glue queries all matches in document order. Text comes from Neo's isolated utility world,
-//! so page-defined `textContent` overrides (a `Node.prototype` patch, a custom element class or a
-//! per-instance property) can differ from Playwright's main-world `$$eval`.
+//! so page-defined `textContent` or `innerText` overrides (a prototype patch, a custom element
+//! class or a per-instance property) can differ from Playwright's main-world `$$eval`.
 //! CDP request timeouts also become `NotConnected`, so `count` can return 0 on a frozen page.
 
 use std::future::Future;
 
-use neo_runtime_spec::injected::{InjectedAllTextContentsParams, InjectedQueryCountParams};
+use neo_runtime_spec::injected::{
+    InjectedAllInnerTextsParams, InjectedAllTextContentsParams, InjectedQueryCountParams,
+};
 use neo_runtime_spec::serve::{
-    FrameEvalOnSelectorAllResult, FrameQueryCountResult, SerializedValue,
+    FrameEvalOnSelectorAllResult, FrameQueryCountResult, SerializedValue, SerializedValueV,
 };
 
 use crate::click::PageError;
@@ -33,6 +37,11 @@ use crate::reads::SelectorTab;
 /// arbitrary page JS must never bypass the typed glue boundary in `world.rs`.
 pub(crate) const ALL_TEXT_CONTENTS_EXPRESSION: &str = "ee => ee.map(e => e.textContent || '')";
 
+/// Neo: the one `evalOnSelectorAll` expression served for `locator.allInnerTexts`, as Neo's SDK
+/// sends it (Playwright's page function without its TypeScript cast); scripts never see it, and
+/// any other expression is refused.
+pub(crate) const ALL_INNER_TEXTS_EXPRESSION: &str = "ee => ee.map(e => e.innerText)";
+
 /// Collection page reads; futures are cancel-safe, losing only their answer when dropped.
 pub(crate) trait ListTab: SelectorTab {
     fn query_count(&self, selector: &str) -> impl Future<Output = Result<i64, PageError>> + Send;
@@ -41,6 +50,12 @@ pub(crate) trait ListTab: SelectorTab {
         &self,
         selector: &str,
     ) -> impl Future<Output = Result<Vec<String>, PageError>> + Send;
+
+    /// Every match's `innerText`, `None` for an element that has none (an SVG element).
+    fn all_inner_texts(
+        &self,
+        selector: &str,
+    ) -> impl Future<Output = Result<Vec<Option<String>>, PageError>> + Send;
 }
 
 /// `frames.ts` `queryCount` catches retriable page errors and returns zero, without retrying.
@@ -72,11 +87,37 @@ fn count_result(result: Result<i64, PageError>) -> Result<FrameQueryCountResult,
     Ok(FrameQueryCountResult { value })
 }
 
-/// `frames.ts` `evalOnSelectorAll` has no catch: a lost document is an error, not an empty list.
+/// Serves `locator.allTextContents`: every match's `textContent || ''`.
 pub(crate) async fn all_text_contents<T: ListTab>(
     tab: &T,
     selector: &str,
     progress: &Progress,
+) -> Result<FrameEvalOnSelectorAllResult, CallError> {
+    let read = async {
+        let texts = tab.all_text_contents(selector).await?;
+        Ok(texts.into_iter().map(Some).collect())
+    };
+    collect_texts(tab, selector, progress, read).await
+}
+
+/// Serves `locator.allInnerTexts`: every match's rendered `innerText`, `undefined` for a match
+/// without one, as Playwright's page function reads an SVG element.
+pub(crate) async fn all_inner_texts<T: ListTab>(
+    tab: &T,
+    selector: &str,
+    progress: &Progress,
+) -> Result<FrameEvalOnSelectorAllResult, CallError> {
+    collect_texts(tab, selector, progress, tab.all_inner_texts(selector)).await
+}
+
+/// One collection read after the selector is known to parse. `frames.ts` `evalOnSelectorAll`
+/// has no catch: a lost document is an error, not an empty list. `read` is not polled until the
+/// selector has been described, so an invalid selector never reaches the page.
+async fn collect_texts<T: ListTab>(
+    tab: &T,
+    selector: &str,
+    progress: &Progress,
+    read: impl Future<Output = Result<Vec<Option<String>>, PageError>> + Send,
 ) -> Result<FrameEvalOnSelectorAllResult, CallError> {
     progress.race(tab.prepare()).await?.map_err(page_error)?;
     let facts = progress
@@ -86,12 +127,9 @@ pub(crate) async fn all_text_contents<T: ListTab>(
     if let Some(invalid) = facts.invalid {
         return Err(PlaywrightError::error(invalid).into());
     }
-    let values = progress
-        .race(tab.all_text_contents(selector))
-        .await?
-        .map_err(page_error)?;
+    let values = progress.race(read).await?.map_err(page_error)?;
     Ok(FrameEvalOnSelectorAllResult {
-        value: serialize_strings(values),
+        value: serialize_texts(values),
     })
 }
 
@@ -105,6 +143,26 @@ fn page_error(error: PageError) -> CallError {
             PlaywrightError::error("neo-runtime: document changed during collection read").into()
         }
     }
+}
+
+/// [`serialize_strings`] for texts that may be missing: a missing one is written as
+/// `undefined`, `{v: 'undefined'}`.
+///
+/// Playwright: `protocol/src/serializers.ts` `innerSerializeValue`: `return { v: 'undefined' };`
+pub(crate) fn serialize_texts(values: Vec<Option<String>>) -> SerializedValue {
+    let mut array = serialize_strings(Vec::new());
+    let items = values.into_iter().map(|value| {
+        let mut item = serialize_strings(Vec::new());
+        item.a = None;
+        item.id = None;
+        match value {
+            Some(text) => item.s = Some(text),
+            None => item.v = Some(SerializedValueV::Undefined),
+        }
+        item
+    });
+    array.a = Some(items.collect());
+    array
 }
 
 /// `packages/protocol/src/serializers.ts` `innerSerializeValue` at 26137face: the first array
@@ -176,6 +234,25 @@ impl ListTab for FrameTab {
             .await?
             .values)
     }
+
+    async fn all_inner_texts(&self, selector: &str) -> Result<Vec<Option<String>>, PageError> {
+        let Some(located) = frame_selector::locate(self, selector, false).await? else {
+            return Ok(Vec::new());
+        };
+        Ok(located
+            .frame
+            .call(
+                None,
+                &InjectedAllInnerTextsParams {
+                    selector: located.selector,
+                },
+            )
+            .await?
+            .values
+            .into_iter()
+            .map(|entry| entry.value)
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -201,6 +278,7 @@ mod tests {
         Describe(Result<SelectorFacts, PageError>),
         Count(Result<i64, PageError>),
         Texts(Result<Vec<String>, PageError>),
+        InnerTexts(Result<Vec<Option<String>>, PageError>),
     }
 
     struct FakeLists {
@@ -265,10 +343,14 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../neo-sdk/dist/sdk.js"
         ));
-        assert!(
-            bundle.contains(ALL_TEXT_CONTENTS_EXPRESSION),
-            "the embedded SDK expression must match the runtime's route gate"
-        );
+        for expression in [ALL_TEXT_CONTENTS_EXPRESSION, ALL_INNER_TEXTS_EXPRESSION] {
+            // The bundle spells each as a double-quoted JavaScript string, as JSON does.
+            let literal = serde_json::to_string(expression).expect("a string encodes");
+            assert!(
+                bundle.contains(&literal),
+                "the embedded SDK sends {expression}, which the runtime's route gate serves"
+            );
+        }
     }
 
     #[tokio::test(start_paused = true)]
@@ -312,6 +394,63 @@ mod tests {
             };
             result
         }
+
+        async fn all_inner_texts(&self, selector: &str) -> Result<Vec<Option<String>>, PageError> {
+            assert_eq!(selector, SELECTOR);
+            let Step::InnerTexts(result) = self.step("allInnerTexts").await else {
+                panic!("expected allInnerTexts");
+            };
+            result
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_all_inner_texts_reads_its_own_glue_once_after_the_selector_parses() {
+        // An SVG match has no innerText: Playwright's page function reads `undefined` there.
+        let values = vec![Some("Banana split".to_string()), Some(String::new()), None];
+        let tab = FakeLists::new([
+            Step::Prepare(Ok(())),
+            valid_selector(),
+            Step::InnerTexts(Ok(values)),
+        ]);
+        let result = all_inner_texts(&tab, SELECTOR, &Progress::for_test(0.0))
+            .await
+            .expect("inner texts");
+        assert_eq!(
+            serde_json::to_value(result).expect("wire result"),
+            json!({"value": {"a": [{"s": "Banana split"}, {"s": ""}, {"v": "undefined"}], "id": 1}})
+        );
+        tab.assert_calls(&["prepare", "describe", "allInnerTexts"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_all_inner_texts_rejects_an_invalid_selector_or_a_lost_document() {
+        let invalid = FakeLists::new([
+            Step::Prepare(Ok(())),
+            Step::Describe(Ok(SelectorFacts {
+                locator: SELECTOR.to_string(),
+                invalid: Some("invalid selector".to_string()),
+            })),
+        ]);
+        assert_error(
+            all_inner_texts(&invalid, SELECTOR, &Progress::for_test(0.0))
+                .await
+                .expect_err("invalid selector"),
+            ErrorName::Error,
+        );
+        invalid.assert_calls(&["prepare", "describe"]);
+        let lost = FakeLists::new([
+            Step::Prepare(Ok(())),
+            valid_selector(),
+            Step::InnerTexts(Err(PageError::NotConnected)),
+        ]);
+        assert_error(
+            all_inner_texts(&lost, SELECTOR, &Progress::for_test(0.0))
+                .await
+                .expect_err("document lost"),
+            ErrorName::Error,
+        );
+        lost.assert_calls(&["prepare", "describe", "allInnerTexts"]);
     }
 
     #[tokio::test(start_paused = true)]
