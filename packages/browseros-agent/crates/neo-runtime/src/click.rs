@@ -1894,10 +1894,13 @@ pub(crate) mod tests {
             Ok(self.pending.lock().expect("pending").take())
         }
 
-        async fn locator_handlers_checkpoint(&self, _progress: &Progress) -> Result<(), Stop> {
+        fn locator_handlers_checkpoint(
+            &self,
+            _progress: &Progress,
+        ) -> impl Future<Output = Result<(), Stop>> + Send {
             let pressed = self.plans.lock().expect("plans").len();
             self.checkpoints.lock().expect("checkpoints").push(pressed);
-            Ok(())
+            future::ready(Ok(()))
         }
 
         fn watch_navigations(&self) {
