@@ -81,6 +81,27 @@ export const glue = {
     }
   },
 
+  /** `selectorState` plus the first match as a handle, for a wait that returns its element. */
+  selectorElement: (injected, { selector, strict }) => {
+    const elements = query(injected, selector, strict)
+    const [element] = elements
+    if (!element) return { count: 0, visible: false }
+    return {
+      element,
+      count: elements.length,
+      visible: injected.elementState(element, 'visible', true).matches,
+      preview: injected.previewNode(element),
+    }
+  },
+
+  // Rust only reads the node's `backendNodeId` (`DOM.describeNode`), which a `Document` has like
+  // any node; the cast is what lets the spec's one node handle kind carry it.
+  document: () => ({ node: document as unknown as Element }),
+
+  previewNode: (injected, _params, node) => ({
+    preview: injected.previewNode(node),
+  }),
+
   textContent: (injected, { selector, strict }) => {
     const [element] = query(injected, selector, strict, {
       markTargets: 'first',

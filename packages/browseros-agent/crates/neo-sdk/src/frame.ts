@@ -63,7 +63,19 @@ import {
   getByTitleSelector,
 } from '../vendor/playwright/isomorphic/locatorUtils'
 import type { ApiName, Connection } from './connection'
+import { ElementHandle } from './element-handle'
 import { FrameLocator, kAnyFrameSelector } from './frame-locator'
+import {
+  assertEvaluateOptions,
+  assertMaxArguments,
+  type CreatedHandle,
+  type EvaluateOptions,
+  evaluateParams,
+  handleFrom,
+  type JSHandle,
+  type PageFunction,
+  parseResult,
+} from './js-handle'
 import { Locator, type LocatorOptions, testIdAttributeName } from './locator'
 import { serializeUrlMatch } from './neo-commands'
 import { type Response, responseFor } from './network'
@@ -407,6 +419,101 @@ export class Frame {
       }) as FrameWaitForSelectorParams,
       this._page._timeoutSettings.timeout(options),
     )
+  }
+
+  /**
+   * Playwright's `frame.evaluate`: runs `pageFunction` (or an expression string) in this frame's
+   * main world with `arg`, and resolves its JSON-serializable result (`js-handle.ts`).
+   */
+  async evaluate<R, Arg>(
+    pageFunction: PageFunction<Arg, R>,
+    arg?: Arg,
+    options?: EvaluateOptions,
+  ): Promise<R> {
+    // biome-ignore lint/complexity/noArguments: Playwright counts the arguments the call passed
+    assertMaxArguments(arguments.length, 3)
+    return await this._evaluate('frame.evaluate', pageFunction, arg, options)
+  }
+
+  /** Sends `Frame.evaluateExpression` with no timeout, as Playwright's `kNoTimeout`. */
+  async _evaluate<R>(
+    apiName: ApiName,
+    pageFunction: unknown,
+    arg: unknown,
+    options: EvaluateOptions | undefined,
+  ): Promise<R> {
+    assertEvaluateOptions(options)
+    const params = evaluateParams(apiName, pageFunction, arg, options)
+    const result = await this._connection.sendEval(
+      apiName,
+      this._guid,
+      'evaluateExpression',
+      params,
+      0,
+    )
+    return parseResult(result?.value) as R
+  }
+
+  /** Playwright's `frame.evaluateHandle`: as `evaluate`, resolving a handle to the result. */
+  async evaluateHandle<R, Arg>(
+    pageFunction: PageFunction<Arg, R>,
+    arg?: Arg,
+    options?: EvaluateOptions,
+  ): Promise<JSHandle<R>> {
+    // biome-ignore lint/complexity/noArguments: Playwright counts the arguments the call passed
+    assertMaxArguments(arguments.length, 3)
+    return await this._evaluateHandle(
+      'frame.evaluateHandle',
+      pageFunction,
+      arg,
+      options,
+    )
+  }
+
+  /** Sends `Frame.evaluateExpressionHandle` with no timeout. */
+  async _evaluateHandle<R>(
+    apiName: ApiName,
+    pageFunction: unknown,
+    arg: unknown,
+    options: EvaluateOptions | undefined,
+  ): Promise<JSHandle<R>> {
+    assertEvaluateOptions(options)
+    const params = evaluateParams(apiName, pageFunction, arg, options)
+    const result = await this._connection.sendEval(
+      apiName,
+      this._guid,
+      'evaluateExpressionHandle',
+      params,
+      0,
+    )
+    return handleFrom(this._connection, result.handle) as JSHandle<R>
+  }
+
+  /**
+   * Playwright's `Locator._withElement` (`client/locator.ts`): one strict `waitForSelector` for
+   * an attached element under the action timeout, `task` on the `ElementHandle` Rust answers,
+   * then `dispose`, whatever the task did.
+   */
+  async _withElement<R>(
+    apiName: ApiName,
+    selector: string,
+    task: (handle: ElementHandle) => Promise<R>,
+    options: { timeout?: number },
+  ): Promise<R> {
+    const result = (await this._connection.send(
+      apiName,
+      this._guid,
+      'waitForSelector',
+      { selector, strict: true, state: 'attached' },
+      this._page._timeoutSettings.timeout(options),
+    )) as { element?: CreatedHandle } | undefined
+    const handle = ElementHandle.fromNullable(this._connection, result?.element)
+    if (!handle) throw new Error(`Could not resolve ${selector} to DOM Element`)
+    try {
+      return await task(handle)
+    } finally {
+      await handle._dispose(apiName)
+    }
   }
 
   async title(): Promise<string> {

@@ -58,6 +58,7 @@ import type {
   WaitForSelectorOptions,
 } from './frame'
 import { FrameLocator } from './frame-locator'
+import type { EvaluateOptions, PageElement, PageFunctionOn } from './js-handle'
 import type { Page } from './page'
 import type { SelectOptionValues } from './select-option'
 
@@ -246,6 +247,25 @@ export class Locator {
    * timeout and polls the page. It never takes the tab's input, so a click or typing in the same
    * run can be what satisfies it.
    */
+  /**
+   * Playwright's `locator.evaluate`: `pageFunction` on the one element this locator matches, in
+   * the main world, after waiting under the action timeout for it to be attached
+   * (`_withElement`). More than one match is a strict mode violation.
+   */
+  async evaluate<R, Arg>(
+    pageFunction: PageFunctionOn<PageElement, Arg, R>,
+    arg?: Arg,
+    options?: EvaluateOptions & { timeout?: number },
+  ): Promise<R> {
+    return await this._frame._withElement(
+      'locator.evaluate',
+      this._selector,
+      (handle) =>
+        handle._evaluate<R>('locator.evaluate', pageFunction, arg, options),
+      { timeout: options?.timeout },
+    )
+  }
+
   async waitFor(options?: WaitForSelectorOptions): Promise<void> {
     await this._frame._waitForSelector('locator.waitFor', this._selector, {
       strict: true,

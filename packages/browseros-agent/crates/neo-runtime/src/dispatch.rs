@@ -54,6 +54,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::check::{self, CheckOptions};
 use crate::click::{self, ClickOptions};
+use crate::evaluate::{self, EvalCall};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
 use crate::frames::FrameScope;
@@ -219,6 +220,8 @@ enum ObjectKind {
     Frame,
     /// A hop's `Request` or `Response`, behind `goto`'s answer.
     Network(NetworkObject, HopId),
+    /// A run's `JSHandle` or `ElementHandle` (`evaluate.rs`), by guid.
+    Handle(String),
     Unknown,
 }
 
@@ -255,6 +258,8 @@ enum Route {
     FrameWaitForSelector(WaitForSelectorOptions),
     FrameWaitForUrl(WaitForUrlOptions),
     FrameWaitForLoadState(WaitForLoadStateOptions),
+    /// Page evaluation and the `JSHandle` commands, served by `evaluate.rs`.
+    Eval(EvalCall),
 }
 
 impl Dispatcher {
@@ -286,11 +291,20 @@ impl Dispatcher {
                 return PendingReply::ready(Err(BridgeError::BadMessage(error.to_string())));
             }
         };
-        let target = inner.tabs.resolve(&guid);
+        // A handle's calls run on the frame it belongs to.
+        let target = inner.tabs.resolve(&guid).or_else(|| {
+            inner
+                .run
+                .handles
+                .frame_guid(&guid)
+                .and_then(|frame| inner.tabs.resolve(&frame))
+        });
         let object = if guid == "context@default" {
             ObjectKind::Context
         } else if target.is_none() {
             ObjectKind::Unknown
+        } else if guid.starts_with(evaluate::HANDLE_PREFIX) {
+            ObjectKind::Handle(guid.clone())
         } else if guid.starts_with("frame@") {
             ObjectKind::Frame
         } else if let Some((kind, _, hop)) = HopId::parse(&guid) {
@@ -373,6 +387,9 @@ impl Dispatcher {
         let _created = time::timeout_at(deadline, self.0.tabs.finish_creations()).await;
         run.tasks.close();
         let _waited = time::timeout_at(deadline, run.tasks.wait()).await;
+        // Releases each session's handle group on its page's tracked task, before the sessions
+        // detach; a run whose future is dropped releases them as `RunScope` drops.
+        run.handles.close();
         let _refreshed = time::timeout_at(deadline, self.0.tabs.refresh_closing()).await;
         self.0.trace.take(reason)
     }
@@ -393,6 +410,12 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
                     route: decode_neo_params::<NeoWaitForUrlParams>(params, &WAIT_FOR_URL_META)
                         .and_then(|params| WaitForUrlOptions::from_params(&params))
                         .map(|options| ObjectCall::Frame(Route::FrameWaitForUrl(options))),
+                };
+            }
+            if let Some((meta, call)) = evaluate::route_frame(method, params.as_ref()) {
+                return Routed {
+                    meta: Some(meta),
+                    route: call.map(|call| ObjectCall::Frame(Route::Eval(call))),
                 };
             }
             if method == WAIT_FOR_LOAD_STATE_META.method {
@@ -439,6 +462,13 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
                     Ok(ObjectCall::Network(NetworkCall::Response(hop, call))),
                 )
             }),
+        ObjectKind::Handle(guid) => {
+            let (meta, call) = evaluate::route_handle(&guid, method, params.as_ref());
+            return Routed {
+                meta,
+                route: call.map(|call| ObjectCall::Frame(Route::Eval(call))),
+            };
+        }
         ObjectKind::Unknown => {
             return Routed {
                 meta: None,
@@ -640,12 +670,16 @@ async fn serve(
         Route::FrameWaitForSelector(options) => {
             waits::wait_for_selector(&page, &options, &progress)
                 .await
-                .and_then(|()| {
-                    encode_result::<FrameWaitForSelectorParams>(&FrameWaitForSelectorResult {
-                        element: None,
-                    })
+                .and_then(|element| match element {
+                    // `ElementHandle` is no interface of the generated spec: the created handle
+                    // travels as the record the SDK builds it from (`evaluate.rs`).
+                    Some(created) => Ok(Some(json!({ "element": created }))),
+                    None => encode_result::<FrameWaitForSelectorParams>(
+                        &FrameWaitForSelectorResult { element: None },
+                    ),
                 })
         }
+        Route::Eval(call) => evaluate::serve(&page, call, &progress).await,
         // Neo extensions answer an empty result.
         Route::FrameWaitForUrl(options) => waits::wait_for_url(&page, &options, &progress)
             .await
@@ -760,7 +794,8 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameAriaSnapshot(_)
         | Route::FrameWaitForSelector(_)
         | Route::FrameWaitForUrl(_)
-        | Route::FrameWaitForLoadState(_) => Err(PlaywrightError::error(
+        | Route::FrameWaitForLoadState(_)
+        | Route::Eval(_) => Err(PlaywrightError::error(
             "neo-runtime: navigation and page reads are served by `serve`",
         )
         .into()),

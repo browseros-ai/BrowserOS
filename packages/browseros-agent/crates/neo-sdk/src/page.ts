@@ -28,6 +28,12 @@ import {
   type WaitForURLOptions,
 } from './frame'
 import type { FrameLocator } from './frame-locator'
+import {
+  assertMaxArguments,
+  type EvaluateOptions,
+  type JSHandle,
+  type PageFunction,
+} from './js-handle'
 import type { Locator, LocatorOptions } from './locator'
 import { serializeUrlMatch } from './neo-commands'
 import type { Response } from './network'
@@ -199,6 +205,38 @@ export class Page {
   /** The navigation's `Response`, or `null` where Playwright's has none. */
   async goto(url: string, options: GotoOptions = {}): Promise<Response | null> {
     return await this.#mainFrame._goto('page.goto', url, options)
+  }
+
+  /** Playwright's `page.evaluate`: `frame.evaluate` in the main frame. */
+  async evaluate<R, Arg>(
+    pageFunction: PageFunction<Arg, R>,
+    arg?: Arg,
+    options?: EvaluateOptions,
+  ): Promise<R> {
+    // biome-ignore lint/complexity/noArguments: Playwright counts the arguments the call passed
+    assertMaxArguments(arguments.length, 3)
+    return await this.mainFrame()._evaluate(
+      'page.evaluate',
+      pageFunction,
+      arg,
+      options,
+    )
+  }
+
+  /** Playwright's `page.evaluateHandle`: `frame.evaluateHandle` in the main frame. */
+  async evaluateHandle<R, Arg>(
+    pageFunction: PageFunction<Arg, R>,
+    arg?: Arg,
+    options?: EvaluateOptions,
+  ): Promise<JSHandle<R>> {
+    // biome-ignore lint/complexity/noArguments: Playwright counts the arguments the call passed
+    assertMaxArguments(arguments.length, 3)
+    return await this.mainFrame()._evaluateHandle(
+      'page.evaluateHandle',
+      pageFunction,
+      arg,
+      options,
+    )
   }
 
   async title(): Promise<string> {

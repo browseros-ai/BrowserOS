@@ -103,6 +103,678 @@ function getByRoleSelector(role, options = {}) {
   return `internal:role=${role}${props.map(([n, v]) => `[${n}=${v}]`).join("")}`;
 }
 
+// src/vendor-shims.ts
+var DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+class URL {
+  href;
+  constructor(href) {
+    this.href = String(href);
+  }
+  toString() {
+    return this.href;
+  }
+  toJSON() {
+    return this.href;
+  }
+  get [Symbol.toStringTag]() {
+    return "URL";
+  }
+}
+var Buffer = {
+  from(buffer, byteOffset, length) {
+    return new Uint8Array(buffer, byteOffset, length);
+  }
+};
+function btoa(binary) {
+  let out = "";
+  for (let i = 0;i < binary.length; i += 3) {
+    const a = binary.charCodeAt(i);
+    const b = i + 1 < binary.length ? binary.charCodeAt(i + 1) : -1;
+    const c = i + 2 < binary.length ? binary.charCodeAt(i + 2) : -1;
+    if (a > 255 || b > 255 || c > 255)
+      throw new Error("btoa: the string has characters outside Latin1");
+    out += DIGITS[a >> 2];
+    out += DIGITS[(a & 3) << 4 | (b < 0 ? 0 : b >> 4)];
+    out += b < 0 ? "=" : DIGITS[(b & 15) << 2 | (c < 0 ? 0 : c >> 6)];
+    out += c < 0 ? "=" : DIGITS[c & 63];
+  }
+  return out;
+}
+function atob(base64) {
+  const clean = base64.replace(/[\t\n\f\r ]/g, "").replace(/={1,2}$/, "");
+  let out = "";
+  let bits = 0;
+  let value = 0;
+  for (const char of clean) {
+    const digit = DIGITS.indexOf(char);
+    if (digit < 0)
+      throw new Error("atob: the string is not valid base64");
+    value = value << 6 | digit;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out += String.fromCharCode(value >> bits & 255);
+    }
+  }
+  return out;
+}
+
+// vendor/playwright/isomorphic/utilityScriptSerializers.ts
+var kFunctionBindingPrefix = "__pw_fn_";
+var kBindingsControllerProperty = "__playwright__binding__controller__";
+function isRegExp(obj) {
+  try {
+    return obj instanceof RegExp || Object.prototype.toString.call(obj) === "[object RegExp]";
+  } catch (error) {
+    return false;
+  }
+}
+function isDate(obj) {
+  try {
+    return obj instanceof Date || Object.prototype.toString.call(obj) === "[object Date]";
+  } catch (error) {
+    return false;
+  }
+}
+function isURL(obj) {
+  try {
+    return obj instanceof URL || Object.prototype.toString.call(obj) === "[object URL]";
+  } catch (error) {
+    return false;
+  }
+}
+function isError(obj) {
+  try {
+    return obj instanceof Error || obj && Object.getPrototypeOf(obj)?.name === "Error";
+  } catch (error) {
+    return false;
+  }
+}
+function isTypedArray(obj, constructor) {
+  try {
+    return obj instanceof constructor || Object.prototype.toString.call(obj) === `[object ${constructor.name}]`;
+  } catch (error) {
+    return false;
+  }
+}
+function isArrayBuffer(obj) {
+  try {
+    return obj instanceof ArrayBuffer || Object.prototype.toString.call(obj) === "[object ArrayBuffer]";
+  } catch (error) {
+    return false;
+  }
+}
+function isMap(obj) {
+  try {
+    return obj instanceof Map || Object.prototype.toString.call(obj) === "[object Map]";
+  } catch (error) {
+    return false;
+  }
+}
+function isSet(obj) {
+  try {
+    return obj instanceof Set || Object.prototype.toString.call(obj) === "[object Set]";
+  } catch (error) {
+    return false;
+  }
+}
+var typedArrayConstructors = {
+  i8: Int8Array,
+  ui8: Uint8Array,
+  ui8c: Uint8ClampedArray,
+  i16: Int16Array,
+  ui16: Uint16Array,
+  i32: Int32Array,
+  ui32: Uint32Array,
+  f32: Float32Array,
+  f64: Float64Array,
+  bi64: BigInt64Array,
+  bui64: BigUint64Array
+};
+function typedArrayToBase64(array) {
+  if ("toBase64" in array)
+    return array.toBase64();
+  const binary = Array.from(new Uint8Array(array.buffer, array.byteOffset, array.byteLength)).map((b) => String.fromCharCode(b)).join("");
+  return btoa(binary);
+}
+function base64ToTypedArray(base64, TypedArrayConstructor) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0;i < binary.length; i++)
+    bytes[i] = binary.charCodeAt(i);
+  return new TypedArrayConstructor(bytes.buffer);
+}
+function parseEvaluationResultValue(value, handles = [], refs = new Map) {
+  if (Object.is(value, undefined))
+    return;
+  if (typeof value === "object" && value) {
+    if ("ref" in value)
+      return refs.get(value.ref);
+    if ("v" in value) {
+      if (value.v === "undefined")
+        return;
+      if (value.v === "null")
+        return null;
+      if (value.v === "NaN")
+        return NaN;
+      if (value.v === "Infinity")
+        return Infinity;
+      if (value.v === "-Infinity")
+        return -Infinity;
+      if (value.v === "-0")
+        return -0;
+      return;
+    }
+    if ("d" in value) {
+      return new Date(value.d);
+    }
+    if ("u" in value)
+      return new URL(value.u);
+    if ("bi" in value)
+      return BigInt(value.bi);
+    if ("e" in value) {
+      const error = new Error(value.e.m);
+      error.name = value.e.n;
+      error.stack = value.e.s;
+      return error;
+    }
+    if ("r" in value)
+      return new RegExp(value.r.p, value.r.f);
+    if ("a" in value) {
+      const result = [];
+      refs.set(value.id, result);
+      for (const a of value.a)
+        result.push(parseEvaluationResultValue(a, handles, refs));
+      return result;
+    }
+    if ("o" in value) {
+      const result = {};
+      refs.set(value.id, result);
+      for (const { k, v } of value.o) {
+        if (k === "__proto__")
+          continue;
+        result[k] = parseEvaluationResultValue(v, handles, refs);
+      }
+      return result;
+    }
+    if ("m" in value) {
+      const result = new Map;
+      refs.set(value.id, result);
+      for (const { k, v } of value.m)
+        result.set(parseEvaluationResultValue(k, handles, refs), parseEvaluationResultValue(v, handles, refs));
+      return result;
+    }
+    if ("s" in value) {
+      const result = new Set;
+      refs.set(value.id, result);
+      for (const item of value.s)
+        result.add(parseEvaluationResultValue(item, handles, refs));
+      return result;
+    }
+    if ("h" in value)
+      return handles[value.h];
+    if ("fn" in value) {
+      const name = value.fn;
+      return (...args) => globalThis[kBindingsControllerProperty].callBinding(name, ...args);
+    }
+    if ("ta" in value)
+      return base64ToTypedArray(value.ta.b, typedArrayConstructors[value.ta.k]);
+    if ("ab" in value)
+      return base64ToTypedArray(value.ab.b, Uint8Array).buffer;
+  }
+  return value;
+}
+function serializeAsCallArgument(value, handleSerializer, options = {}) {
+  return serialize(value, handleSerializer, { visited: new Map, lastId: 0, extendedSerialization: options.extendedSerialization });
+}
+function serialize(value, handleSerializer, visitorInfo) {
+  if (value && typeof value === "object") {
+    if (typeof globalThis.Window === "function" && value instanceof globalThis.Window)
+      return "ref: <Window>";
+    if (typeof globalThis.Document === "function" && value instanceof globalThis.Document)
+      return "ref: <Document>";
+    if (typeof globalThis.Node === "function" && value instanceof globalThis.Node)
+      return "ref: <Node>";
+  }
+  return innerSerialize(value, handleSerializer, visitorInfo);
+}
+function innerSerialize(value, handleSerializer, visitorInfo) {
+  const result = handleSerializer(value);
+  if ("fallThrough" in result)
+    value = result.fallThrough;
+  else
+    return result;
+  if (typeof value === "symbol")
+    return { v: "undefined" };
+  if (Object.is(value, undefined))
+    return { v: "undefined" };
+  if (Object.is(value, null))
+    return { v: "null" };
+  if (Object.is(value, NaN))
+    return { v: "NaN" };
+  if (Object.is(value, Infinity))
+    return { v: "Infinity" };
+  if (Object.is(value, -Infinity))
+    return { v: "-Infinity" };
+  if (Object.is(value, -0))
+    return { v: "-0" };
+  if (typeof value === "boolean")
+    return value;
+  if (typeof value === "number")
+    return value;
+  if (typeof value === "string")
+    return value;
+  if (typeof value === "bigint")
+    return { bi: value.toString() };
+  if (isError(value)) {
+    let stack;
+    if (value.stack?.startsWith(value.name + ": " + value.message)) {
+      stack = value.stack;
+    } else {
+      stack = `${value.name}: ${value.message}
+${value.stack}`;
+    }
+    return { e: { n: value.name, m: value.message, s: stack } };
+  }
+  if (isDate(value))
+    return { d: value.toJSON() };
+  if (isURL(value))
+    return { u: value.toJSON() };
+  if (isRegExp(value))
+    return { r: { p: value.source, f: value.flags } };
+  for (const [k, ctor] of Object.entries(typedArrayConstructors)) {
+    if (isTypedArray(value, ctor))
+      return { ta: { b: typedArrayToBase64(value), k } };
+  }
+  if (isArrayBuffer(value))
+    return { ab: { b: typedArrayToBase64(new Uint8Array(value)) } };
+  const id = visitorInfo.visited.get(value);
+  if (id)
+    return { ref: id };
+  if (visitorInfo.extendedSerialization) {
+    if (isMap(value)) {
+      const m = [];
+      const id2 = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id2);
+      const iterator = value.entries();
+      const next = new Map().entries().next;
+      while (true) {
+        const entry = next.call(iterator);
+        if (entry.done)
+          break;
+        m.push({ k: serialize(entry.value[0], handleSerializer, visitorInfo), v: serialize(entry.value[1], handleSerializer, visitorInfo) });
+      }
+      return { m, id: id2 };
+    }
+    if (isSet(value)) {
+      const s = [];
+      const id2 = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id2);
+      const iterator = value.values();
+      const next = new Set().values().next;
+      while (true) {
+        const entry = next.call(iterator);
+        if (entry.done)
+          break;
+        s.push(serialize(entry.value, handleSerializer, visitorInfo));
+      }
+      return { s, id: id2 };
+    }
+  }
+  if (Array.isArray(value)) {
+    const a = [];
+    const id2 = ++visitorInfo.lastId;
+    visitorInfo.visited.set(value, id2);
+    for (let i = 0;i < value.length; ++i)
+      a.push(serialize(value[i], handleSerializer, visitorInfo));
+    return { a, id: id2 };
+  }
+  if (typeof value === "object") {
+    const o = [];
+    const id2 = ++visitorInfo.lastId;
+    visitorInfo.visited.set(value, id2);
+    for (const name of Object.keys(value)) {
+      let item;
+      try {
+        item = value[name];
+      } catch (e) {
+        continue;
+      }
+      if (name === "toJSON" && typeof item === "function")
+        o.push({ k: name, v: { o: [], id: 0 } });
+      else
+        o.push({ k: name, v: serialize(item, handleSerializer, visitorInfo) });
+    }
+    let jsonWrapper;
+    try {
+      if (o.length === 0 && value.toJSON && typeof value.toJSON === "function")
+        jsonWrapper = { value: value.toJSON() };
+    } catch (e) {}
+    if (jsonWrapper)
+      return innerSerialize(jsonWrapper.value, handleSerializer, visitorInfo);
+    return { o, id: id2 };
+  }
+  if (typeof value === "function" && value.name.startsWith(kFunctionBindingPrefix))
+    return { fn: value.name };
+}
+
+// vendor/playwright/protocol/src/serializers.ts
+function parseSerializedValue(value, handles) {
+  return innerParseSerializedValue(value, handles, new Map, []);
+}
+function innerParseSerializedValue(value, handles, refs, accessChain) {
+  if (value.ref !== undefined)
+    return refs.get(value.ref);
+  if (value.n !== undefined)
+    return value.n;
+  if (value.s !== undefined)
+    return value.s;
+  if (value.b !== undefined)
+    return value.b;
+  if (value.v !== undefined) {
+    if (value.v === "undefined")
+      return;
+    if (value.v === "null")
+      return null;
+    if (value.v === "NaN")
+      return NaN;
+    if (value.v === "Infinity")
+      return Infinity;
+    if (value.v === "-Infinity")
+      return -Infinity;
+    if (value.v === "-0")
+      return -0;
+  }
+  if (value.d !== undefined)
+    return new Date(value.d);
+  if (value.u !== undefined)
+    return new URL(value.u);
+  if (value.bi !== undefined)
+    return BigInt(value.bi);
+  if (value.e !== undefined) {
+    const error = new Error(value.e.m);
+    error.name = value.e.n;
+    error.stack = value.e.s;
+    return error;
+  }
+  if (value.r !== undefined)
+    return new RegExp(value.r.p, value.r.f);
+  if (value.ta !== undefined) {
+    const ctor = typedArrayKindToConstructor[value.ta.k];
+    return new ctor(value.ta.b.buffer, value.ta.b.byteOffset, value.ta.b.length / ctor.BYTES_PER_ELEMENT);
+  }
+  if (value.a !== undefined) {
+    const result = [];
+    refs.set(value.id, result);
+    for (let i = 0;i < value.a.length; i++)
+      result.push(innerParseSerializedValue(value.a[i], handles, refs, [...accessChain, i]));
+    return result;
+  }
+  if (value.o !== undefined) {
+    const result = {};
+    refs.set(value.id, result);
+    for (const { k, v } of value.o)
+      result[k] = innerParseSerializedValue(v, handles, refs, [...accessChain, k]);
+    return result;
+  }
+  if (value.h !== undefined) {
+    if (handles === undefined)
+      throw new Error("Unexpected handle");
+    return handles[value.h];
+  }
+  if (value.fn !== undefined) {
+    const dummy = () => {};
+    Object.defineProperty(dummy, "name", { value: value.fn });
+    return dummy;
+  }
+  throw new Error(`Attempting to deserialize unexpected value${accessChainToDisplayString(accessChain)}: ${value}`);
+}
+function serializeValue(value, handleSerializer) {
+  return innerSerializeValue(value, handleSerializer, { lastId: 0, visited: new Map }, []);
+}
+function innerSerializeValue(value, handleSerializer, visitorInfo, accessChain) {
+  const handle = handleSerializer(value);
+  if ("fallThrough" in handle)
+    value = handle.fallThrough;
+  else
+    return handle;
+  if (typeof value === "symbol")
+    return { v: "undefined" };
+  if (Object.is(value, undefined))
+    return { v: "undefined" };
+  if (Object.is(value, null))
+    return { v: "null" };
+  if (Object.is(value, NaN))
+    return { v: "NaN" };
+  if (Object.is(value, Infinity))
+    return { v: "Infinity" };
+  if (Object.is(value, -Infinity))
+    return { v: "-Infinity" };
+  if (Object.is(value, -0))
+    return { v: "-0" };
+  if (typeof value === "boolean")
+    return { b: value };
+  if (typeof value === "number")
+    return { n: value };
+  if (typeof value === "string")
+    return { s: value };
+  if (typeof value === "bigint")
+    return { bi: value.toString() };
+  if (isError2(value))
+    return { e: { n: value.name, m: value.message, s: value.stack || "" } };
+  if (isDate2(value))
+    return { d: value.toJSON() };
+  if (isURL2(value))
+    return { u: value.toJSON() };
+  if (isRegExp2(value))
+    return { r: { p: value.source, f: value.flags } };
+  const typedArrayKind = constructorToTypedArrayKind.get(value.constructor);
+  if (typedArrayKind)
+    return { ta: { b: Buffer.from(value.buffer, value.byteOffset, value.byteLength), k: typedArrayKind } };
+  const id = visitorInfo.visited.get(value);
+  if (id)
+    return { ref: id };
+  if (Array.isArray(value)) {
+    const a = [];
+    const id2 = ++visitorInfo.lastId;
+    visitorInfo.visited.set(value, id2);
+    for (let i = 0;i < value.length; ++i)
+      a.push(innerSerializeValue(value[i], handleSerializer, visitorInfo, [...accessChain, i]));
+    return { a, id: id2 };
+  }
+  if (typeof value === "object") {
+    const o = [];
+    const id2 = ++visitorInfo.lastId;
+    visitorInfo.visited.set(value, id2);
+    for (const name of Object.keys(value))
+      o.push({ k: name, v: innerSerializeValue(value[name], handleSerializer, visitorInfo, [...accessChain, name]) });
+    return { o, id: id2 };
+  }
+  throw new Error(`Attempting to serialize unexpected value${accessChainToDisplayString(accessChain)}: ${value}`);
+}
+function accessChainToDisplayString(accessChain) {
+  const chainString = accessChain.map((accessor, i) => {
+    if (typeof accessor === "string")
+      return i ? `.${accessor}` : accessor;
+    return `[${accessor}]`;
+  }).join("");
+  return chainString.length > 0 ? ` at position "${chainString}"` : "";
+}
+function isRegExp2(obj) {
+  return obj instanceof RegExp || Object.prototype.toString.call(obj) === "[object RegExp]";
+}
+function isDate2(obj) {
+  return obj instanceof Date || Object.prototype.toString.call(obj) === "[object Date]";
+}
+function isURL2(obj) {
+  return obj instanceof URL || Object.prototype.toString.call(obj) === "[object URL]";
+}
+function isError2(obj) {
+  const proto = obj ? Object.getPrototypeOf(obj) : null;
+  return obj instanceof Error || proto?.name === "Error" || proto && isError2(proto);
+}
+var typedArrayKindToConstructor = {
+  i8: Int8Array,
+  ui8: Uint8Array,
+  ui8c: Uint8ClampedArray,
+  i16: Int16Array,
+  ui16: Uint16Array,
+  i32: Int32Array,
+  ui32: Uint32Array,
+  f32: Float32Array,
+  f64: Float64Array,
+  bi64: BigInt64Array,
+  bui64: BigUint64Array
+};
+var constructorToTypedArrayKind = new Map(Object.entries(typedArrayKindToConstructor).map(([k, v]) => [v, k]));
+
+// src/js-handle.ts
+class HandleRef {
+  guid;
+  constructor(guid) {
+    this.guid = guid;
+  }
+}
+
+class JSHandle {
+  _guid;
+  _connection;
+  _apiPrefix;
+  _preview;
+  constructor(connection, guid, initializer, apiPrefix = "jsHandle") {
+    this._connection = connection;
+    this._guid = guid;
+    this._apiPrefix = apiPrefix;
+    this._preview = initializer.preview;
+  }
+  async evaluate(pageFunction, arg, options) {
+    return await this._evaluate(`${this._apiPrefix}.evaluate`, pageFunction, arg, options);
+  }
+  async _evaluate(apiName, pageFunction, arg, options) {
+    assertEvaluateOptions(options);
+    const params = evaluateParams(apiName, pageFunction, arg, options);
+    const result = await this._connection.sendHandle(apiName, this._guid, "evaluateExpression", params, 0);
+    return parseResult(result.value);
+  }
+  async evaluateHandle(pageFunction, arg, options) {
+    return await this._evaluateHandle(`${this._apiPrefix}.evaluateHandle`, pageFunction, arg, options);
+  }
+  async _evaluateHandle(apiName, pageFunction, arg, options) {
+    assertEvaluateOptions(options);
+    const params = evaluateParams(apiName, pageFunction, arg, options);
+    const result = await this._connection.sendHandle(apiName, this._guid, "evaluateExpressionHandle", params, 0);
+    return handleFrom(this._connection, result.handle);
+  }
+  async jsonValue() {
+    const result = await this._connection.sendHandle(`${this._apiPrefix}.jsonValue`, this._guid, "jsonValue", {}, 0);
+    return parseResult(result.value);
+  }
+  asElement() {
+    return null;
+  }
+  async dispose() {
+    await this._dispose(`${this._apiPrefix}.dispose`);
+  }
+  async _dispose(apiName) {
+    try {
+      await this._connection.sendHandle(apiName, this._guid, "dispose", {}, 0);
+    } catch (e) {
+      if (isTargetClosedError(e))
+        return;
+      throw e;
+    }
+  }
+  toString() {
+    return this._preview;
+  }
+}
+var handleFactory = {};
+function handleFrom(connection, created) {
+  if (created.type === "ElementHandle" && handleFactory.element)
+    return handleFactory.element(connection, created.guid, created.initializer);
+  return new JSHandle(connection, created.guid, created.initializer);
+}
+function evaluateParams(apiName, pageFunction, arg, options) {
+  if (options?.exposeFunctions)
+    throw new Error(`${apiName}: Neo does not support exposeFunctions yet`);
+  const isFunction = typeof pageFunction === "function";
+  let expression;
+  try {
+    expression = normalizeEvaluationExpression(String(pageFunction), isFunction);
+  } catch (error) {
+    throw new Error(`${apiName}: ${error.message}`);
+  }
+  return { expression, isFunction, arg: serializeArgument(arg) };
+}
+function serializeArgument(arg) {
+  const channels = [];
+  const protocolValue = serializeValue(arg, (value2) => {
+    if (value2 instanceof JSHandle)
+      return { h: channels.push(value2) - 1 };
+    return { fallThrough: value2 };
+  });
+  const live = parseSerializedValue(protocolValue, channels.map((handle) => new HandleRef(handle._guid)));
+  const handles = [];
+  const value = serializeAsCallArgument(live, (value2) => {
+    if (value2 instanceof HandleRef)
+      return { h: handles.push(value2.guid) - 1 };
+    return { fallThrough: value2 };
+  });
+  return { value, handles };
+}
+function parseResult(value) {
+  const live = parseEvaluationResultValue(value);
+  const wire = serializeValue(live, (value2) => ({ fallThrough: value2 }));
+  return parseSerializedValue(wire, undefined);
+}
+function assertMaxArguments(count, max) {
+  if (count > max)
+    throw new Error("Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.");
+}
+function assertEvaluateOptions(options) {
+  if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
+    throw new Error("Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.");
+}
+function normalizeEvaluationExpression(expression, isFunction) {
+  expression = expression.trim();
+  if (isFunction) {
+    try {
+      new Function(`(${expression})`);
+    } catch {
+      if (expression.startsWith("async "))
+        expression = `async function ${expression.substring("async ".length)}`;
+      else
+        expression = `function ${expression}`;
+      try {
+        new Function(`(${expression})`);
+      } catch {
+        throw new Error("Passed function is not well-serializable!");
+      }
+    }
+  }
+  if (/^(async)?\s*function(\s|\()/.test(expression))
+    expression = `(${expression})`;
+  return expression;
+}
+
+// src/element-handle.ts
+class ElementHandle extends JSHandle {
+  constructor(connection, guid, initializer) {
+    super(connection, guid, initializer, "elementHandle");
+  }
+  static fromNullable(connection, created) {
+    if (!created)
+      return null;
+    const handle = handleFrom(connection, created);
+    return handle instanceof ElementHandle ? handle : null;
+  }
+  asElement() {
+    return this;
+  }
+}
+handleFactory.element = (connection, guid, initializer) => new ElementHandle(connection, guid, initializer);
+
 // src/locator.ts
 class Locator {
   _frame;
@@ -207,6 +879,9 @@ class Locator {
   }
   async selectOption(values, options = {}) {
     return await this._frame._selectOption("locator.selectOption", this._selector, values, { strict: true, ...options });
+  }
+  async evaluate(pageFunction, arg, options) {
+    return await this._frame._withElement("locator.evaluate", this._selector, (handle) => handle._evaluate("locator.evaluate", pageFunction, arg, options), { timeout: options?.timeout });
   }
   async waitFor(options) {
     await this._frame._waitForSelector("locator.waitFor", this._selector, {
@@ -378,13 +1053,13 @@ function serializeUrlMatch(apiName, url) {
     return { glob: "" };
   if (isString(url))
     return url.length === 0 ? { regexSource: "^$", regexFlags: "" } : { glob: url };
-  if (isRegExp(url))
+  if (isRegExp3(url))
     return { regexSource: url.source, regexFlags: url.flags };
   if (typeof url === "function")
     throw new Error(`${apiName}: Neo does not support a predicate function as url yet; pass a glob string or a RegExp`);
   throw new Error("url parameter should be string, RegExp, URLPattern or function");
 }
-function isRegExp(value) {
+function isRegExp3(value) {
   return value instanceof RegExp || Object.prototype.toString.call(value) === "[object RegExp]";
 }
 
@@ -480,7 +1155,7 @@ class Request {
   }
   postDataBuffer() {
     const data = this.#initializer.postData;
-    return data ? Buffer.fromBinary(data) : null;
+    return data ? Buffer3.fromBinary(data) : null;
   }
   postDataJSON() {
     const postData = this.postData();
@@ -646,7 +1321,7 @@ class Response {
   }
   async#body(apiName) {
     const { binary } = await this.#connection.sendResponse(apiName, this._guid, "body", {}, 0);
-    return Buffer.fromBinary(binary);
+    return Buffer3.fromBinary(binary);
   }
   #actualHeaders(apiName) {
     this.#actualHeadersPromise ??= this.#connection.sendResponse(apiName, this._guid, "rawResponseHeaders", {}, 0).then(({ headers }) => new RawHeaders(headers));
@@ -690,10 +1365,10 @@ function parseFormBody(body) {
 var BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 var BASE64_INDEX = new Map([...BASE64].map((char, index) => [char, index]));
 
-class Buffer extends Uint8Array {
+class Buffer3 extends Uint8Array {
   static fromBinary(text) {
     const clean = text.replace(/=+$/, "");
-    const bytes = new Buffer(Math.floor(clean.length * 3 / 4));
+    const bytes = new Buffer3(Math.floor(clean.length * 3 / 4));
     let bits = 0;
     let value = 0;
     let at = 0;
@@ -1064,6 +1739,37 @@ class Frame {
       ...options
     }), this._page._timeoutSettings.timeout(options));
   }
+  async evaluate(pageFunction, arg, options) {
+    assertMaxArguments(arguments.length, 3);
+    return await this._evaluate("frame.evaluate", pageFunction, arg, options);
+  }
+  async _evaluate(apiName, pageFunction, arg, options) {
+    assertEvaluateOptions(options);
+    const params = evaluateParams(apiName, pageFunction, arg, options);
+    const result = await this._connection.sendEval(apiName, this._guid, "evaluateExpression", params, 0);
+    return parseResult(result?.value);
+  }
+  async evaluateHandle(pageFunction, arg, options) {
+    assertMaxArguments(arguments.length, 3);
+    return await this._evaluateHandle("frame.evaluateHandle", pageFunction, arg, options);
+  }
+  async _evaluateHandle(apiName, pageFunction, arg, options) {
+    assertEvaluateOptions(options);
+    const params = evaluateParams(apiName, pageFunction, arg, options);
+    const result = await this._connection.sendEval(apiName, this._guid, "evaluateExpressionHandle", params, 0);
+    return handleFrom(this._connection, result.handle);
+  }
+  async _withElement(apiName, selector, task, options) {
+    const result = await this._connection.send(apiName, this._guid, "waitForSelector", { selector, strict: true, state: "attached" }, this._page._timeoutSettings.timeout(options));
+    const handle = ElementHandle.fromNullable(this._connection, result?.element);
+    if (!handle)
+      throw new Error(`Could not resolve ${selector} to DOM Element`);
+    try {
+      return await task(handle);
+    } finally {
+      await handle._dispose(apiName);
+    }
+  }
   async title() {
     return await this._title("frame.title");
   }
@@ -1390,6 +2096,14 @@ class Page {
   async goto(url, options = {}) {
     return await this.#mainFrame._goto("page.goto", url, options);
   }
+  async evaluate(pageFunction, arg, options) {
+    assertMaxArguments(arguments.length, 3);
+    return await this.mainFrame()._evaluate("page.evaluate", pageFunction, arg, options);
+  }
+  async evaluateHandle(pageFunction, arg, options) {
+    assertMaxArguments(arguments.length, 3);
+    return await this.mainFrame()._evaluateHandle("page.evaluateHandle", pageFunction, arg, options);
+  }
   async title() {
     return await this.#mainFrame._title("page.title");
   }
@@ -1545,6 +2259,12 @@ class Connection {
   }
   async sendNeo(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendEval(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendHandle(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout) ?? {};
   }
   async#send(apiName, guid, method, params, timeout) {
     if (typeof timeout !== "number")
