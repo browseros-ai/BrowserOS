@@ -252,6 +252,24 @@ Injected:
         left: float
         top: float
 
+    # Playwright's iframe transform check and border/padding insets (`dom.ts`
+    # `_checkFrameIsHitTarget`). Transformed ancestors use only the event interceptor.
+    describeIFrameStyle:
+      internal: true
+      parameters:
+        element: Element
+      returns:
+        style: FrameStyle
+
+    # Checks the iframe owner in its parent document before arming in the child.
+    expectHitTarget:
+      internal: true
+      parameters:
+        element: Element
+        point: Point
+      returns:
+        outcome: HitTargetOutcome
+
     # `InjectedScript.setupHitTargetInterceptor(element, 'mouse', hitPoint, blockAllEvents)`.
     # It retargets to the closest button or link, checks the hit point once, and arms the
     # injected script's single hit-target slot for the coming mouse events.
@@ -405,6 +423,26 @@ FormInputValueMatch:
 # `HitTargetInterceptionResult`, bound in the glue's `satisfies` clause.
 HitTargetInterceptor:
   type: handle
+
+# Unchanged `InjectedScript.describeIFrameStyle` result.
+FrameStyle:
+  type: union
+  members:
+    status: FrameStyleStatus
+    insets: FrameInsets
+
+FrameStyleStatus:
+  type: enum
+  literals:
+  - error:notconnected
+  - transformed
+
+# The iframe content origin relative to its border box.
+FrameInsets:
+  type: object
+  properties:
+    left: float
+    top: float
 
 # Playwright's `ElementState` (`injectedScript.ts`), every value, so the glue's `missingState`
 # result type-checks against Playwright's own union.
