@@ -4,7 +4,7 @@
 //!
 //! ```text
 //!  Tabs ─▶ PageEntry ─▶ Arc<PageSession> ─┬─▶ realm::run(…, dispatcher)   the deadline decides, as before
-//!                                             ├─▶ dispatcher.finish(reason)  cancel calls, wait ≤ 1 s, records
+//!                                             ├─▶ dispatcher.finish(reason)  cancel calls, wait ≤ 1 s (highlights ≤ 1 s more), records
 //!                                             └─▶ last Arc drops ─▶ Session::drop ─▶ detach in background
 //! ```
 //!
@@ -111,8 +111,9 @@ impl Runtime {
     }
 
     /// Waits for every run's remaining browser work, including late creation replies and
-    /// their tab cleanup. Hosts must stop admitting runs and cancel/await active runs first,
-    /// then drain before disconnecting CDP; a returned outcome alone does not settle writes.
+    /// their tab cleanup, and run-end input releases still writing. Hosts must stop admitting
+    /// runs and cancel/await active runs first, then drain before disconnecting CDP; a
+    /// returned outcome alone does not settle writes.
     pub async fn drain(&self) {
         self.cleanup.close();
         self.cleanup.wait().await;
