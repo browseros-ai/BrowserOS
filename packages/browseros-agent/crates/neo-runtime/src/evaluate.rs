@@ -44,7 +44,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use tokio::time;
 
-use crate::click::{LoopAWaits, PageError};
+use crate::click::{self, LoopAWaits, PageError};
 use crate::frame_selector;
 use crate::frames::{FrameContext, FrameScope};
 use crate::main_world::{self, BuiltExpression, Called, DocumentId, Installed, MainFunction};
@@ -1018,6 +1018,16 @@ pub(crate) async fn serve(
     progress: &Progress,
 ) -> Result<Option<Value>, CallError> {
     let handles = progress.handles();
+    if matches!(
+        call,
+        EvalCall::Frame(_)
+            | EvalCall::Handle { .. }
+            | EvalCall::WaitForFunction { .. }
+            | EvalCall::EvalOnSelector { .. }
+            | EvalCall::EvalOnSelectorAll { .. }
+    ) {
+        prepare_page(tab, progress).await?;
+    }
     let result = match call {
         call @ (EvalCall::Query { .. }
         | EvalCall::QueryAll { .. }
@@ -2680,6 +2690,20 @@ pub(crate) async fn element_handle_for(
         true,
         format!("{NODE_PREVIEW_PREFIX}{preview}"),
     )
+}
+
+/// Neo: starts the page's watcher before the caller's page JS runs, once per run, as every action
+/// and read does first (`click::Tab::prepare`), so a navigation that JS requests
+/// (`location.href = …`) is followed from its request on. Playwright, listening since it
+/// connected, sees it too, and the next action's `performActionPreChecks` waits it out.
+/// This only arms tracking; it never runs action prechecks or waits for navigation or dialogs.
+/// Keep it at the `serve` boundary for page-frame targets (`FrameTab`): workers have no page
+/// lifecycle, and cleanup callers of the main-world helpers must not start page tracking.
+async fn prepare_page(tab: &FrameTab, progress: &Progress) -> Result<(), CallError> {
+    progress
+        .race(click::Tab::prepare(tab))
+        .await?
+        .map_err(|error| page_error(error).into())
 }
 
 fn page_error(error: PageError) -> PlaywrightError {
