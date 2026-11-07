@@ -1842,6 +1842,7 @@ mod tests {
     use crate::run::Delivery;
     use crate::run::PageId;
     use crate::screenshot::TabScreenshots;
+    use crate::session_state::Permissions;
     use crate::switch::Switches;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
@@ -1858,6 +1859,7 @@ mod tests {
             TabInputs::default(),
             TabScreenshots::default(),
             Switches::default(),
+            Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -1937,6 +1939,7 @@ mod tests {
             TabInputs::default(),
             TabScreenshots::default(),
             Switches::default(),
+            Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )
@@ -3257,6 +3260,7 @@ mod review_abort_priority {
     use crate::page::TabInputs;
     use crate::run::PageId;
     use crate::screenshot::TabScreenshots;
+    use crate::session_state::Permissions;
     use crate::switch::Switches;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
@@ -3275,6 +3279,7 @@ mod review_abort_priority {
             TabInputs::default(),
             TabScreenshots::default(),
             Switches::default(),
+            Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
         )

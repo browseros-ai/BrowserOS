@@ -72,6 +72,7 @@ import {
   type WaitForURLOptions,
 } from './frame'
 import type { FrameLocator } from './frame-locator'
+import { type Headers, headersObjectToArray, validateHeaders } from './headers'
 import { Disposable, evaluationScript, type InitScript } from './init-script'
 import { Keyboard, Mouse, Touchscreen } from './input'
 import {
@@ -272,6 +273,19 @@ export class Page extends ChannelOwner {
       this.#guid,
       'bringToFront',
       {},
+      0,
+    )
+  }
+
+  /** Playwright: `client/page.ts` `Page.setExtraHTTPHeaders`: `validateHeaders(headers);`
+   * Sent with every request of this tab, over the context's, until the run ends. */
+  async setExtraHTTPHeaders(headers: Headers): Promise<void> {
+    validateHeaders(headers)
+    await this.#connection.sendPage(
+      'page.setExtraHTTPHeaders',
+      this.#guid,
+      'setExtraHTTPHeaders',
+      { headers: headersObjectToArray(headers) },
       0,
     )
   }

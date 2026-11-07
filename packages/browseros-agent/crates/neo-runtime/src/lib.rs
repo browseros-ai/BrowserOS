@@ -100,6 +100,7 @@ mod responses;
 mod run;
 mod runtime;
 mod screenshot;
+mod session_state;
 mod states;
 mod switch;
 mod tab_calls;
