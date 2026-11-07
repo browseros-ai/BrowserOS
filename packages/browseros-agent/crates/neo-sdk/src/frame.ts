@@ -38,13 +38,18 @@ export type WaitForFunctionOptions = {
 import type {
   FrameAriaSnapshotParams,
   FrameAriaSnapshotResult,
+  FrameBlurParams,
   FrameCheckParams,
   FrameClickParams,
   FrameDblclickParams,
+  FrameDispatchEventParams,
   FrameFillParams,
+  FrameFocusParams,
   FrameGetAttributeParams,
   FrameGetAttributeResult,
   FrameGotoParams,
+  FrameHideHighlightParams,
+  FrameHighlightParams,
   FrameHoverParams,
   FrameInitializer,
   FrameInnerHTMLParams,
@@ -99,20 +104,29 @@ import {
 } from './js-handle'
 import { Locator, type LocatorOptions, testIdAttributeName } from './locator'
 import {
+  NEO_SELECT_TEXT_KEYS,
   type NeoNavigationResult,
   type NeoNextNavigationResult,
+  type NeoRect,
+  type NeoSelectTextParams,
   serializeUrlMatch,
 } from './neo-commands'
 import { type Response, responseFor } from './network'
 import type { Page } from './page'
+import { serializePlainArgument } from './plain-argument'
 import {
   FRAME_ARIA_SNAPSHOT_KEYS,
+  FRAME_BLUR_KEYS,
   FRAME_CHECK_KEYS,
   FRAME_CLICK_KEYS,
   FRAME_DBLCLICK_KEYS,
+  FRAME_DISPATCH_EVENT_KEYS,
   FRAME_FILL_KEYS,
+  FRAME_FOCUS_KEYS,
   FRAME_GET_ATTRIBUTE_KEYS,
   FRAME_GOTO_KEYS,
+  FRAME_HIDE_HIGHLIGHT_KEYS,
+  FRAME_HIGHLIGHT_KEYS,
   FRAME_HOVER_KEYS,
   FRAME_INNER_HTML_KEYS,
   FRAME_INNER_TEXT_KEYS,
@@ -312,6 +326,23 @@ export type SelectOptionOptions = Omit<
   FrameSelectOptionParams,
   'selector' | 'elements' | 'options'
 > & { timeout?: number }
+
+/** `focus`'s and `blur`'s options as a script passes them. */
+export type FocusOptions = Omit<FrameFocusParams, 'selector'> & {
+  timeout?: number
+}
+
+/** `dispatchEvent`'s options as a script passes them. */
+export type DispatchEventOptions = Omit<
+  FrameDispatchEventParams,
+  'selector' | 'type' | 'eventInit'
+> & { timeout?: number }
+
+/** `selectText`'s options, as `ElementHandle.selectText` takes them. */
+export type SelectTextOptions = { force?: boolean; timeout?: number }
+
+/** The options of the `Locator` methods Playwright serves through an `ElementHandle`. */
+export type ElementTimeoutOptions = { timeout?: number }
 
 /** What a frame event says of its frame (`Frame._during`). */
 export interface FrameEventState {
@@ -1705,6 +1736,172 @@ export class Frame {
   ): Promise<void> {
     if (checked) await this._check('frame.setChecked', selector, options)
     else await this._uncheck('frame.setChecked', selector, options)
+  }
+
+  /** Not strict, as Playwright's `frame.focus`; waits for the element, then focuses it. */
+  async focus(selector: string, options: FocusOptions = {}): Promise<void> {
+    return await this._focus('frame.focus', selector, options)
+  }
+
+  /** Sends `Frame.focus` under the action timeout. */
+  async _focus(
+    apiName: ApiName,
+    selector: string,
+    options: FocusOptions,
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'focus',
+      pickParams(FRAME_FOCUS_KEYS, {
+        selector,
+        ...options,
+      }) as FrameFocusParams,
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
+    )
+  }
+
+  /** Sends `Frame.blur` under the action timeout; behind `locator.blur` only, as Playwright's. */
+  async _blur(
+    apiName: ApiName,
+    selector: string,
+    options: FocusOptions,
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'blur',
+      pickParams(FRAME_BLUR_KEYS, {
+        selector,
+        ...options,
+      }) as FrameBlurParams,
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
+    )
+  }
+
+  /** Not strict, as Playwright's `frame.dispatchEvent`; waits for the element. */
+  async dispatchEvent(
+    selector: string,
+    type: string,
+    eventInit?: unknown,
+    options: DispatchEventOptions = {},
+  ): Promise<void> {
+    return await this._dispatchEvent(
+      'frame.dispatchEvent',
+      selector,
+      type,
+      eventInit,
+      options,
+    )
+  }
+
+  /** Sends `Frame.dispatchEvent` under the action timeout, `eventInit` serialized first, so a
+   * value Neo cannot send throws before anything is sent. */
+  async _dispatchEvent(
+    apiName: ApiName,
+    selector: string,
+    type: string,
+    eventInit: unknown,
+    options: DispatchEventOptions,
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'dispatchEvent',
+      pickParams(FRAME_DISPATCH_EVENT_KEYS, {
+        selector,
+        type,
+        eventInit: serializePlainArgument(eventInit),
+        ...options,
+      }) as FrameDispatchEventParams,
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
+    )
+  }
+
+  /** Sends `neo:scrollIntoViewIfNeeded` strictly, under the action timeout. */
+  async _scrollIntoViewIfNeeded(
+    apiName: ApiName,
+    selector: string,
+    options: ElementTimeoutOptions,
+  ): Promise<void> {
+    await this._connection.sendNeo(
+      apiName,
+      this._guid,
+      'neo:scrollIntoViewIfNeeded',
+      { selector, strict: true },
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
+    )
+  }
+
+  /** Sends `neo:selectText` strictly, under the action timeout. */
+  async _selectText(
+    apiName: ApiName,
+    selector: string,
+    options: SelectTextOptions,
+  ): Promise<void> {
+    const opts = options ?? {}
+    await this._connection.sendNeo(
+      apiName,
+      this._guid,
+      'neo:selectText',
+      pickParams(NEO_SELECT_TEXT_KEYS, {
+        selector,
+        strict: true,
+        force: opts.force,
+      }) as NeoSelectTextParams,
+      this._page._timeoutSettings.timeout(opts, apiName),
+    )
+  }
+
+  /** Sends `neo:boundingBox` strictly, under the action timeout: the border box, or `null`. */
+  async _boundingBox(
+    apiName: ApiName,
+    selector: string,
+    options: ElementTimeoutOptions,
+  ): Promise<NeoRect | null> {
+    const result = await this._connection.sendNeo(
+      apiName,
+      this._guid,
+      'neo:boundingBox',
+      { selector, strict: true },
+      this._page._timeoutSettings.timeout(options ?? {}, apiName),
+    )
+    const box = result?.value
+    // Playwright's `Rect` key order (`CRPage.getBoundingBox`), whatever order the wire used.
+    return box
+      ? { x: box.x, y: box.y, width: box.width, height: box.height }
+      : null
+  }
+
+  /** Sends `Frame.highlight` with no timeout, as Playwright's `_highlight` (`kNoTimeout`). */
+  async _highlight(
+    apiName: ApiName,
+    selector: string,
+    style?: string,
+  ): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'highlight',
+      pickParams(FRAME_HIGHLIGHT_KEYS, {
+        selector,
+        style,
+      }) as FrameHighlightParams,
+      0,
+    )
+  }
+
+  /** Sends `Frame.hideHighlight` with no timeout, as Playwright's `_hideHighlight`. */
+  async _hideHighlight(apiName: ApiName, selector: string): Promise<void> {
+    await this._connection.send(
+      apiName,
+      this._guid,
+      'hideHighlight',
+      pickParams(FRAME_HIDE_HIGHLIGHT_KEYS, {
+        selector,
+      }) as FrameHideHighlightParams,
+      0,
+    )
   }
 
   locator(selector: string, options?: LocatorOptions): Locator {

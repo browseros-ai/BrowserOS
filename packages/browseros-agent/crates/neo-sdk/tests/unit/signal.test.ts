@@ -47,6 +47,21 @@ function locatorCalls(page: ReturnType<typeof start>['page']): Call[] {
       (signal) => locator.ariaSnapshot(withSignal(signal)),
     ],
     ['locator.fill', (signal) => locator.fill('x', withSignal(signal))],
+    ['locator.focus', (signal) => locator.focus(withSignal(signal))],
+    ['locator.blur', (signal) => locator.blur(withSignal(signal))],
+    [
+      'locator.dispatchEvent',
+      (signal) => locator.dispatchEvent('click', {}, withSignal(signal)),
+    ],
+    [
+      'locator.scrollIntoViewIfNeeded',
+      (signal) => locator.scrollIntoViewIfNeeded(withSignal(signal)),
+    ],
+    ['locator.selectText', (signal) => locator.selectText(withSignal(signal))],
+    [
+      'locator.boundingBox',
+      (signal) => locator.boundingBox(withSignal(signal)),
+    ],
     ['locator.clear', (signal) => locator.clear(withSignal(signal))],
     ['locator.press', (signal) => locator.press('a', withSignal(signal))],
     ['locator.inputValue', (signal) => locator.inputValue(withSignal(signal))],
@@ -78,6 +93,12 @@ function selectorCalls(
     [
       `${name}.goto`,
       (signal) => target.goto('https://run.test/next', withSignal(signal)),
+    ],
+    [`${name}.focus`, (signal) => target.focus('#plain', withSignal(signal))],
+    [
+      `${name}.dispatchEvent`,
+      (signal) =>
+        target.dispatchEvent('#plain', 'click', {}, withSignal(signal)),
     ],
     [
       `${name}.waitForURL`,

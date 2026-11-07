@@ -19,6 +19,7 @@ use tracing::debug;
 use crate::bridge;
 use crate::dispatch::encode_result;
 use crate::frames::FrameScope;
+use crate::highlight;
 use crate::history::{self, HistoryOptions};
 use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
@@ -192,6 +193,10 @@ pub(crate) async fn page(
                     .await?;
                 checked(tabs, entry, progress, activated).await?;
             }
+        }
+        PageCall::HideHighlight(_) => {
+            let page = progress.race(tabs.session(entry)).await??;
+            highlight::hide_all(&page, progress).await?;
         }
     }
     Ok(None)
