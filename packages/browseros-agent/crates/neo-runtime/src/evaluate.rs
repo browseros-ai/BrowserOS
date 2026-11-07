@@ -793,7 +793,7 @@ fn render_preview(object: &RemoteObject) -> String {
 }
 
 /// JavaScript's `String(value)` for a value CDP returned by value.
-fn js_string(value: &Value) -> String {
+pub(crate) fn js_string(value: &Value) -> String {
     match value {
         Value::Null => "null".to_string(),
         Value::Bool(flag) => flag.to_string(),

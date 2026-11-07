@@ -42,6 +42,7 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use crate::click::PageError;
+use crate::evaluate::js_string;
 use crate::frames::FrameContext;
 use crate::world::ObjectGroup;
 
@@ -337,11 +338,18 @@ async fn describe(frame: &FrameContext, object_id: &str) -> Result<i64, PageErro
 /// Playwright: `server/chromium/crProtocolHelper.ts` `getExceptionMessage`: `return exceptionDetails.exception.description || String(exceptionDetails.exception.value);`
 fn exception_message(details: browseros_cdp::runtime::ExceptionDetails) -> String {
     if let Some(exception) = details.exception {
-        return exception.description.unwrap_or_else(|| match exception.value {
+        if let Some(description) = exception.description {
+            return description;
+        }
+        // `String(value)`; serde reads a thrown `null` as no value, so its subtype tells.
+        if exception.subtype.as_deref() == Some("null") {
+            return "null".to_string();
+        }
+        return match exception.value {
             Some(Value::String(text)) => text,
             Some(value) => js_string(&value),
             None => "undefined".to_string(),
-        });
+        };
     }
     let mut message = details.text;
     if let Some(trace) = details.stack_trace {
@@ -360,17 +368,4 @@ fn exception_message(details: browseros_cdp::runtime::ExceptionDetails) -> Strin
         }
     }
     message
-}
-
-/// JavaScript's `String(value)` for a JSON value CDP returned by value.
-fn js_string(value: &Value) -> String {
-    match value {
-        Value::Null => "null".to_string(),
-        Value::Bool(flag) => flag.to_string(),
-        Value::Number(number) => number
-            .as_f64()
-            .map_or_else(|| number.to_string(), crate::progress::js_number),
-        Value::String(text) => text.clone(),
-        Value::Array(_) | Value::Object(_) => "[object Object]".to_string(),
-    }
 }

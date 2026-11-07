@@ -208,6 +208,8 @@ impl<T: WaitTab> Condition for PrepareCondition<'_, T> {
     }
 }
 
+/// [`wait_for_selector_element`] without the element, as the policy tests drive it.
+#[cfg(test)]
 pub(crate) async fn wait_for_selector<T: WaitTab>(
     tab: &T,
     options: &WaitForSelectorOptions,
@@ -218,8 +220,9 @@ pub(crate) async fn wait_for_selector<T: WaitTab>(
         .map(|_| ())
 }
 
-/// [`wait_for_selector`], answering the element when `options.return_element` asks for it and
-/// the state is attached or visible: Playwright's `Frame.waitForSelector` result.
+/// Playwright's `Frame.waitForSelector`: waits for `options.state`, answering the element, adopted
+/// into the main world, when `options.return_element` asks for it and the state is attached or
+/// visible.
 pub(crate) async fn wait_for_selector_element<T: WaitTab>(
     tab: &T,
     options: &WaitForSelectorOptions,
