@@ -620,3 +620,38 @@ async fn tests_that_an_ai_locator_snapshot_in_a_frame_answers_refs_that_reach_it
         "the default mode has no refs to route"
     );
 }
+
+/// After `page.ariaSnapshot({ mode: 'ai' })`, a locator snapshot inside a frame reuses the ref the
+/// page snapshot gave its iframe, so both snapshots' refs keep working together.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_frame_locator_snapshot_reuses_the_page_snapshots_iframe_ref() {
+    let Some(binary) = browser::e2e_browser() else {
+        return;
+    };
+    let fixture = Fixture {
+        pages: vec![("/framed-buttons".to_string(), FRAMED_BUTTONS.to_string())],
+        ..Fixture::default()
+    };
+    let tab = Tab::open(binary, fixture, "/framed-buttons").await;
+    let outcome = run(
+        &tab,
+        "await page.frameLocator('#inner').locator('button').waitFor();
+         const full = await page.ariaSnapshot({ mode: 'ai' });
+         const iframe = /- iframe \\[ref=e(\\d+)\\]/.exec(full)?.[1];
+         const top = /button \"Top\" \\[ref=(e\\d+)\\]/.exec(full)?.[1];
+         const snap = await page.frameLocator('#inner').locator('button').ariaSnapshot({ mode: 'ai' });
+         const inner = /\\[ref=([a-z0-9]+)\\]/.exec(snap)?.[1];
+         return {
+           sameFrame: inner?.startsWith('f' + iframe + 'e'),
+           inner: await page.locator('aria-ref=' + inner).textContent({ timeout: 3000 }),
+           top: await page.locator('aria-ref=' + top).textContent({ timeout: 3000 }),
+         };",
+    )
+    .await;
+    tab.close().await;
+    assert_eq!(
+        value(&outcome),
+        json!({ "sameFrame": true, "inner": "Inner", "top": "Top" }),
+        "the frame's path is the page snapshot's iframe ref, and the page's refs still resolve"
+    );
+}
