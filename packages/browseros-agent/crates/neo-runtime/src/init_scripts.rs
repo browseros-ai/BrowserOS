@@ -35,6 +35,7 @@ use tokio::sync::Mutex;
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio_util::sync::CancellationToken;
 
+use crate::auto_attach::{self, AttachKind};
 use crate::bindings::Bindings;
 use crate::page::PageSession;
 use crate::progress::PlaywrightError;
@@ -690,6 +691,11 @@ async fn watch(
             else {
                 continue;
             };
+            // A dedicated worker is workers.rs's: it enables the worker's runtime before resuming
+            // it, as Playwright's `_initializeWorker` does (slice W, DECIDED).
+            if event.params["targetInfo"]["type"].as_str() == Some("worker") {
+                continue;
+            }
             let session = SessionId::from(session);
             let attach = Attach {
                 link: Link {
@@ -783,20 +789,16 @@ async fn remove_script(cdp: &CdpClient, link: &Link, identifier: &str) {
 /// Neo: Chromium attaches each out-of-process iframe of the session's frame as it starts, held
 /// until its scripts are in (probe C1); off again when the run removes its scripts, which
 /// detaches those iframes' sessions.
+/// Turns the link's iframe auto-attach on or off, through the session's one setting
+/// (`auto_attach.rs`), which also holds what `workers.rs` wants of it.
 async fn set_auto_attach(cdp: &CdpClient, link: &Link, on: bool) {
-    let _set = until_gone(
-        &link.gone,
-        cdp.send(
-            "Target.setAutoAttach",
-            json!({
-                "autoAttach": on,
-                "waitForDebuggerOnStart": on,
-                "flatten": true,
-                "filter": [{ "type": "iframe" }],
-            }),
-            Some(&link.session),
-        ),
-    )
+    let _set = until_gone(&link.gone, async {
+        if on {
+            auto_attach::want(cdp, &link.session, AttachKind::Iframe).await
+        } else {
+            auto_attach::release(cdp, &link.session, AttachKind::Iframe).await
+        }
+    })
     .await;
 }
 

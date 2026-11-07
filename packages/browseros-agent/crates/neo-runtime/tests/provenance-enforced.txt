@@ -22,6 +22,7 @@ neo-runtime-injected/src/wait-result.ts
 neo-runtime-spec/src/binary.rs
 neo-runtime/src/abort.rs
 neo-runtime/src/artifacts.rs
+neo-runtime/src/auto_attach.rs
 neo-runtime/src/bindings.rs
 neo-runtime/src/capture.rs
 neo-runtime/src/console.rs
@@ -50,6 +51,10 @@ neo-runtime/src/pdf.rs
 neo-runtime/src/screenshot.rs
 neo-runtime/src/session_state.rs
 neo-runtime/src/switch.rs
+neo-runtime/src/web_storage.rs
+neo-runtime/src/worker_eval.rs
+neo-runtime/src/worker_world.rs
+neo-runtime/src/workers.rs
 neo-sdk/src/binding-call.ts
 neo-sdk/src/buffer.ts
 neo-sdk/src/console-message.ts
@@ -70,3 +75,5 @@ neo-sdk/src/vendor-globals.d.ts
 neo-sdk/src/vendor-shims.ts
 neo-sdk/src/waiter.ts
 neo-sdk/src/web-error.ts
+neo-sdk/src/web-storage.ts
+neo-sdk/src/worker.ts

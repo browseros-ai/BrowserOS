@@ -460,6 +460,11 @@ export class BrowserContext extends ChannelOwner {
       .filter((page) => !page._isClosedLocally())
   }
 
+  /** Playwright: `client/browserContext.ts` `BrowserContext.backgroundPages`: `return [];` */
+  backgroundPages(): Page[] {
+    return []
+  }
+
   /** Playwright's `browserContext.exposeFunction`: `window[name](...args)` in every frame of every page of the context calls
    * `callback(...args)` in the run and answers with its result. `dispose()` removes it. */
   async exposeFunction(

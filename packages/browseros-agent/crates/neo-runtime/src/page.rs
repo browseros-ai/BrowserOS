@@ -69,6 +69,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 use tracing::{debug, warn};
 
+use crate::auto_attach;
 use crate::click::{
     Arming, Geometry, NotReady, PageError, PressReport, Resolved, Scroll, SelectorFacts,
     StatesCheck, Stop, Tab, Verdict,
@@ -947,6 +948,31 @@ impl PageSession {
 
     fn state(&self) -> Option<watch::Receiver<PageState>> {
         self.prepared.get().map(|_| self.state.clone())
+    }
+
+    /// Neo: the main frame's current document (its loader), as the watcher last applied it;
+    /// `None` before the session is prepared or before its first commit.
+    pub(crate) fn main_document(&self) -> Option<String> {
+        self.state()
+            .and_then(|state| state.borrow().document.clone())
+    }
+
+    /// Neo: resolves once the main frame commits a document other than `document`, for a call
+    /// bound to the document it started in. A same-document commit keeps the document. Never
+    /// resolves on a session without its watcher, or once the watcher is gone (the tab's
+    /// closure ends such a call instead).
+    pub(crate) async fn main_document_replaced(&self, document: Option<String>) {
+        let Some(mut state) = self.state() else {
+            return future::pending().await;
+        };
+        loop {
+            if state.borrow_and_update().document != document {
+                return;
+            }
+            if state.changed().await.is_err() {
+                return future::pending().await;
+            }
+        }
     }
 
     /// Resolves when no navigation is pending, with the URL it committed to, if any.
@@ -2281,6 +2307,8 @@ impl Drop for PageSession {
         // A run whose future is dropped never reaches its run end: its end is recorded here,
         // once nothing of the run writes any more, so what it holds is held by no live run.
         self.mark_input_ended();
+        // The session detaches with it, and its auto-attach setting with it (`auto_attach.rs`).
+        auto_attach::forget(self.session_id());
     }
 }
 

@@ -100,6 +100,12 @@ function elementList(elements: Element[]): Record<string, Element> {
   return Object.assign(Object.create(null), elements)
 }
 
+/** The document's `localStorage` or `sessionStorage`, as Playwright's `${kind}Storage`
+ * expression reads it in the utility world. */
+function webStorage(kind: 'local' | 'session'): Storage {
+  return kind === 'local' ? localStorage : sessionStorage
+}
+
 export const glue = {
   title: () => ({ value: document.title }),
 
@@ -603,6 +609,41 @@ export const glue = {
   queryCount: (injected, { selector }) => ({
     value: query(injected, selector, false).length,
   }),
+  /** Playwright: `server/page.ts` `Page.webStorageItems` */
+  webStorageItems: (_injected, { kind }) => {
+    const storage = webStorage(kind)
+    const items: { name: string; value: string }[] = []
+    for (let i = 0; i < storage.length; i++) {
+      const name = storage.key(i)
+      if (name !== null)
+        items.push({ name, value: storage.getItem(name) ?? '' })
+    }
+    return { items }
+  },
+
+  /** Playwright: `server/page.ts` `Page.webStorageGetItem` */
+  webStorageGetItem: (_injected, { kind, name }) => {
+    const value = webStorage(kind).getItem(name)
+    return value === null ? {} : { value }
+  },
+
+  /** Playwright: `server/page.ts` `Page.webStorageSetItem` */
+  webStorageSetItem: (_injected, { kind, name, value }) => {
+    webStorage(kind).setItem(name, value)
+    return {}
+  },
+
+  /** Playwright: `server/page.ts` `Page.webStorageRemoveItem` */
+  webStorageRemoveItem: (_injected, { kind, name }) => {
+    webStorage(kind).removeItem(name)
+    return {}
+  },
+
+  /** Playwright: `server/page.ts` `Page.webStorageClear` */
+  webStorageClear: (_injected, { kind }) => {
+    webStorage(kind).clear()
+    return {}
+  },
 
   /**
    * Playwright's page function for screenshots, for one document. Chromium never syncs

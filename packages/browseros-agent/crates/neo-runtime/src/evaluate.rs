@@ -32,8 +32,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use browseros_cdp::SessionId;
 use browseros_cdp::runtime::{GetPropertiesResult, RemoteObject};
+use browseros_cdp::{CdpClient, SessionId};
 use neo_runtime_spec::injected::{
     InjectedListPreviewsParams, InjectedPreviewNodeParams, InjectedQueryAllParams,
     InjectedScopedQueryAllParams, InjectedScopedSelectorElementParams,
@@ -51,6 +51,8 @@ use crate::main_world::{self, BuiltExpression, Called, DocumentId, Installed, Ma
 use crate::page::{FrameTab, GroupGuard};
 use crate::progress::{CallError, PlaywrightError, Progress, js_number};
 use crate::reads::SelectorTab;
+use crate::worker_eval;
+use crate::workers::Worker;
 use crate::world::ObjectGroup;
 
 /// Neo: the guid prefix of a run's handles (`handle@<run>.<n>`), opaque to the SDK.
@@ -70,10 +72,11 @@ const WAIT_FOR_FUNCTION_RETRY: Duration = Duration::from_millis(100);
 const WAITER_ABORT_BOUND: Duration = Duration::from_secs(2);
 
 /// Playwright: `server/javascript.ts` `evaluateExpression`: `throw new JavaScriptErrorInEvaluate('JSHandles can be evaluated only in the context they were created!');`
-const OTHER_CONTEXT: &str = "JSHandles can be evaluated only in the context they were created!";
+pub(crate) const OTHER_CONTEXT: &str =
+    "JSHandles can be evaluated only in the context they were created!";
 
 /// Playwright: `server/chromium/crExecutionContext.ts` `rewriteError`: `throw new Error('Execution context was destroyed, most likely because of a navigation.');`
-const CONTEXT_DESTROYED: &str =
+pub(crate) const CONTEXT_DESTROYED: &str =
     "Execution context was destroyed, most likely because of a navigation.";
 
 /// Playwright: `server/chromium/crExecutionContext.ts` `rewriteError`: `throw new Error('Cannot serialize result: object reference chain is too long.');`
@@ -469,6 +472,43 @@ pub(crate) static HANDLE_GET_PROPERTY_LIST_META: MethodMeta = MethodMeta {
     flags: &[],
 };
 
+/// Neo: an evaluation command's params as the page runs them, for a worker's evaluations
+/// (`worker_eval.rs`), which are routed by hand as the handle ones are.
+pub(crate) fn evaluation(
+    params: Option<&Value>,
+    meta: &MethodMeta,
+    return_by_value: bool,
+) -> Result<Evaluation, PlaywrightError> {
+    decode::<EvaluateParams>(params, meta).map(|params| Evaluation {
+        expression: params.expression,
+        is_function: params.is_function,
+        arg: params.arg,
+        return_by_value,
+    })
+}
+
+impl EvalCall {
+    /// The handle the call is on or scoped to, if any.
+    pub(crate) fn named_handle(&self) -> Option<&str> {
+        match self {
+            Self::Handle { guid, .. }
+            | Self::JsonValue { guid }
+            | Self::Dispose { guid }
+            | Self::DispatchEvent { guid, .. }
+            | Self::GetProperty { guid, .. }
+            | Self::GetPropertyList { guid } => Some(guid),
+            Self::Query { scope, .. }
+            | Self::QueryAll { scope, .. }
+            | Self::EvalOnSelector { scope, .. }
+            | Self::EvalOnSelectorAll { scope, .. } => scope.as_deref(),
+            Self::Frame(_)
+            | Self::WaitForFunction { .. }
+            | Self::WaitForFunctionOnElement { .. }
+            | Self::AddTag { .. } => None,
+        }
+    }
+}
+
 /// A routed evaluation command.
 #[derive(Debug)]
 pub(crate) enum EvalCall {
@@ -845,8 +885,65 @@ pub(crate) struct Handles {
     entries: Mutex<HashMap<String, Arc<HandleEntry>>>,
     /// Keyed by the host session. Dropping a guard releases its group (`page.rs`).
     groups: Mutex<HashMap<SessionId, Arc<GroupGuard>>>,
+    /// The handles on dedicated workers' objects (`worker_eval.rs`), by guid.
+    worker_entries: Mutex<HashMap<String, Arc<WorkerHandle>>>,
+    /// The worker sessions the run's worker group holds objects in, released at run end.
+    worker_groups: Mutex<HashMap<SessionId, CdpClient>>,
     /// Set at run end: no handle is created after the run's groups are released.
     closed: AtomicBool,
+}
+
+/// Neo: what a frame's handle is as an argument of a worker's call (`worker_eval.rs`).
+pub(crate) enum FrameArgument {
+    /// A primitive's CDP `CallArgument`, which passes by value into any context, as
+    /// `serializeAsCallArgument` falls through to it.
+    Value(Value),
+    /// An object of a frame's world, which reaches no worker.
+    Object,
+}
+
+/// Neo: a handle on a dedicated worker's object (`worker_eval.rs`). A worker has no frame and
+/// no document: the handle belongs to its worker, and is closed once the worker is.
+pub(crate) struct WorkerHandle {
+    pub(crate) worker: Arc<Worker>,
+    remote: Remote,
+    /// The worker's page's main frame, which routes the handle's calls while the worker is open.
+    frame_guid: String,
+}
+
+impl WorkerHandle {
+    /// The handle as a CDP `CallArgument` in its worker: its object, or a primitive's value.
+    pub(crate) fn call_argument(&self) -> Value {
+        match &self.remote {
+            Remote::Value(argument) => argument.clone(),
+            Remote::Object(id) => json!({ "objectId": id.object_id() }),
+        }
+    }
+
+    /// A primitive's CDP `CallArgument`, which passes by value into any context
+    /// (`serializeAsCallArgument`'s `fallThrough`); `None` for an object.
+    pub(crate) fn primitive_argument(&self) -> Option<Value> {
+        match &self.remote {
+            Remote::Value(argument) => Some(argument.clone()),
+            Remote::Object(_) => None,
+        }
+    }
+
+    /// The object the handle names, `None` for a primitive.
+    pub(crate) fn object_id(&self) -> Option<&str> {
+        match &self.remote {
+            Remote::Object(id) => Some(id.object_id()),
+            Remote::Value(_) => None,
+        }
+    }
+
+    /// A primitive's page value, as `jsonValue` answers it without a call.
+    pub(crate) fn primitive_value(&self) -> Option<Value> {
+        match &self.remote {
+            Remote::Value(argument) => Some(page_value(argument)),
+            Remote::Object(_) => None,
+        }
+    }
 }
 
 /// What a guid names.
@@ -879,6 +976,8 @@ impl Default for Handles {
             run: format!("{:016x}", hasher.finish()),
             entries: Mutex::default(),
             groups: Mutex::default(),
+            worker_entries: Mutex::default(),
+            worker_groups: Mutex::default(),
             closed: AtomicBool::default(),
         }
     }
@@ -887,11 +986,88 @@ impl Default for Handles {
 impl Handles {
     /// The frame guid that routes calls on `guid`, `None` when the run has no such handle.
     pub(crate) fn frame_guid(&self, guid: &str) -> Option<String> {
-        self.entry(guid).map(|entry| entry.frame_guid.clone())
+        self.entry(guid)
+            .map(|entry| entry.frame_guid.clone())
+            .or_else(|| {
+                // A worker's handle routes to its page only while the worker is open: once it
+                // closed, its calls are closed (Playwright's TargetClosedError).
+                self.worker_entry(guid)
+                    .filter(|handle| !handle.worker.closed().is_cancelled())
+                    .map(|handle| handle.frame_guid.clone())
+            })
+    }
+
+    /// The worker handle `guid` names.
+    pub(crate) fn worker_entry(&self, guid: &str) -> Option<Arc<WorkerHandle>> {
+        self.worker_entries.lock().ok()?.get(guid).cloned()
+    }
+
+    /// Forgets the worker handle `guid` (`dispose`), and answers what it named.
+    pub(crate) fn forget_worker(&self, guid: &str) -> Option<Arc<WorkerHandle>> {
+        self.worker_entries.lock().ok()?.remove(guid)
+    }
+
+    /// The run's object group in `worker`, which the run's end releases there.
+    pub(crate) fn worker_group(&self, worker: &Worker) -> ObjectGroup {
+        if let Ok(mut groups) = self.worker_groups.lock() {
+            groups
+                .entry(worker.session().clone())
+                .or_insert_with(|| worker.cdp().clone());
+        }
+        ObjectGroup(format!("neo-worker-handles-{}", self.run))
+    }
+
+    /// A worker's result object as a new `JSHandle` of the run, routed by `frame_guid`: a
+    /// worker has no DOM, so it is never an `ElementHandle`.
+    /// Playwright: `server/chromium/crExecutionContext.ts` `createHandle`
+    pub(crate) fn register_worker(
+        &self,
+        worker: &Arc<Worker>,
+        frame_guid: String,
+        object: &RemoteObject,
+    ) -> Result<CreatedHandle, PageError> {
+        let (remote, preview) = if let Some(id) = object.object_id.clone() {
+            (Remote::Object(HandleId::new(id)), render_preview(object))
+        } else {
+            let (argument, preview) = primitive(object);
+            (Remote::Value(argument), preview)
+        };
+        let guid = format!(
+            "{HANDLE_PREFIX}{}.{}",
+            self.run,
+            NEXT_HANDLE.fetch_add(1, Ordering::Relaxed)
+        );
+        let mut entries = self.worker_entries.lock().map_err(|_| table_error())?;
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(PageError::Closed);
+        }
+        entries.insert(
+            guid.clone(),
+            Arc::new(WorkerHandle {
+                worker: Arc::clone(worker),
+                remote,
+                frame_guid,
+            }),
+        );
+        Ok(CreatedHandle {
+            kind: HandleType::JSHandle,
+            guid,
+            initializer: HandleInitializer { preview },
+        })
     }
 
     fn entry(&self, guid: &str) -> Option<Arc<HandleEntry>> {
         self.entries.lock().ok()?.get(guid).cloned()
+    }
+
+    /// A frame's handle `guid` as an argument of a worker's call (`worker_eval.rs`), `None` when
+    /// the run has no such handle.
+    pub(crate) fn frame_argument(&self, guid: &str) -> Option<FrameArgument> {
+        let entry = self.entry(guid)?;
+        Some(match &entry.remote {
+            Remote::Value(argument) => FrameArgument::Value(argument.clone()),
+            Remote::Object(_) => FrameArgument::Object,
+        })
     }
 
     /// Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection._tChannelImplFromWire`: `no object with guid ${guid}`
@@ -926,6 +1102,30 @@ impl Handles {
         self.closed.store(true, Ordering::SeqCst);
         if let Ok(mut entries) = self.entries.lock() {
             entries.clear();
+        }
+        if let Ok(mut entries) = self.worker_entries.lock() {
+            entries.clear();
+        }
+        let workers = self
+            .worker_groups
+            .lock()
+            .map(|mut groups| mem::take(&mut *groups))
+            .unwrap_or_default();
+        if !workers.is_empty() {
+            let group = format!("neo-worker-handles-{}", self.run);
+            for (session, cdp) in workers {
+                let group = group.clone();
+                // Fire and forget, as a frame group's release is: a closed worker took it along.
+                tokio::spawn(async move {
+                    let _released = cdp
+                        .send(
+                            "Runtime.releaseObjectGroup",
+                            json!({ "objectGroup": group }),
+                            Some(&session),
+                        )
+                        .await;
+                });
+            }
         }
         let groups = self
             .groups
@@ -1018,6 +1218,12 @@ pub(crate) async fn serve(
     progress: &Progress,
 ) -> Result<Option<Value>, CallError> {
     let handles = progress.handles();
+    // A call on a dedicated worker's handle runs in its worker, not in a frame.
+    if let Some(guid) = call.named_handle()
+        && let Some(receiver) = handles.worker_entry(guid)
+    {
+        return worker_eval::serve_handle(&receiver, call, handles, progress).await;
+    }
     if matches!(
         call,
         EvalCall::Frame(_)
@@ -1214,7 +1420,7 @@ async fn invoke_with(
     late: LateAnswer,
 ) -> Result<(DocumentId, Called), CallError> {
     let frame = invocation.frame;
-    let args = resolve_args(&invocation.arg.handles, handles)?;
+    let args = resolve_args(&invocation.arg.handles, frame, handles)?;
     let group = if invocation.return_by_value {
         None
     } else {
@@ -2074,7 +2280,7 @@ async fn get_property_list(
 }
 
 /// A CDP `RemoteObject` for `undefined`, as Playwright reads a property the holder lacks.
-fn undefined_object() -> RemoteObject {
+pub(crate) fn undefined_object() -> RemoteObject {
     RemoteObject {
         r#type: "undefined".to_string(),
         ..RemoteObject::default()
@@ -2535,7 +2741,7 @@ async fn json_value(
 /// A primitive handle's kept `CallArgument` (`{value}`, `{unserializableValue}` or `{}`) in the
 /// page's own encoding, as `UtilityScript.jsonValue` answers the same value: `null`, `undefined`
 /// and the numbers JSON cannot carry as `{v}`, everything else as itself.
-fn page_value(argument: &Value) -> Value {
+pub(crate) fn page_value(argument: &Value) -> Value {
     match (argument.get("value"), argument.get("unserializableValue")) {
         (Some(Value::Null), _) => json!({ "v": "null" }),
         (Some(value), _) => value.clone(),
@@ -2595,11 +2801,29 @@ async fn installed(
 
 /// The run's entries for `guids`, refusing one the run does not have as Playwright's validator
 /// does.
-fn resolve_args(guids: &[String], handles: &Handles) -> Result<Vec<Arc<HandleEntry>>, CallError> {
+fn resolve_args(
+    guids: &[String],
+    frame: &Arc<FrameContext>,
+    handles: &Handles,
+) -> Result<Vec<Arc<HandleEntry>>, CallError> {
     guids
         .iter()
         .enumerate()
         .map(|(index, guid)| {
+            if let Some(handle) = handles.worker_entry(guid) {
+                // A worker's primitive passes by value into any context; its objects reach no
+                // frame's world.
+                return match handle.primitive_argument() {
+                    Some(argument) => Ok(Arc::new(HandleEntry {
+                        frame_guid: String::new(),
+                        frame: Arc::clone(frame),
+                        document: DocumentId::GONE,
+                        remote: Remote::Value(argument),
+                        element: false,
+                    })),
+                    None => Err(PlaywrightError::error(OTHER_CONTEXT).into()),
+                };
+            }
             handles.entry(guid).ok_or_else(|| {
                 // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection._tChannelImplFromWire`: `${path}: no object with guid ${guid}`
                 PlaywrightError::error(format!("arg.handles[{index}]: no object with guid {guid}"))
@@ -2646,19 +2870,24 @@ async fn answer(
             .await
             .map(EvalResult::Handle),
         Called::Threw(message) => Err(PlaywrightError::error(message).into()),
-        Called::Protocol(message) => {
-            if CHAIN_TOO_LONG_CDP.iter().any(|text| message.contains(text)) {
-                Err(PlaywrightError::error(CHAIN_TOO_LONG).into())
-            } else if message.contains(NOT_BY_VALUE_CDP) {
-                // Playwright answers `{ result: { type: 'undefined' } }`.
-                Ok(EvalResult::Value(None))
-            } else if message.contains(PROMISE_COLLECTED_CDP) {
-                Err(PlaywrightError::error(PROMISE_COLLECTED).into())
-            } else {
-                Err(PlaywrightError::error(CONTEXT_DESTROYED).into())
-            }
-        }
+        Called::Protocol(message) => protocol_answer(&message),
         Called::Stale => Err(PlaywrightError::error(CONTEXT_DESTROYED).into()),
+    }
+}
+
+/// Playwright's `rewriteError` of an evaluation's protocol error, which a worker's evaluations
+/// read the same way (`worker_eval.rs`).
+/// Playwright: `server/chromium/crExecutionContext.ts` `rewriteError`
+pub(crate) fn protocol_answer(message: &str) -> Result<EvalResult, CallError> {
+    if CHAIN_TOO_LONG_CDP.iter().any(|text| message.contains(text)) {
+        Err(PlaywrightError::error(CHAIN_TOO_LONG).into())
+    } else if message.contains(NOT_BY_VALUE_CDP) {
+        // Playwright answers `{ result: { type: 'undefined' } }`.
+        Ok(EvalResult::Value(None))
+    } else if message.contains(PROMISE_COLLECTED_CDP) {
+        Err(PlaywrightError::error(PROMISE_COLLECTED).into())
+    } else {
+        Err(PlaywrightError::error(CONTEXT_DESTROYED).into())
     }
 }
 
@@ -2837,7 +3066,7 @@ async fn prepare_page(tab: &FrameTab, progress: &Progress) -> Result<(), CallErr
         .map_err(|error| page_error(error).into())
 }
 
-fn page_error(error: PageError) -> PlaywrightError {
+pub(crate) fn page_error(error: PageError) -> PlaywrightError {
     match error {
         PageError::Threw(message) => PlaywrightError::error(message),
         PageError::Closed => PlaywrightError::target_closed(),

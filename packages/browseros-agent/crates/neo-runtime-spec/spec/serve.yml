@@ -9,7 +9,7 @@
 # A reference to an interface that is not a key here gets an uninhabited type, so Rust cannot
 # produce one. `Frame.goto` returns `response: Response?`: the main frame's navigation response,
 # as Playwright's server finds it, or `{}` where Playwright's has none (`page.goto` resolves to
-# `null`). A `Request`'s `serviceWorker: Worker?` stays uninhabited: Neo has no workers.
+# `null`). A `Request`'s `serviceWorker: Worker?` is never set: Neo records no worker's requests.
 interfaces:
   BrowserContext:
     - newPage
@@ -74,6 +74,17 @@ interfaces:
     - registerLocatorHandler
     - resolveLocatorHandlerNoReply
     - unregisterLocatorHandler
+    # `page.localStorage` and `page.sessionStorage` (web_storage.rs): the main frame's storage,
+    # read and written by glue in its utility world, where Playwright evaluates the same steps.
+    - webStorageItems
+    - webStorageGetItem
+    - webStorageSetItem
+    - webStorageRemoveItem
+    - webStorageClear
+  # A dedicated worker of a page (workers.rs), for its initializer: its `evaluateExpression` and
+  # `evaluateExpressionHandle` are routed by hand, as the frame and handle evaluations are
+  # (`evaluate.rs`), and run in the worker's own execution context (worker_world.rs).
+  Worker: []
   # A JavaScript dialog the run's `dialog` event handed out.
   Dialog:
     - accept

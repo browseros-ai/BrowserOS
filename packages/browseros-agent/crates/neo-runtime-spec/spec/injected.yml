@@ -627,6 +627,48 @@ Injected:
       returns:
         value: int
 
+    # `Page.webStorageItems`: each item of the document's `localStorage` or `sessionStorage`, in
+    # key order, an item `key(i)` no longer names skipped.
+    webStorageItems:
+      internal: true
+      parameters:
+        kind: WebStorageKind
+      returns:
+        items:
+          type: array
+          items: WebStorageItem
+
+    # `Page.webStorageGetItem`: the item's value.
+    webStorageGetItem:
+      internal: true
+      parameters:
+        kind: WebStorageKind
+        name: string
+      returns:
+        # Absent when the storage has no such item.
+        value: string?
+
+    # `Page.webStorageSetItem`: sets the item, replacing its value.
+    webStorageSetItem:
+      internal: true
+      parameters:
+        kind: WebStorageKind
+        name: string
+        value: string
+
+    # `Page.webStorageRemoveItem`: removes the item, if any.
+    webStorageRemoveItem:
+      internal: true
+      parameters:
+        kind: WebStorageKind
+        name: string
+
+    # `Page.webStorageClear`: removes every item.
+    webStorageClear:
+      internal: true
+      parameters:
+        kind: WebStorageKind
+
     # `screenshotter.ts` `inPagePrepareForScreenshots` in one document, which Playwright runs in
     # the utility world of every frame before a screenshot: `style` in a `<style>` of the
     # document and of each shadow root, a transparent `caret-color` on editable elements, and
@@ -1104,3 +1146,18 @@ AriaRole:
   - treeitem
   - iframe
   - text
+
+# Which of the document's storages a `webStorage*` command reads: `localStorage` or
+# `sessionStorage`.
+WebStorageKind:
+  type: enum
+  literals:
+  - local
+  - session
+
+# One `localStorage` or `sessionStorage` item.
+WebStorageItem:
+  type: object
+  properties:
+    name: string
+    value: string

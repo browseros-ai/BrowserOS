@@ -54,6 +54,7 @@ mod fake_browser;
 mod abort;
 mod aria_yaml;
 mod artifacts;
+mod auto_attach;
 mod bindings;
 mod bridge;
 mod capture;
@@ -109,6 +110,10 @@ mod tab_calls;
 mod tabs;
 mod url_match;
 mod waits;
+mod web_storage;
+mod worker_eval;
+mod worker_world;
+mod workers;
 mod world;
 
 pub use artifacts::RunArtifact;

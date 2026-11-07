@@ -81,7 +81,7 @@ use crate::element_ops::{
     self, BOUNDING_BOX_META, DispatchOptions, ElementTarget, NeoElementParams, NeoSelectTextParams,
     SCROLL_INTO_VIEW_META, SELECT_TEXT_META,
 };
-use crate::evaluate::{self, EvalCall};
+use crate::evaluate::{self, EvalCall, Evaluation};
 use crate::events::{ALL_PAGES, EventHub};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
@@ -117,6 +117,8 @@ use crate::waits::{
     self, NeoWaitForLoadStateParams, NeoWaitForUrlParams, WaitForLoadStateOptions,
     WaitForSelectorOptions, WaitForUrlOptions, WaitTab,
 };
+use crate::worker_eval;
+use crate::workers;
 
 /// The shared budget for creation settlement, call draining and closing-state reads after
 /// the realm ends. Tasks still running keep their state and records read `Unfinished`.
@@ -244,6 +246,9 @@ struct Inner {
     next_call_id: AtomicU64,
     /// The `setContent` writes into each frame, in arrival order (`content.rs`).
     write_order: WriteOrder,
+    /// Each page's `localStorage` and `sessionStorage` calls, in arrival order (`web_storage.rs`):
+    /// Playwright's server sends them in the order the script made them.
+    storage_order: WriteOrder,
     /// Cancels `run.ended` when the last `Dispatcher` drops. A reason `finish` recorded first
     /// wins; otherwise calls read [`RunEnd::Cancelled`].
     _ending: DropGuard,
@@ -288,10 +293,15 @@ impl Inner {
         })
     }
 
-    /// A `setContent` call takes its place in its frame's write order as it arrives.
+    /// A `setContent` call takes its place in its frame's write order as it arrives, and a
+    /// storage call its place in its page's storage order.
     fn ordered(&self, guid: &str, mut call: ObjectCall) -> ObjectCall {
-        if let ObjectCall::Frame(Route::FrameSetContent(_, turn)) = &mut call {
-            *turn = Some(self.write_order.turn(guid));
+        match &mut call {
+            ObjectCall::Frame(Route::FrameSetContent(_, turn)) => {
+                *turn = Some(self.write_order.turn(guid));
+            }
+            ObjectCall::Storage(_, turn) => *turn = Some(self.storage_order.turn(guid)),
+            _ => {}
         }
         call
     }
@@ -380,6 +390,8 @@ enum ObjectKind {
     /// A download the run's `download` event handed out, by the browser's guid
     /// (`downloads.rs`). It belongs to the run, not to its tab, which may close first.
     Download(String),
+    /// A dedicated worker of a tab (`workers.rs`), by guid.
+    Worker(String),
     Unknown,
 }
 
@@ -398,6 +410,11 @@ enum ObjectCall {
     Binding(BindingRoute),
     Dialog(u64, DialogCall),
     Download(String, ArtifactCall),
+    /// `worker.evaluate` / `evaluateHandle` (`worker_eval.rs`), by the worker's guid.
+    Worker(String, Evaluation),
+    /// `page.localStorage` and `page.sessionStorage` (`web_storage.rs`), with the call's place
+    /// in its page's storage order, taken as it arrives ([`Inner::ordered`]).
+    Storage(PageCall, Option<WriteTurn>),
 }
 
 /// What a message asks for. One variant per served (object, method).
@@ -473,6 +490,7 @@ impl Dispatcher {
             aborts: Arc::default(),
             next_call_id: AtomicU64::new(1),
             write_order: WriteOrder::default(),
+            storage_order: WriteOrder::default(),
         }))
     }
 
@@ -775,6 +793,18 @@ async fn binding_call(
 }
 
 /// Names a message's target and decodes its params. Pure.
+/// A Page call that is not a device call: a storage call keeps its own route, ordered per page.
+fn storage_or_page(call: PageCall) -> ObjectCall {
+    match call {
+        call @ (PageCall::WebStorageItems(_)
+        | PageCall::WebStorageGetItem(_)
+        | PageCall::WebStorageSetItem(_)
+        | PageCall::WebStorageRemoveItem(_)
+        | PageCall::WebStorageClear(_)) => ObjectCall::Storage(call, None),
+        call => ObjectCall::Page(call),
+    }
+}
+
 fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
     let (object, params) = match route_init(object, method, params) {
         Ok(routed) => return routed,
@@ -829,6 +859,14 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         }
         ObjectKind::Dialog(index) => DialogCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
+        // Hand-routed: the spec's `Worker` commands have no generated decoder (`serve.yml`).
+        ObjectKind::Worker(guid) => {
+            let (meta, evaluation) = worker_eval::route(method, params.as_ref());
+            return Routed {
+                meta,
+                route: evaluation.map(|evaluation| ObjectCall::Worker(guid, evaluation)),
+            };
+        }
         ObjectKind::Download(guid) => ArtifactCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Download(guid, call)))),
         // `route_init` answers every Disposable and BindingCall message.
@@ -903,7 +941,7 @@ fn page_call(
             params: Box::new(params),
             path: path?,
         }),
-        call => ObjectCall::Page(call),
+        call => storage_or_page(call),
     })
 }
 
@@ -1229,6 +1267,9 @@ async fn serve_call(
     let result = match (route, target) {
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
         (ObjectCall::Init(route), target) => init_call(&tabs, target, route, &progress).await,
+        (ObjectCall::Storage(call, turn), Some((page, _))) => {
+            tab_calls::storage(&tabs, &page, call, turn, &progress).await
+        }
         (ObjectCall::Binding(route), target) => binding_call(&tabs, target, route, &progress).await,
         (ObjectCall::Page(call), Some((page, _))) => {
             // A page call that navigates (`reload`, `goBack`, …) shows the run's scripts first,
@@ -1302,6 +1343,11 @@ async fn serve_call(
         (ObjectCall::Download(guid, call), _) => {
             downloads::serve(&tabs, &guid, call, &progress).await
         }
+        // A worker exists only after its tab's watcher saw it attach on this run's session.
+        (ObjectCall::Worker(guid, evaluation), Some((page, _))) => match page.attached_session() {
+            Some(session) => worker_eval::serve(&session, &guid, evaluation, &progress).await,
+            None => Err(PlaywrightError::target_closed().into()),
+        },
         _ => Err(PlaywrightError::target_closed().into()),
     };
     finish_reply(result, reply).await;
@@ -1735,6 +1781,8 @@ fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
         ObjectKind::Network(kind, hop)
     } else if let Some((_, index)) = dialogs::parse(guid) {
         ObjectKind::Dialog(index)
+    } else if guid.starts_with(workers::WORKER_PREFIX) {
+        ObjectKind::Worker(guid.to_owned())
     } else {
         ObjectKind::Page
     }
@@ -2065,7 +2113,9 @@ mod tests {
             | ObjectCall::Capture(_)
             | ObjectCall::Binding(_)
             | ObjectCall::Dialog(..)
-            | ObjectCall::Download(..) => {
+            | ObjectCall::Download(..)
+            | ObjectCall::Worker(..)
+            | ObjectCall::Storage(..) => {
                 panic!("a Frame message routed to another object")
             }
         })

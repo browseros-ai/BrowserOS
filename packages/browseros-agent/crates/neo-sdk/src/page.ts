@@ -120,6 +120,8 @@ import {
 import type { SelectOptionValues } from './select-option'
 import { type TimeoutInput, TimeoutSettings } from './timeout-settings'
 import { Waiter, type WaitForEventOptions, wrapApiCall } from './waiter'
+import { WebStorage } from './web-storage'
+import { type CreatedWorker, Worker } from './worker'
 
 /**
  * Neo: the page's listener events, by Playwright's names (`Events.Page`): what Neo produces,
@@ -146,10 +148,14 @@ const PAGE_EVENTS: EventTable = {
     'response',
     'requestfailed',
     'requestfinished',
+    'worker',
   ],
   quiet: [],
-  unserved: ['websocket', 'worker'],
+  unserved: ['websocket'],
 }
+
+// biome-ignore lint/suspicious/noExplicitAny: Node's EventEmitter listener type.
+type Listener = (...args: any[]) => any
 
 /** `waitForRequest` and `waitForResponse`'s options: Playwright's `TimeoutOptions`; the Waiter
  * honours `signal` (`_waitForEvent`). */
@@ -214,11 +220,19 @@ export class Page extends ChannelOwner {
   readonly #mainFrame: Frame
   /** Stable identity, including detached frames a script may still hold. */
   readonly #frames = new Map<string, Frame>()
+  /** Playwright's `_workers`, by guid: one `Worker` per worker, whether a `worker` event or
+   * `workers()` showed it first. */
+  readonly #workers = new Map<string, Worker>()
+  /** Set once the page listens for its workers' closes (`#trackWorkers`). */
+  #workersTracked = false
   readonly _timeoutSettings: TimeoutSettings
   /** Playwright's `page.keyboard`, `page.mouse` and `page.touchscreen`, one each per page. */
   readonly keyboard: Keyboard
   readonly mouse: Mouse
   readonly touchscreen: Touchscreen
+  /** Playwright's `page.localStorage` and `page.sessionStorage`: the main frame's storage. */
+  readonly localStorage: WebStorage
+  readonly sessionStorage: WebStorage
   /** Set when this page's `close` ran (`_onClose`): what Playwright's client flips then. */
   #closedLocally = false
   /** Playwright's `_closeReason`: what `close({ reason })` was given. */
@@ -249,6 +263,8 @@ export class Page extends ChannelOwner {
     this.keyboard = new Keyboard(this)
     this.mouse = new Mouse(this)
     this.touchscreen = new Touchscreen(this)
+    this.localStorage = new WebStorage(connection, guid, 'local')
+    this.sessionStorage = new WebStorage(connection, guid, 'session')
   }
 
   /** Sends a device command to this page's tab, with no timeout (Playwright's `kNoTimeout`). */
@@ -372,6 +388,14 @@ export class Page extends ChannelOwner {
       this.#onLocatorHandlerTriggered((params as { uid: number }).uid).catch(
         (error) => this.#context._pipe.report(error),
       )
+    else if (method === 'worker')
+      // Playwright: `client/page.ts` `Page._onWorker`: `this.emit(Events.Page.Worker, worker);`
+      this.emit(
+        'worker',
+        this._workerFrom((params as { worker: CreatedWorker }).worker),
+      )
+    else if (method === 'workerClose')
+      this.#onWorkerClose((params as { worker: { guid: string } }).worker.guid)
     else if (method === 'fileChooser') {
       // Playwright: `client/page.ts` `Page.constructor`: `this._channel.on('fileChooser', ({ element, isMultiple }) => this.emit(Events.Page.FileChooser, new FileChooser(this, ElementHandle.from(element), isMultiple)));`
       const { chooser, isMultiple } = params as {
@@ -383,6 +407,61 @@ export class Page extends ChannelOwner {
         new FileChooser(this, chooser, isMultiple, this.#connection),
       )
     }
+  }
+
+  /** Playwright: `client/page.ts` `Page._onWorker`: `this._workers.add(worker);`
+   * The page's `Worker` for one record Rust sent, the same object for every record of a guid. */
+  _workerFrom(record: CreatedWorker): Worker {
+    let worker = this.#workers.get(record.guid)
+    if (!worker) {
+      worker = new Worker(record, this, this.#context._pipe, this.#connection)
+      this.#workers.set(record.guid, worker)
+    }
+    return worker
+  }
+
+  /** Playwright: `client/worker.ts` `Worker.constructor`: `this._page._workers.delete(this);` */
+  #onWorkerClose(guid: string): void {
+    const worker = this.#workers.get(guid)
+    if (!worker) return
+    this.#workers.delete(guid)
+    worker._onClose()
+  }
+
+  /**
+   * Neo: the page listens for its workers' closes from its first look at its workers (a
+   * `worker` listener, `workers()`), before Rust reports any worker, and for the rest of the run,
+   * as Rust tracks them: a worker whose close nobody heard would never emit `close`.
+   */
+  #trackWorkers(): void {
+    if (this.#workersTracked) return
+    this.#workersTracked = true
+    this._subscribeChannelEvent('workerClose', true)
+  }
+
+  override on(event: string | symbol, listener: Listener): this {
+    if (event === 'worker') this.#trackWorkers()
+    return super.on(event, listener)
+  }
+
+  override addListener(event: string | symbol, listener: Listener): this {
+    if (event === 'worker') this.#trackWorkers()
+    return super.addListener(event, listener)
+  }
+
+  override prependListener(event: string | symbol, listener: Listener): this {
+    if (event === 'worker') this.#trackWorkers()
+    return super.prependListener(event, listener)
+  }
+
+  /**
+   * The page's open dedicated workers, in the order they attached. The first call starts Rust's
+   * tracking of the tab's workers (neo-runtime `workers.rs`), which then sees the workers already
+   * running.
+   */
+  workers(): Worker[] {
+    this.#trackWorkers()
+    return get(this.#guid, 'workers').map((record) => this._workerFrom(record))
   }
 
   /** Playwright: `client/page.ts` `Page._onBinding`: `await this._browserContext._onBinding(bindingCall);` */

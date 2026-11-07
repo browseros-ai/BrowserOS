@@ -34,6 +34,10 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("crates/browseros-core/src/page_js.rs", METHODS),
     ("crates/neo-runtime/src/world.rs", &[CALL_FUNCTION_ON]),
     ("crates/neo-runtime/src/main_world.rs", &[CALL_FUNCTION_ON]),
+    (
+        "crates/neo-runtime/src/worker_world.rs",
+        &[CALL_FUNCTION_ON],
+    ),
 ];
 const SKIPPED_DIRS: &[&str] = &[
     "target",
@@ -111,6 +115,35 @@ fn tests_that_neo_world_may_call_functions_but_never_evaluate() {
             allowed_methods("crates/browseros-core/src/page_js.rs"),
         ),
         "page_js.rs sends both"
+    );
+}
+
+/// Slice W (DECIDED): Neo's worker world calls its built functions in a worker's context, as
+/// main_world.rs does in a frame, and never evaluates.
+#[test]
+fn tests_that_neo_worker_world_may_call_functions_but_never_evaluate() {
+    let worker_world = allowed_methods("crates/neo-runtime/src/worker_world.rs");
+    assert!(
+        !sends_page_script(
+            r#"self.cdp.send("Runtime.callFunctionOn", request, Some(&self.session))"#,
+            worker_world
+        ),
+        "worker_world.rs calls the UtilityScript it built in the worker's own context"
+    );
+    assert!(
+        sends_page_script(
+            r#"self.cdp.send("Runtime.evaluate", request, Some(&self.session))"#,
+            worker_world
+        ),
+        "worker_world.rs may not evaluate"
+    );
+    let tracker = allowed_methods("crates/neo-runtime/src/workers.rs");
+    assert!(
+        sends_page_script(
+            r#"cdp.send("Runtime.callFunctionOn", request, Some(&session))"#,
+            tracker
+        ),
+        "workers.rs tracks workers and reaches them only through worker_world.rs"
     );
 }
 

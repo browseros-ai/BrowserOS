@@ -21,14 +21,18 @@ use serde_json::{Value, json};
 use tracing::debug;
 
 use crate::bridge;
+use crate::click::PageError;
+use crate::content::WriteTurn;
 use crate::dispatch::encode_result;
 use crate::frames::FrameScope;
 use crate::highlight;
 use crate::history::{self, HistoryOptions};
+use crate::navigate;
 use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::session_state;
 use crate::tabs::{self, PageEntry, Tabs};
+use crate::web_storage;
 
 pub(crate) async fn context(
     tabs: &Tabs,
@@ -253,6 +257,14 @@ pub(crate) async fn page(
         // `Network.enable`: the first goto, history step or navigation wait, a network event
         // listener, or this read, as Chromium replays no earlier request.
         PageCall::Requests(_) => return requests(tabs, entry, progress).await,
+        // `dispatch::route` hands these to [`storage`], in their page's storage order.
+        PageCall::WebStorageItems(_)
+        | PageCall::WebStorageGetItem(_)
+        | PageCall::WebStorageSetItem(_)
+        | PageCall::WebStorageRemoveItem(_)
+        | PageCall::WebStorageClear(_) => {
+            return Err(PlaywrightError::error(STORAGE_MISROUTED).into());
+        }
         PageCall::Close(_) => close(tabs, entry, progress).await?,
         PageCall::SetExtraHTTPHeaders(params) => {
             set_page_headers(tabs, entry, params.headers, progress).await?;
@@ -395,6 +407,53 @@ async fn console_page(
     let page = progress.race(tabs.session(entry)).await??;
     let enabled = progress.race(page.enable_runtime()).await?;
     checked(tabs, entry, progress, enabled).await?;
+    Ok(page)
+}
+
+/// Neo: a storage call reaching the tab-lifecycle handler, which `dispatch::route` never does.
+const STORAGE_MISROUTED: &str = "neo-runtime: a storage call reached the tab-lifecycle handler";
+
+/// A `page.localStorage` / `page.sessionStorage` call on `entry`'s main frame, in call order:
+/// after the session's one shared preparation, it waits for every earlier storage call of the
+/// page to finish, so no call overtakes an earlier one, as Playwright's server sends them in
+/// order. Its place (`turn`) was taken as it arrived (`dispatch.rs` `Inner::ordered`).
+pub(crate) async fn storage(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    call: PageCall,
+    turn: Option<WriteTurn>,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let page = prepared_page(tabs, entry, progress).await?;
+    let _turn = match turn {
+        Some(turn) => Some(progress.race(turn.ready()).await?),
+        None => None,
+    };
+    // The call belongs to the document it starts in. A commit that replaces that document ends
+    // it with Playwright's destroyed-context error and hands its turn on, as Playwright's
+    // utility-world evaluation rejects once its context is gone: a later call never waits for
+    // an obsolete document's reply.
+    let document = page.main_document();
+    let serving = web_storage::serve(Arc::clone(&page), call, progress);
+    tokio::select! {
+        biased;
+        result = serving => result,
+        () = page.main_document_replaced(document) => {
+            Err(navigate::page_error(PageError::NotConnected).into())
+        }
+    }
+}
+
+/// `entry`'s session with its watcher running (`PageSession::prepare`), as a call on its frames
+/// needs it.
+async fn prepared_page(
+    tabs: &Tabs,
+    entry: &PageEntry,
+    progress: &Progress,
+) -> Result<Arc<PageSession>, CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    let prepared = progress.race(page.prepare()).await?;
+    checked(tabs, entry, progress, prepared).await?;
     Ok(page)
 }
 

@@ -123,12 +123,55 @@ test('tests that an unserved Playwright event refuses a listener instead of neve
     /BrowserContext/,
   )
   expect(page.listenerCount('websocket')).toBe(0)
-  await expect(page.waitForEvent('worker')).rejects.toThrow(
-    'page.waitForEvent: Neo does not serve the "worker" event on Page yet',
+  await expect(page.waitForEvent('websocket')).rejects.toThrow(
+    'page.waitForEvent: Neo does not serve the "websocket" event on Page yet',
   )
+  // A worker's console is not produced yet; its close is the page's to route.
+  const worker = page._workerFrom({
+    guid: 'worker@T:1',
+    initializer: { url: 'https://run.test/worker.js' },
+  })
+  expect(() => worker.on('console', () => {})).toThrow(
+    'Neo does not serve the "console" event on Worker yet',
+  )
+  worker.on('close', () => {})
   // The context never closes during a run: listening to it is allowed and silent.
   context.on('close', () => {})
   expect(subscriptions).toEqual([])
+})
+
+test('tests that a page hears its workers close from its first look at them', async () => {
+  const { page } = run()
+  page.once('worker', () => {})
+  expect(subscriptions).toEqual([
+    { guid: 'page@T', event: 'workerClose', enabled: true },
+    { guid: 'page@T', event: 'worker', enabled: true },
+  ])
+  const created: unknown[] = []
+  page.on('worker', (worker) => created.push(worker))
+  const record = {
+    guid: 'worker@T:1',
+    initializer: { url: 'https://run.test/worker.js' },
+  }
+  queueEvent('page@T', 'worker', { worker: record })
+  await page.bringToFront()
+  const [worker] = created as ReturnType<Page['_workerFrom']>[]
+  expect(worker).toBe(page._workerFrom(record))
+  expect(worker?.url()).toBe('https://run.test/worker.js')
+  const closed: unknown[] = []
+  worker?.on('close', (closing) => closed.push(closing))
+  queueEvent('page@T', 'workerClose', { worker: { guid: 'worker@T:1' } })
+  await page.bringToFront()
+  expect(closed).toEqual([worker])
+  // A closed worker's guid names a new object, as a new worker would.
+  expect(page._workerFrom(record)).not.toBe(worker)
+  // The close subscription stays for the run, as Rust's tracking does.
+  page.removeAllListeners('worker')
+  expect(subscriptions.at(-1)).toEqual({
+    guid: 'page@T',
+    event: 'worker',
+    enabled: false,
+  })
 })
 
 test('tests that a reply runs its events before the caller continues', async () => {

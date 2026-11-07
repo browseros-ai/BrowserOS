@@ -20,6 +20,7 @@ use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio::time;
 use tokio::time::Instant;
+use tracing::debug;
 
 use crate::bridge;
 use crate::click::PageError;
@@ -304,6 +305,27 @@ pub(crate) fn matches_url(
 
 /// Every current frame, in the core's tree order. Rust alone mints the SDK's opaque guids.
 /// This can wait for a pending main-frame navigation to commit before the tree answers.
+/// `page.workers()`: the tab's open dedicated workers' records, in attach order. The first read
+/// starts the tab's worker tracking (`workers.rs`); the workers already running attach before
+/// the setting answers, and the barrier lets the watcher apply them first. A page that closed,
+/// or never let Neo look, has none: Playwright's `workers()` never throws.
+/// Playwright: `client/page.ts` `Page.workers`
+pub(crate) async fn workers(tabs: &Tabs, page: &PageEntry) -> Result<Value, PlaywrightError> {
+    let Ok(session) = tabs.session(page).await else {
+        return Ok(json!([]));
+    };
+    if let Err(error) = session.prepare().await {
+        debug!(%error, "page.workers() found no page to watch");
+        return Ok(json!([]));
+    }
+    if let Err(error) = session.events.workers.track().await {
+        debug!(%error, "page.workers() could not track the page's workers");
+        return Ok(json!([]));
+    }
+    tabs.events().replay_barrier().await;
+    Ok(Value::Array(session.events.workers.records()))
+}
+
 pub(crate) async fn frames(tabs: &Tabs, page: &PageEntry) -> Result<Value, PlaywrightError> {
     let tree = frame_tree(tabs, page).await?;
     frame_records(&page.id, &tree, tree.iter())

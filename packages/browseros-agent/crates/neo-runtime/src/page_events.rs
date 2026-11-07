@@ -60,6 +60,7 @@ use crate::network_events;
 use crate::page::{Applied, DialogAnswer};
 use crate::run::PageId;
 use crate::tabs::{PageEntry, Tabs};
+use crate::workers::Workers;
 
 /// Neo: how long an out-of-process frame's first call waits for that frame's console to turn on.
 /// A frame frozen by its page's dialog may never answer; the call then goes on without it.
@@ -95,6 +96,8 @@ pub(crate) struct PageEvents {
     pub(crate) dialogs: Arc<Dialogs>,
     /// The tab's frames, as the run's frame events see them.
     frames: Arc<Mutex<FrameModel>>,
+    /// The tab's dedicated workers (`workers.rs`), once the run asks for them.
+    pub(crate) workers: Arc<Workers>,
     /// Whether the main frame's lifecycle reaches listeners: once the watcher has applied the
     /// lifecycle replay of its start ([`Self::lifecycle_replayed`]), or from the start on a page
     /// the run's discovery reported.
@@ -162,9 +165,17 @@ impl PageEvents {
         session: SessionId,
         discovered: bool,
     ) -> Self {
+        let page_guid = bridge::page_guid(&PageId::new(target.to_string()));
+        let workers = Arc::new(Workers::new(
+            hub.clone(),
+            page_guid.clone(),
+            target.to_string(),
+            cdp.clone(),
+            session.clone(),
+        ));
         Self {
             hub,
-            page_guid: bridge::page_guid(&PageId::new(target.to_string())),
+            page_guid,
             target: target.to_string(),
             cdp,
             session,
@@ -176,6 +187,7 @@ impl PageEvents {
             console: Arc::default(),
             dialogs: Arc::default(),
             frames: Arc::new(Mutex::new(FrameModel::new(target))),
+            workers,
             lifecycle_live: Arc::new(AtomicBool::new(discovered)),
             on_child: Arc::default(),
             visited: Arc::default(),
@@ -404,6 +416,8 @@ impl PageEvents {
         let Some(session) = event.session_id.as_ref() else {
             return applied.dialog;
         };
+        // Before the session filter: a worker's own session is neither the tab's nor a frame's.
+        self.workers.apply(event);
         self.track_context(event, session);
         if session != &self.session {
             // An out-of-process frame of this tab: its console, frames and file choosers.
@@ -519,6 +533,7 @@ impl PageEvents {
     /// The session ended: the tab closed or crashed. Emits `close` or `crash` on the page; the
     /// SDK's `close` also runs the context's `pageclose` listeners.
     pub(crate) fn closing(&self, event: Option<&CdpEvent>) {
+        self.workers.close_all();
         let crashed = event.is_some_and(|event| event.method == "Inspector.targetCrashed");
         let wanted = if crashed {
             self.hub.subscribed(&self.page_guid, "crash")
@@ -1071,6 +1086,11 @@ pub(crate) fn enable(tabs: &Tabs, entry: Arc<PageEntry>, needs: Needs) {
             && let Err(error) = session.enable_network().await
         {
             debug!(?error, "a subscription could not enable the page's network");
+        }
+        if needs.workers
+            && let Err(error) = session.events.workers.track().await
+        {
+            debug!(%error, "a subscription could not track the page's workers");
         }
     });
 }
