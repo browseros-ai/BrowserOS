@@ -20,11 +20,13 @@ use serde_json::{Value, json};
 use tracing::debug;
 
 use crate::bridge;
+use crate::click::PageError;
 use crate::content::WriteTurn;
 use crate::dispatch::encode_result;
 use crate::frames::FrameScope;
 use crate::highlight;
 use crate::history::{self, HistoryOptions};
+use crate::navigate;
 use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::tabs::{self, PageEntry, Tabs};
@@ -344,7 +346,19 @@ pub(crate) async fn storage(
         Some(turn) => Some(progress.race(turn.ready()).await?),
         None => None,
     };
-    web_storage::serve(page, call, progress).await
+    // The call belongs to the document it starts in. A commit that replaces that document ends
+    // it with Playwright's destroyed-context error and hands its turn on, as Playwright's
+    // utility-world evaluation rejects once its context is gone: a later call never waits for
+    // an obsolete document's reply.
+    let document = page.main_document();
+    let serving = web_storage::serve(Arc::clone(&page), call, progress);
+    tokio::select! {
+        biased;
+        result = serving => result,
+        () = page.main_document_replaced(document) => {
+            Err(navigate::page_error(PageError::NotConnected).into())
+        }
+    }
 }
 
 /// `entry`'s session with its watcher running (`PageSession::prepare`), as a call on its frames

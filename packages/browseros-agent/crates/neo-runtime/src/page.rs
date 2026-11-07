@@ -903,6 +903,31 @@ impl PageSession {
         self.prepared.get().map(|_| self.state.clone())
     }
 
+    /// Neo: the main frame's current document (its loader), as the watcher last applied it;
+    /// `None` before the session is prepared or before its first commit.
+    pub(crate) fn main_document(&self) -> Option<String> {
+        self.state()
+            .and_then(|state| state.borrow().document.clone())
+    }
+
+    /// Neo: resolves once the main frame commits a document other than `document`, for a call
+    /// bound to the document it started in. A same-document commit keeps the document. Never
+    /// resolves on a session without its watcher, or once the watcher is gone (the tab's
+    /// closure ends such a call instead).
+    pub(crate) async fn main_document_replaced(&self, document: Option<String>) {
+        let Some(mut state) = self.state() else {
+            return future::pending().await;
+        };
+        loop {
+            if state.borrow_and_update().document != document {
+                return;
+            }
+            if state.changed().await.is_err() {
+                return future::pending().await;
+            }
+        }
+    }
+
     /// Resolves when no navigation is pending, with the URL it committed to, if any.
     pub(crate) async fn navigation_settled(&self) -> Result<Option<String>, PageError> {
         let Some(mut state) = self.state() else {
