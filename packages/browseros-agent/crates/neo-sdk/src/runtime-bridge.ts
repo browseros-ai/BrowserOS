@@ -13,6 +13,7 @@ import type {
   FrameInitializer,
   PageInitializer,
 } from '@browseros/neo-runtime-spec/serve'
+import type { NeoSerializedUrlMatch } from './neo-commands'
 
 declare const __neo_runtime: {
   get(request: string): string
@@ -28,7 +29,13 @@ declare const __neo_runtime: {
 export interface CreatedPage {
   guid: string
   initializer: PageInitializer
-  mainFrame: { guid: string; initializer: FrameInitializer }
+  mainFrame: CreatedFrame
+}
+
+/** A frame record minted by Rust. Guids remain opaque to the SDK. */
+export interface CreatedFrame {
+  guid: string
+  initializer: FrameInitializer
 }
 
 /**
@@ -44,6 +51,13 @@ export interface GetterReplies {
   pages: CreatedPage[]
   /** On a page: its creation record, which `newPage` builds its `Page` from. */
   initializer: CreatedPage
+  /** On a page: its live frame tree in pre-order, main frame first. */
+  frames: CreatedFrame[]
+  /** On a frame: live values from its page's frame tree. */
+  name: string
+  parentFrame: CreatedFrame | null
+  childFrames: CreatedFrame[]
+  isDetached: boolean
 }
 
 export function get<Field extends keyof GetterReplies>(
@@ -51,6 +65,19 @@ export function get<Field extends keyof GetterReplies>(
   field: Field,
 ): GetterReplies[Field] {
   return JSON.parse(__neo_runtime.get(JSON.stringify({ guid, field })))
+}
+
+/**
+ * A pure synchronous getter over Rust's shared URL matcher. QuickJS has no WHATWG URL
+ * parser, so compiling globs here would disagree with `waitForURL`'s URL normalization.
+ */
+export function matchesURL(
+  url: string,
+  matcher: NeoSerializedUrlMatch,
+): boolean {
+  return JSON.parse(
+    __neo_runtime.get(JSON.stringify({ field: 'matchesURL', url, matcher })),
+  )
 }
 
 /** One browser call: message JSON in, reply JSON out. Only `connection.ts` calls it. */
