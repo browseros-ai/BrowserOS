@@ -6,11 +6,11 @@
 //!  ElementHandle.<command> on handle@…, served on the frame the handle belongs to (dispatch.rs)
 //!   the handle → its node adopted into that frame's utility world (evaluate::utility_element;
 //!     a JSHandle is refused as Playwright's dispatcher refuses it, an unknown guid is closed)
-//!   textContent innerText innerHTML  dom's frame reads (reads.rs, states.rs) on a [`Scoped`]
+//!   textContent innerText innerHTML  the frame reads (reads.rs, states.rs) on a [`Scoped`]
 //!   getAttribute inputValue          tab, whose selectors resolve from the node, with the
 //!   isChecked isEnabled isDisabled   selector `:scope`: Playwright reads a handle through its
 //!   isEditable isVisible isHidden    frame as `{ selector: ':scope', scope: this }`
-//!   boundingBox   dom's `neo:boundingBox` step on the node (element_ops.rs), or null
+//!   boundingBox   the `neo:boundingBox` step on the node (element_ops.rs), or null
 //!   ownerFrame    the node's document element → DOM.describeNode's frameId
 //!   contentFrame  DOM.describeNode of a frame element → its frameId
 //!                 → the frame's record (getters::frame_by_id), or null
@@ -23,14 +23,15 @@
 //! `Element is not attached to the DOM`.
 
 use std::future::{self, Future};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use neo_runtime_spec::injected::{
     AttributeMatch, ElementStateMatch, FormInputValueMatch, InjectedAriaSnapshotParams,
-    InjectedOwnerDocumentElementParams, InjectedScopedElementStateOnSelectorParams,
-    InjectedScopedGetAttributeParams, InjectedScopedInnerHTMLParams, InjectedScopedInnerTextParams,
-    InjectedScopedInputValueParams, InjectedScopedIsVisibleParams, InjectedScopedTextContentParams,
-    ReadableElementState, TextMatch,
+    InjectedMarkTargetParams, InjectedOwnerDocumentElementParams,
+    InjectedScopedElementStateOnSelectorParams, InjectedScopedGetAttributeParams,
+    InjectedScopedInnerHTMLParams, InjectedScopedInnerTextParams, InjectedScopedInputValueParams,
+    InjectedScopedIsVisibleParams, InjectedScopedTextContentParams, ReadableElementState,
+    TextMatch,
 };
 use neo_runtime_spec::serve::{
     ElementHandleBoundingBoxResult, ElementHandleCall, ElementHandleGetAttributeResult,
@@ -41,14 +42,22 @@ use neo_runtime_spec::serve::{
 };
 use neo_runtime_spec::{InjectedCall, MethodMeta};
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use crate::click::{PageError, SelectorFacts};
-use crate::element_ops::ElementOpsTab;
+use crate::check::{CheckAction, CheckOptions};
+use crate::click::{
+    self, ActionResult, ElementAction, PageError, PointerOptions, SelectorFacts, Stop,
+    Tab as ClickTab, WaitAfter,
+};
+use crate::element_ops::{self, ElementOpsTab, Focus};
 use crate::evaluate::{self, UtilityElement};
+use crate::fill::{FillAction, FillOptions, SelectAction, SelectOptions};
 use crate::getters;
+use crate::keyboard::KeyboardTab;
 use crate::page::{FrameTab, ResolvedElement};
-use crate::progress::{CallError, PlaywrightError, Progress};
+use crate::press::{PressAction, PressOptions};
+use crate::progress::{CallError, DeliveryCell, PlaywrightError, Progress};
 use crate::reads::{self, AriaRead, AttributeOptions, Matched, ReadOptions, ReadTab, SelectorTab};
 use crate::states::{self, StateOptions, StateTab};
 use crate::tabs::Tabs;
@@ -59,7 +68,7 @@ use crate::tabs::Tabs;
 const SCOPE: &str = ":scope";
 
 /// Neo: one `ElementHandle` command, on the run's handle `guid`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ElementCommand {
     pub(crate) guid: String,
     pub(crate) call: ElementHandleCall,
@@ -139,6 +148,30 @@ pub(crate) async fn serve(
             }
             encode(&ElementHandleIsVisibleResult { value: visible })
         }
+        call @ (ElementHandleCall::Click(_)
+        | ElementHandleCall::Dblclick(_)
+        | ElementHandleCall::Hover(_)
+        | ElementHandleCall::Tap(_)
+        | ElementHandleCall::Check(_)
+        | ElementHandleCall::Uncheck(_)
+        | ElementHandleCall::Fill(_)
+        | ElementHandleCall::Press(_)
+        | ElementHandleCall::Type(_)
+        | ElementHandleCall::SelectOption(_)
+        | ElementHandleCall::SelectText(_)
+        | ElementHandleCall::Focus(_)
+        | ElementHandleCall::ScrollIntoViewIfNeeded(_)) => {
+            let node = match node {
+                Ok(node) => node,
+                Err(PageError::Closed) => return Err(PlaywrightError::target_closed().into()),
+                // Playwright: `server/dom.ts` `ElementHandle.evaluateInUtility`: `return 'error:notconnected';`
+                Err(PageError::NotConnected) => {
+                    return Err(PlaywrightError::error(ELEMENT_NOT_ATTACHED).into());
+                }
+                Err(error) => return Err(evaluate::page_error(error).into()),
+            };
+            act(tab, &node, call, progress).await
+        }
         ElementHandleCall::BoundingBox(_) => {
             let value = match &node {
                 Ok(node) => bounding_box(tab, node, progress).await?,
@@ -155,7 +188,7 @@ pub(crate) async fn serve(
     }
 }
 
-/// The node's border box in the main frame's CSS pixels, `None` without one: dom's
+/// The node's border box in the main frame's CSS pixels, `None` without one: the
 /// `neo:boundingBox` step on the adopted node, which a node gone also answers `None`.
 async fn bounding_box(
     tab: &FrameTab,
@@ -258,16 +291,267 @@ async fn read(
                 |frame| json!({ "frame": frame }),
             )))
         }
-        ElementHandleCall::BoundingBox(_)
-        | ElementHandleCall::IsVisible(_)
-        | ElementHandleCall::IsHidden(_) => Err(PlaywrightError::error(
-            "neo-runtime: boundingBox and the visibility reads are served by `serve`",
+        _ => Err(PlaywrightError::error(
+            "neo-runtime: the actions, boundingBox and the visibility reads are served by `serve`",
         )
         .into()),
     }
 }
 
-/// `Frame.inputValue` of `:scope` on the scoped tab: dom's `_waitForFunctionOnSelector` loop, as
+/// One action on the node: the per-element step of the same frame command, once, on the node,
+/// as Playwright's `ElementHandle.click` runs `_click` with no selector to resolve again. The
+/// command's params are the frame command's with no selector, so the frame command's own
+/// decoding gives its defaults and refusals, before anything reaches the page as Playwright's
+/// validator refuses them.
+async fn act(
+    tab: &FrameTab,
+    node: &UtilityElement,
+    call: ElementHandleCall,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    match call {
+        ElementHandleCall::Click(params) => {
+            let options = PointerOptions::from_click(frame_params(&params)?)?;
+            pointer(tab, node, options, progress).await
+        }
+        ElementHandleCall::Dblclick(params) => {
+            let options = PointerOptions::from_dblclick(frame_params(&params)?)?;
+            pointer(tab, node, options, progress).await
+        }
+        ElementHandleCall::Hover(params) => {
+            let options = PointerOptions::from_hover(frame_params(&params)?);
+            pointer(tab, node, options, progress).await
+        }
+        ElementHandleCall::Tap(params) => {
+            let options = PointerOptions::from_tap(frame_params(&params)?);
+            pointer(tab, node, options, progress).await
+        }
+        call => form(tab, node, call, progress).await,
+    }
+}
+
+/// The form and focus actions on the node.
+async fn form(
+    tab: &FrameTab,
+    node: &UtilityElement,
+    call: ElementHandleCall,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    match call {
+        ElementHandleCall::Check(params) => {
+            let options = CheckOptions::from_check(frame_params(&params)?);
+            let action = CheckAction {
+                options: &options,
+                delivery: delivery(progress)?,
+            };
+            on_element(tab, node, &action, progress).await?;
+            Ok(None)
+        }
+        ElementHandleCall::Uncheck(params) => {
+            let options = CheckOptions::from_uncheck(frame_params(&params)?);
+            let action = CheckAction {
+                options: &options,
+                delivery: delivery(progress)?,
+            };
+            on_element(tab, node, &action, progress).await?;
+            Ok(None)
+        }
+        ElementHandleCall::Fill(params) => {
+            let options = FillOptions::from_params(frame_params(&params)?);
+            let action = FillAction {
+                options: &options,
+                delivery: delivery(progress)?,
+                platform: OnceLock::new(),
+            };
+            on_element(tab, node, &action, progress).await?;
+            Ok(None)
+        }
+        ElementHandleCall::Press(params) => {
+            let options = PressOptions::from_params(frame_params(&params)?);
+            press(tab, node, &options, progress).await
+        }
+        ElementHandleCall::Type(params) => {
+            let options = PressOptions::from_type(frame_params(&params)?);
+            press(tab, node, &options, progress).await
+        }
+        ElementHandleCall::SelectOption(params) => {
+            let options = SelectOptions::from_params(frame_params(&params)?);
+            let action = SelectAction {
+                options: &options,
+                delivery: delivery(progress)?,
+            };
+            let values = on_element(tab, node, &action, progress).await?;
+            Ok(Some(json!({ "values": values })))
+        }
+        // Playwright marks no target for these two.
+        ElementHandleCall::SelectText(params) => {
+            prepare(tab, progress).await?;
+            let force = params.force.unwrap_or(false);
+            element_ops::select_text_element(tab, &adopted(node), force, progress).await?;
+            Ok(None)
+        }
+        ElementHandleCall::ScrollIntoViewIfNeeded(_) => {
+            prepare(tab, progress).await?;
+            element_ops::scroll_element(tab, &adopted(node), progress).await?;
+            Ok(None)
+        }
+        ElementHandleCall::Focus(_) => {
+            on_element(tab, node, &Focus::Focus, progress).await?;
+            Ok(None)
+        }
+        _ => Err(PlaywrightError::error("neo-runtime: not an ElementHandle action").into()),
+    }
+}
+
+/// `press` and `type` on the node, through the frame's press step.
+async fn press(
+    tab: &FrameTab,
+    node: &UtilityElement,
+    options: &PressOptions,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let action = PressAction {
+        options,
+        delivery: delivery(progress)?,
+        platform: OnceLock::new(),
+    };
+    on_element(tab, node, &action, progress).await?;
+    Ok(None)
+}
+
+/// A pointer action on the node: its target marked, then loop B
+/// (`click::retry_pointer_action`), the browser's platform read first for `modifiers` as
+/// `click::pointer_action` reads it.
+async fn pointer(
+    tab: &FrameTab,
+    node: &UtilityElement,
+    options: PointerOptions,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let delivery = delivery(progress)?;
+    mark(node, progress).await?;
+    prepare(tab, progress).await?;
+    let options = if options.modifiers.is_some() {
+        let platform = match progress.race(KeyboardTab::platform(tab)).await? {
+            Ok(platform) => platform,
+            Err(PageError::Closed) => return Err(PlaywrightError::target_closed().into()),
+            Err(_) => {
+                return Err(PlaywrightError::error(
+                    "neo-runtime: the browser's platform could not be read",
+                )
+                .into());
+            }
+        };
+        PointerOptions {
+            platform: Some(platform),
+            ..options
+        }
+    } else {
+        options
+    };
+    let wait_after = if options.wait_after {
+        WaitAfter::Enabled
+    } else {
+        WaitAfter::Disabled
+    };
+    let element = adopted(node);
+    finish(
+        click::retry_pointer_action(tab, &element, &options, wait_after, progress, delivery).await,
+    )?;
+    Ok(None)
+}
+
+/// A frame action's per-element step, once on the node: its target marked and its page made ready,
+/// as loop A makes it.
+async fn on_element<A: ElementAction<FrameTab>>(
+    tab: &FrameTab,
+    node: &UtilityElement,
+    action: &A,
+    progress: &Progress,
+) -> Result<A::Output, CallError> {
+    mark(node, progress).await?;
+    prepare(tab, progress).await?;
+    finish(action.act(tab, &adopted(node), progress).await)
+}
+
+/// The node as the per-element steps take it.
+fn adopted(node: &UtilityElement) -> ResolvedElement {
+    ResolvedElement::adopted(
+        node.element.clone(),
+        Arc::clone(&node.group),
+        Arc::clone(&node.frame),
+    )
+}
+
+/// The target marks an action makes before it acts, which a node that is gone only skips, as
+/// Playwright drops `evaluateInUtility`'s `'error:notconnected'` there.
+///
+/// Playwright: `server/dom.ts` `ElementHandle._markAsTargetElement`: `injected.markTargetElements(new Set([node as Node as Element]));`
+async fn mark(node: &UtilityElement, progress: &Progress) -> Result<(), CallError> {
+    let marked = progress
+        .race(node.frame.call(
+            Some(node.group.group()),
+            &InjectedMarkTargetParams {
+                node: node.element.clone(),
+            },
+        ))
+        .await?;
+    match marked {
+        Ok(_) | Err(PageError::NotConnected) => Ok(()),
+        Err(error) => Err(evaluate::page_error(error).into()),
+    }
+}
+
+/// What a per-element action came to, for a handle: there is no selector to resolve again, so
+/// an element that proved detached, or a page step that lost it, ends the call.
+/// Playwright: `server/dom.ts` `throwRetargetableDOMError`: `throwElementIsNotAttached();`
+fn finish<R>(result: Result<ActionResult<R>, Stop>) -> Result<R, CallError> {
+    match result {
+        Ok(ActionResult::Done(value)) => Ok(value),
+        Ok(ActionResult::NotConnected) | Err(Stop::Retry) => {
+            Err(PlaywrightError::error(ELEMENT_NOT_ATTACHED).into())
+        }
+        Err(Stop::End(error)) => Err(error),
+    }
+}
+
+/// The page's domains and watcher, which the actions' steps need, as loop A prepares them.
+async fn prepare(tab: &FrameTab, progress: &Progress) -> Result<(), CallError> {
+    match progress.race(ClickTab::prepare(tab)).await? {
+        Ok(()) => Ok(()),
+        Err(PageError::Closed) => Err(PlaywrightError::target_closed().into()),
+        Err(PageError::NotConnected) => Err(PlaywrightError::error(ELEMENT_NOT_ATTACHED).into()),
+        Err(PageError::Threw(message) | PageError::Contract(message)) => {
+            Err(PlaywrightError::error(message).into())
+        }
+    }
+}
+
+/// The input method's delivery cell, which dispatch gives every action of the spec.
+fn delivery(progress: &Progress) -> Result<&Arc<DeliveryCell>, CallError> {
+    progress.delivery().ok_or_else(|| {
+        PlaywrightError::error("neo-runtime: an ElementHandle action has no delivery cell").into()
+    })
+}
+
+/// The frame command's params for an element command's: Playwright's wire shape of the one is the
+/// other's with the frame's `selector`, which the per-element steps never read.
+fn frame_params<E: Serialize, F: DeserializeOwned>(params: &E) -> Result<F, CallError> {
+    let mut value = serde_json::to_value(params).map_err(|error| {
+        PlaywrightError::error(format!(
+            "neo-runtime: encoding an ElementHandle action: {error}"
+        ))
+    })?;
+    value["selector"] = json!("");
+    serde_json::from_value(value).map_err(|error| {
+        PlaywrightError::error(format!(
+            "neo-runtime: an ElementHandle action's params: {error}"
+        ))
+        .into()
+    })
+}
+
+/// `Frame.inputValue` of `:scope` on the scoped tab: the frame's `_waitForFunctionOnSelector` loop, as
 /// Playwright's `ElementHandle.inputValue` runs its frame's.
 ///
 /// Playwright: `server/dom.ts` `ElementHandle.inputValue`: `return this._frame.inputValue(progress, { selector: ':scope', scope: this });`
@@ -407,7 +691,7 @@ fn encode<R: Serialize>(result: &R) -> Result<Option<Value>, CallError> {
     })
 }
 
-/// The frame tab dom's reads take, with every selector resolved from one adopted node: a
+/// The frame tab the frame reads take, with every selector resolved from one adopted node: a
 /// Playwright `SelectorTarget` with a `scope`. Only the reads an element handle has are served.
 struct Scoped<'a> {
     tab: &'a FrameTab,
@@ -504,7 +788,7 @@ impl ReadTab for Scoped<'_> {
 }
 
 impl StateTab for Scoped<'_> {
-    /// A node gone reads false, as dom's visibility reads take a lost context (Playwright's
+    /// A node gone reads false, as the frame's visibility reads take a lost context (Playwright's
     /// `isVisibleInternal` catch), so this call keeps CDP's answer.
     async fn is_visible(&self, selector: &str, strict: bool) -> Result<bool, PageError> {
         let params = InjectedScopedIsVisibleParams {

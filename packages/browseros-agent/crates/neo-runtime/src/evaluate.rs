@@ -466,6 +466,10 @@ pub(crate) struct CreatedHandle {
     pub(crate) kind: HandleType,
     pub(crate) guid: String,
     pub(crate) initializer: HandleInitializer,
+    /// Neo: the guid of the frame the handle belongs to, as Playwright's client keeps the handle's
+    /// frame as its parent: its page's timeouts are its actions' (`client/elementHandle.ts`
+    /// `this._frame._timeout(options)`).
+    pub(crate) frame: String,
 }
 
 /// The two handle interfaces of Playwright's protocol.
@@ -811,7 +815,7 @@ impl Handles {
         entries.insert(
             guid.clone(),
             Arc::new(HandleEntry {
-                frame_guid,
+                frame_guid: frame_guid.clone(),
                 frame: Arc::clone(frame),
                 document,
                 remote,
@@ -826,6 +830,7 @@ impl Handles {
             },
             guid,
             initializer: HandleInitializer { preview },
+            frame: frame_guid,
         })
     }
 

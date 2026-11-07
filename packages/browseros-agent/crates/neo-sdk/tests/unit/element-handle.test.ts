@@ -1,8 +1,9 @@
 /**
- * `ElementHandle`'s reads against a fake `__neo_runtime` (fake-runtime.ts): each sends its
- * `ElementHandle` command to the handle's guid with Playwright's `kNoTimeout`, as Playwright's
- * client does (`client/elementHandle.ts` at 26137face). An absent value reads `null` where
- * Playwright's does, and a frame answer is the run's own `Frame` object.
+ * `ElementHandle`'s reads and actions against a fake `__neo_runtime` (fake-runtime.ts): each sends
+ * its `ElementHandle` command to the handle's guid, the reads with Playwright's `kNoTimeout` and
+ * the actions with the timeout of the handle's page, as Playwright's client does
+ * (`client/elementHandle.ts` at 26137face). An absent value reads `null` where Playwright's does,
+ * and a frame answer is the run's own `Frame` object.
  */
 
 import { describe, expect, test } from 'bun:test'
@@ -105,5 +106,86 @@ describe('ElementHandle reads', () => {
     expect(await handle.contentFrame()).toBe(first)
     answer = {}
     expect(await handle.contentFrame()).toBeNull()
+  })
+})
+
+describe('ElementHandle actions', () => {
+  test('send their command to the handle with its page’s timeout', async () => {
+    const run = start()
+    run.fake.answer = () => ({
+      result: { element: { ...ELEMENT, frame: run.page.mainFrame()._guid } },
+      log: [],
+    })
+    const handle = (await run.page.$('#x')) as ElementHandle
+    run.page.setDefaultTimeout(700)
+    run.fake.answer = ({ method }) => ({
+      result: method === 'selectOption' ? { values: ['b'] } : {},
+      log: [],
+    })
+    run.fake.messages.length = 0
+    await handle.click({ button: 'right', noWaitAfter: true, timeout: 5 })
+    await handle.dblclick({ delay: 1 })
+    await handle.hover({ noWaitAfter: true })
+    await handle.tap({ trial: true })
+    await handle.check({ force: true, noWaitAfter: true })
+    await handle.uncheck()
+    await handle.setChecked(true, { timeout: 9 })
+    await handle.setChecked(false)
+    await handle.fill('v', { force: true })
+    await handle.press('Enter', { delay: 2, noWaitAfter: true })
+    await handle.type('ab', { delay: 3 })
+    expect(await handle.selectOption('b')).toEqual(['b'])
+    await handle.selectText({ force: true })
+    await handle.focus()
+    await handle.scrollIntoViewIfNeeded({ timeout: 4 })
+    const sent: [string, object, number][] = [
+      ['click', { noWaitAfter: true, button: 'right' }, 5],
+      ['dblclick', { delay: 1 }, 700],
+      ['hover', {}, 700],
+      ['tap', { trial: true }, 700],
+      ['check', { force: true }, 700],
+      ['uncheck', {}, 700],
+      ['check', {}, 9],
+      ['uncheck', {}, 700],
+      ['fill', { value: 'v', force: true }, 700],
+      ['press', { key: 'Enter', delay: 2, noWaitAfter: true }, 700],
+      ['type', { text: 'ab', delay: 3 }, 700],
+      ['selectOption', { options: [{ valueOrLabel: 'b' }] }, 700],
+      ['selectText', { force: true }, 700],
+      ['focus', {}, 0],
+      ['scrollIntoViewIfNeeded', {}, 4],
+    ]
+    expect(
+      run.fake.messages.map(({ guid, method, params, metadata }) => [
+        guid,
+        method,
+        params,
+        (metadata as { timeout?: number }).timeout,
+      ]),
+    ).toEqual(
+      sent.map(([method, params, timeout]) => [
+        'handle@r.1',
+        method,
+        params,
+        timeout,
+      ]),
+    )
+  })
+
+  test('a null option or an ElementHandle value fails before anything is sent', async () => {
+    const run = start()
+    run.fake.answer = () => ({
+      result: { element: { ...ELEMENT, frame: run.page.mainFrame()._guid } },
+      log: [],
+    })
+    const handle = (await run.page.$('#x')) as ElementHandle
+    run.fake.messages.length = 0
+    await expect(handle.click({ button: null as never })).rejects.toThrow(
+      'button: expected a value, got null',
+    )
+    await expect(handle.selectOption(handle as never)).rejects.toThrow(
+      'Neo does not support ElementHandle values in selectOption yet',
+    )
+    expect(run.fake.messages).toEqual([])
   })
 })

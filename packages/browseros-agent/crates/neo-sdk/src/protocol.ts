@@ -10,6 +10,17 @@
 
 import type {
   BrowserContextCloseParams,
+  ElementHandleCheckParams,
+  ElementHandleClickParams,
+  ElementHandleDblclickParams,
+  ElementHandleFillParams,
+  ElementHandleHoverParams,
+  ElementHandlePressParams,
+  ElementHandleSelectOptionParams,
+  ElementHandleSelectTextParams,
+  ElementHandleTapParams,
+  ElementHandleTypeParams,
+  ElementHandleUncheckParams,
   FrameAriaSnapshotJSONParams,
   FrameAriaSnapshotParams,
   FrameBlurParams,
@@ -264,6 +275,65 @@ export const FRAME_DRAG_AND_DROP_KEYS = [
 /** `Frame.inputValue` in Playwright schema order. */
 export const FRAME_INPUT_VALUE_KEYS = ['selector', 'strict'] as const
 
+/** The `ElementHandle` actions in Playwright schema order: each its frame command's keys
+ * without the frame's `selector` and `strict`. */
+export const ELEMENT_HANDLE_CLICK_KEYS = [
+  'force',
+  'scroll',
+  'noWaitAfter',
+  'modifiers',
+  'position',
+  'delay',
+  'button',
+  'clickCount',
+  'trial',
+  'steps',
+] as const
+export const ELEMENT_HANDLE_DBLCLICK_KEYS = [
+  'force',
+  'scroll',
+  'modifiers',
+  'position',
+  'delay',
+  'button',
+  'trial',
+  'steps',
+] as const
+export const ELEMENT_HANDLE_HOVER_KEYS = [
+  'force',
+  'scroll',
+  'modifiers',
+  'position',
+  'trial',
+] as const
+export const ELEMENT_HANDLE_TAP_KEYS = [
+  'force',
+  'scroll',
+  'modifiers',
+  'position',
+  'trial',
+] as const
+export const ELEMENT_HANDLE_CHECK_KEYS = [
+  'force',
+  'scroll',
+  'position',
+  'trial',
+] as const
+export const ELEMENT_HANDLE_UNCHECK_KEYS = ELEMENT_HANDLE_CHECK_KEYS
+export const ELEMENT_HANDLE_FILL_KEYS = ['value', 'force'] as const
+export const ELEMENT_HANDLE_PRESS_KEYS = [
+  'key',
+  'delay',
+  'noWaitAfter',
+] as const
+export const ELEMENT_HANDLE_TYPE_KEYS = ['text', 'delay'] as const
+export const ELEMENT_HANDLE_SELECT_OPTION_KEYS = [
+  'elements',
+  'options',
+  'force',
+] as const
+export const ELEMENT_HANDLE_SELECT_TEXT_KEYS = ['force'] as const
+
 /** `Frame.isChecked` in Playwright schema order. */
 export const FRAME_IS_CHECKED_KEYS = ['selector', 'strict'] as const
 
@@ -331,6 +401,72 @@ type SameKeys<A, B> = [keyof A] extends [keyof B]
     : false
   : false
 type Assert<T extends true> = T
+type _ElementHandleClickKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof ELEMENT_HANDLE_CLICK_KEYS)[number], true>,
+    Required<ElementHandleClickParams>
+  >
+>
+type _ElementHandleDblclickKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof ELEMENT_HANDLE_DBLCLICK_KEYS)[number], true>,
+    Required<ElementHandleDblclickParams>
+  >
+>
+type _ElementHandleHoverKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof ELEMENT_HANDLE_HOVER_KEYS)[number], true>,
+    Required<ElementHandleHoverParams>
+  >
+>
+type _ElementHandleTapKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof ELEMENT_HANDLE_TAP_KEYS)[number], true>,
+    Required<ElementHandleTapParams>
+  >
+>
+type _ElementHandleCheckKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof ELEMENT_HANDLE_CHECK_KEYS)[number], true>,
+    Required<ElementHandleCheckParams>
+  >
+>
+type _ElementHandleUncheckKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof ELEMENT_HANDLE_UNCHECK_KEYS)[number], true>,
+    Required<ElementHandleUncheckParams>
+  >
+>
+type _ElementHandleFillKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof ELEMENT_HANDLE_FILL_KEYS)[number], true>,
+    Required<ElementHandleFillParams>
+  >
+>
+type _ElementHandlePressKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof ELEMENT_HANDLE_PRESS_KEYS)[number], true>,
+    Required<ElementHandlePressParams>
+  >
+>
+type _ElementHandleTypeKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof ELEMENT_HANDLE_TYPE_KEYS)[number], true>,
+    Required<ElementHandleTypeParams>
+  >
+>
+type _ElementHandleSelectOptionKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof ELEMENT_HANDLE_SELECT_OPTION_KEYS)[number], true>,
+    Required<ElementHandleSelectOptionParams>
+  >
+>
+type _ElementHandleSelectTextKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof ELEMENT_HANDLE_SELECT_TEXT_KEYS)[number], true>,
+    Required<ElementHandleSelectTextParams>
+  >
+>
 type _FrameClickKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_CLICK_KEYS)[number], true>,

@@ -201,6 +201,14 @@ Injected:
       returns:
         element: Element?
 
+    # Playwright's `ElementHandle._markAsTargetElement`, before an element handle's action: a
+    # `__playwright_reset_targets__` on the document, then a `__playwright_mark_target__` on
+    # `node` when it is an element, as the selector forms mark their matches (`query`).
+    markTarget:
+      internal: true
+      parameters:
+        node: Element
+
     # `elementStateOnSelector` within `root`, for `ElementHandle.isChecked`, `isEnabled`,
     # `isDisabled` and `isEditable`.
     scopedElementStateOnSelector:

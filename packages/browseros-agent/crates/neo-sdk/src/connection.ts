@@ -42,6 +42,7 @@ import type { Frame } from './frame'
 import type { EvalFrameCommands, JSHandleCommands } from './js-handle'
 import type { NeoFrameCommands } from './neo-commands'
 import type { Request, Response } from './network'
+import type { Page } from './page'
 import { abort, type CreatedFrame, call } from './runtime-bridge'
 import type { SignalLike, TimeoutOptions } from './timeout-settings'
 
@@ -203,6 +204,20 @@ export type ApiName =
   | 'elementHandle.isVisible'
   | 'elementHandle.ownerFrame'
   | 'elementHandle.textContent'
+  | 'elementHandle.click'
+  | 'elementHandle.dblclick'
+  | 'elementHandle.hover'
+  | 'elementHandle.tap'
+  | 'elementHandle.check'
+  | 'elementHandle.uncheck'
+  | 'elementHandle.setChecked'
+  | 'elementHandle.fill'
+  | 'elementHandle.press'
+  | 'elementHandle.type'
+  | 'elementHandle.selectOption'
+  | 'elementHandle.selectText'
+  | 'elementHandle.focus'
+  | 'elementHandle.scrollIntoViewIfNeeded'
   | 'page.$'
   | 'page.$$'
   | 'page.$eval'
@@ -310,6 +325,13 @@ export class Connection {
   _frameFor: (record: CreatedFrame) => Frame = () => {
     throw new Error(
       'neo-sdk: a frame record arrived before the run had its context',
+    )
+  }
+  /** The `Page` a frame guid of the run is on (`BrowserContext`): the page whose timeouts an
+   * element handle's actions take, as Playwright's client reads them through its frame. */
+  _pageFor: (frameGuid: string) => Page = () => {
+    throw new Error(
+      'neo-sdk: a frame guid arrived before the run had its context',
     )
   }
   /** Every `Request` and `Response` built so far, by guid, as Playwright's connection keeps its

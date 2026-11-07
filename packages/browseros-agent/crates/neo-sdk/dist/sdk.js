@@ -627,6 +627,9 @@ class Connection {
   _frameFor = () => {
     throw new Error("neo-sdk: a frame record arrived before the run had its context");
   };
+  _pageFor = () => {
+    throw new Error("neo-sdk: a frame guid arrived before the run had its context");
+  };
   _objects = new Map;
   constructor(lineOffset) {
     this.#lineOffset = lineOffset;
@@ -787,11 +790,13 @@ class JSHandle {
   _guid;
   _connection;
   _apiPrefix;
+  _frameGuid;
   _preview;
-  constructor(connection, guid, initializer, apiPrefix = "jsHandle") {
+  constructor(connection, guid, initializer, apiPrefix = "jsHandle", frameGuid) {
     this._connection = connection;
     this._guid = guid;
     this._apiPrefix = apiPrefix;
+    this._frameGuid = frameGuid;
     this._preview = initializer.preview;
   }
   async evaluate(pageFunction, arg, options) {
@@ -849,8 +854,8 @@ class JSHandle {
 var handleFactory = {};
 function handleFrom(connection, created) {
   if (created.type === "ElementHandle" && handleFactory.element)
-    return handleFactory.element(connection, created.guid, created.initializer);
-  return new JSHandle(connection, created.guid, created.initializer);
+    return handleFactory.element(connection, created.guid, created.initializer, created.frame);
+  return new JSHandle(connection, created.guid, created.initializer, "jsHandle", created.frame);
 }
 function evaluateParams(apiName, pageFunction, arg, options) {
   if (options?.exposeFunctions) {
@@ -2133,10 +2138,421 @@ function getByRoleSelector(role, options = {}) {
   return `internal:role=${role}${props.map(([n, v]) => `[${n}=${v}]`).join("")}`;
 }
 
+// src/protocol.ts
+var FRAME_GOTO_KEYS = ["url", "waitUntil", "referer"];
+var FRAME_TEXT_CONTENT_KEYS = ["selector", "strict"];
+var FRAME_INNER_TEXT_KEYS = ["selector", "strict"];
+var FRAME_GET_ATTRIBUTE_KEYS = ["selector", "strict", "name"];
+var FRAME_QUERY_COUNT_KEYS = ["selector"];
+var FRAME_CONTENT_KEYS = ["includeShadow"];
+var FRAME_SET_CONTENT_KEYS = ["html", "waitUntil"];
+var FRAME_WAIT_FOR_TIMEOUT_KEYS = ["waitTimeout"];
+var FRAME_RESOLVE_SELECTOR_KEYS = ["selector", "sdkLanguage"];
+var FRAME_ARIA_SNAPSHOT_JSON_KEYS = [
+  "mode",
+  "selector",
+  "depth",
+  "boxes"
+];
+var FRAME_ARIA_SNAPSHOT_KEYS = [
+  "mode",
+  "selector",
+  "depth",
+  "boxes"
+];
+var FRAME_CLICK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "noWaitAfter",
+  "modifiers",
+  "position",
+  "delay",
+  "button",
+  "clickCount",
+  "trial",
+  "steps"
+];
+var FRAME_DBLCLICK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "modifiers",
+  "position",
+  "delay",
+  "button",
+  "trial",
+  "steps"
+];
+var FRAME_HOVER_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "modifiers",
+  "position",
+  "trial"
+];
+var FRAME_TAP_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "modifiers",
+  "position",
+  "trial"
+];
+var PAGE_KEYBOARD_DOWN_KEYS = ["key"];
+var PAGE_KEYBOARD_UP_KEYS = ["key"];
+var PAGE_KEYBOARD_INSERT_TEXT_KEYS = ["text"];
+var PAGE_KEYBOARD_TYPE_KEYS = ["text", "delay"];
+var PAGE_KEYBOARD_PRESS_KEYS = ["key", "delay"];
+var PAGE_MOUSE_MOVE_KEYS = ["x", "y", "steps"];
+var PAGE_MOUSE_DOWN_KEYS = ["button", "clickCount"];
+var PAGE_MOUSE_UP_KEYS = ["button", "clickCount"];
+var PAGE_MOUSE_CLICK_KEYS = [
+  "x",
+  "y",
+  "delay",
+  "button",
+  "clickCount"
+];
+var PAGE_MOUSE_WHEEL_KEYS = ["deltaX", "deltaY"];
+var PAGE_TOUCHSCREEN_TAP_KEYS = ["x", "y"];
+var FRAME_FILL_KEYS = ["selector", "strict", "value", "force"];
+var FRAME_PRESS_KEYS = [
+  "selector",
+  "strict",
+  "key",
+  "delay",
+  "noWaitAfter"
+];
+var FRAME_TYPE_KEYS = ["selector", "strict", "text", "delay"];
+var FRAME_DRAG_AND_DROP_KEYS = [
+  "source",
+  "target",
+  "force",
+  "scroll",
+  "trial",
+  "sourcePosition",
+  "targetPosition",
+  "strict",
+  "steps"
+];
+var FRAME_INPUT_VALUE_KEYS = ["selector", "strict"];
+var ELEMENT_HANDLE_CLICK_KEYS = [
+  "force",
+  "scroll",
+  "noWaitAfter",
+  "modifiers",
+  "position",
+  "delay",
+  "button",
+  "clickCount",
+  "trial",
+  "steps"
+];
+var ELEMENT_HANDLE_DBLCLICK_KEYS = [
+  "force",
+  "scroll",
+  "modifiers",
+  "position",
+  "delay",
+  "button",
+  "trial",
+  "steps"
+];
+var ELEMENT_HANDLE_HOVER_KEYS = [
+  "force",
+  "scroll",
+  "modifiers",
+  "position",
+  "trial"
+];
+var ELEMENT_HANDLE_TAP_KEYS = [
+  "force",
+  "scroll",
+  "modifiers",
+  "position",
+  "trial"
+];
+var ELEMENT_HANDLE_CHECK_KEYS = [
+  "force",
+  "scroll",
+  "position",
+  "trial"
+];
+var ELEMENT_HANDLE_UNCHECK_KEYS = ELEMENT_HANDLE_CHECK_KEYS;
+var ELEMENT_HANDLE_FILL_KEYS = ["value", "force"];
+var ELEMENT_HANDLE_PRESS_KEYS = [
+  "key",
+  "delay",
+  "noWaitAfter"
+];
+var ELEMENT_HANDLE_TYPE_KEYS = ["text", "delay"];
+var ELEMENT_HANDLE_SELECT_OPTION_KEYS = [
+  "elements",
+  "options",
+  "force"
+];
+var ELEMENT_HANDLE_SELECT_TEXT_KEYS = ["force"];
+var FRAME_IS_CHECKED_KEYS = ["selector", "strict"];
+var FRAME_IS_VISIBLE_KEYS = ["selector", "strict"];
+var FRAME_IS_HIDDEN_KEYS = ["selector", "strict"];
+var FRAME_IS_ENABLED_KEYS = ["selector", "strict"];
+var FRAME_IS_DISABLED_KEYS = ["selector", "strict"];
+var FRAME_IS_EDITABLE_KEYS = ["selector", "strict"];
+var FRAME_INNER_HTML_KEYS = ["selector", "strict"];
+var FRAME_CHECK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "position",
+  "trial"
+];
+var FRAME_UNCHECK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "position",
+  "trial"
+];
+var FRAME_SELECT_OPTION_KEYS = [
+  "selector",
+  "strict",
+  "elements",
+  "options",
+  "force"
+];
+var FRAME_WAIT_FOR_SELECTOR_KEYS = [
+  "selector",
+  "strict",
+  "state",
+  "omitReturnValue"
+];
+var FRAME_FOCUS_KEYS = ["selector", "strict"];
+var FRAME_BLUR_KEYS = ["selector", "strict"];
+var FRAME_DISPATCH_EVENT_KEYS = [
+  "selector",
+  "strict",
+  "type",
+  "eventInit"
+];
+var FRAME_HIGHLIGHT_KEYS = ["selector", "style"];
+var FRAME_HIDE_HIGHLIGHT_KEYS = ["selector"];
+var BROWSER_CONTEXT_CLOSE_KEYS = ["reason"];
+var PAGE_CLOSE_KEYS = ["reason"];
+var PAGE_REGISTER_LOCATOR_HANDLER_KEYS = [
+  "selector",
+  "noWaitAfter"
+];
+var PAGE_RESOLVE_LOCATOR_HANDLER_KEYS = ["uid", "remove"];
+var PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS = ["uid"];
+var PAGE_RELOAD_KEYS = ["waitUntil"];
+var PAGE_GO_BACK_KEYS = ["waitUntil"];
+var PAGE_GO_FORWARD_KEYS = ["waitUntil"];
+var PAGE_CONSOLE_MESSAGES_KEYS = ["filter"];
+var PAGE_PAGE_ERRORS_KEYS = ["filter"];
+function pickParams(keys, options) {
+  const params = {};
+  for (const key of keys) {
+    const value = options[key];
+    if (value === null)
+      throw new Error(`${key}: expected a value, got null`);
+    if (value !== undefined)
+      params[key] = value;
+  }
+  return params;
+}
+
+// src/select-option.ts
+var ELEMENT_VALUES_UNSUPPORTED = "Neo does not support ElementHandle values in selectOption yet";
+function convertSelectOptionValues(values) {
+  if (values === null)
+    return {};
+  const list = snapshot(values);
+  if (!list.length)
+    return {};
+  for (let i = 0;i < list.length; i++) {
+    if (list[i] === null)
+      throw new Error(`options[${i}]: expected object, got null`);
+  }
+  for (let i = 0;i < list.length; i++) {
+    if (list[i] instanceof JSHandle)
+      throw new Error(ELEMENT_VALUES_UNSUPPORTED);
+  }
+  const strings = isString(list[0]);
+  const options = [];
+  for (let i = 0;i < list.length; i++) {
+    options[i] = copyOption(strings ? { valueOrLabel: list[i] } : list[i], i);
+  }
+  return { options };
+}
+function snapshot(values) {
+  if (!Array.isArray(values))
+    return [values];
+  const length = values.length;
+  if (typeof length !== "number" || !Number.isSafeInteger(length) || length < 0)
+    throw new Error("options: expected array");
+  const list = [];
+  for (let i = 0;i < length; i++)
+    list[i] = values[i];
+  return list;
+}
+function copyOption(option, index) {
+  if (typeof option !== "object" || option === null)
+    throw new Error(`options[${index}]: expected object`);
+  const source = option;
+  const valueOrLabel = source.valueOrLabel;
+  const value = source.value;
+  const label = source.label;
+  const position = source.index;
+  const copy = {};
+  if (valueOrLabel !== undefined)
+    copy.valueOrLabel = text(valueOrLabel, index, "valueOrLabel");
+  if (value !== undefined)
+    copy.value = text(value, index, "value");
+  if (label !== undefined)
+    copy.label = text(label, index, "label");
+  if (position !== undefined) {
+    if (typeof position !== "number" || !Number.isInteger(position))
+      throw new Error(`options[${index}].index: expected integer`);
+    copy.index = position;
+  }
+  return copy;
+}
+function text(value, index, field) {
+  if (typeof value !== "string")
+    throw new Error(`options[${index}].${field}: expected string`);
+  return value;
+}
+
+// src/timeout-settings.ts
+var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
+
+class TimeoutSettings {
+  #parent;
+  #defaultTimeout;
+  #defaultNavigationTimeout;
+  constructor(parent) {
+    this.#parent = parent;
+  }
+  setDefaultTimeout(timeout) {
+    this.#defaultTimeout = timeout;
+  }
+  setDefaultNavigationTimeout(timeout) {
+    this.#defaultNavigationTimeout = timeout;
+  }
+  timeout(options, _apiName) {
+    return { signal: options.signal, timeout: this.#timeout(options) };
+  }
+  navigationTimeout(options, _apiName) {
+    return { signal: options.signal, timeout: this.#navigationTimeout(options) };
+  }
+  #timeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#timeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+  #navigationTimeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultNavigationTimeout !== undefined)
+      return this.#defaultNavigationTimeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#navigationTimeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+}
+
 // src/element-handle.ts
 class ElementHandle extends JSHandle {
-  constructor(connection, guid, initializer) {
-    super(connection, guid, initializer, "elementHandle");
+  constructor(connection, guid, initializer, frameGuid) {
+    super(connection, guid, initializer, "elementHandle", frameGuid);
+  }
+  _timeout(options, apiName) {
+    const timeoutSettings = this._frameGuid ? this._connection._pageFor(this._frameGuid)._timeoutSettings : new TimeoutSettings;
+    return timeoutSettings.timeout(options, apiName);
+  }
+  async scrollIntoViewIfNeeded(options = {}) {
+    const apiName = "elementHandle.scrollIntoViewIfNeeded";
+    await this._connection.sendElement(apiName, this._guid, "scrollIntoViewIfNeeded", {}, this._timeout(options, apiName));
+  }
+  async hover(options = {}) {
+    const apiName = "elementHandle.hover";
+    await this._connection.sendElement(apiName, this._guid, "hover", pickParams(ELEMENT_HANDLE_HOVER_KEYS, options), this._timeout(options, apiName));
+  }
+  async click(options = {}) {
+    const apiName = "elementHandle.click";
+    await this._connection.sendElement(apiName, this._guid, "click", pickParams(ELEMENT_HANDLE_CLICK_KEYS, options), this._timeout(options, apiName));
+  }
+  async dblclick(options = {}) {
+    const apiName = "elementHandle.dblclick";
+    await this._connection.sendElement(apiName, this._guid, "dblclick", pickParams(ELEMENT_HANDLE_DBLCLICK_KEYS, options), this._timeout(options, apiName));
+  }
+  async tap(options = {}) {
+    const apiName = "elementHandle.tap";
+    await this._connection.sendElement(apiName, this._guid, "tap", pickParams(ELEMENT_HANDLE_TAP_KEYS, options), this._timeout(options, apiName));
+  }
+  async selectOption(values, options = {}) {
+    const apiName = "elementHandle.selectOption";
+    const result = await this._connection.sendElement(apiName, this._guid, "selectOption", pickParams(ELEMENT_HANDLE_SELECT_OPTION_KEYS, {
+      ...convertSelectOptionValues(values),
+      ...options
+    }), this._timeout(options, apiName));
+    return result.values;
+  }
+  async fill(value, options = {}) {
+    const apiName = "elementHandle.fill";
+    await this._connection.sendElement(apiName, this._guid, "fill", pickParams(ELEMENT_HANDLE_FILL_KEYS, {
+      value,
+      ...options
+    }), this._timeout(options, apiName));
+  }
+  async selectText(options = {}) {
+    const apiName = "elementHandle.selectText";
+    await this._connection.sendElement(apiName, this._guid, "selectText", pickParams(ELEMENT_HANDLE_SELECT_TEXT_KEYS, options), this._timeout(options, apiName));
+  }
+  async focus() {
+    await this._connection.sendElement("elementHandle.focus", this._guid, "focus", {}, 0);
+  }
+  async type(text2, options = {}) {
+    const apiName = "elementHandle.type";
+    await this._connection.sendElement(apiName, this._guid, "type", pickParams(ELEMENT_HANDLE_TYPE_KEYS, {
+      text: text2,
+      ...options
+    }), this._timeout(options, apiName));
+  }
+  async press(key, options = {}) {
+    const apiName = "elementHandle.press";
+    await this._connection.sendElement(apiName, this._guid, "press", pickParams(ELEMENT_HANDLE_PRESS_KEYS, {
+      key,
+      ...options
+    }), this._timeout(options, apiName));
+  }
+  async check(options = {}) {
+    const apiName = "elementHandle.check";
+    await this._connection.sendElement(apiName, this._guid, "check", pickParams(ELEMENT_HANDLE_CHECK_KEYS, options), this._timeout(options, apiName));
+  }
+  async uncheck(options = {}) {
+    const apiName = "elementHandle.uncheck";
+    await this._connection.sendElement(apiName, this._guid, "uncheck", pickParams(ELEMENT_HANDLE_UNCHECK_KEYS, options), this._timeout(options, apiName));
+  }
+  async setChecked(checked, options) {
+    if (checked)
+      await this.check(options);
+    else
+      await this.uncheck(options);
   }
   static fromNullable(connection, created) {
     if (!created)
@@ -2219,7 +2635,7 @@ function frameFrom(connection, record) {
 function elementsFrom(connection, created) {
   return created.map((record) => ElementHandle.fromNullable(connection, record)).filter((handle) => handle !== null);
 }
-handleFactory.element = (connection, guid, initializer) => new ElementHandle(connection, guid, initializer);
+handleFactory.element = (connection, guid, initializer, frameGuid) => new ElementHandle(connection, guid, initializer, frameGuid);
 
 // vendor/playwright/isomorphic/cssTokenizer.ts
 var between = function(num, first, last) {
@@ -3720,21 +4136,21 @@ function innerAsLocators(factory, parsed, isFrameLocator = false, maxOutputSize 
       continue;
     }
     if (part.name === "internal:text") {
-      const { exact, text } = detectExact(part.body);
-      tokens.push([factory.generateLocator(base, "text", text, { exact })]);
+      const { exact, text: text2 } = detectExact(part.body);
+      tokens.push([factory.generateLocator(base, "text", text2, { exact })]);
       continue;
     }
     if (part.name === "internal:has-text") {
-      const { exact, text } = detectExact(part.body);
+      const { exact, text: text2 } = detectExact(part.body);
       if (!exact) {
-        tokens.push([factory.generateLocator(base, "has-text", text, { exact })]);
+        tokens.push([factory.generateLocator(base, "has-text", text2, { exact })]);
         continue;
       }
     }
     if (part.name === "internal:has-not-text") {
-      const { exact, text } = detectExact(part.body);
+      const { exact, text: text2 } = detectExact(part.body);
       if (!exact) {
-        tokens.push([factory.generateLocator(base, "has-not-text", text, { exact })]);
+        tokens.push([factory.generateLocator(base, "has-not-text", text2, { exact })]);
         continue;
       }
     }
@@ -3764,8 +4180,8 @@ function innerAsLocators(factory, parsed, isFrameLocator = false, maxOutputSize 
       continue;
     }
     if (part.name === "internal:label") {
-      const { exact, text } = detectExact(part.body);
-      tokens.push([factory.generateLocator(base, "label", text, { exact })]);
+      const { exact, text: text2 } = detectExact(part.body);
+      tokens.push([factory.generateLocator(base, "label", text2, { exact })]);
       continue;
     }
     if (part.name === "internal:role") {
@@ -3797,18 +4213,18 @@ function innerAsLocators(factory, parsed, isFrameLocator = false, maxOutputSize 
     if (part.name === "internal:attr") {
       const attrSelector = parseAttributeSelector(part.body, true);
       const { name, value, caseSensitive } = attrSelector.attributes[0];
-      const text = value;
+      const text2 = value;
       const exact = !!caseSensitive;
       if (name === "placeholder") {
-        tokens.push([factory.generateLocator(base, "placeholder", text, { exact })]);
+        tokens.push([factory.generateLocator(base, "placeholder", text2, { exact })]);
         continue;
       }
       if (name === "alt") {
-        tokens.push([factory.generateLocator(base, "alt", text, { exact })]);
+        tokens.push([factory.generateLocator(base, "alt", text2, { exact })]);
         continue;
       }
       if (name === "title") {
-        tokens.push([factory.generateLocator(base, "title", text, { exact })]);
+        tokens.push([factory.generateLocator(base, "title", text2, { exact })]);
         continue;
       }
     }
@@ -3832,14 +4248,14 @@ function innerAsLocators(factory, parsed, isFrameLocator = false, maxOutputSize 
     const selectorPart = stringifySelector({ parts: [part] });
     const locatorPart = factory.generateLocator(base, "default", selectorPart);
     if (nextPart && ["internal:has-text", "internal:has-not-text"].includes(nextPart.name)) {
-      const { exact, text } = detectExact(nextPart.body);
+      const { exact, text: text2 } = detectExact(nextPart.body);
       if (!exact) {
-        const nextLocatorPart = factory.generateLocator("locator", nextPart.name === "internal:has-text" ? "has-text" : "has-not-text", text, { exact });
+        const nextLocatorPart = factory.generateLocator("locator", nextPart.name === "internal:has-text" ? "has-text" : "has-not-text", text2, { exact });
         const options = {};
         if (nextPart.name === "internal:has-text")
-          options.hasText = text;
+          options.hasText = text2;
         else
-          options.hasNotText = text;
+          options.hasNotText = text2;
         const combinedPart = factory.generateLocator(base, "default", selectorPart, options);
         tokens.push([factory.chainLocators([locatorPart, nextLocatorPart]), combinedPart]);
         index++;
@@ -3873,22 +4289,22 @@ function combineTokens(factory, tokens, maxOutputSize) {
   visit(0);
   return result;
 }
-function detectExact(text) {
+function detectExact(text2) {
   let exact = false;
-  const match = text.match(/^\/(.*)\/([dgimsuvy]*)$/);
+  const match = text2.match(/^\/(.*)\/([dgimsuvy]*)$/);
   if (match)
     return { text: new RegExp(match[1], match[2]) };
-  if (text.endsWith('"')) {
-    text = JSON.parse(text);
+  if (text2.endsWith('"')) {
+    text2 = JSON.parse(text2);
     exact = true;
-  } else if (text.endsWith('"s')) {
-    text = JSON.parse(text.substring(0, text.length - 1));
+  } else if (text2.endsWith('"s')) {
+    text2 = JSON.parse(text2.substring(0, text2.length - 1));
     exact = true;
-  } else if (text.endsWith('"i')) {
-    text = JSON.parse(text.substring(0, text.length - 1));
+  } else if (text2.endsWith('"i')) {
+    text2 = JSON.parse(text2.substring(0, text2.length - 1));
     exact = false;
   }
-  return { exact, text };
+  return { exact, text: text2 };
 }
 
 class JavaScriptLocatorFactory {
@@ -3987,8 +4403,8 @@ class JavaScriptLocatorFactory {
       return this.regexToSourceString(value);
     return this.quote(value);
   }
-  quote(text) {
-    return escapeWithQuotes(text, this.preferredQuote ?? "'");
+  quote(text2) {
+    return escapeWithQuotes(text2, this.preferredQuote ?? "'");
   }
 }
 
@@ -4091,8 +4507,8 @@ class PythonLocatorFactory {
       return this.regexToString(value);
     return this.quote(value);
   }
-  quote(text) {
-    return escapeWithQuotes(text, '"');
+  quote(text2) {
+    return escapeWithQuotes(text2, '"');
   }
 }
 
@@ -4203,8 +4619,8 @@ class JavaLocatorFactory {
       return this.regexToString(value);
     return this.quote(value);
   }
-  quote(text) {
-    return escapeWithQuotes(text, '"');
+  quote(text2) {
+    return escapeWithQuotes(text2, '"');
   }
 }
 
@@ -4308,8 +4724,8 @@ class CSharpLocatorFactory {
       return `HasNotTextRegex = ${this.regexToString(body)}`;
     return `HasNotText = ${this.quote(body)}`;
   }
-  quote(text) {
-    return escapeWithQuotes(text, '"');
+  quote(text2) {
+    return escapeWithQuotes(text2, '"');
   }
 }
 
@@ -4526,11 +4942,11 @@ class Locator {
   async dragTo(target, options = {}) {
     return await this._frame._dragAndDrop("locator.dragTo", this._selector, target._selector, { strict: true, ...options });
   }
-  async pressSequentially(text, options = {}) {
-    return await this._frame._type("locator.pressSequentially", this._selector, text, { strict: true, ...options });
+  async pressSequentially(text2, options = {}) {
+    return await this._frame._type("locator.pressSequentially", this._selector, text2, { strict: true, ...options });
   }
-  async type(text, options = {}) {
-    return await this._frame._type("locator.type", this._selector, text, {
+  async type(text2, options = {}) {
+    return await this._frame._type("locator.type", this._selector, text2, {
       strict: true,
       ...options
     });
@@ -4654,20 +5070,20 @@ class Locator {
   getByTestId(testId) {
     return this.locator(getByTestIdSelector(testIdAttributeName(), testId));
   }
-  getByAltText(text, options) {
-    return this.locator(getByAltTextSelector(text, options));
+  getByAltText(text2, options) {
+    return this.locator(getByAltTextSelector(text2, options));
   }
-  getByLabel(text, options) {
-    return this.locator(getByLabelSelector(text, options));
+  getByLabel(text2, options) {
+    return this.locator(getByLabelSelector(text2, options));
   }
-  getByPlaceholder(text, options) {
-    return this.locator(getByPlaceholderSelector(text, options));
+  getByPlaceholder(text2, options) {
+    return this.locator(getByPlaceholderSelector(text2, options));
   }
-  getByText(text, options) {
-    return this.locator(getByTextSelector(text, options));
+  getByText(text2, options) {
+    return this.locator(getByTextSelector(text2, options));
   }
-  getByTitle(text, options) {
-    return this.locator(getByTitleSelector(text, options));
+  getByTitle(text2, options) {
+    return this.locator(getByTitleSelector(text2, options));
   }
   getByRole(role, options = {}) {
     return this.locator(getByRoleSelector(role, options));
@@ -4746,20 +5162,20 @@ class FrameLocator {
   getByTestId(testId) {
     return this.locator(getByTestIdSelector(testIdAttributeName(), testId));
   }
-  getByAltText(text, options) {
-    return this.locator(getByAltTextSelector(text, options));
+  getByAltText(text2, options) {
+    return this.locator(getByAltTextSelector(text2, options));
   }
-  getByLabel(text, options) {
-    return this.locator(getByLabelSelector(text, options));
+  getByLabel(text2, options) {
+    return this.locator(getByLabelSelector(text2, options));
   }
-  getByPlaceholder(text, options) {
-    return this.locator(getByPlaceholderSelector(text, options));
+  getByPlaceholder(text2, options) {
+    return this.locator(getByPlaceholderSelector(text2, options));
   }
-  getByText(text, options) {
-    return this.locator(getByTextSelector(text, options));
+  getByText(text2, options) {
+    return this.locator(getByTextSelector(text2, options));
   }
-  getByTitle(text, options) {
-    return this.locator(getByTitleSelector(text, options));
+  getByTitle(text2, options) {
+    return this.locator(getByTitleSelector(text2, options));
   }
   getByRole(role, options = {}) {
     return this.locator(getByRoleSelector(role, options));
@@ -4874,243 +5290,6 @@ function accessChainToDisplayString2(accessChain) {
     return `[${accessor}]`;
   }).join("");
   return chainString.length > 0 ? ` at position "${chainString}"` : "";
-}
-
-// src/protocol.ts
-var FRAME_GOTO_KEYS = ["url", "waitUntil", "referer"];
-var FRAME_TEXT_CONTENT_KEYS = ["selector", "strict"];
-var FRAME_INNER_TEXT_KEYS = ["selector", "strict"];
-var FRAME_GET_ATTRIBUTE_KEYS = ["selector", "strict", "name"];
-var FRAME_QUERY_COUNT_KEYS = ["selector"];
-var FRAME_CONTENT_KEYS = ["includeShadow"];
-var FRAME_SET_CONTENT_KEYS = ["html", "waitUntil"];
-var FRAME_WAIT_FOR_TIMEOUT_KEYS = ["waitTimeout"];
-var FRAME_RESOLVE_SELECTOR_KEYS = ["selector", "sdkLanguage"];
-var FRAME_ARIA_SNAPSHOT_JSON_KEYS = [
-  "mode",
-  "selector",
-  "depth",
-  "boxes"
-];
-var FRAME_ARIA_SNAPSHOT_KEYS = [
-  "mode",
-  "selector",
-  "depth",
-  "boxes"
-];
-var FRAME_CLICK_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "noWaitAfter",
-  "modifiers",
-  "position",
-  "delay",
-  "button",
-  "clickCount",
-  "trial",
-  "steps"
-];
-var FRAME_DBLCLICK_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "modifiers",
-  "position",
-  "delay",
-  "button",
-  "trial",
-  "steps"
-];
-var FRAME_HOVER_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "modifiers",
-  "position",
-  "trial"
-];
-var FRAME_TAP_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "modifiers",
-  "position",
-  "trial"
-];
-var PAGE_KEYBOARD_DOWN_KEYS = ["key"];
-var PAGE_KEYBOARD_UP_KEYS = ["key"];
-var PAGE_KEYBOARD_INSERT_TEXT_KEYS = ["text"];
-var PAGE_KEYBOARD_TYPE_KEYS = ["text", "delay"];
-var PAGE_KEYBOARD_PRESS_KEYS = ["key", "delay"];
-var PAGE_MOUSE_MOVE_KEYS = ["x", "y", "steps"];
-var PAGE_MOUSE_DOWN_KEYS = ["button", "clickCount"];
-var PAGE_MOUSE_UP_KEYS = ["button", "clickCount"];
-var PAGE_MOUSE_CLICK_KEYS = [
-  "x",
-  "y",
-  "delay",
-  "button",
-  "clickCount"
-];
-var PAGE_MOUSE_WHEEL_KEYS = ["deltaX", "deltaY"];
-var PAGE_TOUCHSCREEN_TAP_KEYS = ["x", "y"];
-var FRAME_FILL_KEYS = ["selector", "strict", "value", "force"];
-var FRAME_PRESS_KEYS = [
-  "selector",
-  "strict",
-  "key",
-  "delay",
-  "noWaitAfter"
-];
-var FRAME_TYPE_KEYS = ["selector", "strict", "text", "delay"];
-var FRAME_DRAG_AND_DROP_KEYS = [
-  "source",
-  "target",
-  "force",
-  "scroll",
-  "trial",
-  "sourcePosition",
-  "targetPosition",
-  "strict",
-  "steps"
-];
-var FRAME_INPUT_VALUE_KEYS = ["selector", "strict"];
-var FRAME_IS_CHECKED_KEYS = ["selector", "strict"];
-var FRAME_IS_VISIBLE_KEYS = ["selector", "strict"];
-var FRAME_IS_HIDDEN_KEYS = ["selector", "strict"];
-var FRAME_IS_ENABLED_KEYS = ["selector", "strict"];
-var FRAME_IS_DISABLED_KEYS = ["selector", "strict"];
-var FRAME_IS_EDITABLE_KEYS = ["selector", "strict"];
-var FRAME_INNER_HTML_KEYS = ["selector", "strict"];
-var FRAME_CHECK_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "position",
-  "trial"
-];
-var FRAME_UNCHECK_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "position",
-  "trial"
-];
-var FRAME_SELECT_OPTION_KEYS = [
-  "selector",
-  "strict",
-  "elements",
-  "options",
-  "force"
-];
-var FRAME_WAIT_FOR_SELECTOR_KEYS = [
-  "selector",
-  "strict",
-  "state",
-  "omitReturnValue"
-];
-var FRAME_FOCUS_KEYS = ["selector", "strict"];
-var FRAME_BLUR_KEYS = ["selector", "strict"];
-var FRAME_DISPATCH_EVENT_KEYS = [
-  "selector",
-  "strict",
-  "type",
-  "eventInit"
-];
-var FRAME_HIGHLIGHT_KEYS = ["selector", "style"];
-var FRAME_HIDE_HIGHLIGHT_KEYS = ["selector"];
-var BROWSER_CONTEXT_CLOSE_KEYS = ["reason"];
-var PAGE_CLOSE_KEYS = ["reason"];
-var PAGE_REGISTER_LOCATOR_HANDLER_KEYS = [
-  "selector",
-  "noWaitAfter"
-];
-var PAGE_RESOLVE_LOCATOR_HANDLER_KEYS = ["uid", "remove"];
-var PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS = ["uid"];
-var PAGE_RELOAD_KEYS = ["waitUntil"];
-var PAGE_GO_BACK_KEYS = ["waitUntil"];
-var PAGE_GO_FORWARD_KEYS = ["waitUntil"];
-var PAGE_CONSOLE_MESSAGES_KEYS = ["filter"];
-var PAGE_PAGE_ERRORS_KEYS = ["filter"];
-function pickParams(keys, options) {
-  const params = {};
-  for (const key of keys) {
-    const value = options[key];
-    if (value === null)
-      throw new Error(`${key}: expected a value, got null`);
-    if (value !== undefined)
-      params[key] = value;
-  }
-  return params;
-}
-
-// src/select-option.ts
-var ELEMENT_VALUES_UNSUPPORTED = "Neo does not support ElementHandle values in selectOption yet";
-function convertSelectOptionValues(values) {
-  if (values === null)
-    return {};
-  const list = snapshot(values);
-  if (!list.length)
-    return {};
-  for (let i = 0;i < list.length; i++) {
-    if (list[i] === null)
-      throw new Error(`options[${i}]: expected object, got null`);
-  }
-  for (let i = 0;i < list.length; i++) {
-    if (list[i] instanceof JSHandle)
-      throw new Error(ELEMENT_VALUES_UNSUPPORTED);
-  }
-  const strings = isString(list[0]);
-  const options = [];
-  for (let i = 0;i < list.length; i++) {
-    options[i] = copyOption(strings ? { valueOrLabel: list[i] } : list[i], i);
-  }
-  return { options };
-}
-function snapshot(values) {
-  if (!Array.isArray(values))
-    return [values];
-  const length = values.length;
-  if (typeof length !== "number" || !Number.isSafeInteger(length) || length < 0)
-    throw new Error("options: expected array");
-  const list = [];
-  for (let i = 0;i < length; i++)
-    list[i] = values[i];
-  return list;
-}
-function copyOption(option, index) {
-  if (typeof option !== "object" || option === null)
-    throw new Error(`options[${index}]: expected object`);
-  const source = option;
-  const valueOrLabel = source.valueOrLabel;
-  const value = source.value;
-  const label = source.label;
-  const position = source.index;
-  const copy = {};
-  if (valueOrLabel !== undefined)
-    copy.valueOrLabel = text(valueOrLabel, index, "valueOrLabel");
-  if (value !== undefined)
-    copy.value = text(value, index, "value");
-  if (label !== undefined)
-    copy.label = text(label, index, "label");
-  if (position !== undefined) {
-    if (typeof position !== "number" || !Number.isInteger(position))
-      throw new Error(`options[${index}].index: expected integer`);
-    copy.index = position;
-  }
-  return copy;
-}
-function text(value, index, field) {
-  if (typeof value !== "string")
-    throw new Error(`options[${index}].${field}: expected string`);
-  return value;
 }
 
 // src/url.ts
@@ -6088,50 +6267,6 @@ class Touchscreen {
   }
 }
 
-// src/timeout-settings.ts
-var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
-
-class TimeoutSettings {
-  #parent;
-  #defaultTimeout;
-  #defaultNavigationTimeout;
-  constructor(parent) {
-    this.#parent = parent;
-  }
-  setDefaultTimeout(timeout) {
-    this.#defaultTimeout = timeout;
-  }
-  setDefaultNavigationTimeout(timeout) {
-    this.#defaultNavigationTimeout = timeout;
-  }
-  timeout(options, _apiName) {
-    return { signal: options.signal, timeout: this.#timeout(options) };
-  }
-  navigationTimeout(options, _apiName) {
-    return { signal: options.signal, timeout: this.#navigationTimeout(options) };
-  }
-  #timeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.#timeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
-  }
-  #navigationTimeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultNavigationTimeout !== undefined)
-      return this.#defaultNavigationTimeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.#navigationTimeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
-  }
-}
-
 // src/waiter.ts
 async function wrapApiCall(apiName, body) {
   try {
@@ -6866,6 +7001,7 @@ class BrowserContext extends ChannelOwner {
     connection._closeReasonFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._closeReason() ?? this.#closeReason;
     connection._closedFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._isClosedLocally() ?? false;
     connection._frameFor = (record) => this.#pageFor(pageGuidOf(record.guid))._frameFrom(record);
+    connection._pageFor = (frameGuid) => this.#pageFor(pageGuidOf(frameGuid));
   }
   isClosed() {
     return this.#closingStatus !== "none";

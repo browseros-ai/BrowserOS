@@ -63,6 +63,9 @@ export type CreatedHandle = {
   type: 'JSHandle' | 'ElementHandle'
   guid: string
   initializer: JSHandleInitializer
+  /** Neo: the guid of the frame the handle belongs to, as Playwright's client keeps the handle's
+   * frame as its parent: its page's timeouts are an element handle's actions'. */
+  frame?: string
 }
 
 /** A by-value answer: the page's JSON, absent for `undefined`. */
@@ -151,6 +154,8 @@ export class JSHandle<T = unknown> {
   readonly _connection: Connection
   /** `jsHandle` or `elementHandle`: the prefix of this handle's errors. */
   readonly _apiPrefix: 'jsHandle' | 'elementHandle'
+  /** The guid of the frame Rust created the handle in ({@link CreatedHandle.frame}). */
+  readonly _frameGuid: string | undefined
   _preview: string
   /** Phantom: the page value's type, as Playwright's `JSHandle<T>`. */
   declare readonly __type: T
@@ -160,10 +165,12 @@ export class JSHandle<T = unknown> {
     guid: string,
     initializer: JSHandleInitializer,
     apiPrefix: 'jsHandle' | 'elementHandle' = 'jsHandle',
+    frameGuid?: string,
   ) {
     this._connection = connection
     this._guid = guid
     this._apiPrefix = apiPrefix
+    this._frameGuid = frameGuid
     this._preview = initializer.preview
   }
 
@@ -297,6 +304,7 @@ export const handleFactory: {
     connection: Connection,
     guid: string,
     initializer: JSHandleInitializer,
+    frameGuid?: string,
   ) => JSHandle
 } = {}
 
@@ -307,8 +315,19 @@ export function handleFrom(
   created: CreatedHandle,
 ): JSHandle {
   if (created.type === 'ElementHandle' && handleFactory.element)
-    return handleFactory.element(connection, created.guid, created.initializer)
-  return new JSHandle(connection, created.guid, created.initializer)
+    return handleFactory.element(
+      connection,
+      created.guid,
+      created.initializer,
+      created.frame,
+    )
+  return new JSHandle(
+    connection,
+    created.guid,
+    created.initializer,
+    'jsHandle',
+    created.frame,
+  )
 }
 
 /**

@@ -256,6 +256,12 @@ export const glue = {
     }
   },
 
+  // Playwright: `server/dom.ts` `ElementHandle._markAsTargetElement`: `if (node.nodeType === 1 /* Node.ELEMENT_NODE */)`
+  markTarget: (injected, _params, node) => {
+    if (node.nodeType === 1) injected.markTargetElements(new Set([node]))
+    return {}
+  },
+
   // Playwright: `server/chromium/crPage.ts` `FrameSession._getOwnerFrame`: `const documentElement = await handle.evaluateHandle(node => {`
   ownerDocumentElement: (_injected, _params, node) => {
     const doc = node as unknown as Document

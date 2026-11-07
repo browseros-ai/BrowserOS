@@ -124,12 +124,14 @@ pub(crate) async fn press<T: FormTab + KeyboardTab>(
     .await
 }
 
-struct PressAction<'a> {
-    options: &'a PressOptions,
-    delivery: &'a Arc<DeliveryCell>,
+/// The per-element step of `press`, which an element handle's `press` and `type` run on their own
+/// element (`element_handle.rs`).
+pub(crate) struct PressAction<'a> {
+    pub(crate) options: &'a PressOptions,
+    pub(crate) delivery: &'a Arc<DeliveryCell>,
     /// Read by the first attempt that resolves the element, and kept for the call's later
     /// attempts.
-    platform: OnceLock<Platform>,
+    pub(crate) platform: OnceLock<Platform>,
 }
 
 impl<T: FormTab + KeyboardTab> ElementAction<T> for PressAction<'_> {
