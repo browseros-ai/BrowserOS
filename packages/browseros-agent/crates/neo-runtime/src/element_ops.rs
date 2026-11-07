@@ -242,8 +242,9 @@ pub(crate) async fn blur<T: ElementOpsTab>(
     .await
 }
 
-/// Neo: which of the two focus steps loop A runs on its element.
-enum Focus {
+/// Neo: which of the two focus steps loop A runs on its element; an element handle's `focus`
+/// runs it on its own element (`element_handle.rs`).
+pub(crate) enum Focus {
     Focus,
     Blur,
 }
@@ -482,7 +483,16 @@ pub(crate) async fn scroll_into_view_if_needed<T: ElementOpsTab>(
     progress: &Progress,
 ) -> Result<(), CallError> {
     let resolved = attached(tab, target, progress).await?;
-    let element = &resolved.element;
+    scroll_element(tab, &resolved.element, progress).await
+}
+
+/// `neo:scrollIntoViewIfNeeded`'s step on one element, which an element handle's
+/// `scrollIntoViewIfNeeded` runs on its own element (`element_handle.rs`).
+pub(crate) async fn scroll_element<T: ElementOpsTab>(
+    tab: &T,
+    element: &T::Element,
+    progress: &Progress,
+) -> Result<(), CallError> {
     retry_action(tab, progress, "scroll into view", false, || async {
         progress.log("  waiting for element to be stable");
         let checked = progress
@@ -518,7 +528,17 @@ pub(crate) async fn select_text<T: ElementOpsTab>(
     progress: &Progress,
 ) -> Result<(), CallError> {
     let resolved = attached(tab, target, progress).await?;
-    let element = &resolved.element;
+    select_text_element(tab, &resolved.element, force, progress).await
+}
+
+/// `neo:selectText`'s step on one element, which an element handle's `selectText` runs on its
+/// own element (`element_handle.rs`).
+pub(crate) async fn select_text_element<T: ElementOpsTab>(
+    tab: &T,
+    element: &T::Element,
+    force: bool,
+    progress: &Progress,
+) -> Result<(), CallError> {
     retry_action(tab, progress, "selectText", force, || async {
         if !force {
             progress.log("  waiting for element to be visible");

@@ -25,6 +25,7 @@ neo-runtime/src/dialogs.rs
 neo-runtime/src/discovery.rs
 neo-runtime/src/downloads.rs
 neo-runtime/src/drag.rs
+neo-runtime/src/element_handle.rs
 neo-runtime/src/element_ops.rs
 neo-runtime/src/evaluate.rs
 neo-runtime/src/events.rs

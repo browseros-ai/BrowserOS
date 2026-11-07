@@ -24,6 +24,7 @@ import type {
   ArtifactCommands,
   BrowserContextCommands,
   DialogCommands,
+  ElementHandleCommands,
   FrameCommands,
   Metadata,
   PageCommands,
@@ -37,11 +38,13 @@ import {
   parseError,
   targetClosedError,
 } from './errors'
+import type { Frame } from './frame'
 import type { InitScriptCommands } from './init-script'
 import type { EvalFrameCommands, JSHandleCommands } from './js-handle'
 import type { NeoFrameCommands } from './neo-commands'
 import type { Request, Response } from './network'
-import { abort, call } from './runtime-bridge'
+import type { Page } from './page'
+import { abort, type CreatedFrame, call } from './runtime-bridge'
 import type { SignalLike, TimeoutOptions } from './timeout-settings'
 
 /** The public methods that send a browser call, named as Playwright's client names them. */
@@ -188,6 +191,34 @@ export type ApiName =
   | 'elementHandle.$$'
   | 'elementHandle.$eval'
   | 'elementHandle.$$eval'
+  | 'elementHandle.boundingBox'
+  | 'elementHandle.contentFrame'
+  | 'elementHandle.getAttribute'
+  | 'elementHandle.innerHTML'
+  | 'elementHandle.innerText'
+  | 'elementHandle.inputValue'
+  | 'elementHandle.isChecked'
+  | 'elementHandle.isDisabled'
+  | 'elementHandle.isEditable'
+  | 'elementHandle.isEnabled'
+  | 'elementHandle.isHidden'
+  | 'elementHandle.isVisible'
+  | 'elementHandle.ownerFrame'
+  | 'elementHandle.textContent'
+  | 'elementHandle.click'
+  | 'elementHandle.dblclick'
+  | 'elementHandle.hover'
+  | 'elementHandle.tap'
+  | 'elementHandle.check'
+  | 'elementHandle.uncheck'
+  | 'elementHandle.setChecked'
+  | 'elementHandle.fill'
+  | 'elementHandle.press'
+  | 'elementHandle.type'
+  | 'elementHandle.selectOption'
+  | 'elementHandle.selectText'
+  | 'elementHandle.focus'
+  | 'elementHandle.scrollIntoViewIfNeeded'
   | 'elementHandle.dispatchEvent'
   | 'page.addInitScript'
   | 'browserContext.addInitScript'
@@ -298,6 +329,20 @@ export class Connection {
    * whether that page already reads closed: only the calls its close interrupted get the reason. */
   _closeReasonFor: (guid: string) => string | undefined = () => undefined
   _closedFor: (guid: string) => boolean = () => false
+  /** The `Frame` object of a frame record Rust handed out, on whichever of the run's pages it is
+   * (`BrowserContext`): an element handle's `ownerFrame` and `contentFrame`. */
+  _frameFor: (record: CreatedFrame) => Frame = () => {
+    throw new Error(
+      'neo-sdk: a frame record arrived before the run had its context',
+    )
+  }
+  /** The `Page` a frame guid of the run is on (`BrowserContext`): the page whose timeouts an
+   * element handle's actions take, as Playwright's client reads them through its frame. */
+  _pageFor: (frameGuid: string) => Page = () => {
+    throw new Error(
+      'neo-sdk: a frame guid arrived before the run had its context',
+    )
+  }
   /** Every `Request` and `Response` built so far, by guid, as Playwright's connection keeps its
    * objects: one guid is always one object (`network.ts` `responseFor`). */
   readonly _objects = new Map<string, Request | Response>()
@@ -481,6 +526,19 @@ export class Connection {
 
   /** {@link Connection.send} for a `JSHandle` command, to a handle's `handle@<n>` guid. A void
    * command (`dispose`) resolves `undefined`. */
+  /** {@link Connection.send} for an `ElementHandle` command (`element_handle.rs`), to a
+   * handle's `handle@<n>` guid. */
+  async sendElement<M extends keyof ElementHandleCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: ElementHandleCommands[M]['params'],
+    timeout: number | TimeoutOptions,
+  ): Promise<ElementHandleCommands[M]['result']> {
+    return ((await this.#send(apiName, guid, method, params, timeout)) ??
+      {}) as ElementHandleCommands[M]['result']
+  }
+
   async sendHandle<M extends keyof JSHandleCommands>(
     apiName: ApiName,
     guid: string,

@@ -98,9 +98,11 @@ pub(crate) async fn set_checked<T: FormTab>(
     .await
 }
 
-struct CheckAction<'a> {
-    options: &'a CheckOptions,
-    delivery: &'a Arc<DeliveryCell>,
+/// The per-element step of `set_checked`, which an element handle's `check` and `uncheck` run
+/// on their own element (`element_handle.rs`).
+pub(crate) struct CheckAction<'a> {
+    pub(crate) options: &'a CheckOptions,
+    pub(crate) delivery: &'a Arc<DeliveryCell>,
 }
 
 impl<T: FormTab> ElementAction<T> for CheckAction<'_> {

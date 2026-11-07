@@ -63,6 +63,7 @@ mod discovery;
 mod dispatch;
 mod downloads;
 mod drag;
+mod element_handle;
 mod element_ops;
 mod evaluate;
 mod events;

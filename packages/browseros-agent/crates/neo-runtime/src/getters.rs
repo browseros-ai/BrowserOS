@@ -309,6 +309,21 @@ pub(crate) async fn frames(tabs: &Tabs, page: &PageEntry) -> Result<Value, Playw
     frame_records(&page.id, &tree, tree.iter())
 }
 
+/// The record of the frame CDP calls `frame_id` in `page`'s tree, `None` when the page has no
+/// such frame: an element handle's `ownerFrame` and `contentFrame` (`element_handle.rs`), as
+/// Playwright's `FrameManager.frame(frameId)`.
+pub(crate) async fn frame_by_id(
+    tabs: &Tabs,
+    page: &PageEntry,
+    frame_id: &str,
+) -> Result<Option<Value>, PlaywrightError> {
+    let tree = frame_tree(tabs, page).await?;
+    tree.iter()
+        .find(|frame| frame.id == frame_id)
+        .map(|frame| frame_record(&page.id, &tree, frame))
+        .transpose()
+}
+
 /// A direct frame's live field, or its observed metadata after page closure. A real detach
 /// preserves the frame's parent identity while removing it from the parent's child list.
 /// Only the main URL avoids a frame-tree read while the page is alive.

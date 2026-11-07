@@ -73,7 +73,7 @@ const WAITER_ABORT_BOUND: Duration = Duration::from_secs(2);
 const OTHER_CONTEXT: &str = "JSHandles can be evaluated only in the context they were created!";
 
 /// Playwright: `server/chromium/crExecutionContext.ts` `rewriteError`: `throw new Error('Execution context was destroyed, most likely because of a navigation.');`
-const CONTEXT_DESTROYED: &str =
+pub(crate) const CONTEXT_DESTROYED: &str =
     "Execution context was destroyed, most likely because of a navigation.";
 
 /// Playwright: `server/chromium/crExecutionContext.ts` `rewriteError`: `throw new Error('Cannot serialize result: object reference chain is too long.');`
@@ -561,6 +561,10 @@ pub(crate) struct CreatedHandle {
     pub(crate) kind: HandleType,
     pub(crate) guid: String,
     pub(crate) initializer: HandleInitializer,
+    /// Neo: the guid of the frame the handle belongs to, as Playwright's client keeps the handle's
+    /// frame as its parent: its page's timeouts are its actions' (`client/elementHandle.ts`
+    /// `this._frame._timeout(options)`).
+    pub(crate) frame: String,
 }
 
 /// The two handle interfaces of Playwright's protocol.
@@ -979,7 +983,7 @@ impl Handles {
         entries.insert(
             guid.clone(),
             Arc::new(HandleEntry {
-                frame_guid,
+                frame_guid: frame_guid.clone(),
                 frame: Arc::clone(frame),
                 document,
                 remote,
@@ -994,6 +998,7 @@ impl Handles {
             },
             guid,
             initializer: HandleInitializer { preview },
+            frame: frame_guid,
         })
     }
 
@@ -1604,6 +1609,49 @@ async fn utility_root(
         .element(group.group(), backend)
         .await
         .map_err(|error| page_error(error).into())
+}
+
+/// The node a run's `ElementHandle` names, adopted into its frame's utility world for one
+/// `ElementHandle` command (`element_handle.rs`). The node lives as long as `group`.
+pub(crate) struct UtilityElement {
+    /// The frame document the handle was created in.
+    pub(crate) frame: Arc<FrameContext>,
+    pub(crate) element: Handle<Element>,
+    pub(crate) group: Arc<GroupGuard>,
+}
+
+/// Adopts the node of the run's element handle `guid` into its frame's utility world, as
+/// Playwright's server passes a handle to its frame's utility context
+/// (`ElementHandle.evaluateInUtility`), in a group of the call's own.
+///
+/// # Errors
+///
+/// `TargetClosedError` for a handle the run does not have, and Playwright's mismatching-dispatcher
+/// error for a `JSHandle` (`method` names the command). The inner `PageError` is the adoption's:
+/// `NotConnected` once the handle's document is gone.
+pub(crate) async fn utility_element(
+    tab: &FrameTab,
+    guid: &str,
+    method: &str,
+    handles: &Handles,
+) -> Result<Result<UtilityElement, PageError>, CallError> {
+    let entry =
+        element_scope(handles, Some(guid), method)?.ok_or_else(PlaywrightError::target_closed)?;
+    let Remote::Object(id) = &entry.remote else {
+        return Ok(Err(PageError::NotConnected));
+    };
+    let frame = Arc::clone(&entry.frame);
+    let group = tab.group(&frame, "element");
+    let adopted = async {
+        let backend = frame.main.backend_of(&frame, id.object_id()).await?;
+        frame.element(group.group(), backend).await
+    }
+    .await;
+    Ok(adopted.map(|element| UtilityElement {
+        frame,
+        element,
+        group: Arc::new(group),
+    }))
 }
 
 /// The first match of `selector` (strict when asked), in the frame the selector ends in, adopted
@@ -2682,7 +2730,7 @@ pub(crate) async fn element_handle_for(
     )
 }
 
-fn page_error(error: PageError) -> PlaywrightError {
+pub(crate) fn page_error(error: PageError) -> PlaywrightError {
     match error {
         PageError::Threw(message) => PlaywrightError::error(message),
         PageError::Closed => PlaywrightError::target_closed(),

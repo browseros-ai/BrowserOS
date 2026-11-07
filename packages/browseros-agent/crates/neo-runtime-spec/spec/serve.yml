@@ -136,6 +136,39 @@ interfaces:
     - dispatchEvent
     - highlight
     - hideHighlight
+  # The run's element handles (neo-runtime `element_handle.rs`), on the handle's own element:
+  # Playwright's `server/dom.ts` `ElementHandle`. `$`, `$$`, `$eval` and `$$eval` are served with
+  # the `JSHandle` commands (`evaluate.rs`), which are not keys here.
+  ElementHandle:
+    - boundingBox
+    - contentFrame
+    - getAttribute
+    - innerHTML
+    - innerText
+    - inputValue
+    - isChecked
+    - isDisabled
+    - isEditable
+    - isEnabled
+    - isHidden
+    - isVisible
+    - ownerFrame
+    - textContent
+    # The actions, through the frame actions' per-element steps on the handle's own element
+    # (click.rs, check.rs, fill.rs, press.rs, element_ops.rs).
+    - click
+    - dblclick
+    - hover
+    - tap
+    - check
+    - uncheck
+    - fill
+    - press
+    - type
+    - selectOption
+    - selectText
+    - focus
+    - scrollIntoViewIfNeeded
 
 # Named Playwright types the call bridge needs outside any command. `Metadata` is the `metadata`
 # of every protocol call; it carries the call's timeout, which is never a command parameter.

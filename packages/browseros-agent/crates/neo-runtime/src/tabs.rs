@@ -1,7 +1,7 @@
 //! A run's ordered page registry and lazy CDP sessions. Handing out a page registers its
 //! identity; attaching it owns a session until the run and its last writer have let go.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -240,6 +240,27 @@ impl Tabs {
                     .collect()
             },
         )
+    }
+
+    /// Every live page of the run's context, each registered as [`Self::pages`] registers it, in
+    /// first-seen order, attached or not: a lookup that must see the pages the run holds no
+    /// session on yet, which [`Self::session`] then attaches as the getters do
+    /// (`element_handle.rs` `owner_frame`).
+    pub(crate) async fn live_entries(&self) -> Result<Vec<Arc<PageEntry>>, PlaywrightError> {
+        let mut live = HashSet::new();
+        for info in self.infos().await? {
+            self.register(PageId::new(info.target_id.clone()), false)?;
+            live.insert(info.target_id);
+        }
+        let pages =
+            self.0.pages.lock().map_err(|_| {
+                PlaywrightError::error("neo-runtime: the run's pages cannot be read")
+            })?;
+        Ok(pages
+            .iter()
+            .filter(|entry| live.contains(entry.id.as_str()))
+            .cloned()
+            .collect())
     }
 
     pub(crate) fn finish_close(&self, page: Arc<PageSession>, entry: Arc<PageEntry>) {

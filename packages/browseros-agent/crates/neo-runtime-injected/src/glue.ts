@@ -148,6 +148,152 @@ export const glue = {
     elements: elementList(query(injected, selector, false, { root })),
   }),
 
+  /**
+   * The element handle reads (`scopedTextContent` … `scopedElementStateOnSelector`): each is its
+   * frame read below, resolved from `root` rather than the document, as Playwright's server
+   * reads a handle through its frame with `{ selector: ':scope', scope: this }`.
+   */
+  // Playwright: `server/dom.ts` `ElementHandle.textContent`: `return this._frame.textContent(progress, { selector: ':scope', scope: this });`
+  scopedTextContent: (injected, { selector, strict }, root) => {
+    const [element] = query(injected, selector, strict, {
+      markTargets: 'first',
+      root,
+    })
+    if (!element) return {}
+    return {
+      matched: {
+        value: element.textContent,
+        preview: injected.previewNode(element),
+      },
+    }
+  },
+
+  // Playwright: `server/dom.ts` `ElementHandle.innerText`: `return this._frame.innerText(progress, { selector: ':scope', scope: this });`
+  scopedInnerText: (injected, { selector, strict }, root) => {
+    const [element] = query(injected, selector, strict, {
+      markTargets: 'first',
+      root,
+    })
+    if (!element) return {}
+    // Playwright: `server/frames.ts` `Frame.innerText`: `throw injectedScript.createStacklessError('Node is not an HTMLElement');`
+    if (element.namespaceURI !== 'http://www.w3.org/1999/xhtml')
+      throw injected.createStacklessError('Node is not an HTMLElement')
+    return {
+      matched: {
+        value: (element as HTMLElement).innerText,
+        preview: injected.previewNode(element),
+      },
+    }
+  },
+
+  // Playwright: `server/dom.ts` `ElementHandle.innerHTML`: `return this._frame.innerHTML(progress, { selector: ':scope', scope: this });`
+  scopedInnerHTML: (injected, { selector, strict }, root) => {
+    const [element] = query(injected, selector, strict, {
+      markTargets: 'first',
+      root,
+    })
+    if (!element) return {}
+    return {
+      matched: {
+        value: element.innerHTML,
+        preview: injected.previewNode(element),
+      },
+    }
+  },
+
+  // Playwright: `server/dom.ts` `ElementHandle.getAttribute`: `return this._frame.getAttribute(progress, { selector: ':scope', scope: this }, name);`
+  scopedGetAttribute: (injected, { selector, strict, name }, root) => {
+    const [element] = query(injected, selector, strict, {
+      markTargets: 'first',
+      root,
+    })
+    if (!element) return {}
+    const value = element.getAttribute(name)
+    return {
+      matched: {
+        ...(value === null ? {} : { value }),
+        preview: injected.previewNode(element),
+      },
+    }
+  },
+
+  // Playwright: `server/dom.ts` `ElementHandle.inputValue`: `return this._frame.inputValue(progress, { selector: ':scope', scope: this });`
+  scopedInputValue: (injected, { selector, strict }, root) => {
+    const [node] = query(injected, selector, strict, {
+      markTargets: 'first',
+      root,
+    })
+    if (!node) return {}
+    const element = injected.retarget(node, 'follow-label')
+    if (
+      !element ||
+      (element.nodeName !== 'INPUT' &&
+        element.nodeName !== 'TEXTAREA' &&
+        element.nodeName !== 'SELECT')
+    )
+      // Playwright: `server/frames.ts` `Frame.inputValue`: `throw injectedScript.createStacklessError('Node is not an <input>, <textarea> or <select> element');`
+      throw injected.createStacklessError(
+        'Node is not an <input>, <textarea> or <select> element',
+      )
+    return {
+      matched: {
+        value: (
+          element as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+        ).value,
+        preview: injected.previewNode(node),
+      },
+    }
+  },
+
+  // Playwright: `server/dom.ts` `ElementHandle.isVisible`: `return this._frame.isVisible(progress, { selector: ':scope', scope: this });`
+  scopedIsVisible: (injected, { selector, strict, frameVisible }, root) => {
+    const [element] = query(injected, selector, strict, { root })
+    return {
+      value:
+        !!element &&
+        frameVisible &&
+        injected.elementState(element, 'visible', true).matches,
+    }
+  },
+
+  // Playwright: `server/dom.ts` `ElementHandle._markAsTargetElement`: `if (node.nodeType === 1 /* Node.ELEMENT_NODE */)`
+  markTarget: (injected, _params, node) => {
+    if (node.nodeType === 1) injected.markTargetElements(new Set([node]))
+    return {}
+  },
+
+  // Playwright: `server/chromium/crPage.ts` `FrameSession._getOwnerFrame`: `const documentElement = await handle.evaluateHandle(node => {`
+  ownerDocumentElement: (_injected, _params, node) => {
+    const doc = node as unknown as Document
+    if (doc.documentElement && doc.documentElement.ownerDocument === doc)
+      return { element: doc.documentElement }
+    const element = node.ownerDocument
+      ? node.ownerDocument.documentElement
+      : null
+    return element ? { element } : {}
+  },
+
+  // Playwright: `server/dom.ts` `ElementHandle.isChecked`: `return this._frame.isChecked(progress, { selector: ':scope', scope: this });`
+  scopedElementStateOnSelector: (
+    injected,
+    { selector, strict, state },
+    root,
+  ) => {
+    const [element] = query(injected, selector, strict, {
+      markTargets: 'first',
+      root,
+    })
+    if (!element) return {}
+    const { matches, received } = injected.elementState(element, state)
+    return {
+      matched: {
+        matches,
+        received,
+        preview: injected.previewNode(element),
+      },
+    }
+  },
+
   // Playwright: `server/dom.ts` `ElementHandle._initializePreview`: `this._setPreview(await utility.evaluate((injected, e) => 'JSHandle@' + injected.previewNode(e), this));`
   listPreviews: (injected, _params, list) => ({
     previews: Object.values(list).map((element) =>

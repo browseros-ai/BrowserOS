@@ -182,10 +182,12 @@ pub(crate) async fn input_value<T: FormTab>(
     }
 }
 
-struct FillAction<'a> {
-    options: &'a FillOptions,
-    delivery: &'a Arc<DeliveryCell>,
-    platform: OnceLock<Platform>,
+/// The per-element step of `fill`, which an element handle's `fill` runs on its own element
+/// (`element_handle.rs`).
+pub(crate) struct FillAction<'a> {
+    pub(crate) options: &'a FillOptions,
+    pub(crate) delivery: &'a Arc<DeliveryCell>,
+    pub(crate) platform: OnceLock<Platform>,
 }
 
 impl<T: FormTab + KeyboardTab> ElementAction<T> for FillAction<'_> {
@@ -313,10 +315,12 @@ fn plan_fill_input<D: Devices>(
     Ok(plan)
 }
 
-struct SelectAction<'a> {
-    options: &'a SelectOptions,
-    elements: &'a [Arc<HandleEntry>],
-    delivery: &'a Arc<DeliveryCell>,
+/// The per-element step of `select_option`, which an element handle's `selectOption` runs on
+/// its own element (`element_handle.rs`).
+pub(crate) struct SelectAction<'a> {
+    pub(crate) options: &'a SelectOptions,
+    pub(crate) elements: &'a [Arc<HandleEntry>],
+    pub(crate) delivery: &'a Arc<DeliveryCell>,
 }
 
 impl<T: FormTab> ElementAction<T> for SelectAction<'_> {
