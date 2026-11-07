@@ -47,6 +47,7 @@ import {
   isString,
 } from '../vendor/playwright/isomorphic/stringUtils'
 import type {
+  AriaSnapshotJSON,
   AriaSnapshotOptions,
   CheckOptions,
   ClickOptions,
@@ -205,6 +206,27 @@ export class Locator {
       options,
       this._selector,
     )
+  }
+
+  /** The tree `ariaSnapshot` renders, as Playwright's `AriaSnapshotJSON`. */
+  async ariaSnapshotJSON(
+    options: AriaSnapshotOptions = {},
+  ): Promise<AriaSnapshotJSON> {
+    return await this._frame._ariaSnapshotJSON(
+      'locator.ariaSnapshotJSON',
+      options,
+      this._selector,
+    )
+  }
+
+  /** A locator of Playwright's simple selector for the first match (not strict), behind the
+   * selectors of the iframes on the way from the main frame, on this locator's frame. */
+  async normalize(): Promise<Locator> {
+    const resolved = await this._frame._resolveSelector(
+      'locator.normalize',
+      this._selector,
+    )
+    return new Locator(this._frame, resolved)
   }
 
   async count(): Promise<number> {

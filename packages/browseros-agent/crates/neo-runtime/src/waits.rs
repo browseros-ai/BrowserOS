@@ -318,6 +318,78 @@ pub(crate) async fn wait_for_load_state<T: WaitTab>(
     .await
 }
 
+/// Neo: `Frame.setContent`'s wait. `since` is the frame's lifecycle before `document.open()`,
+/// which clears what had fired (Playwright's `_onClearLifecycle`), so only an event of the
+/// written content satisfies `state`; `commit` needs none.
+///
+/// Playwright: `server/frames.ts` `Frame.setContent`: `const lifecyclePromise = progress.race(tagPromise).then(() => this.waitForLoadState(progress, waitUntil));`
+pub(crate) async fn wait_for_written_content<O: Observation>(
+    events: O,
+    since: Lifecycle,
+    state: LifecycleEvent,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    if state == LifecycleEvent::Commit {
+        return Ok(());
+    }
+    let cleared = Lifecycle {
+        dom_content_loaded: false,
+        load: false,
+        ..since
+    };
+    wait_until(
+        &mut NavigationCondition {
+            events,
+            matcher: None,
+            phase: Phase::Loading(cleared),
+            wait_until: state,
+            navigation: None,
+            check_current: false,
+            initial_check: false,
+        },
+        progress,
+    )
+    .await
+}
+
+/// Neo: the delay Node's `setTimeout` waits for Playwright's `waitForTimeout(ms)`: none for a
+/// negative or NaN delay, and [`OVERFLOWED_TIMER`] past the 32-bit timer range, as Node sets
+/// an overflowing delay to 1 ms.
+pub(crate) fn timer_delay(ms: f64) -> time::Duration {
+    if ms > MAX_TIMER_MS {
+        return OVERFLOWED_TIMER;
+    }
+    time::Duration::try_from_secs_f64(ms.max(0.0) / 1000.0).unwrap_or_default()
+}
+
+/// Neo: Node's largest timer delay, `2 ** 31 - 1` ms.
+const MAX_TIMER_MS: f64 = 2_147_483_647.0;
+
+/// Neo: what Node waits instead of a delay past [`MAX_TIMER_MS`].
+const OVERFLOWED_TIMER: time::Duration = time::Duration::from_millis(1);
+
+/// Serves `Frame.waitForTimeout`: the wait, ended early when the frame goes or the page closes.
+///
+/// Playwright: `server/frames.ts` `Frame.waitForTimeout`: `// Make sure we react to page close or frame detach.`
+pub(crate) async fn wait_for_timeout<T: WaitTab>(
+    tab: &T,
+    wait: time::Duration,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let mut events = tab.observe().map_err(page_error)?;
+    let gone = async {
+        loop {
+            if let Err(error) = events.next().await {
+                return error;
+            }
+        }
+    };
+    tokio::select! {
+        waited = progress.wait(wait) => waited,
+        error = gone => Err(page_error(error).into()),
+    }
+}
+
 pub(crate) async fn wait_for_url<T: WaitTab>(
     tab: &T,
     options: &WaitForUrlOptions,

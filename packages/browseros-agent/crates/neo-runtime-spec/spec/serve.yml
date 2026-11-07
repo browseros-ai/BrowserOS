@@ -81,6 +81,15 @@ interfaces:
     - isEditable
     - isHidden
     - innerHTML
+    # Document content and timing (content.rs): `content`, `setContent` (`document.open`,
+    # `write` and `close` in the utility world, then a lifecycle event of the new content),
+    # `waitForTimeout`, `resolveSelector` (`locator.normalize`), and `ariaSnapshotJSON`
+    # (reads.rs: the tree the YAML snapshot renders, as Playwright's JSON).
+    - content
+    - setContent
+    - waitForTimeout
+    - resolveSelector
+    - ariaSnapshotJSON
 
 # Named Playwright types the call bridge needs outside any command. `Metadata` is the `metadata`
 # of every protocol call; it carries the call's timeout, which is never a command parameter.

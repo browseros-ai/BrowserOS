@@ -20,9 +20,11 @@ import {
 } from './errors'
 import { ChannelOwner, type EventTable } from './events'
 import {
+  type AriaSnapshotJSON,
   type AriaSnapshotOptions,
   type CheckOptions,
   type ClickOptions,
+  type ContentOptions,
   type DblclickOptions,
   type FillOptions,
   Frame,
@@ -41,6 +43,7 @@ import {
   type NavigationURLMatch,
   type PressOptions,
   type SelectOptionOptions,
+  type SetContentOptions,
   type TapOptions,
   type TextContentOptions,
   type UncheckOptions,
@@ -569,6 +572,35 @@ export class Page extends ChannelOwner {
    */
   async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
     return await this.#mainFrame._ariaSnapshot('page.ariaSnapshot', options)
+  }
+
+  /** The tree `ariaSnapshot` renders, as Playwright's `AriaSnapshotJSON`. */
+  async ariaSnapshotJSON(
+    options: AriaSnapshotOptions = {},
+  ): Promise<AriaSnapshotJSON> {
+    return await this.#mainFrame._ariaSnapshotJSON(
+      'page.ariaSnapshotJSON',
+      options,
+    )
+  }
+
+  /** The main frame's markup, as Playwright's `page.content`. */
+  async content(options?: ContentOptions): Promise<string> {
+    return await this.#mainFrame._content('page.content', options ?? {})
+  }
+
+  /** Writes `html` into the main frame, as Playwright's `page.setContent`. */
+  async setContent(html: string, options?: SetContentOptions): Promise<void> {
+    return await this.#mainFrame._setContent(
+      'page.setContent',
+      html,
+      options ?? {},
+    )
+  }
+
+  /** Waits `timeout` milliseconds in the main frame, as Playwright's `page.waitForTimeout`. */
+  async waitForTimeout(timeout: number): Promise<void> {
+    return await this.#mainFrame._waitForTimeout('page.waitForTimeout', timeout)
   }
 
   /** Not strict, as Playwright's `page.click`, which forwards to the main frame. */

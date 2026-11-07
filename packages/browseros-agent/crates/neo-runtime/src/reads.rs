@@ -64,6 +64,7 @@ use neo_runtime_spec::injected::{
     InjectedInnerHTMLParams, InjectedInnerTextParams, InjectedTextContentParams, TextMatch,
 };
 use neo_runtime_spec::serve::{
+    FrameAriaSnapshotJSONParams, FrameAriaSnapshotJSONParamsMode, FrameAriaSnapshotJSONResult,
     FrameAriaSnapshotParams, FrameAriaSnapshotParamsMode, FrameAriaSnapshotResult,
     FrameGetAttributeParams, FrameGetAttributeResult, FrameInnerHTMLParams, FrameInnerHTMLResult,
     FrameInnerTextParams, FrameInnerTextResult, FrameTextContentParams, FrameTextContentResult,
@@ -229,6 +230,25 @@ pub(crate) struct SnapshotOptions {
 
 // Neo: decodes the generated snapshot params once for the runtime route.
 impl SnapshotOptions {
+    /// `Frame.ariaSnapshotJSON` takes `Frame.ariaSnapshot`'s params.
+    pub(crate) fn from_json_params(params: FrameAriaSnapshotJSONParams) -> Self {
+        let FrameAriaSnapshotJSONParams {
+            mode,
+            selector,
+            depth,
+            boxes,
+        } = params;
+        Self::from_params(FrameAriaSnapshotParams {
+            mode: mode.map(|mode| match mode {
+                FrameAriaSnapshotJSONParamsMode::Ai => FrameAriaSnapshotParamsMode::Ai,
+                FrameAriaSnapshotJSONParamsMode::Default => FrameAriaSnapshotParamsMode::Default,
+            }),
+            selector,
+            depth,
+            boxes,
+        })
+    }
+
     /// Playwright: `server/frames.ts` `Frame.ariaSnapshotJSON`: `if (options.selector && options.mode !== 'ai') {`
     pub(crate) fn from_params(params: FrameAriaSnapshotParams) -> Self {
         let FrameAriaSnapshotParams {
@@ -406,13 +426,39 @@ where
     Ok(Some(matched.value))
 }
 
-/// Serves a document or locator snapshot. AI snapshots rooted in the main frame stitch
-/// rendered iframe documents and prefix their refs with paths from that main frame.
+/// Serves `Frame.ariaSnapshot`: the tree as Playwright's YAML.
+///
+/// Playwright: `server/frames.ts` `Frame.ariaSnapshot`: `return { snapshot: renderAriaSnapshotAsYaml(snapshot) };`
 pub(crate) async fn aria_snapshot<T: ReadTab>(
     tab: &T,
     options: &SnapshotOptions,
     progress: &Progress,
 ) -> Result<FrameAriaSnapshotResult, CallError> {
+    render_snapshot(&aria_nodes(tab, options, progress).await?)
+}
+
+/// Serves `Frame.ariaSnapshotJSON`: the same tree as Playwright's `AriaSnapshotJSON`, the nodes
+/// the YAML renders.
+///
+/// Playwright: `server/frames.ts` `Frame.ariaSnapshotJSON`: `return { snapshot: await ariaSnapshotJSONForFrame(progress, this, options.selector, options) };`
+pub(crate) async fn aria_snapshot_json<T: ReadTab>(
+    tab: &T,
+    options: &SnapshotOptions,
+    progress: &Progress,
+) -> Result<FrameAriaSnapshotJSONResult, CallError> {
+    let nodes = aria_nodes(tab, options, progress).await?;
+    let snapshot = serde_json::to_value(nodes)
+        .map_err(|error| PlaywrightError::error(format!("neo-runtime: {error}")))?;
+    Ok(FrameAriaSnapshotJSONResult { snapshot })
+}
+
+/// Serves a document or locator snapshot. AI snapshots rooted in the main frame stitch
+/// rendered iframe documents and prefix their refs with paths from that main frame.
+async fn aria_nodes<T: ReadTab>(
+    tab: &T,
+    options: &SnapshotOptions,
+    progress: &Progress,
+) -> Result<Vec<AriaNode>, CallError> {
     if let Some(selector) = &options.selector {
         return locator_aria_snapshot(tab, selector, options, progress).await;
     }
@@ -422,7 +468,7 @@ pub(crate) async fn aria_snapshot<T: ReadTab>(
     } else {
         root.nodes
     };
-    render_snapshot(&nodes)
+    Ok(nodes)
 }
 
 /// The call's own document, polled until it has a body.
@@ -460,7 +506,7 @@ async fn locator_aria_snapshot<T: ReadTab>(
     selector: &str,
     options: &SnapshotOptions,
     progress: &Progress,
-) -> Result<FrameAriaSnapshotResult, CallError> {
+) -> Result<Vec<AriaNode>, CallError> {
     let params = InjectedAriaSnapshotParams {
         selector: selector.to_string(),
         strict: true,
@@ -485,7 +531,7 @@ async fn locator_aria_snapshot<T: ReadTab>(
         Ok(Some(Matched { value, preview }))
     })
     .await?;
-    render_snapshot(&snapshot.nodes)
+    Ok(snapshot.nodes)
 }
 
 /// Playwright: `server/page.ts` `ariaSnapshotJSONForFrame`: `frame.retryWithProgressAndTimeouts(progress, [1000, 2000, 4000, 8000],`
@@ -494,7 +540,7 @@ async fn locator_ai_snapshot<T: ReadTab>(
     params: &InjectedAriaSnapshotParams,
     options: &SnapshotOptions,
     progress: &Progress,
-) -> Result<FrameAriaSnapshotResult, CallError> {
+) -> Result<Vec<AriaNode>, CallError> {
     let mut attempt: usize = 0;
     loop {
         let wait = SNAPSHOT_WAITS_MS[attempt.min(SNAPSHOT_WAITS_MS.len() - 1)];
@@ -504,8 +550,7 @@ async fn locator_ai_snapshot<T: ReadTab>(
         }
         match snapshot_once(tab, params, progress).await {
             Ok(Some(snapshot)) => {
-                let nodes = stitch(tab, options, progress, snapshot).await?;
-                return render_snapshot(&nodes);
+                return stitch(tab, options, progress, snapshot).await;
             }
             Ok(None) => {
                 // Playwright: `server/page.ts` `ariaSnapshotJSONForFrame`: `throw new NonRecoverableDOMError(`

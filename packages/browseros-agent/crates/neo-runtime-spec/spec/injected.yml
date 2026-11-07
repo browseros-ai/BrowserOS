@@ -189,6 +189,40 @@ Injected:
         # Visibility of the first iframe owner, false when nothing matched.
         visible: boolean
 
+    # `frames.ts` `Frame._content`: the document's markup, its doctype first.
+    documentContent:
+      internal: true
+      parameters:
+        # Serialize open shadow roots too (`<template shadowrootmode>`).
+        includeShadow: boolean
+      returns:
+        value: string
+
+    # `frames.ts` `Frame.setContent`'s page function: `document.open()`, `write`, `close()`.
+    # neo-runtime records the frame's lifecycle counts before it and waits for a new event after.
+    writeContent:
+      internal: true
+      parameters:
+        html: string
+
+    # `frames.ts` `Frame.resolveSelector`: the first match of one frame chunk (not strict), and
+    # `InjectedScript.generateSelectorSimple` for it.
+    generateSelector:
+      internal: true
+      parameters:
+        selector: string
+      returns:
+        # Absent when nothing matches; empty when no selector could be generated.
+        generated: string?
+
+    # `generateSelectorSimple` for one iframe owner, the frame hop in front of the element's.
+    generateOwnerSelector:
+      internal: true
+      parameters:
+        element: Element
+      returns:
+        generated: string
+
     # Names a selector the way Playwright's call log does, for a click's first log line
     # `waiting for <locator>`, and reports a selector the page cannot parse. Playwright computes
     # both in Node (`asLocator`, `Selectors.parseSelector`); Neo asks the injected script's own
