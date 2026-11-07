@@ -21,6 +21,7 @@ type Api = InjectedApi<InjectedScript, Handles>
 /** A table that satisfies the contract; each case below breaks one entry of it. */
 const valid = {
   title: () => ({ value: document.title }),
+  selectorState: () => ({}),
   textContent: () => ({}),
   innerText: () => ({}),
   getAttribute: () => ({}),

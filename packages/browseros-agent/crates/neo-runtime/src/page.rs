@@ -67,7 +67,9 @@ use crate::click::{
     Arming, Geometry, MouseButton, MouseClick, NotReady, PageError, PressReport, Resolved, Scroll,
     SelectorFacts, StatesCheck, Tab, Verdict,
 };
-use crate::navigate::{NavigateReply, Navigation, NavigationState, NavigationTab, Observation};
+use crate::navigate::{
+    Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
+};
 use crate::progress::InputTicket;
 use crate::progress::PlaywrightError;
 use crate::run::PageId;
@@ -152,8 +154,13 @@ pub(crate) struct PageSession {
     /// group-release tasks, so `Dispatcher::finish` can wait for them before reading final
     /// deliveries.
     tasks: TaskTracker,
-    /// The domains and the watcher, set up by this tab's first click or beforeunload call.
-    prepared: OnceCell<Watcher>,
+    /// Channels exist before domain setup, so a wait can subscribe before preparation emits
+    /// commits. Every watcher attempt publishes into the same channels.
+    state: watch::Receiver<PageState>,
+    state_updates: watch::Sender<PageState>,
+    navigations: broadcast::Sender<Navigation>,
+    /// Set after domain setup; dropping the guard stops the watcher.
+    prepared: OnceCell<DropGuard>,
     /// Cancelled when the tab closes or the session detaches; every call's `Progress` races
     /// it, so a call on a closed tab ends with Playwright's `TargetClosedError`.
     closed: CancellationToken,
@@ -166,17 +173,11 @@ pub(crate) struct PageSession {
     input: Arc<Mutex<()>>,
 }
 
-/// The watcher's published state, and the guard that stops it when the page drops.
-struct Watcher {
-    state: watch::Receiver<PageState>,
-    navigations: broadcast::Sender<Navigation>,
-    _stop: DropGuard,
-}
-
-struct PageUpdates {
+struct PageUpdates<S> {
     state: watch::Sender<PageState>,
     navigations: broadcast::Sender<Navigation>,
     world: Arc<World>,
+    initial_url: S,
 }
 
 /// What the run's session has reported since `prepare`. Counters only grow, so a caller takes
@@ -198,6 +199,8 @@ pub(crate) struct PageState {
     pub(crate) document: Option<String>,
     pub(crate) dom_content_loaded: bool,
     pub(crate) load: bool,
+    pub(crate) dom_content_loaded_count: u64,
+    pub(crate) load_count: u64,
     /// Chromium emits no load lifecycle when restoring this document from bfcache.
     restored_from_bfcache: bool,
     /// `Page.javascriptDialogOpening` events seen; each was answered.
@@ -209,6 +212,31 @@ pub(crate) struct PageState {
 pub(crate) struct PageMark {
     navigations_requested: u64,
     dialogs_opened: u64,
+}
+
+impl PageState {
+    fn lifecycle(&self) -> Lifecycle {
+        Lifecycle {
+            dom_content_loaded: self.dom_content_loaded,
+            load: self.load,
+            dom_content_loaded_count: self.dom_content_loaded_count,
+            load_count: self.load_count,
+        }
+    }
+
+    fn did_dom_content_load(&mut self) {
+        if !self.dom_content_loaded {
+            self.dom_content_loaded = true;
+            self.dom_content_loaded_count += 1;
+        }
+    }
+
+    fn did_load(&mut self) {
+        if !self.load {
+            self.load = true;
+            self.load_count += 1;
+        }
+    }
 }
 
 /// How the watcher answers a dialog: Playwright's default with no `page.on('dialog')` listener
@@ -244,10 +272,15 @@ impl PageSession {
             session.id.clone(),
             page.as_str().to_string(),
         );
+        let (state_updates, state) = watch::channel(PageState::default());
+        let (navigations, _) = broadcast::channel(4096);
         Self {
             session,
             main_frame: page.as_str().to_string(),
             tasks,
+            state,
+            state_updates,
+            navigations,
             prepared: OnceCell::new(),
             closed,
             world: Arc::new(world),
@@ -286,8 +319,12 @@ impl PageSession {
         self.prepared
             .get_or_try_init(|| async {
                 let events = self.session.cdp.events();
-                let (state, receiver) = watch::channel(PageState::default());
-                let (navigations, _) = broadcast::channel(4096);
+                let (seed_ready, ready) = oneshot::channel();
+                let cdp = self.session.cdp.clone();
+                let session = self.session.id.clone();
+                let initial_url = seed_url(ready, move |method| async move {
+                    cdp.send(method, json!({}), Some(&session)).await
+                });
                 // Guarded before the spawn: if this setup fails or is dropped before it
                 // finishes (the call stopped), the guard stops the watcher it already started.
                 let stop = CancellationToken::new();
@@ -298,9 +335,10 @@ impl PageSession {
                     self.session.id.clone(),
                     self.main_frame.clone(),
                     PageUpdates {
-                        state,
-                        navigations: navigations.clone(),
+                        state: self.state_updates.clone(),
+                        navigations: self.navigations.clone(),
                         world: Arc::clone(&self.world),
+                        initial_url,
                     },
                     self.closed.clone(),
                     stop,
@@ -310,6 +348,9 @@ impl PageSession {
                 // including pages loaded before this run and restored from bfcache.
                 self.send("Page.setLifecycleEventsEnabled", json!({ "enabled": true }))
                     .await?;
+                // The watcher reads the frame tree after Page.enable and lifecycle replay.
+                // Preparation never waits for that read: clicks must not pay for the seed.
+                let _ = seed_ready.send(());
                 let focus = self
                     .send(
                         "Emulation.setFocusEmulationEnabled",
@@ -319,11 +360,7 @@ impl PageSession {
                 if let Err(error) = focus {
                     debug!(%error, "focus emulation refused; a background tab may not paint");
                 }
-                Ok(Watcher {
-                    state: receiver,
-                    navigations,
-                    _stop: stop_guard,
-                })
+                Ok(stop_guard)
             })
             .await
             .map(|_| ())
@@ -343,11 +380,11 @@ impl PageSession {
     }
 
     fn state(&self) -> Option<watch::Receiver<PageState>> {
-        self.prepared.get().map(|watcher| watcher.state.clone())
+        self.prepared.get().map(|_| self.state.clone())
     }
 
     /// Resolves when no navigation is pending, with the URL it committed to, if any.
-    async fn navigation_settled(&self) -> Result<Option<String>, PageError> {
+    pub(crate) async fn navigation_settled(&self) -> Result<Option<String>, PageError> {
         let Some(mut state) = self.state() else {
             return Ok(None);
         };
@@ -363,6 +400,27 @@ impl PageSession {
         })
     }
 
+    pub(crate) fn pending_navigation(&self) -> Option<String> {
+        self.state()
+            .and_then(|state| state.borrow().pending_url.clone())
+    }
+
+    /// Waits can recover from a full commit queue by checking the latest state. An
+    /// intermediate URL may have been lost; goto keeps its existing overflow error.
+    pub(crate) fn observe_waits(&self) -> NavigationObservation {
+        let mut observation = self.observe_navigations();
+        observation.recover_lag = true;
+        observation
+    }
+
+    fn observe_navigations(&self) -> NavigationObservation {
+        NavigationObservation {
+            navigations: self.navigations.subscribe(),
+            state: self.state.clone(),
+            recover_lag: false,
+        }
+    }
+
     fn mark(&self) -> PageMark {
         self.state().map_or_else(PageMark::default, |state| {
             let state = state.borrow();
@@ -374,11 +432,12 @@ impl PageSession {
     }
 }
 
-/// A commit queue plus the current lifecycle. Watch coalescing is fine for lifecycle flags;
-/// commits use a queue so two navigations before a CDP reply cannot hide an interruption.
+/// A commit queue plus current state. Lifecycle counts survive watch coalescing; commits
+/// use a queue so two navigations before a CDP reply cannot hide an intermediate URL.
 pub(crate) struct NavigationObservation {
     navigations: broadcast::Receiver<Navigation>,
     state: watch::Receiver<PageState>,
+    recover_lag: bool,
 }
 
 impl Observation for NavigationObservation {
@@ -386,16 +445,18 @@ impl Observation for NavigationObservation {
         let state = self.state.borrow();
         NavigationState {
             pending_url: state.pending_url.clone(),
-            dom_content_loaded: state.dom_content_loaded,
-            load: state.load,
+            url: state.committed_url.clone(),
+            lifecycle: state.lifecycle(),
         }
     }
 
     async fn next(&mut self) -> Result<Option<Navigation>, PageError> {
         tokio::select! {
+            biased;
             navigation = self.navigations.recv() => match navigation {
                 Ok(navigation) => Ok(Some(navigation)),
                 Err(RecvError::Closed) => Err(PageError::Closed),
+                Err(RecvError::Lagged(_)) if self.recover_lag => Ok(None),
                 Err(RecvError::Lagged(_)) => Err(PageError::Contract("Navigation event queue overflowed".to_string())),
             },
             changed = self.state.changed() => changed.map(|()| None).map_err(|_| PageError::Closed),
@@ -413,14 +474,7 @@ impl NavigationTab for Arc<PageSession> {
     }
 
     fn observe(&self) -> Result<NavigationObservation, PageError> {
-        let watcher = self
-            .prepared
-            .get()
-            .ok_or_else(|| PageError::Contract("Page has not been prepared".to_string()))?;
-        Ok(NavigationObservation {
-            navigations: watcher.navigations.subscribe(),
-            state: watcher.state.clone(),
-        })
+        Ok(self.observe_navigations())
     }
 
     async fn navigate(
@@ -516,6 +570,31 @@ pub(crate) struct InputPermit {
 // The watcher.
 // ---------------------------------------------------------------------------------------------
 
+/// Playwright's attach source (`chromium/crPage.ts:500-502,689-694`): the same main-frame URL
+/// and fragment as a commit event, including chrome-error URLs. An abandoned setup never
+/// queries the page or completes its seed; its stop guard disposes the watcher instead.
+async fn seed_url<F, Fut>(ready: oneshot::Receiver<()>, read: F) -> Result<Option<String>, CdpError>
+where
+    F: FnOnce(&'static str) -> Fut,
+    Fut: Future<Output = Result<Value, CdpError>>,
+{
+    if ready.await.is_err() {
+        return future::pending().await;
+    }
+    let reply = read("Page.getFrameTree").await?;
+    // frameTree and Page.frameNavigated carry the same frame payload; child frames are ignored.
+    let tree: FrameNavigated = serde_json::from_value(reply["frameTree"].clone())?;
+    let frame = tree.frame;
+    if frame.url.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "{}{}",
+        frame.url,
+        frame.url_fragment.as_deref().unwrap_or("")
+    )))
+}
+
 /// The watcher task: one `cdp.events()` receiver for the run, filtered to this session (and to
 /// `Target.detachedFromTarget` naming it). Answers dialogs with `Page.handleJavaScriptDialog`
 /// on its own task, so no click await can block the answer; applies every event to `state`;
@@ -531,28 +610,56 @@ async fn watch_events(
     cdp: CdpClient,
     session: SessionId,
     main_frame: String,
-    updates: PageUpdates,
+    updates: PageUpdates<impl Future<Output = Result<Option<String>, CdpError>>>,
     closed: CancellationToken,
     stop: CancellationToken,
 ) {
+    let PageUpdates {
+        state,
+        navigations,
+        world,
+        initial_url,
+    } = updates;
+    tokio::pin!(initial_url);
+    let mut seed_pending = true;
     loop {
         let event = tokio::select! {
+            // The CDP reader publishes events and replies in socket order. Drain events
+            // before applying the frame-tree reply, even if both became ready in one poll.
+            biased;
             () = stop.cancelled() => return,
             event = events.recv() => event,
+            seed = &mut initial_url, if seed_pending => {
+                seed_pending = false;
+                match seed {
+                    Ok(Some(url)) => {
+                        state.send_if_modified(|state| {
+                            if state.committed_url.is_some() {
+                                return false;
+                            }
+                            state.committed_url = Some(url);
+                            true
+                        });
+                    }
+                    Ok(None) => debug!(%session, "initial page URL empty; waiting for a commit"),
+                    Err(error) => debug!(%session, %error, "initial page URL unavailable; waiting for a commit"),
+                }
+                continue;
+            }
         };
         match event {
             Ok(event) => {
                 let mut applied = Applied::default();
-                updates.state.send_if_modified(|state| {
+                state.send_if_modified(|state| {
                     applied = apply(state, &event, &session, &main_frame);
                     if applied.new_document {
                         // Before notifying readers: no in-flight read may return old-document data.
-                        updates.world.document_committed();
+                        world.document_committed();
                     }
                     applied.changed
                 });
                 if let Some(navigation) = applied.navigation {
-                    let _listeners = updates.navigations.send(navigation);
+                    let _listeners = navigations.send(navigation);
                 }
                 if let Some(answer) = applied.dialog {
                     answer_dialog(&cdp, &session, answer);
@@ -564,9 +671,7 @@ async fn watch_events(
             }
             Err(RecvError::Lagged(skipped)) => {
                 warn!(%session, skipped, "the run's event watcher lagged; answering any dialog");
-                updates
-                    .state
-                    .send_if_modified(|state| state.pending_url.take().is_some());
+                state.send_if_modified(|state| state.pending_url.take().is_some());
                 answer_dialog(&cdp, &session, DialogAnswer::Dismiss);
             }
             Err(RecvError::Closed) => {
@@ -699,6 +804,7 @@ pub(crate) fn apply(
                 applied.navigation = Some(Navigation {
                     document: state.document.clone(),
                     url: state.committed_url.clone().unwrap_or_default(),
+                    lifecycle: state.lifecycle(),
                 });
                 applied.changed = true;
             }
@@ -716,6 +822,7 @@ pub(crate) fn apply(
                 applied.navigation = Some(Navigation {
                     document: None,
                     url,
+                    lifecycle: state.lifecycle(),
                 });
                 applied.changed = true;
             }
@@ -728,8 +835,8 @@ pub(crate) fn apply(
                 // Playwright 26137face ignores stop-loading. Only bfcache needs this fallback:
                 // Chromium restores a loaded document without replaying its lifecycle events.
                 if state.restored_from_bfcache {
-                    state.dom_content_loaded = true;
-                    state.load = true;
+                    state.did_dom_content_load();
+                    state.did_load();
                 }
                 applied.changed = true;
             }
@@ -767,8 +874,8 @@ fn apply_lifecycle(state: &mut PageState, event: &LifecycleEvent) -> bool {
         return seeded;
     }
     match event.name.as_str() {
-        "DOMContentLoaded" => state.dom_content_loaded = true,
-        "load" => state.load = true,
+        "DOMContentLoaded" => state.did_dom_content_load(),
+        "load" => state.did_load(),
         _ => return seeded,
     }
     true
@@ -1244,8 +1351,7 @@ impl Tab for Arc<PageSession> {
     }
 
     fn pending_navigation(&self) -> Option<String> {
-        self.state()
-            .and_then(|state| state.borrow().pending_url.clone())
+        PageSession::pending_navigation(self)
     }
 
     async fn navigation_settled(&self) -> Result<Option<String>, PageError> {
@@ -1819,6 +1925,362 @@ mod tests {
         }
         assert_eq!(state.document.as_deref(), Some("existing"));
         assert!(state.dom_content_loaded && state.load);
+    }
+
+    #[test]
+    fn tests_that_lifecycle_counts_survive_resets_and_ignore_duplicate_events() {
+        let mut state = PageState::default();
+        for document in ["one", "two"] {
+            let committed = applied(
+                &mut state,
+                &event(
+                    "Page.frameNavigated",
+                    Some(SESSION),
+                    json!({
+                        "frame": {"id": MAIN, "url": "https://a.test/", "loaderId": document}
+                    }),
+                ),
+            );
+            let snapshot = committed.navigation.expect("commit").lifecycle;
+            assert!(!snapshot.load && !snapshot.dom_content_loaded);
+            assert_eq!(snapshot.load_count, state.load_count);
+            for name in ["DOMContentLoaded", "load"] {
+                for _ in 0..2 {
+                    applied(
+                        &mut state,
+                        &event(
+                            "Page.lifecycleEvent",
+                            Some(SESSION),
+                            json!({
+                                "frameId": MAIN, "loaderId": document, "name": name
+                            }),
+                        ),
+                    );
+                }
+            }
+        }
+        assert_eq!(state.dom_content_loaded_count, 2);
+        assert_eq!(state.load_count, 2);
+        let hash = applied(
+            &mut state,
+            &event(
+                "Page.navigatedWithinDocument",
+                Some(SESSION),
+                json!({
+                    "frameId": MAIN, "url": "https://a.test/#hash"
+                }),
+            ),
+        );
+        let snapshot = hash.navigation.expect("same-document commit").lifecycle;
+        assert!(snapshot.load && snapshot.dom_content_loaded);
+        assert_eq!(snapshot.load_count, 2);
+    }
+
+    #[test]
+    fn tests_that_bfcache_counts_each_lifecycle_once() {
+        let mut state = PageState::default();
+        applied(
+            &mut state,
+            &event(
+                "Page.frameNavigated",
+                Some(SESSION),
+                json!({
+                    "frame": {"id": MAIN, "url": "https://a.test/", "loaderId": "restored"},
+                    "type": "BackForwardCacheRestore"
+                }),
+            ),
+        );
+        for _ in 0..2 {
+            applied(
+                &mut state,
+                &event(
+                    "Page.frameStoppedLoading",
+                    Some(SESSION),
+                    json!({"frameId": MAIN}),
+                ),
+            );
+        }
+        for name in ["DOMContentLoaded", "load"] {
+            applied(
+                &mut state,
+                &event(
+                    "Page.lifecycleEvent",
+                    Some(SESSION),
+                    json!({
+                        "frameId": MAIN, "loaderId": "restored", "name": name
+                    }),
+                ),
+            );
+        }
+        assert_eq!(state.dom_content_loaded_count, 1);
+        assert_eq!(state.load_count, 1);
+    }
+
+    #[tokio::test]
+    async fn tests_that_the_url_seed_follows_queued_events_and_preserves_a_commit() {
+        use crate::fake_browser::{FakeBrowser, Replies};
+
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let cdp = browser.cdp().await;
+        for committed in [false, true] {
+            let (events, receiver) = broadcast::channel(16);
+            let (state, mut current) = watch::channel(PageState::default());
+            let (navigations, _) = broadcast::channel(16);
+            let stop = CancellationToken::new();
+            if committed {
+                events
+                    .send(event(
+                        "Page.frameNavigated",
+                        Some(SESSION),
+                        json!({
+                            "frame": {"id": MAIN, "url": "https://a.test/new", "loaderId": "new"}
+                        }),
+                    ))
+                    .expect("queued commit");
+            }
+            events
+                .send(event(
+                    "Page.lifecycleEvent",
+                    Some(SESSION),
+                    json!({
+                        "frameId": MAIN, "loaderId": "new", "name": "load"
+                    }),
+                ))
+                .expect("queued load");
+            let before_seed = current.clone();
+            let (seeded, consumed) = oneshot::channel();
+            let initial_url = async move {
+                assert!(
+                    before_seed.borrow().load,
+                    "events before the reply apply first"
+                );
+                let _ = seeded.send(());
+                Ok(Some("https://a.test/old".to_string()))
+            };
+            let updates = PageUpdates {
+                state,
+                navigations,
+                world: Arc::new(World::new(
+                    cdp.clone(),
+                    SessionId::from(SESSION),
+                    MAIN.to_string(),
+                )),
+                initial_url,
+            };
+            let watcher = watch_events(
+                receiver,
+                cdp.clone(),
+                SessionId::from(SESSION),
+                MAIN.to_string(),
+                updates,
+                CancellationToken::new(),
+                stop.clone(),
+            );
+            let verify = async {
+                consumed.await.expect("seed consumed");
+                let expected = if committed {
+                    "https://a.test/new"
+                } else {
+                    "https://a.test/old"
+                };
+                current
+                    .wait_for(|state| state.committed_url.as_deref() == Some(expected))
+                    .await
+                    .expect("seed published");
+                stop.cancel();
+            };
+            tokio::join!(watcher, verify);
+            assert_eq!(current.borrow().load_count, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn tests_that_observers_created_before_preparation_receive_watcher_updates() {
+        use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+        use crate::waits::WaitTab;
+
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let id = PageId::new(PAGE.to_string());
+        let session = Session::attach(browser.cdp().await, id.clone(), TokioHandle::current())
+            .await
+            .expect("attach");
+        let page = Arc::new(PageSession::new(
+            session,
+            &id,
+            TaskTracker::new(),
+            Arc::new(Mutex::new(())),
+            CancellationToken::new(),
+        ));
+        let mut events = WaitTab::observe(&page).expect("wait observer before prepare");
+        let mut navigation =
+            NavigationTab::observe(&page).expect("navigation observer before prepare");
+        PageSession::prepare(&page).await.expect("prepare");
+        time::timeout(Duration::from_secs(1), async {
+            while !events.state().lifecycle.load {
+                events.next().await.expect("watcher update");
+            }
+            while !navigation.state().lifecycle.load {
+                navigation.next().await.expect("watcher update");
+            }
+        })
+        .await
+        .expect("both observers see preparation's lifecycle replay");
+        assert!(events.state().lifecycle.dom_content_loaded);
+        assert_eq!(events.state().lifecycle.load_count, 1);
+        drop(events);
+        drop(navigation);
+        assert_eq!(page.navigations.receiver_count(), 0);
+        assert_eq!(page.state_updates.receiver_count(), 1);
+    }
+
+    async fn assert_seed_keeps_watcher_open(
+        initial_url: impl Future<Output = Result<Option<String>, CdpError>>,
+    ) {
+        use crate::fake_browser::{FakeBrowser, Replies};
+
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let cdp = browser.cdp().await;
+        let (events, receiver) = broadcast::channel(16);
+        let (state, mut current) = watch::channel(PageState::default());
+        let (navigations, _) = broadcast::channel(16);
+        let closed = CancellationToken::new();
+        let stop = CancellationToken::new();
+        let watcher = watch_events(
+            receiver,
+            cdp.clone(),
+            SessionId::from(SESSION),
+            MAIN.to_string(),
+            PageUpdates {
+                state,
+                navigations,
+                world: Arc::new(World::new(cdp, SessionId::from(SESSION), MAIN.to_string())),
+                initial_url,
+            },
+            closed.clone(),
+            stop.clone(),
+        );
+        time::timeout(Duration::from_secs(1), async {
+            tokio::join!(watcher, async {
+                time::sleep(Duration::from_millis(10)).await;
+                assert!(!closed.is_cancelled(), "a seed cannot close an open tab");
+                assert!(current.borrow().committed_url.is_none());
+                events
+                    .send(event(
+                        "Page.frameNavigated",
+                        Some(SESSION),
+                        json!({
+                            "frame": {"id": MAIN, "url": "https://a.test/later", "loaderId": "new"}
+                        }),
+                    ))
+                    .expect("watcher still subscribed");
+                current
+                    .wait_for(|state| {
+                        state.committed_url.as_deref() == Some("https://a.test/later")
+                    })
+                    .await
+                    .expect("watcher still applies commits");
+                assert!(!closed.is_cancelled());
+                stop.cancel();
+            });
+        })
+        .await
+        .expect("seed paths and stop must be bounded");
+    }
+
+    #[tokio::test]
+    async fn tests_that_failed_or_empty_seeds_do_not_close_the_tab() {
+        for result in [Ok(None), Err(CdpError::Json("seed failed".to_string()))] {
+            assert_seed_keeps_watcher_open(future::ready(result)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn tests_that_the_seed_uses_frame_tree_urls_including_error_pages_and_fragments() {
+        for (url, fragment, expected) in [
+            ("https://a.test/", "#part", Some("https://a.test/#part")),
+            (
+                "chrome-error://chromewebdata/",
+                "",
+                Some("chrome-error://chromewebdata/"),
+            ),
+            ("", "", None),
+        ] {
+            let (enabled, ready) = oneshot::channel();
+            enabled.send(()).expect("enable completed");
+            let result = time::timeout(
+                Duration::from_secs(1),
+                seed_url(ready, |method| {
+                    assert_eq!(method, "Page.getFrameTree");
+                    future::ready(Ok(json!({"frameTree":{"frame":{
+                        "id": MAIN, "url": url, "urlFragment": fragment,
+                        "unreachableUrl": "http://127.0.0.1:9/unreachable"
+                    }}})))
+                }),
+            )
+            .await
+            .expect("bounded seed")
+            .expect("frame tree");
+            assert_eq!(result.as_deref(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn tests_that_abandoning_prepare_never_closes_the_tab_or_queries_a_url() {
+        use std::sync::atomic::AtomicBool;
+
+        let (enabled, ready) = oneshot::channel::<()>();
+        let queried = AtomicBool::new(false);
+        drop(enabled);
+        let seed = seed_url(ready, |_| {
+            queried.store(true, Ordering::Relaxed);
+            future::ready(Ok(json!({})))
+        });
+        assert_seed_keeps_watcher_open(seed).await;
+        assert!(!queried.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_wait_observations_drain_commits_before_state_and_recover_lag() {
+        let (state, receiver) = watch::channel(PageState::default());
+        let (commits, queue) = broadcast::channel(2);
+        let mut events = NavigationObservation {
+            navigations: queue,
+            state: receiver,
+            recover_lag: true,
+        };
+        for index in 0..3 {
+            let url = format!("https://a.test/{index}");
+            state.send_modify(|state| state.committed_url = Some(url.clone()));
+            commits
+                .send(Navigation {
+                    document: Some(url.clone()),
+                    url,
+                    lifecycle: Lifecycle::default(),
+                })
+                .expect("subscribed");
+        }
+        assert_eq!(
+            events.next().await,
+            Ok(None),
+            "lag asks the wait to recheck current state"
+        );
+        assert_eq!(events.state().url.as_deref(), Some("https://a.test/2"));
+        assert_eq!(
+            events.next().await.expect("commit").expect("queued").url,
+            "https://a.test/1"
+        );
+        assert_eq!(
+            events.next().await.expect("commit").expect("queued").url,
+            "https://a.test/2"
+        );
+        assert_eq!(
+            events.next().await,
+            Ok(None),
+            "coalesced state follows the queue"
+        );
+        drop(events);
+        assert_eq!(commits.receiver_count(), 0);
+        assert_eq!(state.receiver_count(), 0);
     }
 
     #[test]

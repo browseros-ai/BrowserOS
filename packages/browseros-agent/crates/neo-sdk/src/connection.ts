@@ -2,9 +2,10 @@
  * The client half of Playwright's wire inside the realm (Playwright's `client/connection.ts`
  * and `channelOwner.ts` `_wrapApiCall` at 26137face, cut to what a run needs). Every browser
  * call goes through a `Connection` method typed by the interface its guid names (`send` for a
- * `Frame`, `sendPage`, `sendContext`): it captures the caller's location synchronously, builds
- * Playwright's `{id, guid, method, params, metadata}`, hands it to `runtime-bridge.ts`, and
- * turns the reply into a value or a Playwright-shaped error.
+ * `Frame`, `sendPage`, `sendContext`, and `sendNeo` for Neo's own `neo:` frame commands,
+ * `neo-commands.ts`): it captures the caller's location synchronously, builds Playwright's
+ * `{id, guid, method, params, metadata}`, hands it to `runtime-bridge.ts`, and turns the reply
+ * into a value or a Playwright-shaped error.
  *
  * ```text
  *  locator.click() → frame._click('locator.click', …) → send(): location, message
@@ -25,6 +26,7 @@ import type {
   PageCommands,
 } from '@browseros/neo-runtime-spec/serve'
 import { type PlaywrightError, parseError } from './errors'
+import type { NeoFrameCommands } from './neo-commands'
 import { call } from './runtime-bridge'
 
 /** The public methods that send a browser call, named as Playwright's client names them. */
@@ -79,6 +81,11 @@ export type ApiName =
   | 'browserContext.newPage'
   | 'page.close'
   | 'page.bringToFront'
+  | 'locator.waitFor'
+  | 'page.waitForURL'
+  | 'frame.waitForURL'
+  | 'page.waitForLoadState'
+  | 'frame.waitForLoadState'
 
 /** Playwright's wire error, `{error: {name, message}}`'s inner object. */
 export type WireError = { name: string; message: string }
@@ -165,6 +172,27 @@ export class Connection {
       params,
       timeout,
     )) as Resolved<BrowserContextCommands[M]['result']>
+  }
+
+  /**
+   * {@link Connection.send} for one of Neo's own commands on a frame guid (`neo-commands.ts`):
+   * not Playwright protocol, but the same message, reply and error rebuild. `timeout` bounds the
+   * whole wait Rust runs for it.
+   */
+  async sendNeo<M extends keyof NeoFrameCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: NeoFrameCommands[M]['params'],
+    timeout: number,
+  ): Promise<Resolved<NeoFrameCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<NeoFrameCommands[M]['result']>
   }
 
   /**

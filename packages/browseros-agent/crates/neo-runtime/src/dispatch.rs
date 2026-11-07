@@ -40,10 +40,12 @@ use neo_runtime_spec::serve::{
     FrameInputValueResult, FrameIsCheckedParams, FrameIsCheckedResult, FrameIsVisibleParams,
     FrameIsVisibleResult, FramePressParams, FramePressResult, FrameQueryCountParams,
     FrameSelectOptionParams, FrameSelectOptionResult, FrameTextContentParams, FrameTitleParams,
-    FrameUncheckParams, FrameUncheckResult, Metadata, PageCall,
+    FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
+    Metadata, PageCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tokio::time;
@@ -67,6 +69,10 @@ use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
 use crate::states::{self, StateOptions};
 use crate::tab_calls;
 use crate::tabs::{PageEntry, Tabs};
+use crate::waits::{
+    self, NeoWaitForLoadStateParams, NeoWaitForUrlParams, WaitForLoadStateOptions,
+    WaitForSelectorOptions, WaitForUrlOptions,
+};
 
 /// The shared budget for creation settlement, call draining and closing-state reads after
 /// the realm ends. Tasks still running keep their state and records read `Unfinished`.
@@ -93,6 +99,28 @@ const FRAMES_UNSUPPORTED: &str = "Neo does not support frames yet: the selector 
 /// Neo has no `ElementHandle` objects to pass as `selectOption` values.
 const ELEMENTS_UNSUPPORTED: &str = "Neo does not support ElementHandle values in selectOption yet";
 
+// Playwright implements these on its eventful client. Neo has a call/reply bridge, so its
+// Frame extensions keep the whole wait in Rust. Wire shapes live in waits.rs and neo-commands.ts.
+static WAIT_FOR_URL_META: MethodMeta = MethodMeta {
+    interface: "Frame",
+    method: "neo:waitForURL",
+    title: Some("Wait for URL"),
+    subtitle: None,
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[],
+};
+static WAIT_FOR_LOAD_STATE_META: MethodMeta = MethodMeta {
+    interface: "Frame",
+    method: "neo:waitForLoadState",
+    title: Some("Wait for load state"),
+    subtitle: None,
+    group: None,
+    render_params: &[],
+    internal: false,
+    flags: &[],
+};
 /// Arbitrary page JS remains outside Neo's typed glue boundary.
 const EVAL_ON_SELECTOR_ALL_UNSERVED: &str =
     "Neo serves Frame.evalOnSelectorAll only for locator.allTextContents";
@@ -223,6 +251,9 @@ enum Route {
     FrameIsChecked(StateOptions),
     FrameSetChecked(CheckOptions),
     FrameSelectOption(SelectOptions),
+    FrameWaitForSelector(WaitForSelectorOptions),
+    FrameWaitForUrl(WaitForUrlOptions),
+    FrameWaitForLoadState(WaitForLoadStateOptions),
 }
 
 impl Dispatcher {
@@ -353,6 +384,25 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             PageCall::decode(method, params).map(|call| (call.meta(), Ok(ObjectCall::Page(call))))
         }
         ObjectKind::Frame => {
+            if method == WAIT_FOR_URL_META.method {
+                return Routed {
+                    meta: Some(&WAIT_FOR_URL_META),
+                    route: decode_neo_params::<NeoWaitForUrlParams>(params, &WAIT_FOR_URL_META)
+                        .and_then(|params| WaitForUrlOptions::from_params(&params))
+                        .map(|options| ObjectCall::Frame(Route::FrameWaitForUrl(options))),
+                };
+            }
+            if method == WAIT_FOR_LOAD_STATE_META.method {
+                return Routed {
+                    meta: Some(&WAIT_FOR_LOAD_STATE_META),
+                    route: decode_neo_params::<NeoWaitForLoadStateParams>(
+                        params,
+                        &WAIT_FOR_LOAD_STATE_META,
+                    )
+                    .and_then(WaitForLoadStateOptions::from_params)
+                    .map(|options| ObjectCall::Frame(Route::FrameWaitForLoadState(options))),
+                };
+            }
             // ElementHandleChannel is uninhabited in Neo, so reject non-empty arrays before
             // serde tries to decode their members. Keep the method's input flag and title.
             if method == "selectOption"
@@ -390,6 +440,18 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             route: Err(PlaywrightError::error(error.to_string())),
         },
     }
+}
+
+fn decode_neo_params<T: DeserializeOwned>(
+    params: Option<Value>,
+    meta: &MethodMeta,
+) -> Result<T, PlaywrightError> {
+    serde_json::from_value(params.unwrap_or_else(|| json!({}))).map_err(|error| {
+        PlaywrightError::error(format!(
+            "invalid params for {}.{}: {error}",
+            meta.interface, meta.method
+        ))
+    })
 }
 
 /// Serving a new `Frame` command in `spec/serve.yml` adds a `FrameCall` variant, and this match
@@ -480,6 +542,12 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         }
         FrameCall::SelectOption(params) => {
             Ok(Route::FrameSelectOption(SelectOptions::from_params(params)))
+        }
+        FrameCall::WaitForSelector(params) if enters_frame(&params.selector) => {
+            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
+        }
+        FrameCall::WaitForSelector(params) => {
+            WaitForSelectorOptions::from_params(params).map(Route::FrameWaitForSelector)
         }
     }
 }
@@ -577,6 +645,24 @@ async fn serve(
         Route::FrameAriaSnapshot(options) => reads::aria_snapshot(&page, &options, &progress)
             .await
             .and_then(|result| encode_result::<FrameAriaSnapshotParams>(&result)),
+        Route::FrameWaitForSelector(options) => {
+            waits::wait_for_selector(&page, &options, &progress)
+                .await
+                .and_then(|()| {
+                    encode_result::<FrameWaitForSelectorParams>(&FrameWaitForSelectorResult {
+                        element: None,
+                    })
+                })
+        }
+        // Neo extensions answer an empty result.
+        Route::FrameWaitForUrl(options) => waits::wait_for_url(&page, &options, &progress)
+            .await
+            .map(|()| Some(json!({}))),
+        Route::FrameWaitForLoadState(options) => {
+            waits::wait_for_load_state(&page, &options, &progress)
+                .await
+                .map(|()| Some(json!({})))
+        }
         Route::FrameIsVisible(options) => states::is_visible(&page, &options, &progress)
             .await
             .and_then(|value| {
@@ -666,7 +752,10 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameAllTextContents(_)
         | Route::FrameIsVisible(_)
         | Route::FrameIsChecked(_)
-        | Route::FrameAriaSnapshot(_) => Err(PlaywrightError::error(
+        | Route::FrameAriaSnapshot(_)
+        | Route::FrameWaitForSelector(_)
+        | Route::FrameWaitForUrl(_)
+        | Route::FrameWaitForLoadState(_) => Err(PlaywrightError::error(
             "neo-runtime: navigation and page reads are served by `serve`",
         )
         .into()),
@@ -928,6 +1017,7 @@ mod tests {
     use std::path::PathBuf;
 
     use neo_runtime_spec::injected::AriaSnapshotMode;
+    use neo_runtime_spec::serve::FrameWaitForSelectorParamsState;
 
     use super::*;
     use neo_runtime_spec::injected::Point;
@@ -1165,7 +1255,12 @@ mod tests {
                 | Route::FrameAllTextContents(_)
                 | Route::FrameIsVisible(_)
                 | Route::FrameIsChecked(_)
-                | Route::FrameAriaSnapshot(_) => panic!("a form is not a navigation or a read"),
+                | Route::FrameAriaSnapshot(_)
+                | Route::FrameWaitForSelector(_)
+                | Route::FrameWaitForUrl(_)
+                | Route::FrameWaitForLoadState(_) => {
+                    panic!("a form is not a navigation, read or wait")
+                }
             }
         }
     }
@@ -1271,6 +1366,127 @@ mod tests {
             assert_eq!(routed.meta.and_then(|meta| meta.title), Some(title));
             assert!(routed.route.is_ok(), "{method} must be served");
         }
+    }
+
+    #[test]
+    fn tests_that_waits_route_without_an_input_flag() {
+        for (method, params, title) in [
+            (
+                "waitForSelector",
+                json!({"selector":"#item","strict":true,"omitReturnValue":true}),
+                "Wait for selector",
+            ),
+            (
+                "neo:waitForURL",
+                json!({"url":{"glob":"https://a.test/"}}),
+                "Wait for URL",
+            ),
+            ("neo:waitForLoadState", json!({}), "Wait for load state"),
+        ] {
+            let routed = route_frame(method, params);
+            let meta = routed.meta.expect("wait metadata");
+            assert_eq!(meta.title, Some(title));
+            assert_eq!(meta.interface, "Frame");
+            assert!(!meta.has(MethodFlag::Input));
+            assert!(routed.route.is_ok(), "{method}");
+        }
+        let Ok(ObjectCall::Frame(Route::FrameWaitForSelector(options))) = route_frame(
+            "waitForSelector",
+            json!({"selector":"#item","omitReturnValue":true}),
+        )
+        .route
+        else {
+            panic!("selector route");
+        };
+        assert_eq!(options.state, FrameWaitForSelectorParamsState::Visible);
+        assert!(!options.strict);
+    }
+
+    #[test]
+    fn tests_that_the_verbatim_neo_wait_messages_decode() {
+        // The wire examples in med-neo-waits/design.md, with concrete metadata locations.
+        let messages = [
+            r#"{"id":7,"guid":"frame@T","method":"neo:waitForURL","params":{"url":{"glob":"**/done.html"},"waitUntil":"load"},"metadata":{"location":{"file":"test.js","line":1,"column":1},"timeout":30000}}"#,
+            r#"{"id":8,"guid":"frame@T","method":"neo:waitForURL","params":{"url":{"regexSource":"done\\.html$","regexFlags":"i"},"waitUntil":"commit"},"metadata":{}}"#,
+            r#"{"id":9,"guid":"frame@T","method":"neo:waitForLoadState","params":{"state":"domcontentloaded"},"metadata":{}}"#,
+        ];
+        for (index, text) in messages.into_iter().enumerate() {
+            let message: Message = serde_json::from_str(text).expect("wire envelope");
+            assert_eq!(message.id, json!(index + 7));
+            let routed = route(ObjectKind::Frame, &message.method, message.params);
+            assert!(routed.route.is_ok(), "wire message {index}");
+            assert!(!routed.meta.expect("metadata").has(MethodFlag::Input));
+        }
+    }
+
+    #[test]
+    fn tests_that_wait_refusals_happen_during_routing() {
+        for omit in [json!({}), json!({"omitReturnValue":false})] {
+            let mut params = json!({"selector":"#item"});
+            params
+                .as_object_mut()
+                .expect("object")
+                .extend(omit.as_object().expect("object").clone());
+            assert_eq!(
+                error_of(route_frame("waitForSelector", params)).name,
+                ErrorName::Error
+            );
+        }
+        // Frame refusal wins even when omitReturnValue is missing.
+        assert_eq!(
+            error_of(route_frame(
+                "waitForSelector",
+                json!({"selector":"iframe >> internal:control=enter-frame >> button"})
+            )),
+            PlaywrightError::error(FRAMES_UNSUPPORTED)
+        );
+        for (method, params) in [
+            (
+                "neo:waitForURL",
+                json!({"url":{"glob":""},"waitUntil":"networkidle"}),
+            ),
+            ("neo:waitForLoadState", json!({"state":"networkidle"})),
+        ] {
+            assert_eq!(error_of(route_frame(method, params)).name, ErrorName::Error);
+        }
+        for (method, params) in [
+            (
+                "waitForSelector",
+                json!({"selector":"a","state":"wrong","omitReturnValue":true}),
+            ),
+            (
+                "neo:waitForURL",
+                json!({"url":{"glob":""},"waitUntil":"wrong"}),
+            ),
+            ("neo:waitForURL", json!({"url":{}})),
+            (
+                "neo:waitForURL",
+                json!({"url":{"glob":"","regexSource":"a"}}),
+            ),
+            ("neo:waitForURL", json!({})),
+            ("neo:waitForLoadState", json!({"state":"wrong"})),
+        ] {
+            assert_eq!(error_of(route_frame(method, params)).name, ErrorName::Error);
+        }
+        for object in [ObjectKind::Page, ObjectKind::Context, ObjectKind::Unknown] {
+            assert!(
+                route(object, "neo:waitForLoadState", Some(json!({})))
+                    .route
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn tests_that_wait_success_encodes_an_empty_result() {
+        let result = encode_result::<FrameWaitForSelectorParams>(&FrameWaitForSelectorResult {
+            element: None,
+        })
+        .expect("wait result");
+        let reply: Value =
+            serde_json::from_str(&encode_reply(&json!(7), Ok(result.as_ref()), None))
+                .expect("reply");
+        assert_eq!(reply, json!({"id":7,"result":{}}));
     }
 
     #[test]
