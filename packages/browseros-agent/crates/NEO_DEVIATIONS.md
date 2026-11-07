@@ -3,12 +3,14 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (3)
+## Deviations (5)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
 | neo-runtime/src/evaluate.rs | `create_handle` | `server/dom.ts` `ElementHandle._initializePreview` | Playwright starts at `JSHandle@node` and updates the preview by event; Neo has no events, so the handle starts with the final preview. |
+| neo-sdk/src/frame.ts | `Frame._withElement` | `client/timeoutSettings.ts` `TimeoutSettings.timeout` | Neo refuses a signal rather than ignore it. |
 | neo-sdk/src/js-handle.ts | `evaluateParams` | `client/jsHandle.ts` `JSHandle.evaluate` | Neo has no realm callback from the page, so it refuses the option rather than ignore it. |
+| neo-sdk/src/js-handle.ts | `evaluateParams` | `client/jsHandle.ts` `JSHandle.evaluate` | Playwright's evaluations send no signal and ignore one; Neo refuses any signal rather than ignore one. |
 | neo-sdk/src/vendor-shims.ts | `URL` | `isomorphic/utilityScriptSerializers.ts` `parseEvaluationResultValue` | QuickJS has no WHATWG URL, so a `URL` the page returns (and a `URL` an agent passes back) is this object: its `href`, `toString()` and `toJSON()` as Playwright's client gives them, and no parsed parts (`host`, `pathname`, `searchParams`). |
 
 ## Unexplained: owner questions (0)
