@@ -1,4 +1,4 @@
-//! The utility world in the run's main frame, where neo-runtime-injected's glue (Playwright's
+//! The utility world in a frame, where neo-runtime-injected's glue (Playwright's
 //! injected script behind Neo's typed table) answers page calls, and the one way Rust calls the
 //! page: [`World::call`], typed by the spec's `InjectedCall`.
 //!
@@ -38,9 +38,12 @@ use browseros_cdp::runtime::{
 };
 use browseros_cdp::{CdpClient, CdpError, SessionId};
 use neo_runtime_spec::injected::InjectedInitializer;
-use neo_runtime_spec::{HandleId, InjectedCall, PageResult, Properties, SPEC_SHA256};
+use neo_runtime_spec::{
+    Element, Handle, HandleId, InjectedCall, PageResult, Properties, SPEC_SHA256,
+};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::click::PageError;
 
@@ -113,12 +116,14 @@ fn glue_key() -> Result<String, PageError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ObjectGroup(pub(crate) String);
 
-/// The run's handle on the main frame's utility world.
+/// The run's handle on one frame's utility world.
 pub(crate) struct World {
     cdp: CdpClient,
     session: SessionId,
-    /// The main frame's id, which is the target id (measured, `tests/sync_getters.rs`).
+    /// A frame id; only the main frame also uses the tab target id.
     frame_id: String,
+    child_host: bool,
+    gone: CancellationToken,
     /// The glue this session found in the current document. A mutex, not a lock-free cache, so
     /// concurrent first calls attach once.
     attached: Mutex<Option<Arc<Attached>>>,
@@ -129,6 +134,7 @@ pub(crate) struct World {
 struct Attached {
     /// In [`GLUE_GROUP`].
     glue: HandleId,
+    context: i64,
     document: u64,
 }
 
@@ -139,10 +145,22 @@ enum StaleReply {
 
 impl World {
     pub(crate) fn new(cdp: CdpClient, session: SessionId, frame_id: String) -> Self {
+        Self::on_host(cdp, session, frame_id, false, CancellationToken::new())
+    }
+
+    pub(crate) fn on_host(
+        cdp: CdpClient,
+        session: SessionId,
+        frame_id: String,
+        child_host: bool,
+        gone: CancellationToken,
+    ) -> Self {
         Self {
             cdp,
             session,
             frame_id,
+            child_host,
+            gone,
             attached: Mutex::new(None),
             document: AtomicU64::new(0),
         }
@@ -155,6 +173,38 @@ impl World {
         if let Ok(mut slot) = self.attached.try_lock() {
             *slot = None;
         }
+    }
+
+    /// Bind an iframe owner returned by DOM.getFrameOwner to this parent's utility world.
+    /// A direct scope has no selector for that owner; the typed handle still lives in the
+    /// caller's group and follows the same document checks as a selector result.
+    pub(crate) async fn element(
+        &self,
+        group: &ObjectGroup,
+        backend: i64,
+    ) -> Result<Handle<Element>, PageError> {
+        let attached = self.attached().await?;
+        let result = self.send("DOM.resolveNode", json!({"backendNodeId":backend,"executionContextId":attached.context,"objectGroup":group.0})).await;
+        let reply = match result {
+            Ok(reply) => reply,
+            Err(error) => {
+                if error == PageError::NotConnected {
+                    self.invalidate(&attached).await;
+                }
+                return Err(error);
+            }
+        };
+        if self.document.load(Ordering::SeqCst) != attached.document {
+            return Err(PageError::NotConnected);
+        }
+        let object: RemoteObject = serde_json::from_value(reply["object"].clone())
+            .map_err(|error| PageError::Contract(format!("DOM.resolveNode answered: {error}")))?;
+        let id = object.object_id.ok_or_else(|| {
+            PageError::Contract("DOM.resolveNode returned no objectId".to_string())
+        })?;
+        Handle::new(HandleId::new(id), object.subtype.as_deref()).ok_or_else(|| {
+            PageError::Contract("DOM.resolveNode returned a non-element owner".to_string())
+        })
     }
 
     /// Calls glue function `C::NAME` with `params` and its handles, and decodes the result per
@@ -323,7 +373,11 @@ impl World {
         if self.document.load(Ordering::SeqCst) != document {
             return Err(PageError::NotConnected);
         }
-        let attached = Arc::new(Attached { glue, document });
+        let attached = Arc::new(Attached {
+            glue,
+            context,
+            document,
+        });
         *slot = Some(Arc::clone(&attached));
         Ok(attached)
     }
@@ -368,10 +422,11 @@ impl World {
     }
 
     async fn send(&self, method: &str, params: Value) -> Result<Value, PageError> {
-        self.cdp
-            .send(method, params, Some(&self.session))
-            .await
-            .map_err(|error| classify(&error))
+        tokio::select! {
+            biased;
+            () = self.gone.cancelled() => Err(PageError::NotConnected),
+            result = self.cdp.send(method, params, Some(&self.session)) => result.map_err(|error| classify_host(&error, self.child_host)),
+        }
     }
 }
 
@@ -407,6 +462,15 @@ pub(crate) fn classify(error: &CdpError) -> PageError {
         | CdpError::Transport(_) => PageError::Closed,
         CdpError::Protocol { .. } | CdpError::Timeout { .. } => PageError::NotConnected,
         CdpError::Json(message) => PageError::Contract(message.clone()),
+    }
+}
+
+/// A vanished OOPIF is a stale frame, while the tab and the call remain alive.
+pub(crate) fn classify_host(error: &CdpError, child: bool) -> PageError {
+    if child && matches!(error, CdpError::SessionGone) {
+        PageError::NotConnected
+    } else {
+        classify(error)
     }
 }
 
@@ -503,6 +567,56 @@ mod tests {
         for (error, expected) in cases {
             assert_eq!(classify(&error), expected, "{error:?}");
         }
+    }
+
+    #[test]
+    fn child_session_loss_is_a_disconnected_frame() {
+        assert_eq!(
+            classify_host(&CdpError::SessionGone, true),
+            PageError::NotConnected
+        );
+        assert_eq!(
+            classify_host(&CdpError::SessionGone, false),
+            PageError::Closed
+        );
+    }
+
+    #[tokio::test]
+    async fn a_detached_child_interrupts_a_pending_world_call() {
+        use crate::fake_browser::{FakeBrowser, PAGE, Replies, Reply};
+        use neo_runtime_spec::injected::InjectedTitleParams;
+        use tokio::task;
+
+        let browser = FakeBrowser::start(Replies {
+            world: Reply {
+                answers: 0,
+                ..Reply::default()
+            },
+            ..Replies::default()
+        })
+        .await;
+        let cdp = browser.cdp().await;
+        let attached = cdp
+            .send(
+                "Target.attachToTarget",
+                json!({"targetId":PAGE,"flatten":true}),
+                None,
+            )
+            .await
+            .unwrap();
+        let gone = CancellationToken::new();
+        let world = World::on_host(
+            cdp,
+            SessionId::from(attached["sessionId"].as_str().unwrap()),
+            PAGE.to_string(),
+            true,
+            gone.clone(),
+        );
+        let pending = world.call(None, &InjectedTitleParams {});
+        tokio::pin!(pending);
+        tokio::select! { biased; result = &mut pending => panic!("world should be pending: {result:?}"), () = task::yield_now() => {} }
+        gone.cancel();
+        assert_eq!(pending.await, Err(PageError::NotConnected));
     }
 
     /// `resolve`'s answer as BrowserOS neo gives it (probe P1's shapes), decoded end to end.

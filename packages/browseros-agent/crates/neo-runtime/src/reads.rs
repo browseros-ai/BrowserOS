@@ -43,7 +43,6 @@
 //! News, Wikipedia and MDN pages measured 11 to 16 levels).
 
 use std::future::Future;
-use std::sync::Arc;
 use std::time::Duration;
 
 use neo_runtime_spec::injected::{
@@ -58,7 +57,8 @@ use neo_runtime_spec::serve::{
 
 use crate::aria_yaml;
 use crate::click::{self, LoopAWaits, PageError, SelectorFacts};
-use crate::page::PageSession;
+use crate::frame_selector;
+use crate::page::FrameTab;
 use crate::progress::{CallError, PlaywrightError, Progress};
 
 /// The selector Playwright snapshots a frame's document by when the caller gave none
@@ -404,7 +404,7 @@ async fn snapshot_once<T: ReadTab>(
 // ---------------------------------------------------------------------------------------------
 
 /// The same steps click takes, so a read and a click prepare the tab and name a selector alike.
-impl SelectorTab for Arc<PageSession> {
+impl SelectorTab for FrameTab {
     fn prepare(&self) -> impl Future<Output = Result<(), PageError>> + Send {
         click::Tab::prepare(self)
     }
@@ -418,18 +418,21 @@ impl SelectorTab for Arc<PageSession> {
 }
 
 /// By value, with no object group: none of these results holds a page object.
-impl ReadTab for Arc<PageSession> {
+impl ReadTab for FrameTab {
     async fn text_content(
         &self,
         selector: &str,
         strict: bool,
     ) -> Result<Option<TextMatch>, PageError> {
-        let read = self
-            .world
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok(None);
+        };
+        let read = located
+            .frame
             .call(
                 None,
                 &InjectedTextContentParams {
-                    selector: selector.to_string(),
+                    selector: located.selector,
                     strict,
                 },
             )
@@ -442,12 +445,15 @@ impl ReadTab for Arc<PageSession> {
         selector: &str,
         strict: bool,
     ) -> Result<Option<TextMatch>, PageError> {
-        let read = self
-            .world
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok(None);
+        };
+        let read = located
+            .frame
             .call(
                 None,
                 &InjectedInnerTextParams {
-                    selector: selector.to_string(),
+                    selector: located.selector,
                     strict,
                 },
             )
@@ -461,12 +467,15 @@ impl ReadTab for Arc<PageSession> {
         strict: bool,
         name: &str,
     ) -> Result<Option<AttributeMatch>, PageError> {
-        let read = self
-            .world
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok(None);
+        };
+        let read = located
+            .frame
             .call(
                 None,
                 &InjectedGetAttributeParams {
-                    selector: selector.to_string(),
+                    selector: located.selector,
                     strict,
                     name: name.to_string(),
                 },
@@ -479,7 +488,7 @@ impl ReadTab for Arc<PageSession> {
         &self,
         params: &InjectedAriaSnapshotParams,
     ) -> Result<Option<AriaFrameSnapshot>, PageError> {
-        Ok(self.world.call(None, params).await?.snapshot)
+        Ok(self.context().await?.call(None, params).await?.snapshot)
     }
 }
 

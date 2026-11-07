@@ -230,6 +230,7 @@ impl Getters {
         let page = self
             .tabs
             .resolve(&request.guid)
+            .map(|(page, _scope)| page)
             .filter(|_| request.guid.starts_with("page@"))
             .ok_or_else(|| GetError::BadRequest(format!("unknown guid {:?}", request.guid)))?;
         match request.field {

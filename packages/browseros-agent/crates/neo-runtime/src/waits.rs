@@ -16,20 +16,18 @@
 //! retain intermediate URLs, and lifecycle counters retain events across watch coalescing.
 
 use std::future::{self, Future};
-use std::sync::Arc;
 
-use neo_runtime_spec::injected::{
-    InjectedDescribeSelectorParams, InjectedSelectorStateParams, SelectorMatch,
-};
+use neo_runtime_spec::injected::{InjectedSelectorStateParams, SelectorMatch};
 use neo_runtime_spec::serve::{
     FrameWaitForSelectorParams, FrameWaitForSelectorParamsState as SelectorState, LifecycleEvent,
 };
 use serde::Deserialize;
 use tokio::time;
 
-use crate::click::{LoopAWaits, PageError, SelectorFacts};
+use crate::click::{LoopAWaits, PageError, SelectorFacts, Tab};
+use crate::frame_selector;
 use crate::navigate::{Lifecycle, Navigation, Observation};
-use crate::page::{NavigationObservation, PageSession};
+use crate::page::{FrameTab, NavigationObservation, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::url_match::{SerializedUrlMatch, UrlMatcher};
 use crate::world;
@@ -454,7 +452,7 @@ fn page_error(error: PageError) -> PlaywrightError {
     }
 }
 
-impl WaitTab for Arc<PageSession> {
+impl WaitTab for FrameTab {
     type Observation = NavigationObservation;
 
     async fn prepare(&self) -> Result<(), PageError> {
@@ -464,19 +462,7 @@ impl WaitTab for Arc<PageSession> {
     }
 
     async fn describe(&self, selector: &str) -> Result<SelectorFacts, PageError> {
-        let facts = self
-            .world
-            .call(
-                None,
-                &InjectedDescribeSelectorParams {
-                    selector: selector.to_string(),
-                },
-            )
-            .await?;
-        Ok(SelectorFacts {
-            locator: facts.locator,
-            invalid: facts.invalid_selector,
-        })
+        Tab::describe(self, selector).await
     }
 
     fn observe(&self) -> Result<Self::Observation, PageError> {
@@ -495,17 +481,24 @@ impl WaitTab for Arc<PageSession> {
         selector: &str,
         strict: bool,
     ) -> Result<Option<SelectorMatch>, PageError> {
-        Ok(self
-            .world
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok(None);
+        };
+        let mut matched = located
+            .frame
             .call(
                 None,
                 &InjectedSelectorStateParams {
-                    selector: selector.to_string(),
+                    selector: located.selector,
                     strict,
                 },
             )
             .await?
-            .matched)
+            .matched;
+        if let Some(matched) = &mut matched {
+            matched.visible &= located.frame_visible;
+        }
+        Ok(matched)
     }
 }
 

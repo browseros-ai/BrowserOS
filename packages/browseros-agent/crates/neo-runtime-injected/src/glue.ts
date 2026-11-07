@@ -123,12 +123,13 @@ export const glue = {
     }
   },
 
-  isVisible: (injected, { selector, strict }) => {
+  isVisible: (injected, { selector, strict, frameVisible }) => {
     const [element] = query(injected, selector, strict)
     return {
-      value: element
-        ? injected.elementState(element, 'visible', true).matches
-        : false,
+      value:
+        !!element &&
+        frameVisible &&
+        injected.elementState(element, 'visible', true).matches,
     }
   },
 
@@ -168,7 +169,11 @@ export const glue = {
           `Selector "${selector}" resolved to ${injected.previewNode(element)}, <iframe> was expected`,
         )
     }
-    return { element: elements[0] }
+    const element = elements[0]
+    return {
+      element,
+      visible: !!element && injected.utils.isElementVisible(element),
+    }
   },
 
   describeSelector: (injected, { selector }) => {
@@ -208,7 +213,18 @@ export const glue = {
     return {}
   },
 
-  viewportSize: () => ({ width: innerWidth, height: innerHeight }),
+  // Scrollbar gutters cannot receive content clicks. The root client size is the layout
+  // viewport without those gutters, including documents in quirks mode.
+  viewportSize: () => {
+    const root =
+      document.compatMode === 'BackCompat'
+        ? document.body
+        : document.documentElement
+    return {
+      width: root?.clientWidth ?? innerWidth,
+      height: root?.clientHeight ?? innerHeight,
+    }
+  },
 
   getElementBorderWidth: (injected, _params, element) =>
     injected.getElementBorderWidth(element),

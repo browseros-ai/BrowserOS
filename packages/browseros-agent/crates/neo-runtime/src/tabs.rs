@@ -18,6 +18,7 @@ use tokio_util::task::TaskTracker;
 use tracing::debug;
 
 use crate::bridge;
+use crate::frames::FrameScope;
 use crate::getters;
 use crate::page::{PageSession, Session, TabInputs};
 use crate::progress::PlaywrightError;
@@ -177,17 +178,31 @@ impl Tabs {
         );
     }
 
-    pub(crate) fn resolve(&self, guid: &str) -> Option<Arc<PageEntry>> {
-        let target = guid
-            .strip_prefix("page@")
-            .or_else(|| guid.strip_prefix("frame@"))?;
-        self.0
+    pub(crate) fn resolve(&self, guid: &str) -> Option<(Arc<PageEntry>, FrameScope)> {
+        let (target, scope) = if let Some(target) = guid.strip_prefix("page@") {
+            if target.contains('/') {
+                return None;
+            }
+            (target, FrameScope::Main)
+        } else {
+            let frame = guid.strip_prefix("frame@")?;
+            match frame.split_once('/') {
+                Some((target, frame)) if !frame.is_empty() && !frame.contains('/') => {
+                    (target, FrameScope::Frame(frame.to_string()))
+                }
+                Some(_) => return None,
+                None => (frame, FrameScope::Main),
+            }
+        };
+        let page = self
+            .0
             .pages
             .lock()
             .ok()?
             .iter()
             .find(|entry| entry.id.as_str() == target)
-            .cloned()
+            .cloned()?;
+        Some((page, scope))
     }
 
     fn register(&self, id: PageId, created: bool) -> Result<Arc<PageEntry>, PlaywrightError> {
@@ -560,5 +575,46 @@ fn created_page(entry: &PageEntry, url: String, closed: bool) -> CreatedPage {
                 load_states: Vec::new(),
             },
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+
+    #[tokio::test]
+    async fn guids_resolve_the_registered_tab_and_starting_frame_scope() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            TaskTracker::new(),
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap();
+        for (guid, scope) in [
+            (format!("page@{PAGE}"), FrameScope::Main),
+            (format!("frame@{PAGE}"), FrameScope::Main),
+            (
+                format!("frame@{PAGE}/child"),
+                FrameScope::Frame("child".to_string()),
+            ),
+        ] {
+            let (page, actual) = tabs.resolve(&guid).unwrap();
+            assert_eq!(page.id.as_str(), PAGE);
+            assert_eq!(actual, scope);
+        }
+        for guid in [
+            format!("page@{PAGE}/child"),
+            format!("frame@{PAGE}/"),
+            format!("frame@{PAGE}/one/two"),
+            "frame@unknown/child".to_string(),
+            "element@fake-page".to_string(),
+        ] {
+            assert!(tabs.resolve(&guid).is_none(), "{guid}");
+        }
     }
 }

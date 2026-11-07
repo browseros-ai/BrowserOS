@@ -38,6 +38,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::iter;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -67,6 +68,8 @@ use crate::click::{
     Arming, Geometry, MouseButton, MouseClick, NotReady, PageError, PressReport, Resolved, Scroll,
     SelectorFacts, StatesCheck, Tab, Verdict,
 };
+use crate::frame_selector::{self, FrameOwner};
+use crate::frames::{FrameContext, FrameScope, Frames};
 use crate::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
 };
@@ -147,7 +150,7 @@ impl Drop for Session {
 
 /// A handed-out tab's session, attached lazily once per run and shared by its call and writer tasks.
 pub(crate) struct PageSession {
-    session: Session,
+    session: Arc<Session>,
     /// The main frame's id, which is the target id.
     main_frame: String,
     /// The run's tracker, for the interceptor-setup, writer, interceptor-stop and
@@ -166,6 +169,7 @@ pub(crate) struct PageSession {
     closed: CancellationToken,
     /// The main frame's utility world, where the glue runs.
     pub(crate) world: Arc<World>,
+    pub(crate) frames: Arc<Frames>,
     /// Names this session's object groups apart.
     next_group: AtomicU64,
     /// The tab's input lock, shared with every other run of the `Runtime` on this tab
@@ -173,10 +177,40 @@ pub(crate) struct PageSession {
     input: Arc<Mutex<()>>,
 }
 
+/// One call's frame scope over the tab's shared input, navigation and lifetime.
+#[derive(Clone)]
+pub(crate) struct FrameTab {
+    pub(crate) page: Arc<PageSession>,
+    pub(crate) scope: FrameScope,
+}
+
+// Input, preparation and top-level navigation always belong to the shared tab.
+impl Deref for FrameTab {
+    type Target = Arc<PageSession>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.page
+    }
+}
+
+impl FrameTab {
+    pub(crate) async fn context(&self) -> Result<Arc<FrameContext>, PageError> {
+        match &self.scope {
+            FrameScope::Main => Ok(self.frames.main()),
+            FrameScope::Frame(id) => self.frames.context(id, None).await,
+        }
+    }
+
+    pub(crate) fn group(&self, frame: &Arc<FrameContext>, purpose: &str) -> GroupGuard {
+        new_group(&self.page, frame, purpose)
+    }
+}
+
 struct PageUpdates<S> {
     state: watch::Sender<PageState>,
     navigations: broadcast::Sender<Navigation>,
     world: Arc<World>,
+    frames: Option<Arc<Frames>>,
     initial_url: S,
 }
 
@@ -272,6 +306,14 @@ impl PageSession {
             session.id.clone(),
             page.as_str().to_string(),
         );
+        let session = Arc::new(session);
+        let world = Arc::new(world);
+        let frames = Arc::new(Frames::new(
+            Arc::clone(&session),
+            page.as_str().to_string(),
+            Arc::clone(&world),
+            tasks.clone(),
+        ));
         let (state_updates, state) = watch::channel(PageState::default());
         let (navigations, _) = broadcast::channel(4096);
         Self {
@@ -283,15 +325,11 @@ impl PageSession {
             navigations,
             prepared: OnceCell::new(),
             closed,
-            world: Arc::new(world),
+            world,
+            frames,
             next_group: AtomicU64::new(1),
             input,
         }
-    }
-
-    /// The typed utility-world calls used by sibling action seams.
-    pub(crate) fn world(&self) -> &World {
-        &self.world
     }
 
     pub(crate) fn session_id(&self) -> &SessionId {
@@ -338,6 +376,7 @@ impl PageSession {
                         state: self.state_updates.clone(),
                         navigations: self.navigations.clone(),
                         world: Arc::clone(&self.world),
+                        frames: Some(Arc::clone(&self.frames)),
                         initial_url,
                     },
                     self.closed.clone(),
@@ -464,7 +503,7 @@ impl Observation for NavigationObservation {
     }
 }
 
-impl NavigationTab for Arc<PageSession> {
+impl NavigationTab for FrameTab {
     type Observation = NavigationObservation;
 
     async fn prepare(&self) -> Result<(), PageError> {
@@ -504,7 +543,8 @@ impl NavigationTab for Arc<PageSession> {
     }
 
     async fn read_title(&self) -> Result<String, PageError> {
-        self.world
+        self.context()
+            .await?
             .call(None, &InjectedTitleParams {})
             .await
             .map(|result| result.value)
@@ -512,10 +552,11 @@ impl NavigationTab for Arc<PageSession> {
 }
 
 /// A fresh object group of `page`'s session, released when the guard drops.
-fn new_group(page: &Arc<PageSession>, purpose: &str) -> GroupGuard {
+fn new_group(page: &Arc<PageSession>, frame: &Arc<FrameContext>, purpose: &str) -> GroupGuard {
     let index = page.next_group.fetch_add(1, Ordering::Relaxed);
     GroupGuard {
         page: Arc::clone(page),
+        frame: Arc::clone(frame),
         group: ObjectGroup(format!("neo-{purpose}-{index}")),
     }
 }
@@ -618,6 +659,7 @@ async fn watch_events(
         state,
         navigations,
         world,
+        frames,
         initial_url,
     } = updates;
     tokio::pin!(initial_url);
@@ -649,6 +691,14 @@ async fn watch_events(
         };
         match event {
             Ok(event) => {
+                if event.method == "Page.frameNavigated"
+                    && event.session_id.as_ref() == Some(&session)
+                    && let Some(frame) = event.params["frame"]["id"].as_str()
+                    && frame != main_frame
+                    && let Some(frames) = &frames
+                {
+                    frames.committed(frame);
+                }
                 let mut applied = Applied::default();
                 state.send_if_modified(|state| {
                     applied = apply(state, &event, &session, &main_frame);
@@ -891,21 +941,23 @@ fn apply_lifecycle(state: &mut PageState, event: &LifecycleEvent) -> bool {
 /// object and every handle `getProperties` read out of it (probe P1).
 pub(crate) struct GroupGuard {
     page: Arc<PageSession>,
+    frame: Arc<FrameContext>,
     group: ObjectGroup,
 }
 
 impl GroupGuard {
-    fn group(&self) -> &ObjectGroup {
+    pub(crate) fn group(&self) -> &ObjectGroup {
         &self.group
     }
 }
 
 impl Drop for GroupGuard {
     fn drop(&mut self) {
-        let page = Arc::clone(&self.page);
+        let frame = Arc::clone(&self.frame);
         let ObjectGroup(group) = self.group.clone();
         self.page.spawn(async move {
-            let released = page
+            let released = frame
+                .host
                 .send(
                     "Runtime.releaseObjectGroup",
                     json!({ "objectGroup": group }),
@@ -924,6 +976,9 @@ impl Drop for GroupGuard {
 pub(crate) struct ResolvedElement {
     handle: Handle<Element>,
     _group: Arc<GroupGuard>,
+    pub(crate) frame: Arc<FrameContext>,
+    frame_visible: bool,
+    owners: Vec<FrameOwner>,
 }
 
 impl ResolvedElement {
@@ -946,6 +1001,7 @@ pub(crate) struct ArmedInterceptor {
     handle: Handle<HitTargetInterceptor>,
     group: Option<GroupGuard>,
     page: Arc<PageSession>,
+    frame: Arc<FrameContext>,
     /// The counters when it was armed, for the verdict's dialog and navigation race.
     mark: PageMark,
     /// Set once `stopHitTargetInterceptor` has answered, so `Drop` does not send it again.
@@ -965,11 +1021,10 @@ impl Drop for ArmedInterceptor {
         }
         // Playwright's `finally` sends the same fire-and-forget stop. The stop goes before the
         // group release, in one task, so the handle is still alive when the stop names it.
-        let page = Arc::clone(&self.page);
+        let frame = Arc::clone(&self.frame);
         let interceptor = self.handle.clone();
         self.page.spawn(async move {
-            let stopped = page
-                .world
+            let stopped = frame
                 .call(
                     None,
                     &InjectedStopHitTargetInterceptorParams { interceptor },
@@ -1027,7 +1082,7 @@ impl Barrier {
 // The tab, for click.
 // ---------------------------------------------------------------------------------------------
 
-impl Tab for Arc<PageSession> {
+impl Tab for FrameTab {
     type Element = ResolvedElement;
     type Armed = ArmedInterceptor;
     type Input = InputPermit;
@@ -1040,8 +1095,14 @@ impl Tab for Arc<PageSession> {
     }
 
     async fn describe(&self, selector: &str) -> Result<SelectorFacts, PageError> {
-        let described = self
-            .world
+        let invalid = frame_selector::split(selector).err();
+        if let Some(message) = &invalid
+            && message.starts_with("Neo ")
+        {
+            return Err(PageError::Threw(message.clone()));
+        }
+        let frame = self.context().await?;
+        let described = frame
             .call(
                 None,
                 &InjectedDescribeSelectorParams {
@@ -1051,7 +1112,7 @@ impl Tab for Arc<PageSession> {
             .await?;
         Ok(SelectorFacts {
             locator: described.locator,
-            invalid: described.invalid_selector,
+            invalid: invalid.or(described.invalid_selector),
         })
     }
 
@@ -1060,13 +1121,16 @@ impl Tab for Arc<PageSession> {
         selector: &str,
         strict: bool,
     ) -> Result<Option<Resolved<ResolvedElement>>, PageError> {
-        let group = new_group(self, "resolve");
-        let resolved = self
-            .world
+        let Some(located) = frame_selector::locate(self, selector, strict).await? else {
+            return Ok(None);
+        };
+        let group = self.group(&located.frame, "resolve");
+        let resolved = located
+            .frame
             .call(
                 Some(group.group()),
                 &InjectedResolveParams {
-                    selector: selector.to_string(),
+                    selector: located.selector,
                     strict,
                 },
             )
@@ -1075,6 +1139,9 @@ impl Tab for Arc<PageSession> {
             element: ResolvedElement {
                 handle,
                 _group: Arc::new(group),
+                frame: located.frame,
+                frame_visible: located.frame_visible,
+                owners: located.owners,
             },
             count: u32::try_from(resolved.count).unwrap_or(u32::MAX),
             preview: resolved.preview.unwrap_or_default(),
@@ -1086,14 +1153,29 @@ impl Tab for Arc<PageSession> {
         element: &ResolvedElement,
         states: &[ElementState],
     ) -> Result<StatesCheck, PageError> {
-        let checked = self
-            .world
+        // An offscreen OOPIF can throttle animation frames indefinitely. Bring its owners
+        // into view before a stability check waits on that frame's animation callbacks.
+        if states.contains(&ElementState::Stable) {
+            for owner in &element.owners {
+                owner
+                    .frame
+                    .host
+                    .send(
+                        "DOM.scrollIntoViewIfNeeded",
+                        json!({"objectId":owner.element.id().object_id()}),
+                    )
+                    .await
+                    .map_err(|error| owner.frame.host.classify(&error))?;
+            }
+        }
+        let checked = element
+            .frame
             .call(
                 None,
                 &InjectedCheckElementStatesParams {
                     element: element.handle.clone(),
                     states: states.to_vec(),
-                    frame_visible: true,
+                    frame_visible: element.frame_visible,
                 },
             )
             .await?;
@@ -1129,13 +1211,13 @@ impl Tab for Arc<PageSession> {
                     }),
                     ..dom::ScrollIntoViewIfNeededParams::default()
                 };
-                let scrolled = self
-                    .session
-                    .cdp
-                    .send_typed::<_, Value>(
+                let scrolled = element
+                    .frame
+                    .host
+                    .send(
                         "DOM.scrollIntoViewIfNeeded",
-                        params,
-                        Some(&self.session.id),
+                        serde_json::to_value(params)
+                            .map_err(|error| PageError::Contract(error.to_string()))?,
                     )
                     .await;
                 return match scrolled {
@@ -1150,14 +1232,15 @@ impl Tab for Arc<PageSession> {
                     {
                         Ok(Some(NotReady::NotConnected))
                     }
-                    Err(error) => Err(world::classify(&error)),
+                    Err(error) => Err(element.frame.host.classify(&error)),
                 };
             }
             Scroll::End => ScrollAlignment::End,
             Scroll::Center => ScrollAlignment::Center,
             Scroll::Start => ScrollAlignment::Start,
         };
-        self.world
+        element
+            .frame
             .call(
                 None,
                 &InjectedScrollIntoViewParams {
@@ -1179,55 +1262,91 @@ impl Tab for Arc<PageSession> {
         element: &ResolvedElement,
         position: Option<&Point>,
     ) -> Result<Geometry, PageError> {
-        let object_id = Some(element.handle.id().object_id().to_string());
-        let session = Some(&self.session.id);
+        // Scrolling a remote descendant also scrolls its owners. Its own local rect can
+        // stay still while those parent documents are moving; wait for those rects before
+        // combining coordinates from separate renderer sessions.
+        if !element.owners.is_empty() {
+            for owner in &element.owners {
+                let states = owner
+                    .frame
+                    .call(
+                        None,
+                        &InjectedCheckElementStatesParams {
+                            element: owner.element.clone(),
+                            states: vec![ElementState::Stable],
+                            frame_visible: true,
+                        },
+                    )
+                    .await?;
+                if states.outcome.is_some() {
+                    return Err(PageError::NotConnected);
+                }
+            }
+            let states = element
+                .frame
+                .call(
+                    None,
+                    &InjectedCheckElementStatesParams {
+                        element: element.handle.clone(),
+                        states: vec![ElementState::Stable],
+                        frame_visible: element.frame_visible,
+                    },
+                )
+                .await?;
+            if states.outcome.is_some() {
+                return Err(PageError::NotConnected);
+            }
+        }
+        let params = json!({"objectId":element.handle.id().object_id()});
         if position.is_some() {
-            let model = self.session.cdp.send_typed::<_, dom::GetBoxModelResult>(
-                "DOM.getBoxModel",
-                dom::GetBoxModelParams {
-                    object_id,
-                    ..dom::GetBoxModelParams::default()
-                },
-                session,
-            );
+            let model = element.frame.host.send("DOM.getBoxModel", params);
             let border_params = InjectedGetElementBorderWidthParams {
                 element: element.handle.clone(),
             };
-            let border = self.world.call(None, &border_params);
+            let border = element.frame.call(None, &border_params);
             let (model, border) = tokio::join!(model, border);
             let model = match model {
-                Ok(model) => model.model,
-                Err(error) => return no_geometry(&world::classify(&error)),
+                Ok(model) => model,
+                Err(error) => return no_geometry(&element.frame.host.classify(&error)),
             };
             let border = match border {
                 Ok(border) => border,
                 Err(error) => return no_geometry(&error),
             };
+            let model: dom::GetBoxModelResult = serde_json::from_value(model)
+                .map_err(|error| PageError::Contract(error.to_string()))?;
+            let offset = self
+                .frames
+                .offset(&element.frame.host)
+                .await?
+                .unwrap_or_default();
             return Ok(Geometry::Offset {
-                border_box: quad(model.border)?,
+                border_box: translate(quad(model.model.border)?, offset),
                 border: (border.left, border.top),
             });
         }
-        let quads = self
-            .session
-            .cdp
-            .send_typed::<_, dom::GetContentQuadsResult>(
-                "DOM.getContentQuads",
-                dom::GetContentQuadsParams {
-                    object_id,
-                    ..dom::GetContentQuadsParams::default()
-                },
-                session,
-            );
-        let viewport = self.world.call(None, &InjectedViewportSizeParams {});
+        let quads = element.frame.host.send("DOM.getContentQuads", params);
+        let viewport_frame = self.frames.main();
+        let viewport = viewport_frame.call(None, &InjectedViewportSizeParams {});
         let (quads, viewport) = tokio::join!(quads, viewport);
         let viewport = viewport?;
         let quads = match quads {
-            Ok(quads) => quads.quads,
-            Err(error) => return no_geometry(&world::classify(&error)),
+            Ok(quads) => quads,
+            Err(error) => return no_geometry(&element.frame.host.classify(&error)),
         };
+        let quads: dom::GetContentQuadsResult = serde_json::from_value(quads)
+            .map_err(|error| PageError::Contract(error.to_string()))?;
+        let offset = self
+            .frames
+            .offset(&element.frame.host)
+            .await?
+            .unwrap_or_default();
         Ok(Geometry::Quads {
-            quads: quads.into_iter().map(quad).collect::<Result<_, _>>()?,
+            quads: quads
+                .quads
+                .into_iter()
+                .map(|points| quad(points).map(|quad| translate(quad, offset)))
+                .collect::<Result<_, _>>()?,
             viewport: (pixels(viewport.width), pixels(viewport.height)),
         })
     }
@@ -1253,7 +1372,7 @@ impl Tab for Arc<PageSession> {
         input: InputPermit,
     ) -> impl Future<Output = Result<Arming<ArmedInterceptor>, PageError>> + Send {
         let page = Arc::clone(self);
-        let element = element.handle.clone();
+        let element = element.clone();
         async move {
             let (answer, armed) = oneshot::channel();
             let setup = arm_interceptor(Arc::clone(&page), element, hit_point, input);
@@ -1331,7 +1450,7 @@ impl Tab for Arc<PageSession> {
         let params = InjectedStopHitTargetInterceptorParams {
             interceptor: armed.handle.clone(),
         };
-        let stop = self.world.call(None, &params);
+        let stop = armed.frame.call(None, &params);
         tokio::select! {
             biased;
             () = stalled => Verdict::Done,
@@ -1408,19 +1527,19 @@ impl Tab for Arc<PageSession> {
 /// `Arc<PageSession>`), so it reads the answer to the end whoever still waits for it.
 async fn arm_interceptor(
     page: Arc<PageSession>,
-    element: Handle<Element>,
+    element: ResolvedElement,
     hit_point: Point,
     input: InputPermit,
 ) -> Result<Arming<ArmedInterceptor>, PageError> {
     let mark = page.mark();
-    let group = new_group(&page, "interceptor");
-    let (armed, current) = page
-        .world
+    let group = new_group(&page, &element.frame, "interceptor");
+    let frame = Arc::clone(&element.frame);
+    let (armed, current) = frame
         .call_retaining_reply(
             Some(group.group()),
             &InjectedSetupHitTargetInterceptorParams {
-                element,
-                hit_point: Some(hit_point),
+                element: element.handle.clone(),
+                hit_point: (frame.id == page.main_frame).then_some(hit_point),
                 // Only Playwright's trial blocks every event, and Neo's trial sends none.
                 block_all_events: false,
             },
@@ -1435,6 +1554,7 @@ async fn arm_interceptor(
             handle,
             group: Some(group),
             page,
+            frame: Arc::clone(&frame),
             mark,
             stopped: false,
             input: Some(input),
@@ -1465,6 +1585,14 @@ fn no_geometry(error: &PageError) -> Result<Geometry, PageError> {
 }
 
 /// A CDP `DOM.Quad`, which is always eight numbers.
+fn translate(mut quad: [f64; 8], (x, y): (f64, f64)) -> [f64; 8] {
+    for point in quad.as_chunks_mut::<2>().0 {
+        point[0] += x;
+        point[1] += y;
+    }
+    quad
+}
+
 fn quad(points: Vec<f64>) -> Result<[f64; 8], PageError> {
     <[f64; 8]>::try_from(points)
         .map_err(|points| PageError::Contract(format!("a DOM quad of {} numbers", points.len())))
@@ -2065,6 +2193,7 @@ mod tests {
                     SessionId::from(SESSION),
                     MAIN.to_string(),
                 )),
+                frames: None,
                 initial_url,
             };
             let watcher = watch_events(
@@ -2111,9 +2240,13 @@ mod tests {
             Arc::new(Mutex::new(())),
             CancellationToken::new(),
         ));
-        let mut events = WaitTab::observe(&page).expect("wait observer before prepare");
+        let tab = FrameTab {
+            page: Arc::clone(&page),
+            scope: FrameScope::Main,
+        };
+        let mut events = WaitTab::observe(&tab).expect("wait observer before prepare");
         let mut navigation =
-            NavigationTab::observe(&page).expect("navigation observer before prepare");
+            NavigationTab::observe(&tab).expect("navigation observer before prepare");
         PageSession::prepare(&page).await.expect("prepare");
         time::timeout(Duration::from_secs(1), async {
             while !events.state().lifecycle.load {
@@ -2154,6 +2287,7 @@ mod tests {
                 state,
                 navigations,
                 world: Arc::new(World::new(cdp, SessionId::from(SESSION), MAIN.to_string())),
+                frames: None,
                 initial_url,
             },
             closed.clone(),
