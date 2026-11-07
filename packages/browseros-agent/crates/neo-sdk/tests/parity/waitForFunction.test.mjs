@@ -13,10 +13,18 @@
 // negative polling interval", WA-014 "should return the success value as a JSHandle", WA-015
 // "should return the window as a success value", WA-016 "should accept ElementHandle arguments",
 // WA-019 "should disable timeout when its set to 0", WA-021 "should survive navigations", WA-023
-// "should wait for predicate with arguments".
+// "should wait for predicate with arguments", WA-026 "should throw when frame is detached" (on
+// frame-top.html's same-process child and its cross-site OOPIF, frames.mjs).
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import {
+  assertDecoysUntouched,
+  compareFrameCases,
+  FRAME_TREE,
+  failed,
+  value,
+} from './frames.mjs'
 import { compareMethod, skip } from './harness.mjs'
 import { VALUES } from './values.mjs'
 
@@ -101,4 +109,69 @@ test('waitForFunction survives a navigation of its page', {
     probe: 'window.__facts()',
   })
   assert.deepEqual(outcome.value, { survived: { value: true } })
+})
+
+const frameCases = [
+  {
+    name: "frame.waitForFunction polls in its own frame's document",
+    source: `const same = page.frame('same')
+    const cross = page.frame('cross')
+    await same.evaluate(() => setTimeout(() => { window.__ready = 'ready:' + window.__who }, 100))
+    await cross.evaluate(() => setTimeout(() => { window.__ready = 'ready:' + window.__who }, 100))
+    return {
+      same: await settle(async () => (await same.waitForFunction(() => window.__ready)).jsonValue()),
+      cross: await settle(async () => (await cross.waitForFunction(() => window.__ready, undefined, { polling: 50 })).jsonValue()),
+      top: await settle(() => page.mainFrame().waitForFunction(() => window.__ready, undefined, { timeout: 300 })),
+    }`,
+    expected: {
+      same: value('ready:same'),
+      cross: value('ready:cross'),
+      top: failed('timeout'),
+    },
+    effect: (effect) => assertDecoysUntouched(effect, []),
+  },
+  {
+    name: 'a waitForFunction on a child frame rejects when its iframe is removed',
+    source: `const removedWhileWaiting = async (frame, remove) => {
+      let settled = false
+      const waiting = settle(() => frame.waitForFunction(() => false, undefined, { timeout: 10000 })).then((result) => {
+        settled = true
+        return result
+      })
+      await page.title()
+      const pendingAtRemoval = !settled
+      await page.click(remove)
+      return { pendingAtRemoval, removed: await waiting, detached: frame.isDetached() }
+    }
+    return {
+      same: await removedWhileWaiting(page.frame('same'), '#remove-same'),
+      cross: await removedWhileWaiting(page.frame('cross'), '#remove-cross'),
+    }`,
+    expected: {
+      same: {
+        pendingAtRemoval: true,
+        removed: failed('error'),
+        detached: true,
+      },
+      cross: {
+        pendingAtRemoval: true,
+        removed: failed('error'),
+        detached: true,
+      },
+    },
+    effect: (effect) => {
+      const gone = ['same', 'cross', 'grandchild']
+      const frames = Object.keys(FRAME_TREE).filter(
+        (who) => !gone.includes(who),
+      )
+      assertDecoysUntouched(effect, ['top'], frames)
+    },
+  },
+]
+
+test('waitForFunction on child frames settles the same through Neo and Playwright', {
+  skip,
+  timeout: 300_000,
+}, async (t) => {
+  await compareFrameCases(t, frameCases)
 })

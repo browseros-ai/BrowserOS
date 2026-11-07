@@ -2020,6 +2020,7 @@ fn page_error(error: PageError) -> PlaywrightError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::progress::ErrorName;
 
     fn remote(value: Value) -> RemoteObject {
         serde_json::from_value(value).expect("a recorded RemoteObject")
@@ -2128,6 +2129,65 @@ mod tests {
         let (meta, call) = route_handle("handle@1", "boundingBox", Some(&json!({})));
         assert!(meta.is_none());
         assert!(call.is_err());
+    }
+
+    #[test]
+    fn selector_and_wait_commands_decode_their_params_and_refuse_the_selector_wait() {
+        let arg = json!({"value": {"v": "undefined"}, "handles": []});
+        let (meta, call) = route_frame(
+            "querySelector",
+            Some(&json!({"selector": "#a", "strict": true})),
+        )
+        .expect("a frame query");
+        assert_eq!(meta.method, "querySelector");
+        assert!(matches!(
+            call,
+            Ok(EvalCall::Query { scope: None, ref selector, strict: true }) if selector == "#a"
+        ));
+        let (_, call) = route_handle(
+            "handle@1",
+            "querySelectorAll",
+            Some(&json!({"selector": "li"})),
+        );
+        assert!(matches!(
+            call,
+            Ok(EvalCall::QueryAll { scope: Some(ref scope), .. }) if scope == "handle@1"
+        ));
+        let (_, call) = route_handle(
+            "handle@1",
+            "evalOnSelector",
+            Some(
+                &json!({"selector": "td", "expression": "e => e.id", "isFunction": true, "arg": arg}),
+            ),
+        );
+        assert!(matches!(
+            call,
+            Ok(EvalCall::EvalOnSelector { scope: Some(_), strict: false, ref evaluation, .. })
+                if evaluation.return_by_value
+        ));
+        let (_, call) = route_frame(
+            "waitForFunction",
+            Some(&json!({"expression": "() => 1", "isFunction": true, "arg": arg, "pollingInterval": 50})),
+        )
+        .expect("a wait");
+        assert!(matches!(
+            call,
+            Ok(EvalCall::WaitForFunction { polling: Some(polling), ref evaluation })
+                if polling.to_bits() == 50.0_f64.to_bits() && !evaluation.return_by_value
+        ));
+        // `Locator.waitForFunction`'s selector form needs the element in the main world's
+        // injected script, which Neo does not have yet.
+        let (_, call) = route_frame(
+            "waitForFunction",
+            Some(&json!({"expression": "() => 1", "arg": arg, "selector": "#a", "strict": true})),
+        )
+        .expect("a wait");
+        assert_eq!(call.expect_err("refused").name, ErrorName::Error);
+        let (_, call) = route_handle("handle@1", "getPropertyList", None);
+        assert!(matches!(call, Ok(EvalCall::GetPropertyList { ref guid }) if guid == "handle@1"));
+        let (_, call) = route_frame("querySelector", Some(&json!({"selector": "#a", "x": 1})))
+            .expect("a frame query");
+        assert!(call.is_err(), "unknown params are refused");
     }
 
     #[test]
