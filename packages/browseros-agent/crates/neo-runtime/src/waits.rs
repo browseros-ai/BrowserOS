@@ -212,6 +212,18 @@ pub(crate) async fn wait_for_selector<T: WaitTab>(
     tab: &T,
     options: &WaitForSelectorOptions,
     progress: &Progress,
+) -> Result<(), CallError> {
+    wait_for_selector_element(tab, options, progress)
+        .await
+        .map(|_| ())
+}
+
+/// [`wait_for_selector`], answering the element when `options.return_element` asks for it and
+/// the state is attached or visible: Playwright's `Frame.waitForSelector` result.
+pub(crate) async fn wait_for_selector_element<T: WaitTab>(
+    tab: &T,
+    options: &WaitForSelectorOptions,
+    progress: &Progress,
 ) -> Result<Option<CreatedHandle>, CallError> {
     name_selector(progress, &options.selector, options.state);
     let mut backoff = LoopAWaits::new(progress.timeout_ms());

@@ -751,6 +751,10 @@ async fn node_preview(tab: &FrameTab, frame: &Arc<FrameContext>, object_id: &str
 /// `-0`, `NaN` and `±Infinity` parsed, any other unserializable value such as a BigInt read as
 /// `undefined`), as a CDP `CallArgument`, and its preview, JavaScript's `String(value)`.
 fn primitive(object: &RemoteObject) -> (Value, String) {
+    // `null` arrives as `value: null`, which serde reads as no value.
+    if object.subtype.as_deref() == Some("null") {
+        return (json!({ "value": null }), "null".to_string());
+    }
     if let Some(unserializable) = object.unserializable_value.as_deref() {
         return match unserializable {
             // `String(-0)` is "0".

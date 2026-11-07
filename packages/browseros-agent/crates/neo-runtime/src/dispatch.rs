@@ -668,7 +668,7 @@ async fn serve(
             .await
             .and_then(|result| encode_result::<FrameAriaSnapshotParams>(&result)),
         Route::FrameWaitForSelector(options) => {
-            waits::wait_for_selector(&page, &options, &progress)
+            waits::wait_for_selector_element(&page, &options, &progress)
                 .await
                 .and_then(|element| match element {
                     // `ElementHandle` is no interface of the generated spec: the created handle
@@ -1203,7 +1203,8 @@ mod tests {
                 | Route::FrameAriaSnapshot(_)
                 | Route::FrameWaitForSelector(_)
                 | Route::FrameWaitForUrl(_)
-                | Route::FrameWaitForLoadState(_) => {
+                | Route::FrameWaitForLoadState(_)
+                | Route::Eval(_) => {
                     panic!("a form is not a navigation, read or wait")
                 }
             }
@@ -1366,16 +1367,23 @@ mod tests {
 
     #[test]
     fn tests_that_wait_refusals_happen_during_routing() {
-        for omit in [json!({}), json!({"omitReturnValue":false})] {
+        // A wait that returns its element (`locator.evaluate`'s `_withElement`) is served too.
+        for (omit, returns) in [
+            (json!({}), true),
+            (json!({"omitReturnValue":false}), true),
+            (json!({"omitReturnValue":true}), false),
+        ] {
             let mut params = json!({"selector":"#item"});
             params
                 .as_object_mut()
                 .expect("object")
                 .extend(omit.as_object().expect("object").clone());
-            assert_eq!(
-                error_of(route_frame("waitForSelector", params)).name,
-                ErrorName::Error
-            );
+            match frame_route(route_frame("waitForSelector", params).route) {
+                Ok(Route::FrameWaitForSelector(options)) => {
+                    assert_eq!(options.return_element, returns, "{omit}");
+                }
+                other => panic!("waitForSelector routed to {other:?}"),
+            }
         }
         assert!(route_frame("waitForSelector", json!({"selector":"iframe >> internal:control=enter-frame >> button", "omitReturnValue": true})).route.is_ok());
         for (method, params) in [
