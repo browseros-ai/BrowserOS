@@ -132,7 +132,7 @@ pub(crate) struct WaitForUrlOptions {
 
 impl WaitForUrlOptions {
     pub(crate) fn from_params(params: &NeoWaitForUrlParams) -> Result<Self, PlaywrightError> {
-        let wait_until = supported_lifecycle(params.wait_until, "waitUntil")?;
+        let wait_until = params.wait_until.unwrap_or(LifecycleEvent::Load);
         Ok(Self {
             matcher: UrlMatcher::new(&params.url)?,
             wait_until,
@@ -146,19 +146,12 @@ pub(crate) struct WaitForLoadStateOptions {
 }
 
 impl WaitForLoadStateOptions {
-    pub(crate) fn from_params(params: NeoWaitForLoadStateParams) -> Result<Self, PlaywrightError> {
-        Ok(Self {
-            state: supported_lifecycle(params.state, "state")?,
-        })
+    /// Every lifecycle event Playwright waits for is served, `load` when absent.
+    pub(crate) fn from_params(params: NeoWaitForLoadStateParams) -> Self {
+        Self {
+            state: params.state.unwrap_or(LifecycleEvent::Load),
+        }
     }
-}
-
-/// A wait's lifecycle option, `load` when absent. Every one of Playwright's is served.
-pub(crate) fn supported_lifecycle(
-    state: Option<LifecycleEvent>,
-    _name: &str,
-) -> Result<LifecycleEvent, PlaywrightError> {
-    Ok(state.unwrap_or(LifecycleEvent::Load))
 }
 
 /// The three public waits share deadline, cancellation and disposal here. A condition's
@@ -1058,7 +1051,6 @@ mod tests {
 
     fn load(state: LifecycleEvent) -> WaitForLoadStateOptions {
         WaitForLoadStateOptions::from_params(NeoWaitForLoadStateParams { state: Some(state) })
-            .expect("load options")
     }
 
     struct Run {

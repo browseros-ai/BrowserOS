@@ -19,12 +19,12 @@ pub(crate) struct GotoOptions {
 }
 
 impl GotoOptions {
-    pub(crate) fn from_params(params: FrameGotoParams) -> Result<Self, PlaywrightError> {
-        Ok(Self {
+    pub(crate) fn from_params(params: FrameGotoParams) -> Self {
+        Self {
             url: params.url,
             wait_until: params.wait_until.unwrap_or(LifecycleEvent::Load),
             referer: params.referer,
-        })
+        }
     }
 }
 
@@ -687,8 +687,7 @@ mod tests {
             url: "x".to_string(),
             wait_until: Some(LifecycleEvent::Networkidle),
             referer: None,
-        })
-        .expect("networkidle is served");
+        });
         assert_eq!(options.wait_until, LifecycleEvent::Networkidle);
     }
 

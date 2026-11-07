@@ -87,23 +87,23 @@ pub(crate) struct HistoryOptions {
 
 /// Playwright: `server/frames.ts` `Frame.waitForNavigation`: `const waitUntil = verifyLifecycle('waitUntil', options.waitUntil === undefined ? 'load' : options.waitUntil);`
 impl HistoryOptions {
-    pub(crate) fn reload(params: &PageReloadParams) -> Result<Self, PlaywrightError> {
+    pub(crate) fn reload(params: &PageReloadParams) -> Self {
         Self::new(HistoryStep::Reload, params.wait_until)
     }
 
-    pub(crate) fn back(params: &PageGoBackParams) -> Result<Self, PlaywrightError> {
+    pub(crate) fn back(params: &PageGoBackParams) -> Self {
         Self::new(HistoryStep::Back, params.wait_until)
     }
 
-    pub(crate) fn forward(params: &PageGoForwardParams) -> Result<Self, PlaywrightError> {
+    pub(crate) fn forward(params: &PageGoForwardParams) -> Self {
         Self::new(HistoryStep::Forward, params.wait_until)
     }
 
-    fn new(step: HistoryStep, wait_until: Option<LifecycleEvent>) -> Result<Self, PlaywrightError> {
-        Ok(Self {
+    fn new(step: HistoryStep, wait_until: Option<LifecycleEvent>) -> Self {
+        Self {
             step,
-            wait_until: waits::supported_lifecycle(wait_until, "waitUntil")?,
-        })
+            wait_until: wait_until.unwrap_or(LifecycleEvent::Load),
+        }
     }
 }
 
@@ -188,7 +188,7 @@ impl WaitForNavigationOptions {
         params: &NeoWaitForNavigationParams,
     ) -> Result<Self, PlaywrightError> {
         Ok(Self {
-            wait_until: waits::supported_lifecycle(params.wait_until, "waitUntil")?,
+            wait_until: params.wait_until.unwrap_or(LifecycleEvent::Load),
             matcher: UrlMatcher::new(&params.url)?,
         })
     }
@@ -305,12 +305,12 @@ pub(crate) struct FinishNavigationOptions {
 
 /// Neo: decodes Neo's own `neo:finishNavigation`; Playwright has no such command.
 impl FinishNavigationOptions {
-    pub(crate) fn from_params(params: &NeoFinishNavigationParams) -> Result<Self, PlaywrightError> {
-        Ok(Self {
+    pub(crate) fn from_params(params: &NeoFinishNavigationParams) -> Self {
+        Self {
             cursor: params.cursor,
             index: params.index,
-            wait_until: waits::supported_lifecycle(params.wait_until, "waitUntil")?,
-        })
+            wait_until: params.wait_until.unwrap_or(LifecycleEvent::Load),
+        }
     }
 }
 
@@ -1351,8 +1351,7 @@ mod tests {
     fn tests_that_networkidle_is_a_wait_like_the_others() {
         let options = HistoryOptions::back(&PageGoBackParams {
             wait_until: Some(LifecycleEvent::Networkidle),
-        })
-        .expect("networkidle is served");
+        });
         assert_eq!(options.wait_until, LifecycleEvent::Networkidle);
     }
 }

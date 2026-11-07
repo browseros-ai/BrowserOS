@@ -511,7 +511,7 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
                         params,
                         &WAIT_FOR_LOAD_STATE_META,
                     )
-                    .and_then(WaitForLoadStateOptions::from_params)
+                    .map(WaitForLoadStateOptions::from_params)
                     .map(|options| ObjectCall::Frame(Route::FrameWaitForLoadState(options))),
                 };
             }
@@ -594,7 +594,7 @@ fn route_navigation_wait(method: &str, params: Option<&Value>) -> Option<Routed>
         (&NEXT_NAVIGATION_META, route)
     } else if method == FINISH_NAVIGATION_META.method {
         let route = decode_neo_params::<NeoFinishNavigationParams>(params, &FINISH_NAVIGATION_META)
-            .and_then(|params| FinishNavigationOptions::from_params(&params))
+            .map(|params| FinishNavigationOptions::from_params(&params))
             .map(Route::FrameFinishNavigation);
         (&FINISH_NAVIGATION_META, route)
     } else if method == RELEASE_NAVIGATION_META.method {
@@ -657,7 +657,7 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         }
         FrameCall::Hover(params) => PointerOptions::from_hover(params).map(Route::FramePointer),
         FrameCall::Tap(params) => PointerOptions::from_tap(params).map(Route::FramePointer),
-        FrameCall::Goto(params) => GotoOptions::from_params(params).map(Route::FrameGoto),
+        FrameCall::Goto(params) => Ok(Route::FrameGoto(GotoOptions::from_params(params))),
         FrameCall::Title(_) => Ok(Route::FrameTitle),
         FrameCall::TextContent(params) => {
             Ok(Route::FrameTextContent(ReadOptions::from_params(params)))

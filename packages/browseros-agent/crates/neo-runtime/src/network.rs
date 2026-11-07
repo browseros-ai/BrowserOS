@@ -887,32 +887,40 @@ impl Log {
                 chain.hops.push(hop);
                 started
             });
-        let started = match continued {
-            Some(started) => started,
-            None => {
-                let mut chain = Chain::new(event.request_id.clone(), navigation, session.cloned());
-                if event.redirect_response.is_some() {
-                    // A redirect with no chain to continue: the request's start was never seen.
-                    chain.lag = Lag::BeforeAnswer;
-                }
-                let hop = Hop::new(event, frame, false);
-                let started = (!hop.favicon).then(|| chain.hop_id(0));
-                chain.hops.push(hop);
-                for orphan in self.take_orphans(&chain.request) {
-                    chain.extra(orphan);
-                }
-                self.chains
-                    .retain(|existing| existing.request != chain.request);
-                self.chains.push_back(chain);
-                self.evict(navigation);
-                started
-            }
-        };
+        let started =
+            continued.unwrap_or_else(|| self.start_chain(session, event, frame, navigation));
         if let Some(id) = started {
             self.record_start(id.clone());
             happenings.push(Happening::Request(id));
         }
         true
+    }
+
+    /// A request id this log holds no live chain for starts one, its earlier extra info
+    /// applied; the request's first hop, unless it is a favicon.
+    fn start_chain(
+        &mut self,
+        session: Option<&SessionId>,
+        event: &RequestWillBeSent,
+        frame: &str,
+        navigation: bool,
+    ) -> Option<HopId> {
+        let mut chain = Chain::new(event.request_id.clone(), navigation, session.cloned());
+        if event.redirect_response.is_some() {
+            // A redirect with no chain to continue: the request's start was never seen.
+            chain.lag = Lag::BeforeAnswer;
+        }
+        let hop = Hop::new(event, frame, false);
+        let started = (!hop.favicon).then(|| chain.hop_id(0));
+        chain.hops.push(hop);
+        for orphan in self.take_orphans(&chain.request) {
+            chain.extra(orphan);
+        }
+        self.chains
+            .retain(|existing| existing.request != chain.request);
+        self.chains.push_back(chain);
+        self.evict(navigation);
+        started
     }
 
     /// Drops the oldest chain past its kind's cap: navigations past [`MAX_CHAINS`], oldest

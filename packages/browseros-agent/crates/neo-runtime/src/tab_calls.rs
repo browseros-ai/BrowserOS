@@ -127,16 +127,7 @@ pub(crate) async fn page(
         // what the run's network log recorded, which starts with the session's
         // `Network.enable`: the first goto, history step or navigation wait, a network event
         // listener, or this read, as Chromium replays no earlier request.
-        PageCall::Requests(_) => {
-            let page = progress.race(tabs.session(entry)).await??;
-            let enabled = progress.race(page.enable_network()).await?;
-            checked(tabs, entry, progress, enabled).await?;
-            let requests = page
-                .network
-                .requests()
-                .map_err(|error| PlaywrightError::error(error.to_string()))?;
-            return encode_result::<PageRequestsParams>(&PageRequestsResult { requests });
-        }
+        PageCall::Requests(_) => return requests(tabs, entry, progress).await,
         PageCall::Close(_) => close(tabs, entry, progress).await?,
         PageCall::RunBeforeUnload(_) => {
             // Playwright 26137face server/page.ts:852-861 and chromium/crPage.ts:264-270:
@@ -189,16 +180,31 @@ pub(crate) async fn page(
 async fn history_step(
     tabs: &Tabs,
     entry: &Arc<PageEntry>,
-    options: Result<HistoryOptions, PlaywrightError>,
+    options: HistoryOptions,
     progress: &Progress,
 ) -> Result<Option<ResponseChannel>, CallError> {
-    let options = options?;
     let page = progress.race(tabs.session(entry)).await??;
     let main = FrameTab {
         page,
         scope: FrameScope::Main,
     };
     history::navigate(&main, &options, progress).await
+}
+
+/// `page.requests()`: what the session's network log recorded, after making sure it records.
+async fn requests(
+    tabs: &Tabs,
+    entry: &PageEntry,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    let enabled = progress.race(page.enable_network()).await?;
+    checked(tabs, entry, progress, enabled).await?;
+    let requests = page
+        .network
+        .requests()
+        .map_err(|error| PlaywrightError::error(error.to_string()))?;
+    encode_result::<PageRequestsParams>(&PageRequestsResult { requests })
 }
 
 /// `entry`'s session with console messages and page errors reported (`PageSession::enable_runtime`).
