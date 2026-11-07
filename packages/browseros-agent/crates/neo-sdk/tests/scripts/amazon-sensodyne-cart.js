@@ -1,6 +1,6 @@
 // Async function body for Runtime::run: `page` is supplied by neo-runtime.
 // Live Amazon.in scenario; requires an empty cart. Leaves one pack in the cart.
-// Executed by neo-runtime/tests/amazon_cart_live.rs in a fresh browser profile.
+// Executed by neo-runtime/integration-tests/amazon_cart_live.rs in a fresh browser profile.
 
 const productName =
   'Sensodyne Toothpaste Fresh Mint | Daily Sensitivity Relief Tooth Paste Pack of 1 - 75gm | Dentist Recommended | Everyday Use Paste, Fresh Breath, Fights Tooth Decay, Maintain Healthy Gums'
