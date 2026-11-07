@@ -48,6 +48,7 @@ use crate::frames::{FrameContext, FrameScope};
 use crate::main_world::{self, BuiltExpression, Called, DocumentId, Installed, MainFunction};
 use crate::page::{FrameTab, GroupGuard};
 use crate::progress::{CallError, PlaywrightError, Progress, js_number};
+use crate::reads::SelectorTab;
 
 /// Neo: the guid prefix of a run's handles (`handle@<run>.<n>`), opaque to the SDK.
 pub(crate) const HANDLE_PREFIX: &str = "handle@";
@@ -262,12 +263,33 @@ struct WaitForFunctionParams {
     strict: Option<bool>,
 }
 
+/// `ElementHandle.dispatchEvent`'s params.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DispatchEventParams {
+    #[serde(rename = "type")]
+    kind: String,
+    event_init: SerializedArgument,
+}
+
 /// `JSHandle.getProperty`'s params.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GetPropertyParams {
     name: String,
 }
+
+/// Neo: `ElementHandle.dispatchEvent`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
+pub(crate) static HANDLE_DISPATCH_EVENT_META: MethodMeta = MethodMeta {
+    interface: "ElementHandle",
+    method: "dispatchEvent",
+    title: Some("Dispatch event"),
+    subtitle: None,
+    group: None,
+    render_params: &["type"],
+    internal: false,
+    flags: &[MethodFlag::SlowMo, MethodFlag::Snapshot, MethodFlag::Pause],
+};
 
 /// Neo: `Frame.querySelector`'s trace metadata, as `neo-runtime-spec/spec/playwright/frame.yml`
 /// declares it.
@@ -435,6 +457,19 @@ pub(crate) enum EvalCall {
         evaluation: Evaluation,
         polling: Option<f64>,
     },
+    /// `Frame.waitForFunction` with a `selector`: `Locator.waitForFunction`, the predicate on the
+    /// first match in the main world.
+    WaitForFunctionOnElement {
+        selector: String,
+        strict: bool,
+        evaluation: Evaluation,
+    },
+    /// `ElementHandle.dispatchEvent`.
+    DispatchEvent {
+        guid: String,
+        kind: String,
+        event_init: SerializedArgument,
+    },
     /// `JSHandle.getProperty`.
     GetProperty {
         guid: String,
@@ -491,14 +526,21 @@ pub(crate) fn route_frame(
         let meta = &FRAME_WAIT_FOR_FUNCTION_META;
         return Some((
             meta,
-            decode::<WaitForFunctionParams>(params, meta).and_then(|params| {
-                if params.selector.is_some() || params.strict.is_some() {
-                    // Deviation: `server/frames.ts` `Frame.waitForFunctionExpressionOnElement`: `expression = js.normalizeEvaluationExpression(expression, isFunction);` Neo has no main-world injected script yet to run the predicate on an element, so it refuses the selector form.
-                    return Err(PlaywrightError::error(
-                        "Neo does not support waitForFunction on a selector yet",
-                    ));
+            decode::<WaitForFunctionParams>(params, meta).map(|params| {
+                // Playwright: `server/dispatchers/frameDispatcher.ts` `FrameDispatcher.waitForFunction`: `if (params.selector !== undefined) {`
+                if let Some(selector) = params.selector {
+                    return EvalCall::WaitForFunctionOnElement {
+                        selector,
+                        strict: params.strict.unwrap_or(false),
+                        evaluation: Evaluation {
+                            expression: params.expression,
+                            is_function: params.is_function,
+                            arg: params.arg,
+                            return_by_value: true,
+                        },
+                    };
                 }
-                Ok(EvalCall::WaitForFunction {
+                EvalCall::WaitForFunction {
                     evaluation: Evaluation {
                         expression: params.expression,
                         is_function: params.is_function,
@@ -506,7 +548,7 @@ pub(crate) fn route_frame(
                         return_by_value: false,
                     },
                     polling: params.polling_interval,
-                })
+                }
             }),
         ));
     }
@@ -583,6 +625,16 @@ pub(crate) fn route_handle(
             &HANDLE_GET_PROPERTY_LIST_META,
             decode::<NoParams>(params, &HANDLE_GET_PROPERTY_LIST_META)
                 .map(|NoParams {}| EvalCall::GetPropertyList { guid }),
+        ),
+        "dispatchEvent" => (
+            &HANDLE_DISPATCH_EVENT_META,
+            decode::<DispatchEventParams>(params, &HANDLE_DISPATCH_EVENT_META).map(|params| {
+                EvalCall::DispatchEvent {
+                    guid,
+                    kind: params.kind,
+                    event_init: params.event_init,
+                }
+            }),
         ),
 
         // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection.dispatch`: `Mismatching dispatcher: "${dispatcher._type}" does not implement "${method}"`
@@ -855,6 +907,10 @@ pub(crate) async fn serve(
         | EvalCall::EvalOnSelectorAll { .. }) => {
             return serve_selector(tab, call, handles, progress).await;
         }
+        call @ (EvalCall::DispatchEvent { .. } | EvalCall::WaitForFunctionOnElement { .. }) => {
+            serve_element(tab, call, handles, progress).await?;
+            return Ok(Some(json!({})));
+        }
         EvalCall::WaitForFunction {
             evaluation,
             polling,
@@ -970,6 +1026,8 @@ enum Extra<'a> {
     Object(&'a str),
     /// The document's `UtilityScript`.
     Utility,
+    /// The document's main-world `InjectedScript` (`MainWorld::injected`), built on first use.
+    MainInjected,
 }
 
 /// One `UtilityScript.evaluate` call: `leading` page-format arguments before the agent's `arg`
@@ -1007,6 +1065,26 @@ async fn invoke(
     loop {
         attempt += 1;
         let installed = installed(tab, frame, invocation.receiver, progress).await?;
+        let wants_injected = invocation
+            .extras
+            .iter()
+            .any(|extra| matches!(extra, Extra::MainInjected));
+        let injected = if wants_injected {
+            match progress
+                .race(frame.main.injected(frame, &installed))
+                .await?
+            {
+                Ok(id) => id,
+                // The cached `UtilityScript` outlived its document: install once more.
+                Err(PageError::NotConnected) if attempt == 1 => {
+                    frame.main.invalidate(&installed).await;
+                    continue;
+                }
+                Err(error) => return Err(page_error(error).into()),
+            }
+        } else {
+            String::new()
+        };
         let mut handle_args = Vec::with_capacity(args.len() + invocation.extras.len());
         for arg in &args {
             handle_args.push(call_argument(arg, frame, &installed)?);
@@ -1017,6 +1095,7 @@ async fn invoke(
                 Extra::Entry(entry) => call_argument(entry, frame, &installed)?,
                 Extra::Object(id) => json!({ "objectId": id }),
                 Extra::Utility => json!({ "objectId": installed.utility_id() }),
+                Extra::MainInjected => json!({ "objectId": injected }),
             });
         }
         let mut values = vec![
@@ -1046,6 +1125,60 @@ async fn invoke(
             Called::Stale if attempt == 1 => frame.main.invalidate(&installed).await,
             called => return Ok((installed.document, called)),
         }
+    }
+}
+
+/// The main-world element callbacks' share of [`serve`]: each answers nothing.
+async fn serve_element(
+    tab: &FrameTab,
+    call: EvalCall,
+    handles: &Handles,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    match call {
+        EvalCall::DispatchEvent {
+            guid,
+            kind,
+            event_init,
+        } => {
+            let receiver = element_scope(handles, Some(&guid), "dispatchEvent")?
+                .ok_or_else(PlaywrightError::target_closed)?;
+            // Playwright: `server/dom.ts` `ElementHandle.dispatchEvent`: `return this._frame.dispatchEvent(progress, { selector: ':scope', scope: this }, type, eventInit);`
+            call_on_element_main(
+                tab,
+                Some(&receiver),
+                SCOPE_SELECTOR,
+                false,
+                MainCallback::DispatchEvent,
+                &[json!(kind)],
+                &event_init,
+                handles,
+                progress,
+            )
+            .await
+        }
+        EvalCall::WaitForFunctionOnElement {
+            selector,
+            strict,
+            evaluation,
+        } => {
+            let is_function = evaluation
+                .is_function
+                .map_or_else(|| json!({ "v": "undefined" }), |flag| json!(flag));
+            call_on_element_main(
+                tab,
+                None,
+                &selector,
+                strict,
+                MainCallback::WaitForFunction,
+                &[json!(evaluation.expression), is_function],
+                &evaluation.arg,
+                handles,
+                progress,
+            )
+            .await
+        }
+        _ => Err(PlaywrightError::error("neo-runtime: not an element callback").into()),
     }
 }
 
@@ -1668,6 +1801,167 @@ async fn abort_waiter(tab: FrameTab, frame: Arc<FrameContext>, waiter: String) {
     drop(tab);
 }
 
+/// Playwright: `server/dom.ts` `ElementHandle.dispatchEvent`: `return this._frame.dispatchEvent(progress, { selector: ':scope', scope: this }, type, eventInit);`
+const SCOPE_SELECTOR: &str = ":scope";
+
+/// A page callback Playwright runs on a matched element in the main world's `InjectedScript`
+/// (`mainWorld: true`), built in `dist/call-on-element.js` and named here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MainCallback {
+    /// `Frame.dispatchEvent`'s: data `[type]`, then the `eventInit` argument.
+    DispatchEvent,
+    /// `Frame.waitForFunctionExpressionOnElement`'s: data `[expression, isFunction]`, then the
+    /// predicate's argument.
+    WaitForFunction,
+}
+
+impl MainCallback {
+    /// The callback's key in `dist/call-on-element.js`.
+    fn name(self) -> &'static str {
+        match self {
+            Self::DispatchEvent => "dispatchEvent",
+            Self::WaitForFunction => "waitForFunction",
+        }
+    }
+}
+
+/// The seam of the `mainWorld: true` element callbacks (`ElementHandle.dispatchEvent` here;
+/// med-pw-dom's `Locator.dispatchEvent` and `Locator.waitForFunction`): Playwright's
+/// `Frame._waitForFunctionOnSelector` with `mainWorld: true`. It polls with loop A's backoff
+/// until `selector` matches (within `scope`'s element when given, else from the tab's frame,
+/// entering frames as the selector says) and `callback` answers truthy on the first match.
+/// `data` are the callback's own page-format values, before `arg`, the agent's argument with its
+/// handles. Strict mode and a thrown callback end the call; a match that is not there yet, a falsy
+/// answer or a document that went away (without a scope) poll again.
+/// Playwright: `server/frames.ts` `Frame._waitForFunctionOnSelector`: `const promise = this.retryWithProgressAndBackoff(progress, async (progress, continuePolling) => {`
+///
+/// # Errors
+///
+/// Playwright's: an invalid selector at once, a strict mode violation, the callback's throw, the
+/// scope's document gone, the call's timeout.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the seam's published shape: target, callback, its data and argument, the run"
+)]
+pub(crate) async fn call_on_element_main(
+    tab: &FrameTab,
+    scope: Option<&HandleEntry>,
+    selector: &str,
+    strict: bool,
+    callback: MainCallback,
+    data: &[Value],
+    arg: &SerializedArgument,
+    handles: &Handles,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    progress.race(tab.prepare()).await?.map_err(page_error)?;
+    let facts = progress
+        .race(tab.describe(selector))
+        .await?
+        .map_err(page_error)?;
+    progress.name_locator(&facts.locator);
+    // Playwright parses the selector before its first page call and fails at once.
+    if let Some(message) = facts.invalid {
+        return Err(PlaywrightError::error(message).into());
+    }
+    let mut backoff = LoopAWaits::new(progress.timeout_ms());
+    let target = ElementTarget {
+        scope,
+        selector,
+        strict,
+        callback,
+        data,
+    };
+    loop {
+        progress.wait(backoff.next_wait()).await?;
+        if let Some(preview) = call_on_element_once(tab, &target, arg, handles, progress).await? {
+            progress.log(format!("  locator resolved to {preview}"));
+            return Ok(());
+        }
+    }
+}
+
+/// What [`call_on_element_main`] runs, as each attempt reads it.
+struct ElementTarget<'a> {
+    scope: Option<&'a HandleEntry>,
+    selector: &'a str,
+    strict: bool,
+    callback: MainCallback,
+    data: &'a [Value],
+}
+
+/// One attempt of [`call_on_element_main`]: the first match's preview once the callback answered
+/// truthy on it, `None` to poll again.
+async fn call_on_element_once(
+    tab: &FrameTab,
+    target: &ElementTarget<'_>,
+    arg: &SerializedArgument,
+    handles: &Handles,
+    progress: &Progress,
+) -> Result<Option<String>, CallError> {
+    let (frame, selector) = match target.scope {
+        Some(root) => (Arc::clone(&root.frame), target.selector.to_string()),
+        None => match progress
+            .race(frame_selector::locate(tab, target.selector, target.strict))
+            .await?
+            .map_err(page_error)?
+        {
+            Some(located) => (located.frame, located.selector),
+            None => return Ok(None),
+        },
+    };
+    let mut extras = vec![Extra::MainInjected];
+    if let Some(root) = target.scope {
+        extras.push(Extra::Entry(root));
+    }
+    let scoped = target.scope.is_some();
+    // `(injected, selector, strict, scope, callback, ...data, arg)`.
+    let leading = |base: usize| {
+        let mut values = vec![
+            json!({ "h": base }),
+            json!(selector),
+            json!(target.strict),
+            if scoped {
+                json!({ "h": base + 1 })
+            } else {
+                json!({ "v": "undefined" })
+            },
+            json!(target.callback.name()),
+        ];
+        values.extend(target.data.iter().cloned());
+        values
+    };
+    let called = invoke(
+        tab,
+        &Invocation {
+            frame: &frame,
+            receiver: target.scope,
+            expression: BuiltExpression::CallOnElement.source(),
+            is_function: Some(true),
+            return_by_value: true,
+            leading: &leading,
+            extras: &extras,
+            arg,
+        },
+        handles,
+        progress,
+    )
+    .await;
+    match called {
+        Ok((_, Called::Value(Some(Value::String(preview))))) => Ok(Some(preview)),
+        Ok((_, Called::Value(_) | Called::Stale | Called::Protocol(_))) => Ok(None),
+        Ok((_, Called::Threw(message))) => Err(PlaywrightError::error(message).into()),
+        Ok((_, Called::Object(_))) => Err(PlaywrightError::error(
+            "neo-runtime: the element callback answered by handle",
+        )
+        .into()),
+        Err(CallError::Playwright(error)) if !scoped && error.message == CONTEXT_DESTROYED => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// The seam of med-pw-net's `ConsoleMessage.args()`: `object`, a value an event of `frame`'s
 /// session carried (a console message's argument), as a handle of the run. An object is first
 /// re-wrapped into the run's handle group of that session (`main_world::retain`), so the handle
@@ -2037,7 +2331,6 @@ fn page_error(error: PageError) -> PlaywrightError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::progress::ErrorName;
 
     fn remote(value: Value) -> RemoteObject {
         serde_json::from_value(value).expect("a recorded RemoteObject")
@@ -2164,7 +2457,7 @@ mod tests {
     }
 
     #[test]
-    fn selector_and_wait_commands_decode_their_params_and_refuse_the_selector_wait() {
+    fn selector_wait_and_element_commands_decode_their_params() {
         let arg = json!({"value": {"v": "undefined"}, "handles": []});
         let (meta, call) = route_frame(
             "querySelector",
@@ -2207,14 +2500,26 @@ mod tests {
             Ok(EvalCall::WaitForFunction { polling: Some(polling), ref evaluation })
                 if polling.to_bits() == 50.0_f64.to_bits() && !evaluation.return_by_value
         ));
-        // `Locator.waitForFunction`'s selector form needs the element in the main world's
-        // injected script, which Neo does not have yet.
+        // `Locator.waitForFunction`: the predicate on the first match, in the main world.
         let (_, call) = route_frame(
             "waitForFunction",
             Some(&json!({"expression": "() => 1", "arg": arg, "selector": "#a", "strict": true})),
         )
         .expect("a wait");
-        assert_eq!(call.expect_err("refused").name, ErrorName::Error);
+        assert!(matches!(
+            call,
+            Ok(EvalCall::WaitForFunctionOnElement { ref selector, strict: true, .. }) if selector == "#a"
+        ));
+        let (meta, call) = route_handle(
+            "handle@1",
+            "dispatchEvent",
+            Some(&json!({"type": "click", "eventInit": arg})),
+        );
+        assert_eq!(meta.map(|meta| meta.title), Some(Some("Dispatch event")));
+        assert!(matches!(
+            call,
+            Ok(EvalCall::DispatchEvent { ref kind, .. }) if kind == "click"
+        ));
         let (_, call) = route_handle("handle@1", "getPropertyList", None);
         assert!(matches!(call, Ok(EvalCall::GetPropertyList { ref guid }) if guid == "handle@1"));
         let (_, call) = route_frame("querySelector", Some(&json!({"selector": "#a", "x": 1})))

@@ -112,6 +112,10 @@ export type JSHandleCommands = EvalFrameCommands & {
     params: Record<string, never>
     result: { properties: { name: string; value: CreatedHandle }[] }
   }
+  dispatchEvent: {
+    params: { type: string; eventInit: SerializedArgument }
+    result: Record<string, never>
+  }
 }
 
 /** Playwright's `Unboxed`: a handle in an argument arrives in the page as the value it names. */

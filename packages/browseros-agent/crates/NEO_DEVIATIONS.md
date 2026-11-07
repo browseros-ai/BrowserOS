@@ -3,12 +3,11 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (10)
+## Deviations (9)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
 | neo-runtime/src/evaluate.rs | `created_handle` | `server/dom.ts` `ElementHandle._initializePreview` | Playwright starts at `JSHandle@node` and updates the preview by event; Neo has no events, so the handle starts with the final preview. |
-| neo-runtime/src/evaluate.rs | `route_frame` | `server/frames.ts` `Frame.waitForFunctionExpressionOnElement` | Neo has no main-world injected script yet to run the predicate on an element, so it refuses the selector form. |
 | neo-runtime/src/evaluate.rs | `utility_root` | `server/frameSelectors.ts` `FrameSelectors._resolveChainedSelector` | Playwright resolves frame hops from a scope too; Neo serves a scoped query within the element's own document only. |
 | neo-sdk/src/frame.ts | `Frame._querySelector` | `client/timeoutSettings.ts` `kNoTimeout` | Playwright's `$` sends this, so it ignores a caller's signal; Neo refuses one rather than ignore it. |
 | neo-sdk/src/frame.ts | `Frame._waitForFunction` | `client/timeoutSettings.ts` `TimeoutSettings.timeout` | Neo refuses a signal rather than ignore it. |

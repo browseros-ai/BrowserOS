@@ -128,6 +128,7 @@ export type ApiName =
   | 'elementHandle.$$'
   | 'elementHandle.$eval'
   | 'elementHandle.$$eval'
+  | 'elementHandle.dispatchEvent'
   | 'page.$'
   | 'page.$$'
   | 'page.$eval'

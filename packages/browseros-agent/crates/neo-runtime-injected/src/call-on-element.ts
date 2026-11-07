@@ -42,6 +42,7 @@ const CALLBACKS: Record<'dispatchEvent' | 'waitForFunction', Callback> = {
   },
 }
 
+/** Playwright: `server/frameSelectors.ts` `FrameSelectors._callOnSelectorInternal`: `const elements = injected.querySelectorAll(params.info.parsed, params.scope || document);` */
 export default function callOnElement(
   injected: InjectedScript,
   selector: string,

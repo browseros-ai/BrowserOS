@@ -13,6 +13,10 @@
  *                       expressions (`JSHandle.getProperty`, `page.waitForFunction`)
  *   dist/retain.js      `(object) => object`                       an event's object, kept
  *                       in a run's handle group
+ *   dist/main-injected.js  `(initializer) => InjectedScript`       the main world's own,
+ *                       held by CDP id, never on a global
+ *   dist/call-on-element.js  Playwright's `mainWorld: true` element callbacks, run as a
+ *                       `UtilityScript.evaluate` expression with that InjectedScript
  *   dist/spec-sha256    neo-runtime-spec's SPEC_SHA256, no trailing newline, which neo-runtime
  *                       const-asserts against the Rust crate's own hash
  *
@@ -35,10 +39,11 @@
  * in a real page.
  *
  * Also enforced here, because Biome cannot tell a type import from a value import by path: no
- * file under `src/` except `install.ts` and `utility.ts` may value-import vendored code
- * (Playwright's DEPS.list rule: glue sees injected types, never injected code). `install.ts`
- * constructs `InjectedScript` for the utility world, `utility.ts` constructs `UtilityScript` for
- * the main world, and nothing else may build page code from the vendored tree. A violation fails
+ * file under `src/` except `install.ts`, `utility.ts` and `main-injected.ts` may value-import
+ * vendored code (Playwright's DEPS.list rule: glue sees injected types, never injected code).
+ * `install.ts` constructs `InjectedScript` for the utility world, `utility.ts` constructs
+ * `UtilityScript` and `main-injected.ts` constructs `InjectedScript` for the main world, and
+ * nothing else may build page code from the vendored tree. A violation fails
  * the build, and so neo-check.
  *
  * `scripts/neo-check.sh` runs this and fails when `dist/` differs from the committed files.
@@ -61,8 +66,10 @@ const ENTRIES = [
   'wait-result',
   'wait-abort',
   'retain',
+  'main-injected',
+  'call-on-element',
 ] as const
-const VALUE_IMPORTERS = ['install.ts', 'utility.ts']
+const VALUE_IMPORTERS = ['install.ts', 'utility.ts', 'main-injected.ts']
 const VENDOR_ALIASES = ['@injected/', '@isomorphic/', '@protocol/']
 
 const packageDir = import.meta.dir

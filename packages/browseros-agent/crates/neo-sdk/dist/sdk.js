@@ -902,6 +902,9 @@ class ElementHandle extends JSHandle {
     const result = await this._connection.sendHandle("elementHandle.$$eval", this._guid, "evalOnSelectorAll", { selector, ...params }, 0);
     return parseResult(result.value);
   }
+  async dispatchEvent(type, eventInit = {}) {
+    await this._connection.sendHandle("elementHandle.dispatchEvent", this._guid, "dispatchEvent", { type, eventInit: serializeArgument(eventInit) }, 0);
+  }
 }
 function elementsFrom(connection, created) {
   return created.map((record) => ElementHandle.fromNullable(connection, record)).filter((handle) => handle !== null);
