@@ -53,6 +53,7 @@ use crate::click::{
 use crate::element_ops::{self, ElementOpsTab, Focus};
 use crate::evaluate::{self, UtilityElement};
 use crate::fill::{FillAction, FillOptions, SelectAction, SelectOptions};
+use crate::frame_selector;
 use crate::getters;
 use crate::keyboard::KeyboardTab;
 use crate::page::{FrameTab, ResolvedElement};
@@ -195,10 +196,12 @@ async fn bounding_box(
     node: &UtilityElement,
     progress: &Progress,
 ) -> Result<Option<Rect>, CallError> {
+    // Playwright's box reads no frame element: no owners.
     let element = ResolvedElement::adopted(
         node.element.clone(),
         Arc::clone(&node.group),
         Arc::clone(&node.frame),
+        Vec::new(),
     );
     Ok(
         match progress
@@ -402,12 +405,14 @@ async fn form(
         ElementHandleCall::SelectText(params) => {
             prepare(tab, progress).await?;
             let force = params.force.unwrap_or(false);
-            element_ops::select_text_element(tab, &adopted(node), force, progress).await?;
+            let element = adopted(tab, node, progress).await?;
+            element_ops::select_text_element(tab, &element, force, progress).await?;
             Ok(None)
         }
         ElementHandleCall::ScrollIntoViewIfNeeded(_) => {
             prepare(tab, progress).await?;
-            element_ops::scroll_element(tab, &adopted(node), progress).await?;
+            let element = adopted(tab, node, progress).await?;
+            element_ops::scroll_element(tab, &element, progress).await?;
             Ok(None)
         }
         ElementHandleCall::Focus(_) => {
@@ -469,7 +474,7 @@ async fn pointer(
     } else {
         WaitAfter::Disabled
     };
-    let element = adopted(node);
+    let element = adopted(tab, node, progress).await?;
     finish(
         click::retry_pointer_action(tab, &element, &options, wait_after, progress, delivery).await,
     )?;
@@ -486,16 +491,38 @@ async fn on_element<A: ElementAction<FrameTab>>(
 ) -> Result<A::Output, CallError> {
     mark(node, progress).await?;
     prepare(tab, progress).await?;
-    finish(action.act(tab, &adopted(node), progress).await)
+    let element = adopted(tab, node, progress).await?;
+    finish(action.act(tab, &element, progress).await)
 }
 
-/// The node as the per-element steps take it.
-fn adopted(node: &UtilityElement) -> ResolvedElement {
-    ResolvedElement::adopted(
+/// The node as the per-element steps take it, with its frame's frame elements from the main
+/// frame down, as Playwright's `_checkFrameIsHitTarget` walks the element's own frame up to the
+/// main frame: without them a pointer step would hit-test a child frame at the main frame's
+/// point. A frame gone since the node was adopted has taken the node with it.
+///
+/// Playwright: `server/dom.ts` `ElementHandle._checkFrameIsHitTarget`: `while (frame.parentFrame()) {`
+async fn adopted(
+    tab: &FrameTab,
+    node: &UtilityElement,
+    progress: &Progress,
+) -> Result<ResolvedElement, CallError> {
+    let owners = match progress
+        .race(frame_selector::direct_owners(tab, &node.frame.id))
+        .await?
+    {
+        Ok(owners) => owners,
+        Err(PageError::Closed) => return Err(PlaywrightError::target_closed().into()),
+        Err(PageError::NotConnected | PageError::Threw(_)) => {
+            return Err(PlaywrightError::error(ELEMENT_NOT_ATTACHED).into());
+        }
+        Err(PageError::Contract(message)) => return Err(PlaywrightError::error(message).into()),
+    };
+    Ok(ResolvedElement::adopted(
         node.element.clone(),
         Arc::clone(&node.group),
         Arc::clone(&node.frame),
-    )
+        owners,
+    ))
 }
 
 /// The target marks an action makes before it acts, which a node that is gone only skips, as

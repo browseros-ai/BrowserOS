@@ -2231,18 +2231,21 @@ pub(crate) struct ResolvedElement {
 impl ResolvedElement {
     /// An element a run's `ElementHandle` names, adopted into its frame's utility world in
     /// `group` (`element_handle.rs`), for a step on that element alone. No frame hop led to it:
-    /// its own frame is the one it shows in.
+    /// its own frame is the one it shows in. `owners` are its frame's frame elements from the
+    /// main frame down (`frame_selector::direct_owners`), which the pointer steps scroll, keep
+    /// stable and hit-test through; none for a step that reads no geometry through them.
     pub(crate) fn adopted(
         handle: Handle<Element>,
         group: Arc<GroupGuard>,
         frame: Arc<FrameContext>,
+        owners: Vec<FrameOwner>,
     ) -> Self {
         Self {
             handle,
             _group: group,
             frame,
             frame_visible: true,
-            owners: Vec::new(),
+            owners,
         }
     }
 
