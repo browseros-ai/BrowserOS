@@ -32,7 +32,12 @@ import type {
   SerializedError,
   SetNetworkCookie,
 } from '@browseros/neo-runtime-spec/serve'
-import type { Connection } from './connection'
+import {
+  BindingCall,
+  type BindingCallback,
+  type BindingCallRecord,
+} from './binding-call'
+import type { ApiName, Connection } from './connection'
 import { ConsoleMessage, type ConsoleMessagePayload } from './console-message'
 import { Dialog } from './dialog'
 import { DisposableStub } from './disposable'
@@ -90,14 +95,6 @@ const CONTEXT_EVENTS: EventTable = {
   quiet: ['backgroundpage'],
   unserved: ['serviceworker'],
 }
-
-/** Neo: why `storageState({ path })` throws: the run has no artifact directory to write it in. */
-const STORAGE_STATE_PATH =
-  'path: this run has no artifact directory, so Neo cannot write the storage state; the host sets one per run'
-
-/** Neo: why `setStorageState(path)` throws: the run has no artifact directory to read it from. */
-const STATE_FILE_PATH =
-  'storageState: this run has no artifact directory, so Neo cannot read a state file; the host sets one per run'
 
 /** Neo: why `clearCookies()` without a filter throws. */
 const CLEAR_ALL_COOKIES_REFUSED =
@@ -181,6 +178,8 @@ export class BrowserContext extends ChannelOwner {
   /** Every dialog the run's events handed out, by guid: one object per dialog. */
   readonly #dialogs = new Map<string, Dialog>()
   readonly _timeoutSettings = new TimeoutSettings()
+  /** The context's exposed callbacks, by name (Playwright's `BrowserContext._bindings`). */
+  readonly _bindings = new Map<string, BindingCallback>()
   /** The run's event pipe, which this context's pages share. */
   readonly _pipe: EventPipe
   /** Playwright's `_closingStatus`: `closing` from `close()`'s call, `closed` once done. */
@@ -258,6 +257,10 @@ export class BrowserContext extends ChannelOwner {
       this.#onDialog((params as { dialog: DialogRecord }).dialog)
     else if (method === 'dialogClosed')
       this.#onDialogClosed((params as { dialog: DialogRecord }).dialog)
+    else if (method === 'bindingCall')
+      void this.#onBindingCall(
+        (params as { binding: BindingCallRecord }).binding,
+      )
     else if (method === 'download')
       this.#onDownload(params as DownloadEventParams)
     else if (method === 'request') this.#onRequest(params as RequestEventParams)
@@ -381,6 +384,20 @@ export class BrowserContext extends ChannelOwner {
       this.#routeListening = false
       this._subscribeChannelEvent('route', false)
     }
+  }
+
+  /** A call of the context's binding: on its page's frame, answered by the context's callback. */
+  async #onBindingCall(record: BindingCallRecord): Promise<void> {
+    const page = this.#pageFor(record.page.guid)
+    const frame = page._frameForGuid(record.frame.guid)
+    await this._onBinding(new BindingCall(this.#connection, record, frame))
+  }
+
+  /** Playwright: `client/browserContext.ts` `BrowserContext._onBinding`: `await bindingCall.call(func);` */
+  async _onBinding(call: BindingCall): Promise<void> {
+    const func = this._bindings.get(call.name)
+    if (!func) return
+    await call.call(func)
   }
 
   /** Playwright's `BrowserContext._onRequest`: the context's listeners, then the page's. */
@@ -567,6 +584,54 @@ export class BrowserContext extends ChannelOwner {
     return get(this.#guid, 'pages')
       .map((created) => this.#pages.get(created.guid) ?? this.#add(created))
       .filter((page) => !page._isClosedLocally())
+  }
+
+  /** Playwright's `browserContext.exposeFunction`: `window[name](...args)` in every frame of every page of the context calls
+   * `callback(...args)` in the run and answers with its result. `dispose()` removes it. */
+  async exposeFunction(
+    name: string,
+    // biome-ignore lint/suspicious/noExplicitAny: Playwright's callback type.
+    callback: (...args: any[]) => unknown,
+  ): Promise<Disposable> {
+    return await this.#expose(
+      'browserContext.exposeFunction',
+      name,
+      (_source, ...args) => callback(...args),
+    )
+  }
+
+  /** Playwright's `browserContext.exposeBinding`: as `exposeFunction`, with the call's
+   * `{ context, page, frame }` first. */
+  async exposeBinding(
+    name: string,
+    callback: BindingCallback,
+  ): Promise<Disposable> {
+    return await this.#expose('browserContext.exposeBinding', name, callback)
+  }
+
+  async #expose(
+    apiName: ApiName,
+    name: string,
+    callback: BindingCallback,
+  ): Promise<Disposable> {
+    // Deviation: `client/browserContext.ts` `BrowserContext.exposeBinding`: `this._bindings.set(name, callback);` Playwright sets the callback after its answer; Neo before, as the answer's events, a first page call among them, run before the caller goes on.
+    const previous = this._bindings.get(name)
+    this._bindings.set(name, callback)
+    this._subscribeChannelEvent('bindingCall', true)
+    try {
+      const result = await this.#connection.sendBinding(
+        apiName,
+        this.#guid,
+        'exposeBinding',
+        { name },
+        0,
+      )
+      return new Disposable(this.#connection, result.disposable.guid)
+    } catch (error) {
+      if (previous) this._bindings.set(name, previous)
+      else this._bindings.delete(name)
+      throw error
+    }
   }
 
   /** Playwright's `browserContext.addInitScript`: `script` (a function called with `arg`, source text, or
@@ -779,8 +844,9 @@ export class BrowserContext extends ChannelOwner {
    * visited and still have open (neo-runtime `session_state.rs`).
    *
    * Deviation: `client/browserContext.ts` `BrowserContext.storageState`: `await fs.promises.writeFile(options.path, JSON.stringify(state, undefined, 2), 'utf8');`
-   * Playwright writes `path` anywhere on its host. Neo writes a script's files only inside the
-   * run's artifact directory, which the host gives the run; without one, `path` throws.
+   * Playwright writes `path` anywhere on its host. `path` travels with the call, and neo-runtime
+   * writes the state there, as Playwright does, inside the run's artifact directory only
+   * (`artifacts.rs`): a relative path without `..`; a run without a directory names the option.
    */
   async storageState(
     options: {
@@ -790,8 +856,8 @@ export class BrowserContext extends ChannelOwner {
       credentials?: boolean
     } = {},
   ): Promise<BrowserContextStorageStateResult> {
-    if (options.path !== undefined) throw new Error(STORAGE_STATE_PATH)
-    const params: BrowserContextStorageStateParams = {}
+    const params: BrowserContextStorageStateParams & { path?: string } = {}
+    if (options.path !== undefined) params.path = options.path
     if (options.indexedDB !== undefined) params.indexedDB = options.indexedDB
     if (options.opfs !== undefined) params.opfs = options.opfs
     if (options.credentials !== undefined)
@@ -811,19 +877,23 @@ export class BrowserContext extends ChannelOwner {
    * open page on it; nothing else of the user's browser is cleared (neo-runtime
    * `session_state.rs`, Deviation).
    *
-   * Deviation: `client/browserContext.ts` `prepareStorageState`: `return JSON.parse(await fs.promises.readFile(storageState, 'utf8'));`
-   * Playwright reads a state file anywhere on its host. Neo reads a script's files only inside
-   * the run's artifact directory, which the host gives the run; without one, a path throws.
+   * A state file's path travels with the call, and neo-runtime reads it inside the run's
+   * artifact directory only (`session_state.rs` `read_state`, Deviation).
    */
   async setStorageState(
     storageState: string | BrowserContextSetStorageStateParams['storageState'],
   ): Promise<void> {
-    if (typeof storageState === 'string') throw new Error(STATE_FILE_PATH)
+    const params: BrowserContextSetStorageStateParams & { path?: string } =
+      typeof storageState === 'string'
+        ? { path: storageState }
+        : storageState
+          ? { storageState }
+          : {}
     await this.#connection.sendContext(
       'browserContext.setStorageState',
       this.#guid,
       'setStorageState',
-      storageState ? { storageState } : {},
+      params,
       0,
     )
   }

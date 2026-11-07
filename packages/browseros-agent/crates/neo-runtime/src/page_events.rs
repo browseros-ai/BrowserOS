@@ -50,6 +50,7 @@ use crate::bridge;
 use crate::console::{
     self, ConsoleApiCalled, ConsoleRecord, ExceptionThrown, History, LogEntryAdded, PageErrorRecord,
 };
+use crate::contexts::ContextFrames;
 use crate::dialogs::{self, Dialogs};
 use crate::events::{CONTEXT_GUID, Emitted, EventHub, Needs};
 use crate::frame_events::FrameModel;
@@ -105,6 +106,9 @@ pub(crate) struct PageEvents {
     /// The origins this tab's frames navigated to since the run attached, in the order first
     /// seen: what `storageState()` reads (`session_state.rs`).
     visited: Arc<Mutex<Vec<String>>>,
+    /// The frame of each main-world context of the tab's session and of its frame hosts, fed
+    /// here in socket order (`contexts.rs`): `bindings.rs` names a binding call's frame with it.
+    pub(crate) context_frames: Arc<ContextFrames>,
 }
 
 /// What the run does with each out-of-process frame session of a tab it attaches.
@@ -176,6 +180,7 @@ impl PageEvents {
             lifecycle_live: Arc::new(AtomicBool::new(discovered)),
             on_child: Arc::default(),
             visited: Arc::default(),
+            context_frames: Arc::default(),
         }
     }
 
@@ -422,6 +427,7 @@ impl PageEvents {
                 .ok()
                 .and_then(|children| children.get(session).cloned());
             if let Some(hosted) = hosted {
+                self.context_frames.apply(event);
                 if event.method == "Page.fileChooserOpened" {
                     self.file_chooser(&event.params, hosted);
                 }
@@ -430,6 +436,7 @@ impl PageEvents {
             }
             return applied.dialog;
         }
+        self.context_frames.apply(event);
         let mut answer = applied.dialog;
         match event.method.as_str() {
             "Page.javascriptDialogOpening" => answer = self.dialog_opening(&event.params, answer),

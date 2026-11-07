@@ -661,6 +661,9 @@ class Connection {
   async sendEval(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
+  async sendBinding(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout) ?? {};
+  }
   async sendInit(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout) ?? {};
   }
@@ -917,6 +920,47 @@ function normalizeEvaluationExpression(expression, isFunction) {
   if (/^(async)?\s*function(\s|\()/.test(expression))
     expression = `(${expression})`;
   return expression;
+}
+
+// src/binding-call.ts
+class BindingCall {
+  #connection;
+  #record;
+  #frame;
+  constructor(connection, record, frame) {
+    this.#connection = connection;
+    this.#record = record;
+    this.#frame = frame;
+  }
+  get name() {
+    return this.#record.name;
+  }
+  async call(func) {
+    try {
+      const page = this.#frame.page();
+      const source = { context: page.context(), page, frame: this.#frame };
+      const result = await func(source, ...this.#record.args.map(parseResult));
+      this.#send("bindingCall.resolve", "resolve", {
+        result: serializeArgument(result)
+      });
+    } catch (error) {
+      this.#send("bindingCall.reject", "reject", { error: thrown(error) });
+    }
+  }
+  #send(apiName, method, params) {
+    this.#connection.sendBinding(apiName, this.#record.guid, method, params, 0).catch(() => {});
+  }
+}
+function thrown(error) {
+  if (error instanceof Error)
+    return {
+      error: { message: error.message, name: error.name, stack: error.stack }
+    };
+  try {
+    return { value: serializeArgument(error).value };
+  } catch {
+    return { value: { v: "undefined" } };
+  }
 }
 
 // src/console-message.ts
@@ -4985,6 +5029,24 @@ var FRAME_UNCHECK_KEYS = [
   "position",
   "trial"
 ];
+var FRAME_SET_INPUT_FILES_KEYS = [
+  "selector",
+  "strict",
+  "payloads",
+  "localDirectory",
+  "directoryStream",
+  "localPaths",
+  "streams"
+];
+var FRAME_DROP_KEYS = [
+  "selector",
+  "strict",
+  "position",
+  "payloads",
+  "localPaths",
+  "streams",
+  "data"
+];
 var FRAME_SELECT_OPTION_KEYS = [
   "selector",
   "strict",
@@ -5364,6 +5426,15 @@ class Locator {
   async selectOption(values, options = {}) {
     return await this._frame._selectOption("locator.selectOption", this._selector, values, { strict: true, ...options });
   }
+  async setInputFiles(files, options = {}) {
+    return await this._frame._setInputFiles("locator.setInputFiles", this._selector, files, { strict: true, ...options });
+  }
+  async drop(payload, options = {}) {
+    return await this._frame._drop("locator.drop", this._selector, payload, {
+      strict: true,
+      ...options
+    });
+  }
   async screenshot(options = {}) {
     const result = await this._frame._connection.sendNeo("locator.screenshot", this._frame._guid, "neo:screenshot", locatorScreenshotParams("locator.screenshot", this._selector, options), this._frame._page._timeoutSettings.timeout(options, "locator.screenshot"));
     return resultBuffer(result.binary);
@@ -5719,6 +5790,55 @@ function text(value, index, field) {
   if (typeof value !== "string")
     throw new Error(`options[${index}].${field}: expected string`);
   return value;
+}
+
+// src/set-input-files.ts
+var FILE_UPLOAD_SIZE_LIMIT = 50 * 1024 * 1024;
+function convertInputFiles(files) {
+  const items = Array.isArray(files) ? files.slice() : [files];
+  if (items.some((item) => typeof item === "string")) {
+    if (!items.every((item) => typeof item === "string"))
+      throw new Error("File paths cannot be mixed with buffers");
+    return { localPaths: items };
+  }
+  const payloads = items;
+  if (filePayloadExceedsSizeLimit(payloads))
+    throw new Error("Cannot set buffer larger than 50Mb, please write it to a file and pass its path instead.");
+  return { payloads: payloads.map(wirePayload) };
+}
+function filePayloadExceedsSizeLimit(payloads) {
+  return payloads.reduce((size, item) => size + (item.buffer ? item.buffer.byteLength : 0), 0) >= FILE_UPLOAD_SIZE_LIMIT;
+}
+function wirePayload(payload, index) {
+  const path = `payloads[${index}]`;
+  if (payload === null)
+    throw new Error(`${path}: expected object, got null`);
+  if (typeof payload !== "object")
+    throw new Error(`${path}: expected object, got ${typeof payload}`);
+  const { name, mimeType, buffer } = payload;
+  if (typeof name !== "string")
+    throw new Error(`${path}.name: expected string, got ${typeof name}`);
+  if (mimeType !== undefined && typeof mimeType !== "string")
+    throw new Error(`${path}.mimeType: expected string, got ${typeof mimeType}`);
+  if (!(buffer instanceof Uint8Array))
+    throw new Error(`${path}.buffer: expected Buffer, got ${typeof buffer}`);
+  return mimeType === undefined ? { name, buffer: toBinary(buffer) } : { name, mimeType, buffer: toBinary(buffer) };
+}
+function convertDropPayload(payload) {
+  let fileParams = {};
+  if (payload.files !== undefined) {
+    const converted = convertInputFiles(payload.files);
+    fileParams = {
+      payloads: converted.payloads,
+      localPaths: converted.localPaths
+    };
+  }
+  const data = payload.data ? Object.entries(payload.data).map(([mimeType, value], index) => {
+    if (typeof value !== "string")
+      throw new Error(`data[${index}].value: expected string, got ${typeof value}`);
+    return { mimeType, value };
+  }) : undefined;
+  return { ...fileParams, data };
 }
 
 // src/url.ts
@@ -6538,6 +6658,23 @@ class Frame {
       throw new Error("neo-sdk: Frame.selectOption contract error: missing result");
     return result.values;
   }
+  async setInputFiles(selector, files, options = {}) {
+    return await this._setInputFiles("frame.setInputFiles", selector, files, options);
+  }
+  async _setInputFiles(apiName, selector, files, options) {
+    await this._connection.send(apiName, this._guid, "setInputFiles", pickParams(FRAME_SET_INPUT_FILES_KEYS, {
+      selector,
+      ...convertInputFiles(files),
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
+  async _drop(apiName, selector, payload, options) {
+    await this._connection.send(apiName, this._guid, "drop", pickParams(FRAME_DROP_KEYS, {
+      selector,
+      ...convertDropPayload(payload),
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
+  }
   async setChecked(selector, checked, options = {}) {
     if (checked)
       await this._check("frame.setChecked", selector, options);
@@ -7268,6 +7405,7 @@ class Page extends ChannelOwner {
   #routeListening = false;
   #patternsSent = Promise.resolve();
   #closeReason;
+  _bindings = new Map;
   constructor(guid, mainFrameGuid, url, context, connection) {
     super(guid, context._pipe, PAGE_EVENTS);
     this.#guid = guid;
@@ -7342,6 +7480,8 @@ class Page extends ChannelOwner {
       this.#onFrameDetached(params.frame);
     else if (method === "frameNavigated")
       this.#onFrameNavigated(params);
+    else if (method === "bindingCall")
+      this._onBinding(params.binding);
     else if (method === "locatorHandlerTriggered")
       this.#onLocatorHandlerTriggered(params.uid).catch((error) => this.#context._pipe.report(error));
     else if (method === "fileChooser") {
@@ -7349,6 +7489,15 @@ class Page extends ChannelOwner {
       this.emit("filechooser", new FileChooser(this, chooser, isMultiple, this.#connection));
     } else if (method === "route")
       this.#onRouteEvent(params);
+  }
+  async _onBinding(record) {
+    const call2 = new BindingCall(this.#connection, record, this._frameForGuid(record.frame.guid));
+    const func = this._bindings.get(record.name);
+    if (func) {
+      await call2.call(func);
+      return;
+    }
+    await this.#context._onBinding(call2);
   }
   #locatorHandlers = new Map;
   async addLocatorHandler(locator, handler, options = {}) {
@@ -7630,6 +7779,27 @@ class Page extends ChannelOwner {
   async goto(url, options = {}) {
     return await this.#mainFrame._goto("page.goto", url, options);
   }
+  async exposeFunction(name, callback) {
+    return await this.#expose("page.exposeFunction", name, (_source, ...args) => callback(...args));
+  }
+  async exposeBinding(name, callback) {
+    return await this.#expose("page.exposeBinding", name, callback);
+  }
+  async#expose(apiName, name, callback) {
+    const previous = this._bindings.get(name);
+    this._bindings.set(name, callback);
+    this._subscribeChannelEvent("bindingCall", true);
+    try {
+      const result = await this.#connection.sendBinding(apiName, this.#guid, "exposeBinding", { name }, 0);
+      return new Disposable(this.#connection, result.disposable.guid);
+    } catch (error) {
+      if (previous)
+        this._bindings.set(name, previous);
+      else
+        this._bindings.delete(name);
+      throw error;
+    }
+  }
   async addInitScript(script, arg, options) {
     assertEvaluateOptions(options);
     const signal = options?.signal;
@@ -7812,6 +7982,9 @@ class Page extends ChannelOwner {
   async selectOption(selector, values, options = {}) {
     return await this.#mainFrame._selectOption("page.selectOption", selector, values, options);
   }
+  async setInputFiles(selector, files, options = {}) {
+    return await this.#mainFrame._setInputFiles("page.setInputFiles", selector, files, options);
+  }
   async setChecked(selector, checked, options = {}) {
     if (checked)
       await this.#mainFrame._check("page.setChecked", selector, options);
@@ -7898,8 +8071,6 @@ var CONTEXT_EVENTS = {
   quiet: ["backgroundpage"],
   unserved: ["serviceworker"]
 };
-var STORAGE_STATE_PATH = "path: this run has no artifact directory, so Neo cannot write the storage state; the host sets one per run";
-var STATE_FILE_PATH = "storageState: this run has no artifact directory, so Neo cannot read a state file; the host sets one per run";
 var CLEAR_ALL_COOKIES_REFUSED = "Neo does not clear every cookie of the user's browser, which would sign the user out of every site: pass clearCookies a name, domain or path";
 function clearCookieFilter(options) {
   const kept = (value) => typeof value === "string" || value instanceof RegExp ? value : undefined;
@@ -7934,6 +8105,7 @@ class BrowserContext extends ChannelOwner {
   #pages = new Map;
   #dialogs = new Map;
   _timeoutSettings = new TimeoutSettings;
+  _bindings = new Map;
   _pipe;
   #closingStatus = "none";
   #closeReason;
@@ -7986,6 +8158,8 @@ class BrowserContext extends ChannelOwner {
       this.#onDialog(params.dialog);
     else if (method === "dialogClosed")
       this.#onDialogClosed(params.dialog);
+    else if (method === "bindingCall")
+      this.#onBindingCall(params.binding);
     else if (method === "download")
       this.#onDownload(params);
     else if (method === "request")
@@ -8067,6 +8241,17 @@ class BrowserContext extends ChannelOwner {
       this.#routeListening = false;
       this._subscribeChannelEvent("route", false);
     }
+  }
+  async#onBindingCall(record) {
+    const page = this.#pageFor(record.page.guid);
+    const frame = page._frameForGuid(record.frame.guid);
+    await this._onBinding(new BindingCall(this.#connection, record, frame));
+  }
+  async _onBinding(call2) {
+    const func = this._bindings.get(call2.name);
+    if (!func)
+      return;
+    await call2.call(func);
   }
   #onRequest({ request, page }) {
     const pageObject = this.#pageFor(page.guid);
@@ -8163,6 +8348,27 @@ class BrowserContext extends ChannelOwner {
       return [];
     return get(this.#guid, "pages").map((created) => this.#pages.get(created.guid) ?? this.#add(created)).filter((page) => !page._isClosedLocally());
   }
+  async exposeFunction(name, callback) {
+    return await this.#expose("browserContext.exposeFunction", name, (_source, ...args) => callback(...args));
+  }
+  async exposeBinding(name, callback) {
+    return await this.#expose("browserContext.exposeBinding", name, callback);
+  }
+  async#expose(apiName, name, callback) {
+    const previous = this._bindings.get(name);
+    this._bindings.set(name, callback);
+    this._subscribeChannelEvent("bindingCall", true);
+    try {
+      const result = await this.#connection.sendBinding(apiName, this.#guid, "exposeBinding", { name }, 0);
+      return new Disposable(this.#connection, result.disposable.guid);
+    } catch (error) {
+      if (previous)
+        this._bindings.set(name, previous);
+      else
+        this._bindings.delete(name);
+      throw error;
+    }
+  }
   async addInitScript(script, arg, options) {
     assertEvaluateOptions(options);
     const signal = options?.signal;
@@ -8217,9 +8423,9 @@ class BrowserContext extends ChannelOwner {
     await this.#connection.sendContext("browserContext.setHTTPCredentials", this.#guid, "setHTTPCredentials", list.length ? { httpCredentials: list } : {}, 0);
   }
   async storageState(options = {}) {
-    if (options.path !== undefined)
-      throw new Error(STORAGE_STATE_PATH);
     const params = {};
+    if (options.path !== undefined)
+      params.path = options.path;
     if (options.indexedDB !== undefined)
       params.indexedDB = options.indexedDB;
     if (options.opfs !== undefined)
@@ -8229,9 +8435,8 @@ class BrowserContext extends ChannelOwner {
     return await this.#connection.sendContext("browserContext.storageState", this.#guid, "storageState", params, 0);
   }
   async setStorageState(storageState) {
-    if (typeof storageState === "string")
-      throw new Error(STATE_FILE_PATH);
-    await this.#connection.sendContext("browserContext.setStorageState", this.#guid, "setStorageState", storageState ? { storageState } : {}, 0);
+    const params = typeof storageState === "string" ? { path: storageState } : storageState ? { storageState } : {};
+    await this.#connection.sendContext("browserContext.setStorageState", this.#guid, "setStorageState", params, 0);
   }
   setDefaultTimeout(timeout) {
     this._timeoutSettings.setDefaultTimeout(timeout);

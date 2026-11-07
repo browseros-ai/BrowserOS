@@ -54,6 +54,7 @@ import type {
   DblclickOptions,
   DispatchEventOptions,
   DragAndDropOptions,
+  DropOptions,
   ElementTimeoutOptions,
   FillOptions,
   FocusOptions,
@@ -72,6 +73,7 @@ import type {
   PressOptions,
   SelectOptionOptions,
   SelectTextOptions,
+  SetInputFilesOptions,
   TapOptions,
   TextContentOptions,
   TypeOptions,
@@ -92,6 +94,7 @@ import {
   type ScreenshotOptions,
 } from './screenshot'
 import type { SelectOptionValues } from './select-option'
+import type { DropPayload, InputFiles } from './set-input-files'
 import type { SignalLike, TimeoutInput } from './timeout-settings'
 
 export type LocatorOptions = {
@@ -477,6 +480,27 @@ export class Locator {
       values,
       { strict: true, ...options },
     )
+  }
+
+  async setInputFiles(
+    files: InputFiles,
+    options: SetInputFilesOptions = {},
+  ): Promise<void> {
+    return await this._frame._setInputFiles(
+      'locator.setInputFiles',
+      this._selector,
+      files,
+      { strict: true, ...options },
+    )
+  }
+
+  /** Playwright's `Locator.drop` (v1.60): files or data dropped on the element at its point.
+   * Playwright: `client/locator.ts` `Locator.drop`: `await this._frame._drop(this._selector, payload, { strict: true, ...options });` */
+  async drop(payload: DropPayload, options: DropOptions = {}): Promise<void> {
+    return await this._frame._drop('locator.drop', this._selector, payload, {
+      strict: true,
+      ...options,
+    })
   }
 
   /**

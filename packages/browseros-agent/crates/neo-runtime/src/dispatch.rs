@@ -45,17 +45,18 @@ use neo_runtime_spec::serve::{
     ArtifactCall, BrowserContextCall, DialogCall, FrameAriaSnapshotJSONParams,
     FrameAriaSnapshotParams, FrameCall, FrameCheckParams, FrameCheckResult, FrameClickParams,
     FrameContentParams, FrameDblclickParams, FrameDragAndDropParams, FrameDragAndDropResult,
-    FrameFillParams, FrameFillResult, FrameGetAttributeParams, FrameGotoParams, FrameHoverParams,
-    FrameInnerHTMLParams, FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult,
-    FrameIsCheckedParams, FrameIsCheckedResult, FrameIsDisabledParams, FrameIsDisabledResult,
-    FrameIsEditableParams, FrameIsEditableResult, FrameIsEnabledParams, FrameIsEnabledResult,
-    FrameIsHiddenParams, FrameIsHiddenResult, FrameIsVisibleParams, FrameIsVisibleResult,
-    FramePressParams, FramePressResult, FrameQueryCountParams, FrameResolveSelectorParams,
-    FrameSelectOptionParams, FrameSelectOptionResult, FrameSetContentParams, FrameSetContentResult,
-    FrameTapParams, FrameTextContentParams, FrameTitleParams, FrameTypeParams, FrameTypeResult,
-    FrameUncheckParams, FrameUncheckResult, FrameWaitForSelectorParams, FrameWaitForSelectorResult,
-    FrameWaitForTimeoutParams, FrameWaitForTimeoutResult, Metadata, PageCall, RequestCall,
-    ResponseCall, RouteCall,
+    FrameDropParams, FrameDropResult, FrameFillParams, FrameFillResult, FrameGetAttributeParams,
+    FrameGotoParams, FrameHoverParams, FrameInnerHTMLParams, FrameInnerTextParams,
+    FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams, FrameIsCheckedResult,
+    FrameIsDisabledParams, FrameIsDisabledResult, FrameIsEditableParams, FrameIsEditableResult,
+    FrameIsEnabledParams, FrameIsEnabledResult, FrameIsHiddenParams, FrameIsHiddenResult,
+    FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams, FramePressResult,
+    FrameQueryCountParams, FrameResolveSelectorParams, FrameSelectOptionParams,
+    FrameSelectOptionResult, FrameSetContentParams, FrameSetContentResult,
+    FrameSetInputFilesParams, FrameSetInputFilesResult, FrameTapParams, FrameTextContentParams,
+    FrameTitleParams, FrameTypeParams, FrameTypeResult, FrameUncheckParams, FrameUncheckResult,
+    FrameWaitForSelectorParams, FrameWaitForSelectorResult, FrameWaitForTimeoutParams,
+    FrameWaitForTimeoutResult, Metadata, PageCall, RequestCall, ResponseCall, RouteCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -68,6 +69,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
 use crate::abort::{Aborts, Registration};
+use crate::bindings::{self, BindingRoute, Outcome};
 use crate::capture::{self, Capture, NEO_SCREENSHOT_META, NeoScreenshotParams};
 use crate::check::{self, CheckOptions};
 use crate::click::{self, PointerOptions};
@@ -76,6 +78,7 @@ use crate::devices::{self, DeviceCall};
 use crate::dialogs;
 use crate::downloads;
 use crate::drag::{self, DragOptions};
+use crate::drop_on;
 use crate::element_ops::{
     self, BOUNDING_BOX_META, DispatchOptions, ElementTarget, NeoElementParams, NeoSelectTextParams,
     SCROLL_INTO_VIEW_META, SELECT_TEXT_META,
@@ -110,6 +113,8 @@ use crate::reads::{self, AttributeOptions, ReadOptions, SnapshotOptions};
 use crate::responses::{self, NetworkCall};
 use crate::routes;
 use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
+use crate::session_state::StateFile;
+use crate::set_input_files;
 use crate::states::{self, StateOptions};
 use crate::tab_calls;
 use crate::tabs::{PageEntry, Tabs};
@@ -123,10 +128,11 @@ use crate::waits::{
 /// Unkept creations close their tabs when their late acknowledgements arrive.
 const RECORDS_WAIT: Duration = Duration::from_secs(1);
 
-/// Neo: how long removing the run's init scripts may take at run end, apart from
-/// [`RECORDS_WAIT`]: a session it does not reach keeps a script the next run's documents would
-/// run. Free for a run that added none.
-const PAGE_END_WAIT: Duration = Duration::from_secs(3);
+/// Neo: how long run end may take removing the run's init scripts and ending its bindings in
+/// its pages (`init_scripts.rs`, `bindings.rs`), apart from [`RECORDS_WAIT`]: a session it does
+/// not reach keeps a script the next run's documents would run, or a binding whose calls never
+/// settle. Free for a run that used neither.
+pub(crate) const PAGE_END_WAIT: Duration = Duration::from_secs(3);
 /// Neo: the budget for removing the run's highlights at its end, after [`RECORDS_WAIT`] and
 /// apart from it, so a document that does not answer delays the outcome by at most this and
 /// never holds back an input release. An overlay it cannot remove in time stays, as one in a
@@ -370,8 +376,10 @@ enum ObjectKind {
     Network(NetworkObject, HopId),
     /// A run's `JSHandle` or `ElementHandle` (`evaluate.rs`), by guid.
     Handle(String),
-    /// An init script's `Disposable` (`init_scripts.rs`), by guid.
+    /// An init script's or a binding's `Disposable` (`init_scripts.rs`, `bindings.rs`), by guid.
     Disposable(String),
+    /// A binding call the realm answers (`bindings.rs`), by guid.
+    BindingCall(String),
     /// A JavaScript dialog the run's `dialog` event handed out, by its index on the tab.
     Dialog(u64),
     /// A paused request the run's `route` event handed out (Playwright's `Route`), by its index
@@ -385,6 +393,9 @@ enum ObjectKind {
 
 enum ObjectCall {
     Context(BrowserContextCall),
+    /// `context.storageState` and `context.setStorageState`, with the `path` the spec's params
+    /// lack (`neo_path`).
+    StorageState(StateFile, Option<String>),
     Page(PageCall),
     /// `page.keyboard`, `page.mouse` and `page.touchscreen` (`devices.rs`).
     Device(DeviceCall),
@@ -394,6 +405,8 @@ enum ObjectCall {
     Init(InitRoute),
     /// `Page.screenshot`, `Page.pdf` and `neo:screenshot`, with Neo's `path` (`capture.rs`).
     Capture(Capture),
+    /// A binding command (`bindings.rs`).
+    Binding(BindingRoute),
     Dialog(u64, DialogCall),
     /// A paused request's answer or `route.fetch` (`routes.rs`).
     Intercepted(u64, routes::InterceptedCall),
@@ -432,6 +445,10 @@ enum Route {
     FrameIsEditable(StateOptions),
     FrameSetChecked(CheckOptions),
     FrameSelectOption(SelectOptions),
+    /// `Frame.setInputFiles` (`set_input_files.rs`).
+    FrameSetInputFiles(FrameSetInputFilesParams),
+    /// `Frame.drop`, behind `Locator.drop` (`drop_on.rs`).
+    FrameDrop(FrameDropParams),
     FrameWaitForSelector(WaitForSelectorOptions),
     /// `Frame.frameElement` (`frame_element.rs`).
     FrameFrameElement,
@@ -600,9 +617,11 @@ impl Dispatcher {
         // Before anything below waits: what the run holds is held by no live run from now on,
         // however its release goes (`TabInput::mark_ended`).
         self.0.tabs.mark_input_ended();
-        // The run's init scripts go first, on a budget of their own: removal never waits on a
-        // call still running, so no document loaded after the run returns runs one.
-        let _removed = time::timeout(PAGE_END_WAIT, run.init_scripts.close()).await;
+        // What the run installed on the tabs it leaves open goes first, as `context.close()`
+        // lets go of it, each part on a budget of its own: removal never waits on a call still
+        // running, so no document loaded after the run returns runs one of its init scripts, no page keeps one of its
+        // bindings, and none gets its session overrides (`Tabs::release_run_scoped`).
+        self.0.tabs.release_run_scoped(run).await;
         // The realm is gone with its listeners: from now on the watchers answer dialogs
         // themselves, and a dialog a listener left open gets the default answer before the
         // sessions detach (`Dialogs::left_open`).
@@ -670,6 +689,12 @@ async fn init_call(
             }
             guid
         }
+        InitRoute::Dispose(guid) if bindings::owns(&guid) => {
+            progress
+                .race(progress.bindings().dispose(tabs, scripts, &guid))
+                .await??;
+            return Ok(Some(json!({})));
+        }
         InitRoute::Dispose(guid) => {
             progress.race(scripts.dispose(&guid)).await??;
             return Ok(Some(json!({})));
@@ -696,6 +721,29 @@ fn route_init(
             route: init_scripts::source_of(&PAGE_ADD_INIT_SCRIPT_META, params)
                 .map(|source| ObjectCall::Init(InitRoute::Page(source))),
         }),
+        ObjectKind::Context | ObjectKind::Page
+            if method == bindings::PAGE_EXPOSE_BINDING_META.method =>
+        {
+            let (meta, route) =
+                bindings::decode_expose(matches!(object, ObjectKind::Context), params);
+            Ok(Routed {
+                meta: Some(meta),
+                route: route.map(ObjectCall::Binding),
+            })
+        }
+        ObjectKind::BindingCall(guid) => Ok(match bindings::decode_call(&guid, method, params) {
+            Some((meta, route)) => Routed {
+                meta: Some(meta),
+                route: route.map(ObjectCall::Binding),
+            },
+            None => Routed {
+                meta: None,
+                // Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection.dispatch`: `Mismatching dispatcher: "${dispatcher._type}" does not implement "${method}"`
+                route: Err(PlaywrightError::error(format!(
+                    "Mismatching dispatcher: \"BindingCall\" does not implement \"{method}\""
+                ))),
+            },
+        }),
         ObjectKind::Disposable(guid) => {
             Ok(Routed {
                 meta: Some(&DISPOSABLE_DISPOSE_META),
@@ -713,6 +761,40 @@ fn route_init(
     }
 }
 
+/// A binding command: `exposeBinding` answers its `Disposable`, as Playwright's
+/// `{ disposable }`; a binding call's answer answers nothing.
+async fn binding_call(
+    tabs: &Tabs,
+    target: Option<(Arc<PageEntry>, FrameScope)>,
+    route: BindingRoute,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let bindings = progress.bindings();
+    let scripts = progress.init_scripts();
+    let (outcome, guid) = match route {
+        BindingRoute::Page { name, no_global } => {
+            let (page, _) = target.ok_or_else(PlaywrightError::target_closed)?;
+            let session = progress.race(tabs.session(&page)).await??;
+            let guid = progress
+                .race(bindings.expose(tabs, scripts, Some(&session), &name, no_global))
+                .await??;
+            return Ok(Some(json!({ "disposable": { "guid": guid } })));
+        }
+        BindingRoute::Context { name, no_global } => {
+            let guid = progress
+                .race(bindings.expose(tabs, scripts, None, &name, no_global))
+                .await??;
+            return Ok(Some(json!({ "disposable": { "guid": guid } })));
+        }
+        BindingRoute::Resolve { guid, result } => (Outcome::Result(result), guid),
+        BindingRoute::Reject { guid, error } => (Outcome::Error(error), guid),
+    };
+    bindings
+        .answer(tabs, &guid, outcome, progress.handles(), progress)
+        .await?;
+    Ok(Some(json!({})))
+}
+
 /// Names a message's target and decodes its params. Pure.
 fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
     let (object, params) = match route_init(object, method, params) {
@@ -720,8 +802,11 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         Err(unrouted) => unrouted,
     };
     let decoded = match object {
-        ObjectKind::Context => BrowserContextCall::decode(method, params)
-            .map(|call| (call.meta(), Ok(ObjectCall::Context(call)))),
+        ObjectKind::Context => {
+            let path = neo_path(params.as_ref());
+            BrowserContextCall::decode(method, params)
+                .map(|call| (call.meta(), context_call(call, path)))
+        }
         ObjectKind::Page => {
             let path = neo_path(params.as_ref());
             PageCall::decode(method, params).map(|call| {
@@ -787,8 +872,8 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         }),
         ObjectKind::Download(guid) => ArtifactCall::decode(method, params)
             .map(|call| (call.meta(), Ok(ObjectCall::Download(guid, call)))),
-        // `route_init` answers every Disposable message.
-        ObjectKind::Disposable(_) | ObjectKind::Unknown => {
+        // `route_init` answers every Disposable and BindingCall message.
+        ObjectKind::Disposable(_) | ObjectKind::BindingCall(_) | ObjectKind::Unknown => {
             return Routed {
                 meta: None,
                 route: Err(PlaywrightError::target_closed()),
@@ -843,6 +928,22 @@ fn json_kind(value: &Value) -> &'static str {
         Value::Array(_) => "array",
         Value::Object(_) => "object",
     }
+}
+
+/// A decoded context call: the storage-state ones go with their `path`.
+fn context_call(
+    call: BrowserContextCall,
+    path: Result<Option<String>, PlaywrightError>,
+) -> Result<ObjectCall, PlaywrightError> {
+    Ok(match call {
+        BrowserContextCall::StorageState(params) => {
+            ObjectCall::StorageState(StateFile::Export(params), path?)
+        }
+        BrowserContextCall::SetStorageState(params) => {
+            ObjectCall::StorageState(StateFile::Import(params), path?)
+        }
+        call => ObjectCall::Context(call),
+    })
 }
 
 /// A decoded page call: the ones that answer bytes go to `capture.rs` with their `path`.
@@ -1100,14 +1201,18 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::SelectOption(params) => {
             Ok(Route::FrameSelectOption(SelectOptions::from_params(params)))
         }
+        FrameCall::SetInputFiles(params) => Ok(Route::FrameSetInputFiles(params)),
+        FrameCall::Drop(params) => Ok(Route::FrameDrop(params)),
         FrameCall::WaitForSelector(params) => Ok(Route::FrameWaitForSelector(
             WaitForSelectorOptions::from_params(params),
         )),
         FrameCall::Content(params) => {
             Ok(Route::FrameContent(params.include_shadow.unwrap_or(false)))
         }
-        FrameCall::SetContent(params) => SetContentOptions::from_params(params)
-            .map(|options| Route::FrameSetContent(options, None)),
+        FrameCall::SetContent(params) => Ok(Route::FrameSetContent(
+            SetContentOptions::from_params(params),
+            None,
+        )),
         FrameCall::WaitForTimeout(params) => Ok(Route::FrameWaitForTimeout(params.wait_timeout)),
         FrameCall::ResolveSelector(params) => Ok(Route::FrameResolveSelector(params.selector)),
         FrameCall::AriaSnapshotJSON(params) => Ok(Route::FrameAriaSnapshotJson(
@@ -1173,7 +1278,7 @@ async fn serve_call(
         (ObjectCall::Dialog(..) | ObjectCall::Download(..) | ObjectCall::Intercepted(..), _) => {
             None
         }
-        (ObjectCall::Context(_), _) => Some(ALL_PAGES),
+        (ObjectCall::Context(_) | ObjectCall::StorageState(..), _) => Some(ALL_PAGES),
         (_, Some((page, _))) => Some(page.id.as_str()),
         (_, None) => None,
     };
@@ -1186,7 +1291,11 @@ async fn serve_call(
     }
     let result = match (route, target) {
         (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
+        (ObjectCall::StorageState(file, path), _) => {
+            tab_calls::state_file(&tabs, file, path, &progress).await
+        }
         (ObjectCall::Init(route), target) => init_call(&tabs, target, route, &progress).await,
+        (ObjectCall::Binding(route), target) => binding_call(&tabs, target, route, &progress).await,
         (ObjectCall::Page(call), Some((page, _))) => {
             // A page call that navigates (`reload`, `goBack`, …) shows the run's scripts first,
             // as a Frame call does.
@@ -1390,6 +1499,9 @@ async fn serve(
         | Route::FrameWaitForTimeout(_)
         | Route::FrameResolveSelector(_)
         | Route::FrameAriaSnapshotJson(_)) => serve_document(&page, route, &progress).await,
+        route @ (Route::FrameSetInputFiles(_) | Route::FrameDrop(_)) => {
+            serve_files(&page, route, &progress).await
+        }
         route @ (Route::FrameFocus(_)
         | Route::FrameBlur(_)
         | Route::FrameDispatchEvent(_)
@@ -1401,6 +1513,31 @@ async fn serve(
         route => serve_route(&page, route, &progress).await,
     };
     finish_reply(result, reply).await;
+}
+
+/// The file calls `serve` answers on the call's page: `setInputFiles` and `drop`, which read
+/// the run's artifact directory. Each replies `{}`.
+async fn serve_files(
+    page: &FrameTab,
+    route: Route,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    match route {
+        Route::FrameSetInputFiles(params) => {
+            set_input_files::set_input_files(page, params, progress)
+                .await
+                .and_then(|()| {
+                    encode_result::<FrameSetInputFilesParams>(&FrameSetInputFilesResult {})
+                })
+        }
+        Route::FrameDrop(params) => drop_on::drop_on(page, params, progress)
+            .await
+            .and_then(|()| encode_result::<FrameDropParams>(&FrameDropResult {})),
+        _ => Err(PlaywrightError::error(
+            "neo-runtime: `serve_files` serves setInputFiles and drop only",
+        )
+        .into()),
+    }
 }
 
 /// The element operations `serve` answers on the call's page (`element_ops.rs`,
@@ -1665,6 +1802,8 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         | Route::FrameBoundingBox(_)
         | Route::FrameHighlight(_)
         | Route::FrameHideHighlight(_)
+        | Route::FrameSetInputFiles(_)
+        | Route::FrameDrop(_)
         | Route::FrameWaitForNavigation(_)
         | Route::FrameNextNavigation(_)
         | Route::FrameFinishNavigation(_)
@@ -1683,6 +1822,8 @@ fn object_kind(guid: &str, resolved: bool) -> ObjectKind {
         ObjectKind::Context
     } else if guid.starts_with(init_scripts::DISPOSABLE_PREFIX) {
         ObjectKind::Disposable(guid.to_owned())
+    } else if guid.starts_with(bindings::BINDING_CALL_PREFIX) {
+        ObjectKind::BindingCall(guid.to_owned())
     } else if let Some(download) = guid.strip_prefix(downloads::DOWNLOAD_PREFIX) {
         ObjectKind::Download(download.to_owned())
     } else if !resolved {
@@ -2020,11 +2161,13 @@ mod tests {
         route.map(|call| match call {
             ObjectCall::Frame(route) => route,
             ObjectCall::Context(_)
+            | ObjectCall::StorageState(..)
             | ObjectCall::Page(_)
             | ObjectCall::Device(_)
             | ObjectCall::Network(_)
             | ObjectCall::Init(_)
             | ObjectCall::Capture(_)
+            | ObjectCall::Binding(_)
             | ObjectCall::Dialog(..)
             | ObjectCall::Intercepted(..)
             | ObjectCall::Download(..) => {

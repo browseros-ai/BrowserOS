@@ -21,6 +21,7 @@ type Handles = {
   }
   ScreenshotCleanup: { restore: () => void }
   ElementList: Element[]
+  InputEventWaiter: { promise: Promise<void> }
 }
 type Api = InjectedApi<InjectedScript, Handles>
 
@@ -90,6 +91,14 @@ const valid = {
   fullPageSize: () => ({ size: { width: 1280, height: 720 } }),
   scrollOffset: () => ({ x: 0, y: 0 }),
   maskElements: () => ({}),
+  fileInput: (_injected, _params, element) => ({ input: element }),
+  setInputFilePayloads: () => ({}),
+  inputEventWaiter: () => ({ waiter: { promise: Promise.resolve() } }),
+  waitForInputEvent: async (_injected, _params, waiter) => {
+    await waiter.promise
+    return {}
+  },
+  dropOn: () => ({ outcome: 'accepted' as const }),
 } satisfies Api
 
 export const screenshotCleanupIsNotAnElement = {

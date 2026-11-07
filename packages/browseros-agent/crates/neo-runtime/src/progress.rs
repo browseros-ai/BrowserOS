@@ -33,6 +33,7 @@ use tracing::info;
 
 use crate::abort::CallAbort;
 use crate::artifacts::Artifacts;
+use crate::bindings::Bindings;
 use crate::deadline::{Deadline, Stop};
 use crate::evaluate::Handles;
 use crate::init_scripts::InitScripts;
@@ -151,6 +152,8 @@ pub(crate) struct RunScope {
     pub(crate) context_closed: CancellationToken,
     /// Where the run's `path` options write, and what they wrote (`artifacts.rs`).
     pub(crate) artifacts: Arc<Artifacts>,
+    /// The run's exposed bindings (`bindings.rs`); ended in every frame at run end.
+    pub(crate) bindings: Arc<Bindings>,
 }
 
 impl RunScope {
@@ -164,6 +167,7 @@ impl RunScope {
             init_scripts: Arc::default(),
             context_closed: CancellationToken::new(),
             artifacts: Arc::default(),
+            bindings: Arc::default(),
         }
     }
 
@@ -252,6 +256,11 @@ impl Progress {
     /// would, at its next await or check.
     pub(crate) fn stop_the_runs_calls(&self) {
         self.run.context_closed.cancel();
+    }
+
+    /// What every call of the run shares about the run itself.
+    pub(crate) fn run_scope(&self) -> &RunScope {
+        &self.run
     }
 }
 
@@ -369,6 +378,11 @@ impl Progress {
     /// The run's init scripts (`init_scripts.rs`).
     pub(crate) fn init_scripts(&self) -> &Arc<InitScripts> {
         &self.run.init_scripts
+    }
+
+    /// The run's exposed bindings (`bindings.rs`).
+    pub(crate) fn bindings(&self) -> &Arc<Bindings> {
+        &self.run.bindings
     }
 
     pub(crate) fn timeout_ms(&self) -> f64 {

@@ -24,15 +24,17 @@ use crate::bridge;
 use crate::click::PageError;
 use crate::dialogs;
 use crate::discovery::{self, TargetInfo};
+use crate::dispatch::PAGE_END_WAIT;
 use crate::downloads::{self, Downloads, Opened};
 use crate::evaluate::{self, Handles};
 use crate::events::{ALL_PAGES, CONTEXT_GUID, Enabling, EventHub, Needs};
 use crate::frames::{FrameContext, FrameScope};
 use crate::getters;
+use crate::init_scripts;
 use crate::network::HopId;
 use crate::page::{FrameTab, PageSession, Session, TabInputs};
 use crate::page_events::{self, Kept, MAX_KEPT_ARGS, MAX_KEPT_CHOOSERS};
-use crate::progress::PlaywrightError;
+use crate::progress::{PlaywrightError, RunScope};
 use crate::routes::{self, ContextRoutes};
 use crate::run::{PageId, RunPage};
 use crate::screenshot::TabScreenshots;
@@ -440,16 +442,29 @@ impl Tabs {
         let overrides = Arc::clone(&self.0.overrides);
         let cdp = page.events.cdp().clone();
         let id = entry.id.clone();
+        let slots = self.0.permissions.slots().clone();
+        let run = self.0.run_id;
         page.events.on_child_session(Arc::new(move |session| {
             let overrides = Arc::clone(&overrides);
             let cdp = cdp.clone();
             let id = id.clone();
-            Box::pin(async move { overrides.apply_to_new(&cdp, session, &id, true).await })
+            let slots = slots.clone();
+            Box::pin(async move {
+                overrides
+                    .apply_to_new(&cdp, session, &id, true, (&slots, run))
+                    .await;
+            })
         }));
         if let Some(own) = page.events.sessions().into_iter().next() {
             self.0
                 .overrides
-                .apply_to_new(page.events.cdp(), own, &entry.id, false)
+                .apply_to_new(
+                    page.events.cdp(),
+                    own,
+                    &entry.id,
+                    false,
+                    (self.0.permissions.slots(), self.0.run_id),
+                )
                 .await;
         }
         Ok(page)
@@ -641,6 +656,42 @@ impl Tabs {
     pub(crate) async fn finish_creations(&self) {
         self.0.creations.close();
         self.0.creations.wait().await;
+    }
+
+    /// Everything the run installed that the tabs it leaves open would otherwise keep, taken
+    /// back, in one place that each area adding such state releases it from: the run's init
+    /// scripts (`init_scripts.rs`) and exposed bindings (`bindings.rs`), its session overrides (extra headers, offline mode,
+    /// geolocation; HTTP credentials hold none while `setHTTPCredentials` is pending) and its
+    /// permission grants (`session_state.rs`). `context.close()` awaits it before it resolves and
+    /// `Dispatcher::finish` runs it, so a closed context and an ended run let go the same way.
+    /// Each part marks itself released before it waits, so an attach or a call still running
+    /// installs nothing after it, and waits [`PAGE_END_WAIT`] at most: the overrides' resets
+    /// finish on the run's tracker and the grants' on the cleanup tracker regardless, so none
+    /// is given up. Idempotent: a run that closed its context finds nothing left at its end,
+    /// but what its close could not take back yet.
+    pub(crate) async fn release_run_scoped(&self, run: &RunScope) {
+        // The init scripts, then the bindings, on one budget, as the run's end had them (#3196).
+        let _scripts = time::timeout(PAGE_END_WAIT, async {
+            init_scripts::release_all(run).await;
+            run.bindings.close(self).await;
+        })
+        .await;
+        // On a task of the run's tracker, which `Runtime::drain` waits for: a reset that outlasts
+        // the budget still goes through, and none is given up as done.
+        let releasing = self.0.tasks.spawn_on(
+            Arc::clone(&self.0.overrides).release(
+                self.0.cdp.clone(),
+                self.0.permissions.slots().clone(),
+                self.0.run_id,
+            ),
+            &self.0.tokio,
+        );
+        let _overrides = time::timeout(PAGE_END_WAIT, releasing).await;
+        let _grants = time::timeout(
+            PAGE_END_WAIT,
+            self.0.permissions.release(&self.0.cdp, self.0.run_id),
+        )
+        .await;
     }
 
     /// Records the run's end on every tab it attached to (`PageSession::mark_input_ended`): no

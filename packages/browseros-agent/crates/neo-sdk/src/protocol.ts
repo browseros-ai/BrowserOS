@@ -19,6 +19,7 @@ import type {
   FrameDblclickParams,
   FrameDispatchEventParams,
   FrameDragAndDropParams,
+  FrameDropParams,
   FrameFillParams,
   FrameFocusParams,
   FrameGetAttributeParams,
@@ -40,6 +41,7 @@ import type {
   FrameResolveSelectorParams,
   FrameSelectOptionParams,
   FrameSetContentParams,
+  FrameSetInputFilesParams,
   FrameTapParams,
   FrameTextContentParams,
   FrameTypeParams,
@@ -308,6 +310,28 @@ export const FRAME_UNCHECK_KEYS = [
   'trial',
 ] as const
 
+/** `Frame.setInputFiles` in Playwright schema order. */
+export const FRAME_SET_INPUT_FILES_KEYS = [
+  'selector',
+  'strict',
+  'payloads',
+  'localDirectory',
+  'directoryStream',
+  'localPaths',
+  'streams',
+] as const
+
+/** `Frame.drop` in Playwright schema order. */
+export const FRAME_DROP_KEYS = [
+  'selector',
+  'strict',
+  'position',
+  'payloads',
+  'localPaths',
+  'streams',
+  'data',
+] as const
+
 /** `Frame.selectOption` in Playwright schema order. */
 export const FRAME_SELECT_OPTION_KEYS = [
   'selector',
@@ -544,6 +568,18 @@ type _FrameUncheckKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_UNCHECK_KEYS)[number], true>,
     Required<FrameUncheckParams>
+  >
+>
+type _FrameSetInputFilesKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_SET_INPUT_FILES_KEYS)[number], true>,
+    Required<FrameSetInputFilesParams>
+  >
+>
+type _FrameDropKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_DROP_KEYS)[number], true>,
+    Required<FrameDropParams>
   >
 >
 type _FrameSelectOptionKeysMatchSpec = Assert<

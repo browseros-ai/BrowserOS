@@ -30,7 +30,7 @@ use crate::history::{self, HistoryOptions};
 use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::routes::{self, Patterns};
-use crate::session_state;
+use crate::session_state::{self, StateFile};
 use crate::tabs::{self, PageEntry, Tabs};
 
 pub(crate) async fn context(
@@ -133,11 +133,45 @@ pub(crate) async fn context(
             Ok(None)
         }
         BrowserContextCall::StorageState(params) => {
-            let state = session_state::storage_state(tabs, &params, progress).await?;
-            encode_result::<BrowserContextStorageStateParams>(&state)
+            state_file(tabs, StateFile::Export(params), None, progress).await
         }
         BrowserContextCall::SetStorageState(params) => {
-            session_state::set_storage_state(tabs, params.storage_state, progress).await?;
+            state_file(tabs, StateFile::Import(params), None, progress).await
+        }
+    }
+}
+
+/// Playwright: `client/browserContext.ts` `BrowserContext.storageState`: `if (options.path) {`
+///
+/// `context.storageState` and `context.setStorageState`, with the `path` they write or read in
+/// the run's artifact directory (`artifacts.rs`), checked before anything else: `storageState`
+/// writes none for an empty one, as Playwright's `if (options.path)` does; `setStorageState`
+/// takes any string as a file to read.
+pub(crate) async fn state_file(
+    tabs: &Tabs,
+    file: StateFile,
+    path: Option<String>,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let artifacts = progress.artifacts();
+    match file {
+        StateFile::Export(params) => {
+            let path = path
+                .filter(|path| !path.is_empty())
+                .map(|path| artifacts.check("path", &path))
+                .transpose()?;
+            let state = session_state::storage_state(tabs, &params, progress).await?;
+            if let Some(path) = &path {
+                session_state::write_state(artifacts, path, &state).await?;
+            }
+            encode_result::<BrowserContextStorageStateParams>(&state)
+        }
+        StateFile::Import(params) => {
+            let state = match path {
+                Some(path) => Some(session_state::read_state(artifacts, &path).await?),
+                None => params.storage_state,
+            };
+            session_state::set_storage_state(tabs, state, progress).await?;
             Ok(None)
         }
     }
@@ -177,6 +211,9 @@ async fn close_context(tabs: &Tabs, progress: &Progress) -> Result<(), CallError
     // The script's promises for them have rejected (the SDK); this stops the calls themselves
     // before the close resolves, so none writes input to a tab the run let go of.
     progress.stop_the_runs_calls();
+    // Then what the run set on the tabs it leaves open goes, before the close resolves, as
+    // Playwright's overrides go with its connection (`Tabs::release_run_scoped`).
+    tabs.release_run_scoped(progress.run_scope()).await;
     Ok(())
 }
 

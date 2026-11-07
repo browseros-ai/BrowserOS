@@ -31,12 +31,14 @@ use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId};
 use neo_runtime_spec::{MethodGroup, MethodMeta};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::sync::Mutex;
 use tokio::sync::broadcast::{self, error::RecvError};
+use tokio::sync::{Mutex, oneshot};
+use tokio::time::{self, Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
+use crate::bindings::Bindings;
 use crate::page::PageSession;
-use crate::progress::PlaywrightError;
+use crate::progress::{PlaywrightError, RunScope};
 
 /// Neo: the guid prefix of an init script's `Disposable`, which the SDK disposes by guid.
 pub(crate) const DISPOSABLE_PREFIX: &str = "disposable@";
@@ -133,6 +135,9 @@ pub(crate) struct InitScripts {
     /// Cancelled as run end starts: a setup still waiting on a reply stops waiting, while the
     /// request's own task keeps the reply and undoes it.
     ending: CancellationToken,
+    /// The run's bindings once it exposed one: each session this file shows a page on then gets
+    /// the CDP binding before the page runs (`bindings.rs`).
+    bindings: OnceLock<Weak<Bindings>>,
 }
 
 #[derive(Clone)]
@@ -155,7 +160,48 @@ struct Registry {
     installed: Vec<Installed>,
     /// Each session given auto-attach, the tab's first.
     attaching: Vec<Link>,
+    /// Each request that installs a script or turns auto-attach on, by number, from before it is
+    /// sent until it settles: what the release waits for, so none it began outlives the release.
+    pending: HashMap<u64, Pending>,
+    next_pending: u64,
 }
+
+/// A request still out: its task registers its effect or undoes it, then ends.
+struct Pending {
+    link: Link,
+    /// Closed when the request's task ends.
+    settled: oneshot::Receiver<()>,
+    /// `Page.addScriptToEvaluateOnNewDocument`, rather than `Target.setAutoAttach`.
+    installs: bool,
+}
+
+impl Registry {
+    /// Registers a request about to go out on `link`, unless the run's scripts are released:
+    /// the sender its task keeps until it settles.
+    fn begin(&mut self, link: &Link, installs: bool) -> Option<(u64, oneshot::Sender<()>)> {
+        if self.closed {
+            return None;
+        }
+        let (done, settled) = oneshot::channel();
+        let id = self.next_pending;
+        self.next_pending += 1;
+        self.pending.insert(
+            id,
+            Pending {
+                link: link.clone(),
+                settled,
+                installs,
+            },
+        );
+        Some((id, done))
+    }
+}
+
+/// Neo: how long the release waits for a request still out before it stops the scripts of a
+/// session whose installation has not answered (`Page.disable`): Chromium answers in
+/// milliseconds, so one silent this long is taken as stuck. Within the release's own budget
+/// (`Tabs::release_run_scoped`'s `PAGE_END_WAIT`).
+const PENDING_WAIT: Duration = Duration::from_millis(500);
 
 /// A script a session took: its identifier there.
 struct Installed {
@@ -170,12 +216,39 @@ struct Script {
     source: String,
     /// The page's target id for `page.addInitScript`; `None` for the context's.
     page: Option<String>,
+    rank: Rank,
 }
 
 impl Script {
     fn reaches(&self, target: &str) -> bool {
         self.page.as_deref().is_none_or(|page| page == target)
     }
+}
+
+/// Where a script runs in a session that starts with every script in: Playwright's order. A
+/// session that is already showing a page gets each script after the ones it has, in call order.
+/// Playwright: `server/page.ts` `Page.allInitScripts`: `return [...bindings, ...this.browserContext.initScripts, ...this.initScripts];`
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Rank {
+    /// Playwright's `BindingsController` (`bindings.rs`).
+    Controller,
+    /// A context's binding, then a page's (`bindings.rs`).
+    ContextBinding,
+    PageBinding,
+    /// `browserContext.addInitScript`, then `page.addInitScript`.
+    Context,
+    Page,
+}
+
+/// The scripts a session that starts showing `target` gets, in [`Rank`] order, each rank's in
+/// the order the run added them.
+fn for_new_session<'a>(scripts: &'a [Script], target: &str) -> Vec<&'a Script> {
+    let mut reaching: Vec<&Script> = scripts
+        .iter()
+        .filter(|script| script.reaches(target))
+        .collect();
+    reaching.sort_by_key(|script| script.rank);
+    reaching
 }
 
 /// A page the run touched, with every session that shows it: the tab's own first, then each
@@ -187,9 +260,9 @@ struct ShownPage {
 
 /// A session that shows a page the run touched, with the token its detach cancels.
 #[derive(Clone)]
-struct Link {
-    session: SessionId,
-    gone: CancellationToken,
+pub(crate) struct Link {
+    pub(crate) session: SessionId,
+    pub(crate) gone: CancellationToken,
 }
 
 impl Default for InitScripts {
@@ -206,6 +279,7 @@ impl Default for InitScripts {
             sessions: SyncMutex::default(),
             stop: CancellationToken::new(),
             ending: CancellationToken::new(),
+            bindings: OnceLock::new(),
         }
     }
 }
@@ -233,6 +307,26 @@ impl InitScripts {
         page: Option<&Arc<PageSession>>,
         source: &str,
     ) -> Result<String, PlaywrightError> {
+        let rank = if page.is_some() {
+            Rank::Page
+        } else {
+            Rank::Context
+        };
+        self.add_ranked(cdp, page, source, rank).await
+    }
+
+    /// [`Self::add`] for a script of `rank`, as `bindings.rs` adds its own.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::add`].
+    pub(crate) async fn add_ranked(
+        self: &Arc<Self>,
+        cdp: &CdpClient,
+        page: Option<&Arc<PageSession>>,
+        source: &str,
+        rank: Rank,
+    ) -> Result<String, PlaywrightError> {
         if self.closed() {
             return Err(PlaywrightError::target_closed());
         }
@@ -248,6 +342,7 @@ impl InitScripts {
             guid: guid.clone(),
             source: wrap(source),
             page: page.map(|page| target_of(page)),
+            rank,
         };
         let mut state = self.state.lock().await;
         self.any.store(true, Ordering::Relaxed);
@@ -317,11 +412,7 @@ impl InitScripts {
             session: page.session_id().clone(),
             gone: self.watched(page.session_id(), &target),
         };
-        for script in state
-            .scripts
-            .iter()
-            .filter(|script| script.reaches(&target))
-        {
+        for script in for_new_session(&state.scripts, &target) {
             self.install(cdp, &link, &script.guid, &script.source, run_immediately)
                 .await;
         }
@@ -330,7 +421,31 @@ impl InitScripts {
             target,
             sessions: vec![link],
         });
+        drop(state);
+        if let Some(bindings) = self.bindings() {
+            bindings.prepare_tab(cdp, page).await;
+        }
         Ok(())
+    }
+
+    /// From now on every session this file shows a page on gets `bindings`' CDP binding.
+    pub(crate) fn attach_bindings(&self, bindings: &Arc<Bindings>) {
+        let _set = self.bindings.set(Arc::downgrade(bindings));
+    }
+
+    fn bindings(&self) -> Option<Arc<Bindings>> {
+        self.bindings.get().and_then(Weak::upgrade)
+    }
+
+    /// The out-of-process iframe sessions this file holds for `target`'s page, tab excluded.
+    pub(crate) async fn child_links(&self, target: &str) -> Vec<Link> {
+        let state = self.state.lock().await;
+        state
+            .pages
+            .iter()
+            .find(|page| page.target == target)
+            .map(|page| page.sessions.iter().skip(1).cloned().collect())
+            .unwrap_or_default()
     }
 
     fn closed(&self) -> bool {
@@ -349,6 +464,12 @@ impl InitScripts {
         source: &str,
         run_immediately: bool,
     ) -> bool {
+        // Registered before it is sent, so a release that comes while it is out waits for it.
+        let Some((id, done)) =
+            lock(&self.registry).and_then(|mut registry| registry.begin(link, true))
+        else {
+            return false;
+        };
         let (registry, cdp, link, guid, source) = (
             Arc::clone(&self.registry),
             cdp.clone(),
@@ -357,19 +478,29 @@ impl InitScripts {
             source.to_string(),
         );
         let task = tokio::spawn(async move {
+            // Kept until the task ends: the release's wait for it ends with it.
+            let _settled = done;
             let Some(identifier) = add_script(&cdp, &link, &source, run_immediately).await else {
+                if let Some(mut registry) = lock(&registry) {
+                    registry.pending.remove(&id);
+                }
                 return false;
             };
             let late = match lock(&registry) {
-                Some(mut registry) if !registry.closed => {
-                    registry.installed.push(Installed {
-                        link: link.clone(),
-                        guid,
-                        identifier: identifier.clone(),
-                    });
-                    false
+                Some(mut registry) => {
+                    registry.pending.remove(&id);
+                    if registry.closed {
+                        true
+                    } else {
+                        registry.installed.push(Installed {
+                            link: link.clone(),
+                            guid,
+                            identifier: identifier.clone(),
+                        });
+                        false
+                    }
                 }
-                _ => true,
+                None => true,
             };
             if late {
                 remove_script(&cdp, &link, &identifier).await;
@@ -387,14 +518,26 @@ impl InitScripts {
     /// is sent, and on a task of its own that turns it off again when its reply comes after run
     /// end, so the session is left without it whichever request Chromium reads last.
     async fn attach_iframes(&self, cdp: &CdpClient, link: &Link) {
-        match lock(&self.registry) {
-            Some(mut registry) if !registry.closed => registry.attaching.push(link.clone()),
-            _ => return,
-        }
+        let Some((id, done)) = lock(&self.registry).and_then(|mut registry| {
+            let begun = registry.begin(link, false)?;
+            registry.attaching.push(link.clone());
+            Some(begun)
+        }) else {
+            return;
+        };
         let (registry, cdp, link) = (Arc::clone(&self.registry), cdp.clone(), link.clone());
         let task = tokio::spawn(async move {
-            set_auto_attach(&cdp, &link, true).await;
+            let _settled = done;
+            // A release since it was registered turned auto-attach off already.
             if lock(&registry).is_none_or(|registry| registry.closed) {
+                return;
+            }
+            set_auto_attach(&cdp, &link, true).await;
+            let closed = lock(&registry).is_none_or(|mut registry| {
+                registry.pending.remove(&id);
+                registry.closed
+            });
+            if closed {
                 set_auto_attach(&cdp, &link, false).await;
             }
         });
@@ -460,15 +603,16 @@ impl InitScripts {
     /// The event reader runs until the end, so an iframe held at its start meanwhile still runs.
     pub(crate) async fn close(&self) {
         self.ending.cancel();
-        let (installed, attaching) = match lock(&self.registry) {
+        let (installed, attaching, pending) = match lock(&self.registry) {
             Some(mut registry) => {
                 registry.closed = true;
                 (
                     mem::take(&mut registry.installed),
                     mem::take(&mut registry.attaching),
+                    mem::take(&mut registry.pending),
                 )
             }
-            None => (Vec::new(), Vec::new()),
+            None => (Vec::new(), Vec::new(), HashMap::new()),
         };
         if let Some(cdp) = self.cdp.get().cloned() {
             // On a task of its own, so a run end cut short still removes every script.
@@ -480,6 +624,7 @@ impl InitScripts {
                 for link in attaching.iter().rev() {
                     set_auto_attach(&cdp, link, false).await;
                 }
+                settle(&cdp, pending).await;
             });
             let _removed = removal.await;
         }
@@ -510,7 +655,7 @@ impl InitScripts {
                     cdp.send("Page.enable", json!({}), Some(&link.session)),
                 )
                 .await;
-                for script in scripts.iter().filter(|script| script.reaches(&target)) {
+                for script in for_new_session(scripts, &target) {
                     self.install(&cdp, &link, &script.guid, &script.source, held)
                         .await;
                 }
@@ -519,6 +664,11 @@ impl InitScripts {
                     shown_here = true;
                 }
             }
+        }
+        // Its CDP binding too, before it runs, once the run exposed one (checked after the push,
+        // so a binding exposed meanwhile reaches this session one way or the other).
+        if shown_here && let Some(bindings) = self.bindings() {
+            bindings.prepare_child(&cdp, &link, &target).await;
         }
         // Sent together, in this order, as Playwright's `FrameSession` sends its batch: a target
         // held at its start may answer `Target.setAutoAttach` only once it runs.
@@ -558,6 +708,19 @@ impl InitScripts {
             true
         });
     }
+}
+
+/// Releases the run's init scripts, as a closed context and the run's end let go of what the
+/// run holds (`Tabs::release_run_scoped`, awaited before the close is acknowledged and at run
+/// end): every script the run added leaves every session that shows it, the out-of-process
+/// iframes' included, and the registry closes first, so an attach still pending installs nothing
+/// and a reply that comes late undoes itself ([`InitScripts::close`]). No document loaded after
+/// it returns runs one of the run's scripts; a second call finds nothing left. It waits on the
+/// browser's replies, so its caller bounds it.
+///
+/// Playwright: `server/browserContext.ts` `BrowserContext.close`: `const disposition = await progress.race(this.doClose(options.reason));`
+pub(crate) async fn release_all(run: &RunScope) {
+    run.init_scripts.close().await;
 }
 
 /// A target one of the run's sessions attached, as its event names it.
@@ -647,7 +810,7 @@ impl InitScripts {
 }
 
 /// `request`'s answer, or `None` once `gone` (its session detached) or on a CDP error.
-async fn until_gone<T>(
+pub(crate) async fn until_gone<T>(
     gone: &CancellationToken,
     request: impl Future<Output = Result<T, CdpError>>,
 ) -> Option<T> {
@@ -665,7 +828,7 @@ fn wrap(source: &str) -> String {
 }
 
 /// The page's target id, which is its main frame's id.
-fn target_of(page: &PageSession) -> String {
+pub(crate) fn target_of(page: &PageSession) -> String {
     page.frames.main().id.clone()
 }
 
@@ -722,6 +885,37 @@ async fn set_auto_attach(cdp: &CdpClient, link: &Link, on: bool) {
     .await;
 }
 
+/// Waits for the requests still out when the release closed the registry: each undoes its own
+/// effect once its reply comes ([`InitScripts::install`], [`InitScripts::attach_iframes`]). A
+/// session whose installation has not answered within [`PENDING_WAIT`] already runs that script
+/// on its next document, and only the reply names it, so its new-document scripts stop at once
+/// ([`suspend_scripts`]); the script itself still goes when the reply comes.
+async fn settle(cdp: &CdpClient, pending: HashMap<u64, Pending>) {
+    let deadline = Instant::now() + PENDING_WAIT;
+    let mut suspended: Vec<SessionId> = Vec::new();
+    for (_, request) in pending {
+        if time::timeout_at(deadline, request.settled).await.is_ok() || !request.installs {
+            continue;
+        }
+        if !suspended.contains(&request.link.session) {
+            suspend_scripts(cdp, &request.link).await;
+            suspended.push(request.link.session.clone());
+        }
+    }
+}
+
+/// Neo: `Page.disable` on `link`'s session, which stops every script that session added from
+/// running on its next documents (measured on BrowserOS neo 155.0.8318.26: `Page.enable` would
+/// bring them back, and nothing enables the page of a released run again). The session's
+/// isolated worlds keep working.
+async fn suspend_scripts(cdp: &CdpClient, link: &Link) {
+    let _disabled = until_gone(
+        &link.gone,
+        cdp.send("Page.disable", json!({}), Some(&link.session)),
+    )
+    .await;
+}
+
 /// The registry's lock, `None` once a panic poisoned it: the run then counts as ended, so
 /// nothing new is installed or turned on.
 fn lock(registry: &SyncMutex<Registry>) -> Option<MutexGuard<'_, Registry>> {
@@ -758,17 +952,48 @@ mod tests {
 
     #[test]
     fn a_page_script_reaches_its_page_and_a_context_script_every_page() {
-        let page = Script {
-            guid: "a".into(),
-            source: String::new(),
-            page: Some("T1".into()),
-        };
-        let context = Script {
-            guid: "b".into(),
-            source: String::new(),
-            page: None,
-        };
+        let page = script("a", Some("T1"), Rank::Page);
+        let context = script("b", None, Rank::Context);
         assert!(page.reaches("T1") && !page.reaches("T2"));
         assert!(context.reaches("T1") && context.reaches("T2"));
+    }
+
+    fn script(guid: &str, page: Option<&str>, rank: Rank) -> Script {
+        Script {
+            guid: guid.into(),
+            source: String::new(),
+            page: page.map(Into::into),
+            rank,
+        }
+    }
+
+    #[test]
+    fn a_new_session_gets_bindings_first_then_context_then_page_scripts_each_in_call_order() {
+        let scripts = [
+            script("page-1", Some("T1"), Rank::Page),
+            script("context-1", None, Rank::Context),
+            script("controller", None, Rank::Controller),
+            script("page-binding", Some("T1"), Rank::PageBinding),
+            script("other-page", Some("T2"), Rank::Page),
+            script("context-binding", None, Rank::ContextBinding),
+            script("page-2", Some("T1"), Rank::Page),
+            script("context-2", None, Rank::Context),
+        ];
+        let order: Vec<&str> = for_new_session(&scripts, "T1")
+            .into_iter()
+            .map(|script| script.guid.as_str())
+            .collect();
+        assert_eq!(
+            order,
+            [
+                "controller",
+                "context-binding",
+                "page-binding",
+                "context-1",
+                "context-2",
+                "page-1",
+                "page-2"
+            ]
+        );
     }
 }

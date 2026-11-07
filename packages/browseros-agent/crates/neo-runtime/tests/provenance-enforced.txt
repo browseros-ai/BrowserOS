@@ -7,6 +7,8 @@
 # One path per line, relative to crates/, sorted. Add a file in the commit that makes it pass;
 # the list grows until it holds every neo source.
 neo-runtime-injected/src/add-tag.ts
+neo-runtime-injected/src/bindings-call.ts
+neo-runtime-injected/src/bindings-controller.ts
 neo-runtime-injected/src/call-on-element.ts
 neo-runtime-injected/src/evaluate.ts
 neo-runtime-injected/src/get-property.ts
@@ -20,14 +22,17 @@ neo-runtime-injected/src/wait-result.ts
 neo-runtime-spec/src/binary.rs
 neo-runtime/src/abort.rs
 neo-runtime/src/artifacts.rs
+neo-runtime/src/bindings.rs
 neo-runtime/src/capture.rs
 neo-runtime/src/console.rs
 neo-runtime/src/content.rs
+neo-runtime/src/contexts.rs
 neo-runtime/src/devices.rs
 neo-runtime/src/dialogs.rs
 neo-runtime/src/discovery.rs
 neo-runtime/src/downloads.rs
 neo-runtime/src/drag.rs
+neo-runtime/src/drop_on.rs
 neo-runtime/src/element_ops.rs
 neo-runtime/src/evaluate.rs
 neo-runtime/src/events.rs
@@ -39,6 +44,7 @@ neo-runtime/src/init_scripts.rs
 neo-runtime/src/input_devices.rs
 neo-runtime/src/locator_handlers.rs
 neo-runtime/src/main_world.rs
+neo-runtime/src/mime.rs
 neo-runtime/src/network_events.rs
 neo-runtime/src/network_idle.rs
 neo-runtime/src/page_events.rs
@@ -46,8 +52,10 @@ neo-runtime/src/pdf.rs
 neo-runtime/src/routes.rs
 neo-runtime/src/screenshot.rs
 neo-runtime/src/session_state.rs
+neo-runtime/src/set_input_files.rs
 neo-runtime/src/switch.rs
 neo-sdk/src/api-response.ts
+neo-sdk/src/binding-call.ts
 neo-sdk/src/buffer.ts
 neo-sdk/src/console-message.ts
 neo-sdk/src/dialog.ts
@@ -63,6 +71,7 @@ neo-sdk/src/js-handle.ts
 neo-sdk/src/plain-argument.ts
 neo-sdk/src/route.ts
 neo-sdk/src/screenshot.ts
+neo-sdk/src/set-input-files.ts
 neo-sdk/src/url.ts
 neo-sdk/src/vendor-globals.d.ts
 neo-sdk/src/vendor-shims.ts

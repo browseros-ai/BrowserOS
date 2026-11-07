@@ -31,6 +31,7 @@ import type {
   ResponseCommands,
   RouteCommands,
 } from '@browseros/neo-runtime-spec/serve'
+import type { BindingCommands } from './binding-call'
 import {
   AbortError,
   isTargetClosedError,
@@ -80,6 +81,8 @@ export type ApiName =
   | 'locator.uncheck'
   | 'locator.setChecked'
   | 'locator.selectOption'
+  | 'locator.setInputFiles'
+  | 'locator.drop'
   | 'locator.clear'
   | 'page.click'
   | 'page.dblclick'
@@ -96,6 +99,7 @@ export type ApiName =
   | 'page.uncheck'
   | 'page.setChecked'
   | 'page.selectOption'
+  | 'page.setInputFiles'
   | 'frame.click'
   | 'frame.dblclick'
   | 'frame.hover'
@@ -138,6 +142,7 @@ export type ApiName =
   | 'frame.uncheck'
   | 'frame.setChecked'
   | 'frame.selectOption'
+  | 'frame.setInputFiles'
   | 'browserContext.newPage'
   | 'browserContext.close'
   | 'browserContext.cookies'
@@ -209,6 +214,12 @@ export type ApiName =
   | 'page.addInitScript'
   | 'browserContext.addInitScript'
   | 'disposable.dispose'
+  | 'page.exposeBinding'
+  | 'page.exposeFunction'
+  | 'browserContext.exposeBinding'
+  | 'browserContext.exposeFunction'
+  | 'bindingCall.resolve'
+  | 'bindingCall.reject'
   | 'page.addScriptTag'
   | 'page.addStyleTag'
   | 'frame.addScriptTag'
@@ -529,6 +540,19 @@ export class Connection {
       params,
       timeout,
     )) as EvalFrameCommands[M]['result']
+  }
+
+  /** {@link Connection.send} for a binding command (`binding-call.ts`): `exposeBinding` on a
+   * page or the context, `resolve` / `reject` on a call's `bindingcall@` guid. */
+  async sendBinding<M extends keyof BindingCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: BindingCommands[M]['params'],
+    timeout: number,
+  ): Promise<BindingCommands[M]['result']> {
+    return ((await this.#send(apiName, guid, method, params, timeout)) ??
+      {}) as BindingCommands[M]['result']
   }
 
   /** {@link Connection.send} for an init script command (`init-script.ts`): `addInitScript` on a
