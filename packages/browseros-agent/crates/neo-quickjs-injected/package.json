@@ -1,0 +1,19 @@
+{
+  "name": "@browseros/neo-quickjs-injected",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Neo's Playwright-shaped SDK. Runs inside neo-runtime's QuickJS realm, which embeds dist/sdk.js.",
+  "scripts": {
+    "build": "bun build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test tests/unit",
+    "test:parity": "node --test --test-concurrency=1 'tests/parity/*.test.mjs'"
+  },
+  "dependencies": {
+    "@browseros/neo-runtime-spec": "workspace:*"
+  },
+  "devDependencies": {
+    "playwright-core": "1.64.1"
+  }
+}

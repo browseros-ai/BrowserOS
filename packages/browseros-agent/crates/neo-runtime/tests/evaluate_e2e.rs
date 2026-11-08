@@ -1,9 +1,9 @@
-//! Page evaluation and JS handles end to end on a real BrowserOS neo, through neo-sdk's
-//! `page.evaluate`, `page.evaluateHandle`, `JSHandle.jsonValue` and `locator.evaluate`: the
-//! main world answers, and a run that ends by its deadline while an evaluation is still pending
-//! and handles are alive stops on time and leaves the tab to the next run, whose handles are its
-//! own. `crates/neo-sdk/tests/parity/evaluate*.test.mjs` and `jsHandle-*.test.mjs` compare the
-//! same calls with live Playwright.
+//! Page evaluation and JS handles end to end on a real BrowserOS neo, through
+//! neo-quickjs-injected's `page.evaluate`, `page.evaluateHandle`, `JSHandle.jsonValue` and
+//! `locator.evaluate`: the main world answers, and a run that ends by its deadline while an
+//! evaluation is still pending and handles are alive stops on time and leaves the tab to the next
+//! run, whose handles are its own. `crates/neo-quickjs-injected/tests/parity/evaluate*.test.mjs`
+//! and `jsHandle-*.test.mjs` compare the same calls with live Playwright.
 //!
 //! Runs only when `NEO_E2E_BROWSER` names the browser binary (`support/browser.rs`); otherwise
 //! each test passes as a skip.

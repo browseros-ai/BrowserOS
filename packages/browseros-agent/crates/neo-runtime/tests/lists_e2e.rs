@@ -1,9 +1,9 @@
 //! `Locator.count()` and `Locator.allTextContents()` end to end on a real BrowserOS neo, through
-//! neo-sdk, on `neo-sdk/tests/pages/element-lists.html`: one run reads five matches (an empty and
-//! a hidden one among them) and a selector that matches nothing, and gets Playwright's exact
-//! numbers and texts, with no strict mode violation, including within an iframe.
-//! `crates/neo-sdk/tests/parity/count.test.mjs` and `allTextContents.test.mjs` run the same reads
-//! through live Playwright beside Neo.
+//! neo-quickjs-injected, on `neo-quickjs-injected/tests/pages/element-lists.html`: one run reads
+//! five matches (an empty and a hidden one among them) and a selector that matches nothing, and
+//! gets Playwright's exact numbers and texts, with no strict mode violation, including within an
+//! iframe. `crates/neo-quickjs-injected/tests/parity/count.test.mjs` and `allTextContents.test.mjs`
+//! run the same reads through live Playwright beside Neo.
 //!
 //! Runs only when `NEO_E2E_BROWSER` names the browser binary (`support/browser.rs`); otherwise
 //! each test passes as a skip.
@@ -19,7 +19,7 @@ use browser::{Fixture, Tab};
 use neo_runtime::{CallResult, RunOutcome, RunStatus};
 use serde_json::{Value, json};
 
-const LISTS: &str = include_str!("../../neo-sdk/tests/pages/element-lists.html");
+const LISTS: &str = include_str!("../../neo-quickjs-injected/tests/pages/element-lists.html");
 
 async fn open() -> Option<Tab> {
     let binary = browser::e2e_browser()?;

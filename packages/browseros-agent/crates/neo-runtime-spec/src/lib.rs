@@ -14,7 +14,7 @@
 //!   result types taken unchanged from Playwright's spec (`spec/playwright/`). The call bridge
 //!   decodes a call with [`serve::FrameCall::decode`], matches on it, and answers with
 //!   [`Command::reply`], which accepts only that command's result type.
-//! - [`injected`] holds the page calls `neo-runtime` makes into `neo-runtime-injected`'s glue
+//! - [`injected`] holds the page calls `neo-runtime` makes into `neo-playwright-injected`'s glue
 //!   table (`spec/injected.yml`). Each call's params type implements [`InjectedCall`], and its
 //!   result type implements [`PageResult`]. A call crosses plain JSON plus handles: a
 //!   [`Handle<K>`](Handle) names a page object that stays in the page, by its CDP object id,
@@ -23,7 +23,7 @@
 //!
 //! The same types exist in TypeScript under `ts/`, in the bun package
 //! `@browseros/neo-runtime-spec` (exports `./serve`, `./injected` and `./spec-hash`).
-//! `neo-runtime-injected`'s glue table is written as
+//! `neo-playwright-injected`'s glue table is written as
 //! `export const glue = { ... } satisfies InjectedApi<InjectedScript, Handles>`, where `Handles`
 //! binds each named handle kind to its Playwright page type, so it fails `tsc` when it drifts
 //! from `spec/injected.yml`.
@@ -57,7 +57,7 @@
 //!
 //! 1. Add a command under `Injected.commands` in `spec/injected.yml`, with `internal: true`,
 //!    `parameters` and `returns`. The file's header lists the rules the translator enforces.
-//! 2. Regenerate. `ts/injected.ts` gains the call, so `neo-runtime-injected` fails `tsc` until
+//! 2. Regenerate. `ts/injected.ts` gains the call, so `neo-playwright-injected` fails `tsc` until
 //!    its glue table implements it, and its `dist/` must be rebuilt because the spec hash
 //!    changed.
 //!
@@ -108,7 +108,7 @@ pub use call::{
 pub use spec_hash::SPEC_SHA256;
 
 /// Whether `hash` is the spec hash this crate was generated from. `const`, so `neo-runtime` can
-/// assert at compile time that the page bundle it embeds (`neo-runtime-injected`'s
+/// assert at compile time that the page bundle it embeds (`neo-playwright-injected`'s
 /// `dist/spec-sha256`) was built from the same spec as these types.
 #[must_use]
 pub const fn is_current(hash: &str) -> bool {

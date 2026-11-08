@@ -77,10 +77,10 @@ pub trait Command: Serialize + DeserializeOwned + Sealed {
     }
 }
 
-/// A page call: one function in `neo-runtime-injected`'s glue table, implemented by the call's
+/// A page call: one function in `neo-playwright-injected`'s glue table, implemented by the call's
 /// params type.
 ///
-/// The calling convention, which `neo-runtime-injected/src/call.ts` implements and
+/// The calling convention, which `neo-playwright-injected/src/call.ts` implements and
 /// `neo-runtime` drives: CDP `Runtime.callFunctionOn` with `objectId` set to the glue object of
 /// one world of one document, `functionDeclaration` set to the built `dist/call.js`
 /// (`this[name](params, ...handles)`), `arguments` set to

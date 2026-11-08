@@ -1,10 +1,10 @@
-//! Exposed bindings end to end on a real BrowserOS neo, through neo-sdk's `page.exposeFunction`,
-//! for Neo's one deviation from Playwright here: a binding lives as long as the run that exposed
-//! it (`Deviation:` in `src/bindings.rs`). Once the run has ended, the page's call of a binding,
-//! through a reference the page kept too, rejects and never hangs; a call still waiting when the
-//! run ended rejects; the page keeps none of the run's globals; and a later document has no
-//! binding. `crates/neo-sdk/tests/parity/exposeFunction.test.mjs` and `exposeBinding.test.mjs`
-//! compare the in-run behaviour with live Playwright.
+//! Exposed bindings end to end on a real BrowserOS neo, through neo-quickjs-injected's
+//! `page.exposeFunction`, for Neo's one deviation from Playwright here: a binding lives as long as
+//! the run that exposed it (`Deviation:` in `src/bindings.rs`). Once the run has ended, the page's
+//! call of a binding, through a reference the page kept too, rejects and never hangs; a call still
+//! waiting when the run ended rejects; the page keeps none of the run's globals; and a later
+//! document has no binding. `crates/neo-quickjs-injected/tests/parity/exposeFunction.test.mjs` and
+//! `exposeBinding.test.mjs` compare the in-run behaviour with live Playwright.
 //!
 //! Runs only when `NEO_E2E_BROWSER` names the browser binary (`support/browser.rs`); otherwise
 //! each test passes as a skip.

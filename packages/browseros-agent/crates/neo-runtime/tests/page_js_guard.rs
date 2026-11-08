@@ -15,9 +15,10 @@
 //!   to `init_scripts.rs` and `main_world.rs`.
 //!
 //! In both, every `functionDeclaration` is a `const` whose initializer is exactly
-//! `include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/<name>.js"))`
-//! and that nothing else in the file re-binds (or a parameter every caller in the file passes one
-//! of those consts), so agent code can reach a page only as an argument value.
+//! `include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
+//! "/../neo-playwright-injected/dist/<name>.js"))` and that nothing else in the file re-binds (or a
+//! parameter every caller in the file passes one of those consts), so agent code can reach a page
+//! only as an argument value.
 //!
 //! Literals are read as the compiler reads them: `proc-macro2` tokenizes the file and `syn`
 //! decodes each string literal (escapes, raw, byte and C strings), so `"\x52untime.evaluate"` is
@@ -80,7 +81,7 @@ const INIT_SCRIPTS: &str = "neo-runtime/src/init_scripts.rs";
 const BINDINGS: &str = "neo-runtime/src/bindings.rs";
 
 /// Where a built artifact lives: the only source a `functionDeclaration` may have.
-const BUILT_PREFIX: &str = "/../neo-runtime-injected/dist/";
+const BUILT_PREFIX: &str = "/../neo-playwright-injected/dist/";
 
 #[test]
 fn tests_that_only_the_two_world_doors_reach_page_javascript() {
@@ -159,7 +160,7 @@ fn tests_that_a_method_is_refused_outside_its_file() {
     assert!(check("neo-runtime/src/world.rs", send).is_empty());
     assert!(!check("neo-runtime/src/evaluate.rs", send).is_empty());
     assert!(!check("neo-runtime/src/page.rs", send).is_empty());
-    assert!(!check("neo-sdk/src/x.rs", send).is_empty());
+    assert!(!check("neo-quickjs-injected/src/x.rs", send).is_empty());
     let world = "self.send(\"Page.createIsolatedWorld\", params)";
     assert!(check("neo-runtime/src/world.rs", world).is_empty());
     assert!(
@@ -209,7 +210,7 @@ fn tests_that_comments_and_test_modules_are_not_code() {
 
 #[test]
 fn tests_that_a_function_declaration_must_be_a_built_artifact() {
-    let built = "const GLUE: &str = include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../neo-runtime-injected/dist/call.js\"));\n";
+    let built = "const GLUE: &str = include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../neo-playwright-injected/dist/call.js\"));\n";
     let ok = format!("{built}fn f() {{ json!({{\"functionDeclaration\": GLUE}}); }}\n");
     assert!(check("neo-runtime/src/main_world.rs", &ok).is_empty());
 
@@ -402,7 +403,7 @@ fn declarations(relative: &str, tokens: &[Token], door: bool, built: &[String]) 
             Token::Ident { text, .. } if ends && built.iter().any(|name| name == text) => {}
             Token::Ident { text, .. } if ends && relayed(tokens, text, built) => {}
             _ => problems.push(format!(
-                "{relative}:{line}: a functionDeclaration that is not a built neo-runtime-injected/dist/*.js const"
+                "{relative}:{line}: a functionDeclaration that is not a built neo-playwright-injected/dist/*.js const"
             )),
         }
     }
@@ -433,8 +434,9 @@ fn built_consts(source: &str, tokens: &[Token]) -> Vec<String> {
     built
 }
 
-/// Exactly `include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/<name>.js"))`:
-/// no block around it, no transformation of it, no other path.
+/// Exactly `include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
+/// "/../neo-playwright-injected/dist/<name>.js"))`: no block around it, no transformation of it, no
+/// other path.
 fn is_built_artifact(expr: &Expr) -> bool {
     let Expr::Macro(include) = expr else {
         return false;
@@ -472,7 +474,7 @@ fn is_built_artifact(expr: &Expr) -> bool {
     manifest_dir && is_artifact_path(&path.value())
 }
 
-/// `/../neo-runtime-injected/dist/<name>.js`, `<name>` one plain file name.
+/// `/../neo-playwright-injected/dist/<name>.js`, `<name>` one plain file name.
 fn is_artifact_path(path: &str) -> bool {
     path.strip_prefix(BUILT_PREFIX)
         .and_then(|rest| rest.strip_suffix(".js"))
@@ -872,7 +874,7 @@ fn tests_that_an_escaped_literal_is_read_as_its_value() {
 #[test]
 fn tests_that_only_an_exact_artifact_include_is_a_built_function() {
     let source = r#"const GLUE: &str = {
-        let _ = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/evaluate.js"));
+        let _ = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-playwright-injected/dist/evaluate.js"));
         "function () { return globalThis.secret; }"
     };
     fn probe() { json!({"functionDeclaration": GLUE}); }"#;
@@ -880,18 +882,18 @@ fn tests_that_only_an_exact_artifact_include_is_a_built_function() {
         !check("neo-runtime/src/main_world.rs", source).is_empty(),
         "the const mentions an include_str but evaluates to another string"
     );
-    let built = r#"include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/evaluate.js"))"#;
+    let built = r#"include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-playwright-injected/dist/evaluate.js"))"#;
     let accepted = format!(
         "const GLUE: &str = {built};\nfn probe() {{ json!({{\"functionDeclaration\": GLUE}}); }}"
     );
     assert!(check("neo-runtime/src/main_world.rs", &accepted).is_empty());
     for initializer in [
-        r#"include_str!("/../neo-runtime-injected/dist/evaluate.js")"#,
-        r#"include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/../evil.js"))"#,
-        r#"include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/sub/x.js"))"#,
-        r#"include_str!(concat!(env!("OUT_DIR"), "/../neo-runtime-injected/dist/evaluate.js"))"#,
-        r#"include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/evaluate.js", ""))"#,
-        r#"include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-runtime-injected/dist/evaluate.js")).trim_start()"#,
+        r#"include_str!("/../neo-playwright-injected/dist/evaluate.js")"#,
+        r#"include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-playwright-injected/dist/../evil.js"))"#,
+        r#"include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-playwright-injected/dist/sub/x.js"))"#,
+        r#"include_str!(concat!(env!("OUT_DIR"), "/../neo-playwright-injected/dist/evaluate.js"))"#,
+        r#"include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-playwright-injected/dist/evaluate.js", ""))"#,
+        r#"include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-playwright-injected/dist/evaluate.js")).trim_start()"#,
     ] {
         let source = format!(
             "const GLUE: &str = {initializer};\nfn probe() {{ json!({{\"functionDeclaration\": GLUE}}); }}"

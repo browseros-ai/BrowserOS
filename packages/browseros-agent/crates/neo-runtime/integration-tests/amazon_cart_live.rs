@@ -33,7 +33,8 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-const SHOP: &str = include_str!("../../neo-sdk/tests/scripts/amazon-sensodyne-cart.js");
+const SHOP: &str =
+    include_str!("../../neo-quickjs-injected/tests/scripts/amazon-sensodyne-cart.js");
 const PRODUCT: &str = "Sensodyne Toothpaste Fresh Mint | Daily Sensitivity Relief Tooth Paste Pack of 1 - 75gm | Dentist Recommended | Everyday Use Paste, Fresh Breath, Fights Tooth Decay, Maintain Healthy Gums";
 
 /// Reads DOM state independently of the SDK's locators and snapshot renderer. Amazon marks

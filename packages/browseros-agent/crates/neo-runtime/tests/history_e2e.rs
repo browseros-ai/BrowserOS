@@ -1,6 +1,7 @@
 //! `page.reload`, `goBack`, `goForward` and `waitForNavigation` on an isolated real BrowserOS
 //! neo profile, with the back-forward cache on, as a user's browser has it (Playwright launches
-//! its own browser without it; `neo-sdk/tests/parity/history.mjs` compares the two there).
+//! its own browser without it; `neo-quickjs-injected/tests/parity/history.mjs` compares the two
+//! there).
 
 #[path = "support/browser.rs"]
 mod browser;

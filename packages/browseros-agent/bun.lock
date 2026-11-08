@@ -315,23 +315,15 @@
       "name": "@browseros/hosted-api-rust",
       "version": "0.0.0",
     },
-    "crates/neo-runtime": {
-      "name": "@browseros/neo-runtime-rust",
-      "version": "0.0.0",
-    },
-    "crates/neo-runtime-injected": {
-      "name": "@browseros/neo-runtime-injected",
+    "crates/neo-playwright-injected": {
+      "name": "@browseros/neo-playwright-injected",
       "version": "0.0.0",
       "dependencies": {
         "@browseros/neo-runtime-spec": "workspace:*",
       },
     },
-    "crates/neo-runtime-spec": {
-      "name": "@browseros/neo-runtime-spec",
-      "version": "0.0.0",
-    },
-    "crates/neo-sdk": {
-      "name": "@browseros/neo-sdk",
+    "crates/neo-quickjs-injected": {
+      "name": "@browseros/neo-quickjs-injected",
       "version": "0.0.0",
       "dependencies": {
         "@browseros/neo-runtime-spec": "workspace:*",
@@ -339,6 +331,14 @@
       "devDependencies": {
         "playwright-core": "1.64.1",
       },
+    },
+    "crates/neo-runtime": {
+      "name": "@browseros/neo-runtime-rust",
+      "version": "0.0.0",
+    },
+    "crates/neo-runtime-spec": {
+      "name": "@browseros/neo-runtime-spec",
+      "version": "0.0.0",
     },
     "packages/acpx-ai-provider": {
       "name": "@browseros/acpx-ai-provider",
@@ -689,13 +689,13 @@
 
     "@browseros/hosted-api-rust": ["@browseros/hosted-api-rust@workspace:crates/hosted-api"],
 
-    "@browseros/neo-runtime-injected": ["@browseros/neo-runtime-injected@workspace:crates/neo-runtime-injected"],
+    "@browseros/neo-playwright-injected": ["@browseros/neo-playwright-injected@workspace:crates/neo-playwright-injected"],
+
+    "@browseros/neo-quickjs-injected": ["@browseros/neo-quickjs-injected@workspace:crates/neo-quickjs-injected"],
 
     "@browseros/neo-runtime-rust": ["@browseros/neo-runtime-rust@workspace:crates/neo-runtime"],
 
     "@browseros/neo-runtime-spec": ["@browseros/neo-runtime-spec@workspace:crates/neo-runtime-spec"],
-
-    "@browseros/neo-sdk": ["@browseros/neo-sdk@workspace:crates/neo-sdk"],
 
     "@browseros/onboarding-video": ["@browseros/onboarding-video@workspace:packages/onboarding-video"],
 

@@ -989,7 +989,7 @@ fn tab_command(
     })
 }
 
-/// `Runtime.callFunctionOn`: neo-runtime-injected's bundle entries by execution context, and
+/// `Runtime.callFunctionOn`: neo-playwright-injected's bundle entries by execution context, and
 /// glue calls on the glue object. A by-value result is the glue's JSON; a result that holds a
 /// handle is a page object whose properties `Runtime.getProperties` then lists. The interceptor
 /// glue arms and stops the page's slot.

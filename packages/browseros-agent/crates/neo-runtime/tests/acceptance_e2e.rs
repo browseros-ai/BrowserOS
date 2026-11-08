@@ -1,5 +1,5 @@
 //! The navigation and page-reading acceptance run, end to end on a real BrowserOS neo: one Neo
-//! run (`neo-sdk/tests/scripts/navigation-acceptance.js`) opens a fixture page with
+//! run (`neo-quickjs-injected/tests/scripts/navigation-acceptance.js`) opens a fixture page with
 //! `page.goto`, reads its title, AI snapshot and text, clicks by a snapshot ref and by role with
 //! the existing `locator.click`, reads the change, follows a link to a second document and reads
 //! that one, then shows the old ref no longer resolves.
@@ -18,7 +18,8 @@ use browser::{Fixture, Tab};
 use neo_runtime::RunStatus;
 use serde_json::{Value, json};
 
-const ACCEPTANCE: &str = include_str!("../../neo-sdk/tests/scripts/navigation-acceptance.js");
+const ACCEPTANCE: &str =
+    include_str!("../../neo-quickjs-injected/tests/scripts/navigation-acceptance.js");
 
 const START: &str = r#"<!doctype html>
 <html><head><title>Neo acceptance</title></head>

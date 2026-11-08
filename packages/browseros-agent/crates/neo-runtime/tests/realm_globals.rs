@@ -1,8 +1,8 @@
-//! The standard globals a run's realm defines (`realm.rs` `HOST_GLOBALS` and neo-sdk's
+//! The standard globals a run's realm defines (`realm.rs` `HOST_GLOBALS` and neo-quickjs-injected's
 //! `globals.ts`), through `Runtime::run` against the fake browser in `support/fake_browser.rs`:
 //! what is defined and how, `URL` resolving and writing through Rust's parser, `crypto`'s bytes
 //! from Rust, and `setInterval` within the run's deadline and cancellation. No browser needed;
-//! `neo-sdk/tests/parity/globals.test.mjs` compares the values with Node's.
+//! `neo-quickjs-injected/tests/parity/globals.test.mjs` compares the values with Node's.
 
 #[path = "support/fake_browser.rs"]
 #[expect(dead_code, reason = "the fake page's readers serve the click tests")]

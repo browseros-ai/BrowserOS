@@ -1,4 +1,4 @@
-# Rust -> page calls: what neo-runtime sends to the glue table in neo-runtime-injected, and
+# Rust -> page calls: what neo-runtime sends to the glue table in neo-playwright-injected, and
 # exactly what comes back. Written in Playwright's protocol dialect and loaded into the same
 # flat namespace as spec/playwright/, so these names must not collide with Playwright's.
 #

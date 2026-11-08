@@ -1,10 +1,10 @@
-//! The fake clock end to end on a real BrowserOS neo, through neo-sdk's `page.clock`, for Neo's
-//! one deviation from Playwright here: the clock lives as long as the run (`Deviation:` in
-//! `neo-runtime-injected/src/clock-call.ts`). Once a run that paused the page's time has ended,
-//! the page has its own `Date` and timers back, and a later document has no clock; nothing of the
-//! clock outlives the run, even a `runFor` it left running.
-//! `crates/neo-sdk/tests/parity/clock.test.mjs` compares the in-run behaviour with live
-//! Playwright.
+//! The fake clock end to end on a real BrowserOS neo, through neo-quickjs-injected's `page.clock`,
+//! for Neo's one deviation from Playwright here: the clock lives as long as the run (`Deviation:`
+//! in `neo-playwright-injected/src/clock-call.ts`). Once a run that paused the page's time has
+//! ended, the page has its own `Date` and timers back, and a later document has no clock; nothing
+//! of the clock outlives the run, even a `runFor` it left running.
+//! `crates/neo-quickjs-injected/tests/parity/clock.test.mjs` compares the in-run behaviour with
+//! live Playwright.
 //!
 //! Runs only when `NEO_E2E_BROWSER` names the browser binary (`support/browser.rs`); otherwise
 //! each test passes as a skip.

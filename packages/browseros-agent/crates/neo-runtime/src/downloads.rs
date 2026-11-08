@@ -1,7 +1,7 @@
 //! Neo: the run's downloads, for `page.on('download')`, `context.on('download')` and the
-//! `Download` objects they hand out (neo-sdk `download.ts`). While a run listens for downloads,
-//! Neo asks the browser to report them on its connection and leaves the saving to the browser,
-//! which puts each file where it puts the user's:
+//! `Download` objects they hand out (neo-quickjs-injected `download.ts`). While a run listens for
+//! downloads, Neo asks the browser to report them on its connection and leaves the saving to the
+//! browser, which puts each file where it puts the user's:
 //!
 //! ```text
 //!  Runtime: Switch  holders 0 → 1: Browser.setDownloadBehavior {default, eventsEnabled: true}

@@ -3,7 +3,7 @@
 //!
 //! `page.localStorage` and `page.sessionStorage`: each method is one Page call on the main
 //! frame's storage. Playwright's server evaluates each step as an expression in the main frame's
-//! utility world; Neo runs the same steps there as typed glue (`neo-runtime-injected` `glue.ts`,
+//! utility world; Neo runs the same steps there as typed glue (`neo-playwright-injected` `glue.ts`,
 //! `webStorage*`), never as an evaluation it sends itself.
 //!
 //! ```text

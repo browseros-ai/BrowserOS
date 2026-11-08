@@ -1,8 +1,8 @@
 //! B2's behavior in real Neo runs on a throwaway browser profile: the highlight overlays a run
 //! removes when it ends, and the exact box of an element inside a bordered out-of-process frame
 //! (Playwright's border-box placement, pinned in numbers). Everything Neo shares with Playwright
-//! is also compared against it in neo-sdk's parity tests; `dispatchEvent`'s `eventInit` is
-//! Playwright's own now (`dispatchEvent.test.mjs`).
+//! is also compared against it in neo-quickjs-injected's parity tests; `dispatchEvent`'s
+//! `eventInit` is Playwright's own now (`dispatchEvent.test.mjs`).
 
 #[expect(
     dead_code,

@@ -12,7 +12,7 @@ use browser::{Fixture, Tab};
 use neo_runtime::{Delivery, RunOutcome, RunStatus};
 use serde_json::json;
 
-const CHECKS: &str = include_str!("../../neo-sdk/tests/pages/check-actions.html");
+const CHECKS: &str = include_str!("../../neo-quickjs-injected/tests/pages/check-actions.html");
 
 async fn open() -> Option<Tab> {
     let binary = browser::e2e_browser()?;

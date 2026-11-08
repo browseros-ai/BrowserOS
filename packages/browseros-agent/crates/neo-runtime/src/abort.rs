@@ -8,7 +8,7 @@
 //! timeout does, so every cleanup that runs for a timeout runs for an abort.
 //!
 //! ```text
-//!  JS: controller.abort()  → the call's `abort` listener (neo-sdk/src/connection.ts)
+//!  JS: controller.abort()  → the call's `abort` listener (neo-quickjs-injected/src/connection.ts)
 //!    └─ __neo_runtime.abort(7, 'stop')            sync, inside the listener
 //!         └─ Aborts::abort(7) → CallEntry::abort  ── reason set once, token cancelled
 //!  call task: progress.race(work) ── Err(AbortError 'stop') ── reply {error: {name, message}}

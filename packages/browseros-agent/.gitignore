@@ -123,10 +123,10 @@ out
 dist
 packages/*/dist
 # neo-runtime embeds these bundles at compile time, so cargo needs them without a Bun build.
-!/crates/neo-sdk/dist/
-!/crates/neo-runtime-injected/dist/
+!/crates/neo-quickjs-injected/dist/
+!/crates/neo-playwright-injected/dist/
 # Agent scripts the neo end-to-end tests run, not compiled test output.
-!/crates/neo-sdk/tests/scripts/*.js
+!/crates/neo-quickjs-injected/tests/scripts/*.js
 
 # Gatsby files
 .cache/

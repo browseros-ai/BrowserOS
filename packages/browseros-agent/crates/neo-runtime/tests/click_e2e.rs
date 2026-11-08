@@ -1,16 +1,16 @@
 //! Clicks end to end on a real BrowserOS neo. Each case serves a page from
-//! `crates/neo-sdk/tests/pages/`, runs a Neo script against it, and checks what the script saw,
-//! the run's record (its result and delivery) and what the page's own listeners saw. A failure is
-//! checked by its error kind and by the reason its log gives, never by Playwright's exact wording,
-//! call-log layout or retry counts.
+//! `crates/neo-quickjs-injected/tests/pages/`, runs a Neo script against it, and checks what the
+//! script saw, the run's record (its result and delivery) and what the page's own listeners saw. A
+//! failure is checked by its error kind and by the reason its log gives, never by Playwright's
+//! exact wording, call-log layout or retry counts.
 //!
 //! The cases: an ordinary click, which reaches its target and not the button beside it; strict,
 //! hidden, covered and disabled buttons; a press an overlay catches after the hit check; a press
 //! that moves its own target away before the release, and presses that cover or hide their own
 //! target, which must not be pressed again; a sticky header; a link to a slow page; a dialog; a run that ends mid-press; a trial; a closed tab; the
 //! install's reuse; a frame selector; a background tab; and concurrent clicks.
-//! `crates/neo-sdk/tests/parity/click.test.mjs` runs the same pages through live Playwright beside
-//! Neo.
+//! `crates/neo-quickjs-injected/tests/parity/click.test.mjs` runs the same pages through live
+//! Playwright beside Neo.
 //!
 //! Runs only when `NEO_E2E_BROWSER` names the browser binary (`support/browser.rs`); otherwise
 //! each test passes as a skip.
@@ -34,32 +34,35 @@ use tokio::time;
 
 /// One `Submit` button whose `onclick` sets `#done`, a `Cancel` button beside it whose `onclick`
 /// sets `#decoy`, and a recorder of every pointer and mouse event in `window.__events`.
-const OK_PAGE: &str = include_str!("../../neo-sdk/tests/pages/ok.html");
+const OK_PAGE: &str = include_str!("../../neo-quickjs-injected/tests/pages/ok.html");
 /// Two `Submit` buttons.
-const STRICT_PAGE: &str = include_str!("../../neo-sdk/tests/pages/strict.html");
+const STRICT_PAGE: &str = include_str!("../../neo-quickjs-injected/tests/pages/strict.html");
 /// A `display:none` `Submit` button.
-const HIDDEN_PAGE: &str = include_str!("../../neo-sdk/tests/pages/hidden.html");
+const HIDDEN_PAGE: &str = include_str!("../../neo-quickjs-injected/tests/pages/hidden.html");
 /// A `Submit` button under a full-viewport overlay, `<div id="overlay">`.
-const COVERED_PAGE: &str = include_str!("../../neo-sdk/tests/pages/covered.html");
+const COVERED_PAGE: &str = include_str!("../../neo-quickjs-injected/tests/pages/covered.html");
 /// A disabled `Submit` button.
-const DISABLED_PAGE: &str = include_str!("../../neo-sdk/tests/pages/disabled.html");
+const DISABLED_PAGE: &str = include_str!("../../neo-quickjs-injected/tests/pages/disabled.html");
 /// A button under a sticky header that covers the top 55% of the viewport.
-const STICKY_PAGE: &str = include_str!("../../neo-sdk/tests/pages/sticky.html");
+const STICKY_PAGE: &str = include_str!("../../neo-quickjs-injected/tests/pages/sticky.html");
 /// A link to `/slow`, which the fixture answers late.
-const LINK_PAGE: &str = include_str!("../../neo-sdk/tests/pages/link.html");
+const LINK_PAGE: &str = include_str!("../../neo-quickjs-injected/tests/pages/link.html");
 /// A button whose `onclick` opens a `confirm()` and keeps its answer in `window.__answer`.
-const DIALOG_PAGE: &str = include_str!("../../neo-sdk/tests/pages/dialog.html");
+const DIALOG_PAGE: &str = include_str!("../../neo-quickjs-injected/tests/pages/dialog.html");
 /// A button whose overlay appears on the click's own `mousemove` and goes after the
 /// `pointerdown` it caught, so exactly one press is blocked after the hit check passed. The page
 /// counts the button's own clicks in `window.__clicks`.
-const BLOCKED_ONCE_PAGE: &str = include_str!("../../neo-sdk/tests/pages/blocked-once.html");
+const BLOCKED_ONCE_PAGE: &str =
+    include_str!("../../neo-quickjs-injected/tests/pages/blocked-once.html");
 /// A popover placed against the viewport's bottom from its size, and placed again whenever it
 /// handles a `mousedown`. `window.__grow()` adds content without placing it again, so the next
 /// press on it moves it; its `Edit` button counts its clicks in `window.__edits`.
-const MOVES_ON_PRESS_PAGE: &str = include_str!("../../neo-sdk/tests/pages/moves-on-press.html");
+const MOVES_ON_PRESS_PAGE: &str =
+    include_str!("../../neo-quickjs-injected/tests/pages/moves-on-press.html");
 /// `Choose`, whose `mousedown` opens a listbox over the whole page, and `Dismiss`, whose
 /// `mousedown` hides it; each counts its presses (`window.__chosen`, `window.__dismissed`).
-const COVERS_ON_PRESS_PAGE: &str = include_str!("../../neo-sdk/tests/pages/covers-on-press.html");
+const COVERS_ON_PRESS_PAGE: &str =
+    include_str!("../../neo-quickjs-injected/tests/pages/covers-on-press.html");
 
 /// The ordinary click: Playwright's `getByRole` locator on `OK_PAGE`, then the URL its handler
 /// moved to.
@@ -739,7 +742,7 @@ impl InstallTap {
         let crate_dir = PathBuf::from(
             env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| panic!("cargo sets it")),
         );
-        let path = crate_dir.join("../neo-runtime-injected/dist/install.js");
+        let path = crate_dir.join("../neo-playwright-injected/dist/install.js");
         let install = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
         Self {

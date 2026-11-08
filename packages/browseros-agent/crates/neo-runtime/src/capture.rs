@@ -89,7 +89,8 @@ pub(crate) enum Capture {
 /// `neo:screenshot`: Playwright's `Locator.screenshot`, which its client serves as a strict
 /// `waitForSelector` for an attached element and then `ElementHandle.screenshot` on it. One call
 /// carries the selector beside `ElementHandle.screenshot`'s params and Neo's `path`
-/// ([`ElementScreenshotParams`]). Keep this shape in sync with neo-sdk's `NeoFrameCommands`.
+/// ([`ElementScreenshotParams`]). Keep this shape in sync with neo-quickjs-injected's
+/// `NeoFrameCommands`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NeoScreenshotParams {
@@ -100,7 +101,7 @@ pub(crate) struct NeoScreenshotParams {
 
 /// `ElementHandle.screenshot`'s params (`spec/playwright/handles.yml`) and Neo's `path`: what
 /// `elementHandle.screenshot` sends, and what `neo:screenshot` carries beside its selector. Keep
-/// this shape in sync with neo-sdk's `ElementScreenshotParams`.
+/// this shape in sync with neo-quickjs-injected's `ElementScreenshotParams`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ElementScreenshotParams {

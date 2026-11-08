@@ -1430,7 +1430,7 @@ impl Reader {
 /// The next event of the run's sessions. In debug builds, `NEO_TEST_BINDING_POLL_PAUSE_MS` makes
 /// a look that finds none hold the reader's thread that long (`test_hooks::receive_paused`), as a
 /// preemption right after that look would: the events and the reply after them all arrive
-/// before the reader looks again (`neo-sdk/tests/parity/binding-order.test.mjs`).
+/// before the reader looks again (`neo-quickjs-injected/tests/parity/binding-order.test.mjs`).
 async fn receive(events: &mut broadcast::Receiver<CdpEvent>) -> Result<CdpEvent, RecvError> {
     #[cfg(debug_assertions)]
     if let Some(pause) = test_hooks::poll_pause() {
@@ -1443,7 +1443,7 @@ async fn receive(events: &mut broadcast::Receiver<CdpEvent>) -> Result<CdpEvent,
 /// comma-separated milliseconds, the process's n-th binding call waits the n-th of them (cycling)
 /// once it is read and before its event goes. A parity test thereby makes a call that would reach
 /// the script after the reply it preceded, or after a later call, do so every time
-/// (`neo-sdk/tests/parity/binding-order.test.mjs`). Release builds have no such wait.
+/// (`neo-quickjs-injected/tests/parity/binding-order.test.mjs`). Release builds have no such wait.
 #[cfg(debug_assertions)]
 mod test_hooks {
     use std::future::{self, Future};

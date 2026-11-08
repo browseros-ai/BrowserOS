@@ -7,13 +7,13 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
+| neo-quickjs-injected/src/locator.ts | (file) | `server/frames.ts` `Frame.ariaSnapshot` | Absent: the fixture serves no snapshots. |
 | neo-runtime/src/click.rs | `MAX_CLICK_COUNT` | `server/frames.ts` `Frame.click` | Playwright has no cap; a script's `clickCount: 1e9` must not take the server's memory with it. |
 | neo-runtime/src/click.rs | `click` | `server/frames.ts` `Frame.click` | The fixture tries once and never retries. |
-| neo-sdk/src/locator.ts | (file) | `server/frames.ts` `Frame.ariaSnapshot` | Absent: the fixture serves no snapshots. |
 
 ## Unexplained: owner questions (2)
 
 | File | Item | What is unknown |
 | --- | --- | --- |
+| neo-quickjs-injected/src/locator.ts | (file) | why the fixture's locator keeps no timeout of its own. |
 | neo-runtime/src/click.rs | `MEMORY_LIMIT_BYTES` | why the realm gets 64 MiB; no measurement is recorded. |
-| neo-sdk/src/locator.ts | (file) | why the fixture's locator keeps no timeout of its own. |

@@ -1,8 +1,8 @@
 //! Every request of a page on a real BrowserOS neo (`src/network.rs`, `src/network_events.rs`,
-//! neo-sdk `network.ts`): a busy page's requests each reach the run's listeners exactly once, as
-//! one object per request; the network log keeps a bounded number of requests, and an object
-//! past that bound answers Neo's error naming it; and a run that listened leaves nothing behind
-//! for the next run on the same tab: its log, its events and its Network domain die with its
+//! neo-quickjs-injected `network.ts`): a busy page's requests each reach the run's listeners
+//! exactly once, as one object per request; the network log keeps a bounded number of requests, and
+//! an object past that bound answers Neo's error naming it; and a run that listened leaves nothing
+//! behind for the next run on the same tab: its log, its events and its Network domain die with its
 //! session.
 
 #[expect(

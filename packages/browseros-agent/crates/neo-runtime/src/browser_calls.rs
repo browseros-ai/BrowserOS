@@ -52,11 +52,11 @@ use crate::tabs::{self, CreatedPage, PageEntry, Tabs};
 pub(crate) const BROWSER_GUID: &str = "browser@default";
 
 /// Neo: Playwright's device descriptors at the pin, vendored unchanged as
-/// `neo-sdk/vendor/playwright/isomorphic/deviceDescriptorsSource.json` (its VENDOR.md hashes them)
-/// and handed to the realm when a script first reads `playwright.devices`.
+/// `neo-quickjs-injected/vendor/playwright/isomorphic/deviceDescriptorsSource.json` (its VENDOR.md
+/// hashes them) and handed to the realm when a script first reads `playwright.devices`.
 pub(crate) const DEVICE_DESCRIPTORS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-sdk/vendor/playwright/isomorphic/deviceDescriptorsSource.json"
+    "/../neo-quickjs-injected/vendor/playwright/isomorphic/deviceDescriptorsSource.json"
 ));
 
 /// Neo: the guid prefix of a context the run created, `context@<browserContextId>`.

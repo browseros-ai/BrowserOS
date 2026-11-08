@@ -5,7 +5,7 @@
 //! ```text
 //! Runtime::run                           runtime.rs: starting tab, run lifetime, outcome
 //!   ├─ Tabs::open                        tabs.rs: context scope, ordered page registry
-//!   └─ realm::run                        realm.rs: fresh QuickJS and embedded neo-sdk
+//!   └─ realm::run                        realm.rs: fresh QuickJS and embedded neo-quickjs-injected
 //!        └─ __neo_runtime                bridge.rs: JS/Rust boundary
 //!             ├─ get → Tabs              live pages, URL, initializer, opener and closed state
 //!             ├─ subscribe → EventHub    events.rs: the run's event queue; producers:

@@ -1,6 +1,6 @@
 //! Playwright's `urlMatches` (`packages/isomorphic/urlMatch.ts` at 26137face) for the `url` a script
-//! passes to `waitForURL`. neo-sdk sends it as Playwright's own `SerializedURLMatch` without
-//! `urlPattern` (the realm has no `URLPattern`): a glob, where `''` matches every URL, or a
+//! passes to `waitForURL`. neo-quickjs-injected sends it as Playwright's own `SerializedURLMatch`
+//! without `urlPattern` (the realm has no `URLPattern`): a glob, where `''` matches every URL, or a
 //! `RegExp`'s `source` and `flags`. Neo has no `baseURL` option, so a glob resolves against none.
 //!
 //! A glob becomes a regex source here, by a port of Playwright's `resolveGlobBase` and
@@ -64,8 +64,8 @@ pub(crate) struct SerializedUrlMatch {
     pub(crate) regex_flags: Option<String>,
 }
 
-/// A WHATWG URL's parts, which the realm's `URL` (neo-sdk `url.ts`) keeps: the script's global
-/// `URL` and the one a URL predicate receives (Playwright's `urlMatches` calls
+/// A WHATWG URL's parts, which the realm's `URL` (neo-quickjs-injected `url.ts`) keeps: the
+/// script's global `URL` and the one a URL predicate receives (Playwright's `urlMatches` calls
 /// `match(new URL(urlString))`). QuickJS has no URL parser, so every parse and every setter of
 /// that `URL` comes here.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]

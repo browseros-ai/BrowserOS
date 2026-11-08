@@ -1,6 +1,6 @@
-//! Playwright's selectors, built inside QuickJS by the committed `neo-sdk/dist/sdk.js`. Bun
-//! cross-checked the base goldens against playwright-core 1.64.1; the frame goldens come from
-//! the real pinned 26137face build. This checks the engine that
+//! Playwright's selectors, built inside QuickJS by the committed
+//! `neo-quickjs-injected/dist/sdk.js`. Bun cross-checked the base goldens against playwright-core
+//! 1.64.1; the frame goldens come from the real pinned 26137face build. This checks the engine that
 //! actually runs agent scripts, where `RegExp` flags and `source` escaping could differ from
 //! V8's. Building a locator does no I/O, so the fake browser in `support/fake_browser.rs` only
 //! has to let the run start, and the test checks that nothing else reached it.
@@ -45,7 +45,7 @@ enum GoldenKind {
 /// build dir reads this checkout's goldens.
 fn goldens() -> Result<Vec<Golden>, Box<dyn Error>> {
     let crate_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").ok_or("cargo sets it")?);
-    let directory = crate_dir.join("../neo-sdk/tests/goldens");
+    let directory = crate_dir.join("../neo-quickjs-injected/tests/goldens");
     let mut goldens: Vec<Golden> = serde_json::from_str(&fs::read_to_string(
         directory.join("selector-goldens.json"),
     )?)?;

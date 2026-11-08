@@ -1,6 +1,6 @@
-//! `__neo_runtime`, the only door from a run's JS into Rust. neo-sdk's `runtime-bridge.ts`
-//! calls `get` for every synchronous Playwright getter and `call` for every browser call, and
-//! the realm's `console` calls `log`.
+//! `__neo_runtime`, the only door from a run's JS into Rust. neo-quickjs-injected's
+//! `runtime-bridge.ts` calls `get` for every synchronous Playwright getter and `call` for every
+//! browser call, and the realm's `console` calls `log`.
 //!
 //! ```text
 //!  page.url()                                    JS, on the run's thread
@@ -813,7 +813,8 @@ impl Getters {
 
 /// `length` bytes from the thread's CSPRNG (rand's `ThreadRng`: `ChaCha`, seeded and reseeded from
 /// the OS), as standard base64, for the realm's `crypto.getRandomValues` and `randomUUID`.
-/// neo-sdk refuses a longer request with the Web Crypto `QuotaExceededError` before it asks.
+/// neo-quickjs-injected refuses a longer request with the Web Crypto `QuotaExceededError` before it
+/// asks.
 fn random_values(length: usize) -> Result<Value, GetError> {
     if length > MAX_RANDOM_BYTES {
         return Err(GetError::BadRequest(format!(
