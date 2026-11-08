@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (135)
+## Deviations (132)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -71,7 +71,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/page.rs | `apply_frame` | `server/chromium/chromiumSwitches.ts` `chromiumSwitches` | Playwright's Chromium never restores a cached document, and one it met would never fire `load`, so its history navigation would time out. Neo runs in the user's browser, where Chromium caches only a document that finished loading and restores it without lifecycle events, reporting `frameStoppedLoading` before this commit (measured on BrowserOS neo): it counts as loaded at once. |
 | neo-runtime/src/page.rs | `interception` | `server/chromium/crNetworkManager.ts` `CRNetworkManager._onAuthRequired` | Neo pauses requests without taking their auth challenges (`handleAuthRequests: false`): with no credentials Playwright answers `Default`, which is Chromium's own handling. |
 | neo-runtime/src/page_events.rs | `MAX_KEPT_ARGS` | `client/consoleMessage.ts` `ConsoleMessage.args` | Playwright's server makes every argument a handle as the message arrives. Neo keeps the arguments of a page's last this-many listened messages and makes their handles when the script first reads them; an older message's `args()` throws an Error naming this cap. |
-| neo-runtime/src/realm.rs | `RACE_UNCAUGHT` | `client/eventEmitter.ts` `EventEmitter._handleListenerError` | A listener's throw, or its rejection with no `error` listener, is an uncaught exception in Node, which exits. QuickJS has no such exit, so neo-sdk reports the first one on its `uncaught` promise, and the run ends with that error at once instead of running on. The realm's own `abort` listeners report theirs the same way (`abort::REALM_GLOBALS`). |
+| neo-runtime/src/realm.rs | `RACE_UNCAUGHT` | `client/eventEmitter.ts` `EventEmitter._handleListenerError` | A listener's throw, or its rejection with no `error` listener, is an uncaught exception in Node, which exits. QuickJS has no such exit, so neo-sdk reports the first one on its `uncaught` promise, and the run ends with that error at once instead of running on. The realm's own `abort` listeners and timer callbacks report theirs the same way (`abort::REALM_GLOBALS`, `HOST_GLOBALS`). |
 | neo-runtime/src/routes.rs | `FETCHED_CONTINUE` | `client/network.ts` `Route.continue` | After a fetch the request has its response already: a continue delivers that response, and Neo refuses overrides it can no longer send. |
 | neo-runtime/src/routes.rs | `FETCH_ONCE` | `client/network.ts` `Route.fetch` | Neo's fetch sends the paused request itself, which goes out once: a second fetch of the same route is refused. |
 | neo-runtime/src/routes.rs | `INVALID_URL` | `server/network.ts` `Route.continue` | Playwright's `new URL` throws a `TypeError`; Neo parses with Rust's WHATWG parser and answers that error's message as a plain error. |
@@ -139,9 +139,6 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-sdk/src/route.ts | `Route.fetch` | `client/network.ts` `Route.fetch` | The browser sends the routed request itself, once (neo-runtime `routes.rs` `fetch`); `maxRetries` is checked as Playwright's and leaves retries to the browser. Its `postData` is typed as Playwright's API request types `data` (`request-data.ts`), and the request goes with the content type Playwright's server would give that body; with no `postData`, the request's own body is typed as bytes. Only what changes goes to the browser: a body the script gave, and the headers once they change. |
 | neo-sdk/src/screenshot.ts | (file) | `client/page.ts` `Page.screenshot` | A Neo script has no file system: `path` travels with the call and neo-runtime writes the bytes into the run's artifact directory (`artifacts.rs`), relative paths only. A run without one refuses `path` with an Error naming the option. |
 | neo-sdk/src/set-input-files.ts | `FILE_UPLOAD_SIZE_LIMIT` | `client/elementHandle.ts` `convertInputFiles` | Playwright sends buffers up to this limit; Neo's dispatcher holds at most 8 MiB of a run's requests in flight (neo-runtime `dispatch.rs` `MAX_REQUEST_BYTES_IN_FLIGHT`), so buffers past about 6 MiB (base64 grows them by a third) are refused with its Error naming that bound; a path in the artifact directory takes any size. |
-| neo-sdk/src/url.ts | (file) | `isomorphic/urlMatch.ts` `urlMatches` | Playwright passes a URL predicate a WHATWG `URL`. The realm has no `URL`, so Neo passes this read-only one, built from Rust's WHATWG parser: every getter and `toString`/`toJSON` read as `URL`'s do, and `searchParams` reads as `URLSearchParams`; setters and `searchParams`' mutators throw, and `instanceof URL` cannot hold. |
-| neo-sdk/src/url.ts | `READ_ONLY` | `isomorphic/urlMatch.ts` `urlMatches` | the error a write to Neo's read-only `URL` throws, where Playwright's predicate gets a writable WHATWG `URL`. |
-| neo-sdk/src/vendor-shims.ts | `URL` | `isomorphic/utilityScriptSerializers.ts` `parseEvaluationResultValue` | QuickJS has no WHATWG URL, so a `URL` the page returns (and a `URL` an agent passes back) is this object: its `href`, `toString()` and `toJSON()` as Playwright's client gives them, and no parsed parts (`host`, `pathname`, `searchParams`). |
 
 ## Unexplained: owner questions (0)
 

@@ -30,6 +30,7 @@ use rquickjs::{
 };
 use serde::Deserialize;
 use url::Url;
+use url::quirks;
 
 use crate::progress::PlaywrightError;
 
@@ -63,8 +64,10 @@ pub(crate) struct SerializedUrlMatch {
     pub(crate) regex_flags: Option<String>,
 }
 
-/// A WHATWG URL's parts, which the realm's `URL` (neo-sdk `url.ts`) serves to a URL predicate:
-/// Playwright's `urlMatches` calls `match(new URL(urlString))`, and the realm has no `URL`.
+/// A WHATWG URL's parts, which the realm's `URL` (neo-sdk `url.ts`) keeps: the script's global
+/// `URL` and the one a URL predicate receives (Playwright's `urlMatches` calls
+/// `match(new URL(urlString))`). QuickJS has no URL parser, so every parse and every setter of
+/// that `URL` comes here.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ParsedUrl {
@@ -83,44 +86,84 @@ pub(crate) struct ParsedUrl {
     pub(crate) search_params: Vec<(String, String)>,
 }
 
+impl ParsedUrl {
+    /// `url`'s parts as the WHATWG `URL` getters read them: the `url` crate's `quirks` module is
+    /// that API, getter for getter.
+    fn of(url: &Url) -> Self {
+        Self {
+            href: quirks::href(url).to_string(),
+            origin: quirks::origin(url),
+            protocol: quirks::protocol(url).to_string(),
+            username: quirks::username(url).to_string(),
+            password: quirks::password(url).to_string(),
+            host: quirks::host(url).to_string(),
+            hostname: quirks::hostname(url).to_string(),
+            port: quirks::port(url).to_string(),
+            pathname: quirks::pathname(url).to_string(),
+            search: quirks::search(url).to_string(),
+            hash: quirks::hash(url).to_string(),
+            search_params: url.query_pairs().into_owned().collect(),
+        }
+    }
+}
+
+/// A WHATWG `URL` setter, by the name of the attribute it sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum UrlPart {
+    Href,
+    Protocol,
+    Username,
+    Password,
+    Host,
+    Hostname,
+    Port,
+    Pathname,
+    Search,
+    Hash,
+}
+
 /// `new URL(url)`, or `None` where the WHATWG parser throws, which makes `urlMatches` answer
 /// `false` without calling the predicate.
 ///
 /// Playwright: `isomorphic/urlMatch.ts` `parseURL`: `return new URL(url);`
 pub(crate) fn parse_url(url: &str) -> Option<ParsedUrl> {
-    let parsed = Url::parse(url).ok()?;
-    let hostname = parsed.host_str().unwrap_or_default().to_string();
-    let port = parsed
-        .port()
-        .map(|port| port.to_string())
-        .unwrap_or_default();
-    let host = if port.is_empty() {
-        hostname.clone()
-    } else {
-        format!("{hostname}:{port}")
+    parse_url_against(url, None)
+}
+
+/// `new URL(url, base)`, or `None` where it throws a `TypeError`: `base` does not parse, or `url`
+/// does not parse against it. The URL Standard parses `base` first, on its own, so a relative
+/// `base` fails even when `url` is absolute.
+pub(crate) fn parse_url_against(url: &str, base: Option<&str>) -> Option<ParsedUrl> {
+    let base = match base {
+        Some(base) => Some(Url::parse(base).ok()?),
+        None => None,
     };
-    Some(ParsedUrl {
-        href: parsed.as_str().to_string(),
-        origin: parsed.origin().ascii_serialization(),
-        protocol: format!("{}:", parsed.scheme()),
-        username: parsed.username().to_string(),
-        password: parsed.password().unwrap_or_default().to_string(),
-        host,
-        hostname,
-        port,
-        pathname: parsed.path().to_string(),
-        search: parsed
-            .query()
-            .filter(|query| !query.is_empty())
-            .map(|query| format!("?{query}"))
-            .unwrap_or_default(),
-        hash: parsed
-            .fragment()
-            .filter(|fragment| !fragment.is_empty())
-            .map(|fragment| format!("#{fragment}"))
-            .unwrap_or_default(),
-        search_params: parsed.query_pairs().into_owned().collect(),
-    })
+    let parsed = Url::options().base_url(base.as_ref()).parse(url).ok()?;
+    Some(ParsedUrl::of(&parsed))
+}
+
+/// The URL `href` after its `part` setter runs with `value`, or `None` where that throws, which
+/// only the `href` setter does (with a `TypeError`, for a `value` that does not parse). Every
+/// other setter ignores a `value` it cannot use and leaves the URL as it was, as the URL Standard
+/// says; `quirks`' `Err(())` is that case. `None` too when `href` itself does not parse, which a
+/// `URL`'s own `href` always does.
+pub(crate) fn set_url_part(href: &str, part: UrlPart, value: &str) -> Option<ParsedUrl> {
+    let mut url = Url::parse(href).ok()?;
+    // A setter that refuses `value` (`Err(())`) has changed nothing: the URL as it is answers.
+    match part {
+        UrlPart::Href => quirks::set_href(&mut url, value).ok()?,
+        UrlPart::Protocol => quirks::set_protocol(&mut url, value).unwrap_or_default(),
+        UrlPart::Username => quirks::set_username(&mut url, value).unwrap_or_default(),
+        UrlPart::Password => quirks::set_password(&mut url, value).unwrap_or_default(),
+        UrlPart::Host => quirks::set_host(&mut url, value).unwrap_or_default(),
+        UrlPart::Hostname => quirks::set_hostname(&mut url, value).unwrap_or_default(),
+        UrlPart::Port => quirks::set_port(&mut url, value).unwrap_or_default(),
+        UrlPart::Pathname => quirks::set_pathname(&mut url, value),
+        UrlPart::Search => quirks::set_search(&mut url, value),
+        UrlPart::Hash => quirks::set_hash(&mut url, value),
+    }
+    Some(ParsedUrl::of(&url))
 }
 
 /// One compiled `waitForURL` match. `Send + Sync`: a wait holds it across awaits.
@@ -521,7 +564,8 @@ mod tests {
     use serde::Deserialize;
 
     use super::{
-        SerializedUrlMatch, TEST_BUDGET, UrlMatcher, parse_url, resolve_glob_to_regex_pattern,
+        SerializedUrlMatch, TEST_BUDGET, UrlMatcher, UrlPart, parse_url, parse_url_against,
+        resolve_glob_to_regex_pattern, set_url_part,
     };
     use crate::progress::ErrorName;
 
@@ -571,6 +615,73 @@ mod tests {
             Some("null".to_string())
         );
         assert_eq!(parse_url("not a url"), None);
+    }
+
+    #[test]
+    fn tests_that_a_relative_url_resolves_against_its_base() {
+        let href = |url: &str, base: &str| parse_url_against(url, Some(base)).map(|url| url.href);
+        assert_eq!(
+            href("/x?a=1", "https://h.test/p/q"),
+            Some("https://h.test/x?a=1".to_string())
+        );
+        assert_eq!(
+            href("../up", "https://h.test/a/b/c"),
+            Some("https://h.test/a/up".to_string())
+        );
+        assert_eq!(
+            href("https://other.test/", "https://h.test/"),
+            Some("https://other.test/".to_string())
+        );
+        // The base parses on its own first, so a relative base fails even for an absolute URL.
+        assert_eq!(href("https://other.test/", "/relative"), None);
+        assert_eq!(href("/x", "not a url"), None);
+        assert_eq!(parse_url_against("/x", None), None);
+    }
+
+    #[test]
+    fn tests_that_url_setters_follow_the_url_standard() {
+        let start = "https://h.test/p?a=1#f";
+        let set = |part, value: &str| set_url_part(start, part, value).map(|url| url.href);
+        let cases = [
+            (UrlPart::Href, "http://x.test/", Some("http://x.test/")),
+            (UrlPart::Href, "not a url", None),
+            (UrlPart::Protocol, "http:", Some("http://h.test/p?a=1#f")),
+            // A special URL cannot become a non-special one: the setter ignores the value.
+            (UrlPart::Protocol, "foo", Some(start)),
+            (UrlPart::Username, "u", Some("https://u@h.test/p?a=1#f")),
+            (
+                UrlPart::Host,
+                "o.test:8080",
+                Some("https://o.test:8080/p?a=1#f"),
+            ),
+            (UrlPart::Hostname, "o.test", Some("https://o.test/p?a=1#f")),
+            (UrlPart::Port, "443", Some(start)),
+            (UrlPart::Port, "abc", Some(start)),
+            (
+                UrlPart::Pathname,
+                "/a b",
+                Some("https://h.test/a%20b?a=1#f"),
+            ),
+            (
+                UrlPart::Search,
+                "?b=2 3",
+                Some("https://h.test/p?b=2%203#f"),
+            ),
+            (UrlPart::Search, "", Some("https://h.test/p#f")),
+            (UrlPart::Hash, "", Some("https://h.test/p?a=1")),
+        ];
+        for (part, value, expected) in cases {
+            assert_eq!(
+                set(part, value),
+                expected.map(str::to_string),
+                "{part:?} = {value:?}"
+            );
+        }
+        let searched = set_url_part(start, UrlPart::Search, "x=1&y=a+b").expect("a URL");
+        assert_eq!(
+            searched.search_params,
+            [("x", "1"), ("y", "a b")].map(|(k, v)| (k.to_string(), v.to_string()))
+        );
     }
 
     /// `tests/fixtures/url-match-goldens.json`, written by `tests/url-match-goldens.mjs`.

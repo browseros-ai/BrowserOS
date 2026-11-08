@@ -3,41 +3,19 @@
  * and QuickJS lacks: `URL`, `Buffer`, `atob` and `btoa`. `build.ts` binds them inside those two
  * modules only (`vendor/playwright/protocol/src/serializers.ts` and
  * `vendor/playwright/isomorphic/utilityScriptSerializers.ts`), by an import it prepends while
- * bundling. Nothing here is a global, and the vendored files stay byte-identical.
+ * bundling. The vendored files stay byte-identical.
  *
- * Each is the least that the serializers' own calls need: `new URL(href)` / `instanceof URL`,
- * `Buffer.from(arrayBuffer, byteOffset, length)`, and binary-string base64.
+ * `URL` is the realm's own WHATWG `URL` (`url.ts`), the class a script finds as its global `URL`:
+ * a `URL` the page returns is a full one, and a script's `URL` passed to `evaluate` is seen as
+ * one (`instanceof URL`). The rest is the least the serializers' own calls need:
+ * `Buffer.from(arrayBuffer, byteOffset, length)` and binary-string base64.
  */
+
+export { URL } from './url'
 
 /** Neo: base64's 64 digits (RFC 4648 section 4), for the serializers' typed-array transport. */
 const DIGITS =
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-
-/**
- * Deviation: `isomorphic/utilityScriptSerializers.ts` `parseEvaluationResultValue`: `return new URL(value.u);`
- * QuickJS has no WHATWG URL, so a `URL` the page returns (and a `URL` an agent passes back) is
- * this object: its `href`, `toString()` and `toJSON()` as Playwright's client gives them, and no
- * parsed parts (`host`, `pathname`, `searchParams`).
- */
-export class URL {
-  readonly href: string
-
-  constructor(href: string) {
-    this.href = String(href)
-  }
-
-  toString(): string {
-    return this.href
-  }
-
-  toJSON(): string {
-    return this.href
-  }
-
-  get [Symbol.toStringTag](): string {
-    return 'URL'
-  }
-}
 
 /** Neo: the one `Buffer` call of `protocol/src/serializers.ts`, a view over a typed array's
  * bytes, which `parseSerializedValue` reads straight back in the same realm. */
