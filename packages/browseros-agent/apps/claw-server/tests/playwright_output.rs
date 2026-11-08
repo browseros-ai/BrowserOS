@@ -209,14 +209,33 @@ async fn stop_server(client: &Client, base: &str, process: &mut Process) -> anyh
     process.wait().await
 }
 
+/// The default reply budget: 100 000 tokens of 4 UTF-8 bytes.
+const DEFAULT_BYTES: usize = 400_000;
+/// The old fixed 24 000-byte budget, named on calls whose case must still truncate.
+const SMALL_TOKENS: usize = 6_000;
+const SMALL_BYTES: usize = SMALL_TOKENS * 4;
+
 fn bounded(result: &Value) -> &Value {
-    bounded_by(result, 24_000)
+    bounded_by(result, DEFAULT_BYTES)
+}
+
+/// The byte cap a continuation's `next` asks for: its `limit`, else its budget's bytes.
+fn window_cap(next: &Value) -> usize {
+    next["limit"].as_u64().map_or_else(
+        || {
+            next["maxResponseTokens"]
+                .as_u64()
+                .map_or(DEFAULT_BYTES, |tokens| tokens as usize * 4)
+        },
+        |limit| limit as usize,
+    )
 }
 
 fn bounded_by(result: &Value, cap: usize) -> &Value {
     let text = result["content"][0]["text"]
         .as_str()
         .expect("expected test value");
+    // Tokens are estimated as ceil(bytes / 4): a reply fits `n` tokens iff it fits `4 n` bytes.
     assert!(
         text.len() <= cap,
         "model-visible JSON: {} bytes",
@@ -337,10 +356,7 @@ impl Harness {
             windows += 1;
             anyhow::ensure!(windows < 100, "retrieval must make progress");
             let window = self.run(1_000 + windows, next.clone()).await?;
-            let cap = next["limit"]
-                .as_u64()
-                .map_or(24_000, |limit| limit as usize);
-            let window = bounded_by(&window, cap);
+            let window = bounded_by(&window, window_cap(&next));
             anyhow::ensure!(window["pages"] == json!([]), "retrieval touched pages");
             anyhow::ensure!(
                 window["truncated"]["end"].as_u64() > next["offset"].as_u64(),
@@ -388,9 +404,9 @@ async fn tests_that_scoped_snapshots_and_bounded_results_work_through_mcp() -> a
     let page = report["pages"][0]["id"]
         .as_str()
         .expect("expected test value");
-    let full = run(client, base, 2, json!({"page":page,"code":
+    let full = run(client, base, 2, json!({"page":page,"maxResponseTokens":SMALL_TOKENS,"code":
         "const tree = await page.ariaSnapshot({mode:'ai'}); if (tree.length < 100000) throw new Error('fixture too small'); let hash=0; for(let i=0;i<tree.length;i++) hash=(Math.imul(hash,31)+tree.charCodeAt(i))>>>0; console.log('hash:'+hash); console.log('pages:'+(await context.pages()).length); return tree;"})).await?;
-    let report = bounded(&full);
+    let report = bounded_by(&full, SMALL_BYTES);
     assert_eq!(report["status"], "ok");
     assert_eq!(report["pages"][0]["id"], page);
     assert!(
@@ -411,7 +427,7 @@ async fn tests_that_scoped_snapshots_and_bounded_results_work_through_mcp() -> a
         windows += 1;
         assert!(windows < 100, "retrieval must make progress");
         let window = run(client, base, 10 + windows, next.clone()).await?;
-        let window = bounded(&window);
+        let window = bounded_by(&window, window_cap(&next));
         assert!(
             window["pages"]
                 .as_array()
@@ -499,9 +515,9 @@ async fn tests_that_scoped_snapshots_and_bounded_results_work_through_mcp() -> a
             .is_empty()
     );
 
-    let failed = run(client, base, 170, json!({"timeout":5000,"code":format!(
+    let failed = run(client, base, 170, json!({"timeout":5000,"maxResponseTokens":SMALL_TOKENS,"code":format!(
         "console.log('large log\\n'.repeat(20000)); await page.goto({}, {{timeout:200}});", serde_json::to_string(&format!("{url}never"))?)})).await?;
-    let failed_report = bounded(&failed);
+    let failed_report = bounded_by(&failed, SMALL_BYTES);
     assert_eq!(failed["isError"], true);
     assert_eq!(failed_report["status"], "error");
     assert_eq!(failed_report["error"]["name"], "TimeoutError");
@@ -531,10 +547,10 @@ async fn tests_that_object_and_array_returns_keep_their_type_through_mcp() -> an
     };
     // The REAL regression (topwork-7, opendining-2): an object around a big snapshot showed
     // only `{\n  "n": …,\n` of the 24 KB budget and hid the snapshot.
-    let reply = harness.run(1, json!({"code":format!(
+    let reply = harness.run(1, json!({"maxResponseTokens":SMALL_TOKENS,"code":format!(
         "await page.goto({}); const snap = await page.locator('body').first().ariaSnapshot({{mode:'ai'}}); {HASH_JS} return {{snap, n: snap.length}};",
         serde_json::to_string(&harness.url)?)})).await?;
-    let report = bounded(&reply);
+    let report = bounded_by(&reply, SMALL_BYTES);
     assert_eq!(report["status"], "ok");
     let n = report["value"]["n"]
         .as_u64()
@@ -572,10 +588,10 @@ async fn tests_that_object_and_array_returns_keep_their_type_through_mcp() -> an
     let reply = harness
         .run(
             2,
-            json!({"page":page,"code":"return await page.locator('article button').allInnerTexts();"}),
+            json!({"page":page,"maxResponseTokens":SMALL_TOKENS,"code":"return await page.locator('article button').allInnerTexts();"}),
         )
         .await?;
-    let report = bounded(&reply);
+    let report = bounded_by(&reply, SMALL_BYTES);
     let shown = report["value"].as_array().expect("array keeps its type");
     let expected = (0..3500)
         .map(|i| format!("Buy product {i:04} 漢字 🦀"))
@@ -667,17 +683,124 @@ async fn tests_that_large_results_are_saved_to_files_and_read_in_larger_windows_
         assert_eq!(reply["error"]["code"], -32602);
     }
     let reply = harness
-        .run(4, json!({"code":"return 'abc'.repeat(30000);"}))
+        .run(
+            4,
+            json!({"code":"return 'abc'.repeat(30000);","maxResponseTokens":SMALL_TOKENS}),
+        )
         .await?;
-    let report = bounded(&reply);
+    let report = bounded_by(&reply, SMALL_BYTES);
     let file = report["truncated"]["value"]["file"]
         .as_str()
         .expect("truncated value links its file");
     assert_eq!(fs::read_to_string(file)?, "abc".repeat(30_000));
     eprintln!(
-        "PASS MCP bulk: {total}-byte value saved to {}; {windows} windows at limit 100000 (24000-byte windows need {})",
+        "PASS MCP bulk: {total}-byte value saved to {}; first reply shows {} bytes at the default budget, then {windows} windows at limit 100000",
         file,
-        total.div_ceil(24_000)
+        prefix.len()
+    );
+    harness.stop().await
+}
+
+#[expect(clippy::print_stderr, reason = "Report verification measurements")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tests_that_the_reply_budget_is_counted_in_tokens_and_set_per_call_through_mcp()
+-> anyhow::Result<()> {
+    let Some(harness) = Harness::start().await? else {
+        return Ok(());
+    };
+    let tools = rpc(&harness.client, &harness.base, 1, "tools/list", json!({})).await?;
+    let schema = &tools["result"]["tools"][0]["inputSchema"]["properties"]["maxResponseTokens"];
+    assert_eq!(
+        (&schema["default"], &schema["minimum"], &schema["maximum"]),
+        (&json!(100_000), &json!(1_000), &json!(200_000)),
+        "{tools}"
+    );
+
+    // ~170 KB of multibyte lines, seven times the old 24 000-byte budget: whole by default.
+    const LINES: &str = "return 'line 漢字 🦀 abcdefghij\\n'.repeat(6000);";
+    let expected = "line 漢字 🦀 abcdefghij\n".repeat(6000);
+    let reply = harness.run(2, json!({"code":LINES})).await?;
+    let report = bounded(&reply);
+    assert_eq!(report["status"], "ok");
+    assert!(report.get("truncated").is_none(), "{}", report["truncated"]);
+    assert_eq!(report["value"], expected);
+    let whole = reply["content"][0]["text"]
+        .as_str()
+        .expect("expected test value")
+        .len();
+    assert!(whole > 150_000, "reply is {whole} bytes");
+
+    // 1000 tokens cut it to 4000 bytes; every next repeats the budget and reads the rest exactly.
+    let reply = harness
+        .run(3, json!({"code":LINES,"maxResponseTokens":1_000}))
+        .await?;
+    let report = bounded_by(&reply, 4_000);
+    let next = report["truncated"]["value"]["next"].clone();
+    assert_eq!(next["maxResponseTokens"], 1_000, "{report}");
+    let prefix = report["value"].as_str().expect("string prefix");
+    let (text, windows) = harness.follow(next.clone(), prefix.to_string()).await?;
+    assert_eq!(text, expected);
+
+    // 600 KB: cut near 400 000 bytes by default, whole at 200 000 tokens.
+    const WIDE: &str = "return 'x'.repeat(600000);";
+    let reply = harness.run(4, json!({"code":WIDE})).await?;
+    let report = bounded(&reply);
+    let shown = report["value"].as_str().expect("string prefix").len();
+    assert!((390_000..400_000).contains(&shown), "shows {shown} bytes");
+    assert!(
+        report["truncated"]["value"]["next"]
+            .get("maxResponseTokens")
+            .is_none()
+    );
+    let reply = harness
+        .run(5, json!({"code":WIDE,"maxResponseTokens":200_000}))
+        .await?;
+    let report = bounded_by(&reply, 800_000);
+    assert!(report.get("truncated").is_none(), "{}", report["truncated"]);
+    assert_eq!(report["value"].as_str().map(str::len), Some(600_000));
+
+    // Out-of-range or non-integer budgets are refused on both forms, never clamped.
+    let id = next["result"].clone();
+    for bad in [
+        json!(999),
+        json!(200_001),
+        json!(0),
+        json!(-1),
+        json!(1.5),
+        json!("1000"),
+    ] {
+        for args in [
+            json!({"code":"return 1","maxResponseTokens":bad}),
+            json!({"result":id,"maxResponseTokens":bad}),
+        ] {
+            let reply = rpc(
+                &harness.client,
+                &harness.base,
+                6,
+                "tools/call",
+                json!({"name":"run","arguments":args}),
+            )
+            .await?;
+            assert_eq!(reply["error"]["code"], -32602, "{args}: {reply}");
+        }
+    }
+    // A limit wider than the budget is refused, naming both.
+    let reply = rpc(
+        &harness.client,
+        &harness.base,
+        7,
+        "tools/call",
+        json!({"name":"run","arguments":{"result":id,"maxResponseTokens":1_000,"limit":50_000}}),
+    )
+    .await?;
+    assert_eq!(reply["error"]["code"], -32602, "{reply}");
+    let message = reply["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("50000") && message.contains("4000"),
+        "{message}"
+    );
+    eprintln!(
+        "PASS MCP token budget: {whole}-byte reply whole by default; {windows} windows at maxResponseTokens 1000; 600000 bytes whole at 200000, {shown} shown by default; invalid budgets and a limit over the budget refused"
     );
     harness.stop().await
 }

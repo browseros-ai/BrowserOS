@@ -35,14 +35,15 @@ use tokio_util::task::TaskTracker;
 
 use super::{
     artifacts, binary,
-    output::{BUDGET, LIMIT_MAX, LIMIT_MIN, RESULTS_DIR, Store},
+    budget::{Budget, DEFAULT_TOKENS, LIMIT_MAX, LIMIT_MIN, MAX_TOKENS, MIN_TOKENS},
+    output::{RESULTS_DIR, Store},
 };
 
 const DEFAULT_TIMEOUT: u64 = 30_000;
 const MAX_TIMEOUT: u64 = 120_000;
 const INSTRUCTIONS: &str = concat!(
     "Write Playwright JavaScript. `page` and `context` are provided; await browser calls and return a value. Send an async function body without imports or a wrapper. Omit `page` to open a background tab; pass a returned `pages[].id` to continue in that tab. `timeout` is milliseconds (default 30000, maximum 120000).",
-    " Scope large reads with locator.ariaSnapshot({mode:'ai'}); responses use a 24000-byte JSON budget and truncated fields include next arguments for run({result,field,path,offset,limit}) to read the stored original without changing refs; limit raises a window to at most 100000 bytes, and truncated.<field>.file names a local file holding the field's full text. A large object or array keeps its type: small keys stay whole, and truncated.value.cut lists each shortened part by JSON Pointer path with its own next.",
+    " Scope large reads with locator.ariaSnapshot({mode:'ai'}). A response's JSON is held to maxResponseTokens (default 100000, 1000-200000; tokens = UTF-8 bytes / 4, rounded up), settable on any call; image blocks are outside it. If your client caps tool output lower, pass maxResponseTokens. Truncated fields include next arguments for run({result,field,path,offset,limit,maxResponseTokens}) to read the stored original without changing refs; next repeats the maxResponseTokens you set. limit (4000-100000 bytes, at most maxResponseTokens x 4) narrows a window, and truncated.<field>.file names a local file holding the field's full text. A large object or array keeps its type: small keys stay whole, and truncated.value.cut lists each shortened part by JSON Pointer path with its own next.",
     " A `path` option (screenshot, pdf, storageState, download.saveAs) writes into one artifact directory shared by all runs: relative paths resolve there, and an absolute path outside it is written there under its file name; the result's artifacts[] gives each file's absolute `file` path (and `requested` when redirected). setInputFiles reads from the same directory.",
     " A returned Buffer (return await page.screenshot()), alone or nested, is saved there in full and described in value as {type, mimeType, bytes, width, height, file}; a PNG or JPEG is also returned as an image content block, scaled to at most 1568 px and 1.15 megapixels."
 );
@@ -101,6 +102,9 @@ struct RequestArguments {
     path: Option<String>,
     offset: Option<usize>,
     limit: Option<usize>,
+    /// Raw, so `Budget::parse` words every refusal the same way.
+    #[serde(rename = "maxResponseTokens")]
+    max_response_tokens: Option<Value>,
 }
 
 impl PlaywrightService {
@@ -416,7 +420,8 @@ fn tool() -> Tool {
             "field":{"type":"string","enum":["value","logs","calls","error"],"default":"value","description":"Original field to retrieve. Strings are raw text; other values and logs/calls/error use pretty JSON. Follow truncated.next verbatim."},
             "path":{"type":"string","description":"JSON Pointer (RFC 6901) to one node inside the field, such as /snap or /items/0; offset then counts into that node's text (raw for a string, pretty JSON otherwise). Copy it from a truncated.value.cut[].next."},
             "offset":{"type":"integer","minimum":0,"default":0,"description":"UTF-8 byte offset into the original field text. Prefer the next arguments returned with truncation metadata."},
-            "limit":{"type":"integer","minimum":LIMIT_MIN,"maximum":LIMIT_MAX,"default":BUDGET,"description":"Window size in bytes of compact JSON. Later next arguments keep it. For the whole text at once, read truncated.<field>.file."}
+            "limit":{"type":"integer","minimum":LIMIT_MIN,"maximum":LIMIT_MAX,"description":"Narrows a retrieval window to this many bytes of compact JSON; at most maxResponseTokens x 4, which is the default window. Later next arguments keep it. For the whole text at once, read truncated.<field>.file."},
+            "maxResponseTokens":{"type":"integer","minimum":MIN_TOKENS,"maximum":MAX_TOKENS,"default":DEFAULT_TOKENS,"description":"Token budget of this response's JSON, estimated as UTF-8 bytes / 4 rounded up; larger results are truncated with next arguments. Works with code or result; next arguments repeat it. Lower it if your client caps tool output."}
         })),
     ])))
     .with_title("Run Playwright code")
@@ -487,6 +492,8 @@ impl ServerHandler for PlaywrightService {
         }
         let args = serde_json::from_value::<RequestArguments>(Value::Object(arguments))
             .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        let budget = Budget::parse(args.max_response_tokens.as_ref())
+            .map_err(|error| McpError::invalid_params(error, None))?;
         if let Some(id) = args.result {
             if args.code.is_some()
                 || args.page.is_some()
@@ -498,13 +505,10 @@ impl ServerHandler for PlaywrightService {
                     None,
                 ));
             }
-            let limit = args.limit.unwrap_or(BUDGET);
-            if !(LIMIT_MIN..=LIMIT_MAX).contains(&limit) {
-                return Err(McpError::invalid_params(
-                    format!("limit must be {LIMIT_MIN}..{LIMIT_MAX} bytes"),
-                    None,
-                ));
-            }
+            // Refuse a bad window before waiting for the store.
+            budget
+                .window(args.limit)
+                .map_err(|error| McpError::invalid_params(error, None))?;
             let result = self
                 .output
                 .lock()
@@ -514,7 +518,8 @@ impl ServerHandler for PlaywrightService {
                     args.field.as_deref().unwrap_or("value"),
                     args.path.as_deref(),
                     args.offset.unwrap_or(0),
-                    limit,
+                    budget,
+                    args.limit,
                 )
                 .map_err(|error| McpError::invalid_params(error, None))?;
             return Ok(if result["status"] == "ok" {
@@ -581,7 +586,7 @@ impl ServerHandler for PlaywrightService {
         let files = self.state_dir.join(RESULTS_DIR);
         // Links in the reply must stay valid if the client resolves them from another cwd.
         let files = std::path::absolute(&files).unwrap_or(files);
-        let (result, disk) = self.output.lock().await.limit(report, Some(&files));
+        let (result, disk) = self.output.lock().await.limit(report, Some(&files), budget);
         // An owned task, so a dropped request still deletes evicted files and finishes writes;
         // the reply waits for it to learn which file links survived.
         let result = self
@@ -601,5 +606,32 @@ impl ServerHandler for PlaywrightService {
                 .map(|image| ContentBlock::image(image.data, image.mime_type)),
         );
         Ok(result.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_TOKENS, INSTRUCTIONS, LIMIT_MAX, LIMIT_MIN, MAX_TOKENS, MIN_TOKENS};
+
+    /// The agent-facing skill, as `services/harness_skills.rs` embeds it.
+    const SKILL: &str = include_str!("../../../../../resources/skills/browserclaw/PLAYWRIGHT.md");
+
+    #[test]
+    fn tests_that_agent_docs_state_the_token_budget_and_its_override() {
+        for (name, doc) in [("INSTRUCTIONS", INSTRUCTIONS), ("PLAYWRIGHT.md", SKILL)] {
+            // Prose may write ranges with an en dash.
+            let doc = doc.replace('\u{2013}', "-");
+            for needle in [
+                "maxResponseTokens".to_string(),
+                format!("default {DEFAULT_TOKENS}"),
+                format!("{MIN_TOKENS}-{MAX_TOKENS}"),
+                format!("{LIMIT_MIN}-{LIMIT_MAX}"),
+            ] {
+                assert!(doc.contains(&needle), "{name} lacks {needle:?}");
+            }
+            for stale in ["24000", "24,000", "1000-100000"] {
+                assert!(!doc.contains(stale), "{name} still says {stale:?}");
+            }
+        }
     }
 }

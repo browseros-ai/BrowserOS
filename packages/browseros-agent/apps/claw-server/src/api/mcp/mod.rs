@@ -1,5 +1,6 @@
 mod artifacts;
 mod binary;
+mod budget;
 pub mod captcha;
 pub mod dispatch;
 pub mod distill;

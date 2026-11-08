@@ -12,15 +12,8 @@ use tokio::io::AsyncWriteExt;
 use serde::{Serialize, Serializer};
 use serde_json::{Map, Value, json};
 
-pub(super) const BUDGET: usize = 24_000;
-/// Largest continuation window (the med-fix-b decision asks for at least 100 000). Prose runs
-/// about 4 bytes per token, so this is near Claude Code's default 25 000-token MCP output cap;
-/// denser text (base64, minified code) costs more tokens per byte and may be cut by such a
-/// client, which then wants a smaller window or the saved `file`.
-pub(super) const LIMIT_MAX: usize = 100_000;
-/// Smallest continuation window: the ancestor `context` (`CONTEXT_BUDGET`) and window metadata
-/// must still leave room for text.
-pub(super) const LIMIT_MIN: usize = 4_000;
+use super::budget::{self, Budget};
+
 /// Directory under the host's state dir that holds saved originals.
 pub(super) const RESULTS_DIR: &str = "run-results";
 /// A slow disk may drop a reply's `file` links, never delay the reply past this.
@@ -30,6 +23,8 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// finished after their entry was evicted, without touching another live process's
 /// recent results (stdio servers can share one state dir).
 const STALE_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
+// Excerpt caps in bytes beside a truncated value, and the ancestor context of a retrieval
+// window. `budget::scaled` shrinks them for budgets under 24 000 bytes.
 const LOG_BUDGET: usize = 2_000;
 const CALL_BUDGET: usize = 4_000;
 const ERROR_BUDGET: usize = 4_000;
@@ -41,7 +36,8 @@ const STORE_BUDGET: usize = 64 * 1024 * 1024;
 /// record still splits its share among its fields.
 const MIN_SHARE: usize = 2_000;
 const MIN_SHARE_PARTS: usize = 8;
-/// Listed cuts cost about 150 bytes each, so the list stays near 3 KB of the budget.
+/// Listed cuts cost about 150 bytes each, so the list stays near 3 KB of a 24 000-byte budget
+/// (`budget::scaled` lists fewer under a smaller one).
 const MAX_CUTS: usize = 20;
 /// Metadata grows with the cuts it lists; each attempt shrinks the value by the overshoot.
 const FIT_ATTEMPTS: usize = 8;
@@ -158,11 +154,12 @@ async fn sweep(dir: &Path) {
     }
 }
 
-/// What truncation metadata links to: the stored result and, when the host saves them, the
-/// absolute directory of its files.
+/// What truncation metadata links to: the stored result, when the host saves them the
+/// absolute directory of its files, and the `maxResponseTokens` every `next` repeats.
 struct Link<'a> {
     id: &'a str,
     files: Option<&'a Path>,
+    tokens: Option<usize>,
 }
 
 impl Link<'_> {
@@ -179,13 +176,21 @@ impl Link<'_> {
 }
 
 impl Store {
-    /// Bounds `original` to the reply budget. With `files`, an absolute directory, each truncated
-    /// field of a retained original also gets a `file` link that the returned `Disk` writes.
-    pub(super) fn limit(&mut self, original: Value, files: Option<&Path>) -> (Value, Disk) {
-        let bytes = original.to_string().len();
-        if bytes <= BUDGET {
-            return (original, Disk::default());
-        }
+    /// Bounds `original` to `budget`. With `files`, an absolute directory, each truncated field
+    /// of a retained original also gets a `file` link that the returned `Disk` writes.
+    pub(super) fn limit(
+        &mut self,
+        original: Value,
+        files: Option<&Path>,
+        budget: Budget,
+    ) -> (Value, Disk) {
+        let bytes = {
+            let text = original.to_string();
+            if budget.fits(&text) {
+                return (original, Disk::default());
+            }
+            text.len()
+        };
         let id = loop {
             let id = format!("r{:012x}", rand::random::<u64>() & 0xffff_ffff_ffff);
             if !self.entries.iter().any(|entry| entry.id == id) {
@@ -195,8 +200,12 @@ impl Store {
         let retained = bytes <= STORE_BUDGET;
         // Only an LRU entry can delete its files, so an unretained original gets none.
         let files = files.filter(|_| retained);
-        let link = Link { id: &id, files };
-        let mut bounded = bound(&original, &link, retained);
+        let link = Link {
+            id: &id,
+            files,
+            tokens: budget.requested(),
+        };
+        let mut bounded = bound(&original, &link, retained, budget.bytes());
         let mut disk = Disk {
             dir: files.map(Path::to_path_buf),
             ..Disk::default()
@@ -249,16 +258,18 @@ impl Store {
         (bounded, disk)
     }
 
-    /// Reads one window of at most `limit` bytes of a stored field, or of the node `path`
-    /// (RFC 6901) names in it.
+    /// Reads one window of a stored field, or of the node `path` (RFC 6901) names in it: at
+    /// most `budget`, or the narrower `limit` bytes (`Budget::window`).
     pub(super) fn retrieve(
         &mut self,
         id: &str,
         field: &str,
         path: Option<&str>,
         offset: usize,
-        limit: usize,
+        budget: Budget,
+        limit: Option<usize>,
     ) -> Result<Value, String> {
+        let cap = budget.window(limit)?;
         if !matches!(field, "value" | "logs" | "calls" | "error") {
             return Err("field must be value, logs, calls or error".into());
         }
@@ -295,7 +306,7 @@ impl Store {
             out["truncated"]["path"] = json!(path);
         }
         if field == "value" && value.is_string() {
-            let (context, clipped) = ancestors(&text, offset);
+            let (context, clipped) = ancestors(&text, offset, budget::scaled(CONTEXT_BUDGET, cap));
             if !context.is_empty() {
                 out["truncated"]["context"] = json!(context);
             }
@@ -303,20 +314,25 @@ impl Store {
                 out["truncated"]["contextTruncated"] = json!(true);
             }
         }
-        let end = fit_window(&text[offset..], limit, |shown| {
+        let link = Link {
+            id,
+            files: None,
+            tokens: budget.requested(),
+        };
+        let end = fit_window(&text[offset..], cap, |shown| {
             let end = offset + shown;
             out["value"] = json!(&text[offset..end]);
             out["truncated"]["end"] = json!(end);
             if end < text.len() {
-                out["truncated"]["next"] = next(id, field, path, end);
+                out["truncated"]["next"] = next(&link, field, path, end);
                 // Following `next` verbatim keeps the window size the client asked for.
-                if limit != BUDGET {
+                if let Some(limit) = limit {
                     out["truncated"]["next"]["limit"] = json!(limit);
                 }
             } else if let Some(meta) = out["truncated"].as_object_mut() {
                 meta.remove("next");
             }
-            out.to_string().len() <= limit
+            out.to_string().len() <= cap
         });
         if end == 0 && offset < text.len() {
             return Err("a single ref token cannot fit in a retrieval window".into());
@@ -348,10 +364,14 @@ fn value_type(value: &Value) -> &'static str {
     }
 }
 
-fn next(id: &str, field: &str, path: Option<&str>, offset: usize) -> Value {
-    let mut next = json!({"result":id, "field":field, "offset":offset});
+fn next(link: &Link, field: &str, path: Option<&str>, offset: usize) -> Value {
+    let mut next = json!({"result":link.id, "field":field, "offset":offset});
     if let Some(path) = path {
         next["path"] = json!(path);
+    }
+    // Following `next` verbatim keeps the budget the call set.
+    if let Some(tokens) = link.tokens {
+        next["maxResponseTokens"] = json!(tokens);
     }
     next
 }
@@ -359,7 +379,7 @@ fn next(id: &str, field: &str, path: Option<&str>, offset: usize) -> Value {
 fn metadata(link: &Link, field: &str, shown: usize, total: usize, value: &Value) -> Value {
     let mut meta = json!({"shown":shown,"total":total,"type":value_type(value)});
     if shown < total {
-        meta["next"] = next(link.id, field, None, shown);
+        meta["next"] = next(link, field, None, shown);
         if let Some(file) = link.file(field, value) {
             meta["file"] = json!(file.to_string_lossy());
         }
@@ -367,7 +387,8 @@ fn metadata(link: &Link, field: &str, shown: usize, total: usize, value: &Value)
     meta
 }
 
-fn bound(original: &Value, link: &Link, retained: bool) -> Value {
+/// Bounds `original` to `budget` bytes of compact JSON.
+fn bound(original: &Value, link: &Link, retained: bool, budget: usize) -> Value {
     let id = link.id;
     let mut out = original.clone();
     out["truncated"] = json!({"result":id});
@@ -378,7 +399,9 @@ fn bound(original: &Value, link: &Link, retained: bool) -> Value {
         let mut kept = Vec::new();
         for line in logs {
             kept.push(line.clone());
-            if serde_json::to_string(&kept).unwrap_or_default().len() > LOG_BUDGET {
+            if serde_json::to_string(&kept).unwrap_or_default().len()
+                > budget::scaled(LOG_BUDGET, budget)
+            {
                 kept.pop();
                 break;
             }
@@ -394,7 +417,9 @@ fn bound(original: &Value, link: &Link, retained: bool) -> Value {
                 .filter_map(|key| call.get(key).map(|value| (key.to_string(), value.clone())))
                 .collect::<serde_json::Map<_, _>>();
             kept.push(Value::Object(compact));
-            if serde_json::to_string(&kept).unwrap_or_default().len() > CALL_BUDGET {
+            if serde_json::to_string(&kept).unwrap_or_default().len()
+                > budget::scaled(CALL_BUDGET, budget)
+            {
                 kept.pop();
                 break;
             }
@@ -403,14 +428,15 @@ fn bound(original: &Value, link: &Link, retained: bool) -> Value {
         out["calls"] = json!(kept);
         mark_calls(&mut out, original, link);
     }
+    let error_budget = budget::scaled(ERROR_BUDGET, budget);
     if let Some(message) = original["error"]["message"].as_str()
-        && message.len() > ERROR_BUDGET
+        && message.len() > error_budget
     {
-        let end = fit_prefix(message, BUDGET, |shown| {
+        let end = fit_prefix(message, budget, |shown| {
             serde_json::to_string(&message[..shown])
                 .unwrap_or_default()
                 .len()
-                <= ERROR_BUDGET
+                <= error_budget
         });
         out["error"]["message"] = json!(&message[..end]);
         mark_changed(&mut out, original, link, "error");
@@ -419,7 +445,7 @@ fn bound(original: &Value, link: &Link, retained: bool) -> Value {
         out["value"] = json!("");
     }
     // Recovery identities and errors take priority over optional log/trace excerpts.
-    if out.to_string().len() > BUDGET {
+    if out.to_string().len() > budget {
         out["logs"] = json!([]);
         out["calls"] = json!([]);
         mark_changed(&mut out, original, link, "logs");
@@ -427,13 +453,13 @@ fn bound(original: &Value, link: &Link, retained: bool) -> Value {
     }
     match original.get("value") {
         Some(value @ Value::String(text)) => {
-            fit_prefix(text, BUDGET, |shown| {
+            fit_prefix(text, budget, |shown| {
                 out["value"] = json!(&text[..shown]);
                 out["truncated"]["value"] = metadata(link, "value", shown, text.len(), value);
-                out.to_string().len() <= BUDGET
+                out.to_string().len() <= budget
             });
         }
-        Some(value) => fit_value(&mut out, value, link),
+        Some(value) => fit_value(&mut out, value, link, budget),
         None => {}
     }
     if !retained {
@@ -450,7 +476,7 @@ fn bound(original: &Value, link: &Link, retained: bool) -> Value {
     }
     // All page identities and error names are recovery data. If those alone exceed the
     // budget, say so instead of silently losing a tab or replacing the original failure.
-    if out.to_string().len() > BUDGET {
+    if out.to_string().len() > budget {
         out["truncated"]["metadataOverBudget"] = json!(true);
     }
     out
@@ -493,15 +519,16 @@ fn mark_calls(out: &mut Value, original: &Value, link: &Link) {
 /// room goes to oversized strings, arrays and objects, each listed in `cut` with its own
 /// `next`. Nothing shown is a byte prefix of the field's pretty JSON, so the whole-field
 /// `next` reads that text from offset 0, as for clipped logs and calls.
-fn fit_value(out: &mut Value, value: &Value, link: &Link) {
+fn fit_value(out: &mut Value, value: &Value, link: &Link, budget: usize) {
     out["value"] = Value::Null;
-    let mut room = (BUDGET + "null".len()).saturating_sub(out.to_string().len());
+    let mut room = (budget + "null".len()).saturating_sub(out.to_string().len());
     let size = encoded_len(value);
     if size <= room {
         out["value"] = value.clone();
         return;
     }
     let total = pretty_len(value);
+    let max_cuts = budget::scaled(MAX_CUTS, budget);
     for attempt in 1..=FIT_ATTEMPTS {
         // A value that keeps missing gives up its content, never the recovery metadata.
         if attempt == FIT_ATTEMPTS {
@@ -512,19 +539,19 @@ fn fit_value(out: &mut Value, value: &Value, link: &Link) {
         let mut meta = metadata(link, "value", 0, total, value);
         meta["cut"] = cuts
             .iter()
-            .take(MAX_CUTS)
-            .map(|cut| cut.metadata(link.id))
+            .take(max_cuts)
+            .map(|cut| cut.metadata(link))
             .collect();
-        if cuts.len() > MAX_CUTS {
-            meta["cutOmitted"] = json!(cuts.len() - MAX_CUTS);
+        if cuts.len() > max_cuts {
+            meta["cutOmitted"] = json!(cuts.len() - max_cuts);
         }
         out["truncated"]["value"] = meta;
         let len = out.to_string().len();
-        if len <= BUDGET {
+        if len <= budget {
             return;
         }
         // Shrink from what was shown, not the room: a value can leave slack under its room.
-        room = encoded_len(&out["value"]).saturating_sub(len - BUDGET);
+        room = encoded_len(&out["value"]).saturating_sub(len - budget);
     }
 }
 
@@ -548,18 +575,18 @@ enum Kind {
 }
 
 impl Cut {
-    fn metadata(&self, id: &str) -> Value {
+    fn metadata(&self, link: &Link) -> Value {
         let path = Some(self.path.as_str());
         match self.kind {
             Kind::Text { shown, total } => json!({"path":self.path, "type":"string",
-                "shown":shown, "total":total, "next":next(id, "value", path, shown)}),
+                "shown":shown, "total":total, "next":next(link, "value", path, shown)}),
             Kind::Entries {
                 array,
                 kept,
                 length,
                 offset,
             } => json!({"path":self.path, "type":if array {"array"} else {"object"},
-                "kept":kept, "length":length, "next":next(id, "value", path, offset)}),
+                "kept":kept, "length":length, "next":next(link, "value", path, offset)}),
         }
     }
 }
@@ -868,8 +895,9 @@ fn prefix_end(text: &str, limit: usize, min_line: usize) -> usize {
     end
 }
 
-/// Real aria-YAML ancestor lines, in document order; omit distant context before content.
-fn ancestors(text: &str, offset: usize) -> (String, bool) {
+/// Real aria-YAML ancestor lines, at most `budget` bytes in document order; omit distant
+/// context before content.
+fn ancestors(text: &str, offset: usize, budget: usize) -> (String, bool) {
     let start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
     let first = text[start..].lines().next().unwrap_or_default();
     let mut indent = first.len() - first.trim_start().len();
@@ -883,7 +911,7 @@ fn ancestors(text: &str, offset: usize) -> (String, bool) {
         let depth = line.len() - line.trim_start().len();
         if depth < indent && line.trim_start().starts_with("- ") {
             indent = depth;
-            if bytes + line.len() <= CONTEXT_BUDGET {
+            if bytes + line.len() <= budget {
                 lines.push(line);
                 bytes += line.len();
             } else {
@@ -907,28 +935,42 @@ mod tests {
 
     use serde_json::{Value, json};
 
-    use super::{BUDGET, Store};
+    use super::budget::{DEFAULT_TOKENS, estimate_tokens, scaled};
+    use super::{Budget, Store};
+
+    /// The old fixed 24 000-byte budget, named on each call so these cases still truncate.
+    const TOKENS: usize = 6_000;
+    const BYTES: usize = TOKENS * 4;
+
+    fn budget() -> Budget {
+        tokens(TOKENS)
+    }
+
+    fn tokens(tokens: usize) -> Budget {
+        Budget::parse(Some(&json!(tokens))).expect("valid budget")
+    }
 
     fn report(value: Value) -> Value {
         json!({"status":"ok", "value":value, "logs":[], "calls":[],
             "pages":[{"id":"p1", "created":true, "closed":false,"url":"https://example.com"}]})
     }
 
+    /// Follows `next` verbatim, checking each window against the budget and limit it names.
     fn remainder(store: &mut Store, mut next: Value, mut text: String) -> String {
         while next.is_object() {
-            let limit = next["limit"]
-                .as_u64()
-                .map_or(BUDGET, |limit| limit as usize);
+            let budget = Budget::parse(next.get("maxResponseTokens")).expect("valid budget");
+            let limit = next["limit"].as_u64().map(|limit| limit as usize);
             let window = store
                 .retrieve(
                     next["result"].as_str().expect("expected test value"),
                     next["field"].as_str().expect("expected test value"),
                     next["path"].as_str(),
                     next["offset"].as_u64().expect("expected test value") as usize,
+                    budget,
                     limit,
                 )
                 .expect("expected test value");
-            assert!(window.to_string().len() <= limit);
+            assert!(window.to_string().len() <= limit.unwrap_or(budget.bytes()));
             assert!(
                 window["pages"]
                     .as_array()
@@ -950,7 +992,10 @@ mod tests {
     #[test]
     fn tests_that_small_results_are_unchanged() {
         let original = report(json!({"count":3,"active":true}));
-        assert_eq!(Store::default().limit(original.clone(), None).0, original);
+        assert_eq!(
+            Store::default().limit(original.clone(), None, budget()).0,
+            original
+        );
     }
 
     #[test]
@@ -962,8 +1007,8 @@ mod tests {
                 .collect::<String>()
         );
         let mut store = Store::default();
-        let bounded = store.limit(report(json!(text)), None).0;
-        assert!(bounded.to_string().len() <= BUDGET);
+        let bounded = store.limit(report(json!(text)), None, budget()).0;
+        assert!(bounded.to_string().len() <= BYTES);
         assert_eq!(bounded["pages"][0]["id"], "p1");
         assert_eq!(bounded["pages"][0]["url"], "https://example.com");
         let prefix = bounded["value"].as_str().expect("expected test value");
@@ -975,7 +1020,8 @@ mod tests {
                 "value",
                 None,
                 prefix.len(),
-                BUDGET,
+                budget(),
+                None,
             )
             .expect("expected test value");
         assert_eq!(
@@ -985,8 +1031,8 @@ mod tests {
         assert_eq!(remainder(&mut store, next, prefix.into()), text);
 
         let object = json!({"items":["quoted \" \\ \n 🦀".repeat(12_000)]});
-        let bounded = store.limit(report(object.clone()), None).0;
-        assert!(bounded.to_string().len() <= BUDGET);
+        let bounded = store.limit(report(object.clone()), None, budget()).0;
+        assert!(bounded.to_string().len() <= BYTES);
         assert_eq!(bounded["truncated"]["value"]["type"], "object");
         let shown = bounded["value"]["items"][0]
             .as_str()
@@ -1028,8 +1074,8 @@ mod tests {
             "result":{"kind":"ok"},"delivery":if i == 0 {"unknown"} else {"done"}
         })).collect::<Vec<_>>());
         original["callsDropped"] = json!({"count":7,"delivery":"notSent"});
-        let bounded = store.limit(original.clone(), None).0;
-        assert!(bounded.to_string().len() <= BUDGET);
+        let bounded = store.limit(original.clone(), None, budget()).0;
+        assert!(bounded.to_string().len() <= BYTES);
         assert_eq!(bounded["status"], "error");
         assert_eq!(bounded["pages"], original["pages"]);
         assert_eq!(bounded["error"]["name"], "TimeoutError");
@@ -1063,40 +1109,46 @@ mod tests {
         let mut ids = Vec::new();
         for _ in 0..16 {
             ids.push(
-                store.limit(report(json!("🦀".repeat(10_000))), None).0["truncated"]["result"]
+                store
+                    .limit(report(json!("🦀".repeat(10_000))), None, budget())
+                    .0["truncated"]["result"]
                     .as_str()
                     .expect("expected test value")
                     .to_string(),
             );
         }
-        assert!(store.retrieve(&ids[0], "value", None, 1, BUDGET).is_err());
         assert!(
             store
-                .retrieve(&ids[0], "value", None, 40_001, BUDGET)
+                .retrieve(&ids[0], "value", None, 1, budget(), None)
+                .is_err()
+        );
+        assert!(
+            store
+                .retrieve(&ids[0], "value", None, 40_001, budget(), None)
                 .is_err()
         );
         assert_eq!(
             store
-                .retrieve(&ids[0], "value", None, 0, BUDGET)
+                .retrieve(&ids[0], "value", None, 0, budget(), None)
                 .expect("expected test value")["status"],
             "ok"
         );
-        let _ = store.limit(report(json!("x".repeat(40_000))), None);
+        let _ = store.limit(report(json!("x".repeat(40_000))), None, budget());
         assert_eq!(
             store
-                .retrieve(&ids[1], "value", None, 0, BUDGET)
+                .retrieve(&ids[1], "value", None, 0, budget(), None)
                 .expect("expected test value")["status"],
             "error"
         );
         assert_eq!(
             store
-                .retrieve(&ids[0], "value", None, 0, BUDGET)
+                .retrieve(&ids[0], "value", None, 0, budget(), None)
                 .expect("expected test value")["status"],
             "ok"
         );
         assert_eq!(
             store
-                .retrieve("missing", "value", None, 0, BUDGET)
+                .retrieve("missing", "value", None, 0, budget(), None)
                 .expect("expected test value")["status"],
             "error"
         );
@@ -1108,12 +1160,16 @@ mod tests {
         // Every possible cut near a token, including its opening characters, stays outside it.
         for padding in 23_000..23_030 {
             let text = format!("{}[ref=e999]{}", "x".repeat(padding), "z".repeat(2000));
-            let bounded = store.limit(report(json!(text)), None).0;
+            let bounded = store.limit(report(json!(text)), None, budget()).0;
             let id = bounded["truncated"]["result"]
                 .as_str()
                 .expect("expected test value");
             for offset in padding + 1..padding + 10 {
-                assert!(store.retrieve(id, "value", None, offset, BUDGET).is_err());
+                assert!(
+                    store
+                        .retrieve(id, "value", None, offset, budget(), None)
+                        .is_err()
+                );
             }
             let prefix = bounded["value"].as_str().expect("expected test value");
             assert!(!((padding + 1..padding + 10).contains(&prefix.len())));
@@ -1127,7 +1183,7 @@ mod tests {
             );
         }
         let text = format!("ordinary text [ref={}", "x".repeat(40_000));
-        let bounded = store.limit(report(json!(text)), None).0;
+        let bounded = store.limit(report(json!(text)), None, budget()).0;
         assert_eq!(
             remainder(
                 &mut store,
@@ -1139,7 +1195,7 @@ mod tests {
         let mut failed = report(Value::Null);
         failed["status"] = json!("error");
         failed["error"] = json!({"name":"Error", "message":"\u{1}".repeat(40_000)});
-        assert!(store.limit(failed, None).0.to_string().len() <= BUDGET);
+        assert!(store.limit(failed, None, budget()).0.to_string().len() <= BYTES);
     }
 
     fn aria(items: usize) -> String {
@@ -1161,8 +1217,8 @@ mod tests {
         assert!(snap.len() > 100_000);
         let original = json!({"snap":snap, "n":snap.len(), "url":"https://example.com/a"});
         let mut store = Store::default();
-        let bounded = store.limit(report(original.clone()), None).0;
-        assert!(bounded.to_string().len() <= BUDGET);
+        let bounded = store.limit(report(original.clone()), None, budget()).0;
+        assert!(bounded.to_string().len() <= BYTES);
         assert_eq!(bounded["pages"][0]["id"], "p1");
         assert_eq!(bounded["value"]["n"], original["n"]);
         assert_eq!(bounded["value"]["url"], original["url"]);
@@ -1174,14 +1230,16 @@ mod tests {
         assert_eq!(meta["type"], "object");
         assert_eq!(meta["shown"], 0);
         assert_eq!(meta["total"], pretty(&original).len());
+        // Every `next` repeats the budget the call named.
         assert_eq!(
             meta["next"],
-            json!({"result":id, "field":"value", "offset":0})
+            json!({"result":id, "field":"value", "offset":0, "maxResponseTokens":TOKENS})
         );
         assert_eq!(
             meta["cut"],
             json!([{"path":"/snap", "type":"string", "shown":prefix.len(), "total":snap.len(),
-                "next":{"result":id, "field":"value", "path":"/snap", "offset":prefix.len()}}])
+                "next":{"result":id, "field":"value", "path":"/snap", "offset":prefix.len(),
+                    "maxResponseTokens":TOKENS}}])
         );
         let window = store
             .retrieve(
@@ -1189,7 +1247,8 @@ mod tests {
                 "value",
                 Some("/snap"),
                 prefix.len(),
-                BUDGET,
+                budget(),
+                None,
             )
             .expect("expected test value");
         assert_eq!(window["truncated"]["path"], "/snap");
@@ -1214,8 +1273,8 @@ mod tests {
             .map(|i| format!("Buy product {i:04} 漢字 🦀"))
             .collect::<Vec<_>>();
         let mut store = Store::default();
-        let bounded = store.limit(report(json!(items)), None).0;
-        assert!(bounded.to_string().len() <= BUDGET);
+        let bounded = store.limit(report(json!(items)), None, budget()).0;
+        assert!(bounded.to_string().len() <= BYTES);
         let shown = bounded["value"].as_array().expect("array keeps its type");
         assert!(shown.len() > 500, "kept {} elements", shown.len());
         assert_eq!(
@@ -1257,8 +1316,8 @@ mod tests {
         let original = json!({"a/b":{"m~n":["x".repeat(60_000), "y".repeat(60_000), "short"]},
             "count":3, "ok":true, "none":null});
         let mut store = Store::default();
-        let bounded = store.limit(report(original.clone()), None).0;
-        assert!(bounded.to_string().len() <= BUDGET);
+        let bounded = store.limit(report(original.clone()), None, budget()).0;
+        assert!(bounded.to_string().len() <= BYTES);
         let value = &bounded["value"];
         assert_eq!(
             (&value["count"], &value["ok"], &value["none"]),
@@ -1291,12 +1350,16 @@ mod tests {
             .as_str()
             .expect("expected test value");
         let small = store
-            .retrieve(id, "value", Some("/a~1b/m~0n/2"), 0, BUDGET)
+            .retrieve(id, "value", Some("/a~1b/m~0n/2"), 0, budget(), None)
             .expect("expected test value");
         assert_eq!(small["value"], "short");
         assert!(small["truncated"].get("next").is_none());
         for path in ["snap", "/missing", "/a~1b/m~0n/9"] {
-            assert!(store.retrieve(id, "value", Some(path), 0, BUDGET).is_err());
+            assert!(
+                store
+                    .retrieve(id, "value", Some(path), 0, budget(), None)
+                    .is_err()
+            );
         }
     }
 
@@ -1319,8 +1382,8 @@ mod tests {
             .collect::<serde_json::Map<_, _>>();
         let mut store = Store::default();
         for original in [json!(records), Value::Object(wide), Value::Object(links)] {
-            let bounded = store.limit(report(original.clone()), None).0;
-            assert!(bounded.to_string().len() <= BUDGET);
+            let bounded = store.limit(report(original.clone()), None, budget()).0;
+            assert!(bounded.to_string().len() <= BYTES);
             let meta = &bounded["truncated"]["value"];
             let cuts = meta["cut"].as_array().expect("cut list");
             assert!(cuts.len() <= 20);
@@ -1349,6 +1412,7 @@ mod tests {
             .limit(
                 report(json!({"z":1, "a":"w".repeat(30_000), "b":"w".repeat(30_000)})),
                 None,
+                budget(),
             )
             .0;
         assert_eq!(wide["value"]["z"], 1);
@@ -1358,13 +1422,19 @@ mod tests {
     fn tests_that_leaf_cuts_stay_outside_ref_tokens_and_survive_an_early_newline() {
         let mut store = Store::default();
         let probe = store
-            .limit(report(json!({"n":1, "snap":"x".repeat(40_000)})), None)
+            .limit(
+                report(json!({"n":1, "snap":"x".repeat(40_000)})),
+                None,
+                budget(),
+            )
             .0;
         let room = probe["value"]["snap"].as_str().expect("string leaf").len();
         for padding in room - 12..room + 3 {
             let text = format!("{}[ref=e999]{}", "x".repeat(padding), "z".repeat(20_000));
-            let bounded = store.limit(report(json!({"n":1, "snap":text})), None).0;
-            assert!(bounded.to_string().len() <= BUDGET);
+            let bounded = store
+                .limit(report(json!({"n":1, "snap":text})), None, budget())
+                .0;
+            assert!(bounded.to_string().len() <= BYTES);
             let shown = bounded["value"]["snap"].as_str().expect("string leaf");
             assert!(!(padding + 1..padding + 10).contains(&shown.len()));
             assert_eq!(
@@ -1377,7 +1447,9 @@ mod tests {
             );
         }
         let text = format!("\n{}", "a".repeat(50_000));
-        let bounded = store.limit(report(json!({"n":1, "snap":text})), None).0;
+        let bounded = store
+            .limit(report(json!({"n":1, "snap":text})), None, budget())
+            .0;
         assert!(
             bounded["value"]["snap"]
                 .as_str()
@@ -1404,19 +1476,21 @@ mod tests {
         ] {
             let mut original = report(value.clone());
             original["calls"] = json!(calls);
-            let bounded = store.limit(original, None).0;
-            assert!(bounded.to_string().len() <= BUDGET);
+            let bounded = store.limit(original, None, budget()).0;
+            assert!(bounded.to_string().len() <= BYTES);
             assert_eq!(bounded["value"], value);
             assert!(bounded["truncated"].get("value").is_none());
         }
         // A bare string keeps today's shape: a prefix and byte-offset metadata, no cut list.
-        let bounded = store.limit(report(json!("abc".repeat(30_000))), None).0;
+        let bounded = store
+            .limit(report(json!("abc".repeat(30_000))), None, budget())
+            .0;
         let shown = bounded["value"].as_str().expect("string prefix").len();
         let id = bounded["truncated"]["result"].clone();
         assert_eq!(
             bounded["truncated"]["value"],
             json!({"shown":shown, "total":90_000, "type":"string",
-                "next":{"result":id, "field":"value", "offset":shown}})
+                "next":{"result":id, "field":"value", "offset":shown, "maxResponseTokens":TOKENS}})
         );
     }
 
@@ -1533,13 +1607,19 @@ mod tests {
 
     #[test]
     fn tests_that_random_values_stay_in_budget_keep_their_types_and_reassemble() {
+        random_cases(budget(), 80, 150_000, 20);
+        // The smallest budget scales its excerpts and cut list down instead of overflowing.
+        random_cases(tokens(1_000), 40, 30_000, 10);
+    }
+
+    fn random_cases(budget: Budget, cases: usize, room: usize, least_bounded: usize) {
         let mut random = Lcg(7);
         let mut store = Store::default();
         let mut bounded_count = 0;
-        for case in 0..80 {
-            let original = random.tree(3, &mut 150_000);
-            let bounded = store.limit(report(original.clone()), None).0;
-            assert!(bounded.to_string().len() <= BUDGET, "case {case}");
+        for case in 0..cases {
+            let original = random.tree(3, &mut room.clone());
+            let bounded = store.limit(report(original.clone()), None, budget).0;
+            assert!(bounded.to_string().len() <= budget.bytes(), "case {case}");
             assert_eq!(
                 super::value_type(&bounded["value"]),
                 super::value_type(&original)
@@ -1581,7 +1661,7 @@ mod tests {
             );
         }
         assert!(
-            bounded_count > 20,
+            bounded_count > least_bounded,
             "only {bounded_count} cases exceeded the budget"
         );
     }
@@ -1594,10 +1674,12 @@ mod tests {
             &super::Link {
                 id: "r000000000000",
                 files: None,
+                tokens: None,
             },
             false,
+            BYTES,
         );
-        assert!(bounded.to_string().len() <= BUDGET);
+        assert!(bounded.to_string().len() <= BYTES);
         assert!(bounded["truncated"]["unavailable"].is_string());
         let meta = &bounded["truncated"]["value"];
         assert!(meta.get("next").is_none());
@@ -1607,9 +1689,9 @@ mod tests {
     }
 
     async fn bounded_with_files(store: &mut Store, original: Value, dir: &Path) -> Value {
-        let (bounded, disk) = store.limit(original, Some(dir));
+        let (bounded, disk) = store.limit(original, Some(dir), budget());
         let bounded = disk.apply(bounded).await;
-        assert!(bounded.to_string().len() <= BUDGET);
+        assert!(bounded.to_string().len() <= BYTES);
         bounded
     }
 
@@ -1695,6 +1777,7 @@ mod tests {
         let (bounded, disk) = store.limit(
             report(json!("x".repeat(30_000))),
             Some(&blocker.join("run-results")),
+            budget(),
         );
         assert!(bounded["truncated"]["value"]["file"].is_string());
         let bounded = disk.apply(bounded).await;
@@ -1708,23 +1791,39 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_a_larger_limit_returns_a_bigger_window_and_keeps_it_in_next() {
+    fn tests_that_a_limit_narrows_a_window_keeps_it_in_next_and_never_exceeds_the_budget() {
         let text = format!("{}{}", aria(3000), "abc".repeat(100_000));
         let mut store = Store::default();
-        let (bounded, _) = store.limit(report(json!(text)), None);
+        let (bounded, _) = store.limit(report(json!(text)), None, budget());
         let prefix = bounded["value"].as_str().expect("string prefix");
         let id = bounded["truncated"]["result"]
             .as_str()
             .expect("expected test value");
+        // Under the default budget, a `limit` sets the window and later `next`s keep it.
         let window = store
-            .retrieve(id, "value", None, prefix.len(), super::LIMIT_MAX)
+            .retrieve(
+                id,
+                "value",
+                None,
+                prefix.len(),
+                Budget::default(),
+                Some(super::budget::LIMIT_MAX),
+            )
             .expect("expected test value");
         let size = window.to_string().len();
         assert!(
-            (90_000..=super::LIMIT_MAX).contains(&size),
+            (90_000..=super::budget::LIMIT_MAX).contains(&size),
             "window {size} bytes"
         );
-        assert_eq!(window["truncated"]["next"]["limit"], super::LIMIT_MAX);
+        assert_eq!(
+            window["truncated"]["next"]["limit"],
+            super::budget::LIMIT_MAX
+        );
+        assert!(
+            window["truncated"]["next"]
+                .get("maxResponseTokens")
+                .is_none()
+        );
         assert_eq!(
             remainder(
                 &mut store,
@@ -1734,10 +1833,27 @@ mod tests {
             text
         );
         let small = store
-            .retrieve(id, "value", None, 0, super::LIMIT_MIN)
+            .retrieve(
+                id,
+                "value",
+                None,
+                0,
+                Budget::default(),
+                Some(super::budget::LIMIT_MIN),
+            )
             .expect("expected test value");
-        assert!(small.to_string().len() <= super::LIMIT_MIN);
+        assert!(small.to_string().len() <= super::budget::LIMIT_MIN);
         assert!(small["truncated"]["end"].as_u64() > Some(0));
+        // A limit wider than the budget is refused, naming both, never clamped.
+        let error = store
+            .retrieve(id, "value", None, 0, tokens(1_000), Some(50_000))
+            .expect_err("limit above the budget");
+        assert!(error.contains("50000") && error.contains("4000"), "{error}");
+        assert!(
+            store
+                .retrieve(id, "value", None, 0, budget(), Some(BYTES + 1))
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -1766,7 +1882,11 @@ mod tests {
     #[test]
     fn tests_that_an_early_newline_does_not_shrink_a_retrieval_window() {
         let mut store = Store::default();
-        let (bounded, _) = store.limit(report(json!({"n":1, "snap":"z".repeat(90_000)})), None);
+        let (bounded, _) = store.limit(
+            report(json!({"n":1, "snap":"z".repeat(90_000)})),
+            None,
+            budget(),
+        );
         let next = &bounded["truncated"]["value"]["next"];
         let window = store
             .retrieve(
@@ -1774,7 +1894,8 @@ mod tests {
                 "value",
                 None,
                 0,
-                BUDGET,
+                budget(),
+                None,
             )
             .expect("expected test value");
         let shown = window["value"].as_str().expect("window text").len();
@@ -1782,5 +1903,110 @@ mod tests {
             shown > 20_000,
             "first pretty-JSON window shows {shown} bytes"
         );
+    }
+
+    #[test]
+    fn tests_that_the_default_budget_applies_when_a_call_names_none() {
+        let mut store = Store::default();
+        // A ~150 KB value, six times the old budget, fits whole.
+        let fits = report(json!(aria(3500)));
+        assert!(fits.to_string().len() > 150_000);
+        assert_eq!(store.limit(fits.clone(), None, Budget::default()).0, fits);
+        // Past 100 000 tokens it fills the budget, and its `next` names no budget.
+        let text = aria(10_000);
+        let bounded = store.limit(report(json!(text)), None, Budget::default()).0;
+        let reply = bounded.to_string();
+        assert!(estimate_tokens(&reply) <= DEFAULT_TOKENS);
+        assert!(reply.len() > 390_000, "reply is {} bytes", reply.len());
+        let next = bounded["truncated"]["value"]["next"].clone();
+        assert!(next.get("maxResponseTokens").is_none(), "{next}");
+        let prefix = bounded["value"].as_str().expect("string prefix");
+        assert_eq!(remainder(&mut store, next, prefix.into()), text);
+    }
+
+    #[test]
+    fn tests_that_each_budget_bounds_every_field_and_its_continuations_reassemble() {
+        for count in [1_000, 100_000, 200_000] {
+            let budget = tokens(count);
+            let size = (budget.bytes() * 3 / 2).max(30_000);
+            let mut store = Store::default();
+            let mut original = report(json!(aria(size / 40)));
+            original["status"] = json!("error");
+            original["error"] =
+                json!({"name":"TimeoutError", "message":"navigation failed\n".repeat(size / 18)});
+            original["logs"] = json!(
+                (0..size / 16)
+                    .map(|i| format!("log line {i:06}"))
+                    .collect::<Vec<_>>()
+            );
+            original["calls"] = json!(
+                (0..size / 150)
+                    .map(|i| json!({"callId":i, "method":"click", "title":"Click",
+                        "params":{"text":"x".repeat(60)}, "result":{"kind":"ok"},
+                        "delivery":"done"}))
+                    .collect::<Vec<_>>()
+            );
+            let bounded = store.limit(original.clone(), None, budget).0;
+            let reply = bounded.to_string();
+            assert!(
+                estimate_tokens(&reply) <= count,
+                "{count}: {} bytes",
+                reply.len()
+            );
+            assert!(
+                bounded["truncated"].get("metadataOverBudget").is_none(),
+                "{count}"
+            );
+            assert_eq!(bounded["pages"], original["pages"]);
+            assert_eq!(bounded["error"]["name"], "TimeoutError");
+            // Excerpts stay within their caps, scaled to the budget.
+            let bytes = budget.bytes();
+            let excerpt = |field: &str| serde_json::to_string(&bounded[field]).expect("excerpt");
+            assert!(excerpt("logs").len() <= scaled(super::LOG_BUDGET, bytes));
+            assert!(excerpt("calls").len() <= scaled(super::CALL_BUDGET, bytes));
+            let message = bounded["error"]["message"].as_str().expect("message");
+            assert!(!message.is_empty());
+            assert!(json!(message).to_string().len() <= scaled(super::ERROR_BUDGET, bytes));
+            let prefix = bounded["value"].as_str().expect("string prefix");
+            assert!(
+                prefix.len() > bytes / 4,
+                "{count}: value shows {} bytes",
+                prefix.len()
+            );
+            for field in ["value", "logs", "calls", "error"] {
+                let next = bounded["truncated"][field]["next"].clone();
+                assert_eq!(next["maxResponseTokens"], count, "{count} {field}");
+                if field == "value" {
+                    assert_eq!(
+                        remainder(&mut store, next, prefix.into()),
+                        original["value"],
+                        "{count}"
+                    );
+                } else {
+                    let text = remainder(&mut store, next, String::new());
+                    assert_eq!(
+                        serde_json::from_str::<Value>(&text).expect("pretty JSON"),
+                        original[field],
+                        "{count} {field}"
+                    );
+                }
+            }
+            // An object keeps its type and small keys at every budget; its cut repeats the budget.
+            let object = json!({"n":1, "url":"https://example.com/a", "snap":aria(size / 40)});
+            let bounded = store.limit(report(object.clone()), None, budget).0;
+            assert!(estimate_tokens(&bounded.to_string()) <= count, "{count}");
+            assert_eq!(
+                (&bounded["value"]["n"], &bounded["value"]["url"]),
+                (&object["n"], &object["url"])
+            );
+            let cut = &bounded["truncated"]["value"]["cut"][0];
+            assert_eq!(cut["next"]["maxResponseTokens"], count);
+            let shown = bounded["value"]["snap"].as_str().expect("string leaf");
+            assert_eq!(
+                remainder(&mut store, cut["next"].clone(), shown.into()),
+                object["snap"],
+                "{count}"
+            );
+        }
     }
 }

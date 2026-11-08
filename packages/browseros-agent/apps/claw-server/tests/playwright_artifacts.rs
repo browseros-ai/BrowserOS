@@ -466,12 +466,14 @@ async fn tests_that_returned_screenshots_become_image_blocks_and_files() -> anyh
     .await?;
     let report = self::report(&full);
     assert_eq!(report["status"], "ok", "{report}");
+    // The descriptor, not a number array, fits the default 100 000-token budget whole.
     let text = full["content"][0]["text"].as_str().expect("text");
     assert!(
-        text.len() <= 24_000,
+        text.len().div_ceil(4) <= 100_000,
         "model-visible JSON: {} bytes",
         text.len()
     );
+    assert!(report.get("truncated").is_none(), "{report}");
     let value = &report["value"];
     assert_eq!(value["type"], "Buffer");
     assert_eq!(value["mimeType"], "image/png");
