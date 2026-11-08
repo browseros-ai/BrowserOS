@@ -125,7 +125,7 @@ mod world;
 
 pub use artifacts::{AbsolutePaths, RunArtifact};
 pub use run::{
-    CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, PageId, RunEnd, RunError,
-    RunOutcome, RunPage, RunRequest, RunStatus,
+    CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, PageId, RunBinary, RunEnd,
+    RunError, RunOutcome, RunPage, RunRequest, RunStatus,
 };
 pub use runtime::{Runtime, RuntimeError};

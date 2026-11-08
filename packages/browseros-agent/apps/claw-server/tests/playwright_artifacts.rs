@@ -1,6 +1,8 @@
-//! `path` options through the shipped MCP binary: every run gets `<state_dir>/artifacts/`
-//! (REAL fly-unified-3, opendining-2, dashdish-3: absolute paths were refused for want of an
-//! artifact directory). Set NEO_E2E_BROWSER; every process/profile/port belongs to this test.
+//! `path` options and returned binaries through the shipped MCP binary: every run gets
+//! `<state_dir>/artifacts/` (REAL fly-unified-3, opendining-2, dashdish-3: absolute paths were
+//! refused for want of an artifact directory), and a returned screenshot becomes an image block
+//! plus a saved file (REAL opendining-2, fly-unified-3/14, dashdish-3: out of memory, or a number
+//! array). Set NEO_E2E_BROWSER; every process/profile/port belongs to this test.
 
 #![cfg(unix)]
 #![expect(
@@ -227,7 +229,11 @@ fn is_png(path: &Path) -> bool {
 }
 
 /// An isolated headless BrowserOS neo and its CDP port.
-async fn start_browser(root: &Path, binary: &std::ffi::OsStr) -> anyhow::Result<(Process, u16)> {
+async fn start_browser(
+    root: &Path,
+    binary: &std::ffi::OsStr,
+    extra: &[&str],
+) -> anyhow::Result<(Process, u16)> {
     let profile = root.join("browser-profile");
     let mut command = Command::new(binary);
     command
@@ -237,6 +243,7 @@ async fn start_browser(root: &Path, binary: &std::ffi::OsStr) -> anyhow::Result<
             "--remote-debugging-port=0",
             "--no-first-run",
         ])
+        .args(extra)
         .arg(format!("--user-data-dir={}", profile.display()))
         .arg("about:blank");
     let mut browser = spawn(&mut command, root.join("browser.log"))?;
@@ -268,7 +275,7 @@ async fn tests_that_path_options_write_into_the_shared_artifact_directory() -> a
     };
     let root = TempDir::new()?;
     fs::create_dir_all(root.path().join("home"))?;
-    let (mut browser, cdp_port) = start_browser(root.path(), &binary).await?;
+    let (mut browser, cdp_port) = start_browser(root.path(), &binary, &[]).await?;
     let cdp = CdpClient::connect(ConnectOptions {
         reconnect_policy: ReconnectPolicy::KeepTrying,
         ..ConnectOptions::new(cdp_port)
@@ -362,6 +369,190 @@ async fn tests_that_path_options_write_into_the_shared_artifact_directory() -> a
     let refused = report(&refused);
     assert_eq!(refused["value"], "Error", "{refused}");
     assert!(refused.get("artifacts").is_none(), "{refused}");
+
+    stop_server(&client, &base, &mut server).await?;
+    fixture.abort();
+    let _ = cdp.send("Browser.close", json!({}), None).await;
+    cdp.disconnect().await;
+    browser.wait().await?;
+    Ok(())
+}
+
+/// The image blocks of a reply, decoded: MIME type, width, height, encoded bytes.
+fn image_blocks(result: &Value) -> Vec<(String, u32, u32, usize)> {
+    use base64::Engine;
+    result["content"]
+        .as_array()
+        .expect("content")
+        .iter()
+        .filter(|block| block["type"] == "image")
+        .map(|block| {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(block["data"].as_str().expect("image data"))
+                .expect("base64 image data");
+            let decoded = image::load_from_memory(&bytes).expect("a decodable image");
+            (
+                block["mimeType"].as_str().expect("mimeType").to_string(),
+                decoded.width(),
+                decoded.height(),
+                bytes.len(),
+            )
+        })
+        .collect()
+}
+
+/// Within the bounds `binary.rs` promises: 1568 px long edge, 1.15 MP, 1 MiB.
+fn within_bounds(&(_, width, height, bytes): &(String, u32, u32, usize)) -> bool {
+    width.max(height) <= 1568
+        && u64::from(width) * u64::from(height) <= 1_150_000
+        && bytes <= 1 << 20
+}
+
+#[expect(clippy::print_stderr, reason = "Report opt-in browser skips and sizes")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tests_that_returned_screenshots_become_image_blocks_and_files() -> anyhow::Result<()> {
+    let Some(binary) = env::var_os("NEO_E2E_BROWSER") else {
+        eprintln!("SKIP: set NEO_E2E_BROWSER to a real BrowserOS neo executable");
+        return Ok(());
+    };
+    let root = TempDir::new()?;
+    fs::create_dir_all(root.path().join("home"))?;
+    // DPR 2, as a Retina capture: the REAL OOM came from a 5.4 MB full-page PNG.
+    let (mut browser, cdp_port) =
+        start_browser(root.path(), &binary, &["--force-device-scale-factor=2"]).await?;
+    let cdp = CdpClient::connect(ConnectOptions {
+        reconnect_policy: ReconnectPolicy::KeepTrying,
+        ..ConnectOptions::new(cdp_port)
+    })
+    .await?;
+    let client = Client::builder().timeout(Duration::from_secs(90)).build()?;
+    let (mut server, base) = start_server(root.path(), cdp_port, "1", &client).await?;
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+    let url = format!("http://{}/", listener.local_addr()?);
+    // Random pixels do not compress: a 1000×3000 device-pixel canvas is a ~9 MB PNG.
+    let fixture = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/",
+                get(|| async {
+                    axum::response::Html(
+                        "<!doctype html><title>tall</title><style>body{margin:0}</style>\
+                         <button style='width:120px;height:40px'>Buy</button>\
+                         <canvas id=noise style='display:block;width:500px;height:1500px'></canvas>\
+                         <div style='height:1500px;background:linear-gradient(#f80,#08f)'></div>\
+                         <script>const c=document.getElementById('noise');c.width=1000;c.height=3000;\
+                         const x=c.getContext('2d');const d=x.createImageData(1000,3000);\
+                         for(let i=0;i<d.data.length;i++){d.data[i]=(i%4===3)?255:(Math.random()*256)|0}\
+                         x.putImageData(d,0,0)</script>",
+                    )
+                }),
+            ),
+        )
+        .await
+    });
+    let artifacts = root.path().join("state/artifacts");
+
+    // REAL opendining-2 / fly-unified-14: return the full page.
+    let full = run(
+        &client,
+        &base,
+        1,
+        json!({"timeout":60000,"code":format!(
+            "await page.goto({}); return await page.screenshot({{fullPage:true}});",
+            serde_json::to_string(&url)?,
+        )}),
+    )
+    .await?;
+    let report = self::report(&full);
+    assert_eq!(report["status"], "ok", "{report}");
+    let text = full["content"][0]["text"].as_str().expect("text");
+    assert!(
+        text.len() <= 24_000,
+        "model-visible JSON: {} bytes",
+        text.len()
+    );
+    let value = &report["value"];
+    assert_eq!(value["type"], "Buffer");
+    assert_eq!(value["mimeType"], "image/png");
+    let bytes = value["bytes"].as_u64().expect("bytes");
+    assert!(bytes > 5_400_000, "past the REAL OOM size: {bytes} bytes");
+    assert!(value["height"].as_u64().expect("height") >= 6000, "{value}");
+    let file = PathBuf::from(value["file"].as_str().expect("file"));
+    assert!(file.starts_with(&artifacts), "{}", file.display());
+    assert_eq!(
+        fs::metadata(&file)?.len(),
+        bytes,
+        "the full-size bytes are saved"
+    );
+    assert!(is_png(&file));
+    let listed = report["artifacts"].as_array().expect("artifacts");
+    assert!(
+        listed.iter().any(|entry| entry["file"] == value["file"]),
+        "{report}"
+    );
+    let images = image_blocks(&full);
+    assert_eq!(images.len(), 1, "{images:?}");
+    assert!(within_bounds(&images[0]), "{images:?}");
+    assert_eq!(images[0].0, "image/jpeg");
+    assert_eq!(
+        value["image"]["width"].as_u64(),
+        Some(u64::from(images[0].1))
+    );
+    let page = report["pages"][0]["id"].as_str().expect("a page id");
+
+    // REAL dashdish-3: an element screenshot. Small enough to be its own PNG block.
+    let element = run(
+        &client,
+        &base,
+        2,
+        json!({"page":page,"code":
+        "return await page.getByRole('button').first().screenshot();"}),
+    )
+    .await?;
+    let element_report = self::report(&element);
+    assert_eq!(element_report["status"], "ok", "{element_report}");
+    let images = image_blocks(&element);
+    assert_eq!(images.len(), 1, "{images:?}");
+    assert_eq!(images[0].0, "image/png");
+    assert!(within_bounds(&images[0]));
+    assert_eq!(
+        element_report["value"]["width"].as_u64(),
+        Some(u64::from(images[0].1))
+    );
+
+    // Nested: the other keys stay as returned; the in-script Buffer is still a Buffer.
+    let nested = run(&client, &base, 3, json!({"page":page,"code":
+        "const shot = await page.screenshot(); return { shot, title: await page.title(), length: shot.length, base64: shot.toString('base64').slice(0, 8) };"})).await?;
+    let nested_report = self::report(&nested);
+    let value = &nested_report["value"];
+    assert_eq!(value["title"], "tall", "{nested_report}");
+    assert_eq!(value["base64"], "iVBORw0K");
+    assert_eq!(value["shot"]["bytes"], value["length"]);
+    assert_eq!(value["shot"]["mimeType"], "image/png");
+    assert_eq!(image_blocks(&nested).len(), 1);
+
+    // Non-image bytes: a descriptor and a file, no image block.
+    let raw = run(
+        &client,
+        &base,
+        4,
+        json!({"page":page,"code":
+        "return new Uint8Array([1, 2, 3]);"}),
+    )
+    .await?;
+    let raw_report = self::report(&raw);
+    assert_eq!(raw_report["value"]["type"], "Uint8Array", "{raw_report}");
+    assert_eq!(raw_report["value"]["mimeType"], "application/octet-stream");
+    assert_eq!(
+        fs::read(raw_report["value"]["file"].as_str().expect("file"))?,
+        [1, 2, 3]
+    );
+    assert!(image_blocks(&raw).is_empty());
+    eprintln!(
+        "PASS full page {bytes} bytes → block {:?}",
+        image_blocks(&full)[0]
+    );
 
     stop_server(&client, &base, &mut server).await?;
     fixture.abort();

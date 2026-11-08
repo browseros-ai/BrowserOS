@@ -37,6 +37,43 @@ export function toBinary(bytes: Uint8Array): string {
   return (bytes as Base64Bytes).toBase64()
 }
 
+/** True only while {@link exportValue} serializes the run's return value. */
+let exporting = false
+
+/** The realm's `JSON.stringify` as the SDK loads, before the agent's script could replace it,
+ * as neo-runtime's native call to it could not be. */
+const stringify = JSON.stringify
+
+/**
+ * The script's return value as JSON text for neo-runtime (`realm.rs` `to_json`), exactly as the
+ * realm's `JSON.stringify` writes it, except each `Uint8Array` (a `Buffer` included, top level
+ * or nested): `ship(bytes)` copies its bytes out of the realm natively and answers an index, and
+ * the JSON holds `{ type, bytes, [marker]: index }` in its place. Node's `{ type: 'Buffer', data }`
+ * spreads one number per byte, which ends a full-page screenshot's run out of memory and is no
+ * use to a host anyway. `undefined` when JSON drops the value. In-script `JSON.stringify` of a
+ * `Buffer` stays Node's: the switch is on only during this call.
+ */
+export function exportValue(
+  value: unknown,
+  ship: (bytes: Uint8Array) => number,
+  marker: string,
+): string | undefined {
+  exporting = true
+  try {
+    return stringify(value, (_key, field: unknown) =>
+      field instanceof Uint8Array
+        ? {
+            type: field instanceof Buffer ? 'Buffer' : 'Uint8Array',
+            bytes: field.length,
+            [marker]: ship(field),
+          }
+        : field,
+    )
+  } finally {
+    exporting = false
+  }
+}
+
 /**
  * The part of Node's `Buffer` a body needs: a `Uint8Array` whose `toString` decodes as Node's
  * does (UTF-8 by default), whose JSON is Node's `{ type: 'Buffer', data }`, and `equals`.
@@ -107,7 +144,9 @@ export class Buffer extends Uint8Array {
     }
   }
 
-  toJSON(): { type: 'Buffer'; data: number[] } {
+  /** Node's JSON; while {@link exportValue} runs, the buffer itself, for its replacer. */
+  toJSON(): { type: 'Buffer'; data: number[] } | Buffer {
+    if (exporting) return this
     return { type: 'Buffer', data: [...this] }
   }
 
