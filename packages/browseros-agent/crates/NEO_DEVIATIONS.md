@@ -3,12 +3,14 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (131)
+## Deviations (133)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
 | neo-runtime-injected/src/add-tag.ts | (file) | `server/frames.ts` `Frame._raceWithCSPError` | Playwright rejects a tag the page's Content Security Policy blocked by watching the console; Neo watches no console, so it waits for the document's `securitypolicyviolation` event instead, one task after the tag (Chromium reports an inline script's violation in a later task), and rejects with an Error naming the policy. |
 | neo-runtime-injected/src/bindings-call.ts | `endRun` | `server/page.ts` `Page.removeExposedBinding` | Playwright's bindings live as long as their page; Neo's end with the run, and a call still waiting on one is refused. |
+| neo-runtime-injected/src/browseros-ui.ts | `BROWSEROS_UI_HOSTS` | `injected/src/selectorEvaluator.ts` `SelectorEvaluatorImpl._queryCSS` | Playwright enters every open shadow root; Neo skips the root of BrowserOS's own takeover bar, which BrowserOS mounts on every page, so selectors, counts, text and role matching and aria snapshots see the page as a browser without the bar shows it. |
+| neo-runtime-injected/src/call-on-element.ts | `callOnElement` | `server/frameSelectors.ts` `FrameSelectors._callOnSelectorInternal` | the query skips BrowserOS's own UI roots (`browseros-ui.ts`), as every Neo read in the utility world does. |
 | neo-runtime-injected/src/clock-call.ts | `endRun` | `server/clock.ts` `Clock.uninstall` | Playwright's clock lives as long as its context; Neo's ends with the run, and each document gets its own timers back. |
 | neo-runtime-injected/src/main-injected.ts | `MainWorldInjectedScript` | `injected/src/injectedScript.ts` `InjectedScript.constructor` | Neo's main-world instance adds no window listener or document observer. |
 | neo-runtime/src/abort.rs | `REALM_GLOBALS` | `client/connection.ts` `Connection.sendMessageToServer` | Node's signal is an `EventTarget` whose listeners get an `Event`; the realm has neither class, so a listener gets a plain object with the `Event` fields a listener reads (`type`, `target`, `currentTarget`, `isTrusted`, `stopImmediatePropagation`), and `dispatchEvent` is not served. |
