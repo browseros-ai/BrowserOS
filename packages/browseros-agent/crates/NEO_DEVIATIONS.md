@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (133)
+## Deviations (134)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -12,6 +12,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime-injected/src/browseros-ui.ts | `BROWSEROS_UI_HOSTS` | `injected/src/selectorEvaluator.ts` `SelectorEvaluatorImpl._queryCSS` | Playwright enters every open shadow root; Neo skips the root of BrowserOS's own takeover bar, which BrowserOS mounts on every page, so selectors, counts, text and role matching and aria snapshots see the page as a browser without the bar shows it. |
 | neo-runtime-injected/src/call-on-element.ts | `callOnElement` | `server/frameSelectors.ts` `FrameSelectors._callOnSelectorInternal` | the query skips BrowserOS's own UI roots (`browseros-ui.ts`), as every Neo read in the utility world does. |
 | neo-runtime-injected/src/clock-call.ts | `endRun` | `server/clock.ts` `Clock.uninstall` | Playwright's clock lives as long as its context; Neo's ends with the run, and each document gets its own timers back. |
+| neo-runtime-injected/src/glue.ts | `judgeRelease` | `injected/src/injectedScript.ts` `InjectedScript.setupHitTargetInterceptor` | Playwright judges only the first event of the input and lets the rest through. Neo also judges the first release (`pointerup`, `mouseup`, `touchend`): when the element got the press but has moved off the press point by then (the page re-laid out while it handled the press, as a popover that repositions on every render does), the release and every later event are blocked and the stop names what is under the point, so the action presses again where the element now is instead of reporting a click the element never got. |
 | neo-runtime-injected/src/main-injected.ts | `MainWorldInjectedScript` | `injected/src/injectedScript.ts` `InjectedScript.constructor` | Neo's main-world instance adds no window listener or document observer. |
 | neo-runtime/src/abort.rs | `REALM_GLOBALS` | `client/connection.ts` `Connection.sendMessageToServer` | Node's signal is an `EventTarget` whose listeners get an `Event`; the realm has neither class, so a listener gets a plain object with the `Event` fields a listener reads (`type`, `target`, `currentTarget`, `isTrusted`, `stopImmediatePropagation`), and `dispatchEvent` is not served. |
 | neo-runtime/src/artifacts.rs | `Artifacts::existing` | `client/elementHandle.ts` `resolvePathsAndDirectoryForInputFiles` | Playwright's client reads any path on its host, relative to its working directory. A Neo script has no file system, and the host must not hand an agent's script its disk, so Rust reads a file to upload or drop only inside the run's artifact directory, at a relative path without `..`, refusing a symbolic link on the way, and a run without one names the option. |

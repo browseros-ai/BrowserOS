@@ -110,6 +110,92 @@ function webStorage(kind: 'local' | 'session'): Storage {
   return kind === 'local' ? localStorage : sessionStorage
 }
 
+/** Removes the release listener `judgeRelease` armed last in this document. A new arming calls
+ * it first, as Playwright's one `_hitTargetInterceptor` slot drops a listener nobody stopped, so
+ * a run that lost its page before the stop never leaves the user's clicks blocked. */
+let disarmRelease: (() => void) | undefined
+
+/**
+ * Deviation: `injected/src/injectedScript.ts` `InjectedScript.setupHitTargetInterceptor`: `if (result === undefined && point)` Playwright judges only the first event of the input and lets the rest through. Neo also judges the first release (`pointerup`, `mouseup`, `touchend`): when the element got the press but has moved off the press point by then (the page re-laid out while it handled the press, as a popover that repositions on every render does), the release and every later event are blocked and the stop names what is under the point, so the action presses again where the element now is instead of reporting a click the element never got.
+ *
+ * Wraps the `{stop}` of an armed `interceptor` with a second capture listener on `window`. It is
+ * added after Playwright's (built with the glue), so it runs after it on each event, and never
+ * runs once Playwright's blocks the first event (`stopImmediatePropagation`). Only a move is
+ * judged: a release still inside the element's box (covered by what the press opened, as a menu
+ * or listbox), or on an element now detached or without a box (removed or hidden by its own
+ * press), is left alone, as Playwright leaves it.
+ */
+function judgeRelease(
+  injected: InjectedScript,
+  node: Node,
+  action: 'hover' | 'tap' | 'mouse' | 'drag',
+  interceptor: HitTargetInterceptionResult,
+): HitTargetInterceptionResult {
+  // The events Playwright's interceptor judges for each action (its constructor's sets).
+  const judged = {
+    mouse: [
+      'mousedown',
+      'mouseup',
+      'pointerdown',
+      'pointerup',
+      'click',
+      'auxclick',
+      'dblclick',
+      'contextmenu',
+    ],
+    tap: ['pointerdown', 'pointerup', 'touchstart', 'touchend', 'touchcancel'],
+  }[action as 'mouse' | 'tap']
+  // `setupHitTargetInterceptor` judges this element, already found connected.
+  const element = injected.retarget(node, 'button-link')
+  if (!judged || !element) return interceptor
+  disarmRelease?.()
+  const releases = new Set(['pointerup', 'mouseup', 'touchend'])
+  let released = false
+  let moved: { hitTargetDescription: string } | undefined
+  const listener = (event: Event) => {
+    if (!event.isTrusted) return
+    if (moved) {
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+    if (released || !releases.has(event.type)) return
+    released = true
+    const point =
+      'changedTouches' in event
+        ? (event as TouchEvent).changedTouches[0]
+        : (event as MouseEvent)
+    if (!point || !element.isConnected) return
+    const box = element.getBoundingClientRect()
+    if (!box.width || !box.height) return
+    const { clientX: x, clientY: y } = point
+    if (x >= box.left && x <= box.right && y >= box.top && y <= box.bottom)
+      return
+    const hit = injected.expectHitTarget({ x, y }, element)
+    if (hit === 'done') return
+    moved = hit
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+  }
+  const disarm = () => {
+    for (const type of judged)
+      window.removeEventListener(type, listener, { capture: true })
+    if (disarmRelease === disarm) disarmRelease = undefined
+  }
+  for (const type of judged)
+    window.addEventListener(type, listener, { capture: true, passive: false })
+  disarmRelease = disarm
+  return {
+    stop: () => {
+      disarm()
+      const verdict = interceptor.stop()
+      return verdict === 'done' && moved ? moved : verdict
+    },
+  }
+}
+
 export const glue = {
   title: () => ({ value: document.title }),
 
@@ -424,14 +510,20 @@ export const glue = {
     injected,
     { action, hitPoint, blockAllEvents },
     element,
-  ) => ({
-    outcome: injected.setupHitTargetInterceptor(
+  ) => {
+    const outcome = injected.setupHitTargetInterceptor(
       element,
       action,
       hitPoint,
       blockAllEvents,
-    ),
-  }),
+    )
+    return {
+      outcome:
+        typeof outcome === 'string'
+          ? outcome
+          : judgeRelease(injected, element, action, outcome),
+    }
+  },
 
   // Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `window.addEventListener('mousemove', mouseListener, { once: true, capture: true });`
   setupDragListeners: () => {

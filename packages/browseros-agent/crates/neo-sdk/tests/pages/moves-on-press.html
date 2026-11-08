@@ -1,0 +1,64 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Moves on press</title>
+<style>
+  body { margin: 0; height: 100vh; font: 16px sans-serif; }
+  #open { position: absolute; left: 40px; bottom: 100px; }
+  #panel { position: fixed; left: 200px; width: 300px; background: #eef; display: none; }
+  #panel header { display: flex; gap: 8px; padding: 8px; }
+  #panel .row { height: 40px; padding: 0 8px; }
+  #lazy { height: 120px; background: #fee; }
+</style>
+</head>
+<body>
+<button id="open">Open</button>
+<div id="panel" role="dialog" aria-label="Details">
+  <header><button id="edit">Edit</button><button id="close">Close</button></header>
+  <div class="row">Title</div>
+  <div class="row">When</div>
+  <div class="row">Where</div>
+</div>
+<script>
+  // A popover placed as MUI's Popover places one: from its anchor, kept 16px inside the
+  // viewport's bottom, and placed again on every render. It renders when it opens and when it
+  // handles a press (`mousedown`, as a React re-render in a press handler would), so a press
+  // moves it to wherever its current size says it belongs.
+  window.__edits = 0
+  window.__hidden = 0
+  window.__grown = false
+  const panel = document.getElementById('panel')
+  const open = document.getElementById('open')
+  function place() {
+    const anchor = open.getBoundingClientRect()
+    const top = Math.min(anchor.top + anchor.height / 2, innerHeight - 16 - panel.offsetHeight)
+    panel.style.top = `${top}px`
+  }
+  open.onclick = () => {
+    panel.style.display = 'block'
+    place()
+  }
+  panel.addEventListener('mousedown', place)
+  // Content that arrives while nobody renders the popover (here: while the tab is hidden): the
+  // popover keeps its place until its next render, which is the next press on it.
+  window.__grow = () => {
+    if (window.__grown) return
+    window.__grown = true
+    const lazy = document.createElement('div')
+    lazy.id = 'lazy'
+    lazy.textContent = 'Loaded later'
+    panel.append(lazy)
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'hidden') return
+    window.__hidden++
+    if (panel.style.display === 'block') window.__grow()
+  })
+  document.getElementById('edit').onclick = () => {
+    window.__edits++
+    location.hash = 'edit'
+  }
+</script>
+</body>
+</html>

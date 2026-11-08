@@ -5,8 +5,9 @@
 //! call-log layout or retry counts.
 //!
 //! The cases: an ordinary click, which reaches its target and not the button beside it; strict,
-//! hidden, covered and disabled buttons; a press an overlay catches after the hit check; a sticky
-//! header; a link to a slow page; a dialog; a run that ends mid-press; a trial; a closed tab; the
+//! hidden, covered and disabled buttons; a press an overlay catches after the hit check; a press
+//! that moves its own target away before the release, and presses that cover or hide their own
+//! target, which must not be pressed again; a sticky header; a link to a slow page; a dialog; a run that ends mid-press; a trial; a closed tab; the
 //! install's reuse; a frame selector; a background tab; and concurrent clicks.
 //! `crates/neo-sdk/tests/parity/click.test.mjs` runs the same pages through live Playwright beside
 //! Neo.
@@ -52,6 +53,13 @@ const DIALOG_PAGE: &str = include_str!("../../neo-sdk/tests/pages/dialog.html");
 /// `pointerdown` it caught, so exactly one press is blocked after the hit check passed. The page
 /// counts the button's own clicks in `window.__clicks`.
 const BLOCKED_ONCE_PAGE: &str = include_str!("../../neo-sdk/tests/pages/blocked-once.html");
+/// A popover placed against the viewport's bottom from its size, and placed again whenever it
+/// handles a `mousedown`. `window.__grow()` adds content without placing it again, so the next
+/// press on it moves it; its `Edit` button counts its clicks in `window.__edits`.
+const MOVES_ON_PRESS_PAGE: &str = include_str!("../../neo-sdk/tests/pages/moves-on-press.html");
+/// `Choose`, whose `mousedown` opens a listbox over the whole page, and `Dismiss`, whose
+/// `mousedown` hides it; each counts its presses (`window.__chosen`, `window.__dismissed`).
+const COVERS_ON_PRESS_PAGE: &str = include_str!("../../neo-sdk/tests/pages/covers-on-press.html");
 
 /// The ordinary click: Playwright's `getByRole` locator on `OK_PAGE`, then the URL its handler
 /// moved to.
@@ -536,6 +544,83 @@ return 'clicked'"
             json!(1),
             "{options}: the button's handler ran once, never for the blocked press"
         );
+    }
+}
+
+/// The REAL bench's gocalendar popover: the press reaches `Edit`, the popover handles it by
+/// placing itself again from its grown size, and the release lands on the popover's body, so the
+/// browser's click never reaches `Edit`. The interceptor judges that release, blocks it and the
+/// click, and the click presses again where `Edit` went: its handler ran once, delivery `Done`.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_target_its_own_press_moves_away_is_pressed_again_where_it_went() {
+    let Some(tab) = open_page("/moves-on-press.html", MOVES_ON_PRESS_PAGE).await else {
+        return;
+    };
+    tab.evaluate("document.getElementById('open').click(); window.__grow()")
+        .await;
+    let outcome = run(
+        &tab,
+        "await page.getByRole('button', { name: 'Edit' }).click()
+return page.url()",
+    )
+    .await;
+    let edits = tab.evaluate("window.__edits").await;
+    tab.close().await;
+
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:#?}");
+    let call = only_record(&outcome);
+    assert_eq!(
+        (&call.result, call.delivery),
+        (&CallResult::Ok, Some(Delivery::Done)),
+        "{call:#?}"
+    );
+    assert!(
+        call.log.join("\n").contains("intercepts pointer events"),
+        "the first release landed off the moved button and was blocked: {:#?}",
+        call.log
+    );
+    let url = outcome
+        .value
+        .as_ref()
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(url.ends_with("#edit"), "{url:?}");
+    assert_eq!(edits, json!(1), "Edit's handler ran once");
+}
+
+/// Presses that act on their own `mousedown` and leave the target where it was: `Choose` opens a
+/// listbox over it, so the release lands on the listbox; `Dismiss` hides itself. Neither is a
+/// move, so each is pressed once and the click resolves, as Playwright's does.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_press_that_covers_or_hides_its_target_is_not_pressed_again() {
+    for (name, presses) in [
+        ("Choose", "window.__chosen"),
+        ("Dismiss", "window.__dismissed"),
+    ] {
+        let Some(tab) = open_page("/covers-on-press.html", COVERS_ON_PRESS_PAGE).await else {
+            return;
+        };
+        let outcome = run(
+            &tab,
+            &format!("await page.getByRole('button', {{ name: '{name}' }}).click()"),
+        )
+        .await;
+        let pressed = tab.evaluate(presses).await;
+        tab.close().await;
+
+        assert_eq!(outcome.status, RunStatus::Ok, "{name}: {outcome:#?}");
+        let call = only_record(&outcome);
+        assert_eq!(
+            (&call.result, call.delivery),
+            (&CallResult::Ok, Some(Delivery::Done)),
+            "{name}: {call:#?}"
+        );
+        assert!(
+            !call.log.join("\n").contains("intercepts pointer events"),
+            "{name}: no press was blocked: {:#?}",
+            call.log
+        );
+        assert_eq!(pressed, json!(1), "{name}: pressed once");
     }
 }
 

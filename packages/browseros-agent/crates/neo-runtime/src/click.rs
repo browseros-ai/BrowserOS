@@ -44,6 +44,11 @@
 //! - The verdict is read after every press. Playwright skips it under `noWaitAfter`, and so
 //!   reports a press its interceptor blocked as a click; here `noWaitAfter` skips only the
 //!   navigation barrier.
+//! - The interceptor also judges the press's release (the glue's `judgeRelease`): a target the
+//!   page moved off the press point before the release (a popover placing itself again while it
+//!   handles the press) gets its release and click blocked, and the verdict names what is under
+//!   the point, so loop B presses again where the target went. Playwright judges the first event
+//!   only and reports that click done although the target never got it.
 //! - A CDP failure after a press was written ends the call with `Error` and delivery `Unknown`;
 //!   Playwright's loop A would retry it and might press again.
 //! - A `clickCount` above [`MAX_CLICK_COUNT`] and `steps` above [`MAX_STEPS`] are refused
