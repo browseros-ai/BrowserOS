@@ -27,8 +27,8 @@ import { fixture } from './events.mjs'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
   connectCdp,
+  connectReference,
   errorCategory,
   eventually,
   launchBrowser,
@@ -241,7 +241,7 @@ test('context.close() lets go of every tab the same way through Neo and Playwrig
 
 /** Runs the script as Playwright does on the tab, then lets go of the browser if it still holds it. */
 async function viaPlaywright(port, targetId, source) {
-  const playwright = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
+  const playwright = await connectReference(port)
   try {
     const [context] = playwright.contexts()
     return await runInPlaywright(context, targetId, source)

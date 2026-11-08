@@ -22,7 +22,9 @@
 
 import type {
   ArtifactCommands,
+  BrowserCommands,
   BrowserContextCommands,
+  DebuggerCommands,
   DialogCommands,
   FrameCommands,
   Metadata,
@@ -32,6 +34,7 @@ import type {
   RouteCommands,
 } from '@browseros/neo-runtime-spec/serve'
 import type { BindingCommands } from './binding-call'
+import type { ClockCommands } from './clock'
 import {
   AbortError,
   isTargetClosedError,
@@ -165,6 +168,7 @@ export type ApiName =
   | 'frame.frameElement'
   | 'page.removeLocatorHandler'
   | 'locator.waitFor'
+  | 'locator.waitForFunction'
   | 'page.waitForURL'
   | 'frame.waitForURL'
   | 'page.waitForLoadState'
@@ -220,6 +224,13 @@ export type ApiName =
   | 'browserContext.exposeFunction'
   | 'bindingCall.resolve'
   | 'bindingCall.reject'
+  | 'clock.install'
+  | 'clock.fastForward'
+  | 'clock.pauseAt'
+  | 'clock.resume'
+  | 'clock.runFor'
+  | 'clock.setFixedTime'
+  | 'clock.setSystemTime'
   | 'page.addScriptTag'
   | 'page.addStyleTag'
   | 'frame.addScriptTag'
@@ -241,12 +252,18 @@ export type ApiName =
   | 'page.screenshot'
   | 'page.pdf'
   | 'locator.screenshot'
+  | 'elementHandle.screenshot'
   | 'page.waitForEvent'
   | 'browserContext.waitForEvent'
   | 'page.consoleMessages'
   | 'page.waitForRequest'
   | 'page.waitForResponse'
   | 'page.requests'
+  | 'webStorage.items'
+  | 'webStorage.getItem'
+  | 'webStorage.setItem'
+  | 'webStorage.removeItem'
+  | 'webStorage.clear'
   | 'page.pageErrors'
   | 'page.clearConsoleMessages'
   | 'page.clearPageErrors'
@@ -287,6 +304,19 @@ export type ApiName =
   | 'frame.innerHTML'
   | 'locator.allInnerTexts'
   | 'locator.all'
+  // Browser and emulation (platform).
+  | 'browser.newContext'
+  | 'browser.close'
+  | 'browserContext.close'
+  | 'page.setViewportSize'
+  | 'page.emulateMedia'
+  | 'page.requestGC'
+  | 'page.pause'
+  | 'debugger.requestPause'
+  | 'debugger.resume'
+  | 'debugger.next'
+  | 'debugger.runTo'
+  | 'selectors.setTestIdAttribute'
   // Element operations (B2).
   | 'locator.focus'
   | 'page.focus'
@@ -332,8 +362,8 @@ const AGENT_FRAME = /^ {4}at .* \(<input>:(\d+):(\d+)\)$/
 export class Connection {
   #nextId = 1
   readonly #lineOffset: number
-  /** Set once the run's context closed (`BrowserContext.close`): every later call fails as
-   * closed before it reaches Rust. */
+  /** Set once the run disconnected (`browser.close()`, or its own context's `close()`): every
+   * later call fails as closed before it reaches Rust. */
   #closed = false
   /** What rejects each call still waiting for its reply, with the context's close reason. */
   readonly #inFlight = new Set<(reason: string | undefined) => void>()
@@ -383,6 +413,40 @@ export class Connection {
       params,
       timeout,
     )) as Resolved<PageCommands[M]['result']>
+  }
+
+  /** {@link Connection.send} for a `Browser` command, to the run's `browser@default`. */
+  async sendBrowser<M extends keyof BrowserCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: BrowserCommands[M]['params'],
+    timeout: number,
+  ): Promise<Resolved<BrowserCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<BrowserCommands[M]['result']>
+  }
+
+  /** {@link Connection.send} for a `Debugger` command, to a context's `debugger@…` guid. */
+  async sendDebugger<M extends keyof DebuggerCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: DebuggerCommands[M]['params'],
+    timeout: number,
+  ): Promise<Resolved<DebuggerCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<DebuggerCommands[M]['result']>
   }
 
   /** {@link Connection.send} for a `BrowserContext` command, to the context's guid. */
@@ -542,6 +606,18 @@ export class Connection {
     )) as EvalFrameCommands[M]['result']
   }
 
+  /** {@link Connection.send} for a clock command on the context (`clock.ts`). */
+  async sendClock<M extends keyof ClockCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: ClockCommands[M]['params'],
+    timeout: number,
+  ): Promise<ClockCommands[M]['result']> {
+    return ((await this.#send(apiName, guid, method, params, timeout)) ??
+      {}) as ClockCommands[M]['result']
+  }
+
   /** {@link Connection.send} for a binding command (`binding-call.ts`): `exposeBinding` on a
    * page or the context, `resolve` / `reject` on a call's `bindingcall@` guid. */
   async sendBinding<M extends keyof BindingCommands>(
@@ -620,6 +696,8 @@ export class Connection {
     const closedBefore = this._closedFor(guid)
     const id = this.#nextId++
     const message = { id, guid, method, params, metadata }
+    // Playwright's connection rejects every call still pending when it closes: a reply that
+    // arrives after it (a `newContext` Rust answered meanwhile) creates nothing.
     const pending = new Promise<string>((resolve, reject) => {
       const abandon = (reason: string | undefined) =>
         reject(closedError(apiName, reason))
@@ -659,9 +737,9 @@ export class Connection {
   }
 
   /**
-   * The run's context closed: calls still waiting for a reply reject at once, with `reason`
-   * when the close gave one, and every later call fails as closed. A call Rust was serving
-   * finishes there on its own; its record in the run's outcome says what it did.
+   * The run disconnected (`Browser._didClose`): calls still waiting for a reply reject at once,
+   * with `reason` when the close gave one, and every later call fails as closed. A call Rust
+   * was serving finishes there on its own; its record in the run's outcome says what it did.
    */
   _close(reason: string | undefined): void {
     this.#closed = true

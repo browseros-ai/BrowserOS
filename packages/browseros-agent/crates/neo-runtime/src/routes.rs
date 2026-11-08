@@ -29,6 +29,7 @@ use std::sync::{Arc, Mutex};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use browseros_cdp::{CdpError, SessionId};
+use futures_util::future;
 use neo_runtime_spec::serve::{NameValue, RouteCall, RouteContinueParams, RouteFulfillParams};
 use neo_runtime_spec::{Binary, MethodMeta};
 use serde::{Deserialize, Serialize};
@@ -341,7 +342,7 @@ impl Patterns {
     }
 }
 
-/// Neo: the run's context routes, shared by every tab the run has a session on.
+/// Neo: the run's context routes, shared only by its own context's attached tabs.
 #[derive(Default)]
 pub(crate) struct ContextRoutes(Mutex<Option<Arc<Patterns>>>);
 
@@ -433,6 +434,8 @@ struct State {
     paused: HashMap<u64, Paused>,
     /// The pauses whose one answer was taken, by the script or a release.
     answered: HashSet<u64>,
+    /// The pauses whose own continuation holds its claim ([`Routes::begin_continuing`]).
+    continuing: HashSet<u64>,
     /// The fetches in flight, by `networkId`: their request's pauses and failure go to them.
     fetching: HashMap<String, mpsc::UnboundedSender<FetchStep>>,
     /// Playwright: `server/chromium/crNetworkManager.ts` `RouteImpl.continue`: `this._alreadyContinuedParams = {`
@@ -440,6 +443,21 @@ struct State {
     /// Each continued request's params (without its interception id), by `networkId`: its
     /// redirect hops keep its header overrides, and a restart of it goes on with them again.
     continued: HashMap<String, Map<String, Value>>,
+}
+
+/// Neo: the claim of one paused route's own continuation ([`Routes::begin_continuing`]), given
+/// back when it drops.
+pub(crate) struct Continuing {
+    routes: Arc<Routes>,
+    index: u64,
+}
+
+/// Neo: gives the claim back.
+impl Drop for Continuing {
+    fn drop(&mut self) {
+        let index = self.index;
+        let _released = self.routes.with(|state| state.continuing.remove(&index));
+    }
 }
 
 /// Neo: one tab's routes in this run (`route@<targetId>:<n>`).
@@ -779,6 +797,28 @@ impl Routes {
                 paused.emitted = true;
             }
         });
+    }
+
+    /// Neo: claims the continuation the SDK sends on its own for pause `index` once none of its
+    /// handlers took it, for the dispatcher to admit outside its in-flight cap
+    /// (`dispatch.rs` `Inner::release_claim`): it lets the page's request go and adds no work.
+    /// `None` unless the run was handed the pause, its answer is not taken, and no other call
+    /// holds the claim, so such calls never outnumber the pauses the run holds.
+    pub(crate) fn begin_continuing(self: &Arc<Self>, index: u64) -> Option<Continuing> {
+        let claimed = self
+            .with(|state| {
+                state
+                    .paused
+                    .get(&index)
+                    .is_some_and(|paused| paused.emitted)
+                    && !state.answered.contains(&index)
+                    && state.continuing.insert(index)
+            })
+            .ok()?;
+        claimed.then(|| Continuing {
+            routes: Arc::clone(self),
+            index,
+        })
     }
 
     /// Nobody took pause `index` (no listener, a full queue, the run over): it goes on.
@@ -1174,8 +1214,8 @@ pub(crate) async fn set_page_patterns(
     turn(page, progress).await
 }
 
-/// Neo: `BrowserContext.setNetworkInterceptionPatterns`, for every tab the run has a session
-/// on; a tab attached later pauses at its attach (`Tabs::session`).
+/// Neo: `BrowserContext.setNetworkInterceptionPatterns`, for the run's own context's attached
+/// tabs; a tab of that context attached later pauses at its attach (`Tabs::session`).
 ///
 /// # Errors
 ///
@@ -1187,7 +1227,7 @@ pub(crate) async fn set_context_patterns(
 ) -> Result<(), CallError> {
     let emptied = patterns.is_empty();
     tabs.routes().set(patterns);
-    for (_, page) in tabs.attached() {
+    for (_, page) in tabs.own_attached() {
         if emptied {
             progress
                 .race(send_all(&page, page.routes.context_emptied()))
@@ -1209,27 +1249,34 @@ async fn turn(page: &PageSession, progress: &Progress) -> Result<(), CallError> 
     Ok(())
 }
 
-/// Neo: at the run's end, every pause it left open goes on and the tab stops pausing
-/// requests, before its session detaches ([`Routes::left_open`]).
+/// Neo: at the run's end or the context's close, every pause the run left open goes on and the
+/// tab stops pausing requests, before its session detaches ([`Routes::left_open`]). Both are
+/// taken from the routes at once and every continuation and the pausing's end go out together,
+/// none waiting on another's reply: one the browser is slow to acknowledge holds back no other,
+/// and a caller that stops waiting drops nothing still owed once this runs on a task of its own
+/// (`Tabs::release_run_scoped`).
 pub(crate) async fn finish(page: &PageSession) {
-    send_all(page, page.routes.left_open()).await;
-    if page.routes.stop_intercepting()
-        && let Err(error) = page.intercept(false).await
-    {
-        debug!(%error, "turning a tab's request pausing off at run end failed");
-    }
+    let answers = page.routes.left_open();
+    let stop = page.routes.stop_intercepting();
+    let off = async {
+        if stop && let Err(error) = page.intercept(false).await {
+            debug!(%error, "turning a tab's request pausing off failed");
+        }
+    };
+    future::join(send_all(page, answers), off).await;
 }
 
-/// Neo: sends answers whose outcome nobody waits for (released pauses).
+/// Neo: sends answers whose outcome nobody waits for (released pauses), all together.
 async fn send_all(page: &PageSession, answers: Vec<Answer>) {
-    for answer in answers {
+    future::join_all(answers.into_iter().map(|answer| async move {
         if let Err(error) = page
             .send_to(answer.session.as_ref(), answer.method, answer.params)
             .await
         {
             debug!(%error, "releasing a paused request failed");
         }
-    }
+    }))
+    .await;
 }
 
 /// Neo: a CDP error turning the pausing over, as the script sees it.
@@ -1753,6 +1800,54 @@ mod tests {
             .answer(1, RouteCall::Abort(RouteAbortParams { error_code: None }))
             .unwrap_err();
         assert_eq!(second.message, ROUTE_HANDLED);
+    }
+
+    #[test]
+    fn tests_that_only_a_handed_unanswered_pause_gives_its_continuation_one_claim() {
+        let routes = Arc::new(Routes::new("T", Arc::default()));
+        let index = routes
+            .with(|state| {
+                state.next += 1;
+                let mut pause = paused("http://a.test/", &[]);
+                pause.emitted = false;
+                state.paused.insert(state.next, pause);
+                state.next
+            })
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert!(
+            routes.begin_continuing(index).is_none(),
+            "a pause not handed to the run yet"
+        );
+        routes.emitted(index);
+        assert!(
+            routes.begin_continuing(index + 1).is_none(),
+            "a pause that does not exist"
+        );
+        let claim = routes.begin_continuing(index);
+        assert!(claim.is_some(), "the run's pause");
+        assert!(
+            routes.begin_continuing(index).is_none(),
+            "a second continuation while the first holds the claim"
+        );
+        drop(claim);
+        assert!(
+            routes.begin_continuing(index).is_some(),
+            "the claim goes back when it drops"
+        );
+        let _answer = routes.answer(
+            index,
+            RouteCall::Continue(RouteContinueParams {
+                url: None,
+                method: None,
+                headers: None,
+                post_data: None,
+                is_fallback: true,
+            }),
+        );
+        assert!(
+            routes.begin_continuing(index).is_none(),
+            "a pause whose answer was taken"
+        );
     }
 
     #[test]

@@ -17,10 +17,8 @@ import { fileURLToPath } from 'node:url'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
-  connectCdp,
   eventually,
-  launchBrowser,
+  launchReference,
   openTab,
   playwrightVersion,
   runCleanups,
@@ -53,13 +51,13 @@ test(`context.pages() reads the same through Neo and Playwright ${playwrightVers
     const origin = await serveFixture(cleanups, {
       pages: { '/run.html': tab, '/other.html': tab, '/opened.html': tab },
     })
-    const browser = await launchBrowser(cleanups, browserBinary)
-    const cdp = await connectCdp(cleanups, browser.port)
+    const { playwright, cdp, ...browser } = await launchReference(
+      cleanups,
+      browserBinary,
+      { cdp: true },
+    )
     const source = readFileSync(scriptPath, 'utf8')
 
-    const playwright = await chromium.connectOverCDP(
-      `http://127.0.0.1:${browser.port}`,
-    )
     const [context] = playwright.contexts()
     const viaPlaywright = await half(cdp, origin, (target) =>
       runInPlaywright(context, target, source),

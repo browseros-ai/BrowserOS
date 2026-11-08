@@ -1,9 +1,11 @@
 /**
  * Playwright: `client/page.ts` `Page.screenshot`
  * Playwright: `client/page.ts` `Page.pdf`
+ * Playwright: `client/elementHandle.ts` `ElementHandle.screenshot`
  * Playwright: `client/elementHandle.ts` `determineScreenshotType`
  *
- * The client half of `page.screenshot`, `locator.screenshot` and `page.pdf`: Playwright's
+ * The client half of `page.screenshot`, `locator.screenshot`, `elementHandle.screenshot` and
+ * `page.pdf`: Playwright's
  * option mapping before the call (the image type a `path` names, mask locators as
  * `{frame, selector}`, PDF sizes in `px`), and the `Buffer` the call resolves.
  *
@@ -12,11 +14,10 @@
  *   A Neo script has no file system: `path` travels with the call and neo-runtime writes the
  *   bytes into the run's artifact directory (`artifacts.rs`), relative paths only. A run
  *   without one refuses `path` with an Error naming the option.
- * - Deviation: `client/page.ts` `Page.pdf`: `const result = await this._channel.pdf(transportOptions, kNoTimeout);`
- *   `page.screenshot` and `locator.screenshot` resolve their timeout through `TimeoutSettings`,
- *   so their `signal` aborts the capture as Playwright's does (slice S). `page.pdf`, which
- *   Playwright sends with no signal, refuses one before anything reaches the page instead of
- *   ignoring it (med-pw-eval DECIDED). `undefined` and `null` are no signal.
+ *
+ * The three screenshots resolve their timeout through `TimeoutSettings`, so their `signal` aborts
+ * the capture as Playwright's does (slice S). `page.pdf` sends no timeout and no signal, as
+ * Playwright's `kNoTimeout` print, so a signal does not stop a print.
  */
 
 import type {
@@ -27,8 +28,12 @@ import { getMimeTypeForPath } from '../vendor/playwright/isomorphic/mimeType'
 import { Buffer } from './buffer'
 import type { ApiName } from './connection'
 import type { Locator } from './locator'
-import type { NeoScreenshotParams } from './neo-commands'
+import type {
+  ElementScreenshotParams,
+  NeoScreenshotParams,
+} from './neo-commands'
 import {
+  ELEMENT_SCREENSHOT_KEYS,
   NEO_SCREENSHOT_KEYS,
   PAGE_PDF_KEYS,
   PAGE_SCREENSHOT_KEYS,
@@ -38,7 +43,8 @@ import {
 /** Playwright's `Rect`. */
 export type Rect = { x: number; y: number; width: number; height: number }
 
-/** The options `page.screenshot` and `locator.screenshot` share (`LocatorScreenshotOptions`). */
+/** The options `page.screenshot`, `locator.screenshot` and `elementHandle.screenshot` share
+ * (`LocatorScreenshotOptions`, `ElementHandleScreenshotOptions`). */
 export type ScreenshotOptions = {
   type?: 'png' | 'jpeg' | 'webp'
   quality?: number
@@ -140,6 +146,22 @@ export function locatorScreenshotParams(
 }
 
 /**
+ * `elementHandle.screenshot`'s params: `ElementHandle.screenshot`'s, in schema order, then
+ * Neo's `path`.
+ * Playwright: `client/elementHandle.ts` `ElementHandle.screenshot`
+ */
+export function elementScreenshotParams(
+  apiName: ApiName,
+  options: ScreenshotOptions,
+): ElementScreenshotParams {
+  const params = pickParams(
+    ELEMENT_SCREENSHOT_KEYS,
+    screenshotFields(apiName, options),
+  ) as ElementScreenshotParams
+  return withPath(params, options.path)
+}
+
+/**
  * Playwright's copy of the options, `copy.type` from the path when unset, and each mask
  * locator as its frame's channel and selector.
  * Playwright: `client/page.ts` `Page.screenshot`: `const copy: channels.PageScreenshotParams = { ...options, mask: undefined };`
@@ -167,26 +189,11 @@ function screenshotFields(
 }
 
 /**
- * `page.pdf`'s refusal of a supplied `signal`, before any option is mapped or sent: it resolves
- * no timeout, so `TimeoutSettings` never hands it a signal to forward. `undefined` and `null`
- * are no signal, as Playwright's client acts only on a truthy one.
- * Deviation: `client/page.ts` `Page.pdf`: `const result = await this._channel.pdf(transportOptions, kNoTimeout);` until Neo can abort a call, a signal is refused rather than ignored.
- */
-function refuseSignal(apiName: ApiName, options: { signal?: unknown }): void {
-  if (options.signal !== undefined && options.signal !== null)
-    throw new Error(`${apiName}: Neo does not support signal yet`)
-}
-
-/**
  * Playwright's `Page.pdf` option mapping: number sizes and margins become `px` strings, and
  * `margin` is copied so the caller's object stays as it was.
  * Playwright: `client/page.ts` `Page.pdf`
  */
-export function pdfParams(
-  apiName: ApiName,
-  options: PDFOptions & { signal?: unknown },
-): WithPath<PagePdfParams> {
-  refuseSignal(apiName, options)
+export function pdfParams(options: PDFOptions): WithPath<PagePdfParams> {
   const transportOptions: Record<string, unknown> = { ...options }
   const margin = options.margin ? { ...options.margin } : undefined
   if (margin) transportOptions.margin = margin

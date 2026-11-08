@@ -1,7 +1,8 @@
 /**
  * The BUILT `dist/bindings-call.js` (what neo-runtime's `bindings.rs` runs in a frame's main
  * world) on a stand-in global, without a browser: the run's `end` leaves a document none of the
- * run's binding globals, whether or not its controller was ever installed.
+ * run's binding globals, whether or not its controller was ever installed, and leaves another
+ * run's names with the controller and the CDP binding they need.
  */
 
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -36,13 +37,26 @@ describe('bindings-call end', () => {
     expect(BINDING in global).toBe(false)
   })
 
-  test('rejects each waiting call and removes every binding with the controller', () => {
+  /** A stand-in controller holding `names`, each with one waiting call. */
+  function controllerOf(names: string[]) {
     const rejected: string[] = []
     const removed: string[] = []
-    const callbacks = new Map([
-      [1, { reject: (error: Error) => rejected.push(error.message) }],
-    ])
-    const bindings = new Map([['compute', { callbacks }]])
+    const bindings = new Map(
+      names.map((name) => [
+        name,
+        {
+          callbacks: new Map([
+            [
+              1,
+              {
+                reject: (error: Error) =>
+                  rejected.push(`${name}:${error.message}`),
+              },
+            ],
+          ]),
+        },
+      ]),
+    )
     global[BINDING] = () => {}
     global[CONTROLLER] = {
       _bindings: bindings,
@@ -51,11 +65,25 @@ describe('bindings-call end', () => {
         bindings.delete(name)
       },
     }
-    bindingsCall('end', END)
-    expect(rejected).toEqual([END.message])
+    return { rejected, removed }
+  }
+
+  test('rejects the run’s waiting calls and removes its bindings with the controller', () => {
+    const { rejected, removed } = controllerOf(['compute'])
+    bindingsCall('end', { ...END, names: ['compute'] })
+    expect(rejected).toEqual([`compute:${END.message}`])
     expect(removed).toEqual(['compute'])
     expect(CONTROLLER in global).toBe(false)
     expect(BINDING in global).toBe(false)
+  })
+
+  test('leaves another run’s names with the controller and the CDP binding', () => {
+    const { rejected, removed } = controllerOf(['runA', 'runB'])
+    bindingsCall('end', { ...END, names: ['runA'] })
+    expect(rejected).toEqual([`runA:${END.message}`])
+    expect(removed).toEqual(['runA'])
+    expect(CONTROLLER in global).toBe(true)
+    expect(BINDING in global).toBe(true)
   })
 
   test('another op without a controller changes nothing', () => {

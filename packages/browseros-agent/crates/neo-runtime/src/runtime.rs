@@ -210,7 +210,8 @@ impl Runtime {
         };
         let outcome = realm::run(script, getters, dispatcher.clone(), deadline, events).await;
         let (calls, dropped) = dispatcher.finish(run_end_of(&outcome)).await;
-        grants.release().await;
+        // `Dispatcher::finish` let go of the grants (`Tabs::release_run_scoped`).
+        grants.disarm();
         outcome
             .with_calls(calls, dropped)
             .with_pages(tabs.outcome())
@@ -218,8 +219,10 @@ impl Runtime {
     }
 }
 
-/// A run's hold on its permission grants (`session_state.rs` `Permissions`): released at its
-/// end, before its outcome returns, so the next run finds the browser's permissions as they were.
+/// A run's hold on its permission grants (`session_state.rs` `Permissions`), for a run whose
+/// future is dropped before `Dispatcher::finish` let go of them (`Tabs::release_run_scoped`,
+/// before the outcome returns, so the next run finds the browser's permissions as they were):
+/// its grants are then released on the cleanup tracker.
 struct Grants {
     permissions: Permissions,
     cdp: CdpClient,
@@ -228,9 +231,9 @@ struct Grants {
 }
 
 impl Grants {
-    async fn release(mut self) {
+    /// The run's end let go of its grants: nothing left for the drop to release.
+    fn disarm(mut self) {
         self.released = true;
-        self.permissions.release(&self.cdp, self.run).await;
     }
 }
 

@@ -25,9 +25,7 @@ import { assertDecoysUntouched, compareFrameCases, failed } from './frames.mjs'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
-  connectCdp,
-  launchBrowser,
+  launchReference,
   runCleanups,
   serveFixture,
   skip,
@@ -207,12 +205,11 @@ async function withBoth(cases, body) {
       cases.map((c) => [`/${c.name}.html`, c.html]),
     )
     const origin = await serveFixture(cleanups, { pages })
-    const browser = await launchBrowser(cleanups, browserBinary)
-    const cdp = await connectCdp(cleanups, browser.port)
-    const playwright = await chromium.connectOverCDP(
-      `http://127.0.0.1:${browser.port}`,
+    const { playwright, cdp, ...browser } = await launchReference(
+      cleanups,
+      browserBinary,
+      { cdp: true },
     )
-    cleanups.push(() => playwright.close())
     const [context] = playwright.contexts()
     const scripts = mkdtempSync(join(tmpdir(), 'neo-parity-scripts-'))
     cleanups.push(() => rmSync(scripts, { recursive: true, force: true }))

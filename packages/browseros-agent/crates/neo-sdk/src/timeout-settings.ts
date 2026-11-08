@@ -60,6 +60,17 @@ export class TimeoutSettings {
     this.#defaultNavigationTimeout = timeout
   }
 
+  /** Playwright's `TimeoutSettings.defaultTimeout`: this level's own default, if set. */
+  defaultTimeout(): number | undefined {
+    return this.#defaultTimeout
+  }
+
+  /** Playwright's `TimeoutSettings.defaultNavigationTimeout`: this level's own navigation
+   * default, if set. */
+  defaultNavigationTimeout(): number | undefined {
+    return this.#defaultNavigationTimeout
+  }
+
   /**
    * Playwright: `client/timeoutSettings.ts` `TimeoutSettings.timeout`: `return { signal: options.signal, timeout: this._timeout(options) };`
    *

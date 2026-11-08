@@ -6,9 +6,8 @@ import { test } from 'node:test'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
   compareMethod,
-  launchBrowser,
+  launchReference,
   runCleanups,
   serveFixture,
   skip,
@@ -65,9 +64,10 @@ async function delayedWrite(
         '/b': `<button id="old">Old B</button><button id="new">New B</button><button id="release" onclick="window.postMessage('release-highlight','*');document.querySelector('#clicked').textContent='yes'">Release</button><output id="clicked">no</output>${noTakeover}`,
       },
     })
-    const browser = await launchBrowser(cleanups, browserBinary)
-    const pw = await chromium.connectOverCDP(`http://127.0.0.1:${browser.port}`)
-    cleanups.push(() => pw.close())
+    const { playwright: pw, ...browser } = await launchReference(
+      cleanups,
+      browserBinary,
+    )
     const [context] = pw.contexts(),
       page = await context.newPage()
     await page.goto(origin + '/main')

@@ -22,12 +22,11 @@ import { join } from 'node:path'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
-  connectCdp,
   eventually,
   findPage,
-  launchBrowser,
+  launchReference,
   playwrightVersion,
+  referenceHalf,
   runCleanups,
   serveFixture,
   startNeo,
@@ -66,16 +65,11 @@ export async function withHistory(t, { pages, slowMs = 0 }, body) {
   const cleanups = []
   try {
     const origin = await serveFixture(cleanups, { pages, slowMs })
-    const browser = await launchBrowser(
+    const { playwright, cdp, ...browser } = await launchReference(
       cleanups,
       browserBinary,
-      PLAYWRIGHT_SWITCHES,
+      { args: PLAYWRIGHT_SWITCHES, cdp: true },
     )
-    const cdp = await connectCdp(cleanups, browser.port)
-    const playwright = await chromium.connectOverCDP(
-      `http://127.0.0.1:${browser.port}`,
-    )
-    cleanups.push(() => playwright.close())
     const [context] = playwright.contexts()
     const scripts = mkdtempSync(join(tmpdir(), 'neo-history-parity-'))
     cleanups.push(() => rmSync(scripts, { recursive: true, force: true }))
@@ -85,8 +79,8 @@ export async function withHistory(t, { pages, slowMs = 0 }, body) {
       const source = PRELUDE + c.source
       const index = next++
       return {
-        playwright: await onTab(cdp, url, c, (tab) =>
-          viaPlaywright(context, tab, source),
+        playwright: await referenceHalf(() =>
+          onTab(cdp, url, c, (tab) => viaPlaywright(context, tab, source)),
         ),
         neo: await onTab(cdp, url, c, (tab) =>
           viaNeo(browser.port, neoRun, scripts, index, tab, source),

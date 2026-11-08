@@ -40,7 +40,7 @@ struct Args {
     /// `page.pdf({ path })`) write, relative to it. Without it they are refused.
     #[arg(long)]
     artifacts: Option<PathBuf>,
-    /// A file holding the body of an async function of `(page, context)`.
+    /// A file holding the body of an async function of `(page, context, playwright)`.
     script: PathBuf,
 }
 

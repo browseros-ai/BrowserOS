@@ -21,12 +21,11 @@ import { join } from 'node:path'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
-  connectCdp,
   eventually,
   findPage,
-  launchBrowser,
+  launchReference,
   playwrightVersion,
+  referenceHalf,
   runCleanups,
   serveFixture,
   startNeo,
@@ -299,12 +298,11 @@ export async function withFrames(t, { slowMs = 0 }, body) {
   const cleanups = []
   try {
     const origin = await serveFixture(cleanups, { pages: FRAME_PAGES, slowMs })
-    const browser = await launchBrowser(cleanups, browserBinary)
-    const cdp = await connectCdp(cleanups, browser.port)
-    const playwright = await chromium.connectOverCDP(
-      `http://127.0.0.1:${browser.port}`,
+    const { playwright, cdp, ...browser } = await launchReference(
+      cleanups,
+      browserBinary,
+      { cdp: true },
     )
-    cleanups.push(() => playwright.close())
     const [context] = playwright.contexts()
     const scripts = mkdtempSync(join(tmpdir(), 'neo-frame-parity-'))
     cleanups.push(() => rmSync(scripts, { recursive: true, force: true }))
@@ -364,34 +362,36 @@ const VIEWPORT = {
   mobile: false,
 }
 
-/** Runs the case as Playwright does, with `page` and `context` in scope. */
+/** Runs the case as Playwright does, with `page` and `context` in scope (`referenceHalf`). */
 async function viaPlaywright(cdp, context, url, c) {
-  const page = await context.newPage()
-  try {
-    // Kept attached to the end: the override lasts as long as the session that set it.
-    const emulation = await context.newCDPSession(page)
-    await emulation.send('Emulation.setDeviceMetricsOverride', VIEWPORT)
-    await page.goto(url)
-    const AsyncFunction = (async () => {}).constructor
-    const result = await new AsyncFunction(
-      'page',
-      'context',
-      SETTLE + (c.prelude?.playwright ?? '') + c.source,
-    )(page, context).then(
-      (value) => ({ value }),
-      (error) => ({ error: { name: error.name, message: error.message } }),
-    )
-    const session = await context.newCDPSession(page)
-    const { targetInfo } = await session.send('Target.getTargetInfo')
-    await session.detach()
-    return {
-      result,
-      effect: await frameEffects(page, c.probe),
-      iframes: await iframeTargets(cdp, targetInfo.targetId),
+  return await referenceHalf(async () => {
+    const page = await context.newPage()
+    try {
+      // Kept attached to the end: the override lasts as long as the session that set it.
+      const emulation = await context.newCDPSession(page)
+      await emulation.send('Emulation.setDeviceMetricsOverride', VIEWPORT)
+      await page.goto(url)
+      const AsyncFunction = (async () => {}).constructor
+      const result = await new AsyncFunction(
+        'page',
+        'context',
+        SETTLE + (c.prelude?.playwright ?? '') + c.source,
+      )(page, context).then(
+        (value) => ({ value }),
+        (error) => ({ error: { name: error.name, message: error.message } }),
+      )
+      const session = await context.newCDPSession(page)
+      const { targetInfo } = await session.send('Target.getTargetInfo')
+      await session.detach()
+      return {
+        result,
+        effect: await frameEffects(page, c.probe),
+        iframes: await iframeTargets(cdp, targetInfo.targetId),
+      }
+    } finally {
+      await page.close()
     }
-  } finally {
-    await page.close()
-  }
+  })
 }
 
 /**

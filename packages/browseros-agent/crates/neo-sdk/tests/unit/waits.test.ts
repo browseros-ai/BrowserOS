@@ -41,6 +41,7 @@ function run() {
     page: 'page@T',
     mainFrame: 'frame@T',
     context: 'context@1',
+    browser: 'browser@default',
     url: 'about:blank',
     testIdAttribute: 'data-testid',
     lineOffset: 0,

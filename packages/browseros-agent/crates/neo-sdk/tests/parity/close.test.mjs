@@ -21,10 +21,8 @@ import { fileURLToPath } from 'node:url'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
-  connectCdp,
   eventually,
-  launchBrowser,
+  launchReference,
   openTab,
   playwrightVersion,
   runCleanups,
@@ -63,8 +61,11 @@ test(`page.close() closes the same tabs through Neo and Playwright ${playwrightV
     const origin = await serveFixture(cleanups, {
       pages: Object.fromEntries(TABS.map((name) => [`/${name}.html`, tab])),
     })
-    const browser = await launchBrowser(cleanups, browserBinary)
-    const cdp = await connectCdp(cleanups, browser.port)
+    const { playwright, cdp, ...browser } = await launchReference(
+      cleanups,
+      browserBinary,
+      { cdp: true },
+    )
     const scripts = mkdtempSync(join(tmpdir(), 'neo-parity-close-'))
     cleanups.push(() => rmSync(scripts, { recursive: true, force: true }))
     const survivorScript = join(scripts, 'survivor.js')
@@ -74,9 +75,6 @@ test(`page.close() closes the same tabs through Neo and Playwright ${playwrightV
     )
     const source = readFileSync(scriptPath, 'utf8')
 
-    const playwright = await chromium.connectOverCDP(
-      `http://127.0.0.1:${browser.port}`,
-    )
     const [context] = playwright.contexts()
     const viaPlaywright = await half(cdp, origin, (target) =>
       runInPlaywright(context, target, source),

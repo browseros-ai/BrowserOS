@@ -47,11 +47,13 @@ use tokio::time;
 use crate::click::{self, LoopAWaits, PageError};
 use crate::frame_selector;
 use crate::frames::{FrameContext, FrameScope};
-use crate::main_world::{self, BuiltExpression, Called, DocumentId, Installed, MainFunction};
-use crate::page::{FrameTab, GroupGuard};
+use crate::main_world::{
+    self, BuiltExpression, Called, ContextPin, DocumentId, Installed, MainFunction,
+};
+use crate::page::{FrameTab, GroupGuard, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress, js_number};
 use crate::reads::SelectorTab;
-use crate::world::ObjectGroup;
+use crate::world::{self, ObjectGroup};
 
 /// Neo: the guid prefix of a run's handles (`handle@<run>.<n>`), opaque to the SDK.
 pub(crate) const HANDLE_PREFIX: &str = "handle@";
@@ -861,6 +863,34 @@ pub(crate) struct HandleEntry {
     element: bool,
 }
 
+impl HandleEntry {
+    /// The frame document the handle was created in.
+    pub(crate) fn frame(&self) -> &Arc<FrameContext> {
+        &self.frame
+    }
+
+    /// The handle's node adopted into its frame's utility world, in `group`.
+    /// Playwright: `server/dom.ts` `ElementHandle.evaluateInUtility`
+    ///
+    /// # Errors
+    ///
+    /// `NotConnected` when the node or its document is gone, or the handle holds no object.
+    pub(crate) async fn utility_element(
+        &self,
+        group: &GroupGuard,
+    ) -> Result<Handle<Element>, PageError> {
+        let Remote::Object(id) = &self.remote else {
+            return Err(PageError::NotConnected);
+        };
+        let backend = self
+            .frame
+            .main
+            .backend_of(&self.frame, id.object_id())
+            .await?;
+        self.frame.element(group.group(), backend).await
+    }
+}
+
 /// The page object, or for a primitive the value itself, as Playwright keeps `JSHandle._value`
 /// for a result without an `objectId`.
 #[derive(Debug, Clone)]
@@ -885,6 +915,14 @@ impl Default for Handles {
 }
 
 impl Handles {
+    /// The element handle `guid` for a call that acts on its node (`ElementHandle.screenshot`),
+    /// refused for a `JSHandle` as Playwright's dispatcher refuses `method` on one, and closed
+    /// when the run has no such handle.
+    pub(crate) fn element(&self, guid: &str, method: &str) -> Result<Arc<HandleEntry>, CallError> {
+        element_scope(self, Some(guid), method)?
+            .ok_or_else(|| PlaywrightError::target_closed().into())
+    }
+
     /// The frame guid that routes calls on `guid`, `None` when the run has no such handle.
     pub(crate) fn frame_guid(&self, guid: &str) -> Option<String> {
         self.entry(guid).map(|entry| entry.frame_guid.clone())
@@ -1171,7 +1209,7 @@ struct Invocation<'a> {
     frame: &'a Arc<FrameContext>,
     /// The execution context a binding call's answer is pinned to (`MainWorld::call_in`), never
     /// installed again for; `None` for every other call.
-    context: Option<i64>,
+    context: Option<&'a ContextPin>,
     /// The handle whose document must still be the frame's (Playwright's destroyed context).
     receiver: Option<&'a HandleEntry>,
     expression: &'a str,
@@ -1204,6 +1242,59 @@ enum LateAnswer {
     AbortWaiter,
 }
 
+/// One attempt's `UtilityScript.evaluate` arguments, Playwright's `(isFunction, returnByValue,
+/// expression, argCount, ...leading, arg, ...handles)`, with the handles as `installed`'s document
+/// takes them.
+fn evaluate_values(
+    invocation: &Invocation<'_>,
+    frame: &FrameContext,
+    installed: &Installed,
+    args: &[Arc<HandleEntry>],
+    injected: &str,
+) -> Result<Vec<Value>, CallError> {
+    let mut handle_args = Vec::with_capacity(args.len() + invocation.extras.len());
+    for arg in args {
+        handle_args.push(call_argument(arg, frame, installed)?);
+    }
+    let leading = (invocation.leading)(handle_args.len());
+    for extra in invocation.extras {
+        handle_args.push(match extra {
+            Extra::Entry(entry) => call_argument(entry, frame, installed)?,
+            Extra::Object(id) => json!({ "objectId": id }),
+            Extra::Utility => json!({ "objectId": installed.utility_id() }),
+            Extra::MainInjected => json!({ "objectId": injected }),
+        });
+    }
+    let mut values = vec![
+        match invocation.is_function {
+            Some(flag) => json!({ "value": flag }),
+            None => json!({}),
+        },
+        json!({ "value": invocation.return_by_value }),
+        json!({ "value": invocation.expression }),
+        json!({ "value": leading.len() + 1 }),
+    ];
+    values.extend(leading.into_iter().map(|value| json!({ "value": value })));
+    values.push(json!({ "value": invocation.arg.value }));
+    values.extend(handle_args);
+    Ok(values)
+}
+
+/// Neo: the protocol answer of a call whose document went before it could run, which every caller
+/// reads as the destroyed context it is (`answer`'s `CONTEXT_DESTROYED`; a wait restarts).
+const DOCUMENT_REPLACED: &str = "neo-runtime: the call's document was replaced before it ran";
+
+/// Starts the page's watcher before a main-world call: it reports the frames' commits, as
+/// Playwright's page always hears them, which tell a call whose document went while it was out
+/// from one sent to a document already gone (`main_world.rs` `replaced_during`), so only the
+/// latter runs again.
+async fn watch_commits(tab: &FrameTab, progress: &Progress) -> Result<(), CallError> {
+    progress
+        .race(PageSession::prepare(tab))
+        .await?
+        .map_err(|error| page_error(world::classify(&error)).into())
+}
+
 /// [`invoke`], with `late` deciding what becomes of an answer that arrives after the call
 /// stopped (a timeout, the run's end).
 async fn invoke_with(
@@ -1220,6 +1311,10 @@ async fn invoke_with(
     } else {
         Some(handles.group(tab, frame).map_err(page_error)?)
     };
+    watch_commits(tab, progress).await?;
+    // The document this call was made for is the frame's as the call starts: a commit of the
+    // frame from now on (socket order) replaced it, during the setup below as during the call.
+    let mut events = frame.host.events();
     let mut attempt = 0;
     loop {
         attempt += 1;
@@ -1236,6 +1331,14 @@ async fn invoke_with(
         } else {
             installed(tab, frame, invocation.receiver, progress).await?
         };
+        // A setup that waited out the call's document (a first call during a pending navigation
+        // installs in the next one): the call fails with its document, never runs in the next.
+        if invocation.context.is_none() && main_world::replaced_during(&mut events, frame) {
+            return Ok((
+                installed.document,
+                Called::Protocol(DOCUMENT_REPLACED.to_string()),
+            ));
+        }
         let wants_injected = invocation
             .extras
             .iter()
@@ -1256,44 +1359,20 @@ async fn invoke_with(
         } else {
             String::new()
         };
-        let mut handle_args = Vec::with_capacity(args.len() + invocation.extras.len());
-        for arg in &args {
-            handle_args.push(call_argument(arg, frame, &installed)?);
-        }
-        let leading = (invocation.leading)(handle_args.len());
-        for extra in invocation.extras {
-            handle_args.push(match extra {
-                Extra::Entry(entry) => call_argument(entry, frame, &installed)?,
-                Extra::Object(id) => json!({ "objectId": id }),
-                Extra::Utility => json!({ "objectId": installed.utility_id() }),
-                Extra::MainInjected => json!({ "objectId": injected }),
-            });
-        }
-        let mut values = vec![
-            match invocation.is_function {
-                Some(flag) => json!({ "value": flag }),
-                None => json!({}),
-            },
-            json!({ "value": invocation.return_by_value }),
-            json!({ "value": invocation.expression }),
-            json!({ "value": leading.len() + 1 }),
-        ];
-        values.extend(leading.into_iter().map(|value| json!({ "value": value })));
-        values.push(json!({ "value": invocation.arg.value }));
-        values.extend(handle_args);
+        let values = evaluate_values(invocation, frame, &installed, &args, &injected)?;
         let call = {
             let frame = Arc::clone(frame);
             let installed = Arc::clone(&installed);
             let group = group.clone();
             let return_by_value = invocation.return_by_value;
-            let context = invocation.context;
+            let context = invocation.context.cloned();
             Box::pin(async move {
                 frame
                     .main
                     .call_in(
                         &frame,
                         &installed,
-                        context,
+                        context.as_ref(),
                         MainFunction::Evaluate,
                         values,
                         return_by_value,
@@ -1310,8 +1389,20 @@ async fn invoke_with(
         match called {
             // A pinned call's context is gone with its document: installing in the next one
             // would answer a call that document never made.
-            Called::Stale if attempt == 1 && invocation.context.is_none() => {
+            // An install kept from a document gone before this call began: once more, unless
+            // the call's own document went since it began.
+            Called::Stale
+                if attempt == 1
+                    && invocation.context.is_none()
+                    && !main_world::replaced_during(&mut events, frame) =>
+            {
                 frame.main.invalidate(&installed).await;
+            }
+            Called::Stale if invocation.context.is_none() => {
+                return Ok((
+                    installed.document,
+                    Called::Protocol(DOCUMENT_REPLACED.to_string()),
+                ));
             }
             called => return Ok((installed.document, called)),
         }
@@ -1340,18 +1431,18 @@ fn tag_source(
 }
 
 /// Neo: runs built `expression` on page-format `leading` arguments in `tab`'s frame's main
-/// world, by value, outside any call of the run (`bindings.rs`'s installs, removals and run
-/// end, as Playwright's `safeNonStallingEvaluateInAllFrames`): a gone document or a throw is the
-/// caller's to ignore.
+/// world, by value, outside any call of the run (`bindings.rs`'s and `clock.rs`'s installs and
+/// run ends, as Playwright's `safeNonStallingEvaluateInAllFrames`): the page's answer, by value.
 ///
 /// # Errors
 ///
-/// The frame's [`PageError`]; a throw or a stale document reads `NotConnected`.
+/// The frame's [`PageError`]: `Threw` with the page's message for a throw, `NotConnected` for a
+/// stale document.
 pub(crate) async fn run_built(
     tab: &FrameTab,
     expression: BuiltExpression,
     leading: Vec<Value>,
-) -> Result<(), PageError> {
+) -> Result<Value, PageError> {
     let frame = tab.context().await?;
     run_built_on(&frame, None, expression, leading).await
 }
@@ -1365,10 +1456,10 @@ pub(crate) async fn run_built(
 /// As [`run_built`].
 pub(crate) async fn run_built_on(
     frame: &Arc<FrameContext>,
-    context: Option<i64>,
+    context: Option<&ContextPin>,
     expression: BuiltExpression,
     leading: Vec<Value>,
-) -> Result<(), PageError> {
+) -> Result<Value, PageError> {
     let installed = frame.main.installed(frame).await?;
     let mut values = vec![
         json!({ "value": true }),
@@ -1390,8 +1481,10 @@ pub(crate) async fn run_built_on(
         )
         .await?
     {
-        Called::Value(_) | Called::Object(_) => Ok(()),
-        Called::Threw(_) | Called::Stale | Called::Protocol(_) => Err(PageError::NotConnected),
+        Called::Value(value) => Ok(value.unwrap_or(Value::Null)),
+        Called::Object(_) => Ok(Value::Null),
+        Called::Threw(message) => Err(PageError::Threw(message)),
+        Called::Stale | Called::Protocol(_) => Err(PageError::NotConnected),
     }
 }
 
@@ -1411,7 +1504,7 @@ pub(crate) async fn run_built_on(
 pub(crate) async fn call_built_on(
     tab: &FrameTab,
     frame: &Arc<FrameContext>,
-    context: i64,
+    context: &ContextPin,
     expression: BuiltExpression,
     leading: Vec<Value>,
     arg: &SerializedArgument,
@@ -1727,17 +1820,10 @@ async fn utility_root(
         )
         .into());
     }
-    let Remote::Object(id) = &root.remote else {
+    if !matches!(root.remote, Remote::Object(_)) {
         return Err(PlaywrightError::error(CONTEXT_DESTROYED).into());
-    };
-    let frame = &root.frame;
-    let backend = frame
-        .main
-        .backend_of(frame, id.object_id())
-        .await
-        .map_err(page_error)?;
-    frame
-        .element(group.group(), backend)
+    }
+    root.utility_element(group)
         .await
         .map_err(|error| page_error(error).into())
 }
@@ -2812,6 +2898,34 @@ pub(crate) async fn element_handle_for(
 ) -> Result<CreatedHandle, PageError> {
     let group = handles.group(tab, frame)?;
     let (document, object) = frame.main.adopt(frame, element, group.group()).await?;
+    let object_id = object.object_id.ok_or(PageError::NotConnected)?;
+    handles.register(
+        tab,
+        frame,
+        document,
+        Remote::Object(HandleId::new(object_id)),
+        true,
+        format!("{NODE_PREVIEW_PREFIX}{preview}"),
+    )
+}
+
+/// Neo: [`element_handle_for`] for an element the caller already adopted into the main world in
+/// an object group of its own (`MainWorld::adopt`), registered without a page call, so nothing
+/// is allocated between the adoption and the handle. A caller that can be cancelled while
+/// adopting owns the object through its group's guard until it disposes the handle:
+/// `element_ops.rs` `dispatch_on_aria_ref`.
+///
+/// # Errors
+///
+/// `NotConnected` when the adoption answered no object; `Closed` once the run ended.
+pub(crate) fn adopted_element_handle(
+    tab: &FrameTab,
+    frame: &Arc<FrameContext>,
+    document: DocumentId,
+    object: RemoteObject,
+    preview: &str,
+    handles: &Handles,
+) -> Result<CreatedHandle, PageError> {
     let object_id = object.object_id.ok_or(PageError::NotConnected)?;
     handles.register(
         tab,

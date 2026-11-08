@@ -12,8 +12,8 @@ import { fileURLToPath } from 'node:url'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
   connectCdp,
+  connectReference,
   findPage,
   launchBrowser,
   runCleanups,
@@ -53,9 +53,7 @@ test('watch-url.js returns the same value through Neo and through Playwright', {
     })
     await waitForUrl(cdp, driver, `${origin}/a`)
 
-    const playwright = await chromium.connectOverCDP(
-      `http://127.0.0.1:${browser.port}`,
-    )
+    const playwright = await connectReference(browser.port)
     cleanups.push(() => playwright.close())
     const [context] = playwright.contexts()
     const page = await findPage(context, targetId)

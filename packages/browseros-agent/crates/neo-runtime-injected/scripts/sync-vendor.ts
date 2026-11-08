@@ -3,8 +3,8 @@
  * commit. The file list is not hand-kept: it is the import closure of `ROOT_ENTRIES`,
  * `packages/injected/src/injectedScript.ts` (which pulls in `utilityScript.ts`, the
  * `@isomorphic/*` files it names, the type-only `@protocol/*` files and `highlight.css`) and
- * `bindingsController.ts` (the page half of `exposeBinding`), plus Playwright's LICENSE and
- * NOTICE. Each file keeps its path under Playwright's `packages/`, so
+ * `bindingsController.ts` (the page half of `exposeBinding`) and `clock.ts` (the page half of
+ * `page.clock`), plus Playwright's LICENSE and NOTICE. Each file keeps its path under Playwright's `packages/`, so
  * relative imports between vendored files resolve unchanged and tsconfig's `paths` map the
  * `@injected`, `@isomorphic` and `@protocol` aliases. The generated VENDOR.md names the commit
  * and lists every file with its sha256.
@@ -35,6 +35,7 @@ const PINNED_COMMIT = '26137face0500cacddf90c767dc1364da7262559'
 const ROOT_ENTRIES = [
   'packages/injected/src/injectedScript.ts',
   'packages/injected/src/bindingsController.ts',
+  'packages/injected/src/clock.ts',
 ]
 const LEGAL_FILES = ['LICENSE', 'NOTICE']
 /** Playwright's tsconfig `paths` for the injected closure, as checkout paths. */

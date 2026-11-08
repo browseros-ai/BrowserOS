@@ -16,6 +16,7 @@ use std::time::Duration;
 use browser::{Fixture, Tab};
 use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime};
 use serde_json::{Value, json};
+use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
@@ -299,5 +300,223 @@ return 'cleared'",
         after,
         json!("granted"),
         "run A, still going, keeps its grant"
+    );
+}
+
+/// The tab's geolocation, read over the test's own session; an error code when there is none.
+const POSITION_NOW: &str = "new Promise((resolve) => navigator.geolocation.getCurrentPosition((p) => resolve([p.coords.latitude, p.coords.longitude]), (e) => resolve({ error: e.code }), { timeout: 1500 }))";
+
+/// The tab's geolocation and notifications permissions, as the test's own session reads them.
+const PERMISSIONS: &str = "Promise.all(['geolocation', 'notifications'].map((name) => navigator.permissions.query({ name }).then((status) => status.state)))";
+
+/// Starts `code` as a run of its own on the tab, ended by the returned token.
+fn spawn_run(
+    runtime: &Runtime,
+    tab: &Tab,
+    code: &str,
+) -> (JoinHandle<RunOutcome>, CancellationToken) {
+    let cancel = CancellationToken::new();
+    let runtime = runtime.clone();
+    let request = cancellable(tab, code, &cancel);
+    (
+        tokio::spawn(async move { runtime.run(request).await }),
+        cancel,
+    )
+}
+
+/// Waits, a bounded while, until `expression` settles to `expected` on the page.
+async fn until_settled(tab: &Tab, expression: &str, expected: &Value) {
+    let mut last = Value::Null;
+    let reached = time::timeout(Duration::from_secs(15), async {
+        loop {
+            last = settled(tab, expression).await;
+            if &last == expected {
+                return;
+            }
+            time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(
+        reached.is_ok(),
+        "the page read {last}, never {expected}, from {expression}"
+    );
+}
+
+/// Review D1 P2: run B's `context.close()` takes back only B's own on a tab run A, still going,
+/// also set: A keeps its init script, its header, its permission grant and its geolocation,
+/// though the browser keeps one geolocation per tab and one session's clear ends another's
+/// (measured).
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_closing_one_run_leaves_another_runs_state_on_their_tab() {
+    let Some(tab) = open().await else {
+        return;
+    };
+    let runtime = Runtime::connect(tab.cdp.clone())
+        .await
+        .unwrap_or_else(|error| panic!("Runtime::connect: {error}"));
+    let (a, a_cancel) = spawn_run(
+        &runtime,
+        &tab,
+        r"await context.addInitScript(() => { window.scriptA = true })
+await context.setExtraHTTPHeaders({ 'x-run-a': 'A' })
+await context.grantPermissions(['geolocation'], { origin: page.url() })
+await context.setGeolocation({ latitude: 10, longitude: 20 })
+await page.evaluate(() => { window.readyA = true })
+await new Promise(() => {})",
+    );
+    until(&tab, "window.readyA === true").await;
+    let (b, b_cancel) = spawn_run(
+        &runtime,
+        &tab,
+        r"await context.addInitScript(() => { window.scriptB = true })
+await context.setExtraHTTPHeaders({ 'x-run-b': 'B' })
+await context.grantPermissions(['notifications'], { origin: page.url() })
+await context.setGeolocation({ latitude: 30, longitude: 40 })
+await page.evaluate(() => new Promise((resolve) => { window.closeB = resolve }))
+await context.close()
+await new Promise((resolve) => setTimeout(resolve, 15000))",
+    );
+    until(&tab, "typeof window.closeB === 'function'").await;
+    assert_eq!(
+        settled(&tab, POSITION_NOW).await,
+        json!([30, 40]),
+        "B's position, the last set"
+    );
+    settled(&tab, "window.closeB()").await;
+    // B's notifications grant goes last in its close: once it is gone, the close let go.
+    until_settled(&tab, PERMISSIONS, &json!(["granted", "denied"])).await;
+    assert!(!b.is_finished(), "B's realm lives on after its close");
+    let position = settled(&tab, POSITION_NOW).await;
+    let headers = settled(
+        &tab,
+        "fetch('/echo-headers').then((response) => response.text())",
+    )
+    .await;
+    tab.navigate("/state.html").await;
+    until(&tab, "document.readyState === 'complete'").await;
+    let scripts = settled(
+        &tab,
+        "({ a: window.scriptA === true, b: window.scriptB === true })",
+    )
+    .await;
+    b_cancel.cancel();
+    let b = b.await.unwrap_or_else(|error| panic!("run B: {error}"));
+    a_cancel.cancel();
+    let a = a.await.unwrap_or_else(|error| panic!("run A: {error}"));
+    runtime.drain().await;
+    tab.close().await;
+    assert_eq!(
+        (a.status, b.status),
+        (RunStatus::Cancelled, RunStatus::Cancelled)
+    );
+    assert_eq!(
+        position,
+        json!([10, 20]),
+        "A's position is back once B let go of its own"
+    );
+    let headers = headers.as_str().unwrap_or_default().to_lowercase();
+    assert!(
+        headers.contains("x-run-a: a"),
+        "A's header stays: {headers}"
+    );
+    assert!(!headers.contains("x-run-b"), "B's header goes: {headers}");
+    assert_eq!(
+        scripts,
+        json!({ "a": true, "b": false }),
+        "A's init script stays, B's goes"
+    );
+}
+
+/// Review D1 P2, offline: the browser keeps one offline state per tab, one session's reset ends
+/// another's, and a session that set it once ends the page's `navigator.onLine` override when it
+/// detaches (measured). Run A, still going, stays offline after run B's close and after B's
+/// sessions detach at its end.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_closing_one_run_leaves_another_runs_offline_mode() {
+    let Some(tab) = open().await else {
+        return;
+    };
+    let runtime = Runtime::connect(tab.cdp.clone())
+        .await
+        .unwrap_or_else(|error| panic!("Runtime::connect: {error}"));
+    let (a, a_cancel) = spawn_run(
+        &runtime,
+        &tab,
+        r"await context.setOffline(true)
+await page.evaluate(() => { window.readyA = true })
+await new Promise(() => {})",
+    );
+    until(&tab, "window.readyA === true").await;
+    let (b, b_cancel) = spawn_run(
+        &runtime,
+        &tab,
+        r"await context.setOffline(true)
+await context.grantPermissions(['notifications'], { origin: page.url() })
+await page.evaluate(() => new Promise((resolve) => { window.closeB = resolve }))
+await context.close()
+await new Promise((resolve) => setTimeout(resolve, 15000))",
+    );
+    until(&tab, "typeof window.closeB === 'function'").await;
+    let notifications =
+        "navigator.permissions.query({ name: 'notifications' }).then((status) => status.state)";
+    assert_eq!(
+        settled(&tab, notifications).await,
+        json!("granted"),
+        "B's grant, before its close"
+    );
+    settled(&tab, "window.closeB()").await;
+    // B's notifications grant goes last in its close: once it is gone, the close let go.
+    until_settled(
+        &tab,
+        &format!("{notifications}.then((state) => state !== 'granted')"),
+        &json!(true),
+    )
+    .await;
+    let offline = "(async () => [navigator.onLine, await fetch('/again').then(() => 'fetched', () => 'failed')])()";
+    let after_close = settled(&tab, offline).await;
+    let mut events = tab.cdp.events();
+    b_cancel.cancel();
+    let b = b.await.unwrap_or_else(|error| panic!("run B: {error}"));
+    time::timeout(Duration::from_secs(15), async {
+        loop {
+            let event = events
+                .recv()
+                .await
+                .unwrap_or_else(|error| panic!("events: {error}"));
+            if event.method == "Target.detachedFromTarget" {
+                return;
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("B's session never detached"));
+    // Neo puts A's state back once it hears of the detach: read until it did, a bounded while.
+    let expected = json!([false, "failed"]);
+    let mut after_detach = settled(&tab, offline).await;
+    let _back = time::timeout(Duration::from_secs(5), async {
+        while after_detach != expected {
+            time::sleep(Duration::from_millis(20)).await;
+            after_detach = settled(&tab, offline).await;
+        }
+    })
+    .await;
+    a_cancel.cancel();
+    let a = a.await.unwrap_or_else(|error| panic!("run A: {error}"));
+    runtime.drain().await;
+    tab.close().await;
+    assert_eq!(
+        (a.status, b.status),
+        (RunStatus::Cancelled, RunStatus::Cancelled)
+    );
+    assert_eq!(
+        after_close,
+        json!([false, "failed"]),
+        "A is offline after B's close"
+    );
+    assert_eq!(
+        after_detach,
+        json!([false, "failed"]),
+        "and after B's session detached"
     );
 }

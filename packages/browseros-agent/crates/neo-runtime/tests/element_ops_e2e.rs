@@ -1,8 +1,8 @@
-//! B2's behavior in real Neo runs on a throwaway browser profile: the `eventInit` values Neo
-//! refuses before any event, the highlight overlays a run removes when it ends, and the exact
-//! box of an element inside a bordered out-of-process frame (Playwright's border-box placement,
-//! pinned in numbers). Everything Neo shares with Playwright is also compared against it in
-//! neo-sdk's parity tests.
+//! B2's behavior in real Neo runs on a throwaway browser profile: the highlight overlays a run
+//! removes when it ends, and the exact box of an element inside a bordered out-of-process frame
+//! (Playwright's border-box placement, pinned in numbers). Everything Neo shares with Playwright
+//! is also compared against it in neo-sdk's parity tests; `dispatchEvent`'s `eventInit` is
+//! Playwright's own now (`dispatchEvent.test.mjs`).
 
 #[expect(
     dead_code,
@@ -22,96 +22,6 @@ use tokio::time::{self, Instant};
 const SETTLE: Duration = Duration::from_secs(15);
 /// How often a page fact is read again while it settles.
 const POLL: Duration = Duration::from_millis(50);
-
-const TARGET: &str = r"<!doctype html><html><body>
-<button id='target' type='button'>Target</button>
-<script>
-window.seen = []
-for (const type of ['click', 'ping'])
-  document.addEventListener(type, (event) => window.seen.push(event.type), true)
-</script>
-</body></html>";
-
-const REFUSALS: &str = r"async function rejection(action) {
-  try { await action(); return 'resolved' }
-  catch (error) { return { name: error.name, message: error.message } }
-}
-const locator = page.locator('#target')
-return {
-  date: await rejection(() => locator.dispatchEvent('click', { detail: new Date(0) })),
-  nan: await rejection(() => locator.dispatchEvent('click', { detail: NaN })),
-  bigint: await rejection(() => locator.dispatchEvent('click', { detail: 1n })),
-  regexp: await rejection(() => locator.dispatchEvent('click', { detail: /x/ })),
-  hole: await rejection(() => locator.dispatchEvent('click', { list: [1, undefined] })),
-  fn: await rejection(() => locator.dispatchEvent('click', { detail: () => 1 })),
-  typed: await rejection(() => locator.dispatchEvent('click', { data: new Uint8Array(2) })),
-  served: await rejection(() => locator.dispatchEvent('ping', { skipped: undefined, zero: -0 })),
-}";
-
-#[tokio::test(flavor = "multi_thread")]
-async fn tests_that_event_init_values_neo_cannot_dispatch_are_refused_before_any_event() {
-    let Some(binary) = browser::e2e_browser() else {
-        return;
-    };
-    let tab = Tab::open(
-        binary,
-        Fixture {
-            pages: vec![("/target.html".into(), TARGET.into())],
-            ..Fixture::default()
-        },
-        "/target.html",
-    )
-    .await;
-    let outcome = tab
-        .start_run(REFUSALS.to_string())
-        .await
-        .await
-        .unwrap_or_else(|error| panic!("run task: {error}"));
-    let seen = tab.evaluate("window.seen").await;
-    tab.close().await;
-
-    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:#?}");
-    let value = outcome.value.clone().unwrap_or(Value::Null);
-    let holds = "Neo's dispatchEvent takes plain eventInit values (strings, finite numbers, \
-                 booleans, null, arrays and plain objects); this one holds";
-    for (key, kind) in [
-        ("date", "a Date"),
-        ("nan", "a number that is not finite"),
-        ("bigint", "a BigInt"),
-        ("regexp", "a RegExp"),
-        ("hole", "an array holding undefined"),
-        ("typed", "a typed array"),
-    ] {
-        assert_eq!(value[key]["name"], "Error", "{key}: {value}");
-        let message = value[key]["message"].as_str().unwrap_or_default();
-        assert!(
-            message.ends_with(&format!("{holds} {kind}")),
-            "{key}: {message}"
-        );
-    }
-    assert_eq!(value["fn"]["name"], "Error", "{value}");
-    let message = value["fn"]["message"].as_str().unwrap_or_default();
-    assert!(
-        message
-            .ends_with("Attempting to serialize unexpected value at position \"detail\": () => 1"),
-        "a function throws in the SDK, as Playwright's client serializer does: {message}"
-    );
-    assert_eq!(value["served"], json!("resolved"));
-    assert_eq!(
-        seen,
-        json!(["ping"]),
-        "no refused value dispatched an event"
-    );
-    let sent = outcome
-        .calls
-        .iter()
-        .filter(|call| call.method == "dispatchEvent")
-        .count();
-    assert_eq!(
-        sent, 6,
-        "the SDK sends no call for a function or a typed array: {outcome:#?}"
-    );
-}
 
 const OVERLAYS: &str = r#"<!doctype html><html><body>
 <button id='target' type='button'>Target</button>

@@ -4,7 +4,7 @@
 // src/vendor-shims.ts
 var DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-class URL2 {
+class URL {
   href;
   constructor(href) {
     this.href = String(href);
@@ -77,7 +77,7 @@ function isDate(obj) {
 }
 function isURL(obj) {
   try {
-    return obj instanceof URL2 || Object.prototype.toString.call(obj) === "[object URL]";
+    return obj instanceof URL || Object.prototype.toString.call(obj) === "[object URL]";
   } catch (error) {
     return false;
   }
@@ -168,7 +168,7 @@ function parseEvaluationResultValue(value, handles = [], refs = new Map) {
       return new Date(value.d);
     }
     if ("u" in value)
-      return new URL2(value.u);
+      return new URL(value.u);
     if ("bi" in value)
       return BigInt(value.bi);
     if ("e" in value) {
@@ -387,7 +387,7 @@ function innerParseSerializedValue(value, handles, refs, accessChain) {
   if (value.d !== undefined)
     return new Date(value.d);
   if (value.u !== undefined)
-    return new URL2(value.u);
+    return new URL(value.u);
   if (value.bi !== undefined)
     return BigInt(value.bi);
   if (value.e !== undefined) {
@@ -506,7 +506,7 @@ function isDate2(obj) {
   return obj instanceof Date || Object.prototype.toString.call(obj) === "[object Date]";
 }
 function isURL2(obj) {
-  return obj instanceof URL2 || Object.prototype.toString.call(obj) === "[object URL]";
+  return obj instanceof URL || Object.prototype.toString.call(obj) === "[object URL]";
 }
 function isError2(obj) {
   const proto = obj ? Object.getPrototypeOf(obj) : null;
@@ -593,6 +593,9 @@ function matchesURL(url, matcher) {
 function parseURL(url) {
   return JSON.parse(__neo_runtime.get(JSON.stringify({ field: "parseURL", url })));
 }
+function devices() {
+  return JSON.parse(__neo_runtime.get(JSON.stringify({ field: "devices" })));
+}
 async function call(message) {
   const { reply, events } = await __neo_runtime.callWithEvents(message);
   deliverEvents?.(events);
@@ -634,6 +637,12 @@ class Connection {
   async sendPage(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
+  async sendBrowser(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendDebugger(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout);
+  }
   async sendContext(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
   }
@@ -660,6 +669,9 @@ class Connection {
   }
   async sendEval(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout);
+  }
+  async sendClock(apiName, guid, method, params, timeout) {
+    return await this.#send(apiName, guid, method, params, timeout) ?? {};
   }
   async sendBinding(apiName, guid, method, params, timeout) {
     return await this.#send(apiName, guid, method, params, timeout) ?? {};
@@ -793,11 +805,13 @@ class JSHandle {
   _guid;
   _connection;
   _apiPrefix;
+  _frame;
   _preview;
-  constructor(connection, guid, initializer, apiPrefix = "jsHandle") {
+  constructor(connection, guid, initializer, apiPrefix = "jsHandle", frame) {
     this._connection = connection;
     this._guid = guid;
     this._apiPrefix = apiPrefix;
+    this._frame = frame;
     this._preview = initializer.preview;
   }
   async evaluate(pageFunction, arg, options) {
@@ -816,7 +830,7 @@ class JSHandle {
     assertEvaluateOptions(options);
     const params = evaluateParams(apiName, pageFunction, arg, options);
     const result = await this._connection.sendHandle(apiName, this._guid, "evaluateExpressionHandle", params, 0);
-    return handleFrom(this._connection, result.handle);
+    return handleFrom(this._connection, result.handle, this._frame);
   }
   async jsonValue() {
     const result = await this._connection.sendHandle(`${this._apiPrefix}.jsonValue`, this._guid, "jsonValue", {}, 0);
@@ -824,13 +838,13 @@ class JSHandle {
   }
   async getProperty(propertyName) {
     const result = await this._connection.sendHandle(`${this._apiPrefix}.getProperty`, this._guid, "getProperty", { name: propertyName }, 0);
-    return handleFrom(this._connection, result.handle);
+    return handleFrom(this._connection, result.handle, this._frame);
   }
   async getProperties() {
     const map = new Map;
     const result = await this._connection.sendHandle(`${this._apiPrefix}.getProperties`, this._guid, "getPropertyList", {}, 0);
     for (const { name, value } of result.properties)
-      map.set(name, handleFrom(this._connection, value));
+      map.set(name, handleFrom(this._connection, value, this._frame));
     return map;
   }
   asElement() {
@@ -853,10 +867,10 @@ class JSHandle {
   }
 }
 var handleFactory = {};
-function handleFrom(connection, created) {
+function handleFrom(connection, created, frame) {
   if (created.type === "ElementHandle" && handleFactory.element)
-    return handleFactory.element(connection, created.guid, created.initializer);
-  return new JSHandle(connection, created.guid, created.initializer);
+    return handleFactory.element(connection, created.guid, created.initializer, frame);
+  return new JSHandle(connection, created.guid, created.initializer, "jsHandle", frame);
 }
 function evaluateParams(apiName, pageFunction, arg, options) {
   if (options?.exposeFunctions) {
@@ -963,6 +977,63 @@ function thrown(error) {
   }
 }
 
+// src/clock.ts
+class Clock {
+  #connection;
+  #guid;
+  constructor(connection, guid) {
+    this.#connection = connection;
+    this.#guid = guid;
+  }
+  async install(options = {}) {
+    await this.#send("clock.install", "clockInstall", options.time !== undefined ? parseTime("clock.install", options.time) : {});
+  }
+  async fastForward(ticks) {
+    await this.#send("clock.fastForward", "clockFastForward", parseTicks("clock.fastForward", ticks));
+  }
+  async pauseAt(time) {
+    await this.#send("clock.pauseAt", "clockPauseAt", parseTime("clock.pauseAt", time));
+  }
+  async resume() {
+    await this.#send("clock.resume", "clockResume", {});
+  }
+  async runFor(ticks) {
+    await this.#send("clock.runFor", "clockRunFor", parseTicks("clock.runFor", ticks));
+  }
+  async setFixedTime(time) {
+    await this.#send("clock.setFixedTime", "clockSetFixedTime", parseTime("clock.setFixedTime", time));
+  }
+  async setSystemTime(time) {
+    await this.#send("clock.setSystemTime", "clockSetSystemTime", parseTime("clock.setSystemTime", time));
+  }
+  async#send(apiName, method, params) {
+    await this.#connection.sendClock(apiName, this.#guid, method, params, 0);
+  }
+}
+function parseTime(apiName, time) {
+  if (typeof time === "number")
+    return { timeNumber: number(apiName, time) };
+  if (typeof time === "string")
+    return { timeString: time };
+  if (!Number.isFinite(time.getTime()))
+    throw new Error(`Invalid date: ${time}`);
+  return { timeNumber: time.getTime() };
+}
+function parseTicks(apiName, ticks) {
+  if (typeof ticks === "string")
+    return { ticksString: ticks };
+  if (!Number.isFinite(ticks))
+    throw new Error(`${apiName}: Invalid ticks: ${ticks}`);
+  return { ticksNumber: ticks };
+}
+function number(apiName, time) {
+  if (Number.isNaN(time))
+    return 0;
+  if (!Number.isFinite(time))
+    throw new Error(`${apiName}: Invalid date: ${time}`);
+  return time;
+}
+
 // src/console-message.ts
 var HISTORY_KEEPS_NO_ARGS = 'Neo keeps no arguments of a message read from consoleMessages(); listen to "console" for them';
 
@@ -982,7 +1053,8 @@ class ConsoleMessage {
       if (!connection)
         throw new Error(HISTORY_KEEPS_NO_ARGS);
       const id = this.#event.argsId;
-      this.#args = id ? get(id, "args").map((created) => handleFrom(connection, created)) : [];
+      const frame = this.#page?.mainFrame();
+      this.#args = id ? get(id, "args").map((created) => handleFrom(connection, created, frame)) : [];
     }
     return [...this.#args];
   }
@@ -1409,6 +1481,7 @@ class EventPipe {
   #subscriptions = new Set;
   #waking = false;
   #failed = false;
+  #disconnected = false;
   #reject = () => {};
   uncaught;
   constructor() {
@@ -1420,7 +1493,18 @@ class EventPipe {
   _register(target) {
     this.#targets.set(target._guid, target);
   }
+  _disconnect() {
+    for (const key of this.#subscriptions) {
+      const [guid = "", event = ""] = key.split(`
+`);
+      subscribe(guid, event, false);
+    }
+    this.#subscriptions.clear();
+    this.#disconnected = true;
+  }
   _subscribe(guid, event, enabled) {
+    if (this.#disconnected)
+      return;
     subscribe(guid, event, enabled);
     const key = `${guid}
 ${event}`;
@@ -1432,7 +1516,10 @@ ${event}`;
       this.#arm();
   }
   deliver(until) {
-    for (const event of drain(until)) {
+    const events = drain(until);
+    if (this.#disconnected)
+      return;
+    for (const event of events) {
       const target = this.#targets.get(event.guid);
       if (!target)
         continue;
@@ -1459,6 +1546,41 @@ ${event}`;
       if (this.#subscriptions.size)
         this.#arm();
     });
+  }
+}
+
+// src/debugger.ts
+var DEBUGGER_EVENTS = {
+  receiver: "Debugger",
+  served: ["pausedstatechanged"],
+  quiet: [],
+  unserved: ["apicallsupdated"]
+};
+
+class Debugger extends ChannelOwner {
+  #connection;
+  constructor(guid, connection, pipe) {
+    super(guid, pipe, DEBUGGER_EVENTS);
+    this.#connection = connection;
+  }
+  _onEvent(method) {
+    if (method === "pausedStateChanged")
+      this.emit("pausedstatechanged");
+  }
+  async requestPause() {
+    await this.#connection.sendDebugger("debugger.requestPause", this._guid, "requestPause", {}, 0);
+  }
+  async resume() {
+    await this.#connection.sendDebugger("debugger.resume", this._guid, "resume", {}, 0);
+  }
+  async next() {
+    await this.#connection.sendDebugger("debugger.next", this._guid, "next", {}, 0);
+  }
+  async runTo(location) {
+    await this.#connection.sendDebugger("debugger.runTo", this._guid, "runTo", { location }, 0);
+  }
+  pausedDetails() {
+    return get(this._guid, "pausedDetails");
   }
 }
 
@@ -2244,7 +2366,7 @@ class FileChooser {
   }
   element() {
     if (!this.#element)
-      this.#element = handleFrom(this.#connection, get(this.#chooser, "element"));
+      this.#element = handleFrom(this.#connection, get(this.#chooser, "element"), this.#page.mainFrame());
     return this.#element;
   }
   isMultiple() {
@@ -2306,15 +2428,801 @@ function getByRoleSelector(role, options = {}) {
   return `internal:role=${role}${props.map(([n, v]) => `[${n}=${v}]`).join("")}`;
 }
 
+// vendor/playwright/isomorphic/mimeType.ts
+function getMimeTypeForPath(path) {
+  const dotIndex = path.lastIndexOf(".");
+  if (dotIndex === -1)
+    return null;
+  const extension = path.substring(dotIndex + 1).toLowerCase();
+  return types.get(extension) || null;
+}
+var types = new Map([
+  ["ez", "application/andrew-inset"],
+  ["aw", "application/applixware"],
+  ["atom", "application/atom+xml"],
+  ["atomcat", "application/atomcat+xml"],
+  ["atomdeleted", "application/atomdeleted+xml"],
+  ["atomsvc", "application/atomsvc+xml"],
+  ["dwd", "application/atsc-dwd+xml"],
+  ["held", "application/atsc-held+xml"],
+  ["rsat", "application/atsc-rsat+xml"],
+  ["bdoc", "application/bdoc"],
+  ["xcs", "application/calendar+xml"],
+  ["ccxml", "application/ccxml+xml"],
+  ["cdfx", "application/cdfx+xml"],
+  ["cdmia", "application/cdmi-capability"],
+  ["cdmic", "application/cdmi-container"],
+  ["cdmid", "application/cdmi-domain"],
+  ["cdmio", "application/cdmi-object"],
+  ["cdmiq", "application/cdmi-queue"],
+  ["cu", "application/cu-seeme"],
+  ["mpd", "application/dash+xml"],
+  ["davmount", "application/davmount+xml"],
+  ["dbk", "application/docbook+xml"],
+  ["dssc", "application/dssc+der"],
+  ["xdssc", "application/dssc+xml"],
+  ["ecma", "application/ecmascript"],
+  ["es", "application/ecmascript"],
+  ["emma", "application/emma+xml"],
+  ["emotionml", "application/emotionml+xml"],
+  ["epub", "application/epub+zip"],
+  ["exi", "application/exi"],
+  ["exp", "application/express"],
+  ["fdt", "application/fdt+xml"],
+  ["pfr", "application/font-tdpfr"],
+  ["geojson", "application/geo+json"],
+  ["gml", "application/gml+xml"],
+  ["gpx", "application/gpx+xml"],
+  ["gxf", "application/gxf"],
+  ["gz", "application/gzip"],
+  ["hjson", "application/hjson"],
+  ["stk", "application/hyperstudio"],
+  ["ink", "application/inkml+xml"],
+  ["inkml", "application/inkml+xml"],
+  ["ipfix", "application/ipfix"],
+  ["its", "application/its+xml"],
+  ["ear", "application/java-archive"],
+  ["jar", "application/java-archive"],
+  ["war", "application/java-archive"],
+  ["ser", "application/java-serialized-object"],
+  ["class", "application/java-vm"],
+  ["js", "application/javascript"],
+  ["mjs", "application/javascript"],
+  ["json", "application/json"],
+  ["map", "application/json"],
+  ["json5", "application/json5"],
+  ["jsonml", "application/jsonml+json"],
+  ["jsonld", "application/ld+json"],
+  ["lgr", "application/lgr+xml"],
+  ["lostxml", "application/lost+xml"],
+  ["hqx", "application/mac-binhex40"],
+  ["cpt", "application/mac-compactpro"],
+  ["mads", "application/mads+xml"],
+  ["webmanifest", "application/manifest+json"],
+  ["mrc", "application/marc"],
+  ["mrcx", "application/marcxml+xml"],
+  ["ma", "application/mathematica"],
+  ["mb", "application/mathematica"],
+  ["nb", "application/mathematica"],
+  ["mathml", "application/mathml+xml"],
+  ["mbox", "application/mbox"],
+  ["mscml", "application/mediaservercontrol+xml"],
+  ["metalink", "application/metalink+xml"],
+  ["meta4", "application/metalink4+xml"],
+  ["mets", "application/mets+xml"],
+  ["maei", "application/mmt-aei+xml"],
+  ["musd", "application/mmt-usd+xml"],
+  ["mods", "application/mods+xml"],
+  ["m21", "application/mp21"],
+  ["mp21", "application/mp21"],
+  ["m4p", "application/mp4"],
+  ["mp4s", "application/mp4"],
+  ["doc", "application/msword"],
+  ["dot", "application/msword"],
+  ["mxf", "application/mxf"],
+  ["nq", "application/n-quads"],
+  ["nt", "application/n-triples"],
+  ["cjs", "application/node"],
+  ["bin", "application/octet-stream"],
+  ["bpk", "application/octet-stream"],
+  ["buffer", "application/octet-stream"],
+  ["deb", "application/octet-stream"],
+  ["deploy", "application/octet-stream"],
+  ["dist", "application/octet-stream"],
+  ["distz", "application/octet-stream"],
+  ["dll", "application/octet-stream"],
+  ["dmg", "application/octet-stream"],
+  ["dms", "application/octet-stream"],
+  ["dump", "application/octet-stream"],
+  ["elc", "application/octet-stream"],
+  ["exe", "application/octet-stream"],
+  ["img", "application/octet-stream"],
+  ["iso", "application/octet-stream"],
+  ["lrf", "application/octet-stream"],
+  ["mar", "application/octet-stream"],
+  ["msi", "application/octet-stream"],
+  ["msm", "application/octet-stream"],
+  ["msp", "application/octet-stream"],
+  ["pkg", "application/octet-stream"],
+  ["so", "application/octet-stream"],
+  ["oda", "application/oda"],
+  ["opf", "application/oebps-package+xml"],
+  ["ogx", "application/ogg"],
+  ["omdoc", "application/omdoc+xml"],
+  ["onepkg", "application/onenote"],
+  ["onetmp", "application/onenote"],
+  ["onetoc", "application/onenote"],
+  ["onetoc2", "application/onenote"],
+  ["oxps", "application/oxps"],
+  ["relo", "application/p2p-overlay+xml"],
+  ["xer", "application/patch-ops-error+xml"],
+  ["pdf", "application/pdf"],
+  ["pgp", "application/pgp-encrypted"],
+  ["asc", "application/pgp-signature"],
+  ["sig", "application/pgp-signature"],
+  ["prf", "application/pics-rules"],
+  ["p10", "application/pkcs10"],
+  ["p7c", "application/pkcs7-mime"],
+  ["p7m", "application/pkcs7-mime"],
+  ["p7s", "application/pkcs7-signature"],
+  ["p8", "application/pkcs8"],
+  ["ac", "application/pkix-attr-cert"],
+  ["cer", "application/pkix-cert"],
+  ["crl", "application/pkix-crl"],
+  ["pkipath", "application/pkix-pkipath"],
+  ["pki", "application/pkixcmp"],
+  ["pls", "application/pls+xml"],
+  ["ai", "application/postscript"],
+  ["eps", "application/postscript"],
+  ["ps", "application/postscript"],
+  ["provx", "application/provenance+xml"],
+  ["pskcxml", "application/pskc+xml"],
+  ["raml", "application/raml+yaml"],
+  ["owl", "application/rdf+xml"],
+  ["rdf", "application/rdf+xml"],
+  ["rif", "application/reginfo+xml"],
+  ["rnc", "application/relax-ng-compact-syntax"],
+  ["rl", "application/resource-lists+xml"],
+  ["rld", "application/resource-lists-diff+xml"],
+  ["rs", "application/rls-services+xml"],
+  ["rapd", "application/route-apd+xml"],
+  ["sls", "application/route-s-tsid+xml"],
+  ["rusd", "application/route-usd+xml"],
+  ["gbr", "application/rpki-ghostbusters"],
+  ["mft", "application/rpki-manifest"],
+  ["roa", "application/rpki-roa"],
+  ["rsd", "application/rsd+xml"],
+  ["rss", "application/rss+xml"],
+  ["rtf", "application/rtf"],
+  ["sbml", "application/sbml+xml"],
+  ["scq", "application/scvp-cv-request"],
+  ["scs", "application/scvp-cv-response"],
+  ["spq", "application/scvp-vp-request"],
+  ["spp", "application/scvp-vp-response"],
+  ["sdp", "application/sdp"],
+  ["senmlx", "application/senml+xml"],
+  ["sensmlx", "application/sensml+xml"],
+  ["setpay", "application/set-payment-initiation"],
+  ["setreg", "application/set-registration-initiation"],
+  ["shf", "application/shf+xml"],
+  ["sieve", "application/sieve"],
+  ["siv", "application/sieve"],
+  ["smi", "application/smil+xml"],
+  ["smil", "application/smil+xml"],
+  ["rq", "application/sparql-query"],
+  ["srx", "application/sparql-results+xml"],
+  ["gram", "application/srgs"],
+  ["grxml", "application/srgs+xml"],
+  ["sru", "application/sru+xml"],
+  ["ssdl", "application/ssdl+xml"],
+  ["ssml", "application/ssml+xml"],
+  ["swidtag", "application/swid+xml"],
+  ["tei", "application/tei+xml"],
+  ["teicorpus", "application/tei+xml"],
+  ["tfi", "application/thraud+xml"],
+  ["tsd", "application/timestamped-data"],
+  ["toml", "application/toml"],
+  ["trig", "application/trig"],
+  ["ttml", "application/ttml+xml"],
+  ["ubj", "application/ubjson"],
+  ["rsheet", "application/urc-ressheet+xml"],
+  ["td", "application/urc-targetdesc+xml"],
+  ["vxml", "application/voicexml+xml"],
+  ["wasm", "application/wasm"],
+  ["wgt", "application/widget"],
+  ["hlp", "application/winhlp"],
+  ["wsdl", "application/wsdl+xml"],
+  ["wspolicy", "application/wspolicy+xml"],
+  ["xaml", "application/xaml+xml"],
+  ["xav", "application/xcap-att+xml"],
+  ["xca", "application/xcap-caps+xml"],
+  ["xdf", "application/xcap-diff+xml"],
+  ["xel", "application/xcap-el+xml"],
+  ["xns", "application/xcap-ns+xml"],
+  ["xenc", "application/xenc+xml"],
+  ["xht", "application/xhtml+xml"],
+  ["xhtml", "application/xhtml+xml"],
+  ["xlf", "application/xliff+xml"],
+  ["rng", "application/xml"],
+  ["xml", "application/xml"],
+  ["xsd", "application/xml"],
+  ["xsl", "application/xml"],
+  ["dtd", "application/xml-dtd"],
+  ["xop", "application/xop+xml"],
+  ["xpl", "application/xproc+xml"],
+  ["*xsl", "application/xslt+xml"],
+  ["xslt", "application/xslt+xml"],
+  ["xspf", "application/xspf+xml"],
+  ["mxml", "application/xv+xml"],
+  ["xhvml", "application/xv+xml"],
+  ["xvm", "application/xv+xml"],
+  ["xvml", "application/xv+xml"],
+  ["yang", "application/yang"],
+  ["yin", "application/yin+xml"],
+  ["zip", "application/zip"],
+  ["*3gpp", "audio/3gpp"],
+  ["adp", "audio/adpcm"],
+  ["amr", "audio/amr"],
+  ["au", "audio/basic"],
+  ["snd", "audio/basic"],
+  ["kar", "audio/midi"],
+  ["mid", "audio/midi"],
+  ["midi", "audio/midi"],
+  ["rmi", "audio/midi"],
+  ["mxmf", "audio/mobile-xmf"],
+  ["*mp3", "audio/mp3"],
+  ["m4a", "audio/mp4"],
+  ["mp4a", "audio/mp4"],
+  ["m2a", "audio/mpeg"],
+  ["m3a", "audio/mpeg"],
+  ["mp2", "audio/mpeg"],
+  ["mp2a", "audio/mpeg"],
+  ["mp3", "audio/mpeg"],
+  ["mpga", "audio/mpeg"],
+  ["oga", "audio/ogg"],
+  ["ogg", "audio/ogg"],
+  ["opus", "audio/ogg"],
+  ["spx", "audio/ogg"],
+  ["s3m", "audio/s3m"],
+  ["sil", "audio/silk"],
+  ["wav", "audio/wav"],
+  ["*wav", "audio/wave"],
+  ["weba", "audio/webm"],
+  ["xm", "audio/xm"],
+  ["ttc", "font/collection"],
+  ["otf", "font/otf"],
+  ["ttf", "font/ttf"],
+  ["woff", "font/woff"],
+  ["woff2", "font/woff2"],
+  ["exr", "image/aces"],
+  ["apng", "image/apng"],
+  ["avif", "image/avif"],
+  ["bmp", "image/bmp"],
+  ["cgm", "image/cgm"],
+  ["drle", "image/dicom-rle"],
+  ["emf", "image/emf"],
+  ["fits", "image/fits"],
+  ["g3", "image/g3fax"],
+  ["gif", "image/gif"],
+  ["heic", "image/heic"],
+  ["heics", "image/heic-sequence"],
+  ["heif", "image/heif"],
+  ["heifs", "image/heif-sequence"],
+  ["hej2", "image/hej2k"],
+  ["hsj2", "image/hsj2"],
+  ["ief", "image/ief"],
+  ["jls", "image/jls"],
+  ["jp2", "image/jp2"],
+  ["jpg2", "image/jp2"],
+  ["jpe", "image/jpeg"],
+  ["jpeg", "image/jpeg"],
+  ["jpg", "image/jpeg"],
+  ["jph", "image/jph"],
+  ["jhc", "image/jphc"],
+  ["jpm", "image/jpm"],
+  ["jpf", "image/jpx"],
+  ["jpx", "image/jpx"],
+  ["jxr", "image/jxr"],
+  ["jxra", "image/jxra"],
+  ["jxrs", "image/jxrs"],
+  ["jxs", "image/jxs"],
+  ["jxsc", "image/jxsc"],
+  ["jxsi", "image/jxsi"],
+  ["jxss", "image/jxss"],
+  ["ktx", "image/ktx"],
+  ["ktx2", "image/ktx2"],
+  ["png", "image/png"],
+  ["sgi", "image/sgi"],
+  ["svg", "image/svg+xml"],
+  ["svgz", "image/svg+xml"],
+  ["t38", "image/t38"],
+  ["tif", "image/tiff"],
+  ["tiff", "image/tiff"],
+  ["tfx", "image/tiff-fx"],
+  ["webp", "image/webp"],
+  ["wmf", "image/wmf"],
+  ["disposition-notification", "message/disposition-notification"],
+  ["u8msg", "message/global"],
+  ["u8dsn", "message/global-delivery-status"],
+  ["u8mdn", "message/global-disposition-notification"],
+  ["u8hdr", "message/global-headers"],
+  ["eml", "message/rfc822"],
+  ["mime", "message/rfc822"],
+  ["3mf", "model/3mf"],
+  ["gltf", "model/gltf+json"],
+  ["glb", "model/gltf-binary"],
+  ["iges", "model/iges"],
+  ["igs", "model/iges"],
+  ["mesh", "model/mesh"],
+  ["msh", "model/mesh"],
+  ["silo", "model/mesh"],
+  ["mtl", "model/mtl"],
+  ["obj", "model/obj"],
+  ["stpx", "model/step+xml"],
+  ["stpz", "model/step+zip"],
+  ["stpxz", "model/step-xml+zip"],
+  ["stl", "model/stl"],
+  ["vrml", "model/vrml"],
+  ["wrl", "model/vrml"],
+  ["*x3db", "model/x3d+binary"],
+  ["x3dbz", "model/x3d+binary"],
+  ["x3db", "model/x3d+fastinfoset"],
+  ["*x3dv", "model/x3d+vrml"],
+  ["x3dvz", "model/x3d+vrml"],
+  ["x3d", "model/x3d+xml"],
+  ["x3dz", "model/x3d+xml"],
+  ["x3dv", "model/x3d-vrml"],
+  ["appcache", "text/cache-manifest"],
+  ["manifest", "text/cache-manifest"],
+  ["ics", "text/calendar"],
+  ["ifb", "text/calendar"],
+  ["coffee", "text/coffeescript"],
+  ["litcoffee", "text/coffeescript"],
+  ["css", "text/css"],
+  ["csv", "text/csv"],
+  ["htm", "text/html"],
+  ["html", "text/html"],
+  ["shtml", "text/html"],
+  ["jade", "text/jade"],
+  ["jsx", "text/jsx"],
+  ["less", "text/less"],
+  ["markdown", "text/markdown"],
+  ["md", "text/markdown"],
+  ["mml", "text/mathml"],
+  ["mdx", "text/mdx"],
+  ["n3", "text/n3"],
+  ["conf", "text/plain"],
+  ["def", "text/plain"],
+  ["in", "text/plain"],
+  ["ini", "text/plain"],
+  ["list", "text/plain"],
+  ["log", "text/plain"],
+  ["text", "text/plain"],
+  ["txt", "text/plain"],
+  ["rtx", "text/richtext"],
+  ["*rtf", "text/rtf"],
+  ["sgm", "text/sgml"],
+  ["sgml", "text/sgml"],
+  ["shex", "text/shex"],
+  ["slim", "text/slim"],
+  ["slm", "text/slim"],
+  ["spdx", "text/spdx"],
+  ["styl", "text/stylus"],
+  ["stylus", "text/stylus"],
+  ["tsv", "text/tab-separated-values"],
+  ["man", "text/troff"],
+  ["me", "text/troff"],
+  ["ms", "text/troff"],
+  ["roff", "text/troff"],
+  ["t", "text/troff"],
+  ["tr", "text/troff"],
+  ["ttl", "text/turtle"],
+  ["uri", "text/uri-list"],
+  ["uris", "text/uri-list"],
+  ["urls", "text/uri-list"],
+  ["vcard", "text/vcard"],
+  ["vtt", "text/vtt"],
+  ["*xml", "text/xml"],
+  ["yaml", "text/yaml"],
+  ["yml", "text/yaml"],
+  ["3gp", "video/3gpp"],
+  ["3gpp", "video/3gpp"],
+  ["3g2", "video/3gpp2"],
+  ["h261", "video/h261"],
+  ["h263", "video/h263"],
+  ["h264", "video/h264"],
+  ["m4s", "video/iso.segment"],
+  ["jpgv", "video/jpeg"],
+  ["jpm", "video/jpm"],
+  ["jpgm", "video/jpm"],
+  ["mj2", "video/mj2"],
+  ["mjp2", "video/mj2"],
+  ["ts", "application/typescript"],
+  ["mp4", "video/mp4"],
+  ["mp4v", "video/mp4"],
+  ["mpg4", "video/mp4"],
+  ["m1v", "video/mpeg"],
+  ["m2v", "video/mpeg"],
+  ["mpe", "video/mpeg"],
+  ["mpeg", "video/mpeg"],
+  ["mpg", "video/mpeg"],
+  ["ogv", "video/ogg"],
+  ["mov", "video/quicktime"],
+  ["qt", "video/quicktime"],
+  ["webm", "video/webm"]
+]);
+
+// src/protocol.ts
+var FRAME_GOTO_KEYS = ["url", "waitUntil", "referer"];
+var FRAME_TEXT_CONTENT_KEYS = ["selector", "strict"];
+var FRAME_INNER_TEXT_KEYS = ["selector", "strict"];
+var FRAME_GET_ATTRIBUTE_KEYS = ["selector", "strict", "name"];
+var FRAME_QUERY_COUNT_KEYS = ["selector"];
+var FRAME_CONTENT_KEYS = ["includeShadow"];
+var FRAME_SET_CONTENT_KEYS = ["html", "waitUntil"];
+var FRAME_WAIT_FOR_TIMEOUT_KEYS = ["waitTimeout"];
+var FRAME_RESOLVE_SELECTOR_KEYS = ["selector", "sdkLanguage"];
+var FRAME_ARIA_SNAPSHOT_JSON_KEYS = [
+  "mode",
+  "selector",
+  "depth",
+  "boxes"
+];
+var FRAME_ARIA_SNAPSHOT_KEYS = [
+  "mode",
+  "selector",
+  "depth",
+  "boxes"
+];
+var FRAME_CLICK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "noWaitAfter",
+  "modifiers",
+  "position",
+  "delay",
+  "button",
+  "clickCount",
+  "trial",
+  "steps"
+];
+var FRAME_DBLCLICK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "modifiers",
+  "position",
+  "delay",
+  "button",
+  "trial",
+  "steps"
+];
+var FRAME_HOVER_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "modifiers",
+  "position",
+  "trial"
+];
+var FRAME_TAP_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "modifiers",
+  "position",
+  "trial"
+];
+var PAGE_KEYBOARD_DOWN_KEYS = ["key"];
+var PAGE_KEYBOARD_UP_KEYS = ["key"];
+var PAGE_KEYBOARD_INSERT_TEXT_KEYS = ["text"];
+var PAGE_KEYBOARD_TYPE_KEYS = ["text", "delay"];
+var PAGE_KEYBOARD_PRESS_KEYS = ["key", "delay"];
+var PAGE_MOUSE_MOVE_KEYS = ["x", "y", "steps"];
+var PAGE_MOUSE_DOWN_KEYS = ["button", "clickCount"];
+var PAGE_MOUSE_UP_KEYS = ["button", "clickCount"];
+var PAGE_MOUSE_CLICK_KEYS = [
+  "x",
+  "y",
+  "delay",
+  "button",
+  "clickCount"
+];
+var PAGE_MOUSE_WHEEL_KEYS = ["deltaX", "deltaY"];
+var PAGE_TOUCHSCREEN_TAP_KEYS = ["x", "y"];
+var FRAME_FILL_KEYS = ["selector", "strict", "value", "force"];
+var FRAME_PRESS_KEYS = [
+  "selector",
+  "strict",
+  "key",
+  "delay",
+  "noWaitAfter"
+];
+var FRAME_TYPE_KEYS = ["selector", "strict", "text", "delay"];
+var FRAME_DRAG_AND_DROP_KEYS = [
+  "source",
+  "target",
+  "force",
+  "scroll",
+  "trial",
+  "sourcePosition",
+  "targetPosition",
+  "strict",
+  "steps"
+];
+var FRAME_INPUT_VALUE_KEYS = ["selector", "strict"];
+var FRAME_IS_CHECKED_KEYS = ["selector", "strict"];
+var FRAME_IS_VISIBLE_KEYS = ["selector", "strict"];
+var FRAME_IS_HIDDEN_KEYS = ["selector", "strict"];
+var FRAME_IS_ENABLED_KEYS = ["selector", "strict"];
+var FRAME_IS_DISABLED_KEYS = ["selector", "strict"];
+var FRAME_IS_EDITABLE_KEYS = ["selector", "strict"];
+var FRAME_INNER_HTML_KEYS = ["selector", "strict"];
+var FRAME_CHECK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "position",
+  "trial"
+];
+var FRAME_UNCHECK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "position",
+  "trial"
+];
+var FRAME_SET_INPUT_FILES_KEYS = [
+  "selector",
+  "strict",
+  "payloads",
+  "localDirectory",
+  "directoryStream",
+  "localPaths",
+  "streams"
+];
+var FRAME_DROP_KEYS = [
+  "selector",
+  "strict",
+  "position",
+  "payloads",
+  "localPaths",
+  "streams",
+  "data"
+];
+var FRAME_SELECT_OPTION_KEYS = [
+  "selector",
+  "strict",
+  "elements",
+  "options",
+  "force"
+];
+var FRAME_WAIT_FOR_SELECTOR_KEYS = [
+  "selector",
+  "strict",
+  "state",
+  "omitReturnValue"
+];
+var FRAME_FOCUS_KEYS = ["selector", "strict"];
+var FRAME_BLUR_KEYS = ["selector", "strict"];
+var FRAME_DISPATCH_EVENT_KEYS = [
+  "selector",
+  "strict",
+  "type",
+  "eventInit"
+];
+var FRAME_HIGHLIGHT_KEYS = ["selector", "style"];
+var FRAME_HIDE_HIGHLIGHT_KEYS = ["selector"];
+var BROWSER_CONTEXT_CLOSE_KEYS = ["reason"];
+var PAGE_CLOSE_KEYS = ["reason"];
+var PAGE_SCREENSHOT_KEYS = [
+  "type",
+  "quality",
+  "fullPage",
+  "clip",
+  "omitBackground",
+  "caret",
+  "animations",
+  "scale",
+  "mask",
+  "maskColor",
+  "style"
+];
+var PAGE_PDF_KEYS = [
+  "scale",
+  "displayHeaderFooter",
+  "headerTemplate",
+  "footerTemplate",
+  "printBackground",
+  "landscape",
+  "pageRanges",
+  "format",
+  "width",
+  "height",
+  "preferCSSPageSize",
+  "margin",
+  "tagged",
+  "outline"
+];
+var ELEMENT_SCREENSHOT_KEYS = [
+  "type",
+  "quality",
+  "omitBackground",
+  "caret",
+  "animations",
+  "scale",
+  "mask",
+  "maskColor",
+  "style"
+];
+var NEO_SCREENSHOT_KEYS = [
+  "selector",
+  ...ELEMENT_SCREENSHOT_KEYS
+];
+var PAGE_REGISTER_LOCATOR_HANDLER_KEYS = [
+  "selector",
+  "noWaitAfter"
+];
+var PAGE_RESOLVE_LOCATOR_HANDLER_KEYS = ["uid", "remove"];
+var PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS = ["uid"];
+var PAGE_RELOAD_KEYS = ["waitUntil"];
+var PAGE_GO_BACK_KEYS = ["waitUntil"];
+var PAGE_GO_FORWARD_KEYS = ["waitUntil"];
+var PAGE_CONSOLE_MESSAGES_KEYS = ["filter"];
+var PAGE_PAGE_ERRORS_KEYS = ["filter"];
+function pickParams(keys, options) {
+  const params = {};
+  for (const key of keys) {
+    const value = options[key];
+    if (value === null)
+      throw new Error(`${key}: expected a value, got null`);
+    if (value !== undefined)
+      params[key] = value;
+  }
+  return params;
+}
+
+// src/screenshot.ts
+function determineScreenshotType(options) {
+  if (options.path) {
+    const mimeType = getMimeTypeForPath(options.path);
+    if (mimeType === "image/png")
+      return "png";
+    else if (mimeType === "image/jpeg")
+      return "jpeg";
+    else if (mimeType === "image/webp")
+      return "webp";
+    throw new Error(`path: unsupported mime type "${mimeType}"`);
+  }
+  return options.type;
+}
+function pageScreenshotParams(apiName, options) {
+  const params = pickParams(PAGE_SCREENSHOT_KEYS, screenshotFields(apiName, options));
+  return withPath(params, options.path);
+}
+function locatorScreenshotParams(apiName, selector, options) {
+  const params = pickParams(NEO_SCREENSHOT_KEYS, {
+    ...screenshotFields(apiName, options),
+    selector
+  });
+  return withPath(params, options.path);
+}
+function elementScreenshotParams(apiName, options) {
+  const params = pickParams(ELEMENT_SCREENSHOT_KEYS, screenshotFields(apiName, options));
+  return withPath(params, options.path);
+}
+function screenshotFields(apiName, options) {
+  const fields = { ...options, mask: undefined };
+  if (!fields.type) {
+    try {
+      fields.type = determineScreenshotType(options);
+    } catch (error) {
+      error.message = `${apiName}: ${error.message}`;
+      throw error;
+    }
+  }
+  if (options.mask) {
+    fields.mask = options.mask.map((locator) => ({
+      frame: { guid: locator._frame._guid },
+      selector: locator._selector
+    }));
+  }
+  return fields;
+}
+function pdfParams(options) {
+  const transportOptions = { ...options };
+  const margin = options.margin ? { ...options.margin } : undefined;
+  if (margin)
+    transportOptions.margin = margin;
+  if (typeof options.width === "number")
+    transportOptions.width = `${options.width}px`;
+  if (typeof options.height === "number")
+    transportOptions.height = `${options.height}px`;
+  if (margin) {
+    for (const side of ["top", "right", "bottom", "left"]) {
+      const value = margin[side];
+      if (typeof value === "number")
+        margin[side] = `${value}px`;
+    }
+  }
+  const params = pickParams(PAGE_PDF_KEYS, transportOptions);
+  return withPath(params, options.path);
+}
+function withPath(params, path) {
+  if (path)
+    params.path = path;
+  return params;
+}
+function resultBuffer(binary) {
+  return Buffer3.fromBinary(binary);
+}
+
+// src/timeout-settings.ts
+var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
+
+class TimeoutSettings {
+  #parent;
+  #defaultTimeout;
+  #defaultNavigationTimeout;
+  constructor(parent) {
+    this.#parent = parent;
+  }
+  setDefaultTimeout(timeout) {
+    this.#defaultTimeout = timeout;
+  }
+  setDefaultNavigationTimeout(timeout) {
+    this.#defaultNavigationTimeout = timeout;
+  }
+  defaultTimeout() {
+    return this.#defaultTimeout;
+  }
+  defaultNavigationTimeout() {
+    return this.#defaultNavigationTimeout;
+  }
+  timeout(options, _apiName) {
+    return { signal: options.signal, timeout: this.#timeout(options) };
+  }
+  navigationTimeout(options, _apiName) {
+    return { signal: options.signal, timeout: this.#navigationTimeout(options) };
+  }
+  #timeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#timeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+  #navigationTimeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultNavigationTimeout !== undefined)
+      return this.#defaultNavigationTimeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.#navigationTimeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+}
+
 // src/element-handle.ts
 class ElementHandle extends JSHandle {
-  constructor(connection, guid, initializer) {
-    super(connection, guid, initializer, "elementHandle");
+  constructor(connection, guid, initializer, frame) {
+    super(connection, guid, initializer, "elementHandle", frame);
   }
-  static fromNullable(connection, created) {
+  static fromNullable(connection, created, frame) {
     if (!created)
       return null;
-    const handle = handleFrom(connection, created);
+    const handle = handleFrom(connection, created, frame);
     return handle instanceof ElementHandle ? handle : null;
   }
   asElement() {
@@ -2322,11 +3230,11 @@ class ElementHandle extends JSHandle {
   }
   async $(selector) {
     const result = await this._connection.sendHandle("elementHandle.$", this._guid, "querySelector", { selector }, 0);
-    return ElementHandle.fromNullable(this._connection, result.element);
+    return ElementHandle.fromNullable(this._connection, result.element, this._frame);
   }
   async $$(selector) {
     const result = await this._connection.sendHandle("elementHandle.$$", this._guid, "querySelectorAll", { selector }, 0);
-    return elementsFrom(this._connection, result.elements);
+    return elementsFrom(this._connection, result.elements, this._frame);
   }
   async $eval(selector, pageFunction, arg) {
     const params = evaluateParams("elementHandle.$eval", pageFunction, arg, undefined);
@@ -2338,14 +3246,22 @@ class ElementHandle extends JSHandle {
     const result = await this._connection.sendHandle("elementHandle.$$eval", this._guid, "evalOnSelectorAll", { selector, ...params }, 0);
     return parseResult(result.value);
   }
+  async screenshot(options = {}) {
+    const result = await this._connection.sendHandle("elementHandle.screenshot", this._guid, "screenshot", elementScreenshotParams("elementHandle.screenshot", options), this._timeout(options, "elementHandle.screenshot"));
+    return resultBuffer(result.binary);
+  }
+  _timeout(options, apiName) {
+    const settings = this._frame?._page._timeoutSettings ?? new TimeoutSettings;
+    return settings.timeout(options, apiName);
+  }
   async dispatchEvent(type, eventInit = {}) {
     await this._connection.sendHandle("elementHandle.dispatchEvent", this._guid, "dispatchEvent", { type, eventInit: serializeArgument(eventInit) }, 0);
   }
 }
-function elementsFrom(connection, created) {
-  return created.map((record) => ElementHandle.fromNullable(connection, record)).filter((handle) => handle !== null);
+function elementsFrom(connection, created, frame) {
+  return created.map((record) => ElementHandle.fromNullable(connection, record, frame)).filter((handle) => handle !== null);
 }
-handleFactory.element = (connection, guid, initializer) => new ElementHandle(connection, guid, initializer);
+handleFactory.element = (connection, guid, initializer, frame) => new ElementHandle(connection, guid, initializer, frame);
 
 // vendor/playwright/isomorphic/cssTokenizer.ts
 var between = function(num, first, last) {
@@ -4478,740 +5394,6 @@ function isRegExp3(obj) {
   return obj instanceof RegExp;
 }
 
-// vendor/playwright/isomorphic/mimeType.ts
-function getMimeTypeForPath(path) {
-  const dotIndex = path.lastIndexOf(".");
-  if (dotIndex === -1)
-    return null;
-  const extension = path.substring(dotIndex + 1).toLowerCase();
-  return types.get(extension) || null;
-}
-var types = new Map([
-  ["ez", "application/andrew-inset"],
-  ["aw", "application/applixware"],
-  ["atom", "application/atom+xml"],
-  ["atomcat", "application/atomcat+xml"],
-  ["atomdeleted", "application/atomdeleted+xml"],
-  ["atomsvc", "application/atomsvc+xml"],
-  ["dwd", "application/atsc-dwd+xml"],
-  ["held", "application/atsc-held+xml"],
-  ["rsat", "application/atsc-rsat+xml"],
-  ["bdoc", "application/bdoc"],
-  ["xcs", "application/calendar+xml"],
-  ["ccxml", "application/ccxml+xml"],
-  ["cdfx", "application/cdfx+xml"],
-  ["cdmia", "application/cdmi-capability"],
-  ["cdmic", "application/cdmi-container"],
-  ["cdmid", "application/cdmi-domain"],
-  ["cdmio", "application/cdmi-object"],
-  ["cdmiq", "application/cdmi-queue"],
-  ["cu", "application/cu-seeme"],
-  ["mpd", "application/dash+xml"],
-  ["davmount", "application/davmount+xml"],
-  ["dbk", "application/docbook+xml"],
-  ["dssc", "application/dssc+der"],
-  ["xdssc", "application/dssc+xml"],
-  ["ecma", "application/ecmascript"],
-  ["es", "application/ecmascript"],
-  ["emma", "application/emma+xml"],
-  ["emotionml", "application/emotionml+xml"],
-  ["epub", "application/epub+zip"],
-  ["exi", "application/exi"],
-  ["exp", "application/express"],
-  ["fdt", "application/fdt+xml"],
-  ["pfr", "application/font-tdpfr"],
-  ["geojson", "application/geo+json"],
-  ["gml", "application/gml+xml"],
-  ["gpx", "application/gpx+xml"],
-  ["gxf", "application/gxf"],
-  ["gz", "application/gzip"],
-  ["hjson", "application/hjson"],
-  ["stk", "application/hyperstudio"],
-  ["ink", "application/inkml+xml"],
-  ["inkml", "application/inkml+xml"],
-  ["ipfix", "application/ipfix"],
-  ["its", "application/its+xml"],
-  ["ear", "application/java-archive"],
-  ["jar", "application/java-archive"],
-  ["war", "application/java-archive"],
-  ["ser", "application/java-serialized-object"],
-  ["class", "application/java-vm"],
-  ["js", "application/javascript"],
-  ["mjs", "application/javascript"],
-  ["json", "application/json"],
-  ["map", "application/json"],
-  ["json5", "application/json5"],
-  ["jsonml", "application/jsonml+json"],
-  ["jsonld", "application/ld+json"],
-  ["lgr", "application/lgr+xml"],
-  ["lostxml", "application/lost+xml"],
-  ["hqx", "application/mac-binhex40"],
-  ["cpt", "application/mac-compactpro"],
-  ["mads", "application/mads+xml"],
-  ["webmanifest", "application/manifest+json"],
-  ["mrc", "application/marc"],
-  ["mrcx", "application/marcxml+xml"],
-  ["ma", "application/mathematica"],
-  ["mb", "application/mathematica"],
-  ["nb", "application/mathematica"],
-  ["mathml", "application/mathml+xml"],
-  ["mbox", "application/mbox"],
-  ["mscml", "application/mediaservercontrol+xml"],
-  ["metalink", "application/metalink+xml"],
-  ["meta4", "application/metalink4+xml"],
-  ["mets", "application/mets+xml"],
-  ["maei", "application/mmt-aei+xml"],
-  ["musd", "application/mmt-usd+xml"],
-  ["mods", "application/mods+xml"],
-  ["m21", "application/mp21"],
-  ["mp21", "application/mp21"],
-  ["m4p", "application/mp4"],
-  ["mp4s", "application/mp4"],
-  ["doc", "application/msword"],
-  ["dot", "application/msword"],
-  ["mxf", "application/mxf"],
-  ["nq", "application/n-quads"],
-  ["nt", "application/n-triples"],
-  ["cjs", "application/node"],
-  ["bin", "application/octet-stream"],
-  ["bpk", "application/octet-stream"],
-  ["buffer", "application/octet-stream"],
-  ["deb", "application/octet-stream"],
-  ["deploy", "application/octet-stream"],
-  ["dist", "application/octet-stream"],
-  ["distz", "application/octet-stream"],
-  ["dll", "application/octet-stream"],
-  ["dmg", "application/octet-stream"],
-  ["dms", "application/octet-stream"],
-  ["dump", "application/octet-stream"],
-  ["elc", "application/octet-stream"],
-  ["exe", "application/octet-stream"],
-  ["img", "application/octet-stream"],
-  ["iso", "application/octet-stream"],
-  ["lrf", "application/octet-stream"],
-  ["mar", "application/octet-stream"],
-  ["msi", "application/octet-stream"],
-  ["msm", "application/octet-stream"],
-  ["msp", "application/octet-stream"],
-  ["pkg", "application/octet-stream"],
-  ["so", "application/octet-stream"],
-  ["oda", "application/oda"],
-  ["opf", "application/oebps-package+xml"],
-  ["ogx", "application/ogg"],
-  ["omdoc", "application/omdoc+xml"],
-  ["onepkg", "application/onenote"],
-  ["onetmp", "application/onenote"],
-  ["onetoc", "application/onenote"],
-  ["onetoc2", "application/onenote"],
-  ["oxps", "application/oxps"],
-  ["relo", "application/p2p-overlay+xml"],
-  ["xer", "application/patch-ops-error+xml"],
-  ["pdf", "application/pdf"],
-  ["pgp", "application/pgp-encrypted"],
-  ["asc", "application/pgp-signature"],
-  ["sig", "application/pgp-signature"],
-  ["prf", "application/pics-rules"],
-  ["p10", "application/pkcs10"],
-  ["p7c", "application/pkcs7-mime"],
-  ["p7m", "application/pkcs7-mime"],
-  ["p7s", "application/pkcs7-signature"],
-  ["p8", "application/pkcs8"],
-  ["ac", "application/pkix-attr-cert"],
-  ["cer", "application/pkix-cert"],
-  ["crl", "application/pkix-crl"],
-  ["pkipath", "application/pkix-pkipath"],
-  ["pki", "application/pkixcmp"],
-  ["pls", "application/pls+xml"],
-  ["ai", "application/postscript"],
-  ["eps", "application/postscript"],
-  ["ps", "application/postscript"],
-  ["provx", "application/provenance+xml"],
-  ["pskcxml", "application/pskc+xml"],
-  ["raml", "application/raml+yaml"],
-  ["owl", "application/rdf+xml"],
-  ["rdf", "application/rdf+xml"],
-  ["rif", "application/reginfo+xml"],
-  ["rnc", "application/relax-ng-compact-syntax"],
-  ["rl", "application/resource-lists+xml"],
-  ["rld", "application/resource-lists-diff+xml"],
-  ["rs", "application/rls-services+xml"],
-  ["rapd", "application/route-apd+xml"],
-  ["sls", "application/route-s-tsid+xml"],
-  ["rusd", "application/route-usd+xml"],
-  ["gbr", "application/rpki-ghostbusters"],
-  ["mft", "application/rpki-manifest"],
-  ["roa", "application/rpki-roa"],
-  ["rsd", "application/rsd+xml"],
-  ["rss", "application/rss+xml"],
-  ["rtf", "application/rtf"],
-  ["sbml", "application/sbml+xml"],
-  ["scq", "application/scvp-cv-request"],
-  ["scs", "application/scvp-cv-response"],
-  ["spq", "application/scvp-vp-request"],
-  ["spp", "application/scvp-vp-response"],
-  ["sdp", "application/sdp"],
-  ["senmlx", "application/senml+xml"],
-  ["sensmlx", "application/sensml+xml"],
-  ["setpay", "application/set-payment-initiation"],
-  ["setreg", "application/set-registration-initiation"],
-  ["shf", "application/shf+xml"],
-  ["sieve", "application/sieve"],
-  ["siv", "application/sieve"],
-  ["smi", "application/smil+xml"],
-  ["smil", "application/smil+xml"],
-  ["rq", "application/sparql-query"],
-  ["srx", "application/sparql-results+xml"],
-  ["gram", "application/srgs"],
-  ["grxml", "application/srgs+xml"],
-  ["sru", "application/sru+xml"],
-  ["ssdl", "application/ssdl+xml"],
-  ["ssml", "application/ssml+xml"],
-  ["swidtag", "application/swid+xml"],
-  ["tei", "application/tei+xml"],
-  ["teicorpus", "application/tei+xml"],
-  ["tfi", "application/thraud+xml"],
-  ["tsd", "application/timestamped-data"],
-  ["toml", "application/toml"],
-  ["trig", "application/trig"],
-  ["ttml", "application/ttml+xml"],
-  ["ubj", "application/ubjson"],
-  ["rsheet", "application/urc-ressheet+xml"],
-  ["td", "application/urc-targetdesc+xml"],
-  ["vxml", "application/voicexml+xml"],
-  ["wasm", "application/wasm"],
-  ["wgt", "application/widget"],
-  ["hlp", "application/winhlp"],
-  ["wsdl", "application/wsdl+xml"],
-  ["wspolicy", "application/wspolicy+xml"],
-  ["xaml", "application/xaml+xml"],
-  ["xav", "application/xcap-att+xml"],
-  ["xca", "application/xcap-caps+xml"],
-  ["xdf", "application/xcap-diff+xml"],
-  ["xel", "application/xcap-el+xml"],
-  ["xns", "application/xcap-ns+xml"],
-  ["xenc", "application/xenc+xml"],
-  ["xht", "application/xhtml+xml"],
-  ["xhtml", "application/xhtml+xml"],
-  ["xlf", "application/xliff+xml"],
-  ["rng", "application/xml"],
-  ["xml", "application/xml"],
-  ["xsd", "application/xml"],
-  ["xsl", "application/xml"],
-  ["dtd", "application/xml-dtd"],
-  ["xop", "application/xop+xml"],
-  ["xpl", "application/xproc+xml"],
-  ["*xsl", "application/xslt+xml"],
-  ["xslt", "application/xslt+xml"],
-  ["xspf", "application/xspf+xml"],
-  ["mxml", "application/xv+xml"],
-  ["xhvml", "application/xv+xml"],
-  ["xvm", "application/xv+xml"],
-  ["xvml", "application/xv+xml"],
-  ["yang", "application/yang"],
-  ["yin", "application/yin+xml"],
-  ["zip", "application/zip"],
-  ["*3gpp", "audio/3gpp"],
-  ["adp", "audio/adpcm"],
-  ["amr", "audio/amr"],
-  ["au", "audio/basic"],
-  ["snd", "audio/basic"],
-  ["kar", "audio/midi"],
-  ["mid", "audio/midi"],
-  ["midi", "audio/midi"],
-  ["rmi", "audio/midi"],
-  ["mxmf", "audio/mobile-xmf"],
-  ["*mp3", "audio/mp3"],
-  ["m4a", "audio/mp4"],
-  ["mp4a", "audio/mp4"],
-  ["m2a", "audio/mpeg"],
-  ["m3a", "audio/mpeg"],
-  ["mp2", "audio/mpeg"],
-  ["mp2a", "audio/mpeg"],
-  ["mp3", "audio/mpeg"],
-  ["mpga", "audio/mpeg"],
-  ["oga", "audio/ogg"],
-  ["ogg", "audio/ogg"],
-  ["opus", "audio/ogg"],
-  ["spx", "audio/ogg"],
-  ["s3m", "audio/s3m"],
-  ["sil", "audio/silk"],
-  ["wav", "audio/wav"],
-  ["*wav", "audio/wave"],
-  ["weba", "audio/webm"],
-  ["xm", "audio/xm"],
-  ["ttc", "font/collection"],
-  ["otf", "font/otf"],
-  ["ttf", "font/ttf"],
-  ["woff", "font/woff"],
-  ["woff2", "font/woff2"],
-  ["exr", "image/aces"],
-  ["apng", "image/apng"],
-  ["avif", "image/avif"],
-  ["bmp", "image/bmp"],
-  ["cgm", "image/cgm"],
-  ["drle", "image/dicom-rle"],
-  ["emf", "image/emf"],
-  ["fits", "image/fits"],
-  ["g3", "image/g3fax"],
-  ["gif", "image/gif"],
-  ["heic", "image/heic"],
-  ["heics", "image/heic-sequence"],
-  ["heif", "image/heif"],
-  ["heifs", "image/heif-sequence"],
-  ["hej2", "image/hej2k"],
-  ["hsj2", "image/hsj2"],
-  ["ief", "image/ief"],
-  ["jls", "image/jls"],
-  ["jp2", "image/jp2"],
-  ["jpg2", "image/jp2"],
-  ["jpe", "image/jpeg"],
-  ["jpeg", "image/jpeg"],
-  ["jpg", "image/jpeg"],
-  ["jph", "image/jph"],
-  ["jhc", "image/jphc"],
-  ["jpm", "image/jpm"],
-  ["jpf", "image/jpx"],
-  ["jpx", "image/jpx"],
-  ["jxr", "image/jxr"],
-  ["jxra", "image/jxra"],
-  ["jxrs", "image/jxrs"],
-  ["jxs", "image/jxs"],
-  ["jxsc", "image/jxsc"],
-  ["jxsi", "image/jxsi"],
-  ["jxss", "image/jxss"],
-  ["ktx", "image/ktx"],
-  ["ktx2", "image/ktx2"],
-  ["png", "image/png"],
-  ["sgi", "image/sgi"],
-  ["svg", "image/svg+xml"],
-  ["svgz", "image/svg+xml"],
-  ["t38", "image/t38"],
-  ["tif", "image/tiff"],
-  ["tiff", "image/tiff"],
-  ["tfx", "image/tiff-fx"],
-  ["webp", "image/webp"],
-  ["wmf", "image/wmf"],
-  ["disposition-notification", "message/disposition-notification"],
-  ["u8msg", "message/global"],
-  ["u8dsn", "message/global-delivery-status"],
-  ["u8mdn", "message/global-disposition-notification"],
-  ["u8hdr", "message/global-headers"],
-  ["eml", "message/rfc822"],
-  ["mime", "message/rfc822"],
-  ["3mf", "model/3mf"],
-  ["gltf", "model/gltf+json"],
-  ["glb", "model/gltf-binary"],
-  ["iges", "model/iges"],
-  ["igs", "model/iges"],
-  ["mesh", "model/mesh"],
-  ["msh", "model/mesh"],
-  ["silo", "model/mesh"],
-  ["mtl", "model/mtl"],
-  ["obj", "model/obj"],
-  ["stpx", "model/step+xml"],
-  ["stpz", "model/step+zip"],
-  ["stpxz", "model/step-xml+zip"],
-  ["stl", "model/stl"],
-  ["vrml", "model/vrml"],
-  ["wrl", "model/vrml"],
-  ["*x3db", "model/x3d+binary"],
-  ["x3dbz", "model/x3d+binary"],
-  ["x3db", "model/x3d+fastinfoset"],
-  ["*x3dv", "model/x3d+vrml"],
-  ["x3dvz", "model/x3d+vrml"],
-  ["x3d", "model/x3d+xml"],
-  ["x3dz", "model/x3d+xml"],
-  ["x3dv", "model/x3d-vrml"],
-  ["appcache", "text/cache-manifest"],
-  ["manifest", "text/cache-manifest"],
-  ["ics", "text/calendar"],
-  ["ifb", "text/calendar"],
-  ["coffee", "text/coffeescript"],
-  ["litcoffee", "text/coffeescript"],
-  ["css", "text/css"],
-  ["csv", "text/csv"],
-  ["htm", "text/html"],
-  ["html", "text/html"],
-  ["shtml", "text/html"],
-  ["jade", "text/jade"],
-  ["jsx", "text/jsx"],
-  ["less", "text/less"],
-  ["markdown", "text/markdown"],
-  ["md", "text/markdown"],
-  ["mml", "text/mathml"],
-  ["mdx", "text/mdx"],
-  ["n3", "text/n3"],
-  ["conf", "text/plain"],
-  ["def", "text/plain"],
-  ["in", "text/plain"],
-  ["ini", "text/plain"],
-  ["list", "text/plain"],
-  ["log", "text/plain"],
-  ["text", "text/plain"],
-  ["txt", "text/plain"],
-  ["rtx", "text/richtext"],
-  ["*rtf", "text/rtf"],
-  ["sgm", "text/sgml"],
-  ["sgml", "text/sgml"],
-  ["shex", "text/shex"],
-  ["slim", "text/slim"],
-  ["slm", "text/slim"],
-  ["spdx", "text/spdx"],
-  ["styl", "text/stylus"],
-  ["stylus", "text/stylus"],
-  ["tsv", "text/tab-separated-values"],
-  ["man", "text/troff"],
-  ["me", "text/troff"],
-  ["ms", "text/troff"],
-  ["roff", "text/troff"],
-  ["t", "text/troff"],
-  ["tr", "text/troff"],
-  ["ttl", "text/turtle"],
-  ["uri", "text/uri-list"],
-  ["uris", "text/uri-list"],
-  ["urls", "text/uri-list"],
-  ["vcard", "text/vcard"],
-  ["vtt", "text/vtt"],
-  ["*xml", "text/xml"],
-  ["yaml", "text/yaml"],
-  ["yml", "text/yaml"],
-  ["3gp", "video/3gpp"],
-  ["3gpp", "video/3gpp"],
-  ["3g2", "video/3gpp2"],
-  ["h261", "video/h261"],
-  ["h263", "video/h263"],
-  ["h264", "video/h264"],
-  ["m4s", "video/iso.segment"],
-  ["jpgv", "video/jpeg"],
-  ["jpm", "video/jpm"],
-  ["jpgm", "video/jpm"],
-  ["mj2", "video/mj2"],
-  ["mjp2", "video/mj2"],
-  ["ts", "application/typescript"],
-  ["mp4", "video/mp4"],
-  ["mp4v", "video/mp4"],
-  ["mpg4", "video/mp4"],
-  ["m1v", "video/mpeg"],
-  ["m2v", "video/mpeg"],
-  ["mpe", "video/mpeg"],
-  ["mpeg", "video/mpeg"],
-  ["mpg", "video/mpeg"],
-  ["ogv", "video/ogg"],
-  ["mov", "video/quicktime"],
-  ["qt", "video/quicktime"],
-  ["webm", "video/webm"]
-]);
-
-// src/protocol.ts
-var FRAME_GOTO_KEYS = ["url", "waitUntil", "referer"];
-var FRAME_TEXT_CONTENT_KEYS = ["selector", "strict"];
-var FRAME_INNER_TEXT_KEYS = ["selector", "strict"];
-var FRAME_GET_ATTRIBUTE_KEYS = ["selector", "strict", "name"];
-var FRAME_QUERY_COUNT_KEYS = ["selector"];
-var FRAME_CONTENT_KEYS = ["includeShadow"];
-var FRAME_SET_CONTENT_KEYS = ["html", "waitUntil"];
-var FRAME_WAIT_FOR_TIMEOUT_KEYS = ["waitTimeout"];
-var FRAME_RESOLVE_SELECTOR_KEYS = ["selector", "sdkLanguage"];
-var FRAME_ARIA_SNAPSHOT_JSON_KEYS = [
-  "mode",
-  "selector",
-  "depth",
-  "boxes"
-];
-var FRAME_ARIA_SNAPSHOT_KEYS = [
-  "mode",
-  "selector",
-  "depth",
-  "boxes"
-];
-var FRAME_CLICK_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "noWaitAfter",
-  "modifiers",
-  "position",
-  "delay",
-  "button",
-  "clickCount",
-  "trial",
-  "steps"
-];
-var FRAME_DBLCLICK_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "modifiers",
-  "position",
-  "delay",
-  "button",
-  "trial",
-  "steps"
-];
-var FRAME_HOVER_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "modifiers",
-  "position",
-  "trial"
-];
-var FRAME_TAP_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "modifiers",
-  "position",
-  "trial"
-];
-var PAGE_KEYBOARD_DOWN_KEYS = ["key"];
-var PAGE_KEYBOARD_UP_KEYS = ["key"];
-var PAGE_KEYBOARD_INSERT_TEXT_KEYS = ["text"];
-var PAGE_KEYBOARD_TYPE_KEYS = ["text", "delay"];
-var PAGE_KEYBOARD_PRESS_KEYS = ["key", "delay"];
-var PAGE_MOUSE_MOVE_KEYS = ["x", "y", "steps"];
-var PAGE_MOUSE_DOWN_KEYS = ["button", "clickCount"];
-var PAGE_MOUSE_UP_KEYS = ["button", "clickCount"];
-var PAGE_MOUSE_CLICK_KEYS = [
-  "x",
-  "y",
-  "delay",
-  "button",
-  "clickCount"
-];
-var PAGE_MOUSE_WHEEL_KEYS = ["deltaX", "deltaY"];
-var PAGE_TOUCHSCREEN_TAP_KEYS = ["x", "y"];
-var FRAME_FILL_KEYS = ["selector", "strict", "value", "force"];
-var FRAME_PRESS_KEYS = [
-  "selector",
-  "strict",
-  "key",
-  "delay",
-  "noWaitAfter"
-];
-var FRAME_TYPE_KEYS = ["selector", "strict", "text", "delay"];
-var FRAME_DRAG_AND_DROP_KEYS = [
-  "source",
-  "target",
-  "force",
-  "scroll",
-  "trial",
-  "sourcePosition",
-  "targetPosition",
-  "strict",
-  "steps"
-];
-var FRAME_INPUT_VALUE_KEYS = ["selector", "strict"];
-var FRAME_IS_CHECKED_KEYS = ["selector", "strict"];
-var FRAME_IS_VISIBLE_KEYS = ["selector", "strict"];
-var FRAME_IS_HIDDEN_KEYS = ["selector", "strict"];
-var FRAME_IS_ENABLED_KEYS = ["selector", "strict"];
-var FRAME_IS_DISABLED_KEYS = ["selector", "strict"];
-var FRAME_IS_EDITABLE_KEYS = ["selector", "strict"];
-var FRAME_INNER_HTML_KEYS = ["selector", "strict"];
-var FRAME_CHECK_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "position",
-  "trial"
-];
-var FRAME_UNCHECK_KEYS = [
-  "selector",
-  "strict",
-  "force",
-  "scroll",
-  "position",
-  "trial"
-];
-var FRAME_SET_INPUT_FILES_KEYS = [
-  "selector",
-  "strict",
-  "payloads",
-  "localDirectory",
-  "directoryStream",
-  "localPaths",
-  "streams"
-];
-var FRAME_DROP_KEYS = [
-  "selector",
-  "strict",
-  "position",
-  "payloads",
-  "localPaths",
-  "streams",
-  "data"
-];
-var FRAME_SELECT_OPTION_KEYS = [
-  "selector",
-  "strict",
-  "elements",
-  "options",
-  "force"
-];
-var FRAME_WAIT_FOR_SELECTOR_KEYS = [
-  "selector",
-  "strict",
-  "state",
-  "omitReturnValue"
-];
-var FRAME_FOCUS_KEYS = ["selector", "strict"];
-var FRAME_BLUR_KEYS = ["selector", "strict"];
-var FRAME_DISPATCH_EVENT_KEYS = [
-  "selector",
-  "strict",
-  "type",
-  "eventInit"
-];
-var FRAME_HIGHLIGHT_KEYS = ["selector", "style"];
-var FRAME_HIDE_HIGHLIGHT_KEYS = ["selector"];
-var BROWSER_CONTEXT_CLOSE_KEYS = ["reason"];
-var PAGE_CLOSE_KEYS = ["reason"];
-var PAGE_SCREENSHOT_KEYS = [
-  "type",
-  "quality",
-  "fullPage",
-  "clip",
-  "omitBackground",
-  "caret",
-  "animations",
-  "scale",
-  "mask",
-  "maskColor",
-  "style"
-];
-var PAGE_PDF_KEYS = [
-  "scale",
-  "displayHeaderFooter",
-  "headerTemplate",
-  "footerTemplate",
-  "printBackground",
-  "landscape",
-  "pageRanges",
-  "format",
-  "width",
-  "height",
-  "preferCSSPageSize",
-  "margin",
-  "tagged",
-  "outline"
-];
-var NEO_SCREENSHOT_KEYS = [
-  "selector",
-  "type",
-  "quality",
-  "omitBackground",
-  "caret",
-  "animations",
-  "scale",
-  "mask",
-  "maskColor",
-  "style"
-];
-var PAGE_REGISTER_LOCATOR_HANDLER_KEYS = [
-  "selector",
-  "noWaitAfter"
-];
-var PAGE_RESOLVE_LOCATOR_HANDLER_KEYS = ["uid", "remove"];
-var PAGE_UNREGISTER_LOCATOR_HANDLER_KEYS = ["uid"];
-var PAGE_RELOAD_KEYS = ["waitUntil"];
-var PAGE_GO_BACK_KEYS = ["waitUntil"];
-var PAGE_GO_FORWARD_KEYS = ["waitUntil"];
-var PAGE_CONSOLE_MESSAGES_KEYS = ["filter"];
-var PAGE_PAGE_ERRORS_KEYS = ["filter"];
-function pickParams(keys, options) {
-  const params = {};
-  for (const key of keys) {
-    const value = options[key];
-    if (value === null)
-      throw new Error(`${key}: expected a value, got null`);
-    if (value !== undefined)
-      params[key] = value;
-  }
-  return params;
-}
-
-// src/screenshot.ts
-function determineScreenshotType(options) {
-  if (options.path) {
-    const mimeType = getMimeTypeForPath(options.path);
-    if (mimeType === "image/png")
-      return "png";
-    else if (mimeType === "image/jpeg")
-      return "jpeg";
-    else if (mimeType === "image/webp")
-      return "webp";
-    throw new Error(`path: unsupported mime type "${mimeType}"`);
-  }
-  return options.type;
-}
-function pageScreenshotParams(apiName, options) {
-  const params = pickParams(PAGE_SCREENSHOT_KEYS, screenshotFields(apiName, options));
-  return withPath(params, options.path);
-}
-function locatorScreenshotParams(apiName, selector, options) {
-  const params = pickParams(NEO_SCREENSHOT_KEYS, {
-    ...screenshotFields(apiName, options),
-    selector
-  });
-  return withPath(params, options.path);
-}
-function screenshotFields(apiName, options) {
-  const fields = { ...options, mask: undefined };
-  if (!fields.type) {
-    try {
-      fields.type = determineScreenshotType(options);
-    } catch (error) {
-      error.message = `${apiName}: ${error.message}`;
-      throw error;
-    }
-  }
-  if (options.mask) {
-    fields.mask = options.mask.map((locator) => ({
-      frame: { guid: locator._frame._guid },
-      selector: locator._selector
-    }));
-  }
-  return fields;
-}
-function refuseSignal(apiName, options) {
-  if (options.signal !== undefined && options.signal !== null)
-    throw new Error(`${apiName}: Neo does not support signal yet`);
-}
-function pdfParams(apiName, options) {
-  refuseSignal(apiName, options);
-  const transportOptions = { ...options };
-  const margin = options.margin ? { ...options.margin } : undefined;
-  if (margin)
-    transportOptions.margin = margin;
-  if (typeof options.width === "number")
-    transportOptions.width = `${options.width}px`;
-  if (typeof options.height === "number")
-    transportOptions.height = `${options.height}px`;
-  if (margin) {
-    for (const side of ["top", "right", "bottom", "left"]) {
-      const value = margin[side];
-      if (typeof value === "number")
-        margin[side] = `${value}px`;
-    }
-  }
-  const params = pickParams(PAGE_PDF_KEYS, transportOptions);
-  return withPath(params, options.path);
-}
-function withPath(params, path) {
-  if (path)
-    params.path = path;
-  return params;
-}
-function resultBuffer(binary) {
-  return Buffer3.fromBinary(binary);
-}
-
 // src/locator.ts
 class Locator {
   _frame;
@@ -5457,6 +5639,9 @@ class Locator {
   async elementHandles() {
     return await this._frame._querySelectorAll("locator.elementHandles", this._selector);
   }
+  async waitForFunction(pageFunction, arg, options) {
+    return await this._frame._waitForFunctionOnSelector("locator.waitForFunction", this._selector, pageFunction, arg, options);
+  }
   async waitFor(options) {
     await this._frame._waitForSelector("locator.waitFor", this._selector, {
       strict: true,
@@ -5650,79 +5835,6 @@ function isRegExp4(value) {
   return value instanceof RegExp || Object.prototype.toString.call(value) === "[object RegExp]";
 }
 
-// src/plain-argument.ts
-function serializePlainArgument(value) {
-  return {
-    value: serialize2(value, { lastId: 0, visited: new Map }, []),
-    handles: []
-  };
-}
-function serialize2(value, visitorInfo, accessChain) {
-  if (typeof value === "symbol")
-    return { v: "undefined" };
-  if (Object.is(value, undefined))
-    return { v: "undefined" };
-  if (Object.is(value, null))
-    return { v: "null" };
-  if (Object.is(value, Number.NaN))
-    return { v: "NaN" };
-  if (Object.is(value, Number.POSITIVE_INFINITY))
-    return { v: "Infinity" };
-  if (Object.is(value, Number.NEGATIVE_INFINITY))
-    return { v: "-Infinity" };
-  if (Object.is(value, -0))
-    return { v: "-0" };
-  if (typeof value === "boolean")
-    return { b: value };
-  if (typeof value === "number")
-    return { n: value };
-  if (typeof value === "string")
-    return { s: value };
-  if (typeof value === "bigint")
-    return { bi: value.toString() };
-  if (value instanceof Error)
-    return { e: { n: value.name, m: value.message, s: value.stack || "" } };
-  if (value instanceof Date)
-    return { d: value.toJSON() };
-  if (typeof URL !== "undefined" && value instanceof URL)
-    return { u: value.toJSON() };
-  if (value instanceof RegExp)
-    return { r: { p: value.source, f: value.flags } };
-  if (ArrayBuffer.isView(value))
-    refuseTypedArray();
-  if (typeof value === "object") {
-    const object = value;
-    const seen = visitorInfo.visited.get(object);
-    if (seen)
-      return { ref: seen };
-    if (Array.isArray(object)) {
-      const id2 = ++visitorInfo.lastId;
-      visitorInfo.visited.set(object, id2);
-      const a = object.map((item, i) => serialize2(item, visitorInfo, [...accessChain, i]));
-      return { a, id: id2 };
-    }
-    const id = ++visitorInfo.lastId;
-    visitorInfo.visited.set(object, id);
-    const o = Object.keys(object).map((name) => ({
-      k: name,
-      v: serialize2(object[name], visitorInfo, [...accessChain, name])
-    }));
-    return { o, id };
-  }
-  throw new Error(`Attempting to serialize unexpected value${accessChainToDisplayString2(accessChain)}: ${String(value)}`);
-}
-function refuseTypedArray() {
-  throw new Error("Neo's dispatchEvent takes plain eventInit values (strings, finite numbers, booleans, null, arrays and plain objects); this one holds a typed array");
-}
-function accessChainToDisplayString2(accessChain) {
-  const chainString = accessChain.map((accessor, i) => {
-    if (typeof accessor === "string")
-      return i ? `.${accessor}` : accessor;
-    return `[${accessor}]`;
-  }).join("");
-  return chainString.length > 0 ? ` at position "${chainString}"` : "";
-}
-
 // src/select-option.ts
 function convertSelectOptionValues(values) {
   if (values === null)
@@ -5844,7 +5956,7 @@ function convertDropPayload(payload) {
 // src/url.ts
 var READ_ONLY = "Neo's URL is read-only: build a new URL string instead";
 
-class URL3 {
+class URL2 {
   #parts;
   #searchParams;
   constructor(parts) {
@@ -5979,7 +6091,7 @@ class URLSearchParams {
 }
 function urlFor(url) {
   const parts = parseURL(url);
-  return parts ? new URL3(parts) : null;
+  return parts ? new URL2(parts) : null;
 }
 function formEncode(text2) {
   return encodeURIComponent(text2).replace(/%20/g, "+").replace(/[!'()~]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
@@ -6235,11 +6347,11 @@ class Frame {
     assertEvaluateOptions(options);
     const params = evaluateParams(apiName, pageFunction, arg, options);
     const result = await this._connection.sendEval(apiName, this._guid, "evaluateExpressionHandle", params, 0);
-    return handleFrom(this._connection, result.handle);
+    return handleFrom(this._connection, result.handle, this);
   }
   async _withElement(apiName, selector, task, options) {
     const result = await this._connection.send(apiName, this._guid, "waitForSelector", { selector, strict: true, state: "attached" }, this._page._timeoutSettings.timeout(options, apiName));
-    const handle = ElementHandle.fromNullable(this._connection, result?.element);
+    const handle = ElementHandle.fromNullable(this._connection, result?.element, this);
     if (!handle)
       throw new Error(`Could not resolve ${selector} to DOM Element`);
     try {
@@ -6329,7 +6441,7 @@ class Frame {
       throw error;
     }
     const result = await this._connection.sendEval(apiName, this._guid, method, params, 0);
-    const handle = ElementHandle.fromNullable(this._connection, result.element);
+    const handle = ElementHandle.fromNullable(this._connection, result.element, this);
     if (!handle)
       throw new Error(`neo-sdk: Frame.${method} contract error: no element`);
     return handle;
@@ -6352,14 +6464,14 @@ class Frame {
       ...pickParams(["strict"], options ?? {})
     };
     const result = await this._connection.sendEval(apiName, this._guid, "querySelector", params, 0);
-    return ElementHandle.fromNullable(this._connection, result?.element);
+    return ElementHandle.fromNullable(this._connection, result?.element, this);
   }
   async $$(selector) {
     return await this._querySelectorAll("frame.$$", selector);
   }
   async _querySelectorAll(apiName, selector) {
     const result = await this._connection.sendEval(apiName, this._guid, "querySelectorAll", { selector }, 0);
-    return elementsFrom(this._connection, result?.elements ?? []);
+    return elementsFrom(this._connection, result?.elements ?? [], this);
   }
   async $eval(selector, pageFunction, arg) {
     assertMaxArguments(arguments.length, 3);
@@ -6390,7 +6502,13 @@ class Frame {
       pollingInterval: options.polling === "raf" ? undefined : options.polling
     });
     const result = await this._connection.sendEval(apiName, this._guid, "waitForFunction", pollingInterval === undefined ? params : { ...params, pollingInterval }, this._page._timeoutSettings.timeout(options, apiName));
-    return handleFrom(this._connection, result.handle);
+    if (!("handle" in result))
+      throw new Error("neo-sdk: Frame.waitForFunction contract error: missing handle");
+    return handleFrom(this._connection, result.handle, this);
+  }
+  async _waitForFunctionOnSelector(apiName, selector, pageFunction, arg, options) {
+    const params = evaluateParams(apiName, pageFunction, arg, undefined);
+    await this._connection.sendEval(apiName, this._guid, "waitForFunction", { selector, strict: true, ...params }, this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
   async waitForSelector(selector, options) {
     return await this._waitForSelectorPublic("frame.waitForSelector", selector, options);
@@ -6405,7 +6523,7 @@ class Frame {
   }
   async frameElement() {
     const result = await this._connection.sendNeo("frame.frameElement", this._guid, "frameElement", {}, 0);
-    const element = ElementHandle.fromNullable(this._connection, result?.element);
+    const element = ElementHandle.fromNullable(this._connection, result?.element, this.parentFrame() ?? this);
     if (!element)
       throw new Error("neo-sdk: frameElement answered no element");
     return element;
@@ -6415,7 +6533,7 @@ class Frame {
       selector,
       ...options
     }), this._page._timeoutSettings.timeout(options, apiName));
-    return ElementHandle.fromNullable(this._connection, result?.element);
+    return ElementHandle.fromNullable(this._connection, result?.element, this);
   }
   async _ariaSnapshot(apiName, options, selector) {
     const result = await this._connection.send(apiName, this._guid, "ariaSnapshot", pickParams(FRAME_ARIA_SNAPSHOT_KEYS, {
@@ -6703,7 +6821,7 @@ class Frame {
     await this._connection.send(apiName, this._guid, "dispatchEvent", pickParams(FRAME_DISPATCH_EVENT_KEYS, {
       selector,
       type,
-      eventInit: serializePlainArgument(eventInit),
+      eventInit: serializeArgument(eventInit),
       ...options
     }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
@@ -6910,6 +7028,50 @@ class APIResponse {
   }
 }
 
+// src/request-data.ts
+function isJsonContentType(headers) {
+  if (!headers)
+    return false;
+  for (const { name, value } of headers) {
+    if (name.toLocaleLowerCase() === "content-type")
+      return value.split(";")[0].trim().toLowerCase() === "application/json";
+  }
+  return false;
+}
+function isJsonParsable(value) {
+  if (typeof value !== "string")
+    return false;
+  try {
+    JSON.parse(value);
+    return true;
+  } catch (error) {
+    if (error instanceof SyntaxError)
+      return false;
+    throw error;
+  }
+}
+function typeData(data, headers) {
+  if (data === undefined)
+    return {};
+  if (typeof data === "string") {
+    if (isJsonContentType(headers))
+      return { json: isJsonParsable(data) ? data : JSON.stringify(data) };
+    return { bytes: encodeUtf8(data) };
+  }
+  if (data instanceof Uint8Array)
+    return { bytes: data };
+  if (typeof data === "object" || typeof data === "number" || typeof data === "boolean")
+    return { json: JSON.stringify(data) };
+  throw new Error(`Unexpected 'data' type`);
+}
+function serializePostData(data) {
+  if (data.json !== undefined)
+    return { body: encodeUtf8(data.json), contentType: "application/json" };
+  if (data.bytes !== undefined)
+    return { body: data.bytes, contentType: "application/octet-stream" };
+  return;
+}
+
 // src/waiter.ts
 async function wrapApiCall(apiName, body) {
   try {
@@ -7053,14 +7215,8 @@ var BODY_TOO_LARGE = "route.fulfill: Neo carries a body of at most 6291456 bytes
 var ROUTE_HANDLED = "Route is already handled!";
 var BODY_AND_JSON = "Can specify either body or json parameters";
 var NO_PATH = `route.fulfill: Neo cannot read a file for "path" yet (it reads only inside the run's artifact directory, which this build lacks); pass "body" instead`;
-function postDataBytes(postData) {
-  if (postData === undefined || postData === null)
-    return;
-  if (typeof postData === "string")
-    return encodeUtf8(postData);
-  if (postData instanceof Uint8Array)
-    return postData;
-  return encodeUtf8(JSON.stringify(postData));
+function hasHeader(headers, name) {
+  return Object.keys(headers).some((key) => key.toLowerCase() === name.toLowerCase());
 }
 function deferred() {
   let resolve = () => {};
@@ -7125,25 +7281,31 @@ class Route {
     });
   }
   async fetch(options = {}) {
-    await wrapApiCall("route.fetch", async () => {
+    const request = this.#request;
+    const overrides = request._fallbackOverridesForContinue();
+    const headers = options.headers ?? request.headers();
+    const typed = await wrapApiCall("route.fetch", async () => {
       if (options.maxRedirects !== undefined && options.maxRedirects < 0)
         throw new Error(`'maxRedirects' must be greater than or equal to '0'`);
       if (options.maxRetries !== undefined && options.maxRetries < 0)
         throw new Error(`'maxRetries' must be greater than or equal to '0'`);
+      return typeData(options.postData, headersObjectToArray2(headers));
     });
-    {
-      const overrides = this.#request._fallbackOverridesForContinue();
-      const headers = options.headers ?? overrides.headers;
-      const postData = postDataBytes(options.postData) ?? overrides.postDataBuffer;
-      const result = await this.#connection.sendRouteFetch("route.fetch", this._guid, {
-        url: options.url ?? overrides.url,
-        method: options.method ?? overrides.method,
-        headers: headers ? headersObjectToArray2(headers) : undefined,
-        postData: postData ? toBinary(postData) : undefined,
-        maxRedirects: options.maxRedirects
-      }, this.#timeoutSettings.timeout(options, "route.fetch"));
-      return new APIResponse(result);
-    }
+    const given = typed.json !== undefined || typed.bytes !== undefined;
+    const own = given ? undefined : request.postDataBuffer() ?? undefined;
+    const serialized = serializePostData(given ? typed : { bytes: own });
+    let headerOverrides = options.headers ?? overrides.headers;
+    if (serialized && !hasHeader(headers, "content-type"))
+      headerOverrides = { ...headers, "content-type": serialized.contentType };
+    const postData = given ? serialized?.body : overrides.postDataBuffer;
+    const result = await this.#connection.sendRouteFetch("route.fetch", this._guid, {
+      url: options.url ?? overrides.url,
+      method: options.method ?? overrides.method,
+      headers: headerOverrides ? headersObjectToArray2(headerOverrides) : undefined,
+      postData: postData ? toBinary(postData) : undefined,
+      maxRedirects: options.maxRedirects
+    }, this.#timeoutSettings.timeout(options, "route.fetch"));
+    return new APIResponse(result);
   }
   async fulfill(options = {}) {
     await this.#handleRoute(async () => {
@@ -7311,47 +7473,32 @@ before the end of the test to ignore remaining routes in flight.`);
   }
 }
 
-// src/timeout-settings.ts
-var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
-
-class TimeoutSettings {
-  #parent;
-  #defaultTimeout;
-  #defaultNavigationTimeout;
-  constructor(parent) {
-    this.#parent = parent;
+// src/web-storage.ts
+class WebStorage {
+  #connection;
+  #page;
+  #kind;
+  constructor(connection, page, kind) {
+    this.#connection = connection;
+    this.#page = page;
+    this.#kind = kind;
   }
-  setDefaultTimeout(timeout) {
-    this.#defaultTimeout = timeout;
+  async items() {
+    const { items } = await this.#connection.sendPage("webStorage.items", this.#page, "webStorageItems", { kind: this.#kind }, 0);
+    return items;
   }
-  setDefaultNavigationTimeout(timeout) {
-    this.#defaultNavigationTimeout = timeout;
+  async getItem(name) {
+    const { value } = await this.#connection.sendPage("webStorage.getItem", this.#page, "webStorageGetItem", { kind: this.#kind, name }, 0);
+    return value ?? null;
   }
-  timeout(options, _apiName) {
-    return { signal: options.signal, timeout: this.#timeout(options) };
+  async setItem(name, value) {
+    await this.#connection.sendPage("webStorage.setItem", this.#page, "webStorageSetItem", { kind: this.#kind, name, value }, 0);
   }
-  navigationTimeout(options, _apiName) {
-    return { signal: options.signal, timeout: this.#navigationTimeout(options) };
+  async removeItem(name) {
+    await this.#connection.sendPage("webStorage.removeItem", this.#page, "webStorageRemoveItem", { kind: this.#kind, name }, 0);
   }
-  #timeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.#timeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
-  }
-  #navigationTimeout(options) {
-    if (typeof options.timeout === "number")
-      return options.timeout;
-    if (this.#defaultNavigationTimeout !== undefined)
-      return this.#defaultNavigationTimeout;
-    if (this.#defaultTimeout !== undefined)
-      return this.#defaultTimeout;
-    if (this.#parent)
-      return this.#parent.#navigationTimeout(options);
-    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  async clear() {
+    await this.#connection.sendPage("webStorage.clear", this.#page, "webStorageClear", { kind: this.#kind }, 0);
   }
 }
 
@@ -7397,20 +7544,27 @@ class Page extends ChannelOwner {
   #mainFrame;
   #frames = new Map;
   _timeoutSettings;
+  #viewportSize;
+  _ownedContext;
   keyboard;
   mouse;
   touchscreen;
+  localStorage;
+  sessionStorage;
   #closedLocally = false;
   _routes = [];
   #routeListening = false;
   #patternsSent = Promise.resolve();
   #closeReason;
   _bindings = new Map;
-  constructor(guid, mainFrameGuid, url, context, connection) {
+  clock;
+  constructor(guid, mainFrameGuid, url, context, connection, viewportSize) {
     super(guid, context._pipe, PAGE_EVENTS);
     this.#guid = guid;
+    this.#viewportSize = viewportSize;
     this.#lastUrl = url;
     this.#context = context;
+    this.clock = context.clock;
     this.#connection = connection;
     this._timeoutSettings = new TimeoutSettings(context._timeoutSettings);
     this.#mainFrame = new Frame(mainFrameGuid, this, connection, {
@@ -7421,6 +7575,8 @@ class Page extends ChannelOwner {
     this.keyboard = new Keyboard(this);
     this.mouse = new Mouse(this);
     this.touchscreen = new Touchscreen(this);
+    this.localStorage = new WebStorage(connection, guid, "local");
+    this.sessionStorage = new WebStorage(connection, guid, "session");
   }
   async _sendInput(apiName, method, params) {
     await this.#connection.sendPage(apiName, this.#guid, method, params, 0);
@@ -7443,7 +7599,9 @@ class Page extends ChannelOwner {
   async close(options = {}) {
     this.#closeReason = options.reason;
     try {
-      if (options.runBeforeUnload)
+      if (this._ownedContext)
+        await this._ownedContext.close();
+      else if (options.runBeforeUnload)
         await this.#connection.sendPage("page.close", this.#guid, "runBeforeUnload", {}, 0);
       else
         await this.#connection.sendPage("page.close", this.#guid, "close", pickParams(PAGE_CLOSE_KEYS, {
@@ -7457,6 +7615,55 @@ class Page extends ChannelOwner {
   }
   isClosed() {
     return this.#closedLocally || get(this.#guid, "isClosed");
+  }
+  async setViewportSize(viewportSize) {
+    this.#viewportSize = viewportSize;
+    await this.#connection.sendPage("page.setViewportSize", this.#guid, "setViewportSize", { viewportSize }, 0);
+  }
+  viewportSize() {
+    return this.#viewportSize || null;
+  }
+  async emulateMedia(options = {}) {
+    await this.#connection.sendPage("page.emulateMedia", this.#guid, "emulateMedia", {
+      media: options.media === null ? "no-override" : options.media,
+      colorScheme: options.colorScheme === null ? "no-override" : options.colorScheme,
+      reducedMotion: options.reducedMotion === null ? "no-override" : options.reducedMotion,
+      forcedColors: options.forcedColors === null ? "no-override" : options.forcedColors,
+      contrast: options.contrast === null ? "no-override" : options.contrast
+    }, 0);
+  }
+  async requestGC() {
+    await this.#connection.sendPage("page.requestGC", this.#guid, "requestGC", {}, 0);
+  }
+  async pause(_options) {
+    const settings = this.#context._timeoutSettings;
+    const defaultNavigationTimeout = settings.defaultNavigationTimeout();
+    const defaultTimeout = settings.defaultTimeout();
+    this.#context.setDefaultNavigationTimeout(0);
+    this.#context.setDefaultTimeout(0);
+    try {
+      await this.#closedOrCrashedRace(this.#connection.sendContext("page.pause", this.#context._guid, "pause", {}, 0));
+    } finally {
+      this.#context.setDefaultNavigationTimeout(defaultNavigationTimeout);
+      this.#context.setDefaultTimeout(defaultTimeout);
+    }
+  }
+  async#closedOrCrashedRace(promise) {
+    promise.catch(() => {});
+    let settle = () => {};
+    const ended = new Promise((resolve) => {
+      settle = resolve;
+    });
+    this.once("close", settle);
+    this.once("crash", settle);
+    try {
+      if (this.isClosed())
+        return;
+      await Promise.race([promise, ended]);
+    } finally {
+      this.off("close", settle);
+      this.off("crash", settle);
+    }
   }
   _isClosedLocally() {
     return this.#closedLocally;
@@ -7901,7 +8108,7 @@ class Page extends ChannelOwner {
     return resultBuffer(result.binary);
   }
   async pdf(options = {}) {
-    const result = await this.#connection.sendPage("page.pdf", this.#guid, "pdf", pdfParams("page.pdf", options), 0);
+    const result = await this.#connection.sendPage("page.pdf", this.#guid, "pdf", pdfParams(options), 0);
     return resultBuffer(result.pdf);
   }
   async ariaSnapshot(options = {}) {
@@ -8071,8 +8278,6 @@ var CONTEXT_EVENTS = {
   quiet: ["backgroundpage"],
   unserved: ["serviceworker"]
 };
-var STORAGE_STATE_PATH = "path: this run has no artifact directory, so Neo cannot write the storage state; the host sets one per run";
-var STATE_FILE_PATH = "storageState: this run has no artifact directory, so Neo cannot read a state file; the host sets one per run";
 var CLEAR_ALL_COOKIES_REFUSED = "Neo does not clear every cookie of the user's browser, which would sign the user out of every site: pass clearCookies a name, domain or path";
 function clearCookieFilter(options) {
   const kept = (value) => typeof value === "string" || value instanceof RegExp ? value : undefined;
@@ -8108,46 +8313,49 @@ class BrowserContext extends ChannelOwner {
   #dialogs = new Map;
   _timeoutSettings = new TimeoutSettings;
   _bindings = new Map;
+  clock;
   _pipe;
+  _browser = null;
+  _ownerPage;
   #closingStatus = "none";
   #closeReason;
+  #debugger;
   constructor(guid, connection, pipe) {
     super(guid, pipe, CONTEXT_EVENTS);
+    this.clock = new Clock(connection, guid);
     this.#guid = guid;
     this.#connection = connection;
     this._pipe = pipe;
-    connection._closeReasonFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._closeReason() ?? this.#closeReason;
-    connection._closedFor = (callGuid) => this.#pages.get(pageGuidOf(callGuid))?._isClosedLocally() ?? false;
   }
   isClosed() {
     return this.#closingStatus !== "none";
   }
   _closeReason() {
-    return this.#closeReason;
+    return this.#closeReason ?? this._browser?._closeReason;
   }
   async close(options = {}) {
     if (this.isClosed())
       return;
     this.#closeReason = options.reason;
     this.#closingStatus = "closing";
+    const send = () => this.#connection.sendContext("browserContext.close", this.#guid, "close", pickParams(BROWSER_CONTEXT_CLOSE_KEYS, {
+      reason: options.reason
+    }), 0);
     try {
-      await this.#connection.sendContext("browserContext.close", this.#guid, "close", pickParams(BROWSER_CONTEXT_CLOSE_KEYS, {
-        reason: options.reason
-      }), 0);
+      if (this._browser && this._browser._runContext() === this)
+        await this._browser._disconnect(send, options.reason);
+      else {
+        const open = this._openPages();
+        await send();
+        for (const page of open)
+          page._onClose();
+        this._onClose();
+      }
     } catch (error) {
       this.#closingStatus = "none";
       this.#closeReason = undefined;
       throw error;
     }
-    this.#connection._close(options.reason);
-    const pages = this.pages();
-    for (const page of this.#pages.values())
-      if (!pages.includes(page) && !page._isClosedLocally())
-        pages.push(page);
-    for (const page of pages)
-      page._onClose();
-    this.#closingStatus = "closed";
-    this.emit("close", this);
   }
   _onEvent(method, params) {
     if (method === "page")
@@ -8201,15 +8409,18 @@ class BrowserContext extends ChannelOwner {
     await route._innerContinue(true).catch(() => {});
   }
   async route(url, handler, options = {}) {
+    this.#assertOwnRouting("route");
     const routeHandler = await wrapApiCall("browserContext.route", async () => new RouteHandler(url, handler, options.times));
     this._routes.unshift(routeHandler);
     await this.#updateInterceptionPatterns();
     return new DisposableStub(() => this.unroute(url, handler));
   }
   async unrouteAll(options) {
+    this.#assertOwnRouting("unrouteAll");
     await this.#unrouteInternal(this._routes, [], options?.behavior);
   }
   async unroute(url, handler) {
+    this.#assertOwnRouting("unroute");
     const removed = [];
     const remaining = [];
     for (const route of this._routes) {
@@ -8219,6 +8430,19 @@ class BrowserContext extends ChannelOwner {
         remaining.push(route);
     }
     await this.#unrouteInternal(removed, remaining, "default");
+  }
+  async routeFromHAR(_har, _options) {
+    this.#assertOwnRouting("routeFromHAR");
+    throw new Error("browserContext.routeFromHAR: neo-runtime: routeFromHAR is not served yet");
+  }
+  async routeWebSocket(_url, _handler) {
+    this.#assertOwnRouting("routeWebSocket");
+    throw new Error("browserContext.routeWebSocket: neo-runtime: routeWebSocket is not served yet");
+  }
+  #assertOwnRouting(method) {
+    if (this.#guid !== "context@default") {
+      throw new Error(`browserContext.${method}: neo-runtime: ${method} is not served yet for a context browser.newContext created, only for the run's own context`);
+    }
   }
   async#unrouteInternal(removed, remaining, behavior) {
     this._routes = remaining;
@@ -8258,25 +8482,25 @@ class BrowserContext extends ChannelOwner {
   #onRequest({ request, page }) {
     const pageObject = this.#pageFor(page.guid);
     const requestObject = requestFromRecord(this.#connection, request, pageObject);
-    this.emit("request", requestObject);
+    this.#contextOf(pageObject).emit("request", requestObject);
     pageObject.emit("request", requestObject);
   }
   #onResponse({ response, request, page }) {
     const pageObject = this.#pageFor(page.guid);
     const responseObject = responseFromRecord(this.#connection, response, requestFromRecord(this.#connection, request, pageObject));
-    this.emit("response", responseObject);
+    this.#contextOf(pageObject).emit("response", responseObject);
     pageObject.emit("response", responseObject);
   }
   #onRequestFinished({ request, page }) {
     const pageObject = this.#pageFor(page.guid);
     const requestObject = requestFromRecord(this.#connection, request, pageObject);
-    this.emit("requestfinished", requestObject);
+    this.#contextOf(pageObject).emit("requestfinished", requestObject);
     pageObject.emit("requestfinished", requestObject);
   }
   #onRequestFailed({ request, page }) {
     const pageObject = this.#pageFor(page.guid);
     const requestObject = requestFromRecord(this.#connection, request, pageObject);
-    this.emit("requestfailed", requestObject);
+    this.#contextOf(pageObject).emit("requestfailed", requestObject);
     pageObject.emit("requestfailed", requestObject);
   }
   #onPage(created) {
@@ -8290,12 +8514,12 @@ class BrowserContext extends ChannelOwner {
     const page = event.page ? this.#pageFor(event.page.guid) : null;
     const consoleMessage = new ConsoleMessage(event, page, null, this.#connection);
     page?.emit("console", consoleMessage);
-    this.emit("console", consoleMessage);
+    this.#contextOf(page).emit("console", consoleMessage);
   }
   #onPageError({ error, page, location }) {
     const pageObject = this.#pageFor(page.guid);
     const parsedError = parseSerializedError(error);
-    this.emit("weberror", new WebError(pageObject, parsedError, location));
+    this.#contextOf(pageObject).emit("weberror", new WebError(pageObject, parsedError, location));
     if (pageObject)
       pageObject.emit("pageerror", parsedError);
   }
@@ -8303,11 +8527,11 @@ class BrowserContext extends ChannelOwner {
     const page = this.#pageFor(event.page.guid);
     const download = new Download(page, event.url, event.suggestedFilename, event.artifact, this.#connection);
     page.emit("download", download);
-    this.emit("download", download);
+    this.#contextOf(page).emit("download", download);
   }
   #onDialog(record) {
     const dialogObject = this.#dialogFrom(record);
-    let hasListeners = this.emit("dialog", dialogObject);
+    let hasListeners = this.#contextOf(dialogObject.page()).emit("dialog", dialogObject);
     const page = dialogObject.page();
     if (page)
       hasListeners = page.emit("dialog", dialogObject) || hasListeners;
@@ -8316,7 +8540,7 @@ class BrowserContext extends ChannelOwner {
   }
   #onDialogClosed(record) {
     const dialogObject = this.#dialogFrom(record);
-    this.emit("dialogclosed", dialogObject);
+    this.#contextOf(dialogObject.page()).emit("dialogclosed", dialogObject);
     const page = dialogObject.page();
     if (page)
       page.emit("dialogclosed", dialogObject);
@@ -8339,7 +8563,7 @@ class BrowserContext extends ChannelOwner {
       const waiter = Waiter.createForEvent();
       waiter.rejectOnTimeout(timeoutOptions, `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`);
       if (event !== "close")
-        waiter.rejectOnEvent(this, "close", () => targetClosedError(this.#closeReason));
+        waiter.rejectOnEvent(this, "close", () => targetClosedError(this._closeReason()));
       const result = await waiter.waitForEvent(this, event, predicate);
       waiter.dispose();
       return result;
@@ -8382,9 +8606,21 @@ class BrowserContext extends ChannelOwner {
     const result = await this.#connection.sendInit("browserContext.addInitScript", this.#guid, "addInitScript", { source }, 0);
     return new Disposable(this.#connection, result.disposable.guid);
   }
+  get debugger() {
+    this.#debugger ??= new Debugger(get(this.#guid, "debugger"), this.#connection, this._pipe);
+    return this.#debugger;
+  }
+  browser() {
+    return this._browser;
+  }
   async newPage() {
+    if (this._ownerPage)
+      throw new Error("Please use browser.newContext()");
     const { page } = await this.#connection.sendContext("browserContext.newPage", this.#guid, "newPage", {}, 0);
-    return this.#pageFor(page.guid);
+    const created = this.#pageFor(page.guid);
+    if (this._browser && this._browser._runContext() !== this)
+      this.emit("page", created);
+    return created;
   }
   async cookies(urls) {
     const list = !urls ? [] : typeof urls === "string" ? [urls] : urls;
@@ -8425,9 +8661,9 @@ class BrowserContext extends ChannelOwner {
     await this.#connection.sendContext("browserContext.setHTTPCredentials", this.#guid, "setHTTPCredentials", list.length ? { httpCredentials: list } : {}, 0);
   }
   async storageState(options = {}) {
-    if (options.path !== undefined)
-      throw new Error(STORAGE_STATE_PATH);
     const params = {};
+    if (options.path !== undefined)
+      params.path = options.path;
     if (options.indexedDB !== undefined)
       params.indexedDB = options.indexedDB;
     if (options.opfs !== undefined)
@@ -8437,9 +8673,8 @@ class BrowserContext extends ChannelOwner {
     return await this.#connection.sendContext("browserContext.storageState", this.#guid, "storageState", params, 0);
   }
   async setStorageState(storageState) {
-    if (typeof storageState === "string")
-      throw new Error(STATE_FILE_PATH);
-    await this.#connection.sendContext("browserContext.setStorageState", this.#guid, "setStorageState", storageState ? { storageState } : {}, 0);
+    const params = typeof storageState === "string" ? { path: storageState } : storageState ? { storageState } : {};
+    await this.#connection.sendContext("browserContext.setStorageState", this.#guid, "setStorageState", params, 0);
   }
   setDefaultTimeout(timeout) {
     this._timeoutSettings.setDefaultTimeout(timeout);
@@ -8447,8 +8682,28 @@ class BrowserContext extends ChannelOwner {
   setDefaultNavigationTimeout(timeout) {
     this._timeoutSettings.setDefaultNavigationTimeout(timeout);
   }
+  _onClose() {
+    if (this.#closingStatus === "closed")
+      return;
+    this.#closingStatus = "closed";
+    this._browser?._contexts.delete(this);
+    this.emit("close", this);
+  }
+  _openPages() {
+    const pages = this.pages();
+    for (const page of this.#pages.values())
+      if (!pages.includes(page) && !page.isClosed())
+        pages.push(page);
+    return pages;
+  }
+  _knownPage(guid) {
+    return this.#pages.get(guid);
+  }
   toJSON() {
     return { _type: "BrowserContext", _guid: this.#guid };
+  }
+  #contextOf(page) {
+    return page ? page.context() : this;
   }
   _addRunPage(guid, mainFrameGuid, url) {
     const page = new Page(guid, mainFrameGuid, url, this, this.#connection);
@@ -8459,10 +8714,10 @@ class BrowserContext extends ChannelOwner {
     return this.#pages.get(created.guid) ?? this.#add(created);
   }
   #pageFor(guid) {
-    return this.#pages.get(guid) ?? this.#add(get(guid, "initializer"));
+    return this.#pages.get(guid) ?? this._browser?._knownPage(guid) ?? this.#add(get(guid, "initializer"));
   }
   #add(created) {
-    const page = new Page(created.guid, created.mainFrame.guid, created.mainFrame.initializer.url, this, this.#connection);
+    const page = new Page(created.guid, created.mainFrame.guid, created.mainFrame.initializer.url, this, this.#connection, created.initializer.viewportSize);
     this.#pages.set(created.guid, page);
     return page;
   }
@@ -8472,6 +8727,290 @@ function pageGuidOf(guid) {
   return `page@${target}`;
 }
 
+// src/browser.ts
+var BROWSER_EVENTS = {
+  receiver: "Browser",
+  served: [],
+  quiet: [],
+  unserved: []
+};
+var BROWSER_CLOSE_KEYS = ["reason"];
+var BROWSER_NEW_CONTEXT_KEYS = [
+  "noDefaultViewport",
+  "viewport",
+  "screen",
+  "ignoreHTTPSErrors",
+  "clientCertificates",
+  "javaScriptEnabled",
+  "bypassCSP",
+  "userAgent",
+  "locale",
+  "timezoneId",
+  "geolocation",
+  "permissions",
+  "extraHTTPHeaders",
+  "offline",
+  "httpCredentials",
+  "deviceScaleFactor",
+  "isMobile",
+  "hasTouch",
+  "colorScheme",
+  "reducedMotion",
+  "forcedColors",
+  "acceptDownloads",
+  "contrast",
+  "baseURL",
+  "recordVideo",
+  "strictSelectors",
+  "serviceWorkers",
+  "selectorEngines",
+  "testIdAttributeName",
+  "proxy",
+  "storageState"
+];
+var CLIENT_OPTIONS = ["logger", "recordHar"];
+var STORAGE_STATE_REFUSAL = 'Neo does not support the "storageState" option of a new context yet';
+
+class Browser extends ChannelOwner {
+  #connection;
+  #pipe;
+  #browserType;
+  _contexts = new Set;
+  #known = [];
+  #isConnected = true;
+  _closeReason;
+  constructor(guid, connection, pipe, browserType) {
+    super(guid, pipe, BROWSER_EVENTS);
+    this.#connection = connection;
+    this.#pipe = pipe;
+    this.#browserType = browserType;
+    connection._closeReasonFor = (callGuid) => this.#closeReasonFor(callGuid);
+    connection._closedFor = (callGuid) => this._knownPage(pageGuidOf(callGuid))?._isClosedLocally() ?? false;
+  }
+  _onEvent() {}
+  browserType() {
+    return this.#browserType;
+  }
+  contexts() {
+    return [...this._contexts];
+  }
+  version() {
+    return get(this._guid, "version");
+  }
+  isConnected() {
+    return this.#isConnected && get(this._guid, "isConnected");
+  }
+  async newContext(options = {}) {
+    for (const option of CLIENT_OPTIONS)
+      if (options[option] !== undefined)
+        throw new Error(`browser.newContext: Neo does not support the "${option}" option of a new context yet`);
+    if (typeof options.storageState === "string")
+      throw new Error(`browser.newContext: ${STORAGE_STATE_REFUSAL}`);
+    const params = pickParams(BROWSER_NEW_CONTEXT_KEYS, prepareBrowserContextParams(options));
+    const { context } = await this.#connection.sendBrowser("browser.newContext", this._guid, "newContext", params, 0);
+    const created = new BrowserContext(context.guid, this.#connection, this.#pipe);
+    this._didCreateContext(created);
+    return created;
+  }
+  async newPage(options = {}) {
+    const context = await this.newContext(options);
+    const page = await context.newPage();
+    page._ownedContext = context;
+    context._ownerPage = page;
+    return page;
+  }
+  async close(options = {}) {
+    this._closeReason = options.reason;
+    if (!this.#isConnected)
+      return;
+    try {
+      await this._disconnect(() => this.#connection.sendBrowser("browser.close", this._guid, "close", pickParams(BROWSER_CLOSE_KEYS, {
+        reason: options.reason
+      }), 0), options.reason);
+    } catch (error) {
+      if (isTargetClosedError(error))
+        return;
+      throw error;
+    }
+  }
+  async _disconnect(send, reason) {
+    const open = this.contexts().map((context) => context._openPages());
+    await send();
+    this._didClose(open, reason);
+  }
+  _didClose(open, reason) {
+    this.#connection._close(reason);
+    this.#pipe._disconnect();
+    const contexts = this.contexts();
+    for (const pages of open)
+      for (const page of pages)
+        page._onClose();
+    for (const context of contexts.slice(1))
+      context._onClose();
+    contexts[0]?._onClose();
+    this.#isConnected = false;
+    this.emit("disconnected", this);
+  }
+  _runContext() {
+    return this.#known[0];
+  }
+  _knownPage(guid) {
+    for (const context of this.#known) {
+      const page = context._knownPage(guid);
+      if (page)
+        return page;
+    }
+    return;
+  }
+  #closeReasonFor(guid) {
+    const page = this._knownPage(pageGuidOf(guid));
+    if (page)
+      return page._closeReason();
+    const context = this.#known.find((known) => known._guid === guid) ?? this.#known[0];
+    return context?._closeReason();
+  }
+  _didCreateContext(context) {
+    context._browser = this;
+    this._contexts.add(context);
+    this.#known.push(context);
+    this.emit("context", context);
+  }
+  async bind(_title, _options) {
+    throw new Error("browser.bind: Neo runs inside BrowserOS and serves the browser to no other client");
+  }
+  async unbind() {
+    throw new Error("browser.unbind: Neo runs inside BrowserOS and serves the browser to no other client");
+  }
+  async newBrowserCDPSession() {
+    throw new Error("browser.newBrowserCDPSession: Neo does not serve CDP sessions yet");
+  }
+  async startTracing(_page, _options) {
+    throw new Error("browser.startTracing: Neo does not serve tracing yet");
+  }
+  async stopTracing() {
+    throw new Error("browser.stopTracing: Neo does not serve tracing yet");
+  }
+  async[Symbol.asyncDispose]() {
+    await this.close();
+  }
+  toJSON() {
+    return { _type: "Browser", _guid: this._guid };
+  }
+}
+function prepareBrowserContextParams(options) {
+  return {
+    ...options,
+    viewport: options.viewport === null ? undefined : options.viewport,
+    noDefaultViewport: options.viewport === null,
+    extraHTTPHeaders: options.extraHTTPHeaders ? headersObjectToArray3(options.extraHTTPHeaders) : undefined,
+    colorScheme: options.colorScheme === null ? "no-override" : options.colorScheme,
+    reducedMotion: options.reducedMotion === null ? "no-override" : options.reducedMotion,
+    forcedColors: options.forcedColors === null ? "no-override" : options.forcedColors,
+    contrast: options.contrast === null ? "no-override" : options.contrast,
+    acceptDownloads: toAcceptDownloadsProtocol(options.acceptDownloads),
+    httpCredentials: toHttpCredentialsProtocol(options.httpCredentials)
+  };
+}
+function toAcceptDownloadsProtocol(acceptDownloads) {
+  if (acceptDownloads === undefined)
+    return;
+  if (acceptDownloads)
+    return "accept";
+  return "deny";
+}
+function toHttpCredentialsProtocol(credentials) {
+  if (!credentials)
+    return;
+  const list = Array.isArray(credentials) ? credentials : [credentials];
+  return list.length ? list : undefined;
+}
+function headersObjectToArray3(headers) {
+  const result = [];
+  for (const name in headers) {
+    if (!Object.is(headers[name], undefined))
+      result.push({ name, value: headers[name] });
+  }
+  return result;
+}
+
+// src/browser-type.ts
+var ATTACHED_REFUSAL = "Neo runs attached to BrowserOS; use the provided context / context.browser()";
+var CHROMIUM_ONLY_REFUSAL = "Neo drives BrowserOS (Chromium) only; firefox and webkit are not available";
+var NO_EXECUTABLE_PATH = "Neo runs attached to BrowserOS and launches no browser; CDP does not report its executable path";
+
+class BrowserType {
+  #name;
+  constructor(name) {
+    this.#name = name;
+  }
+  name() {
+    return this.#name;
+  }
+  executablePath() {
+    throw new Error(NO_EXECUTABLE_PATH);
+  }
+  async launch(_options) {
+    this.#refuse("browserType.launch");
+  }
+  async launchPersistentContext(_userDataDir, _options) {
+    this.#refuse("browserType.launchPersistentContext");
+  }
+  async launchServer(_options) {
+    this.#refuse("browserType.launchServer");
+  }
+  async connect(_optionsOrEndpoint, _options) {
+    this.#refuse("browserType.connect");
+  }
+  async connectOverCDP(_endpointOrOptions, _options) {
+    this.#refuse("browserType.connectOverCDP");
+  }
+  toJSON() {
+    return { _type: "BrowserType", _guid: `browser-type@${this.#name}` };
+  }
+  #refuse(apiName) {
+    throw new Error(`${apiName}: ${this.#name === "chromium" ? ATTACHED_REFUSAL : CHROMIUM_ONLY_REFUSAL}`);
+  }
+}
+
+// src/playwright.ts
+class Selectors {
+  #connection;
+  #context;
+  _attach(connection, context) {
+    this.#connection = connection;
+    this.#context = context;
+  }
+  async register(_name, _script, _options) {
+    throw new Error("selectors.register: Neo does not run custom selector engines in the page");
+  }
+  setTestIdAttribute(attributeName) {
+    setTestIdAttribute(attributeName);
+    if (!this.#connection || !this.#context)
+      return;
+    this.#connection.sendContext("selectors.setTestIdAttribute", this.#context, "setTestIdAttributeName", { testIdAttributeName: attributeName }, 0).catch(() => {});
+  }
+}
+
+class APIRequest {
+  async newContext(_options) {
+    throw new Error("apiRequest.newContext: Neo does not serve playwright.request yet");
+  }
+}
+
+class Playwright {
+  chromium = new BrowserType("chromium");
+  firefox = new BrowserType("firefox");
+  webkit = new BrowserType("webkit");
+  selectors = new Selectors;
+  request = new APIRequest;
+  errors = { TimeoutError };
+  #devices;
+  get devices() {
+    this.#devices ??= devices();
+    return this.#devices;
+  }
+}
+
 // src/index.ts
 function createRun(init) {
   setTestIdAttribute(init.testIdAttribute);
@@ -8479,9 +9018,13 @@ function createRun(init) {
   const pipe = new EventPipe;
   onReplyEvents((until) => pipe.deliver(until));
   onUncaughtListenerError((error) => pipe.report(error));
+  const playwright = new Playwright;
+  const browser = new Browser(init.browser, connection, pipe, playwright.chromium);
   const context = new BrowserContext(init.context, connection, pipe);
+  browser._didCreateContext(context);
+  playwright.selectors._attach(connection, init.context);
   const page = context._addRunPage(init.page, init.mainFrame, init.url);
-  return { page, context, uncaught: pipe.uncaught };
+  return { page, context, playwright, uncaught: pipe.uncaught };
 }
 return { createRun };
 })();

@@ -125,12 +125,7 @@ impl Artifacts {
         path: &ArtifactPath,
         bytes: &[u8],
     ) -> Result<(), PlaywrightError> {
-        let Some(dir) = self.dir.clone() else {
-            return Err(PlaywrightError::error(format!(
-                "{}: this run has no artifact directory",
-                path.option
-            )));
-        };
+        let dir = self.dir_for(path)?;
         let relative = path.relative.clone();
         let contents = bytes.to_vec();
         let written = task::spawn_blocking(move || write_inside(&dir, &relative, &contents))
@@ -143,7 +138,47 @@ impl Artifacts {
                 path.option, path.display
             )));
         }
-        let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        self.list(path, u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+        Ok(())
+    }
+
+    /// Copies the file at `source` (a download the browser saved) to `path` inside the artifact
+    /// directory as [`Self::write`] writes bytes, overwriting a file already there as
+    /// Playwright's copy does, and lists it in the outcome. Returns its size.
+    pub(crate) async fn copy(
+        &self,
+        path: &ArtifactPath,
+        source: &Path,
+    ) -> Result<u64, PlaywrightError> {
+        let dir = self.dir_for(path)?;
+        let relative = path.relative.clone();
+        let source = source.to_path_buf();
+        let copied =
+            task::spawn_blocking(move || fs::copy(&source, inside(&dir, &relative, true)?))
+                .await
+                .map_err(|error| io::Error::other(error.to_string()))
+                .and_then(|result| result)
+                .map_err(|error| {
+                    PlaywrightError::error(format!(
+                        "{}: saving \"{}\" failed: {error}",
+                        path.option, path.display
+                    ))
+                })?;
+        self.list(path, copied);
+        Ok(copied)
+    }
+
+    fn dir_for(&self, path: &ArtifactPath) -> Result<PathBuf, PlaywrightError> {
+        self.dir.clone().ok_or_else(|| {
+            PlaywrightError::error(format!(
+                "{}: this run has no artifact directory",
+                path.option
+            ))
+        })
+    }
+
+    /// Lists `path` in the outcome with its size, once, the last size winning.
+    fn list(&self, path: &ArtifactPath, size: u64) {
         if let Ok(mut written) = self.written.lock() {
             match written.iter_mut().find(|file| file.path == path.display) {
                 Some(file) => file.bytes = size,
@@ -153,7 +188,6 @@ impl Artifacts {
                 }),
             }
         }
-        Ok(())
     }
 
     /// Deviation: `client/elementHandle.ts` `resolvePathsAndDirectoryForInputFiles`: `const stat = await fs.promises.stat(item as string);` Playwright's client reads any path on its host, relative to its working directory. A Neo script has no file system, and the host must not hand an agent's script its disk, so Rust reads a file to upload or drop only inside the run's artifact directory, at a relative path without `..`, refusing a symbolic link on the way, and a run without one names the option.
@@ -287,10 +321,13 @@ fn refused(option: &str, path: &str, why: &str) -> PlaywrightError {
     PlaywrightError::error(format!("{option}: \"{path}\" {why}"))
 }
 
-/// Creates `relative`'s parents under `dir` one component at a time and writes the file,
-/// refusing any component, the file included, that is a symbolic link.
-fn write_inside(dir: &Path, relative: &Path, bytes: &[u8]) -> io::Result<()> {
-    fs::create_dir_all(dir)?;
+/// `relative` under `dir`, each part checked on the way down: none, the file included, may be a
+/// symbolic link, so nothing read or written lands outside `dir`. With `create`, `dir` and the
+/// missing parents are made, as Playwright's `mkdirIfNeeded` does.
+fn inside(dir: &Path, relative: &Path, create: bool) -> io::Result<PathBuf> {
+    if create {
+        fs::create_dir_all(dir)?;
+    }
     let mut at = dir.to_path_buf();
     let mut components = relative.components().peekable();
     while let Some(component) = components.next() {
@@ -304,14 +341,19 @@ fn write_inside(dir: &Path, relative: &Path, bytes: &[u8]) -> io::Result<()> {
             }
             Ok(_) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                if components.peek().is_some() {
+                if create && components.peek().is_some() {
                     fs::create_dir(&at)?;
                 }
             }
             Err(error) => return Err(error),
         }
     }
-    fs::write(&at, bytes)
+    Ok(at)
+}
+
+/// Creates `relative`'s parents under `dir` and writes the file ([`inside`]).
+fn write_inside(dir: &Path, relative: &Path, bytes: &[u8]) -> io::Result<()> {
+    fs::write(inside(dir, relative, true)?, bytes)
 }
 
 /// Walks `relative` under `dir` one component at a time, refusing any that is a symbolic link,
@@ -443,6 +485,48 @@ mod tests {
         assert!(error.message.contains("symbolic link"), "{error:?}");
         assert!(!outside.join("a.png").exists(), "nothing written outside");
         assert!(artifacts.written().is_empty(), "nothing listed");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn tests_that_a_copy_makes_its_folders_overwrites_is_listed_and_refuses_a_link() {
+        use std::os::unix::fs as unix_fs;
+
+        let (dir, artifacts) = artifacts();
+        let source = dir.path().join("download.txt");
+        fs::write(&source, "hello data").expect("the source");
+        let path = artifacts.check("path", "a/b/saved.txt").expect("relative");
+        assert_eq!(artifacts.copy(&path, &source).await.ok(), Some(10));
+        fs::write(&source, "hello again").expect("the source again");
+        assert_eq!(
+            artifacts.copy(&path, &source).await.ok(),
+            Some(11),
+            "a second save overwrites"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("run/a/b/saved.txt"))
+                .ok()
+                .as_deref(),
+            Some("hello again")
+        );
+        assert!(source.exists(), "the browser's file stays");
+        assert_eq!(
+            artifacts.written(),
+            vec![RunArtifact {
+                path: "a/b/saved.txt".to_string(),
+                bytes: 11,
+            }],
+            "listed once, with its last size"
+        );
+        let outside = dir.path().join("outside");
+        fs::create_dir_all(&outside).expect("outside");
+        unix_fs::symlink(&outside, dir.path().join("run/link")).expect("a link");
+        let through = artifacts.check("path", "link/x.txt").expect("relative");
+        assert!(
+            artifacts.copy(&through, &source).await.is_err(),
+            "through a symbolic link"
+        );
+        assert!(!outside.join("x.txt").exists(), "nothing landed outside");
     }
 
     /// Upload paths resolve inside the directory only: a file and a directory are found with

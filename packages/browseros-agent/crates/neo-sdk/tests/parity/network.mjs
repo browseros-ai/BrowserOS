@@ -24,11 +24,12 @@ import { join } from 'node:path'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
   connectCdp,
+  connectReference,
   errorCategory,
   launchBrowser,
   playwrightVersion,
+  referenceHalf,
   runCleanups,
   runInNeo,
   sleep,
@@ -90,12 +91,23 @@ sessionStorage.setItem('loads', String(Number(sessionStorage.getItem('loads')) +
 </script>`,
   // An EventSource never holds networkidle.
   '/net/event-source.html': `<title>events</title><script>new EventSource('/net/sse')</script>`,
+  // Tells its parent it is ready; on 'go', fetches /net/startup.json and posts back where the
+  // answer came from (the server's has no `origin`) and the init script's `seed`.
+  '/net/ready-child.html': `<title>ready child</title><p id="old">Child</p><script>
+addEventListener('message', async (event) => {
+  if (event.data !== 'go') return
+  const data = await (await fetch('/net/startup.json')).json()
+  parent.postMessage({ kind: 'result', origin: data.origin ?? 'server', seed: window.seed ?? null }, '*')
+})
+parent.postMessage({ kind: 'ready' }, '*')
+</script>`,
 }
 
 /**
  * The fixture server: `PAGES`, JSON at `*.json`, a PNG at `/net/img.png`, a 302 at
  * `/net/redirect` (to `?to=`, else `/net/data.json`), `/net/headers` echoing the request's method,
- * headers and body as JSON, a 204 at `/net/204`, a 404 at `/net/404`, a connection
+ * headers and body as JSON, `/net/post-echo` its method, content type and body (as hex),
+ * `/net/require-json` a 415 unless the request's content type is JSON, a 204 at `/net/204`, a 404 at `/net/404`, a connection
  * dropped before any response at `/net/hangup`, `/net/slow?ms=N` after N ms (readable from
  * any origin), an event stream
  * that never ends at `/net/sse`, `/net/echo` answering a POST's body, and `/net/hold?id=X`, which
@@ -158,6 +170,37 @@ export async function serveNetwork(cleanups) {
           headers: request.headers,
           body,
         }),
+      )
+      return
+    }
+    if (pathname === '/net/post-echo') {
+      const chunks = []
+      for await (const chunk of request) chunks.push(chunk)
+      response.setHeader('content-type', 'application/json')
+      response.end(
+        JSON.stringify({
+          method: request.method,
+          type: request.headers['content-type'] ?? null,
+          hex: Buffer.concat(chunks).toString('hex'),
+        }),
+      )
+      return
+    }
+    if (pathname === '/net/require-json') {
+      const chunks = []
+      for await (const chunk of request) chunks.push(chunk)
+      const json = (request.headers['content-type'] ?? '').startsWith(
+        'application/json',
+      )
+      response.writeHead(json ? 200 : 415, {
+        'content-type': 'application/json',
+      })
+      response.end(
+        JSON.stringify(
+          json
+            ? { ok: true, value: JSON.parse(Buffer.concat(chunks).toString()) }
+            : { ok: false },
+        ),
       )
       return
     }
@@ -261,25 +304,30 @@ ${c.source}`
   }
 }
 
-/** Runs the script as Playwright does, with `page` and `context` in scope, then disconnects. */
+/**
+ * Runs the script as Playwright does, with `page` and `context` in scope, then disconnects
+ * (`referenceHalf`).
+ */
 async function viaPlaywright(port, source) {
-  const playwright = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
-  try {
-    const [context] = playwright.contexts()
-    const page = await context.newPage()
-    const AsyncFunction = (async () => {}).constructor
-    const result = await new AsyncFunction('page', 'context', source)(
-      page,
-      context,
-    ).then(
-      (value) => ({ value }),
-      (error) => ({ error: { name: error.name, message: error.message } }),
-    )
-    await page.close()
-    return result
-  } finally {
-    await playwright.close()
-  }
+  return await referenceHalf(async () => {
+    const playwright = await connectReference(port)
+    try {
+      const [context] = playwright.contexts()
+      const page = await context.newPage()
+      const AsyncFunction = (async () => {}).constructor
+      const result = await new AsyncFunction('page', 'context', source)(
+        page,
+        context,
+      ).then(
+        (value) => ({ value }),
+        (error) => ({ error: { name: error.name, message: error.message } }),
+      )
+      await page.close()
+      return result
+    } finally {
+      await playwright.close()
+    }
+  })
 }
 
 /** Runs the script through neo_run on a fresh about:blank tab, with no other client on it. */

@@ -46,6 +46,10 @@ use tracing::warn;
 /// page error events, each naming its page.
 pub(crate) const CONTEXT_GUID: &str = "context@default";
 
+/// Neo: the prefix of every context's guid, the run's own and each one the run created
+/// (`browser_calls.rs`).
+const CONTEXT_PREFIX: &str = "context@";
+
 /// Deviation: `client/connection.ts` `Connection.dispatch`: `const object = this._objects.get(guid);`
 /// Playwright's client dispatches every event its server sends; Neo's queue lives outside the
 /// realm's memory limit, so a run holds at most this many undelivered events and counts the rest.
@@ -102,8 +106,9 @@ const PAGE_EVENTS: [(&str, Needs); 21] = [
     ("locatorHandlerTriggered", Needs::NOTHING),
 ];
 
-/// Neo: the listener events Neo produces on the run's `BrowserContext` (`Events.BrowserContext`),
-/// for every page the run has a session on; `page` for every new tab of the context.
+/// Neo: the listener events Neo produces on a `BrowserContext` (`Events.BrowserContext`), the
+/// run's own or one `browser.newContext` created, for every page of it the run has a session on;
+/// `page` for every new tab of the context.
 const CONTEXT_EVENTS: [(&str, Needs); 17] = [
     ("console", Needs::RUNTIME),
     ("weberror", Needs::RUNTIME),
@@ -123,6 +128,10 @@ const CONTEXT_EVENTS: [(&str, Needs); 17] = [
     ("requestfailed", Needs::NETWORK),
     ("route", Needs::NETWORK),
 ];
+
+/// Neo: the listener event of a context's `Debugger` (`Events.Debugger`), which needs nothing
+/// switched on: the debugger queues it itself (`debugger.rs`).
+const DEBUGGER_EVENTS: [(&str, Needs); 1] = [("pausedstatechanged", Needs::NOTHING)];
 
 /// What a subscription switches on in a page's session before that page's next call runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,8 +155,8 @@ pub(crate) struct Needs {
 }
 
 impl Needs {
-    /// Neo: an event an action's own call produces (`locatorHandlerTriggered`), with nothing to
-    /// switch on.
+    /// Neo: an event with nothing to switch on, which no page's domains produce: an action's own
+    /// call's (`locatorHandlerTriggered`) or the debugger's.
     const NOTHING: Self = Self {
         watcher: false,
         runtime: false,
@@ -211,10 +220,12 @@ pub(crate) const ALL_PAGES: &str = "*";
 /// What a listener event on `guid` needs, or `None` when Neo does not produce it there. `guid`
 /// is the context's or a page's (`page@<targetId>`).
 pub(crate) fn needs(guid: &str, event: &str) -> Option<Needs> {
-    let table: &[(&str, Needs)] = if guid == CONTEXT_GUID {
+    let table: &[(&str, Needs)] = if guid.starts_with(CONTEXT_PREFIX) {
         &CONTEXT_EVENTS
     } else if guid.starts_with("page@") {
         &PAGE_EVENTS
+    } else if guid.starts_with("debugger@") {
+        &DEBUGGER_EVENTS
     } else {
         return None;
     };
@@ -253,6 +264,9 @@ struct State {
     bytes: usize,
     /// (guid, listener event) pairs the script listens to.
     subscriptions: HashSet<(String, String)>,
+    /// (platform) The context of each page of a context the run created, by page guid; every
+    /// other page is the run's own context's.
+    owners: HashMap<String, String>,
     /// One flush channel per live watcher; a closed one belongs to a watcher that ended.
     watchers: Vec<mpsc::UnboundedSender<oneshot::Sender<()>>>,
     /// Per page (target id): the enables its subscriptions started, done when `true`.
@@ -320,28 +334,42 @@ impl EventHub {
 
     /// Whether the script listens to `event` on `guid`.
     pub(crate) fn subscribed(&self, guid: &str, event: &str) -> bool {
+        self.with(|state| listens(state, guid, event))
+            .unwrap_or(false)
+    }
+
+    /// (platform) Records that the page `page_guid` belongs to the context `context_guid` the run
+    /// created: its context-level events answer to that context's listeners, never the run's own.
+    pub(crate) fn set_owner(&self, page_guid: &str, context_guid: &str) {
         self.with(|state| {
             state
-                .subscriptions
-                .iter()
-                .any(|(listening, name)| listening == guid && name == event)
+                .owners
+                .insert(page_guid.to_string(), context_guid.to_string())
+        });
+    }
+
+    /// Whether a page event reaches any listener: the page's own `page_event` or its context's
+    /// `context_event` (Playwright's `BrowserContextDispatcher._shouldDispatchEvent`), the
+    /// context that owns the page.
+    pub(crate) fn wants(&self, page_guid: &str, page_event: &str, context_event: &str) -> bool {
+        self.with(|state| {
+            let context = state
+                .owners
+                .get(page_guid)
+                .map_or(CONTEXT_GUID, String::as_str);
+            listens(state, page_guid, page_event) || listens(state, context, context_event)
         })
         .unwrap_or(false)
     }
 
-    /// Whether a page event reaches any listener: the page's own `page_event` or the context's
-    /// `context_event` (Playwright's `BrowserContextDispatcher._shouldDispatchEvent`).
-    pub(crate) fn wants(&self, page_guid: &str, page_event: &str, context_event: &str) -> bool {
-        self.subscribed(page_guid, page_event) || self.subscribed(CONTEXT_GUID, context_event)
-    }
-
-    /// What the context's listeners need on every page with a session, if it listens at all.
-    pub(crate) fn context_needs(&self) -> Option<Needs> {
+    /// What the listeners of the context `context_guid` need on every page of it with a
+    /// session, if it listens at all.
+    pub(crate) fn context_needs(&self, context_guid: &str) -> Option<Needs> {
         self.with(|state| {
             state
                 .subscriptions
                 .iter()
-                .filter(|(guid, _)| guid == CONTEXT_GUID)
+                .filter(|(guid, _)| guid == context_guid)
                 .filter_map(|(guid, event)| needs(guid, event))
                 .reduce(|left, right| Needs {
                     watcher: left.watcher || right.watcher,
@@ -593,6 +621,14 @@ impl EventHub {
     }
 }
 
+/// Whether the script listens to `event` on `guid`, under the hub's lock.
+fn listens(state: &State, guid: &str, event: &str) -> bool {
+    state
+        .subscriptions
+        .iter()
+        .any(|(listening, name)| listening == guid && name == event)
+}
+
 fn drop_note(dropped: usize) -> String {
     let events = if dropped == 1 { "event" } else { "events" };
     format!(
@@ -672,6 +708,28 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_a_created_contexts_page_answers_to_its_own_contexts_listeners() {
+        let hub = EventHub::default();
+        hub.set_owner("page@C", "context@C1");
+        // Every context-level event subscribes on a created context, as on the run's own.
+        for (name, wanted) in CONTEXT_EVENTS {
+            assert_eq!(needs("context@C1", name), Some(wanted), "{name}");
+        }
+        hub.subscribe(CONTEXT_GUID, "console", true);
+        assert!(hub.wants("page@T", "console", "console"));
+        assert!(
+            !hub.wants("page@C", "console", "console"),
+            "the run's own context hears none of a created context's pages"
+        );
+        hub.subscribe("context@C1", "console", true);
+        assert!(hub.wants("page@C", "console", "console"));
+        assert_eq!(hub.context_needs("context@C1"), Some(Needs::RUNTIME));
+        hub.subscribe(CONTEXT_GUID, "console", false);
+        assert!(!hub.wants("page@T", "console", "console"));
+        assert!(hub.wants("page@C", "console", "console"));
+    }
+
+    #[test]
     fn tests_that_subscriptions_route_page_events_to_the_page_or_the_context() {
         let hub = EventHub::default();
         assert!(!hub.wants("page@T", "console", "console"));
@@ -681,7 +739,7 @@ mod tests {
         hub.subscribe("page@T", "console", true);
         assert!(hub.wants("page@T", "console", "console"));
         assert!(!hub.wants("page@U", "console", "console"));
-        assert_eq!(hub.context_needs(), Some(Needs::RUNTIME));
+        assert_eq!(hub.context_needs(CONTEXT_GUID), Some(Needs::RUNTIME));
         hub.subscribe("page@T", "console", false);
         assert!(!hub.wants("page@T", "console", "console"));
     }

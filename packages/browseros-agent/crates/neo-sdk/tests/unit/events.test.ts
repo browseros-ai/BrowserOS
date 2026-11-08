@@ -77,6 +77,7 @@ function run(): {
     page: 'page@T',
     mainFrame: 'frame@T',
     context: 'context@default',
+    browser: 'browser@default',
     url: 'https://run.test/',
     testIdAttribute: 'data-testid',
     lineOffset: 0,
@@ -555,6 +556,54 @@ test("tests that a page's close reason reaches its waits and the calls it interr
   await expect(page.title()).rejects.toThrow(
     'page.title: Target page, context or browser has been closed',
   )
+})
+
+test("tests that closing the run's context disconnects its browser, in Playwright's order", async () => {
+  const { page, context } = run()
+  const native = (
+    globalThis as unknown as Record<
+      string,
+      { callWithEvents: unknown; get: unknown }
+    >
+  ).__neo_runtime
+  native.get = (request: string) => {
+    const { field } = JSON.parse(request)
+    if (field === 'pages')
+      return JSON.stringify([pageRecord('T', 'https://run.test/')])
+    if (field === 'isClosed') return 'false'
+    if (field === 'isConnected') return 'true'
+    return JSON.stringify(null)
+  }
+  const sent: string[] = []
+  native.callWithEvents = async (message: string) => {
+    const { id, guid, method } = JSON.parse(message)
+    sent.push(`${guid} ${method}`)
+    return { reply: JSON.stringify({ id }), events: 0 }
+  }
+  const browser = context.browser()
+  if (!browser) throw new Error('the run has a browser')
+  const order: string[] = []
+  page.on('close', () => order.push(`page close ${browser.isConnected()}`))
+  context.on('close', () =>
+    order.push(`context close ${browser.isConnected()}`),
+  )
+  browser.on('disconnected', () =>
+    order.push(
+      `disconnected ${browser.isConnected()} ${browser.contexts().length}`,
+    ),
+  )
+  await context.close({ reason: 'done' })
+  expect(order).toEqual([
+    'page close true',
+    'context close true',
+    'disconnected false 0',
+  ])
+  await expect(browser.newContext()).rejects.toThrow(
+    'browser.newContext: Target page, context or browser has been closed',
+  )
+  // Disconnected once: the browser's close has nothing left to send.
+  await browser.close()
+  expect(sent).toEqual(['context@default close'])
 })
 
 test('tests that a close Rust refuses leaves the context open, to close again', async () => {

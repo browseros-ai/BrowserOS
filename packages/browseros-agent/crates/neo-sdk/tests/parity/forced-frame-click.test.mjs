@@ -7,9 +7,7 @@ import { test } from 'node:test'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
-  connectCdp,
-  launchBrowser,
+  launchReference,
   playwrightVersion,
   runCleanups,
   runInNeo,
@@ -117,12 +115,11 @@ for (const moving of ['owner', 'target']) {
           '/force-leaf.html': document(moving, 'leaf'),
         },
       })
-      const browser = await launchBrowser(cleanups, browserBinary)
-      const cdp = await connectCdp(cleanups, browser.port)
-      const playwright = await chromium.connectOverCDP(
-        `http://127.0.0.1:${browser.port}`,
+      const { playwright, cdp, ...browser } = await launchReference(
+        cleanups,
+        browserBinary,
+        { cdp: true },
       )
-      cleanups.push(() => playwright.close())
       const [context] = playwright.contexts()
       const scripts = mkdtempSync(join(tmpdir(), 'neo-forced-frame-'))
       cleanups.push(() => rmSync(scripts, { recursive: true, force: true }))

@@ -9,8 +9,7 @@ import { withFrames } from './frames.mjs'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
-  launchBrowser,
+  launchReference,
   runCleanups,
   skip,
   startNeo,
@@ -100,9 +99,10 @@ test('review D recheck: adopted objects are released before run end', {
       fixture.closeAllConnections()
       await new Promise((resolve) => fixture.close(resolve))
     })
-    const browser = await launchBrowser(cleanups, browserBinary)
-    const pw = await chromium.connectOverCDP(`http://127.0.0.1:${browser.port}`)
-    cleanups.push(() => pw.close())
+    const { playwright: pw, ...browser } = await launchReference(
+      cleanups,
+      browserBinary,
+    )
     const [context] = pw.contexts()
     const page = await context.newPage()
     await page.goto(`http://127.0.0.1:${fixture.address().port}/`)

@@ -23,15 +23,22 @@ use serde_json::{Value, json};
 use tracing::debug;
 
 use crate::bridge;
+use crate::browser_calls;
+use crate::click::PageError;
+use crate::content::WriteTurn;
+use crate::debugger::DEFAULT_CONTEXT;
 use crate::dispatch::encode_result;
+use crate::emulation::{self, Size};
 use crate::frames::FrameScope;
 use crate::highlight;
 use crate::history::{self, HistoryOptions};
+use crate::navigate;
 use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::routes::{self, Patterns};
-use crate::session_state;
+use crate::session_state::{self, StateFile};
 use crate::tabs::{self, PageEntry, Tabs};
+use crate::web_storage;
 
 pub(crate) async fn context(
     tabs: &Tabs,
@@ -64,7 +71,7 @@ pub(crate) async fn context(
             if scripts.has_scripts() {
                 let session = progress.race(tabs.session(entry)).await??;
                 progress
-                    .race(scripts.show_new(tabs.cdp(), &session))
+                    .race(scripts.show_new(tabs.cdp(), &session, DEFAULT_CONTEXT))
                     .await?;
             }
             let result = BrowserContextNewPageResult {
@@ -78,9 +85,12 @@ pub(crate) async fn context(
             Ok(Some(value))
         }
         BrowserContextCall::Close(_) => {
-            close_context(tabs, progress).await?;
+            browser_calls::disconnect(tabs, progress).await?;
             Ok(None)
         }
+        // Playwright: `server/dispatchers/browserContextDispatcher.ts` `BrowserContextDispatcher.pause`: `// Debugger will take care of this.`
+        // `setTestIdAttributeName`: `Dispatcher::call` applied it before this call started.
+        BrowserContextCall::Pause(_) | BrowserContextCall::SetTestIdAttributeName(_) => Ok(None),
         BrowserContextCall::SetNetworkInterceptionPatterns(params) => {
             context_patterns(tabs, params, progress).await
         }
@@ -133,11 +143,45 @@ pub(crate) async fn context(
             Ok(None)
         }
         BrowserContextCall::StorageState(params) => {
-            let state = session_state::storage_state(tabs, &params, progress).await?;
-            encode_result::<BrowserContextStorageStateParams>(&state)
+            state_file(tabs, StateFile::Export(params), None, progress).await
         }
         BrowserContextCall::SetStorageState(params) => {
-            session_state::set_storage_state(tabs, params.storage_state, progress).await?;
+            state_file(tabs, StateFile::Import(params), None, progress).await
+        }
+    }
+}
+
+/// Playwright: `client/browserContext.ts` `BrowserContext.storageState`: `if (options.path) {`
+///
+/// `context.storageState` and `context.setStorageState`, with the `path` they write or read in
+/// the run's artifact directory (`artifacts.rs`), checked before anything else: `storageState`
+/// writes none for an empty one, as Playwright's `if (options.path)` does; `setStorageState`
+/// takes any string as a file to read.
+pub(crate) async fn state_file(
+    tabs: &Tabs,
+    file: StateFile,
+    path: Option<String>,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let artifacts = progress.artifacts();
+    match file {
+        StateFile::Export(params) => {
+            let path = path
+                .filter(|path| !path.is_empty())
+                .map(|path| artifacts.check("path", &path))
+                .transpose()?;
+            let state = session_state::storage_state(tabs, &params, progress).await?;
+            if let Some(path) = &path {
+                session_state::write_state(artifacts, path, &state).await?;
+            }
+            encode_result::<BrowserContextStorageStateParams>(&state)
+        }
+        StateFile::Import(params) => {
+            let state = match path {
+                Some(path) => Some(session_state::read_state(artifacts, &path).await?),
+                None => params.storage_state,
+            };
+            session_state::set_storage_state(tabs, state, progress).await?;
             Ok(None)
         }
     }
@@ -150,34 +194,14 @@ async fn set_page_headers(
     headers: Vec<NameValue>,
     progress: &Progress,
 ) -> Result<(), CallError> {
+    // (platform) The page's own headers go over its context's: the run's own context's.
+    if entry.context.get().is_some() {
+        return Err(browser_calls::created_state("setExtraHTTPHeaders").into());
+    }
     let page = progress.race(tabs.session(entry)).await??;
     tabs.overrides()
         .set_page_headers(&page, &entry.id, headers, progress)
         .await
-}
-
-/// Playwright's close of a connectOverCDP default context, which only disconnects: every tab
-/// stays open (measured on BrowserOS neo, a2-mapping-evidence.md §2). The run lets go of what it
-/// holds in the browser: a `beforeunload` dialog a listener holds is dismissed, so its tab stays,
-/// every subscription ends with target discovery, and every other call of the run stops, as
-/// Playwright's calls stop with its connection. The SDK closes the run's pages and context as the
-/// script sees them; the reason stays there.
-async fn close_context(tabs: &Tabs, progress: &Progress) -> Result<(), CallError> {
-    for (_, session) in tabs.attached() {
-        if session.events.dialogs.take_open_beforeunload() {
-            let dismissed = progress
-                .race(session.send("Page.handleJavaScriptDialog", json!({ "accept": false })))
-                .await?;
-            if let Err(error) = dismissed {
-                debug!(%error, "dismissing a beforeunload dialog at the context's close failed");
-            }
-        }
-    }
-    tabs.events().end_subscriptions();
-    // The script's promises for them have rejected (the SDK); this stops the calls themselves
-    // before the close resolves, so none writes input to a tab the run let go of.
-    progress.stop_the_runs_calls();
-    Ok(())
 }
 
 /// Neo: `dispatch::route` hands every `Page.screenshot` and `Page.pdf` to `capture.rs`, so one
@@ -232,28 +256,14 @@ pub(crate) async fn page(
             });
         }
         PageCall::ClearConsoleMessages(_) => {
-            console_page(tabs, entry, progress)
-                .await?
-                .events
-                .console
-                .clear_messages();
-            return encode_result::<PageClearConsoleMessagesParams>(
-                &PageClearConsoleMessagesResult {},
-            );
+            return clear_console(tabs, entry, true, progress).await;
         }
         call @ (PageCall::RegisterLocatorHandler(_)
         | PageCall::ResolveLocatorHandlerNoReply(_)
         | PageCall::UnregisterLocatorHandler(_)) => {
             return locator_handler_call(tabs, entry, call, progress).await;
         }
-        PageCall::ClearPageErrors(_) => {
-            console_page(tabs, entry, progress)
-                .await?
-                .events
-                .console
-                .clear_errors();
-            return encode_result::<PageClearPageErrorsParams>(&PageClearPageErrorsResult {});
-        }
+        PageCall::ClearPageErrors(_) => return clear_console(tabs, entry, false, progress).await,
         // Playwright's server keeps a page's last requests from its first moment; Neo keeps
         // what the run's network log recorded, which starts with the session's
         // `Network.enable`: the first goto, history step or navigation wait, a network event
@@ -263,7 +273,18 @@ pub(crate) async fn page(
         PageCall::SetNetworkInterceptionPatterns(params) => {
             return set_page_patterns(tabs, entry, params, progress).await;
         }
+        // `dispatch::route` hands these to [`storage`], in their page's storage order.
+        PageCall::WebStorageItems(_)
+        | PageCall::WebStorageGetItem(_)
+        | PageCall::WebStorageSetItem(_)
+        | PageCall::WebStorageRemoveItem(_)
+        | PageCall::WebStorageClear(_) => {
+            return Err(PlaywrightError::error(STORAGE_MISROUTED).into());
+        }
         PageCall::Close(_) => close(tabs, entry, progress).await?,
+        call @ (PageCall::SetViewportSize(_)
+        | PageCall::EmulateMedia(_)
+        | PageCall::RequestGC(_)) => emulated(tabs, entry, call, progress).await?,
         PageCall::SetExtraHTTPHeaders(params) => {
             set_page_headers(tabs, entry, params.headers, progress).await?;
         }
@@ -380,6 +401,32 @@ async fn history_step(
     history::navigate(&main, &options, progress).await
 }
 
+/// The page's emulation calls and `requestGC`, on its run session (`emulation.rs`).
+async fn emulated(
+    tabs: &Tabs,
+    entry: &PageEntry,
+    call: PageCall,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    match call {
+        PageCall::SetViewportSize(params) => {
+            let size = Size {
+                width: params.viewport_size.width,
+                height: params.viewport_size.height,
+            };
+            page.emulation
+                .set_viewport_size(&page, size, progress)
+                .await
+        }
+        PageCall::EmulateMedia(params) => {
+            page.emulation.emulate_media(&page, &params, progress).await
+        }
+        PageCall::RequestGC(_) => emulation::request_gc(&page, progress).await,
+        _ => Err(PlaywrightError::error("neo-runtime: not an emulation call").into()),
+    }
+}
+
 /// Neo: `page.route`'s patterns (`setNetworkInterceptionPatterns`): which of the page's requests
 /// pause for its handlers (`routes.rs`).
 async fn set_page_patterns(
@@ -438,6 +485,24 @@ async fn requests(
     encode_result::<PageRequestsParams>(&PageRequestsResult { requests })
 }
 
+/// `Page.clearConsoleMessages` (`messages`) or `Page.clearPageErrors`: the page's kept console
+/// messages, or its page errors, go.
+async fn clear_console(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    messages: bool,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let console = &console_page(tabs, entry, progress).await?.events.console;
+    if messages {
+        console.clear_messages();
+        encode_result::<PageClearConsoleMessagesParams>(&PageClearConsoleMessagesResult {})
+    } else {
+        console.clear_errors();
+        encode_result::<PageClearPageErrorsParams>(&PageClearPageErrorsResult {})
+    }
+}
+
 /// `entry`'s session with console messages and page errors reported (`PageSession::enable_runtime`).
 async fn console_page(
     tabs: &Tabs,
@@ -447,6 +512,53 @@ async fn console_page(
     let page = progress.race(tabs.session(entry)).await??;
     let enabled = progress.race(page.enable_runtime()).await?;
     checked(tabs, entry, progress, enabled).await?;
+    Ok(page)
+}
+
+/// Neo: a storage call reaching the tab-lifecycle handler, which `dispatch::route` never does.
+const STORAGE_MISROUTED: &str = "neo-runtime: a storage call reached the tab-lifecycle handler";
+
+/// A `page.localStorage` / `page.sessionStorage` call on `entry`'s main frame, in call order:
+/// after the session's one shared preparation, it waits for every earlier storage call of the
+/// page to finish, so no call overtakes an earlier one, as Playwright's server sends them in
+/// order. Its place (`turn`) was taken as it arrived (`dispatch.rs` `Inner::ordered`).
+pub(crate) async fn storage(
+    tabs: &Tabs,
+    entry: &Arc<PageEntry>,
+    call: PageCall,
+    turn: Option<WriteTurn>,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let page = prepared_page(tabs, entry, progress).await?;
+    let _turn = match turn {
+        Some(turn) => Some(progress.race(turn.ready()).await?),
+        None => None,
+    };
+    // The call belongs to the document it starts in. A commit that replaces that document ends
+    // it with Playwright's destroyed-context error and hands its turn on, as Playwright's
+    // utility-world evaluation rejects once its context is gone: a later call never waits for
+    // an obsolete document's reply.
+    let document = page.main_document();
+    let serving = web_storage::serve(Arc::clone(&page), call, progress);
+    tokio::select! {
+        biased;
+        result = serving => result,
+        () = page.main_document_replaced(document) => {
+            Err(navigate::page_error(PageError::NotConnected).into())
+        }
+    }
+}
+
+/// `entry`'s session with its watcher running (`PageSession::prepare`), as a call on its frames
+/// needs it.
+async fn prepared_page(
+    tabs: &Tabs,
+    entry: &PageEntry,
+    progress: &Progress,
+) -> Result<Arc<PageSession>, CallError> {
+    let page = progress.race(tabs.session(entry)).await??;
+    let prepared = progress.race(page.prepare()).await?;
+    checked(tabs, entry, progress, prepared).await?;
     Ok(page)
 }
 

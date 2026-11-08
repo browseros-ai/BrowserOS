@@ -32,13 +32,13 @@
 //! The page JavaScript guard allows this file, and only it, to send `Runtime.addBinding` and
 //! `Runtime.removeBinding`; it runs no script itself.
 
-use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
+use std::collections::{HashMap, HashSet};
 use std::future;
 use std::hash::{BuildHasher, Hasher};
 use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex as SyncMutex, Weak};
 
 use browseros_cdp::{CdpClient, CdpEvent, SessionId};
 use neo_runtime_spec::{MethodGroup, MethodMeta};
@@ -56,11 +56,12 @@ use tracing::debug;
 
 use crate::bridge;
 use crate::contexts::ContextFrames;
+use crate::debugger::DEFAULT_CONTEXT;
 use crate::evaluate::{self, Handles, SerializedArgument};
 use crate::events::{CONTEXT_GUID, Emitted, Flushes};
 use crate::frames::{FrameContext, FrameScope};
 use crate::init_scripts::{self, InitScripts, Link, Rank, until_gone};
-use crate::main_world::BuiltExpression;
+use crate::main_world::{BuiltExpression, ContextPin};
 use crate::page::{FrameTab, PageSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::run::PageId;
@@ -280,12 +281,27 @@ pub(crate) struct Bindings {
     contexts: ContextFrames,
     /// Stops the session reader, at run end.
     stop: CancellationToken,
+    /// The waiting calls' admission claims ([`Bindings::begin_answering`]): a plain lock, as the
+    /// dispatcher's admission is no task.
+    claims: SyncMutex<Claims>,
+}
+
+/// Each waiting call by guid: free to claim release admission for its answer, or claimed by an
+/// answer still running.
+#[derive(Default)]
+struct Claims {
+    waiting: HashSet<String>,
+    claimed: HashSet<String>,
 }
 
 #[derive(Default)]
 struct State {
     /// Set at run end: nothing is exposed after the run removed its bindings.
     closed: bool,
+    /// Every binding the run began to expose, by name and page (`None` for the context's), which
+    /// its end takes off the pages each reaches: never a name another live run registered on that
+    /// page, which shares the page's controller ([`OWNERS`]).
+    registered: Vec<Registration>,
     /// The controller's init script is in and the session reader runs.
     started: bool,
     exposed: Vec<Exposed>,
@@ -326,8 +342,10 @@ struct Call {
     /// Where the answer goes, `None` when the frame was gone before the call was read: the
     /// callback still runs, and its answer has no document to reach.
     origin: Option<Origin>,
-    /// The execution context that called, the only one its answer may reach.
-    context: i64,
+    /// The execution context that called, the only one its answer may reach: by its unique id,
+    /// as the session reported it before any later event, so a context of another process that
+    /// took the same number never gets it.
+    context: ContextPin,
 }
 
 /// The frame context that made a call, as the call found it.
@@ -357,7 +375,7 @@ struct Ready {
     guid: String,
     name: String,
     seq: u64,
-    context: i64,
+    context: ContextPin,
 }
 
 /// A call's place in the order the page made the calls: the signal of the call read before it,
@@ -372,7 +390,9 @@ struct Incoming {
     turn: Turn,
     session: String,
     prepared: Prepared,
-    context: i64,
+    /// The calling execution context, with the unique id the session's events gave it before
+    /// this call's.
+    context: ContextPin,
     /// The calling frame, read in event order by the session reader; `None` when no frame is
     /// known for the calling context.
     frame: Option<String>,
@@ -396,6 +416,7 @@ impl Default for Bindings {
             state: Mutex::default(),
             contexts: ContextFrames::default(),
             stop: CancellationToken::new(),
+            claims: SyncMutex::default(),
         }
     }
 }
@@ -403,11 +424,88 @@ impl Default for Bindings {
 impl Drop for Bindings {
     fn drop(&mut self) {
         self.stop.cancel();
+        disown_run(&self.run);
     }
 }
 
 /// Neo: the process-wide count that keeps two runs' tokens apart within one process.
 static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
+
+/// Neo: every live run's exposed names, process-wide. A tab's controller and its CDP binding are
+/// shared by every run on it, and Chromium reports a call on every session that added the
+/// binding, so each run's reader takes only its own names and leaves another run's to that run,
+/// as each Playwright connection answers the bindings it registered.
+static OWNERS: SyncMutex<Vec<Owner>> = SyncMutex::new(Vec::new());
+
+/// A run's name: the run's token, and the page's target id for a page binding (`None` for the
+/// context's, which reaches every page).
+struct Owner {
+    run: String,
+    name: String,
+    page: Option<String>,
+}
+
+fn own(run: &str, name: &str, page: Option<&str>) {
+    if let Ok(mut owners) = OWNERS.lock() {
+        owners.push(Owner {
+            run: run.to_string(),
+            name: name.to_string(),
+            page: page.map(str::to_string),
+        });
+    }
+}
+
+fn disown(run: &str, name: &str, page: Option<&str>) {
+    if let Ok(mut owners) = OWNERS.lock() {
+        owners.retain(|owner| {
+            owner.run != run || owner.name != name || owner.page.as_deref() != page
+        });
+    }
+}
+
+fn disown_run(run: &str) {
+    if let Ok(mut owners) = OWNERS.lock() {
+        owners.retain(|owner| owner.run != run);
+    }
+}
+
+/// One binding a run began to expose: its name and the page's target id (`None` for the
+/// context's, which reaches every page).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Registration {
+    name: String,
+    page: Option<String>,
+}
+
+/// The names `run`'s end takes off the page `target`: the run's registrations that reach it, but
+/// none another live run also exposes to it.
+fn page_names(run: &str, registered: &[Registration], target: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for registration in registered {
+        if registration
+            .page
+            .as_deref()
+            .is_some_and(|page| page != target)
+            || names.contains(&registration.name)
+            || owned_elsewhere(run, &registration.name, target)
+        {
+            continue;
+        }
+        names.push(registration.name.clone());
+    }
+    names
+}
+
+/// Whether a live run other than `run` exposes `name` to the page `target`.
+fn owned_elsewhere(run: &str, name: &str, target: &str) -> bool {
+    OWNERS.lock().is_ok_and(|owners| {
+        owners.iter().any(|owner| {
+            owner.run != run
+                && owner.name == name
+                && owner.page.as_deref().is_none_or(|page| page == target)
+        })
+    })
+}
 
 impl Bindings {
     /// Playwright's `exposeBinding` on `page` (or on the context, without): the binding's
@@ -430,8 +528,12 @@ impl Bindings {
         let exposed = self.expose_now(tabs, scripts, page, name, no_global).await;
         // Run end came while this expose ran: whatever it put on a page after that end ran, this
         // end takes back.
-        if self.state.lock().await.closed {
-            self.end_pages(tabs).await;
+        let late = {
+            let state = self.state.lock().await;
+            state.closed.then(|| state.registered.clone())
+        };
+        if let Some(registered) = late {
+            self.end_pages(tabs, &registered).await;
         }
         exposed
     }
@@ -453,13 +555,32 @@ impl Bindings {
             refusal(&state.exposed, target.as_deref(), name)?;
             !state.started
         };
+        {
+            // Before a page can call it: another run's reader leaves it to this one, and this
+            // run's end takes it off the pages, however far this expose gets.
+            let mut state = self.state.lock().await;
+            let registration = Registration {
+                name: name.to_string(),
+                page: target.clone(),
+            };
+            if !state.registered.contains(&registration) {
+                state.registered.push(registration);
+                own(&self.run, name, target.as_deref());
+            }
+        }
         let cdp = tabs.cdp();
         if first {
             scripts.attach_bindings(self);
             // Subscribed before any session gets the binding, so no call is missed.
             tokio::spawn(watch(Arc::downgrade(self), tabs.clone(), cdp.events()));
             scripts
-                .add_ranked(cdp, None, &controller_source(), Rank::Controller)
+                .add_ranked(
+                    cdp,
+                    None,
+                    DEFAULT_CONTEXT,
+                    &controller_source(),
+                    Rank::Controller,
+                )
                 .await?;
             self.state.lock().await.started = true;
         }
@@ -469,7 +590,13 @@ impl Bindings {
             Rank::ContextBinding
         };
         let script = scripts
-            .add_ranked(cdp, page, &add_source(name, no_global), rank)
+            .add_ranked(
+                cdp,
+                page,
+                DEFAULT_CONTEXT,
+                &add_source(name, no_global),
+                rank,
+            )
             .await?;
         let disposable = format!(
             "{DISPOSABLE}{}.{}",
@@ -490,14 +617,14 @@ impl Bindings {
             });
         }
         let add = add_arg(name, no_global);
-        for (_, session) in tabs.attached() {
+        for (_, session) in tabs.own_attached() {
             if self.state.lock().await.closed {
                 return Err(PlaywrightError::target_closed());
             }
             let shown = init_scripts::target_of(&session);
             // Shows the run's scripts on a page touched before it had any (its tab gets the
             // binding there, `prepare_tab`), and gives its held iframes the binding.
-            scripts.ensure(cdp, &session).await;
+            scripts.ensure(cdp, &session, DEFAULT_CONTEXT).await;
             self.prepare_tab(cdp, &session).await;
             for link in scripts.child_links(&shown).await {
                 self.prepare_child(cdp, &link, &shown).await;
@@ -524,6 +651,10 @@ impl Bindings {
         if !self.mark(page.session_id().as_str(), &target, false).await {
             return;
         }
+        // The tab's contexts from before this reader read its session, as net's watcher saw them:
+        // from now on this reader's own events keep them, in the order of the calls it reads.
+        self.contexts
+            .seed(&page.events.context_frames, page.session_id().as_str());
         if let Err(error) = page.enable_runtime().await {
             debug!(%error, "a page's runtime did not turn on for its bindings");
         }
@@ -609,7 +740,7 @@ impl Bindings {
         tabs: &Tabs,
         session: String,
         prepared: Prepared,
-        context: i64,
+        context: ContextPin,
         frame: Option<String>,
         payload: String,
     ) -> Option<Ready> {
@@ -617,7 +748,7 @@ impl Bindings {
         let Some(frame) = frame else {
             // Never another frame in its place: no frame can answer the call in its document,
             // and run end rejects it there.
-            debug!(%session, context, "a binding call came from a context of no known frame");
+            debug!(%session, context = context.id, "a binding call came from a context of no known frame");
             return None;
         };
         let tab = frame_tab(&page, &prepared.target, &frame);
@@ -634,10 +765,14 @@ impl Bindings {
                 .find(|exposed| exposed.name == payload.name && exposed.reaches(&prepared.target))
                 .map(|exposed| exposed.page.is_some())
         };
+        // Another live run's name on this tab: that run's reader answers it.
+        if binding.is_none() && owned_elsewhere(&self.run, &payload.name, &prepared.target) {
+            return None;
+        }
         if let Some(message) = refused(binding, &payload) {
             deliver_error(
                 origin.as_ref(),
-                context,
+                &context,
                 &payload.name,
                 payload.seq,
                 &message,
@@ -676,10 +811,11 @@ impl Bindings {
                 target: prepared.target.clone(),
                 frame,
                 origin,
-                context,
+                context: context.clone(),
             },
         );
         drop(state);
+        self.wait_for_answer(&guid);
         #[cfg(debug_assertions)]
         test_hooks::read_delay().await;
         Some(Ready {
@@ -704,6 +840,7 @@ impl Bindings {
             context,
         } = ready;
         if tabs.events().emit(&owner, "bindingCall", &params) != Emitted::Queued {
+            self.settle_claim(&guid);
             let origin = self
                 .state
                 .lock()
@@ -711,7 +848,7 @@ impl Bindings {
                 .calls
                 .remove(&guid)
                 .and_then(|call| call.origin);
-            deliver_error(origin.as_ref(), context, &name, seq, RUN_ENDED).await;
+            deliver_error(origin.as_ref(), &context, &name, seq, RUN_ENDED).await;
         }
     }
 
@@ -732,6 +869,8 @@ impl Bindings {
         let Some(call) = self.state.lock().await.calls.remove(guid) else {
             return Ok(());
         };
+        // The answer has its call: whatever becomes of its delivery, no later answer waits for it.
+        self.settle_claim(guid);
         let Some(page) = page_of(tabs, &call.target) else {
             return Ok(());
         };
@@ -764,7 +903,7 @@ impl Bindings {
         if let Err(error) = evaluate::call_built_on(
             &tab,
             &origin.frame,
-            call.context,
+            &call.context,
             BuiltExpression::BindingsCall,
             vec![json!("deliver")],
             &arg,
@@ -798,12 +937,17 @@ impl Bindings {
                 .iter()
                 .position(|exposed| exposed.disposable == guid)
                 .ok_or_else(PlaywrightError::target_closed)?;
-            state.exposed.remove(index)
+            let exposed = state.exposed.remove(index);
+            state.registered.retain(|registered| {
+                registered.name != exposed.name || registered.page != exposed.page
+            });
+            exposed
         };
+        disown(&self.run, &exposed.name, exposed.page.as_deref());
         // Playwright: `server/page.ts` `Page.removeExposedBinding`: `await this.delegate.removeInitScripts([binding.initScript]);`
         let _removed = scripts.dispose(&exposed.script).await;
         let remove = page_object(1, vec![("name", json!(exposed.name))]);
-        for (_, session) in tabs.attached() {
+        for (_, session) in tabs.own_attached() {
             if exposed.reaches(&init_scripts::target_of(&session)) {
                 in_all_frames(
                     &session,
@@ -824,15 +968,23 @@ impl Bindings {
     /// running, which finds the run ended at its next step.
     /// Deviation: `server/page.ts` `Page.removeExposedBinding`: `await this.delegate.removeInitScripts([binding.initScript]);` Playwright's bindings live as long as their page or context; Neo's live as long as the run.
     pub(crate) async fn close(&self, tabs: &Tabs) {
-        let (started, sessions) = {
+        let (started, sessions, registered) = {
             let mut state = self.state.lock().await;
             state.closed = true;
             state.calls.clear();
             state.exposed.clear();
-            (state.started, mem::take(&mut state.sessions))
+            if let Ok(mut claims) = self.claims.lock() {
+                *claims = Claims::default();
+            }
+            (
+                state.started,
+                mem::take(&mut state.sessions),
+                state.registered.clone(),
+            )
         };
+        disown_run(&self.run);
         if started {
-            self.end_pages(tabs).await;
+            self.end_pages(tabs, &registered).await;
         }
         // The iframe sessions went with `init_scripts.rs`'s auto-attach.
         let cdp = tabs.cdp();
@@ -846,25 +998,77 @@ impl Bindings {
 }
 
 impl Bindings {
-    /// In every frame of the run's pages: each call still waiting rejects, and every binding the
-    /// page's controller holds goes, the controller and the CDP binding function with them.
-    async fn end_pages(&self, tabs: &Tabs) {
-        let end = page_object(
-            1,
-            vec![
-                ("names", json!({ "a": [], "id": 2 })),
-                ("message", json!(RUN_ENDED)),
-            ],
-        );
-        for (_, session) in tabs.attached() {
+    /// Neo: claims the answer to the waiting call `guid`, for the dispatcher to admit outside its
+    /// in-flight cap, as it admits a locator handler's completion (`locator_handlers.rs`
+    /// `begin_resolving`): the answer frees the page call waiting on it and adds no work. One
+    /// claim per call at a time: an answer to a call answered or claimed already, or to one never
+    /// made, takes an ordinary share, so such answers never outnumber the calls the page waits
+    /// on. The claim goes back when its answer ends without having taken the call (it failed, or
+    /// stopped first), so a later answer still gets it.
+    pub(crate) fn begin_answering(self: &Arc<Self>, guid: &str) -> Option<Answering> {
+        let mut claims = self.claims.lock().ok()?;
+        if !claims.waiting.remove(guid) {
+            return None;
+        }
+        claims.claimed.insert(guid.to_string());
+        Some(Answering {
+            bindings: Arc::clone(self),
+            guid: guid.to_string(),
+        })
+    }
+
+    /// `guid` waits for an answer, whose claim is free.
+    fn wait_for_answer(&self, guid: &str) {
+        if let Ok(mut claims) = self.claims.lock() {
+            claims.waiting.insert(guid.to_string());
+        }
+    }
+
+    /// `guid` waits no more: its answer came, or it never will.
+    fn settle_claim(&self, guid: &str) {
+        if let Ok(mut claims) = self.claims.lock() {
+            claims.waiting.remove(guid);
+            claims.claimed.remove(guid);
+        }
+    }
+
+    /// In every frame of each of the run's pages: each call still waiting on a binding the run
+    /// registered there (a page's own, or the context's) rejects, and each such name goes, unless
+    /// another live run registered it on that page too; the controller and the CDP binding
+    /// function go once the controller holds no name, so another run's bindings stay.
+    async fn end_pages(&self, tabs: &Tabs, registered: &[Registration]) {
+        for (_, session) in tabs.own_attached() {
+            let target = init_scripts::target_of(&session);
+            let names = page_names(&self.run, registered, &target);
+            let end = page_object(
+                1,
+                vec![
+                    ("names", json!({ "a": names, "id": 2 })),
+                    ("message", json!(RUN_ENDED)),
+                ],
+            );
             in_all_frames(
                 &session,
-                &[(
-                    BuiltExpression::BindingsCall,
-                    vec![json!("end"), end.clone()],
-                )],
+                &[(BuiltExpression::BindingsCall, vec![json!("end"), end])],
             )
             .await;
+        }
+    }
+}
+
+/// Neo: the claim a waiting call's answer holds on release admission while it runs
+/// ([`Bindings::begin_answering`]); it goes back when the answer ends without taking its call.
+pub(crate) struct Answering {
+    bindings: Arc<Bindings>,
+    guid: String,
+}
+
+impl Drop for Answering {
+    fn drop(&mut self) {
+        if let Ok(mut claims) = self.bindings.claims.lock()
+            && claims.claimed.remove(&self.guid)
+        {
+            claims.waiting.insert(self.guid.clone());
         }
     }
 }
@@ -995,7 +1199,13 @@ async fn remove_binding(cdp: &CdpClient, session: &SessionId, gone: Option<&Canc
 
 /// The page's call `seq` of `name` rejects with `message`, at once, in the frame context
 /// `origin` and its execution context `context` that made it.
-async fn deliver_error(origin: Option<&Origin>, context: i64, name: &str, seq: u64, message: &str) {
+async fn deliver_error(
+    origin: Option<&Origin>,
+    context: &ContextPin,
+    name: &str,
+    seq: u64,
+    message: &str,
+) {
     let Some(origin) = origin else {
         debug!(%name, "a refused binding call's frame is gone");
         return;
@@ -1049,7 +1259,7 @@ fn frame_tab(page: &Arc<PageSession>, target: &str, frame: &str) -> FrameTab {
 }
 
 fn page_of(tabs: &Tabs, target: &str) -> Option<Arc<PageSession>> {
-    tabs.attached()
+    tabs.own_attached()
         .into_iter()
         .map(|(_, session)| session)
         .find(|session| init_scripts::target_of(session) == target)
@@ -1156,13 +1366,17 @@ impl Reader {
                 // context: this reader's own map for a context it saw created, else net's for a
                 // tab context older than this reader (`contexts.rs` keeps destroyed ones).
                 // Playwright: `server/page.ts` `PageBinding.dispatch`: `const result = await binding.playwrightFunction({ frame: context.frame, page, context: page.browserContext }, ...args);`
-                let frame = bindings.contexts.frame_of(session, context).or_else(|| {
+                // Its unique id comes from the same map, in the same order: a frame that changed
+                // process may number a new context as the old one.
+                let found = bindings.contexts.context_of(session, context).or_else(|| {
                     if prepared.child {
                         return None;
                     }
                     page_of(&self.tabs, &prepared.target)
-                        .and_then(|page| page.events.context_frames.frame_of(session, context))
+                        .and_then(|page| page.events.context_frames.context_of(session, context))
                 });
+                let (frame, unique) =
+                    found.map_or((None, None), |(frame, unique)| (Some(frame), unique));
                 let (done, next) = oneshot::channel();
                 let incoming = Incoming {
                     turn: Turn {
@@ -1171,7 +1385,10 @@ impl Reader {
                     },
                     session: session.to_string(),
                     prepared,
-                    context,
+                    context: ContextPin {
+                        id: context,
+                        unique,
+                    },
                     frame,
                     payload: payload.to_string(),
                 };
@@ -1299,6 +1516,60 @@ mod tests {
             disposable: String::new(),
             script: String::new(),
         }
+    }
+
+    #[test]
+    fn a_run_ends_only_its_own_registrations_on_each_page() {
+        let registration = |name: &str, page: Option<&str>| Registration {
+            name: name.to_string(),
+            page: page.map(str::to_string),
+        };
+        let mine = [
+            registration("shared", Some("P")),
+            registration("everywhere", None),
+        ];
+        // Another live run registered "shared" on Q, and "everywhere" on P.
+        own("other-run", "shared", Some("Q"));
+        own("other-run", "everywhere", Some("P"));
+        assert_eq!(page_names("my-run", &mine, "P"), vec!["shared".to_string()]);
+        assert_eq!(
+            page_names("my-run", &mine, "Q"),
+            vec!["everywhere".to_string()],
+            "a page the run merely attached keeps another run's same-named binding"
+        );
+        disown_run("other-run");
+        assert_eq!(
+            page_names("my-run", &mine, "P"),
+            vec!["shared".to_string(), "everywhere".to_string()]
+        );
+    }
+
+    #[test]
+    fn an_answer_claims_admission_once_and_gives_the_claim_back_unless_it_answered() {
+        let bindings = Arc::new(Bindings::default());
+        let guid = "bindingcall@run.1";
+        bindings.wait_for_answer(guid);
+        let claim = bindings
+            .begin_answering(guid)
+            .expect("a waiting call's answer claims");
+        assert!(
+            bindings.begin_answering(guid).is_none(),
+            "one claim per call at a time"
+        );
+        // The answer's call failed before it took the call: a later answer claims again.
+        drop(claim);
+        let again = bindings.begin_answering(guid).expect("the claim went back");
+        // This one took its call.
+        bindings.settle_claim(guid);
+        drop(again);
+        assert!(
+            bindings.begin_answering(guid).is_none(),
+            "an answered call takes no more claims"
+        );
+        assert!(
+            bindings.begin_answering("bindingcall@run.2").is_none(),
+            "an answer to a call never made claims nothing"
+        );
     }
 
     #[test]

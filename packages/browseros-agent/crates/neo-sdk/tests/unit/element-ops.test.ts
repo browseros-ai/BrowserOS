@@ -6,7 +6,6 @@
  */
 import { expect, test } from 'bun:test'
 import { DisposableStub } from '../../src/disposable'
-import { serializePlainArgument } from '../../src/plain-argument'
 import { failure, type Message, start, TARGET_CLOSED } from './fake-runtime'
 
 /** Every message's `[guid, method, params, metadata.timeout]`. */
@@ -55,8 +54,9 @@ test('tests that focus, blur and dispatchEvent send strict locators and plain re
       {
         selector: '#a',
         type: 'click',
+        // The page's format (`serializeAsCallArgument`), as eval's `serializeArgument` sends.
         eventInit: {
-          value: { o: [{ k: 'detail', v: { n: 2 } }], id: 1 },
+          value: { o: [{ k: 'detail', v: 2 }], id: 1 },
           handles: [],
         },
       },
@@ -76,7 +76,7 @@ test('tests that focus, blur and dispatchEvent send strict locators and plain re
   ])
 })
 
-test('tests that an eventInit Neo cannot send throws before anything is sent', async () => {
+test('tests that an eventInit Playwright cannot serialize throws before anything is sent, and a handle travels by guid', async () => {
   const { fake, page } = start()
   fake.answer = () => ({ result: {} })
   const locator = page.locator('#a')
@@ -85,10 +85,22 @@ test('tests that an eventInit Neo cannot send throws before anything is sent', a
   ).rejects.toThrow(
     'Attempting to serialize unexpected value at position "detail": () => 1',
   )
-  await expect(
-    locator.dispatchEvent('click', { data: new Uint8Array([1, 2]) }),
-  ).rejects.toThrow('this one holds a typed array')
   expect(fake.messages).toEqual([])
+  // What Neo's isolated world refused before now goes as Playwright sends it.
+  await locator.dispatchEvent('click', {
+    data: new Uint8Array([1, 2]),
+    when: new Date(0),
+    nan: Number.NaN,
+  })
+  const [[, , params]] = sent(fake.messages) as [
+    [string, string, { eventInit: { value: unknown; handles: string[] } }],
+  ]
+  expect(params.eventInit.handles).toEqual([])
+  expect(JSON.stringify(params.eventInit.value)).toContain('"ta"')
+  expect(JSON.stringify(params.eventInit.value)).toContain(
+    '"d":"1970-01-01T00:00:00.000Z"',
+  )
+  expect(JSON.stringify(params.eventInit.value)).toContain('"v":"NaN"')
 })
 
 test('tests that the handle-shaped Locator methods send neo commands strictly', async () => {
@@ -209,43 +221,46 @@ test('tests that a DisposableStub is async-disposable where the realm has the sy
   expect(calls).toBe(1)
 })
 
-test('tests that serializePlainArgument writes Playwright protocol values', () => {
-  const shared = { k: 1 }
-  const cyclic: Record<string, unknown> = { name: 'c' }
-  cyclic.self = cyclic
-  const value = (v: unknown) => serializePlainArgument(v).value
-  expect(serializePlainArgument({}).handles).toEqual([])
-  expect(value(undefined)).toEqual({ v: 'undefined' })
-  expect(value(Symbol('s'))).toEqual({ v: 'undefined' })
-  expect(value(null)).toEqual({ v: 'null' })
-  expect(value(Number.NaN)).toEqual({ v: 'NaN' })
-  expect(value(Number.POSITIVE_INFINITY)).toEqual({ v: 'Infinity' })
-  expect(value(Number.NEGATIVE_INFINITY)).toEqual({ v: '-Infinity' })
-  expect(value(-0)).toEqual({ v: '-0' })
-  expect(value(1.5)).toEqual({ n: 1.5 })
-  expect(value(true)).toEqual({ b: true })
-  expect(value('s')).toEqual({ s: 's' })
-  expect(value(10n)).toEqual({ bi: '10' })
-  expect(value(new Date(0))).toEqual({ d: '1970-01-01T00:00:00.000Z' })
-  expect(value(/a+/gi)).toEqual({ r: { p: 'a+', f: 'gi' } })
-  expect(value(new URL('https://a.test/x'))).toEqual({ u: 'https://a.test/x' })
-  const error = value(new TypeError('boom')) as { e: { n: string; m: string } }
-  expect([error.e.n, error.e.m]).toEqual(['TypeError', 'boom'])
-  expect(value([shared, shared])).toEqual({
-    a: [{ o: [{ k: 'k', v: { n: 1 } }], id: 2 }, { ref: 2 }],
-    id: 1,
-  })
-  expect(value(cyclic)).toEqual({
-    o: [
-      { k: 'name', v: { s: 'c' } },
-      { k: 'self', v: { ref: 1 } },
+test('tests that Locator.waitForFunction sends the selector form of Frame.waitForFunction', async () => {
+  const { fake, page } = start()
+  page.setDefaultTimeout(700)
+  fake.answer = () => ({ result: {} })
+  expect(
+    await page
+      .locator('#a')
+      .waitForFunction((element) => element.isConnected, 7),
+  ).toBeUndefined()
+  expect(
+    await page
+      .locator('#a')
+      .waitForFunction('element => element.isConnected', undefined, {
+        timeout: 9,
+      }),
+  ).toBeUndefined()
+  expect(sent(fake.messages)).toEqual([
+    [
+      FRAME,
+      'waitForFunction',
+      {
+        selector: '#a',
+        strict: true,
+        expression: '(element) => element.isConnected',
+        isFunction: true,
+        arg: { value: 7, handles: [] },
+      },
+      700,
     ],
-    id: 1,
-  })
-  expect(() => serializePlainArgument({ list: [0, () => 0] })).toThrow(
-    'Attempting to serialize unexpected value at position "list[1]": () => 0',
-  )
-  expect(() => serializePlainArgument(new Float32Array(1))).toThrow(
-    "Neo's dispatchEvent takes plain eventInit values",
-  )
+    [
+      FRAME,
+      'waitForFunction',
+      {
+        selector: '#a',
+        strict: true,
+        expression: 'element => element.isConnected',
+        isFunction: false,
+        arg: { value: { v: 'undefined' }, handles: [] },
+      },
+      9,
+    ],
+  ])
 })

@@ -13,7 +13,16 @@
 interfaces:
   BrowserContext:
     - newPage
+    # The run's own context's close disconnects the run, as its browser's does, its tabs left
+    # open; (platform) a context `browser.newContext` created closes with its pages (neo-runtime
+    # `browser_calls.rs`).
     - close
+    # (platform) `page.pause()`: Playwright's server handler does nothing itself; the context's
+    # debugger holds the call once it is enabled (neo-runtime `debugger.rs`).
+    - pause
+    # (platform) `selectors.setTestIdAttribute`'s page half: the attribute every page world of the
+    # run hands its injected script (neo-runtime `world.rs` `TestIdAttribute`).
+    - setTestIdAttributeName
     # Session state (neo-runtime `session_state.rs`): cookies and storage are the user's browser
     # data; headers, offline, geolocation and credentials live on the run's sessions;
     # permission overrides are reset when the last run that granted lets go. `clearCookies` is
@@ -30,15 +39,30 @@ interfaces:
     - clearPermissions
     # The run's context routes (`context.route`): which URLs pause for its handlers (`routes.rs`).
     - setNetworkInterceptionPatterns
+  # (platform) The BrowserOS the run is attached to, `browser@default`: contexts the run creates
+  # and its connected-browser `close` (`browser_calls.rs`). Its initializer is never sent.
+  Browser:
+    - newContext
+    - close
   # A BrowserContext initializer requires these three. Neo never sends one (a run receives its
-  # context at start) and serves no command on them; listing them keeps the type constructible.
+  # context at start); listing them keeps the type constructible.
   APIRequestContext: []
-  Debugger: []
+  # (platform) `context.debugger`: pauses the run's own calls of a context (neo-runtime
+  # `debugger.rs`), `debugger@<context>`.
+  Debugger:
+    - requestPause
+    - resume
+    - next
+    - runTo
   Tracing: []
   Page:
     - close
     - runBeforeUnload
     - bringToFront
+    # (platform) Emulation and GC on the page's own session (neo-runtime `emulation.rs`).
+    - setViewportSize
+    - emulateMedia
+    - requestGC
     # The page's own extra HTTP headers, over the context's (neo-runtime `session_state.rs`).
     - setExtraHTTPHeaders
     # Element operations (element_ops.rs, highlight.rs): every highlight of the page.
@@ -78,6 +102,13 @@ interfaces:
     - unregisterLocatorHandler
     # The page's routes (`page.route`): which URLs pause for its handlers (`routes.rs`).
     - setNetworkInterceptionPatterns
+    # `page.localStorage` and `page.sessionStorage` (web_storage.rs): the main frame's storage,
+    # read and written by glue in its utility world, where Playwright evaluates the same steps.
+    - webStorageItems
+    - webStorageGetItem
+    - webStorageSetItem
+    - webStorageRemoveItem
+    - webStorageClear
   # A paused request the run's `route` event handed out (`routes.rs`): one answer each.
   Route:
     - abort

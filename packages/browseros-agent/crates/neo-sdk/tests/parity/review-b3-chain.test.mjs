@@ -7,9 +7,8 @@ import { test } from 'node:test'
 import {
   browserBinary,
   buildNeoRun,
-  chromium,
   errorCategory,
-  launchBrowser,
+  launchReference,
   runCleanups,
   skip,
   startNeo,
@@ -52,9 +51,10 @@ async function compareContentRun(t, source) {
       await new Promise((resolve) => server.close(resolve))
     })
     const origin = `http://127.0.0.1:${server.address().port}`
-    const browser = await launchBrowser(cleanups, browserBinary)
-    const pw = await chromium.connectOverCDP(`http://127.0.0.1:${browser.port}`)
-    cleanups.push(() => pw.close())
+    const { playwright: pw, ...browser } = await launchReference(
+      cleanups,
+      browserBinary,
+    )
     const [context] = pw.contexts()
     const dir = mkdtempSync(join(tmpdir(), 'neo-b3-review-'))
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
