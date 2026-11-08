@@ -778,16 +778,32 @@ impl Tabs {
     /// permission grants (`session_state.rs`) and its routes' paused requests (`routes.rs`). `context.close()` awaits it before it resolves and
     /// `Dispatcher::finish` runs it, so a closed context and an ended run let go the same way.
     /// Each part marks itself released before it waits, so an attach or a call still running
-    /// installs nothing after it, and waits [`PAGE_END_WAIT`] at most: the overrides' resets
-    /// finish on the run's tracker and the grants' on the cleanup tracker regardless, so none
-    /// is given up. Idempotent: a run that closed its context finds nothing left at its end,
+    /// installs nothing after it, and waits [`PAGE_END_WAIT`] at most: scripts, bindings and
+    /// overrides finish on the run's tracker and grants on the cleanup tracker regardless, so
+    /// none is given up. Idempotent: a run that closed its context finds nothing left at its end,
     /// but what its close could not take back yet.
     pub(crate) async fn release_run_scoped(&self, run: &RunScope) {
-        // The init scripts, then the bindings, on one budget, as the run's end had them (#3196).
-        let _scripts = time::timeout(PAGE_END_WAIT, async {
-            init_scripts::release_all(run).await;
-            run.bindings.close(self).await;
-        })
+        // Start both before waiting: a held script-removal reply must not prevent binding
+        // teardown. The tracker owns each cleanup past its caller's independent budget.
+        let scripts = self.0.tasks.spawn_on(
+            {
+                let run = run.clone();
+                async move { init_scripts::release_all(&run).await }
+            },
+            &self.0.tokio,
+        );
+        let bindings = self.0.tasks.spawn_on(
+            {
+                let bindings = Arc::clone(&run.bindings);
+                let tabs = self.clone();
+                async move { bindings.close(&tabs).await }
+            },
+            &self.0.tokio,
+        );
+        let (_scripts, _bindings) = future::join(
+            time::timeout(PAGE_END_WAIT, scripts),
+            time::timeout(PAGE_END_WAIT, bindings),
+        )
         .await;
         // On a task of the run's tracker, which `Runtime::drain` waits for: a reset that outlasts
         // the budget still goes through, and none is given up as done.
