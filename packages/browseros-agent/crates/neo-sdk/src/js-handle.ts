@@ -21,7 +21,6 @@
  *
  * What differs from Playwright:
  * - `exposeFunctions: true` is refused: Neo cannot call back into the realm from the page yet.
- * - A `URL` crossing either way is Neo's stand-in (`vendor-shims.ts`): QuickJS has no WHATWG URL.
  * - An `ElementHandle`'s preview is final when the handle is created (Playwright updates it from
  *   `JSHandle@node` by event).
  */

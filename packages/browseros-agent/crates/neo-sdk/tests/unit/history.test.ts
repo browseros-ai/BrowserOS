@@ -9,7 +9,9 @@
 
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { createRun } from '../../src/index'
+import { URL as NeoURL } from '../../src/url'
 import { eventless } from './bridge-stub'
+import { answerURL } from './url-stub'
 
 type Sent = {
   guid: string
@@ -82,31 +84,8 @@ beforeEach(() => {
   ;(globalThis as Record<string, unknown>).__neo_runtime = eventless({
     get: (request: string) => {
       const asked = JSON.parse(request)
-      if (asked.field === 'parseURL') {
-        // Bun's WHATWG parser stands in for Rust's.
-        let url: URL
-        try {
-          url = new URL(asked.url)
-        } catch {
-          return JSON.stringify(null)
-        }
-        const { href, origin, protocol, username, password, host } = url
-        const { hostname, port, pathname, search, hash } = url
-        return JSON.stringify({
-          href,
-          origin,
-          protocol,
-          username,
-          password,
-          host,
-          hostname,
-          port,
-          pathname,
-          search,
-          hash,
-          searchParams: [...url.searchParams],
-        })
-      }
+      const url = answerURL(asked)
+      if (url !== undefined) return url
       if (asked.field === 'url') return JSON.stringify(currentUrl)
       if (asked.field === 'chain') return JSON.stringify(CHAIN)
       return JSON.stringify(null)
@@ -329,7 +308,7 @@ describe('waitForNavigation', () => {
     ])
   })
 
-  test("a predicate's URL is read-only and a URL that does not parse is never accepted", async () => {
+  test("a predicate's URL is a fresh writable URL and a URL that does not parse is never accepted", async () => {
     const { page } = run()
     replies.push(
       { cursor: 1, index: 0, url: 'not a url' },
@@ -340,14 +319,14 @@ describe('waitForNavigation', () => {
     const urls: string[] = []
     await page.waitForNavigation({
       url: (url) => {
+        expect(url).toBeInstanceOf(NeoURL)
         urls.push(url.href)
-        expect(() => {
-          ;(url as { pathname: string }).pathname = '/y'
-        }).toThrow(TypeError)
+        url.pathname = '/y'
+        urls.push(url.href)
         return true
       },
     })
-    expect(urls).toEqual(['http://a.test/x'])
+    expect(urls).toEqual(['http://a.test/x', 'http://a.test/y'])
   })
 
   test("a predicate's throw rejects with the API prefix and releases its cursor", async () => {
