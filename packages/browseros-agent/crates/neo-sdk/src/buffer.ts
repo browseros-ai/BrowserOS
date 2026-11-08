@@ -10,8 +10,8 @@
  * ```
  *
  * `Buffer` is the part of Node's `Buffer` a script reads results with, moved unchanged in
- * behaviour from `neo-sdk/src/network.ts` (#3172). QuickJS has no `Buffer`, and the SDK defines
- * no globals.
+ * behaviour from `neo-sdk/src/network.ts` (#3172). QuickJS has no `Buffer`; the realm's global
+ * `Buffer` is this class, defined by `realm.rs` from `globals.ts`.
  *
  * Platform: this QuickJS (quickjs-ng in rquickjs 0.12) has `Uint8Array.fromBase64` and
  * `Uint8Array.prototype.toBase64` (probes-bin.md B3: a 10 MiB result decodes in 6 ms and
@@ -256,9 +256,14 @@ export class Buffer extends Uint8Array {
 
 /** A UTF-8 lead byte's sequence: continuation bytes still needed, its payload bits, and the
  * range its first continuation byte must fall in (the WHATWG decoder's bounds). */
-type Lead = { needed: number; codePoint: number; lower: number; upper: number }
+export type Lead = {
+  needed: number
+  codePoint: number
+  lower: number
+  upper: number
+}
 
-function utf8Lead(byte: number): Lead | null {
+export function utf8Lead(byte: number): Lead | null {
   if (byte >= 0xc2 && byte <= 0xdf)
     return { needed: 1, codePoint: byte & 0x1f, lower: 0x80, upper: 0xbf }
   if (byte >= 0xe0 && byte <= 0xef)

@@ -392,25 +392,32 @@ function nextEvents() {
 // src/url.ts
 var linkParams;
 var resetParams;
+var parsed;
 
 class URL {
   #parts;
   #searchParams;
   constructor(url, base) {
-    const text = usv(url);
-    const baseText = base === undefined ? undefined : usv(base);
-    const parts = parseURL(text, baseText);
-    if (!parts)
-      throw invalidURL(text, baseText);
+    let parts = parsed;
+    parsed = undefined;
+    if (!parts) {
+      const text = usv(url);
+      const baseText = base === undefined ? undefined : usv(base);
+      parts = parseURL(text, baseText) ?? undefined;
+      if (!parts)
+        throw invalidURL(text, baseText);
+    }
     this.#parts = parts;
     this.#searchParams = new URLSearchParams;
     resetParams(this.#searchParams, parts.searchParams);
     linkParams(this.#searchParams, (query) => this.#set("search", query, false));
   }
   static parse(url, base) {
-    const text = usv(url);
-    const baseText = base === undefined ? undefined : usv(base);
-    return parseURL(text, baseText) ? new URL(text, baseText) : null;
+    const parts = parseURL(usv(url), base === undefined ? undefined : usv(base));
+    if (!parts)
+      return null;
+    parsed = parts;
+    return new URL(parts.href);
   }
   static canParse(url, base) {
     return parseURL(usv(url), base === undefined ? undefined : usv(base)) !== null;
@@ -2739,30 +2746,7 @@ function parseFormBody(body) {
   return entries;
 }
 function encodeUtf82(text) {
-  const bytes = [];
-  for (let index = 0;index < text.length; index++) {
-    let code = text.charCodeAt(index);
-    if (code >= 55296 && code <= 56319 && index + 1 < text.length) {
-      const next = text.charCodeAt(index + 1);
-      if (next >= 56320 && next <= 57343) {
-        code = 65536 + (code - 55296 << 10) + (next - 56320);
-        index++;
-      } else
-        code = 65533;
-    } else if (code >= 55296 && code <= 57343)
-      code = 65533;
-    if (code < 128)
-      bytes.push(code);
-    else if (code < 2048)
-      bytes.push(192 | code >> 6, 128 | code & 63);
-    else if (code < 65536)
-      bytes.push(224 | code >> 12, 128 | code >> 6 & 63, 128 | code & 63);
-    else
-      bytes.push(240 | code >> 18, 128 | code >> 12 & 63, 128 | code >> 6 & 63, 128 | code & 63);
-  }
-  const buffer = new Buffer(bytes.length);
-  buffer.set(bytes);
-  return buffer;
+  return Buffer.from(text);
 }
 
 // vendor/playwright/isomorphic/stringUtils.ts
@@ -5176,25 +5160,25 @@ function parseAttributeSelector(selector, allowUnquotedStrings) {
 // vendor/playwright/isomorphic/locatorGenerators.ts
 function asLocatorDescription(lang, selector) {
   try {
-    const parsed = parseSelector(selector);
-    const customDescription = parseCustomDescription(parsed);
+    const parsed2 = parseSelector(selector);
+    const customDescription = parseCustomDescription(parsed2);
     if (customDescription)
       return customDescription;
-    return innerAsLocators(new generators[lang], parsed, false, 1)[0];
+    return innerAsLocators(new generators[lang], parsed2, false, 1)[0];
   } catch (e) {
     return selector;
   }
 }
 function locatorCustomDescription(selector) {
   try {
-    const parsed = parseSelector(selector);
-    return parseCustomDescription(parsed);
+    const parsed2 = parseSelector(selector);
+    return parseCustomDescription(parsed2);
   } catch (e) {
     return;
   }
 }
-function parseCustomDescription(parsed) {
-  const lastPart = parsed.parts[parsed.parts.length - 1];
+function parseCustomDescription(parsed2) {
+  const lastPart = parsed2.parts[parsed2.parts.length - 1];
   if (lastPart?.name === "internal:describe") {
     const description = JSON.parse(lastPart.body);
     if (typeof description === "string")
@@ -5202,8 +5186,8 @@ function parseCustomDescription(parsed) {
   }
   return;
 }
-function innerAsLocators(factory, parsed, isFrameLocator = false, maxOutputSize = 20) {
-  const parts = [...parsed.parts];
+function innerAsLocators(factory, parsed2, isFrameLocator = false, maxOutputSize = 20) {
+  const parts = [...parsed2.parts];
   const tokens = [];
   let nextBase = isFrameLocator ? "frame-locator" : "page";
   for (let index = 0;index < parts.length; index++) {
@@ -6595,12 +6579,12 @@ class Frame {
           if (index === undefined || url === undefined)
             throw new Error("neo-sdk: neo-runtime ended this navigation wait under it");
           waiting = next();
-          const parsed = urlFor(url);
-          if (!parsed)
+          const parsed2 = urlFor(url);
+          if (!parsed2)
             continue;
           let verdict;
           try {
-            verdict = predicate(parsed);
+            verdict = predicate(parsed2);
           } catch (error) {
             throw prefixed2(apiName, error);
           }
@@ -9345,11 +9329,16 @@ function clone(value, memory) {
       });
     return copy2;
   }
-  if (value instanceof Promise || value instanceof WeakMap || value instanceof WeakSet || value instanceof WeakRef)
+  if (value instanceof Promise || value instanceof WeakMap || value instanceof WeakSet || value instanceof WeakRef || value instanceof URL || value instanceof URLSearchParams)
     throw cannotClone(`${Object.prototype.toString.call(value)} could not be cloned.`);
   const copy = remember(Array.isArray(value) ? new Array(value.length) : {});
   for (const key of Object.keys(value))
-    copy[key] = clone(value[key], memory);
+    Object.defineProperty(copy, key, {
+      value: clone(value[key], memory),
+      writable: true,
+      enumerable: true,
+      configurable: true
+    });
   return copy;
 }
 function typedArrayKind(view) {
@@ -9381,12 +9370,22 @@ class TextEncoder {
     let read = 0;
     let written = 0;
     while (read < text2.length) {
-      const units = text2.codePointAt(read) > 65535 ? 2 : 1;
-      const bytes = encodeUtf8(text2.slice(read, read + units));
-      if (written + bytes.length > destination.length)
+      let code = text2.codePointAt(read);
+      const units = code > 65535 ? 2 : 1;
+      if (code >= 55296 && code <= 57343)
+        code = 65533;
+      const size = code < 128 ? 1 : code < 2048 ? 2 : code < 65536 ? 3 : 4;
+      if (written + size > destination.length)
         break;
-      destination.set(bytes, written);
-      written += bytes.length;
+      if (size === 1)
+        destination[written] = code;
+      else {
+        const lead = [192, 224, 240][size - 2];
+        destination[written] = lead | code >> 6 * (size - 1);
+        for (let k = 1;k < size; k++)
+          destination[written + k] = 128 | code >> 6 * (size - 1 - k) & 63;
+      }
+      written += size;
       read += units;
     }
     return { read, written };
@@ -9458,23 +9457,6 @@ function bytesOf(input) {
     return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
   throw new TypeError('The "input" argument must be an instance of ArrayBuffer or ArrayBufferView.');
 }
-function lead(byte) {
-  if (byte >= 194 && byte <= 223)
-    return { needed: 1, lower: 128, upper: 191 };
-  if (byte >= 224 && byte <= 239)
-    return {
-      needed: 2,
-      lower: byte === 224 ? 160 : 128,
-      upper: byte === 237 ? 159 : 191
-    };
-  if (byte >= 240 && byte <= 244)
-    return {
-      needed: 3,
-      lower: byte === 240 ? 144 : 128,
-      upper: byte === 244 ? 143 : 191
-    };
-  return;
-}
 function openTail(bytes) {
   for (let back = 1;back <= Math.min(3, bytes.length); back++) {
     const byte = bytes[bytes.length - back];
@@ -9482,7 +9464,7 @@ function openTail(bytes) {
       return 0;
     if (byte < 192)
       continue;
-    const sequence = lead(byte);
+    const sequence = utf8Lead(byte);
     if (!sequence || back > sequence.needed)
       return 0;
     const second = bytes[bytes.length - back + 1];
@@ -9496,7 +9478,7 @@ function isUtf8(bytes) {
     const byte = bytes[i];
     if (byte < 128)
       continue;
-    const sequence = lead(byte);
+    const sequence = utf8Lead(byte);
     if (!sequence)
       return false;
     for (let k = 1;k <= sequence.needed; k++) {

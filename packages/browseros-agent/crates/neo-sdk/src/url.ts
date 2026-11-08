@@ -39,15 +39,23 @@ let linkParams: (
 ) => void
 let resetParams: (params: URLSearchParams, pairs: readonly Pair[]) => void
 
+/** Parts `URL.parse` already read, which the constructor it calls takes instead of parsing again.
+ * Set and taken with no script code in between. */
+let parsed: ParsedURL | undefined
+
 export class URL {
   #parts: ParsedURL
   readonly #searchParams: URLSearchParams
 
   constructor(url: string | URL, base?: string | URL) {
-    const text = usv(url)
-    const baseText = base === undefined ? undefined : usv(base)
-    const parts = parseURL(text, baseText)
-    if (!parts) throw invalidURL(text, baseText)
+    let parts = parsed
+    parsed = undefined
+    if (!parts) {
+      const text = usv(url)
+      const baseText = base === undefined ? undefined : usv(base)
+      parts = parseURL(text, baseText) ?? undefined
+      if (!parts) throw invalidURL(text, baseText)
+    }
     this.#parts = parts
     this.#searchParams = new URLSearchParams()
     resetParams(this.#searchParams, parts.searchParams)
@@ -56,9 +64,10 @@ export class URL {
 
   /** `new URL(url, base)`, or `null` where that throws. */
   static parse(url: string | URL, base?: string | URL): URL | null {
-    const text = usv(url)
-    const baseText = base === undefined ? undefined : usv(base)
-    return parseURL(text, baseText) ? new URL(text, baseText) : null
+    const parts = parseURL(usv(url), base === undefined ? undefined : usv(base))
+    if (!parts) return null
+    parsed = parts
+    return new URL(parts.href)
   }
 
   static canParse(url: string | URL, base?: string | URL): boolean {

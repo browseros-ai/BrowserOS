@@ -123,6 +123,37 @@ async fn an_interval_repeats_with_its_arguments_until_cleared() {
     );
 }
 
+/// Node exits on a timer callback's throw (an uncaught exception); the run ends with that error
+/// at once, a parked script included, and the throwing interval stops.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_timer_callback_that_throws_ends_the_run_with_its_error() {
+    for code in [
+        "setTimeout(() => { throw new RangeError('from a timeout') }, 1); await new Promise(() => {})",
+        "let n = 0
+         setInterval(() => { n++; throw new RangeError('from an interval') }, 1)
+         await new Promise(() => {})",
+    ] {
+        let started = Instant::now();
+        let outcome = run(code, Duration::from_secs(30)).await;
+        assert_eq!(outcome.status, RunStatus::Error, "{outcome:?}");
+        let error = outcome.error.expect("the callback's error");
+        assert_eq!(error.name, "RangeError", "{error:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the throw ends the run, not its deadline: {:?}",
+            started.elapsed()
+        );
+    }
+    let refused = value(
+        "const kinds = []
+         for (const start of [() => setTimeout('x', 1), () => setInterval(42, 1)])
+           try { start() } catch (error) { kinds.push(error.name) }
+         return kinds",
+    )
+    .await;
+    assert_eq!(refused, json!(["TypeError", "TypeError"]));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_live_interval_never_holds_a_run_past_its_end() {
     let started = Instant::now();

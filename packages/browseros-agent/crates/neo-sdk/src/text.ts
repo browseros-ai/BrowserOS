@@ -7,7 +7,7 @@
  * The codec itself is `buffer.ts`'s, so `Buffer` and these agree byte for byte.
  */
 
-import { decodeUtf8, encodeUtf8 } from './buffer'
+import { decodeUtf8, encodeUtf8, utf8Lead } from './buffer'
 
 /** Platform: the Encoding Standard's labels for UTF-8 (https://encoding.spec.whatwg.org/#names-and-labels). */
 const UTF8_LABELS = [
@@ -28,7 +28,8 @@ export class TextEncoder {
     return encodeUtf8(String(input))
   }
 
-  /** Encodes as much of `source` as fits in `destination`, never half a code point. */
+  /** Encodes as much of `source` as fits in `destination`, never half a code point; `read`
+   * counts UTF-16 code units. */
   encodeInto(
     source: string,
     destination: Uint8Array,
@@ -37,11 +38,20 @@ export class TextEncoder {
     let read = 0
     let written = 0
     while (read < text.length) {
-      const units = (text.codePointAt(read) as number) > 0xffff ? 2 : 1
-      const bytes = encodeUtf8(text.slice(read, read + units))
-      if (written + bytes.length > destination.length) break
-      destination.set(bytes, written)
-      written += bytes.length
+      let code = text.codePointAt(read) as number
+      const units = code > 0xffff ? 2 : 1
+      if (code >= 0xd800 && code <= 0xdfff) code = 0xfffd
+      const size = code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4
+      if (written + size > destination.length) break
+      if (size === 1) destination[written] = code
+      else {
+        const lead = [0xc0, 0xe0, 0xf0][size - 2] as number
+        destination[written] = lead | (code >> (6 * (size - 1)))
+        for (let k = 1; k < size; k++)
+          destination[written + k] =
+            0x80 | ((code >> (6 * (size - 1 - k))) & 0x3f)
+      }
+      written += size
       read += units
     }
     return { read, written }
@@ -134,35 +144,13 @@ function bytesOf(input: unknown): Uint8Array {
   )
 }
 
-/** A UTF-8 lead byte's continuation count and the bounds of its first continuation byte (the
- * Encoding Standard's UTF-8 decoder), or `undefined` for a byte no sequence starts with. */
-function lead(
-  byte: number,
-): { needed: number; lower: number; upper: number } | undefined {
-  if (byte >= 0xc2 && byte <= 0xdf)
-    return { needed: 1, lower: 0x80, upper: 0xbf }
-  if (byte >= 0xe0 && byte <= 0xef)
-    return {
-      needed: 2,
-      lower: byte === 0xe0 ? 0xa0 : 0x80,
-      upper: byte === 0xed ? 0x9f : 0xbf,
-    }
-  if (byte >= 0xf0 && byte <= 0xf4)
-    return {
-      needed: 3,
-      lower: byte === 0xf0 ? 0x90 : 0x80,
-      upper: byte === 0xf4 ? 0x8f : 0xbf,
-    }
-  return undefined
-}
-
 /** How many of the last bytes are a valid sequence cut short, which a stream holds back. */
 function openTail(bytes: Uint8Array): number {
   for (let back = 1; back <= Math.min(3, bytes.length); back++) {
     const byte = bytes[bytes.length - back] as number
     if (byte < 0x80) return 0
     if (byte < 0xc0) continue
-    const sequence = lead(byte)
+    const sequence = utf8Lead(byte)
     if (!sequence || back > sequence.needed) return 0
     const second = bytes[bytes.length - back + 1]
     const fits =
@@ -178,7 +166,7 @@ function isUtf8(bytes: Uint8Array): boolean {
   for (let i = 0; i < bytes.length; i++) {
     const byte = bytes[i] as number
     if (byte < 0x80) continue
-    const sequence = lead(byte)
+    const sequence = utf8Lead(byte)
     if (!sequence) return false
     for (let k = 1; k <= sequence.needed; k++) {
       const next = bytes[i + k]

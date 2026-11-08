@@ -6,10 +6,13 @@
  * their wrapper objects, `Date`, `RegExp`, `ArrayBuffer`, typed arrays and `DataView`, `Map`,
  * `Set`, `Error`s, arrays, and every other object as a plain object of its own enumerable string
  * keys (its prototype is not kept, as in Node). Shared and cyclic references stay shared and
- * cyclic. A function, a symbol, a `Promise`, a `WeakMap`/`WeakSet`/`WeakRef` throws a
+ * cyclic. A function, a symbol, a `Promise`, a `WeakMap`/`WeakSet`/`WeakRef`, a `URL` or
+ * `URLSearchParams` throws a
  * `DOMException` named `DataCloneError`, as in Node; the `transfer` option is refused the same
  * way, since nothing here can detach a buffer.
  */
+
+import { URL, URLSearchParams } from './url'
 
 type TypedArrayKind = {
   new (buffer: ArrayBuffer, byteOffset: number, length: number): ArrayBufferView
@@ -107,7 +110,9 @@ function clone(value: unknown, memory: Map<object, unknown>): unknown {
     value instanceof Promise ||
     value instanceof WeakMap ||
     value instanceof WeakSet ||
-    value instanceof WeakRef
+    value instanceof WeakRef ||
+    value instanceof URL ||
+    value instanceof URLSearchParams
   )
     throw cannotClone(
       `${Object.prototype.toString.call(value)} could not be cloned.`,
@@ -116,8 +121,14 @@ function clone(value: unknown, memory: Map<object, unknown>): unknown {
   const copy = remember(
     Array.isArray(value) ? new Array(value.length) : {},
   ) as Record<string, unknown>
+  // Defined, not assigned: a `__proto__` key stays an own key instead of setting the prototype.
   for (const key of Object.keys(value))
-    copy[key] = clone((value as Record<string, unknown>)[key], memory)
+    Object.defineProperty(copy, key, {
+      value: clone((value as Record<string, unknown>)[key], memory),
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    })
   return copy
 }
 

@@ -3,7 +3,8 @@
 // real Playwright on one BrowserOS neo: each script runs the same expressions in Neo's realm and
 // in Playwright's Node, and the test compares the values, error kinds included (never wording).
 // Random values are compared by shape. `setInterval` counts ticks its own callback reports, so no
-// result depends on the machine's speed.
+// result depends on the machine's speed. A timer callback that throws is not compared here: Node
+// exits on it (neo-runtime `tests/realm_globals.rs` pins Neo's run ending with that error).
 //
 // The REAL regression is staynb-1 (REAL_BENCH_TESTING results/staynb-1/feedback.md, item 2):
 // `await page.goto(new URL(href, page.url()).href)` threw `ReferenceError: URL is not defined`.
@@ -77,6 +78,15 @@ t('grv', () => { const a = new Uint32Array(8); const r = crypto.getRandomValues(
 t('grvBig', () => crypto.getRandomValues(new Uint8Array(65537)))
 t('grvBigName', () => { try { crypto.getRandomValues(new Uint8Array(65537)) } catch (e) { return e.name } })
 t('grvFloat', () => { try { crypto.getRandomValues(new Float32Array(1)) } catch (e) { return e.name } })
+t('cloneProto', () => { const c = structuredClone(JSON.parse('{"__proto__":{"p":1}}')); return [Object.keys(c), c.p === undefined, Object.getPrototypeOf(c) === Object.prototype] })
+t('cloneURL', () => structuredClone(new URL('https://a.test/')))
+t('cloneParams', () => structuredClone(new URLSearchParams('a=1')))
+t('cloneEncoder', () => structuredClone(new TextEncoder()))
+t('intervalNotFn', () => setInterval('x', 1))
+t('timeoutNotFn', () => setTimeout(42, 1))
+out.overflow = await new Promise((resolve) => {
+  const id = setInterval(() => { clearInterval(id); resolve('ticked') }, 2 ** 32)
+})
 const ticks = []
 let id
 await new Promise((resolve) => {

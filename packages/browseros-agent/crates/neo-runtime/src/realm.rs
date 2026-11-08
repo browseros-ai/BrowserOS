@@ -41,25 +41,48 @@ const SDK_BUNDLE: &str = include_str!(concat!(
 ));
 
 /// The host globals a Playwright script finds in Node. Evaluates to a function that takes the
-/// native `sleep(ms)`, so the sleep itself never becomes a global.
+/// native `sleep(ms)`, so the sleep itself never becomes a global, and returns a promise that
+/// rejects with the first error a timer callback throws: Node reports that as an uncaught
+/// exception and exits, and the realm races the promise with the script (`RACE_UNCAUGHT`), so
+/// the run ends with that error at once instead of running on without it.
 ///
 /// Every timer waits on that `sleep`, which never wakes at or after the run's deadline
 /// ([`Deadline::sleep`]), so no timer fires once the run is over; dropping the realm drops the
-/// pending sleeps with it. An interval re-arms only after its callback ran and only while its id
-/// is live, so `clearInterval` from inside the callback stops it, and it never piles up ticks.
-/// Timer ids are one sequence, so `clearTimeout` clears an interval and `clearInterval` a timeout,
-/// as in Node.
+/// pending sleeps with it. An interval re-arms only after its callback returned and only while
+/// its id is live, so `clearInterval` from inside the callback stops it, and it never piles up
+/// ticks; a callback that throws stops its interval. Timer ids are one sequence, so `clearTimeout`
+/// clears an interval and `clearInterval` a timeout, as in Node.
 ///
-/// Platform: Node's `setInterval` repeats after `delay` ms, and a `delay` below 1 or not a number
-/// is 1 (Node `lib/internal/timers.js` `Timeout`), so a 0 ms interval never spins the realm.
+/// Platform: Node's timers refuse a callback that is not a function with a `TypeError`, and
+/// `setInterval` repeats after `delay` ms, where a `delay` below 1, above 2^31 - 1 or not a
+/// number is 1 (Node `lib/internal/timers.js` `Timeout`), so a 0 ms interval never spins.
 const HOST_GLOBALS: &str = r"(sleep) => {
+  let fail
+  const uncaught = new Promise((_, reject) => {
+    fail = reject
+  })
+  const report = (error) => {
+    const reject = fail
+    fail = undefined
+    if (reject) reject(error)
+  }
+  const callable = (callback) => {
+    if (typeof callback !== 'function')
+      throw new TypeError(`The callback argument must be of type function. Received ${typeof callback}`)
+  }
   let nextTimer = 1
   const timers = new Set()
   globalThis.setTimeout = (callback, delay, ...args) => {
+    callable(callback)
     const id = nextTimer++
     timers.add(id)
     sleep(Math.max(0, Number(delay) || 0)).then(() => {
-      if (timers.delete(id)) callback(...args)
+      if (!timers.delete(id)) return
+      try {
+        callback(...args)
+      } catch (error) {
+        report(error)
+      }
     })
     return id
   }
@@ -67,17 +90,22 @@ const HOST_GLOBALS: &str = r"(sleep) => {
     timers.delete(id)
   }
   globalThis.setInterval = (callback, delay, ...args) => {
+    callable(callback)
     const id = nextTimer++
-    const every = Math.max(1, Number(delay) || 0)
+    const ms = Number(delay)
+    const every = ms >= 1 && ms <= 2147483647 ? ms : 1
     timers.add(id)
     const tick = () => {
       sleep(every).then(() => {
         if (!timers.has(id)) return
         try {
           callback(...args)
-        } finally {
-          if (timers.has(id)) tick()
+        } catch (error) {
+          timers.delete(id)
+          report(error)
+          return
         }
+        if (timers.has(id)) tick()
       })
     }
     tick()
@@ -94,6 +122,7 @@ const HOST_GLOBALS: &str = r"(sleep) => {
   }
   const log = (...values) => __neo_runtime.log(values.map(format).join(' '))
   globalThis.console = { log, info: log, warn: log, error: log, debug: log }
+  return uncaught
 }";
 
 /// Neo: puts neo-sdk's standard globals (`createRun`'s `globals`: `URL`, `Buffer`, `crypto`, …) on
@@ -113,9 +142,10 @@ const INSTALL_SDK_GLOBALS: &str = r"(globals) => {
 /// A listener's throw, or its rejection with no `error` listener, is an uncaught exception in
 /// Node, which exits. QuickJS has no such exit, so neo-sdk reports the first one on its
 /// `uncaught` promise, and the run ends with that error at once instead of running on. The
-/// realm's own `abort` listeners report theirs the same way (`abort::REALM_GLOBALS`).
+/// realm's own `abort` listeners and timer callbacks report theirs the same way
+/// (`abort::REALM_GLOBALS`, `HOST_GLOBALS`).
 const RACE_UNCAUGHT: &str =
-    "(script, uncaught, aborts) => Promise.race([script, uncaught, aborts])";
+    "(script, uncaught, aborts, timers) => Promise.race([script, uncaught, aborts, timers])";
 
 /// How many lines QuickJS reports before the agent's line 1 in an `AsyncFunction`-constructed
 /// function (`async function anonymous(page,context,playwright\n) {\n`). Measured by probe P4 and pinned by
@@ -221,7 +251,7 @@ fn start<'js>(
         async move { deadline.sleep(delay_from_millis(delay_ms)).await }
     }));
     let install_host_globals: Function<'js> = ctx.eval(HOST_GLOBALS)?;
-    install_host_globals.call::<_, ()>((sleep,))?;
+    let timer_uncaught: rquickjs::Value<'js> = install_host_globals.call((sleep,))?;
     // After the host globals: `AbortSignal.timeout` schedules with their `setTimeout`.
     let install_abort_globals: Function<'js> = ctx.eval(abort::REALM_GLOBALS)?;
     let abort_uncaught: rquickjs::Value<'js> = install_abort_globals.call(())?;
@@ -255,7 +285,7 @@ fn start<'js>(
         async_function.construct(("page", "context", "playwright", script.code))?;
     let script: Promise<'js> = agent_function.call((page, context, playwright))?;
     let race: Function<'js> = ctx.eval(RACE_UNCAUGHT)?;
-    race.call((script, uncaught, abort_uncaught))
+    race.call((script, uncaught, abort_uncaught, timer_uncaught))
 }
 
 /// `setTimeout` delays in JS milliseconds. A delay too large for a `Duration` is due after

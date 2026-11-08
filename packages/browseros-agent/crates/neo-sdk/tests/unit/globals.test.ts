@@ -179,6 +179,15 @@ test('structuredClone keeps types, sharing and cycles, and refuses functions', (
   expect(() => neoClone(() => 1)).toThrow(
     expect.objectContaining({ name: 'DataCloneError' }),
   )
+  const proto = neoClone(JSON.parse('{"__proto__":{"p":1}}')) as Record<
+    string,
+    unknown
+  >
+  expect(Object.keys(proto)).toEqual(['__proto__'])
+  expect(Object.getPrototypeOf(proto)).toBe(Object.prototype)
+  expect(() => neoClone(new NeoURL('https://h.test/'))).toThrow(
+    expect.objectContaining({ name: 'DataCloneError' }),
+  )
 })
 
 test('crypto draws its bytes from Rust', () => {
