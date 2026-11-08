@@ -2,7 +2,13 @@
 members = ["crates/*", "apps/claw-server"]
 # neo-quickjs-injected and neo-playwright-injected are the TypeScript halves of neo-runtime: Bun
 # packages, not crates.
-exclude = ["crates/neo-quickjs-injected", "crates/neo-playwright-injected"]
+exclude = [
+    "crates/neo-quickjs-injected",
+    "crates/neo-playwright-injected",
+    # Leftover ignored dirs (node_modules) of the rename in old checkouts; safe to drop later.
+    "crates/neo-sdk",
+    "crates/neo-runtime-injected",
+]
 resolver = "3"
 
 [workspace.package]
