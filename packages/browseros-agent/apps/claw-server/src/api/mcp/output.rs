@@ -23,8 +23,8 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// finished after their entry was evicted, without touching another live process's
 /// recent results (stdio servers can share one state dir).
 const STALE_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
-/// Excerpt caps in bytes beside a truncated value, and the ancestor context of a retrieval
-/// window. `budget::scaled` shrinks them for budgets under 24 000 bytes.
+// Excerpt caps in bytes beside a truncated value, and the ancestor context of a retrieval
+// window. `budget::scaled` shrinks them for budgets under 24 000 bytes.
 const LOG_BUDGET: usize = 2_000;
 const CALL_BUDGET: usize = 4_000;
 const ERROR_BUDGET: usize = 4_000;

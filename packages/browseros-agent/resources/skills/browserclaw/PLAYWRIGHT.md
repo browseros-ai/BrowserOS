@@ -56,7 +56,7 @@ For an object or array, `truncated.value.cut` lists each shortened part by JSON 
 
 Append a string's windows to its shown prefix. An array's or object's windows are its pretty JSON from the first omitted entry, or from offset zero. `cutOmitted` counts parts not listed.
 
-When a call sets `maxResponseTokens`, every `next` it returns repeats it, so following `next` keeps the budget; a continuation may pass its own. Each window fills the budget. `"limit"` (bytes, 4000–100000, at most `maxResponseTokens` × 4) narrows a window; later `next` arguments keep it. For bigger windows raise `maxResponseTokens`. For the whole text at once, read the local file `truncated.<field>.file`: it holds exactly the text offsets count into (raw for a string value, pretty JSON otherwise). A file is missing when the server could not save it.
+When a call sets `maxResponseTokens`, every `next` it returns repeats it, so following `next` keeps the budget; a continuation may pass its own. A retrieval window uses the whole budget unless `"limit"` (bytes, 4000–100000, at most `maxResponseTokens` × 4) narrows it; later `next` arguments keep `limit`. For bigger windows raise `maxResponseTokens`. For the whole text at once, read the local file `truncated.<field>.file`: it holds exactly the text offsets count into (raw for a string value, pretty JSON otherwise). A file is missing when the server could not save it.
 
 Retrieval reads the stored original without touching the browser, so refs remain valid. The server keeps 16 recently used truncated results, up to 64 MiB of serialized JSON, across MCP sessions; restart or eviction loses them and deletes their files.
 

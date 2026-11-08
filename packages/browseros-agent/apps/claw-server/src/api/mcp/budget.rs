@@ -63,9 +63,20 @@ impl Budget {
                 tokens,
                 requested: true,
             }),
-            _ => Err(format!(
-                "maxResponseTokens must be an integer from {MIN_TOKENS} to {MAX_TOKENS}, got {value}"
-            )),
+            _ => {
+                // Echo a number; any other input may be large, so name only its type.
+                let got = match value {
+                    Value::Number(number) => number.to_string(),
+                    Value::String(_) => "a string".into(),
+                    Value::Bool(_) => "a boolean".into(),
+                    Value::Array(_) => "an array".into(),
+                    Value::Object(_) => "an object".into(),
+                    Value::Null => "null".into(),
+                };
+                Err(format!(
+                    "maxResponseTokens must be an integer from {MIN_TOKENS} to {MAX_TOKENS}, got {got}"
+                ))
+            }
         }
     }
 
@@ -108,7 +119,7 @@ impl Budget {
 /// `cap`, an excerpt cap tuned for a 24 000-byte reply, for a reply of at most `bytes`: shrunk
 /// in proportion below that, unchanged above it, so excerpts never crowd out a small budget.
 pub(super) fn scaled(cap: usize, bytes: usize) -> usize {
-    cap.min(cap * bytes / TUNED_BYTES)
+    cap * bytes.min(TUNED_BYTES) / TUNED_BYTES
 }
 
 #[cfg(test)]
