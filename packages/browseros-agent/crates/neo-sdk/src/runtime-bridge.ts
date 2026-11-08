@@ -13,12 +13,15 @@
  *   replies `AbortError`.
  * - `subscribe` turns the run's listening to one event of a page or the context on or off.
  * - `drain` takes queued events; `nextEvents` resolves once one is queued (the idle wake).
+ * - `get` also serves the pure platform reads QuickJS lacks: URL parses and setters, device
+ *   descriptors, random bytes.
  */
 
 import type {
   FrameInitializer,
   PageInitializer,
 } from '@browseros/neo-runtime-spec/serve'
+import { Buffer } from './buffer'
 import type { PausedDetails } from './debugger'
 import type { RawEvent } from './events'
 import type { CreatedHandle } from './js-handle'
@@ -147,11 +150,47 @@ export interface ParsedURL {
 
 /**
  * A synchronous parse by Rust's WHATWG URL parser, which QuickJS lacks: `null` where
- * `new URL(url)` would throw.
+ * `new URL(url, base)` would throw.
  */
-export function parseURL(url: string): ParsedURL | null {
+export function parseURL(url: string, base?: string): ParsedURL | null {
   return JSON.parse(
-    __neo_runtime.get(JSON.stringify({ field: 'parseURL', url })),
+    __neo_runtime.get(JSON.stringify({ field: 'parseURL', url, base })),
+  )
+}
+
+/** A WHATWG `URL` attribute with a setter (`url_match.rs` `UrlPart`). */
+export type URLPart =
+  | 'href'
+  | 'protocol'
+  | 'username'
+  | 'password'
+  | 'host'
+  | 'hostname'
+  | 'port'
+  | 'pathname'
+  | 'search'
+  | 'hash'
+
+/**
+ * The URL `href` once Rust's WHATWG parser has run the `part` setter with `value`: unchanged
+ * parts where the setter ignores `value`, `null` where it throws (only `href`'s does).
+ */
+export function setURL(
+  href: string,
+  part: URLPart,
+  value: string,
+): ParsedURL | null {
+  return JSON.parse(
+    __neo_runtime.get(JSON.stringify({ field: 'setURL', href, part, value })),
+  )
+}
+
+/** `length` random bytes from Rust's OS-seeded CSPRNG, at most 65,536 (`bridge.rs`). */
+export function randomValues(length: number): Uint8Array {
+  return Buffer.fromBinary(
+    JSON.parse(
+      __neo_runtime.get(JSON.stringify({ field: 'randomValues', length })),
+    ),
   )
 }
 

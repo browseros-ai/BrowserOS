@@ -1855,6 +1855,7 @@ dependencies = [
  "futures-util",
  "neo-runtime-spec",
  "proc-macro2",
+ "rand 0.9.4",
  "regex",
  "rquickjs",
  "serde",

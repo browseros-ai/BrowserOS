@@ -39,9 +39,145 @@ export function toBinary(bytes: Uint8Array): string {
 
 /**
  * The part of Node's `Buffer` a body needs: a `Uint8Array` whose `toString` decodes as Node's
- * does (UTF-8 by default), whose JSON is Node's `{ type: 'Buffer', data }`, and `equals`.
+ * does (UTF-8 by default), whose JSON is Node's `{ type: 'Buffer', data }`, and `equals`. It is
+ * also the script's global `Buffer` (`globals.ts`), with the statics a script builds one with
+ * (`from`, `alloc`, `concat`, `byteLength`, `isBuffer`, …), so a screenshot is `instanceof Buffer`.
  */
 export class Buffer extends Uint8Array {
+  /**
+   * Node's `Buffer.from` (`lib/buffer.js`): a string's bytes in `encoding` (UTF-8 by default), a
+   * view over an `ArrayBuffer`'s own memory, or a copy of a typed array, an array or array-like,
+   * or a `{ type: 'Buffer', data }` JSON form.
+   */
+  static override from(
+    value: unknown,
+    encodingOrOffset?: unknown,
+    length?: unknown,
+  ): Buffer {
+    if (typeof value === 'string')
+      return Buffer.#copy(encodeString(value, encodingOrOffset))
+    if (value instanceof ArrayBuffer || value instanceof SharedArrayBuffer) {
+      const offset = Number(encodingOrOffset) || 0
+      const size =
+        length === undefined ? value.byteLength - offset : Number(length) || 0
+      return new Buffer(value as ArrayBuffer, offset, size)
+    }
+    if (typeof value === 'object' && value !== null) {
+      const primitive = (value as { valueOf?: () => unknown }).valueOf?.()
+      if (
+        primitive !== value &&
+        primitive !== null &&
+        (typeof primitive === 'string' || typeof primitive === 'object')
+      )
+        return Buffer.from(primitive, encodingOrOffset, length)
+      const like = value as { length?: unknown; type?: unknown; data?: unknown }
+      if (like.length !== undefined || ArrayBuffer.isView(value))
+        return Buffer.#copy(
+          typeof like.length === 'number' ? (value as ArrayLike<number>) : [],
+        )
+      if (like.type === 'Buffer' && Array.isArray(like.data))
+        return Buffer.#copy(like.data)
+    }
+    throw new TypeError(
+      'The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object.',
+    )
+  }
+
+  /** Node's `Buffer.alloc`: `size` bytes, zeroed, or filled with a byte, a string's bytes in
+   * `encoding`, or a repeated byte pattern. */
+  static alloc(
+    size: number,
+    fill?: string | number | Uint8Array,
+    encoding?: string,
+  ): Buffer {
+    if (typeof size !== 'number')
+      throw new TypeError('The "size" argument must be of type number.')
+    if (!(size >= 0))
+      throw new RangeError(
+        `The value of "size" is out of range. Received ${size}`,
+      )
+    const out = new Buffer(size)
+    if (fill === undefined || fill === 0 || size === 0) return out
+    if (typeof fill === 'number') return out.fill(fill & 0xff)
+    const pattern =
+      typeof fill === 'string' ? encodeString(fill, encoding) : fill
+    if (pattern.length === 0) return out
+    for (let at = 0; at < size; at += pattern.length)
+      out.set(pattern.subarray(0, size - at), at)
+    return out
+  }
+
+  /** Node's `Buffer.allocUnsafe`, zeroed: Neo never hands a script stale memory. */
+  static allocUnsafe(size: number): Buffer {
+    return Buffer.alloc(size)
+  }
+
+  /** Node's `Buffer.concat`: the bytes of every `Uint8Array` in `list`, cut or zero-padded to
+   * `totalLength` when it is given. */
+  static concat(list: readonly Uint8Array[], totalLength?: number): Buffer {
+    if (!Array.isArray(list))
+      throw new TypeError('The "list" argument must be an instance of Array.')
+    for (const [i, item] of list.entries())
+      if (!(item instanceof Uint8Array))
+        throw new TypeError(
+          `The "list[${i}]" argument must be an instance of Buffer or Uint8Array.`,
+        )
+    const size =
+      totalLength === undefined
+        ? list.reduce((sum, item) => sum + item.length, 0)
+        : totalLength
+    const out = Buffer.alloc(size)
+    let at = 0
+    for (const item of list) {
+      if (at >= size) break
+      const part = item.subarray(0, size - at)
+      out.set(part, at)
+      at += part.length
+    }
+    return out
+  }
+
+  /** Node's `Buffer.byteLength`: the bytes `Buffer.from(value, encoding)` would hold. */
+  static byteLength(
+    value: string | ArrayBufferView | ArrayBufferLike,
+    encoding?: string,
+  ): number {
+    if (typeof value === 'string') return encodeString(value, encoding).length
+    if (
+      ArrayBuffer.isView(value) ||
+      value instanceof ArrayBuffer ||
+      value instanceof SharedArrayBuffer
+    )
+      return value.byteLength
+    throw new TypeError(
+      'The "string" argument must be of type string or an instance of Buffer or ArrayBuffer.',
+    )
+  }
+
+  static isBuffer(value: unknown): value is Buffer {
+    return value instanceof Buffer
+  }
+
+  static isEncoding(encoding: unknown): boolean {
+    return typeof encoding === 'string' && encodingName(encoding) !== undefined
+  }
+
+  /** Node's `Buffer.compare`: -1, 0 or 1, byte by byte, a prefix first. */
+  static compare(a: Uint8Array, b: Uint8Array): number {
+    const length = Math.min(a.length, b.length)
+    for (let i = 0; i < length; i++)
+      if (a[i] !== b[i]) return (a[i] as number) < (b[i] as number) ? -1 : 1
+    return a.length === b.length ? 0 : a.length < b.length ? -1 : 1
+  }
+
+  /** A new `Buffer` holding a copy of `bytes`, each value reduced to a byte as a `Uint8Array`
+   * stores it. */
+  static #copy(bytes: ArrayLike<number>): Buffer {
+    const out = new Buffer(bytes.length)
+    out.set(bytes)
+    return out
+  }
+
   /** The bytes of the wire's `binary`, a base64 string, without a copy. Rust always sends
    * standard base64 with padding; anything else is a broken bridge. */
   static fromBinary(text: string): Buffer {
@@ -219,4 +355,131 @@ function fromCodeUnits(
   for (let i = 0; i < bytes.length; i += 4096)
     out += String.fromCharCode(...[...bytes.subarray(i, i + 4096)].map(unit))
   return out
+}
+
+/**
+ * The WHATWG UTF-8 encoder, which Node's `Buffer.from(string)` and `TextEncoder` follow: a lone
+ * surrogate becomes U+FFFD. One pass sizes the result, so a long string never needs three bytes
+ * per code unit of scratch.
+ */
+export function encodeUtf8(text: string): Uint8Array {
+  let length = 0
+  for (let i = 0; i < text.length; i++) {
+    const unit = text.charCodeAt(i)
+    if (unit < 0x80) length += 1
+    else if (unit < 0x800) length += 2
+    else if (isPair(text, i)) {
+      length += 4
+      i++
+    } else length += 3
+  }
+  const out = new Uint8Array(length)
+  let at = 0
+  for (let i = 0; i < text.length; i++) {
+    let code = text.charCodeAt(i)
+    if (isPair(text, i)) {
+      code = 0x10000 + ((code - 0xd800) << 10) + (text.charCodeAt(++i) - 0xdc00)
+    } else if (code >= 0xd800 && code <= 0xdfff) code = 0xfffd
+    if (code < 0x80) out[at++] = code
+    else if (code < 0x800) {
+      out[at++] = 0xc0 | (code >> 6)
+      out[at++] = 0x80 | (code & 0x3f)
+    } else if (code < 0x10000) {
+      out[at++] = 0xe0 | (code >> 12)
+      out[at++] = 0x80 | ((code >> 6) & 0x3f)
+      out[at++] = 0x80 | (code & 0x3f)
+    } else {
+      out[at++] = 0xf0 | (code >> 18)
+      out[at++] = 0x80 | ((code >> 12) & 0x3f)
+      out[at++] = 0x80 | ((code >> 6) & 0x3f)
+      out[at++] = 0x80 | (code & 0x3f)
+    }
+  }
+  return out
+}
+
+/** Whether `text[i]` starts a surrogate pair. */
+function isPair(text: string, i: number): boolean {
+  const unit = text.charCodeAt(i)
+  const next = text.charCodeAt(i + 1)
+  return unit >= 0xd800 && unit <= 0xdbff && next >= 0xdc00 && next <= 0xdfff
+}
+
+/** Node's name for one of its buffer encodings, read case-insensitively, or `undefined`. */
+function encodingName(encoding: string): string | undefined {
+  switch (encoding.toLowerCase()) {
+    case 'utf8':
+    case 'utf-8':
+      return 'utf8'
+    case 'ucs2':
+    case 'ucs-2':
+    case 'utf16le':
+    case 'utf-16le':
+      return 'utf16le'
+    case 'latin1':
+    case 'binary':
+      return 'latin1'
+    case 'ascii':
+    case 'base64':
+    case 'base64url':
+    case 'hex':
+      return encoding.toLowerCase()
+    default:
+      return undefined
+  }
+}
+
+/**
+ * A string's bytes in one of Node's encodings (`lib/buffer.js` `fromString`): UTF-8 when
+ * `encoding` is not a non-empty string, a `TypeError` for an unknown one. As Node's, `latin1`
+ * and `ascii` keep each code unit's low byte, base64 accepts either alphabet and skips what is
+ * not a digit, and hex stops at the first pair that is not two hex digits.
+ */
+function encodeString(text: string, encoding: unknown): Uint8Array {
+  const name =
+    typeof encoding === 'string' && encoding !== ''
+      ? encodingName(encoding)
+      : 'utf8'
+  switch (name) {
+    case 'utf8':
+      return encodeUtf8(text)
+    case 'utf16le': {
+      const out = new Uint8Array(text.length * 2)
+      for (let i = 0; i < text.length; i++) {
+        const unit = text.charCodeAt(i)
+        out[2 * i] = unit & 0xff
+        out[2 * i + 1] = unit >> 8
+      }
+      return out
+    }
+    case 'latin1':
+    case 'ascii': {
+      const out = new Uint8Array(text.length)
+      for (let i = 0; i < text.length; i++) out[i] = text.charCodeAt(i) & 0xff
+      return out
+    }
+    case 'base64':
+    case 'base64url': {
+      let digits = text
+        .replace(/=.*$/s, '')
+        .replace(/-/g, '+')
+        .replace(/_/g, '/')
+        .replace(/[^A-Za-z0-9+/]/g, '')
+      // A lone last digit carries no whole byte; Node drops it.
+      if (digits.length % 4 === 1) digits = digits.slice(0, -1)
+      return (Uint8Array as unknown as Base64Natives).fromBase64(digits)
+    }
+    case 'hex': {
+      const out = new Uint8Array(text.length >> 1)
+      let length = 0
+      for (; length < out.length; length++) {
+        const pair = text.slice(2 * length, 2 * length + 2)
+        if (!/^[0-9a-fA-F]{2}$/.test(pair)) break
+        out[length] = Number.parseInt(pair, 16)
+      }
+      return out.subarray(0, length)
+    }
+    default:
+      throw new TypeError(`Unknown encoding: ${encoding}`)
+  }
 }

@@ -34,6 +34,9 @@ use std::future::Future;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+use rand::RngCore;
 use rquickjs::function::{Async, Func};
 use rquickjs::{Ctx, Exception, Object};
 use serde::Deserialize;
@@ -53,7 +56,7 @@ use crate::page_events;
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunError};
 use crate::tabs::Tabs;
-use crate::url_match::{self, SerializedUrlMatch};
+use crate::url_match::{self, SerializedUrlMatch, UrlPart};
 
 /// The guid the realm gives a run's page, in the `<type>@<id>` form Playwright's protocol uses.
 pub(crate) fn page_guid(page: &PageId) -> String {
@@ -255,6 +258,11 @@ fn subscribe(tabs: &Tabs, request: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Platform: Web Crypto's `getRandomValues` throws `QuotaExceededError` for an array of more than
+/// 65,536 bytes (W3C Web Cryptography API, `Crypto.getRandomValues`), and Node's follows it; one
+/// `randomValues` getter never serves more.
+const MAX_RANDOM_BYTES: usize = 65_536;
+
 /// The most `console` text and lines a run keeps. Kept lines live in Rust, outside the realm's
 /// memory limit, so without a cap one script could hold any amount of the server's memory.
 const MAX_LOG_BYTES: usize = 1024 * 1024;
@@ -439,13 +447,49 @@ enum ParseField {
     ParseUrl,
 }
 
-/// A URL predicate's argument: the parts of `new URL(url)`, or `null` where it would throw.
+/// The realm's `new URL(url, base)` (and a URL predicate's argument): its parts, or `null` where
+/// it would throw.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ParseRequest {
     #[serde(rename = "field")]
     _field: ParseField,
     url: String,
+    #[serde(default)]
+    base: Option<String>,
+}
+
+#[derive(Deserialize)]
+enum SetUrlField {
+    #[serde(rename = "setURL")]
+    SetUrl,
+}
+
+/// One setter of the realm's `URL`: the parts of `href` once `part` is set to `value`, or `null`
+/// where the setter throws.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetUrlRequest {
+    #[serde(rename = "field")]
+    _field: SetUrlField,
+    href: String,
+    part: UrlPart,
+    value: String,
+}
+
+#[derive(Deserialize)]
+enum RandomField {
+    #[serde(rename = "randomValues")]
+    RandomValues,
+}
+
+/// The realm's `crypto`: `length` random bytes, as base64.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RandomRequest {
+    #[serde(rename = "field")]
+    _field: RandomField,
+    length: usize,
 }
 
 #[derive(Deserialize)]
@@ -453,8 +497,42 @@ struct ParseRequest {
 enum GetRequest {
     Object(ObjectRequest),
     Match(MatchRequest),
+    Pure(PureRead),
+}
+
+/// A getter that reads no browser state, answered on the spot: platform pieces QuickJS lacks.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PureRead {
     Devices(DevicesRequest),
     Parse(ParseRequest),
+    SetUrl(SetUrlRequest),
+    Random(RandomRequest),
+}
+
+impl PureRead {
+    fn answer(self) -> Result<Value, GetError> {
+        match self {
+            Self::Devices(_) => {
+                serde_json::from_str(browser_calls::DEVICE_DESCRIPTORS).map_err(|error| {
+                    GetError::Page(PlaywrightError::error(format!(
+                        "neo-runtime: the device descriptors are unreadable: {error}"
+                    )))
+                })
+            }
+            Self::Parse(request) => {
+                let parsed = url_match::parse_url_against(&request.url, request.base.as_deref());
+                serde_json::to_value(parsed)
+                    .map_err(|error| GetError::BadRequest(format!("encoding a URL: {error}")))
+            }
+            Self::SetUrl(request) => {
+                let set = url_match::set_url_part(&request.href, request.part, &request.value);
+                serde_json::to_value(set)
+                    .map_err(|error| GetError::BadRequest(format!("encoding a URL: {error}")))
+            }
+            Self::Random(request) => random_values(request.length),
+        }
+    }
 }
 
 /// Why a getter threw. Each maps to the JS error the script sees.
@@ -497,17 +575,7 @@ impl Getters {
                     getters::matches_url(&request.url, &request.matcher).map(|value| json!(value))
                 });
             }
-            GetRequest::Devices(_) => {
-                return serde_json::from_str(browser_calls::DEVICE_DESCRIPTORS).map_err(|error| {
-                    GetError::Page(PlaywrightError::error(format!(
-                        "neo-runtime: the device descriptors are unreadable: {error}"
-                    )))
-                });
-            }
-            GetRequest::Parse(request) => {
-                return serde_json::to_value(url_match::parse_url(&request.url))
-                    .map_err(|error| GetError::BadRequest(format!("encoding a URL: {error}")));
-            }
+            GetRequest::Pure(read) => return read.answer(),
         };
         if request.guid == "context@default" && matches!(request.field, GetterField::Pages) {
             return self.wait(async {
@@ -743,6 +811,20 @@ impl Getters {
     }
 }
 
+/// `length` bytes from the thread's CSPRNG (rand's `ThreadRng`: `ChaCha`, seeded and reseeded from
+/// the OS), as standard base64, for the realm's `crypto.getRandomValues` and `randomUUID`.
+/// neo-sdk refuses a longer request with the Web Crypto `QuotaExceededError` before it asks.
+fn random_values(length: usize) -> Result<Value, GetError> {
+    if length > MAX_RANDOM_BYTES {
+        return Err(GetError::BadRequest(format!(
+            "neo-runtime: {length} random bytes asked for, at most {MAX_RANDOM_BYTES} served"
+        )));
+    }
+    let mut bytes = vec![0; length];
+    rand::rng().fill_bytes(&mut bytes);
+    Ok(json!(STANDARD.encode(bytes)))
+}
+
 /// Throws a JS `Error` whose `name` is `name`, the way Playwright's own error classes read.
 fn throw_named(ctx: &Ctx<'_>, name: &str, message: &str) -> rquickjs::Error {
     let exception = match Exception::from_message(ctx.clone(), message) {
@@ -759,8 +841,13 @@ fn throw_named(ctx: &Ctx<'_>, name: &str, message: &str) -> rquickjs::Error {
 mod tests {
     use serde_json::json;
 
-    use super::GetRequest;
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+    use serde_json::Value;
+
+    use super::{GetRequest, MAX_RANDOM_BYTES, PureRead, random_values};
     use crate::getters;
+    use crate::url_match::UrlPart;
 
     #[test]
     fn tests_that_matches_url_uses_the_wait_for_url_wire_shape_without_a_guid() {
@@ -773,6 +860,54 @@ mod tests {
             };
             assert!(getters::matches_url(&request.url, &request.matcher).unwrap());
         }
+    }
+
+    #[test]
+    fn tests_that_the_url_getters_read_their_wire_shapes() {
+        let wire = r#"{"field":"parseURL","url":"/x","base":"https://h.test/p/"}"#;
+        let GetRequest::Pure(PureRead::Parse(request)) = serde_json::from_str(wire).unwrap() else {
+            panic!("expected the URL parse getter");
+        };
+        assert_eq!(
+            (request.url.as_str(), request.base.as_deref()),
+            ("/x", Some("https://h.test/p/"))
+        );
+        let GetRequest::Pure(PureRead::Parse(request)) =
+            serde_json::from_str(r#"{"field":"parseURL","url":"https://h.test/"}"#).unwrap()
+        else {
+            panic!("expected the URL parse getter without a base");
+        };
+        assert_eq!(request.base, None);
+        let wire = r#"{"field":"setURL","href":"https://h.test/","part":"pathname","value":"/a"}"#;
+        let GetRequest::Pure(PureRead::SetUrl(request)) = serde_json::from_str(wire).unwrap()
+        else {
+            panic!("expected the URL setter getter");
+        };
+        assert_eq!(request.part, UrlPart::Pathname);
+        assert!(
+            serde_json::from_str::<GetRequest>(
+                r#"{"field":"setURL","href":"https://h.test/","part":"origin","value":"x"}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn tests_that_random_values_are_fresh_and_bounded() {
+        let draw = |length| match random_values(length) {
+            Ok(Value::String(text)) => STANDARD.decode(text).unwrap(),
+            other => panic!("expected base64 text, got {other:?}"),
+        };
+        assert_eq!(draw(0).len(), 0);
+        assert_eq!(draw(MAX_RANDOM_BYTES).len(), MAX_RANDOM_BYTES);
+        // 2^-256 odds of a false failure.
+        assert_ne!(draw(32), draw(32));
+        assert!(random_values(MAX_RANDOM_BYTES + 1).is_err());
+        let wire = r#"{"field":"randomValues","length":16}"#;
+        assert!(matches!(
+            serde_json::from_str(wire).unwrap(),
+            GetRequest::Pure(PureRead::Random(request)) if request.length == 16
+        ));
     }
 
     #[test]
