@@ -70,9 +70,13 @@ pub fn browser_mcp_service(state: AppState) -> ClawMcpService {
 pub fn streamable_http_service(
     state: AppState,
 ) -> StreamableHttpService<ClawMcpService, LocalSessionManager> {
+    // rmcp drops a transport session after its own 5-minute keep-alive, which 404s a
+    // legacy client long before our session idle sweep would retire it.
+    let mut transport_sessions = LocalSessionManager::default();
+    transport_sessions.session_config.keep_alive = Some(state.config.session_idle);
     StreamableHttpService::new(
         move || Ok(browser_mcp_service(state.clone())),
-        Arc::new(LocalSessionManager::default()),
+        Arc::new(transport_sessions),
         StreamableHttpServerConfig::default(),
     )
 }
