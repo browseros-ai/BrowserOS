@@ -437,18 +437,20 @@ static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
 /// as each Playwright connection answers the bindings it registered.
 static OWNERS: SyncMutex<Vec<Owner>> = SyncMutex::new(Vec::new());
 
-/// A run's name: the run's token, and the page's target id for a page binding (`None` for the
-/// context's, which reaches every page).
+/// A run's name in its actual browser context, and an optional page within that context.
+/// The context id is Chromium's identity from `Tabs`, not the run-local `context@default`.
 struct Owner {
     run: String,
+    context: Option<String>,
     name: String,
     page: Option<String>,
 }
 
-fn own(run: &str, name: &str, page: Option<&str>) {
+fn own(run: &str, context: Option<&str>, name: &str, page: Option<&str>) {
     if let Ok(mut owners) = OWNERS.lock() {
         owners.push(Owner {
             run: run.to_string(),
+            context: context.map(str::to_string),
             name: name.to_string(),
             page: page.map(str::to_string),
         });
@@ -470,7 +472,7 @@ fn disown_run(run: &str) {
 }
 
 /// One binding a run began to expose: its name and the page's target id (`None` for the
-/// context's, which reaches every page).
+/// context's, which reaches every page of that context).
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Registration {
     name: String,
@@ -479,7 +481,12 @@ struct Registration {
 
 /// The names `run`'s end takes off the page `target`: the run's registrations that reach it, but
 /// none another live run also exposes to it.
-fn page_names(run: &str, registered: &[Registration], target: &str) -> Vec<String> {
+fn page_names(
+    run: &str,
+    context: Option<&str>,
+    registered: &[Registration],
+    target: &str,
+) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     for registration in registered {
         if registration
@@ -487,7 +494,7 @@ fn page_names(run: &str, registered: &[Registration], target: &str) -> Vec<Strin
             .as_deref()
             .is_some_and(|page| page != target)
             || names.contains(&registration.name)
-            || owned_elsewhere(run, &registration.name, target)
+            || owned_elsewhere(run, context, &registration.name, target)
         {
             continue;
         }
@@ -496,11 +503,12 @@ fn page_names(run: &str, registered: &[Registration], target: &str) -> Vec<Strin
     names
 }
 
-/// Whether a live run other than `run` exposes `name` to the page `target`.
-fn owned_elsewhere(run: &str, name: &str, target: &str) -> bool {
+/// Whether another live run in the same browser context exposes `name` to `target`.
+fn owned_elsewhere(run: &str, context: Option<&str>, name: &str, target: &str) -> bool {
     OWNERS.lock().is_ok_and(|owners| {
         owners.iter().any(|owner| {
             owner.run != run
+                && owner.context.as_deref() == context
                 && owner.name == name
                 && owner.page.as_deref().is_none_or(|page| page == target)
         })
@@ -565,7 +573,7 @@ impl Bindings {
             };
             if !state.registered.contains(&registration) {
                 state.registered.push(registration);
-                own(&self.run, name, target.as_deref());
+                own(&self.run, tabs.context_id(), name, target.as_deref());
             }
         }
         let cdp = tabs.cdp();
@@ -766,7 +774,14 @@ impl Bindings {
                 .map(|exposed| exposed.page.is_some())
         };
         // Another live run's name on this tab: that run's reader answers it.
-        if binding.is_none() && owned_elsewhere(&self.run, &payload.name, &prepared.target) {
+        if binding.is_none()
+            && owned_elsewhere(
+                &self.run,
+                tabs.context_id(),
+                &payload.name,
+                &prepared.target,
+            )
+        {
             return None;
         }
         if let Some(message) = refused(binding, &payload) {
@@ -1039,7 +1054,7 @@ impl Bindings {
     async fn end_pages(&self, tabs: &Tabs, registered: &[Registration]) {
         for (_, session) in tabs.own_attached() {
             let target = init_scripts::target_of(&session);
-            let names = page_names(&self.run, registered, &target);
+            let names = page_names(&self.run, tabs.context_id(), registered, &target);
             let end = page_object(
                 1,
                 vec![
@@ -1274,7 +1289,9 @@ async fn watch(bindings: Weak<Bindings>, tabs: Tabs, mut events: broadcast::Rece
     let Some(stop) = bindings.upgrade().map(|bindings| bindings.stop.clone()) else {
         return;
     };
-    let mut flushes = Some(tabs.events().watcher());
+    // Reading a binding may prepare a cold frame and wait for its Runtime replay. That replay
+    // must not flush this reader back onto itself; ordinary call barriers still wait for it.
+    let mut flushes = Some(tabs.events().callback_watcher());
     let mut reader = Reader {
         bindings,
         tabs,
@@ -1529,17 +1546,20 @@ mod tests {
             registration("everywhere", None),
         ];
         // Another live run registered "shared" on Q, and "everywhere" on P.
-        own("other-run", "shared", Some("Q"));
-        own("other-run", "everywhere", Some("P"));
-        assert_eq!(page_names("my-run", &mine, "P"), vec!["shared".to_string()]);
+        own("other-run", Some("context"), "shared", Some("Q"));
+        own("other-run", Some("context"), "everywhere", Some("P"));
         assert_eq!(
-            page_names("my-run", &mine, "Q"),
+            page_names("my-run", Some("context"), &mine, "P"),
+            vec!["shared".to_string()]
+        );
+        assert_eq!(
+            page_names("my-run", Some("context"), &mine, "Q"),
             vec!["everywhere".to_string()],
             "a page the run merely attached keeps another run's same-named binding"
         );
         disown_run("other-run");
         assert_eq!(
-            page_names("my-run", &mine, "P"),
+            page_names("my-run", Some("context"), &mine, "P"),
             vec!["shared".to_string(), "everywhere".to_string()]
         );
     }
