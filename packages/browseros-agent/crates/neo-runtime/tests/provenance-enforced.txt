@@ -9,6 +9,7 @@
 neo-runtime-injected/src/add-tag.ts
 neo-runtime-injected/src/bindings-call.ts
 neo-runtime-injected/src/bindings-controller.ts
+neo-runtime-injected/src/browseros-ui.ts
 neo-runtime-injected/src/call-on-element.ts
 neo-runtime-injected/src/clock-call.ts
 neo-runtime-injected/src/clock-install.ts

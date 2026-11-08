@@ -3,7 +3,8 @@
  * built from:
  *
  *   dist/install.js     `(key, specSha256, initializer) => glue`   InjectedScript + glue
- *   dist/attach.js      `(key) => glue | undefined`                a few hundred bytes
+ *   dist/attach.js      `(key) => glue | undefined`                about a kilobyte, which
+ *                       also hides BrowserOS's own page UI from the world
  *   dist/call.js        `function (name, params, ...handles)`      the page-call convention
  *   dist/utility.js     `() => UtilityScript`                      Playwright's main-world helper
  *   dist/evaluate.js    `(utilityScript, ...args) => evaluate`     Playwright's evaluate convention

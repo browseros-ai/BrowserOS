@@ -636,7 +636,7 @@ async fn a_tab_closed_mid_click_fails_with_target_closed() {
 /// Counts installs of Neo's injected bundle in a tab, from the test's own session. With the
 /// `Debugger` domain on, the browser reports every script it compiles in any world of the page,
 /// `Runtime.callFunctionOn` declarations included, and only the install bundle is anywhere near
-/// its length (the attach and call entries are a few hundred bytes).
+/// its length (the attach and call entries are about a kilobyte or less).
 struct InstallTap {
     events: broadcast::Receiver<CdpEvent>,
     driver: SessionId,
